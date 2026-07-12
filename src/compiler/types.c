@@ -10,6 +10,25 @@
 #include <ctype.h>
 #include <assert.h>   /* structdef-retirement slice 5 B4: def-less TY_STRUCT guard */
 
+/* Global type arena backing fn types' out-of-line per-arg arrays (arg_kinds /
+ * arg_flags).  Process-lifetime and never freed: the arrays must outlive every
+ * by-value Type copy that shares them, and a compiler process builds a bounded
+ * set of fn types.  Reachable via this file-scope static, so LeakSanitizer does
+ * not report it.  Single-threaded: tur elaborates/emits on one thread per
+ * invocation (the suite parallelises across processes, not threads). */
+static Arena g_type_arena;
+static bool  g_type_arena_ready = false;
+
+uint8_t *tur_fn_args_alloc(uint32_t n) {
+    if (n == 0) return NULL;
+    if (!g_type_arena_ready) { arena_init(&g_type_arena, 0); g_type_arena_ready = true; }
+    /* arena_alloc zero-fills is not guaranteed; zero explicitly so arg_flags
+     * defaults to all-clear and arg_kinds has no indeterminate slots. */
+    uint8_t *p = (uint8_t *)arena_alloc(&g_type_arena, (size_t)n);
+    memset(p, 0, (size_t)n);
+    return p;
+}
+
 /* CONV-S1 seam 4 (keystone): named-layout helpers defined in emit_core.c.
  * Forward-declared here (types.c does not include emit_internal.h) so the
  * single-variant record monomorph emit routes its field stores through the same
@@ -91,7 +110,7 @@ int type_eq(Type a, Type b) {
                 return 0;
         }
         if (a.as.fn.arity != b.as.fn.arity) return 0;
-        for (uint8_t i = 0; i < a.as.fn.arity; i++) {
+        for (uint32_t i = 0; i < a.as.fn.arity; i++) {
             if (a.as.fn.arg_kinds[i] != b.as.fn.arg_kinds[i])
                 return 0;
         }
@@ -275,7 +294,7 @@ int type_eq(Type a, Type b) {
 int fn_type_subtype(Type actual, Type expected) {
     if (actual.kind != TY_FN || expected.kind != TY_FN) return 1;
     if (actual.as.fn.arity != expected.as.fn.arity) return 1; /* arity mismatch caught elsewhere */
-    for (uint8_t i = 0; i < actual.as.fn.arity; i++) {
+    for (uint32_t i = 0; i < actual.as.fn.arity; i++) {
         if (FN_ARG_FLAG(actual.as.fn, i, FA_LINEAR) != FN_ARG_FLAG(expected.as.fn, i, FA_LINEAR)) return 0;
     }
     return 1;
@@ -440,7 +459,7 @@ bool type_app_is_concrete_adt(const Type *t) {
      * int64 carrier with its type args erased -- never a monomorphizable concrete
      * ADT -- so it must not be registered/monomorphized. */
     if (def->is_opaque) return false;
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         /* Nested by-value-product element accepted only for a :heap outer (see
          * adt_app_is_byvalue_product) so the ctor selection picks the monomorph
          * ctor matching the field-read consumer's layout. */
@@ -572,7 +591,7 @@ static void append_type_mangle(Buf *b, Type t) {
             uint8_t an_args = 0;
             if (type_extract_adt_app(&t, &adef, args, &an_args) && adef) {
                 buf_puts(b, adef->name);
-                for (uint8_t i = 0; i < an_args; i++) {
+                for (uint32_t i = 0; i < an_args; i++) {
                     buf_puts(b, "__");
                     append_type_mangle(b, args[i]);
                 }
@@ -654,7 +673,7 @@ static bool fn_kind_is_primitive(TypeKind k) {
 static bool fn_type_is_concrete_for_ptr(const Type *t) {
     if (!t || t->kind != TY_FN) return false;
     if (!fn_kind_is_primitive(t->as.fn.result_kind)) return false;
-    for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
         if (!fn_kind_is_primitive(t->as.fn.arg_kinds[i])) return false;
     }
     return true;
@@ -681,7 +700,7 @@ static char *fn_ptr_typedef_name(const Type *fn_type) {
     for (const char *p = ret_c; *p; p++)
         buf_putc(&name, isalnum((unsigned char)*p) ? *p : '_');
     bool use_full = fn_type->as.fn.cfnptr && fn_type->as.fn.arg_full_types != NULL;
-    for (uint8_t i = 0; i < fn_type->as.fn.arity; i++) {
+    for (uint32_t i = 0; i < fn_type->as.fn.arity; i++) {
         buf_putc(&name, '_');
         const char *arg_c;
         if (use_full && fn_type->as.fn.arg_full_types[i]) {
@@ -726,7 +745,7 @@ const char *register_fn_ptr_typedef(const Type *fn_type) {
     entry->emitted = false;
     entry->result_kind = fn_type->as.fn.result_kind;
     entry->arity = fn_type->as.fn.arity;
-    for (uint8_t i = 0; i < fn_type->as.fn.arity; i++)
+    for (uint32_t i = 0; i < fn_type->as.fn.arity; i++)
         entry->arg_kinds[i] = fn_type->as.fn.arg_kinds[i];
     /* c-fn-ptr-element-and-size-precision-gap fix: snapshot per-arg full
      * types for cfnptrs so the later emit pass can use precise element-typed
@@ -734,7 +753,7 @@ const char *register_fn_ptr_typedef(const Type *fn_type) {
      * outlives codegen; storing the pointer is safe. */
     for (uint8_t i = 0; i < MAX_FN_ARITY; i++) entry->arg_full_types[i] = NULL;
     if (fn_type->as.fn.cfnptr && fn_type->as.fn.arg_full_types) {
-        for (uint8_t i = 0; i < fn_type->as.fn.arity; i++)
+        for (uint32_t i = 0; i < fn_type->as.fn.arity; i++)
             entry->arg_full_types[i] = fn_type->as.fn.arg_full_types[i];
     }
     /* c-fn-ptr-element-and-size-precision-gap fix: snapshot the precise result
@@ -924,7 +943,7 @@ Type adt_field_type_for_app(const Type *recv, const CtorField *field) {
 static void append_adt_app_type_suffix(Buf *b, const AdtDef *def,
                                         const Type *args, uint8_t n_args) {
     (void)def;
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         buf_puts(b, "__");
         append_type_mangle(b, args[i]);
     }
@@ -939,7 +958,7 @@ const char *type_register_adt_app(Type t) {
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return NULL;
     if (def->is_gadt) return NULL;
     /* Require all type args to have concrete codegen layout. */
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
     /* Look for an existing registration. */
@@ -979,7 +998,7 @@ char *type_adt_app_ctor_suffix(Type t) {
     uint8_t n_args = 0;
     if (!type_extract_adt_app(&t, &def, args, &n_args) || !def) return NULL;
     if (def->is_gadt) return NULL;
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
     Buf b; buf_init(&b);
@@ -1323,7 +1342,7 @@ const char *type_name(Type t) {
             Buf tmp;
             buf_init(&tmp);
             buf_puts(&tmp, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
-            for (uint8_t i = 0; i < t.as.fn.arity; i++) {
+            for (uint32_t i = 0; i < t.as.fn.arity; i++) {
                 if (i > 0) buf_puts(&tmp, " ");
                 buf_puts(&tmp, type_name(type_from_kind(t.as.fn.arg_kinds[i])));
             }
@@ -1838,7 +1857,7 @@ static void type_name_buf(Buf *b, Type t) {
         case TY_ANY:     buf_puts(b, "any"); break;
         case TY_FN: {
             buf_puts(b, t.as.fn.cfnptr ? "(c-fn [" : "(fn [");
-            for (uint8_t i = 0; i < t.as.fn.arity; i++) {
+            for (uint32_t i = 0; i < t.as.fn.arity; i++) {
                 if (i > 0) buf_puts(b, " ");
                 type_name_buf(b, type_from_kind(t.as.fn.arg_kinds[i]));
             }
@@ -2508,7 +2527,7 @@ bool adt_app_is_byvalue_product(Type t) {
      * and its field read needs the ADT monomorph layout; a non-heap nested
      * aggregate already round-trips via the struct-app monomorph path, so leaving
      * it untouched avoids perturbing the constrained-instance-body specs. */
-    for (uint8_t i = 0; i < n_args; i++)
+    for (uint32_t i = 0; i < n_args; i++)
         if (!type_has_concrete_codegen_layout(&args[i]) &&
             !(def->is_heap && adt_app_is_byvalue_product(args[i]))) return false;
     /* Every monomorphised field must resolve to a by-value-able concrete type --

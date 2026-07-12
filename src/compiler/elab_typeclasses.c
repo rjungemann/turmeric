@@ -23,7 +23,7 @@ static bool method_is_return_dispatch(const TypeClass *c, const TypeClassMethod 
         if (!tp) continue;
         if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
         bool in_param = false;
-        for (uint8_t pi = 0; pi < m->n_params; pi++) {
+        for (uint32_t pi = 0; pi < m->n_params; pi++) {
             if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
                 in_param = true;
                 break;
@@ -161,7 +161,7 @@ static Form *type_to_form(Elab *e, const Type *t, Span span) {
         Form **items = (Form **)arena_alloc(e->arena, n_items * sizeof(Form *));
         items[0] = form_sym(e->arena, span, intern_cstr(e->st, head_name));
         /* args were collected innermost-first; reverse to original order. */
-        for (uint8_t i = 0; i < n_args; i++) {
+        for (uint32_t i = 0; i < n_args; i++) {
             Form *af = type_to_form(e, args[n_args - 1 - i], span);
             if (!af) return NULL;
             items[1 + i] = af;
@@ -723,14 +723,14 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
         param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
         param_is_fn = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
         param_explicit_type = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             param_is_fn[i] = false;
             param_explicit_type[i] = false;
         }
 
         /* actual_p: number of real parameters encountered (keywords don't count). */
         uint8_t actual_p = 0;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             Form *p = params_form->as.list.items[i];
             /* ECS E2d-P6 (Issue 2 secondary): substructural / borrow caret
              * markers (^borrow, ^mut, ^unique, ^linear, ^affine, ^relevant,
@@ -1144,7 +1144,7 @@ static bool typeclass_signatures_match(const TypeClass *existing,
         if (em->name != nm->name) return false; /* symbols interned -- ptr eq */
         if (em->n_params != nm->n_params) return false;
         if (em->return_type.kind != nm->return_type.kind) return false;
-        for (uint8_t j = 0; j < em->n_params; j++) {
+        for (uint32_t j = 0; j < em->n_params; j++) {
             if (em->param_types[j].kind != nm->param_types[j].kind) return false;
         }
     }
@@ -1954,7 +1954,7 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
             return;
         case TY_FN:
             if (act.kind == TY_FN) {
-                uint8_t ar = decl.as.fn.arity < act.as.fn.arity
+                uint32_t ar = decl.as.fn.arity < act.as.fn.arity
                              ? decl.as.fn.arity : act.as.fn.arity;
                 for (uint8_t i = 0; i < ar; i++) {
                     Type da = (decl.as.fn.arg_full_types && decl.as.fn.arg_full_types[i])
@@ -1998,7 +1998,7 @@ static bool m7_type_has_free_tyvar(Type t) {
                    (t.as.app.arg && m7_type_has_free_tyvar(*t.as.app.arg));
         case TY_FN: {
             if (t.as.fn.arg_full_types)
-                for (uint8_t i = 0; i < t.as.fn.arity; i++)
+                for (uint32_t i = 0; i < t.as.fn.arity; i++)
                     if (t.as.fn.arg_full_types[i] &&
                         m7_type_has_free_tyvar(*t.as.fn.arg_full_types[i]))
                         return true;
@@ -4277,7 +4277,7 @@ bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name) {
             for (uint8_t ti = 0; ti < c->n_type_params && !any_tp_in_param; ti++) {
                 const Symbol *tp = c->type_params[ti];
                 if (!tp) continue;
-                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                for (uint32_t pi = 0; pi < m->n_params; pi++) {
                     if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
                         any_tp_in_param = true;
                         break;
@@ -4290,7 +4290,7 @@ bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name) {
                 if (!tp) continue;
                 if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
                 bool in_param = false;
-                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                for (uint32_t pi = 0; pi < m->n_params; pi++) {
                     if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
                         in_param = true;
                         break;
@@ -4342,7 +4342,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             for (uint8_t ti = 0; ti < c->n_type_params && !any_tp_in_param; ti++) {
                 const Symbol *tp = c->type_params[ti];
                 if (!tp) continue;
-                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                for (uint32_t pi = 0; pi < m->n_params; pi++) {
                     if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
                         any_tp_in_param = true;
                         break;
@@ -4355,7 +4355,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                 if (!tp) continue;
                 if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
                 bool in_param = false;
-                for (uint8_t pi = 0; pi < m->n_params; pi++) {
+                for (uint32_t pi = 0; pi < m->n_params; pi++) {
                     if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
                         in_param = true;
                         break;
@@ -4692,8 +4692,8 @@ static bool obj_is_unascribed_carrier_elem(const Expr *obj) {
         !ft->as.fn.result_full_type->as.tyvar_.name)
         return false;
     const char *rname = ft->as.fn.result_full_type->as.tyvar_.name;
-    uint8_t np = ft->as.fn.arity;
-    for (uint8_t pi = 0; pi < np && pi < obj->as.call_.n_args; pi++) {
+    uint32_t np = ft->as.fn.arity;
+    for (uint32_t pi = 0; pi < np && pi < obj->as.call_.n_args; pi++) {
         const Type *pft = ft->as.fn.arg_full_types[pi];
         const Expr *ae = obj->as.call_.args[pi];
         if (!pft || !ae) continue;
@@ -5794,7 +5794,7 @@ resolved_user_fallback:;
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else {
-                uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                uint32_t inner_arity = (inner_b->type.kind == TY_FN)
                     ? (uint8_t)inner_b->type.as.fn.arity : 1;
                 Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, obj->span, false);
                 if (!wrapper_b) return NULL;
@@ -5843,7 +5843,7 @@ resolved_user_fallback:;
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
                 wrap->as.poly_wrap_.is_closure = true;
             } else {
-                uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                uint32_t inner_arity = (inner_b->type.kind == TY_FN)
                     ? (uint8_t)inner_b->type.as.fn.arity : 1;
                 Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span, false);
                 if (!wrapper_b) return NULL;
@@ -5947,7 +5947,7 @@ resolved_user_fallback:;
             best_method->body && best_method->body->kind == EX_VAR) {
             const Binding *vb = best_method->body->as.var.binding;
             int passthru_idx = -1;
-            for (uint8_t pi = 0; pi < best_method->n_params; pi++) {
+            for (uint32_t pi = 0; pi < best_method->n_params; pi++) {
                 if (best_method->params[pi] == vb) { passthru_idx = pi; break; }
             }
             if (passthru_idx >= 0) {

@@ -842,9 +842,9 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
                              * under-saturated and synthesised a bogus extra-arg
                              * PAP wrapper.  See
                              * docs/reported/pap-defmodule-fat-fn-too-many-args.md */
-                            TypeKind arg_kinds[MAX_FN_ARITY];
+                            TypeKind *arg_kinds = NULL;
                             uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-                                ? fwd_decl_scan_params(f->as.list.items[name_idx + 1], arg_kinds)
+                                ? fwd_decl_scan_params(e->arena, f->as.list.items[name_idx + 1], &arg_kinds)
                                 : 0;
                             Type fn_type = type_fn(arg_kinds, param_arity, fwd_result_kind);
                             Binding *b = binding_new(e, fn_name_f->as.sym, fn_type, false, true, f->span);

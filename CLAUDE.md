@@ -833,14 +833,18 @@ The doc panel in the web REPL calls `turi_doc_lookup(name)` (exported from
 
 ## Function Arity Style Guide
 
-### Hard parameter limit
+### Parameter count
 
-`MAX_FN_ARITY` is **64**. Functions with more than ~5 positional parameters
-are a code smell, and declaring more than **16** now emits the `TUR-W0041`
-lint nudge back to this guide -- 64 is an emergency escape hatch for generated
-code, macro expansions, and wide interop shims, not a target. Prefer a
-`defstruct` options value or a `& rest :type` variadic long before you get near
-it.
+There is **no hard cap** on positional parameters -- a function may declare an
+arbitrary number, bounded only by `uint32_t`, matching the emitted C (which has
+no limit of its own). Functions with more than ~5 positional parameters are
+still a code smell, and declaring more than **16** emits the `TUR-W0041` lint
+nudge back to this guide. The high ceiling is an escape hatch for generated
+code, macro expansions, and wide interop shims, not a target -- prefer a
+`defstruct` options value or a `& rest :type` variadic. (`MAX_FN_ARITY` survives
+in the source only as the default size of a few internal codegen fast-path
+buffers, which fall back gracefully for wider functions; it is no longer an
+arity limit.)
 
 ### More than 5 params -- reach for `defstruct`
 

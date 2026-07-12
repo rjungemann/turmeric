@@ -624,7 +624,7 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * so it matches the actual by-pointer function signature. */
                 bool body_is_inline_c = (method_impl->body
                                          && method_impl->body->kind == EX_INLINE_C);
-                for (uint8_t j = 0; j < method_impl->n_params; j++) {
+                for (uint32_t j = 0; j < method_impl->n_params; j++) {
                     if (j > 0) buf_puts(ctx->file, ", ");
                     if (method_impl->params && method_impl->params[j]->is_poly_fn) {
                         buf_puts(ctx->file, "tur_poly_fn_t");

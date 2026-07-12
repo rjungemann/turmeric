@@ -1168,7 +1168,7 @@ static TuriValue eval_handle_inner(TuriEnv *env, EvalFrame *frame,
 
     /* Bind params and k in a new frame. */
     EvalFrame *hframe = eval_frame_new(env, frame);
-    for (uint8_t i = 0; i < matched->n_params && i < cont->n_perf_args; i++) {
+    for (uint32_t i = 0; i < matched->n_params && i < cont->n_perf_args; i++) {
         const char *pname = matched->param_bindings[i]->name->name;
         frame_bind(env, hframe, pname, cont->perf_args[i]);
     }
@@ -5085,7 +5085,7 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
     switch (e->kind) {
     case EX_PERFORM: {
         PerformExpr *pe = e->as.perform_.perform;
-        for (uint8_t i = 0; i < pe->n_args; i++)
+        for (uint32_t i = 0; i < pe->n_args; i++)
             if (ws_has_perform(pe->args[i])) return false;  /* args run via eval_expr */
         return true;
     }
@@ -5705,7 +5705,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 PerformExpr *pe = control->as.perform_.perform;
                 const char  *effect_name = pe->effect_name->name;
                 TuriValue pargs[EVAL_MAX_FN_ARITY];
-                uint8_t n = pe->n_args;
+                uint32_t n = pe->n_args;
                 if (n > EVAL_MAX_FN_ARITY) {
                     cur = turi_errorf("eval: too many effect arguments (%u)", n);
                     descending = false; break;
@@ -5787,7 +5787,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 len = (size_t)pidx + 1;
                 st[pidx].index = 0;   /* disable while its own case body runs */
                 EvalFrame *hf = eval_frame_new(env, st[pidx].frame);
-                for (uint8_t i = 0; i < matched->n_params && i < n; i++)
+                for (uint32_t i = 0; i < matched->n_params && i < n; i++)
                     frame_bind(env, hf, matched->param_bindings[i]->name->name, pargs[i]);
                 frame_bind(env, hf, matched->k_binding->name->name, turi_ws_cont_val(env, wc));
                 env->current_module = st[pidx].saved_module;
@@ -7369,7 +7369,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (n_args > EVAL_MAX_FN_ARITY)
             return turi_errorf("eval: too many effect arguments (%u)", n_args);
 
-        for (uint8_t i = 0; i < n_args; i++) {
+        for (uint32_t i = 0; i < n_args; i++) {
             args[i] = eval_expr(env, frame, pe->args[i]);
             if (turi_is_error(args[i]) || env_signaled(env)) return args[i];
         }

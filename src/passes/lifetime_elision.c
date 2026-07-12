@@ -39,7 +39,7 @@ static void type_collect_lifetimes_recursive(const Type *t, LifetimeId *out, uin
             break;
         case TY_FN:
             /* Collect from arg types and return type */
-            for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+            for (uint32_t i = 0; i < t->as.fn.arity; i++) {
                 Type arg_type = {(TypeKind)t->as.fn.arg_kinds[i], .copy_kind = CK_COPY, .n_lifetimes = 0};
                 type_collect_lifetimes_recursive(&arg_type, out, n_out, max_out);
             }
@@ -68,7 +68,7 @@ bool type_has_any_lifetime(const Type *t) {
         case TY_REF_MUT:
             return t->n_lifetimes > 0 || type_has_any_lifetime(&(Type){.kind = t->as.ref_borrow.target, .copy_kind = CK_COPY, .n_lifetimes = 0});
         case TY_FN:
-            for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+            for (uint32_t i = 0; i < t->as.fn.arity; i++) {
                 Type arg_type = {(TypeKind)t->as.fn.arg_kinds[i], .copy_kind = CK_COPY, .n_lifetimes = 0};
                 if (type_has_any_lifetime(&arg_type)) return true;
             }
@@ -108,7 +108,7 @@ uint8_t lifetime_elision_apply(LifetimeContext *ctx,
     LifetimeId sole_lifetime = LIFETIME_NONE; /* Rule 2 candidate */
     uint8_t    n_input_lifetimes = 0;
 
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         Type *p = &param_types[i];
         if (!type_head_is_borrow(p)) continue;
         LifetimeId lid;

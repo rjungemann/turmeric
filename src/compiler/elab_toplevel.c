@@ -1392,9 +1392,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                              * `^`-prefixed markers (^fat/^mut/...) so the
                              * forward-declared arity is not over-stated (see
                              * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
-                            TypeKind arg_kinds[MAX_FN_ARITY];
+                            TypeKind *arg_kinds = NULL;
                             uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-                                ? fwd_decl_scan_params(f->as.list.items[name_idx + 1], arg_kinds)
+                                ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
                                 : 0;
                             Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
                             /* defdata-parametric-forward-decl-inference: carry the

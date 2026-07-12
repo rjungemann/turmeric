@@ -150,7 +150,7 @@ static int count_uses(const Expr *e, const Binding *b) {
             n += count_uses(e->as.shift0_.body, b);
             return n;
         case EX_PERFORM:
-            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++)
+            for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
                 n += count_uses(e->as.perform_.perform->args[i], b);
             return n;
         case EX_HANDLE: {
@@ -559,7 +559,7 @@ static void analyze_expr(Expr *e) {
             analyze_expr(e->as.shift0_.body);
             return;
         case EX_PERFORM:
-            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++)
+            for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
                 analyze_expr(e->as.perform_.perform->args[i]);
             return;
         case EX_HANDLE: {

@@ -1,6 +1,6 @@
 ;; fn-arity-40-param -- a 40-positional-parameter defn, well beyond the old cap
-;; of 16 and past 32, within the raised MAX_FN_ARITY = 64 ceiling
-;; (arbitrary-fn-arity Phase 1).
+;; of 16.  Value-function arity is unbounded (arbitrary-fn-arity); see
+;; fn-arity-100-param for a count past the former 64 inline ceiling too.
 (extern-c printf [^cstr fmt ^int v] :int)
 
 (defn sum40 [a0 : int a1 : int a2 : int a3 : int a4 : int a5 : int a6 : int a7 : int

@@ -1377,7 +1377,7 @@ static bool fn_sig_ok(const FnDef *fd) {
      * owning-field aggregate stays out. */
     const Type *rt = fn_ret_type(fd);
     if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
-    for (uint8_t i = 0; i < fd->n_params; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
          * param is a read-only handle the callee never consumes; a plain (non-
@@ -3670,7 +3670,7 @@ static void emit_callcc(CE *ce, const CTerm *t) {
 /* ---- signatures ------------------------------------------------------ */
 
 static void emit_params(EmitCtx *ctx, Buf *file, const FnDef *fd) {
-    for (uint8_t i = 0; i < fd->n_params; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
         const char *pty;
         /* A rank-2 poly fn value crosses as a fat closure (`tur_poly_fn_t`),
@@ -3778,7 +3778,7 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
     if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
-    for (uint8_t i = 0; i < fd->n_params; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         const Type *pt = (i < spec->n_args) ? &spec->arg_types[i] : &p->type;
         if (p->is_poly_fn) return false;   /* poly-fat param -- evict (see fn_sig_ok) */
@@ -3875,7 +3875,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
          * carrier.  The CPS emit_params does not set this, so set it here for each
          * such param -- otherwise the direct emitter reconstructs the aggregate
          * from a bogus `(intptr_t)(o)` carrier cast. */
-        for (uint8_t i = 0; i < fd->n_params && i < spec->n_args; i++) {
+        for (uint32_t i = 0; i < fd->n_params && i < spec->n_args; i++) {
             Type rat = emit_resolve_type(ctx, spec->arg_types[i]);
             const char *pc = emit_type_c_name(ctx, rat);
             if (fd->params[i] && pc && strcmp(pc, "int64_t") != 0
@@ -3995,7 +3995,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, ") {\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
-    for (uint8_t i = 0; i < fd->n_params; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
         buf_puts(file, pn);

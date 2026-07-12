@@ -98,9 +98,15 @@ TypeKind typekind_from_symbol(const char *name) {
  *    the HRT5 early-update once the callee's body is elaborated.
  *
  * Fills arg_kinds[0..arity) (capacity MAX_FN_ARITY) and returns the arity. */
-uint32_t fwd_decl_scan_params(const Form *params_f, TypeKind *arg_kinds) {
+uint32_t fwd_decl_scan_params(Arena *arena, const Form *params_f, TypeKind **out_arg_kinds) {
+    *out_arg_kinds = NULL;
     uint32_t arity = 0;
     if (!params_f || params_f->tag != F_VEC) return 0;
+    /* Scratch is sized to the parameter-vector length -- a safe upper bound on
+     * the parameter count -- so the forward-declared arity is not capped
+     * (arbitrary-fn-arity: no MAX_FN_ARITY ceiling). */
+    uint32_t cap = params_f->as.list.len ? params_f->as.list.len : 1;
+    TypeKind *arg_kinds = (TypeKind *)arena_alloc(arena, cap * sizeof(TypeKind));
     for (uint32_t pi = 0; pi < params_f->as.list.len; pi++) {
         const Form *p = params_f->as.list.items[pi];
         /* `^`-prefixed substructural / fat / mut markers annotate the next
@@ -119,18 +125,17 @@ uint32_t fwd_decl_scan_params(const Form *params_f, TypeKind *arg_kinds) {
                  * as the TY_INT placeholder (matches prior pre-pass behavior). */
                 if (k != TY_UNKNOWN && k != TY_INT &&
                     (typekind_is_numeric(k) || k == TY_BOOL || k == TY_CSTR ||
-                     k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM) &&
-                    arity - 1 < MAX_FN_ARITY) {
+                     k == TY_NIL || k == TY_PTR_VOID || k == TY_SYM)) {
                     arg_kinds[arity - 1] = k;
                 }
             }
             continue;
         }
         /* Otherwise this form opens a new parameter slot. */
-        if (arity < MAX_FN_ARITY) arg_kinds[arity] = TY_INT;
+        arg_kinds[arity] = TY_INT;
         arity++;
     }
-    if (arity > MAX_FN_ARITY) arity = MAX_FN_ARITY;
+    *out_arg_kinds = arg_kinds;
     return arity;
 }
 
@@ -459,7 +464,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             local_defs[n_local++] = hc->k_binding;
                         }
                         /* Register effect param bindings as local */
-                        for (uint8_t pi = 0; pi < hc->n_params; pi++) {
+                        for (uint32_t pi = 0; pi < hc->n_params; pi++) {
                             if (hc->param_bindings && hc->param_bindings[pi]) {
                                 if (n_local >= cap_local) {
                                     cap_local = cap_local ? cap_local * 2 : 8;
@@ -537,7 +542,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
         if (cur->kind == EX_VAR) {
             /* Check if this is a param or global */
             bool is_param = false;
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 if (params[i] == cur->as.var.binding) {
                     is_param = true;
                     break;
@@ -663,7 +668,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                      * letrec/named-let self-recursion). */
                     Binding *fb = cur->as.call_.fn_binding;
                     bool fb_is_param = false;
-                    for (uint8_t i = 0; i < n_params; i++) {
+                    for (uint32_t i = 0; i < n_params; i++) {
                         if (params[i] == fb) { fb_is_param = true; break; }
                     }
                     /* Edge 1: a letrec/named-let group member called *directly*
@@ -725,7 +730,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                         Binding *icap = inner->captures[ci];
                         if (!icap || icap->is_global) continue;
                         bool is_param = false;
-                        for (uint8_t i = 0; i < n_params; i++) {
+                        for (uint32_t i = 0; i < n_params; i++) {
                             if (params[i] == icap) { is_param = true; break; }
                         }
                         if (is_param) continue;
@@ -832,7 +837,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 break;
             /* Phase 19: Algebraic effects */
             case EX_PERFORM:
-                for (uint8_t i = cur->as.perform_.perform->n_args; i > 0; i--) {
+                for (uint32_t i = cur->as.perform_.perform->n_args; i > 0; i--) {
                     stack[sp++] = cur->as.perform_.perform->args[i-1];
                 }
                 break;
@@ -876,7 +881,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                         Binding *sb = sub[si];
                         if (!sb || sb->is_global) continue;
                         bool skip = false;
-                        for (uint8_t i = 0; i < n_params; i++) if (params[i] == sb) { skip = true; break; }
+                        for (uint32_t i = 0; i < n_params; i++) if (params[i] == sb) { skip = true; break; }
                         for (uint32_t i = 0; !skip && i < n_local; i++) if (local_defs[i] == sb) skip = true;
                         for (uint32_t i = 0; !skip && i < n; i++) if (result[i] == sb) skip = true;
                         if (skip) continue;

@@ -561,7 +561,7 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
      * loses the def.  Entries stay NULL for scalars; the whole array is NULL if no
      * param is an aggregate (set after the loop). */
     const Type **param_full = arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(const Type *));
-    for (uint8_t j = 0; j < n_params; j++) param_full[j] = NULL;
+    for (uint32_t j = 0; j < n_params; j++) param_full[j] = NULL;
     bool any_agg_param = false;
 
     {
@@ -828,7 +828,7 @@ Expr *elab_perform(Elab *e, const Form *call) {
     /* Parse arguments */
     uint8_t n_args = effect_call_f->as.list.len - 1;
     Expr **args = arena_alloc(e->arena, n_args * sizeof(Expr *));
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, effect_call_f->as.list.items[i + 1]);
         if (!args[i]) return NULL;
     }
@@ -945,7 +945,7 @@ Expr *elab_handle(Elab *e, const Form *call) {
         cases[i].n_params = params_f->as.list.len;
         cases[i].param_names = arena_alloc(e->arena, cases[i].n_params * sizeof(const Symbol *));
         cases[i].param_bindings = arena_alloc(e->arena, cases[i].n_params * sizeof(Binding *));
-        for (uint8_t j = 0; j < cases[i].n_params; j++) {
+        for (uint32_t j = 0; j < cases[i].n_params; j++) {
             Form *param_f = params_f->as.list.items[j];
             if (param_f->tag != F_SYM) {
                 diag_emit(DIAG_ERROR, param_f->span,
@@ -1011,7 +1011,7 @@ Expr *elab_handle(Elab *e, const Form *call) {
         e->scope = &handler_scope;
         
         /* Create bindings for each parameter */
-        for (uint8_t j = 0; j < cases[i].n_params; j++) {
+        for (uint32_t j = 0; j < cases[i].n_params; j++) {
             /* Use the effect's declared param type if available, else TY_INT.
              * Tier C: prefer the full param Type (carries the real aggregate def)
              * so field access on the param binding elaborates. */
@@ -1071,7 +1071,7 @@ Expr *elab_handle(Elab *e, const Form *call) {
             /* Build the "local params" list: effect params + k (not free vars) */
             uint8_t n_hparams = (uint8_t)(cases[i].n_params + 1);
             Binding **hparams = arena_alloc(e->arena, n_hparams * sizeof(Binding *));
-            for (uint8_t j = 0; j < cases[i].n_params; j++)
+            for (uint32_t j = 0; j < cases[i].n_params; j++)
                 hparams[j] = cases[i].param_bindings[j];
             hparams[cases[i].n_params] = kb;
             uint32_t n_caps = 0;
@@ -1214,7 +1214,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     cases[0].n_params = params_f->as.list.len;
     cases[0].param_names = arena_alloc(e->arena, cases[0].n_params * sizeof(const Symbol *));
     cases[0].param_bindings = arena_alloc(e->arena, cases[0].n_params * sizeof(Binding *));
-    for (uint8_t j = 0; j < cases[0].n_params; j++) {
+    for (uint32_t j = 0; j < cases[0].n_params; j++) {
         Form *param_f = params_f->as.list.items[j];
         if (param_f->tag != F_SYM) {
             diag_emit(DIAG_ERROR, param_f->span, "handler literal: parameter name must be a symbol");
@@ -1265,7 +1265,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     Scope *saved_scope = e->scope;
     e->scope = &handler_scope;
 
-    for (uint8_t j = 0; j < cases[0].n_params; j++) {
+    for (uint32_t j = 0; j < cases[0].n_params; j++) {
         TypeKind pk = (eff && j < eff->constructor->n_params)
             ? eff->constructor->param_types[j] : TY_INT;
         Type ptype = type_from_kind(pk);
@@ -1300,7 +1300,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     if (cases[0].cont_kind == CK_MULTISHOT && cases[0].body) {
         uint8_t n_hparams = (uint8_t)(cases[0].n_params + 1);
         Binding **hparams = arena_alloc(e->arena, n_hparams * sizeof(Binding *));
-        for (uint8_t j = 0; j < cases[0].n_params; j++)
+        for (uint32_t j = 0; j < cases[0].n_params; j++)
             hparams[j] = cases[0].param_bindings[j];
         hparams[cases[0].n_params] = kb;
         uint32_t n_caps = 0;

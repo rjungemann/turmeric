@@ -257,7 +257,7 @@ static bool call_type_has_named_tyvar(const Type *t) {
              * after the re-stamp in type_expr_from_form. */
             if (call_type_has_named_tyvar(t->as.fn.result_full_type)) return true;
             if (t->as.fn.arg_full_types) {
-                for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
                     if (call_type_has_named_tyvar(t->as.fn.arg_full_types[i])) return true;
                 }
             }
@@ -299,7 +299,7 @@ static bool type_mentions_tyvar(const Type *t) {
         case TY_FN:
             if (type_mentions_tyvar(t->as.fn.result_full_type)) return true;
             if (t->as.fn.arg_full_types)
-                for (uint8_t i = 0; i < t->as.fn.arity; i++)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
                     if (type_mentions_tyvar(t->as.fn.arg_full_types[i])) return true;
             return false;
         default: return false;
@@ -317,7 +317,7 @@ static bool type_mentions_tyvar_name(const Type *t, const char *name) {
         case TY_FN:
             if (type_mentions_tyvar_name(t->as.fn.result_full_type, name)) return true;
             if (t->as.fn.arg_full_types) {
-                for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
                     if (type_mentions_tyvar_name(t->as.fn.arg_full_types[i], name)) return true;
                 }
             }
@@ -465,8 +465,8 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                 return type_eq(*expected, actual);
             }
             bool ok = true;
-            uint8_t exp_arity = expected->as.fn.arity;
-            uint8_t act_arity = actual.as.fn.arity;
+            uint32_t exp_arity = expected->as.fn.arity;
+            uint32_t act_arity = actual.as.fn.arity;
             uint8_t n = exp_arity < act_arity ? exp_arity : act_arity;
             for (uint8_t i = 0; i < n; i++) {
                 const Type *ea = (expected->as.fn.arg_full_types &&
@@ -568,7 +568,7 @@ static void call_collect_forall_outer_rec(const Type *expected, const Type *actu
             return;
         case TY_FN: {
             if (actual->kind != TY_FN) return;
-            uint8_t n = expected->as.fn.arity < actual->as.fn.arity
+            uint32_t n = expected->as.fn.arity < actual->as.fn.arity
                 ? expected->as.fn.arity : actual->as.fn.arity;
             for (uint8_t i = 0; i < n; i++) {
                 const Type *ea = expected->as.fn.arg_full_types
@@ -636,15 +636,27 @@ static Type call_instantiate_type(Elab *e, const Type *t,
              * TypeKind shells (arg_kinds/result_kind) in sync with the
              * instantiated payloads. */
             Type ft = *t;
-            uint8_t ar = t->as.fn.arity;
+            uint32_t ar = t->as.fn.arity;
+            /* ft shares t's out-of-line arg arrays by value; give it private
+             * copies before overwriting per-arg kinds for instantiated poly
+             * args, so the shared source type is not mutated. */
+            if (ar) {
+                uint8_t *fk = tur_fn_args_alloc(ar), *ff = tur_fn_args_alloc(ar);
+                for (uint32_t k = 0; k < ar; k++) {
+                    fk[k] = t->as.fn.arg_kinds[k];
+                    ff[k] = t->as.fn.arg_flags[k];
+                }
+                ft.as.fn.arg_kinds = fk;
+                ft.as.fn.arg_flags = ff;
+            }
             if (t->as.fn.arg_full_types) {
                 Type **afts = (Type **)arena_alloc(e->arena, (ar ? ar : 1) * sizeof(Type *));
-                for (uint8_t k = 0; k < ar; k++) {
+                for (uint32_t k = 0; k < ar; k++) {
                     if (t->as.fn.arg_full_types[k]) {
                         afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
                         *afts[k] = call_instantiate_type(e, t->as.fn.arg_full_types[k],
                                                          bindings, n_bindings);
-                        if (k < MAX_FN_ARITY) ft.as.fn.arg_kinds[k] = afts[k]->kind;
+                        ft.as.fn.arg_kinds[k] = afts[k]->kind;
                     } else {
                         afts[k] = NULL;
                     }
@@ -1053,7 +1065,7 @@ static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
              * argument via EX_FN_TO_FAT instead of passing a raw thin pointer
              * the callee then mis-dispatches -> SIGSEGV. */
             if (tmp_b->type.as.fn.arg_full_types) {
-                for (uint8_t ai = 0; ai < tmp_b->type.as.fn.arity; ai++) {
+                for (uint32_t ai = 0; ai < tmp_b->type.as.fn.arity; ai++) {
                     Type *aft = tmp_b->type.as.fn.arg_full_types[ai];
                     if ((aft && aft->kind == TY_FN && !aft->as.fn.cfnptr) ||
                         (!aft && tmp_b->type.as.fn.arg_kinds[ai] == TY_FN))
@@ -1311,7 +1323,7 @@ static bool sz_cross_param_unify(Elab *e, const Form *call,
     /* Per-call substitution table: bare-symbol size variable -> bound term. */
     struct { const char *name; const SizeTerm *bound; uint32_t arg_idx; } subst[8];
     uint8_t n_subst = 0;
-    uint8_t arity = fn_type->as.fn.arity;
+    uint32_t arity = fn_type->as.fn.arity;
     for (uint32_t i = 0; i < n_args && i < arity; i++) {
         const Form *pf = fn_type->as.fn.param_type_forms[i];
         if (!pf || pf->tag != F_LIST || pf->as.list.len < 2) continue;
@@ -1460,7 +1472,7 @@ static bool fn_type_has_float_carrier(const Type *t) {
     if (!t || t->kind != TY_FN) return false;
     TypeKind rk = t->as.fn.result_kind;
     if (rk == TY_FLOAT || rk == TY_FLOAT32 || rk == TY_FLOAT64) return true;
-    for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
         TypeKind ak = t->as.fn.arg_kinds[i];
         if (ak == TY_FLOAT || ak == TY_FLOAT32 || ak == TY_FLOAT64) return true;
     }
@@ -2451,7 +2463,7 @@ Expr *elab_call(Elab *e, Form *call) {
                     Expr *fa = call_expr->as.call_.args[fi];
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
                         continue;
-                    uint8_t inner_arity = fa->type.as.fn.arity;
+                    uint32_t inner_arity = fa->type.as.fn.arity;
                     if (inner_arity < 1 || inner_arity > 5) continue;
                     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *bt = fa->type;
@@ -3169,7 +3181,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
             if (inner_fn_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL;
             } else {
-                uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                uint32_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                     ? inner_fn_b->type.as.fn.arity : 1;
                 if (inner_fn_b->closure_fn_binding) inner_arity--;
                 Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity, elab_args[i]->span, false);
@@ -3353,7 +3365,7 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
     if (!vb->is_global || vb->type.kind != TY_FN || vb->is_poly_fn) return NULL;
     const Type *vt = &vb->type;
     if (!vt->as.fn.arg_full_types) return NULL;
-    uint8_t ar = vt->as.fn.arity;
+    uint32_t ar = vt->as.fn.arity;
     if (ar == 0 || ar > MAX_FN_ARITY || ar != expected->as.fn.arity) return NULL;
     /* poly-hof-reversed-order-primitive-pin: a "pin" is any generic parameter
      * slot (gt is a bare tyvar) whose expected counterpart `ct` is already
@@ -3577,7 +3589,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return NULL;
     }
 
-    uint8_t expected_arity = 0;
+    uint32_t expected_arity = 0;
     if (fn_type.kind == TY_FN) {
         expected_arity = fn_type.as.fn.arity;
 
@@ -3594,8 +3606,8 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
      * partial application is allowed up to n_required (= arity - 1) args,
      * and any call with n_args >= n_required dispatches variadically. */
     bool fn_is_variadic = (fn_type.kind == TY_FN && fn_type.as.fn.is_variadic);
-    uint8_t n_required = (fn_is_variadic && expected_arity > 0)
-                         ? (uint8_t)(expected_arity - 1)
+    uint32_t n_required = (fn_is_variadic && expected_arity > 0)
+                         ? (expected_arity - 1)
                          : expected_arity;
 
     if (n_args < n_required && fn_type.kind == TY_FN) {
@@ -3883,7 +3895,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                  * unchanged).  Only the full-type arrays the eta look-ahead
                  * reads need substituting. */
                 eta_param_fn_inst = *exp_param_fn;
-                uint8_t ar = exp_param_fn->as.fn.arity;
+                uint32_t ar = exp_param_fn->as.fn.arity;
                 if (exp_param_fn->as.fn.arg_full_types) {
                     Type **afts = (Type **)arena_alloc(e->arena,
                         (ar ? ar : 1) * sizeof(Type *));
@@ -4090,7 +4102,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * box) and a boxed TY_FN is left untouched; only a bare, unboxed
              * TY_FN is shimmed.  Mirrors the ^fat auto-shim arity bound (<=5). */
             if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
-                uint8_t inner_arity = args[i]->type.as.fn.arity;
+                uint32_t inner_arity = args[i]->type.as.fn.arity;
                 if (inner_arity >= 1 && inner_arity <= 5) {
                     /* M7 fix direction 1: keep the precise fn signature on the
                      * boxed shim's static type so a function value escaping into
@@ -4565,7 +4577,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                     inner_fn_b->type.kind == TY_FN &&
                     inner_fn_b->type.as.fn.arg_full_types) {
                     uint8_t env_off = inner_fn_b->closure_fn_binding ? 1 : 0;
-                    for (uint8_t bp = 0; bp < fbody->as.fn.arity; bp++) {
+                    for (uint32_t bp = 0; bp < fbody->as.fn.arity; bp++) {
                         Kind fk;
                         if (!hrt_body_param_hk_var_kind(rank2_forall_ty,
                                 fbody->as.fn.arg_full_types[bp], &fk))
@@ -4656,7 +4668,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         if (!wrapper_b) return NULL;
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
                     } else {
-                        uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                        uint32_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                             ? inner_fn_b->type.as.fn.arity : 1;
                         if (inner_fn_b->closure_fn_binding) inner_arity--;
                         Binding *wrapper_b = make_poly_wrapper_ex(
@@ -4685,7 +4697,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                               inner_fn_b->name ? inner_fn_b->name->name : "?");
                     return NULL;
                 } else {
-                    uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                    uint32_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                         ? inner_fn_b->type.as.fn.arity : 1;
                     /* Closures have an env param counted in arity — subtract it */
                     if (inner_fn_b->closure_fn_binding) inner_arity--;
@@ -4772,7 +4784,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
                         wrap->as.poly_wrap_.is_closure = true;
                     } else {
-                        uint8_t inner_arity = (inner_fn_b->type.kind == TY_FN)
+                        uint32_t inner_arity = (inner_fn_b->type.kind == TY_FN)
                             ? inner_fn_b->type.as.fn.arity : 1;
                         if (inner_fn_b->closure_fn_binding) inner_arity--;
                         Binding *wrapper_b = make_poly_wrapper(e, inner_fn_b, inner_arity,
@@ -4899,7 +4911,7 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                      * through to the pass-through branch below exactly as a
                      * TY_PTR_VOID closure did pre-B-1; shimming it here would
                      * double-box and segfault. */
-                    uint8_t inner_arity = args[i]->type.as.fn.arity;
+                    uint32_t inner_arity = args[i]->type.as.fn.arity;
                     if (inner_arity > 5) {
                         diag_emit(DIAG_ERROR, args[i]->span,
                             "fat (^fat) parameter of '%s' cannot shim an arity-%u "
@@ -5750,7 +5762,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     Type mapper_ty = M->binding->type;
 
     /* Prepend a void* env parameter. */
-    uint8_t new_np = (uint8_t)(M->n_params + 1);
+    uint32_t new_np = (uint32_t)(M->n_params + 1);
     Binding **np = (Binding **)arena_alloc(e->arena, new_np * sizeof(Binding *));
     Type *npt = (Type *)arena_alloc(e->arena, new_np * sizeof(Type));
     char epn[40];
@@ -5758,33 +5770,39 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     Binding *envp = binding_new(e, symtab_intern(e->st, strslice(epn, (uint32_t)strlen(epn))),
                                 TYPE_PTR_VOID, false, false, span);
     np[0] = envp; npt[0] = TYPE_PTR_VOID;
-    for (uint8_t i = 0; i < M->n_params; i++) {
+    for (uint32_t i = 0; i < M->n_params; i++) {
         np[i + 1] = M->params[i];
         npt[i + 1] = M->param_types ? M->param_types[i] : M->params[i]->type;
     }
     M->params = np; M->n_params = new_np; M->param_types = npt;
 
     /* Rebuild M's fn type with the void* env kind prepended.  Copy the whole
-     * type by value (preserving result info and EVERY per-arg flag array --
-     * arg_linear/unique/affine/relevant/borrow/fat/poly_fn/...), then shift the
-     * fixed-size per-arg arrays up by one and put env in slot 0.  A partial
-     * rebuild via type_fn() would zero-init the flag arrays and silently drop,
-     * e.g., a ^poly_fn marker on a shifted param -> ABI-mismatched call. */
-    uint8_t old_arity = mapper_ty.as.fn.arity;
+     * type by value (preserving result info and EVERY per-arg flag --
+     * arg_flags carries linear/unique/affine/relevant/borrow/fat/poly_fn), then
+     * build fresh per-arg arrays one longer with env in slot 0.  Fresh arrays
+     * (not an in-place shift) because the out-of-line arg storage is shared with
+     * mapper_ty by value; shifting in place would both corrupt the source and
+     * overflow its `old_arity`-sized allocation.  type_fn() alone will not do --
+     * it would zero the flags and drop, e.g., a ^poly_fn marker. */
+    uint32_t old_arity = mapper_ty.as.fn.arity;
     Type new_ty = mapper_ty;
     new_ty.as.fn.arity = new_np;
-    for (uint8_t i = old_arity; i >= 1; i--) {
-        new_ty.as.fn.arg_kinds[i] = new_ty.as.fn.arg_kinds[i - 1];
-        /* One packed byte carries every per-arg flag, so the whole flag set
-         * shifts up in a single move (was eight parallel bool-array shifts). */
-        new_ty.as.fn.arg_flags[i] = new_ty.as.fn.arg_flags[i - 1];
+    {
+        uint8_t *nk = tur_fn_args_alloc(new_np);
+        uint8_t *nf = tur_fn_args_alloc(new_np);
+        nk[0] = TY_PTR_VOID;  /* env slot */
+        nf[0] = 0;            /* env slot carries no per-arg markers */
+        for (uint32_t i = 0; i < old_arity; i++) {
+            nk[i + 1] = mapper_ty.as.fn.arg_kinds[i];
+            nf[i + 1] = mapper_ty.as.fn.arg_flags[i];
+        }
+        new_ty.as.fn.arg_kinds = nk;
+        new_ty.as.fn.arg_flags = nf;
     }
-    new_ty.as.fn.arg_kinds[0] = TY_PTR_VOID;
-    new_ty.as.fn.arg_flags[0] = 0;  /* env slot carries no per-arg markers */
     if (mapper_ty.as.fn.arg_full_types) {
         Type **shifted = (Type **)arena_alloc(e->arena, new_np * sizeof(Type *));
         shifted[0] = NULL;
-        for (uint8_t i = 0; i < old_arity; i++) shifted[i + 1] = mapper_ty.as.fn.arg_full_types[i];
+        for (uint32_t i = 0; i < old_arity; i++) shifted[i + 1] = mapper_ty.as.fn.arg_full_types[i];
         new_ty.as.fn.arg_full_types = shifted;
     }
     M->binding->type = new_ty;
@@ -6187,7 +6205,7 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span) {
     /* The original FnDef, reached directly from the binding (MB1 link). */
     FnDef *orig = inner_b->source_fn_def;
     if (!orig || !orig->params || !orig->body) return NULL;
-    uint8_t on = orig->n_params;
+    uint32_t on = orig->n_params;
     if ((uint32_t)on + nc > MAX_FN_ARITY) return NULL;
 
     /* clone name */
@@ -6392,7 +6410,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     bool inner_is_plain_fn = (inner_b->type.kind == TY_FN &&
                               inner_b->closure_fn_binding == NULL);
     TypeKind real_arg_kinds[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < inner_arity; i++) {
+    for (uint32_t i = 0; i < inner_arity; i++) {
         TypeKind rk = TY_INT;
         if (inner_is_plain_fn && i < inner_b->type.as.fn.arity) {
             TypeKind k = inner_b->type.as.fn.arg_kinds[i];
@@ -6414,7 +6432,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
 
     /* Arg params x0, x1, ... */
     Binding *arg_bs[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < inner_arity; i++) {
+    for (uint32_t i = 0; i < inner_arity; i++) {
         char apname[40];
         snprintf(apname, sizeof(apname), "__poly_x%u_%u", i, e->next_id++);
         const Symbol *apsym = symtab_intern(e->st, strslice(apname, (uint32_t)strlen(apname)));
@@ -6440,9 +6458,9 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
         : ((inner_b->type.kind == TY_FN)
             ? inner_b->type.as.fn.result_kind : TY_INT);
     Expr **call_args = (Expr **)arena_alloc(e->arena, (inner_arity ? inner_arity : 1) * sizeof(Expr *));
-    uint32_t call_poly_mask = 0;
-    uint32_t call_agg_mask = 0;
-    for (uint8_t i = 0; i < inner_arity; i++) {
+    uint64_t call_poly_mask = 0;
+    uint64_t call_agg_mask = 0;
+    for (uint32_t i = 0; i < inner_arity; i++) {
         Expr *av = expr_new(e->arena, EX_VAR, type_from_kind(real_arg_kinds[i]), span);
         av->as.var.binding = arg_bs[i];
         call_args[i] = av;
@@ -6451,7 +6469,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
         if (inner_b->type.kind == TY_FN && inner_b->type.as.fn.arg_full_types) {
             const Type *aft = inner_b->type.as.fn.arg_full_types[i];
             if (aft && aft->kind == TY_FORALL) {
-                call_poly_mask |= (1u << i);
+                call_poly_mask |= ARG_IDX_BIT(i);
             }
             /* Slice 3 (constrained-hkt-forall codegen): a by-value aggregate
              * param `(f a)` = `(Option int)` arrives through the carrier as an
@@ -6464,7 +6482,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
                       (aft->kind == TY_ADT && aft->as.adt_.def &&
                        !aft->as.adt_.def->is_heap &&
                        adt_is_byvalue_product(aft->as.adt_.def)))) {
-                call_agg_mask |= (1u << i);
+                call_agg_mask |= ARG_IDX_BIT(i);
             }
         }
     }
@@ -6482,7 +6500,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     TypeKind warg_kinds[MAX_FN_ARITY];
     warg_kinds[0] = TY_PTR_VOID;
     for (uint8_t j = 0; j < n_lead_ignore; j++) warg_kinds[1 + j] = TY_INT;
-    for (uint8_t i = 0; i < inner_arity; i++) warg_kinds[argbase + i] = real_arg_kinds[i];
+    for (uint32_t i = 0; i < inner_arity; i++) warg_kinds[argbase + i] = real_arg_kinds[i];
     Type wfn_type = type_fn(warg_kinds, w_arity, inner_result_kind);
     /* M7: when the inner fn returns a by-value aggregate (a Monad/HKT
      * continuation returning `(m b)` -> e.g. `Option__int`), carry its FULL
@@ -6601,7 +6619,7 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
         }
     }
 
-    uint32_t poly_arg_mask = 0;
+    uint64_t poly_arg_mask = 0;
     if (poly && poly->kind == TY_FORALL) {
         const Type *pbody = poly->as.forall_.body;
         if (pbody && pbody->kind == TY_FN && pbody->as.fn.arg_full_types) {
@@ -6623,14 +6641,14 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                         /* HRT4: pass-through — already a tur_poly_fn_t. */
                         wrap->as.poly_wrap_.wrapper_binding = NULL;
                     } else {
-                        uint8_t inner_arity = (inner_b->type.kind == TY_FN)
+                        uint32_t inner_arity = (inner_b->type.kind == TY_FN)
                             ? (uint8_t)inner_b->type.as.fn.arity : 1;
                         Binding *wrapper_b = make_poly_wrapper(e, inner_b, inner_arity, args[i]->span, false);
                         if (!wrapper_b) return NULL;
                         wrap->as.poly_wrap_.wrapper_binding = wrapper_b;
                     }
                     args[i] = wrap;
-                    poly_arg_mask |= (1u << i);
+                    poly_arg_mask |= ARG_IDX_BIT(i);
                 }
             }
         }

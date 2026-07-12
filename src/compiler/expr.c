@@ -387,7 +387,7 @@ void expr_print(Buf *b, const Expr *e) {
         case EX_PERFORM:
             buf_puts(b, "(perform (");
             buf_puts(b, e->as.perform_.perform->effect_name->name);
-            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++) {
+            for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++) {
                 buf_putc(b, ' ');
                 expr_print(b, e->as.perform_.perform->args[i]);
             }
@@ -400,7 +400,7 @@ void expr_print(Buf *b, const Expr *e) {
                 buf_puts(b, " (");
                 buf_puts(b, e->as.handle_.handle->cases[i].effect_name->name);
                 buf_puts(b, " [");
-                for (uint8_t j = 0; j < e->as.handle_.handle->cases[i].n_params; j++) {
+                for (uint32_t j = 0; j < e->as.handle_.handle->cases[i].n_params; j++) {
                     if (j > 0) buf_putc(b, ' ');
                     buf_puts(b, e->as.handle_.handle->cases[i].param_names[j]->name);
                 }

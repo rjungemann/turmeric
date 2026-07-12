@@ -478,7 +478,7 @@ static bool fn_is_lens(const FnDef *fn) {
     if (fn->return_type.kind != TY_APP) return false;
     const char *fv = ty_head_tyvar_name(&fn->return_type);
     if (!fv) return false;
-    for (uint8_t p = 0; p < fn->n_params; p++) {
+    for (uint32_t p = 0; p < fn->n_params; p++) {
         const Type *pt = &fn->param_types[p];
         if (pt->kind != TY_FN) continue;
         const Type *res = pt->as.fn.result_full_type;
@@ -942,7 +942,7 @@ static void compute_lens_indices(const Expr *prog) {
         if (k->lens_idx >= 0) continue;
         const FnDef *enc = find_fndef(prog, k->enclosing);
         if (!enc) continue;
-        for (uint8_t p = 0; p < enc->n_params; p++) {
+        for (uint32_t p = 0; p < enc->n_params; p++) {
             const Binding *pb = enc->params ? enc->params[p] : NULL;
             if (pb && pb->name && pb->name->name &&
                 strcmp(pb->name->name, k->callee) == 0) {
@@ -956,7 +956,7 @@ static void compute_lens_indices(const Expr *prog) {
 /* CM3-transitive: is `b` a positional parameter binding of `fd`? */
 static bool is_param_of(const FnDef *fd, const Binding *b) {
     if (!fd || !b || !fd->params) return false;
-    for (uint8_t p = 0; p < fd->n_params; p++)
+    for (uint32_t p = 0; p < fd->n_params; p++)
         if ((const Binding *)fd->params[p] == b) return true;
     return false;
 }
@@ -1103,7 +1103,7 @@ void mono_specs_resolve_program(const void *prog_) {
             const FnDef *enc = find_fndef(prog, k->enclosing);
             if (!enc) continue;
             int lens_idx = -1;
-            for (uint8_t p = 0; p < enc->n_params; p++) {
+            for (uint32_t p = 0; p < enc->n_params; p++) {
                 const Binding *pb = enc->params ? enc->params[p] : NULL;
                 if (pb && pb->name && pb->name->name &&
                     strcmp(pb->name->name, k->callee) == 0) {

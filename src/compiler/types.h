@@ -527,21 +527,22 @@ static inline CopyKind typekind_default_copy_kind(TypeKind k) {
             return CK_MOVE;
     }
 }
-/* Mechanical ceiling on positional fn parameters.  This is NOT an ABI limit
- * (an emitted C function takes an arbitrary number of params); it bounds the
- * fixed-size inline per-arg arrays in Type.as.fn and the fixed stack buffers in
- * elaboration/emission/the interpreter.  Raised from the historical 16 to 64
- * (arbitrary-fn-arity-plan Phase 1): generated code, macro expansions, and wide
- * interop shims legitimately exceed 16.  Hand-written high-arity APIs remain a
- * code smell -- exceeding 16 is a soft TUR-W0102 warning (Phase 6), not a hard
- * error.  Phase 2 replaces these inline arrays with an arena-allocated FnArg
- * record to lift the ceiling entirely; until then 64 is the hard bound. */
+/* MAX_FN_ARITY is NO LONGER a cap on how many parameters a function may have.
+ * A function type's per-arg storage is out of line (Type.as.fn.arg_kinds /
+ * arg_flags are arena pointers), FnDef/ExternC/Type arities are uint32_t, and
+ * the elaboration/emission per-param buffers are arena-sized to the actual
+ * parameter count -- so a defn, fn, or extern-c may declare an arbitrary number
+ * of positional parameters, matching the emitted C (which has no limit of its
+ * own).  This constant survives only as the default size of a few internal
+ * codegen fast-path buffers (e.g. the ABI-specialization scratch), each of
+ * which falls back gracefully for wider functions rather than rejecting them.
+ * The house-style nudge lives in HIGH_ARITY_SOFT_LIMIT, not here. */
 #define MAX_FN_ARITY 64
 
-/* arbitrary-fn-arity Phase 6: the historical hard cap of 16.  Declaring more
- * than this many positional params is no longer an error (the mechanical bound
- * is MAX_FN_ARITY), but it emits the TUR-W0041 lint nudge toward the Function
- * Arity Style Guide.  Keep <= MAX_FN_ARITY. */
+/* arbitrary-fn-arity: the historical hand-written-arity soft ceiling of 16.
+ * Declaring more than this many positional params is NOT an error -- arity is
+ * unbounded -- but it emits the TUR-W0041 lint nudge toward the Function Arity
+ * Style Guide (prefer a defstruct options value or a `& rest :type` variadic). */
 #define HIGH_ARITY_SOFT_LIMIT 16
 
 /* forall-dict-pass-multi-constraint-hkt-plan (Task 1.1): maximum number of
@@ -577,15 +578,21 @@ typedef struct Type {
     uint8_t c_num_spelling;
     union {
         struct {
-            /* Per-arg fast kind cache.  Stored as uint8_t (TypeKind has < 256
-             * enumerators) rather than the 4-byte enum so the inline array is
-             * a quarter the size -- every Type (fn or not) carries this union,
-             * so shrinking it shrinks all Types and keeps deep by-value-Type
-             * recursion (codegen's nested-let lowering) off the stack ceiling
-             * as MAX_FN_ARITY grows (arbitrary-fn-arity Phase 1). */
-            uint8_t arg_kinds[MAX_FN_ARITY];
+            /* Per-arg fast kind cache, out of line: an arena pointer of length
+             * `arity` (NULL iff arity == 0), allocated from the process-lifetime
+             * global type arena (see tur_fn_args_alloc).  Stored as uint8_t
+             * (TypeKind has < 256 enumerators).  Out-of-line so a Type describes
+             * ANY number of parameters -- there is no fixed inline ceiling -- and
+             * so every Type (fn or not) stays small: the fn variant no longer
+             * dominates the union with a big inline array.  Read as arg_kinds[i]
+             * exactly like the former inline array (pointer indexing is
+             * identical); it is immutable once built and freely shared across
+             * by-value Type copies.  A handful of sites that rebuild a fn type
+             * with a different arity allocate fresh storage rather than mutate a
+             * shared array (see tur_fn_args_alloc call sites). */
+            uint8_t *arg_kinds;
             TypeKind result_kind;
-            uint8_t arity;
+            uint32_t arity;       /* bounded only by uint32_t -- no hard cap */
             /* Future-proofing for v3 effects: effect row slot.
              * NULL in v0/v1; treated as empty effect set. */
             struct EffectRow *effect_row;
@@ -614,8 +621,10 @@ typedef struct Type {
              *                  convention (thunk slot 0, env heap struct); a bare
              *                  non-capturing fn is auto-shimmed (EX_FN_TO_FAT)
              *   FA_POLY_FN     CCL: a first-class :fn poly-closure carrier
-             *                  (tur_poly_fn_t {env, fn}); boxed via EX_POLY_WRAP */
-            uint8_t arg_flags[MAX_FN_ARITY];
+             *                  (tur_poly_fn_t {env, fn}); boxed via EX_POLY_WRAP
+             * Out of line alongside arg_kinds: an arena pointer of length `arity`
+             * (NULL iff arity == 0).  Allocated/owned identically. */
+            uint8_t *arg_flags;
             /* A#1 (return position): true when the result type carries the
              * ^fat marker.  A bare non-capturing fn returned from this
              * function is auto-shimmed into a fat closure (EX_FN_TO_FAT) at
@@ -882,6 +891,13 @@ enum {
         if (v) (fn).arg_flags[(i)] |= (uint8_t)(bit);                         \
         else   (fn).arg_flags[(i)] &= (uint8_t)~(uint8_t)(bit);               \
     } while (0)
+
+/* Allocate `n` zeroed bytes for a fn type's out-of-line per-arg array from the
+ * process-lifetime global type arena (defined in types.c).  Returns NULL for
+ * n == 0.  Used by type_fn and by the few sites that rebuild a fn type at a
+ * different arity; the arena is never freed (reachable, process-lifetime), so
+ * the arrays outlive every by-value Type copy that shares them. */
+uint8_t *tur_fn_args_alloc(uint32_t n);
 
 /* CONV-S1 (defstruct-as-defadt): the runtime `any`-box tag for a type.  A
  * struct-origin lowered ADT boxes / casts / is?-tests as TY_STRUCT, so the
@@ -1248,8 +1264,11 @@ static inline Type type_weak(TypeKind inner) {
     return t;
 }
 
-/* Construct a function type from TypeKinds. */
-static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_kind) {
+/* Construct a function type from TypeKinds.  arity is unbounded (uint32_t); the
+ * per-arg kind/flag arrays are allocated out of line from the global type arena
+ * (tur_fn_args_alloc), so a function type can describe any number of parameters
+ * -- matching the emitted C, which has no parameter-count limit of its own. */
+static inline Type type_fn(const TypeKind arg_kinds[], uint32_t arity, TypeKind result_kind) {
     Type t = {0};
     t.kind = TY_FN;
     t.copy_kind = typekind_default_copy_kind(TY_FN);
@@ -1258,17 +1277,15 @@ static inline Type type_fn(TypeKind arg_kinds[], uint8_t arity, TypeKind result_
     t.n_typeclass_instances = 0;
     t.hkt_kind = KIND_STAR;  /* Phase HKT-P6: all types are kind * in v1 */
     t.as.fn.arity = arity;
-    for (uint8_t i = 0; i < arity; i++) {
-        t.as.fn.arg_kinds[i] = arg_kinds[i];
+    t.as.fn.arg_kinds = tur_fn_args_alloc(arity);  /* NULL when arity == 0 */
+    t.as.fn.arg_flags = tur_fn_args_alloc(arity);  /* zeroed: all flags clear */
+    for (uint32_t i = 0; i < arity; i++) {
+        t.as.fn.arg_kinds[i] = (uint8_t)arg_kinds[i];
     }
     t.as.fn.result_kind = result_kind;
     t.as.fn.effect_row = NULL;
     t.as.fn.arg_full_types = NULL;
     t.as.fn.result_full_type = NULL;
-    /* All per-arg flags default clear.  `Type t = {0}` already zeroed arg_flags;
-     * the explicit sweep documents the invariant and stays correct if the union
-     * initialiser ever changes. */
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) t.as.fn.arg_flags[i] = 0;
     t.as.fn.result_fat = false;  /* A#1: must initialise or UBSan fires on bool read */
     t.as.fn.boxed = false;  /* CRU B-1: must initialise or UBSan fires on bool read */
     t.as.fn.cfnptr = false; /* typed-c-abi-function-pointers: default to a Turmeric closure type */

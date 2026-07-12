@@ -165,7 +165,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                               head->name);
                     return NULL;
                 }
-                for (uint8_t i = 0; i < n_args; i++) {
+                for (uint32_t i = 0; i < n_args; i++) {
                     Type *a = fn_type_from_form(e, form->as.list.items[i + 1],
                                                 type_params, type_param_kinds, n_type_params);
                     if (!a) return NULL;
@@ -300,7 +300,7 @@ static bool fn_type_has_named_tyvar(const Type *t) {
              * nested tyvar went undetected and `carrier_ok` wrongly fired. */
             if (fn_type_has_named_tyvar(t->as.fn.result_full_type)) return true;
             if (t->as.fn.arg_full_types) {
-                for (uint8_t i = 0; i < t->as.fn.arity; i++) {
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
                     if (fn_type_has_named_tyvar(t->as.fn.arg_full_types[i])) return true;
                 }
             }
@@ -361,7 +361,7 @@ static void fn_collect_sig_tyvars(Elab *e, const Type *t) {
             return;
         case TY_FN:
             if (t->as.fn.arg_full_types) {
-                for (uint8_t i = 0; i < t->as.fn.arity; i++)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
                     fn_collect_sig_tyvars(e, t->as.fn.arg_full_types[i]);
             }
             fn_collect_sig_tyvars(e, t->as.fn.result_full_type);
@@ -390,7 +390,7 @@ static bool fn_type_mentions_named(const Type *t, const char *name) {
             return false;
         case TY_FN:
             if (t->as.fn.arg_full_types)
-                for (uint8_t i = 0; i < t->as.fn.arity; i++)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
                     if (fn_type_mentions_named(t->as.fn.arg_full_types[i], name)) return true;
             return fn_type_mentions_named(t->as.fn.result_full_type, name);
         default:
@@ -543,7 +543,7 @@ static bool fn_type_is_carrier_safe(const Type *ft) {
     if (!ft || ft->kind != TY_FN) return false;
     if (ft->as.fn.result_fat) return false;
     if (!fn_kind_is_carrier_scalar(ft->as.fn.result_kind)) return false;
-    for (uint8_t i = 0; i < ft->as.fn.arity; i++) {
+    for (uint32_t i = 0; i < ft->as.fn.arity; i++) {
         if (!fn_kind_is_carrier_scalar(ft->as.fn.arg_kinds[i])) return false;
         if ((ft->as.fn.arg_flags[i] &
              (FA_LINEAR | FA_UNIQUE | FA_UNIQUE_MUT | FA_AFFINE |
@@ -601,28 +601,31 @@ bool retype_bare_fat_tail_calls(Expr *tail, TypeKind target) {
  * signature on the enclosing function's type so a caller that boxes a
  * tur_poly_fn_t into this ^fat slot (EX_POLY_TO_FAT) can pick a slot-0 shim
  * whose ABI matches the typed-thunk cast the retyped invoke applies. */
-static int bare_fat_tail_call_arg_kinds(const Expr *tail, const Binding *g,
-                                        TypeKind *out) {
+static int bare_fat_tail_call_arg_kinds(Arena *arena, const Expr *tail,
+                                        const Binding *g, TypeKind **out) {
     if (!tail) return -1;
     switch (tail->kind) {
         case EX_DO:
             return tail->as.do_.n
-                ? bare_fat_tail_call_arg_kinds(tail->as.do_.items[tail->as.do_.n - 1], g, out)
+                ? bare_fat_tail_call_arg_kinds(arena, tail->as.do_.items[tail->as.do_.n - 1], g, out)
                 : -1;
         case EX_LET:
         case EX_LETREC:
-            return bare_fat_tail_call_arg_kinds(tail->as.let_.body, g, out);
+            return bare_fat_tail_call_arg_kinds(arena, tail->as.let_.body, g, out);
         case EX_IF: {
-            int a = bare_fat_tail_call_arg_kinds(tail->as.if_.then_, g, out);
+            int a = bare_fat_tail_call_arg_kinds(arena, tail->as.if_.then_, g, out);
             if (a >= 0) return a;
-            return bare_fat_tail_call_arg_kinds(tail->as.if_.else_or_null, g, out);
+            return bare_fat_tail_call_arg_kinds(arena, tail->as.if_.else_or_null, g, out);
         }
         case EX_CALL:
             if (tail->as.call_.fn_binding == g) {
+                /* Arena-allocate the arg-kind vector sized to the actual call --
+                 * no fixed ceiling on the tail-called function's arity. */
                 uint32_t n = tail->as.call_.n_args;
-                if (n > MAX_FN_ARITY) n = MAX_FN_ARITY;
+                TypeKind *buf = n ? (TypeKind *)arena_alloc(arena, n * sizeof(TypeKind)) : NULL;
                 for (uint32_t i = 0; i < n; i++)
-                    out[i] = tail->as.call_.args[i]->type.kind;
+                    buf[i] = tail->as.call_.args[i]->type.kind;
+                *out = buf;
                 return (int)n;
             }
             return -1;
@@ -1027,25 +1030,31 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * We parse sequentially, collecting constraints and creating parameters.
      */
     Binding **params = NULL;
-    uint8_t n_params = 0;
-    TypeKind param_kinds[MAX_FN_ARITY];
+    uint32_t n_params = 0;
+    /* Per-param scratch is sized to the parameter-vector length -- a safe upper
+     * bound on the parameter count (each param spends >= 1 vector slot) -- and
+     * arena-allocated rather than a fixed [MAX_FN_ARITY] stack array, so a defn
+     * may declare any number of positional parameters (arbitrary-fn-arity: no
+     * hard cap). */
+    uint32_t pcap = params_f->as.list.len ? params_f->as.list.len : 1;
+    TypeKind *param_kinds = (TypeKind *)arena_alloc(e->arena, pcap * sizeof(TypeKind));
     /* Phase HRT1: full type annotations for rank-2 poly params (NULL if not poly) */
-    Type *param_poly_types[MAX_FN_ARITY];
-    for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_poly_types[_i] = NULL;
+    Type **param_poly_types = (Type **)arena_alloc(e->arena, pcap * sizeof(Type *));
+    for (uint32_t _i = 0; _i < pcap; _i++) param_poly_types[_i] = NULL;
     /* sized-types-cross-param-unification: retain each parameter's raw type
      * annotation Form so call-site unification can re-extract size-index
      * templates (e.g. `(SizedVec n)`).  NULL when a param has no list-form
      * annotation. */
-    const Form *param_type_forms_buf[MAX_FN_ARITY];
-    for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_type_forms_buf[_i] = NULL;
+    const Form **param_type_forms_buf = (const Form **)arena_alloc(e->arena, pcap * sizeof(const Form *));
+    for (uint32_t _i = 0; _i < pcap; _i++) param_type_forms_buf[_i] = NULL;
 
     /* CT0: Contract type predicates from param annotations { v : T | p }.
      * Collected during param parsing; injected as pre-checks before the body. */
-    const Form *ct_param_preds[MAX_FN_ARITY];     /* predicate forms */
-    const char *ct_param_varnames[MAX_FN_ARITY];  /* contract var names (for substitution) */
-    uint8_t ct_param_param_idx[MAX_FN_ARITY];     /* which param index the predicate belongs to */
-    uint8_t n_ct_param_preds = 0;
-    for (uint8_t _ci = 0; _ci < MAX_FN_ARITY; _ci++) {
+    const Form **ct_param_preds     = (const Form **)arena_alloc(e->arena, pcap * sizeof(const Form *));
+    const char **ct_param_varnames  = (const char **)arena_alloc(e->arena, pcap * sizeof(const char *));
+    uint32_t    *ct_param_param_idx = (uint32_t *)arena_alloc(e->arena, pcap * sizeof(uint32_t));
+    uint32_t n_ct_param_preds = 0;
+    for (uint32_t _ci = 0; _ci < pcap; _ci++) {
         ct_param_preds[_ci] = NULL;
         ct_param_varnames[_ci] = NULL;
         ct_param_param_idx[_ci] = 0;
@@ -1179,7 +1188,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             is_variadic = true;
             /* Add rest param as a regular int binding (cons-list pointer at runtime) */
             if (n_params == 0) {
-                params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+                params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
             }
             param_kinds[n_params] = TY_INT;
             Binding *rest_b = binding_new(e, rest_p->as.sym, TYPE_INT, false, false, rest_p->span);
@@ -1783,16 +1792,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
             continue;
         }
 
-        if (n_params >= MAX_FN_ARITY) {
-            diag_emit(DIAG_ERROR, p->span,
-                      "defn: too many fixed parameters (max %d); use '& rest :type' for a rest list",
-                      MAX_FN_ARITY);
-            /* params is arena-allocated, no need to free */
-            return NULL;
-        }
-        /* arbitrary-fn-arity Phase 6: exceeding the historical soft ceiling of
-         * 16 positional params is a lint nudge, not an error.  Fire once, on the
-         * 17th positional param. */
+        /* No hard parameter-count ceiling: per-param scratch is arena-sized to
+         * the param vector and the fn type's arg arrays are out of line, so a
+         * defn may take arbitrarily many positional parameters (the emitted C
+         * function has no limit of its own).  Exceeding the historical 16 is a
+         * lint nudge (arbitrary-fn-arity Phase 6), fired once on the 17th. */
         if (n_params == HIGH_ARITY_SOFT_LIMIT) {
             diag_emit_with_code(DIAG_WARNING, p->span, TUR_W0041_HIGH_ARITY,
                       "defn has more than %d positional parameters; prefer a defstruct "
@@ -1861,7 +1865,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                     ? e->bare_fat_spec_kind : TY_INT;
         }
         if (n_params == 0) {
-            params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+            params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
         }
         params[n_params++] = b;
     }
@@ -2223,7 +2227,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
                 /* return_resolved when no parameter type mentions the tyvar. */
                 bool in_param = false;
-                for (uint8_t pi = 0; pi < n_params; pi++) {
+                for (uint32_t pi = 0; pi < n_params; pi++) {
                     if (type_mentions_named_tyvar(&params[pi]->type, tv_sym->name)) {
                         in_param = true;
                         break;
@@ -2290,8 +2294,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * the body see the stale arity-1 / no-arg_full_types from pass-1, which
      * causes spurious arity-mismatch errors for functions with poly fn params. */
     if (existing && existing->type.kind == TY_FN && existing->is_global) {
+        /* Grow the forward-declared type to the real arity.  Its pass-1
+         * out-of-line arg arrays were sized to the pass-1 arity, so allocate
+         * fresh arrays of n_params rather than write past them.  The FN_ARG_SET
+         * flag writes below then land in the fresh arg_flags. */
         existing->type.as.fn.arity = n_params;
-        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+        existing->type.as.fn.arg_kinds = tur_fn_args_alloc(n_params);
+        existing->type.as.fn.arg_flags = tur_fn_args_alloc(n_params);
+        for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             existing->type.as.fn.arg_kinds[_ei] = param_kinds[_ei];
         }
         /* AR6: propagate variadic flag early so call sites in the same body
@@ -2300,12 +2310,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
         existing->type.as.fn.rest_kind   = rest_kind;
         existing->type.as.fn.rest_full_type = rest_full_type;
         bool _any_poly = false;
-        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+        for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             if (param_poly_types[_ei]) { _any_poly = true; break; }
         }
         if (_any_poly) {
             Type **_aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
-            for (uint8_t _ei = 0; _ei < n_params; _ei++) _aFT[_ei] = param_poly_types[_ei];
+            for (uint32_t _ei = 0; _ei < n_params; _ei++) _aFT[_ei] = param_poly_types[_ei];
             existing->type.as.fn.arg_full_types = _aFT;
         }
         /* Propagate the `:fn` poly-closure marker early too, so a *recursive*
@@ -2314,7 +2324,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * already-a-carrier) -- mirroring the same arg_poly_fn assignment applied
          * to the final fn_type below.  Without this a self-call would fall back to
          * the generic int64/void* arg cast and miscompile (aggregate-as-integer). */
-        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+        for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             FN_ARG_SET(existing->type.as.fn, _ei, FA_POLY_FN,
                 params[_ei]->is_poly_fn &&
                 (params[_ei]->poly_type == NULL ||
@@ -2327,7 +2337,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * Without this the self-call sees the stale pass-1 arg_fat=false and
          * rejects the argument with a spurious "(fn []), got ptr<void>" mismatch.
          * Mirrors the final fn_type.arg_fat / result_fat assignment below. */
-        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+        for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             FN_ARG_SET(existing->type.as.fn, _ei, FA_FAT, params[_ei]->is_fat);
         }
         existing->type.as.fn.result_fat = result_fat;
@@ -2343,7 +2353,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * markers are propagated alongside it so recursive self-calls see the
          * complete discipline signature, mirroring the final fn_type assignment
          * below. */
-        for (uint8_t _ei = 0; _ei < n_params; _ei++) {
+        for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             FN_ARG_SET(existing->type.as.fn, _ei, FA_BORROW,     params[_ei]->is_borrow);
             FN_ARG_SET(existing->type.as.fn, _ei, FA_LINEAR,     params[_ei]->is_linear);
             FN_ARG_SET(existing->type.as.fn, _ei, FA_AFFINE,     params[_ei]->is_affine);
@@ -2384,7 +2394,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
 
     /* Push params into the inner scope (created earlier for kind-var bindings). */
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         scope_add(&inner, params[i]);
     }
 
@@ -2404,7 +2414,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * This pass undoes those two over-eager recoveries. */
     {
         /* Demote lone bare-keyword params to an unresolved type. */
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->type.kind != TY_TYVAR ||
                 !params[i]->type.as.tyvar_.name) continue;
             const char *nm = params[i]->type.as.tyvar_.name;
@@ -2423,7 +2433,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * match arm -- even when it appears only once in this signature. */
             if (fn_name_is_adt_tyvar(e, nm)) continue;
             uint8_t occ = 0;
-            for (uint8_t j = 0; j < n_params; j++) {
+            for (uint32_t j = 0; j < n_params; j++) {
                 const Type *jt = param_poly_types[j]
                     ? param_poly_types[j] : &params[j]->type;
                 if (fn_type_mentions_named(jt, nm)) occ++;
@@ -2460,7 +2470,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     declared = true; break;
                 }
             uint8_t occ = 1;  /* the return position itself */
-            for (uint8_t j = 0; j < n_params; j++) {
+            for (uint32_t j = 0; j < n_params; j++) {
                 const Type *jt = param_poly_types[j]
                     ? param_poly_types[j] : &params[j]->type;
                 if (fn_type_mentions_named(jt, rn)) occ++;
@@ -2483,7 +2493,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * so a GADT match arm can distinguish a quantified-`a` result from a skolem
      * that escapes.  Accumulated on top of any enclosing function's set. */
     uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (param_poly_types[i]) fn_collect_sig_tyvars(e, param_poly_types[i]);
         else                     fn_collect_sig_tyvars(e, &params[i]->type);
     }
@@ -2503,7 +2513,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * per call site (elab_specialize_bare_fat).  Specialization is the only
      * sound way to type `(g x)` as a non-int register class off the tail. */
     bool has_bare_fat = false;
-    for (uint8_t _i = 0; _i < n_params; _i++)
+    for (uint32_t _i = 0; _i < n_params; _i++)
         if (params[_i]->is_fat && params[_i]->type.kind == TY_PTR_VOID) {
             has_bare_fat = true;
             break;
@@ -2983,7 +2993,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     bool lt1_param_fail = false;
     bool body_is_inline_c = (body && body->kind == EX_INLINE_C);
     if (body && !body_is_inline_c) {
-        for (uint8_t _li = 0; _li < n_params; _li++) {
+        for (uint32_t _li = 0; _li < n_params; _li++) {
             /* LB1: a ^borrow parameter is non-consuming -- the caller retains
              * ownership and the borrow auto-releases at scope exit -- so it
              * carries no consumption obligation. Without this exemption a
@@ -3023,7 +3033,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* ST1: At function scope exit, verify all relevant params were used at least once */
     bool st1_param_fail = false;
     if (body) {
-        for (uint8_t _li = 0; _li < n_params; _li++) {
+        for (uint32_t _li = 0; _li < n_params; _li++) {
             if (params[_li]->is_relevant && params[_li]->usage_state == USAGE_UNUSED
                     && !params[_li]->is_moved) {
                 diag_emit_with_code(DIAG_ERROR, params[_li]->span,
@@ -3065,8 +3075,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
     }
 
     /* Create function type */
-    TypeKind arg_kinds[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < n_params; i++) {
+    TypeKind *arg_kinds = (TypeKind *)arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(TypeKind));
+    for (uint32_t i = 0; i < n_params; i++) {
         arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
@@ -3127,7 +3137,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         LifetimeId rlid = (return_borrow_type->n_lifetimes > 0)
                         ? return_borrow_type->lifetimes[0] : LIFETIME_NONE;
         if (rlid != LIFETIME_NONE) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 if ((params[i]->type.kind == TY_REF_IMMUT
                      || params[i]->type.kind == TY_REF_MUT)
                         && params[i]->type.n_lifetimes > 0
@@ -3138,7 +3148,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
         if (tied < 0) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 if (params[i]->type.kind == TY_REF_IMMUT
                         || params[i]->type.kind == TY_REF_MUT) {
                     tied = (int8_t)i;
@@ -3159,7 +3169,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * the call. See docs/upcoming/positional-nominal-type-identity-fix-plan.md. */
     {
         Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
-        for (uint8_t i = 0; i < n_params; i++)
+        for (uint32_t i = 0; i < n_params; i++)
             aFT[i] = param_poly_types[i] ? param_poly_types[i] : &params[i]->type;
         /* bare-fat-sink-poly-box-slot0-int64-mismatch.md: a bare `^fat` param
          * carries no fn signature (its full type is TY_PTR_VOID), so a caller
@@ -3172,14 +3182,14 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * here so the box site (elab_call.c, sink_fn_type) selects the typed
          * slot-0 shim that matches the invoke. */
         if (kind_is_non_int_register_class(return_kind)) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 if (!(params[i]->is_fat && params[i]->type.kind == TY_PTR_VOID))
                     continue;
-                TypeKind akinds[MAX_FN_ARITY];
-                int n = bare_fat_tail_call_arg_kinds(body, params[i], akinds);
+                TypeKind *akinds = NULL;
+                int n = bare_fat_tail_call_arg_kinds(e->arena, body, params[i], &akinds);
                 if (n < 0) continue;
                 Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
-                *ft = type_fn(akinds, (uint8_t)n, return_kind);
+                *ft = type_fn(akinds, (uint32_t)n, return_kind);
                 aFT[i] = ft;
             }
         }
@@ -3189,11 +3199,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* LT2: Store arg_linear flags from param bindings into fn_type */
     {
         bool any_linear = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_linear) { any_linear = true; break; }
         }
         if (any_linear) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_LINEAR, params[i]->is_linear);
             }
         }
@@ -3202,11 +3212,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* UT0: Store arg_unique flags from param bindings into fn_type */
     {
         bool any_unique = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_unique) { any_unique = true; break; }
         }
         if (any_unique) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_UNIQUE, params[i]->is_unique);
             }
         }
@@ -3214,11 +3224,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* UT2: Store arg_unique_mut flags (^unique ^mut) from param bindings into fn_type */
     {
         bool any_unique_mut = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_unique && params[i]->is_mut) { any_unique_mut = true; break; }
         }
         if (any_unique_mut) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_UNIQUE_MUT, params[i]->is_unique && params[i]->is_mut);
             }
         }
@@ -3226,11 +3236,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* ST0: Store arg_affine flags from param bindings into fn_type */
     {
         bool any_affine = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_affine) { any_affine = true; break; }
         }
         if (any_affine) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_AFFINE, params[i]->is_affine);
             }
         }
@@ -3238,11 +3248,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* ST0: Store arg_relevant flags from param bindings into fn_type */
     {
         bool any_relevant = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_relevant) { any_relevant = true; break; }
         }
         if (any_relevant) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_RELEVANT, params[i]->is_relevant);
             }
         }
@@ -3251,11 +3261,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * can borrow (read without consuming) a linear/affine argument. */
     {
         bool any_borrow = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_borrow) { any_borrow = true; break; }
         }
         if (any_borrow) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_BORROW, params[i]->is_borrow);
             }
         }
@@ -3264,11 +3274,11 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * can auto-shim bare fn arguments into fat closures. */
     {
         bool any_fat = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_fat) { any_fat = true; break; }
         }
         if (any_fat) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_FAT, params[i]->is_fat);
             }
         }
@@ -3279,7 +3289,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * NULL, int64-default signature) and the F5 typed carrier (poly_type is a
      * concrete TY_FN signature) take this path.  A rank-2 forall param (is_poly_fn
      * with a TY_FORALL poly_type) is handled by the arg_full_types path instead. */
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (params[i]->is_poly_fn &&
             (params[i]->poly_type == NULL ||
              params[i]->poly_type->kind == TY_FN)) {
@@ -3299,7 +3309,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         const Form **ptf = (const Form **)arena_alloc(
             e->arena, n_params * sizeof(const Form *));
         bool any = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             ptf[i] = param_type_forms_buf[i];
             if (ptf[i]) any = true;
         }
@@ -3448,7 +3458,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * pointer (needed so emit.c can emit the struct name in the C signature).
      * For all other kinds, fall back to type_from_kind which is sufficient. */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (param_kinds[i] == TY_FN && params[i]->type.kind == TY_FN) {
             fd->param_types[i] = params[i]->type;
         } else if (param_kinds[i] == TY_STRUCT && params[i]->type.kind == TY_STRUCT) {
@@ -3531,7 +3541,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * parameter at its narrow C type (e.g. int16_t), not int64_t, which
      * surprises callers that wrote the body expecting the carrier width. */
     if (body && body->kind == EX_INLINE_C) {
-        for (uint8_t _ci = 0; _ci < n_params; _ci++) {
+        for (uint32_t _ci = 0; _ci < n_params; _ci++) {
             TypeKind k = param_kinds[_ci];
             bool is_narrow = (k == TY_INT8  || k == TY_INT16  || k == TY_INT32 ||
                               k == TY_UINT8 || k == TY_UINT16 || k == TY_UINT32 ||
@@ -3662,12 +3672,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
         n_fn_type_params = n_implicit_fn_type_params;
     }
 
-    /* Parse params */
+    /* Parse params.  Per-param scratch is arena-sized to the param-vector length
+     * (a safe upper bound), not a fixed [MAX_FN_ARITY] stack array, so a lambda
+     * may take any number of positional parameters. */
+    uint32_t pcap = params_f->as.list.len ? params_f->as.list.len : 1;
     Binding **params = NULL;
-    uint8_t n_params = 0;
-    TypeKind param_kinds[MAX_FN_ARITY];
-    Type *param_full_types[MAX_FN_ARITY];
-    for (uint8_t _i = 0; _i < MAX_FN_ARITY; _i++) param_full_types[_i] = NULL;
+    uint32_t n_params = 0;
+    TypeKind *param_kinds = (TypeKind *)arena_alloc(e->arena, pcap * sizeof(TypeKind));
+    Type **param_full_types = (Type **)arena_alloc(e->arena, pcap * sizeof(Type *));
+    for (uint32_t _i = 0; _i < pcap; _i++) param_full_types[_i] = NULL;
     /* AR5: variadic rest parameter state for fn */
     bool fn_is_variadic = false;
     TypeKind fn_rest_kind = TY_INT;
@@ -3741,7 +3754,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             }
             fn_is_variadic = true;
             if (n_params == 0) {
-                params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+                params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
             }
             param_kinds[n_params] = TY_INT;
             Binding *rest_b = binding_new(e, rest_p->as.sym, TYPE_INT, false, false, rest_p->span);
@@ -3794,7 +3807,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
              * fn-typed param of a non-carrier lambda is untouched. */
             if (ann->kind == TY_FN && !ann->as.fn.cfnptr &&
                 e->expected_type && e->expected_type->kind == TY_FN &&
-                (n_params - 1) < e->expected_type->as.fn.arity &&
+                n_params >= 1 && (n_params - 1) < e->expected_type->as.fn.arity &&
                 e->expected_type->as.fn.arg_full_types) {
                 Type *exp_arg =
                     e->expected_type->as.fn.arg_full_types[n_params - 1];
@@ -3826,13 +3839,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
             /* params is arena-allocated, no need to free */
             return NULL;
         }
-        if (n_params >= MAX_FN_ARITY) {
-            diag_emit(DIAG_ERROR, p->span,
-                      "fn: too many parameters (max %d)", MAX_FN_ARITY);
-            /* params is arena-allocated, no need to free */
-            return NULL;
-        }
-        /* arbitrary-fn-arity Phase 6: lint nudge past the historical 16 cap. */
+        /* No hard parameter-count ceiling (see the defn path); arbitrary-fn-arity
+         * Phase 6 lint nudge past the historical 16 cap. */
         if (n_params == HIGH_ARITY_SOFT_LIMIT) {
             diag_emit_with_code(DIAG_WARNING, p->span, TUR_W0041_HIGH_ARITY,
                       "fn has more than %d positional parameters; prefer a defstruct "
@@ -3886,7 +3894,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             next_param_fat = false;
         }
         if (n_params == 0) {
-            params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+            params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
         }
         params[n_params++] = b;
     }
@@ -4066,14 +4074,14 @@ Expr *elab_fn(Elab *e, const Form *call) {
     Scope inner;
     scope_init(&inner, e->scope);
     e->scope = &inner;
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         scope_add(&inner, params[i]);
     }
 
     /* KB-025: accumulate this closure's signature type variables on top of the
      * enclosing function's set (see elab_defn for the rationale). */
     uint8_t saved_n_sig_tyvars = e->n_sig_tyvars;
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         fn_collect_sig_tyvars(e, &params[i]->type);
     }
     fn_collect_sig_tyvars(e, return_full_type);
@@ -4150,7 +4158,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * param was consumed.  A ^linear continuation handed to (call/cc (fn [^linear
      * k] ...)) that is never invoked is a dropped linear value (TUR-E0100). */
     if (body) {
-        for (uint8_t _li = 0; _li < n_params; _li++) {
+        for (uint32_t _li = 0; _li < n_params; _li++) {
             /* LB1: ^borrow params are non-consuming; they carry no consumption
              * obligation (see the defn-scope LT1 check above). */
             if (params[_li]->is_borrow) continue;
@@ -4219,8 +4227,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
 
     /* Create function type */
-    TypeKind arg_kinds[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < n_params; i++) {
+    TypeKind *arg_kinds = (TypeKind *)arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(TypeKind));
+    for (uint32_t i = 0; i < n_params; i++) {
         arg_kinds[i] = param_kinds[i];
     }
     Type fn_type = type_fn(arg_kinds, n_params, return_kind);
@@ -4230,12 +4238,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
     fn_type.as.fn.rest_full_type = fn_rest_full_type;
     {
         bool any_full = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (param_full_types[i]) { any_full = true; break; }
         }
         if (any_full) {
             Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
-            for (uint8_t i = 0; i < n_params; i++) aFT[i] = param_full_types[i];
+            for (uint32_t i = 0; i < n_params; i++) aFT[i] = param_full_types[i];
             fn_type.as.fn.arg_full_types = aFT;
         }
     }
@@ -4244,15 +4252,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * gets a `(fn [args] : R)` recorded on arg_full_types so a caller boxing a
      * tur_poly_fn_t selects the typed slot-0 shim. */
     if (kind_is_non_int_register_class(return_kind)) {
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (!(params[i]->is_fat && params[i]->type.kind == TY_PTR_VOID))
                 continue;
-            TypeKind akinds[MAX_FN_ARITY];
-            int n = bare_fat_tail_call_arg_kinds(body, params[i], akinds);
+            TypeKind *akinds = NULL;
+            int n = bare_fat_tail_call_arg_kinds(e->arena, body, params[i], &akinds);
             if (n < 0) continue;
             if (!fn_type.as.fn.arg_full_types) {
                 Type **aFT = (Type **)arena_alloc(e->arena, n_params * sizeof(Type *));
-                for (uint8_t k = 0; k < n_params; k++) aFT[k] = NULL;
+                for (uint32_t k = 0; k < n_params; k++) aFT[k] = NULL;
                 fn_type.as.fn.arg_full_types = aFT;
             }
             Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -4271,11 +4279,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * closures, mirroring the defn path. */
     {
         bool any_fat = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_fat) { any_fat = true; break; }
         }
         if (any_fat) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_FAT, params[i]->is_fat);
             }
         }
@@ -4284,7 +4292,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * markers into the lambda's fn_type, mirroring the defn path (bare `:fn`
      * carrier with poly_type == NULL, or the F5 typed carrier with a concrete
      * TY_FN poly_type). */
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (params[i]->is_poly_fn &&
             (params[i]->poly_type == NULL ||
              params[i]->poly_type->kind == TY_FN)) {
@@ -4294,11 +4302,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* LB1: propagate ^borrow param flags into the lambda's fn_type. */
     {
         bool any_borrow = false;
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->is_borrow) { any_borrow = true; break; }
         }
         if (any_borrow) {
-            for (uint8_t i = 0; i < n_params; i++) {
+            for (uint32_t i = 0; i < n_params; i++) {
                 FN_ARG_SET(fn_type.as.fn, i, FA_BORROW, params[i]->is_borrow);
             }
         }
@@ -4354,7 +4362,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
     /* Store param types for codegen */
     fd->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         fd->param_types[i] = params[i]->type;
     }
     /* Phase 15: Initialize constraints */
@@ -4388,14 +4396,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
         const Symbol *env_name_sym = symtab_intern(e->st,
             strslice(env_name_buf, (uint32_t)strlen(env_name_buf)));
         
-        /* Modify the FnDef to include env parameter as first parameter */
-        uint8_t new_n_params = n_params + 1;
-        if (new_n_params > MAX_FN_ARITY) {
-            diag_emit(DIAG_ERROR, call->span,
-                      "fn with captures: too many parameters including env (max %d)", MAX_FN_ARITY);
-            free(captures);
-            return NULL;
-        }
+        /* Modify the FnDef to include env parameter as first parameter.  No hard
+         * ceiling: the env-prepended arg-kind scratch below is arena-sized to
+         * new_n_params (arbitrary-fn-arity). */
+        uint32_t new_n_params = n_params + 1;
         
         /* Create new params array with env as first parameter */
         Binding **new_params = (Binding **)arena_alloc(e->arena, new_n_params * sizeof(Binding *));
@@ -4411,7 +4415,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         new_param_types[0] = TYPE_PTR_VOID;
         
         /* Copy existing params */
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             new_params[i + 1] = params[i];
             new_param_types[i + 1] = params[i]->type;
         }
@@ -4421,17 +4425,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
         fd->n_params = new_n_params;
         fd->param_types = new_param_types;
         
-        /* Update function type to include env parameter */
-        TypeKind new_arg_kinds[MAX_FN_ARITY];
+        /* Update function type to include env parameter (arena-sized scratch,
+         * no fixed cap). */
+        TypeKind *new_arg_kinds = (TypeKind *)arena_alloc(e->arena, new_n_params * sizeof(TypeKind));
         new_arg_kinds[0] = TY_PTR_VOID;  /* env parameter */
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             new_arg_kinds[i + 1] = param_kinds[i];
         }
         Type new_fn_type = type_fn(new_arg_kinds, new_n_params, return_kind);
         if (b->type.as.fn.arg_full_types) {
             Type **shifted = (Type **)arena_alloc(e->arena, new_n_params * sizeof(Type *));
             shifted[0] = NULL;
-            for (uint8_t i = 0; i < n_params; i++) shifted[i + 1] = b->type.as.fn.arg_full_types[i];
+            for (uint32_t i = 0; i < n_params; i++) shifted[i + 1] = b->type.as.fn.arg_full_types[i];
             new_fn_type.as.fn.arg_full_types = shifted;
         }
         if (b->type.as.fn.result_full_type) {
@@ -4449,7 +4454,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
          * EX_FN_TO_FAT shim, and feeds a bare fn pointer to a fat-dispatch
          * consumer (slot-0 read of code bytes -> SEGV).  arg_full_types above is
          * shifted for exactly the same reason; arg_fat must travel with it. */
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             FN_ARG_SET(new_fn_type.as.fn, i + 1, FA_FAT, FN_ARG_FLAG(b->type.as.fn, i, FA_FAT));
         }
         new_fn_type.as.fn.result_fat = b->type.as.fn.result_fat;
@@ -4486,8 +4491,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
          * direct call on a value statically typed boxed TY_FN dispatches
          * through the fat protocol for all arities (emit_expr.c).  See
          * docs/upcoming/closure-first-class-type-plan.md. */
-        TypeKind clo_arg_kinds[MAX_FN_ARITY];
-        for (uint8_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
+        TypeKind *clo_arg_kinds = (TypeKind *)arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(TypeKind));
+        for (uint32_t i = 0; i < n_params; i++) clo_arg_kinds[i] = param_kinds[i];
         Type clo_ty = type_fn(clo_arg_kinds, n_params, return_kind);
         clo_ty.as.fn.boxed = true;
         /* curried-fn-typed-param: preserve the closure's full result type so a
@@ -4549,9 +4554,13 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
 
     /* Parse params - support type annotations: [name :type ...]
      * e.g. (extern-c getenv [key :cstr] :cstr) */
+    /* Per-param scratch arena-sized to the param-vector length (a safe upper
+     * bound), not a fixed [MAX_FN_ARITY] stack array -- an extern-c shim may
+     * mirror a wide C signature with any number of parameters. */
+    uint32_t pcap = params_f->as.list.len ? params_f->as.list.len : 1;
     Binding **params = NULL;
-    uint8_t n_params = 0;
-    TypeKind param_kinds[MAX_FN_ARITY];
+    uint32_t n_params = 0;
+    TypeKind *param_kinds = (TypeKind *)arena_alloc(e->arena, pcap * sizeof(TypeKind));
     /* A#1: ^fat marks the next extern-c parameter as a fat-closure consumer. */
     bool next_param_fat = false;
 
@@ -4601,11 +4610,8 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                       "extern-c: parameter must be a symbol");
             return NULL;
         }
-        if (n_params >= MAX_FN_ARITY) {
-            diag_emit(DIAG_ERROR, p->span,
-                      "extern-c: too many parameters (max %d)", MAX_FN_ARITY);
-            return NULL;
-        }
+        /* No hard parameter-count ceiling: an extern-c shim may mirror a wide
+         * C signature with arbitrarily many parameters (arbitrary-fn-arity). */
 
         /* Handle ^type prefix: ^int, ^ptr<void>, etc.
          * When a symbol starts with '^', the rest is a C type annotation and the
@@ -4626,7 +4632,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
             if (i >= params_f->as.list.len) {
                 /* ^type at end with no following name — create anonymous param */
                 if (n_params == 0) {
-                    params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+                    params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
                 }
                 param_kinds[n_params] = ck;
                 /* Use the ^type symbol itself as a placeholder name */
@@ -4642,7 +4648,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
                 return NULL;
             }
             if (n_params == 0) {
-                params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+                params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
             }
             param_kinds[n_params] = ck;
             Binding *b = binding_new(e, name_f->as.sym, type_from_kind(ck), false, false, name_f->span);
@@ -4657,7 +4663,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
         b->is_param = true;
         b->is_fat = next_param_fat; next_param_fat = false;
         if (n_params == 0) {
-            params = (Binding **)arena_alloc(e->arena, MAX_FN_ARITY * sizeof(Binding *));
+            params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
         }
         params[n_params++] = b;
     }
@@ -4707,7 +4713,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     /* Create function type */
     Type fn_type = type_fn(param_kinds, n_params, return_kind);
     /* A#1: propagate ^fat parameter flags into the fn type for call-site shimming. */
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (params[i]->is_fat) FN_ARG_SET(fn_type.as.fn, i, FA_FAT, true);
     }
 
@@ -4744,7 +4750,7 @@ Expr *elab_extern_c(Elab *e, const Form *call) {
     ec->binding = b;
     ec->return_type = type_from_kind(return_kind);
     ec->param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         ec->param_types[i] = type_from_kind(param_kinds[i]);
     }
     ec->n_params = n_params;

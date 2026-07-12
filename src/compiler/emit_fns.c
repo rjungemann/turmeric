@@ -3,6 +3,17 @@
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
 #include "globals.h"   /* g_cps_path, g_panic_trace */
 
+/* Append a pass-by-ptr param binding to ctx->pbp_param_ptrs, growing the
+ * (realloc-backed) array on demand -- no fixed arity ceiling. */
+static void pbp_push(EmitCtx *ctx, Binding *b) {
+    if (ctx->n_pbp_params >= ctx->cap_pbp_params) {
+        ctx->cap_pbp_params = ctx->cap_pbp_params ? ctx->cap_pbp_params * 2 : 16;
+        ctx->pbp_param_ptrs = (Binding **)realloc(ctx->pbp_param_ptrs,
+            ctx->cap_pbp_params * sizeof(Binding *));
+    }
+    ctx->pbp_param_ptrs[ctx->n_pbp_params++] = b;
+}
+
 /* ============================================================================
  * CF1: Self-tail-call optimization (self-TCO).
  *
@@ -55,7 +66,7 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
  * a bridge to/from the carrier on reassignment. */
 static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
     if (fd->is_variadic || fd->closure) return false;
-    for (uint8_t i = 0; i < fd->n_params; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
         Type pty = tco_param_type(ctx, fn_e, fd, i);
         if (pty.kind == TY_FN) return false;
@@ -158,7 +169,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
  * `goto __tur_tailcall;`. */
 static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
                                FnDef *fd, const Expr *call) {
-    uint8_t n = fd->n_params;
+    uint32_t n = fd->n_params;
     char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
     for (uint8_t i = 0; i < n; i++) {
         char *av = emit_value(ctx, body, call->as.call_.args[i]);
@@ -540,7 +551,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
         if (re && re->kind == EX_VAR && re->as.var.binding &&
             tail_bv.kind == TY_UNKNOWN && !(is_main && result_kind == TY_INT)) {
-            for (uint8_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+            for (uint32_t _i = 0; _i < ctx->n_pbp_params; _i++) {
                 if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
                     char *deref = (char *)malloc(strlen(v) + 4);
                     sprintf(deref, "*(%s)", v);
@@ -956,7 +967,7 @@ static bool gs_is_br3b_reader_call(const Expr *e, FnDef *fd) {
         const Expr *a = e->as.call_.args[i];
         bool is_fd_byref = false;
         if (a && a->kind == EX_VAR && a->as.var.binding) {
-            for (uint8_t pp = 0; pp < fd->n_params; pp++) {
+            for (uint32_t pp = 0; pp < fd->n_params; pp++) {
                 if (fd->params[pp] != a->as.var.binding) continue;
                 TypeKind k; const char *ct; bool aggr, ref;
                 if (gs_param_class(g_gs_ctx, fd->param_types[pp], &k, &ct, &aggr, &ref) && ref)
@@ -2116,7 +2127,7 @@ static bool gs_basic_ok(EmitCtx *ctx, FnDef *fd) {
      * by-value aggregate (heap-boxed across a descend). */
     TypeKind k; const char *ct; bool aggr; bool ref;
     if (!gs_param_class(ctx, fd->return_type, &k, &ct, &aggr, &ref)) return false;
-    for (uint8_t i = 0; i < fd->n_params; i++)
+    for (uint32_t i = 0; i < fd->n_params; i++)
         if (!gs_param_class(ctx, fd->param_types[i], &k, &ct, &aggr, &ref)) return false;
     return true;
 }
@@ -2145,7 +2156,7 @@ static bool gs_build(GsCtx *gs) {
     for (int m = 0; m < gs->n_mem; m++) {
         FnDef *f = gs->mem[m];
         gs->mem_pbase[m] = gs->n_vars;
-        for (uint8_t i = 0; i < f->n_params; i++) {
+        for (uint32_t i = 0; i < f->n_params; i++) {
             /* G6: an int64-carrier / opaque param rides the slot with kind
              * TY_INT (intptr path); a by-value aggregate rides via heap-boxing. */
             TypeKind k; const char *ct; bool aggr; bool ref;
@@ -2403,7 +2414,7 @@ typedef struct {
     TypeKind ret[GS_MAXMEM];
     const char *retctype[GS_MAXMEM];
     char name[40];
-    int max_arity;
+    uint32_t max_arity;
 } GsGroup;
 static GsGroup g_cu_groups[64];
 static int g_n_cu_groups;
@@ -2414,10 +2425,10 @@ void gs_reset_group_registry(void) { g_n_cu_groups = 0; g_cu_driver_ctr = 0; }
 /* Emit the shared driver function for a built group into pending_handler_fns
  * (so it lands at file scope before any member shim). */
 static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
-                                 const char *name, int maxar) {
+                                 const char *name, uint32_t maxar) {
     Buf *out = ctx->pending_handler_fns ? ctx->pending_handler_fns : file;
     buf_printf(out, "static int64_t %s(int __pc", name);
-    for (int a = 0; a < maxar; a++) buf_printf(out, ", int64_t __a%d", a);
+    for (uint32_t a = 0; a < maxar; a++) buf_printf(out, ", int64_t __a%d", a);
     buf_puts(out, ") {\n");
     int bi = 1;
     for (int i = 0; i < gs->n_vars; i++) {
@@ -2452,7 +2463,7 @@ static void gs_emit_group_driver(EmitCtx *ctx, Buf *file, GsCtx *gs,
     for (int m = 0; m < gs->n_mem; m++) {
         indent_buf(out, bi + 1);
         buf_printf(out, "case %d: {\n", gs->mem_entry_tag[m]);
-        for (uint8_t p = 0; p < gs->mem[m]->n_params; p++) {
+        for (uint32_t p = 0; p < gs->mem[m]->n_params; p++) {
             int vi = gs->mem_pbase[m] + p;
             char slot[16]; snprintf(slot, sizeof slot, "__a%u", (unsigned)p);
             indent_buf(out, bi + 2);
@@ -2487,7 +2498,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
      * ownership of), then behaves like the single-function aggregate param
      * inside the driver.  A member that is otherwise un-rideable still bails. */
     for (int m = 0; m < ng; m++)
-        for (uint8_t i = 0; i < group[m]->n_params; i++) {
+        for (uint32_t i = 0; i < group[m]->n_params; i++) {
             TypeKind k; const char *ct; bool aggr; bool ref;
             if (!gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref))
                 return false;
@@ -2517,7 +2528,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
         GsCtx gs; memset(&gs, 0, sizeof gs);
         gs.ctx = ctx; gs.fd = group[0]; gs.base_ind = 1;
         gs.n_mem = ng;
-        int maxar = 0;
+        uint32_t maxar = 0;
         for (int m = 0; m < ng; m++) {
             gs.mem[m] = group[m];
             gs.mem_entry_tag[m] = 1 + m;
@@ -2533,12 +2544,12 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
          * struct temp (which would assign a `const T *` into a `T` -- a cc error).
          * The single-member prologue in emit_fn_def only records the triggering
          * member's params. */
-        uint8_t sv_npbp = ctx->n_pbp_params; ctx->n_pbp_params = 0;
+        uint32_t sv_npbp = ctx->n_pbp_params; ctx->n_pbp_params = 0;
         for (int m = 0; m < ng; m++)
-            for (uint8_t i = 0; i < group[m]->n_params && ctx->n_pbp_params < MAX_FN_ARITY; i++) {
+            for (uint32_t i = 0; i < group[m]->n_params; i++) {
                 TypeKind k; const char *ct; bool aggr; bool ref;
                 if (gs_param_class(ctx, group[m]->param_types[i], &k, &ct, &aggr, &ref) && ref)
-                    ctx->pbp_param_ptrs[ctx->n_pbp_params++] = group[m]->params[i];
+                    pbp_push(ctx, group[m]->params[i]);
             }
         g_gs_nmem = ng; g_gs_ctx = ctx; for (int m = 0; m < ng; m++) g_gs_mem[m] = group[m];
         bool ok = gs_build(&gs);
@@ -2572,7 +2583,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
      * through it; a by-value aggregate needs its address taken. */
     Buf call; buf_init(&call);
     buf_printf(&call, "%s(%d", g->name, g->entry[mi]);
-    for (uint8_t p = 0; p < fd->n_params; p++) {
+    for (uint32_t p = 0; p < fd->n_params; p++) {
         char *cn = atom_var(ctx, fd->params[p]);
         TypeKind k; const char *ct; bool aggr; bool ref;
         gs_param_class(ctx, fd->param_types[p], &k, &ct, &aggr, &ref);
@@ -2589,7 +2600,7 @@ static bool emit_group_member(EmitCtx *ctx, Buf *file, FnDef *fd, TypeKind resul
         }
         free(cn);
     }
-    for (int p = fd->n_params; p < g->max_arity; p++) buf_puts(&call, ", 0");
+    for (uint32_t p = fd->n_params; p < g->max_arity; p++) buf_puts(&call, ", 0");
     buf_putc(&call, ')');
     buf_putc(&call, '\0');
     char *rv = sc_restore_expr(ctx->current_fn_ret_ctype, result_kind, call.data);
@@ -2799,14 +2810,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * to its concrete (float) type so the typed thunk slot is xmm0-correct. */
             thunk_result = emit_resolve_type(ctx, thunk_result);
             Type *thunk_params = fd->n_params > 1 ? &fd->param_types[1] : NULL;
-            Type resolved_thunk_params[MAX_FN_ARITY];
             if (thunk_params && use_abi_spec) {
-                uint8_t tp_n = (uint8_t)(fd->n_params - 1);
-                for (uint8_t _t = 0; _t < tp_n; _t++)
+                uint32_t tp_n = (uint32_t)(fd->n_params - 1);
+                Type *resolved_thunk_params = (Type *)arena_alloc(ctx->type_arena, (tp_n ? tp_n : 1) * sizeof(Type));
+                for (uint32_t _t = 0; _t < tp_n; _t++)
                     resolved_thunk_params[_t] = emit_resolve_type(ctx, fd->param_types[_t + 1]);
                 thunk_params = resolved_thunk_params;
             }
-            uint8_t thunk_arity = fd->n_params > 0 ? (uint8_t)(fd->n_params - 1) : 0;
+            uint32_t thunk_arity = fd->n_params > 0 ? (uint32_t)(fd->n_params - 1) : 0;
             char *thunk_typedef = ensure_typed_thunk_typedef(ctx, file, thunk_result, thunk_params, thunk_arity);
             if (ctx->n_env_struct_names >= ctx->cap_env_struct_names) {
                 ctx->cap_env_struct_names = ctx->cap_env_struct_names ? ctx->cap_env_struct_names * 2 : 8;
@@ -3080,8 +3091,9 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * a pointer and produces the int64 carrier the call site expects.
      * No source-level annotation: the recognizer is purely structural.
      * See docs/reported/polymorphic-ok-fails-for-value-struct-payload.md. */
-    bool needs_box_spill[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) needs_box_spill[i] = false;
+    uint32_t nbp = fd->n_params ? fd->n_params : 1;
+    bool *needs_box_spill = (bool *)arena_alloc(ctx->type_arena, nbp * sizeof(bool));
+    for (uint32_t i = 0; i < nbp; i++) needs_box_spill[i] = false;
     /* The box-spill recognizer keyed on a value-struct parameter (a Type of
      * kind TY_STRUCT).  No Type ever carries that kind now -- value records
      * lower to TY_ADT/TY_APP -- so the population never fired and has been
@@ -3098,10 +3110,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * only borrows it -- no free here.  Restricted to closures: a top-level fn
      * taking a wide by-value ADT uses the ordinary pass-by-ptr ABI, not the fat
      * carrier. */
-    bool needs_box_load[MAX_FN_ARITY];
-    for (uint8_t i = 0; i < MAX_FN_ARITY; i++) needs_box_load[i] = false;
+    bool *needs_box_load = (bool *)arena_alloc(ctx->type_arena, nbp * sizeof(bool));
+    for (uint32_t i = 0; i < nbp; i++) needs_box_load[i] = false;
     if (fd->closure) {
-        for (uint8_t i = 0; i < fd->n_params && i < MAX_FN_ARITY; i++) {
+        for (uint32_t i = 0; i < fd->n_params; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;
             Type pty = use_abi_spec
@@ -3112,10 +3124,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 needs_box_load[i] = true;
         }
     }
-    for (uint8_t i = 0; i < fd->n_params; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i > 0) buf_puts(file, ", ");
         /* B4 slice 2: wide by-value ADT closure param arrives as int64 box ptr. */
-        if (i < MAX_FN_ARITY && needs_box_load[i]) {
+        if (needs_box_load[i]) {
             const char *pn = raw_name_for_binding(fd->params[i]);
             buf_printf(file, "int64_t __tur_b4box_%s", pn);
             free((void*)pn);
@@ -3217,7 +3229,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
         }
         const char *pn = raw_name_for_binding(fd->params[i]);
-        if (i < MAX_FN_ARITY && needs_box_spill[i]) {
+        if (needs_box_spill[i]) {
             /* Prereq 6: rename the parameter so the inline-C body's
              * `<orig>` identifier can be redeclared as a heap pointer
              * inside the function. */
@@ -3240,7 +3252,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * ADT closure param from its int64 heap box at entry -- deref + copy into
      * the by-value aggregate `<orig>` the body expects.  Borrow only: the box is
      * owned by the carrier node that produced it, so no free here. */
-    for (uint8_t i = 0; i < fd->n_params && i < MAX_FN_ARITY; i++) {
+    for (uint32_t i = 0; i < fd->n_params; i++) {
         if (!needs_box_load[i]) continue;
         Type pty = use_abi_spec
             ? ctx->current_abi_specialization->arg_types[i]
@@ -3333,7 +3345,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * cast their params via `(int64_t)(intptr_t)x`.  Stdlib has none,
          * but the safety net is cheap and future user code can rely on it. */
         {
-            for (uint8_t i = 0; i < fd->n_params && i < MAX_FN_ARITY; i++) {
+            for (uint32_t i = 0; i < fd->n_params; i++) {
                 if (!needs_box_spill[i]) continue;
                 Type pty = ctx->current_abi_specialization->arg_types[i];
                 const char *ctype = emit_type_c_name(ctx, pty);
@@ -3392,19 +3404,19 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Set up function parameter context so that parameter references
      * in the body use raw names (without ID suffix) */
     Binding **saved_params = ctx->fn_params;
-    uint8_t saved_n_params = ctx->n_fn_params;
+    uint32_t saved_n_params = ctx->n_fn_params;
     ctx->fn_params = fd->params;
     ctx->n_fn_params = fd->n_params;
 
     /* Phase D: record which params are pbp for field-access and call-site handling. */
-    uint8_t saved_n_pbp = ctx->n_pbp_params;
+    uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
     if (!fd->closure && !body_is_inline_c) {
-        for (uint8_t _pi = 0; _pi < fd->n_params && ctx->n_pbp_params < MAX_FN_ARITY; _pi++) {
+        for (uint32_t _pi = 0; _pi < fd->n_params; _pi++) {
             Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
                 ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];
             if (type_struct_pass_by_ptr(pty))
-                ctx->pbp_param_ptrs[ctx->n_pbp_params++] = fd->params[_pi];
+                pbp_push(ctx, fd->params[_pi]);
         }
     }
 
@@ -3538,7 +3550,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             while (re && re->kind == EX_ASCRIBE) re = re->as.ascribe_.inner;
             if (re && re->kind == EX_VAR && re->as.var.binding &&
                 !(is_main && result_kind == TY_INT)) {
-                for (uint8_t _i = 0; _i < ctx->n_pbp_params; _i++) {
+                for (uint32_t _i = 0; _i < ctx->n_pbp_params; _i++) {
                     if (ctx->pbp_param_ptrs[_i] == re->as.var.binding) {
                         char *deref = (char *)malloc(strlen(ret_val) + 4);
                         sprintf(deref, "*(%s)", ret_val);
@@ -3972,7 +3984,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (fd->is_cps && g_cps_path && !is_main && !fd->closure) {
         char *wrap_name = raw_name_for_binding(fd->binding);
         buf_printf(real_file, "static void %s__cps(tur_cps_cont_t *__k", wrap_name);
-        for (uint8_t i = 0; i < fd->n_params; i++) {
+        for (uint32_t i = 0; i < fd->n_params; i++) {
             buf_puts(real_file, ", ");
             if (fd->params[i]->is_poly_fn) {
                 buf_puts(real_file, "tur_poly_fn_t");
@@ -4001,7 +4013,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * continuation instead of casting a void expression. */
         if (result_kind == TY_NIL) {
             buf_printf(real_file, "    %s(", wrap_name);
-            for (uint8_t i = 0; i < fd->n_params; i++) {
+            for (uint32_t i = 0; i < fd->n_params; i++) {
                 if (i > 0) buf_puts(real_file, ", ");
                 const char *pn = raw_name_for_binding(fd->params[i]);
                 buf_puts(real_file, pn);
@@ -4011,7 +4023,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_puts(real_file, "    tur_cps_apply(__k, 0);\n");
         } else {
             buf_printf(real_file, "    int64_t __result = (int64_t)%s(", wrap_name);
-            for (uint8_t i = 0; i < fd->n_params; i++) {
+            for (uint32_t i = 0; i < fd->n_params; i++) {
                 if (i > 0) buf_puts(real_file, ", ");
                 const char *pn = raw_name_for_binding(fd->params[i]);
                 buf_puts(real_file, pn);

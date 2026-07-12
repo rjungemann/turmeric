@@ -369,7 +369,7 @@ static bool thunk_type_has_concrete_c_abi(Type t) {
 
 bool use_typed_thunk_abi(Type result_type, Type *param_types, uint8_t n_params) {
     if (!thunk_type_has_concrete_c_abi(result_type)) return false;
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (!thunk_type_has_concrete_c_abi(param_types[i])) return false;
     }
     return true;
@@ -410,7 +410,7 @@ static char *typed_thunk_typedef_name(Type result_type, Type *param_types, uint8
     buf_init(&name);
     buf_puts(&name, "tur_thunk_");
     append_sanitized_c_token(&name, type_c_name(result_type));
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         buf_putc(&name, '_');
         append_sanitized_c_token(&name, type_c_name(param_types[i]));
     }
@@ -448,7 +448,7 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : out;
     buf_printf(target, "typedef %s (*%s)(void *", type_c_name(result_type), name);
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         buf_printf(target, ", %s", type_c_name(param_types[i]));
     }
     buf_puts(target, ");\n");
@@ -513,7 +513,7 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
      * In any of these, return NULL so the caller falls back to the real dict. */
     for (uint8_t i = 0; i < tc->n_methods; i++) {
         if (exwit_type_is_classvar(tc->methods[i].return_type)) return NULL;
-        for (uint8_t j = 0; j < tc->methods[i].n_params; j++) {
+        for (uint32_t j = 0; j < tc->methods[i].n_params; j++) {
             if (tc->methods[i].param_is_fn && tc->methods[i].param_is_fn[j])
                 return NULL;
         }
@@ -557,7 +557,7 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
 
         buf_printf(out, "static %s %s_%s(", ret_c, base, field);
         if (m->n_params == 0) buf_puts(out, "void");
-        for (uint8_t j = 0; j < m->n_params; j++) {
+        for (uint32_t j = 0; j < m->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
             if (exwit_type_is_classvar(m->param_types[j]))
                 buf_printf(out, "int64_t __p%u", (unsigned)j);
@@ -567,7 +567,7 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
         buf_puts(out, ") {\n    ");
         if (!ret_void) buf_puts(out, "return ");
         buf_printf(out, "%s(", inst_fn);
-        for (uint8_t j = 0; j < m->n_params; j++) {
+        for (uint32_t j = 0; j < m->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
             Type ipt = (j < mi->n_params) ? mi->param_types[j] : payload_ty;
             bool by_ptr = exwit_inst_param_by_ptr(mi, ipt);
@@ -609,7 +609,7 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
         tur_mangle_ident(m->name->name, field, sizeof(field));
         buf_printf(out, "    %s (*%s)(", type_c_name(m->return_type), field);
         if (m->n_params == 0) buf_puts(out, "void");
-        for (uint8_t j = 0; j < m->n_params; j++) {
+        for (uint32_t j = 0; j < m->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
             buf_puts(out, exwit_type_is_classvar(m->param_types[j])
                               ? "int64_t" : type_c_name(m->param_types[j]));
@@ -634,7 +634,7 @@ static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_p
     buf_init(&name);
     buf_puts(&name, "__tur_fatshim_");
     append_sanitized_c_token(&name, type_c_name(result_type));
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         buf_putc(&name, '_');
         append_sanitized_c_token(&name, type_c_name(param_types[i]));
     }
@@ -684,7 +684,7 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
     buf_printf(target, "static %s %s(void *__e", type_c_name(result_type), name);
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
     }
     buf_puts(target, ") {\n    ");
@@ -693,13 +693,13 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     if (n_params == 0) {
         buf_puts(target, "void");
     } else {
-        for (uint8_t i = 0; i < n_params; i++) {
+        for (uint32_t i = 0; i < n_params; i++) {
             if (i) buf_puts(target, ", ");
             buf_puts(target, type_c_name(param_types[i]));
         }
     }
     buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
-    for (uint8_t i = 0; i < n_params; i++) {
+    for (uint32_t i = 0; i < n_params; i++) {
         if (i) buf_puts(target, ", ");
         buf_printf(target, "a%u", (unsigned)i);
     }
@@ -759,15 +759,15 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
      * implicit int-returning declaration (which then conflicts with the real
      * aggregate-returning signature). */
     buf_printf(target, "static %s %s(void *", rc, real_fn);
-    for (uint8_t i = 0; i < n_params; i++)
+    for (uint32_t i = 0; i < n_params; i++)
         buf_printf(target, ", %s", type_c_name(param_types[i]));
     buf_puts(target, ");\n");
     buf_printf(target, "static int64_t %s(void *__e", name);
-    for (uint8_t i = 0; i < n_params; i++)
+    for (uint32_t i = 0; i < n_params; i++)
         buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
     buf_puts(target, ") {\n    ");
     buf_printf(target, "%s __r = %s(__e", rc, real_fn);
-    for (uint8_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n    ");
     buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);
     buf_printf(target, "memcpy(__p, &__r, sizeof(%s));\n    ", rc);
@@ -1427,7 +1427,7 @@ static char *emit_abi_clone_name(const Binding *binding, Type result_type, Type 
     append_sanitized_c_token(&name, binding && binding->name ? binding->name->name : "fn");
     buf_puts(&name, "__spec__");
     append_sanitized_c_token(&name, type_c_name(result_type));
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         buf_putc(&name, '_');
         append_sanitized_c_token(&name, type_c_name(arg_types[i]));
     }
@@ -1948,7 +1948,7 @@ static bool emit_inner_closure_needs_float_spec(Binding *inner,
     if (!inner || inner->type.kind != TY_FN) return false;
     if (abi_type_binds_to_float(inner->type.as.fn.result_full_type, bindings, n_bindings))
         return true;
-    for (uint8_t i = 0; i < inner->type.as.fn.arity; i++) {
+    for (uint32_t i = 0; i < inner->type.as.fn.arity; i++) {
         const Type *at = inner->type.as.fn.arg_full_types
             ? inner->type.as.fn.arg_full_types[i] : NULL;
         if (abi_type_binds_to_float(at, bindings, n_bindings)) return true;
@@ -2147,7 +2147,7 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
             if (!tp || !tp->name) continue;
             if (!emit_type_mentions_tyvar(&omethod->return_type, tp->name)) continue;
             bool in_param = false;
-            for (uint8_t pi = 0; pi < omethod->n_params; pi++) {
+            for (uint32_t pi = 0; pi < omethod->n_params; pi++) {
                 if (emit_type_mentions_tyvar(&omethod->param_types[pi], tp->name)) {
                     in_param = true;
                     break;
@@ -2165,7 +2165,7 @@ static bool emit_abi_try_nested_instance_dispatch_redirect(
      * its params carry no class tyvar, so param 0 is NOT the receiver and must not
      * be forced to `resolved`.  Other params instantiate their erased declared
      * type through the element bindings. */
-    uint8_t n_spec_args = fd->n_params;
+    uint32_t n_spec_args = fd->n_params;
     if (n_spec_args > MAX_FN_ARITY) return false;
     Type arg_types[MAX_FN_ARITY];
     for (uint8_t i = 0; i < n_spec_args; i++) {
@@ -2267,7 +2267,7 @@ static bool type_phantom_hides_aggregate(const Type *t) {
         type_extract_adt_app(t, &adef, args, &n_args) && adef && adef->is_opaque;
     if (!opaque_head)
         return false;
-    for (uint8_t i = 0; i < n_args; i++) {
+    for (uint32_t i = 0; i < n_args; i++) {
         /* Under the defstruct-as-defadt lowering the by-value aggregate element
          * is an ADT app (`Option__int`), not a struct app.
          * `type_has_concrete_codegen_layout` only recognizes struct apps, so it
@@ -3547,7 +3547,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         if (inner_expr && inner_expr->kind == EX_FN_DEF && inner_expr->as.fn_def_.fn) {
             FnDef *inner_fd = inner_expr->as.fn_def_.fn;
             Type inner_args[MAX_FN_ARITY];
-            uint8_t inner_n = inner_fd->n_params;
+            uint32_t inner_n = inner_fd->n_params;
             /* The inner closure binding's TY_FN includes the hidden env as arg 0,
              * so its arg_full_types are 1:1 with inner_fd->params.  Resolve each
              * to a *concrete* type via the spec bindings: the clone name and
@@ -3760,7 +3760,7 @@ static bool emit_abi_fn_value_signature(EmitCtx *ctx, const Binding *vb,
         FnDef *vfd, const AbiTypeBinding *bindings, uint8_t n_bindings,
         Type *out_args, uint8_t *out_nargs, Type *out_result) {
     bool abi_changes = false;
-    uint8_t v_nargs = vfd->n_params;
+    uint32_t v_nargs = vfd->n_params;
     for (uint8_t a = 0; a < v_nargs; a++) {
         const Type *full = (vb->type.as.fn.arg_full_types &&
                             vb->type.as.fn.arg_full_types[a])
@@ -4569,7 +4569,7 @@ static bool emit_abi_fn_is_generic_unsafe(const Expr *e) {
         return true;
     }
     if (e->type.as.fn.arg_full_types) {
-        for (uint8_t i = 0; i < e->type.as.fn.arity; i++) {
+        for (uint32_t i = 0; i < e->type.as.fn.arity; i++) {
             const Type *arg = e->type.as.fn.arg_full_types[i];
             if (arg && arg->kind != TY_TYVAR && emit_abi_type_has_named_tyvar(arg)) {
                 return true;
@@ -4636,7 +4636,7 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
         for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
             const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
             if (spec->binding != fd->binding) continue;
-            for (uint8_t j = 0; j < spec->n_args; j++) {
+            for (uint32_t j = 0; j < spec->n_args; j++) {
                 if (spec->arg_types[j].kind == TY_STRUCT) {
                     return !emit_abi_has_carrier_call(ctx, fd->binding);
                 }
@@ -4972,7 +4972,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         buf_puts(out, type_c_name(spec->result_type));
     }
     buf_printf(out, " %s(", spec->clone_name);
-    for (uint8_t i = 0; i < spec->n_args; i++) {
+    for (uint32_t i = 0; i < spec->n_args; i++) {
         if (i > 0) buf_puts(out, ", ");
         /* B4 slice 2: a wide by-value ADT closure param crosses as an int64 box
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
@@ -5131,7 +5131,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         }
         const char *fn_name = raw_name_for_binding(fd->binding);
         buf_printf(out, " %s(", fn_name);
-        for (uint8_t j = 0; j < fd->n_params; j++) {
+        for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
             /* B4 slice 2: a wide by-value ADT closure param crosses as an int64
              * box pointer -- mirror emit_fns.c's needs_box_load signature. */
@@ -5194,7 +5194,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             if (emit_cps_ir_emits_binding(ctx->program_root, fd->binding)) continue;
             const char *fn_name = raw_name_for_binding(fd->binding);
             buf_printf(out, "static void %s__cps(tur_cps_cont_t *__k", fn_name);
-            for (uint8_t j = 0; j < fd->n_params; j++) {
+            for (uint32_t j = 0; j < fd->n_params; j++) {
                 buf_puts(out, ", ");
                 if (fd->params[j]->is_poly_fn) {
                     buf_puts(out, "tur_poly_fn_t");
@@ -9529,7 +9529,7 @@ int emit_program(Buf *out, const Expr *program) {
                        type_c_name(ec->return_type),
                        ec_mangled);
             free(ec_mangled);
-            for (uint8_t j = 0; j < ec->n_params; j++) {
+            for (uint32_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(&extern_decls, ", ");
                 buf_printf(&extern_decls, "%s", type_c_name(ec->param_types[j]));
             }
@@ -9633,10 +9633,9 @@ int emit_program(Buf *out, const Expr *program) {
             /* Bind the functor tyvar to the concrete functor, instantiate the
              * lens signature by value. */
             AbiTypeBinding b; b.name = tyvar; b.type = *fty;
-            Type arg_types[MAX_FN_ARITY];
-            uint8_t nargs = lfd->n_params <= MAX_FN_ARITY ? lfd->n_params
-                                                          : MAX_FN_ARITY;
-            for (uint8_t a = 0; a < nargs; a++)
+            uint32_t nargs = lfd->n_params;
+            Type *arg_types = (Type *)arena_alloc(ctx.type_arena, (nargs ? nargs : 1) * sizeof(Type));
+            for (uint32_t a = 0; a < nargs; a++)
                 arg_types[a] = emit_abi_instantiate_type(
                     &lfd->param_types[a], &b, 1, ctx.type_arena);
             Type result_type = emit_abi_instantiate_type(
@@ -9796,10 +9795,9 @@ int emit_program(Buf *out, const Expr *program) {
                     ? aexpr->as.fn_def_.fn : NULL;
                 if (afd && afd->param_types && afd->n_params >= 1) {
                     AbiTypeBinding ab2; ab2.name = tyvar; ab2.type = *fty;
-                    uint8_t a_n = afd->n_params <= MAX_FN_ARITY ? afd->n_params
-                                                               : MAX_FN_ARITY;
-                    Type a_args[MAX_FN_ARITY];
-                    for (uint8_t a = 0; a < a_n; a++)
+                    uint32_t a_n = afd->n_params;
+                    Type *a_args = (Type *)arena_alloc(ctx.type_arena, (a_n ? a_n : 1) * sizeof(Type));
+                    for (uint32_t a = 0; a < a_n; a++)
                         a_args[a] = emit_abi_instantiate_type(
                             &afd->param_types[a], &ab2, 1, ctx.type_arena);
                     /* The adapter's declared result `(f Focus)` is left carrier
@@ -9967,11 +9965,10 @@ int emit_program(Buf *out, const Expr *program) {
             AbiTypeBinding fb;
             fb.name = ftyvar;
             fb.type = *(const Type *)fty_v;
-            uint8_t g_n = gfd->n_params <= MAX_FN_ARITY ? gfd->n_params
-                                                        : MAX_FN_ARITY;
+            uint32_t g_n = gfd->n_params;
             if (g_n < 1 || !gfd->param_types) continue;
-            Type g_args[MAX_FN_ARITY];
-            for (uint8_t a = 0; a < g_n; a++) g_args[a] = gfd->param_types[a];
+            Type *g_args = (Type *)arena_alloc(ctx.type_arena, g_n * sizeof(Type));
+            for (uint32_t a = 0; a < g_n; a++) g_args[a] = gfd->param_types[a];
             Type g_res;
             {
                 Type *fnp = (Type *)emit_abi_type_scratch(ctx.type_arena,
@@ -10036,12 +10033,11 @@ int emit_program(Buf *out, const Expr *program) {
              * shared body still names `l` only in the redirected `(l g s)` (never
              * emitted as a value), so its binding need not stay a param. */
             int cm_lens_idx = -1;
-            uint8_t c_n0 = cfd->n_params <= MAX_FN_ARITY ? cfd->n_params
-                                                         : MAX_FN_ARITY;
-            for (uint8_t p = 0; p < c_n0; p++)
-                if ((const void *)cfd->params[p] == lb) { cm_lens_idx = p; break; }
+            uint32_t c_n0 = cfd->n_params;
+            for (uint32_t p = 0; p < c_n0; p++)
+                if ((const void *)cfd->params[p] == lb) { cm_lens_idx = (int)p; break; }
             if (cm_lens_idx < 0) continue;   /* lens not a positional param */
-            uint8_t c_n = (uint8_t)(c_n0 - 1);
+            uint32_t c_n = c_n0 - 1;
             Binding **r_params = (Binding **)arena_alloc(
                 ctx.type_arena, sizeof(Binding *) * (c_n ? c_n : 1));
             Type *r_ptypes = (Type *)arena_alloc(
@@ -10286,6 +10282,7 @@ int emit_program(Buf *out, const Expr *program) {
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
+    free(ctx.pbp_param_ptrs);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
@@ -10407,7 +10404,7 @@ int emit_exports_manifest(Buf *out, const Expr *program) {
         char *mangled = raw_name_for_binding(b);
         buf_printf(out, "%s/%.*s -> %s :: (",
                    mod_name, (int)b->name->len, b->name->name, mangled);
-        for (uint8_t j = 0; j < fd->n_params; j++) {
+        for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, " ");
             buf_puts(out, manifest_type_tag(fd->param_types[j].kind));
         }
@@ -10542,7 +10539,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                     (void)type_c_name(emit_type_from_kind(e->type.as.fn.result_kind));
                 }
             }
-            for (uint8_t j = 0; j < fd->n_params; j++) {
+            for (uint32_t j = 0; j < fd->n_params; j++) {
                 if (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j]) {
                     (void)type_c_name(*e->type.as.fn.arg_full_types[j]);
                 } else {
@@ -10559,7 +10556,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         } else if (e->kind == EX_EXTERN_C) {
             ExternC *ec = e->as.extern_c_.ext;
             (void)type_c_name(ec->return_type);
-            for (uint8_t j = 0; j < ec->n_params; j++) (void)type_c_name(ec->param_types[j]);
+            for (uint32_t j = 0; j < ec->n_params; j++) (void)type_c_name(ec->param_types[j]);
         } else if (e->kind == EX_DEF) {
             if (def_is_opaque_type_decl(e)) continue;   /* slice 5: type decl, no storage */
             if (separate_compilation && e->as.def_.binding->is_exported) {
@@ -10619,7 +10616,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             if (!b || !fn_expr || !fn_expr->as.fn_def_.fn) continue;
             /* Build arg_types[] and result_type from TypeKind values. */
             Type arg_types[16];
-            for (uint8_t ai = 0; ai < fs->n_args; ai++)
+            for (uint32_t ai = 0; ai < fs->n_args; ai++)
                 arg_types[ai] = emit_type_from_kind(fs->arg_kinds[ai]);
             Type result_type = emit_type_from_kind(fs->result_kind);
             /* Grow hdr_ctx.abi_specializations and add spec. */
@@ -10638,7 +10635,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             sp->binding = b;
             sp->n_args = fs->n_args;
             sp->result_type = result_type;
-            for (uint8_t ai = 0; ai < fs->n_args; ai++) sp->arg_types[ai] = arg_types[ai];
+            for (uint32_t ai = 0; ai < fs->n_args; ai++) sp->arg_types[ai] = arg_types[ai];
             sp->clone_name = strdup(fs->clone_name);
             sp->external_linkage = true;
         }
@@ -10650,7 +10647,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
             const EmitAbiSpecialization *spec = &hdr_ctx.abi_specializations[i];
             if (!spec->fn) continue; /* skip borrow specs */
             (void)type_c_name(spec->result_type);
-            for (uint8_t j = 0; j < spec->n_args; j++)
+            for (uint32_t j = 0; j < spec->n_args; j++)
                 (void)type_c_name(spec->arg_types[j]);
         }
     }
@@ -10704,7 +10701,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                 continue;
             buf_puts(out, type_c_name(spec->result_type));
             buf_printf(out, " %s(", spec->clone_name);
-            for (uint8_t j = 0; j < spec->n_args; j++) {
+            for (uint32_t j = 0; j < spec->n_args; j++) {
                 if (j > 0) buf_puts(out, ", ");
                 if (spec->fn->params[j]->is_poly_fn) {
                     buf_puts(out, "tur_poly_fn_t");
@@ -10780,7 +10777,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                 buf_puts(out, "void");
             }
             buf_printf(out, " %s(", fn_name);
-            for (uint8_t j = 0; j < fd->n_params; j++) {
+            for (uint32_t j = 0; j < fd->n_params; j++) {
                 if (j > 0) buf_puts(out, ", ");
                 /* header-fat-param-emitted-as-inner-type.md: mirror the
                  * forward-decl carrier logic from emit_implementation so the
@@ -10824,7 +10821,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
                        type_c_name(ec->return_type),
                        ec_mangled);
             free(ec_mangled);
-            for (uint8_t j = 0; j < ec->n_params; j++) {
+            for (uint32_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(out, ", ");
                 buf_puts(out, type_c_name(ec->param_types[j]));
             }
@@ -11068,7 +11065,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         sp->binding = b;
         sp->n_args = fs->n_args;
         sp->result_type = emit_type_from_kind(fs->result_kind);
-        for (uint8_t ai = 0; ai < fs->n_args; ai++)
+        for (uint32_t ai = 0; ai < fs->n_args; ai++)
             sp->arg_types[ai] = emit_type_from_kind(fs->arg_kinds[ai]);
         sp->clone_name = strdup(fs->clone_name);
         sp->external_linkage = true;
@@ -11100,7 +11097,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
                     ? strdup(spec->binding->name->name) : NULL;
                 bsi->result_kind = spec->result_type.kind;
                 bsi->n_args = spec->n_args;
-                for (uint8_t ai = 0; ai < spec->n_args; ai++)
+                for (uint32_t ai = 0; ai < spec->n_args; ai++)
                     bsi->arg_kinds[ai] = spec->arg_types[ai].kind;
             }
             *out_borrow_specs = bs;
@@ -11243,7 +11240,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
                        type_c_name(ec->return_type),
                        ec_mangled);
             free(ec_mangled);
-            for (uint8_t j = 0; j < ec->n_params; j++) {
+            for (uint32_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(&file, ", ");
                 buf_puts(&file, type_c_name(ec->param_types[j]));
             }
@@ -11383,6 +11380,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
+    free(ctx.pbp_param_ptrs);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);

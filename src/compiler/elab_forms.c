@@ -1643,8 +1643,8 @@ Expr *elab_letrec(Elab *e, const Form *call) {
                     /* Same `^`-marker-aware scan as the defmodule/top-level
                      * forward-decl pre-pass: a `(fn [^fat g ...] ...)` literal
                      * must not count its ^fat marker as a parameter slot. */
-                    TypeKind arg_kinds[MAX_FN_ARITY];
-                    uint32_t arity = fwd_decl_scan_params(params_f, arg_kinds);
+                    TypeKind *arg_kinds = NULL;
+                    uint32_t arity = fwd_decl_scan_params(e->arena, params_f, &arg_kinds);
                     /* Peek at the return-type keyword at index 2 (fn [params] :ret body). */
                     TypeKind ret_kind = TY_INT;
                     if (init_f->as.list.len >= 4) {
