@@ -1,8 +1,8 @@
 ---
 title: Owning pointers on the CPS-IR-to-C backend -- remaining follow-ups
 category: Planning
-status: open (low priority) -- O1-a landed; O1-b and O3 remain deferred
-description: The owning-pointer analysis + landing (O1 owning-value locals, O2 owning fields inside aggregates via N3, O3 guarded by the zero-capture cut) shipped and re-scoped graduation gate item 4; see the archived parent. This doc carries the small, deliberately-deferred remainder. O1-a (non-atomic owning-op operand delegation) has now landed; ref<T> scope-exit auto-drop (EX_DEFER) and captured owning values remain documented deferrals -- each safe on the fallback today, none on the critical path for cps-backend graduation.
+status: archived -- fully dispatched: O1-a landed; O1-b and O3 spun out to their own plans
+description: The owning-pointer analysis + landing (O1 owning-value locals, O2 owning fields inside aggregates via N3, O3 guarded by the zero-capture cut) shipped and re-scoped graduation gate item 4; see the archived parent. This doc carried the small, deliberately-deferred remainder and is now archived because every item has a home: O1-a (non-atomic owning-op operand delegation) landed; O1-b (ref<T> scope-exit auto-drop / EX_DEFER) is planned in cps-backend-ref-scope-exit-drop-plan.md; O3 (captured owning values) is planned in cps-backend-env-capture-owning-values-plan.md. Both remaining items are safe on the fallback today and off the critical path for cps-backend graduation. Kept as the index that ties O1-a's landing to the two follow-on plans.
 ---
 
 # Owning pointers on the CPS backend -- remaining follow-ups
@@ -10,7 +10,7 @@ description: The owning-pointer analysis + landing (O1 owning-value locals, O2 o
 ## Context
 
 The analysis and the landed work live in the archived parent,
-[cps-backend-owning-pointers-plan.md](../../archive/cps-backend-owning-pointers-plan.md).
+[cps-backend-owning-pointers-plan.md](cps-backend-owning-pointers-plan.md).
 Its four findings still hold and are the frame for everything below:
 
 1. Bare owning pointers (`ref` / `rc` / `weak` / `lref`) are never bare slot
@@ -60,29 +60,35 @@ path, delivers a scalar; `direct == cps` (7) and LeakSanitizer-clean.
 
 ## Task O1-b -- `ref<T>` scope-exit auto-drop (`EX_DEFER`)
 
-**State: deferred, documented low-value -- keep on fallback.** `ref<T>`'s
-auto-drop is injected as `(defer (drop! r))` at **scope exit** (`elab_forms.c`
-~1000). In a colored function that scope-exit drop lands *after* the control op;
-an abortive `shift` discards its continuation, so the drop lands in the discarded
-region -- exactly the case `owning_dropped_before_control` rejects. A `ref` whose
-scope ends *before* the control op could translate, but its produced value is then
-typically captured by the continuation (fallback). So a `ref` local in a colored
-function almost always falls back regardless of `EX_DEFER` translation.
+**State: deferred, planned in
+[cps-backend-ref-scope-exit-drop-plan.md](../upcoming/v1/cps-backend-ref-scope-exit-drop-plan.md).**
+`ref<T>`'s auto-drop is injected as `(defer (drop! r))` at **scope exit**
+(`elab_forms.c` ~1000). In a colored function that scope-exit drop lands *after*
+the control op; an abortive `shift` discards its continuation, so the drop lands
+in the discarded region -- exactly the case `owning_dropped_before_control`
+rejects. A `ref` whose scope ends *before* the control op could translate, but a
+`ref` that crosses the control op is captured by the continuation (fallback). So
+a `ref` local in a colored function almost always falls back regardless of
+`EX_DEFER` translation.
 
-Implementing scope-exit defer semantics (LIFO ordering, early-return paths) in the
-CPS backend is not justified by the payoff now. **Non-goal unless** a real
-`ref`/`weak`/`lref`-in-colored-function case shows up that would actually CPS-emit
--- revisit then, not speculatively.
+That plan splits the spectrum: P1 hoists the drop to last-use for a `ref` that
+does **not** cross a control op (self-contained, no runtime -- the one tractable
+slice); P2 (abortive-crossing) and P3 (resumable-crossing) ride the DK-teardown /
+owning-capture clone-drop substrate from the env-capture plan. Landing P1 is the
+standalone O1-b win; P2/P3 stay gated on a real crossing-`ref` case, per the
+original caveat.
 
 ## Task O3 -- captured owning values
 
-**State: deferred, rides the env-capture story.** If a future phase lifts the
-zero-capture cut and lets a continuation capture live locals, an owning capture
-must be deep-cloned / incref'd per `dk_copy` (DK continuations are multi-shot, so
-a shallow copy of a frame holding an owning pointer would double-free). Until the
-cut is lifted this is unreachable, so O3 stays off the critical path for
-graduation. Tracked here so it is not lost; owned by whichever plan lifts the
-zero-capture cut (the env-capture work, out of scope in the parent plans).
+**State: deferred, planned in
+[cps-backend-env-capture-owning-values-plan.md](../upcoming/v1/cps-backend-env-capture-owning-values-plan.md).**
+If a future phase lifts the zero-capture cut and lets a continuation capture live
+locals, an owning capture must be deep-cloned / incref'd per `dk_copy` (DK
+continuations are multi-shot, so a shallow copy of a frame holding an owning
+pointer would double-free). Until the cut is lifted this is unreachable, so O3
+stays off the critical path for graduation. The env-capture work that owns O3 now
+has a concrete plan (gate relaxation + per-capture clone/drop glue in the CT-IR
+backend, phased E1-E4); see that document.
 
 ## Depends on / reuses
 
@@ -97,5 +103,7 @@ zero-capture cut (the env-capture work, out of scope in the parent plans).
 
 - Adding `ref` / `rc` / `weak` / `lref` to `slot_ty` -- Findings 1-2 show there is
   nothing to hook; owning pointers never cross the slot bare.
-- Lifting the zero-capture cut itself -- that is the env-capture story; O3 rides
-  it.
+- Lifting the zero-capture cut itself -- that is the env-capture story, planned
+  in
+  [cps-backend-env-capture-owning-values-plan.md](../upcoming/v1/cps-backend-env-capture-owning-values-plan.md);
+  O3 rides it.

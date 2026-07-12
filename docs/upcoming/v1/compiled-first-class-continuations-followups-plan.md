@@ -45,7 +45,9 @@ effect resume is permitted where the source opts in.
   delimited-control surface already uses.
 - **Interaction with the owning/capture cut:** a multi-shot effect resume that
   captures an owning value is the O3 hazard from the owning-pointers follow-ups --
-  keep it behind the same guard until the env-capture / deep-clone story lands.
+  keep it behind the same guard until the env-capture / deep-clone story lands
+  ([cps-backend-env-capture-owning-values-plan.md](cps-backend-env-capture-owning-values-plan.md),
+  E1-E3).
 
 ## Phase F3 -- `async` / `await` on heap continuations (optional)
 

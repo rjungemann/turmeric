@@ -90,6 +90,6 @@ Only after Task 2 does `cps-backend` satisfy gate item 7.
 
 - Uncolored functions -- never CPS-emitted; N6 is only about colored functions.
 - Owning-field aggregate / carrier crossings -- gate item 4, see the
-  [owning-pointers follow-ups](cps-backend-owning-pointers-followups-plan.md).
+  [owning-pointers follow-ups](../../archive/cps-backend-owning-pointers-followups-plan.md).
 - Porting cloneable / serial / async into the CT-IR backend -- explicitly the
   carve-out, not a goal.
