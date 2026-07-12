@@ -4,6 +4,18 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.28.1] -- 2026-07-11
+
+### Added
+
+- **Debug sanitizers are now configurable via `TUR_DEBUG_SANITIZE`**: the
+  ~40 hardcoded `-fsanitize=address,undefined` sites in the Debug build now
+  route through a single `TUR_ASAN_FLAGS` variable driven by a new
+  `-DTUR_DEBUG_SANITIZE=ON/OFF` CMake option (also gating the `eval_import`
+  test's fixture-compile flags), so ASan/UBSan coverage can be toggled without
+  editing the build. Adds a tight-timeout `tur --version` CI smoke check on
+  Linux and macOS to catch startup-hang regressions (#660).
+
 ## [0.28.0] -- 2026-07-11
 
 ### Changed

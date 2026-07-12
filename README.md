@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.28.0` -- the CPS-IR-to-C backend graduates to the always-on codegen path: `emit-c` lowers ANF/CPS IR directly to C under the DK-threading ABI with no flag, and the last `--enable=cps-backend` surface is removed.
+**Latest release:** `v0.28.1` -- Debug sanitizers become configurable through a new `TUR_DEBUG_SANITIZE` CMake option, routing the ~40 hardcoded ASan/UBSan sites through one toggle, plus a tight-timeout `tur --version` CI smoke check on Linux and macOS.
 
 ## What
 
