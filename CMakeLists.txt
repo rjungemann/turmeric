@@ -8,31 +8,31 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Debug-build sanitizers (AddressSanitizer + UBSan)
 # ---------------------------------------------------------------------------
 # The Debug build instruments `tur` (and, in the eval_import test, the C it
-# generates) with -fsanitize=address,undefined. On newer macOS/dyld the clang
-# ASan runtime can deadlock in InitializeShadowMemory while walking the dyld
-# shared cache -- it spins forever in a startup spinlock *before* main(), so
-# every `tur` invocation (even `tur --version`) hangs. This is a runtime/OS
-# incompatibility, not a bug in `tur`.
+# generates) with -fsanitize=address,undefined. This is ON by default on every
+# platform -- the sanitizers are load-bearing coverage and we never want to
+# silently carve a platform out of testing them.
 #
-# Provide a single opt-out that strips ASan+UBSan from the whole Debug build:
+# Known failure mode: on some newer macOS/dyld the ASan runtime *baked into the
+# binary at link time by an outdated clang* deadlocks in InitializeShadowMemory
+# while walking the dyld shared cache -- it spins in a startup spinlock *before*
+# main(), so every `tur` invocation (even `tur --version`) hangs. That is a
+# toolchain/OS runtime bug, not a bug in `tur`, and it reproduces with a bare
+# `int main(){}` compiled `-fsanitize=address`.
 #
-#     cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
+#   * Real fix (keeps coverage): build with a current LLVM whose ASan runtime
+#     knows the new dyld cache layout, e.g. Homebrew LLVM:
+#         brew install llvm
+#         cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+#               -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang"
+#   * Escape hatch (drops leak/UB detection locally): explicitly opt out --
+#         cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
 #
-# It defaults ON everywhere the runtime is known-good, and auto-defaults OFF on
-# the Darwin versions where the deadlock has been observed (Darwin >= 27 /
-# macOS 26+) so a plain Debug build stays usable there. Force it back on with
-# -DTUR_DEBUG_SANITIZE=ON if your local toolchain's ASan runtime is fixed.
-set(_tur_debug_sanitize_default ON)
-if(APPLE AND CMAKE_SYSTEM_VERSION VERSION_GREATER_EQUAL "27")
-  set(_tur_debug_sanitize_default OFF)
-  message(STATUS
-    "tur: macOS/dyld (Darwin ${CMAKE_SYSTEM_VERSION}) is known to deadlock the "
-    "ASan runtime at startup; defaulting TUR_DEBUG_SANITIZE=OFF. "
-    "Override with -DTUR_DEBUG_SANITIZE=ON.")
-endif()
+# We deliberately do NOT auto-disable on any platform: a silent, permanent loss
+# of sanitizer coverage in CI is worse than a loud hang the `tur --version`
+# smoke check catches.
 option(TUR_DEBUG_SANITIZE
   "Instrument the Debug build with AddressSanitizer + UBSan"
-  ${_tur_debug_sanitize_default})
+  ON)
 if(TUR_DEBUG_SANITIZE)
   set(TUR_ASAN_FLAGS "-fsanitize=address,undefined")
 else()
