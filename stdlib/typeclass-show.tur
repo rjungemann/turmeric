@@ -230,8 +230,7 @@
   [(Show A)]
   (show [x]
     (show-concat "["
-      (show-concat
-        (vec-show-loop (:: x (Vec A)) 0 (vec-len (:: x (Vec A))) "")
+      (show-concat (vec-show-loop (:: x (Vec A)) 0 (vec-len (:: x (Vec A))) "")
         "]"))))
 ;;; set-show-loop -- accumulate the space-separated element repr for Show[Set].
 ;;;
@@ -264,7 +263,8 @@
   [s : (Set A) iter : ptr<void> first : bool acc : cstr]
   : cstr
   (if (hamt/iter-advance! iter)
-    (set-show-loop s iter
+    (set-show-loop s
+      iter
       false
       (show-concat acc
         (show-concat (if first "" " ") (show (:: (hamt/iter-cur-key iter) A)))))
@@ -276,8 +276,7 @@
 (defn set-show-driver [^Show A]
   [s (Set A)]
   : cstr
-  (let [iter (hamt/iter-alloc (set-hamt s))
-        body (set-show-loop s iter true "")]
+  (let [iter (hamt/iter-alloc (set-hamt s)) body (set-show-loop s iter true "")]
     (do (hamt/iter-destroy! iter) body)))
 ;;; Show [Set] -- render a Set[A] as "#set{a b c}" using the element's Show
 ;;; instance.  Mirrors the #set{...} / set-of literal surface.  An empty Set
@@ -291,8 +290,7 @@
 (definstance Show [Set]
   [(Show A)]
   (show [x]
-    (show-concat "#set{"
-      (show-concat (set-show-driver (:: x (Set A))) "}"))))
+    (show-concat "#set{" (show-concat (set-show-driver (:: x (Set A))) "}"))))
 ;;; map-show-loop -- accumulate the "k v" pairs repr for Show[Map].
 ;;;
 ;;; Walks the map's HAMT via the pure-Turmeric iterator, formatting each entry
@@ -323,11 +321,12 @@
   [m : (Map K V) iter : ptr<void> first : bool acc : cstr]
   : cstr
   (if (hamt/iter-advance! iter)
-    (map-show-loop m iter
+    (map-show-loop m
+      iter
       false
       (show-concat acc
-        (show-concat
-          (show-concat (if first "" " ") (show (:: (hamt/iter-cur-key iter) K)))
+        (show-concat (show-concat (if first "" " ")
+                       (show (:: (hamt/iter-cur-key iter) K)))
           (show-concat " " (show (:: (map-iter-cur-val-as iter) V))))))
     acc))
 ;;; map-show-driver -- allocate the iter box, run map-show-loop, free.
@@ -337,8 +336,7 @@
 (defn map-show-driver [^Show K ^Show V]
   [m (Map K V)]
   : cstr
-  (let [iter (hamt/iter-alloc (map-hamt m))
-        body (map-show-loop m iter true "")]
+  (let [iter (hamt/iter-alloc (map-hamt m)) body (map-show-loop m iter true "")]
     (do (hamt/iter-destroy! iter) body)))
 ;;; Show [Map] -- render a Map[K V] as "#map{k1 v1 k2 v2}" using the key and
 ;;; value Show instances.  Mirrors the #map{...} / hamt-of literal surface.
@@ -352,5 +350,4 @@
 (definstance Show [Map]
   [(Show K) (Show V)]
   (show [x]
-    (show-concat "#map{"
-      (show-concat (map-show-driver (:: x (Map K V))) "}"))))
+    (show-concat "#map{" (show-concat (map-show-driver (:: x (Map K V))) "}"))))

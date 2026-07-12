@@ -27,6 +27,7 @@
 ;; no-op there; declaring it makes set self-sufficient under an isolated
 ;; `(load "stdlib/set.tur")` and under the interpreter preload (whose order has
 ;; set before map).  No cycle: map.tur does not load set.tur.
+
 (load "stdlib/map.tur")
 ;;; Set -- parameterized persistent set with element type A.
 ;;;
@@ -126,7 +127,11 @@
 
 (defmacro set-add [s h x]
   `(let [__tur_se__ ~x]
-     (set-add-eq-o ~s ~h (mk-box __tur_se__) (mk-cmp __tur_se__) (mk-owned? __tur_se__))))
+     (set-add-eq-o ~s
+       ~h
+       (mk-box __tur_se__)
+       (mk-cmp __tur_se__)
+       (mk-owned? __tur_se__))))
 ;;; set-remove -- remove element x from the set; returns a new set.
 ;;;
 ;;; Parameters:
@@ -144,7 +149,11 @@
 
 (defmacro set-remove [s h x]
   `(let [__tur_se__ ~x]
-     (set-del-eq-o ~s ~h (mk-box __tur_se__) (mk-cmp __tur_se__) (mk-owned? __tur_se__))))
+     (set-del-eq-o ~s
+       ~h
+       (mk-box __tur_se__)
+       (mk-cmp __tur_se__)
+       (mk-owned? __tur_se__))))
 ;;; set-member? -- check whether element x is in the set.
 ;;;
 ;;; Parameters:
@@ -162,7 +171,11 @@
 
 (defmacro set-member? [s h x]
   `(let [__tur_se__ ~x]
-     (set-has-eq-o? ~s ~h (mk-box __tur_se__) (mk-cmp __tur_se__) (mk-owned? __tur_se__))))
+     (set-has-eq-o? ~s
+       ~h
+       (mk-box __tur_se__)
+       (mk-cmp __tur_se__)
+       (mk-owned? __tur_se__))))
 ;;; set-count -- return the number of elements in the set.
 ;;;
 ;;; Parameters:
@@ -197,7 +210,6 @@
 ;;;   (set-union set-a set-b)  ; => union set
 ;;;
 ;;; Since: Phase TC2
-
 ;; NOTE (set-element-api-generalization): union / intersect / diff thread the
 ;; source set's stamped element comparator (tur_hamt_keyeq) through the
 ;; content-aware HAMT ops (tur_hamt_has_dynamic / tur_hamt_set_eq_o), so a set of
@@ -207,6 +219,7 @@
 ;; owned=0: these re-insert existing element pointers borrowed from the sources
 ;; (matching how the sources hold them); an owned-key element type (a future
 ;; owned String) would need the boxes retained here.
+
 
 (defn set-union [A]
   [a (Set A) b (Set A)]
@@ -507,8 +520,7 @@
 ;;; member even at distinct addresses.
 
 (defmacro set-add1 [s x]
-  `(let [__tur_se1__ ~x]
-     (set-add ~s (hash __tur_se1__) __tur_se1__)))
+  `(let [__tur_se1__ ~x] (set-add ~s (hash __tur_se1__) __tur_se1__)))
 ;;; set-add-each__ -- internal helper for the set-of macro.
 ;;;
 ;;; Threads (set-add1 s x) over the elements in xs.  Each element appears
@@ -540,7 +552,6 @@
 ;;;   (set-of 1 1 2)  ; => Set {1, 2}
 ;;;
 ;;; Since: DL1 (data-literals-plan)
-
 ;;; set-empty-for -- internal: an empty Set[A] whose A is pinned by a sample
 ;;; element.  Used by the set-of / #set{...} lowering, where the element type is
 ;;; known from the first literal element but cannot be written as an annotation
@@ -551,6 +562,7 @@
 ;;; are not deduped.
 ;;;
 ;;; Since: set-element-api-generalization
+
 
 (defn set-empty-for [^Hash A ^MapKey A] [x :A] : (Set A) (set-new))
 

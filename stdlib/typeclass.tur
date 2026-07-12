@@ -19,6 +19,7 @@
 ;;;
 ;;; Since: Phase 15
 ;; Ord typeclass - ordering
+
 (defclass Ord [a]
   (lt? [x y] : bool)
   (lte? [x y] : bool)

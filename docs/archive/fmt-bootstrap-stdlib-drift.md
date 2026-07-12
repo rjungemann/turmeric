@@ -1,5 +1,14 @@
 # `tur fmt --check` fails on committed stdlib files (fmt-bootstrap-stdlib drift)
 
+**RESOLVED (2026-07-12):** Regenerated the four drifted files in place with
+`tur fmt` (the preferred one-shot fix). Changes are whitespace-only (each file
+verified token-identical to HEAD after stripping whitespace), the formatter is
+idempotent on all four, and the full `tests/run-fmt.sh` harness now reports
+`17 passed, 0 failed` (FT7 fmt-bootstrap-stdlib and FT8 idempotence both green).
+A sweep of every `stdlib/*.tur` (minus `docstrings.tur`, matching FT7's scan)
+confirms none remain dirty. No formatter/heuristic changes; layout only.
+
+
 **Severity: LOW (CI red, no runtime impact; the committed stdlib is valid and
 compiles -- it is only out of sync with the current formatter's canonical
 output).**
