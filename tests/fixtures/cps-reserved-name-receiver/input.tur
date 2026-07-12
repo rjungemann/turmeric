@@ -1,0 +1,17 @@
+;; Regression for the CPS reserved-name collision (docs/archive/
+;; cps-reserved-name-collision-user-fn.md): a user function named `k` -- the
+;; name the CPS backend used for its synthesized continuation -- used from a
+;; colored context.  Before the fix, `make__cps`'s `DK *k` continuation param
+;; shadowed the user function `k`, so the receiver call and the return-delivery
+;; dispatched through the wrong value (segfault, then hang).  The backend now
+;; names its continuation `__kont`, so a user `k` no longer collides.
+
+(defn k [c : int] : int c)   ;; named `k`; used as a cloneable-shift receiver
+
+(defn make [] : int
+  (cloneable-reset (+ 1 (cloneable-shift k 0))))
+
+(defn main [] : int
+  ;; continuation (+ 1 []) resumed with 10 -> 11
+  (println (tur_cloneable_cont_resume (make) 10))
+  0)

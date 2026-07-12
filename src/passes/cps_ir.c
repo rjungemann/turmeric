@@ -387,11 +387,18 @@ static bool clone_let_ty_ok(TypeKind k) {
  * non-int operand, a second `if`, a non-delegatable init/cond/pure arm, or
  * overflow of the frame/let caps) -- the caller then falls back to the CT_LETRAW
  * delegation. */
+/* A scalar kind a delimited context frame's hole / env / result can carry: int
+ * or cstr.  Both fit the intptr_t carrier the DK machine threads, so a value-
+ * typed cont<cstr> (CC4) rides the same machinery as cont<int>, with the frame
+ * wrapper casting to the real kind at the call boundary. */
+static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
+
 static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     const Expr *cur = ascribe_peel(e->as.cloneable_reset_.body);
     CloneFrame frames[CL_IR_MAX_FRAMES];
     CloneLet   lets[CL_IR_MAX_LETS];
     uint32_t nf = 0, nl = 0;
+    uint32_t n_outer = 0;   /* frames collected before the `if` (outer context) */
     const Expr *if_cond = NULL, *if_pure = NULL;
     bool if_when = true, saw_if = false;
 
@@ -409,30 +416,39 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             bool h1 = cloneable_ctx_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* need exactly one hole side */
             const Expr *other = h0 ? a1 : a0;
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || other->type.kind != TY_INT) return NULL;
+            /* D6a: the non-hole operand may be non-atomic (e.g. a call `(id 3)`)
+             * as long as it is shift-free and pure/emit_value-able.  It is
+             * emit_value'd once at the reset site (cold-start capture) and its
+             * value rides the frame's dk_frame env, deep-cloned with the chain on
+             * each resume -- so `(+ (id 3) [])` reifies its context correctly for
+             * multi-shot, matching the atomic-operand twin.  (An atomic operand
+             * still rides `operand` directly; env_expr stays NULL for it.) */
+            bool cl_arith_atom = is_atomic(other);
+            if (!cl_arith_atom && (cloneable_ctx_reaches_shift(other)
+                          || !safe_to_delegate(b, other))) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             frames[nf].op           = cur->as.builtin.spec->c_op;  /* stable string */
             frames[nf].call_fn      = NULL;
             frames[nf].ignore_value = false;
             frames[nf].operand      = atom_of(other);
+            frames[nf].env_expr     = cl_arith_atom ? NULL : other;
             frames[nf].hole_left    = h0;
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
             continue;
         }
 
-        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored int->int fn;
-         * the hole is the sole argument, so there is no captured env.  (The direct
-         * emitter drops a 2-arg call context onto the legacy identity path, so we
-         * leave those to the delegation to keep direct == cps.) */
+        /* Call frame: a 1-arg call `(f [])` to a top-level uncolored scalar->scalar
+         * fn; the hole is the sole argument, so there is no captured env. */
         if (cur->kind == EX_CALL && cur->as.call_.n_args == 1
             && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
             const Binding *fb = cur->as.call_.fn_binding;
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             if (!cloneable_ctx_reaches_shift(a0)) return NULL;   /* sole arg is the hole */
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
@@ -444,6 +460,55 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             frames[nf].hole_left = true;         /* the hole is the sole arg */
             nf++;
             cur = a0;                            /* descend into the hole arg */
+            continue;
+        }
+
+        /* Call frame (2-arg): `(f other [])` / `(f [] other)` to a top-level
+         * uncolored scalar (int/cstr) fn; the hole is one arg, the other is the
+         * captured env -- an atomic operand on `operand`, or (D6a) a non-atomic
+         * pure operand on `env_expr`.  The env value rides the frame's dk_frame
+         * slot -- deep-cloned with the chain on each resume -- so multi-shot is
+         * correct with no marshaling (unlike serial, which registers a per-site
+         * skcall for save/restore). */
+        if (cur->kind == EX_CALL && cur->as.call_.n_args == 2
+            && cur->as.call_.fn_binding && !cur->as.call_.fn_expr) {
+            const Binding *fb = cur->as.call_.fn_binding;
+            if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
+            if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
+            if (callee_colored(b, fb)) return NULL;          /* uncolored target */
+            /* result + both param kinds are scalars (int / cstr): a cstr rides the
+             * carrier like an int, and the value-typed cont<cstr> lets the frame
+             * hole + env carry a string (CC4).  The env is captured by value; for
+             * cstr that is the immutable string pointer, deep-cloned with the chain
+             * (cloneable is single-owner, no marshaling). */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0]) ||
+                !cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[1])) return NULL;
+            const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
+            const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
+            bool h0 = cloneable_ctx_reaches_shift(a0);
+            bool h1 = cloneable_ctx_reaches_shift(a1);
+            if (h0 == h1) return NULL;               /* exactly one hole side */
+            const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
+            if (!other || !cps_scalar_kind_ok(other->type.kind)) return NULL;
+            /* D6a parity (2-arg call frame): admit a non-atomic pure scalar env
+             * (a call `(id 3)`, shift-free + safe_to_delegate) via env_expr, like
+             * the arithmetic frame and serial's 2-arg frame.  It is emit_value'd
+             * once at the reset site; its scalar value rides the frame's dk_frame
+             * env, deep-cloned with the chain on each resume (cloneable is
+             * single-owner, no marshaling). */
+            bool env_atom = is_atomic(other);
+            if (!env_atom && (cloneable_ctx_reaches_shift(other)
+                          || !safe_to_delegate(b, other))) return NULL;
+            if (nf >= CL_IR_MAX_FRAMES) return NULL;
+            memset(&frames[nf], 0, sizeof(CloneFrame));
+            frames[nf].op        = NULL;
+            frames[nf].call_fn   = fb;
+            frames[nf].operand   = atom_of(other);   /* captured scalar env */
+            frames[nf].env_expr  = env_atom ? NULL : other;
+            frames[nf].hole_left = h0;                /* hole is the left arg? */
+            nf++;
+            cur = h0 ? a0 : a1;                        /* descend into the hole side */
             continue;
         }
 
@@ -507,11 +572,15 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
 
         /* Pure `let` prelude: inits shift-free + scalar, body carries the hole. */
         if (cur->kind == EX_LET) {
-            /* Keep `let` and `if` mutually exclusive in one native lowering: a
-             * `let` above an `if` has its binding referenced by the pure arm, but
-             * the prelude local is emitted only inside the shift branch -- the
-             * mixed shape falls through to the (still correct) delegation. */
-            if (saw_if) return NULL;
+            /* emit_cloneable lays every prelude local down at the reset site,
+             * ahead of the `if` branch and the frame-operand pushes, so a `let`
+             * either ABOVE the `if` (referenced by outer frames + the pure arm) or
+             * nested in the shift-bearing arm (referenced by inner frames) is in
+             * scope where it is used.  Hoisting a shift-arm let out of its branch
+             * is sound because its init is pure and scalar (shift-free,
+             * safe_to_delegate below); a binding the shift BODY itself needs would
+             * be a live capture, which the shift admission rejects (n_live_captures
+             * != 0), so it never reaches here. */
             const Expr *lbody = cur->as.let_.body;
             if (!cloneable_ctx_reaches_shift(lbody)) return NULL;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
@@ -532,7 +601,6 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         /* One `if` branch point: pure condition, exactly one shift-bearing arm. */
         if (cur->kind == EX_IF) {
             if (saw_if) return NULL;                  /* only one branch point */
-            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
             const Expr *cond = cur->as.if_.cond;
             const Expr *thn  = cur->as.if_.then_;
             const Expr *els  = cur->as.if_.else_or_null;
@@ -547,6 +615,7 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (cloneable_ctx_reaches_shift(pure_arm)) return NULL;   /* defensive */
             if (!safe_to_delegate(b, pure_arm)) return NULL;
             if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            n_outer = nf;   /* frames so far are OUTSIDE the if; later frames are inner */
             cur = shift_arm;
             continue;
         }
@@ -555,13 +624,17 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
 
     if (!cur || cur->kind != EX_CLONEABLE_SHIFT) return NULL;
-    /* The shared DK runtime prelude (__dk_cont_fn / __dk_env_clone / __dk_env_drop,
-     * dk_copy_range) that native Shape 2 emits is gated by the direct emitter's
-     * cl_can_lower, which requires the shift to have no live captures at its site.
-     * Match that constraint: lowering a shift with live captures natively would
-     * reference prelude helpers the gate never emits (undeclared C names).  Such a
-     * shape stays on the delegation path, which matches the direct backend. */
-    if (cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
+    /* Shape 2 (nf >= 1) reifies the delimited context as a DK frame chain, so a
+     * captured continuation genuinely re-runs the context and references the
+     * captured locals -- native Shape 2 has no env-carrying prelude, so a
+     * live-capture Shape 2 still delegates.  Shape 1 (nf == 0) is different: its
+     * captured continuation is the IDENTITY (the shift sits at the reset tail, no
+     * context to re-run), which returns its delivered value and never reads a
+     * captured local.  emit_cloneable's Shape 1 arm allocates the trivial cont
+     * with a NULL env (tur_cloneable_cont_alloc(cfn, NULL, NULL, NULL)), exactly
+     * like the legacy has_env==false path -- so a conservatively-marked live
+     * capture on a Shape 1 shift is emit-time dead and safe to admit natively. */
+    if (nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0) return NULL;
     const Binding *recv = cloneable_named_receiver(b, cur);
     const Expr *recv_expr = NULL;
     if (!recv) {
@@ -596,11 +669,35 @@ static CTerm *build_cloneable(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     } else {
         t->as.cloneable.lets = NULL;
     }
+    t->as.cloneable.n_outer_frames = n_outer;
     t->as.cloneable.if_cond = if_cond;
     t->as.cloneable.if_pure = if_pure;
     t->as.cloneable.if_when = if_when;
     t->as.cloneable.body = rest;
     return t;
+}
+
+/* Pure existence check: does `program` declare a Serializable instance for the
+ * nominal (TY_ADT) type `t`?  Lets build_serial admit a SER-env frame; the
+ * emitter (emit_cps_ir.c) resolves the instance's serialize/deserialize method
+ * C names.  Kept in the pass (no emit helpers), mirroring the existence path of
+ * emit_cps.c's sk_find_serializable. */
+static bool cps_serializable_exists(const Expr *program, Type t) {
+    if (!program || program->kind != EX_PROGRAM) return false;
+    if (t.kind != TY_ADT || !t.as.adt_.def || !t.as.adt_.def->name) return false;
+    const char *tname = t.as.adt_.def->name;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = it->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
+        if (strcmp(inst->typeclass->name->name, "Serializable") != 0) continue;
+        if (inst->n_type_args < 1) continue;
+        Type at = inst->type_args[0];
+        if (at.kind == TY_ADT && at.as.adt_.def && at.as.adt_.def->name &&
+            strcmp(at.as.adt_.def->name, tname) == 0) return true;
+    }
+    return false;
 }
 
 /* U4 native serial: (serial-reset <arith-ctx> (serial-shift receiver v)) with a
@@ -653,6 +750,7 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     CloneFrame frames[CL_IR_MAX_FRAMES];
     CloneLet   lets[CL_IR_MAX_LETS];
     uint32_t nf = 0, nl = 0;
+    uint32_t n_outer = 0;   /* frames collected before the `if` (outer context) */
     const Expr *if_cond = NULL, *if_pure = NULL;
     bool if_when = true, saw_if = false;
 
@@ -670,11 +768,20 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             bool h1 = serial_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* need exactly one hole side */
             const Expr *other = h0 ? a1 : a0;
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || other->type.kind != TY_INT) return NULL;
+            /* D6a parity: like the cloneable arithmetic frame, admit a non-atomic
+             * pure int operand (shift-free + safe_to_delegate) via env_expr -- it
+             * is emit_value'd once at the reset site and its int value rides the
+             * tagged frame env, which the shared marshaler serializes inline like
+             * an atomic operand, so save-cont!/resume-cont! round-trips. */
+            bool sk_arith_atom = is_atomic(other);
+            if (!sk_arith_atom && (serial_reaches_shift(other)
+                          || !safe_to_delegate(b, other))) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = cur->as.builtin.spec->c_op;   /* stable string */
             frames[nf].operand   = atom_of(other);
+            frames[nf].env_expr  = sk_arith_atom ? NULL : other;
             frames[nf].hole_left = h0;
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
@@ -692,8 +799,8 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 1) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT) return NULL;  /* arg: int */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;         /* result */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0])) return NULL;  /* arg */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             if (!serial_reaches_shift(a0)) return NULL;      /* sole arg is the hole */
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
@@ -720,21 +827,32 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 2) return NULL;
             if (fb->closure_fn_binding) return NULL;         /* not a fat closure */
             if (callee_colored(b, fb)) return NULL;          /* uncolored target */
-            if (cur->type.kind != TY_INT) return NULL;       /* result: int */
-            if (fb->type.as.fn.arg_kinds[0] != TY_INT ||
-                fb->type.as.fn.arg_kinds[1] != TY_INT) return NULL;  /* both args int */
+            if (!cps_scalar_kind_ok(cur->type.kind)) return NULL;   /* result: scalar */
             const Expr *a0 = ascribe_peel(cur->as.call_.args[0]);
             const Expr *a1 = ascribe_peel(cur->as.call_.args[1]);
             bool h0 = serial_reaches_shift(a0);
             bool h1 = serial_reaches_shift(a1);
             if (h0 == h1) return NULL;               /* exactly one hole side */
+            /* the hole slot's param is the resume value -- a scalar (int/cstr) */
+            if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1])) return NULL;
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
-            if (!other || !is_atomic(other) || other->type.kind != TY_INT) return NULL;
+            if (!other || serial_reaches_shift(other)) return NULL;
+            /* env: int / cstr (inline codec) or a nominal type with a Serializable
+             * instance (SER codec via its serialize/deserialize). */
+            TypeKind ek = other->type.kind;
+            if (!cps_scalar_kind_ok(ek)
+                && !cps_serializable_exists(b->program, other->type))
+                return NULL;
+            /* An atomic env rides `operand`; a non-atomic pure env (e.g. a
+             * `(mk-rec ...)` constructor) is emit_value'd at the reset site. */
+            bool atom = is_atomic(other);
+            if (!atom && !safe_to_delegate(b, other)) return NULL;
             if (nf >= CL_IR_MAX_FRAMES) return NULL;
             memset(&frames[nf], 0, sizeof(CloneFrame));
             frames[nf].op        = NULL;
             frames[nf].call_fn   = fb;
-            frames[nf].operand   = atom_of(other);   /* real captured int env */
+            frames[nf].operand   = atom_of(other);   /* carries .type + atomic value */
+            frames[nf].env_expr  = atom ? NULL : other;
             frames[nf].hole_left = h0;                /* hole is arg 0 iff h0 */
             nf++;
             cur = h0 ? a0 : a1;                       /* descend the hole side */
@@ -742,9 +860,10 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         }
 
         /* Pure `let` prelude (emit shared with cloneable): inits shift-free +
-         * scalar, body carries the hole.  Kept mutually exclusive with `if`. */
+         * scalar, body carries the hole.  A `let` above or nested in the shift arm
+         * is hoisted to the reset site (see build_cloneable's note); a binding the
+         * shift body needs is a live capture the shift admission already rejects. */
         if (cur->kind == EX_LET) {
-            if (saw_if) return NULL;
             const Expr *lbody = cur->as.let_.body;
             if (!serial_reaches_shift(lbody)) return NULL;
             for (uint32_t i = 0; i < cur->as.let_.n; i++) {
@@ -766,7 +885,6 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
          * exactly one shift-bearing arm; the pure arm is direct-emitted. */
         if (cur->kind == EX_IF) {
             if (saw_if) return NULL;
-            if (nl > 0) return NULL;                  /* let+if mix -> delegation */
             const Expr *cond = cur->as.if_.cond;
             const Expr *thn  = cur->as.if_.then_;
             const Expr *els  = cur->as.if_.else_or_null;
@@ -781,6 +899,7 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (serial_reaches_shift(pure_arm)) return NULL;
             if (!safe_to_delegate(b, pure_arm)) return NULL;
             if_cond = cond; if_pure = pure_arm; if_when = ht; saw_if = true;
+            n_outer = nf;   /* frames so far are OUTSIDE the if; later frames are inner */
             cur = shift_arm;
             continue;
         }
@@ -815,19 +934,45 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 if (!tail || tail->kind != EX_CALL ||
                     !tail->as.call_.fn_binding || tail->as.call_.fn_expr) return NULL;
                 const Binding *fb = tail->as.call_.fn_binding;
-                if (fb->type.kind != TY_FN || fb->type.as.fn.arity != 0) return NULL;
-                if (tail->as.call_.n_args != 0) return NULL;
+                if (fb->type.kind != TY_FN) return NULL;
                 if (fb->closure_fn_binding) return NULL;    /* not a fat closure */
                 if (callee_colored(b, fb)) return NULL;     /* uncolored target */
                 if (tail->type.kind != TY_INT) return NULL; /* result: int */
                 if (nf >= CL_IR_MAX_FRAMES) return NULL;
-                memset(&frames[nf], 0, sizeof(CloneFrame));
-                frames[nf].op           = NULL;
-                frames[nf].call_fn      = fb;
-                frames[nf].ignore_value = true;
-                frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
-                frames[nf].operand.ty   = TY_INT;
-                frames[nf].hole_left    = true;
+                if (fb->type.as.fn.arity == 0 && tail->as.call_.n_args == 0) {
+                    /* 0-arg ignore-value tail `(f)`: run f() on resume, no env. */
+                    memset(&frames[nf], 0, sizeof(CloneFrame));
+                    frames[nf].op           = NULL;
+                    frames[nf].call_fn      = fb;
+                    frames[nf].ignore_value = true;
+                    frames[nf].operand.kind = CA_INT;   /* unused (env passed as 0) */
+                    frames[nf].operand.ty   = TY_INT;
+                    frames[nf].hole_left    = true;
+                } else if (fb->type.as.fn.arity == 1 && tail->as.call_.n_args == 1) {
+                    /* 1-arg captured-config tail `(f cap)`: cap is a pure atomic
+                     * value captured at the reset site (int inline / cstr length-
+                     * prefixed) and applied to f on resume, ignoring the resumed
+                     * value -- what lets a real loop `(loop cfg)` receive its config
+                     * through the saved continuation.  (Serializable / non-atomic
+                     * caps still delegate.) */
+                    const Expr *cap = ascribe_peel(tail->as.call_.args[0]);
+                    if (!cap || serial_reaches_shift(cap)) return NULL;
+                    if (!is_atomic(cap)) return NULL;
+                    TypeKind ek = cap->type.kind;
+                    bool inline_ok = (ek == TY_INT || ek == TY_CSTR);  /* inline codec */
+                    bool ser_ok = !inline_ok
+                        && cps_serializable_exists(b->program, cap->type);  /* SER codec */
+                    if (!inline_ok && !ser_ok) return NULL;
+                    if (fb->type.as.fn.arg_kinds[0] != ek) return NULL;
+                    memset(&frames[nf], 0, sizeof(CloneFrame));
+                    frames[nf].op           = NULL;
+                    frames[nf].call_fn      = fb;
+                    frames[nf].ignore_value = true;
+                    frames[nf].operand      = atom_of(cap);   /* real captured env */
+                    frames[nf].hole_left    = true;
+                } else {
+                    return NULL;
+                }
                 nf++;
             }
             cur = shift_item;                       /* the shift; loop exits below */
@@ -872,6 +1017,7 @@ static CTerm *build_serial(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     } else {
         t->as.cloneable.lets = NULL;
     }
+    t->as.cloneable.n_outer_frames = n_outer;
     t->as.cloneable.if_cond = if_cond;
     t->as.cloneable.if_pure = if_pure;
     t->as.cloneable.if_when = if_when;
@@ -916,32 +1062,15 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * and the CPS continuation runs after. */
         case EX_ASYNC: case EX_AWAIT:
             return true;
-        /* U3 (cps-backend-unification): a (cloneable-reset body) is a
-         * SELF-CONTAINED multi-shot delimited region.  The bare cloneable-shift
-         * captures the rest of its reset body (a continuation that escapes the
-         * shift expression), so it stays non-delegatable above; but the whole
-         * cloneable-reset is emitted as a unit by the direct emitter
-         * (emit_effects_cloneable_reset -> emit_cps_cloneable_reset), which owns
-         * the dk_copy_range deep-clone + capture clone/drop glue.  Delegating the
-         * reset via CT_LETRAW therefore reuses the proven multi-shot runtime and
-         * lets a colored function that contains a cloneable-reset stay CPS-emitted
-         * instead of wholly evicting.  The reset's value (often a continuation
-         * handle resumed later) is bound and the CPS continuation runs after. */
-        case EX_CLONEABLE_RESET:
-            return true;
-        /* U4 (cps-backend-unification): a (serial-reset body) is a SELF-CONTAINED
-         * marshalable delimited region, analogous to cloneable-reset but with the
-         * continuation serialized (save-cont!/resume-cont!) rather than deep-cloned.
-         * The whole region is emitted as a unit by the direct emitter
-         * (emit_effects_serial_reset -> emit_cps_serial_reset), which owns the
-         * serial marshaling runtime.  Delegating the reset via CT_LETRAW reuses
-         * that proven runtime and lets a colored function that contains a
-         * serial-reset stay CPS-emitted instead of wholly evicting (the serial
-         * runtime prelude is gated on *presence* of serial syntax, so the delegated
-         * helpers are always in scope).  The bare serial-shift stays non-delegatable
-         * above (it captures the rest of its reset body). */
-        case EX_SERIAL_RESET:
-            return true;
+        /* D4 (cps-backend-direct-lowering-removal): the cloneable-reset (U3) and
+         * serial-reset (U4) delimited-control carve-out is deleted.  These regions
+         * are now lowered natively by the CT-IR backend (build_cloneable /
+         * build_serial, plus the no-shift-reset and Shape-1 live-capture paths), so
+         * they are no longer delegated to the direct emitter via CT_LETRAW.  They
+         * fall to the `default: return false` below -- non-delegatable, forcing the
+         * enclosing form to decompose so the reset lands at a bind position where
+         * cps_tail emits it natively (or evicts the whole function for a shape
+         * outside the native subset, rather than routing a sub-region out). */
         /* nested fn defs: call-graph boundaries, delegatable as values. */
         case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
             return is_delegatable_value(e);
@@ -963,6 +1092,15 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * scalar (Copy) capture while a non-Copy capture bails to fallback. */
         case EX_CALLCC: {
             const Expr *f = ascribe_peel(e->as.callcc_.fn);
+            /* A call/cc / escape whose receiver the native escape landing can emit
+             * (build_callcc, via callcc_native_recv) is NOT delegated: reporting it
+             * non-delegatable forces the enclosing form to decompose, so the callcc
+             * lands at a bind position and lowers to a native CT_CALLCC instead of
+             * riding a CT_LETRAW delegation (which would drag emit_cps.c's escape
+             * lowering into an otherwise-native function -- e.g. a capturing escape
+             * nested in a shift body's abort value).  A receiver build_callcc cannot
+             * emit still delegates, keeping the colored function CPS-emitted. */
+            if (callcc_native_recv(e->as.callcc_.fn)) return false;
             return safe_to_delegate(b, e->as.callcc_.fn)
                 || (f && f->kind == EX_CLOSURE);
         }
@@ -1077,6 +1215,39 @@ static const char *builtin_name(const Expr *e) {
  * to the prompt.  Shared by both the plain and shift0 lowerings (which differ
  * only in the emitted dk_shift vs dk_shift0). */
 static CTerm *cps_shift_body_kf(CpsB *b, Expr *recv, Expr *arg, Type *ty) {
+    /* A CLOSURE receiver `(fn [v] body)` -- the abortive-shift value is
+     * `receiver(arg)` = `body[v := arg]`.  A capturing closure's value is its env
+     * pointer, so a synthesized `(closure arg)` is an indirect call the direct
+     * emitter cannot lower (indirect_callee_ok rejects it) and the whole function
+     * evicts.  Beta-reduce instead: bind the user param to arg and deliver the
+     * closure body to the prompt directly.  The body still references its captured
+     * source bindings (closure conversion prepends the env param but leaves the
+     * body's capture references as the original bindings, resolved to env fields
+     * only when the thunk is emitted -- so inlining resolves them to the visible
+     * reset-context locals, which the lifted shift body captures via collect_caps).
+     * A non-capturing lambda is already lifted to a named global (an EX_VAR here),
+     * so this fires only for the capturing case that otherwise evicts. */
+    {
+        const Expr *rp = recv ? ascribe_peel(recv) : NULL;
+        if (rp && rp->kind == EX_CLOSURE && rp->as.closure_.closure
+            && rp->as.closure_.closure->fn && rp->as.closure_.closure->fn->body
+            && rp->as.closure_.closure->fn->n_params >= 1) {
+            FnDef *cfn = rp->as.closure_.closure->fn;
+            /* The user param is the last one (the env, if any, is prepended). */
+            Expr *let = arena_alloc(b->a, sizeof(Expr));
+            memset(let, 0, sizeof(Expr));
+            let->kind = EX_LET;
+            let->type = *ty;
+            LetBinding *lb = arena_alloc(b->a, sizeof(LetBinding));
+            memset(lb, 0, sizeof(LetBinding));
+            lb->binding = cfn->params[cfn->n_params - 1];
+            lb->init = arg;
+            let->as.let_.bindings = lb;
+            let->as.let_.n = 1;
+            let->as.let_.body = cfn->body;
+            return cps_tail(b, let, kont_prompt(ty->kind));
+        }
+    }
     Expr *call = arena_alloc(b->a, sizeof(Expr));
     memset(call, 0, sizeof(Expr));
     call->kind = EX_CALL;
@@ -1306,22 +1477,40 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return t;
         }
         case EX_CLONEABLE_RESET: {
-            /* U3 Shape 1 native, else fall back to the CT_LETRAW delegation. */
+            /* U3 native cloneable context (Shape 1/2, incl. no-shift and Shape-1
+             * live-capture), else (D4) evict rather than delegate. */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *nat = build_cloneable(b, e, x, ac);
-            return nat ? nat : build_letraw(b, e, x, ac);
+            if (nat) return nat;
+            /* No cloneable-shift is bound to this reset -> its value is just the
+             * body (nothing to delimit).  Translate the body directly. */
+            if (!cloneable_ctx_reaches_shift(e->as.cloneable_reset_.body))
+                return cps_tail(b, e->as.cloneable_reset_.body, kont);
+            /* D4: the delimited-control carve-out (delegate the reset to the direct
+             * emitter via CT_LETRAW) is deleted.  A shift-bearing reset outside the
+             * native build_cloneable subset now evicts the whole function to the
+             * direct emitter instead of routing a sub-region to it -- so no colored
+             * function delegates a delimited region.  (No corpus fixture reaches
+             * here; the native subset covers every cloneable reset in the suite.) */
+            return new_term(b, CT_UNSUPPORTED);
         }
         case EX_SERIAL_RESET: {
-            /* U4: native arithmetic serial context, else delegate the marshalable
-             * region so a colored function containing it stays CPS-emitted rather
-             * than wholly evicting. */
+            /* U4: native arithmetic serial context, else (D4) handle a no-shift
+             * reset as its plain body, else evict rather than delegate. */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
             CTerm *nat = build_serial(b, e, x, ac);
-            return nat ? nat : build_letraw(b, e, x, ac);
+            if (nat) return nat;
+            if (!serial_reaches_shift(e->as.serial_reset_.body))
+                return cps_tail(b, e->as.serial_reset_.body, kont);
+            /* D4: carve-out deleted -- a shift-bearing serial reset outside the
+             * native build_serial subset evicts the whole function to the direct
+             * emitter rather than delegating the region.  (No corpus fixture
+             * reaches here.) */
+            return new_term(b, CT_UNSUPPORTED);
         }
         case EX_ASYNC: case EX_AWAIT: {
             /* U5: delegate the self-contained async region (async spawn / await)

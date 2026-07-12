@@ -1875,8 +1875,18 @@ static TuriValue ts_not_capturable(bool serial, Span span) {
             "arithmetic / 1- or 2-arg call / if / do-tail)");
         return turi_error("elaboration error");
     }
-    return turi_error("eval: cloneable-shift context is not capturable "
-                      "(unsupported delimited-context shape)");
+    /* Cloneable mirrors serial: emit the coded TUR-E0710 diagnostic so the
+     * interpreter rejects an unsupported cloneable-shift context the same way the
+     * compiler does (a plain message lacked the code, so the negative fixture's
+     * expected.diag `TUR-E0710` line did not match on the interpret path). */
+    diag_emit_with_code(DIAG_ERROR, span,
+        TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+        "cloneable-shift context is not capturable\n"
+        "  = note: the delimited context falls outside the supported "
+        "lowering grammar, so the continuation cannot be reified\n"
+        "  = help: restructure into a supported shape (scalar let prelude / "
+        "arithmetic / 1- or 2-arg call / if)");
+    return turi_error("elaboration error");
 }
 
 /* SR N4 Slice 4: when the driver evaluates a capturing serial/cloneable reset it

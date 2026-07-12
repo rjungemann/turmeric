@@ -111,7 +111,6 @@ set(TUR_CORE_SOURCES
     compiler/elab_toplevel.c
     compiler/mono_specs.c
     compiler/emit_core.c
-    compiler/emit_cps.c
     compiler/emit_dk_runtime.c
     compiler/emit_cps_ir.c
     compiler/emit_effects.c

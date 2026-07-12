@@ -1,0 +1,33 @@
+;; D6a serial parity: a serial-shift whose arithmetic context has a NON-ATOMIC
+;; operand (a function-call operand, e.g. (+ (id 3) [])).  The operand is
+;; emit_value'd once at the reset site and its int value rides the tagged frame
+;; env, serialized inline by the shared marshaler -- so it round-trips through
+;; save-cont!/resume-cont!.  Before this it cleanly errored (TUR-E0706); it now
+;; lowers natively, matching the cloneable path.
+
+(load "stdlib/workflow.tur")
+
+(defn id [x : int] : int x)
+
+;; single resume: (+ (id 3) []) resumed with 10 -> 13
+(defn rt1 [k : ptr<void>] : int (resume-cont! (save-cont! k) 10))
+(defn t-add [] : int
+  (serial-reset (+ (id 3) (serial-shift rt1 0))))
+
+;; non-commutative, hole right: (- (id 100) []) resumed with 10 -> 90
+(defn t-sub [] : int
+  (serial-reset (- (id 100) (serial-shift rt1 0))))
+
+;; marshal round-trip: save, then resume the SAVED bytes twice; the (id 3)
+;; operand applies on both -> (+ 3 10) + (+ 3 20) = 13 + 23 = 36
+(defn rt2 [k : ptr<void>] : int
+  (let [b (save-cont! k)]
+    (+ (resume-cont! b 10) (resume-cont! b 20))))
+(defn t-marshal [] : int
+  (serial-reset (+ (id 3) (serial-shift rt2 0))))
+
+(defn main [] : int
+  (println (t-add))
+  (println (t-sub))
+  (println (t-marshal))
+  0)

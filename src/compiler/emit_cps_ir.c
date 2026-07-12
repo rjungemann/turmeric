@@ -1,6 +1,7 @@
 #include "emit_cps_ir.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -313,6 +314,7 @@ static bool shape_supported(const BuiltinSpec *sp) {
         case BS_PREFIX_UNARY:
         case BS_AND_SC:
         case BS_OR_SC:
+        case BS_FUNC_CALL:   /* a plain C runtime call c_op(args); prim_expr emits it */
         case BS_PRINTLN_INT:
         case BS_PRINTLN_BOOL:
         case BS_PRINTLN_UINT:
@@ -977,6 +979,14 @@ static bool shift_body_ok(const CTerm *t) {
             return shift_body_ok(t->as.letcall.body);
         case CT_LETRAW:
             return letraw_ok(t) && shift_body_ok(t->as.letraw.body);
+        case CT_CALLCC:
+            /* A call/cc / escape hoisted into the shift body's straight-line
+             * abort-value computation (e.g. `(shift (fn [v] v) (+ 1 (escape f)))`):
+             * emit_lifted emits the body through emit_term, which lowers CT_CALLCC
+             * via the native setjmp landing (emit_callcc), so it stays in the CT-IR
+             * path rather than delegating to emit_cps.c. */
+            return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
+                && shift_body_ok(t->as.callcc.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && shift_body_ok(t->as.if_.then_) && shift_body_ok(t->as.if_.else_);
@@ -1042,6 +1052,13 @@ static bool handle_case_ok(const CTerm *t) {
                 && handle_case_ok(t->as.resume.body);
         case CT_LETRAW:
             return letraw_ok(t) && handle_case_ok(t->as.letraw.body);
+        case CT_CALLCC:
+            /* A call/cc / escape hoisted into a handler case body (e.g. `(resume k
+             * (+ 1 (escape f)))`): emit_lifted emits the case through emit_term,
+             * which lowers CT_CALLCC via the native setjmp landing (emit_callcc),
+             * so it stays in the CT-IR path rather than delegating to emit_cps.c. */
+            return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
+                && handle_case_ok(t->as.callcc.body);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
@@ -1254,8 +1271,17 @@ static bool term_core_ok(const CTerm *t) {
              * env).  Admission needs a slot-representable result + core body. */
             if (!(slot_ok_t(t->as.cloneable.x.type, t->as.cloneable.x.ty) || t->as.cloneable.x.ty == TY_NIL))
                 return false;
-            for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++)
-                if (!atom_ok(&t->as.cloneable.frames[i].operand)) return false;
+            for (uint32_t i = 0; i < t->as.cloneable.n_frames; i++) {
+                const CloneFrame *fr = &t->as.cloneable.frames[i];
+                /* Arithmetic frames ride their operand in the frame-env slot, so it
+                 * must be a slot-atom -- UNLESS it is a non-atomic pure operand on
+                 * env_expr (D6a), which is emit_value'd at the reset site like a
+                 * call-frame env.  A CALL frame's captured env is likewise validated
+                 * and marshaled by the builder/emitter (int/cstr inline, Serializable
+                 * via its instance, or a non-atomic env on env_expr), so it does not
+                 * go through the operand-slot check. */
+                if (!fr->call_fn && !fr->env_expr && !atom_ok(&fr->operand)) return false;
+            }
             return term_core_ok(t->as.cloneable.body);
         case CT_CALLCC:
             /* U7: a local setjmp escape landing (emit_callcc).  The receiver is
@@ -1454,6 +1480,27 @@ typedef struct {
      * effect is tainted by a genuine fiber peer. */
     bool mono_template;
 } SEnt;
+
+/* The program entry point `main` (never module-prefixed). */
+static bool fn_is_main(const FnDef *fd) {
+    return fd && fd->binding && fd->binding->name
+        && fd->binding->name->len == 4
+        && memcmp(fd->binding->name->name, "main", 4) == 0;
+}
+
+/* cps-backend-direct-lowering-removal-plan (D2b): is this a `main` that should
+ * be CPS-emitted with a fixed-ABI entry wrapper?  A zero-arg `main` whose body
+ * directly uses delimited control (reset/shift/shift0, cloneable/serial reset)
+ * is otherwise excluded from S purely because of its entry-point ABI; admitting
+ * it (subject to the same fn_sig_ok/term_core_ok subset gates) lets its delimited
+ * ops emit through the native CT-IR path instead of the direct emitter, and the
+ * `int main(...)` wrapper trampolines into `main__cps`.  Effect-only mains (no
+ * delimited op) stay excluded -- CPS-emitting them is pure overhead and removes
+ * no direct-lowering caller. */
+static bool fn_is_d2b_main(const FnDef *fd) {
+    return fn_is_main(fd) && fd->n_params == 0
+        && fd->body && cps_expr_contains_shift(fd->body);
+}
 
 static const Expr *g_prog;      /* program the cache is keyed on */
 static EmitCtx    *g_emit_ctx;  /* G3b: ctx of the active emission, for ctx->abi_specializations */
@@ -1835,13 +1882,14 @@ static void ensure_S(const Expr *program) {
             FnDef *fd = it->as.fn_def_.fn;
             if (fd->cps_colored && fd->binding && fd->body) {
                 /* `main` is the program entry point (int main(int, char**)); an
-                 * exported binding names a fixed C symbol/linkage.  Neither can
-                 * take the static int64_t entry-wrapper shape, so they are never
-                 * CPS-emitted -- but a `handle`/`perform` in one still taints. */
+                 * exported binding names a fixed C symbol/linkage.  Neither takes
+                 * the plain static int64_t entry-wrapper shape.  Exported bindings
+                 * stay excluded; a delimited zero-arg `main` is admitted (D2b) with
+                 * a fixed-ABI `int main` wrapper (emitted in emit_cps_ir_try_fn).
+                 * Either way a `handle`/`perform` in an excluded fn still taints. */
                 bool candidate = true;
                 if (fd->binding->c_export_name) candidate = false;
-                if (fd->binding->name && fd->binding->name->len == 4 &&
-                    memcmp(fd->binding->name->name, "main", 4) == 0) candidate = false;
+                if (fn_is_main(fd) && !fn_is_d2b_main(fd)) candidate = false;
                 if (candidate && !fn_sig_ok(fd)) candidate = false;
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 if (candidate && !term_core_ok(t)) candidate = false;
@@ -2112,6 +2160,17 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
             if (n == 0) buf_puts(&b, (sp->shape == BS_AND_SC) ? "1" : "0");
             break;
         }
+        case BS_FUNC_CALL: {
+            /* A plain C runtime call `c_op(args)` -- e.g. cons, the continuation
+             * resume/clone/drop/serialize primitives.  Args are slot carriers. */
+            buf_printf(&b, "%s(", sp->c_op);
+            for (uint32_t i = 0; i < n; i++) {
+                if (i) buf_puts(&b, ", ");
+                buf_printf(&b, "(%s)", as[i]);
+            }
+            buf_putc(&b, ')');
+            break;
+        }
         default:
             buf_puts(&b, "0");
             break;
@@ -2178,7 +2237,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
         if (ce->ret_mode)
             ce_line(ce, "return %s;", sv);
         else
-            ce_line(ce, "return dk_run(k, %s);", sv);
+            ce_line(ce, "return dk_run(__kont, %s);", sv);
         free(sv);
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
@@ -2293,7 +2352,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * body, the enclosing prompt chain (KK_PROMPT).  A KK_VAR here
                  * would need a heap join, which excludes the caller. */
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
-                    ? ce->cur_k : "k";
+                    ? ce->cur_k : "__kont";
                 if (t->as.tailcall.n)
                     ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv, thread);
                 else
@@ -2533,7 +2592,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.out = &tmp;
     hc.indent = 4;
     hc.n_joins = 0;
-    hc.cur_k = "k";
+    hc.cur_k = "__kont";
     /* A perform continuation returns its value however it is delivered (KK_RET
      * or KK_PROMPT), so it sets both return modes. */
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
@@ -2547,7 +2606,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
         if (mode == LH_RESET_CONT) {
             indent_buf(&tmp, 4);
-            buf_puts(&tmp, "DK *k = __cap->__k;\n");
+            buf_puts(&tmp, "DK *__kont = __cap->__k;\n");
         }
         for (int i = 0; i < caps->n; i++) {
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
@@ -2638,7 +2697,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         case LH_RESET_CONT:
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
             /* With caps, `k` is read from the env struct (above); else env IS k. */
-            if (!has_caps) buf_puts(ce->helpers, "    DK *k = (DK *)env;\n");
+            if (!has_caps) buf_puts(ce->helpers, "    DK *__kont = (DK *)env;\n");
             break;
     }
     buf_puts(ce->helpers, tmp.data);
@@ -2741,6 +2800,13 @@ static void emit_reset(CE *ce, const CTerm *t) {
 /* The C body expression of a single arithmetic context frame `(<op> <operand>
  * [])` -- `env` is the captured operand, `value` the resumed value.  Mirrors
  * emit_cps.c's frame_c_expr byte-for-byte (the proven generator). */
+/* The C cast applied to an intptr-carried frame env/value handed to a call
+ * target, keyed by the target's param kind.  A cstr rides the carrier like an
+ * int (CC4 value-typed cont<cstr>); mirrors emit_cps.c's c_cast_for_kind. */
+static const char *cc_cast_for_kind(TypeKind k) {
+    return (k == TY_CSTR) ? "(const char *)" : "(int64_t)";
+}
+
 static const char *cloneable_frame_expr(const char *op, bool hole_left) {
     if (strcmp(op, "+") == 0) return "env + value";
     if (strcmp(op, "*") == 0) return "env * value";
@@ -2762,6 +2828,44 @@ static int sk_tag_for_frame(const CloneFrame *fr) {
     return fr->hole_left ? 6 : 5;   /* "/" */
 }
 
+/* Resolve the Serializable instance's serialize/deserialize C names for a nominal
+ * (TY_ADT) serial call-frame env type `t`.  Returns malloc'd names via out-params
+ * and true, or false if no instance.  Mirrors emit_cps.c's sk_find_serializable
+ * name path, kept in the native path so the CT-IR serial emitter owns its env
+ * marshaling (the runtime Sk registry already encodes SK_ENV_SER). */
+static bool serial_env_ser_names(CE *ce, const Type *t,
+                                 char **ser_out, char **deser_out) {
+    const Expr *program = ce->ctx->program_root;
+    if (!program || program->kind != EX_PROGRAM) return false;
+    if (!t || t->kind != TY_ADT || !t->as.adt_.def || !t->as.adt_.def->name) return false;
+    const char *tname = t->as.adt_.def->name;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF) continue;
+        const TypeClassInstance *inst = it->as.instance_def_.instance;
+        if (!inst || !inst->typeclass || !inst->typeclass->name) continue;
+        if (strcmp(inst->typeclass->name->name, "Serializable") != 0) continue;
+        if (inst->n_type_args < 1) continue;
+        Type at = inst->type_args[0];
+        if (at.kind != TY_ADT || !at.as.adt_.def || !at.as.adt_.def->name) continue;
+        if (strcmp(at.as.adt_.def->name, tname) != 0) continue;
+        char *ser = NULL, *deser = NULL;
+        const TypeClass *tc = inst->typeclass;
+        for (uint8_t j = 0; j < tc->n_methods && j < inst->n_method_impls; j++) {
+            if (!inst->method_impls[j] || !inst->method_impls[j]->binding) continue;
+            const char *mn = tc->methods[j].name ? tc->methods[j].name->name : "";
+            char *cn = raw_name_for_binding(inst->method_impls[j]->binding);
+            if (strcmp(mn, "serialize") == 0) ser = cn;
+            else if (strcmp(mn, "deserialize") == 0) deser = cn;
+            else free(cn);
+        }
+        if (ser && deser) { *ser_out = ser; *deser_out = deser; return true; }
+        free(ser); free(deser);
+        return false;
+    }
+    return false;
+}
+
 /* CT_CLONEABLE (U3): (cloneable-reset (cloneable-shift receiver val)) and its
  * single-arithmetic-frame Shape 2 form.  Emits the cloneable multi-shot machinery
  * natively (no emit_cps.c), reusing the shared DK runtime (dk_copy_range,
@@ -2781,6 +2885,61 @@ static char *emit_cloneable_direct(CE *ce, const Expr *e) {
     char *v = emit_value(ce->ctx, ce->out, e);
     ce->ctx->indent = saved;
     return v;
+}
+
+/* Build the pure-arm value of an if-split cloneable/serial context: the direct
+ * value of `if_pure` with the OUTER context frames re-applied (frames[0..
+ * n_outer_frames), applied innermost-outer first).  The shift-bearing arm rides
+ * the full frame chain through the DK machine; the pure arm carries no shift, so
+ * its outer frames must be applied here as plain C.  Inner frames
+ * (frames[n_outer_frames..n_frames)) live inside the shift arm and do NOT apply
+ * to the pure arm.  Mirrors cloneable_frame_expr's per-op semantics (env =
+ * operand, value = the hole).  Returns a malloc'd C expression. */
+static char *emit_cloneable_pure_arm(CE *ce, const CTerm *t) {
+    char *acc = emit_cloneable_direct(ce, t->as.cloneable.if_pure);
+    for (int i = (int)t->as.cloneable.n_outer_frames - 1; i >= 0; i--) {
+        const CloneFrame *fr = &t->as.cloneable.frames[i];
+        Buf b; buf_init(&b);
+        if (fr->call_fn) {
+            char *cfn = callee_name(fr->call_fn);
+            if (!fr->ignore_value && fr->call_fn->type.as.fn.arity == 2) {
+                /* 2-arg outer call frame: apply f to (pure, env) in source order
+                 * (hole side = the pure value; the other arg is the captured env). */
+                char *opv = atom_str(ce, &fr->operand);
+                if (fr->hole_left)
+                    buf_printf(&b, "((int64_t)%s((int64_t)(%s), (int64_t)(%s)))", cfn, acc, opv);
+                else
+                    buf_printf(&b, "((int64_t)%s((int64_t)(%s), (int64_t)(%s)))", cfn, opv, acc);
+                free(opv);
+            } else {
+                /* 1-arg outer call frame: apply f to the pure value. */
+                buf_printf(&b, "((int64_t)%s((int64_t)(%s)))", cfn, acc);
+            }
+            free(cfn);
+        } else {
+            char *opv = atom_str(ce, &fr->operand);
+            const char *op = fr->op;
+            if (strcmp(op, "+") == 0)
+                buf_printf(&b, "((%s) + (%s))", opv, acc);
+            else if (strcmp(op, "*") == 0)
+                buf_printf(&b, "((%s) * (%s))", opv, acc);
+            else if (strcmp(op, "-") == 0)
+                buf_printf(&b, fr->hole_left ? "((%s) - (%s))" : "((%s) - (%s))",
+                           fr->hole_left ? acc : opv, fr->hole_left ? opv : acc);
+            else /* "/" -- guard div-by-zero exactly like cloneable_frame_expr */
+                buf_printf(&b,
+                    "((%s) ? ((%s) / (%s)) : (fprintf(stderr, \"division by zero\\n\"), abort(), 0))",
+                    fr->hole_left ? opv : acc,
+                    fr->hole_left ? acc : opv,
+                    fr->hole_left ? opv : acc);
+            free(opv);
+        }
+        char *nv = strdup(b.data);
+        buf_free(&b);
+        free(acc);
+        acc = nv;
+    }
+    return acc;
 }
 
 /* Emit the Shape 2 shift-body helper `bodyfn`.  `cont_setup` is the C that builds
@@ -2838,8 +2997,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
 
     /* Pure `let` prelude (Shape 2, let-bearing): lay each binding down as a C
      * local at the reset site, ahead of the frame-operand evaluations that may
-     * reference it.  (`let` and `if` are mutually exclusive per build_cloneable,
-     * so n_lets > 0 implies no branch point below.) */
+     * reference it.  Emitted before any `if` branch point below, so a `let` above
+     * an `if` is in scope for both the outer frame operands (shift arm) and the
+     * pure arm. */
     for (uint32_t li = 0; li < t->as.cloneable.n_lets; li++) {
         const CloneLet *cl = &t->as.cloneable.lets[li];
         char *iv = emit_cloneable_direct(ce, cl->init);
@@ -2928,30 +3088,66 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
              * to the resumed value under "$L"; a 2-arg call applies f to the
              * resumed value + the captured int env (source order per hole side)
              * under "$2L"/"$2R", the env serialized inline. */
-            bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
+            uint32_t ar = fr->call_fn->type.as.fn.arity;
+            bool two_arg = !fr->ignore_value && ar == 2;
+            bool env1    = fr->ignore_value && ar == 1;  /* 1-arg captured-config tail */
+            bool has_env = two_arg || env1;
+            /* Env marshal kind: SK_ENV_INT (0) / SK_ENV_CSTR (1) inline codec, or
+             * SK_ENV_SER (2) via the env type's Serializable instance.  Keyed off
+             * the captured operand's type. */
+            int ekc = 0;
+            char *eser = NULL, *edeser = NULL;
+            if (has_env) {
+                if (fr->operand.ty == TY_CSTR) ekc = 1;
+                else if (fr->operand.type
+                         && serial_env_ser_names(ce, fr->operand.type, &eser, &edeser))
+                    ekc = 2;
+            }
+            const char *ecast = ekc == 1 ? "(const char *)" : "(int64_t)";
             const char *side;
-            if (fr->ignore_value) {
+            if (fr->ignore_value && ar == 0) {
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                     ce->fn_cn, id, i, cfn);
                 side = "$0";
-            } else if (two_arg) {
+            } else if (env1) {
+                /* Run f(cap) on resume, ignoring the resumed value; cap = the env. */
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s); }\n",
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)value; return (intptr_t)%s(%senv); }\n",
+                    ce->fn_cn, id, i, cfn, ecast);
+                side = "$E";
+            } else if (two_arg) {
+                TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
+                TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
+                const char *a0 = fr->hole_left ? "value" : "env";
+                const char *a1 = fr->hole_left ? "env" : "value";
+                buf_printf(ce->helpers,
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
                     ce->fn_cn, id, i, cfn,
-                    fr->hole_left ? "(int64_t)value, (int64_t)env" : "(int64_t)env, (int64_t)value");
+                    cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
                 side = fr->hole_left ? "$2L" : "$2R";
             } else {
                 buf_printf(ce->helpers,
-                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
-                    ce->fn_cn, id, i, cfn);
+                    "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                    ce->fn_cn, id, i, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
                 side = "$L";
             }
-            buf_printf(ce->helpers,
-                "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, 0, 0, 0, 0 };\n"
-                "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
-                ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i,
-                ce->fn_cn, id, i, ce->fn_cn, id, i);
+            if (ekc == 2) {
+                /* SER env: carry the instance serialize/deserialize fn pointers. */
+                buf_printf(ce->helpers,
+                    "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
+                    " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
+                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
+                    ce->fn_cn, id, i, ce->fn_cn, id, i);
+            } else {
+                buf_printf(ce->helpers,
+                    "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
+                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
+                    ce->fn_cn, id, i, ce->fn_cn, id, i);
+            }
+            free(eser); free(edeser);
             free(cfn);
         }
         char dv[48];
@@ -2963,15 +3159,27 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < nf; i++) {
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
-                /* A 2-arg call frame carries the captured int env; 1-arg / do-tail
-                 * frames pass 0.  The env rides q->env and is marshaled inline. */
-                bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
-                char *opv = two_arg ? atom_str(ce, &fr->operand) : NULL;
+                /* A 2-arg hole call or a 1-arg captured-config do-tail frame carries
+                 * the captured env; a 1-arg hole call / 0-arg do-tail pass 0.  The
+                 * env rides q->env and is marshaled by kind (int/cstr inline, or a
+                 * Serializable instance).  A non-atomic env is emit_value'd here at
+                 * the reset site (once, cold-start capture). */
+                uint32_t ar = fr->call_fn->type.as.fn.arity;
+                bool has_env = (!fr->ignore_value && ar == 2)
+                            || (fr->ignore_value && ar == 1);
+                char *opv = NULL;
+                if (has_env)
+                    opv = fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
+                                       : atom_str(ce, &fr->operand);
                 ce_line(ce, "%s = dk_frame(%s_skcall%d_%u, (intptr_t)(%s), %s);",
                         dv, ce->fn_cn, id, i, opv ? opv : "0", dv);
                 free(opv);
             } else {
-                char *opv = atom_str(ce, &fr->operand);
+                /* D6a parity: a non-atomic pure arithmetic operand (env_expr) is
+                 * emit_value'd at the reset site; its int value rides the tagged
+                 * frame env, serialized inline by the shared marshaler. */
+                char *opv = fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
+                                         : atom_str(ce, &fr->operand);
                 ce_line(ce, "%s = dk_frame(__sk_frame_for_tag(%d), (intptr_t)(%s), %s);",
                         dv, sk_tag_for_frame(fr), opv, dv);
                 free(opv);
@@ -2980,31 +3188,45 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
         free(senv);
-        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
+                binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
     } else {
         /* Shape 2: an arithmetic context (1+ frames) + dk_copy_range capture. */
         uint32_t nf = t->as.cloneable.n_frames;
         char bodyfn[256];
         snprintf(bodyfn, sizeof(bodyfn), "%s_ccbody%d", ce->fn_cn, id);
-        /* One frame fn per context frame: an arithmetic op, or a 1-arg call to a
-         * top-level fn applied to the resumed value (no captured env). */
+        /* One frame fn per context frame: an arithmetic op, a 1-arg call to a
+         * top-level fn applied to the resumed value (no captured env), or a 2-arg
+         * call whose non-hole arg rides the frame env (deep-cloned with the chain
+         * on each resume, so multi-shot is correct without any marshaling). */
         for (uint32_t i = 0; i < nf; i++) {
             char ctxfn[256];
             snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
             const CloneFrame *fr = &t->as.cloneable.frames[i];
             if (fr->call_fn) {
                 char *cfn = callee_name(fr->call_fn);
+                bool two_arg = !fr->ignore_value && fr->call_fn->type.as.fn.arity == 2;
                 if (fr->ignore_value)
                     /* 0-arg ignore-value tail: run f() regardless of resume value. */
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; (void)value; return (intptr_t)%s(); }\n",
                         ctxfn, cfn);
-                else
+                else if (two_arg) {
+                    /* 2-arg call: apply f to (value, env) in source order (env =
+                     * the captured non-hole arg), casting each to its param kind. */
+                    TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
+                    TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
+                    const char *a0 = fr->hole_left ? "value" : "env";
+                    const char *a1 = fr->hole_left ? "env" : "value";
+                    buf_printf(ce->helpers,
+                        "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
+                        ctxfn, cfn, cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
+                } else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
-                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s((int64_t)value); }\n",
-                        ctxfn, cfn);
+                        "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
+                        ctxfn, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
                 free(cfn);
             } else {
                 buf_printf(ce->helpers,
@@ -3020,19 +3242,28 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
         /* Push frames outermost-first (frames[0] deepest, closest to the prompt).
-         * A call frame has no captured env -- pass 0. */
+         * A 2-arg call frame carries its captured int env; 1-arg / 0-arg call and
+         * do-tail frames pass 0. */
         for (uint32_t i = 0; i < nf; i++) {
             char ctxfn[256];
             snprintf(ctxfn, sizeof(ctxfn), "%s_ccctx%d_%u", ce->fn_cn, id, i);
             const CloneFrame *fr = &t->as.cloneable.frames[i];
-            char *opv = fr->call_fn ? strdup("0") : atom_str(ce, &fr->operand);
+            bool two_arg = fr->call_fn && !fr->ignore_value
+                && fr->call_fn->type.as.fn.arity == 2;
+            /* A non-atomic env operand (fr->env_expr set -- an arithmetic frame
+             * or a 2-arg call frame) is emit_value'd at the reset site; a 1-arg
+             * call frame carries no env (pass 0); everything else rides the atom. */
+            char *opv = (fr->call_fn && !two_arg) ? strdup("0")
+                      : fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
+                      : atom_str(ce, &fr->operand);
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
         free(senv);
-        ce_line(ce, "%s = (int64_t)dk_run(%s, 0);", xn, dv);
+        ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
+                binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
     }
 
@@ -3040,7 +3271,9 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         ce->indent--;
         ce_line(ce, "} else {");
         ce->indent++;
-        char *pv = emit_cloneable_direct(ce, t->as.cloneable.if_pure);
+        /* The pure arm re-applies the OUTER context frames (those outside the
+         * `if`); inner frames belong to the shift-bearing arm only. */
+        char *pv = emit_cloneable_pure_arm(ce, t);
         ce_line(ce, "%s = %s;", xn, pv);
         free(pv);
         ce->indent--;
@@ -3346,7 +3579,7 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
         buf_printf(file, "static int64_t %s__cps(", cn);
         emit_params(ctx, file, fd);
         if (fd->n_params) buf_puts(file, ", ");
-        buf_puts(file, "DK *k);\n");
+        buf_puts(file, "DK *__kont);\n");
         free(cn);
     }
     /* G3b: forward-declare each mono-template monomorph's `<clone>__cps`, since a
@@ -3365,7 +3598,7 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
             buf_printf(file, "static int64_t %s__cps(", spec->clone_name);
             emit_params(ctx, file, fd);
             if (fd->n_params) buf_puts(file, ", ");
-            buf_puts(file, "DK *k);\n");
+            buf_puts(file, "DK *__kont);\n");
             g_cps_mono_resolver = NULL;
             ctx->current_abi_specialization = saved;
         }
@@ -3538,7 +3771,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     int helper_ctr = 0;
     CE ce; memset(&ce, 0, sizeof(ce));
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
-    ce.cur_k = "k"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
+    ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
@@ -3563,11 +3796,50 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_printf(file, "static int64_t %s__cps(", cn);
     emit_params(ctx, file, fd);
     if (fd->n_params) buf_puts(file, ", ");
-    buf_puts(file, "DK *k) {\n");
+    buf_puts(file, "DK *__kont) {\n");
     buf_puts(file, body_buf.data);
     buf_puts(file, "}\n");
     buf_free(&body_buf);
     buf_free(&helpers);
+
+    /* ---- D2b fixed-ABI entry wrapper: int main(int argc, char **argv) ----
+     * A delimited zero-arg `main` (cps-backend-direct-lowering-removal-plan D2b)
+     * keeps the program's fixed entry ABI: the wrapper reproduces the direct
+     * emitter's `main` prologue (panic-trace flag + the *args* cons build from
+     * argv, mirroring emit_fns.c / emit_module.c), seeds the root prompt exactly
+     * like the generic wrapper below, trampolines into `main__cps`, and returns
+     * the delivered value as the process exit code. */
+    if (fn_is_d2b_main(fd)) {
+        const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
+        bool mvoid = (mrt->kind == TY_NIL);
+        buf_puts(file, "int main(int argc, char **argv) {\n");
+        if (g_emit_panic_trace)
+            buf_puts(file, "    g_panic_trace = 1;\n");
+        buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1] */\n");
+        buf_puts(file, "    g_tur_args = 0;\n");
+        buf_puts(file, "    for (int _ai = argc - 1; _ai >= 1; _ai--) {\n");
+        buf_puts(file, "        typedef struct { int64_t value; int64_t next; } __tur_args_cell;\n");
+        buf_puts(file, "        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));\n");
+        buf_puts(file, "        _c->value = (int64_t)(intptr_t)argv[_ai];\n");
+        buf_puts(file, "        _c->next = g_tur_args;\n");
+        buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
+        buf_puts(file, "    }\n");
+        buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
+        buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        buf_puts(file, "    dk_free(__root);\n");
+        if (mvoid) {
+            buf_puts(file, "    return 0;\n}\n");
+        } else {
+            char *ld = slot_load(ctx, mrt->kind, mrt, "__r", true);
+            buf_printf(file, "    return (int)(%s);\n}\n", ld);
+            free(ld);
+        }
+        ctx->fn_params   = saved_fn_params;
+        ctx->n_fn_params = saved_n_fn_params;
+        g_cps_mono_resolver = NULL;
+        free(cn);
+        return true;
+    }
 
     /* ---- direct->cps entry wrapper: int64_t <name>(<params>) ----
      * The boundary trampoline for an uncolored/direct caller (including `main`)

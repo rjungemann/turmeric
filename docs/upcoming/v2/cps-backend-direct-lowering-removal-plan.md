@@ -122,34 +122,111 @@ The two populations close independently; neither blocks the other. Each closes
 by *extending native coverage*, verified per-shape (`direct == cps`), then the
 now-dead caller is removed.
 
-### Phase D1 -- close the colored-function eviction residue (Population 1)
+### Phase D1 -- close the colored-function eviction residue (Population 1) -- DONE
 
-Extend native CT-IR emit until no colored function delegates a delimited shape:
+Extend native CT-IR emit until no colored function delegates a delimited shape.
+**Complete: the Population-1 eviction residue is zero** -- every cloneable /
+serial / callcc delimited shape a colored function contains now emits through the
+native CT-IR path; no colored function delegates a delimited shape via CT_LETRAW.
 
-- **D1a -- colored receivers.** Teach `emit_cloneable` / the callcc landing to
-  emit a colored (fat-closure) receiver natively (the receiver runs once at
-  capture; only the continuation is cloned/marshaled -- the multi-shot / serial
-  semantics already established for closure receivers extend to colored ones).
-  This also fixes the direct emitter's miscompile, so it is a net correctness
-  gain, not just a port.
-- **D1b -- serial `cstr`/`Serializable` 2-arg envs.** Extend the inline env
-  marshaler (`SK_ENV_INT` today) to the non-int env codec so a 2-arg call frame
-  with a `cstr` / `Serializable` env round-trips through
-  `save-cont!`/`resume-cont!` natively.
+- **D1a -- colored / lifted receivers.** Teach `emit_cloneable` / the callcc
+  landing to emit a colored (fat-closure) receiver natively (the receiver runs
+  once at capture; only the continuation is cloned/marshaled -- the multi-shot /
+  serial semantics already established for closure receivers extend to colored
+  ones).
+
+  **Landed** for the one shape the corpus exercised: a capturing `escape` nested
+  in a `shift` body's abort value (`cps-oracle-escape-capture-in-shift-body`).
+  `safe_to_delegate` treated a call/cc / escape whose receiver `build_callcc` can
+  emit (`callcc_native_recv` -- a capturing closure included) as delegatable, so
+  the whole `(+ 1 (escape ...))` rode a CT_LETRAW delegation into `emit_cps.c`'s
+  `setjmp`/`tur_escape_cont` lowering. Reporting such a call/cc *non*-delegatable
+  forces the enclosing form to decompose, so the callcc lands at a bind position
+  and lowers to a native `CT_CALLCC`; only a receiver `build_callcc` cannot emit
+  still delegates. Closes the last eviction.
+- **D1b -- serial `cstr`/`Serializable` envs.** Extend the inline env marshaler
+  (`SK_ENV_INT` today) to the non-int env codec so a captured call-frame env
+  round-trips through `save-cont!`/`resume-cont!` natively.
+
+  **Landed.** The runtime marshaler already encoded all three env kinds
+  (`SK_ENV_INT`/`_CSTR`/`_SER` in `emit_dk_runtime.c`, built for the direct
+  emitter); the native CT-IR serial path now *produces* the matching `SkReg`
+  entries. Covered shapes:
+  - *do-tail captured-config frame* `(loop cfg)` -- a 1-arg tail whose argument
+    is a captured value applied on resume (the resume value ignored). `int`
+    (inline), `cstr` (length-prefixed), and `Serializable` (nominal, via its
+    instance's serialize/deserialize) envs. Closes `serial-context-do-cfg`,
+    `serial-context-do-struct`.
+  - *2-arg hole-call frame* `(f other [])` with a `Serializable` env (in
+    addition to `int`), including a non-atomic env (`(mk-rec ...)`) emit_value'd
+    at the reset site (`CloneFrame.env_expr`). Only the hole slot must be `int`.
+    Closes `serial-struct-env`.
+  - The env-kind decision keys off the captured operand's type; the
+    Serializable instance is gated at build time by a pure `cps_serializable_exists`
+    scan (in the pass) and its serialize/deserialize C names resolved at emit
+    time by `serial_env_ser_names` (in `emit_cps_ir.c`, mirroring
+    `sk_find_serializable`) -- no coupling to `emit_cps.c`.
+  - The `cloneable` side needed no marshaling for these: a captured env rides the
+    `dk_frame` slot and is deep-cloned with the sub-continuation (2-arg cloneable
+    call frames landed under D1c above).
+
+  **CC4 value typing landed alongside.** A value-typed `cont<T>` whose result
+  (and resumed value, and a call-frame env/operand) is a non-int scalar (`cstr`)
+  now emits natively: `cstr` rides the same intptr_t carrier as int, so the
+  builders admit any scalar kind (`cps_scalar_kind_ok`) for the call-frame
+  result / hole-param / env, and the emitter casts to the real kind at each call
+  boundary (`cc_cast_for_kind`) and casts the reset result to the binder's C
+  type (`binder_ctype_full`) instead of `int64_t` -- both no-ops for int, so int
+  fixtures stay byte-identical. This also unblocked the `cstr` 2-arg env that
+  paired with the value typing. Closes `cont-value-typed`.
 - **D1c -- context-grammar generalization.** Widen `collect_ctx` /
   `build_marshal_reset` to reify the remaining context shapes (the
   [marshal-reset unification](cps-backend-unification-marshal-reset-unification-plan.md)
   is the natural home -- one `build_marshal_reset(..., serial)` covering both
   families).
+
+  **Partially landed** (in `build_cloneable`/`build_serial` + `emit_cloneable`):
+  - *`let`+`if` mix.* Lifted the `nl > 0`-at-`if` rejection: `emit_cloneable`
+    lays every `let` prelude local at the reset site ahead of the branch, so a
+    `let` above the `if` is in scope for the outer frame operands and the pure
+    arm. Also lifted the `saw_if`-at-`let` rejection: a `let` nested in the
+    shift-bearing arm is hoisted to the reset site (sound -- its init is pure and
+    scalar; a binding the shift body needs is a live capture the shift admission
+    already rejects). Closes the eviction in `cloneable-context-if` /
+    `-outer-frames`.
+  - *2-arg call frames in cloneable contexts.* `build_cloneable`/`emit_cloneable`
+    now reify a `(f other [])` / `(f [] other)` frame (uncolored (int,int)->int,
+    int env) natively, matching `build_serial`. The env rides the `dk_frame`
+    slot, deep-cloned with the sub-continuation on resume, so multi-shot is
+    correct with no marshaling. Closes all four evictions in `context-call-frame`.
+
+  The `serial` do-tail / 2-arg env-marshaling shapes are now handled here (see
+  D1b); what remains delegating on the context-grammar axis is only the
+  value-typed `cont<T>` shape, which is CC4 value-typing, not context grammar.
 - **D1d -- the `needs_heap_join` boundary.** This is the shared C1-subset item;
   it advances through the five emittable-subset gap plans, not as
   delimited-specific work. D1 is *complete for delimited control* when D1a-D1c
   land; D1d raises the native fraction generally and is tracked there.
 
-**Exit:** with D1a-D1c landed, remove the `CT_LETRAW` delegation arms for
-`EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`, `EX_CLONEABLE_RESET`, `EX_SERIAL_RESET`, and
-`EX_CALLCC` from `safe_to_delegate` and the `cps_bind`/`cps_tail` cases in
-`cps_ir.c`. (`EX_ASYNC`/`EX_AWAIT` stay delegated -- they ride a *separate*
+**Progress (eviction `-emit` reaches, corpus scan): Population 1 is at ZERO.**
+D2b introduced 16 Population-1 evictions (cloneable/serial residue in CPS-emitted
+mains); the D1c (let+if, let-under-if, 2-arg cloneable call frames), D1b (serial
+cstr/Serializable do-tail + 2-arg env marshaling), CC4 (value-typed
+`cont<cstr>`), and D1a (native callcc/escape with a `build_callcc`-emittable
+receiver) work above drove the residue **18 -> 0**. No colored function delegates
+a delimited shape any longer. The remaining direct-lowering `-emit` reaches in
+the corpus (**41**) are entirely Population 2 (`direct-dispatch`): uncolored /
+`main` / exported / subset-reject functions that wholly direct-emit -- chiefly
+callcc-in-`main` (call/cc is not a coloring seed, so those mains never reach the
+CPS classifier) and delimited helpers outside the emittable subset `S`.
+
+**Exit:** with D1a-D1c landed **and Population 1 at zero**, the `CT_LETRAW`
+delegation arms for `EX_RESET`/`EX_SHIFT`/`EX_SHIFT0`, `EX_CLONEABLE_RESET`,
+`EX_SERIAL_RESET`, and `EX_CALLCC` in `safe_to_delegate` and the
+`cps_bind`/`cps_tail` cases in `cps_ir.c` are now **dead for colored functions**
+and can be removed (a mechanical cleanup, gated on re-confirming the zero with
+`--dump-direct-lowering-callers`). (`EX_ASYNC`/`EX_AWAIT` stay delegated -- they
+ride a *separate*
 stackful fiber runtime in `emit_module.c`, untouched by the `emit_cps.c` delete;
 see the [U5 async-substrate note](cps-backend-unification-u5-async-substrate-plan.md).
 Their delegation targets the fiber runtime, not the four lowering functions, so
@@ -169,54 +246,338 @@ function that uses delimited control **regardless of effect-coloring**:
   An uncolored function with *no* delimited control stays on the direct emitter
   as before -- CPS-emitting a genuinely pure function is pure overhead and must
   not be triggered.
+
+  **Landed for `call/cc` / `escape` via coloring.** `reset`/`shift`/`shift0` and
+  `cloneable`/`serial` reset were already coloring seeds (`cps_directly_uses_
+  control` in `cps.c`), so a function using them was already classified. `call/cc`
+  / `escape` was NOT a seed -- a function whose only control op was a call/cc /
+  escape stayed uncolored and wholly direct-emitted through `emit_cps_callcc`.
+  Adding `EX_CALLCC` to the seeds colors those functions; `ensure_S` classifies
+  them and (native receiver + emittable body) CPS-emits with the call/cc lowered
+  natively (`emit_callcc`), the callable symbol preserved by the direct-entry
+  wrapper so uncolored callers (a `main` calling them) are unchanged. This closed
+  the bulk of Population 2: **callcc direct-dispatch reaches 28 -> 2**.
 - **D2b -- fixed-ABI entry wrappers.** The CPS backend already emits a
   direct-entry wrapper that preserves a colored function's callable symbol; make
   that wrapper cover the fixed entry-point ABIs -- `int main(void)` calling
   `main__cps(dk_done())`, and each exported `f(args)` calling `f__cps(args,
   dk_done())`. This is the mechanism the graduation-readiness note flagged as
   missing ("cannot take the `f__cps(args, DK*)` + wrapper shape").
+
+  **Landed (main only; exported deferred).** `emit_cps_ir_try_fn` now admits a
+  zero-arg `main` whose body directly uses delimited control and passes the same
+  `fn_sig_ok`/`term_core_ok` subset gates (`fn_is_d2b_main` in `emit_cps_ir.c`;
+  the `in_s` classifier lifts the `main` exclusion for it). For such a `main` the
+  wrapper is a fixed-ABI `int main(int argc, char **argv)` that reproduces the
+  direct emitter's `main` prologue (panic-trace flag + the `*args*` cons build),
+  seeds the root prompt, trampolines into `main__cps`, and returns the delivered
+  value as the exit code. Effect-only mains (no delimited op) stay excluded --
+  CPS-emitting them is pure overhead and removes no direct-lowering caller.
+  Exported (`c_export_name`) functions stay excluded: none appear in the corpus
+  and the extern-linkage ABI is left as a follow-up.
+
+  *Effect on the caller count (corpus scan): total genuine `-emit` reaches
+  **109 -> 51**; distinct fixtures with any reach **43 -> 28**; **15** former
+  Population-2 fixtures fully cleared.* Base `reset`/`shift` in a CPS-emitted
+  `main` emit **natively** (caller removed). `cloneable`/`serial`/`callcc` in a
+  CPS-emitted `main` mostly emit natively too, but a residual delegates via
+  `CT_LETRAW` -- this **reclassifies** those reaches from Population 2 to
+  Population 1 (the after-scan shows 7 `eviction cloneable` + 9 `eviction serial`
+  where before there were none). D2b does not by itself zero those; closing them
+  is D1's native-emission + delegation-removal work. `callcc`-only mains are not
+  admitted (call/cc is not a coloring seed, so such a `main` never reaches the
+  classifier loop) and stay on the direct emitter unchanged.
+
+  **Native context-grammar fix landed alongside.** CPS-emitting `main` first
+  exposed a latent miscompile in the **native** cloneable/serial if-split
+  emitter (`emit_cloneable`): the pure arm of `(cloneable-reset OUTER[if cond
+  THEN[shift] ELSE])` dropped the OUTER context frames (emitting `ELSE` instead
+  of `OUTER[ELSE]`). The `CloneFrame` chain conflated outer frames with then-arm
+  frames. Fixed by recording `n_outer_frames` (frames collected before the `if`
+  during the outside-in walk, in `build_cloneable`/`build_serial`) and
+  re-applying exactly those to the pure arm (`emit_cloneable_pure_arm`). This is a
+  general correctness fix (a colored helper with the same shape would have
+  miscompiled too), verified by `cloneable-context-if-outer-frames` /
+  `serial-context-if-outer-frames`.
+
 - **D2c -- verify against the direct output.** Each uncolored/`main`/exported
   delimited shape gets a `direct == cps` oracle (the direct output is the current
   baseline; the CPS output must match it) before its dispatch is removed.
+
+  *Status:* the D2b mains are covered by their existing `expected.stdout`
+  fixtures (all green); the two if-split-outer-frames fixtures pin the
+  context-grammar fix. A dedicated `--force-direct-lowering` oracle knob is not
+  yet added.
 
 **Exit:** with D2a-D2b landed and the oracles green, remove the `emit_cps_*`
 calls from the `emit_effects_*` wrappers (`emit_effects.c` :1209/:1223/:1696) and
 the `EX_CALLCC` dispatch (`emit_expr.c` :2826). The wrappers either collapse to
 their now-sole remaining behavior or are deleted with their callers.
 
-### Phase D3 -- delete the lowering functions
+*Progress toward the exit.* Population 1 is at zero (see Phase D1). Population 2
+has fallen from its post-D2b peak to **zero** genuine `-emit` reaches. The closures:
+- the `EX_CALLCC` coloring seed closed callcc `28 -> 2`;
+- accepting `CT_CALLCC` in `handle_case_ok` (mirroring the `shift_body_ok` fix)
+  closed the last 2 callcc via native `emit_callcc` (`cps-oracle-escape-capture-
+  in-handler-case` + twin);
+- admitting call-frame envs in `term_core_ok` (a non-atomic / Serializable
+  captured env rides `env_expr` / the marshaler, skipping the operand-slot
+  `atom_ok` gate) closed the serial-in-`main` fixtures (`serial-struct-env`,
+  `serial-context-do-struct`);
+- admitting `BS_FUNC_CALL` builtins in the emittable subset (`shape_supported` +
+  `prim_expr` emit `c_op(args)`) closed `callcc-star-context` -- a `main` that
+  captures continuations and resumes them via `tur_cloneable_cont_resume`/`_clone`
+  outside the reset (`3` reaches).
 
-With both populations at zero callers, delete from `emit_cps.c`:
-`emit_cps_reset` (+ `emit_cps_reset_escape`), `emit_cps_callcc`,
-`emit_cps_cloneable_reset`, `emit_cps_serial_reset`, and their private analysis
-helpers (`frame_c_expr`, `collect_ctx`, `ctx_if_branch`, `cl_can_lower`,
-`sk_tag_for_frame`). Delete the `emit_effects_*` dispatch wrappers and the
-`EX_CALLCC` dispatch arm that D2's exit made dead.
+**The last Population-2 shape -- the capturing-receiver base shift -- is now
+closed.** The shape was `(reset (let [a b c] (shift (fn [v] (+ a (+ b (+ c v)))) 10)))`,
+in `continuation-advanced` (`test-deeply-nested-shift`) and `continuation-substrate`
+(`t-deep`), `2` reset reaches. The `shift` receiver is a closure that captures
+enclosing locals; after closure conversion it is an `EX_CLOSURE` with an env
+param, so `cps_shift_body_kf`'s synthesized `(closure arg)` was an indirect call
+`indirect_callee_ok` rejects, and the whole function stayed direct.
 
-### Phase D4 -- delete the N6.5 delimited-control carve-out
+The fix beta-reduces the receiver instead of synthesizing a call: abortive-shift
+value is `receiver(arg)` = `body[v := arg]`, so `cps_shift_body_kf` now
+recognizes an `EX_CLOSURE` receiver and inlines it as `(let [v arg] body)`
+delivered to the prompt. The closure body still references its captured source
+bindings by their original names (closure conversion prepends the env param but
+leaves the body's capture references intact, resolving them only when the thunk
+is emitted), so inlining resolves them to the visible reset-context locals, which
+the lifted shift body captures via `collect_caps`. A non-capturing lambda is
+already lifted to a named global (an `EX_VAR` here), so this fires only for the
+capturing case that otherwise evicts. This ports the U7 receiver mechanism to
+`CT_SHIFT` without introducing an indirect call.
+
+**With this landed, a corpus scan reports zero genuine `-emit` reaches** into
+`emit_cps.c` (the four lowering functions) across every fixture -- both
+Population 1 (eviction) and Population 2 (direct-dispatch) are at zero. The
+residual `-fallback` lines that remain (`reset`/`cloneable`/`serial`) are the
+inline legacy paths in `emit_effects.c`, **not** `emit_cps.c` callers, and do not
+gate D3. **D3 is unblocked.**
+
+### Phase D3 -- delete the lowering functions -- LANDED
+
+With both populations at zero callers, the direct-style lowering functions were
+deleted from `emit_cps.c`: `emit_cps_reset` (+ `emit_cps_reset_escape`),
+`emit_cps_callcc`, `emit_cps_cloneable_reset`, `emit_cps_serial_reset`, plus the
+helper trees each one exclusively owned -- `emit_first_shift`, `can_lower`,
+`reaches_shift` (base-reset analysis); `emit_cloneable_ctx`, `emit_serial_ctx`,
+`cl_emit_frame_body`, `cl_emit_frame_fn`, `frame_c_expr`, `c_cast_for_kind`
+(cloneable/serial frame emission); and `sk_tag_for_frame`. The orphan cascade
+was driven by the build's `-Werror=unused-function`: delete the public
+functions, rebuild, delete whatever the compiler proves unused, repeat until
+clean. `emit_cps.c` fell from 1758 to 1014 lines.
+
+**Correction to the plan's helper list.** Of the five helpers this plan
+originally named for deletion (`frame_c_expr`, `collect_ctx`, `ctx_if_branch`,
+`cl_can_lower`, `sk_tag_for_frame`), only `frame_c_expr` and `sk_tag_for_frame`
+were lowering-private. `collect_ctx`, `ctx_if_branch`, and `cl_can_lower` are
+**shared with the surviving `emit_cps_program_uses_*` gates**
+(`uses_cloneable_dk` -> `cl_can_lower` -> `collect_ctx`/`ctx_if_branch`;
+`uses_serial_dk` -> `sk_can_lower` -> the same), so they stay until D5 replaces
+the gates with CT-IR taint classification and the whole analysis subtree becomes
+deletable.
+
+The call sites were retired: `emit_effects_reset` /
+`emit_effects_cloneable_reset` / `emit_effects_serial_reset` collapsed to their
+sole surviving behavior (the legacy no-shift / Case-1 fallback -- these
+`-fallback` reaches never entered `emit_cps.c`), and the `EX_CALLCC` dispatch arm
+in `emit_expr.c` (which `emit_cps_callcc` alone handled) now `abort()`s: call/cc
+is a coloring seed, so every use is colored and emitted natively by the CT-IR
+backend, and reaching the direct emitter is an invariant violation. The
+`emit_cps.h` declarations of the four deleted functions were removed; the four
+gate declarations and the `emit_cps_note_direct_caller` verification hook stay.
+Suite: 2142 passed, 0 failed.
+
+### Phase D4 -- delete the N6.5 delimited-control carve-out -- LANDED
 
 The N6 fallback-removal plan retained a **named carve-out** (N6.5) that keeps the
 delimited-control family routed to `emit_cps.c` because it was the sole emitter
 for those shapes (see
-[N6 plan](../v1/cps-backend-n6-fallback-removal-plan.md) N6.5). Once D1-D3 remove
-that sole-emitter status, delete the carve-out: the routing that special-cases
-the delimited family in the coloring/eviction path is no longer needed, and "the
-CT-IR backend is the sole lowering for every colored function" becomes true
-without exception.
+[N6 plan](../v1/cps-backend-n6-fallback-removal-plan.md) N6.5). The goal: delete
+the routing so "the CT-IR backend is the sole lowering for every colored
+function" becomes true without exception.
 
-### Phase D5 -- retire the gates and the files
+**The carve-out, concretely.** It is the `build_letraw` (`CT_LETRAW`) delegation
+fallback for `EX_CLONEABLE_RESET`/`EX_SERIAL_RESET` in `cps_ir.c`'s translation,
+plus the `safe_to_delegate` `return true` for those two forms (U3/U4). When the
+native `build_cloneable`/`build_serial` returned NULL, the whole delimited region
+was delegated to the direct emitter, keeping the colored function CPS-emitted.
+(Note: after D3, the delegation no longer reaches `emit_cps.c` -- it reaches the
+*legacy* `emit_effects.c` lowering, which D3 kept.)
 
-- Replace the syntactic `emit_cps_program_uses_*` prelude gates
-  (`emit_module.c` :6647-6651) with the CT-IR taint classification (`ensure_S`),
-  the deeper U6 move: prelude emission is driven by which families the
-  *classification* proves are used, not by a second form-presence scan. (The
-  preludes themselves stay in `emit_dk_runtime.{c,h}` -- they are the shared
-  runtime both the fixed-ABI wrappers and the colored bodies call.)
-- Delete `emit_cps_program_uses_delimited` / `_callcc` / `_cloneable_dk` and
-  their declarations in `emit_cps.h`.
-- `emit_cps.c` is now empty (runtime relocated in step 1, lowering deleted in D3,
-  gates deleted here) -> remove `emit_cps.c` and `emit_cps.h`, drop the
-  `#include "emit_cps.h"` sites and the CMake source entry.
+**The plan's premise was wrong.** D1-D3 targeted base reset/shift and call/cc;
+they did **not** make the CT-IR backend cover the cloneable/serial subset. A
+corpus scan found the carve-out still load-bearing for two shapes (serial: zero;
+cloneable: four fixtures):
+- **No-shift resets** (`(cloneable-reset 42)`) -- the reset trivially equals its
+  body.
+- **Shape-1 live-capture cloneable-shift** (`cloneable-drop-rc`:
+  `(cloneable-reset (let [n result] (cloneable-shift k 0)))`) -- `build_cloneable`
+  rejected any shift with live captures.
+
+Simply deleting the carve-out (proved by experiment) keeps the suite green but
+makes those functions *wholly evict* to the direct emitter -- **reducing** CT-IR
+coverage, the opposite of the goal. So the two shapes were ported natively first:
+
+- **No-shift native path.** When `build_cloneable`/`build_serial` returns NULL and
+  the body has no reachable shift, translate the body directly (`cps_tail`) rather
+  than delegating -- a no-shift reset has nothing to delimit.
+- **Shape-1 live-capture, a one-line gate relaxation.** `build_cloneable` rejected
+  `n_live_captures != 0` unconditionally, but a **Shape 1** (`nf == 0`) captured
+  continuation is the IDENTITY (the shift sits at the reset tail; no context to
+  re-run), so it never reads a captured local. `emit_cloneable`'s Shape-1 arm
+  already allocates the trivial cont with a **NULL env**
+  (`tur_cloneable_cont_alloc(cfn, NULL, NULL, NULL)`) -- byte-identical to the
+  legacy `has_env == false` path. So a conservatively-marked live capture on a
+  Shape-1 shift is emit-time dead; the gate now rejects only `nf != 0` captures.
+  `cloneable-drop-rc` emits **zero `__clenv`** structs natively and is leak-clean
+  under LeakSanitizer.
+
+**Carve-out deleted.** With both shapes native, the `safe_to_delegate` U3/U4 cases
+were removed (they fall to `default: return false`, forcing decomposition to a
+bind position), and the `build_letraw` delegation fallback in the translation was
+replaced by `CT_UNSUPPORTED` -- a shift-bearing reset outside the native subset
+now evicts the *whole function* rather than routing a sub-region out. A corpus
+scan confirms **zero delegations and zero evictions** for cloneable/serial resets:
+every one is now natively CT-IR-lowered. Suite: 2142 passed, 0 failed.
+
+**Left standing (deliberately).** The legacy `emit_effects.c` cloneable/serial
+lowering (`emit_effects_cloneable_reset` Case-1/Case-2, `emit_effects_cloneable_shift`,
+`emit_effects_serial_*`) remains as the whole-function *eviction* fallback for
+shapes outside the native subset (Shape-2-with-captures, and cloneable/serial in a
+non-CPS-candidate function). No corpus fixture reaches it, so it is corpus-dead but
+not deleted: removing it would either need the Shape-2-with-captures tail ported
+natively or hard-error those untested shapes. That work is **Phase D6** below --
+tracked as its own step, not folded into D4.
+
+### Phase D5 -- retire the gates and the files -- LANDED
+
+- **Deviation from the planned method (classification-driven -> presence-scan
+  relocation), deliberately.** The plan proposed driving prelude emission off the
+  CT-IR taint classification (`ensure_S`) -- prelude emitted iff the
+  *classification* proves the family is used. But D4 left a whole-function
+  eviction fallback (D6): a delimited form in a function that evicts to the direct
+  emitter is **not** in the classification's emittable set, so a classification-only
+  gate would drop its prelude and miscompile the evicted body. The syntactic
+  form-presence scan does not have that blind spot. So D5 keeps presence gating and
+  simply **relocates** the four scans off the deleted `emit_cps.c`:
+  - `preamble_uses_base_delimited`, `preamble_uses_callcc`, `preamble_uses_serial`
+    are now `static` in `emit_module.c` (verbatim from the old `uses_base_delimited`
+    / `uses_callcc`, and `uses_serial_dk` minus its always-true `g_sk` flag).
+  - the cloneable gate reuses cps.c's complete `cps_expr_contains_cloneable_shift`
+    presence scan, dropping the old `cl_can_lower` "would the direct emitter lower
+    it" subset check. Verified **byte-identical corpus-wide** (regenerated every
+    `expected.c`, zero diff): post-D4 every cloneable reset lowers natively, so
+    presence == can-lower for gating. Dropping `cl_can_lower` also let the entire
+    ~700-line lowerability-analysis helper tree (`collect_ctx`, `ctx_if_branch`,
+    `clone_spine`, `sk_can_lower`, ...) die with the file.
+  (Full classification-driven gating stays possible later, but only once D6 removes
+  the eviction fallback so the classification sees every delimited function.)
+- **Files deleted.** `emit_cps.c` and `emit_cps.h` are removed (runtime was
+  relocated to `emit_dk_runtime.{c,h}` in U7; the lowering in D3; the carve-out
+  routing in D4; the gates relocated here). Dropped the four `#include
+  "emit_cps.h"` sites (`emit_module.c`, `emit_expr.c`, `emit_effects.c`,
+  `emit_cps_ir.c`) and the CMake source entry (`src/CMakeLists.txt`).
+- **Verification scaffolding retired too.** The D1-D4 caller counter is now fully
+  dead (D3 removed its last call sites): deleted `emit_cps_note_direct_caller`, the
+  `g_cps_delegating` bracket in `emit_letraw`, the `g_dump_direct_lowering_callers`
+  global, and the `--dump-direct-lowering-callers` flag (both `main.c` parse sites
+  + help text). Suite: 2142 passed, 0 failed.
+
+### Phase D6 -- retire the legacy `emit_effects.c` delimited-control lowering
+
+D4 deleted the *carve-out* -- the `CT_LETRAW` delegation that routed a
+cloneable/serial reset **sub-region** to the direct emitter. It did **not** delete
+the direct emitter's delimited-control lowering itself, which now survives one rung
+lower as the **whole-function eviction fallback**: a colored function whose
+cloneable/serial reset falls outside the native `build_cloneable`/`build_serial`
+subset emits `CT_UNSUPPORTED`, evicts, and the direct emitter re-emits the whole
+function -- reaching `emit_effects_cloneable_reset` (Case-1/Case-2),
+`emit_effects_cloneable_shift`, and `emit_effects_serial_*`. **No corpus fixture
+reaches this path** (D4 measured zero delegations *and* zero evictions), so it is
+corpus-dead but still a live fallback for the long tail. D6 owns removing it.
+
+**Evidence-gathering changed the picture -- the "corpus-dead fallback" was a
+silent miscompile.** Probing valid shapes that `build_cloneable` rejects revealed
+that the legacy cloneable Case-2 (setjmp) path does not preserve the context: it
+lowers the captured continuation as the IDENTITY. So `(+ (id 3) (cloneable-shift
+k 0))` -- an ordinary program with a non-atomic (function-call) operand next to
+the shift -- printed **100** instead of **103**, silently. Verified a **D3
+regression**: pre-D3 the DK direct lowering (`emit_cps_cloneable_reset`) reified
+the context correctly (103); deleting it dropped these shapes onto the buggy
+legacy path. D3's "0 corpus reaches" gate had a coverage blind spot (no fixture
+of the form `(op (non-atomic) (cloneable-shift))`). Full write-up:
+[docs/archive/cloneable-shift-nonatomic-operand-context-dropped.md](../../archive/cloneable-shift-nonatomic-operand-context-dropped.md).
+
+This makes "retain the fallback" untenable and reframes the fork as
+correctness-first: fix the reachable shapes, and make anything still unsupported
+fail loudly rather than silently.
+
+#### Phase D6a -- LANDED (native fix for the common case + hard-error the rest)
+
+- **Native port of the common case.** `build_cloneable`'s single-hole arithmetic
+  frame now admits a **non-atomic pure int operand** (shift-free + `safe_to_delegate`)
+  via the existing `env_expr` mechanism (already used by serial's 2-arg call
+  frame): the operand is `emit_value`'d once at the reset site and its value rides
+  the frame's `dk_frame` env, deep-cloned with the chain on each resume, so
+  `(+ (compute) [])` reifies correctly and multi-shot is correct. `term_core_ok`'s
+  CT_CLONEABLE gate skips the operand-slot `atom_ok` check when `env_expr` is set
+  (matching the call-frame env exemption). `(+ (id 3) (cloneable-shift ...))` and
+  friends now lower natively and print the right number; regression fixture
+  `cloneable-shift-nonatomic-context` (single/multiplication/nested/multi-shot).
+- **Hard-error the residual (closes the silent-miscompile class).** The legacy
+  cloneable Case-2 setjmp path -- reached by *any* context-bearing cloneable shift
+  `build_cloneable` still rejects (deep contexts, colored-callee operands, ...),
+  whether via whole-function eviction or a non-CPS-candidate function -- is
+  replaced by a **`TUR-E0710`** diagnostic (`CLONEABLE_CONTEXT_NOT_CAPTURABLE`),
+  mirroring the serial `TUR-E0706` fix. So an unsupported cloneable context is now
+  rejected at codegen instead of silently dropping the context. Negative fixture
+  `errors/cloneable-context-not-capturable`. Case-1 (trivial `(cloneable-reset
+  (cloneable-shift k v))`, identity continuation -- correct) and the no-shift
+  passthrough are unchanged. Suite: 2143 passed, 0 failed.
+
+**Serial parity.** Serial already had this fix (`emit_effects_serial_shift` emits
+`TUR-E0706` for unsupported contexts -- no silent miscompile). Serial's arithmetic
+frame still requires an atomic operand (a non-atomic operand cleanly errors, not
+miscompiles); extending serial with the same `env_expr` native admission is a
+symmetric follow-up, not a correctness gap.
+
+#### Phase D6b -- LANDED (delete the now-dead legacy machinery)
+
+A corpus reachability scan (instrumented probes across every fixture) confirmed:
+`emit_effects_cloneable_shift` and `emit_effects_cloneable_reset` Case-1 have
+**zero reaches**; `emit_effects_serial_shift` is reached only to emit its
+`TUR-E0706` diagnostic. Cleanup, three parts:
+
+- **`emit_effects_cloneable_shift` (162 -> 24 lines).** This was the standalone
+  cloneable-shift emitter that cooperated with the old Case-2 via
+  `longjmp(tur_current_reset_ctx->jmp)`. D6a removed Case-2's setjmp landing, so
+  this function's longjmp target no longer exists -- it was dead **and broken**.
+  Replaced its body (env-struct + trivial cont + longjmp) with a `TUR-E0710`
+  diagnostic: a bare cloneable-shift that escapes its reset now errors cleanly
+  instead of jumping to an unestablished landing.
+- **The `tur_cloneable_reset_ctx` / `tur_current_reset_ctx` setjmp-landing
+  runtime** (`emit_module.c`) is deleted -- nothing pushes or longjmps to it
+  anymore, so it was an unused typedef + `__thread` global in every cloneable
+  program.
+- **Case-1's dead `has_env` env-struct block (~84 lines).** `has_env` was
+  hardcoded `false` (the trivial identity continuation ignores its env), so the
+  `__clenv` struct + clone/drop emission never ran. Removed; the cont is
+  allocated with a NULL env, matching the native Shape-1 path.
+
+Kept (all correct + reachable): Case-1's trivial `(cloneable-reset
+(cloneable-shift <non-native-receiver> v))` path (verified reachable via a colored
+receiver -> evicts -> identity cont -> correct), the no-shift passthroughs, and
+the serial `TUR-E0706` diagnostic. The cloneable runtime-prelude gate
+(`cps_uses_cloneable_rt`) is unchanged and keeps the native path's
+`tur_cloneable_cont` runtime. Suite: 2147 passed, 0 failed; no snapshot churn.
+
+**Not a blocker for D3-D5.** D6 is independent: D3/D4/D5 all concern `emit_cps.c`;
+the legacy lowering lives in `emit_effects.c`. With D6a landed the CT-IR backend is
+the sole *correct* delimited-control lowering; the legacy path is now only a
+diagnostic + the trivial correct fallbacks.
 
 ## Verification strategy
 
@@ -236,6 +597,55 @@ without exception.
   caller population to zero; instrument with a one-line `--dump-*` counter (or a
   grep over emitted C for the direct lowering's signature symbols) so "residual
   delegations = 0" and "direct-dispatch callers = 0" are measured, not asserted.
+  **Landed:** `--dump-direct-lowering-callers` (a codegen knob in `globals.{c,h}`,
+  wired in `main.c`; the emit hook is `emit_cps_note_direct_caller` in
+  `emit_cps_ir.c`, called from the three `emit_effects_*` wrappers and the
+  `EX_CALLCC` dispatch). It prints one line per reach into the direct lowering:
+
+  ```
+  direct-lowering-caller: <eviction|direct-dispatch> <family>-<emit|fallback>
+  ```
+
+  where `eviction` = Population 1 (colored function evicting a sub-shape via
+  CT_LETRAW -- attributed via the `g_cps_delegating` bracket in `emit_letraw`),
+  `direct-dispatch` = Population 2 (function not in `S`, emitted wholly by the
+  direct emitter), and `emit` = the lowering actually emitted (a genuine
+  emit_cps.c caller; the delete target) vs `fallback` = returned NULL and the
+  inline path in `emit_effects.c` ran (NOT an emit_cps.c caller). Run it across
+  the corpus with `emit-c --dump-direct-lowering-callers <file> 2>&1 >/dev/null`.
+
+  ### Measured baseline (corpus scan, 2026-07-11)
+
+  Scanning `emit-c` over every fixture input, counting only genuine `-emit`
+  reaches (the live callers of the four lowering functions):
+
+  | Population | Family | `-emit` reaches | Distinct fixtures |
+  |---|---|---:|---:|
+  | **eviction** (P1) | callcc | 2 | `cps-oracle-escape-capture-in-shift-body`(+`-cps` twin) |
+  | **direct-dispatch** (P2) | serial | 42 | 17 |
+  | **direct-dispatch** (P2) | cloneable | 34 | 10 |
+  | **direct-dispatch** (P2) | callcc | 29 | 17 |
+  | **direct-dispatch** (P2) | reset | 2 | 2 |
+
+  This materially updates the plan's premise. **Population 1 (Phase D1) is
+  essentially closed**: the U7 work
+  ([U7 readiness](cps-backend-unification-u7-readiness-plan.md)) drove the
+  cloneable / serial / reset colored-eviction residue to zero; the *only*
+  remaining P1 reach is `call/cc` captured inside a `shift` body (one logical
+  fixture + its `-cps` twin). D1a-D1c as written are therefore already landed
+  for everything except this narrow callcc-in-shift-body tail.
+
+  **Population 2 (Phase D2) is the dominant blocker** -- 41 distinct fixtures.
+  `in_s` (`emit_cps_ir.c` ~:1841) is false, and the function wholly direct-emits,
+  for four reasons; P2 splits along them:
+  - `main` / `c_export_name` -- excluded by construction; the fix is the D2b
+    fixed-ABI entry wrapper (`main__cps(dk_done())` / `f__cps(args, dk_done())`).
+  - `fn_sig_ok` / `term_core_ok` reject -- the emittable-subset boundary (the
+    five v1 gap plans + D1c context-grammar widening + D1d `needs_heap_join`).
+
+  D3-D5 (deleting the lowering, the carve-out, the files) stay gated on **both**
+  populations reaching zero `-emit`, i.e. on closing the callcc-in-shift-body P1
+  tail *and* the full D2 uncolored/main/subset-reject population.
 - **Snapshot churn** regenerates in the same PR as each phase that moves codegen
   (D2 in particular re-emits every uncolored delimited function), per the
   CLAUDE.md fixture-regen recipe.
@@ -258,8 +668,13 @@ without exception.
 graduation (DONE) ──► D1 (colored residue) ──┐
                                               ├─► D3 (delete lowering) ─► D4 (delete carve-out) ─► D5 (delete files)
                       D2 (uncolored/main) ────┘
+
+D6 (retire legacy emit_effects.c delimited lowering) -- independent of D3-D5
 ```
 
 D1 and D2 are independent and can land in either order (or interleaved); D3 waits
 on both reaching zero callers. D4 waits on D3. D5 waits on D4 and folds in the
-deeper U6 classification-driven prelude gating.
+deeper U6 classification-driven prelude gating. D6 is independent of D3-D5 (it
+concerns `emit_effects.c`, not `emit_cps.c`) and can land in any order relative to
+them; it removes the whole-function eviction fallback D4 left standing, either by
+porting the Shape-2-with-captures tail natively (D6a) or hard-erroring it (D6b).

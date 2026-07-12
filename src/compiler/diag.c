@@ -190,6 +190,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH:   return "TUR-E0707";
         case TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH:   return "TUR-E0708";
         case TUR_E0709_RETURN_TYPE_MISMATCH:             return "TUR-E0709";
+        case TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE: return "TUR-E0710";
         /* ET4: effect scope errors */
         case TUR_E0250_ROW_VAR_ESCAPES_SCOPE:            return "TUR-E0250";
         case TUR_E0253_EFFECT_NOT_IN_SCOPE:              return "TUR-E0253";
@@ -328,6 +329,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0707") == 0) return TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH;
     if (strcmp(s, "TUR-E0708") == 0) return TUR_E0708_RETURN_POINTER_SCALAR_MISMATCH;
     if (strcmp(s, "TUR-E0709") == 0) return TUR_E0709_RETURN_TYPE_MISMATCH;
+    if (strcmp(s, "TUR-E0710") == 0) return TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE;
     /* ET4: effect scope errors */
     if (strcmp(s, "TUR-E0250") == 0) return TUR_E0250_ROW_VAR_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0253") == 0) return TUR_E0253_EFFECT_NOT_IN_SCOPE;
@@ -1820,6 +1822,26 @@ static const DiagExplanation diag_explanations_[] = {
       "state into a single Serializable struct passed as a tail call's argument\n"
       "  (do (init) (serial-shift k v) (run-loop state))\n"
       "-- or move the non-capturable work outside the serial-reset boundary.\n",
+    },
+    /* cloneable-shift-unsupported-context-miscompile (D6a) */
+    { TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
+      "TUR-E0710: cloneable-shift context is not capturable\n"
+      "\n"
+      "A cloneable-shift can only be lowered when its delimited context (the\n"
+      "part of the enclosing cloneable-reset between the reset and the shift)\n"
+      "fits the native build_cloneable grammar: a single-scalar-hole chain of\n"
+      "scalar `let` preludes, `+ - * /` binops (with an atomic or pure operand),\n"
+      "1- and 2-arg top-level uncolored calls, and one `if` branch point, up to\n"
+      "a bounded depth.  Outside that subset the captured continuation cannot be\n"
+      "reified into a multi-shot cloneable continuation.\n"
+      "\n"
+      "Previously such contexts silently miscompiled -- the legacy setjmp\n"
+      "fallback lowered the continuation as the identity, dropping the context,\n"
+      "so e.g. `(+ (compute) (cloneable-shift ...))` printed a wrong number with\n"
+      "no error.  They are now rejected at codegen instead.\n"
+      "\n"
+      "Fix: restructure the context into a supported shape, or move the\n"
+      "non-capturable work outside the cloneable-reset boundary.\n",
     },
     /* float-register-class-returns */
     { TUR_E0707_RETURN_REGISTER_CLASS_MISMATCH,

@@ -119,6 +119,11 @@ typedef struct CloneFrame {
     const Binding *call_fn;
     bool           ignore_value;
     CAtom          operand;
+    /* A captured call-frame env that is not a simple atom (e.g. a `(mk-rec ...)`
+     * constructor) -- the emitter emit_value's it at the reset site instead of
+     * reading `operand`.  NULL for atomic / no-env frames.  `operand.type` still
+     * carries the env's type for the serial marshal-kind decision. */
+    const Expr    *env_expr;
     bool           hole_left;
 } CloneFrame;
 
@@ -206,6 +211,13 @@ struct CTerm {
                  bool serial;
                  CloneLet *lets; uint32_t n_lets;
                  CloneFrame *frames; uint32_t n_frames;
+                 /* Count of leading `frames` that sit OUTSIDE the `if` branch point
+                  * (collected before it during the outside-in context walk).  The
+                  * shift arm rides the whole `frames` chain; the pure arm (if_pure)
+                  * must re-apply exactly these outer frames -- frames[n_outer_frames..)
+                  * are inside the shift-bearing arm and do NOT apply to the pure arm.
+                  * 0 when there is no `if` or no outer frames. */
+                 uint32_t n_outer_frames;
                  const Expr *if_cond; const Expr *if_pure; bool if_when;
                  CTerm *body; }                                           cloneable;
         /* (call/cc f) / (escape f): `e` is the original EX_CALLCC expr (the

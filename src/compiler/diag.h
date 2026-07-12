@@ -184,6 +184,13 @@ typedef enum DiagCode {
      * (the carrier-handle bridge), but in a committed monomorphic function there
      * is no carrier to bridge, so it is a real type-erasure bug. */
     TUR_E0709_RETURN_TYPE_MISMATCH,
+    /* cloneable-shift-unsupported-context-miscompile (D6a): a cloneable-shift
+     * whose delimited context falls outside the native build_cloneable grammar
+     * cannot be reified into a multi-shot continuation.  The legacy setjmp
+     * fallback silently dropped the context (lowered the continuation as the
+     * identity), so `(+ (compute) (cloneable-shift ...))` printed a wrong number.
+     * Rejected at codegen instead, mirroring the serial TUR-E0706 fix. */
+    TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
     /* Deprecation band (TUR-D####): syntax accepted for backward
      * compatibility but slated for removal.  Emitted as DIAG_WARNING;
      * promoted to DIAG_ERROR under --Werror=deprecated. */

@@ -1,6 +1,6 @@
 /* emit_module.c -- program/module assembly (emit_program, emit_header, emit_implementation). */
 #include "emit_internal.h"
-#include "emit_cps.h"   /* cps-transform-plan: DK substrate wiring + uses-gates */
+#include "cps.h"        /* D5: cps_expr_contains_cloneable_shift (cloneable prelude gate) */
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
@@ -5745,6 +5745,236 @@ static void emit_rt_global(Buf *out, bool shared,
  * so the replicas operate on one shared state), and every `program`-gated CPS
  * block is forced on so the shared runtime is feature-complete.  `program` may
  * be NULL when shared. */
+/* =========================================================================
+ * Prelude gates (cps-backend-direct-lowering-removal D5).
+ *
+ * Whole-program presence scans deciding which delimited-control runtime
+ * preludes to emit.  Relocated verbatim from the deleted `emit_cps.c`; each is
+ * a pure syntactic walk (the cloneable family reuses cps.c's complete
+ * `cps_expr_contains_cloneable_shift` scan directly at the call site).  Kept as
+ * form-presence scans -- not driven off the CT-IR classification -- so a
+ * delimited form in a function that evicts to the direct emitter (see D4/D6)
+ * still gets its prelude, which a classification-only gate would miss.
+ * ========================================================================= */
+
+/* True iff `e` uses base delimited control (reset / shift / shift0). */
+static bool preamble_uses_base_delimited(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+            return true;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (preamble_uses_base_delimited(e->as.program.items[i])) return true;
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && preamble_uses_base_delimited(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && preamble_uses_base_delimited(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   preamble_uses_base_delimited(e->as.closure_.closure->fn->body);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (preamble_uses_base_delimited(e->as.let_.bindings[i].init)) return true;
+            return preamble_uses_base_delimited(e->as.let_.body);
+        case EX_IF:
+            return preamble_uses_base_delimited(e->as.if_.cond) ||
+                   preamble_uses_base_delimited(e->as.if_.then_) ||
+                   preamble_uses_base_delimited(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (preamble_uses_base_delimited(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return preamble_uses_base_delimited(e->as.while_.cond) ||
+                   preamble_uses_base_delimited(e->as.while_.body);
+        case EX_SET:    return preamble_uses_base_delimited(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && preamble_uses_base_delimited(e->as.def_.init);
+        case EX_RETURN: return e->as.return_.value && preamble_uses_base_delimited(e->as.return_.value);
+        case EX_DEFER:  return preamble_uses_base_delimited(e->as.defer_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (preamble_uses_base_delimited(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (preamble_uses_base_delimited(e->as.call_.args[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* True iff `e` uses (call/cc f) / (escape f).  Complete expr walk (mirrors the
+ * former emit_cps.c uses_callcc: an escape can hide in a shift body, handler
+ * case, match arm, struct field, ...). */
+static bool preamble_uses_callcc(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_CALLCC:
+            return true;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (preamble_uses_callcc(e->as.program.items[i])) return true;
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && preamble_uses_callcc(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && preamble_uses_callcc(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   preamble_uses_callcc(e->as.closure_.closure->fn->body);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (preamble_uses_callcc(e->as.let_.bindings[i].init)) return true;
+            return preamble_uses_callcc(e->as.let_.body);
+        case EX_IF:
+            return preamble_uses_callcc(e->as.if_.cond) ||
+                   preamble_uses_callcc(e->as.if_.then_) ||
+                   preamble_uses_callcc(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (preamble_uses_callcc(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return preamble_uses_callcc(e->as.while_.cond) || preamble_uses_callcc(e->as.while_.body);
+        case EX_SET:    return preamble_uses_callcc(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && preamble_uses_callcc(e->as.def_.init);
+        case EX_RETURN: return e->as.return_.value && preamble_uses_callcc(e->as.return_.value);
+        case EX_DEFER:  return preamble_uses_callcc(e->as.defer_.body);
+        case EX_RESET:  return preamble_uses_callcc(e->as.reset_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (preamble_uses_callcc(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (preamble_uses_callcc(e->as.call_.args[i])) return true;
+            return preamble_uses_callcc(e->as.call_.fn_expr);
+        case EX_MATCH:
+            if (preamble_uses_callcc(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (preamble_uses_callcc(e->as.match_.arms[i].guard) ||
+                    preamble_uses_callcc(e->as.match_.arms[i].body)) return true;
+            return false;
+        case EX_SHIFT:  return preamble_uses_callcc(e->as.shift_.k_fn)  || preamble_uses_callcc(e->as.shift_.body);
+        case EX_SHIFT0: return preamble_uses_callcc(e->as.shift0_.k_fn) || preamble_uses_callcc(e->as.shift0_.body);
+        case EX_CLONEABLE_RESET: return preamble_uses_callcc(e->as.cloneable_reset_.body);
+        case EX_CLONEABLE_SHIFT: return preamble_uses_callcc(e->as.cloneable_shift_.k_fn) ||
+                                        preamble_uses_callcc(e->as.cloneable_shift_.body);
+        case EX_SERIAL_RESET:    return preamble_uses_callcc(e->as.serial_reset_.body);
+        case EX_SERIAL_SHIFT:    return preamble_uses_callcc(e->as.serial_shift_.k_fn) ||
+                                        preamble_uses_callcc(e->as.serial_shift_.body);
+        case EX_PERFORM:
+            if (e->as.perform_.perform)
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    if (preamble_uses_callcc(e->as.perform_.perform->args[i])) return true;
+            return false;
+        case EX_HANDLE:
+        case EX_HANDLER_LIT:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (preamble_uses_callcc(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (preamble_uses_callcc(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_RESUME:
+            return e->as.resume_.resume &&
+                   (preamble_uses_callcc(e->as.resume_.resume->k) || preamble_uses_callcc(e->as.resume_.resume->value));
+        case EX_DISCONTINUE:
+            return e->as.discontinue_.discontinue &&
+                   (preamble_uses_callcc(e->as.discontinue_.discontinue->k) ||
+                    preamble_uses_callcc(e->as.discontinue_.discontinue->exception));
+        case EX_WITH_HANDLER:  return preamble_uses_callcc(e->as.with_handler_.handler) ||
+                                      preamble_uses_callcc(e->as.with_handler_.body);
+        case EX_ASYNC:  return preamble_uses_callcc(e->as.async_.fn_expr);
+        case EX_AWAIT:  return preamble_uses_callcc(e->as.await_.fut_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (preamble_uses_callcc(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_GET_FIELD: return preamble_uses_callcc(e->as.get_field_.struct_expr);
+        case EX_SET_FIELD: return preamble_uses_callcc(e->as.set_field_.receiver) ||
+                                  preamble_uses_callcc(e->as.set_field_.value);
+        case EX_REF:          return preamble_uses_callcc(e->as.ref_.expr);
+        case EX_DEREF:        return preamble_uses_callcc(e->as.deref_.expr);
+        case EX_BORROW_IMMUT: return preamble_uses_callcc(e->as.borrow_immut_.expr);
+        case EX_BORROW_MUT:   return preamble_uses_callcc(e->as.borrow_mut_.expr);
+        case EX_ASCRIBE:      return preamble_uses_callcc(e->as.ascribe_.inner);
+        case EX_REINTERPRET:  return preamble_uses_callcc(e->as.reinterpret_.expr);
+        case EX_CAST:         return preamble_uses_callcc(e->as.cast_.expr);
+        case EX_FN_TO_FAT:    return preamble_uses_callcc(e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT:  return preamble_uses_callcc(e->as.poly_to_fat_.inner);
+        case EX_POLY_WRAP:    return preamble_uses_callcc(e->as.poly_wrap_.inner);
+        default:
+            return false;
+    }
+}
+
+/* True iff `e` contains any serial-shift/serial-reset (presence, lowerable or
+ * not) -- gates the DK machine + serial marshaling runtime so stdlib
+ * save-cont!/resume-cont! references never dangle.  Mirrors the former
+ * emit_cps.c uses_serial_dk under its always-true presence flag. */
+static bool preamble_uses_serial(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_SERIAL_SHIFT:
+        case EX_SERIAL_RESET:
+            return true;
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                if (preamble_uses_serial(e->as.program.items[i])) return true;
+            return false;
+        case EX_FN_DEF:
+            return e->as.fn_def_.fn && preamble_uses_serial(e->as.fn_def_.fn->body);
+        case EX_FN:
+            return e->as.fn_.fn && preamble_uses_serial(e->as.fn_.fn->body);
+        case EX_CLOSURE:
+            return e->as.closure_.closure && e->as.closure_.closure->fn &&
+                   preamble_uses_serial(e->as.closure_.closure->fn->body);
+        case EX_CLONEABLE_RESET:
+            return preamble_uses_serial(e->as.cloneable_reset_.body);
+        case EX_RESET:
+            return preamble_uses_serial(e->as.reset_.body);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (preamble_uses_serial(e->as.let_.bindings[i].init)) return true;
+            return preamble_uses_serial(e->as.let_.body);
+        case EX_IF:
+            return preamble_uses_serial(e->as.if_.cond) ||
+                   preamble_uses_serial(e->as.if_.then_) ||
+                   preamble_uses_serial(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (preamble_uses_serial(e->as.do_.items[i])) return true;
+            return false;
+        case EX_WHILE:
+            return preamble_uses_serial(e->as.while_.cond) ||
+                   preamble_uses_serial(e->as.while_.body);
+        case EX_SET:    return preamble_uses_serial(e->as.set_.value);
+        case EX_DEF:    return e->as.def_.init && preamble_uses_serial(e->as.def_.init);
+        case EX_RETURN: return e->as.return_.value && preamble_uses_serial(e->as.return_.value);
+        case EX_DEFER:  return preamble_uses_serial(e->as.defer_.body);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (preamble_uses_serial(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (preamble_uses_serial(e->as.call_.args[i])) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
@@ -6649,10 +6879,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * Compute each once here -- one classification pass per family -- and gate the
      * preludes on these flags.  Behavior is identical to the per-site calls; this
      * only removes the redundant traversals. */
-    const bool cps_uses_delimited    = emit_cps_program_uses_delimited(program);
-    const bool cps_uses_cloneable_dk = emit_cps_program_uses_cloneable_dk(program);
-    const bool cps_uses_serial       = emit_cps_program_contains_serial(program);
-    const bool cps_uses_callcc       = emit_cps_program_uses_callcc(program);
+    /* D5 (cps-backend-direct-lowering-removal): the whole-program prelude gates
+     * moved off `emit_cps.c` (deleted) to the local presence scanners above.
+     * The cloneable gate now uses the complete `cps_expr_contains_cloneable_shift`
+     * presence scan (cps.c) instead of the old `cl_can_lower` "would the direct
+     * emitter lower it" subset check -- verified byte-identical corpus-wide, since
+     * post-D4 every cloneable reset lowers natively so presence == can-lower. */
+    const bool cps_uses_delimited    = preamble_uses_base_delimited(program);
+    const bool cps_uses_cloneable_dk = cps_expr_contains_cloneable_shift(program);
+    const bool cps_uses_serial       = preamble_uses_serial(program);
+    const bool cps_uses_callcc       = preamble_uses_callcc(program);
     const bool cps_ir_emittable      = emit_cps_ir_program_has_emittable(program);
     const bool cps_uses_cloneable_rt = cps_expr_contains_cloneable_shift(program)
                                     || expr_has_multishot_handler(program)
@@ -6712,16 +6948,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (cont->env && cont->drop_env) cont->drop_env(cont->env);\n");
     buf_puts(out, "    free(cont);\n");
     buf_puts(out, "}\n\n");
-    /* CPS-CL4: Reset context for setjmp/longjmp-based cloneable continuations.
-     * Each cloneable-reset pushes a context on this thread-local stack;
-     * cloneable-shift stores k_fn's return value and longjmps back. */
-    buf_puts(out, "/* CPS-CL4: cloneable-reset context */\n");
-    buf_puts(out, "typedef struct tur_cloneable_reset_ctx {\n");
-    buf_puts(out, "    jmp_buf jmp;\n");
-    buf_puts(out, "    int64_t result;  /* k_fn return value, set by shift before longjmp */\n");
-    buf_puts(out, "    struct tur_cloneable_reset_ctx *prev; /* for nested resets */\n");
-    buf_puts(out, "} tur_cloneable_reset_ctx;\n\n");
-    emit_rt_global(out, shared, "__thread tur_cloneable_reset_ctx *tur_current_reset_ctx = NULL;\n\n", "__thread tur_cloneable_reset_ctx *tur_current_reset_ctx");
+    /* cps-backend-direct-lowering-removal D6b: the setjmp/longjmp cloneable-reset
+     * context (tur_cloneable_reset_ctx / tur_current_reset_ctx) is deleted.  It
+     * was the landing for the legacy emit_effects_cloneable_shift longjmp (Case-2),
+     * which D6a replaced with a TUR-E0710 diagnostic and D6b removed -- nothing in
+     * the generated program pushes or longjmps to it anymore, so emitting the
+     * typedef + thread-local left an unused struct and __thread global in every
+     * cloneable program. */
 
     } /* end if (cps_uses_cloneable_rt) */
 

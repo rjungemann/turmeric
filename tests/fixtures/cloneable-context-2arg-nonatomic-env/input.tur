@@ -1,0 +1,26 @@
+;; D6a completeness: a cloneable 2-arg CALL-frame context whose captured env is
+;; NON-ATOMIC (a function-call operand, e.g. (sub2 [] (id 3))).  Mirrors the
+;; arithmetic-frame and serial 2-arg fixes: the env is emit_value'd once at the
+;; reset site and its scalar value rides the frame's dk_frame env, deep-cloned
+;; per resume.  Before this it cleanly rejected with TUR-E0710; now it lowers
+;; natively.  Non-commutative sub2 exercises both hole sides + hole_left.
+
+(defn id [x : int] : int x)
+(defn sub2 [a : int b : int] : int (- a b))
+(defn kid [k : int] : int k)
+
+;; hole LEFT, non-atomic env: continuation (sub2 [] (id 3)); resume v -> v - 3
+(defn mk-left [] : int
+  (cloneable-reset (sub2 (cloneable-shift kid 0) (id 3))))
+
+;; hole RIGHT, non-atomic env: continuation (sub2 (id 20) []); resume v -> 20 - v
+(defn mk-right [] : int
+  (cloneable-reset (sub2 (id 20) (cloneable-shift kid 0))))
+
+(defn main [] : int
+  ;; multi-shot on hole-left: clone+resume 10 -> 7, resume 20 -> 17
+  (let [c (mk-left)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 10))
+    (println (tur_cloneable_cont_resume c 20)))
+  (println (tur_cloneable_cont_resume (mk-right) 10))
+  0)
