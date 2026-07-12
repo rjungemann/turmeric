@@ -5,6 +5,19 @@ grab-bag of concrete, mostly-independent improvements to suite run time. Filed
 in response to "consolidate CPS tests / split the suite / speed it up" -- each
 section stands alone and can be picked up piecemeal.**
 
+> **ARCHIVED (2026-07-12) -- disposition:**
+> - **Section 1 (CPS-oracle consolidation): landed** (48 twins deleted, suite green).
+> - **Section 3 (speed levers): the JOBS-clamp fix landed; the ccache/prebuilt-runtime
+>   work is now tracked in
+>   [`docs/upcoming/v2/tur-link-and-build-split-plan.md`](../upcoming/v2/tur-link-and-build-split-plan.md)**
+>   (which folds in the corrected finding that installing ccache is a no-op until
+>   `tur build` splits compile from link).
+> - **Section 2 (suite splitting / CI `TUR_TEST_SHARD` matrix): still OPEN.** It is
+>   an independent, tractable follow-up (cross-machine parallelism via `ci.yml`,
+>   needs none of the build-split work). Details are in Section 2 below; not yet
+>   started. If resumed, it can be re-filed as its own report or picked up directly
+>   from here.
+
 > **Progress (2026-07-12):**
 > - **Section 1 landed.** Deleted the 48 duplicate `cps-oracle-*-cps` twins and
 >   cleaned the now-stale oracle header on the 48 surviving base fixtures. Full
