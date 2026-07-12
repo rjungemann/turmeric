@@ -1,0 +1,28 @@
+;; Sweep coverage (D6a follow-up): 2-arg call-frame contexts with the hole on
+;; each side of a NON-COMMUTATIVE op, verifying hole_left is honoured (a hole-
+;; side mixup would silently miscompile).  Resume-in-main + multi-shot, the
+;; corpus's supported cloneable pattern.
+
+(defn sub2 [a : int b : int] : int (- a b))
+(defn kid [k : int] : int k)
+
+;; hole LEFT: continuation (sub2 [] 3); resume 10 -> 10 - 3 = 7
+(defn mk-left [] : int
+  (cloneable-reset (sub2 (cloneable-shift kid 0) 3)))
+
+;; hole RIGHT: continuation (sub2 3 []); resume 10 -> 3 - 10 = -7
+(defn mk-right [] : int
+  (cloneable-reset (sub2 3 (cloneable-shift kid 0))))
+
+;; arithmetic non-commutative, hole right: (- 100 []); resume 10 -> 90
+(defn mk-arith [] : int
+  (cloneable-reset (- 100 (cloneable-shift kid 0))))
+
+(defn main [] : int
+  ;; multi-shot on the hole-left continuation: clone+resume 10 -> 7, resume 20 -> 17
+  (let [c (mk-left)]
+    (println (tur_cloneable_cont_resume (tur_cloneable_cont_clone c) 10))
+    (println (tur_cloneable_cont_resume c 20)))
+  (println (tur_cloneable_cont_resume (mk-right) 10))
+  (println (tur_cloneable_cont_resume (mk-arith) 10))
+  0)

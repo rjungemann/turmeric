@@ -1,0 +1,7 @@
+;; Negative fixture (D6a): a cloneable context deeper than CL_IR_MAX_FRAMES (8)
+;; frames exceeds the native build_cloneable grammar and is rejected with
+;; TUR-E0710 rather than silently dropping the context.
+
+(defn kid [k : int] : int k)
+(defn make [] : int (cloneable-reset (+ 1 (+ 1 (+ 1 (+ 1 (+ 1 (+ 1 (+ 1 (+ 1 (+ 1 (cloneable-shift kid 0))))))))))))
+(defn main [] : int (println (tur_cloneable_cont_resume (make) 10)) 0)
