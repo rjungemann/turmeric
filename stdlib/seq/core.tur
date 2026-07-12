@@ -226,7 +226,8 @@
 
 (defn seq-from-vec [v : int] : int
   (seq-new (fn []
-             (let [^mut i 0]
+             (let [^mut i
+                   0]
                (gen []
                  (while (< i (seq-vec-len v))
                    (yield (seq-vec-get v i))
@@ -247,7 +248,8 @@
 
 (defn seq-from-list [l : int] : int
   (seq-new (fn []
-             (let [^mut node l]
+             (let [^mut node
+                   l]
                (gen []
                  (while (not (seq-list-nil? node))
                    (yield (seq-list-head node))
@@ -268,7 +270,9 @@
 
 
 (defmacro seq-for-each [f s]
-  (let [sv (gensym sv) gv (gensym gv) it (gensym it)]
+  (let [sv (gensym sv)
+        gv (gensym gv)
+        it (gensym it)]
     (list let
       (vec sv s gv (list seq-iter sv))
       (list while
@@ -292,7 +296,10 @@
 ;;; Since: LZ0
 
 (defmacro seq-collect [s]
-  (let [sv (gensym sv) gv (gensym gv) res (gensym res) it (gensym it)]
+  (let [sv  (gensym sv)
+        gv  (gensym gv)
+        res (gensym res)
+        it  (gensym it)]
     (list let
       (vec sv s gv (list seq-iter sv) res (list gen-arr-new))
       (list while

@@ -426,7 +426,8 @@
 ;;; Since: Phase AI
 
 (defmacro with-image-cache-after-init [path init loop]
-  `(let [stamp (image/build-stamp) ok (image/loadable? ~path stamp)]
+  `(let [stamp (image/build-stamp)
+         ok    (image/loadable? ~path stamp)]
      (if (= ok 1)
        ;; warm: re-acquire resources, then resume the pre-checked image.
        (let [_    (image/run-reload-hooks)
@@ -457,7 +458,8 @@
 ;;; Since: Phase AI
 
 (defn with-image-cache [path : cstr ^fat body : (fn [] int)] : int
-  (let [stamp (image/build-stamp) ok (image/loadable? path stamp)]
+  (let [stamp (image/build-stamp)
+        ok    (image/loadable? path stamp)]
     (if (= ok 1)
       (let [_    (image/run-reload-hooks)
             warm (image/load-resume-file! path stamp 0)]

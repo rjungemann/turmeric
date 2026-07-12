@@ -73,7 +73,8 @@
   ;; M2b: ascribe (some x) back to :int to thread the Kleisli carrier ABI.
   (ident [] (kleisli (fn [x] (:: (some x) :int))))
   (comp [f g]
-    (let [fc (:: f :int) gc (:: g :int)]
+    (let [fc (:: f :int)
+          gc (:: g :int)]
       (kleisli (fn [x]
                  (let [r (k-apply-raw fc x)]
                    ;; M2b: polymorphic `(none)` returns `(Option A)`; this

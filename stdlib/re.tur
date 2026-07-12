@@ -245,7 +245,8 @@
 ;;; re/wrap-paren -- internal: wrap one pattern as "(p)" (heap; caller frees).
 
 (defn re/wrap-paren [p : cstr] : cstr
-  (let [open (str-concat "(" p) out (str-concat open ")")]
+  (let [open (str-concat "(" p)
+        out  (str-concat open ")")]
     (do (str-free (:: open int)) out)))
 ;;; re/union-acc -- internal: right-fold the rest onto acc, joining with "|".
 

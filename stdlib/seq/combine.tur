@@ -56,7 +56,8 @@
 
 (defn seq/concat [s1 : int s2 : int] : int
   (seq-new (fn []
-             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1)
+                   g2 (seq-iter s2)]
                (gen []
                  (while (not (seq-gen-done g1))
                    (let [va (seq-gen-next g1)]
@@ -98,10 +99,12 @@
 
 (defn seq/zip [s1 : int s2 : int] : int
   (seq-new (fn []
-             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1)
+                   g2 (seq-iter s2)]
                (gen []
                  (while (and (not (seq-gen-done g1)) (not (seq-gen-done g2)))
-                   (let [v1 (seq-gen-next g1) v2 (seq-gen-next g2)]
+                   (let [v1 (seq-gen-next g1)
+                         v2 (seq-gen-next g2)]
                      (when (and (seq-val-some? v1) (seq-val-some? v2))
                        (yield (seq-make-pair (seq-val-unwrap v1)
                                 (seq-val-unwrap v2)))))))))))
@@ -124,10 +127,12 @@
 
 (defn seq/zip-with [^fat f : int s1 : int s2 : int] : int
   (seq-new (fn []
-             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1)
+                   g2 (seq-iter s2)]
                (gen []
                  (while (and (not (seq-gen-done g1)) (not (seq-gen-done g2)))
-                   (let [v1 (seq-gen-next g1) v2 (seq-gen-next g2)]
+                   (let [v1 (seq-gen-next g1)
+                         v2 (seq-gen-next g2)]
                      (when (and (seq-val-some? v1) (seq-val-some? v2))
                        (yield (seq-call-fn2 f
                                 (seq-val-unwrap v1)
@@ -150,12 +155,15 @@
 
 (defn seq/interleave [s1 : int s2 : int] : int
   (seq-new (fn []
-             (let [g1 (seq-iter s1) g2 (seq-iter s2)]
+             (let [g1 (seq-iter s1)
+                   g2 (seq-iter s2)]
                (gen []
                  (while (and (not (seq-gen-done g1)) (not (seq-gen-done g2)))
-                   (let [v1 (seq-gen-next g1) v2 (seq-gen-next g2)]
+                   (let [v1 (seq-gen-next g1)
+                         v2 (seq-gen-next g2)]
                      (if (and (seq-val-some? v1) (seq-val-some? v2))
-                       (let [a (seq-val-unwrap v1) b (seq-val-unwrap v2)]
+                       (let [a (seq-val-unwrap v1)
+                             b (seq-val-unwrap v2)]
                          (yield a)
                          (yield b))
                        (return)))))))))

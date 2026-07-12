@@ -1,5 +1,23 @@
 # `tur fmt` joins multi-pair `let`/`loop` bindings onto one line (contradicts the one-pair-per-line house style)
 
+**RESOLVED (2026-07-12):** Fixed, with one correction to the root-cause analysis
+below. The `fmt_let` pair-count gate (fix-direction 1) was necessary but **not
+sufficient**: the joining actually happens one level up, in `fmt_list`'s
+"if the whole form fits, emit inline" shortcut (`src/compiler/fmt.c`), which
+flattens a fitting `let` -- and any parent that inlines over it -- before
+`fmt_let` ever runs. The complete fix is two parts:
+1. A recursive `form_contains_multipair_let` predicate; `fmt_measure` now returns
+   `UINT32_MAX` for any form containing a 2+-pair `let`/`loop`, so it is
+   unmeasurable and no enclosing inline check can flatten it (this also fixes the
+   nested case, e.g. `(foo (let [a 1 b 2] ...))`).
+2. The `fmt_let` gate: a 1-pair (or empty) binding vector may inline when it
+   fits; 2+ pairs always break pair-per-line.
+
+Single-pair lets still inline. Verified idempotent; regenerated all 23 affected
+stdlib files (whitespace-only, token-identical to HEAD); `tests/run-fmt.sh`
+green (18/0, FT7+FT8 pass) with a new `fmt-let-multipair-broken` regression;
+full suite 2107 passed, 0 failed.
+
 **Severity: LOW (formatter house-style divergence, not a correctness bug -- the
 output compiles and is idempotent). It contradicts the documented indentation
 rule, so `tur fmt` actively rewrites hand-authored, style-compliant code into a

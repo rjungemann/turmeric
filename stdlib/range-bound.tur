@@ -237,7 +237,8 @@
 ;;; Since: range-gadt-typeclass-migration-plan B2
 
 (defn range->str [r : int] : cstr
-  (let [lo (range-lower r) hi (range-upper r)]
+  (let [lo (range-lower r)
+        hi (range-upper r)]
     (range-fmt (bound-kind lo)
       (range-bound-value lo)
       (bound-kind hi)

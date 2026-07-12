@@ -393,7 +393,8 @@
 ;; lequal (miniKanren ==): goal that unifies two terms
 
 (defn lequal [t1 t2] : (Goal int)
-  (:: (let [lt1 t1 lt2 t2]
+  (:: (let [lt1 t1
+            lt2 t2]
         (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state))))
     :Goal))
 ;;; succeed-impl -- implementation helper for the succeed goal.
@@ -438,7 +439,8 @@
 ;;; conjoined-raw -- int worker behind conjoined / Monad bind sequencing.
 
 (defn conjoined-raw [g1 g2] : ptr<void>
-  (let [lg1 g1 lg2 g2]
+  (let [lg1 g1
+        lg2 g2]
     (fn [state] (let [_ lg1] (conjoined-impl lg1 lg2 state)))))
 ;;; conjoined -- goal that applies g1 then g2 to each result (conjunction).
 ;;;
@@ -468,7 +470,8 @@
 ;;; disjoined-raw -- int worker behind disjoined / Alternative alt-or.
 
 (defn disjoined-raw [g1 g2] : ptr<void>
-  (let [lg1 g1 lg2 g2]
+  (let [lg1 g1
+        lg2 g2]
     (fn [state] (let [_ lg1] (disjoined-impl lg1 lg2 state)))))
 ;;; disjoined -- goal that combines results from g1 and g2 (disjunction).
 ;;;
@@ -494,7 +497,9 @@
 ;;; fresh-impl -- implementation helper for fresh variable introduction.
 
 (defn fresh-impl [lf state] : int
-  (let [nv (term-var (lvar-next)) lf2 lf] (apply-goal (apply-fat lf2 nv) state)))
+  (let [nv  (term-var (lvar-next))
+        lf2 lf]
+    (apply-goal (apply-fat lf2 nv) state)))
 ;;; fresh -- create a new logic variable and pass it to a goal-building function.
 ;;;
 ;;; Parameters:

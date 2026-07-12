@@ -276,7 +276,8 @@
 (defn set-show-driver [^Show A]
   [s (Set A)]
   : cstr
-  (let [iter (hamt/iter-alloc (set-hamt s)) body (set-show-loop s iter true "")]
+  (let [iter (hamt/iter-alloc (set-hamt s))
+        body (set-show-loop s iter true "")]
     (do (hamt/iter-destroy! iter) body)))
 ;;; Show [Set] -- render a Set[A] as "#set{a b c}" using the element's Show
 ;;; instance.  Mirrors the #set{...} / set-of literal surface.  An empty Set
@@ -336,7 +337,8 @@
 (defn map-show-driver [^Show K ^Show V]
   [m (Map K V)]
   : cstr
-  (let [iter (hamt/iter-alloc (map-hamt m)) body (map-show-loop m iter true "")]
+  (let [iter (hamt/iter-alloc (map-hamt m))
+        body (map-show-loop m iter true "")]
     (do (hamt/iter-destroy! iter) body)))
 ;;; Show [Map] -- render a Map[K V] as "#map{k1 v1 k2 v2}" using the key and
 ;;; value Show instances.  Mirrors the #map{...} / hamt-of literal surface.

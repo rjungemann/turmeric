@@ -1950,7 +1950,9 @@
 ;;; Since: Phase H8 (M5)
 
 (defn mw-basic-auth [realm : cstr ^fat verifier : int ^fat next : int] : ptr<void>
-  (let [_r realm _v verifier _n next]
+  (let [_r realm
+        _v verifier
+        _n next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-basic-auth-check c _v))
         (httpd-call _n c)
@@ -3300,7 +3302,8 @@
 (defn httpd-mw-fold [base : int mws : int] : int
   (if (= mws 0)
     base
-    (let [inner (httpd-mw-fold base (list-tail mws)) mw (list-head mws)]
+    (let [inner (httpd-mw-fold base (list-tail mws))
+          mw    (list-head mws)]
       (if (= mw 0) inner (httpd-mw-apply mw inner)))))
 ;;; compose-middleware-of -- runtime variadic form of compose-middleware.
 ;;;
@@ -3401,7 +3404,8 @@
 ;;; Since: Phase H8 (MW1)
 
 (defn mw-body-size [max-bytes : int ^fat next : int] : ptr<void>
-  (let [_max max-bytes _n next]
+  (let [_max max-bytes
+        _n   next]
     (fn [c : ptr<void>] : nil
       (let [n (httpd-mw-content-length c)]
         (if (> n _max)
@@ -3694,9 +3698,11 @@
 ;;; Since: Phase H8 (MW2)
 
 (defn mw-rate-limit [opts : RateLimitOpts ^fat next : int] : ptr<void>
-  (let [_st (httpd-mw-ratelimit-new (.requests opts) (.window-s opts)) _n next]
+  (let [_st (httpd-mw-ratelimit-new (.requests opts) (.window-s opts))
+        _n  next]
     (fn [c : ptr<void>] : nil
-      (let [ip (httpd-req-remote-ip c) retry (httpd-mw-ratelimit-check _st ip)]
+      (let [ip    (httpd-req-remote-ip c)
+            retry (httpd-mw-ratelimit-check _st ip)]
         (if (> retry 0) (httpd-mw-ratelimit-emit-429 c retry) (httpd-call _n c))))))
 ;; =============================================================================
 ;; MW2: mw-static -- serve files from a root directory.
@@ -3846,7 +3852,8 @@
   ```)
 
 (defn mw-static [root-dir : cstr ^fat next : int] : ptr<void>
-  (let [_root root-dir _n next]
+  (let [_root root-dir
+        _n    next]
     (fn [c : ptr<void>] : nil
       (httpd-call _n c)
       (httpd-mw-static-fallback c _root))))

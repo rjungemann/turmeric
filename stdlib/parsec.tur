@@ -512,7 +512,9 @@
 ;;; or-parser-raw -- int-carrier worker behind or-parser / Alternative alt-or.
 
 (defn or-parser-raw [p q] : ptr<void>
-  (let [lp p lq q] (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
+  (let [lp p
+        lq q]
+    (fn [inp] (let [_ lp] (or-parser-impl lp lq inp)))))
 ;;; or-parser -- try two parsers and return all successes from either.
 ;;;
 ;;; This is the typed `(Parser A)` worker behind the `Alternative [Parser]`
@@ -583,7 +585,9 @@
 ;;; then-parser-raw -- int-carrier worker behind then-parser.
 
 (defn then-parser-raw [p q] : ptr<void>
-  (let [lp p lq q] (fn [inp] (let [_ lp] (then-parser-impl lp lq inp)))))
+  (let [lp p
+        lq q]
+    (fn [inp] (let [_ lp] (then-parser-impl lp lq inp)))))
 ;;; then-parser -- sequence two parsers, discarding the first result.
 ;;;
 ;;; Equivalent to `(bind p (fn [_] q))` against the `Monad [Parser]` instance.
@@ -865,7 +869,8 @@
 ;;; ap-parser-raw -- int worker: sequential application of a parser of functions.
 
 (defn ap-parser-raw [pf pa] : ptr<void>
-  (let [lpf pf lpa pa]
+  (let [lpf pf
+        lpa pa]
     (fn [inp]
       (let [_ lpf]
         (mbind (apply-parser lpf inp)

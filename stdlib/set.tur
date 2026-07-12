@@ -466,7 +466,8 @@
 
 (defn set-eq-loop [iter : ptr<void> s2-hamt : ptr<void> keyeq : ptr<void>] : bool
   (if (hamt/iter-advance! iter)
-    (let [h (hamt/iter-cur-hash iter) k (hamt/iter-cur-key iter)]
+    (let [h (hamt/iter-cur-hash iter)
+          k (hamt/iter-cur-key iter)]
       (if (hamt/has-dynamic? s2-hamt h k keyeq)
         (set-eq-loop iter s2-hamt keyeq)
         false))
