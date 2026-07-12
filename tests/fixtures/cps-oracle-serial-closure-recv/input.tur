@@ -1,0 +1,42 @@
+(load "stdlib/workflow.tur")
+;; U7 (cps-backend-unification): native SERIAL closure receiver, Shape 1 + Shape 2.
+;; The marshal-reset spine walk is now unified (build_marshal_reset), so a
+;; capturing-closure receiver -- an inline `(fn ...)` whose k_fn is an EX_CLOSURE
+;; rather than a named top-level fn -- is admitted for serial exactly as it already
+;; was for cloneable.  emit_cl_shift_bodyfn bakes the closure's thunk into the
+;; per-site dk_shift body fn and hands it the raw (marshalable) DK chain typed
+;; ptr<void>; the closure env carries the captures.  The captured continuation is
+;; round-tripped through save-cont!/resume-cont! (serialise to bytes + resume), so
+;; this exercises the marshalable serial path, not the multi-shot cloneable one.
+;;   direct == cps holds across an empty context (Shape 1) and an arithmetic
+;;   context (Shape 2), with and without a captured local.
+(defn dbl [n : int] : int (* n 2))
+;; Shape 1 (identity context): the shift is the whole reset body.  The closure
+;; captures `bonus` and adds it to the resumed value.
+(defn run-id [bonus : int] : int
+  (serial-reset
+    (serial-shift
+      (fn [k : ptr<void>] : int (+ bonus (resume-cont! (save-cont! k) 5)))
+      0)))                                           ; bonus + 5
+;; Shape 2 (arithmetic frame): (+ 10 [])  around the shift; closure captures base.
+(defn run-arith [base : int] : int
+  (serial-reset
+    (+ 10 (serial-shift
+            (fn [k : ptr<void>] : int (+ base (resume-cont! (save-cont! k) 5)))
+            0))))                                    ; base + (10 + 5)
+;; Shape 2 (call frame): (dbl [])  around the shift; closure captures base.
+(defn run-call [base : int] : int
+  (serial-reset
+    (dbl (serial-shift
+           (fn [k : ptr<void>] : int (+ base (resume-cont! (save-cont! k) 5)))
+           0))))                                     ; base + (5 * 2)
+;; A receiver that ignores the continuation and returns a captured constant.
+(defn run-const [c : int] : int
+  (serial-reset
+    (serial-shift (fn [k : ptr<void>] : int c) 0)))  ; c
+(defn main [] : int
+  (println (run-id 100))     ; 100 + 5      = 105
+  (println (run-arith 100))  ; 100 + (10+5) = 115
+  (println (run-call 100))   ; 100 + (5*2)  = 110
+  (println (run-const 42))   ; 42
+  0)

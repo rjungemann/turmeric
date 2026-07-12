@@ -3095,10 +3095,22 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
             snprintf(thunk_name, 64, "__fn_anon_%d",
                      closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
         }
+        /* The thunk's first param is the closure env (void*); its second is the
+         * receiver's continuation param `k`.  Cast each arg to the thunk's actual
+         * param type so the generated call is warning-clean.  The k param's C type
+         * is set by the family, not decidable from the param kind (a cloneable
+         * `:cont` receiver and a serial `ptr<void>` receiver both carry kind
+         * TY_PTR_VOID): the cloneable receiver is handed a `tur_cloneable_cont *`
+         * that rides the int64_t carrier, so its thunk param is int64_t, while the
+         * serial receiver is handed a raw DK chain typed `ptr<void>`, so its thunk
+         * param is void*.  A blanket int64_t cast makes a pointer from an integer
+         * for the serial void* k; a blanket void* cast makes an integer from a
+         * pointer for the cloneable int64_t k. */
+        const char *kty = t->as.cloneable.serial ? "void *" : "int64_t";
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)%s((int64_t)env, (int64_t)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, thunk_name, cont_arg);
+            "    return (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, thunk_name, kty, cont_arg);
         free(thunk_name);
     } else {
         buf_printf(ce->helpers,
