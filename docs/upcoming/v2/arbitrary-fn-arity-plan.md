@@ -36,10 +36,26 @@ What shipped:
 `MAX_FN_ARITY` (64) survives only as the default size of a few internal codegen
 fast-path buffers (ABI specialization; interpreter effect-perform args), each of
 which falls back gracefully / errors cleanly for wider functions rather than
-miscompiling. The spice-FFI descriptor (§2d) still uses a fixed
-`TUR_SPICE_MAX_ARITY` in-memory buffer with clean rejection of over-cap
-manifests; a versioned variable-length descriptor remains the one genuinely
-open item, and matters only for >64-param *exported spice* symbols.
+miscompiling.
+
+**Spice FFI descriptor (§2d) -- landed.** The REPL spice loader's in-memory
+export descriptor is now unbounded: `TurSpiceExport.arg_classes` is a heap array
+of length `n_args` (was a fixed `char[TUR_SPICE_MAX_ARITY]`), `n_args` is
+`uint32_t`, the manifest reader grows its arg-class buffer and reads lines with
+`getline` (no 4 KB line cap), and the FFI marshalling scratch uses a small-arity
+inline fast path (`TUR_SPICE_ARITY_FASTPATH`, 16) with a heap spill above it.
+The manifest writer already emitted all `n_params` tags.  Net effect: a spice
+that exports a >64-param symbol now loads cleanly and its sibling exports stay
+callable, where previously one over-cap row made the whole manifest parse fail.
+The exports.manifest is plain variable-length text, so no binary format version
+gate is needed -- an older `tur` still cleanly rejects a wider row instead of
+misreading it.  The one remaining limit is orthogonal to the descriptor: the
+interpreter's generated shape dispatcher (`tur_ffi_thunk_call`) only covers
+arg-shapes up to `tools/gen_ffi_dispatch.py --max-arity` (6 by default), so a
+REPL call whose shape exceeds that fails at call time with a
+regenerate-the-table diagnostic.  Lifting that needs a wider generated table or
+libffi and is a separate interpreter-FFI concern; the compiled path calls spice
+exports directly and has no such limit.
 
 The cap was never an ABI limit -- emitted C functions already take an arbitrary
 number of parameters -- it was an artifact of fixed-size inline arrays in the

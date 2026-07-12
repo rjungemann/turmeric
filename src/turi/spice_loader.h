@@ -20,14 +20,15 @@
 extern "C" {
 #endif
 
-/* Maximum positional arity tracked per export. Mirrors MAX_FN_ARITY in
- * the compiler; defns with more positional args are rejected by the
- * elaborator long before this loader sees them.  Raised to 64 alongside
- * MAX_FN_ARITY (arbitrary-fn-arity Phase 1).  The exports.manifest arg-class
- * string is naturally variable-length, so a manifest whose export exceeds this
- * bound is cleanly rejected (parse returns -1) rather than misread -- see
- * spice_loader.c.  A fully version-gated variable-length descriptor is Phase 4. */
-#define TUR_SPICE_MAX_ARITY 64
+/* Small-arity fast-path width for the FFI marshalling scratch (see
+ * ffi_thunk.c): calls at or below it avoid a heap allocation.  It is NOT a cap
+ * on how many parameters an exported spice symbol may have -- the descriptor's
+ * arg_classes is a heap array of length n_args (arbitrary), and the
+ * exports.manifest arg-class string is naturally variable-length.  A call whose
+ * arg-shape exceeds the generated dispatcher's --max-arity still fails cleanly
+ * at call time with a regenerate-the-table diagnostic; that is a separate
+ * interpreter-FFI limit, not a descriptor limit. */
+#define TUR_SPICE_ARITY_FASTPATH 16
 
 /* One row from exports.manifest, post-parse. The dispatcher class chars
  * use the encoding shared with src/runtime/ffi_dispatch.h:
@@ -42,8 +43,8 @@ typedef struct TurSpiceExport {
     char    *mangled;     /* C symbol name, e.g. "smokelib__add42" */
     void    *fn_ptr;      /* dlsym'd address */
     char     ret_class;
-    char     arg_classes[TUR_SPICE_MAX_ARITY];
-    uint8_t  n_args;
+    char    *arg_classes; /* heap array of length n_args (NULL iff n_args == 0) */
+    uint32_t n_args;      /* unbounded -- no fixed arity cap */
     bool     is_variadic; /* true when the manifest line had `& :tag` */
 } TurSpiceExport;
 

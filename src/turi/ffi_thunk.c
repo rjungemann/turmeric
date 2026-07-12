@@ -124,55 +124,83 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
             (unsigned)n);
     }
 
-    /* Marshal args -- abort on the first mismatch with a per-arg
-     * diagnostic so the user knows exactly which value was wrong. */
-    int64_t i_vals[TUR_SPICE_MAX_ARITY];
-    double  f_vals[TUR_SPICE_MAX_ARITY];
+    /* Marshal args -- abort on the first mismatch with a per-arg diagnostic so
+     * the user knows exactly which value was wrong.  Small arities use inline
+     * scratch; wider ones spill to the heap (no fixed arity cap here).  A single
+     * cleanup path frees any spill on every exit. */
+    int64_t  i_inl[TUR_SPICE_ARITY_FASTPATH];
+    double   f_inl[TUR_SPICE_ARITY_FASTPATH];
+    int64_t *i_vals = i_inl, *i_heap = NULL;
+    double  *f_vals = f_inl, *f_heap = NULL;
+    if (n > TUR_SPICE_ARITY_FASTPATH) {
+        i_heap = (int64_t *)malloc((size_t)n * sizeof(int64_t));
+        f_heap = (double  *)malloc((size_t)n * sizeof(double));
+        if (!i_heap || !f_heap) {
+            free(i_heap); free(f_heap);
+            return turi_error("ffi: out of memory marshalling call");
+        }
+        i_vals = i_heap; f_vals = f_heap;
+    }
+
+    TuriValue result;
     for (uint32_t k = 0; k < n; k++) {
         char cls = e->arg_classes[k];
         if (cls == 'i') {
             if (marshal_arg_i(&args[k], &i_vals[k]) != 0) {
-                return turi_errorf(
+                result = turi_errorf(
                     "ffi: '%s/%s' arg %u: expected %s, got %s",
                     e->module, e->name, k,
                     class_name(cls), tag_name(args[k].tag));
+                goto cleanup;
             }
         } else if (cls == 'f') {
             if (marshal_arg_f(&args[k], &f_vals[k]) != 0) {
-                return turi_errorf(
+                result = turi_errorf(
                     "ffi: '%s/%s' arg %u: expected %s, got %s",
                     e->module, e->name, k,
                     class_name(cls), tag_name(args[k].tag));
+                goto cleanup;
             }
         } else {
-            return turi_errorf(
+            result = turi_errorf(
                 "ffi: '%s/%s' arg %u has unsupported class '%c'",
                 e->module, e->name, k, cls);
+            goto cleanup;
         }
     }
 
-    int64_t out_i = 0;
-    double  out_f = 0.0;
-    int rc = tur_ffi_thunk_call(e->ret_class,
-                                e->arg_classes, e->n_args,
-                                e->fn_ptr, i_vals, f_vals,
-                                &out_i, &out_f);
-    if (rc != 0) {
-        /* The generator covers every shape up to its --max-arity (6 by
-         * default). Hitting this path means a spice grew an 8-arg defn
-         * and the dispatcher table is stale. */
-        return turi_errorf(
-            "ffi: '%s/%s' has no registered dispatcher for shape "
-            "(arity %u). Regenerate src/runtime/ffi_dispatch_thunk.c "
-            "with `python3 tools/gen_ffi_dispatch.py --max-arity N`.",
-            e->module, e->name, (unsigned)e->n_args);
+    {
+        int64_t out_i = 0;
+        double  out_f = 0.0;
+        int rc = tur_ffi_thunk_call(e->ret_class,
+                                    e->arg_classes, e->n_args,
+                                    e->fn_ptr, i_vals, f_vals,
+                                    &out_i, &out_f);
+        if (rc != 0) {
+            /* The generated dispatcher covers arg-shapes up to its --max-arity
+             * (6 by default).  A call whose shape exceeds that fails here with a
+             * regenerate-the-table diagnostic.  This is an interpreter-FFI
+             * dispatch limit, independent of the (now unbounded) descriptor: the
+             * export loaded fine and its siblings remain callable. */
+            result = turi_errorf(
+                "ffi: '%s/%s' has no registered dispatcher for shape "
+                "(arity %u). Regenerate src/runtime/ffi_dispatch_thunk.c "
+                "with `python3 tools/gen_ffi_dispatch.py --max-arity N`.",
+                e->module, e->name, (unsigned)e->n_args);
+            goto cleanup;
+        }
+        switch (e->ret_class) {
+            case 'i': result = turi_int(out_i);   break;
+            case 'f': result = turi_float(out_f); break;
+            case 'v': result = turi_nil();        break;
+            default:  result = turi_error("ffi: internal: bad ret class"); break;
+        }
     }
-    switch (e->ret_class) {
-        case 'i': return turi_int(out_i);
-        case 'f': return turi_float(out_f);
-        case 'v': return turi_nil();
-        default:  return turi_error("ffi: internal: bad ret class");
-    }
+
+cleanup:
+    free(i_heap);
+    free(f_heap);
+    return result;
 }
 
 /* ------------------------------------------------------------------ */

@@ -46,6 +46,7 @@ static void spice_export_free(TurSpiceExport *e) {
     free(e->module);
     free(e->name);
     free(e->mangled);
+    free(e->arg_classes);
 }
 
 void tur_spice_image_free(TurSpiceImage *img) {
@@ -337,15 +338,17 @@ static char *skip_ws(char *p) {
 
 /* Append an export row; resizes the array as needed. Takes ownership of
  * the three char* fields (frees them on failure). */
+/* Takes ownership of `module`, `name`, `mangled`, and the heap-allocated
+ * `arg_classes` (length n_args; may be NULL when n_args == 0). */
 static int append_export(TurSpiceImage *img, char *module, char *name,
                          char *mangled, char ret_class,
-                         const char *arg_classes, uint8_t n_args,
+                         char *arg_classes, uint32_t n_args,
                          bool is_variadic, void *fn_ptr) {
     if (img->n_exports == img->cap_exports) {
         uint32_t nc = img->cap_exports ? img->cap_exports * 2 : 8;
         TurSpiceExport *na = realloc(img->exports, nc * sizeof(*na));
         if (!na) {
-            free(module); free(name); free(mangled);
+            free(module); free(name); free(mangled); free(arg_classes);
             return -1;
         }
         img->exports = na;
@@ -359,10 +362,7 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->n_args = n_args;
     e->is_variadic = is_variadic;
     e->fn_ptr = fn_ptr;
-    memset(e->arg_classes, 0, sizeof(e->arg_classes));
-    if (arg_classes && n_args > 0) {
-        memcpy(e->arg_classes, arg_classes, n_args);
-    }
+    e->arg_classes = arg_classes;  /* owned; freed in spice_export_free */
     return 0;
 }
 
@@ -409,9 +409,23 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
     char *close = strchr(p, ')');
     if (!close) { free(module); free(name); free(mangled); return -1; }
     *close = '\0';
-    char arg_classes[TUR_SPICE_MAX_ARITY];
-    uint8_t n_args = 0;
+    /* arg_classes is grown on demand to the (arbitrary) argument count; no
+     * fixed-arity cap.  Ownership transfers to the export via append_export. */
+    char    *arg_classes = NULL;
+    uint32_t n_args = 0;
+    uint32_t cap_args = 0;
     bool is_variadic = false;
+    #define ARG_PUSH(cls)                                                     \
+        do {                                                                  \
+            if (n_args == cap_args) {                                         \
+                cap_args = cap_args ? cap_args * 2 : 8;                        \
+                char *_na = (char *)realloc(arg_classes, cap_args);           \
+                if (!_na) { free(arg_classes); free(module); free(name);      \
+                            free(mangled); return -1; }                       \
+                arg_classes = _na;                                            \
+            }                                                                 \
+            arg_classes[n_args++] = (cls);                                    \
+        } while (0)
     char *tok = strtok(p, " \t");
     while (tok) {
         if (strcmp(tok, "&") == 0) {
@@ -420,20 +434,16 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
              * dispatcher receives a single cons-list pointer (int64_t)
              * regardless, so we still add one ':int'-class slot. */
             (void)strtok(NULL, " \t");
-            if (n_args >= TUR_SPICE_MAX_ARITY) break;
-            arg_classes[n_args++] = 'i';
+            ARG_PUSH('i');
             break;
         }
-        if (n_args >= TUR_SPICE_MAX_ARITY) {
-            free(module); free(name); free(mangled);
-            return -1;
-        }
-        arg_classes[n_args++] = class_for_tag(tok, /*is_return=*/false);
+        ARG_PUSH(class_for_tag(tok, /*is_return=*/false));
         tok = strtok(NULL, " \t");
     }
+    #undef ARG_PUSH
     p = skip_ws(close + 1);
     if (strncmp(p, "->", 2) != 0) {
-        free(module); free(name); free(mangled); return -1;
+        free(module); free(name); free(mangled); free(arg_classes); return -1;
     }
     p = skip_ws(p + 2);
     /* The ret tag runs to whitespace or end. */
@@ -459,9 +469,10 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
                 "               `rm -rf .tur-repl-cache` and restart the REPL.\n",
                 mangled, img->lib_path,
                 derr ? derr : "symbol not found");
-        free(module); free(name); free(mangled);
+        free(module); free(name); free(mangled); free(arg_classes);
         return -2;  /* RP7: caller skips the generic "malformed" message */
     }
+    /* Ownership of arg_classes transfers to the export. */
     return append_export(img, module, name, mangled, ret_class,
                           arg_classes, n_args, is_variadic, fn_ptr);
 }
@@ -473,23 +484,28 @@ static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
                 manifest_path, strerror(errno));
         return -1;
     }
-    char line[4096];
-    char snapshot[4096];
+    /* getline grows `line` as needed, so a manifest row for a very high-arity
+     * export (whose arg-tag list can run to many KB) is not truncated. */
+    char   *line = NULL;
+    size_t  line_cap = 0;
+    char   *snapshot = NULL;
     int rc = 0;
-    while (fgets(line, sizeof(line), f)) {
+    ssize_t nread;
+    while ((nread = getline(&line, &line_cap, f)) != -1) {
         /* strip trailing newline */
-        size_t ll = strlen(line);
+        size_t ll = (size_t)nread;
         while (ll > 0 && (line[ll-1] == '\n' || line[ll-1] == '\r')) {
             line[--ll] = '\0';
         }
         /* RP7: parse_manifest_line mutates `line` in place via *p='\0'
          * trimmers, so we snapshot the original for diagnostic display
          * before parsing. */
-        snprintf(snapshot, sizeof(snapshot), "%s", line);
+        free(snapshot);
+        snapshot = strdup(line);
         int prc = parse_manifest_line(img, line);
         if (prc == -1) {
             fprintf(stderr, "tur repl: malformed manifest line: %s\n",
-                    snapshot);
+                    snapshot ? snapshot : "(out of memory)");
             rc = -1;
             break;
         }
@@ -500,6 +516,8 @@ static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
             break;
         }
     }
+    free(line);
+    free(snapshot);
     fclose(f);
     return rc;
 }
