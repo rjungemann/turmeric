@@ -475,6 +475,17 @@ add_test(
 set_tests_properties(tur_collections_embed PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# turi-interp-stdlib-natives-libturi: option/result/str/math embed-API parity.
+# Leak detection OFF -- the tree-walker's carrier allocations are
+# process-lifetime (matching the other turi harnesses' policy).
+add_test(
+  NAME tur_stdlib_natives_embed
+  COMMAND "${CMAKE_BINARY_DIR}/tur_stdlib_natives_embed"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_stdlib_natives_embed PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # libturi-per-embed-env-and-peripherals: Gaps 1-4 embed-API harness. Runs with
 # leak detection FORCED ON -- the create/reset/free cycles plus the owned
 # module_base_dir copy must leave zero turi-attributable live allocations.
@@ -651,6 +662,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_effects tur_eval_async_timeout
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
+                     tur_collections_embed tur_stdlib_natives_embed
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur
 )

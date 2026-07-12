@@ -4,6 +4,7 @@
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 #include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
+#include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 
 #include <limits.h>
@@ -209,6 +210,21 @@ TuriEnv *turi_env_new(void) {
      * before install_default_natives so an embedder-seeded default of the same
      * name still wins.  See docs/upcoming/turi-interp-collections-libturi-plan.md. */
     turi_register_collection_natives(env);
+    /* Register the remaining stdlib inline-C native overrides (option/result/
+     * str/math/safe/contract/comonad/typeclass, seq, json/schema, the
+     * concurrency + OS-handle modules, and sym) so every interpreter env
+     * created through libturi -- embedders driving turi_eval, the WASM REPL,
+     * `tur repl`, and the fixture-runner worker -- resolves the same overrides
+     * as the `tur --interpret` path, rather than hitting "inline-C not
+     * supported in interpreter mode" the moment an op bottoms out in one.
+     * Registered here (before any preload) rather than after: the EX_FN_DEF
+     * "keep native override" branch in eval.c preserves a pre-registered native
+     * when a module's inline-C body of the same name is later loaded, so the
+     * shim still wins over the loaded body -- the same ordering the collection
+     * natives above rely on.  The CLI/REPL/WASM entry points also call this
+     * after their preload; that re-registration is idempotent (same name -> same
+     * fn pointer).  See docs/upcoming/turi-interp-stdlib-natives-libturi-plan.md. */
+    turi_env_register_interpreter_natives(env);
     /* RM Q#5: persistent reader-macro registry for session semantics. */
     env->reader_macros = (ReaderMacroRegistry *)arena_alloc(
         &env->sym_arena, sizeof(ReaderMacroRegistry));

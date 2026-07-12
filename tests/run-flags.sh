@@ -899,7 +899,7 @@ elif [[ "$out" != *"tailcall uses-shift("* ]]; then
     fail "dump-cps-anf" "expected a threaded 'tailcall uses-shift(...)'"
 elif [[ "$out" != *"letcont j"* ]]; then
     fail "dump-cps-anf" "expected a join continuation 'letcont j...'"
-elif [[ "$out" != *"reset t"* ]]; then
+elif [[ "$out" != *"reset __t"* ]]; then
     fail "dump-cps-anf" "expected a 'reset' control form"
 elif [[ "$out" != *"shift k'"* ]]; then
     fail "dump-cps-anf" "expected a 'shift' control form"

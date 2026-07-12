@@ -316,6 +316,10 @@ target_link_options(libturi INTERFACE -pthread)
 # RP3: propagate libdl to anyone linking libturi (the REPL helpers
 # transitively call dlopen via turi/spice_loader.c).
 target_link_libraries(libturi INTERFACE ${CMAKE_DL_LIBS})
+# turi_env_new now pulls in interpreter_natives.c.o (the stdlib native
+# overrides auto-registered for every interpreter env), whose math shims
+# reference sqrt/floor -- propagate libm to anyone linking libturi.
+target_link_libraries(libturi INTERFACE m)
 if(HAVE_EDITLINE)
     target_link_libraries(libturi INTERFACE ${LIBEDIT_LIB})
 endif()
@@ -382,6 +386,24 @@ target_link_options(tur_collections_embed PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_collections_embed PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# turi-interp-stdlib-natives-libturi: option/result/str/math C-embedding parity
+# ---------------------------------------------------------------------------
+add_executable(tur_stdlib_natives_embed ${CMAKE_SOURCE_DIR}/tests/turi/stdlib-natives-embed.c)
+target_include_directories(tur_stdlib_natives_embed PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_stdlib_natives_embed PRIVATE libturi)
+target_compile_options(tur_stdlib_natives_embed PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_stdlib_natives_embed PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_stdlib_natives_embed PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
