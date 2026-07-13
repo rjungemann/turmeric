@@ -1,0 +1,15 @@
+;; A cross-function __Shift cannot be caught by a reset that is ALSO a reified
+;; (cloneable) delimiter for a lexical resuming shift (cps-backend-n6).  The two
+;; lowerings are incompatible in a single reset: the reified path walks the reset
+;; body under the narrow build_cloneable grammar, which a __Shift handler falls
+;; outside of, so the whole-program pass wraps only PLAIN resets.
+;;
+;; Here the program's only reset is `both`, which reifies its own lexical resuming
+;; shift (its body IS a resuming shift -> EX_CLONEABLE_RESET).  `callee` performs a
+;; cross-function __Shift from inside that shift's receiver, and there is no plain
+;; reset anywhere to catch it -- so it is rejected up front (TUR-E0016) instead of
+;; aborting at runtime with "Unhandled effect: __Shift".
+(defn callee [] : int (shift (fn [k2 : cont] : int (k2 1)) 0))
+(defn both [] : int
+  (reset (shift (fn [k : cont] : int (+ (k 1) (callee))) 0)))
+(defn main [] : int (println (both)) 0)

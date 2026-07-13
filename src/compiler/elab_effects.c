@@ -638,18 +638,31 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
  * elaborated before the callee's shift sets the flag). */
 void elab_wrap_resets_for_crossfn_resume(Elab *e) {
     if (!e || !e->uses_crossfn_resume) return;
-    /* A cross-function resuming shift performed __Shift, but the program has no
-     * reset anywhere to install the catching handler -- the effect can never be
-     * handled.  This is the "genuinely unhandled shift" case: keep it a compile
-     * error (TUR-E0016) rather than a runtime "Unhandled effect: __Shift" abort. */
-    if (e->n_pending_reset_nodes == 0) {
+    /* Only a PLAIN reset (EX_RESET) is wrappable into a __Shift handler; an
+     * EX_CLONEABLE_RESET is skipped below (its reified lowering cannot host a
+     * handler).  So the handler-installing capacity of the program is its count of
+     * plain resets.  If that is zero, a performed __Shift can never be caught --
+     * whether the program has no reset at all, or only reified (cloneable) resets
+     * (e.g. a lexical resuming shift whose receiver transitively performs a
+     * cross-function __Shift).  Reject up front (TUR-E0016) rather than let it
+     * reach a runtime "Unhandled effect: __Shift" abort. */
+    uint32_t n_plain_resets = 0;
+    for (uint32_t i = 0; i < e->n_pending_reset_nodes; i++) {
+        Expr *node = e->pending_reset_nodes[i];
+        if (node && node->kind == EX_RESET) n_plain_resets++;
+    }
+    if (n_plain_resets == 0) {
         diag_emit_with_code(DIAG_ERROR, e->crossfn_resume_span,
             TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
             "a resuming shift (its receiver invokes the continuation) has no "
-            "enclosing reset anywhere in the program -- there is no delimiter to "
-            "capture the continuation up to\n"
+            "plain enclosing reset to capture the continuation up to -- there is no "
+            "delimiter that can catch it\n"
+            "  = note: a `reset` that also reifies a *lexical* resuming shift cannot "
+            "additionally catch a *cross-function* one (the two lowerings are "
+            "incompatible in a single delimiter)\n"
             "  = help: wrap the computation that (transitively) reaches this shift "
-            "in a (reset ...)");
+            "in a dedicated (reset ...) that has no lexical resuming shift of its "
+            "own");
         return;
     }
     for (uint32_t i = 0; i < e->n_pending_reset_nodes; i++) {

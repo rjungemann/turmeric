@@ -101,13 +101,29 @@ receivers (including the opening example = 23), `direct == cps == turi`:
   coexistence). `errors/shift-crossfn-resume` now pins the genuinely-unhandled
   case: a resuming shift with no reset anywhere is a TUR-E0016 compile error.
 
-**Limitation:** a SINGLE reset that both reifies a *lexical* resuming shift (making
-it an `EX_CLONEABLE_RESET`) AND must catch a *cross-function* `__Shift` is
-unsupported -- the whole-program pass wraps only plain `EX_RESET` nodes, because
-reifying a lexical shift walks the reset body under the narrow `build_cloneable`
-grammar, which a `(handle ...)` wrapper falls outside of (TUR-E0710). A
-cross-function resuming shift's delimiter is always a plain reset, so this only
-bites when both roles land on the exact same reset.
+**Limitation (a single reset cannot serve both roles).** A `reset` that reifies a
+*lexical* resuming shift (an `EX_CLONEABLE_RESET`) cannot *also* catch a
+*cross-function* `__Shift`: the reified path walks the reset body under the narrow
+`build_cloneable` grammar, which a `(handle ...)` wrapper falls outside of. The
+two lowerings are fundamentally incompatible in one delimiter, so the
+whole-program pass wraps only plain `EX_RESET` nodes. This is well-behaved in
+every case:
+
+- **Distinct resets nest cleanly** -- a reified reset inside a plain reset (or
+  vice-versa) works; the plain one catches the cross-function `__Shift`, the
+  reified one is left intact (fixture `shift-crossfn-resume-nested-reset`).
+- **Forcing both roles onto one reset is rejected at compile time.** Most such
+  shapes hit `build_cloneable`'s `TUR-E0710` directly (the cross-function call
+  sits in the reified context, which the grammar refuses). The one shape that
+  slips past E0710 -- a cross-function `__Shift` performed from inside the lexical
+  shift's *receiver*, with a trivial reified context -- is caught by the
+  handler-installing-capacity check: if the program performs `__Shift` but has no
+  plain (wrappable) reset anywhere, it is a `TUR-E0016` compile error rather than
+  a runtime "Unhandled effect: __Shift" (fixture
+  `errors/shift-crossfn-resume-cloneable-reset-only`).
+
+So no program silently misbehaves: the incompatible combination is either
+expressed as two distinct resets (works) or rejected up front.
 
 ## Slices (ordered; each independently testable)
 
