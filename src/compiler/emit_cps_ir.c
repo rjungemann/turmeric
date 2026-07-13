@@ -989,6 +989,12 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
+        case CT_PERFORM:
+            /* Track A (A2): a nested `perform` in a reset/handle continuation
+             * body.  The perform delivers to a handler (not a join); its joins are
+             * in its own continuation, so recurse there.  term_core_ok already
+             * gates whether the nested perform is emittable (A1). */
+            return joins_closed_rec(t->as.perform.body, def, nd);
         default: return false;
     }
 }

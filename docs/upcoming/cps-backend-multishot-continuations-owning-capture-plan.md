@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A A1 landed (two-perform / nested perform in a continuation now CPS-emits via a resume-frame); A2-A3 and Track B (E2-E4) open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: Track A A1+A2 landed (nested perform in a perform-continuation via a resume-frame; nested perform in a reset/handle continuation); A3 and Track B (E2-E4) open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -195,8 +195,19 @@ lift composes with it.
   observed strong count then *accumulates* across runs (2 then 3, sum 5) because
   E1 leaks the env clone per read-out. The clean count (4) needs Track B / E3's
   refcounted env. The runtime multi-shot owning-capture fixture rides E3, not A1.
-- **A2 -- handle continuation containing a nested effect** (`(+ (handle ...)
-  (perform E))`, the p4 shape).
+- **A2 -- handle continuation containing a nested effect. LANDED.**
+  (`(+ (handle ...) (perform E))`, the p4 shape.) Fixture
+  `cps-backend-handle-cont-perform` (output 15, `direct == cps`). Turned out to
+  need **only** a `CT_PERFORM` arm in `joins_closed_rec`: the handle continuation
+  is already lifted as a k-carrying reset frame (`LH_RESET_CONT`) at the base of
+  the handler chain (`next = dk_done()`), so a nested perform inside it threads
+  the enclosing `__kont` and dispatches with no double delivery -- the resume-frame
+  machinery from A1 was not needed here (it kicks in only for the *value-transform*
+  perform-continuation position). `term_core_ok` already admitted the nested
+  perform (A1); the reset/handle continuation just had to pass the joins-closed
+  structural check. Verified: the p4 shape, a same-effect re-perform in the
+  continuation, a branch after the perform, and the A1+A2 combination (a handle
+  continuation that performs *twice*, output 20).
 - **A3 -- shift/reset continuation containing a nested control op** beyond the
   existing nested-reset arm (`collect_caps_rec` already has `CT_RESET`/`CT_SHIFT`
   arms; A3 extends the *emit* + gate to nested effects there).
