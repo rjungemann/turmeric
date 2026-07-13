@@ -1,7 +1,7 @@
 # Pure-Turmeric regex engine (`stdlib/re.tur`) -- Plan
 
-> **Status:** Not started.
-> **Last Updated:** 2026-07-12
+> **Status:** DONE (2026-07-13).
+> **Last Updated:** 2026-07-13
 > **Type:** stdlib / interpreter parity / WASM
 > **Scope:** Replace `stdlib/re.tur`'s POSIX-`regcomp` inline-C with a
 > pure-Turmeric matcher so regexes work under `tur --interpret` AND in the
@@ -11,6 +11,64 @@
 > [interp-string-natives-and-range-show-plan.md](interp-string-natives-and-range-show-plan.md)
 > Phase 0 (the `cstr-nth` / `cstr-len` / `str-concat` interpreter natives). Do
 > that first -- without runnable byte access no pure matcher can read input.
+>
+> ---
+>
+> ## Resolution (2026-07-13)
+>
+> Shipped. `stdlib/re.tur` is now a pure-Turmeric backtracking engine with zero
+> `` ```c `` blocks; it runs on the AOT backend, `tur --interpret`, and (via the
+> shared interpreter path) the WASM REPL.
+>
+> **What landed vs. the plan below:**
+> - **Phase 0 natives** added to `src/turi/interpreter_natives.c`: `str-concat`,
+>   `cstr-len`, `cstr-nth`, plus a new `cstr-sub` (substring) both as an
+>   interpreter native and an inline-C `stdlib/cstr.tur` counterpart. These are
+>   the byte/string primitives the matcher reads input and builds output through.
+> - **Phase 1 parser + Phase 2 matcher** implemented, but the engine strategy is
+>   a **set-of-positions** matcher (`run-k`: match a Regex from a *set* of start
+>   positions, returning every reachable end position), not the AST-index
+>   backtracker sketched in the plan. This gives leftmost-longest per start (it
+>   takes the max reachable end) and terminates on empty-matchable stars via a
+>   dedup + fixpoint, with no separate NFA compile step.
+> - **Handle typing:** `re/compile` returns a real `Regex` ADT value (the parsed
+>   AST) directly -- NOT an `:int`. This is the only representation that survives
+>   the interpreter, where an ADT is a `TURI_STRUCT` and cannot round-trip
+>   through an `:int` opaque. `re/free` / `re/match-free` / `re/find-all-free`
+>   are no-op shims.
+> - **Phase 3 captures: deferred.** Group capture indices are not threaded, so
+>   `re/match` returns the whole match as an `(Option cstr)` (leftmost-longest).
+>   `re/find-all` returns an `RxStrs` cons list of matched substrings;
+>   `re/replace` / `re/replace-all` do literal splicing. No consumer used the old
+>   group-vec return, so this is a clean signature change, documented in the
+>   module docstring.
+>
+> **Implementation constraints discovered (worth recording):**
+> - Compiled ADTs are **linear/unique** -- a value used twice is an
+>   `TUR-E0201`. The matcher reuses sub-expressions constantly, so `Regex`,
+>   `RxCls`, and `RxPos` (the position list) are declared `:copy`.
+> - A **single-constructor** ADT lowers to a by-value record; when it carries a
+>   heap ADT field the match/bind path miscompiles ("aggregate value used where
+>   an integer was expected"). Fixed by giving the wrapper types (`RxPair`,
+>   `RxParse`) a dummy second variant so they lower to tagged heap handles.
+> - **Forward references to an ADT-returning function default the callee's return
+>   type to `int`** (the top-level pre-pass registers only scalar *param* kinds).
+>   Genuine mutual recursion between ADT-returning functions therefore does not
+>   type-check. Both the matcher and the recursive-descent parser are written as
+>   **single self-recursive functions** (`run-k`; `re-parse-go` with a `mode`
+>   dispatch) so every call is a self-call or a call to an already-defined leaf.
+>
+> **Validation:** `bash tests/run.sh` = 2124 passed / 0 failed;
+> `bash tests/run-turi.sh` = 1595 passed / 0 failed (`reader-macros-rx-literal`
+> now runs un-carved; new `re-pure-match-find-replace` fixture PASSes under
+> `--interpret`). `re.tur` has zero `` ```c `` blocks. The
+> `(re/match? #rx"^[0-9]+$" "123")` acceptance eval runs under `--interpret`, and
+> `src/web/wasm_glue.c` registers the same interpreter natives, so the browser
+> REPL gets it with no WASM rebuild.
+>
+> The Thompson-NFA upgrade and Phase 3 captures remain as documented follow-ups.
+>
+> ---
 
 ---
 

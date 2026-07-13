@@ -12,7 +12,7 @@
 ;;;
 ;;; Since: 2026-07-01
 (defmodule cstr
-  (export cstr-len cstr-nth)
+  (export cstr-len cstr-nth cstr-sub)
   ;;; cstr-len -- byte length of a NUL-terminated C string.
   ;;;
   ;;; Parameters:
@@ -41,4 +41,32 @@
   (defn cstr-nth [s : cstr i : int] : int
     ```c
     return (int64_t)(unsigned char)((const char *)(intptr_t)s)[i];
+    ```)
+  ;;; cstr-sub -- substring [start, end) of a NUL-terminated C string.
+  ;;;
+  ;;; Parameters:
+  ;;;   s     -- NUL-terminated C string pointer
+  ;;;   start -- zero-based start byte index (clamped into [0, len])
+  ;;;   end   -- exclusive end byte index (clamped into [start, len])
+  ;;;
+  ;;; Returns:
+  ;;;   A freshly heap-allocated cstr holding the bytes of s in [start, end),
+  ;;;   NUL-terminated. Out-of-range indices are clamped, so the result is
+  ;;;   always a valid (possibly empty) string. The caller frees the result.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-sub "hello" 1 4)  ; => "ell"
+  (defn cstr-sub [s : cstr start : int end : int] : cstr
+    ```c
+    const char *cs = (const char *)(intptr_t)s;
+    long slen = (long)strlen(cs);
+    long a = (long)start, b = (long)end;
+    if (a < 0) a = 0;
+    if (b > slen) b = slen;
+    if (b < a) b = a;
+    size_t outlen = (size_t)(b - a);
+    char *out = malloc(outlen + 1);
+    memcpy(out, cs + a, outlen);
+    out[outlen] = '\0';
+    return (const char *)out;
     ```))

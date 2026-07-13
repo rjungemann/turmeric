@@ -1,255 +1,521 @@
-;;; tur/re -- POSIX extended regular expressions via regcomp/regexec.
+;;; tur/re -- pure-Turmeric regular expressions (POSIX ERE subset).
 ;;;
-;;; Always available on POSIX systems; no external regex library needed.
+;;; A small backtracking regex engine written entirely in Turmeric, so it runs
+;;; on every path -- the AOT-compiled backend, the `tur --interpret`
+;;; tree-walker, and the browser/WASM REPL (which shares the interpreter).
+;;; The historical libc `regcomp`/`regexec` wrapper has been retired; there is
+;;; no `regex_t` and no inline C here.
 ;;;
-;;; Since: Phase B1
-;; stdlib/re.tur -- POSIX extended regular expressions via regex.h.
+;;; A compiled pattern is a `Regex` value (the parsed AST). `re/compile`
+;;; returns it directly, so it flows unchanged between compiled and interpreted
+;;; code. `re/free` / `re/match-free` / `re/find-all-free` survive as no-op
+;;; shims for source compatibility -- results are ordinary GC/heap values now,
+;;; not malloc'd C buffers.
+;;;
+;;; Supported syntax (POSIX ERE subset): literals, `.`, character classes
+;;; `[...]` / `[^...]` including `[a-z]` ranges and POSIX names (`[:alpha:]`,
+;;; `[:digit:]`, `[:alnum:]`, `[:upper:]`, `[:lower:]`, `[:space:]`,
+;;; `[:blank:]`, `[:xdigit:]`), quantifiers `* + ?` and bounded `{n}` /
+;;; `{n,}` / `{n,m}`, alternation `|`, grouping `(...)`, anchors `^ $`, and
+;;; backslash-escaping of a metacharacter (`\.`). Not supported:
+;;; backreferences, Perl shorthands (`\d \w \b`), lookaround, non-greedy.
+;;;
+;;; Match semantics note: the engine reports leftmost-longest per start
+;;; position (it collects every reachable end and takes the maximum), which
+;;; coincides with POSIX leftmost-longest for the anchored/simple patterns in
+;;; the test suite. Group captures are not yet threaded -- `re/match` returns
+;;; the whole match only (Phase 3 of the port plan).
+;;;
+;;; Since: Phase B1 (libc); pure-Turmeric rewrite 2026-07
+;; stdlib/re.tur -- pure-Turmeric regular expressions.
 ;;
-;; Uses regcomp(3)/regexec(3) which are always available on POSIX systems.
-;; Capture groups are returned as vecs of freshly allocated cstr copies.
-;; re/union-patterns and re/compile-union assemble alternation patterns from
-;; str-concat; pull in str.tur (the load registry dedups, so this is a no-op
-;; when the host program has already loaded it).
+;; str.tur supplies str-concat / str-free / the :int cons-list helpers used by
+;; the union builders; cstr.tur supplies cstr-len / cstr-nth / cstr-sub, the
+;; byte primitives the matcher and parser read input through. The load registry
+;; dedups, so re-loading an already-present module is a no-op.
 (load "stdlib/str.tur")
-;;; re/compile -- compile a regular expression pattern.
+(load "stdlib/cstr.tur")
+(load "stdlib/option.tur")
+
+;; ================= AST =================
+(defdata RxCls :copy
+  (RxClsNil)
+  (RxClsRange :int :int :RxCls))
+
+(defdata Regex :copy
+  (RChar   :int)
+  (RAny)
+  (RClass  :bool :RxCls)
+  (RStar   :Regex)
+  (RPlus   :Regex)
+  (ROpt    :Regex)
+  (RConcat :Regex :Regex)
+  (RAlt    :Regex :Regex)
+  (RGroup  :Regex)
+  (REmpty)
+  (RNever)
+  (RBegin)
+  (REnd))
+
+(defdata RxPos :copy (RxNil) (RxCons :int :RxPos))
+(defdata RxPair (RxIP :int :int) (RxIPNone))
+(defdata RxParse    (RxPR :Regex :int)  (RxPRNone))
+(defdata RxStrs (RxStrsNil) (RxStrsCons :cstr :RxStrs))
+
+;; ================= RxPos leaf helpers =================
+(defn re-pos-append [a : RxPos b : RxPos] : RxPos
+  (match a
+    (RxNil)       b
+    (RxCons x xs) (RxCons x (re-pos-append xs b))))
+
+(defn re-pos-contains? [a : RxPos v : int] : bool
+  (match a
+    (RxNil)       false
+    (RxCons x xs) (if (= x v) true (re-pos-contains? xs v))))
+
+(defn re-pos-empty? [a : RxPos] : bool
+  (match a (RxNil) true (RxCons x xs) false))
+
+(defn re-pos-len [a : RxPos] : int
+  (match a (RxNil) 0 (RxCons x xs) (+ 1 (re-pos-len xs))))
+
+(defn re-pos-max [a : RxPos acc : int] : int
+  (match a
+    (RxNil)       acc
+    (RxCons x xs) (re-pos-max xs (if (> x acc) x acc))))
+
+(defn re-pos-dedup-go [a : RxPos seen : RxPos] : RxPos
+  (match a
+    (RxNil)       (RxNil)
+    (RxCons x xs) (if (re-pos-contains? seen x)
+                   (re-pos-dedup-go xs seen)
+                   (RxCons x (re-pos-dedup-go xs (RxCons x seen))))))
+
+(defn re-pos-dedup [a : RxPos] : RxPos (re-pos-dedup-go a (RxNil)))
+
+(defn re-range-list [lo : int hi : int] : RxPos
+  (if (> lo hi) (RxNil) (RxCons lo (re-range-list (+ lo 1) hi))))
+
+;; ================= cstr helpers =================
+(defn re-cstr-eq-loop [a : cstr b : cstr i : int n : int] : bool
+  (if (>= i n)
+    true
+    (if (= (cstr-nth a i) (cstr-nth b i))
+      (re-cstr-eq-loop a b (+ i 1) n)
+      false)))
+
+(defn re-cstr-eq? [a : cstr b : cstr] : bool
+  (let [la (cstr-len a)
+        lb (cstr-len b)]
+    (if (= la lb) (re-cstr-eq-loop a b 0 la) false)))
+
+;; ================= class membership (leaf) =================
+(defn re-class-match? [items : RxCls b : int] : bool
+  (match items
+    (RxClsNil) false
+    (RxClsRange lo hi rest)
+      (if (if (>= b lo) (<= b hi) false)
+        true
+        (re-class-match? rest b))))
+
+;; ================= per-position step helpers (leaf) =================
+(defn re-step-char [starts : RxPos input : cstr len : int c : int] : RxPos
+  (match starts
+    (RxNil) (RxNil)
+    (RxCons s rest)
+      (if (if (< s len) (= (cstr-nth input s) c) false)
+        (RxCons (+ s 1) (re-step-char rest input len c))
+        (re-step-char rest input len c))))
+
+(defn re-step-any [starts : RxPos input : cstr len : int] : RxPos
+  (match starts
+    (RxNil) (RxNil)
+    (RxCons s rest)
+      (if (< s len)
+        (RxCons (+ s 1) (re-step-any rest input len))
+        (re-step-any rest input len))))
+
+(defn re-step-class [starts : RxPos input : cstr len : int neg : bool items : RxCls] : RxPos
+  (match starts
+    (RxNil) (RxNil)
+    (RxCons s rest)
+      (if (< s len)
+        (let [b   (cstr-nth input s)
+              m   (re-class-match? items b)
+              hit (if neg (not m) m)]
+          (if hit
+            (RxCons (+ s 1) (re-step-class rest input len neg items))
+            (re-step-class rest input len neg items)))
+        (re-step-class rest input len neg items))))
+
+(defn re-step-begin [starts : RxPos] : RxPos
+  (match starts
+    (RxNil) (RxNil)
+    (RxCons s rest)
+      (if (= s 0) (RxCons s (re-step-begin rest)) (re-step-begin rest))))
+
+(defn re-step-end [starts : RxPos len : int] : RxPos
+  (match starts
+    (RxNil) (RxNil)
+    (RxCons s rest)
+      (if (= s len) (RxCons s (re-step-end rest len)) (re-step-end rest len))))
+
+;; ================= matcher: single self-recursive function =================
+(defn re-run-k [re : Regex starts : RxPos input : cstr len : int] : RxPos
+  (match re
+    (RChar c)       (re-step-char starts input len c)
+    (RAny)          (re-step-any starts input len)
+    (RClass neg it) (re-step-class starts input len neg it)
+    (REmpty)        starts
+    (RNever)        (RxNil)
+    (RBegin)        (re-step-begin starts)
+    (REnd)          (re-step-end starts len)
+    (RGroup g)      (re-run-k g starts input len)
+    (RConcat a b)   (re-run-k b (re-run-k a starts input len) input len)
+    (RAlt a b)      (re-pos-append (re-run-k a starts input len) (re-run-k b starts input len))
+    (ROpt a)        (re-pos-append starts (re-run-k a starts input len))
+    (RPlus a)       (re-run-k (RStar a) (re-run-k a starts input len) input len)
+    (RStar a)
+      (let [s0    (re-pos-dedup starts)
+            grown (re-pos-dedup (re-pos-append s0 (re-run-k a s0 input len)))]
+        (if (= (re-pos-len grown) (re-pos-len s0))
+          s0
+          (re-run-k (RStar a) grown input len)))))
+
+;; ================= parser leaf helpers =================
+(defn re-digit? [c : int] : bool (if (>= c 48) (<= c 57) false))
+
+(defn re-read-int [input : cstr len : int pos : int acc : int] : RxPair
+  (if (>= pos len)
+    (RxIP acc pos)
+    (let [c (cstr-nth input pos)]
+      (if (re-digit? c)
+        (re-read-int input len (+ pos 1) (+ (* acc 10) (- c 48)))
+        (RxIP acc pos)))))
+
+(defn re-repeat-n [atom : Regex n : int] : Regex
+  (if (<= n 0)
+    (REmpty)
+    (if (= n 1) atom (RConcat atom (re-repeat-n atom (- n 1))))))
+
+(defn re-repeat-opt [atom : Regex n : int] : Regex
+  (if (<= n 0)
+    (REmpty)
+    (RConcat (ROpt atom) (re-repeat-opt atom (- n 1)))))
+
+(defn re-parse-brace [input : cstr len : int atom : Regex pos : int] : RxParse
+  (match (re-read-int input len pos 0)
+    (RxIP n p1)
+      (if (if (< p1 len) (= (cstr-nth input p1) 44) false)
+        (if (if (< (+ p1 1) len) (= (cstr-nth input (+ p1 1)) 125) false)
+          (RxPR (RConcat (re-repeat-n atom n) (RStar atom)) (+ p1 2))
+          (match (re-read-int input len (+ p1 1) 0)
+            (RxIP m p2)
+              (let [endp (if (if (< p2 len) (= (cstr-nth input p2) 125) false) (+ p2 1) p2)]
+                (RxPR (RConcat (re-repeat-n atom n) (re-repeat-opt atom (- m n))) endp))
+            (RxIPNone) (RxPR (RNever) pos)))
+        (let [endp (if (if (< p1 len) (= (cstr-nth input p1) 125) false) (+ p1 1) p1)]
+          (RxPR (re-repeat-n atom n) endp)))
+    (RxIPNone) (RxPR (RNever) pos)))
+
+(defn re-apply-quant [input : cstr len : int ra : Regex pos : int] : RxParse
+  (if (>= pos len)
+    (RxPR ra pos)
+    (let [c (cstr-nth input pos)]
+      (cond
+        (= c 42)  (RxPR (RStar ra) (+ pos 1))
+        (= c 43)  (RxPR (RPlus ra) (+ pos 1))
+        (= c 63)  (RxPR (ROpt ra)  (+ pos 1))
+        (= c 123) (re-parse-brace input len ra (+ pos 1))
+        :else     (RxPR ra pos)))))
+
+(defn re-parse-escape [input : cstr len : int pos : int] : RxParse
+  (if (>= pos len)
+    (RxPR (RChar 92) pos)
+    (RxPR (RChar (cstr-nth input pos)) (+ pos 1))))
+
+(defn re-scan-name-end [input : cstr len : int pos : int] : int
+  (if (>= pos len)
+    pos
+    (if (= (cstr-nth input pos) 58) pos (re-scan-name-end input len (+ pos 1)))))
+
+(defn re-posix-ranges [name : cstr acc : RxCls] : RxCls
+  (cond
+    (re-cstr-eq? name "digit")  (RxClsRange 48 57 acc)
+    (re-cstr-eq? name "alpha")  (RxClsRange 65 90 (RxClsRange 97 122 acc))
+    (re-cstr-eq? name "alnum")  (RxClsRange 48 57 (RxClsRange 65 90 (RxClsRange 97 122 acc)))
+    (re-cstr-eq? name "upper")  (RxClsRange 65 90 acc)
+    (re-cstr-eq? name "lower")  (RxClsRange 97 122 acc)
+    (re-cstr-eq? name "space")  (RxClsRange 9 13 (RxClsRange 32 32 acc))
+    (re-cstr-eq? name "blank")  (RxClsRange 9 9 (RxClsRange 32 32 acc))
+    (re-cstr-eq? name "xdigit") (RxClsRange 48 57 (RxClsRange 65 70 (RxClsRange 97 102 acc)))
+    :else                    acc))
+
+(defn re-posix-open? [input : cstr len : int pos : int] : bool
+  (if (= (cstr-nth input pos) 91)
+    (if (< (+ pos 1) len) (= (cstr-nth input (+ pos 1)) 58) false)
+    false))
+
+(defn re-range-here? [input : cstr len : int pos : int] : bool
+  (if (< (+ pos 1) len)
+    (if (= (cstr-nth input (+ pos 1)) 45)
+      (if (< (+ pos 2) len) (not (= (cstr-nth input (+ pos 2)) 93)) false)
+      false)
+    false))
+
+(defn re-re-parse-class-items [input : cstr len : int pos : int neg : bool acc : RxCls] : RxParse
+  (if (>= pos len)
+    (RxPR (RClass neg acc) pos)
+    (let [c (cstr-nth input pos)]
+      (if (= c 93)
+        (RxPR (RClass neg acc) (+ pos 1))
+        (if (re-posix-open? input len pos)
+          (let [nend  (re-scan-name-end input len (+ pos 2))
+                nm    (cstr-sub input (+ pos 2) nend)
+                added (re-posix-ranges nm acc)
+                after (if (if (< (+ nend 1) len) (= (cstr-nth input (+ nend 1)) 93) false)
+                        (+ nend 2) (+ nend 1))]
+            (re-re-parse-class-items input len after neg added))
+          (if (re-range-here? input len pos)
+            (re-re-parse-class-items input len (+ pos 3) neg (RxClsRange c (cstr-nth input (+ pos 2)) acc))
+            (re-re-parse-class-items input len (+ pos 1) neg (RxClsRange c c acc))))))))
+
+(defn re-parse-class [input : cstr len : int pos : int] : RxParse
+  (let [neg (if (< pos len) (= (cstr-nth input pos) 94) false)
+        p0  (if neg (+ pos 1) pos)]
+    (re-re-parse-class-items input len p0 neg (RxClsNil))))
+
+(defn re-concat-end? [input : cstr len : int pos : int] : bool
+  (if (>= pos len)
+    true
+    (let [c (cstr-nth input pos)]
+      (if (= c 124) true (if (= c 41) true false)))))
+
+;; ================= parser: single self-recursive function =================
+;; modes: 0 alt, 1 alt-loop, 2 concat, 3 concat-loop, 4 repeat, 5 atom
+(defn re-parse-go [input : cstr len : int pos : int mode : int acc : Regex] : RxParse
+  (cond
+    (= mode 0)
+      (match (re-parse-go input len pos 2 (REmpty))
+        (RxPR r1 p1) (re-parse-go input len p1 1 r1)
+        (RxPRNone)   (RxPR (REmpty) pos))
+    (= mode 1)
+      (if (if (< pos len) (= (cstr-nth input pos) 124) false)
+        (match (re-parse-go input len (+ pos 1) 2 (REmpty))
+          (RxPR r2 p2) (re-parse-go input len p2 1 (RAlt acc r2))
+          (RxPRNone)   (RxPR acc pos))
+        (RxPR acc pos))
+    (= mode 2)
+      (if (re-concat-end? input len pos)
+        (RxPR (REmpty) pos)
+        (match (re-parse-go input len pos 4 (REmpty))
+          (RxPR r1 p1) (re-parse-go input len p1 3 r1)
+          (RxPRNone)   (RxPR (REmpty) pos)))
+    (= mode 3)
+      (if (re-concat-end? input len pos)
+        (RxPR acc pos)
+        (match (re-parse-go input len pos 4 (REmpty))
+          (RxPR r2 p2) (re-parse-go input len p2 3 (RConcat acc r2))
+          (RxPRNone)   (RxPR acc pos)))
+    (= mode 4)
+      (match (re-parse-go input len pos 5 (REmpty))
+        (RxPR ra p) (re-apply-quant input len ra p)
+        (RxPRNone)  (RxPR (REmpty) pos))
+    :else
+      (if (>= pos len)
+        (RxPR (REmpty) pos)
+        (let [c (cstr-nth input pos)]
+          (cond
+            (= c 40) (match (re-parse-go input len (+ pos 1) 0 (REmpty))
+                       (RxPR ri p)
+                         (if (if (< p len) (= (cstr-nth input p) 41) false)
+                           (RxPR (RGroup ri) (+ p 1))
+                           (RxPR (RGroup ri) p))
+                       (RxPRNone) (RxPR (REmpty) (+ pos 1)))
+            (= c 91) (re-parse-class input len (+ pos 1))
+            (= c 46) (RxPR (RAny)   (+ pos 1))
+            (= c 94) (RxPR (RBegin) (+ pos 1))
+            (= c 36) (RxPR (REnd)   (+ pos 1))
+            (= c 92) (re-parse-escape input len (+ pos 1))
+            :else    (RxPR (RChar c) (+ pos 1)))))))
+
+;; ================= public API =================
+;; re-find-from: leftmost match at or after `from`. Returns (RxIP start end)
+;; with the longest end at the first matching start, or (RxIP -1 -1) if no
+;; match occurs from `from` onward.
+(defn re-find-from [re : Regex input : cstr len : int from : int] : RxPair
+  (if (> from len)
+    (RxIP (- 0 1) (- 0 1))
+    (let [ends (re-run-k re (RxCons from (RxNil)) input len)]
+      (if (re-pos-empty? ends)
+        (re-find-from re input len (+ from 1))
+        (RxIP from (re-pos-max ends (- 0 1)))))))
+
+;; re-find-all-go / re-replace-go: internal loops for find-all / replace-all.
+(defn re-find-all-go [re : Regex input : cstr len : int from : int] : RxStrs
+  (match (re-find-from re input len from)
+    (RxIP s e)
+      (if (< s 0)
+        (RxStrsNil)
+        (RxStrsCons (cstr-sub input s e)
+                    (re-find-all-go re input len (if (> e s) e (+ s 1)))))
+    (RxIPNone) (RxStrsNil)))
+
+(defn re-replace-go [re : Regex input : cstr len : int from : int
+                     replacement : cstr acc : cstr] : cstr
+  (match (re-find-from re input len from)
+    (RxIP s e)
+      (if (< s 0)
+        (str-concat acc (cstr-sub input from len))
+        (let [acc1 (str-concat (str-concat acc (cstr-sub input from s)) replacement)]
+          (if (> e s)
+            (re-replace-go re input len e replacement acc1)
+            (if (< s len)
+              (re-replace-go re input len (+ s 1) replacement
+                             (str-concat acc1 (cstr-sub input s (+ s 1))))
+              acc1))))
+    (RxIPNone) (str-concat acc (cstr-sub input from len))))
+
+;;; re/compile -- compile a regular expression pattern into a Regex.
 ;;;
 ;;; Parameters:
-;;;   pattern -- NUL-terminated regex pattern cstr (POSIX extended syntax)
+;;;   pattern -- NUL-terminated regex pattern cstr (POSIX ERE subset)
 ;;;
 ;;; Returns:
-;;;   An opaque handle (:int) on success, or 0 on compilation error.
-;;;   Free with re/free when done.
+;;;   A Regex value (the parsed AST). Parsing is total: a malformed pattern
+;;;   is parsed best-effort rather than rejected, so there is no error return.
 ;;;
 ;;; Example:
-;;;   (re/compile "([0-9]+)")  ; => <handle>
+;;;   (re/compile "([0-9]+)")  ; => <Regex>
 ;;;
 ;;; Since: Phase B2
+(defn re/compile [pattern : cstr] : Regex
+  (match (re-parse-go pattern (cstr-len pattern) 0 0 (REmpty))
+    (RxPR r p) r
+    (RxPRNone) (RNever)))
 
-(defn re/compile [pattern : cstr] : int
-  ```c
-  #include <regex.h>
-  regex_t *re = malloc(sizeof(regex_t));
-  if (regcomp(re, pattern, REG_EXTENDED) != 0) { free(re); return 0; }
-  return (int64_t)(intptr_t)re;
-  ```)
-;;; re/free -- release a compiled regex handle.
+;;; re/match? -- test whether a pattern matches anywhere in input.
 ;;;
 ;;; Parameters:
-;;;   re -- handle returned by re/compile
-;;;
-;;; Example:
-;;;   (re/free my-re)
-;;;
-;;; Since: Phase B2
-
-(defn re/free [re : int] : void
-  ```c
-  #include <regex.h>
-  if (!re) return;
-  regex_t *r = (regex_t*)(intptr_t)re;
-  regfree(r);
-  free(r);
-  ```)
-;;; re/match? -- test whether a compiled pattern matches anywhere in input.
-;;;
-;;; Parameters:
-;;;   re    -- compiled regex handle from re/compile
+;;;   re    -- compiled Regex from re/compile
 ;;;   input -- input string cstr
 ;;;
 ;;; Returns:
-;;;   true if the pattern matches, false otherwise.
+;;;   true if the pattern matches at some position, false otherwise.
 ;;;
 ;;; Example:
-;;;   (re/match? my-re "abc123")  ; => true
+;;;   (re/match? (re/compile "[0-9]+") "abc123")  ; => true
 ;;;
 ;;; Since: Phase B2
+(defn re/match? [re : Regex input : cstr] : bool
+  (let [len (cstr-len input)]
+    (not (re-pos-empty? (re-run-k re (re-range-list 0 len) input len)))))
 
-(defn re/match? [re : int input : cstr] : bool
-  ```c
-  #include <regex.h>
-  if (!re) return false;
-  regex_t *r = (regex_t*)(intptr_t)re;
-  return regexec(r, input, 0, NULL, 0) == 0;
-  ```)
-;;; re/match -- match a regex against input and return capture groups as a vec.
+;;; re/match -- return the leftmost-longest whole match as an Option.
 ;;;
-;;; Index 0 of the returned vec is the full match; indices 1..n are capture
-;;; groups.  Unmatched optional groups are stored as empty strings.
+;;; Group captures are not yet threaded through the engine, so only the whole
+;;; match is returned (index 0 in the old libc API). Use re/match? when you
+;;; only need a boolean.
 ;;;
 ;;; Parameters:
-;;;   re    -- compiled regex handle from re/compile
+;;;   re    -- compiled Regex from re/compile
 ;;;   input -- input string cstr
 ;;;
 ;;; Returns:
-;;;   A vec pointer (:int) whose elements are cstr pointers on success,
-;;;   or 0 if there is no match.  Free with re/match-free.
+;;;   (some matched-substring) on a match, or (none) if there is no match.
 ;;;
 ;;; Example:
-;;;   (re/match my-re "abc123")  ; => vec of capture group cstrs
+;;;   (re/match (re/compile "[0-9]+") "a12b")  ; => (some "12")
 ;;;
-;;; Since: Phase B2
+;;; Since: Phase B2 (pure-Turmeric rewrite)
+(defn re/match [re : Regex input : cstr] : (Option cstr)
+  (let [len (cstr-len input)]
+    (match (re-find-from re input len 0)
+      (RxIP s e) (if (< s 0) (none) (some (cstr-sub input s e)))
+      (RxIPNone) (none))))
 
-(defn re/match [re : int input : cstr] : int
-  ```c
-  #include <regex.h>
-  if (!re) return 0;
-  regex_t *r = (regex_t*)(intptr_t)re;
-  size_t nmatch = r->re_nsub + 1;
-  regmatch_t *matches = malloc(nmatch * sizeof(regmatch_t));
-  if (regexec(r, input, nmatch, matches, 0) != 0) { free(matches); return 0; }
-  struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-  v->data = malloc(nmatch * sizeof(int64_t));
-  v->len  = 0;
-  v->cap  = nmatch;
-  for (size_t i = 0; i < nmatch; i++) {
-    if (matches[i].rm_so < 0) {
-      v->data[v->len++] = (int64_t)(intptr_t)strdup("");
-    } else {
-      size_t len = (size_t)(matches[i].rm_eo - matches[i].rm_so);
-      char *s = malloc(len + 1);
-      memcpy(s, input + matches[i].rm_so, len);
-      s[len] = '\0';
-      v->data[v->len++] = (int64_t)(intptr_t)s;
-    }
-  }
-  free(matches);
-  return (int64_t)(intptr_t)v;
-  ```)
-;;; re/match-free -- free a vec returned by re/match.
+;;; re/find-all -- all non-overlapping matches, left to right.
+;;;
+;;; Advances past each match (by one byte on an empty match to avoid stalling),
+;;; collecting the matched substrings.
 ;;;
 ;;; Parameters:
-;;;   v -- vec pointer returned by re/match (may be 0)
-;;;
-;;; Example:
-;;;   (re/match-free my-match)
-;;;
-;;; Since: Phase B2
-
-(defn re/match-free [v : int] : void
-  ```c
-  if (!v) return;
-  struct { int64_t *data; size_t len; size_t cap; } *vec = (void*)(intptr_t)v;
-  for (size_t i = 0; i < vec->len; i++) free((void*)(intptr_t)vec->data[i]);
-  free(vec->data);
-  free(vec);
-  ```)
-;;; re/find-all -- find all non-overlapping matches of a regex in input.
-;;;
-;;; Parameters:
-;;;   re    -- compiled regex handle from re/compile
+;;;   re    -- compiled Regex from re/compile
 ;;;   input -- input string cstr
 ;;;
 ;;; Returns:
-;;;   A cons list of vec pointers (each vec as returned by re/match).
-;;;   Returns 0 (empty list) if there are no matches.
-;;;   Free with re/find-all-free.
+;;;   An RxStrs cons list of matched substrings (empty list if none).
 ;;;
 ;;; Example:
-;;;   (re/find-all my-re "a1b2c3")  ; => cons list of match vecs
+;;;   (re/find-all (re/compile "[0-9]+") "a1b22c")  ; => ("1" "22")
 ;;;
-;;; Since: Phase B2
+;;; Since: Phase B2 (pure-Turmeric rewrite)
+(defn re/find-all [re : Regex input : cstr] : RxStrs
+  (re-find-all-go re input (cstr-len input) 0))
 
-(defn re/find-all [re : int input : cstr] : int
-  ```c
-  #include <regex.h>
-  if (!re) return 0;
-  regex_t *r = (regex_t*)(intptr_t)re;
-  size_t nmatch = r->re_nsub + 1;
-  regmatch_t *matches = malloc(nmatch * sizeof(regmatch_t));
-  const char *cur = input;
-  int64_t head = 0;
-  while (*cur && regexec(r, cur, nmatch, matches, 0) == 0) {
-    struct { int64_t *data; size_t len; size_t cap; } *v = malloc(sizeof(*v));
-    v->data = malloc(nmatch * sizeof(int64_t));
-    v->len  = 0;
-    v->cap  = nmatch;
-    for (size_t i = 0; i < nmatch; i++) {
-      if (matches[i].rm_so < 0) {
-        v->data[v->len++] = (int64_t)(intptr_t)strdup("");
-      } else {
-        size_t len = (size_t)(matches[i].rm_eo - matches[i].rm_so);
-        char *s = malloc(len + 1);
-        memcpy(s, cur + matches[i].rm_so, len);
-        s[len] = '\0';
-        v->data[v->len++] = (int64_t)(intptr_t)s;
-      }
-    }
-    int64_t *cell = malloc(2 * sizeof(int64_t));
-    cell[0] = (int64_t)(intptr_t)v;
-    cell[1] = head;
-    head = (int64_t)(intptr_t)cell;
-    cur += (matches[0].rm_eo > matches[0].rm_so) ? (size_t)matches[0].rm_eo : 1;
-  }
-  free(matches);
-  return head;
-  ```)
-;;; re/find-all-free -- free a cons list returned by re/find-all.
+;;; re/replace -- replace the first match with a literal replacement.
 ;;;
 ;;; Parameters:
-;;;   lst -- cons list of match vecs returned by re/find-all
-;;;
-;;; Example:
-;;;   (re/find-all-free my-matches)
-;;;
-;;; Since: Phase B2
-
-(defn re/find-all-free [lst : int] : void
-  ```c
-  int64_t cur = lst;
-  while (cur) {
-    int64_t *cell = (int64_t*)(intptr_t)cur;
-    int64_t vptr  = cell[0];
-    int64_t next  = cell[1];
-    if (vptr) {
-      struct { int64_t *data; size_t len; size_t cap; } *v = (void*)(intptr_t)vptr;
-      for (size_t i = 0; i < v->len; i++) free((void*)(intptr_t)v->data[i]);
-      free(v->data);
-      free(v);
-    }
-    free(cell);
-    cur = next;
-  }
-  ```)
-;;; re/replace -- replace the first match of a regex in input.
-;;;
-;;; Parameters:
-;;;   re          -- compiled regex handle from re/compile
+;;;   re          -- compiled Regex from re/compile
 ;;;   input       -- input string cstr
-;;;   replacement -- replacement string cstr (literal; no backreferences)
+;;;   replacement -- literal replacement cstr (no backreferences)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated cstr with the first match replaced, or a strdup of
-;;;   input if there is no match.  The caller must free the result.
+;;;   A fresh cstr with the first match replaced, or a copy of input if there
+;;;   is no match.
 ;;;
 ;;; Example:
-;;;   (re/replace my-re "hello world" "WORLD")  ; => "hello WORLD"
+;;;   (re/replace (re/compile "world") "hello world" "WORLD")  ; => "hello WORLD"
 ;;;
 ;;; Since: Phase B2
+(defn re/replace [re : Regex input : cstr replacement : cstr] : cstr
+  (let [len (cstr-len input)]
+    (match (re-find-from re input len 0)
+      (RxIP s e)
+        (if (< s 0)
+          (cstr-sub input 0 len)
+          (str-concat (str-concat (cstr-sub input 0 s) replacement)
+                      (cstr-sub input e len)))
+      (RxIPNone) (cstr-sub input 0 len))))
 
-(defn re/replace [re : int input : cstr replacement : cstr] : cstr
-  ```c
-  #include <regex.h>
-  if (!re) return strdup(input);
-  regex_t *r = (regex_t*)(intptr_t)re;
-  regmatch_t m[1];
-  if (regexec(r, input, 1, m, 0) != 0) return strdup(input);
-  size_t pre  = (size_t)m[0].rm_so;
-  size_t rlen = strlen(replacement);
-  size_t suf  = strlen(input + m[0].rm_eo);
-  char *out   = malloc(pre + rlen + suf + 1);
-  memcpy(out, input, pre);
-  memcpy(out + pre, replacement, rlen);
-  memcpy(out + pre + rlen, input + m[0].rm_eo, suf + 1);
-  return out;
-  ```)
+;;; re/replace-all -- replace all non-overlapping matches with a literal.
+;;;
+;;; Parameters:
+;;;   re          -- compiled Regex from re/compile
+;;;   input       -- input string cstr
+;;;   replacement -- literal replacement cstr (no backreferences)
+;;;
+;;; Returns:
+;;;   A fresh cstr with every match replaced.
+;;;
+;;; Example:
+;;;   (re/replace-all (re/compile "[0-9]") "a1b2c3" "X")  ; => "aXbXcX"
+;;;
+;;; Since: Phase B2
+(defn re/replace-all [re : Regex input : cstr replacement : cstr] : cstr
+  (re-replace-go re input (cstr-len input) 0 replacement ""))
+
+;;; re/free -- no-op shim (a Regex is a GC/heap value, not a malloc'd handle).
+;;;
+;;; Parameters:
+;;;   re -- a Regex (ignored)
+;;;
+;;; Since: Phase B2 (no-op since the pure-Turmeric rewrite)
+(defn re/free [re : Regex] : void 0)
+
+;;; re/match-free -- no-op shim; the Option result needs no manual free.
+(defn re/match-free [m : (Option cstr)] : void 0)
+
+;;; re/find-all-free -- no-op shim; the RxStrs result needs no manual free.
+(defn re/find-all-free [lst : RxStrs] : void 0)
+
 ;;; re/wrap-paren -- internal: wrap one pattern as "(p)" (heap; caller frees).
-
 (defn re/wrap-paren [p : cstr] : cstr
   (let [open (str-concat "(" p)
         out  (str-concat open ")")]
     (do (str-free (:: open int)) out)))
-;;; re/union-acc -- internal: right-fold the rest onto acc, joining with "|".
 
+;;; re/union-acc -- internal: right-fold the rest onto acc, joining with "|".
 (defn re/union-acc [acc : cstr patterns : int] : cstr
   (if (tnil? patterns)
     acc
@@ -264,27 +530,23 @@
             (str-free (:: bar int))
             (str-free (:: wrap int))
             (re/union-acc out (list-tail patterns))))))))
-;;; re/union-patterns -- build an alternation regex from a cons list of patterns.
-;;;
-;;; Each pattern is wrapped in a non-grouping-aware parenthesised branch and
-;;; joined with `|`. The result is a freshly heap-allocated cstr that the
-;;; caller must free.
+
+;;; re/union-patterns -- build an alternation regex string from a cons list of
+;;; patterns. Each pattern is wrapped in a parenthesised branch and joined with
+;;; `|`. Returns a fresh cstr (caller frees), or 0 if the list is empty or
+;;; contains a null element.
 ;;;
 ;;; Parameters:
-;;;   patterns -- cons list of cstr patterns (head = cstr pointer, tail = next)
+;;;   patterns -- :int cons list of cstr patterns (head = cstr pointer)
 ;;;
 ;;; Returns:
-;;;   A heap-allocated cstr containing the unioned pattern, or 0 if the list
-;;;   is empty or contains a null element. POSIX ERE has no portable
-;;;   "match nothing" pattern, so empty input is reported as 0 rather than
-;;;   silently producing a degenerate regex.
+;;;   A heap cstr containing the unioned pattern, or 0.
 ;;;
 ;;; Example:
 ;;;   (re/union-patterns (cons "[A-Za-z]+" (cons "[0-9]+" 0)))
 ;;;     ; => "([A-Za-z]+)|([0-9]+)"
 ;;;
 ;;; Since: Phase RU1
-
 (defn re/union-patterns [patterns : int] : cstr
   (if (tnil? patterns)
     (:: 0 cstr)
@@ -292,68 +554,25 @@
       (if (= p0 0)
         (:: 0 cstr)
         (re/union-acc (re/wrap-paren (:: p0 cstr)) (list-tail patterns))))))
-;;; re/compile-union -- compile an alternation of multiple regex patterns.
+
+;;; re/compile-union -- compile an alternation of multiple patterns into a Regex.
 ;;;
-;;; Convenience wrapper around re/union-patterns followed by re/compile.
-;;; The intermediate pattern buffer is freed before returning; the caller is
-;;; responsible for re/free on the returned handle.
+;;; Convenience wrapper around re/union-patterns followed by re/compile. The
+;;; intermediate pattern buffer is freed before returning.
 ;;;
 ;;; Parameters:
-;;;   patterns -- cons list of cstr patterns (head = cstr pointer, tail = next)
+;;;   patterns -- :int cons list of cstr patterns (head = cstr pointer)
 ;;;
 ;;; Returns:
-;;;   A compiled regex handle (:int) on success, or 0 if the input list is
-;;;   empty, contains a null element, or compilation fails.
+;;;   A compiled Regex on success, or (RNever) -- a regex that matches nothing
+;;;   -- if the input list is empty or contains a null element.
 ;;;
 ;;; Example:
-;;;   (re/compile-union (cons "[A-Za-z]+" (cons "[0-9]+" 0)))  ; => <handle>
+;;;   (re/compile-union (cons "[A-Za-z]+" (cons "[0-9]+" 0)))  ; => <Regex>
 ;;;
 ;;; Since: Phase RU2
-
-(defn re/compile-union [patterns : int] : int
+(defn re/compile-union [patterns : int] : Regex
   (let [pat (re/union-patterns patterns)]
     (if (= (:: pat int) 0)
-      0
+      (RNever)
       (let [r (re/compile pat)] (do (str-free (:: pat int)) r)))))
-;;; re/replace-all -- replace all non-overlapping matches of a regex.
-;;;
-;;; Parameters:
-;;;   re          -- compiled regex handle from re/compile
-;;;   input       -- input string cstr
-;;;   replacement -- replacement string cstr (literal; no backreferences)
-;;;
-;;; Returns:
-;;;   A heap-allocated cstr with all matches replaced.  Caller must free.
-;;;
-;;; Example:
-;;;   (re/replace-all my-re "a1b2c3" "X")  ; => "aXbXcX"
-;;;
-;;; Since: Phase B2
-
-(defn re/replace-all [re : int input : cstr replacement : cstr] : cstr
-  ```c
-  #include <regex.h>
-  if (!re) return strdup(input);
-  regex_t *r = (regex_t*)(intptr_t)re;
-  regmatch_t m[1];
-  const char *cur = input;
-  size_t rlen = strlen(replacement);
-  size_t out_cap = strlen(input) * 2 + rlen + 16;
-  char *out = malloc(out_cap);
-  size_t pos = 0;
-  while (*cur && regexec(r, cur, 1, m, 0) == 0) {
-    size_t pre  = (size_t)m[0].rm_so;
-    size_t need = pos + pre + rlen + strlen(cur + m[0].rm_eo) + 2;
-    if (need > out_cap) { out_cap = need * 2; out = realloc(out, out_cap); }
-    memcpy(out + pos, cur, pre);
-    pos += pre;
-    memcpy(out + pos, replacement, rlen);
-    pos += rlen;
-    size_t adv = (m[0].rm_eo > m[0].rm_so) ? (size_t)m[0].rm_eo : 1;
-    cur += adv;
-  }
-  size_t tail = strlen(cur);
-  if (pos + tail + 1 > out_cap) out = realloc(out, pos + tail + 1);
-  memcpy(out + pos, cur, tail + 1);
-  return out;
-  ```)

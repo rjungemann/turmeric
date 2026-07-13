@@ -24,7 +24,7 @@
     (if (re/match? r "12345")   (println "digit-yes") (println "digit-no"))
     (if (re/match? r "foo-bar") (println "lit-yes")   (println "lit-no"))
     (if (re/match? r "!!!")     (println "punct-yes") (println "punct-no"))
-    ; Empty list: union returns 0
-    (println (re/compile-union 0))
+    ; Empty list: union compiles to a never-match Regex.
+    (if (re/match? (re/compile-union 0) "anything") (println "empty-yes") (println "empty-no"))
     (re/free r))
   0)

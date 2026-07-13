@@ -544,6 +544,27 @@ static TuriValue native_int_val(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     if (!p) return turi_int(0);
     return turi_int(*p);
 }
+/* cstr-sub: substring [start,end) of a cstr as a fresh NUL-terminated buffer.
+ * Mirrors stdlib/cstr.tur's cstr-sub. Clamps start/end into [0,len] and
+ * start<=end so a caller cannot walk off the buffer. Returns TURI_CSTR. */
+static TuriValue native_cstr_sub(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr)
+                      ? a[0].as_cstr : (const char *)(intptr_t)(n > 0 ? a[0].as_int : 0);
+    if (!s) s = "";
+    int64_t slen = (int64_t)strlen(s);
+    int64_t start = (n > 1) ? a[1].as_int : 0;
+    int64_t end = (n > 2) ? a[2].as_int : 0;
+    if (start < 0) start = 0;
+    if (end > slen) end = slen;
+    if (end < start) end = start;
+    size_t outlen = (size_t)(end - start);
+    char *out = (char *)malloc(outlen + 1);
+    if (!out) return turi_nil();
+    memcpy(out, s + start, outlen);
+    out[outlen] = '\0';
+    TuriValue v = {0}; v.tag = TURI_CSTR; v.as_cstr = out; return v;
+}
 /* alloc-str: strdup a cstr, return heap-allocated copy as int64_t ptr */
 static TuriValue native_alloc_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -2937,10 +2958,13 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "strcmp",          native_strcmp_fn,       NULL);
     /* Layout-exact string builders (interp-string-natives-and-range-show-plan
      * Phase 0): shims over the inline-C str-concat / cstr-len / cstr-nth the
-     * tree-walker cannot run. Same binding names, same NUL-terminated cstr ABI. */
+     * tree-walker cannot run. Same binding names, same NUL-terminated cstr ABI.
+     * cstr-sub (the substring builder the pure-Turmeric re.tur engine reads
+     * output through) rides the same shim cluster. */
     turi_env_register_native(env, "str-concat",      native_str_concat,      NULL);
     turi_env_register_native(env, "cstr-len",        native_cstr_len,        NULL);
     turi_env_register_native(env, "cstr-nth",        native_cstr_nth,        NULL);
+    turi_env_register_native(env, "cstr-sub",        native_cstr_sub,        NULL);
     /* Common math/array fixture helpers */
     turi_env_register_native(env, "c-abs",           native_c_abs,           NULL);
     turi_env_register_native(env, "popcount",        native_popcount,        NULL);
