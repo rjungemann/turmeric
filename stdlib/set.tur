@@ -435,7 +435,14 @@
   #fx{}
   : void
   ```c
-  free((void*)(intptr_t)s);
+  struct { void *hamt; } *set = (void*)(intptr_t)s;
+  /* Deep-free: release the backing HAMT before the wrapper (see map-free).
+   * tur_hamt_free is refcount-safe under structural sharing and releases every
+   * OWNED element box via the set's stamped key_ops -- so a Set[Point] with
+   * mk-owned? = 1 struct elements frees each boxed element exactly once.  Matches
+   * the interpreter's native set-free; the compiled body was shallow. */
+  if (set->hamt) tur_hamt_free(set->hamt);
+  free(set);
   ```)
 ;;; set-hamt -- internal accessor returning the backing HAMT pointer.
 

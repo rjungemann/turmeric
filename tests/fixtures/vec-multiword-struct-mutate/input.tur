@@ -1,0 +1,39 @@
+;; collection-multiword-element-boxing (Vec mutation lifecycle): a Vec[Point]
+;; whose element is a MULTI-WORD by-value :copy struct rides its data slot as a
+;; heap box pointer.  The mutation ops must keep the box lifecycle leak-free:
+;;
+;;   - vec-set! overwrites data[i]: the OLD box is freed before the new one is
+;;     stored (vec-set! is a macro -> vec-set-o! threading the emit-time
+;;     tur-vec-elem-wide? query; for a single-word element the flag is 0 and the
+;;     slot is overwritten directly).
+;;   - vec-drop-last! removes the last element AND frees its box -- the leak-free
+;;     replacement for a discarded (vec-pop! v) (which would transfer the box
+;;     out and leak it; see docs/archive/vec-set-pop-element-box-leak.md).
+;;   - vec-free then releases the remaining element boxes.
+;;
+;; Runs on BOTH paths: the interpreter's native_vec_set_o / native_vec_drop_last_o
+;; ignore the flag (elements ride as TuriStruct pointers it owns separately), so
+;; field reads and Show agree bit-for-bit with the compiled path.
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+
+(definstance Show [Point]
+  (show [p]
+    (show-concat "("
+      (show-concat (show (.x p))
+        (show-concat "," (show-concat (show (.y p)) ")"))))))
+
+(defn main [] : int
+  (let [v (vec-of (Point 1 2) (Point 3 4) (Point 5 6))]
+    ;; overwrite element 0 -- old (Point 1 2) box is freed
+    (vec-set! v 0 (Point 9 9))
+    (println (show (.x (:: (vec-get v 0) Point))))   ;; 9
+    ;; drop the last element -- (Point 5 6) box is freed
+    (vec-drop-last! v)
+    (println (show (vec-len v)))                     ;; 2
+    ;; whole-vec read-back after mutation
+    (println (show v))                               ;; [(9,9) (3,4)]
+    ;; free the vec: the two remaining element boxes are released
+    (vec-free v)
+    0))

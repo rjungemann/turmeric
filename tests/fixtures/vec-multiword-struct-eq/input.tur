@@ -1,0 +1,26 @@
+;; collection-multiword-element-boxing (Eq): Eq[Vec] over a MULTI-WORD by-value
+;; struct element compares element-by-element via Eq[Point] (content), proving
+;; the pushed element is a heap-boxed COPY read back by value -- two
+;; independently-constructed vecs of content-equal Points are equal, and a
+;; differing element makes them unequal.
+;;
+;; Runs on BOTH paths.  The interpreter previously mis-dispatched: the
+;; auto-loaded `vec-eq-loop` baked a `dict_arg` under a DUPLICATE `Eq` typeclass
+;; object, so the runtime re-resolver (which pointer-matched instances) kept the
+;; carrier `Eq[int]` and pointer-compared the struct elements.  The re-resolver
+;; now falls back to matching this class's instances BY NAME for a non-primitive
+;; element (eval.c gde_reresolve_method), so `Eq[Point]` is threaded and content
+;; comparison agrees with the compiled path.
+(load "stdlib/typeclass.tur")
+
+(defstruct Point :copy [x : int y : int])
+
+(definstance Eq [Point]
+  (eq? [a b] (and (= (.x a) (.x b)) (= (.y a) (.y b)))))
+
+(defn main [] : int
+  ;; content-equal, independently constructed -> equal (value semantics)
+  (println (if (.eq? (vec-of (Point 1 2)) (vec-of (Point 1 2))) "eq" "ne"))
+  ;; a differing element -> unequal
+  (println (if (.eq? (vec-of (Point 1 2)) (vec-of (Point 9 9))) "eq" "ne"))
+  0)

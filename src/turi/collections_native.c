@@ -268,6 +268,14 @@ static TuriValue set_free_box(TuriValue v) {
     free(s);
     return turi_nil();
 }
+/* Shared with the map _eq_o natives below: a Turmeric-closure key comparator
+ * (from a MapKey `mk-cmp` :turi branch for a multi-word struct/ADT key -- see
+ * the #?(:tur ... :turi ...) reader-conditional pattern) is threaded through the
+ * HAMT via this ctx + trampoline, exactly as the map natives do.  Defined below
+ * (map_turi_eq_tramp); forward-declared here so the set natives can use it. */
+typedef struct { TuriEnv *env; TuriValue cmp; } MapTuriEqCtx;
+static bool map_turi_eq_tramp(int64_t a, int64_t b, void *vctx);
+
 static TuriValue native_set_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
     return set_wrap_tracked(env, tur_hamt_new());
@@ -279,14 +287,22 @@ static TuriValue native_set_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
 /* Raw content-keyed set ops: (s h x keyeq owned) -- the interpreter overrides
  * for stdlib/set.tur's set-add-eq-o / set-has-eq-o? / set-del-eq-o inline-C
  * bodies (the value slot is the (void*)1 sentinel; a Set is a Map to unit).
- * keyeq is a C function pointer (from MapKey[A].mk-cmp) carried as int -- Set
- * comparators always come from MapKey instances (never a Turmeric closure), so
- * unlike the map _eq_o natives there is no closure path. NULL keyeq (int/Sym
- * identity sets) makes the _eq_o path behave like the plain path. */
+ * keyeq is normally a C function pointer (from MapKey[A].mk-cmp) carried as int;
+ * for a multi-word struct/ADT element whose MapKey `mk-cmp` :turi branch returns
+ * a Turmeric CLOSURE, thread it through the ctx trampoline exactly like the map
+ * _eq_o natives (a raw-int cast + call would be a wild jump).  NULL / non-closure
+ * keyeq (int/Sym identity sets) makes the _eq_o path behave like the plain path. */
 static TuriValue native_set_add_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
     Hamt *src = set_hamt(a[0]);
+    if (a[3].tag == TURI_CLOSURE) {
+        MapTuriEqCtx ctx = { e, a[3] };
+        Hamt *r = tur_hamt_set_eq_ctx(src, (uint64_t)a[1].as_int,
+                                      (void *)(intptr_t)a[2].as_int, (void *)1,
+                                      map_turi_eq_tramp, &ctx);
+        return set_wrap_owned(e, src, r);
+    }
     Hamt *r = tur_hamt_set_eq_o(src, (uint64_t)a[1].as_int,
                                 (void *)(intptr_t)a[2].as_int, (void *)1,
                                 (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
@@ -296,6 +312,12 @@ static TuriValue native_set_add_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
 static TuriValue native_set_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 5) return turi_bool(false);
+    if (a[3].tag == TURI_CLOSURE) {
+        MapTuriEqCtx ctx = { e, a[3] };
+        return turi_bool(tur_hamt_has_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
+                                             (void *)(intptr_t)a[2].as_int,
+                                             map_turi_eq_tramp, &ctx));
+    }
     return turi_bool(tur_hamt_has_eq_o(set_hamt(a[0]), (uint64_t)a[1].as_int,
                                        (void *)(intptr_t)a[2].as_int,
                                        (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
@@ -305,6 +327,13 @@ static TuriValue native_set_del_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
     (void)ud;
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
     Hamt *src = set_hamt(a[0]);
+    if (a[3].tag == TURI_CLOSURE) {
+        MapTuriEqCtx ctx = { e, a[3] };
+        Hamt *r = tur_hamt_del_eq_ctx(src, (uint64_t)a[1].as_int,
+                                      (void *)(intptr_t)a[2].as_int,
+                                      map_turi_eq_tramp, &ctx);
+        return set_wrap_owned(e, src, r);
+    }
     Hamt *r = tur_hamt_del_eq_o(src, (uint64_t)a[1].as_int,
                                 (void *)(intptr_t)a[2].as_int,
                                 (tur_hamt_keyeq_fn)(intptr_t)a[3].as_int,
@@ -540,8 +569,8 @@ static TuriValue native_hash_f64(TuriEnv *e, TuriValue *a, uint32_t n, void *ud)
  * comparable as interpreter values (e.g. a one-word scalar carrier with custom
  * equality logic). A boxed/owned key whose comparator dereferences the box is an
  * inline-C comparator and never reaches here as a runnable turi closure. */
-typedef struct { TuriEnv *env; TuriValue cmp; } MapTuriEqCtx;
-
+/* MapTuriEqCtx typedef + this trampoline's forward declaration are hoisted above
+ * the set _eq_o natives so both the set and map _eq_o natives share them. */
 static bool map_turi_eq_tramp(int64_t a, int64_t b, void *vctx) {
     MapTuriEqCtx *c = (MapTuriEqCtx *)vctx;
     /* If a prior comparison in this HAMT op already raised, stop calling the
@@ -813,6 +842,25 @@ static TuriValue native_hamt_keyeq(TuriEnv *e, TuriValue *a, uint32_t n, void *u
     if (n < 1) return turi_int(0);
     return turi_int((int64_t)(intptr_t)tur_hamt_keyeq((Hamt *)(intptr_t)a[0].as_int));
 }
+/* collection-multiword-element-boxing: hand back the address of the generic
+ * struct-key content comparator (turi_struct_key_eq_c, defined in eval.c) as an
+ * int carrier.  A struct/ADT key's MapKey `mk-cmp` :turi branch returns
+ * `(struct-key-cmp)` so the comparator is a stampable C fn ptr -- identical shape
+ * to the primitive `__inst_MapKey_mk_hycmp_cstr` native -- which makes the
+ * interpreter content-key AND recover the comparator for structural
+ * Eq[Map]/Eq[Set], matching the compiled tur_hamt_box_key_eq path. */
+static TuriValue native_struct_key_cmp(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)a; (void)n; (void)ud;
+    return turi_int((int64_t)(intptr_t)&turi_struct_key_eq_c);
+}
+/* collection-multiword-element-boxing: uniform content hash for a struct/ADT key
+ * -- a Hash :turi branch returns `(struct-hash p)` so the interpreter hash body
+ * is per-struct boilerplate (no field-by-field expression). */
+static TuriValue native_struct_hash(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    if (n < 1) return turi_int(0);
+    return turi_int(turi_struct_hash_c(a[0]));
+}
 static TuriValue native_hamt_get_dynamic(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 4) return turi_int(0);
@@ -1016,6 +1064,41 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* vec-set-o! -- interpreter override for the boxed-aware vec-set! helper.
+ * The compiled body frees the old element box before overwriting when its
+ * `boxed` flag (a[3]) is set; the tree-walker never boxes multi-word elements
+ * (they ride as TuriStruct pointers it owns), so the flag is irrelevant here --
+ * overwrite the slot exactly like native_vec_set.  vec-set! macro-expands to
+ * `(vec-set-o! v i val (tur-vec-elem-wide? v))` on both paths. */
+static TuriValue native_vec_set_o(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_vec_set(env, a, n, ud);
+}
+
+/* vec-drop-last-o! -- interpreter override for vec-drop-last!'s helper.  Shrinks
+ * len; the `boxed` flag (a[1]) is ignored (the interpreter frees no per-element
+ * boxes -- elements ride as TuriStruct pointers freed at teardown).  Mirrors
+ * native_vec_pop minus the returned value. */
+static TuriValue native_vec_drop_last_o(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v || v[1] == 0) return turi_nil();
+    v[1]--;
+    return turi_nil();
+}
+
+/* vec-free-o -- interpreter override for the boxed-aware vec-free-o helper.
+ * The compiled body frees per-element heap boxes when its `boxed` flag is set,
+ * but the tree-walker never boxes multi-word elements (they ride as TuriStruct
+ * pointers owned by the interpreter's own value model, freed at teardown), so
+ * the `boxed` arg (a[1]) is irrelevant here: free the data buffer + header
+ * exactly like native_vec_free.  vec-free macro-expands to `(vec-free-o v
+ * (tur-vec-elem-wide? v))` on both paths, so this native is what backs
+ * `(vec-free v)` under --interpret. */
+static TuriValue native_vec_free_o(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_vec_free(env, a, n, ud);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -1161,6 +1244,8 @@ void turi_register_collection_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_hamt_iter_cur_key", native_hamt_iter_cur_key, NULL);
     turi_env_register_native(env, "tur_hamt_iter_cur_val", native_hamt_iter_cur_val, NULL);
     turi_env_register_native(env, "tur_hamt_keyeq", native_hamt_keyeq, NULL);
+    turi_env_register_native(env, "struct-key-cmp", native_struct_key_cmp, NULL);
+    turi_env_register_native(env, "struct-hash", native_struct_hash, NULL);
     turi_env_register_native(env, "tur_hamt_get_dynamic", native_hamt_get_dynamic, NULL);
     turi_env_register_native(env, "tur_hamt_has_dynamic", native_hamt_has_dynamic, NULL);
     turi_env_register_native(env, "map-hamt", native_map_hamt, NULL);
@@ -1177,7 +1262,10 @@ void turi_register_collection_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-push-ptr!", native_vec_push, NULL);
     turi_env_register_native(env, "vec-pop!", native_vec_pop, NULL);
     turi_env_register_native(env, "vec-set!", native_vec_set, NULL);
+    turi_env_register_native(env, "vec-set-o!", native_vec_set_o, NULL);
+    turi_env_register_native(env, "vec-drop-last-o!", native_vec_drop_last_o, NULL);
     turi_env_register_native(env, "vec-free", native_vec_free, NULL);
+    turi_env_register_native(env, "vec-free-o", native_vec_free_o, NULL);
     turi_env_register_native(env, "vec-eq?", native_vec_eq, NULL);
     turi_env_register_native(env, "vec-new-filled", native_vec_new_filled, NULL);
 

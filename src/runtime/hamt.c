@@ -169,6 +169,7 @@ static Hamt *hamt_alloc_empty(void) {
     m->key_ops.retain = NULL;
     m->key_ops.release = NULL;
     m->key_ops.eq = NULL;  /* GDE3: no stamped comparator initially */
+    m->val_owned = false;  /* multi-word-value boxing: off by default */
     return m;
 }
 
@@ -340,6 +341,19 @@ tur_hamt_key_ops tur_hamt_box_key_ops(void) {
     return ops;
 }
 
+bool tur_hamt_box_key_eq(int64_t a, int64_t b) {
+    void *pa = (void *)(intptr_t)a;
+    void *pb = (void *)(intptr_t)b;
+    if (pa == pb) return true;
+    if (!pa || !pb) return false;
+    const tur_hamt_box_hdr *ha =
+        (const tur_hamt_box_hdr *)((const char *)pa - sizeof(tur_hamt_box_hdr));
+    const tur_hamt_box_hdr *hb =
+        (const tur_hamt_box_hdr *)((const char *)pb - sizeof(tur_hamt_box_hdr));
+    if (ha->size != hb->size) return false;
+    return memcmp(pa, pb, (size_t)ha->size) == 0;
+}
+
 /* Thread-local key-ownership hook, mirroring g_hamt_key_eq: saved/restored
  * around each _eq_owned call and around tur_hamt_free so nested operations
  * (and the deferred free of structurally-shared nodes) see the right ops. */
@@ -351,6 +365,20 @@ static inline void key_retain_hook(void *k) {
 }
 static inline void key_release_hook(void *k) {
     if (g_hamt_key_release && k) g_hamt_key_release(k);
+}
+
+/* Multi-word-value boxing: value-box ownership hooks, exact mirror of the key
+ * hooks above.  An owned value is a tur_hamt_box_key box (same as an owned key),
+ * so the retain/release ops are always the box refcount ops -- the hook is
+ * NULL (no-op) unless the current operation / free is over a val_owned map. */
+static _Thread_local void (*g_hamt_val_retain)(void *) = NULL;
+static _Thread_local void (*g_hamt_val_release)(void *) = NULL;
+
+static inline void val_retain_hook(void *v) {
+    if (g_hamt_val_retain && v) g_hamt_val_retain(v);
+}
+static inline void val_release_hook(void *v) {
+    if (g_hamt_val_release && v) g_hamt_val_release(v);
 }
 
 /* ============================================================================
@@ -411,6 +439,7 @@ static void node_free_recursive(HamtNode *n) {
                 HamtEntry *next = e->next;
                 /* WKC2: this entry's reference to its (boxed) key goes away. */
                 key_release_hook(e->key);
+                val_release_hook(e->val);   /* ... and its (boxed) value */
                 free(e);
                 e = next;
             }
@@ -479,6 +508,7 @@ static HamtNode *collision_node_copy(HamtNode *src) {
         /* WKC2: the duplicated entry is a new reference to the (shared) key;
          * retain so the box outlives whichever copy is freed last. */
         key_retain_hook((*tail)->key);
+        val_retain_hook((*tail)->val);   /* ... and to the (shared) boxed value */
         tail = &(*tail)->next;
     }
 
@@ -600,6 +630,12 @@ static HamtNode *node_insert(HamtNode *n, uint64_t hash, void *key, void *val,
                     HamtNode *new_node = collision_node_copy(n);
                     for (HamtEntry *f = new_node->as.collision.entries; f; f = f->next) {
                         if (f->hash == hash && keys_equal(f->key, key)) {
+                            /* Update replaces the value: collision_node_copy just
+                             * retained the OLD boxed value, and the incoming `val`
+                             * carries the caller's fresh reference -- so release the
+                             * old box once (undo the copy-retain) before overwriting.
+                             * The key is unchanged, so its copy-retain stands. */
+                            val_release_hook(f->val);
                             f->val = val;
                             break;
                         }
@@ -761,6 +797,7 @@ static HamtNode *node_delete(HamtNode *n, uint64_t hash, void *key, uint32_t lev
                             /* WKC2: collision_node_copy retained this key; the
                              * removed entry's reference goes away here. */
                             key_release_hook(new_e->key);
+                            val_release_hook(new_e->val);   /* ... and its boxed value */
                             free(new_e);
                             break;
                         }
@@ -884,9 +921,14 @@ void tur_hamt_free(Hamt *m) {
          * actually free during the node cascade release their boxed keys.
          * Saved/restored to compose with an enclosing operation. */
         void (*save_release)(void *) = g_hamt_key_release;
+        void (*save_val_release)(void *) = g_hamt_val_release;
         g_hamt_key_release = m->key_ops.release;
+        /* Multi-word-value boxing: an owned value is always a tur_hamt_box_key
+         * box, so its release op is the box refcount release. */
+        g_hamt_val_release = m->val_owned ? tur_hamt_box_release : NULL;
         tur_hamt_node_release(m->root);
         g_hamt_key_release = save_release;
+        g_hamt_val_release = save_val_release;
     }
     free(m);
 }
@@ -919,6 +961,7 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
     /* new_root has ref_count=1 from node_insert; new_map is the sole owner. */
     new_map->root = new_root;
     new_map->key_ops = m->key_ops;  /* WKC2: inherit boxed-key ownership */
+    new_map->val_owned = m->val_owned;  /* inherit value-box ownership */
 
     if (key_exists) {
         new_map->count = m->count;
@@ -950,6 +993,7 @@ Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
      * never reaches refcount 0 on free (leaking the node and its boxed keys). */
     new_map->root = new_root;
     new_map->key_ops = m->key_ops;  /* WKC2: inherit boxed-key ownership */
+    new_map->val_owned = m->val_owned;  /* inherit value-box ownership */
     new_map->count = m->count - 1;
 
     return new_map;
@@ -1142,32 +1186,51 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
-/* Flag-driven convenience wrappers (WKC3): owned != 0 uses the standard boxed-
- * key ops, owned == 0 is the plain _eq path. */
+/* Flag-driven convenience wrappers (WKC3 + multi-word-value boxing).  `owned` is
+ * a BITMASK: bit 0 selects boxed-KEY ownership (the standard tur_hamt_box_key
+ * ops), bit 1 selects boxed-VALUE ownership.  A plain `owned == 0` is the
+ * un-owned _eq path, and a legacy `owned == 1` (key only) is unchanged, so this
+ * is backward-compatible.  Value ownership installs the box refcount as the
+ * thread-local value hooks for the duration of the mutating op (set/del) so
+ * structural copies retain and dropped entries release the value box; the flag
+ * is stamped on the resulting map for tur_hamt_free.  get/has are read-only (no
+ * node copy/free), so they never touch value lifetime. */
 Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
-    if (owned)
-        return tur_hamt_set_eq_owned(m, hash, key, val, eq, tur_hamt_box_key_ops());
-    return tur_hamt_set_eq(m, hash, key, val, eq);
+    void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
+    if (owned & 2) { g_hamt_val_retain = tur_hamt_box_retain;
+                     g_hamt_val_release = tur_hamt_box_release; }
+    Hamt *r = (owned & 1)
+        ? tur_hamt_set_eq_owned(m, hash, key, val, eq, tur_hamt_box_key_ops())
+        : tur_hamt_set_eq(m, hash, key, val, eq);
+    if (r && (owned & 2)) r->val_owned = true;
+    g_hamt_val_retain = svr; g_hamt_val_release = svl;
+    return r;
 }
 
 Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
-    if (owned)
-        return tur_hamt_del_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
-    return tur_hamt_del_eq(m, hash, key, eq);
+    void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
+    if (owned & 2) { g_hamt_val_retain = tur_hamt_box_retain;
+                     g_hamt_val_release = tur_hamt_box_release; }
+    Hamt *r = (owned & 1)
+        ? tur_hamt_del_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops())
+        : tur_hamt_del_eq(m, hash, key, eq);
+    if (r && (owned & 2)) r->val_owned = true;
+    g_hamt_val_retain = svr; g_hamt_val_release = svl;
+    return r;
 }
 
 bool tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key,
                        tur_hamt_keyeq_fn eq, int64_t owned) {
-    if (owned)
+    if (owned & 1)
         return tur_hamt_has_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
     return tur_hamt_has_eq(m, hash, key, eq);
 }
 
 void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
-    if (owned)
+    if (owned & 1)
         return tur_hamt_get_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops());
     return tur_hamt_get_eq(m, hash, key, eq);
 }

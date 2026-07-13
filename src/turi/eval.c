@@ -65,6 +65,7 @@
 #include "arena.h"
 #include "buf.h"
 #include "builtins.h"
+#include "runtime/hamt.h"   /* tur_hamt_hash_str -- struct-key content hash */
 #include "diag.h"
 #include "elab.h"
 #include "expr.h"
@@ -566,6 +567,87 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
     s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
+}
+
+/* collection-multiword-element-boxing (interpreter parity): a GENERIC content
+ * comparator for two struct/ADT KEYS, the interpreter analogue of the compiled
+ * runtime's tur_hamt_box_key_eq.  A multi-word struct Map key / Set element uses
+ * a `MapKey` `mk-cmp` #?(:turi ...) branch that returns the ADDRESS of this
+ * function (via the `struct-key-cmp` native), so it is a stampable
+ * bool(int64,int64) C function pointer -- exactly like the primitive cstr/float
+ * comparators.  Being a real C fn ptr (not a Turmeric closure) means it is
+ * stamped on the HAMT root by the _eq_o path and RECOVERED by tur_hamt_keyeq, so
+ * structural Eq[Map]/Eq[Set] over struct keys work in the interpreter, not just
+ * assoc/get/member.  The two int64 args are the stored key carriers, which for a
+ * struct key (mk-box :turi returns the struct itself) are TuriStruct pointers;
+ * compare their field content recursively (mirroring the compiled byte compare
+ * over the copied key bytes). */
+static bool turi_key_content_eq(TuriValue x, TuriValue y) {
+    if (x.tag != y.tag) return false;
+    switch (x.tag) {
+        case TURI_INT:    return x.as_int == y.as_int;
+        case TURI_BOOL:   return x.as_bool == y.as_bool;
+        case TURI_FLOAT:  return x.as_float == y.as_float;
+        case TURI_NIL:    return true;
+        case TURI_CSTR:
+            return x.as_cstr == y.as_cstr ||
+                   (x.as_cstr && y.as_cstr && strcmp(x.as_cstr, y.as_cstr) == 0);
+        case TURI_STRUCT: {
+            const TuriStruct *sa = x.as_struct, *sb = y.as_struct;
+            if (sa == sb) return true;
+            if (!sa || !sb || sa->n_fields != sb->n_fields) return false;
+            if (sa->name && sb->name && strcmp(sa->name, sb->name) != 0)
+                return false;
+            for (uint32_t i = 0; i < sa->n_fields; i++)
+                if (!turi_key_content_eq(sa->fields[i], sb->fields[i]))
+                    return false;
+            return true;
+        }
+        default:          return x.as_int == y.as_int;   /* pointer identity */
+    }
+}
+
+bool turi_struct_key_eq_c(int64_t a, int64_t b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    TuriValue x = turi_struct_val((TuriStruct *)(intptr_t)a);
+    TuriValue y = turi_struct_val((TuriStruct *)(intptr_t)b);
+    return turi_key_content_eq(x, y);
+}
+
+/* Companion generic content hash for a struct/ADT KEY (the interpreter analogue
+ * of the compiled `tur_hamt_hash_xxh64(&p, sizeof p)`).  A `Hash` :turi branch
+ * returns `(struct-hash p)` so the interpreter hash is uniform per struct -- no
+ * per-field expression.  A splitmix64-style fold over each field's content; the
+ * exact value need only be deterministic within an interpreter run (hashes never
+ * cross the compiled/interpreted boundary, and equal-content keys hash equally
+ * because equal fields fold identically). */
+static uint64_t turi_key_content_hash(TuriValue v) {
+    uint64_t h;
+    switch (v.tag) {
+        case TURI_INT:   h = (uint64_t)v.as_int; break;
+        case TURI_BOOL:  h = v.as_bool ? 1u : 0u; break;
+        case TURI_FLOAT: { union { double d; uint64_t u; } u; u.d = v.as_float; h = u.u; break; }
+        case TURI_NIL:   h = 0; break;
+        case TURI_CSTR:  h = v.as_cstr ? tur_hamt_hash_str(v.as_cstr) : 0; break;
+        case TURI_STRUCT: {
+            const TuriStruct *s = v.as_struct;
+            h = s && s->name ? tur_hamt_hash_str(s->name) : 0;
+            if (s) for (uint32_t i = 0; i < s->n_fields; i++) {
+                h ^= turi_key_content_hash(s->fields[i]) + 0x9e3779b97f4a7c15ULL +
+                     (h << 6) + (h >> 2);
+            }
+            break;
+        }
+        default:         h = (uint64_t)v.as_int; break;
+    }
+    h ^= h >> 30; h *= 0xbf58476d1ce4e5b9ULL;
+    h ^= h >> 27; h *= 0x94d049bb133111ebULL; h ^= h >> 31;
+    return h;
+}
+
+int64_t turi_struct_hash_c(TuriValue v) {
+    return (int64_t)turi_key_content_hash(v);
 }
 
 /* M2b: build a zero-valued TuriValue for a type T -- the interpreter's analogue
@@ -4326,6 +4408,33 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
             if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
         }
     }
+    /* Duplicate-typeclass fallback (multi-word struct/ADT element dispatch): the
+     * elaborator can mint more than one `TypeClass` object for the same class --
+     * e.g. `Eq` from the auto-loaded typeclass-eq.tur AND again when the program
+     * loads typeclass.tur.  A generic body (e.g. the auto-loaded `vec-eq-loop`)
+     * elaborated under one copy bakes a `dict_arg` whose `instance->typeclass` is
+     * the OTHER copy than the one every user `definstance` registered under, so
+     * the pointer compare above finds NOTHING and `Eq[Vec]` over a struct element
+     * kept the baked int-carrier `Eq[int]`, comparing the two element BOX POINTERS
+     * instead of the struct content.  When the pointer match came up empty for a
+     * NON-primitive concrete, retry matching this class's instances BY NAME (class
+     * names are unique per program).  Restricted to non-primitives so a primitive
+     * concrete keeps its exact prior dispatch (a primitive that finds no by-name
+     * instance under its own tc pointer must keep the baked representative, never
+     * a stale duplicate's copy). */
+    if (!match && !concrete_is_primitive && head && tc->name) {
+        const char *tc_name = tc->name->name;
+        for (TypeClassInstance *inst = tc_env->instances; inst; inst = inst->next) {
+            if (inst->n_type_args == 0 || inst == rep) continue;
+            const char *itcn = inst->typeclass && inst->typeclass->name
+                               ? inst->typeclass->name->name : NULL;
+            if (!itcn || strcmp(itcn, tc_name) != 0) continue;
+            const char *ihead = (inst->type_arg_syms && inst->type_arg_syms[0])
+                                ? inst->type_arg_syms[0]->name : NULL;
+            if (!ihead) ihead = gde_type_head_name(&inst->type_args[0]);
+            if (ihead && strcmp(ihead, head) == 0) { match = inst; break; }
+        }
+    }
     /* Fallback: structured dispatch key (ARROW -> first non-primitive instance).
      * Skip for a primitive concrete -- a primitive that found no by-name instance
      * keeps the baked representative rather than mis-matching an HKT instance. */
@@ -4889,6 +4998,50 @@ static TypeKind ascribe_effective_kind(EvalFrame *frame, const Type *ty) {
     return ty->kind;
 }
 
+/* collection-multiword-element-boxing (interpreter, Map struct VALUE read-back):
+ * a by-value struct/ADT stored as a Map VALUE rides the int64 carrier (the map
+ * macro passes the value straight through; native_map_get_eq_o hands it back as
+ * turi_int(pointer)).  In the interpreter that pointer is a TuriStruct*, but
+ * get_field_extract's TURI_INT path reads it as a compiled raw int64[] field
+ * buffer -- so `.x` reads the TuriStruct header (name/n_fields), not the logical
+ * field.  When `(:: <carrier> T)` ascribes such a carrier to a by-value
+ * (non-heap) struct/ADT, retag it to TURI_STRUCT so field access takes the
+ * correct TuriStruct path.  Heavily guarded so a raw Option/Result carrier or a
+ * non-struct int is left untouched: Option/Result flow as APPLIED types (TY_APP,
+ * excluded here -- only a bare non-parametric record ADT reaches this), the
+ * pointer and its embedded name pointer must be plausible (> 0x1000), the struct
+ * name must equal the ascribed type's name, and the field count must match. */
+static TuriValue try_retag_carrier_struct(EvalFrame *frame, const Type *ty,
+                                          TuriValue v) {
+    if (v.tag != TURI_INT || v.as_int == 0) return v;
+    Type rt = *ty;
+    if (ty->kind == TY_TYVAR && ty->as.tyvar_.name) {
+        Type r;
+        if (frame_lookup_tyvar(frame, ty->as.tyvar_.name, &r) && r.kind != TY_TYVAR)
+            rt = r;
+    }
+    if (rt.kind != TY_ADT || !rt.as.adt_.def) return v;
+    const AdtDef *d = rt.as.adt_.def;
+    if (d->is_heap || !d->name) return v;
+    /* Only a MULTI-WORD single-ctor record (>= 2 fields) is stored as a carrier
+     * POINTER (matching the compiled ">8 byte by-value is boxed" rule).  A
+     * single-word value -- a `defopaque` int newtype, a 1-field record -- rides
+     * the carrier as its INLINE value (a plain int, NOT a TuriStruct pointer), so
+     * dereferencing it as a struct would read arbitrary memory (a large opaque
+     * int looks like a pointer).  Requiring >= 2 fields excludes every
+     * single-word carrier and confines the deref to real multi-word TuriStructs. */
+    if (d->n_ctors != 1 || !d->ctors || !d->ctors[0]) return v;
+    uint32_t nf = d->ctors[0]->n_fields;
+    if (nf < 2) return v;
+    uintptr_t p = (uintptr_t)(intptr_t)v.as_int;
+    if (p < 0x1000) return v;
+    TuriStruct *s = (TuriStruct *)p;
+    if ((uintptr_t)s->name < 0x1000) return v;   /* raw carrier: word 0 is not a name ptr */
+    if (s->n_fields != nf) return v;
+    if (strcmp(s->name, d->name) != 0) return v;
+    return turi_struct_val(s);
+}
+
 /* Apply the post-operand logic of a single-operand form whose inner expression
  * has already evaluated to `v` (assumed non-signalled; callers check
  * error/returning/throwing first).  Transparent shims fall through to `return
@@ -4995,7 +5148,10 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
             return v;
         default:
-            return v;
+            /* By-value struct/ADT ascription: retag an int carrier that is really
+             * a TuriStruct* (e.g. a struct Map VALUE) so field access reads it as
+             * a struct.  No-op for every other type (guarded). */
+            return try_retag_carrier_struct(frame, &e->type, v);
         }
     case EX_RETURN:
         env->returning    = true;

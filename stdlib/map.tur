@@ -472,14 +472,27 @@
 ;;;
 ;;; Since: Phase TMS3 (macro accessor; was map-assoc-g; GHE3)
 
+;;; tur-wide-byval? -- 1 if V is a multi-word (> 8 byte) by-value struct/ADT that
+;;; the compiler heap-BOXES onto the value carrier, else 0.  The compiled backend
+;;; folds it to a constant per monomorphization (emit_expr.c), in lockstep with
+;;; the value-boxing decision; this pure-Turmeric fallback body returns 0 for the
+;;; interpreter (where a value rides as a TuriValue, never a C box) and for any
+;;; call the backend does not intercept.  map-assoc threads it as bit 1 of the
+;;; `owned` flag so a Map[K Point]-style boxed value is released on map-free.
+;;;
+;;; Since: multiword-value-box-lifecycle
+
+(defn tur-wide-byval? [V] [x : V] : int 0)
+
 (defmacro map-assoc [m k v]
-  `(let [__tur_mk__ ~k]
+  `(let [__tur_mk__ ~k
+         __tur_mv__ ~v]
      (map-assoc-eq-o (tur-map-kcheck ~m (& __tur_mk__))
        (hash __tur_mk__)
        (mk-box __tur_mk__)
-       ~v
+       __tur_mv__
        (mk-cmp __tur_mk__)
-       (mk-owned? __tur_mk__))))
+       (+ (mk-owned? __tur_mk__) (* 2 (tur-wide-byval? __tur_mv__))))))
 ;;; map-get -- look up a key; returns the value or 0 (none) if absent.
 ;;;
 ;;; Parameters:
@@ -606,7 +619,18 @@
   #fx{}
   :void
   ```c
-  free((void*)(intptr_t)m);
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  /* Deep-free: release the backing HAMT before the wrapper.  tur_hamt_free is
+   * refcount-safe under structural sharing (it decrements each node's ref_count
+   * and frees only at zero, so nodes shared with a still-live sibling map
+   * survive) and releases every OWNED key box via the map's stamped key_ops --
+   * so a Map[Point int] with mk-owned? = 1 struct keys frees each boxed key
+   * exactly once.  This matches the interpreter's native map-free (set_free_box),
+   * which already deep-frees; the compiled body was shallow and leaked the HAMT
+   * + owned key boxes.  (A one-word / borrowed-key map stamps no release op, so
+   * this stays a plain structural free there.) */
+  if (map->hamt) tur_hamt_free(map->hamt);
+  free(map);
   ```)
 ;;; map-eq? -- compare two maps for structural equality using a value comparator.
 ;;;
