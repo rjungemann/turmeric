@@ -1005,12 +1005,17 @@ Expr *elab_perform(Elab *e, const Form *call) {
  * Handle algebraic effects with cases.
  * Each case: (EffectName [param1 param2 ...] k) body ...
  */
-Expr *elab_handle(Elab *e, const Form *call) {
+/* Shared body for `handle` (deep) and `handle-shallow` (shallow).  The two forms
+ * differ only in the `shallow` bit stamped on the resulting HandleExpr -- parse,
+ * pre-scan, typecheck, and case elaboration are identical (deep vs shallow is
+ * type-transparent). */
+static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "handle requires (handle expr case1 case2 ...)");
         return NULL;
     }
+
     
     /* Phase 19 TUR-E0008: Pre-scan case headers to push effect names onto the
      * handled-effects scope BEFORE elaborating the body.  This ensures that
@@ -1308,11 +1313,23 @@ Expr *elab_handle(Elab *e, const Form *call) {
     handle->cases = cases;
     handle->n_cases = n_cases;
     handle->is_unsafe_marker = false;
+    handle->shallow = shallow;
 
     /* The return type of handle is the same as the body's type */
     Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
     out->as.handle_.handle = handle;
     return out;
+}
+
+/* `handle` -- deep effect handler (re-installed on resume). */
+Expr *elab_handle(Elab *e, const Form *call) {
+    return elab_handle_impl(e, call, false);
+}
+
+/* `handle-shallow` -- shallow effect handler (F2): NOT re-installed on resume,
+ * the effect-side analogue of `shift0`. */
+Expr *elab_handle_shallow(Elab *e, const Form *call) {
+    return elab_handle_impl(e, call, true);
 }
 
 /* FH2: (handler (E [params] k) body) -- a single-effect handler value literal.
@@ -1482,6 +1499,7 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     handle->cases = cases;
     handle->n_cases = 1;
     handle->is_unsafe_marker = false;
+    handle->shallow = false;      /* handler-value literals are deep (F2) */
 
     /* Build the TY_HANDLER value type. */
     Type htype;

@@ -355,6 +355,7 @@ static SpecialForm classify_list(const Form *f) {
     if (sym_eq(h, "case"))        return SF_CASE;
     if (sym_eq(h, "loop"))        return SF_LOOP;
     if (sym_eq(h, "handle"))      return SF_HANDLE;
+    if (sym_eq(h, "handle-shallow")) return SF_HANDLE;  /* F2: same layout as handle */
     if (sym_eq(h, "defclass"))    return SF_DEFCLASS;
     if (sym_eq(h, "definstance")) return SF_DEFINSTANCE;
     if (sym_eq(h, "defeffect"))   return SF_DEFEFFECT;

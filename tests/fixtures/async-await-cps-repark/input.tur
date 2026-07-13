@@ -1,0 +1,41 @@
+;; F3 gap-2 + F3.2 (cps-async): TWO sequential PENDING awaits drive the deferred
+;; re-park chain on the COMPILED path (previously only provable at the unit level
+;; -- the two-await shape used to evict to the direct emitter).
+;;
+;; work awaits future-a (pending) -> parks; the outer future f stays pending.
+;; Fulfilling future-a resumes into the second await (future-b, pending) -> the
+;; continuation RE-PARKS, threading the outer future onto the new park.  Only when
+;; future-b completes does the body run to x + y = 42 and fulfill f.
+;; Built with --enable=cps-async.
+(defn future-a [] : ptr<void>
+  ```c
+  static TurFuture *g = NULL; if (!g) g = tur_future_new(); return (void *)g;
+  ```)
+(defn future-b [] : ptr<void>
+  ```c
+  static TurFuture *g = NULL; if (!g) g = tur_future_new(); return (void *)g;
+  ```)
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+(defn future-pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+(defn work [] : int
+  (let [x (await (future-a))]
+    (let [y (await (future-b))]
+      (+ x y))))
+(defn main [] : nil
+  (let [f (async work)]
+    (fulfill-future (future-a) 10)      ;; resume -> re-parks on future-b
+    (if (future-pending? f)
+      (do
+        (fulfill-future (future-b) 32)  ;; resume -> 10 + 32 = 42 -> fulfills f
+        (println (future-value f)))
+      (println -1))))

@@ -700,6 +700,13 @@ typedef struct HandleExpr {
     Expr *body;                 /* The expression being handled */
     HandleCase *cases;         /* Array of handle cases */
     uint8_t n_cases;
+    /* F2 (shallow handlers): true for `handle-shallow`, false for `handle` /
+     * `try-with`.  A shallow handler is NOT re-installed on resume (the
+     * effect-side analogue of `shift0`); the flag rides through to the CPS IR
+     * (CT_HANDLE) and the interpreter, where it selects dk_handler_shallow vs
+     * dk_handler / the no-reinstall re-entry.  Deep vs shallow is
+     * type-transparent, so only this bit differs. */
+    bool shallow;
     /* defopaque-struct-payload-fails-through-unsafe-helper: set by elab_unsafe
      * for the desugaring of `(unsafe ...)`.  The built-in Unsafe effect is a
      * pure compile-time marker that is never performed, so this handle's

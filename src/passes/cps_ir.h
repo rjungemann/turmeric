@@ -82,6 +82,10 @@ typedef enum CTermKind {
     CT_SHIFT,        /* shift: capture current cont as k', run body to the prompt */
     CT_HANDLE,       /* handle: run delim under an effect handler; body is the continuation */
     CT_PERFORM,      /* perform: bind x = perform(effect, args), continue body */
+    CT_AWAIT,        /* F3 (cps-async): bind x = await(fut), continue body -- lowered
+                      * to a dk_shift against the entry prompt, capturing `body` +
+                      * the outer continuation as a heap continuation the reactor
+                      * resumes.  Structurally mirrors CT_PERFORM. */
     CT_RESUME,       /* resume: bind x = resume(k, v) [= dk_invoke], continue body */
     CT_LETRAW,       /* bind x = <direct-emitted owning-value op>, continue body.
                       * The RHS is a source Expr (rc/of, rc/drop, ...) emitted by
@@ -174,11 +178,18 @@ struct CTerm {
         struct { CVar k; CTerm *body; bool shift0; }                      shift;
         /* handle: delim = body threading the handler prompt; body = the handle's
          * continuation; cases = the N handler clauses (each delivered by return),
-         * one per handled effect.  Each case's k / params are bound in its body. */
+         * one per handled effect.  Each case's k / params are bound in its body.
+         * shallow == true (from `handle-shallow`, F2) lowers each case to
+         * dk_handler_shallow (NOT re-installed on resume, the effect-side analogue
+         * of shift0); false is a plain deep dk_handler. */
         struct { CVar x; CTerm *delim; CTerm *body;
-                 CHandleCase *cases; uint32_t n_cases; }                  handle;
+                 CHandleCase *cases; uint32_t n_cases; bool shallow; }    handle;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; }                                   perform;
+        /* F3 await: fut = the awaited future atom; x = the awaited value binding;
+         * body = the continuation.  Emitted as a dk_shift whose body is the fixed
+         * __tur_await_body runtime helper (resume-if-ready / park-if-pending). */
+        struct { CAtom fut; CVar x; CTerm *body; }                       await;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level

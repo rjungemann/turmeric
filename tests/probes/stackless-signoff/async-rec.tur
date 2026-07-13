@@ -1,0 +1,30 @@
+;; F3.5 sign-off probe (docs/archive/compiled-async-heap-continuations-plan.md): async-rec --
+;; a 1,000,000-deep tail-recursive async/await loop under `ulimit -s 256`.
+;;
+;; Each iteration spawns a (non-capturing) async computation and awaits it, then
+;; tail-recurses.  The oracle: each await yields 1, summed N times, so go(N,0) = N.
+;;
+;; Path note: a RECURSIVE await evicts from the cps-async heap-continuation
+;; lowering to the direct emitter, and that is CORRECT -- for a ready future
+;; (always, since (async fn) is synchronous) the direct path checks readiness
+;; inline and tail-loops in O(1) stack, whereas the heap path's inline resume
+;; recurses through dk_invoke and is O(N) (SIGSEGV at ~100k under this stack).
+;; See docs/reported/cps-async-recursive-await-eviction.md.  So this probe
+;; exercises the DIRECT await path (tur_async_fiber spawns synchronously;
+;; tur_await_future returns the ready value), staying flat via the direct
+;; emitter's tail-call loop -- which is exactly the right lowering for
+;; synchronous recursion.  The heap representation's stackless win is for
+;; SUSPENDING awaits (F3.2), which this probe does not model.  The async closure
+;; is deliberately NON-capturing: `(async <capturing-closure>)` SIGSEGVs on the
+;; compiled path today (docs/archive/compiled-async-capturing-closure-segfault.md).
+;;
+;; It must exit 0 with `1000000` and no SIGSEGV under the reduced stack.
+
+(defn go [n : int acc : int] : int
+  (let [v (await (async (fn [] : int 1)))]
+    (if (= n 0)
+      acc
+      (go (- n 1) (+ acc v)))))
+
+(defn main [] : nil
+  (println (go 1000000 0)))

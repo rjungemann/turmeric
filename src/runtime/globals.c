@@ -207,6 +207,12 @@ bool g_dump_mono_specs = false;
  * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
 bool g_dump_cps_mono = false;
 
+/* F3: enables the `async`/`await` heap-continuation representation; flipped by
+ * the `cps-async` experiment.  See globals.h and
+ * docs/archive/compiled-async-heap-continuations-plan.md. */
+bool g_opt_cps_async = false;
+
+
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
  * --------------------------------------------------------------------------- */

@@ -6021,10 +6021,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             const Expr *fn_expr = e->as.async_.fn_expr;
             char *tmp = fresh_tmp(ctx);
             if (fn_expr->type.kind == TY_FN) {
-                /* Path (a): fn-expr is already a function pointer */
+                /* Path (a): fn-expr is a function value.  A THIN (bare) fn is a
+                 * plain function pointer -- spawn it directly.  A FAT (boxed)
+                 * closure -- a capturing lambda, EX_CLOSURE `{__fn, captures...}`
+                 * -- is NOT a function pointer: calling the box as code crashes
+                 * (docs/reported/compiled-async-capturing-closure-segfault.md).
+                 * Route it to the env-taking spawn, which reads the thunk out of
+                 * the box and invokes it with the box as its env. */
                 char *fn_val = emit_value(ctx, body, fn_expr);
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
+                if (fn_expr->type.as.fn.boxed) {
+                    buf_printf(body, "void *%s = (void *)tur_async_fiber_closure((void *)(intptr_t)%s);\n", tmp, fn_val);
+                } else {
+                    buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
+                }
                 free(fn_val);
             } else {
                 /* Path (b): wrap the expression in a static thunk (T25 with-handler support).

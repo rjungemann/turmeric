@@ -1156,13 +1156,21 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
                                    TuriEffectCont *cont, TuriValue val) {
     cont->resume_val = val;
 
-    /* Re-install handler frame around the body re-entry (deep semantics). */
+    /* Re-install the handler frame around the body re-entry for a DEEP handler,
+     * so a subsequent perform of the same effect in the resumed body is caught
+     * again.  A SHALLOW handler (F2, `handle-shallow`) does NOT re-install: the
+     * resumed body runs with this handler already removed, so a re-perform of the
+     * same effect reaches the enclosing handler_stack entry (or is unhandled if
+     * none).  This mirrors dk_perform's reinstall-vs-no-reinstall tail. */
+    bool reinstall = !cont->handle_expr->shallow;
     TuriHandlerFrame hf;
-    hf.cases          = cont->handle_expr->cases;
-    hf.n_cases        = cont->handle_expr->n_cases;
-    hf.cont           = cont;
-    hf.prev           = (TuriHandlerFrame *)env->handler_stack;
-    env->handler_stack = &hf;
+    if (reinstall) {
+        hf.cases          = cont->handle_expr->cases;
+        hf.n_cases        = cont->handle_expr->n_cases;
+        hf.cont           = cont;
+        hf.prev           = (TuriHandlerFrame *)env->handler_stack;
+        env->handler_stack = &hf;
+    }
 
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
@@ -1173,8 +1181,10 @@ static TuriValue eval_resume_cont(TuriEnv *env, EvalFrame *frame,
 #  pragma clang diagnostic pop
 #endif
 
-    /* Pop handler frame now that body has yielded control back. */
-    env->handler_stack = hf.prev;
+    /* Pop the handler frame now that body has yielded control back (deep only;
+     * shallow never pushed one). */
+    if (reinstall)
+        env->handler_stack = hf.prev;
 
     if (cont->done) {
         return cont->body_result;
@@ -6380,9 +6390,19 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     break;
                 }
                 TuriWsCont *wc = k.as_cont->ws;
+                /* Re-install the captured prompt around the resumed slice.  For a
+                 * DEEP handler it is re-installed ACTIVE (index = 1), so a perform
+                 * of the same effect in the resumed slice is caught again.  For a
+                 * SHALLOW handler (F2, `handle-shallow`) it is re-installed
+                 * INACTIVE (index = 0): still a return delimiter that restores the
+                 * env boundary and delivers the slice's value, but skipped by the
+                 * perform scan (which ignores index == 0 prompts), so a re-perform
+                 * reaches the nearest ENCLOSING active prompt -- or the fiber path
+                 * / unhandled if none.  Mirrors dk_perform's no-reinstall tail. */
+                int reinstall_active = (wc->handler && wc->handler->shallow) ? 0 : 1;
                 DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
                                          .frame = wc->handler_frame, .tail = rtl,
-                                         .index = 1,
+                                         .index = reinstall_active,
                                          .saved_module = env->current_module,
                                          .was_no_unwind = env->in_no_unwind }));
                 if (wc->n_frames) {

@@ -6,6 +6,7 @@
 
 #include "cps.h"
 #include "builtins.h"
+#include "globals.h"   /* F3: g_opt_cps_async */
 
 /* =========================================================================
  * CPS2 (cps-transform-plan): ANF/CPS translation for colored functions.
@@ -946,8 +947,13 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * evicting.  The delegated region is emitted by the direct emitter
          * (emit_value -> EX_ASYNC/EX_AWAIT), the bound future/result becomes a local,
          * and the CPS continuation runs after. */
-        case EX_ASYNC: case EX_AWAIT:
+        case EX_ASYNC:
             return true;
+        case EX_AWAIT:
+            /* F3 (cps-async): a shifted await threads a continuation, so it is a
+             * control op (not delegatable) under the flag; otherwise it stays the
+             * self-contained delegated runtime call. */
+            return !g_opt_cps_async;
         /* D4 (cps-backend-direct-lowering-removal): the cloneable-reset (U3) and
          * serial-reset (U4) delimited-control carve-out is deleted.  These regions
          * are now lowered natively by the CT-IR backend (build_cloneable /
@@ -1167,6 +1173,7 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
     t->as.handle.x = x;
     t->as.handle.delim = cps_tail(b, h->body, kont_prompt(e->type.kind));
     t->as.handle.n_cases = h->n_cases;
+    t->as.handle.shallow = h->shallow;   /* F2: handle-shallow -> dk_handler_shallow */
     CHandleCase *cs = arena_alloc(b->a, h->n_cases * sizeof(CHandleCase));
     for (uint32_t ci = 0; ci < h->n_cases; ci++) {
         HandleCase *c = &h->cases[ci];
@@ -1198,6 +1205,18 @@ static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     t->as.perform.args = args;
     t->as.perform.x = x;
     t->as.perform.body = cont;
+    return t;
+}
+
+/* F3 (cps-async): (await fut) as a heap-continuation shift.  Mirrors
+ * build_perform: atomize the future, bind the awaited value to x, carry the
+ * continuation in body.  emit_await lowers it to a dk_shift against the entry
+ * prompt whose body is the __tur_await_body runtime helper. */
+static CTerm *build_await(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
+    CTerm *t = new_term(b, CT_AWAIT);
+    t->as.await.fut = atomize(b, e->as.await_.fut_expr, p);
+    t->as.await.x = x;
+    t->as.await.body = cont;
     return t;
 }
 
@@ -1401,10 +1420,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_ASYNC: case EX_AWAIT: {
             /* U5: delegate the self-contained async region (async spawn / await)
              * so a colored function containing it stays CPS-emitted rather than
-             * wholly evicting. */
+             * wholly evicting.  F3 (cps-async): a tail `await` lowers instead to a
+             * dk_shift (build_await) capturing the continuation as a heap kont. */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+            if (e->kind == EX_AWAIT && g_opt_cps_async) {
+                Pending p = {0};
+                CTerm *core = build_await(b, e, x, ac, &p);
+                return fold_pending(b, &p, core);
+            }
             return build_letraw(b, e, x, ac);
         }
         case EX_HANDLE: {
@@ -1592,7 +1617,13 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return nat ? nat : build_letraw(b, e, x, rest);
         }
         case EX_ASYNC: case EX_AWAIT:
-            /* U5: delegate the self-contained async region (see cps_tail). */
+            /* U5: delegate the self-contained async region (see cps_tail).  F3
+             * (cps-async): a tail `await` lowers to a dk_shift (build_await). */
+            if (e->kind == EX_AWAIT && g_opt_cps_async) {
+                Pending p = {0};
+                CTerm *core = build_await(b, e, x, rest, &p);
+                return fold_pending(b, &p, core);
+            }
             return build_letraw(b, e, x, rest);
         case EX_HANDLE:
             return build_handle(b, e, x, rest);
@@ -1751,6 +1782,11 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
                     t->as.perform.effect ? t->as.perform.effect->name : "?");
             print_atoms(t->as.perform.args, t->as.perform.n, out); fputs(")\n", out);
             cps_ir_print(t->as.perform.body, out, indent);
+            break;
+        case CT_AWAIT:
+            fprintf(out, "let %s = await(", t->as.await.x.name);
+            print_atoms(&t->as.await.fut, 1, out); fputs(")\n", out);
+            cps_ir_print(t->as.await.body, out, indent);
             break;
         case CT_RESUME:
             fprintf(out, "let %s = resume ", t->as.resume.x.name);

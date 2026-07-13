@@ -14,7 +14,7 @@ O3 in
 ("captured owning values") is deferred with the words *"rides the env-capture
 story ... owned by whichever plan lifts the zero-capture cut."* That story had
 **no document** -- the same phrase recurs in
-[compiled-first-class-continuations-followups-plan.md](compiled-first-class-continuations-followups-plan.md)
+[compiled-first-class-continuations-followups-plan.md](../archive/compiled-first-class-continuations-followups-plan.md)
 (`Phase F2`, "keep it behind the same guard until the env-capture / deep-clone
 story lands") and in the archived parent
 [cps-backend-owning-pointers-plan.md](../../archive/cps-backend-owning-pointers-plan.md),

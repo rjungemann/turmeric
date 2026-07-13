@@ -26,6 +26,7 @@ struct DK {
     intptr_t  body_env;  /* DKK_SHIFT* */
     DKHandler handler;   /* DKK_HANDLER */
     intptr_t  handler_env; /* DKK_HANDLER */
+    bool      shallow;   /* DKK_HANDLER: true = do NOT reinstall on resume (shift0-like) */
     DK       *next;
 };
 
@@ -63,10 +64,17 @@ DK *dk_shift0(int tag, DKBody body, intptr_t env, DK *next) {
     return dk_shift_impl(DKK_SHIFT0, tag, body, env, next);
 }
 
-DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
+static DK *dk_handler_impl(int tag, DKHandler fn, intptr_t env, bool shallow, DK *next) {
     DK *k = dk_new(DKK_HANDLER, next);
-    k->tag = tag; k->handler = fn; k->handler_env = env;
+    k->tag = tag; k->handler = fn; k->handler_env = env; k->shallow = shallow;
     return k;
+}
+
+DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
+    return dk_handler_impl(tag, fn, env, false, next);
+}
+DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
+    return dk_handler_impl(tag, fn, env, true, next);
 }
 
 /* Shallow-copy one node (next set to NULL). */
@@ -75,6 +83,7 @@ static DK *dk_copy_node(const DK *n) {
     c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env;
+    c->shallow = n->shallow;
     return c;
 }
 
@@ -102,6 +111,30 @@ static DK *dk_copy_range(const DK *from, const DK *stop) {
     return head;
 }
 
+/* Copy just the enclosing handler markers reachable from `from` (skipping frames
+ * and prompts), chained and terminated by a fresh dk_done().  Used to build a
+ * SHALLOW handler's captured sub-continuation (F2.1): the handler markers are
+ * transparent to a returning value (dk_run_impl's DKK_HANDLER case), so a normal
+ * resume still surfaces the body-rest value into the case, but a re-perform
+ * during that resume can find an enclosing handler for its tag -- shallow
+ * outer-propagation.  Frames are deliberately NOT copied: copying them would
+ * transform the returning value instead of surfacing it.  Prompts are skipped
+ * too, matching dk_perform's own search, which walks through prompts to the next
+ * handler or the root.  Stops at DKK_DONE / end of chain. */
+static DK *dk_copy_enclosing_handlers(const DK *from) {
+    DK *head = NULL, *tail = NULL;
+    for (const DK *p = from; p && p->kind != DKK_DONE; p = p->next) {
+        if (p->kind != DKK_HANDLER) continue;
+        DK *c = dk_copy_node(p);
+        if (!head) head = tail = c;
+        else { tail->next = c; tail = c; }
+    }
+    DK *done = dk_done();
+    if (!head) return done;
+    tail->next = done;
+    return head;
+}
+
 /* Append b to the end of a; returns the head. */
 static DK *dk_append(DK *a, DK *b) {
     if (!a) return b;
@@ -118,6 +151,12 @@ void dk_free(DK *k) {
 bool dk_has_prompt(const DK *k) {
     for (const DK *p = k; p; p = p->next)
         if (p->kind == DKK_PROMPT) return true;
+    return false;
+}
+
+bool dk_has_handler(const DK *k, int tag) {
+    for (const DK *p = k; p; p = p->next)
+        if (p->kind == DKK_HANDLER && p->tag == tag) return true;
     return false;
 }
 
@@ -186,11 +225,27 @@ intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag);
         abort();
     }
-    /* Reify the sub-continuation from the perform point up to the handler, then
-     * re-install the handler on the captured copy so a resume re-delimits (deep
-     * handler). */
+    /* Reify the sub-continuation from the perform point up to the handler.  For a
+     * DEEP handler (H->shallow == false), re-install the handler on the captured
+     * copy so a resume re-delimits under it (each subsequent perform of the same
+     * effect in the resumed computation is handled again) -- the effect-side
+     * analogue of `shift`.  For a SHALLOW handler (H->shallow == true), do NOT
+     * re-install: a resume runs the rest of the computation with this handler
+     * already removed -- the analogue of `shift0`.  Both share the same
+     * reify/copy machinery; only the reinstall tail differs.
+     *
+     * Shallow outer-propagation (F2.1): the shallow tail is not a bare dk_done()
+     * but a copy of the ENCLOSING handler markers (dk_copy_enclosing_handlers,
+     * skipping frames/prompts).  Those markers are transparent to a returning
+     * value, so a normal resume still surfaces the body-rest value into the case,
+     * while a subsequent same-effect perform inside the resume finds the copied
+     * enclosing handler for its tag (or aborts as unhandled if none carries it --
+     * correct).  The deep tail is unchanged: it re-installs this handler. */
     DK *sub = dk_copy_range(k, H);
-    sub = dk_append(sub, dk_handler(tag, H->handler, H->handler_env, dk_done()));
+    DK *tail = H->shallow
+        ? dk_copy_enclosing_handlers(H->next)
+        : dk_handler(tag, H->handler, H->handler_env, dk_done());
+    sub = dk_append(sub, tail);
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
     /* Deliver the handler-case result to the handler's outer continuation. */

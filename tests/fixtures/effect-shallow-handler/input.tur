@@ -1,0 +1,24 @@
+;; F2.4-tail / F2.6: a shallow handler whose resume re-performs the same effect,
+;; caught by an enclosing DEEP handler -- distinguishing shallow from deep by
+;; output, on the compiled path AND the interpreter (they must agree).
+;;
+;; `twice` performs Op twice.  The inner SHALLOW handler catches the first
+;; (resume 5) and is then removed, so the second perform escapes to the outer
+;; DEEP handler (resume 100): 5 + 100 = 105.  (A deep inner would catch both:
+;; 5 + 5 = 10.)
+(defeffect Op [] :int)
+
+(defn twice [] : int
+  (+ (perform (Op)) (perform (Op))))
+
+(defn inner [] : int
+  (handle-shallow (twice)
+    (Op [] k) (resume k 5)))
+
+(defn run [] : int
+  (handle (inner)
+    (Op [] k) (resume k 100)))
+
+(defn main [] : int
+  (println (run))
+  0)

@@ -46,7 +46,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # probe name -> expected stdout value
-names=(cu-rec cu-catch-deep atom-rec mutual-rec fiber-rec effect-rec)
+names=(cu-rec cu-catch-deep atom-rec mutual-rec fiber-rec effect-rec async-rec)
 declare -A expect=(
     [cu-rec]=1000000
     [cu-catch-deep]=1000000
@@ -54,13 +54,22 @@ declare -A expect=(
     [mutual-rec]=1000001
     [fiber-rec]=1000000
     [effect-rec]=1000000
+    [async-rec]=1000000
+)
+
+# Per-probe extra build flags (on top of $ENABLE).  async-rec is built with
+# --enable=cps-async so the flag is exercised end-to-end; recursive await evicts
+# to the direct emitter today (F3.5 finding), so the flag is currently a no-op
+# for this shape, but the probe is a forward guard for when it colors.
+declare -A pflags=(
+    [async-rec]=--enable=cps-async
 )
 
 fails=0
 for p in "${names[@]}"; do
     src="$PROBE_DIR/$p.tur"
     bin="$WORK/$p.bin"
-    if ! "$TUR" $ENABLE build "$src" -o "$bin" >"$WORK/$p.build.log" 2>&1; then
+    if ! "$TUR" $ENABLE ${pflags[$p]:-} build "$src" -o "$bin" >"$WORK/$p.build.log" 2>&1; then
         echo "FAIL $p: build error"; sed 's/^/    /' "$WORK/$p.build.log"; fails=$((fails+1)); continue
     fi
     out="$( (ulimit -s "$STACK_KB"; "$bin") 2>&1 )"; rc=$?

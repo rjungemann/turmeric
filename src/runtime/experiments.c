@@ -88,6 +88,32 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * flat-stack heap-continuation trampoline.  The gates in emit_expr.c /
      * emit_fns.c / emit_module.c are removed; the feature is unconditional.  See
      * docs/archive/history/catch-unwind-graduation-plan.md. */
+    /* cps-effects GRADUATED 2026-07-12 (F2 of
+     * docs/archive/compiled-shallow-handlers-plan.md) -- the source-level
+     * shallow effect handler (`handle-shallow`) is now unconditionally accepted;
+     * the elab_handle gate and g_opt_cps_effects are removed.  handle-shallow
+     * lowers to dk_handler_shallow on the CPS path and to the shallow_consumed
+     * bubble-up on the fiber path, with compiled == interp on all shapes.  A
+     * lingering --enable=cps-effects is an accept-and-warn no-op via GRADUATED[]. */
+    /* cps-async: the heap-continuation representation for `async`/`await`.  When
+     * enabled, a function containing `await` is CPS-colored and each `await`
+     * lowers to a `dk_shift` against the entry prompt (capturing the rest of the
+     * async body as a heap continuation) instead of the fiber
+     * `tur_await_future`/swapcontext.  Read by the coloring pass (cps.c) and the
+     * CPS-IR builder (cps_ir.c) via g_opt_cps_async.  F3 is complete + archived
+     * (docs/archive/compiled-async-heap-continuations-plan.md): await-as-shift,
+     * deferred pending drive, and bounded multi-await all landed; all three
+     * admissibility gaps resolved.  Stays gated on the ONE remaining residual --
+     * a recursive await must run stackless ON the heap path rather than evict --
+     * tracked by the successor plan below.  Graduate when it lands. */
+    { "cps-async",
+      "heap-continuation `async`/`await`: `await` lowers to a dk_shift capturing "
+      "the async continuation, resumed via the reactor instead of a ucontext fiber",
+      "docs/upcoming/v1/compiled-stackless-recursive-await-plan.md",
+      "0.28.2",                  /* introduced */
+      "0.30.0",                  /* expires_at (two minor releases; hard contract) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_cps_async },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -100,11 +126,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
  * accept-and-warn no-ops (drop-x-flags-plan).  Entries can age out one minor
  * line after graduation, once downstream configs have dropped the flag. */
 static const char *const GRADUATED[] = {
-    /* Empty until the next experiment graduates.  A graduated name is added
-     * here so a lingering --enable/build.tur/experiments.tur reference to it
-     * is accepted as a no-op (TUR-W0063) for one minor line, rather than the
-     * hard TUR-E0310 an unknown name gets.  cps-backend graduated 2026-07-11
-     * and its shim was retired once no config referenced it. */
+    /* A graduated name is added here so a lingering
+     * --enable/build.tur/experiments.tur reference to it is accepted as a no-op
+     * (TUR-W0063) for one minor line, rather than the hard TUR-E0310 an unknown
+     * name gets.  cps-backend graduated 2026-07-11 and its shim was retired once
+     * no config referenced it. */
+    "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
     NULL,
 };
 
