@@ -358,8 +358,17 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char src[48];
                     snprintf(src, sizeof(src), "__effect_args[%d]", j);
                     char *ld = eff_slot_load(c->param_bindings[j]->type, src);
-                    buf_printf(&hfn_buf, "    %s %s_%u = %s;\n",
-                               ctype, raw, (unsigned)c->param_bindings[j]->id, ld);
+                    /* A fn-value payload is referenced (indirect call, emit_value)
+                     * by its RAW id-less name -- name_for_binding's TY_FN-non-boxed
+                     * path -- so declare it the same way; otherwise the declaration
+                     * (`f_<id>`) and the use (`f`) diverge and `f` is undeclared. */
+                    bool fnval = c->param_bindings[j]->type.kind == TY_FN
+                                 && !c->param_bindings[j]->type.as.fn.boxed;
+                    if (fnval)
+                        buf_printf(&hfn_buf, "    %s %s = %s;\n", ctype, raw, ld);
+                    else
+                        buf_printf(&hfn_buf, "    %s %s_%u = %s;\n",
+                                   ctype, raw, (unsigned)c->param_bindings[j]->id, ld);
                     free(ld);
                     free(raw);
                 }
@@ -881,8 +890,15 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char src[48];
                 snprintf(src, sizeof(src), "__effect_args[%d]", j);
                 char *ld = eff_slot_load(c->param_bindings[j]->type, src);
-                buf_printf(&fn, "    %s %s_%u = %s;\n",
-                           ct, raw, (unsigned)c->param_bindings[j]->id, ld);
+                /* Fn-value payload: declare with the raw id-less name to match the
+                 * TY_FN-non-boxed reference path (see the multi-case site above). */
+                bool fnval = c->param_bindings[j]->type.kind == TY_FN
+                             && !c->param_bindings[j]->type.as.fn.boxed;
+                if (fnval)
+                    buf_printf(&fn, "    %s %s = %s;\n", ct, raw, ld);
+                else
+                    buf_printf(&fn, "    %s %s_%u = %s;\n",
+                               ct, raw, (unsigned)c->param_bindings[j]->id, ld);
                 free(ld);
                 free(raw);
             }

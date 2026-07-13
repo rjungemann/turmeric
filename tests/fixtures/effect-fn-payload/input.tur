@@ -1,0 +1,24 @@
+;; Effects can carry a (non-capturing) fn-value payload, callable in the handler
+;; (blocker 3 of the cross-function-resume design).  Previously a fn-typed effect
+;; param degraded to a 0-arity uncallable fn -- the full param Type (arity +
+;; param/result) was dropped, so `(recv k)` failed.  Now the fn type is preserved
+;; and the payload is declared with the id-less name the call site uses.
+;;
+;; This is the __Shift shape: the effect carries a receiver `f`; the handler
+;; applies it to the captured continuation `k`, and `f` resumes k.
+;; direct == cps == turi.
+
+(defeffect ShiftE [f : (fn [int] int)] : int)
+
+;; performs cross-function, carrying a non-capturing receiver that resumes k
+(defn producer [] : int
+  (+ 100 (perform (ShiftE (fn [k : int] : int (resume k 5))))))
+
+;; the handler applies the fn payload to the continuation
+(defn run [] : int
+  (* 10 (handle (producer)
+          (ShiftE [f] k) (f k))))
+
+(defn main [] : int
+  (println (run))   ; producer resumes to 100+5=105, *10 = 1050
+  0)

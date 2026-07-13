@@ -100,7 +100,29 @@ shift) is byte-for-byte unchanged. A same-elaboration global flag will not do
 (a reset can be elaborated before the callee's shift sets it); it needs a
 post-elaboration transform.
 
-## Blocker 3 -- effects cannot carry a callable fn payload -- open
+## Blocker 3 -- effects carry a callable fn payload -- PARTIALLY RESOLVED
+
+**Non-capturing fn payloads now work.** Two bugs fixed: (1) `defeffect` dropped
+the full param `Type` for a `TY_FN` param (only ADT/APP/STRUCT were preserved),
+so the handler saw a 0-arity uncallable fn -- now `TY_FN` is preserved too
+(`elab_effects.c`); (2) the handler declared a fn-value payload as `f_<id>` but
+the call site references it by the raw id-less name (`name_for_binding`'s
+`TY_FN`-non-boxed path) -- the declaration now matches. A non-capturing receiver
+carried through an effect is callable in the handler and resumes the
+continuation cross-function (`direct == cps == turi`; fixture
+`effect-fn-payload`).
+
+**Capturing receivers remain blocked** and are now a clean error, not a crash.
+An effect payload rides one int64 slot: a non-capturing fn is a bare pointer and
+fits, but a capturing closure is a fat `{env, fn}` value that truncates (it
+segfaulted on call). `elab_perform` now rejects a capturing-closure payload with
+a diagnostic (fixture `errors/effect-fn-payload-capturing`). Supporting it needs
+a **uniform (always-fat) fn payload representation** through effects -- its own
+change. Since a `__Shift` receiver `(fn [k] (k v))` usually captures the shift's
+locals, the desugar stays blocked on this until fat fn payloads land (or the
+desugar lifts captures into explicit effect args).
+
+### (historical) the original blocker probe
 
 Attempting the reset-wrapping transform surfaced a prerequisite the effect
 desugar *depends on but does not have*: the `__Shift` effect must carry the

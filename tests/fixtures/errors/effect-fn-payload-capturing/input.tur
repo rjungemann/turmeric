@@ -1,0 +1,9 @@
+;; An effect payload rides one int64 slot, so a NON-capturing fn (bare pointer)
+;; fits but a CAPTURING closure (fat {env,fn}) does not -- rejected cleanly
+;; rather than truncated + crashed.  (Full fn payloads need a uniform fat
+;; representation; see docs/reported/cross-function-resume-design.md.)
+(defeffect ShiftE [f : (fn [int] int)] : int)
+(defn producer [n : int] : int
+  (+ 100 (perform (ShiftE (fn [k : int] : int (resume k n))))))  ; captures n
+(defn run [] : int (handle (producer 7) (ShiftE [f] k) (f k)))
+(defn main [] : int (println (run)) 0)
