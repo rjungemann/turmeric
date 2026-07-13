@@ -419,12 +419,16 @@ static Form *reflavor_cont_sym(Elab *e, Form *f,
 }
 
 /* cps-backend-n6 cross-function resume.  Reflavor a shift receiver's `cont`
- * parameter to `effect-cont`, so `(k v)` inside it resumes the effect
- * continuation (CONT_EFFECT -> EX_RESUME, slice A) rather than a cloneable one.
- * Only a lambda-literal receiver `(fn [k : cont] ...)` is rewritable from the
- * call site; a named-fn receiver returns NULL (the caller keeps the E0016 error).
- * Only the parameter vector is reflavored -- the body is left untouched, so a
- * body reference to something coincidentally named `cont` is not disturbed. */
+ * parameter to `multishot-effect-cont`, so `(k v)` inside it resumes the effect
+ * continuation multi-shot (CONT_EFFECT + CK_MULTISHOT -> snapshot EX_RESUME)
+ * rather than a cloneable one.  Multi-shot is the general case: a receiver that
+ * resumes `k` once behaves identically (snapshot once, resume once), and one that
+ * resumes it more than once (e.g. (+ (k 1) (k 2))) now works, matching the
+ * ^multishot handler the reset-wrap installs.  Only a lambda-literal receiver
+ * `(fn [k : cont] ...)` is rewritable from the call site; a named-fn receiver
+ * returns NULL (the caller keeps the E0016 error).  Only the parameter vector is
+ * reflavored -- the body is left untouched, so a body reference to something
+ * coincidentally named `cont` is not disturbed. */
 static Form *reflavor_shift_receiver(Elab *e, Form *recv) {
     if (!recv || recv->tag != F_LIST || recv->as.list.len < 2) return NULL;
     Form *head = recv->as.list.items[0];
@@ -432,7 +436,7 @@ static Form *reflavor_shift_receiver(Elab *e, Form *recv) {
     Form *params = recv->as.list.items[1];
     if (params->tag != F_VEC && params->tag != F_LIST) return NULL;
     const Symbol *cont_sym = intern_cstr(e->st, "cont");
-    const Symbol *eff_sym  = intern_cstr(e->st, "effect-cont");
+    const Symbol *eff_sym  = intern_cstr(e->st, "multishot-effect-cont");
     Form *new_params = reflavor_cont_sym(e, params, cont_sym, eff_sym);
     if (new_params == params) return NULL;  /* no `cont` annotation to reflavor */
     uint32_t fn_n = recv->as.list.len;
@@ -501,12 +505,14 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
     Type recv_type = *sheff->constructor->param_full_types[0];
     Binding *recv_b = binding_new(e, recv_name, recv_type, false, false, span);
     scope_add(&hs, recv_b);
-    /* k is the delimited continuation, carried as an int64 handle.  Affine
-     * (at-most-once) default discipline, matching elab_handle's CK_UNIQUE case. */
+    /* k is the delimited continuation, carried as an int64 handle.  Multi-shot
+     * discipline (mirrors elab_handle's CK_MULTISHOT case): the captured
+     * continuation is a snapshot-capable tur_cloneable_cont, so a receiver that
+     * resumes it more than once runs an independent copy each time.  Single-resume
+     * receivers behave identically (one snapshot, one resume). */
     Binding *k_b = binding_new(e, k_name, TYPE_INT, false, false, span);
     k_b->is_continuation = true;
-    k_b->is_affine = true;
-    k_b->type.copy_kind = CK_MOVE;
+    k_b->type.copy_kind = CK_MULTISHOT;
     scope_add(&hs, k_b);
 
     /* (recv k) */
@@ -529,7 +535,7 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
     cases[0].param_bindings[0] = recv_b;
     cases[0].k_name         = k_name;
     cases[0].k_binding      = k_b;
-    cases[0].cont_kind      = CK_UNIQUE;
+    cases[0].cont_kind      = CK_MULTISHOT;
     cases[0].body           = hbody;
 
     HandleExpr *h = (HandleExpr *)arena_alloc(e->arena, sizeof(HandleExpr));

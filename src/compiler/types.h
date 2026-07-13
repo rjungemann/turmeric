@@ -1492,7 +1492,18 @@ static inline int cont_flavor_from_name(const char *n) {
     if (strcmp(n, "escape-cont") == 0) return CONT_ESCAPE;
     if (strcmp(n, "serial-cont") == 0) return CONT_SERIAL;
     if (strcmp(n, "effect-cont") == 0) return CONT_EFFECT;
+    /* multishot-effect-cont: a CONT_EFFECT continuation whose (k v) resumes
+     * multi-shot (snapshot before each resume).  The multi-shot bit is carried in
+     * the param binding's copy_kind (CK_MULTISHOT), set at the annotation sites
+     * via cont_name_is_multishot; the flavor itself is still CONT_EFFECT. */
+    if (strcmp(n, "multishot-effect-cont") == 0) return CONT_EFFECT;
     return -1;
+}
+
+/* True when a cont annotation name denotes a multi-shot continuation, so the
+ * param binding must be CK_MULTISHOT (resume snapshots before each use). */
+static inline bool cont_name_is_multishot(const char *n) {
+    return strcmp(n, "multishot-effect-cont") == 0;
 }
 
 /* Phase B2: Cloneable continuation type constructor */

@@ -1,5 +1,17 @@
 # Cross-function resume: multi-shot receiver returns a wrong value
 
+**Status: RESOLVED (cps-backend-n6).** The auto-desugar now reflavors the
+receiver's `cont` param to `multishot-effect-cont` (CONT_EFFECT + CK_MULTISHOT)
+and installs a `^multishot` __Shift handler, so a receiver may resume `k` any
+number of times.  The opening example runs `23`; a triple-resume runs `306`
+(fixture `shift-crossfn-resume-works`); the flavor is pinned directly by
+`multishot-effect-cont-kv-sugar`.  `direct == cps == turi`.  Both fix directions
+below were applied, plus a third that surfaced during implementation:
+`expr_has_multishot_handler` (emit_core.c) gained `EX_RESET`/`EX_CLONEABLE_RESET`
+cases so it descends into a reset body and finds the synthesized multishot
+handler -- without it the cloneable-cont preamble was not emitted and the build
+failed to link.  Original report retained below.
+
 **Severity: low (known limitation; single-resume is the supported target).**
 
 ## Summary

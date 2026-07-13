@@ -3571,8 +3571,13 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
              * TY_INT-typed k -- any other kind falls through to the identity
              * "return the value" fallback.  So view the cont binding as its int64
              * carrier here (mirrors the handler-continuation `is_continuation`
-             * path above and the cloneable-cont carrier view below). */
-            Expr *kvar = expr_new(e->arena, EX_VAR, TYPE_INT, call->span);
+             * path above and the cloneable-cont carrier view below).  Carry the
+             * binding's copy_kind onto the carrier so a CK_MULTISHOT continuation
+             * (multishot-effect-cont) takes the snapshot resume path -- resume
+             * dispatches on the k EXPR's copy_kind, not the binding's. */
+            Type kcar = TYPE_INT;
+            kcar.copy_kind = fn_type.copy_kind;
+            Expr *kvar = expr_new(e->arena, EX_VAR, kcar, call->span);
             kvar->as.var.binding = fn_binding;
             return elab_make_resume(e, kvar, value, call->span);
         }

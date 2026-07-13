@@ -75,6 +75,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
             if (cflav >= 0) {
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_flavored(TY_INT, (ContFlavor)cflav);
+                if (cont_name_is_multishot(sym->name)) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
         }
@@ -142,11 +143,13 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
          * leaves BodyT unknown (unchecked), preserving existing signatures. */
         {
             int cflav = cont_flavor_from_name(head->name);
+            bool cmulti = head->name && cont_name_is_multishot(head->name);
             if (cflav >= 0 && form->as.list.len == 2) {
                 Type *ret = fn_type_from_form_impl(e, form->as.list.items[1],
                                               type_params, type_param_kinds, n_type_params);
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_flavored(ret ? ret->kind : TY_INT, (ContFlavor)cflav);
+                if (cmulti) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
             if (cflav >= 0 && form->as.list.len == 3) {
@@ -157,6 +160,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_arg_flavored(bt ? bt->kind : TY_UNKNOWN,
                                             rt ? rt->kind : TY_INT, (ContFlavor)cflav);
+                if (cmulti) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
         }
@@ -1668,6 +1672,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     param_kinds[n_params - 1] = TY_CONT;
                     params[n_params - 1]->type =
                         type_cont_flavored(TY_INT, (ContFlavor)_cflav);
+                    if (cont_name_is_multishot(kw->name))
+                        params[n_params - 1]->type.copy_kind = CK_MULTISHOT;
                     continue;
                 }
             }
