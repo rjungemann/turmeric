@@ -131,6 +131,8 @@
 
 (extern-c tur_reactor_remove [r :ptr id :int] :int)
 
+(extern-c tur_reactor_disown_cb [r :ptr id :int] :void)
+
 (extern-c tur_reactor_run [r :ptr] :void)
 
 (extern-c tur_reactor_stop [r :ptr] :void)
@@ -142,6 +144,8 @@
 (extern-c tur_local_fiber_group_free [g :ptr] :void)
 
 (extern-c tur_local_spawn [g :ptr body :int user-data :ptr] :int)
+
+(extern-c tur_local_disown_body [g :ptr fiber-id :int] :void)
 
 (extern-c tur_local_park_fd [g :ptr fd :int events :int timeout-ms :int] :int)
 
@@ -703,6 +707,10 @@
   hb->accept_clos = (void *)clos;
   hb->listen_src_id = (int)tur_reactor_add_fd(hb->reactor, fd, 1,
       (int64_t)(intptr_t)clos, NULL);
+  /* The reactor owns cb boxes by default and frees them at teardown; this
+   * accept box is cached in hb->accept_clos and freed by httpd itself, so
+   * disown it to avoid a double free. */
+  tur_reactor_disown_cb(hb->reactor, hb->listen_src_id);
   if (hb->listen_src_id < 0) {
       free(clos);
       tur_reactor_free(hb->reactor);
@@ -930,6 +938,12 @@
       tur_reactor_free(hb->reactor);
   }
   if (hb->accept_clos) free(hb->accept_clos);
+  /* Free the user handler box. It is passed ^fat (always a heap fat-closure
+   * box) and nothing else frees it, so this is the sole free -- no double free.
+   * For a bare handler this reclaims the whole thing; for a compose-middleware
+   * onion it frees only the outermost layer (the inner captured `next` boxes
+   * still leak, pending closure drop glue -- see the plan). */
+  if (hb->handler) free((void *)(intptr_t)hb->handler);
   if (hb->listen_fd >= 0) close(hb->listen_fd);
   if (hb->fdq) {
       /* Close any pending fds we never got to. */
@@ -2631,6 +2645,9 @@
       ctx->async       = (void *)ha;
       int rc = (int)tur_local_spawn(ha->fiber_group, ha->body_closure, (void *)ctx);
       if (rc < 0) { free(ctx); close(cfd); continue; }
+      /* Every request fiber shares ha->body_closure, which httpd frees itself
+       * in teardown; disown it so the fiber group does not multi-/double-free. */
+      tur_local_disown_body(ha->fiber_group, (int64_t)rc);
       ha->in_flight++;
   }
   ```)
@@ -2713,6 +2730,9 @@
   ha->body_closure = (int64_t)(intptr_t)body_clos;
   ha->listen_src_id = (int)tur_reactor_add_fd(ha->reactor, fd, 1,
       (int64_t)(intptr_t)clos, NULL);
+  /* Accept box is cached in ha->accept_clos and freed by httpd; disown it so
+   * the reactor (which owns cb boxes by default) does not double-free. */
+  tur_reactor_disown_cb(ha->reactor, ha->listen_src_id);
   if (ha->listen_src_id < 0) {
       free(body_clos); free(clos);
       tur_reactor_free(ha->reactor);
@@ -2820,6 +2840,10 @@
   if (ha->reactor) tur_reactor_free(ha->reactor);
   if (ha->accept_clos) free(ha->accept_clos);
   if (ha->body_closure) free((void *)(intptr_t)ha->body_closure);
+  /* Free the user handler box (passed ^fat, always heap; distinct from
+   * body_closure). Sole free -- no double free. Outer layer only for a
+   * compose-middleware onion; see httpd-free / the plan. */
+  if (ha->handler) free((void *)(intptr_t)ha->handler);
   if (ha->listen_fd >= 0) close(ha->listen_fd);
   free(ha);
   ```)
@@ -2988,6 +3012,10 @@
   Route *cur = router->routes;
   while (cur) {
       Route *nx = cur->next;
+      /* Each route handler is passed ^fat (heap box) and freed nowhere else;
+       * reclaim the outer box here (inner middleware layers, if any, still
+       * leak pending closure drop glue -- see the plan). */
+      if (cur->handler) free((void *)(intptr_t)cur->handler);
       free(cur);
       cur = nx;
   }

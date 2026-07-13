@@ -75,6 +75,12 @@ typedef struct {
     int64_t       tur_cb;
     int64_t       tur_user_data;
     bool          active;
+    /* True when tur_cb points at a heap fat-closure box the reactor owns and
+     * must free at teardown (the normal case for the public tur_reactor_add_*
+     * ABI the emitted program calls). False for internal park registrations
+     * whose box is an inline LocalFiber field, not a heap allocation --
+     * freeing that would corrupt the heap. */
+    bool          owns_cb;
 } TurReactorSource;
 
 struct TurReactor {
@@ -250,14 +256,36 @@ static void cleanup_source(TurReactor *r, TurReactorSource *src) {
 void tur_reactor_free(void *rp) {
     TurReactor *r = (TurReactor *)rp;
     if (!r) return;
+    /* Owned callback boxes are freed exactly once: a program may register the
+     * same heap closure box on several sources (e.g. one handler on an fd and
+     * a timer), so track the pointers already freed and skip duplicates.  A
+     * failed realloc degrades to "free without dedup", which is only unsafe if
+     * a box is shared -- acceptably rare on a teardown path that is about to
+     * exit anyway. */
+    int64_t *freed = NULL;
+    size_t   nfreed = 0, freed_cap = 0;
     for (size_t i = 0; i < r->sources_len; i++) {
         TurReactorSource *src = r->sources[i];
-        if (src) {
-            if (src->active)
-                cleanup_source(r, src);
-            free(src);
+        if (!src) continue;
+        if (src->active)
+            cleanup_source(r, src);
+        if (src->owns_cb && src->tur_cb) {
+            bool seen = false;
+            for (size_t j = 0; j < nfreed; j++)
+                if (freed[j] == src->tur_cb) { seen = true; break; }
+            if (!seen) {
+                if (nfreed == freed_cap) {
+                    size_t new_cap = freed_cap ? freed_cap * 2 : 8;
+                    int64_t *grown = (int64_t *)realloc(freed, new_cap * sizeof(int64_t));
+                    if (grown) { freed = grown; freed_cap = new_cap; }
+                }
+                if (nfreed < freed_cap) freed[nfreed++] = src->tur_cb;
+                free((void *)(intptr_t)src->tur_cb);
+            }
         }
+        free(src);
     }
+    free(freed);
     free(r->sources);
     io_backend_free(r->backend);
     free(r);
@@ -295,6 +323,29 @@ static TurReactorSource *find_source(TurReactor *r, int64_t id) {
     return NULL;
 }
 
+/*
+ * Relinquish reactor ownership of a source's callback box: after this call the
+ * reactor will NOT free the box at teardown.
+ *
+ * The public tur_reactor_add_* entry points take ownership of the cb box by
+ * default (owns_cb = true) -- the emitted program builds a heap fat-closure,
+ * hands it to the reactor, and never frees it, so the reactor reclaiming it at
+ * tur_reactor_free is what makes reactor programs leak-clean.  A caller that
+ * manages the box lifetime itself must opt OUT with this call, or the box is
+ * double-freed.  Two such callers:
+ *   - the httpd runtime, which caches its accept-callback box and frees it in
+ *     its own teardown;
+ *   - the internal park registrations, whose cb is an inline LocalFiber field
+ *     (&lf->park_cb_fat), not a heap allocation -- freeing it corrupts the heap.
+ * A no-op for id < 0 (a failed registration). Idempotent.
+ */
+void tur_reactor_disown_cb(void *rp, int64_t id) {
+    TurReactor *r = (TurReactor *)rp;
+    if (!r || id < 0) return;
+    TurReactorSource *src = find_source(r, id);
+    if (src) src->owns_cb = false;
+}
+
 int64_t tur_reactor_add_fd(void *rp, int64_t fd, int64_t events,
                             int64_t tur_cb, void *tur_user_data) {
     TurReactor *r = (TurReactor *)rp;
@@ -307,6 +358,7 @@ int64_t tur_reactor_add_fd(void *rp, int64_t fd, int64_t events,
     src->kind          = TUR_RSRC_FD;
     src->fd            = (int)fd;
     src->tur_cb        = tur_cb;
+    src->owns_cb       = true;   /* default: reactor frees the box at teardown */
     src->tur_user_data = (int64_t)(intptr_t)tur_user_data;
     src->active        = true;
 
@@ -352,6 +404,7 @@ int64_t tur_reactor_add_timer(void *rp, int64_t delay_ms,
     src->deadline_ms   = now_ms() + delay_ms;
     src->interval_ms   = 0;
     src->tur_cb        = tur_cb;
+    src->owns_cb       = true;   /* default: reactor frees the box at teardown */
     src->tur_user_data = (int64_t)(intptr_t)tur_user_data;
     src->active        = true;
     return src->id;
@@ -370,6 +423,7 @@ int64_t tur_reactor_add_interval(void *rp, int64_t first_ms, int64_t interval_ms
     src->deadline_ms   = now_ms() + first_ms;
     src->interval_ms   = interval_ms;
     src->tur_cb        = tur_cb;
+    src->owns_cb       = true;   /* default: reactor frees the box at teardown */
     src->tur_user_data = (int64_t)(intptr_t)tur_user_data;
     src->active        = true;
     return src->id;
@@ -391,6 +445,7 @@ int64_t tur_reactor_add_signal(void *rp, int64_t signum_i,
     src->kind          = TUR_RSRC_SIGNAL;
     src->signum        = (int)signum_i;
     src->tur_cb        = tur_cb;
+    src->owns_cb       = true;   /* default: reactor frees the box at teardown */
     src->tur_user_data = (int64_t)(intptr_t)tur_user_data;
     src->active        = false;
 
@@ -459,6 +514,7 @@ int64_t tur_reactor_add_chan(void *rp, void *chan,
     src->kind          = TUR_RSRC_CHAN;
     src->chan_ptr       = chan;
     src->tur_cb        = tur_cb;
+    src->owns_cb       = true;   /* default: reactor frees the box at teardown */
     src->tur_user_data = (int64_t)(intptr_t)tur_user_data;
     src->active        = true;
     return src->id;
@@ -621,6 +677,12 @@ typedef struct LocalFiber {
     int64_t            id;
     TurFiber          *fiber;       /* underlying stackful coroutine */
     int64_t            tur_body;    /* Turmeric fat-closure (user)->nil */
+    /* True when tur_body is a heap fat-closure box this fiber owns and must
+     * free at group teardown (the default for tur_local_spawn). False for
+     * callers that share one body box across many fibers and free it
+     * themselves -- e.g. the httpd async server -- which opt out via
+     * tur_local_disown_body. */
+    bool               owns_body;
     void              *user_data;
     bool               done;        /* ran to completion */
     bool               in_ready;    /* currently linked into the ready queue */
@@ -707,6 +769,12 @@ void *tur_local_fiber_group_new(void *rp) {
 void tur_local_fiber_group_free(void *gp) {
     LocalFiberGroup *g = (LocalFiberGroup *)gp;
     if (!g) return;
+    /* Owned spawn-body boxes are freed exactly once: even under owning callers
+     * two fibers could share a body box, so dedup like tur_reactor_free does.
+     * Callers that manage the box themselves (httpd async, whose fibers share a
+     * single body_closure it frees itself) opt out with tur_local_disown_body. */
+    int64_t *freed = NULL;
+    size_t   nfreed = 0, freed_cap = 0;
     LocalFiber *lf = g->all_head;
     while (lf) {
         LocalFiber *next = lf->all_next;
@@ -716,9 +784,24 @@ void tur_local_fiber_group_free(void *gp) {
             local_fiber_clear_park(lf);
         if (lf->fiber)
             tur_fiber_free(lf->fiber);
+        if (lf->owns_body && lf->tur_body) {
+            bool seen = false;
+            for (size_t j = 0; j < nfreed; j++)
+                if (freed[j] == lf->tur_body) { seen = true; break; }
+            if (!seen) {
+                if (nfreed == freed_cap) {
+                    size_t new_cap = freed_cap ? freed_cap * 2 : 8;
+                    int64_t *grown = (int64_t *)realloc(freed, new_cap * sizeof(int64_t));
+                    if (grown) { freed = grown; freed_cap = new_cap; }
+                }
+                if (nfreed < freed_cap) freed[nfreed++] = lf->tur_body;
+                free((void *)(intptr_t)lf->tur_body);
+            }
+        }
         free(lf);
         lf = next;
     }
+    free(freed);
     free(g);
 }
 
@@ -756,6 +839,7 @@ int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
     }
     lf->id             = g->next_id++;
     lf->tur_body       = tur_body;
+    lf->owns_body      = true;   /* default: group teardown frees the box */
     lf->user_data      = user_data;
     lf->group          = g;
     lf->done           = false;
@@ -767,6 +851,23 @@ int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
     g->all_head  = lf;
     ready_push(g, lf);
     return lf->id;
+}
+
+/*
+ * Relinquish group ownership of a fiber's spawn-body box: after this call the
+ * group will NOT free it at tur_local_fiber_group_free.  tur_local_spawn owns
+ * the body box by default (the emitted program builds a heap fat-closure and
+ * hands it off), so a caller that reuses one body box across many fibers and
+ * frees it itself -- the httpd async server, whose per-request fibers all share
+ * ha->body_closure -- must disown every such fiber, or the box is
+ * multi-/double-freed.  A no-op for an unknown fiber id.
+ */
+void tur_local_disown_body(void *gp, int64_t fiber_id) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g || fiber_id < 0) return;
+    for (LocalFiber *lf = g->all_head; lf; lf = lf->all_next) {
+        if (lf->id == fiber_id) { lf->owns_body = false; return; }
+    }
 }
 
 int64_t tur_reactor_run_fibers(void *gp) {
@@ -861,11 +962,14 @@ int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
     lf->park_fd_src = tur_reactor_add_fd(g->reactor, fd, events, cb, NULL);
     if (lf->park_fd_src < 0)
         return TUR_LOCAL_NOT_IN_FIBER; /* registration failed */
+    /* cb is &lf->park_cb_fat (inline field), not a heap box -- disown. */
+    tur_reactor_disown_cb(g->reactor, lf->park_fd_src);
 
     if (timeout_ms >= 0) {
         lf->park_timer_src =
             tur_reactor_add_timer(g->reactor, timeout_ms, cb, NULL);
         /* On timer-registration failure just park without a timeout. */
+        tur_reactor_disown_cb(g->reactor, lf->park_timer_src);
     }
 
     /* Yield to the driver; resumed by local_park_wake_cb. */
@@ -887,6 +991,8 @@ int64_t tur_local_park_chan(void *gp, void *chan) {
     lf->park_chan_src = tur_reactor_add_chan(g->reactor, chan, cb, NULL);
     if (lf->park_chan_src < 0)
         return TUR_LOCAL_NOT_IN_FIBER;
+    /* cb is &lf->park_cb_fat (inline field), not a heap box -- disown. */
+    tur_reactor_disown_cb(g->reactor, lf->park_chan_src);
 
     /* Yield to the driver; resumed by local_park_wake_cb with the value.
      * Like all reactor channel watchers, prompt delivery on the same thread
