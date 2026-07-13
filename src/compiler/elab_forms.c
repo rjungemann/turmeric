@@ -1205,6 +1205,48 @@ Expr *elab_let(Elab *e, const Form *call) {
      * scope-exit `weak`-decrement primitive to reuse here, and the reported
      * defect is specifically about *owning* fields.  The rc/of drop-glue path
      * still decrements weak fields via rc_weak_decrement. */
+    /* Reject the unsound consume-in-handler-case shape BEFORE injecting any
+     * per-field auto-drop.  A handler case that drops an owning field of one of
+     * these captured by-value locals (`(rc/drop (.f o))` / `(drop! (.f o))`
+     * inside a `handle` here) would double-release the field against the
+     * scope-exit auto-drop below (and a multi-shot resume would drop it N
+     * times).  is_field_consumed handles the straight-line case (suppress the
+     * auto-drop); the handler-case case cannot be balanced locally, so it is a
+     * hard error (TUR-E0107) rather than a silent double-drop / eviction to a
+     * miscompiling fallback. */
+    if (rc == 0) {
+        for (uint32_t k = 0; k < n_binds; k++) {
+            const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
+            if (!ad) continue;
+            if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+                is_binding_consumed(body, binds[k].binding))
+                continue;
+            const CtorDef *ctor = ad->ctors[0];
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                TypeKind fk = ctor->fields[fi].kind;
+                if (fk != TY_RC && fk != TY_REF && fk != TY_LREF)
+                    continue;
+                if (is_field_consumed_in_handler(body, binds[k].binding, fi)) {
+                    const char *fname = ctor->fields[fi].name
+                                            ? ctor->fields[fi].name : "<field>";
+                    const char *oname = binds[k].binding->name
+                                            ? binds[k].binding->name->name : "<local>";
+                    diag_emit_with_code(
+                        DIAG_ERROR, binds[k].binding->span,
+                        TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER,
+                        "handler case consumes owning field '.%s' of captured "
+                        "by-value value '%s'; the field would be dropped both by "
+                        "the handler case and by '%s's scope-exit auto-drop (and a "
+                        "multi-shot resume would drop it more than once). Borrow "
+                        "the field instead (read it, do not drop it), or move "
+                        "ownership out of '%s' before the handle.",
+                        fname, oname, oname, oname);
+                    rc = -1;
+                }
+            }
+        }
+    }
+
     bool has_byval_drop_bindings = false;
     for (uint32_t k = 0; k < n_binds; k++) {
         if (elab_byval_drop_adt(binds[k].binding->type)) {

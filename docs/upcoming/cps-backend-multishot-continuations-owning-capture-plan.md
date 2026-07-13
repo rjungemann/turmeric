@@ -344,18 +344,19 @@ captured `defstruct` holding an `rc` field into a handler case, `requires.no-lea
 > teardown is NOT needed for leak-cleanliness: a borrow-only capture rides a bare
 > alias (E-borrow) dropped once by P2; a *consuming rc* capture is leak-clean via
 > E1's incref-on-read-out balanced by the case's own drop, with the base dropped
-> by the P2-lowered auto-drop. The one genuine residual is a *consuming multi-field
-> aggregate* capture, which is rare. Its separable direct-path hard-fail (a handler
-> case referencing a captured struct's owning field through an owning-value op) is
-> now FIXED -- `collect_handle_captures` descends into the owning-value ops
-> (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`) -- so the shape
-> falls back to the direct emitter cleanly instead of failing to compile. (The
-> consuming handler-case variant then double-drops, a pre-existing
-> handler-independent auto-drop-move-awareness gap; its straight-line form is now
-> fixed via `is_field_consumed`, the handler-case form stays open --
-> `docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`.)
-> The sketch below is retained for the day a real consuming-aggregate case warrants
-> Option B.
+> by the P2-lowered auto-drop. The one residual is a *consuming multi-field
+> aggregate* capture (a handler case that DROPS a captured struct's owning field),
+> which is rare and has no per-field incref to balance it. That shape is now a
+> **hard error, TUR-E0107** (`is_field_consumed_in_handler` + `elab_let`) rather
+> than a silent double-drop or a raw `'o' undeclared`
+> (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`). Two adjacent
+> shapes are handled and NOT errors: the straight-line field drop (auto-drop
+> suppressed via `is_field_consumed` --
+> `docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`) and the
+> bare-`rc` consuming capture (leak-clean via E1 + P1/P2 --
+> `docs/archive/cps-handler-case-consumes-owning-capture-evicts.md`). The Option B
+> sketch below is retained for the day a real consuming-aggregate case must be
+> ADMITTED rather than rejected.
 
 Stop leaking the owning-carrying env; give the lifted continuation frame a real
 clone/drop pair, emitted **only when `caps` contains an owning field** (Copy-only

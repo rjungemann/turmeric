@@ -45,17 +45,20 @@ clones a shared rc into the struct field (count 2), drops the field explicitly
 fix, but read freed memory (garbage) before it, because the spurious auto-drop
 had freed the block.
 
-## Not covered (a handler case is a different, harder shape)
+## The handler-case sibling (rejected loudly, not suppressed)
 
 `is_field_consumed` does NOT descend into `handle`/`perform`/`resume` bodies --
 deliberately, mirroring `is_binding_consumed`. A handler case that drops a
-captured field (e.g. `docs/archive/cps-consuming-aggregate-capture-hardfails.md`)
-runs 0..N times, so suppressing the outer auto-drop based on a drop *inside* a
-case would leak (0 runs) or still over-drop (N runs). That shape is genuinely
-beyond simple move analysis and remains the documented residual; it is NOT what
-this note fixed. (An earlier draft of this note speculated "fixing the auto-drop
-here fixes both" -- that was wrong; only the straight-line case is tractable
-this way.)
+captured field runs 0..N times, so suppressing the outer auto-drop based on a
+drop *inside* a case would leak (0 runs) or still over-drop (N runs) -- beyond
+simple move analysis. Rather than leave that a silent double-drop, `elab_let`
+now REJECTS it with **TUR-E0107** via the companion walker
+`is_field_consumed_in_handler` (which finds the `handle` and checks each case
+body). So the two siblings are handled differently but both safely: straight-line
+field drop -> auto-drop SUPPRESSED (this note); handler-case field drop -> hard
+ERROR (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`). (An earlier
+draft of this note speculated "fixing the auto-drop here fixes both" -- that was
+wrong; the handler-case case is rejected, not fixed.)
 
 ## Original repro (straight-line, now resolved)
 
@@ -79,4 +82,8 @@ drop is emitted.
   field, guarded by `binding_moved_during_init` / `is_moved` /
   `is_binding_consumed` (all whole-binding).
 - Missing check (added): `is_field_consumed` in `src/compiler/elab_core.c`, the
-  field-level analog of `is_binding_consumed`.
+  field-level analog of `is_binding_consumed` -- suppresses the straight-line
+  field drop's auto-drop.
+- Companion (added): `is_field_consumed_in_handler` in the same file -- finds a
+  field drop inside a handler case and drives the TUR-E0107 rejection in
+  `elab_let` (the sibling shape that cannot be suppressed).

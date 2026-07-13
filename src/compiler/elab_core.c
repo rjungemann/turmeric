@@ -1441,6 +1441,93 @@ bool is_field_consumed(const Expr *body, Binding *binding, uint32_t field_idx) {
     return false;
 }
 
+/* Returns true when a specific owning field of a by-value local is dropped
+ * inside a HANDLER CASE body -- `(rc/drop (.f o))` / `(drop! (.f o))` reached
+ * through a `handle`.  Unlike is_field_consumed (which deliberately does not
+ * descend into handler cases), this walker finds the enclosing `handle` and
+ * checks each case body.  It exists ONLY to REJECT that shape, not to suppress
+ * an auto-drop: a handler case runs 0..N times, so it can neither balance the
+ * enclosing scope's single auto-drop of the same field (double-free when the
+ * case runs, leak when it does not) nor be made safe by local drop-suppression.
+ * The captured local is owned by the enclosing scope; a case consuming its
+ * owning field is unsound regardless of shot count. */
+bool is_field_consumed_in_handler(const Expr *body, Binding *binding,
+                                  uint32_t field_idx) {
+    if (!body) return false;
+
+    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    if (!stack) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    int sp = 0;
+    stack[sp++] = body;
+
+    while (sp > 0) {
+        const Expr *cur = stack[--sp];
+        if (!cur) continue;
+
+        if (cur->kind == EX_HANDLE || cur->kind == EX_HANDLER_LIT) {
+            HandleExpr *h = cur->as.handle_.handle;
+            if (h) {
+                for (uint8_t ci = 0; ci < h->n_cases; ci++) {
+                    /* A case that drops the tracked field -> reject. Reuse the
+                     * (non-descending) field-consume check on the case body. */
+                    if (is_field_consumed(h->cases[ci].body, binding, field_idx)) {
+                        free(stack);
+                        return true;
+                    }
+                }
+                /* Keep walking into the handled body -- a nested handle there
+                 * could also consume the field. */
+                if (sp < 250) stack[sp++] = h->body;
+            }
+            continue;
+        }
+
+        switch (cur->kind) {
+            case EX_LET:
+            case EX_LETREC:
+                for (uint32_t i = cur->as.let_.n; i > 0; i--)
+                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                stack[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                stack[sp++] = cur->as.if_.then_;
+                stack[sp++] = cur->as.if_.cond;
+                break;
+            case EX_DO:
+                for (uint32_t i = cur->as.do_.n; i > 0; i--)
+                    stack[sp++] = cur->as.do_.items[i-1];
+                break;
+            case EX_CALL:
+                for (uint32_t i = cur->as.call_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.call_.args[i-1];
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = cur->as.builtin.n; i > 0; i--)
+                    stack[sp++] = cur->as.builtin.args[i-1];
+                break;
+            case EX_DEFER:
+                stack[sp++] = cur->as.defer_.body;
+                break;
+            case EX_WHILE:
+                stack[sp++] = cur->as.while_.body;
+                stack[sp++] = cur->as.while_.cond;
+                break;
+            case EX_SET:
+                stack[sp++] = cur->as.set_.value;
+                break;
+            default:
+                break;
+        }
+    }
+
+    free(stack);
+    return false;
+}
+
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Zero everything first so any bool/pointer field not explicitly
      * initialised below (e.g. `in_stdlib_load`, set later by

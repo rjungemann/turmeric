@@ -1,0 +1,20 @@
+;; TUR-E0107: a handler case that CONSUMES an owning field of a captured
+;; by-value struct is rejected -- the field would be dropped by the case AND by
+;; the captured local's scope-exit auto-drop (and a multi-shot resume would drop
+;; it more than once).  The safe form borrows the field (reads it); this one
+;; drops it, so it is a hard error rather than a silent double-drop.
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]
+    (handle (g)
+      (E [] k) (do (rc/drop (.r o)) (resume k 0)))))
+
+(defn main [] : int
+  (println (f))
+  0)

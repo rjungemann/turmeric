@@ -30,32 +30,43 @@ count 1, is read inside the case, and is dropped exactly once by `f`'s
 scope-exit auto-drop. Verified compiling (was `'o' undeclared` before) and
 LeakSanitizer-clean.
 
-## Not fixed here (separate, pre-existing, broader)
+## The consuming variant -- now a hard error (TUR-E0107)
 
-A handler case that genuinely CONSUMES the captured field (the original repro
-below, `(rc/drop (.r o))`) now *compiles*, but the resulting program
-double-drops `o.r`: the case decrements it once and `f`'s scope-exit auto-drop
-decrements it again -> use-after-free. This is NOT introduced by the capture
-fix and is NOT specific to handlers -- straight-line code double-drops
-identically, because the scope-exit auto-drop injection is not move-aware for an
-explicit field drop:
+A handler case that genuinely CONSUMES the captured field (`(rc/drop (.r o))`)
+briefly compiled after the capture fix above, but double-dropped `o.r` (the case
+decrements it once, `f`'s scope-exit auto-drop decrements it again ->
+use-after-free). That is now a **hard error, TUR-E0107**
+(`TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER`): `elab_let` detects, via
+`is_field_consumed_in_handler` (`src/compiler/elab_core.c`), that a handler case
+in the body drops an owning field of a captured by-value local and rejects it
+before injecting the per-field auto-drop. Error fixture:
+`tests/fixtures/errors/handler-case-consumes-captured-owning-field/`.
+
+Why an error and not a fix: a handler case runs 0..N times, so no local
+drop-suppression balances the counts (under-drop when the case never runs,
+over-drop when it runs more than once), and the enclosing scope owns the
+aggregate. Unlike a bare-`rc` consuming capture -- which E1's incref-on-read-out
+DOES balance (see
+`docs/archive/cps-handler-case-consumes-owning-capture-evicts.md`) -- a struct
+field has no per-field incref-on-read-out, so the only correct admission is the
+Option B env teardown (not built). Rejecting is the right end-state; it also
+matches what the N6.5 fallback deletion would produce wholesale.
+
+The related STRAIGHT-LINE double-drop (`(rc/drop (.r o))` with no handler) is a
+separate, now-FIXED gap (`is_field_consumed` suppresses that field's auto-drop):
+`docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`.
 
 ```turmeric
 (defstruct Own [r : rc<int> tag : int])
-(defn f [] : int
+(defn f [] : int                               ; straight-line: now single-drop
   (let [o (make-struct Own :r (rc/of 7) :tag 9)]
-    (do (rc/drop (.r o)) (.tag o))))   ; o.r decremented here AND at scope exit
+    (do (rc/drop (.r o)) (.tag o))))
 ```
 
-Tracked separately in
-`docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`, where the
-STRAIGHT-LINE form (shown here) is now FIXED (`is_field_consumed` suppresses the
-per-field auto-drop). The capture fix correctly makes the handler path behave
-like this straight-line code; the double-drop is an orthogonal
-auto-drop-move-awareness gap. Note the *handler-case* form is still open (a case
-runs 0..N times, beyond simple move analysis).
+## Original repro (the hard-fail -- now a clean TUR-E0107 instead)
 
-## Original repro (the hard-fail, now resolved)
+This consuming repro no longer emits the raw `'o' undeclared` C error; it is now
+rejected up front with TUR-E0107 (see "The consuming variant" above).
 
 ```turmeric
 (defstruct Own [r : rc<int> tag : int])
@@ -67,7 +78,7 @@ runs 0..N times, beyond simple move analysis).
 (defn main [] : int (println (f)) 0)
 ```
 
-Before the fix, `tur build` failed:
+Before any of this, `tur build` failed:
 
 ```
 error: 'o_1285' undeclared (first use in this function); did you mean 'k_1286'?

@@ -38,20 +38,18 @@ remains, but it is a fixed, bounded per-region leak unrelated to owning captures
 ### The one genuine residual
 
 A **CONSUMING multi-shot AGGREGATE capture** -- a handler case that DROPS a
-captured by-value struct's owning field and runs N times -- still evicts
+captured by-value struct's owning field and runs N times -- evicts
 (`collect_caps_case` rejects a consuming non-rc capture, since a struct has no
-scalar incref). Its fallback to the direct emitter used to **hard-fail** to
-compile (the struct local was referenced undeclared in the emitted
-`__effect_handler_*`); that direct-path capture bug is now **FIXED** --
-`collect_handle_captures` descends into the owning-value ops, so the shape falls
-back cleanly (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`). The
-consuming *handler-case* variant then compiles but double-drops -- a pre-existing
-handler-independent auto-drop-move-awareness gap, not a CPS-capture issue. Its
-STRAIGHT-LINE form is now fixed (`is_field_consumed` suppresses the per-field
-auto-drop when the body drops the field explicitly:
-`docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`); the
-handler-case form stays open because a case runs 0..N times (beyond simple move
-analysis).
+scalar incref) and, on the direct fallback, would double-drop the field. It is
+now a **hard error, TUR-E0107** (`is_field_consumed_in_handler` +
+`elab_let`), rather than a silent double-drop or a raw `'o' undeclared` C error
+(`docs/archive/cps-consuming-aggregate-capture-hardfails.md`). The related
+STRAIGHT-LINE field drop is fixed by suppressing the per-field auto-drop
+(`is_field_consumed`:
+`docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`). Note the
+bare-`rc` consuming capture is a DIFFERENT, already-working shape (E1
+incref-on-read-out + P1/P2 auto-drop lowering keep it leak-clean; no eviction,
+no error -- `docs/archive/cps-handler-case-consumes-owning-capture-evicts.md`).
 
 Why this one is not just "rc with more fields": incref-on-read-out is only
 balanced when the case drops *exactly* the cloned owning fields. For a

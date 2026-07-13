@@ -5,6 +5,26 @@ sound). Surfaced while landing E1 of
 [cps-backend-multishot-continuations-owning-capture-plan.md](../upcoming/cps-backend-multishot-continuations-owning-capture-plan.md)
 (Track B / E3, which owns the resolution).
 
+**Status: RESOLVED for the bare-`rc` case (this note's repro).** After the owning
+auto-drop lowering landed (O1-b P1/P2,
+[cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md)),
+`f`'s scope-exit `(defer (rc/drop r))` no longer stays an un-lowered `EX_DEFER`
+-- it lowers into the CPS path, so `f` is CPS-emittable and no longer evicts. The
+consuming case then rides E1's clone-on-read-out: the case increments the
+captured `rc` on entry (`rc_strong_increment`) and its own `(rc/drop r)` balances
+that, while the base is dropped once by the P2-lowered auto-drop -- net zero,
+freed once, leak-clean (verified: emitted `f_hc0_0` does incref+decref, `f_hk0`
+does the single base decref). No eviction, no double-drop.
+
+The **aggregate** variant (a captured by-value struct whose owning *field* is
+dropped in the case, `(rc/drop (.f o))`) is NOT resolved this way: there is no
+per-field incref-on-read-out, so it still evicts and its fallback double-drops.
+That variant is now a hard error -- **TUR-E0107** -- rather than a silent
+miscompile
+([../archive/cps-consuming-aggregate-capture-hardfails.md](../archive/cps-consuming-aggregate-capture-hardfails.md)).
+So both shapes this note's "fix directions" worried about are now closed: bare-rc
+works, aggregate is loudly rejected.
+
 ## Summary
 
 E1's mechanism (clone-on-read-out of an owning `rc` capture into a multi-shot

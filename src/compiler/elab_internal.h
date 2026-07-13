@@ -918,6 +918,7 @@ bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
 bool is_field_consumed(const Expr *body, Binding *binding, uint32_t field_idx);
+bool is_field_consumed_in_handler(const Expr *body, Binding *binding, uint32_t field_idx);
 Binding *expr_closure_fn_binding(const Expr *expr);
 bool expr_closure_return_dispatches(const Expr *expr);
 bool expr_closure_return_dispatches_untyped(const Expr *expr);
