@@ -1,8 +1,8 @@
 # Plan: Leak-Detection Follow-ups -- the `requires.no-leak-check` surface
 
-> **Status:** P1 landed (reactor callback-box ownership; 9 fixtures unmarked).
-> Fiber-body ownership landed (5 `reactor-fibers-*` unmarked). Remaining
-> P1-next: httpd handler-chain drop.
+> **Status:** Reactor callback-box ownership (9), fiber-body ownership (5), and
+> httpd outer-handler drop (12) landed -- 26 fixtures unmarked. Remaining: the
+> httpd middleware-onion inner layers, which need compiler closure drop glue.
 > **Last Updated:** 2026-07-13
 > **Type:** Build/test hygiene + runtime memory-management
 > **Related:**
@@ -231,19 +231,42 @@ Result: the 5 `reactor-fibers-*` fixtures are leak-clean and dropped their
 markers; full suite `2111 passed, 0 failed`; httpd-async fixtures still pass
 (the body disown prevents the shared-box double-free).
 
-### P1-next -- httpd handler-chain drop (remaining)
+### httpd handler-chain drop -- PARTIAL (12 fixtures)
 
-The last active-leak class, process-lifetime and bounded. The server stores the
-composed handler / middleware onion (heap capturing-closure boxes) and frees
-none of them at `httpd-free`. Needs recursive drop of the handler closure and
-its captured `next` chain (there is no drop glue for a captured closure chain
-today), plus freeing the rate-limiter bucket table in its destructor. This is
-the larger, riskier chunk flagged originally; it would clear ~30 httpd markers
-plus `httpd-mw-fold-many` and `httpd-mw-compress`.
+**Outer-handler drop landed.** The server stored the user handler
+(`hb->handler` / `ha->handler`, and per-route `route->handler`) -- always passed
+`^fat`, so a heap box -- and freed none of them. `httpd-free`,
+`httpd-async-free`, and `router-free` now free those boxes (`stdlib/httpd.tur`).
+Nothing else frees them, so each is a sole free (no double-free -- confirmed by
+the suite staying green with the markers still in place).
 
-Do it behind the existing markers and drop each marker only once its fixture
-verifies clean with leak detection ON, so the suite ratchets green
-incrementally.
+For a **bare handler** (no `compose-middleware`) the handler is a single box, so
+this reclaims the whole thing. 12 httpd fixtures became leak-clean and dropped
+their markers: `httpd-h{1-basic,2-reactor,3-pool,4-keepalive,6-routing}`,
+`httpd-async-{echo,limit,mw-attr,throughput}`, and the shallow
+`httpd-mw-{multipart,req-header,resp-header}`.
+
+**Still open -- the middleware onion (17 fixtures, markers kept).**
+`compose-middleware` / `httpd-mw-fold` build an onion where each layer is a heap
+closure env capturing the downstream `next` box (and sometimes other heap
+fields). Freeing the outermost box leaves the inner layers leaked, so the
+composed-handler fixtures (`httpd-mw-{basic-auth*,body-size,compose*,cookie,
+cors*,form,json,log,rate-limit,static}`, `httpd-h{5-tls,7-middleware}`,
+`httpd-async-mw-compose`, plus `httpd-mw-fold-many`/`-compress`) still report a
+residual leak and keep their markers.
+
+Fully draining the onion is **not** safely doable from C: the runtime gets an
+opaque `int64_t` box and cannot tell a captured-closure field from a captured
+value, and the emitted env field layout is not a stable ABI. The real fix is
+**compiler-generated closure drop glue** -- a per-closure-type drop that frees
+the box and recursively drops its owned captured fields, reached either via a
+drop-fn word in the fat box or a fn->drop registry. That is a language/codegen
+feature with broad ABI reach (and fixture churn), so it is its own project, not
+part of this runtime-ownership pass. Until then the onion inner layers remain a
+bounded, process-lifetime leak behind the existing markers.
+
+The rate-limiter bucket table (`httpd-mw-rate-limit`, ~24 KB) is a separate
+one-time table freed in its own destructor -- fold it into the same follow-up.
 
 ### P2 -- DK continuation-chain node leak (already reported)
 
@@ -306,8 +329,13 @@ lead.
       opt-out; `^fat` on `local-spawn` body so captureless bodies are heap
       boxes). 5 `reactor-fibers-*` fixtures verified leak-clean and unmarked;
       full suite `2111 passed, 0 failed`; httpd-async still green.
-- [ ] (P1-next) httpd handler-chain drop -- clears ~30 httpd markers +
-      `httpd-mw-fold-many`/`-compress`.
+- [x] httpd outer-handler drop landed (`httpd-free`/`httpd-async-free`/
+      `router-free` free the `^fat` handler + route-handler boxes). 12
+      bare/shallow-handler httpd fixtures verified leak-clean and unmarked;
+      full suite `2111 passed, 0 failed`.
+- [ ] (remaining) httpd middleware-onion inner-layer drop -- needs compiler
+      closure drop glue; clears the 17 composed-handler markers (incl.
+      `httpd-mw-fold-many`) + `httpd-mw-compress` + the rate-limiter table.
 - [ ] (P2) DK node leak fixed at source (`dk_free_node`/arena); repro in the
       report is clean under LSan.
 - [ ] (P3) `reactor-fd-writable` marker removed; inert markers annotated.

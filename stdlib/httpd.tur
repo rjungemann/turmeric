@@ -938,6 +938,12 @@
       tur_reactor_free(hb->reactor);
   }
   if (hb->accept_clos) free(hb->accept_clos);
+  /* Free the user handler box. It is passed ^fat (always a heap fat-closure
+   * box) and nothing else frees it, so this is the sole free -- no double free.
+   * For a bare handler this reclaims the whole thing; for a compose-middleware
+   * onion it frees only the outermost layer (the inner captured `next` boxes
+   * still leak, pending closure drop glue -- see the plan). */
+  if (hb->handler) free((void *)(intptr_t)hb->handler);
   if (hb->listen_fd >= 0) close(hb->listen_fd);
   if (hb->fdq) {
       /* Close any pending fds we never got to. */
@@ -2834,6 +2840,10 @@
   if (ha->reactor) tur_reactor_free(ha->reactor);
   if (ha->accept_clos) free(ha->accept_clos);
   if (ha->body_closure) free((void *)(intptr_t)ha->body_closure);
+  /* Free the user handler box (passed ^fat, always heap; distinct from
+   * body_closure). Sole free -- no double free. Outer layer only for a
+   * compose-middleware onion; see httpd-free / the plan. */
+  if (ha->handler) free((void *)(intptr_t)ha->handler);
   if (ha->listen_fd >= 0) close(ha->listen_fd);
   free(ha);
   ```)
@@ -3002,6 +3012,10 @@
   Route *cur = router->routes;
   while (cur) {
       Route *nx = cur->next;
+      /* Each route handler is passed ^fat (heap box) and freed nowhere else;
+       * reclaim the outer box here (inner middleware layers, if any, still
+       * leak pending closure drop glue -- see the plan). */
+      if (cur->handler) free((void *)(intptr_t)cur->handler);
       free(cur);
       cur = nx;
   }
