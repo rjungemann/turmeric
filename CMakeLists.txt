@@ -107,6 +107,15 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# F2.6 (compiled-shallow-handlers-plan): acceptance probes for `handle-shallow`.
+# The distinguishing shallow behavior (a resume that re-performs) is
+# interpreter-only and hard-errors on the compiled fiber fallback, so it lives
+# in a probe rather than the compile-everything fixture harness.
+add_test(
+  NAME tur_shallow_handler_probes
+  COMMAND bash tests/shallow-handler-probes.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # debugger Phase 1: breakpoint-span coverage gate. Every fixture's elaborated
 # AST must carry a usable source span on each breakpoint-eligible node (defn,
 # let form, call site, top-level form). See docs/upcoming/debugger-plan.md.

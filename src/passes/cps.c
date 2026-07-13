@@ -9,6 +9,7 @@
 #include "arena.h"
 #include "expr.h"
 #include "typeclass.h"
+#include "globals.h"   /* F3: g_opt_cps_async */
 
 /* Phase 18: CPS transformation for delimited continuations
  * 
@@ -109,6 +110,12 @@ bool cps_expr_contains_shift(const Expr *e) {
                     return true;
             }
             return cps_expr_contains_shift(e->as.dynvar_binding_.body);
+        case EX_AWAIT:
+            /* F3 (cps-async): under the flag, `await` lowers to a dk_shift, so a
+             * function containing it must be CPS-colored.  Otherwise it is a
+             * self-contained runtime call (no coloring needed here). */
+            if (g_opt_cps_async) return true;
+            return cps_expr_contains_shift(e->as.await_.fut_expr);
         case EX_PERFORM:
             /* perform lowers to shift - always needs CPS marking */
             return true;
@@ -312,6 +319,12 @@ static bool cps_directly_uses_control(const Expr *e) {
          * emits natively instead of wholly direct-emitting through emit_cps_callcc. */
         case EX_CALLCC:
             return true;
+        /* F3 (cps-async): under the flag, `await` lowers to a dk_shift, so it is a
+         * control seed that colors its function; otherwise it is a self-contained
+         * runtime call (recurse into the future sub-expr for any nested control). */
+        case EX_AWAIT:
+            if (g_opt_cps_async) return true;
+            return cps_directly_uses_control(e->as.await_.fut_expr);
         /* Structural recursion (no descent into nested fn bodies). */
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++)

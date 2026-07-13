@@ -52,8 +52,25 @@ DK *dk_shift(int tag, DKBody body, intptr_t body_env, DK *next);
 DK *dk_shift0(int tag, DKBody body, intptr_t body_env, DK *next);
 /* A handler-prompt for algebraic effects: a marker keyed by effect `tag` that
  * carries the handler case `fn` (with env).  Transparent to a returning value
- * (like dk_prompt); a matching dk_perform runs `fn`. */
+ * (like dk_prompt); a matching dk_perform runs `fn`.
+ *
+ * `dk_handler` is a DEEP handler: dk_perform re-installs the handler on the
+ * captured sub-continuation, so a `resume` inside the case re-delimits under
+ * the same handler (each subsequent perform in the resumed computation is
+ * handled again).  This is the reinstall-on-resume behavior, the effect-side
+ * analogue of `shift`.
+ *
+ * `dk_handler_shallow` is a SHALLOW handler: dk_perform does NOT re-install the
+ * handler on the captured sub-continuation, so a `resume` runs the rest of the
+ * computation with the handler already removed (a subsequent perform of the
+ * same effect is no longer caught by this handler; it propagates to an enclosing
+ * handler, or aborts as unhandled if none catches it).  This is the no-reinstall
+ * behavior, the effect-side analogue of `shift0`.
+ *
+ * Both share the one DK substrate; the only difference is the reinstall bit
+ * carried on the handler marker and read by dk_perform. */
 DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next);
+DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next);
 
 /* ---- evaluation ------------------------------------------------------- */
 /* Run chain `k` with seed value `v` (no implicit root prompt). */
@@ -75,6 +92,11 @@ intptr_t dk_perform(int tag, intptr_t arg, DK *k);
 
 /* Does the chain contain a prompt marker? (used to assert re-install). */
 bool dk_has_prompt(const DK *k);
+
+/* Does the chain contain a handler marker for `tag`? (used to assert deep vs
+ * shallow re-install: a deep handler's captured sub-continuation carries the
+ * re-installed handler marker, a shallow handler's does not). */
+bool dk_has_handler(const DK *k, int tag);
 
 /* ---- memory ----------------------------------------------------------- */
 DK *dk_copy(const DK *k);   /* deep copy a chain */

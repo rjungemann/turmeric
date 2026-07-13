@@ -7021,6 +7021,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);\n");
     buf_puts(out, "    void *body_env;  /* heap-allocated env for body captures */\n");
     buf_puts(out, "    void *table;     /* FH3: tur_handler_table_t* for value-based dispatch (else NULL) */\n");
+    buf_puts(out, "    bool shallow_consumed;  /* F2: a shallow handler that has run its case once; a\n");
+    buf_puts(out, "                             * subsequent same-effect perform bubbles to the enclosing\n");
+    buf_puts(out, "                             * handler instead of re-matching here (handle-shallow). */\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
     buf_puts(out, "struct EffectHandlerCase {\n");
@@ -7860,16 +7863,77 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return f->value;\n");
     buf_puts(out, "}\n\n");
     
-    /* Create a future that runs fn() and fulfills it with the result */
+    /* F3.2 (cps-async): deferred suspend/resume state for a pending await.
+     *
+     * A parked async computation is a captured heap continuation (`subk`) plus
+     * the OUTER future the async boundary handed out -- the one whose fulfillment
+     * the awaiting caller is waiting on.  When the awaited (inner) future
+     * completes, `tur_future_fulfill` fires `on_complete`, which resumes `subk`
+     * with the value and fulfills `outer` with the result (unless the resumed
+     * body immediately re-parks on a further pending await, in which case `outer`
+     * is threaded onto the new park).  Declared before tur_async_fiber (the async
+     * boundary that reads the flag) and __tur_await_body (which sets it). */
+    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; } TurAsyncPark;\n\n");
+    emit_rt_global(out, shared,
+                   "int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */\n",
+                   "int tur_async_suspended");
+    emit_rt_global(out, shared,
+                   "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
+                   "TurAsyncPark *tur_async_pending_park");
+
+    /* Create a future that runs fn() and fulfills it with the result.
+     *
+     * F3.2 (cps-async): fn() is the async body.  When it is CPS-colored and its
+     * body hits a PENDING await, __tur_await_body parks the captured continuation
+     * and sets tur_async_suspended; the body returns a dummy value.  In that case
+     * the future stays pending and we thread it onto the park so the eventual
+     * resume (driven by tur_future_fulfill on the awaited future) fulfills it.
+     * For a synchronous body (the common case, and every non-cps-async program)
+     * the flag is never set and we fulfill inline exactly as before -- byte-
+     * identical behaviour. */
     buf_puts(out, "static TurFuture *tur_async_fiber(int64_t (*fn)(void)) {\n");
     buf_puts(out, "    TurFuture *future = tur_future_new();\n");
     buf_puts(out, "    if (!tur_scheduler) {\n");
     buf_puts(out, "        /* AW-005: Initialize scheduler on first use */\n");
     buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    /* AW-005: Simplified v1 - call function directly and fulfill */\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    int64_t result = fn();\n");
-    buf_puts(out, "    tur_future_fulfill(future, result);\n");
+    buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
+    buf_puts(out, "        /* body parked on a pending await: leave `future` pending; the parked\n");
+    buf_puts(out, "         * resume fulfills it when the awaited future completes. */\n");
+    buf_puts(out, "        tur_async_pending_park->outer = future;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_future_fulfill(future, result);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    return future;\n");
+    buf_puts(out, "}\n\n");
+
+    /* Async spawn for a CAPTURING lambda.  `clos` is a fat closure box whose
+     * layout is `{ int64_t (*__fn)(void *); <captures...> }` (EX_CLOSURE: __fn
+     * first).  A bare-function-pointer async (tur_async_fiber) would call the box
+     * pointer as code and crash; here we read the thunk out of slot 0 and invoke
+     * it with the box itself as its env.  Same future / F3.2 suspend handling as
+     * tur_async_fiber. */
+    buf_puts(out, "static TurFuture *tur_async_fiber_closure(void *clos) {\n");
+    buf_puts(out, "    TurFuture *future = tur_future_new();\n");
+    buf_puts(out, "    if (!tur_scheduler) {\n");
+    buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    int64_t result = __fn(clos);\n");
+    buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
+    buf_puts(out, "        tur_async_pending_park->outer = future;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_future_fulfill(future, result);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    return future;\n");
     buf_puts(out, "}\n\n");
     
@@ -7913,7 +7977,55 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    return f->value;\n");
     buf_puts(out, "}\n\n");
-    
+
+    buf_puts(out, "static void __tur_async_resume(TurFuture *inner, int64_t value) {\n");
+    buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    int64_t r = dk_invoke(rec->subk, value);\n");
+    buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
+    buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");
+    buf_puts(out, "        tur_async_pending_park->outer = rec->outer;\n");
+    buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_future_fulfill(rec->outer, r);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_suspended = 0;\n");
+    buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    dk_free(rec->subk);\n");
+    buf_puts(out, "    free(rec);\n");
+    buf_puts(out, "}\n\n");
+
+    /* F3 (cps-async): the shift body for an `await` lowered to a heap
+     * continuation.  `env` is the awaited future; `subk` is the captured
+     * continuation (the rest of the async body up to the entry prompt).  If the
+     * future is already resolved, resume inline -- dk_invoke replays the captured
+     * continuation with the value, exactly as a synchronous await would continue.
+     * A genuinely pending future parks a copy of the captured continuation on the
+     * future's on_complete seam and SUSPENDS (via the tur_async_suspended flag);
+     * the async boundary that ran the body leaves its outer future pending, and
+     * the eventual tur_future_fulfill resumes the parked continuation. */
+    buf_puts(out, "static intptr_t __tur_await_body(intptr_t env, DK *subk) {\n");
+    buf_puts(out, "    TurFuture *f = (TurFuture *)(intptr_t)env;\n");
+    buf_puts(out, "    if (!f) { fprintf(stderr, \"await: null future\\n\"); abort(); }\n");
+    buf_puts(out, "    if (tur_future_done(f)) {\n");
+    buf_puts(out, "        if (f->status == FUTURE_REJECTED) {\n");
+    buf_puts(out, "            fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
+    buf_puts(out, "            abort();\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        return dk_invoke(subk, f->value);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    /* pending: park a private copy of the captured continuation on on_complete */\n");
+    buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));\n");
+    buf_puts(out, "    if (!rec) { fprintf(stderr, \"await: oom\\n\"); abort(); }\n");
+    buf_puts(out, "    rec->subk = dk_copy_range(subk, NULL);\n");
+    buf_puts(out, "    rec->outer = NULL;  /* patched by the async boundary (tur_async_fiber) */\n");
+    buf_puts(out, "    f->on_complete.fn = (void (*)(TurFuture *, int64_t))__tur_async_resume;\n");
+    buf_puts(out, "    f->on_complete.env = (void *)rec;\n");
+    buf_puts(out, "    tur_async_suspended = 1;\n");
+    buf_puts(out, "    tur_async_pending_park = rec;\n");
+    buf_puts(out, "    return 0;  /* dummy: the boundary reads tur_async_suspended, not this value */\n");
+    buf_puts(out, "}\n\n");
+
     /* Free a future */
     buf_puts(out, "static void tur_future_free(TurFuture *f) {\n");
     buf_puts(out, "    if (!f) return;\n");

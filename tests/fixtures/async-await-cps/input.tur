@@ -1,0 +1,17 @@
+;; F3.1 (cps-async): `await` lowered to a heap-continuation dk_shift.  `get-it`
+;; is CPS-colored (it awaits), so its `await` captures the rest of its body as a
+;; DK continuation and resumes it via __tur_await_body.  compute's future is ready
+;; by the time it is awaited (async is synchronous today), so the shift body
+;; resumes inline -- same result as the fiber path (43), but via the DK substrate.
+;; Built with --enable=cps-async.
+(defn compute [] : int
+  ```c
+  return (int64_t)42;
+  ```)
+
+(defn get-it [] : int
+  (let [fut (async compute)]
+    (+ 1 (await fut))))
+
+(defn main [] : nil
+  (println (get-it)))

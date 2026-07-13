@@ -450,8 +450,14 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         EffectRow *body_row = collect_effects_in_expr(
             a, h->body, effect_row_empty(a), idx, env, subst);
         for (uint8_t i = 0; i < h->n_cases; i++) {
-            /* Absorb the handled effect from the body row. */
-            body_row = effect_row_remove(body_row, h->cases[i].effect_name, a);
+            /* Absorb the handled effect from the body row -- but only for a DEEP
+             * handler.  A shallow handler (handle-shallow, F2) handles the first
+             * perform and then removes itself, so a re-perform in the resumed
+             * continuation escapes to the enclosing handler; the effect stays in
+             * the row (and in the enclosing fn's inferred row), so an outer
+             * handler for it is correctly seen as reachable (no false TUR-W0033). */
+            if (!h->shallow)
+                body_row = effect_row_remove(body_row, h->cases[i].effect_name, a);
             /* Propagate effects performed inside the handler case body. */
             row = collect_effects_in_expr(a, h->cases[i].body, row, idx, env, subst);
         }

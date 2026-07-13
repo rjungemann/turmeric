@@ -851,6 +851,14 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * its body's captures ride the shift-body helper's env.  Walk it so a
              * capture threaded through the enclosing continuation is not missed. */
             collect_caps_rec(t->as.shift.body, exclude, bound, nb, cs); return;
+        case CT_AWAIT:
+            /* F3 gap-2: a nested `await` in a lifted (RESET_CONT) await continuation
+             * -- e.g. the second of two sequential awaits.  Its future atom may be a
+             * capture the lifted frame must carry; the awaited value binds x for the
+             * rest of the continuation. */
+            COL_ATOM(&t->as.await.fut);
+            bound[nb] = t->as.await.x.id;
+            collect_caps_rec(t->as.await.body, exclude, bound, nb + 1, cs); return;
         case CT_CALLCC: {
             /* The receiver f may capture enclosing locals (build_callcc admits a
              * capturing closure).  Surface its free vars -- collect_free_vars
@@ -1019,6 +1027,50 @@ static bool perform_body_ok(const CTerm *t) {
     }
 }
 
+/* F3 gap-2: an await continuation that is a FULL CPS body (a branch, or a further
+ * `await`) but carries a statically-BOUNDED number of await suspensions -- so it
+ * is safe to lift like a RESET continuation (LH_RESET_CONT: the frame threads the
+ * enclosing k itself, its `next` is dk_done()).  The one thing that is NOT bounded
+ * is a TAIL CALL: a cps->cps tail call threads __kont and can recurse, and a
+ * ready-future inline resume then recurses through dk_invoke in O(N) C stack
+ * (gap 1 -- worse than the direct TCO path).  ALL tail calls are rejected here,
+ * not just cps->cps ones: whether a callee is CPS-emitted (binding_in_s) is not
+ * yet settled while this predicate runs during S-classification (a self-recursive
+ * callee reads back as `false` mid-fixpoint), so keying the reject on that flag is
+ * unsound -- it would admit the very recursion it means to exclude.  A tail call
+ * is never part of the gap-2 shape anyway (two sequential awaits end in an
+ * appcont), so rejecting all of them keeps the whitelist sound and still admits
+ * gap 2.  Other nested control ops (reset/handle/perform/shift/resume/callcc mixed
+ * into an await continuation) also stay out of scope and evict. */
+static bool await_cont_reset_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            return (t->as.appcont.kont.kind == KK_RET || t->as.appcont.kont.kind == KK_PROMPT)
+                && atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return atom_ok(&t->as.letval.v) && await_cont_reset_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec)) return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return await_cont_reset_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!call_arg_ok(&t->as.letcall.args[i], true)) return false;
+            return await_cont_reset_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && await_cont_reset_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && await_cont_reset_ok(t->as.if_.then_)
+                && await_cont_reset_ok(t->as.if_.else_);
+        case CT_AWAIT:
+            return atom_ok(&t->as.await.fut) && await_cont_reset_ok(t->as.await.body);
+        default: return false;   /* CT_TAILCALL and any nested control op: evict */
+    }
+}
+
 /* A handler case body (C4): straight-line with `resume` (dk_invoke), delivered
  * to the prompt (KK_PROMPT) as a scalar.  resume.k is the continuation binding
  * (not scalar-checked); resume.v and other atoms are scalar. */
@@ -1101,8 +1153,9 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
             case CT_RESET:
             case CT_HANDLE:
             case CT_PERFORM:
+            case CT_AWAIT:
                 /* The owning value crosses into a SINGLE-SHOT continuation (the
-                 * reset/handle/perform continuation runs at most once -- a second
+                 * reset/handle/perform/await continuation runs at most once -- a second
                  * resume is a hard error, TUR-E0201).  It is now captured into
                  * that continuation's env and dropped there exactly once (or moved
                  * out), which is sound -- so the drop no longer has to precede the
@@ -1252,6 +1305,28 @@ static bool term_core_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             CapSet cs;
             return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
+        }
+        case CT_AWAIT: {
+            /* F3 (cps-async): the awaited future must be a slot-representable atom.
+             * The continuation is admitted EITHER as a straight-line value
+             * transform (perform_body_ok -> LH_PERFORM_CONT, the F3.1 path) OR as a
+             * BOUNDED full CPS continuation (await_cont_reset_ok -> LH_RESET_CONT,
+             * the F3 gap-2 path: a branch or a further sequential `await`, with a
+             * statically-bounded number of suspensions and no cps->cps tail call).
+             *
+             * A continuation with a cps->cps tail call (a recursive await) is
+             * DELIBERATELY not admitted -- await_cont_reset_ok rejects it, so it
+             * evicts to the direct emitter.  Lifting it would resume via dk_invoke,
+             * and a READY-future inline resume recurses through dk_invoke (not a
+             * tail call) in O(N) C stack -- SIGSEGV at ~100k under a 256KB stack,
+             * strictly worse than the direct TCO path (which the async-rec probe
+             * runs 1,000,000 deep).  See
+             * docs/reported/cps-async-recursive-await-eviction.md. */
+            if (!atom_ok(&t->as.await.fut)) return false;
+            if (!perform_body_ok(t->as.await.body) && !await_cont_reset_ok(t->as.await.body))
+                return false;
+            CapSet cs;
+            return collect_caps(t->as.await.body, t->as.await.x.id, &cs);
         }
         case CT_RESUME:
             return t->as.resume.k.kind == CA_VAR && atom_ok(&t->as.resume.v)
@@ -1627,6 +1702,8 @@ static bool needs_heap_join(const CTerm *t) {
         }
         case CT_PERFORM:
             return needs_heap_join(t->as.perform.body);
+        case CT_AWAIT:
+            return needs_heap_join(t->as.await.body);
         case CT_RESUME:
             return needs_heap_join(t->as.resume.body);
         case CT_CLONEABLE:
@@ -2230,6 +2307,10 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
         case CT_PERFORM:
             if (!sym_in(t->as.perform.effect, handled, nh)) return false;  /* escapes */
             return is_cps_island(t->as.perform.body, handled, nh);
+        case CT_AWAIT:
+            /* F3: await performs/handles no algebraic effect -- transparent to
+             * effect co-classification; recurse the continuation. */
+            return is_cps_island(t->as.await.body, handled, nh);
         case CT_RESUME:
             return is_cps_island(t->as.resume.body, handled, nh);
         case CT_CALLCC:
@@ -2380,6 +2461,7 @@ static void emit_shift(CE *ce, const CTerm *t);
 static void emit_cloneable(CE *ce, const CTerm *t);
 static void emit_handle(CE *ce, const CTerm *t);
 static void emit_perform(CE *ce, const CTerm *t);
+static void emit_await(CE *ce, const CTerm *t);   /* F3 (cps-async) */
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_callcc(CE *ce, const CTerm *t);
@@ -2587,6 +2669,7 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_SHIFT:   emit_shift(ce, t); break;
         case CT_HANDLE:  emit_handle(ce, t); break;
         case CT_PERFORM: emit_perform(ce, t); break;
+        case CT_AWAIT:   emit_await(ce, t); break;
         case CT_RESUME:  emit_resume(ce, t); break;
         case CT_LETRAW:  emit_letraw(ce, t); break;
         case CT_CLONEABLE: emit_cloneable(ce, t); break;
@@ -2706,6 +2789,7 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             emit_binder_decls(ce, t->as.handle.delim);
             break;
         case CT_PERFORM: break;   /* terminal; the continuation is lifted */
+        case CT_AWAIT:   break;   /* F3: terminal; the continuation is lifted */
         case CT_RESUME: {
             char *bn = cvar_cname(ce, t->as.resume.x);
             ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type), bn);
@@ -3535,13 +3619,16 @@ static void emit_handle(CE *ce, const CTerm *t) {
     char hchain[64];
     snprintf(hchain, sizeof(hchain), "__h%d", id);
     /* Build the chain inside-out: base is the continuation frame; wrap each case
-     * as dk_handler(tag_i, case_i, case_env_i, <inner>). */
+     * as dk_handler(tag_i, case_i, case_env_i, <inner>).  A shallow handle
+     * (handle-shallow, F2) wraps each case as dk_handler_shallow instead, so a
+     * resume does not re-install it (the effect-side analogue of shift0). */
+    const char *hctor = t->as.handle.shallow ? "dk_handler_shallow" : "dk_handler";
     Buf chain; buf_init(&chain);
     buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         Buf nxt; buf_init(&nxt);
-        buf_printf(&nxt, "dk_handler(%d, %s, %s, %.*s)", tag, cnames[ci], cenvs[ci],
+        buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", hctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         buf_free(&chain);
         chain = nxt;
@@ -3643,6 +3730,86 @@ static void emit_perform(CE *ce, const CTerm *t) {
     }
     free(sa);
     free(arg);
+}
+
+/* F3 (cps-async): is the await continuation trivial (deliver the awaited value
+ * straight to the function's return continuation)?  Then no lifted frame. */
+static bool await_cont_trivial(const CTerm *t) {
+    const CTerm *b = t->as.await.body;
+    return b && b->kind == CT_APPCONT
+        && (b->as.appcont.kont.kind == KK_RET || b->as.appcont.kont.kind == KK_PROMPT)
+        && b->as.appcont.v.kind == CA_CVAR
+        && b->as.appcont.v.cvar_id == t->as.await.x.id;
+}
+
+/* F3 (cps-async): `await` as a heap-continuation shift.  Mirrors emit_perform,
+ * but shifts to the entry root prompt with the fixed __tur_await_body runtime
+ * helper as the shift body (the awaited future rides as the shift's env).  The
+ * continuation (bind the awaited value, run the rest) is lifted exactly like a
+ * perform continuation (LH_PERFORM_CONT) and threaded as the shift's tail. */
+static void emit_await(CE *ce, const CTerm *t) {
+    char *fut = atom_str(ce, &t->as.await.fut);
+    char *fsa = slot_store(ce->ctx, t->as.await.fut.ty, t->as.await.fut.type, fut);
+    if (await_cont_trivial(t)) {
+        ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, %s), 0);",
+                fsa, ce->cur_k);
+    } else if (perform_body_ok(t->as.await.body)) {
+        /* Straight-line continuation (F3.1): a value-transform frame whose result
+         * dk_run delivers to the function's k (frame next = cur_k). */
+        int id = (*ce->helper_ctr)++;
+        char pname[256];
+        snprintf(pname, sizeof(pname), "%s_aw%d", ce->fn_cn, id);
+        char *pxn = cvar_cname(ce, t->as.await.x);
+        CapSet cs;
+        bool ok = collect_caps(t->as.await.body, t->as.await.x.id, &cs);
+        const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.await.x.ty, t->as.await.x.type,
+                    t->as.await.body, NULL, caps);
+        free(pxn);
+        if (caps) {
+            char envv[64];
+            snprintf(envv, sizeof envv, "__awe%d", id);
+            ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
+            for (int i = 0; i < cs.n; i++) {
+                char *cn = cs.b[i] ? name_for_binding(ce->ctx, cs.b[i]) : strdup(cs.cvname[i]);
+                ce_line(ce, "%s->f%d = %s;", envv, i, cn);
+                free(cn);
+            }
+            ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
+                        "dk_frame(%s, (intptr_t)%s, %s)), 0);",
+                    fsa, pname, envv, ce->cur_k);
+        } else {
+            ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
+                        "dk_frame(%s, 0, %s)), 0);",
+                    fsa, pname, ce->cur_k);
+        }
+    } else {
+        /* F3 gap-2: a bounded full CPS continuation (a branch or a further
+         * sequential await -- await_cont_reset_ok, checked at admission).  Lift it
+         * like a RESET continuation: the frame threads the enclosing k (__kont,
+         * carried in the env) itself and its `next` is dk_done(), so a KK_RET
+         * appcont emits `dk_run(__kont, v)`, a nested await emits its own shift
+         * against __kont, and the value is delivered exactly once.  No cps->cps
+         * tail call reaches here (that evicts), so the number of nested dk_invoke
+         * resumes is statically bounded -- no O(N) stack. */
+        int id = (*ce->helper_ctr)++;
+        char aname[256];
+        snprintf(aname, sizeof(aname), "%s_ak%d", ce->fn_cn, id);
+        char *axn = cvar_cname(ce, t->as.await.x);
+        CapSet cs;
+        bool ok = collect_caps(t->as.await.body, t->as.await.x.id, &cs);
+        const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        emit_lifted(ce, aname, LH_RESET_CONT, axn, t->as.await.x.ty, t->as.await.x.type,
+                    t->as.await.body, NULL, caps);
+        free(axn);
+        char *envexpr = emit_cont_env(ce, aname, caps, ce->cur_k);
+        ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
+                    "dk_frame(%s, %s, dk_done())), 0);",
+                fsa, aname, envexpr);
+        free(envexpr);
+    }
+    free(fsa);
+    free(fut);
 }
 
 static void emit_resume(CE *ce, const CTerm *t) {
@@ -4035,7 +4202,12 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    }\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
         buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
-        buf_puts(file, "    dk_free(__root);\n");
+        /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
+     * lifted continuation copy may still reference __root (a RESET_CONT
+     * await frame carries k=__root in its env); leak it rather than dangle.
+     * tur_async_suspended is always 0 for a synchronous / effect-only body,
+     * so this is byte-identical there. */
+    buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
@@ -4078,7 +4250,12 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "__root);\n");
-    buf_puts(file, "    dk_free(__root);\n");
+    /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
+     * lifted continuation copy may still reference __root (a RESET_CONT
+     * await frame carries k=__root in its env); leak it rather than dangle.
+     * tur_async_suspended is always 0 for a synchronous / effect-only body,
+     * so this is byte-identical there. */
+    buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {

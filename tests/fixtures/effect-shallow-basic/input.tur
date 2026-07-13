@@ -1,0 +1,15 @@
+;; F2.6: a single-perform `handle-shallow` on the CPS path.  `use-ask` performs
+;; Ask once; the handler resumes with 41, so use-ask = 1 + 41 = 42 and the
+;; handle value * 10 = 420.  With a single perform, deep and shallow agree (the
+;; continuation never re-performs), so this fixture pins that `handle-shallow`
+;; compiles (dk_handler_shallow) and interprets to the same value as `handle`.
+(defeffect Ask [] :int)
+
+(defn use-ask [] : int (+ 1 (perform (Ask))))
+
+(defn run [] : int
+  (* 10 (handle-shallow (use-ask) (Ask [] k) (resume k 41))))
+
+(defn main [] : int
+  (println (run))
+  0)

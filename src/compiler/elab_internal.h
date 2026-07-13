@@ -267,6 +267,7 @@ typedef struct Elab {
     const Symbol *sym_defeffect;  /* defeffect */
     const Symbol *sym_perform;    /* perform */
     const Symbol *sym_handle;     /* handle */
+    const Symbol *sym_handle_shallow; /* handle-shallow (F2: shallow effect handler) */
     const Symbol *sym_try_with;   /* try-with (sugar for handle) */
     const Symbol *sym_with_handler; /* with-handler (sugar for handle; async-friendly alias) */
     const Symbol *sym_with;         /* WITH-V0: (with src [field value ...]) functional struct update */
@@ -1119,6 +1120,7 @@ Expr *elab_try_with(Elab *e, const Form *call);
 Expr *elab_defeffect(Elab *e, const Form *call);
 Expr *elab_perform(Elab *e, const Form *call);
 Expr *elab_handle(Elab *e, const Form *call);
+Expr *elab_handle_shallow(Elab *e, const Form *call);
 /* FH2-FH5: first-class handler values */
 Expr *elab_handler_lit(Elab *e, const Form *call);
 Expr *elab_with_handler(Elab *e, const Form *call);

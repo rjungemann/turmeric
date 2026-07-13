@@ -1,0 +1,17 @@
+;; F2.5: `^multishot` and `handle-shallow` compose -- a shallow handler whose
+;; clause resumes its captured continuation more than once.  `use-ask` performs
+;; Ask once; the continuation is just the return, so each independent resume
+;; yields its own value: (resume k 10) -> 10, (resume k 20) -> 20, summing to 30.
+;; Single perform means deep and shallow agree here (30); the point is that the
+;; two opt-ins (multi-shot resume + no re-install) compose and compile.
+(defeffect Ask [] :int)
+
+(defn use-ask [] : int (perform (Ask)))
+
+(defn run [] : int
+  (handle-shallow (use-ask)
+    (Ask [] ^multishot k) (+ (resume k 10) (resume k 20))))
+
+(defn main [] : int
+  (println (run))
+  0)

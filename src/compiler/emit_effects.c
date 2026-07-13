@@ -188,6 +188,16 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
         return emit_value(ctx, body, h->body);
     }
 
+    /* F2.4 tail: shallow effect handlers (`handle-shallow`) on the fiber fallback.
+     * The intercept EffectHandlerFrame stays installed for the fiber's whole
+     * lifetime, so deep re-catches every perform.  For a shallow handler we make
+     * the per-handle dispatch DECLINE its own effect once its case has run (a
+     * `shallow_consumed` flag on the capture ctx): a subsequent same-effect
+     * perform then falls through to the existing bubble-up path, which forwards it
+     * to the enclosing handler and re-dispatches the inner body with that
+     * handler's resume value -- exactly the interpreter's shallow semantics.  See
+     * the dispatch emission below (Step 6), all gated on `h->shallow`. */
+
     bool returns_value = (e->type.kind != TY_NIL);
 
     /* Allocate unique IDs for this handle expression */
@@ -603,15 +613,21 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_puts(hbuf, "    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);\n");
     buf_puts(hbuf, "    if (__fiber->done) { return __fiber->result; }\n");
     buf_puts(hbuf, "    if (!__dcap->has_pending_effect) return __r;\n");
-    /* Dispatch to matching handler case */
+    /* Dispatch to matching handler case.  F2: a shallow handler guards every case
+     * on `!shallow_consumed` and sets the flag when it matches, so once its case
+     * has run, a later same-effect perform matches no case and falls through to
+     * the bubble-up else branch (forward to the enclosing handler). */
+    const char *sh_guard = h->shallow ? "!__dcap->shallow_consumed && " : "";
     for (uint8_t i = 0; i < h->n_cases; i++) {
         HandleCase *c = &h->cases[i];
         if (i == 0)
-            buf_printf(hbuf, "    if (strcmp(__dcap->eff_name, \"%s\") == 0) {\n",
-                       c->effect_name->name);
+            buf_printf(hbuf, "    if (%sstrcmp(__dcap->eff_name, \"%s\") == 0) {\n",
+                       sh_guard, c->effect_name->name);
         else
-            buf_printf(hbuf, "    } else if (strcmp(__dcap->eff_name, \"%s\") == 0) {\n",
-                       c->effect_name->name);
+            buf_printf(hbuf, "    } else if (%sstrcmp(__dcap->eff_name, \"%s\") == 0) {\n",
+                       sh_guard, c->effect_name->name);
+        if (h->shallow)
+            buf_puts(hbuf, "        __dcap->shallow_consumed = true;\n");
         if (c->cont_kind == CK_MULTISHOT) {
             /* MS1: wrap fiber k in a tur_cloneable_cont for snapshot-safe multi-shot. */
             buf_printf(hbuf,
@@ -708,6 +724,8 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "%s.eff_n_args = 0;\n", cap_var);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s.dispatch = %s;\n", cap_var, dispatch_fn_name);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.shallow_consumed = false;\n", cap_var);  /* F2 */
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s.body_env = %s;\n", cap_var,
                has_captures ? env_var_name : "NULL");
