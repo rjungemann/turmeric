@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A COMPLETE (A1-A3). Track B: E-borrow landed (leak-clean owning captures via bare aliasing -- E1 is now leak-clean); E2 (aggregate captures) and E3/E4 open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: Track A COMPLETE (A1-A3). Track B: E-borrow landed (leak-clean owning captures via bare aliasing -- E1 is now leak-clean); E2 (aggregate/carrier captures) BLOCKED on the scope-exit-auto-drop hole (rides E3/O1-b); E3/E4 open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -279,19 +279,36 @@ longer on the critical path for a leak-clean *reachable* story -- it becomes the
 enabler for *admitting* consuming multi-shot captures (and O1-b P2/P3's abortive
 ref teardown), not a prerequisite for leak-cleanliness of what already emits.
 
-### E2 -- aggregate + carrier-ADT owning captures
+### E2 -- aggregate + carrier-ADT owning captures (BLOCKED -- no reachable shape today)
 
-With E-borrow, E2's borrow-only shapes need **no clone glue at all**: a
-borrow-only owning-aggregate capture (a `defstruct` with an `rc` field whose
-case reads a field) rides the env by a bare shallow struct copy, leak-clean, the
-same as an rc handle. E2 is therefore: extend `cap_owning_ok` beyond `TY_RC` to
-a carrier ADT (`carrier_handle_ok`) and an owning-carrying by-value aggregate,
-and make a *consuming* aggregate capture (no incref glue) **evict** rather than
-incref (only rc has the scalar incref). The clone-on-read-out for a *consuming*
-aggregate (reusing O2's struct/ADT clone glue via `type_uses_carrier_abi` /
-`adt_is_byvalue_product`) is deferred with E3, since consuming multi-shot
-captures evict today anyway. (Original Option A interim design retained below for
-reference.)
+E2 was prototyped (extend `cap_owning_ok` beyond `TY_RC` to a carrier ADT
+(`carrier_handle_ok`) and an owning-carrying by-value aggregate
+(`owning_byvalue_aggregate`); a borrow-only such capture is a bare shallow copy
+like an rc handle -- **no clone glue needed** -- and a consuming one evicts).
+The change is sound and non-regressing, **but has no reachable fixture and was
+reverted** rather than land untestable code. The blocker, found empirically:
+
+`rc<int>` is essentially the *only* owning type that reaches a multi-shot case,
+because reaching CPS requires the capture's ownership to be discharged by an
+**explicit** straight-line consume that `is_binding_consumed` recognizes (else a
+scope-exit auto-drop is injected as an unlowered `EX_DEFER` and the fn evicts).
+For an rc that consume is `(rc/drop r)`. But:
+
+- a **by-value struct** with an owning field has no user-facing explicit drop
+  (`drop!` requires `ref<T>`, not the aggregate -- `TUR-Exxxx: drop! requires
+  ref<T>, got Own`), so its owning field can only auto-drop -> `EX_DEFER` ->
+  evict (this is the separate `byvalue-struct-local-owning-field-leak`);
+- a **heap ADT / carrier handle** likewise auto-drops via `EX_DEFER`;
+- a **`ref<T>`** captured *across* a control op is exactly O1-b P3, which O1-b
+  rejects (crossing ref) pending the same teardown.
+
+So every owning aggregate / carrier / ref capture into a multi-shot case is
+blocked upstream by the scope-exit-auto-drop (`EX_DEFER`) hole. **E2 rides E3 /
+O1-b** (a real env/DK teardown, or a lowering for the aggregate auto-drop), which
+is what makes these shapes reach CPS in the first place. The prototype
+(`cap_owning_ok` extension + the consuming-non-rc evict guard) is ready to
+re-land the moment one of those exists. (Original Option A interim design
+retained below for reference.)
 
 #### E2 (original Option A interim -- superseded by E-borrow for the reachable case)
 
