@@ -3293,8 +3293,11 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
 
     char *fn = callee_name(call->as.tailcall.fn);
     char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
-    char frame[512];
-    snprintf(frame, sizeof frame, "dk_frame(%s, 0, %s)", jname, ce->cur_k);
+    /* The join frame is spliced onto cur_k and threaded into the callee in tail
+     * position; register it for a single-node reap at the outermost entry
+     * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+    char frame[560];
+    snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
     if (call->as.tailcall.n)
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
     else
@@ -3324,6 +3327,10 @@ static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const 
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);
         free(cn);
     }
+    /* The env struct outlives its DK frame (shared read-only across multi-shot
+     * resumes) and is never freed at a call site; reap it at the outermost entry
+     * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
     Buf b; buf_init(&b); buf_printf(&b, "(intptr_t)%s", envv); buf_putc(&b, '\0');
     char *s = strdup(b.data); buf_free(&b); return s;
 }
@@ -3356,8 +3363,12 @@ static void emit_reset(CE *ce, const CTerm *t) {
      * through the reset's prompt to reach them, and the reified sub still includes
      * the prompt so a shift in the resumed computation stays delimited.  They are
      * transparent to a returning value (the frame already delivers via
-     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged. */
-    ce_line(ce, "DK *%s = dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s)));",
+     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged.
+     * The whole chain (prompt + frame + the fresh copied handler markers + done)
+     * is self-contained and installed in tail position, so it cannot be freed
+     * here; register it for reaping at the outermost entry boundary
+     * (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))));",
             pchain, hname, envexpr, ce->cur_k);
     free(envexpr);
 
@@ -3885,9 +3896,18 @@ static void emit_shift(CE *ce, const CTerm *t) {
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, caps);
     char *env = emit_cont_env(ce, hname, caps, NULL);   /* k-less env */
-    /* shift0 does NOT reinstall the delimiting prompt; plain shift does. */
-    ce_line(ce, "return dk_run(%s(1, %s, %s, %s), 0);",
+    /* shift0 does NOT reinstall the delimiting prompt; plain shift does.  The
+     * shift node is spliced onto cur_k (its ->next); after dk_run has driven the
+     * captured computation to completion it is dead, so reclaim it with
+     * dk_free_node (a single-node free -- dk_free would walk into cur_k).  See
+     * docs/archive/cps-delimited-dk-node-leak.md. */
+    char snode[48];
+    snprintf(snode, sizeof(snode), "__sd%d", id);
+    ce_line(ce, "DK *%s = %s(1, %s, %s, %s);", snode,
             t->as.shift.shift0 ? "dk_shift0" : "dk_shift", hname, env, ce->cur_k);
+    ce_line(ce, "int64_t %s_r = dk_run(%s, 0);", snode, snode);
+    ce_line(ce, "dk_free_node(%s);", snode);
+    ce_line(ce, "return %s_r;", snode);
     free(env);
 }
 
@@ -3963,7 +3983,10 @@ static void emit_handle(CE *ce, const CTerm *t) {
         chain = nxt;
     }
     buf_putc(&chain, '\0');
-    ce_line(ce, "DK *%s = %s;", hchain, chain.data);
+    /* Installed as cur_k and threaded in tail position (like reset); register the
+     * self-contained chain for reaping at the outermost entry boundary
+     * (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
     for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }
@@ -4050,11 +4073,22 @@ static void emit_perform(CE *ce, const CTerm *t) {
                 ce_line(ce, "%s->f%d = %s;", envv, i, cn);
                 free(cn);
             }
-            ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, (intptr_t)%s, %s));",
-                    tag, sa, pname, envv, ce->cur_k);
+            /* Shared read-only across multi-shot resumes; reaped at the outermost
+             * entry boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+            ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
+            /* The perform continuation frame is spliced onto cur_k; dk_perform
+             * copies the captured range and never frees the node we hand it, so
+             * reclaim it single-node after dk_perform settles (dk_free would walk
+             * into cur_k).  See docs/archive/cps-delimited-dk-node-leak.md. */
+            ce_line(ce, "DK *__pfd%d = dk_frame(%s, (intptr_t)%s, %s);", id, pname, envv, ce->cur_k);
+            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
+            ce_line(ce, "dk_free_node(__pfd%d);", id);
+            ce_line(ce, "return __pfr%d;", id);
         } else {
-            ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
-                    tag, sa, pname, ce->cur_k);
+            ce_line(ce, "DK *__pfd%d = dk_frame(%s, 0, %s);", id, pname, ce->cur_k);
+            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
+            ce_line(ce, "dk_free_node(__pfd%d);", id);
+            ce_line(ce, "return __pfr%d;", id);
         }
     } else {
         /* Track A: the continuation contains a NESTED control op (a further
@@ -4552,14 +4586,19 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "        _c->next = g_tur_args;\n");
         buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(file, "    }\n");
+        buf_puts(file, "    __dk_entry_depth++;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
         buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
         /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
-     * lifted continuation copy may still reference __root (a RESET_CONT
-     * await frame carries k=__root in its env); leak it rather than dangle.
-     * tur_async_suspended is always 0 for a synchronous / effect-only body,
-     * so this is byte-identical there. */
-    buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
+         * lifted continuation copy may still reference __root (a RESET_CONT
+         * await frame carries k=__root in its env); leak it rather than dangle.
+         * tur_async_suspended is always 0 for a synchronous / effect-only body,
+         * so this is byte-identical there.  The reap list is gated the same way:
+         * a parked continuation may still reference a registered chain / env
+         * struct / box, so reaping only runs once the body has actually settled
+         * (docs/archive/cps-delimited-dk-node-leak.md). */
+        buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
+        buf_puts(file, "    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
@@ -4592,6 +4631,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
     emit_params(ctx, file, fd);
     buf_puts(file, ") {\n");
+    buf_puts(file, "    __dk_entry_depth++;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
     for (uint32_t i = 0; i < fd->n_params; i++) {
@@ -4606,8 +4646,12 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * lifted continuation copy may still reference __root (a RESET_CONT
      * await frame carries k=__root in its env); leak it rather than dangle.
      * tur_async_suspended is always 0 for a synchronous / effect-only body,
-     * so this is byte-identical there. */
+     * so this is byte-identical there.  The reap list is gated the same way:
+     * a parked continuation may still reference a registered chain / env
+     * struct / box, so reaping only runs once the body has actually settled
+     * (docs/archive/cps-delimited-dk-node-leak.md). */
     buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
+    buf_puts(file, "    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {

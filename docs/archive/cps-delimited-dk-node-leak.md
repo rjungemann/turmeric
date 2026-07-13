@@ -1,5 +1,33 @@
 # Delimited-control lowering leaks DK chain nodes per reset/shift
 
+> **RESOLVED (2026-07-12).** The DK continuation-chain nodes emitted by the
+> delimited-control lowering (`src/compiler/emit_cps_ir.c`) are now reclaimed:
+>
+> - **shift / perform** -- the abortive shift node and the perform continuation
+>   frame are single spliced nodes whose `->next` points into the enclosing
+>   continuation.  They are freed with a new `dk_free_node` (a one-node free that
+>   does not follow `->next`) right after the `dk_run` / `dk_perform` that drives
+>   them, so shift/perform-heavy code stays constant-memory.
+> - **reset / handle** -- the prompt / handler chains are installed as the current
+>   continuation and threaded in tail position, so they cannot be freed at the
+>   install site without giving up stacklessness.  Each chain is self-contained
+>   (tail `dk_done`; frame envs carry the enclosing `k` as an intptr, never via
+>   `->next`), so it is registered in a per-run reap list and freed at the
+>   outermost `direct->cps` entry boundary, after the top-level `dk_run` has fully
+>   settled.  The same list reclaims the per-continuation env structs and the
+>   `emit_heap_join` join frame.
+>
+> `dk_free_node` was also added to the standalone machine (`cps_prompt.{c,h}`) for
+> API parity.  The minimal repro below is LSan-clean, and 36 delimited-control
+> fixtures had their `requires.no-leak-check` markers dropped (verified clean
+> under `-fsanitize=address`).  Six fixtures keep the marker: they leak
+> **non-DK** allocations (user closures, heap ADTs/vectors, Tier-C boxes, the
+> `__eargs` effect-arg array) that are a separate ownership concern, not the DK
+> chain-node leak this report is about.  See the fix in `emit_dk_runtime.c`
+> (`dk_free_node`, `__dk_reap_*`), `emit_cps_ir.c` (`emit_shift`, `emit_perform`,
+> `emit_reset`, `emit_handle`, `emit_cont_env`, `emit_heap_join`, and both entry
+> wrappers).
+
 > **Graduation status (2026-07-12):** The `cps-backend` experiment is **fully
 > graduated** -- always-on since #657 (2026-07-11), flag removed in #658.
 > `--enable=cps-backend` now hard-errors (TUR-E0310); `src/compiler/emit_cps_ir.c`
