@@ -1,7 +1,8 @@
 # Plan: Leak-Detection Follow-ups -- the `requires.no-leak-check` surface
 
-> **Status:** Proposed
-> **Last Updated:** 2026-07-12
+> **Status:** P1 landed (reactor callback-box ownership; 9 fixtures unmarked).
+> P1-next (httpd handler-chain drop, fiber-body ownership) open.
+> **Last Updated:** 2026-07-13
 > **Type:** Build/test hygiene + runtime memory-management
 > **Related:**
 > - `docs/archive/history/asan-debug-leaks-plan.md` -- the *predecessor* plan
@@ -13,8 +14,9 @@
 >   compiled path ~437-445).
 > - `src/main.c` -- `autolink_needs_asan` detection (~1980-2011) and the
 >   `-fsanitize=address,undefined` propagation to the built program (~2080).
-> - `src/runtime/reactor.c`, `src/runtime/httpd*.c` -- the callback-registration
->   sites that leak.
+> - `src/async/reactor.c`, `src/async/reactor.h` -- reactor callback-box
+>   ownership (`owns_cb`, `tur_reactor_disown_cb`); `stdlib/httpd.tur` -- the
+>   httpd accept-box disown and the handler-chain leak that remains.
 
 ---
 
@@ -128,10 +130,10 @@ allocated once in its `new` constructor. **All bounded by registration/config
 count -- none grows per request.** This matches the documented policy exactly:
 "process-lifetime closures the caller never frees (e.g. reactor callbacks)."
 
-### Active but clean -- 1 marker (removal candidate)
+### Active but clean -- 1 marker (removed in P1)
 
-`reactor-fd-writable` is deterministically leak-free (3/3 runs clean, `-O0` and
-`-O2`). Its marker is stale.
+`reactor-fd-writable` was deterministically leak-free (3/3 runs clean, `-O0` and
+`-O2`); its marker was stale and is removed as part of P1.
 
 ### Interpreter path -- 3 markers (legitimate)
 
@@ -148,37 +150,88 @@ absent. Same leak class as the other httpd fixtures when it does run.
 
 ## What to tackle (prioritized)
 
-### P1 -- Reactor/httpd callback ownership (the real coverage win)
+### P1 -- Reactor callback-box ownership -- DONE (9 fixtures)
 
-Give the async runtime ownership of the fat-closure boxes it is handed, and
-free them at teardown. Concretely:
+**Landed.** The reactor now owns the fat-closure callback box handed to each
+`tur_reactor_add_*` and `free()`s it at `tur_reactor_free`
+(`src/async/reactor.c`):
 
-1. `tur_reactor_add_timer` / `add_fd` / `add_signal` / channel-bridge and the
-   httpd middleware-chain registration record the callback box pointer in the
-   registration struct they already keep.
-2. On unregister (`fd-remove`, timer fire-once completion, fiber cancel) and on
-   `reactor_free` / server shutdown, free the owned box.
-3. The httpd rate-limiter frees its bucket table in its destructor.
+- `TurReactorSource` gained an `owns_cb` flag, set true by every public
+  `tur_reactor_add_fd/timer/interval/signal/chan`. `tur_reactor_free` frees each
+  owned box exactly once (deduped, since a program may register one box on
+  several sources).
+- Ownership is the **default**; callers that manage the box themselves opt out
+  with the new `tur_reactor_disown_cb(r, id)`. Two do:
+  - the internal fiber **park** registrations, whose cb is an inline
+    `LocalFiber` field (`&lf->park_cb_fat`), not a heap box -- freeing it would
+    corrupt the heap;
+  - the **httpd runtime**, which caches its accept-callback box in
+    `hb->accept_clos` / `ha->accept_clos` and frees it in its own teardown
+    (`stdlib/httpd.tur`). Without the disown, blanket ownership double-frees it
+    and the server aborts -- so the disown is what keeps httpd working, even
+    though httpd is not made leak-clean by this change (see below).
 
-Payoff: ~43 fixtures drop `requires.no-leak-check`, and the reactor/httpd
-runtime regains real LSan coverage in `run.sh` -- today a *new* leak on that
-path is masked by the blanket marker.
+Result: the 9 pure-reactor fixtures that leaked genuine reactor cb boxes are now
+leak-clean and dropped their markers, verified with leak detection ON:
+`reactor-timer`, `reactor-fd-{readable,writable,modify,remove}`,
+`reactor-signal`, `reactor-chan-bridge`, `reactor-stop-from-callback`,
+`reactor-wake-cross-thread`. Full suite stays green (`2111 passed, 0 failed`).
 
-Risks / gates:
-- **Shared/aliased boxes.** A closure box reused across multiple registrations
-  (e.g. one handler mounted on several routes) must be freed exactly once.
-  Audit whether any box is shared before making the reactor the owner; if so,
-  refcount or clone-on-register.
-- **Fire-and-forget vs. persistent callbacks.** One-shot timers can free on
-  fire; fd watchers free on remove; fibers free on cancel/exit. Get the
-  lifetime right per registration kind or the fix trades a leak for a
-  use-after-free (keep ASan address-checking on throughout to catch it).
-- Do this behind the existing per-fixture markers: remove a fixture's marker
-  only after its specific path is owned+freed, so the suite ratchets green
-  incrementally.
+**What P1 did NOT clean, and why (measured, not assumed):**
 
-Effort: medium. This is a runtime-ownership change threaded through several
-registration sites, not a one-liner.
+- **httpd (all `httpd-*`, ~30 fixtures) -- kept markers.** The httpd leak is a
+  16-byte-and-up box **allocated in `main`** that is the user's request handler
+  / composed middleware onion closure, which the httpd server owns as its
+  handler and never frees. It is *not* a reactor callback box (the handler is
+  invoked *by* the accept callback, never separately reactor-registered), so
+  reactor ownership does not reach it. Confirmed: with the reactor change +
+  httpd disown, `httpd-h1-basic` still reports one 16-byte leak `in main` under
+  the suite. (An earlier "httpd looks clean" reading was a probe artifact -- a
+  standalone run that never drives a request, so the double-free/leak path is
+  not exercised; the httpd fixtures self-drive only under the suite harness.)
+  This is the **httpd handler-chain-drop** follow-up.
+- **`reactor-fibers-*` (5) -- kept markers.** Their leak is the spawn
+  **`tur_body`** box (a heap fat-closure retained for the fiber's lifetime).
+  Freeing it in `tur_local_fiber_group_free` is unsafe as a blanket change: the
+  httpd async server reuses a single `body_closure` across every per-request
+  fiber and frees it itself, so a blanket free multi-frees. This needs the same
+  opt-in ownership handshake as reactor callbacks -- the **fiber-body
+  ownership** follow-up.
+- **`httpd-mw-fold-many`, `httpd-mw-compress` -- kept markers.** Same
+  handler-chain leak class as the other httpd fixtures (compress is also
+  `requires.spices`).
+
+Key correction to the original plan: the fixtures call the C reactor ABI
+**directly** (their own `extern-c`), not the `reactor.tur` `reactor-add-*`
+wrappers, so an opt-in wired only into those wrappers reaches nothing --
+ownership had to be the reactor's **default** with an explicit opt-out. And the
+per-caller ownership split (reactor programs leak their boxes; httpd frees its
+own) is exactly why a single blanket free is unsafe without the disown.
+
+Risks handled: shared boxes (deduped free at teardown); borrowed non-heap boxes
+(park disown); httpd's self-managed box (httpd disown). ASan address-checking
+stayed ON throughout, so any residual double-free/UAF would have surfaced as a
+suite failure -- it did not.
+
+### P1-next -- httpd handler-chain drop + fiber-body ownership
+
+The two remaining active-leak classes, both process-lifetime and bounded:
+
+1. **httpd handler-chain drop.** The server stores the composed handler /
+   middleware onion (heap capturing-closure boxes) and frees none of them at
+   `httpd-free`. Needs recursive drop of the handler closure and its captured
+   `next` chain (there is no drop glue for a captured closure chain today), plus
+   freeing the rate-limiter bucket table in its destructor. This is the larger,
+   riskier chunk flagged originally; it would clear ~30 httpd markers + the two
+   above.
+2. **Fiber-body ownership.** Mirror the reactor cb handshake for
+   `tur_local_spawn`: own the `tur_body` box by default and free it in
+   `tur_local_fiber_group_free`, with an opt-out the httpd async server uses for
+   its shared `body_closure`. Clears the 5 `reactor-fibers-*` markers.
+
+Effort: medium each; do them behind the existing markers and drop each marker
+only once its fixture verifies clean with leak detection ON, so the suite
+ratchets green incrementally.
 
 ### P2 -- DK continuation-chain node leak (already reported)
 
@@ -193,10 +246,9 @@ fixing at the source rather than relying on the linkage accident.
 
 ### P3 -- Marker hygiene (cheap, do anytime)
 
-1. **Delete `reactor-fd-writable/requires.no-leak-check`** -- deterministically
-   clean; keeping it silently disables leak detection on a fixture that does not
-   need it. (Re-verify once under `run.sh`'s exact flags before deleting.)
-2. **Annotate the 58 inert markers.** 78 of 106 marker files are empty (no
+1. `reactor-fd-writable/requires.no-leak-check` -- **removed** as part of P1
+   (deterministically clean; was stale even before the reactor change).
+2. **Annotate the inert markers.** 78 of 106 marker files were empty (no
    rationale). At minimum, add a one-line rationale to the inert ones noting
    they are defensive/documentary and *why* they are currently inert (no
    `-lturi` linkage), so a future reader does not assume they are catching a
@@ -234,8 +286,13 @@ lead.
       3 interpreter / 1 spices-gated.
 - [x] Active-leak root cause confirmed as fat-closure callback boxes +
       one-time config tables (symbolized `-O0 -g` frames).
-- [ ] (P1) Per registration kind: reactor/httpd own+free the box; drop that
-      fixture's marker; suite stays green with detection ON.
+- [x] (P1) Reactor callback-box ownership landed (`owns_cb` default +
+      `tur_reactor_disown_cb` opt-out for park and httpd). 9 pure-reactor
+      fixtures verified leak-clean with detection ON and unmarked; full suite
+      `2111 passed, 0 failed`.
+- [ ] (P1-next) httpd handler-chain drop -- clears ~30 httpd markers +
+      `httpd-mw-fold-many`/`-compress`.
+- [ ] (P1-next) fiber-body ownership -- clears the 5 `reactor-fibers-*` markers.
 - [ ] (P2) DK node leak fixed at source (`dk_free_node`/arena); repro in the
       report is clean under LSan.
 - [ ] (P3) `reactor-fd-writable` marker removed; inert markers annotated.

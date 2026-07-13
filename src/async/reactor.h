@@ -62,6 +62,19 @@ int64_t tur_reactor_modify_fd(void *r, int64_t id, int64_t new_events);
 int64_t tur_reactor_remove(void *r, int64_t id);
 
 /**
+ * Relinquish reactor ownership of a source's callback box.
+ *
+ * The tur_reactor_add_* functions take ownership of the cb box by default and
+ * free() it at tur_reactor_free -- the emitted program hands off a heap
+ * fat-closure it never frees itself, so this is what keeps reactor programs
+ * leak-clean. A caller that manages the box lifetime itself (e.g. the httpd
+ * runtime, which caches and frees its own accept-callback box) must call this
+ * after registering, or the box is double-freed. A no-op for id < 0.
+ * Idempotent.
+ */
+void tur_reactor_disown_cb(void *r, int64_t id);
+
+/**
  * Add a one-shot timer that fires once after delay_ms milliseconds.
  * Returns a source id (>= 0) or -1 on error.
  *

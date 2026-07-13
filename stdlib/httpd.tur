@@ -131,6 +131,8 @@
 
 (extern-c tur_reactor_remove [r :ptr id :int] :int)
 
+(extern-c tur_reactor_disown_cb [r :ptr id :int] :void)
+
 (extern-c tur_reactor_run [r :ptr] :void)
 
 (extern-c tur_reactor_stop [r :ptr] :void)
@@ -703,6 +705,10 @@
   hb->accept_clos = (void *)clos;
   hb->listen_src_id = (int)tur_reactor_add_fd(hb->reactor, fd, 1,
       (int64_t)(intptr_t)clos, NULL);
+  /* The reactor owns cb boxes by default and frees them at teardown; this
+   * accept box is cached in hb->accept_clos and freed by httpd itself, so
+   * disown it to avoid a double free. */
+  tur_reactor_disown_cb(hb->reactor, hb->listen_src_id);
   if (hb->listen_src_id < 0) {
       free(clos);
       tur_reactor_free(hb->reactor);
@@ -2713,6 +2719,9 @@
   ha->body_closure = (int64_t)(intptr_t)body_clos;
   ha->listen_src_id = (int)tur_reactor_add_fd(ha->reactor, fd, 1,
       (int64_t)(intptr_t)clos, NULL);
+  /* Accept box is cached in ha->accept_clos and freed by httpd; disown it so
+   * the reactor (which owns cb boxes by default) does not double-free. */
+  tur_reactor_disown_cb(ha->reactor, ha->listen_src_id);
   if (ha->listen_src_id < 0) {
       free(body_clos); free(clos);
       tur_reactor_free(ha->reactor);

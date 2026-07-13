@@ -1,1 +1,6 @@
-Process-lifetime fat closures (70 middleware wrappers + base) are never freed; mirrors httpd-mw-compose-of.
+Leaks the httpd handler/middleware-chain closures: mw-fold builds an onion of
+~200 capturing fat-closures (each captures the downstream `next`) that httpd
+owns as its request handler and never frees. These are NOT reactor callback
+boxes -- the reactor callback-box ownership (P1) does not reach them -- so this
+needs the httpd handler-chain-drop follow-up in
+docs/leak-detection-followups-plan.md. ~3360 B / ~210 allocs.
