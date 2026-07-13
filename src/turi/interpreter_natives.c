@@ -479,6 +479,39 @@ static TuriValue native_int_to_str(TuriEnv *env, TuriValue *a, uint32_t n, void 
     return turi_cstr(buf);
 }
 
+/* str-concat: mirror stdlib/str.tur:99 -- malloc(la+lb+1), copy both halves,
+ * NUL-terminate.  Layout-exact with the compiled cstr ABI (a NUL-terminated
+ * char* boxed as a cstr value), so a value crossing between interpreted and
+ * native code reads identically. */
+static TuriValue native_str_concat(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *sa = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
+    const char *sb = (n > 1 && a[1].tag == TURI_CSTR && a[1].as_cstr) ? a[1].as_cstr : "";
+    size_t la = strlen(sa), lb = strlen(sb);
+    char *out = (char *)malloc(la + lb + 1);
+    if (!out) return turi_nil();
+    memcpy(out, sa, la);
+    memcpy(out + la, sb, lb);
+    out[la + lb] = '\0';
+    return turi_cstr(out);
+}
+
+/* cstr-len: mirror stdlib/cstr.tur:26 -- byte length of a NUL-terminated cstr. */
+static TuriValue native_cstr_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
+    return turi_int((int64_t)strlen(s));
+}
+
+/* cstr-nth: mirror stdlib/cstr.tur:41 -- unsigned byte at index i.  Caller
+ * ensures 0 <= i < (cstr-len s), matching the compiled contract. */
+static TuriValue native_cstr_nth(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
+    int64_t i = (n > 1) ? a[1].as_int : 0;
+    return turi_int((int64_t)(unsigned char)s[i]);
+}
+
 /* str->int: parse decimal string to int64 */
 static TuriValue native_str_to_int(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -2902,6 +2935,12 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "int->str",        native_int_to_str,      NULL);
     turi_env_register_native(env, "str->int",        native_str_to_int,      NULL);
     turi_env_register_native(env, "strcmp",          native_strcmp_fn,       NULL);
+    /* Layout-exact string builders (interp-string-natives-and-range-show-plan
+     * Phase 0): shims over the inline-C str-concat / cstr-len / cstr-nth the
+     * tree-walker cannot run. Same binding names, same NUL-terminated cstr ABI. */
+    turi_env_register_native(env, "str-concat",      native_str_concat,      NULL);
+    turi_env_register_native(env, "cstr-len",        native_cstr_len,        NULL);
+    turi_env_register_native(env, "cstr-nth",        native_cstr_nth,        NULL);
     /* Common math/array fixture helpers */
     turi_env_register_native(env, "c-abs",           native_c_abs,           NULL);
     turi_env_register_native(env, "popcount",        native_popcount,        NULL);

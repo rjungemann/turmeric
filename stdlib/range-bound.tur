@@ -27,6 +27,12 @@
 ;;;
 ;;; Since: stdlib-refinement-collections-plan (R3)
 (load "stdlib/range.tur")
+;; str-concat + int->str back the pure-Turmeric range-fmt / bound-fmt formatters
+;; below (interp-string-natives-and-range-show-plan Phase 1), replacing the old
+;; inline-C snprintf bodies so `range->str` / `bound->str` run under --interpret.
+;; str-build.tur is a dependency-free leaf (no Eq/Show instances), so this does
+;; not perturb Eq [Bound] resolution the way loading all of str.tur would.
+(load "stdlib/str-build.tur")
 ;;; bound-inclusive -- construct an inclusive endpoint at v.
 ;;;
 ;;; Parameters:
@@ -203,18 +209,13 @@
 ;; kind: 0 = unbounded, 1 = inclusive, 2 = exclusive.
 
 (defn range-fmt [lo-kind : int lo-val : int hi-kind : int hi-val : int] : cstr
-  ```c
-  char *buf = (char *)malloc(80);
-  char lo[32], hi[32];
-  if      (lo_kind == 0) snprintf(lo, sizeof lo, "(-inf");
-  else if (lo_kind == 1) snprintf(lo, sizeof lo, "[%lld", (long long)lo_val);
-  else                   snprintf(lo, sizeof lo, "(%lld", (long long)lo_val);
-  if      (hi_kind == 0) snprintf(hi, sizeof hi, "+inf)");
-  else if (hi_kind == 1) snprintf(hi, sizeof hi, "%lld]", (long long)hi_val);
-  else                   snprintf(hi, sizeof hi, "%lld)", (long long)hi_val);
-  snprintf(buf, 80, "%s, %s", lo, hi);
-  return (const char *)buf;
-  ```)
+  (let [lo (cond (= lo-kind 0) "(-inf"
+                 (= lo-kind 1) (str-concat "[" (int->str lo-val))
+                 :else         (str-concat "(" (int->str lo-val)))
+        hi (cond (= hi-kind 0) "+inf)"
+                 (= hi-kind 1) (str-concat (int->str hi-val) "]")
+                 :else         (str-concat (int->str hi-val) ")"))]
+    (str-concat lo (str-concat ", " hi))))
 ;; bound-kind -- 0 for Unbounded, 1 for Inclusive, 2 for Exclusive.
 
 (defn bound-kind [b : Bound] : int
@@ -272,9 +273,6 @@
 ;; bound-fmt -- inline-C formatter for a single inclusive/exclusive endpoint.
 
 (defn bound-fmt [kind : int v : int] : cstr
-  ```c
-  char *buf = (char *)malloc(32);
-  if (kind == 1) snprintf(buf, 32, "[%lld", (long long)v);
-  else           snprintf(buf, 32, "(%lld", (long long)v);
-  return (const char *)buf;
-  ```)
+  (if (= kind 1)
+    (str-concat "[" (int->str v))
+    (str-concat "(" (int->str v))))

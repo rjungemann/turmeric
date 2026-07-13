@@ -5498,6 +5498,35 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                          itk == TY_UINT64 ||
                          itk == TY_FLOAT32 || itk == TY_FLOAT64);
                     type_ok = !inst_is_primitive;
+                    /* Bare type-variable instance argument (whole type_args[0] is
+                     * a TY_TYVAR, not a partially-applied head like
+                     * `Functor [(Result _ B)]` whose *argument* is erased): this
+                     * arises when an instance is registered for a type name that
+                     * did not resolve to a concrete nominal type -- e.g.
+                     * `Eq [str]`, where `str` has no defstruct/defdata and stays
+                     * an unbound tyvar.  Left as an exact match it becomes a
+                     * catch-all wildcard: every non-primitive receiver "matches"
+                     * it, so the first such instance in registration order shadows
+                     * the receiver's own instance, producing a silent wrong-vtable
+                     * dispatch that SIGSEGVs (docs/archive/
+                     * eq-bound-misdispatch-extra-instance.md: `(.eq? (Inclusive 4)
+                     * (Inclusive 4))` mis-dispatched to `Eq [str]`).  When the
+                     * receiver is a concrete nominal type (an ADT/struct with a
+                     * def, bare or applied), demote the bare-tyvar instance to a
+                     * *fallback* -- the search then continues to the receiver's
+                     * concrete instance and prefers it, while a lone bare-tyvar
+                     * instance still wins when it is the only candidate.  This
+                     * mirrors the KIND_STAR path, where a tyvar type_args[0] never
+                     * equals a primitive receiver kind and is already a fallback. */
+                    if (type_ok && itk == TY_TYVAR) {
+                        const Type *oh = &obj->type;
+                        while (oh && oh->kind == TY_APP) oh = oh->as.app.fn;
+                        /* Structs lower to TY_ADT (from_struct_lowering), so a
+                         * concrete nominal head is always a TY_ADT with a def. */
+                        bool recv_concrete_nominal =
+                            oh && oh->kind == TY_ADT && oh->as.adt_.def;
+                        if (recv_concrete_nominal) type_ok = false;
+                    }
                     /* Arrow head (itk == TY_FN): an `Arrow [(->)]` instance
                      * matches only a function receiver, never a struct/vec.
                      * Conversely, a function receiver must not bind a non-arrow

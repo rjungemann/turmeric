@@ -1,0 +1,60 @@
+;;; tur/str-build -- minimal cstr-building primitives (str-concat, int->str).
+;;;
+;;; A dependency-free leaf module: two heap-allocating :cstr builders and
+;;; nothing else -- no typeclass instances, no transitive loads. This lets both
+;;; stdlib/str.tur and stdlib/range-bound.tur pull the builders without dragging
+;;; extra Eq/Show instances into a consumer's load graph (which would perturb
+;;; instance resolution for unrelated types).
+;;;
+;;; Both defns have inline-C bodies for the compiled path and layout-exact
+;;; interpreter natives (registered as "str-concat" / "int->str" in
+;;; src/turi/interpreter_natives.c) that override them under --interpret, so the
+;;; same binding name runs on both the compiled and tree-walking paths.
+;;;
+;;; Since: interp-string-natives-and-range-show-plan (Phase 1)
+;; str-building primitives for Turmeric
+;;; str-concat -- concatenate two NUL-terminated strings into a new heap buffer.
+;;;
+;;; Parameters:
+;;;   a -- first :cstr (NUL-terminated)
+;;;   b -- second :cstr (NUL-terminated)
+;;;
+;;; Returns:
+;;;   A newly heap-allocated :cstr containing the bytes of a followed by b,
+;;;   NUL-terminated. The caller is responsible for freeing the returned pointer.
+;;;
+;;; Example:
+;;;   (str-concat "Hello, " "world")  ; => "Hello, world"
+;;;
+;;; Since: Phase B1
+(defn str-concat [a : cstr b : cstr] : cstr
+  ```c
+  const char *sa = (const char*)a;
+  const char *sb = (const char*)b;
+  size_t la = strlen(sa), lb = strlen(sb);
+  char *out = malloc(la + lb + 1);
+  memcpy(out, sa, la);
+  memcpy(out + la, sb, lb);
+  out[la + lb] = '\0';
+  return (const char *)out;
+  ```)
+;;; int->str -- format an int64 as a decimal :cstr.
+;;;
+;;; Parameters:
+;;;   v -- the integer to render
+;;;
+;;; Returns:
+;;;   A freshly heap-allocated NUL-terminated :cstr containing the decimal
+;;;   digits of v (with a leading '-' for negatives). Caller owns the buffer.
+;;;
+;;; Example:
+;;;   (int->str 42)   ; => "42"
+;;;   (int->str -7)   ; => "-7"
+;;;
+;;; Since: interp-string-natives-and-range-show-plan (Phase 1)
+(defn int->str [v : int] : cstr
+  ```c
+  char *buf = (char *)malloc(32);
+  snprintf(buf, 32, "%lld", (long long)v);
+  return (const char *)buf;
+  ```)
