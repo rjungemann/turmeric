@@ -2,7 +2,7 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); key + Map-value box lifecycle done (LSan-clean on free); only the Vec-element box-free lifecycle remains
+status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); key + Map-value + Vec-element box lifecycle all done (LSan-clean on free); only minor vec-set!/vec-pop! overwrite residuals remain
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
@@ -24,10 +24,16 @@ symmetrically with an owned key, gated by bit 1 of the `owned` flag that
 `map-assoc` threads via `(tur-wide-byval? v)` (an emit-time type query folded per
 monomorphization; the interpreter's pure-Turmeric fallback returns 0 since it
 never C-boxes values).  `map-free` frees each boxed value exactly once
-(LSan-clean, refcount-safe under structural sharing and key-update).  The one
-remaining follow-up is **Vec element boxes** (`vec-free` frees `data`+header but
-not the per-element boxes -- needs element-type awareness;
-`docs/reported/multiword-value-and-vec-element-boxes-leak.md`).
+(LSan-clean, refcount-safe under structural sharing and key-update).  **Vec
+element boxes are now released too**: `vec-free` is a macro forwarding
+`(vec-free-o v (tur-vec-elem-wide? v))`, where `tur-vec-elem-wide?` is an
+emit-time query (twin of `tur-wide-byval?`) that folds to 1 for a wide by-value
+element; `vec-free-o` then `free`s each owned `data[i]` box before the buffer (a
+Vec is unshared, so it owns its element boxes outright).  Verified LSan-clean; the
+interpreter's `native_vec_free_o` frees the buffer + header (elements ride as
+TuriStruct pointers it owns separately).  The remaining follow-ups are minor: an
+in-place `vec-set!` overwrite and a dropped `vec-pop!` result orphan their old
+box (`docs/reported/vec-set-pop-element-box-leak.md`).
 
 **Done -- Vec multi-word elements (compiled + interpreter).**
 `(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
@@ -145,10 +151,18 @@ and LSan-clean when the collection is freed.  **Map VALUE boxes are released
 too** now: bit 1 of the `owned` flag installs a symmetric value-box refcount on
 the HAMT (`g_hamt_val_retain`/`release` in `src/runtime/hamt.c`), the map-value
 escaping bridge boxes via `tur_hamt_box_key`, and `map-assoc` threads the bit via
-`(tur-wide-byval? v)`.  One box class remains leaked (see
-`docs/reported/multiword-value-and-vec-element-boxes-leak.md`): **Vec element
-boxes** (`vec-free` is not element-type-aware).  That, plus the intermediate
-persistent-map versions every `map-assoc` mints, are process-lifetime.  The
+`(tur-wide-byval? v)`.  **Vec element boxes are released too** now: `vec-free` is
+a macro that forwards `v` to `vec-free-o` along with `(tur-vec-elem-wide? v)` --
+an emit-time query (twin of `tur-wide-byval?`) that peels the element type out of
+the `(Vec A)` spine and folds to 1 for a wide by-value `A`.  Since a Vec is
+mutable and NOT structurally shared it owns its element boxes outright, so
+`vec-free-o` `free`s each `data[i]` box before the buffer (verified LSan-clean;
+the only residual on the repro is the unrelated process-lifetime `show` string
+allocs).  The interpreter's `native_vec_free_o` ignores the flag (elements ride
+as TuriStruct pointers it owns separately).  The remaining minor residuals are an
+in-place `vec-set!` overwrite and a dropped `vec-pop!` result orphaning their old
+box (see `docs/reported/vec-set-pop-element-box-leak.md`), plus the intermediate
+persistent-map versions every `map-assoc` mints -- all process-lifetime.  The
 compiled fixtures run under the default leak-detection-off program policy.
 
 ## The problem, and why it is not just the dispatch bug
@@ -213,11 +227,16 @@ plan extends the same refcount-box discipline to:
 
 1. **Vec elements.** `vec-push!` of a multi-word `A` boxes the value (copy `n`
    bytes) and stores the payload pointer; `vec-get` reinterprets and loads by
-   value. `vec-free` / element removal releases. A copied Vec (`vec-clone`)
-   retains each box. Because Vec is mutable and not structurally shared, refcount
-   could in principle be a plain owned pointer, but reusing the refcount box
-   keeps one code path and makes `Vec` values that escape into a shared
-   structure safe.
+   value. `vec-free` releases (**landed**): it is a macro forwarding
+   `(vec-free-o v (tur-vec-elem-wide? v))`, and `vec-free-o` `free`s each owned
+   `data[i]` box before the buffer when the flag is set.  As anticipated below,
+   the actual boxes are a **plain `malloc` owned pointer**, not the refcount box
+   -- because a Vec is mutable and not structurally shared, it owns its element
+   boxes outright, so `vec-free` frees them directly (no retain/release).  The
+   remaining element-removal cases (in-place `vec-set!` overwrite, dropped
+   `vec-pop!` result) still orphan their old box -- minor process-lifetime
+   residuals (`docs/reported/vec-set-pop-element-box-leak.md`).  A deep
+   `vec-clone` would need to copy each box.
 2. **Map values.** Today a `:V` value rides the int64 carrier (single word). A
    multi-word by-value struct value boxes exactly like a key does, via a
    value-side `owned` flag threaded into the entry (the HAMT entry's `val` is a
@@ -277,10 +296,13 @@ plan extends the same refcount-box discipline to:
 - Compiled vs `--interpret` parity fixtures for each (identical output).
 - Persistence: a structurally-shared HAMT with boxed multi-word KEYS frees each
   key box exactly once on `map-free`/`set-free` (LSan-clean, refcount-safe under
-  sharing).  Boxed multi-word VALUES and Vec element boxes are not yet released
-  (`docs/reported/multiword-value-and-vec-element-boxes-leak.md`).  NB: the
-  compiled test harness does not run programs under LSan, so this is verified by
-  hand (emit-c + `-fsanitize=address` + `libturi.a`), not by a fixture.
+  sharing).  Boxed multi-word VALUES are released too (symmetric HAMT value-box
+  refcount), and Vec element boxes are released on `vec-free` (plain owned
+  pointer, unshared).  The only residuals are in-place `vec-set!` overwrite and
+  a dropped `vec-pop!` result (`docs/reported/vec-set-pop-element-box-leak.md`).
+  NB: the compiled test harness does not run programs under LSan, so this is
+  verified by hand (emit-c + `-fsanitize=address` + `libturi.a`), not by a
+  fixture.
 
 ## Related
 

@@ -31,4 +31,11 @@
     (println (show (.y (vec-get v 1))))            ;; 4
     ;; Show[Vec] dispatches Show[Point] on each element read
     (println (show v))                              ;; [(1,2) (3,4)]
+    ;; free the vec: each element box is a wide by-value Point, so vec-free
+    ;; threads boxed=1 (via the emit-time tur-vec-elem-wide? query) and
+    ;; vec-free-o releases each data[i] box before the buffer.  Exercises the
+    ;; box-release path (no leak / no crash) on both paths; the interpreter's
+    ;; native_vec_free_o frees the buffer + header (elements ride as TuriStruct
+    ;; pointers it owns separately).
+    (vec-free v)
     0))

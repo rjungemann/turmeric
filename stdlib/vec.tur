@@ -180,7 +180,64 @@
   fprintf(stderr, "vec-set! index out of bounds\n");
   exit(1);
   ```)
-;;; vec-free -- free a Vec[A] and its data buffer.
+;;; tur-vec-elem-wide? -- 1 if the Vec's element type A is a multi-word (> 8
+;;; byte) by-value struct/ADT that rides its data slot as an int64 heap-box
+;;; pointer, else 0.  Compiler-intercepted (src/compiler/emit_expr.c) as an
+;;; EMIT-TIME type query that peels A out of the `(Vec A)` spine and reuses the
+;;; same `type_is_wide_byval_adt` predicate the element-boxing bridge keys on;
+;;; this pure-Turmeric fallback body returns 0 for the interpreter (where an
+;;; element rides as a TuriStruct pointer, never a C box) and for any call the
+;;; backend does not intercept.  vec-free threads it to vec-free-o so a
+;;; Vec[Point]-style boxed buffer releases its element boxes on free.
+;;;
+;;; Since: multiword-element-box-lifecycle
+
+(defn tur-vec-elem-wide? [A] [v : (Vec A)] : int 0)
+;;; vec-free-o -- free a Vec[A], its data buffer, and (when `boxed`) each
+;;; per-element heap box.
+;;;
+;;; A multi-word by-value element A cannot ride the int64 data slot inline, so
+;;; the concrete->carrier escaping bridge boxes it (malloc + copy) at the push
+;;; site and stores the box pointer in `data[i]`.  Vec is mutable and NOT
+;;; structurally shared, so the Vec owns those boxes outright: when `boxed` is
+;;; 1 (threaded by vec-free via the emit-time `tur-vec-elem-wide?` query) each
+;;; `data[i]` box is freed before the data buffer.  When `boxed` is 0 (any
+;;; single-word A -- :int, :cstr, :float, an opaque handle, a :heap pointer)
+;;; the slot holds an inline value / shared pointer that the Vec does not own,
+;;; so only the data buffer and header are freed.
+;;;
+;;; Parameters:
+;;;   v     -- Vec[A] pointer to free
+;;;   boxed -- 1 if each data slot is an owned element box, else 0
+;;;
+;;; Since: multiword-element-box-lifecycle
+
+(defn vec-free-o [A]
+  [v : (Vec A) boxed : int]
+  #fx{}
+  : void
+  ```c
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->data) {
+    if (boxed) {
+      for (int64_t i = 0; i < vec->len; i++) {
+        void *box = (void*)(intptr_t)vec->data[i];
+        if (box) free(box);
+      }
+    }
+    free(vec->data);
+  }
+  free(vec);
+  ```)
+;;; vec-free -- free a Vec[A], its data buffer, and any per-element boxes.
+;;;
+;;; A macro (not a plain defn) so the multi-word-element decision folds at
+;;; emit time: it binds v once and forwards it to vec-free-o along with
+;;; `(tur-vec-elem-wide? v)`, which the compiler resolves per monomorphization
+;;; to 1 for a wide by-value element type (whose data slots are owned heap
+;;; boxes) and 0 otherwise.  The interpreter expands the same form; there
+;;; `tur-vec-elem-wide?` is 0 and vec-free-o routes to native_vec_free_o (the
+;;; per-element boxes do not exist in the tree-walker).
 ;;;
 ;;; Parameters:
 ;;;   v -- Vec[A] pointer to free
@@ -190,15 +247,9 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-free [A]
-  [v : (Vec A)]
-  #fx{}
-  : void
-  ```c
-  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
-  if (vec->data) free(vec->data);
-  free(vec);
-  ```)
+(defmacro vec-free [v]
+  `(let [__tur_fv__ ~v]
+     (vec-free-o __tur_fv__ (tur-vec-elem-wide? __tur_fv__))))
 ;;; vec-push-each__ -- internal helper for the vec-of macro.
 ;;;
 ;;; Expands a sequence of pushes onto `v` followed by `v` itself as the

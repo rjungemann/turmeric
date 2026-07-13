@@ -2887,6 +2887,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
             }
 
+            /* multiword-element boxing (Vec): `(tur-vec-elem-wide? v)` is the
+             * ELEMENT-side twin of `tur-wide-byval?` -- it folds to 1 when the
+             * argument's monomorphized `(Vec A)` element type A is a wide (> 8
+             * byte) by-value ADT (the same predicate that decides element
+             * boxing in emit_carrier_bridge_escaping), else 0.  vec-free threads
+             * it to vec-free-o so a Vec[Point]-style buffer FREES each element
+             * box before its data buffer.  Unlike tur-wide-byval? the value in
+             * hand is the container, not an element, so there is no A-typed
+             * witness to inspect -- we peel A out of the `(Vec A)` TY_APP spine.
+             * The pure-Turmeric fallback body (returns 0) covers the
+             * interpreter, where elements ride as TuriStruct pointers, never C
+             * boxes. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                strcmp(fn_binding->name->name, "tur-vec-elem-wide?") == 0 &&
+                e->as.call_.n_args == 1) {
+                Type vt = emit_resolve_type(ctx, e->as.call_.args[0]->type);
+                bool wide = false;
+                if (vt.kind == TY_APP && vt.as.app.arg) {
+                    Type at = emit_resolve_type(ctx, *vt.as.app.arg);
+                    wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
+                           type_is_wide_byval_adt(at);
+                }
+                return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
+            }
+
             /* CM3 (van-laarhoven-consumer-mono-plan): rewrite a call to an
              * ambiguous consumer -- `(consumer concrete-lens args...)` -- to the
              * box-free clone `<consumer>__lens_<hash>(args...)`, dropping the lens

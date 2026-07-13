@@ -1064,6 +1064,18 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* vec-free-o -- interpreter override for the boxed-aware vec-free-o helper.
+ * The compiled body frees per-element heap boxes when its `boxed` flag is set,
+ * but the tree-walker never boxes multi-word elements (they ride as TuriStruct
+ * pointers owned by the interpreter's own value model, freed at teardown), so
+ * the `boxed` arg (a[1]) is irrelevant here: free the data buffer + header
+ * exactly like native_vec_free.  vec-free macro-expands to `(vec-free-o v
+ * (tur-vec-elem-wide? v))` on both paths, so this native is what backs
+ * `(vec-free v)` under --interpret. */
+static TuriValue native_vec_free_o(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_vec_free(env, a, n, ud);
+}
+
 /* vec-eq? -- element-wise Vec equality.  vec.tur's body iterates the {data,len,
  * cap} struct and fat-dispatches the element comparator through a C function
  * pointer, which the simple inline-C executor cannot run; this native re-walks
@@ -1228,6 +1240,7 @@ void turi_register_collection_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-pop!", native_vec_pop, NULL);
     turi_env_register_native(env, "vec-set!", native_vec_set, NULL);
     turi_env_register_native(env, "vec-free", native_vec_free, NULL);
+    turi_env_register_native(env, "vec-free-o", native_vec_free_o, NULL);
     turi_env_register_native(env, "vec-eq?", native_vec_eq, NULL);
     turi_env_register_native(env, "vec-new-filled", native_vec_new_filled, NULL);
 
