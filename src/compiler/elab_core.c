@@ -1316,6 +1316,131 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
     return false;
 }
 
+/* Field-level analog of is_binding_consumed: returns true when the body
+ * explicitly drops a SPECIFIC owning field of a by-value struct/record local --
+ * `(rc/drop (.f o))` for an rc field, `(drop! (.f o))` for a ref field, matched
+ * by (binding, field_idx).  A by-value aggregate gets one scope-exit auto-drop
+ * per owning field; without this per-field check an explicit field drop would be
+ * followed by the auto-drop of the same field -> double-free.  Mirrors
+ * is_binding_consumed's conservative convention: a drop found ANYWHERE (incl.
+ * one branch of an if) suppresses the auto-drop -- a leak on the untaken path is
+ * memory-safe, a double-free is not. */
+bool is_field_consumed(const Expr *body, Binding *binding, uint32_t field_idx) {
+    if (!body) return false;
+
+    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    if (!stack) {
+        fprintf(stderr, "tur: oom\n");
+        abort();
+    }
+    int sp = 0;
+    stack[sp++] = body;
+
+    /* True when `fe` is `(.field_idx binding)` -- a field read of the tracked
+     * owning field off the by-value local. */
+#define TUR_IS_TRACKED_FIELD(fe)                                                \
+    ((fe) && (fe)->kind == EX_GET_FIELD &&                                      \
+     (fe)->as.get_field_.field_idx == field_idx &&                             \
+     (fe)->as.get_field_.struct_expr &&                                        \
+     (fe)->as.get_field_.struct_expr->kind == EX_VAR &&                        \
+     (fe)->as.get_field_.struct_expr->as.var.binding == binding)
+
+    while (sp > 0) {
+        const Expr *cur = stack[--sp];
+        if (!cur) continue;
+
+        /* (rc/drop (.f o)) -- explicit drop of the rc field. */
+        if (cur->kind == EX_RC_DROP && TUR_IS_TRACKED_FIELD(cur->as.rc_drop_.expr)) {
+            free(stack);
+            return true;
+        }
+
+        /* (drop! (.f o)) -- explicit drop of the ref field. */
+        if (cur->kind == EX_BUILTIN &&
+            cur->as.builtin.spec &&
+            cur->as.builtin.spec->name &&
+            strcmp(cur->as.builtin.spec->name, "drop!") == 0 &&
+            cur->as.builtin.n == 1 &&
+            TUR_IS_TRACKED_FIELD(cur->as.builtin.args[0])) {
+            free(stack);
+            return true;
+        }
+
+        switch (cur->kind) {
+            case EX_LET:
+            case EX_LETREC:
+                for (uint32_t i = cur->as.let_.n; i > 0; i--)
+                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                stack[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                stack[sp++] = cur->as.if_.then_;
+                stack[sp++] = cur->as.if_.cond;
+                break;
+            case EX_DO:
+                for (uint32_t i = cur->as.do_.n; i > 0; i--)
+                    stack[sp++] = cur->as.do_.items[i-1];
+                break;
+            case EX_CALL:
+                for (uint32_t i = cur->as.call_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.call_.args[i-1];
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = cur->as.builtin.n; i > 0; i--)
+                    stack[sp++] = cur->as.builtin.args[i-1];
+                break;
+            case EX_CLOSURE:
+                if (cur->as.closure_.closure && cur->as.closure_.closure->fn)
+                    stack[sp++] = cur->as.closure_.closure->fn->body;
+                break;
+            case EX_DEFER:
+                stack[sp++] = cur->as.defer_.body;
+                break;
+            case EX_WHILE:
+                stack[sp++] = cur->as.while_.body;
+                stack[sp++] = cur->as.while_.cond;
+                break;
+            case EX_PANIC:
+                stack[sp++] = cur->as.panic_.payload;
+                break;
+            case EX_SET:
+                stack[sp++] = cur->as.set_.value;
+                break;
+            case EX_SET_DEREF:
+                stack[sp++] = cur->as.set_deref_.ref;
+                stack[sp++] = cur->as.set_deref_.value;
+                break;
+            case EX_MAKE_STRUCT:
+                for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
+                    stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                break;
+            case EX_SET_LIT:
+                for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
+                    stack[sp++] = cur->as.set_lit_.items[i-1];
+                break;
+            case EX_RC_DROP:
+                /* Descend so a nested drop (not of the tracked field) still
+                 * walks its operand. */
+                stack[sp++] = cur->as.rc_drop_.expr;
+                break;
+            case EX_GET_FIELD:
+                stack[sp++] = cur->as.get_field_.struct_expr;
+                break;
+            case EX_SET_FIELD:
+                stack[sp++] = cur->as.set_field_.receiver;
+                stack[sp++] = cur->as.set_field_.value;
+                break;
+            default:
+                break;
+        }
+    }
+
+#undef TUR_IS_TRACKED_FIELD
+    free(stack);
+    return false;
+}
+
 void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Zero everything first so any bool/pointer field not explicitly
      * initialised below (e.g. `in_stdlib_load`, set later by

@@ -1233,8 +1233,13 @@ Expr *elab_let(Elab *e, const Form *call) {
             const CtorDef *ctor = ad->ctors[0];
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 TypeKind fk = ctor->fields[fi].kind;
-                if (fk == TY_RC || fk == TY_REF || fk == TY_LREF)
-                    n_field_drops++;
+                if (fk != TY_RC && fk != TY_REF && fk != TY_LREF)
+                    continue;
+                /* Skip a field the body already drops explicitly -- the
+                 * scope-exit auto-drop would double-free it. */
+                if (is_field_consumed(body, binds[k].binding, fi))
+                    continue;
+                n_field_drops++;
             }
         }
 
@@ -1256,6 +1261,10 @@ Expr *elab_let(Elab *e, const Form *call) {
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     TypeKind fk = ctor->fields[fi].kind;
                     if (fk != TY_RC && fk != TY_REF && fk != TY_LREF)
+                        continue;
+                    /* Skip a field the body already drops explicitly (must match
+                     * the counting loop above, or new_items over/underflows). */
+                    if (is_field_consumed(body, binds[k].binding, fi))
                         continue;
 
                     /* (.f o) -- read the owning field off the by-value local. */

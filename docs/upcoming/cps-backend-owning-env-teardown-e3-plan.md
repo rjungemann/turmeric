@@ -45,10 +45,13 @@ compile (the struct local was referenced undeclared in the emitted
 `__effect_handler_*`); that direct-path capture bug is now **FIXED** --
 `collect_handle_captures` descends into the owning-value ops, so the shape falls
 back cleanly (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`). The
-consuming variant then compiles but double-drops, which is a pre-existing
-handler-independent auto-drop-move-awareness gap
-(`docs/reported/explicit-field-drop-plus-scope-autodrop-double-drops.md`), not a
-CPS-capture issue.
+consuming *handler-case* variant then compiles but double-drops -- a pre-existing
+handler-independent auto-drop-move-awareness gap, not a CPS-capture issue. Its
+STRAIGHT-LINE form is now fixed (`is_field_consumed` suppresses the per-field
+auto-drop when the body drops the field explicitly:
+`docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`); the
+handler-case form stays open because a case runs 0..N times (beyond simple move
+analysis).
 
 Why this one is not just "rc with more fields": incref-on-read-out is only
 balanced when the case drops *exactly* the cloned owning fields. For a

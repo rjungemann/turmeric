@@ -1,0 +1,26 @@
+;; A by-value struct/record local with an owning `rc` field gets one scope-exit
+;; auto-drop per owning field (injected in elab_let).  When the body ALSO drops
+;; the same field explicitly -- `(rc/drop (.r o))` -- the auto-drop must be
+;; SUPPRESSED for that field, or the field is decremented twice (the explicit
+;; drop plus the auto-drop) -> use-after-free.  is_field_consumed (elab_core.c)
+;; now detects the explicit field drop and elab_let skips that field's auto-drop,
+;; the per-field analog of is_binding_consumed's whole-binding check.
+;;
+;; Observable check without a sanitizer: `shared` starts at strong count 1; `o.r`
+;; is a clone of it (count 2); the explicit `(rc/drop (.r o))` brings it back to
+;; 1.  If the auto-drop ALSO fired at o's scope exit it would reach 0 and FREE
+;; the block, so the subsequent `(rc/strong-count shared)` would read freed
+;; memory (a garbage count).  With the auto-drop correctly suppressed the count
+;; is exactly 1.  (Pre-fix this printed a large garbage value.)
+(defstruct Own [r : rc<int> tag : int])
+
+(defn f [] : int
+  (let [shared (rc/of 7)]
+    (do
+      (let [o (make-struct Own :r (rc/clone shared) :tag 9)]
+        (rc/drop (.r o)))
+      (rc/strong-count shared))))
+
+(defn main [] : int
+  (println (f))
+  0)

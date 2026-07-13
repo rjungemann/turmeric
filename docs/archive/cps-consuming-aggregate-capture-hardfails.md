@@ -48,10 +48,12 @@ explicit field drop:
 ```
 
 Tracked separately in
-`docs/reported/explicit-field-drop-plus-scope-autodrop-double-drops.md`. The
-capture fix correctly makes the handler path behave exactly like this
-straight-line code; the double-drop is an orthogonal auto-drop-move-awareness
-gap.
+`docs/archive/explicit-field-drop-plus-scope-autodrop-double-drops.md`, where the
+STRAIGHT-LINE form (shown here) is now FIXED (`is_field_consumed` suppresses the
+per-field auto-drop). The capture fix correctly makes the handler path behave
+like this straight-line code; the double-drop is an orthogonal
+auto-drop-move-awareness gap. Note the *handler-case* form is still open (a case
+runs 0..N times, beyond simple move analysis).
 
 ## Original repro (the hard-fail, now resolved)
 
