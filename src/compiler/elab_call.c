@@ -1746,6 +1746,9 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase B2: Cloneable continuations */
     if (name == e->sym_cloneable_reset)  return elab_cloneable_reset(e, call);
     if (name == e->sym_cloneable_shift)  return elab_cloneable_shift(e, call);
+    /* Note: the interim `k-reset`/`k-shift` spellings were retired once plain
+     * `shift`/`reset` became the unified surface (item d) -- a `cont`-typed
+     * receiver routes `shift` to the continuation-passing path automatically. */
     if (name == e->sym_call_cc_star)      return elab_call_cc_star(e, call);
     /* Phase 21: Serializable continuations */
     if (name == e->sym_serial_reset) return elab_serial_reset(e, call);
@@ -3508,6 +3511,30 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return out;
     }
     
+    /* (k v) application sugar for an EFFECT handler continuation (bound by a
+     * `handle` case; `is_continuation`, resumed via the `resume` special form).
+     * Unlike a cloneable continuation (TY_CONT, below), a handler continuation is
+     * carried as a plain int64 and resumed by EX_RESUME -- so route `(k v)` to
+     * `resume`, giving handler and cloneable continuations one uniform `(k v)`
+     * spelling.  This also lets a receiver `(fn [k] (k v))` be applied to a
+     * handler continuation, which is the foundation for the shift/reset ->
+     * synthetic-effect desugar (cross-function resume). */
+    if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT
+        && fn_binding->is_continuation) {
+        if (n_args != 1) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "continuation '%s' takes exactly one argument (the resume value)",
+                      fn_binding->name->name);
+            return NULL;
+        }
+        if (cont_check_double_use(e, call->as.list.items[0])) return NULL;
+        Expr *value = elab_form(e, call->as.list.items[1]);
+        if (!value) return NULL;
+        Expr *kvar = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
+        kvar->as.var.binding = fn_binding;
+        return elab_make_resume(e, kvar, value, call->span);
+    }
+
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->span,
                   "'%s' is not a function or continuation", fn_binding->name->name);
@@ -3529,6 +3556,20 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         }
         Expr *karg = elab_form(e, call->as.list.items[1]);
         if (!karg) return NULL;
+        /* slice 4 (resuming-shift plan): for a fully-typed continuation
+         * `Cont<BodyT,ResetT>` = (cont BodyT ResetT), the resume value must have
+         * type BodyT.  An untyped-arg cont (the one-arg `(cont R)` / bare `cont`
+         * spellings, arg == TY_UNKNOWN) stays unchecked, as before. */
+        if (fn_type.as.cont.arg != TY_UNKNOWN
+            && karg->type.kind != TY_UNKNOWN
+            && karg->type.kind != fn_type.as.cont.arg) {
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                                "continuation '%s' expects a resume value of type %s, got %s",
+                                fn_binding->name->name,
+                                type_name(type_from_kind(fn_type.as.cont.arg)),
+                                type_name(type_from_kind(karg->type.kind)));
+            return NULL;
+        }
         /* CC4.4: (k v) consumes the continuation.  This sugar builds the EX_VAR
          * by hand (below), bypassing the shared var-use consumption path, so
          * account for linearity here: invoking a ^linear k marks it consumed, and

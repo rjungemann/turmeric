@@ -1,0 +1,27 @@
+;; Cross-function RESUME works via the effect encoding (cross-function-resume
+;; design).  This is the pattern the shift/reset -> __Shift desugar generates:
+;; a resuming continuation is captured in a CALLEE and resumed by a handler in a
+;; CALLER -- the reified (lexically-scoped) shift path cannot express this, but
+;; perform/handle/resume can (dk_invoke compiled; fibers in the interpreter).
+;;
+;; It is enabled by two now-resolved blockers:
+;;   1. `(k v)` on a handler continuation resumes it (unified resume surface).
+;;   3. an effect carries a CAPTURING fn payload (boxed closure), so the receiver
+;;      may close over the shift's locals.
+;;
+;; `step` (callee) performs, carrying a receiver that captures `base` and resumes
+;; the delimited continuation `(+ 1 [])`; `run` (caller) handles + applies the
+;; receiver to the continuation.  direct == cps == turi.
+
+(defeffect Gen [seed : (fn [int] int)] : int)
+
+(defn step [base : int] : int
+  (+ 1 (perform (Gen (fn [k : int] : int (resume k base))))))
+
+(defn run [] : int
+  (handle (step 10)
+    (Gen [seed] k) (seed k)))
+
+(defn main [] : int
+  (println (run))   ; resume (+ 1 []) with base=10 -> 11
+  0)

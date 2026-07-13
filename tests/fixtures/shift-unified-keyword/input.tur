@@ -1,0 +1,40 @@
+;; Keyword collapse (one-substrate plan, item B): ONE shift/reset pair serves
+;; every delimited-control mode, dispatched by the receiver's convention:
+;;
+;;   - receiver takes a plain value  -> abortive shift (receiver applied to the
+;;     body value), the legacy behavior, EX_RESET delimiter.
+;;   - receiver takes a `cont`       -> continuation-passing shift: resume-k uses
+;;     the reified delimiter (the plain `reset` auto-promotes to it), ignore-k
+;;     uses the dynamic-abort path (cross-function, any context).
+;;
+;; So `k-shift`/`k-reset`/`cloneable-*` are no longer needed at the surface --
+;; plain `shift`/`reset` cover abortive, resumable, single-shot, and cross-fn.
+;; direct == cps == turi throughout.
+
+;; (1) abortive: receiver gets the body value (unchanged legacy behavior)
+(defn abortive [] : int
+  (reset (shift (fn [v : int] v) 7)))                 ; 7
+
+;; (2) resumable: cont receiver resumes k twice; the plain `reset` promotes
+;; itself to the reified delimiter because a resuming shift binds to it
+(defn ck [k : cont] : int (+ (k 1) (k 2)))
+(defn resumable [] : int
+  (reset (+ 10 (shift ck 0))))                        ; (10+1)+(10+2) = 23
+
+;; (3) single-shot: a ^linear cont receiver, resumed once
+(defn once [^linear k : cont] : int (k 5))
+(defn single-shot [] : int
+  (reset (+ 10 (shift once 0))))                      ; 10 + 5 = 15
+
+;; (4) cross-function ignore-k: shift in a callee, reset in a caller
+(defn abort-42 [k : cont] : int 42)
+(defn call-shift [] : int (shift abort-42 0))
+(defn cross-fn [] : int
+  (reset (+ 1 (call-shift))))                         ; 42 (context discarded)
+
+(defn main [] : int
+  (println (abortive))
+  (println (resumable))
+  (println (single-shot))
+  (println (cross-fn))
+  0)

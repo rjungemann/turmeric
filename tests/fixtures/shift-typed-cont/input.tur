@@ -1,0 +1,19 @@
+;; Fully-typed continuation Cont<BodyT,ResetT> (one-substrate plan, slice 4).
+;;
+;; `(cont BodyT ResetT)` pins BOTH types of a captured continuation:
+;;   - BodyT: the resume-value type -- `(k v)` now checks `v : BodyT`.
+;;   - ResetT: the type `(k v)` yields (the delimited result).
+;; The one-arg `(cont R)` and bare `cont` spellings leave BodyT unchecked, so
+;; existing signatures are unaffected (see shift-single-shot, which uses `cont`).
+;;
+;; Here the delimited hole (+ 10 []) is filled by an int, so BodyT = int; the
+;; receiver resumes k once with an int.  A wrong-typed resume value is rejected
+;; at compile time -- see errors/shift-typed-cont-mismatch.
+;;
+;; direct == cps == turi.
+(defn add-five [^linear k : (cont int int)] : int
+  (k 5))
+
+(defn main [] : int
+  (println (reset (+ 10 (shift add-five 0))))   ; 10 + 5 = 15
+  0)

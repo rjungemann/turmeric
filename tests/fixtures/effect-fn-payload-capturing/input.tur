@@ -1,0 +1,22 @@
+;; Effects carry a CAPTURING closure payload (cross-function-resume, blocker 3
+;; fully resolved).  An fn payload is a BOXED closure (one-word `void *` to a heap
+;; {thunk, env} box), so a receiver that closes over locals rides the one-word
+;; effect slot; the perform site boxes a non-capturing fn too (EX_FN_TO_FAT) so
+;; the representation is uniform.  This is exactly the __Shift shape (the receiver
+;; usually captures the shift's locals).  direct == cps == turi.
+
+(defeffect ShiftE [f : (fn [int] int)] : int)
+
+;; the receiver captures a and b, then resumes k with their sum
+(defn producer [a : int b : int] : int
+  (+ 100 (perform (ShiftE (fn [k : int] : int (resume k (+ a b)))))))
+
+;; the handler captures `base`, applies the fn payload to the continuation,
+;; and adds base -- exercising capture on both the receiver and handler sides
+(defn run [base : int] : int
+  (+ base (handle (producer 3 4)
+            (ShiftE [f] k) (f k))))
+
+(defn main [] : int
+  (println (run 1000))   ; producer resumes to 100+(3+4)=107; +base 1000 = 1107
+  0)

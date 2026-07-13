@@ -607,6 +607,13 @@ typedef struct Elab {
     /* Phase B2 CPS-CL7: tracks nesting depth of cloneable-reset for
      * detecting cloneable-shift outside any reset boundary. */
     int              cloneable_reset_depth;
+    /* Item B (resuming-shift plan): keyword collapse.  A plain `reset` becomes
+     * the reified delimiter (EX_CLONEABLE_RESET) only when a RESUMING (resume-k)
+     * shift binds to it; otherwise it stays the abortive EX_RESET (which
+     * shift0 / nested / substrate shapes need).  `reified_shift_at_depth[d]` is
+     * set by elab_cloneable_shift's reified path at depth d and read by the
+     * enclosing reset on exit. */
+    bool             reified_shift_at_depth[64];
     /* CF7.3: the scope that was active immediately before the current function
      * body's inner scope was pushed (i.e., e->scope just before scope_init in
      * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
@@ -1118,6 +1125,7 @@ Expr *elab_with_handler(Elab *e, const Form *call);
 Expr *elab_compose_handlers(Elab *e, const Form *call);
 bool cont_check_double_use(Elab *e, const Form *k_form);
 Expr *elab_resume(Elab *e, const Form *call);
+Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span);
 Expr *elab_discontinue(Elab *e, const Form *call);
 Expr *elab_cont_pred(Elab *e, const Form *call);
 Expr *elab_call_cc(Elab *e, const Form *call);

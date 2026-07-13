@@ -116,14 +116,33 @@ static Type shift_result_type(const Expr *k, const Expr *body,
 
 /* (reset body) - Establish a continuation boundary.
  */
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr);  /* fwd */
+
 Expr *elab_reset(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(reset body) requires exactly one argument");
         return NULL;
     }
+    /* Item B (resuming-shift plan): a plain `reset` is the abortive delimiter
+     * (EX_RESET) UNLESS a resuming (resume-k) shift binds to it -- then it
+     * promotes to the reified delimiter (EX_CLONEABLE_RESET), so one `reset`
+     * keyword serves both.  Bumping cloneable_reset_depth lets a resuming shift
+     * inside satisfy its lexical-scope requirement; the per-depth flag records
+     * whether one actually bound here.  A reset with only abortive shifts / shift0
+     * (which need EX_RESET -- proven by the reset-alias experiment) stays EX_RESET. */
+    int d = ++e->cloneable_reset_depth;
+    bool track = d >= 0 && d < 64;
+    if (track) e->reified_shift_at_depth[d] = false;
     Expr *body = elab_form(e, call->as.list.items[1]);
+    bool reified = track && e->reified_shift_at_depth[d];
+    e->cloneable_reset_depth--;
     if (!body) return NULL;
+    if (reified) {
+        Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
+        out->as.cloneable_reset_.body = body;
+        return out;
+    }
     Expr *out = expr_new(e->arena, EX_RESET, body->type, call->span);
     out->as.reset_.body = body;
     return out;
@@ -157,7 +176,20 @@ Expr *elab_shift(Elab *e, const Form *call) {
                   "shift requires a function as first argument");
         return NULL;
     }
-    
+
+    /* Item B (resuming-shift plan): keyword collapse.  A `shift` whose receiver
+     * takes a `cont` uses the continuation-passing convention -- route
+     * it to the unified core (resume-k reified, or ignore-k dynamic abort).  A
+     * receiver whose parameter is a plain value keeps the abortive convention
+     * below (receiver applied to the body value).  This makes one `shift` keyword
+     * serve both conventions, dispatched by the receiver's parameter type; every
+     * existing abortive `shift` (non-`cont` receiver) is unchanged. */
+    {
+        Type dom, cod;
+        if (shift_fn_domain_codomain(k_expr, &dom, &cod) && dom.kind == TY_CONT)
+            return elab_cont_shift_core(e, call, k_expr);
+    }
+
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
     /* CF2: the result type of (shift f body) is f's codomain (the result of
@@ -277,53 +309,143 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
  * All captured environment values must implement Clone.
  * k is a function that receives the cloneable continuation as its first argument.
  */
-Expr *elab_cloneable_shift(Elab *e, const Form *call) {
-    if (call->as.list.len != 3) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(cloneable-shift k body) requires exactly two arguments");
-        return NULL;
+/* Unification (resuming-shift plan): does this shift receiver PROVABLY ignore
+ * its captured continuation?  A receiver `(fn [k] EXPR)` whose body never
+ * references `k` discards the continuation -- semantically an abortive shift,
+ * which can lower via the dynamic-abort path (cross-function, any context)
+ * instead of the reified-context path (lexically scoped, subset-restricted).
+ * Conservative: returns true ONLY for a lambda/closure receiver we can see
+ * through and prove `k` unused; every other case returns false and keeps the
+ * reified lowering, so the routing is purely additive. */
+static bool receiver_ignores_continuation(const Expr *k_expr) {
+    const FnDef *fn = NULL;
+    /* `val_idx` is the parameter index the shift passes the continuation to,
+     * matching shift_fn_domain_codomain: a bare lambda / named fn takes it at 0;
+     * a closure thunk has its env prepended at 0, so the continuation is at 1. */
+    uint8_t val_idx = 0;
+    if (k_expr->kind == EX_FN) {
+        fn = k_expr->as.fn_.fn; val_idx = 0;
+    } else if (k_expr->kind == EX_CLOSURE && k_expr->as.closure_.closure) {
+        fn = k_expr->as.closure_.closure->fn; val_idx = 1;
+    } else if (k_expr->kind == EX_VAR && k_expr->as.var.binding) {
+        /* A named top-level fn receiver: source_fn_def gives its FnDef/body
+         * (set during elaboration).  NULL for a forward reference not yet
+         * elaborated -- conservatively keep the reified path in that case. */
+        fn = k_expr->as.var.binding->source_fn_def; val_idx = 0;
     }
+    /* Only a single-continuation receiver: the continuation must be the LAST
+     * param (no trailing params), so `params[val_idx]` really is the one the
+     * shift binds.  A multi-param fn is not a valid one-arg receiver. */
+    if (!fn || !fn->body || fn->n_params != (uint8_t)(val_idx + 1)) return false;
+    const Binding *kparam = fn->params[val_idx];
+    if (!kparam) return false;
+    uint32_t n_out = 0;
+    Binding **fvs = collect_free_vars(fn->body, NULL, 0, NULL, 0, &n_out);
+    bool uses_k = false;
+    for (uint32_t i = 0; i < n_out; i++)
+        if (fvs[i] == kparam) { uses_k = true; break; }
+    if (fvs) free(fvs);
+    return !uses_k;
+}
 
-    /* CPS-CL7: cloneable-shift must be inside a cloneable-reset */
-    if (e->cloneable_reset_depth == 0) {
-        diag_emit_with_code(DIAG_ERROR, call->span,
-                            TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
-                            "cloneable-shift used outside of any cloneable-reset boundary");
-        return NULL;
-    }
-
-    Expr *k_expr = elab_form(e, call->as.list.items[1]);
-    if (!k_expr) return NULL;
-
+/* Shared core for the continuation-passing (k-convention) shift: cloneable-shift
+ * and a `shift` whose receiver is `cont`-typed (item B).  Takes the
+ * already-elaborated receiver `k_expr` so `elab_shift` can dispatch here without
+ * re-elaborating.  Routes an ignore-k receiver to the abortive path, else emits
+ * the reified EX_CLONEABLE_SHIFT (and records that a resuming shift bound to the
+ * enclosing reset, so a plain `reset` promotes itself to a reified delimiter). */
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
     /* Check if k_expr is a function, closure, or a var referencing a function */
     bool is_function = false;
     if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
         is_function = true;
     } else if (k_expr->kind == EX_VAR) {
-        /* Check if the binding is a function */
         Binding *b = k_expr->as.var.binding;
         if (b && (b->type.kind == TY_FN || b->closure_fn_binding)) {
             is_function = true;
         }
     }
-
     if (!is_function) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "cloneable-shift requires a function as first argument");
         return NULL;
     }
 
+    /* Unification: a shift whose receiver provably IGNORES its continuation is an
+     * abortive shift.  Lower it via the dynamic-abort path (an abortive EX_SHIFT),
+     * which works cross-function and under arbitrary contexts -- no lexical
+     * cloneable-reset (TUR-E0016) or build_cloneable-subset context (TUR-E0710).
+     * The receiver expects a `cont` but ignores it, so we hand it a null (0)
+     * continuation of the right type.  NOT applied to the literal `cloneable-shift`
+     * keyword (which keeps its exact reified semantics); applied to
+     * a `cont`-typed `shift`. */
+    bool abort_route = call->as.list.items[0]->tag == F_SYM
+                       && call->as.list.items[0]->as.sym == e->sym_shift;
+    Type kdomain, kcodomain;
+    if (abort_route && receiver_ignores_continuation(k_expr)
+        && shift_fn_domain_codomain(k_expr, &kdomain, &kcodomain)) {
+        Expr *zero = expr_new(e->arena, EX_INT_LIT, kdomain, call->span);
+        zero->as.i = 0;
+        Expr *out = expr_new(e->arena, EX_SHIFT, kcodomain, call->span);
+        out->as.shift_.k_fn = k_expr;
+        out->as.shift_.body = zero;
+        return out;
+    }
+
+    /* CPS-CL7: a RESUMING shift must be inside a reset (the reified-context path
+     * is lexically scoped).  A plain `reset` counts too (item B): it promotes
+     * itself to a reified delimiter when a resuming shift binds to it. */
+    if (e->cloneable_reset_depth == 0) {
+        /* For the `shift` surface, tailor the message: the common cause
+         * now is a resuming shift whose reset is in a CALLER (cross-function
+         * resume, unsupported -- only cross-function ABORT works).  Keep the exact
+         * legacy wording for the literal `cloneable-shift` keyword (error fixture
+         * cloneable-shift-outside-reset pins it). */
+        bool shift_kw = call->as.list.items[0]->tag == F_SYM
+                        && call->as.list.items[0]->as.sym == e->sym_shift;
+        if (shift_kw) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a resuming shift (its receiver invokes the continuation) must sit "
+                "inside a lexically-enclosing reset\n"
+                "  = note: cross-function RESUME (the reset in a caller) is not "
+                "supported -- only cross-function ABORT (a receiver that ignores "
+                "the continuation) works across a call boundary\n"
+                "  = help: move the reset to enclose the shift lexically, or use "
+                "algebraic effects (perform / handle / resume) for cross-function "
+                "resumable continuations");
+            return NULL;
+        }
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                            "cloneable-shift used outside of any cloneable-reset boundary");
+        return NULL;
+    }
+
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
-    /* The result type of cloneable-shift is the result type of calling k_fn with
-     * a cloneable continuation and body's value. For now, use body's type as placeholder. */
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
     out->as.cloneable_shift_.cont_body = NULL;
+    /* Item B: mark the enclosing reset (at this depth) as needing the reified
+     * delimiter, so a plain `reset` becomes EX_CLONEABLE_RESET. */
+    if (e->cloneable_reset_depth >= 0 && e->cloneable_reset_depth < 64)
+        e->reified_shift_at_depth[e->cloneable_reset_depth] = true;
     /* CPS-CL10: verify all local captures implement Clone at elaboration time */
     check_cloneable_capture(e, call->span);
     return out;
+}
+
+Expr *elab_cloneable_shift(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(cloneable-shift k body) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    if (!k_expr) return NULL;
+    return elab_cont_shift_core(e, call, k_expr);
 }
 
 /* (call/cc* f) - multi-shot call/cc that produces a cloneable continuation.
@@ -602,9 +724,20 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                 }
             }
             param_types[p] = pk;
-            if (ann && (ann->kind == TY_ADT || ann->kind == TY_APP || ann->kind == TY_STRUCT)) {
+            /* Preserve the FULL param Type when the bare TypeKind loses structure
+             * the handler needs: an aggregate (ADT/APP/STRUCT -- keeps the def for
+             * field access) or a function (TY_FN -- keeps arity + param/result
+             * types, so a fn-valued payload `recv` is callable as `(recv k)` in the
+             * handler; without this it degrades to a 0-arity uncallable fn). */
+            if (ann && (ann->kind == TY_ADT || ann->kind == TY_APP
+                        || ann->kind == TY_STRUCT || ann->kind == TY_FN)) {
                 Type *stored = arena_alloc(e->arena, sizeof(Type));
                 *stored = *ann;
+                /* A fn payload is carried as a BOXED closure (a one-word `void *`
+                 * to the heap `{thunk, env}` box), so a CAPTURING receiver's env
+                 * rides along and fits the one-word effect slot -- unlike the fat
+                 * `tur_poly_fn_t` (two words) or the bare pointer (loses the env). */
+                if (stored->kind == TY_FN) stored->as.fn.boxed = true;
                 param_full[p] = stored;
                 any_agg_param = true;
             }
@@ -831,8 +964,24 @@ Expr *elab_perform(Elab *e, const Form *call) {
     for (uint32_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, effect_call_f->as.list.items[i + 1]);
         if (!args[i]) return NULL;
+        /* An fn-value payload is carried as a BOXED closure (one-word `void *` to
+         * the heap `{thunk, env}` box; defeffect marks the param `boxed`), so a
+         * capturing receiver's env rides along in the one-word effect slot.  A
+         * capturing closure is already a boxed value; a NON-capturing fn is a bare
+         * pointer, so box it here (EX_FN_TO_FAT) to keep the representation uniform
+         * -- otherwise the handler's boxed-closure dispatch reads garbage. */
+        if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed
+            && args[i]->type.as.fn.arity >= 1 && args[i]->type.as.fn.arity <= 5) {
+            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *bt = args[i]->type;
+            bt->as.fn.boxed = true;
+            Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt,
+                                  effect_call_f->as.list.items[i + 1]->span);
+            shim->as.fn_to_fat_.inner = args[i];
+            args[i] = shim;
+        }
     }
-    
+
     /* Create the perform expression */
     PerformExpr *perform = arena_alloc(e->arena, sizeof(PerformExpr));
     perform->effect_name = effect_name;
@@ -1537,6 +1686,37 @@ static void cont_mark_consumed(Expr *k) {
     /* CK_COPY / CK_MULTISHOT: usage_state updated but no ownership enforcement. */
 }
 
+/* Build an EX_RESUME from an already-elaborated continuation `k` and `value`,
+ * with the shared consumption + multishot-in-atomically checks.  Used by
+ * `elab_resume` (the `(resume k v)` form) and by the `(k v)` application sugar
+ * for effect handler continuations (elab_call.c) -- so both spellings resume
+ * identically.  Caller runs cont_check_double_use before elaborating `k`. */
+Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
+    /* LC1: Mark continuation consumed per its cont_kind. */
+    cont_mark_consumed(k);
+
+    /* MS2: Resuming a ^multishot continuation inside atomically is unsafe --
+     * the handler body may be re-executed by STM retry, causing the continuation
+     * to be resumed more than once in unexpected ways. */
+    if (k->kind == EX_VAR && k->as.var.binding &&
+        k->as.var.binding->type.copy_kind == CK_MULTISHOT &&
+        elab_in_atomically) {
+        diag_emit_with_code(DIAG_ERROR, span,
+            TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
+            "cannot resume a '^multishot' continuation inside 'atomically' -- "
+            "STM retry may cause the continuation to be resumed multiple times unexpectedly");
+        return NULL;
+    }
+
+    ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
+    resume->k = k;
+    resume->value = value;
+
+    Expr *out = expr_new(e->arena, EX_RESUME, value->type, span);
+    out->as.resume_.resume = resume;
+    return out;
+}
+
 /* (resume k value)
  * Resume a captured continuation with a value.
  */
@@ -1556,29 +1736,7 @@ Expr *elab_resume(Elab *e, const Form *call) {
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;
 
-    /* LC1: Mark continuation consumed per its cont_kind. */
-    cont_mark_consumed(k);
-
-    /* MS2: Resuming a ^multishot continuation inside atomically is unsafe --
-     * the handler body may be re-executed by STM retry, causing the continuation
-     * to be resumed more than once in unexpected ways. */
-    if (k->kind == EX_VAR && k->as.var.binding &&
-        k->as.var.binding->type.copy_kind == CK_MULTISHOT &&
-        elab_in_atomically) {
-        diag_emit_with_code(DIAG_ERROR, call->span,
-            TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
-            "cannot resume a '^multishot' continuation inside 'atomically' -- "
-            "STM retry may cause the continuation to be resumed multiple times unexpectedly");
-        return NULL;
-    }
-
-    ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
-    resume->k = k;
-    resume->value = value;
-
-    Expr *out = expr_new(e->arena, EX_RESUME, value->type, call->span);
-    out->as.resume_.resume = resume;
-    return out;
+    return elab_make_resume(e, k, value, call->span);
 }
 
 /* (discontinue k exception)

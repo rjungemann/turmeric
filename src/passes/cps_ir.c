@@ -35,6 +35,63 @@ static CTerm *new_term(CpsB *b, CTermKind k) {
     return t;
 }
 
+/* Name the source form that fell outside the CPS2 subset, for a diagnostic /
+ * measurement (N6.5 seed: a residual CT_UNSUPPORTED should say WHICH form it
+ * was, so the coverage gate names the shape rather than reporting a generic
+ * miss).  Covers the kinds that can reach the CPS-translation default arm and
+ * fail safe_to_delegate; anything else prints its numeric kind. */
+static const char *cps_form_name(const Expr *e) {
+    if (!e) return "null";
+    switch (e->kind) {
+        case EX_FN:            return "EX_FN (bare lambda)";
+        case EX_CLOSURE:       return "EX_CLOSURE (capturing closure)";
+        case EX_FN_TO_FAT:     return "EX_FN_TO_FAT";
+        case EX_POLY_WRAP:     return "EX_POLY_WRAP";
+        case EX_POLY_TO_FAT:   return "EX_POLY_TO_FAT";
+        case EX_WHILE:         return "EX_WHILE";
+        case EX_SET:           return "EX_SET (mutation)";
+        case EX_SET_DEREF:     return "EX_SET_DEREF";
+        case EX_SET_FIELD:     return "EX_SET_FIELD";
+        case EX_SET_LIT:       return "EX_SET_LIT";
+        case EX_MATCH:         return "EX_MATCH";
+        case EX_LETREC:        return "EX_LETREC";
+        case EX_DEFER:         return "EX_DEFER";
+        case EX_GEN:           return "EX_GEN";
+        case EX_YIELD:         return "EX_YIELD";
+        case EX_GEN_NEXT:      return "EX_GEN_NEXT";
+        case EX_SELECT:        return "EX_SELECT";
+        case EX_STM:           return "EX_STM";
+        case EX_ATOMICALLY:    return "EX_ATOMICALLY";
+        case EX_WITH_HANDLER:  return "EX_WITH_HANDLER";
+        case EX_COMPOSE_HANDLERS: return "EX_COMPOSE_HANDLERS";
+        case EX_HANDLER_LIT:   return "EX_HANDLER_LIT";
+        case EX_DISCONTINUE:   return "EX_DISCONTINUE";
+        case EX_CATCH_UNWIND:  return "EX_CATCH_UNWIND";
+        case EX_CATCH_PANIC_OF:return "EX_CATCH_PANIC_OF";
+        case EX_CLONEABLE_SHIFT: return "EX_CLONEABLE_SHIFT";
+        case EX_SERIAL_SHIFT:  return "EX_SERIAL_SHIFT";
+        default:               return NULL;   /* caller prints numeric kind */
+    }
+}
+
+/* Build a CT_UNSUPPORTED whose `why` names the offending source form. */
+static CTerm *unsupported_form(CpsB *b, const Expr *e) {
+    CTerm *t = new_term(b, CT_UNSUPPORTED);
+    const char *nm = cps_form_name(e);
+    if (nm) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "unsupported form: %s", nm);
+        t->as.unsupported.why = arena_strdup(b->a, buf, strlen(buf));
+    } else if (e) {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "unsupported form: EX_#%d", (int)e->kind);
+        t->as.unsupported.why = arena_strdup(b->a, buf, strlen(buf));
+    } else {
+        t->as.unsupported.why = "unsupported form: null";
+    }
+    return t;
+}
+
 static CVar fresh_cvar(CpsB *b, const Type *ty) {
     CVar v;
     v.id = b->counter++;
@@ -1390,9 +1447,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
-            CTerm *t = new_term(b, CT_UNSUPPORTED);
-            t->as.unsupported.why = "form not in CPS2 subset";
-            return t;
+            return unsupported_form(b, e);
         }
     }
 }
@@ -1562,9 +1617,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * direct emitter (binds x, continues rest). */
             if (safe_to_delegate(b, e))
                 return build_letraw(b, e, x, rest);
-            CTerm *t = new_term(b, CT_UNSUPPORTED);
-            t->as.unsupported.why = "form not in CPS2 subset";
-            return t;
+            return unsupported_form(b, e);
         }
     }
 }
