@@ -1125,6 +1125,7 @@ Expr *elab_with_handler(Elab *e, const Form *call);
 Expr *elab_compose_handlers(Elab *e, const Form *call);
 bool cont_check_double_use(Elab *e, const Form *k_form);
 Expr *elab_resume(Elab *e, const Form *call);
+Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span);
 Expr *elab_discontinue(Elab *e, const Form *call);
 Expr *elab_cont_pred(Elab *e, const Form *call);
 Expr *elab_call_cc(Elab *e, const Form *call);

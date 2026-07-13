@@ -55,38 +55,61 @@ receiver:
 
 This inherits the effect machine's cross-function capture on both paths.
 
-## The blocker -- continuation representation mismatch
+## Blocker 1 -- resume representation mismatch -- RESOLVED
 
-The obstacle is that the two surfaces spell "resume" differently:
+The two surfaces spelled "resume" differently: a shift receiver `(fn [k : cont]
+(k v))` uses the `(k v)` sugar (cloneable resume), while an effect handler
+continuation used `(resume k v)` and was NOT applicable with `(k v)`.
 
-- A shift receiver is `(fn [k : cont] (k v))` -- `k` is `cont`-typed and resumed
-  with the `(k v)` application sugar (`tur_cloneable_cont_resume` /
-  `ContFlavor`).
-- An effect handler continuation is resumed with `(resume k v)`; it is NOT
-  `cont`-typed -- `(k v)` on it errors ("not a function or continuation").
+**Landed:** `(k v)` now works on an effect handler continuation too -- a call
+through an `is_continuation` binding produces an `EX_RESUME` (shared
+`elab_make_resume`, factored out of `elab_resume`; `elab_call.c` routes the
+`(k v)` sugar there). So a receiver `(fn [k] (k v))` resumes a handler
+continuation uniformly. Verified cross-function (`perform` in a callee, `handle`
++ `(k 5)` in a caller): `direct == turi == 1050` (fixture
+`handler-cont-kv-sugar`). This is the foundation the desugar needs -- the handler
+body can now apply the shift's receiver to the handler continuation directly.
 
-So the desugar must align them, via either:
+Note: this reuses the handler continuation's existing int64 representation (no
+`CONT_EFFECT` type flavor needed) -- the `is_continuation` flag is the hook, and
+`resume` already accepts an arbitrary continuation *value*.
 
-1. **A `cont` flavor for effect continuations** (`CONT_EFFECT`): make the
-   handler `k` a `cont` whose `(k v)` sugar lowers to `resume`. Then the shift
-   receiver `(fn [k : cont] (k v))` works unchanged as the handler body's
-   applied receiver. Smallest surface change, but touches the type of handler
-   continuations and the `(k v)` dispatch (`elab_call.c` CC4).
-2. **Rewrite the receiver's `(k v)` to `(resume k v)`** in the desugar -- more
-   local, but requires transforming the receiver body.
+## Blocker 2 -- reset must catch a cross-function perform -- the remaining work
 
-Either is a real, multi-part change (synthetic-effect synthesis + handler-body
-construction + a continuation-flavor/rewrite + coexistence with the reified path
-so only the cross-function case desugars). It spans elaboration and the type
-system and must stay `direct == cps == turi` and suite-green.
+A `(shift recv _)` in a callee lowers to `(perform (__Shift recv))`; the matching
+handler must be at the enclosing `reset`, which is in a *caller* and is
+elaborated separately. So **every `reset` must install a `__Shift` handler**
+around its body:
 
-## Recommendation
+```
+(reset BODY)  ->  <abortive-or-reified-reset> ( handle BODY
+                    (__Shift [recv] k) (recv k) )      ; recv resumes k via (k v)
+```
 
-Cross-function resume is the deep first-class-continuations work the parent plans
-flagged as "a plan of its own." It should be scoped as its own change along the
-`__Shift`-effect-desugar design above, not folded into the incremental
-unification slices. Until then:
+A lexical abortive/reified shift bypasses the handler (it is `EX_SHIFT` /
+`EX_CLONEABLE_SHIFT`, not a `perform`) and hits the outer reset unchanged; only a
+cross-function resuming shift performs `__Shift` and is caught here. `(recv k)`
+applies the receiver to the handler continuation (now possible via blocker 1).
 
-- The tailored `TUR-E0016` message steers users to a lexical reset or to
-  effects (which already give cross-function resumable continuations).
-- Fixture `errors/shift-crossfn-resume` pins the diagnostic.
+The cost/risk: wrapping every reset in a handler changes reset codegen for the
+whole corpus (fixture snapshots, and the shift0 / nested / substrate shapes the
+reset-alias experiment showed are fragile). The safe way to introduce it is a
+**whole-program pass** that wraps resets in the `__Shift` handler *only when the
+program contains a cross-function resuming shift* -- so the common case (no such
+shift) is byte-for-byte unchanged. A same-elaboration global flag will not do
+(a reset can be elaborated before the callee's shift sets it); it needs a post-
+elaboration transform, plus synthesis of the `__Shift` effect (carrying an
+fn-value payload -- confirm effects can carry fn payloads) and the perform/handle
+nodes.
+
+## Status
+
+- **Foundation landed:** unified resume surface (`(k v)` on handler
+  continuations) -- fixture `handler-cont-kv-sugar`.
+- **Remaining (its own focused change):** the reset -> `__Shift`-handler
+  whole-program transform + `shift` -> `perform` desugar for the cross-function
+  resuming case. This is the deep first-class-continuations work; it is gated
+  only by the reset-wrapping transform now, not the resume mismatch.
+- Until then the tailored `TUR-E0016` message steers users to a lexical reset or
+  to effects (fixture `errors/shift-crossfn-resume`), which already give
+  cross-function resumable continuations -- now with `(k v)` sugar.

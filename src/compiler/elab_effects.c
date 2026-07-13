@@ -1659,6 +1659,37 @@ static void cont_mark_consumed(Expr *k) {
     /* CK_COPY / CK_MULTISHOT: usage_state updated but no ownership enforcement. */
 }
 
+/* Build an EX_RESUME from an already-elaborated continuation `k` and `value`,
+ * with the shared consumption + multishot-in-atomically checks.  Used by
+ * `elab_resume` (the `(resume k v)` form) and by the `(k v)` application sugar
+ * for effect handler continuations (elab_call.c) -- so both spellings resume
+ * identically.  Caller runs cont_check_double_use before elaborating `k`. */
+Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
+    /* LC1: Mark continuation consumed per its cont_kind. */
+    cont_mark_consumed(k);
+
+    /* MS2: Resuming a ^multishot continuation inside atomically is unsafe --
+     * the handler body may be re-executed by STM retry, causing the continuation
+     * to be resumed more than once in unexpected ways. */
+    if (k->kind == EX_VAR && k->as.var.binding &&
+        k->as.var.binding->type.copy_kind == CK_MULTISHOT &&
+        elab_in_atomically) {
+        diag_emit_with_code(DIAG_ERROR, span,
+            TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
+            "cannot resume a '^multishot' continuation inside 'atomically' -- "
+            "STM retry may cause the continuation to be resumed multiple times unexpectedly");
+        return NULL;
+    }
+
+    ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
+    resume->k = k;
+    resume->value = value;
+
+    Expr *out = expr_new(e->arena, EX_RESUME, value->type, span);
+    out->as.resume_.resume = resume;
+    return out;
+}
+
 /* (resume k value)
  * Resume a captured continuation with a value.
  */
@@ -1678,29 +1709,7 @@ Expr *elab_resume(Elab *e, const Form *call) {
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;
 
-    /* LC1: Mark continuation consumed per its cont_kind. */
-    cont_mark_consumed(k);
-
-    /* MS2: Resuming a ^multishot continuation inside atomically is unsafe --
-     * the handler body may be re-executed by STM retry, causing the continuation
-     * to be resumed more than once in unexpected ways. */
-    if (k->kind == EX_VAR && k->as.var.binding &&
-        k->as.var.binding->type.copy_kind == CK_MULTISHOT &&
-        elab_in_atomically) {
-        diag_emit_with_code(DIAG_ERROR, call->span,
-            TUR_E0502_MULTISHOT_RESUME_IN_ATOMIC,
-            "cannot resume a '^multishot' continuation inside 'atomically' -- "
-            "STM retry may cause the continuation to be resumed multiple times unexpectedly");
-        return NULL;
-    }
-
-    ResumeExpr *resume = arena_alloc(e->arena, sizeof(ResumeExpr));
-    resume->k = k;
-    resume->value = value;
-
-    Expr *out = expr_new(e->arena, EX_RESUME, value->type, call->span);
-    out->as.resume_.resume = resume;
-    return out;
+    return elab_make_resume(e, k, value, call->span);
 }
 
 /* (discontinue k exception)

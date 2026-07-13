@@ -1,0 +1,25 @@
+;; Unified resume surface (one-substrate plan, cross-function-resume foundation):
+;; an effect handler continuation is now applied with the SAME `(k v)` sugar as a
+;; cloneable continuation -- no need to spell `(resume k v)`.  This also means a
+;; receiver `(fn [k] (k v))` works uniformly on a handler continuation, which is
+;; the foundation for the shift/reset -> synthetic-effect desugar that gives
+;; cross-function RESUME (a resuming shift whose reset is in a caller).
+;;
+;; Here the effect is performed in a CALLEE (`producer`) and handled+resumed in a
+;; CALLER (`run`) -- a genuinely cross-function resumable continuation, resumed
+;; via `(k v)`.  direct == cps == turi.
+
+(defeffect Ask [] :int)
+
+;; performs cross-function; the handler resumes the captured continuation
+(defn producer [] : int
+  (+ 100 (perform (Ask))))
+
+;; `(k 5)` resumes the continuation (was only spellable as `(resume k 5)`)
+(defn run [] : int
+  (* 10 (handle (producer)
+          (Ask [] k) (k 5))))
+
+(defn main [] : int
+  (println (run))   ; producer resumes to 100+5=105, *10 = 1050
+  0)

@@ -3502,6 +3502,30 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
         return out;
     }
     
+    /* (k v) application sugar for an EFFECT handler continuation (bound by a
+     * `handle` case; `is_continuation`, resumed via the `resume` special form).
+     * Unlike a cloneable continuation (TY_CONT, below), a handler continuation is
+     * carried as a plain int64 and resumed by EX_RESUME -- so route `(k v)` to
+     * `resume`, giving handler and cloneable continuations one uniform `(k v)`
+     * spelling.  This also lets a receiver `(fn [k] (k v))` be applied to a
+     * handler continuation, which is the foundation for the shift/reset ->
+     * synthetic-effect desugar (cross-function resume). */
+    if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT
+        && fn_binding->is_continuation) {
+        if (n_args != 1) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "continuation '%s' takes exactly one argument (the resume value)",
+                      fn_binding->name->name);
+            return NULL;
+        }
+        if (cont_check_double_use(e, call->as.list.items[0])) return NULL;
+        Expr *value = elab_form(e, call->as.list.items[1]);
+        if (!value) return NULL;
+        Expr *kvar = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
+        kvar->as.var.binding = fn_binding;
+        return elab_make_resume(e, kvar, value, call->span);
+    }
+
     if (fn_type.kind != TY_FN && fn_type.kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->span,
                   "'%s' is not a function or continuation", fn_binding->name->name);

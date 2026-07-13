@@ -202,8 +202,20 @@ so every existing signature is unaffected.
   receiver's `cont` / `(k v)` vs an effect handler's `resume k`), whose alignment
   (a `CONT_EFFECT` flavor, or a `(k v)`->`resume` rewrite) is a real multi-part
   change spanning the type system + elaboration -- a plan of its own, not an
-  incremental slice. Landed now: a tailored `TUR-E0016` message steering users to
-  a lexical reset or to effects (fixture `errors/shift-crossfn-resume`).
+  incremental slice.
+
+  **Foundation landed.** The resume-representation mismatch (the first blocker) is
+  resolved: `(k v)` now works on an effect handler continuation (routes to
+  `EX_RESUME` via a shared `elab_make_resume`), so a receiver `(fn [k] (k v))`
+  resumes a handler continuation uniformly -- verified cross-function (`perform`
+  in a callee, `handle` + `(k 5)` in a caller, `direct == turi == 1050`; fixture
+  `handler-cont-kv-sugar`). No `CONT_EFFECT` type flavor was needed -- the
+  `is_continuation` flag is the hook and `resume` already accepts a continuation
+  *value*. What remains is a whole-program transform that wraps every `reset` in a
+  `__Shift` handler (so a callee's `(perform __Shift)` is caught) *only when the
+  program uses cross-function resume*, keeping the common case byte-for-byte
+  unchanged (see the design doc). Also landed earlier: a tailored `TUR-E0016`
+  message (fixture `errors/shift-crossfn-resume`).
 
   **Item (d) -- retire the redundant spellings -- PARTIALLY LANDED.** `k-shift` /
   `k-reset` (the interim canonical names this plan introduced) are **removed**:
