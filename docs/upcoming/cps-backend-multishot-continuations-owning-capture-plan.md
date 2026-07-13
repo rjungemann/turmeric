@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A COMPLETE (A1 resume-frame for nested perform in a perform-continuation; A2 nested perform in a reset/handle continuation; A3 reset/shift continuations meet effects + the enclosing-handler fix across all delimiter forms). Track B (E2-E4) open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: Track A COMPLETE (A1-A3). Track B: E-borrow landed (leak-clean owning captures via bare aliasing -- E1 is now leak-clean); E2 (aggregate captures) and E3/E4 open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -248,7 +248,52 @@ lift composes with it.
 Carries forward E2-E4 from the archived env-capture plan, with the Option B
 design detailed and the consuming-case interaction resolved.
 
-### E2 -- aggregate + carrier-ADT owning captures (Option A, interim)
+### E-borrow -- leak-clean owning captures via bare aliasing (LANDED)
+
+A sharper realization than the Option A / Option B split for the shapes that are
+actually **reachable**. An owning value captured into a multi-shot handler case
+is only ever reachable in a **borrow-only** shape: a case that *consumes*
+(drops/moves) the capture without the enclosing fn also consuming it evicts
+upstream (the fn's scope-exit auto-drop becomes an unlowered `EX_DEFER` --
+`docs/reported/cps-handler-case-consumes-owning-capture-evicts.md`). For a
+borrow-only capture the **owner is the enclosing fn**, which drops the value
+exactly once on its straight-line path -- so the env needs neither clone nor
+drop: it rides by a **bare shallow alias**. That is leak-clean (no env clone to
+reclaim), has no double-free, and the observed value is exact (no incref
+inflation) -- **the leak-clean bar without a DK-node teardown**.
+
+Landed: `owning_cap_borrow_only` (a conservative detector -- every reference to
+the capture in the handler-case body must be a pure borrow read: `rc/strong-count`,
+`rc->ptr`, `(weak ..)`; any consuming op / move / delivery keeps the incref path)
+downgrades a borrow-only owning capture from incref-on-read-out (E1's Option A)
+to a bare alias in `collect_caps_case`. The E1 fixture
+`cps-backend-owning-capture-handler-case` is now leak-clean (dropped its
+`requires.no-leak-check`; observed count is 1, not the inflated 2). A *provably
+consuming* rc capture (the rare double-consume that still reaches CPS) keeps the
+memory-safe incref path unchanged.
+
+**What this leaves for E3 (true teardown):** only the genuinely-consuming
+multi-shot case, where the env must *own* a reference and drop it once per
+continuation lifetime. Those shapes currently evict (`EX_DEFER`), so E3 is no
+longer on the critical path for a leak-clean *reachable* story -- it becomes the
+enabler for *admitting* consuming multi-shot captures (and O1-b P2/P3's abortive
+ref teardown), not a prerequisite for leak-cleanliness of what already emits.
+
+### E2 -- aggregate + carrier-ADT owning captures
+
+With E-borrow, E2's borrow-only shapes need **no clone glue at all**: a
+borrow-only owning-aggregate capture (a `defstruct` with an `rc` field whose
+case reads a field) rides the env by a bare shallow struct copy, leak-clean, the
+same as an rc handle. E2 is therefore: extend `cap_owning_ok` beyond `TY_RC` to
+a carrier ADT (`carrier_handle_ok`) and an owning-carrying by-value aggregate,
+and make a *consuming* aggregate capture (no incref glue) **evict** rather than
+incref (only rc has the scalar incref). The clone-on-read-out for a *consuming*
+aggregate (reusing O2's struct/ADT clone glue via `type_uses_carrier_abi` /
+`adt_is_byvalue_product`) is deferred with E3, since consuming multi-shot
+captures evict today anyway. (Original Option A interim design retained below for
+reference.)
+
+#### E2 (original Option A interim -- superseded by E-borrow for the reachable case)
 
 Extend `cap_owning_ok` (`emit_cps_ir.c:670`, today `ty == TY_RC` only) to a
 **carrier ADT** and an **owning-carrying by-value aggregate**, reusing O2's

@@ -1,35 +1,39 @@
-;; CPS-IR-to-C backend, env-capture story E1 (Option A): an OWNING value (an
-;; `rc<int>` handle) captured into a genuinely MULTI-SHOT handler CASE body.
-;; Built with the always-on cps-backend.
+;; CPS-IR-to-C backend, env-capture story E1 + Track B (leak-clean owning
+;; capture): an OWNING value (an `rc<int>` handle) captured into a genuinely
+;; MULTI-SHOT handler CASE body.  Built with the always-on cps-backend.
 ;;
 ;; A handler case body runs once *per perform* -- potentially many times in a
 ;; loop -- so it is classified MULTI-SHOT (collect_caps_case forces
 ;; g_cap_single_shot = false).  Before E1 an owning capture there failed the
 ;; Copy-only capture gate (cap_ty_ok) and the whole function fell back to the
-;; direct emitter.  E1 admits an rc handle through the new cap_owning_ok gate and
-;; the lifted LH_HANDLER_CASE helper CLONES (increfs) it on read-out:
-;;   typedef struct { RcControlBlock * f0; } f_hc0_0_env;   // f0 = r
-;;   e->f0 = r;  dk_handler(E, f_hc0_0, (intptr_t)e, ...);
-;;   ... RcControlBlock * r = __cap->f0;  rc_strong_increment(r);
-;; so each invocation of the case owns its own +1 -- balanced against whatever
-;; that invocation drops -- with no double-free across resumes.
+;; direct emitter.  E1 admits an rc handle through the cap_owning_ok gate.
+;;
+;; Track B (leak-clean): the reachable owning-capture-into-a-case shape is
+;; BORROW-ONLY -- the case reads the handle (here `(rc/strong-count r)`) but does
+;; not consume it; the enclosing `f` owns it and drops it exactly once on its
+;; straight-line path.  (A case that consumes the capture without `f` also
+;; consuming it evicts upstream: the fn's scope-exit auto-drop becomes an
+;; unlowered EX_DEFER -- see
+;; docs/reported/cps-handler-case-consumes-owning-capture-evicts.md.)  So the
+;; capture rides the multi-shot env by a BARE SHALLOW ALIAS
+;; (owning_cap_borrow_only downgrades it): no incref on read-out, no env clone --
+;; leak-clean, and the observed strong count is EXACT (1, not the inflated 2 an
+;; incref-on-read-out would show).  This is the reachable-shape realization of the
+;; env-capture plan's leak-clean bar without a DK-node teardown.
 ;;
 ;; Ownership (verified by inspecting the emitted C):
-;;   rc/of      -> r refcount 1
-;;   case body  -> reads r out of the shared env and increfs it (refcount 2),
-;;                 so (rc/strong-count r) observes 2 -- the case invocation's own
-;;                 owning reference plus f's original.  The env retains that
-;;                 reference; it is intentionally LEAKED (Option A, matching the
-;;                 leaked-DK-node regime), which is why this fixture carries
-;;                 requires.no-leak-check.  There is no double-free and no
-;;                 use-after-free -- only the env's +1 is never reclaimed.
-;;   post-handle -> the single straight-line (rc/drop r) brings it back to 1.
+;;   rc/of       -> r refcount 1
+;;   case body   -> reads r out of the shared env by a bare alias (no incref) and
+;;                  observes (rc/strong-count r) = 1
+;;   post-handle -> the single straight-line (rc/drop r) brings it to 0 and frees.
+;; No incref, no double-free, no leak: runs under normal LeakSanitizer.
 ;;
-;; The leaked env +1 is the debt Option B (E3) retires (a refcounted env with a
-;; real clone/drop pair); until then this rides requires.no-leak-check.
+;; A *consuming* multi-shot capture (an rc dropped in the case AND straight-line
+;; in the fn -- the rare double-consume that still reaches CPS) keeps the
+;; memory-safe incref-on-read-out (Option A) path instead; that is unchanged.
 ;;
-;; Value: g performs E once; the case resumes with (rc/strong-count r) = 2, so
-;; g returns 2 and f returns 2.
+;; Value: g performs E once; the case resumes with (rc/strong-count r) = 1, so g
+;; returns 1 and f returns 1.
 
 (defeffect E [] :int)
 

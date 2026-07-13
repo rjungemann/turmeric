@@ -940,6 +940,92 @@ static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
     return cs->ok;
 }
 
+/* ---- E3-lite: leak-clean owning captures (borrow-only) ------------------ *
+ * An owning value captured into a MULTI-SHOT continuation env is only ever
+ * *reachable* here in a BORROW-ONLY shape: a case that consumes (drops/moves)
+ * the capture without the enclosing fn also consuming it evicts upstream (the
+ * fn's scope-exit auto-drop becomes an unlowered EX_DEFER -- see
+ * docs/reported/cps-handler-case-consumes-owning-capture-evicts.md).  For a
+ * borrow-only capture the owner (the enclosing fn) drops the value exactly once
+ * on its straight-line path, so the env needs neither clone nor drop: it rides
+ * by a bare shallow alias -- leak-clean, no double-free, and the observed value
+ * is exact (no incref inflation).  Only a *provably consuming* rc capture (the
+ * rare "drop in the case AND straight-line in the fn" double-consume that still
+ * reaches CPS) keeps the incref-on-read-out (Option A) path, which is memory-safe
+ * (balanced) though it retains the env's clone.  This is the reachable-shape
+ * realization of the env-capture plan's leak-clean bar without a DK teardown. */
+
+/* A delegated op's Expr `e` is a pure borrow READ of `bid` -- rc/strong-count,
+ * rc->ptr, or (weak ..), whose direct operand is `bid`.  These read the handle
+ * without releasing or moving it (the result is a scalar / a non-owning borrow),
+ * so the capture stays owned by the caller. */
+static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e) return false;
+    const Expr *inner = NULL;
+    switch (e->kind) {
+        case EX_RC_COUNT: inner = e->as.rc_count_.expr; break;
+        case EX_RC_PTR:   inner = e->as.rc_ptr_.expr;   break;
+        case EX_WEAK:     inner = e->as.weak_.expr;     break;
+        default: return false;
+    }
+    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    return inner && inner->kind == EX_VAR && inner->as.var.binding
+        && inner->as.var.binding->id == bid;
+}
+
+static bool expr_refs_bid(const Expr *e, uint32_t bid) {
+    uint32_t nfv = 0;
+    Binding **fv = collect_free_vars(e, NULL, 0, NULL, 0, &nfv);
+    bool r = false;
+    for (uint32_t i = 0; i < nfv; i++) if (fv[i] && fv[i]->id == bid) { r = true; break; }
+    free(fv);
+    return r;
+}
+
+static bool cap_atom_is_bid(const CAtom *a, uint32_t bid) {
+    return a->kind == CA_VAR && a->var && a->var->id == bid;
+}
+
+/* True iff every reference to owning capture `bid` in this handler-case body
+ * (handle_case_ok shape) is a pure borrow read.  Conservative: any reference
+ * that is not a recognized borrow -- a consuming delegated op, a move into a
+ * call arg / delivery, or anything unmodelled -- returns false (keep incref). */
+static bool owning_cap_borrow_only(const CTerm *t, uint32_t bid) {
+    while (t) {
+        switch (t->kind) {
+            case CT_APPCONT:
+                return !cap_atom_is_bid(&t->as.appcont.v, bid);
+            case CT_LETVAL:
+                if (cap_atom_is_bid(&t->as.letval.v, bid)) return false;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (cap_atom_is_bid(&t->as.letprim.args[i], bid)) return false;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (cap_atom_is_bid(&t->as.letcall.args[i], bid)) return false;
+                t = t->as.letcall.body; break;
+            case CT_LETRAW:
+                if (expr_refs_bid(t->as.letraw.e, bid)
+                    && !expr_is_pure_borrow_of(t->as.letraw.e, bid))
+                    return false;
+                t = t->as.letraw.body; break;
+            case CT_RESUME:
+                if (cap_atom_is_bid(&t->as.resume.v, bid) || cap_atom_is_bid(&t->as.resume.k, bid))
+                    return false;
+                t = t->as.resume.body; break;
+            case CT_IF:
+                if (cap_atom_is_bid(&t->as.if_.cond, bid)) return false;
+                return owning_cap_borrow_only(t->as.if_.then_, bid)
+                    && owning_cap_borrow_only(t->as.if_.else_, bid);
+            default: return false;
+        }
+    }
+    return true;
+}
+
 /* Collect a handler case body's scalar captures, excluding the case's own params
  * and continuation k (bound by the DKHandler signature).  Same collect-or-bail
  * contract as collect_caps. */
@@ -953,6 +1039,13 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
     g_cap_single_shot = false;   /* a handler case body runs once per perform, not single-shot */
     collect_caps_rec(body, UINT32_MAX, bound, 0, cs);
     g_excl_n = 0;
+    /* E3-lite: downgrade a borrow-only owning capture from incref-on-read-out
+     * (owning=true) to a bare shallow alias (owning=false) -- leak-clean, since
+     * the enclosing fn owns and drops it exactly once. */
+    if (cs->ok)
+        for (int i = 0; i < cs->n; i++)
+            if (cs->owning[i] && cs->b[i] && owning_cap_borrow_only(body, cs->b[i]->id))
+                cs->owning[i] = false;
     return cs->ok;
 }
 
