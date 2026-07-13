@@ -1,6 +1,8 @@
 # Language/codegen gaps surfaced by the pure-Turmeric `logic.tur` port
 
-> **Status:** Open.
+> **Status:** Partially fixed. **GAP 1 fixed 2026-07-13** (see its section); the
+> `logic.tur` goal-handle `:int`-carrier workaround has been removed. GAP 2, 3,
+> and the residual arg-passing facet of GAP 4 remain open.
 > **Reported:** 2026-07-13 (during the `stdlib/logic.tur` pure-Turmeric port).
 > **Context:** `logic.tur` is now inline-C-free and runs under both harnesses,
 > but getting there required four workarounds that paper over real gaps. None
@@ -14,7 +16,29 @@ it hurt this port," not a release gate.
 
 ---
 
-## GAP 1 -- calling an opaque HKT handle cast to a `fn` type emits a *thin* call (SIGSEGV) -- **HIGH**
+## GAP 1 -- calling an opaque HKT handle cast to a `fn` type emits a *thin* call (SIGSEGV) -- **HIGH** -- FIXED 2026-07-13
+
+**Fix (as landed).** Two changes in `elab_ascribe` (`src/compiler/elab_types.c`),
+both keyed off a new `ascribe_type_is_opaque_handle` helper:
+
+- **Consumer side.** The existing "fat-handle ascription" rule (a `:int` /
+  `:ptr<void>` carrier ascribed to a `fn` type is marked `boxed` for slot-0
+  dispatch) now also fires when the *source* is an opaque newtype whose carrier
+  is the int64/pointer slot -- so `(:: g (fn [Subst] Stream))` on a `(Goal int)`
+  fat-dispatches instead of emitting a thin call.
+- **Producer side.** A *bare, captureless* closure (`TY_FN`, unboxed) ascribed to
+  an opaque handle or `:ptr<void>` is now wrapped in `EX_FN_TO_FAT` so it crosses
+  as a uniform `{ thunk, env }` fat box -- mirroring the captureless-closure
+  boxing already done for `TY_TYVAR` escapes. This also fixed a *latent* variant
+  the report missed: a no-capture goal like `logic.tur`'s `succeed` / `fail`
+  segfaulted when dispatched compiled, because it was stored as a raw code
+  address and slot-0-dispatched. Both now work.
+
+The `logic.tur` workaround (goal handles carried as `:int`) has been removed:
+`apply-goal` is typed `[g : (Goal int) ...]` and the `(:: g :int)` erasures are
+gone from the combinators and instances. See the cleanup checklist below.
+
+Repro below now prints `15` (was SIGSEGV). Original report follows.
 
 **Summary.** When a value typed as an opaque HKT handle (`(Goal A)`,
 `(Box A)`, carrier `:ptr<void>`) is cast to a function type and applied, codegen
@@ -161,20 +185,27 @@ lambda (`(fn [t : Term] (use-int t))`) fixes it.
 
 **Root cause (where known).** `:fn` is intentionally arity/type-erased at the
 call boundary (boxed args). A typed function-type parameter
-(`(fn [Term] (Goal int))`) would preserve the arg type -- but today that path
-does not reliably fat-dispatch a passed-in fat closure (this is exactly GAP 1
-from the other direction: a typed-fn param call segfaulted on a fat closure,
-which is why `logic.tur` fell back to `:fn`).
+(`(fn [Term] (Goal int))`) *does* now preserve the arg type -- after the GAP 1
+fix, a typed callback param even infers an unannotated lambda's parameter type
+(`(fn [t] ...)` binds `t : Term`). **But a residual facet remains:** a
+*capturing* (fat) closure passed into such a typed parameter is still
+mis-dispatched by the callee's *direct* call `(f x)` -- nested `fresh`
+(`(fresh (fn [x : Term] (fresh (fn [y : Term] ...))))`) segfaults compiled if
+`fresh`'s parameter is typed `(fn [Term] (Goal int))`. This is GAP 1's dispatch
+problem on the *argument-passing / direct-call* side (`elab_call`), which the
+`elab_ascribe`-only fix does not cover: a fat-closure argument crossing into a
+plain typed `fn` parameter is not marked `arg_fat`, so the callee calls it thin.
 
-**Fix directions.** This is really the mirror of GAP 1: once a
-*typed* `(fn [T] U)` parameter reliably fat-dispatches any closure value passed
-into it (thin or fat, captured or not), callbacks can be typed honestly and
-`:fn` reserved for genuinely heterogeneous cases. Fixing GAP 1's dispatch is the
-prerequisite.
+**Fix directions.** Mark a `(fn ...)` parameter that may receive a fat closure
+as `arg_fat` (box the argument via `EX_FN_TO_FAT` at the call site, slot-0
+dispatch in the callee) -- the same producer/consumer pairing GAP 1 got, applied
+to the `elab_call` argument path rather than the `::` path. Until then, a
+callback parameter that can receive a *capturing* closure must stay `:fn`.
 
-**Workaround in the tree.** `stdlib/logic.tur`: `fresh` / `apply-fat` /
-`fresh-impl` type the callback `:fn`; migrated fixtures annotate their lambdas
-`(fn [x : Term] ...)`.
+**Workaround in the tree (still present).** `stdlib/logic.tur`: `fresh` /
+`apply-fat` / `fresh-impl` keep the callback typed `:fn` (uniform thin/fat
+dispatch); migrated fixtures annotate their lambdas `(fn [x : Term] ...)`. The
+goal-*handle* carriers, by contrast, are now honestly `(Goal int)` (GAP 1 fixed).
 
 ---
 
@@ -184,15 +215,18 @@ Do these opportunistically as each gap lands; none is a prerequisite for the
 others except where noted. The end state is a `logic.tur` whose goal/stream
 plumbing is typed end-to-end with no `:int` type-erasure.
 
-- [ ] **GAP 1 fixed** -> retype `apply-goal` as
-      `[g : (Goal int) state : Subst] : Stream` and drop the `(:: g :int)`
-      erasures in `conjoined`, `disjoined`, `fresh-impl`, `run-logic`,
-      `bind-goal-raw`, `fmap-goal-raw`, and the `Functor`/`Applicative`/
-      `Monad`/`Alternative` instances. Re-run both harnesses; confirm no
-      thin-call segfault returns.
-- [ ] **GAP 1 fixed** (unblocks GAP 4) -> retype `fresh`/`apply-fat`/`fresh-impl`
-      callbacks as `(fn [Term] (Goal int))` and drop the `:fn` erasure; then the
-      migrated `logic-*` fixtures can drop the `(fn [x : Term] ...)` annotation.
+- [x] **GAP 1 fixed** (done 2026-07-13) -> `apply-goal` retyped
+      `[g : (Goal int) state : Subst] : Stream`; the `(:: g :int)` erasures are
+      gone from `conjoined`, `disjoined`, `run-logic`, `bind-goal-raw`,
+      `fmap-goal-raw`, and the `Functor`/`Applicative`/`Monad`/`Alternative`
+      instances (now `(:: ... (Goal int))`). Both harnesses green; no thin-call
+      segfault.
+- [ ] **GAP 4 residual (arg-passing dispatch) fixed** -> only then retype
+      `fresh`/`apply-fat`/`fresh-impl` callbacks as `(fn [Term] (Goal int))` and
+      drop the `:fn` erasure; then the migrated `logic-*` fixtures can drop the
+      `(fn [x : Term] ...)` annotation. Blocked today: a *capturing* callback
+      into a typed `fn` parameter still mis-dispatches (nested `fresh`
+      segfaults), so `:fn` is retained.
 - [ ] **GAP 3 fixed** -> optionally reintroduce an explicit
       `UState { subst next }` product if it reads more clearly than the
       counter-in-`SNil` encoding (the current encoding stays correct either way;

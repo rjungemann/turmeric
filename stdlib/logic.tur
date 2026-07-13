@@ -300,18 +300,13 @@
 ;;; -- Goal application ─────────────────────────────────────────────────────────
 ;;; apply-goal -- run a goal against a search state, yielding a solution stream.
 ;;;
-;;; The goal handle arrives as its erased `:int` fat-closure carrier (cast a
-;;; `(Goal A)` with `(:: g :int)`); typing it `:int` is what makes the emitted
-;;; call use the fat-closure calling convention rather than a thin function
-;;; pointer.
-;;;
 ;;; Parameters:
-;;;   g     -- a goal, as its `:int` fat-closure carrier
+;;;   g     -- a goal
 ;;;   state -- the current search state (Subst)
 ;;;
 ;;; Returns:
 ;;;   The solution Stream.
-(defn apply-goal [g : int state : Subst] : Stream
+(defn apply-goal [g : (Goal int) state : Subst] : Stream
   ((:: g (fn [Subst] Stream)) state))
 ;;; -- Goal constructors ────────────────────────────────────────────────────────
 ;;; unify-goal-impl -- implementation helper: unify two terms against a state.
@@ -354,13 +349,12 @@
 (defn fail [] : (Goal int)
   (:: (fn [state : Subst] (mzero)) :Goal))
 ;;; conjoined-impl -- implementation helper for conjunction.
-;; lg1 / lg2 are goals as their :int fat-closure carriers.
-(defn conjoined-impl [lg1 : int lg2 : int state : Subst] : Stream
+(defn conjoined-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
   (let [lg22 lg2]
     (mbind (apply-goal lg1 state)
       (fn [s : Subst] (let [_ lg22] (apply-goal lg22 s))))))
 ;;; conjoined-raw -- worker behind conjoined / Monad bind sequencing.
-(defn conjoined-raw [g1 : int g2 : int] : (Goal int)
+(defn conjoined-raw [g1 : (Goal int) g2 : (Goal int)] : (Goal int)
   (let [lg1 g1
         lg2 g2]
     (:: (fn [state : Subst] (let [_ lg1] (conjoined-impl lg1 lg2 state))) :Goal)))
@@ -383,13 +377,12 @@
 (defn conjoined [A B]
   [g1 : (Goal A) g2 : (Goal B)]
   : (Goal B)
-  (:: (conjoined-raw (:: g1 :int) (:: g2 :int)) (Goal B)))
+  (:: (conjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal B)))
 ;;; disjoined-impl -- implementation helper for disjunction.
-;; lg1 / lg2 are goals as their :int fat-closure carriers.
-(defn disjoined-impl [lg1 : int lg2 : int state : Subst] : Stream
+(defn disjoined-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
   (mplus (apply-goal lg1 state) (apply-goal lg2 state)))
 ;;; disjoined-raw -- worker behind disjoined / Alternative alt-or.
-(defn disjoined-raw [g1 : int g2 : int] : (Goal int)
+(defn disjoined-raw [g1 : (Goal int) g2 : (Goal int)] : (Goal int)
   (let [lg1 g1
         lg2 g2]
     (:: (fn [state : Subst] (let [_ lg1] (disjoined-impl lg1 lg2 state))) :Goal)))
@@ -412,20 +405,25 @@
 (defn disjoined [A]
   [g1 : (Goal A) g2 : (Goal A)]
   : (Goal A)
-  (:: (disjoined-raw (:: g1 :int) (:: g2 :int)) (Goal A)))
-;;; apply-fat -- call a (Term -> Goal) closure with a term argument.
+  (:: (disjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal A)))
+;;; apply-fat -- call a (Term -> Goal) callback with a term argument.
 ;;;
 ;;; The callback arrives as a first-class `:fn` value, which dispatches thin and
-;;; fat closures uniformly (the same mechanism st-bind uses for its continuation).
+;;; fat closures uniformly. A concrete `(fn [Term] (Goal int))` parameter would
+;;; read better, but a *capturing* callback passed into such a typed parameter is
+;;; still mis-dispatched by the callee's direct call (see
+;;; docs/reported/logic-port-language-gaps.md GAP 4); `:fn` sidesteps that. A
+;;; caller's lambda must annotate its parameter `(fn [x : Term] ...)` since `:fn`
+;;; erases the argument type.
 ;;;
 ;;; Parameters:
 ;;;   f   -- a (Term -> Goal) callback
 ;;;   arg -- the term to pass
 ;;;
 ;;; Returns:
-;;;   The resulting goal, as its `:int` carrier.
-(defn apply-fat [f : fn arg : Term] : int
-  (:: (f arg) :int))
+;;;   The resulting goal.
+(defn apply-fat [f : fn arg : Term] : (Goal int)
+  (:: (f arg) (Goal int)))
 ;;; fresh-impl -- implementation helper for fresh variable introduction.
 (defn fresh-impl [lf : fn state : Subst] : Stream
   (let [n   (subst-next state)
@@ -441,7 +439,7 @@
 ;;;   A goal (Goal int) that introduces a fresh variable and runs (f var).
 ;;;
 ;;; Example:
-;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 7)))))  ; => [x=7]
+;;;   (run-logic 1 (fresh (fn [x : Term] (lequal x (term-int 7)))))  ; => [x=7]
 (defn fresh [f : fn] : (Goal int)
   (:: (let [lf f] (fn [state : Subst] (let [_ lf] (fresh-impl lf state)))) :Goal))
 ;;; -- Runner ───────────────────────────────────────────────────────────────────
@@ -460,7 +458,7 @@
   [n : int g : (Goal A)]
   : Stream
   (let [init (subs-empty)]
-    (st-take n (apply-goal (:: g :int) init))))
+    (st-take n (apply-goal (:: g (Goal int)) init))))
 ;;; -- Result helpers ───────────────────────────────────────────────────────────
 ;;; stream-empty? -- is a solution stream empty?
 (defn stream-empty? [xs : Stream] : bool
@@ -504,15 +502,15 @@
 ;; callback `:fn` and applies it directly.
 ;;; bind-goal-raw -- worker: conjunction that threads the state into the `:fn`
 ;;; continuation, which returns the next goal.
-(defn bind-goal-raw [g : int k : fn] : (Goal int)
+(defn bind-goal-raw [g : (Goal int) k : fn] : (Goal int)
   (let [lg g]
     (:: (fn [state : Subst]
           (let [_ lg]
             (mbind (apply-goal lg state)
-              (fn [s : Subst] (apply-goal (:: (k s) :int) s)))))
+              (fn [s : Subst] (apply-goal (:: (k s) (Goal int)) s)))))
       :Goal)))
 ;;; fmap-goal-raw -- worker: map a `:fn` callback over each solution state.
-(defn fmap-goal-raw [g : int f : fn] : (Goal int)
+(defn fmap-goal-raw [g : (Goal int) f : fn] : (Goal int)
   (let [lg g]
     (:: (fn [state : Subst]
           (let [_ lg]
@@ -523,14 +521,14 @@
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Functor [Goal]
-  (fmap [container fn] (:: (fmap-goal-raw (:: container :int) fn) :Goal)))
+  (fmap [container fn] (:: (fmap-goal-raw (:: container (Goal int)) fn) :Goal)))
 ;;; Applicative [Goal] -- pure is the always-succeeding goal (state preserved);
 ;;; ap sequences the two goals (conjunction) keeping the second's states.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Applicative [Goal]
   (pure [x] (succeed))
-  (ap [ff fa] (:: (conjoined-raw (:: ff :int) (:: fa :int)) :Goal)))
+  (ap [ff fa] (:: (conjoined-raw (:: ff (Goal int)) (:: fa (Goal int))) :Goal)))
 ;;; Monad [Goal] -- bind is conjunction: run the goal, then feed each resulting
 ;;; state into the continuation (which returns the next goal). This is what
 ;;; `do-m` / `for` lower onto for goal-conjunction chains.
@@ -540,7 +538,7 @@
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Monad [Goal]
-  (bind [ma fn] (:: (bind-goal-raw (:: ma :int) fn) :Goal)))
+  (bind [ma fn] (:: (bind-goal-raw (:: ma (Goal int)) fn) :Goal)))
 ;;; Alternative [Goal] -- empty is the failing goal; alt-or is disjunction (the
 ;;; miniKanren disj): it unions the solutions of both goals.
 ;;;
@@ -550,4 +548,4 @@
 ;;; Since: stdlib-hkt-consolidation T3
 (definstance Alternative [Goal]
   (empty [a] (fail))
-  (alt-or [a b] (:: (disjoined-raw (:: a :int) (:: b :int)) :Goal)))
+  (alt-or [a b] (:: (disjoined-raw (:: a (Goal int)) (:: b (Goal int))) :Goal)))

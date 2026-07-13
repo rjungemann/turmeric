@@ -2473,6 +2473,22 @@ Expr *elab_type_app(Elab *e, const Form *call) {
  * node so the bit pattern survives the carrier crossing intact.  Without
  * this, downstream codegen would emit an implicit C value cast that
  * truncates floats and rounds integers. */
+/* An opaque newtype handle -- `(defopaque Name [T...] :base)` -- is carried at
+ * runtime as the int64/pointer carrier slot (a `TY_ADT`/`TY_APP` with
+ * is_opaque set).  When such a handle actually holds a closure box, ascribing
+ * it to/from a `(fn ...)` type is the fat-handle bridge (slot-0 dispatch), the
+ * same way :int / :ptr<void> carriers are. */
+static bool ascribe_type_is_opaque_handle(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_ADT)
+        return t->as.adt_.def && t->as.adt_.def->is_opaque;
+    if (t->kind == TY_APP) {
+        AdtDef *def = type_adt_app_def(t);
+        return def && def->is_opaque;
+    }
+    return false;
+}
+
 Expr *elab_ascribe(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2539,6 +2555,29 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
             inner->type = *ascribed;
     }
 
+    /* Producer-side fat-boxing: a bare (captureless) closure ascribed to a
+     * pointer-carrier handle -- an opaque newtype whose runtime carrier is the
+     * int64/ptr fat-box slot, or :ptr<void> itself -- must cross as a uniform
+     * { thunk, env } fat box, exactly like a closure escaping into a TY_TYVAR
+     * parameter (see elab_call.c "captureless-closure-lost-through-untyped-vec").
+     * A capturing closure's value is already TY_PTR_VOID (a fat box) and is left
+     * alone; only a bare, unboxed TY_FN is shimmed via EX_FN_TO_FAT.  Without
+     * this, `(:: (fn [s] ...) :Goal)` on a captureless lambda stores a raw code
+     * address that a later slot-0 fat-dispatch reads as a thunk -> SIGSEGV
+     * (docs/reported/logic-port-language-gaps.md GAP 1). */
+    if ((ascribed->kind == TY_PTR_VOID || ascribe_type_is_opaque_handle(ascribed)) &&
+        inner->type.kind == TY_FN && !inner->type.as.fn.boxed) {
+        uint32_t box_ar = inner->type.as.fn.arity;
+        if (box_ar >= 1 && box_ar <= 5) {
+            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *bt = inner->type;
+            bt->as.fn.boxed = true;
+            Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, inner->span);
+            shim->as.fn_to_fat_.inner = inner;
+            inner = shim;
+        }
+    }
+
     /* TS3.3: if both source and target are scalar same-size kinds and they
      * differ, insert an EX_REINTERPRET. */
     TypeKind src_kind = inner->type.kind;
@@ -2574,7 +2613,8 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * flips the ^fat arg classifier from shim to pass-through.  See
      * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
     if (ascribed->kind == TY_FN &&
-        (src_kind == TY_INT || src_kind == TY_PTR_VOID)) {
+        (src_kind == TY_INT || src_kind == TY_PTR_VOID ||
+         ascribe_type_is_opaque_handle(&inner->type))) {
         out->type.as.fn.boxed = true;
     }
     return out;
