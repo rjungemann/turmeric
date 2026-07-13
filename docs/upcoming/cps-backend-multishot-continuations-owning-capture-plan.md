@@ -323,6 +323,15 @@ captured `defstruct` holding an `rc` field into a handler case, `requires.no-lea
 
 ### E3 -- refcounted env with clone/drop (Option B), leak-clean -- THE substrate
 
+> **Detailed plan:**
+> [cps-backend-owning-env-teardown-e3-plan.md](cps-backend-owning-env-teardown-e3-plan.md).
+> That doc supersedes the sketch below, and reframes E3 post-E-borrow: it is no
+> longer needed for leak-cleanliness of what emits today (E-borrow did that) --
+> its job is to ADMIT the currently-evicting consuming / aggregate / carrier / ref
+> captures, in two phases (E3a per-frame env clone/drop hooks; E3b delimited-region
+> teardown, which also retires the DK-node leak). It is the shared substrate O1-b
+> P2/P3 land on.
+
 Stop leaking the owning-carrying env; give the lifted continuation frame a real
 clone/drop pair, emitted **only when `caps` contains an owning field** (Copy-only
 envs keep today's leaked fast path untouched):
