@@ -1,0 +1,24 @@
+;; cps-backend-ref-scope-exit-drop-plan.md (O1-b, P1): a colored function creates
+;; an owning `ref<T>` local, uses and finishes with it BEFORE a `shift`, then the
+;; shift delivers a scalar.  The elaborator injects `(defer (drop! r))` at the
+;; ref's scope exit; on the CPS path that scope-exit drop is a drop-at-last-use
+;; hoisted to the wrong place.  P1 recognises the non-crossing ref, hoists the
+;; drop to straight-line code BEFORE the shift (delegated via CT_LETRAW), and the
+;; function CPS-emits instead of falling back.  The abortive shift discards its
+;; continuation, so the drop MUST run before it -- and does, exactly once, so the
+;; program is LeakSanitizer-clean.
+;;
+;; `inner` prints @r (100), then the shift delivers 5 to `outer`'s reset, so
+;; `outer 100 = 5`.  direct == cps.
+
+(defn inner [x : int] : int
+  (let [r (ref x)]
+    (println @r)
+    (shift (fn [v : int] v) 5)))
+
+(defn outer [x : int] : int
+  (reset (inner x)))
+
+(defn main [] : int
+  (println (outer 100))
+  0)

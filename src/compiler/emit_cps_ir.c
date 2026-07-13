@@ -1172,13 +1172,60 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
     return false;
 }
 
+/* True if `e` is the `(drop! v)` free-shape builtin where v is binding `bid` --
+ * the ownership discharge the elaborator injects for a `ref<T>` local, hoisted to
+ * before the control op by the CPS backend's ref auto-drop (O1-b, cps_ir.c). */
+static bool is_ref_drop_of(const Expr *e, uint32_t bid) {
+    if (!e || e->kind != EX_BUILTIN) return false;
+    if (!e->as.builtin.spec || e->as.builtin.spec->shape != BS_PREFIX_UNARY_FREE
+        || e->as.builtin.n != 1)
+        return false;
+    const Expr *arg = e->as.builtin.args[0];
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    return arg && arg->kind == EX_VAR && arg->as.var.binding
+        && arg->as.var.binding->id == bid;
+}
+
+/* O1-b: is the owning `ref<T>` binding `bid` `drop!`-discharged on a straight-line
+ * path before ANY control op, branch that reifies a continuation, delivery, or the
+ * end of the term?  This is the P1 admission condition for delegating an EX_REF
+ * alloc on the CPS path.  Unlike owning_dropped_before_control (which grants an rc
+ * handle a "captured into a single-shot continuation, dropped there" pass at
+ * reset/handle/perform), a ref gets NO such pass -- the DK teardown that would drop
+ * a captured ref is P2/P3 substrate that does not exist yet -- so a ref crossing
+ * ANY control op (abortive or delimited) falls back.  A ref whose drop is not found
+ * before a barrier (e.g. a moved ref with no in-scope drop) also falls back. */
+static bool ref_dropped_before_control(const CTerm *t, uint32_t bid) {
+    while (t) {
+        switch (t->kind) {
+            case CT_LETRAW:
+                if (is_ref_drop_of(t->as.letraw.e, bid)) return true;
+                t = t->as.letraw.body; break;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_LETCONT: t = t->as.letcont.body; break;
+            case CT_IF:
+                return ref_dropped_before_control(t->as.if_.then_, bid)
+                    && ref_dropped_before_control(t->as.if_.else_, bid);
+            default: return false;   /* control op / delivery / end: not before */
+        }
+    }
+    return false;
+}
+
 /* Soundness of a CT_LETRAW node in isolation: an allocating owning op (rc/of,
  * rc/clone) must have its drop reachable before any control op (see
- * owning_dropped_before_control).  Struct/ADT ops (make-struct, get-field,
- * default-of) have no drop obligation and always pass. */
+ * owning_dropped_before_control).  An owning `ref<T>` constructor (EX_REF) is the
+ * same shape with the stricter ref discipline (ref_dropped_before_control): its
+ * hoisted `drop!` must precede every control op (O1-b P1).  Struct/ADT ops
+ * (make-struct, get-field, default-of) have no drop obligation and always pass. */
 static bool letraw_ok(const CTerm *t) {
     if (owning_alloc_expr(t->as.letraw.e) && t->as.letraw.x.bind
         && !owning_dropped_before_control(t->as.letraw.body, t->as.letraw.x.bind->id))
+        return false;
+    if (t->as.letraw.e && t->as.letraw.e->kind == EX_REF && t->as.letraw.x.bind
+        && !ref_dropped_before_control(t->as.letraw.body, t->as.letraw.x.bind->id))
         return false;
     return true;
 }
