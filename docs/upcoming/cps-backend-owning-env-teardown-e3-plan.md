@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- refcounted owning-value env teardown (Track B / E3)
 category: Planning
-status: LARGELY OBSOLETED by P1/P2/E-borrow -- leak-cleanliness for the reachable owning captures is already achieved WITHOUT a teardown (see "Empirical re-scoping" below). The only genuine residual is a CONSUMING multi-field AGGREGATE capture (rare; today hard-fails via a direct-path bug). Recommend NOT building the general teardown; cover the residual narrowly if a real case appears.
+status: LARGELY OBSOLETED by P1/P2/E-borrow -- leak-cleanliness for the reachable owning captures is already achieved WITHOUT a teardown (see "Empirical re-scoping" below). The one genuine residual is a CONSUMING multi-field AGGREGATE capture (rare); its separable direct-path hard-fail is now FIXED (collect_handle_captures descends into owning-value ops), so the shape falls back cleanly. Recommend NOT building the general teardown; cover the residual narrowly if a real case appears.
 description: The N6 CT-IR backend lifts a continuation body into a heap env struct that is LEAKED with the (also-leaked) DK chain nodes. E-borrow already made the *reachable* owning captures (borrow-only rc handles) leak-clean by riding a bare alias, so E3 is no longer needed for leak-cleanliness of what already emits. E3's remaining job is to ADMIT the shapes that currently evict -- an owning value CONSUMED by a multi-shot continuation, an owning aggregate / carrier handle / ref captured across a control op -- by giving the owning-carrying env a real clone-on-copy / drop-on-teardown discipline. Two phases: E3a attaches per-frame env clone/drop hooks to the DK machine (admits consuming captures memory-safely, still leaking the base ref), and E3b introduces a teardown of the delimited chain at region completion (leak-clean, and it retires the pre-existing DK-node leak). Sound on the fallback today -- missed coverage, not a correctness gap.
 ---
 
@@ -40,10 +40,15 @@ remains, but it is a fixed, bounded per-region leak unrelated to owning captures
 A **CONSUMING multi-shot AGGREGATE capture** -- a handler case that DROPS a
 captured by-value struct's owning field and runs N times -- still evicts
 (`collect_caps_case` rejects a consuming non-rc capture, since a struct has no
-scalar incref), and its fallback **hard-fails** to compile (a pre-existing
-direct-path handler-capture bug -- the struct local is referenced undeclared in
-the emitted `__effect_handler_*`; tracked in
-`docs/reported/cps-consuming-aggregate-capture-hardfails.md`).
+scalar incref). Its fallback to the direct emitter used to **hard-fail** to
+compile (the struct local was referenced undeclared in the emitted
+`__effect_handler_*`); that direct-path capture bug is now **FIXED** --
+`collect_handle_captures` descends into the owning-value ops, so the shape falls
+back cleanly (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`). The
+consuming variant then compiles but double-drops, which is a pre-existing
+handler-independent auto-drop-move-awareness gap
+(`docs/reported/explicit-field-drop-plus-scope-autodrop-double-drops.md`), not a
+CPS-capture issue.
 
 Why this one is not just "rc with more fields": incref-on-read-out is only
 balanced when the case drops *exactly* the cloned owning fields. For a
@@ -52,9 +57,9 @@ struct the env-clone would incref fields the case does not drop -> leak. So a
 *correct* admission needs the env to OWN the aggregate (clone all fields on
 copy, drop all fields once per continuation lifetime) -- the actual Option B
 teardown -- OR the case to clone what it consumes. Given the shape is rare and
-hard-fails today only through a separable direct-path bug, the recommendation is:
-**fix the direct-path hard-fail (so it falls back cleanly) rather than build the
-teardown**, unless a real consuming-aggregate case appears.
+the separable direct-path hard-fail is now fixed (falls back cleanly), the
+recommendation is: **do not build the teardown** unless a real
+consuming-aggregate case appears.
 
 The original design (below) is retained for the day that case arrives.
 

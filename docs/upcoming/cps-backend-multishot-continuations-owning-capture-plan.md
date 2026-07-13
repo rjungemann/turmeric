@@ -345,10 +345,15 @@ captured `defstruct` holding an `rc` field into a handler case, `requires.no-lea
 > alias (E-borrow) dropped once by P2; a *consuming rc* capture is leak-clean via
 > E1's incref-on-read-out balanced by the case's own drop, with the base dropped
 > by the P2-lowered auto-drop. The one genuine residual is a *consuming multi-field
-> aggregate* capture, which is rare and today hard-fails only through a separable
-> direct-path bug (`docs/reported/cps-consuming-aggregate-capture-hardfails.md`) --
-> recommendation there is to fix that fallback, not build the teardown. The sketch
-> below is retained for the day a real consuming-aggregate case warrants Option B.
+> aggregate* capture, which is rare. Its separable direct-path hard-fail (a handler
+> case referencing a captured struct's owning field through an owning-value op) is
+> now FIXED -- `collect_handle_captures` descends into the owning-value ops
+> (`docs/archive/cps-consuming-aggregate-capture-hardfails.md`) -- so the shape
+> falls back to the direct emitter cleanly instead of failing to compile. (The
+> consuming variant then double-drops, but that is a pre-existing handler-independent
+> auto-drop-move-awareness gap: `docs/reported/explicit-field-drop-plus-scope-autodrop-double-drops.md`.)
+> The sketch below is retained for the day a real consuming-aggregate case warrants
+> Option B.
 
 Stop leaking the owning-carrying env; give the lifted continuation frame a real
 clone/drop pair, emitted **only when `caps` contains an owning field** (Copy-only
