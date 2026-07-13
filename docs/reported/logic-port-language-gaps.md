@@ -1,9 +1,10 @@
 # Language/codegen gaps surfaced by the pure-Turmeric `logic.tur` port
 
-> **Status:** GAP 1 **fixed** 2026-07-13 (compiler); GAP 4 **withdrawn** 2026-07-13
-> (not a gap -- it was a missing `^fat` annotation, now applied). Both `logic.tur`
-> workarounds they concerned (the goal-handle `:int` carrier and the `:fn`
-> callback) have been removed. GAP 2 and GAP 3 remain open.
+> **Status:** GAP 1 **fixed** 2026-07-13 (compiler); GAP 2 **fixed** 2026-07-13
+> (compiler); GAP 4 **withdrawn** 2026-07-13 (not a gap -- it was a missing
+> `^fat` annotation, now applied). The `logic.tur` workarounds they concerned
+> (the goal-handle `:int` carrier and the `:fn` callback) have been removed.
+> GAP 3 remains open.
 > **Reported:** 2026-07-13 (during the `stdlib/logic.tur` pure-Turmeric port).
 > **Context:** `logic.tur` is now inline-C-free and runs under both harnesses,
 > but getting there required four workarounds that paper over real gaps. None
@@ -86,7 +87,19 @@ through `conjoined`/`disjoined`/`fresh`/`run-logic` and the four instances.
 
 ---
 
-## GAP 2 -- forward/mutually-recursive `defn` return type defaults to `int` -- **MEDIUM**
+## GAP 2 -- forward/mutually-recursive `defn` return type defaults to `int` -- **MEDIUM** -- FIXED 2026-07-13
+
+**Fix (as landed).** The Pass-1 forward-declaration loop in
+`elaborate_program` (`src/compiler/elab_toplevel.c`) parsed a bare `: T` return
+annotation for primitives only (`int` / `bool` / `void` / `nil` / `cstr` /
+`ptr`); every other bare symbol -- including a user `defdata` / `defstruct` /
+`defopaque` name -- fell through to the `TY_INT` default. Added an `else` branch
+that looks the name up in the already-registered ADT stubs (RF0 runs first) and
+forward-declares with the real result type (`type_adt(def)`, carried on
+`result_full_type`). A sibling caller declared earlier now sees the callee's
+actual ADT return type. The compound-return path (`(F A B)`) already did this;
+this closes the bare-name case. Regression: `tests/fixtures/forward-ref-adt-return`.
+Repro below now prints `6`. Original report follows.
 
 **Summary.** A `defn` that calls a *later-defined* `defn` types that forward
 reference as returning `int`, regardless of the callee's declared return type.
@@ -118,9 +131,11 @@ the ordering dependence.
 pass so forward references resolve to the declared type. Until then, mutually
 recursive helpers must be written self-recursively or ordered callee-first.
 
-**Workaround in the tree.** `stdlib/logic.tur`: `logic-walk` was written to
-recurse only on itself via a `subst-lookup` helper returning a `Lookup` ADT,
-specifically to avoid a `walk-var <-> logic-walk` mutual cycle.
+**Workaround in the tree (kept by choice).** `stdlib/logic.tur`: `logic-walk`
+recurses only on itself via a `subst-lookup` helper returning a `Lookup` ADT.
+This was originally forced by the cycle; with the fix a mutually-recursive
+`walk` / `walk-var` pair would compile in any order, but the self-recursive form
+is at least as clear, so it is left as-is (no code change needed).
 
 ---
 
@@ -224,9 +239,9 @@ plumbing is typed end-to-end with no `:int` type-erasure.
       `UState { subst next }` product if it reads more clearly than the
       counter-in-`SNil` encoding (the current encoding stays correct either way;
       this is a readability call, not a correctness fix).
-- [ ] **GAP 2 fixed** -> `logic-walk`/`subst-lookup` may be re-expressed as a
-      mutually-recursive `walk` / `walk-var` pair if that is clearer (again,
-      cosmetic).
+- [x] **GAP 2 fixed** (done 2026-07-13) -> compiler now forward-declares a bare
+      ADT return type. `logic-walk`/`subst-lookup` are left self-recursive (that
+      form is at least as clear); no `logic.tur` change was needed.
 - [ ] After any of the above, regenerate fixture snapshots / docstrings in the
       same change and re-run `bash tests/run.sh` + `bash tests/run-turi.sh`.
 
@@ -249,3 +264,5 @@ the `^fat` callbacks are now the honest forms. GAP 2 only affected the shape of
   carrier). `src/compiler/elab_call.c:984` (`elab_call_head_expr`) is the
   sibling call-head dispatch that already handled the `:ptr<void>`/carrier cases.
 - `tests/fixtures/opaque-fn-carrier-dispatch/` -- GAP 1 regression fixture.
+- `src/compiler/elab_toplevel.c` (`elaborate_program` Pass-1 forward-decl loop)
+  -- GAP 2 fix site; `tests/fixtures/forward-ref-adt-return/` -- its regression.

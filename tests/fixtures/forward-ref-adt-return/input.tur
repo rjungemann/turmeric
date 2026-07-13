@@ -1,0 +1,28 @@
+;; Regression: a defn whose return type is a bare (non-parametric) user ADT and
+;; that calls a *later-defined* sibling must forward-declare that sibling with
+;; its real ADT result type -- not the TY_INT default.  Before the fix, `(g n)`
+;; below was typed `int`, so the `(B inner)` arm returning `T` reported a
+;; spurious "match: arm types incompatible -- expected int, got adt".
+;; See docs/reported/logic-port-language-gaps.md GAP 2.
+
+(defdata T :copy (A :int) (B :T))
+
+;; f is declared BEFORE g and calls g in one match arm.
+(defn f [x : T] : T
+  (match x
+    (A n)     (g n)
+    (B inner) (f inner)))
+
+(defn g [n : int] : T (A (+ n 1)))
+
+;; Also exercise a struct return forward reference.
+(defstruct P :copy [x :int y :int])
+(defn use-p [n : int] : P (mk-p n))
+(defn mk-p [n : int] : P (make-struct P :x n :y (+ n 1)))
+
+(defn main [] : int
+  (match (f (B (B (A 5))))
+    (A n)     (println n)       ; 6
+    (B _)     (println -1))
+  (println (.y (use-p 41)))     ; 42
+  0)
