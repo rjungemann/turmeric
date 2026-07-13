@@ -145,6 +145,8 @@
 
 (extern-c tur_local_spawn [g :ptr body :int user-data :ptr] :int)
 
+(extern-c tur_local_disown_body [g :ptr fiber-id :int] :void)
+
 (extern-c tur_local_park_fd [g :ptr fd :int events :int timeout-ms :int] :int)
 
 (extern-c tur_reactor_run_fibers [g :ptr] :int)
@@ -2637,6 +2639,9 @@
       ctx->async       = (void *)ha;
       int rc = (int)tur_local_spawn(ha->fiber_group, ha->body_closure, (void *)ctx);
       if (rc < 0) { free(ctx); close(cfd); continue; }
+      /* Every request fiber shares ha->body_closure, which httpd frees itself
+       * in teardown; disown it so the fiber group does not multi-/double-free. */
+      tur_local_disown_body(ha->fiber_group, (int64_t)rc);
       ha->in_flight++;
   }
   ```)

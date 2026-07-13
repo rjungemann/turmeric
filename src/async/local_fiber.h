@@ -53,6 +53,14 @@ void tur_local_fiber_group_free(void *group);
 int64_t tur_local_spawn(void *group, int64_t tur_body, void *user_data);
 
 /**
+ * Relinquish group ownership of a fiber's spawn-body box, so the group does NOT
+ * free it at tur_local_fiber_group_free. tur_local_spawn owns the body box by
+ * default; a caller that reuses one body box across many fibers and frees it
+ * itself must disown every such fiber. No-op for an unknown fiber id.
+ */
+void tur_local_disown_body(void *group, int64_t fiber_id);
+
+/**
  * Drive the bound reactor and pump the group's ready-queue until either the
  * group is empty AND the reactor has no remaining sources, or
  * tur_reactor_stop was called on the bound reactor. Returns the number of

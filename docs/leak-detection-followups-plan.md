@@ -1,7 +1,8 @@
 # Plan: Leak-Detection Follow-ups -- the `requires.no-leak-check` surface
 
 > **Status:** P1 landed (reactor callback-box ownership; 9 fixtures unmarked).
-> P1-next (httpd handler-chain drop, fiber-body ownership) open.
+> Fiber-body ownership landed (5 `reactor-fibers-*` unmarked). Remaining
+> P1-next: httpd handler-chain drop.
 > **Last Updated:** 2026-07-13
 > **Type:** Build/test hygiene + runtime memory-management
 > **Related:**
@@ -190,13 +191,7 @@ leak-clean and dropped their markers, verified with leak detection ON:
   standalone run that never drives a request, so the double-free/leak path is
   not exercised; the httpd fixtures self-drive only under the suite harness.)
   This is the **httpd handler-chain-drop** follow-up.
-- **`reactor-fibers-*` (5) -- kept markers.** Their leak is the spawn
-  **`tur_body`** box (a heap fat-closure retained for the fiber's lifetime).
-  Freeing it in `tur_local_fiber_group_free` is unsafe as a blanket change: the
-  httpd async server reuses a single `body_closure` across every per-request
-  fiber and frees it itself, so a blanket free multi-frees. This needs the same
-  opt-in ownership handshake as reactor callbacks -- the **fiber-body
-  ownership** follow-up.
+- **`reactor-fibers-*` (5) -- fixed, see "Fiber-body ownership" below.**
 - **`httpd-mw-fold-many`, `httpd-mw-compress` -- kept markers.** Same
   handler-chain leak class as the other httpd fixtures (compress is also
   `requires.spices`).
@@ -213,25 +208,42 @@ Risks handled: shared boxes (deduped free at teardown); borrowed non-heap boxes
 stayed ON throughout, so any residual double-free/UAF would have surfaced as a
 suite failure -- it did not.
 
-### P1-next -- httpd handler-chain drop + fiber-body ownership
+### Fiber-body ownership -- DONE (5 fixtures)
 
-The two remaining active-leak classes, both process-lifetime and bounded:
+**Landed**, mirroring the reactor cb handshake. `tur_local_spawn` now owns the
+spawn-body box and `tur_local_fiber_group_free` frees it (deduped); the httpd
+async server, whose per-request fibers all share one `ha->body_closure` it frees
+itself, opts every such fiber out with the new
+`tur_local_disown_body(g, fiber_id)` (`src/async/reactor.c`,
+`src/async/local_fiber.h`, `stdlib/httpd.tur`).
 
-1. **httpd handler-chain drop.** The server stores the composed handler /
-   middleware onion (heap capturing-closure boxes) and frees none of them at
-   `httpd-free`. Needs recursive drop of the handler closure and its captured
-   `next` chain (there is no drop glue for a captured closure chain today), plus
-   freeing the rate-limiter bucket table in its destructor. This is the larger,
-   riskier chunk flagged originally; it would clear ~30 httpd markers + the two
-   above.
-2. **Fiber-body ownership.** Mirror the reactor cb handshake for
-   `tur_local_spawn`: own the `tur_body` box by default and free it in
-   `tur_local_fiber_group_free`, with an opt-out the httpd async server uses for
-   its shared `body_closure`. Clears the 5 `reactor-fibers-*` markers.
+One wrinkle beyond the reactor case: a **captureless** fiber body was lowered to
+a bare C function pointer, not a heap box (`stdlib/reactor.tur`'s `local-spawn`
+took `body : int` with no `^fat`), so `free()`ing it SEGV'd -- and, latently,
+the trampoline's fat-pointer dispatch would have mis-run it if the fiber ever
+executed. Marking the param `^fat` auto-shims a captureless body into a heap
+`{ fatshim, fn }` box, which both makes every body a heap box the group can own
+and fixes that latent dispatch bug. `reactor-fibers-stop-mid-run` (which queues
+captureless fibers that never run, then frees the group) is the case that
+exposed it.
 
-Effort: medium each; do them behind the existing markers and drop each marker
-only once its fixture verifies clean with leak detection ON, so the suite
-ratchets green incrementally.
+Result: the 5 `reactor-fibers-*` fixtures are leak-clean and dropped their
+markers; full suite `2111 passed, 0 failed`; httpd-async fixtures still pass
+(the body disown prevents the shared-box double-free).
+
+### P1-next -- httpd handler-chain drop (remaining)
+
+The last active-leak class, process-lifetime and bounded. The server stores the
+composed handler / middleware onion (heap capturing-closure boxes) and frees
+none of them at `httpd-free`. Needs recursive drop of the handler closure and
+its captured `next` chain (there is no drop glue for a captured closure chain
+today), plus freeing the rate-limiter bucket table in its destructor. This is
+the larger, riskier chunk flagged originally; it would clear ~30 httpd markers
+plus `httpd-mw-fold-many` and `httpd-mw-compress`.
+
+Do it behind the existing markers and drop each marker only once its fixture
+verifies clean with leak detection ON, so the suite ratchets green
+incrementally.
 
 ### P2 -- DK continuation-chain node leak (already reported)
 
@@ -290,9 +302,12 @@ lead.
       `tur_reactor_disown_cb` opt-out for park and httpd). 9 pure-reactor
       fixtures verified leak-clean with detection ON and unmarked; full suite
       `2111 passed, 0 failed`.
+- [x] Fiber-body ownership landed (`owns_body` default + `tur_local_disown_body`
+      opt-out; `^fat` on `local-spawn` body so captureless bodies are heap
+      boxes). 5 `reactor-fibers-*` fixtures verified leak-clean and unmarked;
+      full suite `2111 passed, 0 failed`; httpd-async still green.
 - [ ] (P1-next) httpd handler-chain drop -- clears ~30 httpd markers +
       `httpd-mw-fold-many`/`-compress`.
-- [ ] (P1-next) fiber-body ownership -- clears the 5 `reactor-fibers-*` markers.
 - [ ] (P2) DK node leak fixed at source (`dk_free_node`/arena); repro in the
       report is clean under LSan.
 - [ ] (P3) `reactor-fd-writable` marker removed; inert markers annotated.

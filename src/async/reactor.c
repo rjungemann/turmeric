@@ -677,6 +677,12 @@ typedef struct LocalFiber {
     int64_t            id;
     TurFiber          *fiber;       /* underlying stackful coroutine */
     int64_t            tur_body;    /* Turmeric fat-closure (user)->nil */
+    /* True when tur_body is a heap fat-closure box this fiber owns and must
+     * free at group teardown (the default for tur_local_spawn). False for
+     * callers that share one body box across many fibers and free it
+     * themselves -- e.g. the httpd async server -- which opt out via
+     * tur_local_disown_body. */
+    bool               owns_body;
     void              *user_data;
     bool               done;        /* ran to completion */
     bool               in_ready;    /* currently linked into the ready queue */
@@ -763,6 +769,12 @@ void *tur_local_fiber_group_new(void *rp) {
 void tur_local_fiber_group_free(void *gp) {
     LocalFiberGroup *g = (LocalFiberGroup *)gp;
     if (!g) return;
+    /* Owned spawn-body boxes are freed exactly once: even under owning callers
+     * two fibers could share a body box, so dedup like tur_reactor_free does.
+     * Callers that manage the box themselves (httpd async, whose fibers share a
+     * single body_closure it frees itself) opt out with tur_local_disown_body. */
+    int64_t *freed = NULL;
+    size_t   nfreed = 0, freed_cap = 0;
     LocalFiber *lf = g->all_head;
     while (lf) {
         LocalFiber *next = lf->all_next;
@@ -772,15 +784,24 @@ void tur_local_fiber_group_free(void *gp) {
             local_fiber_clear_park(lf);
         if (lf->fiber)
             tur_fiber_free(lf->fiber);
-        /* Note: lf->tur_body (the spawn closure box) is intentionally NOT freed
-         * here.  Ownership is caller-specific -- the httpd async server reuses a
-         * single body_closure across every per-request fiber and frees it
-         * itself, so a blanket free here would multi-free.  Reclaiming spawn
-         * bodies needs the same opt-in ownership handshake as reactor callbacks
-         * (see docs/leak-detection-followups-plan.md, fiber-body follow-up). */
+        if (lf->owns_body && lf->tur_body) {
+            bool seen = false;
+            for (size_t j = 0; j < nfreed; j++)
+                if (freed[j] == lf->tur_body) { seen = true; break; }
+            if (!seen) {
+                if (nfreed == freed_cap) {
+                    size_t new_cap = freed_cap ? freed_cap * 2 : 8;
+                    int64_t *grown = (int64_t *)realloc(freed, new_cap * sizeof(int64_t));
+                    if (grown) { freed = grown; freed_cap = new_cap; }
+                }
+                if (nfreed < freed_cap) freed[nfreed++] = lf->tur_body;
+                free((void *)(intptr_t)lf->tur_body);
+            }
+        }
         free(lf);
         lf = next;
     }
+    free(freed);
     free(g);
 }
 
@@ -818,6 +839,7 @@ int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
     }
     lf->id             = g->next_id++;
     lf->tur_body       = tur_body;
+    lf->owns_body      = true;   /* default: group teardown frees the box */
     lf->user_data      = user_data;
     lf->group          = g;
     lf->done           = false;
@@ -829,6 +851,23 @@ int64_t tur_local_spawn(void *gp, int64_t tur_body, void *user_data) {
     g->all_head  = lf;
     ready_push(g, lf);
     return lf->id;
+}
+
+/*
+ * Relinquish group ownership of a fiber's spawn-body box: after this call the
+ * group will NOT free it at tur_local_fiber_group_free.  tur_local_spawn owns
+ * the body box by default (the emitted program builds a heap fat-closure and
+ * hands it off), so a caller that reuses one body box across many fibers and
+ * frees it itself -- the httpd async server, whose per-request fibers all share
+ * ha->body_closure -- must disown every such fiber, or the box is
+ * multi-/double-freed.  A no-op for an unknown fiber id.
+ */
+void tur_local_disown_body(void *gp, int64_t fiber_id) {
+    LocalFiberGroup *g = (LocalFiberGroup *)gp;
+    if (!g || fiber_id < 0) return;
+    for (LocalFiber *lf = g->all_head; lf; lf = lf->all_next) {
+        if (lf->id == fiber_id) { lf->owns_body = false; return; }
+    }
 }
 
 int64_t tur_reactor_run_fibers(void *gp) {
