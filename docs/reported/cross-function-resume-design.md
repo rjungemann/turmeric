@@ -100,27 +100,30 @@ shift) is byte-for-byte unchanged. A same-elaboration global flag will not do
 (a reset can be elaborated before the callee's shift sets it); it needs a
 post-elaboration transform.
 
-## Blocker 3 -- effects carry a callable fn payload -- PARTIALLY RESOLVED
+## Blocker 3 -- effects carry a callable fn payload -- RESOLVED
 
-**Non-capturing fn payloads now work.** Two bugs fixed: (1) `defeffect` dropped
-the full param `Type` for a `TY_FN` param (only ADT/APP/STRUCT were preserved),
-so the handler saw a 0-arity uncallable fn -- now `TY_FN` is preserved too
-(`elab_effects.c`); (2) the handler declared a fn-value payload as `f_<id>` but
-the call site references it by the raw id-less name (`name_for_binding`'s
-`TY_FN`-non-boxed path) -- the declaration now matches. A non-capturing receiver
-carried through an effect is callable in the handler and resumes the
-continuation cross-function (`direct == cps == turi`; fixture
-`effect-fn-payload`).
+Effects now carry a callable fn payload, **capturing or not**. Three fixes:
 
-**Capturing receivers remain blocked** and are now a clean error, not a crash.
-An effect payload rides one int64 slot: a non-capturing fn is a bare pointer and
-fits, but a capturing closure is a fat `{env, fn}` value that truncates (it
-segfaulted on call). `elab_perform` now rejects a capturing-closure payload with
-a diagnostic (fixture `errors/effect-fn-payload-capturing`). Supporting it needs
-a **uniform (always-fat) fn payload representation** through effects -- its own
-change. Since a `__Shift` receiver `(fn [k] (k v))` usually captures the shift's
-locals, the desugar stays blocked on this until fat fn payloads land (or the
-desugar lifts captures into explicit effect args).
+1. `defeffect` dropped the full param `Type` for a `TY_FN` param (only
+   ADT/APP/STRUCT were preserved), so the handler saw a 0-arity uncallable fn.
+   Preserve `TY_FN` too, and mark it **`boxed`** -- an fn payload is a boxed
+   closure: a one-word `void *` to a heap `{thunk, env}` box, which carries a
+   captured env yet fits the one-word effect slot. (`elab_effects.c`)
+2. The handler declared an fn-value payload as `f_<id>` but the call site uses
+   the raw id-less name (`name_for_binding`'s `TY_FN`-non-boxed path) -- the
+   declaration now matches. (`emit_effects.c`) *(Superseded in practice by (1)'s
+   boxed spelling, but kept for the general fn-value case.)*
+3. `elab_perform` boxes each non-boxed fn arg (`EX_FN_TO_FAT`) so a *non*-capturing
+   fn (a bare pointer) becomes the same boxed representation a capturing closure
+   already is -- uniform, so the handler's boxed dispatch is always right.
+
+Verified `direct == cps == turi`: non-capturing (`effect-fn-payload` = 1050) and
+capturing on both the receiver and handler sides (`effect-fn-payload-capturing`
+= 1107; a receiver closing over two locals resumes correctly). This is exactly
+the `__Shift` receiver shape (`(fn [k] (k v))` closing over the shift's locals),
+so the effect-desugar path is no longer blocked on the payload representation --
+what remains for full cross-function resume is blocker 2, the reset-wrapping
+whole-program transform.
 
 ### (historical) the original blocker probe
 

@@ -211,17 +211,24 @@ so every existing signature is unaffected.
   in a callee, `handle` + `(k 5)` in a caller, `direct == turi == 1050`; fixture
   `handler-cont-kv-sugar`). No `CONT_EFFECT` type flavor was needed -- the
   `is_continuation` flag is the hook and `resume` already accepts a continuation
-  *value*. Attempting the reset-wrapping transform next surfaced a further
-  prerequisite (design doc, blocker 3): the `__Shift` effect must carry the
-  receiver as a **callable fn payload**, but effect payloads do not preserve
-  callable fn types today -- a fn-typed handler param reads as a 0-arity,
-  uncallable fn (`(recv k)` -> `TUR-E0002`; `reinterpret` does not recover it).
-  So cross-function resume is a **multi-prerequisite** change: (1) make effect
-  payloads carry callable fn values, (2) the reset -> `__Shift`-handler
-  whole-program transform, (3) the receiver resume-mechanism -- OR the alternative
-  DK-subk architecture (a DK-flavored `cont` + interp support). Not a single
-  transform. Also landed earlier: a tailored `TUR-E0016` message (fixture
-  `errors/shift-crossfn-resume`).
+  *value*.
+
+  **Blocker 3 (effect fn payloads) -- RESOLVED.** Effects now carry a callable fn
+  payload, capturing or not. An fn payload is a **boxed closure** (one-word
+  `void *` to a heap `{thunk, env}` box) so a captured env fits the one-word
+  effect slot: `defeffect` preserves + marks `boxed` a `TY_FN` param, and
+  `elab_perform` boxes a non-capturing fn arg (`EX_FN_TO_FAT`) for a uniform
+  representation. Verified `direct == cps == turi` for capturing on both the
+  receiver and handler sides (fixtures `effect-fn-payload`,
+  `effect-fn-payload-capturing`). This is the `__Shift` receiver shape, so the
+  effect-desugar path is unblocked on the payload.
+
+  So of the cross-function-resume prerequisites, blockers 1 (resume mismatch) and
+  3 (callable + capturing fn payloads) are DONE. What remains is **blocker 2**:
+  the reset -> `__Shift`-handler whole-program transform (wrap resets only when
+  the program uses cross-function resume) plus synthesizing the `__Shift` effect
+  and the `shift` -> `perform` desugar. Also landed earlier: a tailored
+  `TUR-E0016` message (fixture `errors/shift-crossfn-resume`).
 
   **Item (d) -- retire the redundant spellings -- PARTIALLY LANDED.** `k-shift` /
   `k-reset` (the interim canonical names this plan introduced) are **removed**:

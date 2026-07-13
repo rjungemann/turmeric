@@ -733,6 +733,11 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                         || ann->kind == TY_STRUCT || ann->kind == TY_FN)) {
                 Type *stored = arena_alloc(e->arena, sizeof(Type));
                 *stored = *ann;
+                /* A fn payload is carried as a BOXED closure (a one-word `void *`
+                 * to the heap `{thunk, env}` box), so a CAPTURING receiver's env
+                 * rides along and fits the one-word effect slot -- unlike the fat
+                 * `tur_poly_fn_t` (two words) or the bare pointer (loses the env). */
+                if (stored->kind == TY_FN) stored->as.fn.boxed = true;
                 param_full[p] = stored;
                 any_agg_param = true;
             }
@@ -959,25 +964,21 @@ Expr *elab_perform(Elab *e, const Form *call) {
     for (uint8_t i = 0; i < n_args; i++) {
         args[i] = elab_form(e, effect_call_f->as.list.items[i + 1]);
         if (!args[i]) return NULL;
-        /* An effect payload rides one int64 slot (eff_slot_store).  A NON-
-         * capturing fn value is a bare fn pointer and fits (its type/arity is
-         * preserved so the handler can call it).  A CAPTURING closure is a fat
-         * {env, fn} value that does not fit the slot -- carrying it truncates the
-         * env and crashes on call.  Reject that cleanly rather than segfault; a
-         * uniform (always-fat) fn payload representation is the remaining piece.
-         * (This is exactly what the shift/reset -> __Shift desugar for
-         * cross-function resume needs, so it stays blocked here for now.) */
-        if (args[i]->kind == EX_CLOSURE && args[i]->as.closure_.closure
-            && args[i]->as.closure_.closure->n_captures > 0) {
-            diag_emit(DIAG_ERROR, effect_call_f->as.list.items[i + 1]->span,
-                "effect payload cannot be a capturing closure -- it does not fit "
-                "the one-word effect slot\n"
-                "  = note: a non-capturing fn value works (it is a bare function "
-                "pointer); a capturing closure needs a fat {env, fn} payload, not "
-                "yet supported\n"
-                "  = help: lift the captured values into explicit effect arguments, "
-                "or pass a top-level (capture-free) function");
-            return NULL;
+        /* An fn-value payload is carried as a BOXED closure (one-word `void *` to
+         * the heap `{thunk, env}` box; defeffect marks the param `boxed`), so a
+         * capturing receiver's env rides along in the one-word effect slot.  A
+         * capturing closure is already a boxed value; a NON-capturing fn is a bare
+         * pointer, so box it here (EX_FN_TO_FAT) to keep the representation uniform
+         * -- otherwise the handler's boxed-closure dispatch reads garbage. */
+        if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed
+            && args[i]->type.as.fn.arity >= 1 && args[i]->type.as.fn.arity <= 5) {
+            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *bt = args[i]->type;
+            bt->as.fn.boxed = true;
+            Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt,
+                                  effect_call_f->as.list.items[i + 1]->span);
+            shim->as.fn_to_fat_.inner = args[i];
+            args[i] = shim;
         }
     }
 
