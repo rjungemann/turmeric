@@ -168,8 +168,11 @@ Once E3a/E3b are in:
   `owning_byvalue_aggregate`) and the consuming-non-rc admission, now with the
   clone/drop glue actually emitted (E3a) instead of evicting -- **contingent on
   the aggregate/carrier/ref scope-exit auto-drop being lowered** so the shapes
-  reach CPS at all (that lowering is O1-b's domain / a sibling item; E3 supplies
-  the teardown it lands on).
+  reach CPS at all. That lowering is
+  [cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md)
+  (NOT part of E3). Note its P2 already unblocks E2's *borrow-only* aggregate
+  captures with no teardown; E3 here is only for the genuinely *consuming* /
+  abortive crossings (that plan's P3).
 - **O1-b P3** (a `ref<T>` captured across a control op): the ref's drop becomes
   the per-capture `env_drop`, fired once per continuation lifetime by E3b.
 - **O1-b P2** (a `ref<T>` live across an abortive control op): rides E3b's
@@ -216,11 +219,13 @@ Once E3a/E3b are in:
 
 ## Out of scope
 
-- **Lowering the owning-aggregate / heap-handle / crossing-ref scope-exit
-  auto-drop** so those shapes reach CPS -- that is the `EX_DEFER` lowering (O1-b /
-  a sibling item). E3 supplies the teardown they land on; it does not lower the
-  auto-drop itself. Until that lands, E3a/E3b are exercised by the *consuming rc*
-  shape only.
+- **Lowering the owning-aggregate / bare-rc / crossing-ref scope-exit
+  auto-drop** so those shapes reach CPS -- that is the `EX_DEFER` lowering, owned
+  by [cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md)
+  (non-`ref`) and O1-b (`ref`). E3 supplies the teardown the *abortive / multi-shot*
+  crossings land on (that plan's P3); it does not lower the auto-drop itself, and
+  the *single-shot* crossings (that plan's P2) need no E3 at all. Until the
+  lowering lands, E3a/E3b are exercised by the *consuming rc* shape only.
 - **The borrow-only fast path** -- E-borrow owns it; a borrow-only capture never
   needs E3's clone/drop (it rides a bare alias, leak-clean already).
 - **Recursive / unbounded suspension continuations** -- Track A's bound; separate.

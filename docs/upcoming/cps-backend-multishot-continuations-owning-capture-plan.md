@@ -303,12 +303,18 @@ For an rc that consume is `(rc/drop r)`. But:
   rejects (crossing ref) pending the same teardown.
 
 So every owning aggregate / carrier / ref capture into a multi-shot case is
-blocked upstream by the scope-exit-auto-drop (`EX_DEFER`) hole. **E2 rides E3 /
-O1-b** (a real env/DK teardown, or a lowering for the aggregate auto-drop), which
-is what makes these shapes reach CPS in the first place. The prototype
-(`cap_owning_ok` extension + the consuming-non-rc evict guard) is ready to
-re-land the moment one of those exists. (Original Option A interim design
-retained below for reference.)
+blocked upstream by the scope-exit-auto-drop (`EX_DEFER`) hole. **E2 rides the
+non-ref auto-drop lowering, NOT E3** -- see
+[cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md).
+That plan's **P2** lowers the injected `(defer (rc/drop (.f o)))` /
+`(defer (drop! (.f o)))` into the SINGLE-SHOT post-handle continuation (exactly
+how E1's explicit `(rc/drop r)` after a `handle` already works), which is sound
+without any DK teardown. Combined with the reverted `cap_owning_ok` extension +
+the consuming-non-rc evict guard (the E2 prototype), that makes the borrow-only
+aggregate capture emit leak-clean. Only a genuinely *consuming* / abortive
+crossing rides E3. (Earlier drafts of this section said "E2 rides E3" -- that was
+wrong; E2's borrow captures are single-shot at the drop and need no teardown.
+Original Option A interim design retained below for reference.)
 
 #### E2 (original Option A interim -- superseded by E-borrow for the reachable case)
 

@@ -1,8 +1,15 @@
 # Codegen: a by-value struct/ADT local with an owning field leaks it at scope exit
 
-**Status:** RESOLVED. `elab_let` now injects a scope-exit auto-drop for every
-by-value ADT/record local carrying an owning `rc`/`ref` field, mirroring the
-existing bare-`rc` auto-drop. See "Resolution" below.
+**Status:** RESOLVED on the direct path. `elab_let` now injects a scope-exit
+auto-drop for every by-value ADT/record local carrying an owning `rc`/`ref`
+field, mirroring the existing bare-`rc` auto-drop. See "Resolution" below.
+
+**CPS follow-up (now tracked):** that injected `(defer (rc/drop (.f o)))` has no
+CT-IR lowering, so a COLORED function carrying such a local evicts to the
+whole-function fallback (`BODY-UNSUPPORTED ... EX_DEFER`). Lowering it under CPS
+-- the missing generalization of O1-b, which only lowered the `ref` shape -- is
+`docs/upcoming/cps-backend-owning-autodrop-lowering-plan.md`. (This closes the
+"not currently tracked anywhere" note below for the CPS side.)
 
 **Severity:** medium (memory leak; no crash / miscompile). Mainline codegen --
 not CPS-backend-specific. Likely part of the deferred owning-pointer lifecycle
