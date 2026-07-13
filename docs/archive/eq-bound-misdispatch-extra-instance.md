@@ -2,6 +2,24 @@
 
 **Severity:** High (silent wrong-code -> segfault on a working typeclass method).
 
+**Status:** RESOLVED (2026-07-13). Root cause was narrower than "any extra `Eq`
+instance": the offender is any instance whose `type_args[0]` is a bare
+`TY_TYVAR` -- i.e. registered for a type name that never resolves to a concrete
+nominal type. `stdlib/str.tur`'s `Eq [str]` is exactly this: `str` has no
+`defstruct`/`defdata`, so it stays an unbound tyvar. In `elab_method_call`'s
+`KIND_ARROW` instance search (`src/compiler/elab_typeclasses.c`), a bare-tyvar
+`type_args[0]` passed the `type_ok = !inst_is_primitive` gate and no
+discrimination block rejected it, so it became an *exact* match and, being
+first in registration order, shadowed the receiver's own concrete instance.
+The `KIND_STAR` (primitive-receiver) path already treated a tyvar arg as a
+non-match/fallback; the fix aligns `KIND_ARROW` with it: when the receiver is a
+concrete nominal type (a `TY_ADT` with a def, bare or applied), a bare-tyvar
+instance is demoted to a *fallback*, so the search continues to the concrete
+instance and prefers it -- while a lone bare-tyvar instance still wins when it
+is the only candidate (e.g. `.eq?` between two `str` views). Regression
+coverage: `tests/fixtures/eq-adt-vs-tyvar-instance`. Full suite 2123/0, turi
+1594/0.
+
 ## Summary
 
 `(.eq? (Inclusive 4) (Inclusive 4))` -- an `Eq [Bound]` method call over the

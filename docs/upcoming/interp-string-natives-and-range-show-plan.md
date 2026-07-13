@@ -10,7 +10,7 @@
 > the formatters live in `str-build.tur` rather than loading all of `str.tur`
 > because loading `str.tur`'s `Eq [str]` instance into `range-bound`'s graph
 > trips a pre-existing `Eq [Bound]` dispatch bug -- see
-> `docs/reported/eq-bound-misdispatch-extra-instance.md`.
+> `docs/archive/eq-bound-misdispatch-extra-instance.md`.
 > **Last Updated:** 2026-07-13
 > **Type:** Interpreter / stdlib
 > **Scope:** Un-carve `tests/fixtures/range-show` (`requires.tur-only`) by giving

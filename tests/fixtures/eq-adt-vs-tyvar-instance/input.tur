@@ -1,0 +1,17 @@
+; Regression: a concrete-ADT typeclass instance must win over a bare-tyvar
+; instance.  Loading str.tur brings in `Eq [str]`, whose `str` never resolves
+; to a concrete nominal type and so registers with a TY_TYVAR argument.  Before
+; the fix that bare-tyvar instance acted as a catch-all wildcard: `.eq?` on a
+; Bound value mis-dispatched to `Eq [str]`, which reinterpreted the Bound
+; pointer as a string view and segfaulted.  The concrete Eq/Ord/Show [Bound]
+; instances must be selected instead.
+; See docs/archive/eq-bound-misdispatch-extra-instance.md.
+(load "stdlib/range-bound.tur")
+(load "stdlib/str.tur")
+
+(defn main [] : int
+  (println (if (.eq? (Inclusive 4) (Inclusive 4)) "eq-ok" "BAD"))
+  (println (if (.eq? (Inclusive 4) (Exclusive 4)) "BAD" "ne-ok"))
+  (println (show (Inclusive 4)))
+  (println (if (.lt? (Inclusive 3) (Inclusive 5)) "lt-ok" "BAD"))
+  0)
