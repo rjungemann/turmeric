@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- ref<T> scope-exit auto-drop in colored functions (O1-b)
 category: Planning
-status: open (not started) -- gives O1-b from the owning-pointers follow-ups a real home
+status: P1 landed -- non-crossing ref<T> auto-drop now CPS-emits; P2/P3 remain gated on the env-capture substrate
 description: A `ref<T>` (also `weak`/`lref`) local gets a `(defer (drop! r))` injected at let scope exit (elab_forms.c). In an uncolored function the direct path fires it through the tur_frame LIFO defer stack. In a colored (CPS-emitted) function there is no equivalent: `EX_DEFER` has no CT-IR lowering case, so the whole function falls back, and even if it were lowered the injected drop lands textually after the control op, which `owning_dropped_before_control` rejects. This plan defines and implements ref scope-exit drop under CPS: P1 hoists the drop to last-use for a ref that does not cross a control op (self-contained, no runtime); P2/P3 (a ref live across an abortive or resumable control op) ride the DK-teardown / clone-drop discipline from the env-capture plan. Sound on the fallback today -- missed coverage, not a correctness gap.
 ---
 
@@ -121,6 +121,37 @@ Fixture `tests/fixtures/cps-backend-ref-noncrossing-drop`: a colored function
 creates a `ref<T>`, uses and finishes with it before a `shift`, delivers a
 scalar; `direct == cps`, LeakSanitizer-clean (the hoisted drop runs exactly
 once).
+
+#### P1 as landed
+
+Implemented across two files:
+
+- **The hoist (`src/passes/cps_ir.c`).** `plan_autodrop` recognises a `do`
+  ending in one or more `(defer (drop! r))` auto-drop shapes (`autodrop_defer_ref`
+  gates to the `drop!` free-shape builtin on a single `ref<T>` var, so a general
+  user `defer` never engages), finds the first control barrier among the real
+  items (`item_has_control`, mirroring `cps_directly_uses_control`'s seed set),
+  and verifies no ref is referenced at/after it (`expr_refs_binding`, conservative:
+  an un-modelled node or an unwalked closure capture assumes a use and bails). The
+  `EX_DO` arms of `cps_tail` / `cps_bind` then emit the drops via `build_letraw`
+  (`cps_emit_hoisted_drops`) straight-line *before* the first barrier, or at scope
+  exit (after the value, before delivery) when the ref's `do` has no barrier. The
+  ref constructor itself (`EX_REF`) is added to `safe_to_delegate` so the whole
+  function can leave the fallback path.
+
+- **The soundness gate (`src/compiler/emit_cps_ir.c`).** A delegated `EX_REF`
+  alloc is admitted by `letraw_ok` only when `ref_dropped_before_control` finds its
+  `drop!` (`is_ref_drop_of`) on a straight-line path before *any* control op.
+  Unlike `owning_dropped_before_control` for rc handles, a ref gets **no**
+  "captured into a single-shot continuation, dropped there" pass at
+  reset/handle/perform (that DK teardown is the unbuilt P2/P3 substrate), so a ref
+  crossing any control op -- abortive or delimited -- fails the gate and falls
+  back. This is the backstop: even a crossing ref whose auto-drop defer is not
+  hoisted (its `EX_DEFER` stays unlowered -> `CT_UNSUPPORTED`) is *also* rejected
+  here, so no ref reaches emission without a hoisted drop preceding every control
+  op. `plan_autodrop` reads the source `Expr` and builds a fresh CT term without
+  mutating it, so a rejected lowering falls back to the direct emitter on the
+  intact `Expr` (defer included).
 
 ### P2 -- abortive-unwind drop firing (DK teardown)
 

@@ -1052,6 +1052,13 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_RC_DROP:  return safe_to_delegate(b, e->as.rc_drop_.expr);
         case EX_RC_COUNT: return safe_to_delegate(b, e->as.rc_count_.expr);
         case EX_RC_PTR:   return safe_to_delegate(b, e->as.rc_ptr_.expr);
+        /* O1-b: an owning `ref<T>` constructor is a control-op-free leaf alloc the
+         * direct emitter emits with the right malloc/drop glue.  Delegating it is
+         * gated in letraw_ok by ref_dropped_before_control: the ref's hoisted
+         * `drop!` must precede every control op (the non-crossing P1 slice), so a
+         * crossing ref -- whose auto-drop defer is not hoisted and stays an
+         * unlowered EX_DEFER, or a moved ref with no in-scope drop -- falls back. */
+        case EX_REF:      return safe_to_delegate(b, e->as.ref_.expr);
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }
@@ -1211,6 +1218,269 @@ static CTerm *build_resume(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     return t;
 }
 
+/* ======================================================================= *
+ * O1-b: ref<T> scope-exit auto-drop hoisting on the CPS path
+ * (cps-backend-ref-scope-exit-drop-plan.md, P1).
+ *
+ * The elaborator injects `(defer (drop! r))` at let-scope exit for an owning
+ * `ref<T>` local (elab_forms.c) -- the single ownership discharge.  EX_DEFER has
+ * no CT-IR lowering, so a colored function still carrying such an auto-drop falls
+ * back wholesale.  P1 converts the tractable slice: a ref whose live range does
+ * NOT cross a control op.  There the scope-exit drop is a drop-at-last-use
+ * hoisted to the wrong place -- we recognise the auto-drop shape, verify
+ * non-crossing, and emit the drop straight-line BEFORE the first control op (or
+ * at scope exit when the ref's do has none), delegated to the direct emitter via
+ * CT_LETRAW exactly like an explicit rc/drop (O1-a).  Because the drop precedes
+ * every control op, `owning_dropped_before_control` is satisfied and the drop is
+ * never captured into a reified continuation.  A ref that crosses a control op,
+ * or a non-auto-drop user `defer`, keeps falling back -- P2/P3 own those.
+ * ======================================================================= */
+
+/* If `e` is the elaborator-injected owning auto-drop `(defer (drop! r))`, return
+ * r's binding; else NULL.  Gated to the `drop!` free-shape builtin on a single
+ * `ref<T>` var so a general user `defer` of arbitrary effects is never hoisted. */
+static const Binding *autodrop_defer_ref(const Expr *e) {
+    if (!e || e->kind != EX_DEFER) return NULL;
+    const Expr *body = ascribe_peel(e->as.defer_.body);
+    if (!body || body->kind != EX_BUILTIN) return NULL;
+    const BuiltinSpec *sp = body->as.builtin.spec;
+    if (!sp || sp->shape != BS_PREFIX_UNARY_FREE || body->as.builtin.n != 1)
+        return NULL;
+    const Expr *arg = ascribe_peel(body->as.builtin.args[0]);
+    if (!arg || arg->kind != EX_VAR || !arg->as.var.binding) return NULL;
+    if (arg->as.var.binding->type.kind != TY_REF) return NULL;
+    return arg->as.var.binding;
+}
+
+/* The `(drop! r)` builtin inside an auto-drop defer, delegated whole to the
+ * direct emitter (its operand is the atomic ref var). */
+static Expr *autodrop_defer_body(const Expr *e) {
+    Expr *body = (Expr *)ascribe_peel(e->as.defer_.body);
+    return body;
+}
+
+/* Does `e` contain a control operator (the coloring seed set)?  Mirrors
+ * cps_directly_uses_control (src/passes/cps.c): the named control-op nodes are
+ * seeds, structural children recurse, nested fn bodies are call-graph boundaries,
+ * and an un-modelled node is NOT a control op (default false).  Used to locate
+ * the first control barrier a hoisted drop must precede.  Over-approximating the
+ * barrier set (treating reset/handle/perform/resume as barriers too) is sound --
+ * it only forces more fallback; the genuine abortive/multi-shot seeds (shift and
+ * friends, resume, discontinue) are all covered. */
+static bool item_has_control(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_RESET:
+        case EX_SHIFT:
+        case EX_SHIFT0:
+        case EX_CLONEABLE_RESET:
+        case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET:
+        case EX_SERIAL_SHIFT:
+        case EX_PERFORM:
+        case EX_HANDLE:
+        case EX_RESUME:
+        case EX_DISCONTINUE:
+        case EX_CALLCC:
+            return true;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (item_has_control(e->as.let_.bindings[i].init)) return true;
+            return item_has_control(e->as.let_.body);
+        case EX_IF:
+            return item_has_control(e->as.if_.cond)
+                || item_has_control(e->as.if_.then_)
+                || item_has_control(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (item_has_control(e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (item_has_control(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_CALL:
+            if (item_has_control(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (item_has_control(e->as.call_.args[i])) return true;
+            return false;
+        case EX_DEFER:  return item_has_control(e->as.defer_.body);
+        case EX_RETURN: return item_has_control(e->as.return_.value);
+        case EX_SET:    return item_has_control(e->as.set_.value);
+        case EX_DEREF:  return item_has_control(e->as.deref_.expr);
+        case EX_GET_FIELD:
+            return item_has_control(e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (item_has_control(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_RC_OF:    return item_has_control(e->as.rc_of_.expr);
+        case EX_RC_CLONE: return item_has_control(e->as.rc_clone_.expr);
+        case EX_RC_DROP:  return item_has_control(e->as.rc_drop_.expr);
+        case EX_REINTERPRET: return item_has_control(e->as.reinterpret_.expr);
+        /* Nested fn definitions are call-graph boundaries. */
+        case EX_FN_DEF: case EX_FN: case EX_CLOSURE:
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* Conservative "does `e` reference binding `bid`?"  Used to verify a ref's live
+ * range does not cross a control op before hoisting its auto-drop.  Over-detection
+ * (an un-modelled node -> assume it might reference the ref) only widens the live
+ * range and forces fallback, so the DEFAULT is `true`; under-detection would drop
+ * a still-live ref and is never allowed.  The straight-line + shift shapes P1
+ * actually hoists are walked precisely; anything else (perform/handle/resume/...)
+ * is treated as a possible use and bails to fallback. */
+static bool expr_refs_binding(const Expr *e, uint32_t bid) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_VAR:
+            return e->as.var.binding && e->as.var.binding->id == bid;
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT:
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_refs_binding(e->as.let_.bindings[i].init, bid)) return true;
+            return expr_refs_binding(e->as.let_.body, bid);
+        case EX_IF:
+            return expr_refs_binding(e->as.if_.cond, bid)
+                || expr_refs_binding(e->as.if_.then_, bid)
+                || expr_refs_binding(e->as.if_.else_or_null, bid);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_refs_binding(e->as.do_.items[i], bid)) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_refs_binding(e->as.builtin.args[i], bid)) return true;
+            return false;
+        case EX_CALL:
+            if (expr_refs_binding(e->as.call_.fn_expr, bid)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_refs_binding(e->as.call_.args[i], bid)) return true;
+            return false;
+        case EX_RETURN: return expr_refs_binding(e->as.return_.value, bid);
+        case EX_DEFER:  return expr_refs_binding(e->as.defer_.body, bid);
+        case EX_SET:
+            return (e->as.set_.target && e->as.set_.target->id == bid)
+                || expr_refs_binding(e->as.set_.value, bid);
+        case EX_DEREF:  return expr_refs_binding(e->as.deref_.expr, bid);
+        case EX_GET_FIELD:
+            return expr_refs_binding(e->as.get_field_.struct_expr, bid);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (expr_refs_binding(e->as.make_struct_.field_values[i], bid)) return true;
+            return false;
+        case EX_RC_OF:    return expr_refs_binding(e->as.rc_of_.expr, bid);
+        case EX_RC_CLONE: return expr_refs_binding(e->as.rc_clone_.expr, bid);
+        case EX_RC_DROP:  return expr_refs_binding(e->as.rc_drop_.expr, bid);
+        case EX_REINTERPRET: return expr_refs_binding(e->as.reinterpret_.expr, bid);
+        case EX_SHIFT:
+            return expr_refs_binding(e->as.shift_.k_fn, bid)
+                || expr_refs_binding(e->as.shift_.body, bid);
+        case EX_SHIFT0:
+            return expr_refs_binding(e->as.shift0_.k_fn, bid)
+                || expr_refs_binding(e->as.shift0_.body, bid);
+        case EX_RESET:  return expr_refs_binding(e->as.reset_.body, bid);
+        /* A bare lambda / nested fn def captures no enclosing local; a closure
+         * reaches `r` only if `r` is in its explicit capture list. */
+        case EX_FN: case EX_FN_DEF:
+            return false;
+        case EX_CLOSURE: {
+            const struct Closure *cl = e->as.closure_.closure;
+            if (!cl) return true;
+            for (uint8_t i = 0; i < cl->n_captures; i++)
+                if (cl->captures[i] && cl->captures[i]->id == bid) return true;
+            return false;
+        }
+        default:
+            return true;   /* un-modelled: assume a possible use -> fall back */
+    }
+}
+
+/* Plan for hoisting the trailing auto-drop defers of a `do` block. */
+typedef struct {
+    bool             engage;      /* hoist applies (all trailing autodrop, non-crossing) */
+    uint32_t         n_real;      /* count of leading non-defer items to lower normally */
+    uint32_t         first_ctrl;  /* index of first control-barrier real item, else n_real */
+    Expr            *drops[8];    /* the (drop! r) builtins to emit, in source order */
+    const Binding   *refs[8];     /* parallel ref bindings */
+    uint32_t         n_drops;
+} AutodropPlan;
+
+/* Recognise a `do` block ending in owning-ref auto-drop defers and, when the
+ * refs' live ranges do not cross a control op, produce a hoist plan.  Returns
+ * false (no engage) for: a `do` with no trailing auto-drop defer; a trailing
+ * defer that is not the auto-drop shape (user defer -> keep falling back); more
+ * refs than the fixed plan holds; or any ref used at/after the first control
+ * barrier (a crossing ref -> P2/P3, keep falling back). */
+static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
+    memset(pl, 0, sizeof(*pl));
+    if (!e || e->kind != EX_DO || e->as.do_.n == 0) return false;
+    uint32_t n = e->as.do_.n;
+    Expr **items = e->as.do_.items;
+
+    /* Count the contiguous trailing auto-drop defers; bail on a trailing
+     * non-auto-drop defer (a general user `defer`). */
+    uint32_t n_defer = 0;
+    while (n_defer < n) {
+        Expr *it = items[n - 1 - n_defer];
+        if (it && it->kind == EX_DEFER) {
+            if (!autodrop_defer_ref(it)) return false;  /* user defer -> fall back */
+            n_defer++;
+        } else {
+            break;
+        }
+    }
+    if (n_defer == 0) return false;             /* nothing to hoist */
+    if (n_defer > 8) return false;              /* more than the plan holds */
+    uint32_t n_real = n - n_defer;
+    if (n_real == 0) return false;              /* a value item is required */
+
+    /* Collect the drops in source order (items[n_real .. n)). */
+    for (uint32_t i = 0; i < n_defer; i++) {
+        Expr *d = items[n_real + i];
+        pl->drops[i] = autodrop_defer_body(d);
+        pl->refs[i]  = autodrop_defer_ref(d);
+    }
+    pl->n_drops = n_defer;
+    pl->n_real  = n_real;
+
+    /* First control barrier among the real items (n_real if none). */
+    uint32_t fc = n_real;
+    for (uint32_t i = 0; i < n_real; i++) {
+        if (item_has_control(items[i])) { fc = i; break; }
+    }
+    pl->first_ctrl = fc;
+
+    /* Non-crossing: no ref may be referenced at/after the first barrier.  When
+     * there is no barrier (fc == n_real) the range is empty, so the drop lands
+     * at scope exit after the (possibly ref-using) value item. */
+    for (uint32_t i = fc; i < n_real; i++)
+        for (uint32_t k = 0; k < pl->n_drops; k++)
+            if (expr_refs_binding(items[i], pl->refs[k]->id))
+                return false;                   /* crossing ref -> fall back */
+
+    pl->engage = true;
+    return true;
+}
+
+/* Emit the hoisted drops (each delegated via CT_LETRAW) in front of `rest`,
+ * innermost-last so they fire in reverse (LIFO) source order like the direct
+ * defer stack.  Order is immaterial for correctness (distinct refs). */
+static CTerm *cps_emit_hoisted_drops(CpsB *b, const AutodropPlan *pl, CTerm *rest) {
+    for (int k = (int)pl->n_drops - 1; k >= 0; k--) {
+        CVar dx = fresh_cvar(b, &pl->drops[k]->type);   /* nil-typed drop binder */
+        rest = build_letraw(b, pl->drops[k], dx, rest);
+    }
+    return rest;
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
@@ -1325,6 +1595,42 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_DO: {
             uint32_t n = e->as.do_.n;
             if (n == 0) return cps_tail(b, NULL, kont);
+            /* O1-b: a `do` ending in owning-ref auto-drop defers whose refs do
+             * not cross a control op -- hoist each drop to before the first
+             * barrier (or to scope exit) instead of falling back. */
+            AutodropPlan pl;
+            if (plan_autodrop(e, &pl)) {
+                Expr **items = e->as.do_.items;
+                uint32_t nr = pl.n_real, fc = pl.first_ctrl;
+                CTerm *rest;
+                if (fc == nr) {
+                    /* No barrier in the ref's scope: compute the value, drop the
+                     * refs at scope exit, then deliver. */
+                    CVar x = fresh_cvar(b, &items[nr - 1]->type);
+                    CTerm *ac = new_term(b, CT_APPCONT);
+                    ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                    rest = cps_emit_hoisted_drops(b, &pl, ac);
+                    rest = cps_bind(b, items[nr - 1], x, rest);
+                    for (int i = (int)nr - 2; i >= 0; i--) {
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        rest = cps_bind(b, items[i], discard, rest);
+                    }
+                } else {
+                    /* Deliver the tail item, then splice the drops in just before
+                     * the first control barrier (after every use of the refs). */
+                    rest = cps_tail(b, items[nr - 1], kont);
+                    for (int i = (int)nr - 2; i >= (int)fc; i--) {
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        rest = cps_bind(b, items[i], discard, rest);
+                    }
+                    rest = cps_emit_hoisted_drops(b, &pl, rest);
+                    for (int i = (int)fc - 1; i >= 0; i--) {
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        rest = cps_bind(b, items[i], discard, rest);
+                    }
+                }
+                return rest;
+            }
             CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
             for (int i = (int)n - 2; i >= 0; i--) {
                 CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);
@@ -1547,6 +1853,34 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_DO: {
             uint32_t n = e->as.do_.n;
             if (n == 0) { return cps_bind(b, NULL, x, rest); }
+            /* O1-b: hoist trailing owning-ref auto-drop defers (see cps_tail). */
+            AutodropPlan pl;
+            if (plan_autodrop(e, &pl)) {
+                Expr **items = e->as.do_.items;
+                uint32_t nr = pl.n_real, fc = pl.first_ctrl;
+                CTerm *r;
+                if (fc == nr) {
+                    /* No barrier: value -> x, drop refs at scope exit, then rest. */
+                    r = cps_emit_hoisted_drops(b, &pl, rest);
+                    r = cps_bind(b, items[nr - 1], x, r);
+                    for (int i = (int)nr - 2; i >= 0; i--) {
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        r = cps_bind(b, items[i], discard, r);
+                    }
+                } else {
+                    r = cps_bind(b, items[nr - 1], x, rest);
+                    for (int i = (int)nr - 2; i >= (int)fc; i--) {
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        r = cps_bind(b, items[i], discard, r);
+                    }
+                    r = cps_emit_hoisted_drops(b, &pl, r);
+                    for (int i = (int)fc - 1; i >= 0; i--) {
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        r = cps_bind(b, items[i], discard, r);
+                    }
+                }
+                return r;
+            }
             CTerm *r = cps_bind(b, e->as.do_.items[n - 1], x, rest);
             for (int i = (int)n - 2; i >= 0; i--) {
                 CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);
