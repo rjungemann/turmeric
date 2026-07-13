@@ -5,5 +5,5 @@
   (k "oops"))
 
 (defn main [] : int
-  (println (k-reset (+ 10 (k-shift bad 0))))
+  (println (reset (+ 10 (shift bad 0))))
   0)

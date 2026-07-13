@@ -1,8 +1,8 @@
-;; Surface unification (one-substrate plan): ONE k-shift, two lowerings.
+;; Surface unification (one-substrate plan): ONE shift, two lowerings.
 ;;
-;; A k-shift whose receiver IGNORES its continuation is an abortive shift, and is
+;; A shift whose receiver IGNORES its continuation is an abortive shift, and is
 ;; lowered via the dynamic-abort path -- so it works CROSS-FUNCTION (shift in a
-;; callee, k-reset in a caller) and under arbitrary contexts, exactly like the
+;; callee, reset in a caller) and under arbitrary contexts, exactly like the
 ;; legacy abortive `shift`.  A resuming receiver (uses `k`) keeps the reified,
 ;; lexically-scoped path.  The routing is by whether the receiver uses `k`, and
 ;; applies to lambda, closure, AND named-fn receivers.
@@ -11,15 +11,15 @@
 
 ;; ignore-k LAMBDA receiver, cross-function: delivers (+ x 5) = 105
 (defn inner [x : int] : int
-  (k-shift (fn [k : cont] (+ x 5)) 0))
+  (shift (fn [k : cont] (+ x 5)) 0))
 
 (defn outer [x : int] : int
-  (k-reset (inner x)))
+  (reset (inner x)))
 
 ;; ignore-k lambda under a non-trivial context: the abortive shift discards
 ;; (+ 100 []), delivering 7 to the reset.
 (defn discard-ctx [] : int
-  (k-reset (+ 100 (k-shift (fn [k : cont] 7) 0))))
+  (reset (+ 100 (shift (fn [k : cont] 7) 0))))
 
 ;; ignore-k NAMED receiver, cross-function (item A): a top-level fn whose body
 ;; never references its continuation param also routes to the abort path.
@@ -27,10 +27,10 @@
   42)
 
 (defn named-crossfn [] : int
-  (k-reset (+ 1 (call-shift))))
+  (reset (+ 1 (call-shift))))
 
 (defn call-shift [] : int
-  (k-shift abort-42 0))
+  (shift abort-42 0))
 
 (defn main [] : int
   (println (outer 100))       ; 105

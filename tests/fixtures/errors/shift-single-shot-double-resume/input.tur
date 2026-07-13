@@ -1,4 +1,4 @@
-;; Single-shot k-shift (one-substrate plan, slice 3): resuming a `^linear`
+;; Single-shot shift (one-substrate plan, slice 3): resuming a `^linear`
 ;; continuation twice is a compile-time error -- the whole point of single-shot.
 ;; The receiver resumes k once via (k 1), then again via (k 2); the second use
 ;; is a use-after-consume of the linear continuation (TUR-E0101).
@@ -6,5 +6,5 @@
   (+ (k 1) (k 2)))
 
 (defn main [] : int
-  (println (k-reset (+ 10 (k-shift twice 0))))
+  (println (reset (+ 10 (shift twice 0))))
   0)

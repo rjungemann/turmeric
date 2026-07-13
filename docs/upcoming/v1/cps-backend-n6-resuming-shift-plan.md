@@ -1,7 +1,7 @@
 ---
 title: Resumable delimited control -- one substrate (k-reset / k-shift)
 category: Planning
-status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation IN PROGRESS: unification slices 1-3 LANDED -- ONE shift/reset pair now serves abortive + resumable + single-shot + cross-function, dispatched by the receiver's convention (cont-typed -> continuation-passing; plain -> abortive), with `reset` auto-promoting to the reified delimiter only when a resuming shift binds. Open: cross-function resume (CT-IR DK-subk), cloneable/serial folding + deprecating the k-*/cloneable-*/serial-* spellings, optional lighter single-shot runtime.
+status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation IN PROGRESS: unification LANDED -- ONE shift/reset pair now serves abortive + resumable + single-shot + typed + cross-function-abort, dispatched by the receiver's convention (cont-typed -> continuation-passing; plain -> abortive), with `reset` auto-promoting to the reified delimiter only when a resuming shift binds. The interim k-shift/k-reset scaffolding is RETIRED (item d), so the plan adds no net new keywords. Open: cross-function RESUME (a __Shift-effect desugar, its own change), folding cloneable-*/serial- into shift/reset with a capability annotation, optional lighter single-shot runtime.
 description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. `cloneable-*` and `serial-*` are capability-specializations that fold into this primitive; abortive `shift`/`shift0` is a distinct dynamic-abort lowering that the unified SURFACE routes to (not deletes) -- see Consolidation.
 ---
 
@@ -205,9 +205,26 @@ so every existing signature is unaffected.
   incremental slice. Landed now: a tailored `TUR-E0016` message steering users to
   a lexical reset or to effects (fixture `errors/shift-crossfn-resume`).
 
-  Remaining: (c) the `__Shift`-effect desugar above; (d) once the ecosystem moves
-  to `shift`/`reset`, deprecate/retire the `k-*` and `cloneable-*`/`serial-*`
-  spellings.
+  **Item (d) -- retire the redundant spellings -- PARTIALLY LANDED.** `k-shift` /
+  `k-reset` (the interim canonical names this plan introduced) are **removed**:
+  plain `shift`/`reset` now cover them (a `cont`-typed receiver routes `shift` to
+  the continuation-passing path). The session therefore adds **no net new
+  keywords** -- `shift`/`reset` (which already existed) became the unified
+  surface, and the scaffolding names are gone. Symbols/dispatch/gates deleted
+  (`elab_internal.h`, `elab_core.c`, `elab_call.c`, `elab_effects.c`); the four
+  `k-shift-*` fixtures migrated to `shift-*`.
+
+  Still standing (a separate, larger capability-folding effort -- NOT pure
+  aliases): `cloneable-*` and `serial-*`. `cloneable-shift` is reachable via
+  `shift` with a `cont` receiver, but its untyped-receiver + explicit-primitive
+  (`tur_cloneable_cont_resume`) style does not migrate cleanly (a `cont`-typed
+  handle is rejected by the `:int` primitives). `serial-*` is a genuinely
+  distinct capability (marshalable): `shift` with a `serial-cont` receiver
+  currently yields cloneable, not serial, so folding it needs `shift` to preserve
+  the continuation's flavor. Both are explicit-capability spellings for now.
+
+  Remaining: (c) the `__Shift`-effect desugar (cross-function resume); the
+  cloneable/serial capability-folding above.
 - **cloneable-shift / serial-shift** become `k-shift` with a *continuation
   capability* (cloneable = multi-shot clone; serial = marshalable). The capture
   machinery is already shared; only the capability annotation differs. Collapse

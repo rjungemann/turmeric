@@ -1423,9 +1423,6 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     /* Phase B2: Cloneable continuations */
     e->sym_cloneable_reset = intern_cstr(st, "cloneable-reset");
     e->sym_cloneable_shift = intern_cstr(st, "cloneable-shift");
-    /* Resumable delimited control (one-substrate plan): canonical k-reset/k-shift. */
-    e->sym_k_reset = intern_cstr(st, "k-reset");
-    e->sym_k_shift = intern_cstr(st, "k-shift");
     e->sym_call_cc_star = intern_cstr(st, "call/cc*");
     /* Phase 21: Serializable continuations */
     e->sym_serial_reset = intern_cstr(st, "serial-reset");

@@ -1734,10 +1734,9 @@ Expr *elab_call(Elab *e, Form *call) {
     /* Phase B2: Cloneable continuations */
     if (name == e->sym_cloneable_reset)  return elab_cloneable_reset(e, call);
     if (name == e->sym_cloneable_shift)  return elab_cloneable_shift(e, call);
-    /* Resumable delimited control (one-substrate plan): k-reset/k-shift alias the
-     * cloneable pipeline for now -- the same reified-context / DK substrate. */
-    if (name == e->sym_k_reset)          return elab_cloneable_reset(e, call);
-    if (name == e->sym_k_shift)          return elab_cloneable_shift(e, call);
+    /* Note: the interim `k-reset`/`k-shift` spellings were retired once plain
+     * `shift`/`reset` became the unified surface (item d) -- a `cont`-typed
+     * receiver routes `shift` to the continuation-passing path automatically. */
     if (name == e->sym_call_cc_star)      return elab_call_cc_star(e, call);
     /* Phase 21: Serializable continuations */
     if (name == e->sym_serial_reset) return elab_serial_reset(e, call);

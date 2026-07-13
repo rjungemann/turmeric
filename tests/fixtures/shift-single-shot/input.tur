@@ -1,9 +1,9 @@
-;; Single-shot k-shift (one-substrate plan, slice 3).
+;; Single-shot shift (one-substrate plan, slice 3).
 ;;
 ;; A single-shot resumable continuation is a `^linear` continuation: the receiver
 ;; gets `k : cont` and may resume it AT MOST ONCE via the `(k v)` application
 ;; sugar.  Resuming twice is a compile-time error (TUR-E0101; see the negative
-;; fixture errors/k-shift-single-shot-double-resume).  So single-shot needs no
+;; fixture errors/shift-single-shot-double-resume).  So single-shot needs no
 ;; separate runtime -- the shared substrate plus linear typing gives it, and the
 ;; `(k v)` sugar makes it ergonomic (no explicit tur_cloneable_cont_resume).
 ;;
@@ -18,6 +18,6 @@
   (k 4))
 
 (defn main [] : int
-  (println (k-reset (+ 10 (k-shift add-five 0))))
-  (println (k-reset (* 3 (k-shift times-four 0))))
+  (println (reset (+ 10 (shift add-five 0))))
+  (println (reset (* 3 (shift times-four 0))))
   0)

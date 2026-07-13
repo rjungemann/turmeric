@@ -178,7 +178,7 @@ Expr *elab_shift(Elab *e, const Form *call) {
     }
 
     /* Item B (resuming-shift plan): keyword collapse.  A `shift` whose receiver
-     * takes a `cont` uses the continuation-passing (k-shift) convention -- route
+     * takes a `cont` uses the continuation-passing convention -- route
      * it to the unified core (resume-k reified, or ignore-k dynamic abort).  A
      * receiver whose parameter is a plain value keeps the abortive convention
      * below (receiver applied to the body value).  This makes one `shift` keyword
@@ -348,8 +348,8 @@ static bool receiver_ignores_continuation(const Expr *k_expr) {
     return !uses_k;
 }
 
-/* Shared core for the continuation-passing (k-convention) shift: cloneable-shift,
- * k-shift, and a `shift` whose receiver is `cont`-typed (item B).  Takes the
+/* Shared core for the continuation-passing (k-convention) shift: cloneable-shift
+ * and a `shift` whose receiver is `cont`-typed (item B).  Takes the
  * already-elaborated receiver `k_expr` so `elab_shift` can dispatch here without
  * re-elaborating.  Routes an ignore-k receiver to the abortive path, else emits
  * the reified EX_CLONEABLE_SHIFT (and records that a resuming shift bound to the
@@ -377,11 +377,10 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * cloneable-reset (TUR-E0016) or build_cloneable-subset context (TUR-E0710).
      * The receiver expects a `cont` but ignores it, so we hand it a null (0)
      * continuation of the right type.  NOT applied to the literal `cloneable-shift`
-     * keyword (which keeps its exact reified semantics); applied to `k-shift` and
+     * keyword (which keeps its exact reified semantics); applied to
      * a `cont`-typed `shift`. */
     bool abort_route = call->as.list.items[0]->tag == F_SYM
-                       && (call->as.list.items[0]->as.sym == e->sym_k_shift
-                           || call->as.list.items[0]->as.sym == e->sym_shift);
+                       && call->as.list.items[0]->as.sym == e->sym_shift;
     Type kdomain, kcodomain;
     if (abort_route && receiver_ignores_continuation(k_expr)
         && shift_fn_domain_codomain(k_expr, &kdomain, &kcodomain)) {
@@ -397,14 +396,13 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * is lexically scoped).  A plain `reset` counts too (item B): it promotes
      * itself to a reified delimiter when a resuming shift binds to it. */
     if (e->cloneable_reset_depth == 0) {
-        /* For the `shift`/`k-shift` surface, tailor the message: the common cause
+        /* For the `shift` surface, tailor the message: the common cause
          * now is a resuming shift whose reset is in a CALLER (cross-function
          * resume, unsupported -- only cross-function ABORT works).  Keep the exact
          * legacy wording for the literal `cloneable-shift` keyword (error fixture
          * cloneable-shift-outside-reset pins it). */
         bool shift_kw = call->as.list.items[0]->tag == F_SYM
-                        && (call->as.list.items[0]->as.sym == e->sym_shift
-                            || call->as.list.items[0]->as.sym == e->sym_k_shift);
+                        && call->as.list.items[0]->as.sym == e->sym_shift;
         if (shift_kw) {
             diag_emit_with_code(DIAG_ERROR, call->span,
                 TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,

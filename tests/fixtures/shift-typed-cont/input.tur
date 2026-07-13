@@ -4,16 +4,16 @@
 ;;   - BodyT: the resume-value type -- `(k v)` now checks `v : BodyT`.
 ;;   - ResetT: the type `(k v)` yields (the delimited result).
 ;; The one-arg `(cont R)` and bare `cont` spellings leave BodyT unchecked, so
-;; existing signatures are unaffected (see k-shift-single-shot, which uses `cont`).
+;; existing signatures are unaffected (see shift-single-shot, which uses `cont`).
 ;;
 ;; Here the delimited hole (+ 10 []) is filled by an int, so BodyT = int; the
 ;; receiver resumes k once with an int.  A wrong-typed resume value is rejected
-;; at compile time -- see errors/k-shift-typed-cont-mismatch.
+;; at compile time -- see errors/shift-typed-cont-mismatch.
 ;;
 ;; direct == cps == turi.
 (defn add-five [^linear k : (cont int int)] : int
   (k 5))
 
 (defn main [] : int
-  (println (k-reset (+ 10 (k-shift add-five 0))))   ; 10 + 5 = 15
+  (println (reset (+ 10 (shift add-five 0))))   ; 10 + 5 = 15
   0)
