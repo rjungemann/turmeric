@@ -2558,6 +2558,17 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     e->expected_type = saved_expected;
     if (!inner) return NULL;
 
+    /* GAP 3 (byvalue-adt-int-cast-plan Part B): `(:: v :any)` is the explicit
+     * coercion of a value into the `any` erased carrier.  It must heap-box the
+     * value (EX_UNION_INJECT), exactly as passing it to an `any`-typed parameter
+     * does -- NOT merely relabel its static type, which miscompiles a by-value
+     * aggregate (a cc "aggregate used where integer expected" error compiled;
+     * diverging under --interpret).  This is the explicit "box" spelling the
+     * TUR-E0295 diagnostic points at; `(cast h T)` reads it back by value. */
+    if (ascribed->kind == TY_ANY && inner->type.kind != TY_ANY) {
+        return elab_coerce_to_any(e, inner);
+    }
+
     /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
      * an ADT constructor call whose own type is left bare/under-applied.  A
      * parametric struct whose type parameter is not pinned by its field types
@@ -2625,10 +2636,11 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
         diag_emit_with_code(DIAG_ERROR, call->span,
             TUR_E0295_BYVALUE_CARRIER_CAST,
             "cannot reinterpret by-value aggregate '%s' as a one-word carrier "
-            "(:int / :ptr<void>); it is a C struct with no int64 handle. Box it "
-            "explicitly to carry it through an erased handle "
-            "(see docs/upcoming/byvalue-adt-int-cast-plan.md).",
-            agg_name);
+            "(:int / :ptr<void>); it is a C struct with no int64 handle. To carry "
+            "it through an erased handle, box it into `any`: `(:: v :any)` (or "
+            "just pass it where an `any` is expected) heap-boxes it, and "
+            "`(cast h %s)` reads it back by value.",
+            agg_name, agg_name);
         return NULL;
     }
 

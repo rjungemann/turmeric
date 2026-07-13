@@ -1,12 +1,14 @@
 # Language/codegen gaps surfaced by the pure-Turmeric `logic.tur` port
 
-> **Status:** GAP 1 **fixed** 2026-07-13 (compiler); GAP 2 **fixed** 2026-07-13
-> (compiler); GAP 4 **withdrawn** 2026-07-13 (not a gap -- it was a missing
-> `^fat` annotation, now applied). The `logic.tur` workarounds they concerned
-> (the goal-handle `:int` carrier and the `:fn` callback) have been removed.
-> GAP 3 is **partially addressed** 2026-07-13: the unsound direct `::` now raises
-> `TUR-E0295` on both harnesses (no more silent miscompile); the explicit
-> `box`/`unbox` bridge (Part B of the plan) is still to do.
+> **Status:** ALL RESOLVED 2026-07-13. GAP 1 **fixed** (compiler); GAP 2 **fixed**
+> (compiler); GAP 3 **fixed** (compiler, Parts A + B); GAP 4 **withdrawn** (not a
+> gap -- it was a missing `^fat` annotation, now applied). The `logic.tur`
+> workarounds they concerned (the goal-handle `:int` carrier and the `:fn`
+> callback) have been removed.
+> GAP 3 is **fixed** 2026-07-13: the unsound direct `::` now raises `TUR-E0295`
+> on both harnesses (Part A), and the sound bridge is `any` + `cast` -- `(:: v :any)`
+> now heap-boxes correctly (it was miscompiling) and `(cast h T)` reads it back
+> (Part B). All four gaps are now closed or withdrawn.
 > **Reported:** 2026-07-13 (during the `stdlib/logic.tur` pure-Turmeric port).
 > **Context:** `logic.tur` is now inline-C-free and runs under both harnesses,
 > but getting there required four workarounds that paper over real gaps. None
@@ -141,16 +143,25 @@ is at least as clear, so it is left as-is (no code change needed).
 
 ---
 
-## GAP 3 -- non-recursive (by-value) `defdata`/`defstruct` cannot erase to/from `:int` -- **MEDIUM** -- Part A (diagnostic) FIXED 2026-07-13
+## GAP 3 -- non-recursive (by-value) `defdata`/`defstruct` cannot erase to/from `:int` -- **MEDIUM** -- FIXED 2026-07-13
 
-**Part A landed.** The direct `::` between a non-parametric by-value ADT/struct
-product and a one-word carrier (`:int` / `:ptr<void>`), in either direction, now
-raises `TUR-E0295` in `elab_ascribe` -- so both harnesses report the same clear
-error instead of miscompiling (the `cc` error / segfault / garbage handle
-described below). The explicit `box`/`unbox` bridge (Part B) is still open; see
-[`docs/upcoming/byvalue-adt-int-cast-plan.md`](../upcoming/byvalue-adt-int-cast-plan.md).
-Regression fixtures: `tests/fixtures/errors/byvalue-adt-cast-to-int` and
-`.../int-cast-to-byvalue-adt`. Original report follows.
+**Fixed.** Two parts:
+- **Part A (diagnostic).** The direct `::` between a non-parametric by-value
+  ADT/struct product and a one-word carrier (`:int` / `:ptr<void>`), in either
+  direction, now raises `TUR-E0295` in `elab_ascribe` -- both harnesses report
+  the same clear error instead of miscompiling (the `cc` error / segfault /
+  garbage handle described below).
+- **Part B (the bridge).** The sound way to carry a by-value aggregate through an
+  erased handle already existed: `any` + `cast`. `elab_ascribe` now makes
+  `(:: v :any)` *heap-box* the value (it previously relabelled it, miscompiling a
+  by-value aggregate), giving a clean explicit box spelling; `(cast h T)` reads
+  it back by value. No new `box`/`unbox` verbs were minted -- those names are
+  already taken by `stdlib/safe.tur`'s int-cell functions.
+
+See [`docs/upcoming/byvalue-adt-int-cast-plan.md`](../upcoming/byvalue-adt-int-cast-plan.md).
+Fixtures: `tests/fixtures/errors/byvalue-adt-cast-to-int`,
+`.../int-cast-to-byvalue-adt` (Part A), and
+`tests/fixtures/box-unbox-byvalue-aggregate` (Part B). Original report follows.
 
 **Summary.** The compiled path represents a non-recursive ADT/struct **by
 value** (`tur_adt_P`), so there is no int handle to cast to. `(:: v :int)` and

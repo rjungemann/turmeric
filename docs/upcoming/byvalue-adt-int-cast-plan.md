@@ -1,8 +1,11 @@
 # By-value ADT `::` carrier cast (GAP 3) -- Plan
 
-> **Status:** Phase 1 (Part A -- diagnostic) **landed 2026-07-13**; Phase 2
-> (Part B -- explicit `box`/`unbox` bridge) not started. The unsound direct `::`
-> now raises `TUR-E0295` on both harnesses instead of miscompiling.
+> **Status:** DONE 2026-07-13. Part A (diagnostic) and Part B (the boxing
+> bridge) both landed. Key finding during Part B: the sound bridge **already
+> existed** as `any` + `cast`; the fix was to make `(:: v :any)` box correctly
+> (it was miscompiling) so there is a clean explicit spelling, point the
+> `TUR-E0295` diagnostic at it, and NOT mint new `box`/`unbox` verbs (they
+> collide with `stdlib/safe.tur`'s existing `box`/`unbox` int-cell functions).
 > **Last Updated:** 2026-07-13
 > **Type:** compiler / type-erasure soundness + ergonomics
 > **Scope:** Make `(:: v :int)` / `(:: v :ptr<void>)` (and the reverse) *sound*
@@ -123,6 +126,31 @@ Naming/surface options to decide during Phase 2:
 
 Recommendation: **A + B1.** `::` stays honest; boxing is opt-in and explicit.
 
+**As landed (supersedes B1/B2 above).** Prototyping revealed the sound bridge
+*already ships* -- the `any` type is a one-word tagged heap handle, `elab_coerce_to_any`
+(EX_UNION_INJECT) heap-boxes a by-value aggregate into it, and `(cast h T)`
+(EX_ANY_CAST) reads it back by value; both already run under the compiled path
+and `--interpret`. So no new box/unbox machinery was needed. Two things were
+done instead:
+
+- **Fixed `(:: v :any)` to coerce.** It previously just *relabelled* the value's
+  static type to `any` without inserting the box, which miscompiled a by-value
+  aggregate (a cc error compiled, a divergent result under `--interpret`).
+  `elab_ascribe` now routes `(:: v :any)` through `elab_coerce_to_any`, giving a
+  clean **explicit box spelling**. `(cast h T)` is the unbox.
+- **Did NOT add `box`/`unbox` verbs.** A first cut added them as special forms,
+  but `stdlib/safe.tur` already defines `box : int -> ptr` / `unbox : ptr -> int`
+  (an int-cell abstraction) and global special-form dispatch shadowed them,
+  breaking the `safe-box` fixture. The `any` + `cast` surface is the bridge; the
+  `TUR-E0295` diagnostic points straight at it.
+
+This lands closer to B2's ergonomics (an existing operator does the boxing) than
+B1, but without the "silent surprising allocation" concern: `(:: v :any)` is an
+*explicit* coercion into a type whose whole purpose is erased dynamic carriage,
+and the implicit-coercion path is the same one every `any`-typed parameter
+already uses. Ownership is inherited from `any` (unchanged), so the lifetime
+question below needed no new decision.
+
 ### Ownership / lifetime (must be pinned in Phase 2)
 
 `emit_agg_box` mallocs. The existing poly-carrier / `any` / lens boxes are
@@ -179,17 +207,23 @@ stay 0-gap.
 - Full suite: 2127 passed, 0 failed -- no legitimate cast was caught; parity
   checks 0-gap.
 
-### Phase 2 -- explicit boxing bridge (Part B1)
+### Phase 2 -- the boxing bridge (Part B) -- DONE 2026-07-13
 
-- Add `box` / `unbox` surface forms (elab in `elab_types.c` or `elab_unsafe.c`),
-  lowering to `emit_agg_box` / `emit_agg_unbox`; decide the reader spelling.
-- Pin ownership (Phase-2 opener): implement option 1 (owned handle + free) unless
-  a review prefers otherwise.
-- Interpreter: register `box`/`unbox` natives (or `eval.c` arms) so a round-trip
-  is identity; update the parity carve lists only if genuinely needed.
-- Tests: round-trip fixture (`(unbox (box v) T) == v`) for a 2-field and a
-  wide (>8 byte) product, both harnesses; a leak fixture if option 1 lands (the
-  freed path is LSan-clean).
+Landed as the `any` + `cast` bridge rather than new verbs (see "As landed"
+above):
+
+- `elab_ascribe` (`src/compiler/elab_types.c`) routes `(:: v :any)` through
+  `elab_coerce_to_any` so it heap-boxes instead of relabelling -- the explicit
+  box spelling. `(cast h T)` is the unbox. No new EX kinds, no interpreter
+  natives, no parity-carve changes (EX_UNION_INJECT / EX_ANY_CAST already run on
+  both harnesses).
+- `TUR-E0295`'s message and `explain` text point at `(:: v :any)` + `(cast h T)`.
+- Round-trip fixture `tests/fixtures/box-unbox-byvalue-aggregate` covers a
+  2-field ADT (explicit `:: :any`) and a wide 3-field struct (implicit coercion),
+  green on both harnesses.
+- Ownership is inherited from `any` (process-lifetime, unchanged) -- no new
+  contract, so the lifetime discussion below did not need a decision. The
+  compiler leak gate stays green.
 
 ### Phase 3 -- opportunistic `logic.tur` follow-up (optional, cosmetic)
 

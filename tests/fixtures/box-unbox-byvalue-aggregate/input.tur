@@ -1,0 +1,22 @@
+;; GAP 3 Part B: the sound bridge for carrying a non-recursive by-value
+;; ADT/struct product through an erased one-word carrier is `any` + `cast`.
+;; `(:: v :any)` heap-boxes the value as a one-word handle (so it can ride an
+;; erased carrier); `(cast h T)` reads it back by value.  This is exactly what
+;; the TUR-E0295 diagnostic recommends, and it runs identically compiled and
+;; under --interpret.
+
+(defdata IntPair :copy (IntPair :int :int))
+(defstruct Vec3 :copy [x :int y :int z :int])
+
+;; A generic carrier: the erased handle rides through as `any`.
+(defn thread [h : any] : any h)
+
+(defn main [] : int
+  ;; explicit box via `:: :any`, carry it, read it back by value.
+  (let [h    (:: (IntPair 3 4) :any)
+        back (cast (thread h) IntPair)]
+    (match back (IntPair a b) (println (+ a b))))    ; 7
+  ;; implicit box: passing the value where an `any` is expected also boxes it.
+  (let [back (cast (thread (Vec3 1 2 3)) Vec3)]
+    (println (+ (.x back) (+ (.y back) (.z back))))) ; 6
+  0)

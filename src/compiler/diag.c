@@ -1127,10 +1127,17 @@ static const DiagExplanation diag_explanations_[] = {
       "  (:: (Pair 3 4) :int)   ; error: cannot reinterpret by-value 'Pair' as int\n"
       "  (:: h :Pair)           ; error: cannot reinterpret int as by-value 'Pair'\n"
       "\n"
-      "A *recursive* ADT rides the int64 carrier and does cast cleanly; if you\n"
-      "genuinely need to carry a by-value aggregate through an erased handle, box\n"
-      "it explicitly (heap-box on the way in, unbox on the way out) rather than\n"
-      "reinterpreting the value.  See docs/upcoming/byvalue-adt-int-cast-plan.md.\n",
+      "A *recursive* ADT rides the int64 carrier and does cast cleanly.  To carry\n"
+      "a by-value aggregate through an erased handle, box it into `any`:\n"
+      "\n"
+      "  (defn thread [h : any] : any h)         ; the erased carrier is `any`\n"
+      "  (let [h    (:: (Pair 3 4) :any)         ; heap-box the by-value value\n"
+      "        back (cast (thread h) Pair)]      ; ... and read it back by value\n"
+      "    ...)\n"
+      "\n"
+      "`(:: v :any)` (or just passing v where an `any` is expected) heap-boxes it\n"
+      "as a one-word handle; `(cast h T)` reads it back as T.  See\n"
+      "docs/upcoming/byvalue-adt-int-cast-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"
