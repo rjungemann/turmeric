@@ -58,8 +58,10 @@
   (REnd))
 
 (defdata RxPos :copy (RxNil) (RxCons :int :RxPos))
-(defdata RxPair (RxIP :int :int) (RxIPNone))
-(defdata RxParse    (RxPR :Regex :int)  (RxPRNone))
+;; RxPair / RxParse are single-constructor records: a positional pair and a
+;; (parsed-Regex, next-position) parse result.
+(defdata RxPair (RxIP :int :int))
+(defdata RxParse (RxPR :Regex :int))
 (defdata RxStrs (RxStrsNil) (RxStrsCons :cstr :RxStrs))
 
 ;; ================= RxPos leaf helpers =================
@@ -212,11 +214,9 @@
           (match (re-read-int input len (+ p1 1) 0)
             (RxIP m p2)
               (let [endp (if (if (< p2 len) (= (cstr-nth input p2) 125) false) (+ p2 1) p2)]
-                (RxPR (RConcat (re-repeat-n atom n) (re-repeat-opt atom (- m n))) endp))
-            (RxIPNone) (RxPR (RNever) pos)))
+                (RxPR (RConcat (re-repeat-n atom n) (re-repeat-opt atom (- m n))) endp))))
         (let [endp (if (if (< p1 len) (= (cstr-nth input p1) 125) false) (+ p1 1) p1)]
-          (RxPR (re-repeat-n atom n) endp)))
-    (RxIPNone) (RxPR (RNever) pos)))
+          (RxPR (re-repeat-n atom n) endp)))))
 
 (defn re-apply-quant [input : cstr len : int ra : Regex pos : int] : RxParse
   (if (>= pos len)
@@ -297,30 +297,25 @@
   (cond
     (= mode 0)
       (match (re-parse-go input len pos 2 (REmpty))
-        (RxPR r1 p1) (re-parse-go input len p1 1 r1)
-        (RxPRNone)   (RxPR (REmpty) pos))
+        (RxPR r1 p1) (re-parse-go input len p1 1 r1))
     (= mode 1)
       (if (if (< pos len) (= (cstr-nth input pos) 124) false)
         (match (re-parse-go input len (+ pos 1) 2 (REmpty))
-          (RxPR r2 p2) (re-parse-go input len p2 1 (RAlt acc r2))
-          (RxPRNone)   (RxPR acc pos))
+          (RxPR r2 p2) (re-parse-go input len p2 1 (RAlt acc r2)))
         (RxPR acc pos))
     (= mode 2)
       (if (re-concat-end? input len pos)
         (RxPR (REmpty) pos)
         (match (re-parse-go input len pos 4 (REmpty))
-          (RxPR r1 p1) (re-parse-go input len p1 3 r1)
-          (RxPRNone)   (RxPR (REmpty) pos)))
+          (RxPR r1 p1) (re-parse-go input len p1 3 r1)))
     (= mode 3)
       (if (re-concat-end? input len pos)
         (RxPR acc pos)
         (match (re-parse-go input len pos 4 (REmpty))
-          (RxPR r2 p2) (re-parse-go input len p2 3 (RConcat acc r2))
-          (RxPRNone)   (RxPR acc pos)))
+          (RxPR r2 p2) (re-parse-go input len p2 3 (RConcat acc r2))))
     (= mode 4)
       (match (re-parse-go input len pos 5 (REmpty))
-        (RxPR ra p) (re-apply-quant input len ra p)
-        (RxPRNone)  (RxPR (REmpty) pos))
+        (RxPR ra p) (re-apply-quant input len ra p))
     :else
       (if (>= pos len)
         (RxPR (REmpty) pos)
@@ -330,8 +325,7 @@
                        (RxPR ri p)
                          (if (if (< p len) (= (cstr-nth input p) 41) false)
                            (RxPR (RGroup ri) (+ p 1))
-                           (RxPR (RGroup ri) p))
-                       (RxPRNone) (RxPR (REmpty) (+ pos 1)))
+                           (RxPR (RGroup ri) p)))
             (= c 91) (re-parse-class input len (+ pos 1))
             (= c 46) (RxPR (RAny)   (+ pos 1))
             (= c 94) (RxPR (RBegin) (+ pos 1))
@@ -358,8 +352,7 @@
       (if (< s 0)
         (RxStrsNil)
         (RxStrsCons (cstr-sub input s e)
-                    (re-find-all-go re input len (if (> e s) e (+ s 1)))))
-    (RxIPNone) (RxStrsNil)))
+                    (re-find-all-go re input len (if (> e s) e (+ s 1)))))))
 
 (defn re-replace-go [re : Regex input : cstr len : int from : int
                      replacement : cstr acc : cstr] : cstr
@@ -373,8 +366,7 @@
             (if (< s len)
               (re-replace-go re input len (+ s 1) replacement
                              (str-concat acc1 (cstr-sub input s (+ s 1))))
-              acc1))))
-    (RxIPNone) (str-concat acc (cstr-sub input from len))))
+              acc1))))))
 
 ;;; re/compile -- compile a regular expression pattern into a Regex.
 ;;;
@@ -391,8 +383,7 @@
 ;;; Since: Phase B2
 (defn re/compile [pattern : cstr] : Regex
   (match (re-parse-go pattern (cstr-len pattern) 0 0 (REmpty))
-    (RxPR r p) r
-    (RxPRNone) (RNever)))
+    (RxPR r p) r))
 
 ;;; re/match? -- test whether a pattern matches anywhere in input.
 ;;;
@@ -431,8 +422,7 @@
 (defn re/match [re : Regex input : cstr] : (Option cstr)
   (let [len (cstr-len input)]
     (match (re-find-from re input len 0)
-      (RxIP s e) (if (< s 0) (none) (some (cstr-sub input s e)))
-      (RxIPNone) (none))))
+      (RxIP s e) (if (< s 0) (none) (some (cstr-sub input s e))))))
 
 ;;; re/find-all -- all non-overlapping matches, left to right.
 ;;;
@@ -475,8 +465,7 @@
         (if (< s 0)
           (cstr-sub input 0 len)
           (str-concat (str-concat (cstr-sub input 0 s) replacement)
-                      (cstr-sub input e len)))
-      (RxIPNone) (cstr-sub input 0 len))))
+                      (cstr-sub input e len))))))
 
 ;;; re/replace-all -- replace all non-overlapping matches with a literal.
 ;;;

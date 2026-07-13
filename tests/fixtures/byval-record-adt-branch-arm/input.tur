@@ -1,0 +1,35 @@
+; Regression: a single-constructor ("record") ADT that carries a heap ADT field,
+; produced by a constructor in an if/cond/match arm whose merge temp is by-value.
+; Previously the ctor arm (and a match-valued arm) were deref-unboxed as an int
+; handle -- "aggregate value used where an integer was expected".
+(defdata Box :copy (Boxed :int) (Empty))
+(defdata Wrap (MkWrap :Box :int))          ; single ctor, heap ADT field
+(defdata Sel  (SelA :int) (SelB :int))
+
+(defn helper [b : Box n : int] : Wrap (MkWrap b n))
+
+; if-arm: ctor arm vs call arm
+(defn build-if [b : Box n : int] : Wrap
+  (if (> n 0) (MkWrap b n) (helper b 0)))
+
+; match-arm: ctor arm vs call arm
+(defn build-match [b : Box s : Sel] : Wrap
+  (match s
+    (SelA n) (MkWrap b n)
+    (SelB n) (helper b n)))
+
+; match arm whose body is a nested match producing the record by value
+(defn build-nested [b : Box s : Sel] : Wrap
+  (match s
+    (SelA n) (match (Boxed n) (Boxed k) (MkWrap b k) (Empty) (MkWrap b 0))
+    (SelB n) (helper b n)))
+
+(defn get-n [w : Wrap] : int (match w (MkWrap b n) n))
+
+(defn main [] : int
+  (println (get-n (build-if     (Boxed 1) 42)))
+  (println (get-n (build-if     (Boxed 1) 0)))
+  (println (get-n (build-match  (Boxed 1) (SelA 7))))
+  (println (get-n (build-match  (Boxed 1) (SelB 9))))
+  (println (get-n (build-nested (Boxed 1) (SelA 5))))
+  0)

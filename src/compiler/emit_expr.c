@@ -722,14 +722,29 @@ static bool call_construct_emits_byval_aggregate(EmitCtx *ctx, const Expr *call,
     if (!is_adt_ctor) return false;
     if (find_matched_abi_spec(ctx, call, fb) != NULL) return false;
     Type r = emit_resolve_type(ctx, call->type);
-    /* Match the EX_CALL ctor suffix gate (emit_expr.c:3351): a concrete ADT app
-     * (`type_app_is_concrete_adt`) that is not a carrier/heap value and whose
-     * c-name is a real aggregate emits `ctor_<Name>__<args>` by value. */
+    const char *cn = emit_type_c_name(ctx, r);
+    size_t cnlen = cn ? strlen(cn) : 0;
+    /* Match the EX_CALL ctor suffix gate (emit_expr.c:3351): a value ADT ctor
+     * emits `ctor_<Name>__<args>` by value.  Two concrete shapes qualify:
+     *   - a concrete parametric app `(Option int)` (`type_app_is_concrete_adt`);
+     *   - a bare non-parametric ADT `Wrap` -- a single-variant record or a
+     *     fieldless enum -- which resolves to TY_ADT, not TY_APP.
+     * The bare-TY_ADT case was missing, so a single-variant record ctor
+     * (`(MkWrap b n)`) used as an `if`/`cond` arm whose merge temp is by-value
+     * (e.g. the other arm calls a defn returning the same record) was wrongly
+     * carrier-bridged -- `(*(tur_adt_Wrap *)(intptr_t)(ctor_...))` derefs the
+     * by-value aggregate as an int handle: "aggregate value used where an
+     * integer was expected".  In both shapes the value must not be a
+     * carrier/heap value and its c-name must be a real aggregate (not
+     * `int64_t`, not a `T *` handle); the def!=NULL guard rejects an open ADT
+     * type variable. */
     bool byval_aggr =
-        r.kind == TY_APP && type_app_is_concrete_adt(&r) &&
+        ((r.kind == TY_APP && type_app_is_concrete_adt(&r)) ||
+         (r.kind == TY_ADT && r.as.adt_.def != NULL)) &&
         !type_uses_carrier_abi(r) &&
         !type_is_heap_struct(r) && !type_is_heap_adt(r) &&
-        strcmp(emit_type_c_name(ctx, r), "int64_t") != 0;
+        cn && strcmp(cn, "int64_t") != 0 &&
+        cnlen > 0 && cn[cnlen - 1] != '*';
     if (byval_aggr && out_ty) *out_ty = r;
     return byval_aggr;
 }
@@ -801,6 +816,17 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
             return e->as.if_.else_or_null &&
                    (fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.then_) ||
                     fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.if_.else_or_null));
+        case EX_MATCH:
+            /* A match's tail value is one of its arm bodies; it emits the
+             * by-value aggregate if any arm's tail does.  Without this a
+             * match-valued branch (e.g. a nested `(match ... (RxIP m p2) ...)`
+             * as an if/let arm) falls to the call predicates below, none match,
+             * and the merge bridge deref-unboxes the already-by-value result --
+             * "aggregate value used where an integer was expected". */
+            for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++)
+                if (fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.match_.arms[ai].body))
+                    return true;
+            return false;
         case EX_LET:
         case EX_LETREC:
             return fn_body_tail_emits_byvalue_carrier_abi(ctx, e->as.let_.body);
@@ -841,6 +867,15 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
             return e->as.if_.else_or_null
                 ? fn_body_tail_byvalue_carrier_type(ctx, e->as.if_.else_or_null)
                 : unknown;
+        }
+        case EX_MATCH: {
+            /* Mirror the bool predicate: the by-value carrier type of the first
+             * arm whose tail produces one. */
+            for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
+                Type t = fn_body_tail_byvalue_carrier_type(ctx, e->as.match_.arms[ai].body);
+                if (t.kind != TY_UNKNOWN) return t;
+            }
+            return unknown;
         }
         case EX_LET:
         case EX_LETREC:
