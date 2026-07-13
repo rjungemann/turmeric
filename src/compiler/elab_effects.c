@@ -287,13 +287,25 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
  * reified lowering, so the routing is purely additive. */
 static bool receiver_ignores_continuation(const Expr *k_expr) {
     const FnDef *fn = NULL;
-    if (k_expr->kind == EX_FN) fn = k_expr->as.fn_.fn;
-    else if (k_expr->kind == EX_CLOSURE && k_expr->as.closure_.closure)
-        fn = k_expr->as.closure_.closure->fn;
-    if (!fn || !fn->body || fn->n_params == 0) return false;
-    /* The continuation is the receiver's last param (an env, if any, is
-     * prepended for a closure thunk). */
-    const Binding *kparam = fn->params[fn->n_params - 1];
+    /* `val_idx` is the parameter index the shift passes the continuation to,
+     * matching shift_fn_domain_codomain: a bare lambda / named fn takes it at 0;
+     * a closure thunk has its env prepended at 0, so the continuation is at 1. */
+    uint8_t val_idx = 0;
+    if (k_expr->kind == EX_FN) {
+        fn = k_expr->as.fn_.fn; val_idx = 0;
+    } else if (k_expr->kind == EX_CLOSURE && k_expr->as.closure_.closure) {
+        fn = k_expr->as.closure_.closure->fn; val_idx = 1;
+    } else if (k_expr->kind == EX_VAR && k_expr->as.var.binding) {
+        /* A named top-level fn receiver: source_fn_def gives its FnDef/body
+         * (set during elaboration).  NULL for a forward reference not yet
+         * elaborated -- conservatively keep the reified path in that case. */
+        fn = k_expr->as.var.binding->source_fn_def; val_idx = 0;
+    }
+    /* Only a single-continuation receiver: the continuation must be the LAST
+     * param (no trailing params), so `params[val_idx]` really is the one the
+     * shift binds.  A multi-param fn is not a valid one-arg receiver. */
+    if (!fn || !fn->body || fn->n_params != (uint8_t)(val_idx + 1)) return false;
+    const Binding *kparam = fn->params[val_idx];
     if (!kparam) return false;
     uint32_t n_out = 0;
     Binding **fvs = collect_free_vars(fn->body, NULL, 0, NULL, 0, &n_out);

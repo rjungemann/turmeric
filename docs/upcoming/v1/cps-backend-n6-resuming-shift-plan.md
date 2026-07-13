@@ -164,11 +164,19 @@ so every existing signature is unaffected.
   lowering sites). Fixture `k-shift-abort-crossfn` (cross-function + context-
   discard, `direct == cps == turi == 105 / 7`).
 
-  Remaining on this axis: (a) extend the ignore-`k` analysis to named-fn
-  receivers (today only see-through lambdas/closures route; named receivers keep
-  the reified path -- conservative, still correct); (b) collapse the *keywords*
-  (`shift`/`reset` <- `k-shift`/`k-reset`) once k-shift subsumes abortive's reach;
-  (c) cross-function *resume* (not just abort) via the CT-IR DK-subk threading.
+  **Unification slice 2 (item A) -- LANDED.** The ignore-`k` analysis now also
+  sees through **named-fn receivers** via `Binding.source_fn_def` (the FnDef a
+  top-level `defn` binding defines, set during elaboration). So a named receiver
+  whose body never references its continuation param routes to the abort path
+  too -- cross-function, any context -- which is where most real abortive code
+  lives. Still conservative on a forward-referenced receiver (source_fn_def not
+  yet set -> reified path). The continuation param index is computed precisely
+  (lambda/named at 0, closure env-prepended at 1) and only single-continuation
+  receivers route. Fixture `k-shift-abort-crossfn` extended with a named case.
+
+  Remaining on this axis: (b) collapse the *keywords* (`shift`/`reset` <-
+  `k-shift`/`k-reset`) once k-shift subsumes abortive's reach; (c) cross-function
+  *resume* (not just abort) via the CT-IR DK-subk threading.
 - **cloneable-shift / serial-shift** become `k-shift` with a *continuation
   capability* (cloneable = multi-shot clone; serial = marshalable). The capture
   machinery is already shared; only the capability annotation differs. Collapse
