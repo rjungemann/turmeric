@@ -1,0 +1,49 @@
+;; CPS-IR-to-C backend, env-capture story E1 (Option A): an OWNING value (an
+;; `rc<int>` handle) captured into a genuinely MULTI-SHOT handler CASE body.
+;; Built with the always-on cps-backend.
+;;
+;; A handler case body runs once *per perform* -- potentially many times in a
+;; loop -- so it is classified MULTI-SHOT (collect_caps_case forces
+;; g_cap_single_shot = false).  Before E1 an owning capture there failed the
+;; Copy-only capture gate (cap_ty_ok) and the whole function fell back to the
+;; direct emitter.  E1 admits an rc handle through the new cap_owning_ok gate and
+;; the lifted LH_HANDLER_CASE helper CLONES (increfs) it on read-out:
+;;   typedef struct { RcControlBlock * f0; } f_hc0_0_env;   // f0 = r
+;;   e->f0 = r;  dk_handler(E, f_hc0_0, (intptr_t)e, ...);
+;;   ... RcControlBlock * r = __cap->f0;  rc_strong_increment(r);
+;; so each invocation of the case owns its own +1 -- balanced against whatever
+;; that invocation drops -- with no double-free across resumes.
+;;
+;; Ownership (verified by inspecting the emitted C):
+;;   rc/of      -> r refcount 1
+;;   case body  -> reads r out of the shared env and increfs it (refcount 2),
+;;                 so (rc/strong-count r) observes 2 -- the case invocation's own
+;;                 owning reference plus f's original.  The env retains that
+;;                 reference; it is intentionally LEAKED (Option A, matching the
+;;                 leaked-DK-node regime), which is why this fixture carries
+;;                 requires.no-leak-check.  There is no double-free and no
+;;                 use-after-free -- only the env's +1 is never reclaimed.
+;;   post-handle -> the single straight-line (rc/drop r) brings it back to 1.
+;;
+;; The leaked env +1 is the debt Option B (E3) retires (a refcounted env with a
+;; real clone/drop pair); until then this rides requires.no-leak-check.
+;;
+;; Value: g performs E once; the case resumes with (rc/strong-count r) = 2, so
+;; g returns 2 and f returns 2.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [r (rc/of 5)]
+    (let [v (handle (g)
+              (E [] k)
+              (resume k (rc/strong-count r)))]
+      (rc/drop r)
+      v)))
+
+(defn main [] : int
+  (println (f))
+  0)

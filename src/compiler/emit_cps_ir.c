@@ -638,15 +638,38 @@ typedef struct {
     TypeKind       ty[CC_MAX_CAPS];
     const Type    *type[CC_MAX_CAPS];   /* full type (Tier C by-value aggregate); may be NULL */
     bool           polyfn[CC_MAX_CAPS]; /* a rank-2 poly fn value -- env field is tur_poly_fn_t */
+    bool           owning[CC_MAX_CAPS]; /* E1: an owning capture admitted into a MULTI-SHOT
+                                         * continuation -- the lifted helper clones (increfs)
+                                         * it on read-out so each invocation owns its own +1,
+                                         * balanced by the body's drop.  Only set for the
+                                         * multi-shot owning admission (a single-shot owning
+                                         * capture rides by a bare shallow copy, owning=false). */
     int n; bool ok;
 } CapSet;
 
 /* A capture rides the env by value: a scalar (Tier A/B) or an owning-free
  * by-value aggregate (Tier C, slot_box_ty).  Both are Copy, so a leaked env
  * storing them is multi-shot-safe with no retain/drop.  Owning handles / carrier
- * ADTs are rejected (their copy would duplicate a refcount). */
+ * ADTs are rejected here (their copy would duplicate a refcount) -- they route
+ * through cap_owning_ok / clone-on-read-out instead. */
 static bool cap_ty_ok(TypeKind ty, const Type *type) {
     return slot_ty(ty) || slot_box_ty(type);
+}
+
+/* E1 (env-capture story, Option A): an OWNING capture whose clone (incref) glue
+ * we can emit on read-out, so it may ride the env of a genuinely MULTI-SHOT
+ * continuation (a handler CASE body, or a reset/shift resumed more than once).
+ * The lifted helper clones it once per invocation (its body's drop balances the
+ * clone); the env's original +1 is intentionally leaked (Option A), so a fixture
+ * exercising this carries requires.no-leak-check.
+ *
+ * Currently just an `rc<int>` handle (TY_RC -> RcControlBlock *, cloned by
+ * rc_strong_increment).  A carrier ADT / owning-carrying aggregate (E2) and
+ * weak<T> are deliberately still excluded -- they fall back until their
+ * clone/drop glue is wired here. */
+static bool cap_owning_ok(TypeKind ty, const Type *type) {
+    (void)type;
+    return ty == TY_RC;
 }
 
 static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type) {
@@ -671,11 +694,21 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
      * (A fn value still routes through the poly path for its tur_poly_fn_t env
      * type; a by-value aggregate through slot_box for its unbox.) */
     bool owning_ok = g_cap_single_shot;
-    if (!is_poly && !borrowed && !owning_ok && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
+    /* E1: an owning capture in a MULTI-SHOT continuation (owning_ok is false) is
+     * admitted iff we can emit its clone glue (cap_owning_ok); the lifted helper
+     * then clones it on read-out so each invocation owns its own +1.  A poly fn,
+     * a `^borrow`, a Copy value, and a single-shot owning capture never need the
+     * clone -- they ride by a bare shallow copy (needs_clone stays false). */
+    bool needs_clone = false;
+    if (!is_poly && !borrowed && !owning_ok && !cap_ty_ok(ty, type)) {
+        if (cap_owning_ok(ty, type)) needs_clone = true;
+        else { cs->ok = false; return; }
+    }
     for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
-    cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly; cs->n++;
+    cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly;
+    cs->owning[cs->n] = needs_clone; cs->n++;
 }
 
 /* The C type of capture slot i: a fat closure is `tur_poly_fn_t`, everything
@@ -690,7 +723,8 @@ static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty,
     for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false; cs->n++;
+    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
+    cs->owning[cs->n] = false; cs->n++;
 }
 
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
@@ -2916,6 +2950,16 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = __cap->f%d;\n", cap_ctype(ce->ctx, caps, i), cn, i);
+            /* E1 (Option A): an owning capture admitted into a multi-shot
+             * continuation is CLONED (increfed) on read-out, so each invocation of
+             * this helper owns its own +1 that the body's drop balances.  The env's
+             * original +1 is intentionally leaked (matching the leaked-DK-node
+             * regime); the fixture carries requires.no-leak-check.  Currently only
+             * an rc handle reaches here (cap_owning_ok gates it). */
+            if (caps->owning[i]) {
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "rc_strong_increment(%s);\n", cn);
+            }
             free(cn);
         }
     }
