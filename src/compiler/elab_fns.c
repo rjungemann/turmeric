@@ -75,6 +75,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
             if (cflav >= 0) {
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_flavored(TY_INT, (ContFlavor)cflav);
+                if (cont_name_is_multishot(sym->name)) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
         }
@@ -142,11 +143,13 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
          * leaves BodyT unknown (unchecked), preserving existing signatures. */
         {
             int cflav = cont_flavor_from_name(head->name);
+            bool cmulti = head->name && cont_name_is_multishot(head->name);
             if (cflav >= 0 && form->as.list.len == 2) {
                 Type *ret = fn_type_from_form_impl(e, form->as.list.items[1],
                                               type_params, type_param_kinds, n_type_params);
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_flavored(ret ? ret->kind : TY_INT, (ContFlavor)cflav);
+                if (cmulti) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
             if (cflav >= 0 && form->as.list.len == 3) {
@@ -157,6 +160,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_arg_flavored(bt ? bt->kind : TY_UNKNOWN,
                                             rt ? rt->kind : TY_INT, (ContFlavor)cflav);
+                if (cmulti) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
         }
@@ -1668,6 +1672,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     param_kinds[n_params - 1] = TY_CONT;
                     params[n_params - 1]->type =
                         type_cont_flavored(TY_INT, (ContFlavor)_cflav);
+                    if (cont_name_is_multishot(kw->name))
+                        params[n_params - 1]->type.copy_kind = CK_MULTISHOT;
                     continue;
                 }
             }
@@ -3371,6 +3377,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* bare-fat-result-monomorphization: hand the freshly-built clone binding
      * back to elab_specialize_bare_fat, which redirects the call site to it. */
     if (e->bare_fat_spec_active) e->bare_fat_spec_result = b;
+    /* cps-backend-n6 cross-function resume: retain the source form of a fn with a
+     * continuation parameter, so a named-fn resuming receiver used cross-function
+     * (the reset is in a caller) can be re-elaborated into a
+     * `multishot-effect-cont` specialization (elab_specialize_cont_receiver).
+     * Cheap (one pointer) and scoped to cont-param fns; nothing else reads it. */
+    if (!b->defn_form) {
+        for (uint32_t _pi = 0; _pi < n_params; _pi++) {
+            if (params[_pi] && params[_pi]->type.kind == TY_CONT) {
+                b->defn_form = call;
+                break;
+            }
+        }
+    }
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
     /* #[used]: retain with external C linkage under separate compilation */

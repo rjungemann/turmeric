@@ -1,0 +1,16 @@
+;; A reified (cloneable) reset and a cross-function-catching reset coexist when
+;; they are DISTINCT resets (cps-backend-n6).  `inner` reifies its own lexical
+;; resuming shift (EX_CLONEABLE_RESET -- left intact by the whole-program pass);
+;; `both`'s OUTER plain reset (EX_RESET -- wrapped in a __Shift handler) catches
+;; the cross-function __Shift performed by `callee`.  The two mechanisms nest
+;; cleanly.  direct == cps == turi.
+(defn callee [] : int (shift (fn [k : cont] : int (k 1)) 0))
+;; pure lexical resuming shift -> inner reifies: (+ 1 [])[10] = 11
+(defn inner [] : int (reset (+ 1 (shift (fn [k : cont] : int (k 10)) 0))))
+;; outer plain reset catches callee's cross-function __Shift:
+;;   k = (+ inner=11 []); (k 1) = 12
+(defn both [] : int (reset (+ (inner) (callee))))
+(defn main [] : int
+  (println (inner))   ; 11
+  (println (both))    ; 12
+  0)

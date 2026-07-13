@@ -1,0 +1,31 @@
+;; Cross-function RESUME with a NAMED-function receiver (cps-backend-n6).  A named
+;; fn written with a plain `cont` param cannot be reflavored in place (its body
+;; was elaborated against a cloneable continuation), but its retained source form
+;; is re-elaborated into a `multishot-effect-cont` specialization (`NAME$xfn`)
+;; when used as a cross-function resuming receiver.  This makes the plan's
+;; verbatim opening example -- a named `ck` -- Just Work.  direct == cps == turi.
+
+;; --- the plan's opening example, verbatim: named receiver, double resume ---
+(defn ck [k : cont] : int (+ (k 1) (k 2)))
+(defn inner [] : int (shift ck 0))              ; shift in a callee
+(defn outer [] : int (reset (+ 10 (inner))))    ; reset in the caller: (10+1)+(10+2)=23
+
+;; --- named receiver, single resume ---
+(defn ak [k : cont] : int (k 1))
+(defn one [] : int (shift ak 0))
+(defn sum1 [] : int (reset (+ 100 (one))))      ; (100+1) = 101
+
+;; --- SAME named `cont` receiver used BOTH lexically AND cross-function:
+;;     the lexical use keeps the cloneable path, the cross-function use gets the
+;;     effect specialization -- two independent copies coexist ---
+(defn bk [k : cont] : int (+ (k 1) (k 2)))
+(defn lexical [] : int (reset (+ 10 (shift bk 0))))   ; lexical reified: 23
+(defn callee [] : int (shift bk 0))
+(defn crossfn [] : int (reset (+ 10 (callee))))        ; cross-function: 23
+
+(defn main [] : int
+  (println (outer))    ; 23
+  (println (sum1))     ; 101
+  (println (lexical))  ; 23
+  (println (crossfn))  ; 23
+  0)

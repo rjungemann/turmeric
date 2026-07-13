@@ -1,7 +1,7 @@
 ---
 title: Auto-desugar the shift/reset surface onto cross-function resume
 category: Planning
-status: open (prerequisites done; this is the remaining auto-desugar -- a substantial multi-part change)
+status: landed (slices A/B/C + integration, single- AND multi-shot receivers, inline-lambda AND named-fn receivers)
 description: Cross-function resumable continuations already WORK via the effect surface (perform/handle/resume/(k v)); blockers 1 (unified resume surface) and 3 (capturing fn payloads) landed, and the reset->handle + shift->perform mechanism is verified end to end. This plan is the remaining piece: automatically desugar a cross-function resuming `shift`/`reset` onto that machinery so users write the ordinary shift/reset surface. Split from cps-backend-n6-resuming-shift-plan.md; full analysis in docs/reported/cross-function-resume-design.md.
 ---
 
@@ -56,6 +56,74 @@ desugar of the `shift`/`reset` *surface* onto the working effect encoding.
 lexical abortive/reified shift is `EX_SHIFT` / `EX_CLONEABLE_SHIFT`, not a
 `perform`, so it bypasses the handler and reaches the outer reset unchanged --
 only a cross-function resuming shift performs `__Shift`.
+
+## What landed
+
+Slices A, B, C and the integration fixture are implemented; cross-function
+resume works on the plain `shift`/`reset` surface for single- AND multi-shot
+receivers (including the opening example = 23), `direct == cps == turi`:
+
+- **Slice A** -- `CONT_EFFECT` continuation flavor (`effect-cont`), `(k v)` ->
+  `EX_RESUME` (`types.h`, `elab_call.c`). Fixture `effect-cont-kv-sugar`.
+- **Slice B** -- a resuming `shift` with an inline-lambda `cont` receiver and no
+  lexical reset desugars to `(perform (__Shift RECV))`; the receiver's `cont`
+  param is reflavored to `multishot-effect-cont` *before* elaboration (in
+  `elab_shift`) so it is elaborated once (no dead cloneable copy). `__Shift` is
+  registered lazily (`elab_effects.c`).
+- **Slice C** -- reset nodes are recorded at elaboration time; a gated
+  post-elaboration pass (`elab_wrap_resets_for_crossfn_resume`) wraps each in a
+  `^multishot` `__Shift` handler only when `uses_crossfn_resume` is set --
+  non-using programs are byte-for-byte unchanged (full suite green). A resuming
+  shift with no reset anywhere is a compile error (TUR-E0016).
+- **Multi-shot** -- the receiver's `k` is `multishot-effect-cont` (CONT_EFFECT +
+  CK_MULTISHOT: `(k v)` snapshots before each resume) and the synthesized handler
+  is `^multishot`, so a receiver may resume `k` any number of times
+  (`(+ (k 1) (k 2))` = 23; a triple-resume = 306). `expr_has_multishot_handler`
+  (`emit_core.c`) gained `EX_RESET`/`EX_CLONEABLE_RESET` cases so the cloneable-
+  cont preamble is emitted for the synthesized handler inside a reset body.
+  Single-resume behaves identically (one snapshot, one resume). The one-shot
+  `effect-cont` flavor stays available (fixture `effect-cont-kv-sugar`);
+  `multishot-effect-cont` is pinned by `multishot-effect-cont-kv-sugar`.
+- **Named-fn receivers** -- a resuming receiver written as a top-level `defn`
+  works too. A plain-`cont` named receiver is re-elaborated from its retained
+  source form (`defn_form`) into a `multishot-effect-cont` specialization
+  `NAME$xfn` (via `elab_defn` + `elab_register_file_def`, reusing the bare-fat
+  monomorphization path); the shift is redirected to that clone. A named receiver
+  the user already annotated `multishot-effect-cont` is accepted directly (flavor
+  read from the receiver's own param binding). The same `cont`-param fn can be
+  used BOTH lexically (keeps the cloneable path) AND cross-function (gets the
+  effect specialization) -- the two copies coexist. So the plan's opening example
+  with a named `ck` now Just Works, verbatim. Fixture
+  `shift-crossfn-resume-named-fn`.
+- **Integration** -- fixture `shift-crossfn-resume-works` (non-capturing +
+  capturing single-resume, plus double- and triple-resume lambda receivers) and
+  `shift-crossfn-resume-named-fn` (named receivers, incl. lexical+cross-function
+  coexistence). `errors/shift-crossfn-resume` now pins the genuinely-unhandled
+  case: a resuming shift with no reset anywhere is a TUR-E0016 compile error.
+
+**Limitation (a single reset cannot serve both roles).** A `reset` that reifies a
+*lexical* resuming shift (an `EX_CLONEABLE_RESET`) cannot *also* catch a
+*cross-function* `__Shift`: the reified path walks the reset body under the narrow
+`build_cloneable` grammar, which a `(handle ...)` wrapper falls outside of. The
+two lowerings are fundamentally incompatible in one delimiter, so the
+whole-program pass wraps only plain `EX_RESET` nodes. This is well-behaved in
+every case:
+
+- **Distinct resets nest cleanly** -- a reified reset inside a plain reset (or
+  vice-versa) works; the plain one catches the cross-function `__Shift`, the
+  reified one is left intact (fixture `shift-crossfn-resume-nested-reset`).
+- **Forcing both roles onto one reset is rejected at compile time.** Most such
+  shapes hit `build_cloneable`'s `TUR-E0710` directly (the cross-function call
+  sits in the reified context, which the grammar refuses). The one shape that
+  slips past E0710 -- a cross-function `__Shift` performed from inside the lexical
+  shift's *receiver*, with a trivial reified context -- is caught by the
+  handler-installing-capacity check: if the program performs `__Shift` but has no
+  plain (wrappable) reset anywhere, it is a `TUR-E0016` compile error rather than
+  a runtime "Unhandled effect: __Shift" (fixture
+  `errors/shift-crossfn-resume-cloneable-reset-only`).
+
+So no program silently misbehaves: the incompatible combination is either
+expressed as two distinct resets (works) or rejected up front.
 
 ## Slices (ordered; each independently testable)
 

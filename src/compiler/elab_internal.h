@@ -615,6 +615,28 @@ typedef struct Elab {
      * set by elab_cloneable_shift's reified path at depth d and read by the
      * enclosing reset on exit. */
     bool             reified_shift_at_depth[64];
+    /* cps-backend-n6 cross-function resume: set true the first time a resuming
+     * shift with no lexical reset is lowered onto the synthetic __Shift effect
+     * (elab_cont_shift_core).  Read by the gated post-elaboration pass
+     * (elab_wrap_resets_for_crossfn_resume) so it wraps each reset's body in a
+     * __Shift handler ONLY when the program actually performs one -- keeping every
+     * non-using program's reset codegen byte-for-byte unchanged. */
+    bool             uses_crossfn_resume;
+    /* Span of the first cross-function resuming shift that desugared onto __Shift
+     * -- used by the post-pass to point the "no enclosing reset anywhere" error at
+     * a real source location. */
+    Span             crossfn_resume_span;
+    /* cps-backend-n6 cross-function resume: every EX_RESET / EX_CLONEABLE_RESET
+     * node created during elaboration is recorded here (by elab_reset /
+     * elab_cloneable_reset).  After elaboration, IF uses_crossfn_resume is set,
+     * elab_wrap_resets_for_crossfn_resume wraps each recorded node's body in a
+     * __Shift handler in place.  Recording is unconditional (cheap, no codegen
+     * impact); the wrap is gated, so a program with no cross-function resuming
+     * shift leaves every reset node untouched -- byte-for-byte identical codegen.
+     * Storing the exact node pointers avoids a fragile whole-program tree walk. */
+    Expr           **pending_reset_nodes;
+    uint32_t         n_pending_reset_nodes;
+    uint32_t         cap_pending_reset_nodes;
     /* CF7.3: the scope that was active immediately before the current function
      * body's inner scope was pushed (i.e., e->scope just before scope_init in
      * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
@@ -1119,6 +1141,11 @@ Expr *elab_serial_shift(Elab *e, const Form *call);
 Expr *elab_try_with(Elab *e, const Form *call);
 Expr *elab_defeffect(Elab *e, const Form *call);
 Expr *elab_perform(Elab *e, const Form *call);
+/* cps-backend-n6 cross-function resume: gated post-elaboration pass that wraps
+ * every recorded reset body in a __Shift handler when the program contains a
+ * cross-function resuming shift.  No-op otherwise.  Called by elaborate_program
+ * after the top-level elaboration loop. */
+void elab_wrap_resets_for_crossfn_resume(Elab *e);
 Expr *elab_handle(Elab *e, const Form *call);
 Expr *elab_handle_shallow(Elab *e, const Form *call);
 /* FH2-FH5: first-class handler values */

@@ -3555,6 +3555,32 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
                       fn_binding->name->name);
             return NULL;
         }
+        /* CONT_EFFECT (cross-function resume): the cont is an algebraic-effect
+         * handler continuation carried as a plain int64.  `(k v)` resumes it via
+         * EX_RESUME (dk_invoke), NOT a cloneable/escape/serial resume builtin --
+         * exactly the `is_continuation`-binding path above, but reached through a
+         * TY_CONT-typed receiver param that the __Shift desugar flavored
+         * CONT_EFFECT.  This is what lets a receiver `(fn [k : effect-cont] (k v))`
+         * resume the delimited continuation the enclosing reset's handler carries. */
+        if ((ContFlavor)fn_type.as.cont.flavor == CONT_EFFECT) {
+            if (cont_check_double_use(e, call->as.list.items[0])) return NULL;
+            Expr *value = elab_form(e, call->as.list.items[1]);
+            if (!value) return NULL;
+            /* The continuation is carried as an int64 handle; emit_effects_resume
+             * takes the real fiber-resume path (tur_effect_cont_resume) only for a
+             * TY_INT-typed k -- any other kind falls through to the identity
+             * "return the value" fallback.  So view the cont binding as its int64
+             * carrier here (mirrors the handler-continuation `is_continuation`
+             * path above and the cloneable-cont carrier view below).  Carry the
+             * binding's copy_kind onto the carrier so a CK_MULTISHOT continuation
+             * (multishot-effect-cont) takes the snapshot resume path -- resume
+             * dispatches on the k EXPR's copy_kind, not the binding's. */
+            Type kcar = TYPE_INT;
+            kcar.copy_kind = fn_type.copy_kind;
+            Expr *kvar = expr_new(e->arena, EX_VAR, kcar, call->span);
+            kvar->as.var.binding = fn_binding;
+            return elab_make_resume(e, kvar, value, call->span);
+        }
         Expr *karg = elab_form(e, call->as.list.items[1]);
         if (!karg) return NULL;
         /* slice 4 (resuming-shift plan): for a fully-typed continuation

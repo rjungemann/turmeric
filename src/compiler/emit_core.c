@@ -951,6 +951,14 @@ bool expr_has_multishot_handler(const Expr *e) {
             return false;
         case EX_FN_DEF:
             return e->as.fn_def_.fn && expr_has_multishot_handler(e->as.fn_def_.fn->body);
+        /* cps-backend-n6 cross-function resume: the desugar wraps a reset body in a
+         * ^multishot __Shift handler, so descend into reset bodies -- otherwise the
+         * synthesized multishot handler is missed and the cloneable-cont preamble
+         * is not emitted (undefined tur_cloneable_cont_* at link time). */
+        case EX_RESET:
+            return expr_has_multishot_handler(e->as.reset_.body);
+        case EX_CLONEABLE_RESET:
+            return expr_has_multishot_handler(e->as.cloneable_reset_.body);
         case EX_PROGRAM:
             for (uint32_t i = 0; i < e->as.program.n; i++) {
                 if (expr_has_multishot_handler(e->as.program.items[i])) return true;

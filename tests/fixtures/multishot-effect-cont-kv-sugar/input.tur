@@ -1,0 +1,23 @@
+;; multishot-effect-cont (cps-backend-n6): a CONT_EFFECT continuation whose (k v)
+;; resumes MULTI-shot -- it snapshots the continuation before each resume, so a
+;; receiver may invoke `k` more than once.  This is the receiver-side convention
+;; the shift/reset -> __Shift desugar attaches for cross-function resume; here it
+;; is exercised directly with a hand-written ^multishot handler.
+;;
+;; The effect is performed in a CALLEE (`inner`) and handled by a ^multishot
+;; handler in a CALLER (`outer`), which applies the receiver to the delimited
+;; continuation.  The receiver resumes k twice: k = (+ 10 []); (k 1) + (k 2) =
+;; 11 + 12 = 23.  direct == cps == turi.
+
+(defeffect ShiftE [f : (fn [multishot-effect-cont] int)] : int)
+
+(defn inner [] : int
+  (perform (ShiftE (fn [k : multishot-effect-cont] : int (+ (k 1) (k 2))))))
+
+(defn outer [] : int
+  (handle (+ 10 (inner))
+    (ShiftE [f] ^multishot k) (f k)))
+
+(defn main [] : int
+  (println (outer))   ; 23
+  0)
