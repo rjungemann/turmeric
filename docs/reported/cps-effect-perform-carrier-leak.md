@@ -16,17 +16,28 @@ lowering heap-allocates a carrier to cross the `intptr`-typed
 > clears `cps-backend-multiarg-effect`, `-multiarg-effect-float`, and
 > `-tierc-effect-arg` (markers dropped).
 >
-> **Still open:** the **fiber-path** Tier-C boxes (`cps-backend-tierc-effect`).
-> That fixture's effect lowers to the ucontext **fiber** runtime
-> (`tur_effect_cont_resume`, `emit_effects.c`), whose `eff_box_expr` boxes the
-> resume value / handler result and whose `eff_slot_load` never frees them, so
-> they leak. Reaping them with `__dk_reap_ptr` is **not** safe in general: the
-> DK reap prelude is emitted only when the program uses DK/CPS delimited control
-> (`emit_module.c:6966`), so a **pure-fiber** effect program would reference an
-> undefined `__dk_reap_ptr`. The fiber runtime needs its own box reclamation
-> (free on fiber/handler teardown, honoring multi-shot resume) -- a separate
-> change in `emit_effects.c` / the fiber runtime. `cps-backend-tierc-effect`
-> keeps `requires.no-leak-check` until then.
+> **Still open:** the Tier-C boxes in `cps-backend-tierc-effect`. This is **not**
+> a second, parallel leak to fix in place -- it is the same carrier leak surfacing
+> on the **legacy fiber effect fallback**, which the CPS-backend-unification work
+> (`docs/upcoming/v2/cps-backend-unification-plan.md`) is folding onto the DK
+> substrate. That fixture's `Get` effect returns a **Tier-C** (heap-boxed struct)
+> result; a Tier-C effect *result* is not yet in the DK-emittable subset, so the
+> whole `run`/`use-get` function is delegated to the **direct emitter**, whose
+> effect lowering is the ucontext fiber runtime (`emit_effects.c`:
+> `eff_box_expr` boxes the resume value / handler result, `eff_slot_load` never
+> frees them). Contrast `cps-backend-tierc-effect-arg`, whose effect has a
+> Tier-C *argument* but a scalar result: it stays on the DK `dk_perform` path and
+> is fixed above.
+>
+> The right resolution is therefore **not** to bolt box reclamation onto the fiber
+> runtime (and it cannot reuse `__dk_reap_ptr` anyway: the reap prelude is gated on
+> DK/CPS usage at `emit_module.c:6967`, so a pure-fiber program would reference an
+> undefined symbol). It resolves when a **Tier-C effect result** is brought onto
+> the DK effect path (part of the `emit_cps.c` retirement / unification), at which
+> point the resume-value and handler-result boxes flow through
+> `slot_store` / `dk_perform` and are already covered by the `slot_store_reap`
+> treatment added here. `cps-backend-tierc-effect` keeps `requires.no-leak-check`
+> until that lands.
 
 ## Summary
 
@@ -99,13 +110,16 @@ which the carrier is dead -- but no free is emitted.
    settles. Only boxes read with `slot_load(consume=false)` are wrapped
    (`slot_store_reap`), so the entry-return box that `slot_load(consume=true)`
    frees is never double-freed.
-2. **OPEN (fiber path).** The `emit_effects.c` boxes (`eff_box_expr`, resume
-   value / handler result) leak the same way but cannot reuse `__dk_reap_ptr`:
-   the reap prelude is gated on DK/CPS delimited-control usage
-   (`emit_module.c:6966`), so a pure-fiber effect program would not have it. Give
-   the fiber runtime its own box reclamation -- free the box on fiber/handler
-   teardown, honoring multi-shot resume (reference-count or copy-per-replay a box
-   that rides a replayed value rather than freeing it on first read).
+2. **OPEN (resolves via unification, not a fiber-side patch).** The remaining
+   `cps-backend-tierc-effect` boxes leak because a Tier-C effect *result* forces
+   the function onto the legacy fiber effect fallback (`emit_effects.c`). Bring a
+   Tier-C effect result into the DK-emittable subset so `handle`/`perform`/`resume`
+   lower through `dk_handler`/`dk_perform` (part of the `emit_cps.c` retirement in
+   `docs/upcoming/v2/cps-backend-unification-plan.md`); the resume-value and
+   handler-result boxes then ride `slot_store` and are picked up by
+   `slot_store_reap` with no fiber-specific reclamation. Do **not** add a parallel
+   free path to the fiber runtime -- it is being retired, and it cannot reference
+   the DK reap list (prelude gated at `emit_module.c:6967`).
 
 ## Affected fixtures
 
