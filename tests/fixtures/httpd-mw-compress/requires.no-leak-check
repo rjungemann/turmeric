@@ -1,6 +1,6 @@
 requires.spices (loads the sibling turmeric-spices zlib), so it cannot be
-leak-verified in a spices-absent checkout. Leaks the same class as the other
-httpd fixtures: the handler/middleware-chain closures httpd owns and never
-frees (the httpd handler-chain-drop follow-up in
-docs/leak-detection-followups-plan.md), independent of the reactor
-callback-box ownership landed in P1.
+leak-verified in a spices-absent checkout. Same class as the other composed
+httpd handlers: the inner compose-middleware onion layers leak (intentional,
+bounded, process-lifetime), unreachable from the outer-handler free in
+httpd-free. Fix tracked in docs/httpd-middleware-chain-drop-plan.md; kept
+marked until that lands.

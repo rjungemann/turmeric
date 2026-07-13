@@ -255,17 +255,17 @@ cors*,form,json,log,rate-limit,static}`, `httpd-h{5-tls,7-middleware}`,
 `httpd-async-mw-compose`, plus `httpd-mw-fold-many`/`-compress`) still report a
 residual leak and keep their markers.
 
-Fully draining the onion is **not** safely doable from C: the runtime gets an
-opaque `int64_t` box and cannot tell a captured-closure field from a captured
-value, and the emitted env field layout is not a stable ABI. The design space
-(runtime closure drop glue via registry or embedded drop-fn; a reified,
-server-owned middleware chain that needs no compiler change; or accepting the
-bounded leak) is worked out in
-[docs/upcoming/closure-drop-glue-plan.md](upcoming/closure-drop-glue-plan.md).
-Its recommendation: these are bounded, process-lifetime leaks with no
-correctness cost, so keep the 17 markers for now and fold the reified-chain fix
-into the next middleware-API revision rather than opening a language-wide ABI
-change solely to reclaim ~1 box per layer at process exit.
+Fully draining the onion is **not** safely doable from the current C teardown:
+the runtime gets an opaque `int64_t` box and cannot tell a captured-closure
+field from a captured value, and the emitted env field layout is not a stable
+ABI. This is **accepted as a bounded, process-lifetime leak for now** -- each of
+the 17 markers carries a rationale saying so. The tracked resolution is to
+**reify the middleware chain** into a server-owned node list the teardown can
+walk and free (no compiler change), folded into the next middleware-API
+revision; see
+[docs/httpd-middleware-chain-drop-plan.md](httpd-middleware-chain-drop-plan.md).
+A general compiler closure-drop-glue feature would also solve it but is not
+justified by this one bounded leak (that doc explains why).
 
 The rate-limiter bucket table (`httpd-mw-rate-limit`, ~24 KB) is a separate
 one-time table freed in its own destructor -- fold it into the same follow-up.
