@@ -1,0 +1,19 @@
+;; Interpreter variant of session-send (turi-session-types-plan, Slice B).
+;;
+;; Same protocol as session-send, but the receiver peer runs as an interpreter
+;; async fiber (`async`/`await`) instead of a pthread, so it runs under the
+;; cooperative session-channel runtime of `tur --interpret`.  requires.interp
+;; forces the interpreter path in the compiled suite too (a session recv would
+;; block a cooperative async fiber under the compiled pthread runtime).
+;;
+;; Expected output: 42
+(defn main [] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (async (fn []
+                     (let [[n r] (recv r)]
+                       (println n)
+                       (close r))))]
+      (let [s (send s 42)]
+        (close s)
+        (await t))))
+  0)

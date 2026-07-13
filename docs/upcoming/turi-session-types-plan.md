@@ -1,7 +1,21 @@
 # Session-typed channels under the interpreter (`tur --interpret`) -- Plan
 
-> **Status:** Not started.
-> **Last Updated:** 2026-07-12
+> **Status:** COMPLETE -- Slices A + A.5 + B + C + D landed.  The full session
+> surface -- `make-session` / `send` / `recv` / `close` / `offer` /
+> `choose-left` / `choose-right` / `recv-timeout` and the multi-party
+> `make-protocol` / `send-to` / `recv-from` / role-`close` -- now runs under
+> `tur --interpret` via a cooperative fiber rendezvous (`src/turi/eval.c`,
+> cooperative session + router runtime; `turi_sched_step` in `src/turi/fiber.c`).
+> The carved `session-close/requires.tur-only` marker is deleted, and interpreter
+> test variants (`session-send-turi`, `session-recv-turi`,
+> `session-calc-rpc-turi`, `session-offer-turi`, `session-offer-right-turi`,
+> `session-timeout-ok-turi`, `session-timeout-expired-turi`,
+> `session-mp-ping-turi`, `session-mp-three-role-turi`,
+> `session-mp-handshake-turi`, all marked `requires.interp-only`) exercise real
+> send/recv, offer/choose branch selection, timed receive, and 2-/3-role
+> multi-party protocols under `tests/run-turi.sh`.  No session inline-C template
+> remains carved under the interpreter.
+> **Last Updated:** 2026-07-13
 > **Type:** Interpreter / runtime
 > **Scope:** Give the tree-walking interpreter a cooperative-fiber session-channel
 > runtime so `make-session` / `close` / `send` / `recv` / `offer` / `choose` /
@@ -163,7 +177,7 @@ need an interpreter-friendly `spawn` or test variants.
 
 ## Phases
 
-### Slice A -- make-session Close + close (unblocks the carved fixture)
+### Slice A -- make-session Close + close (unblocks the carved fixture) -- DONE
 
 Intercept `tur_session_new(` (produce a `TuriChan`, refcount 2, both endpoints
 alias) and `tur_session_close(` / `tur_role_close(` (refcount--, free at 0). No
@@ -172,16 +186,33 @@ Smallest step; note it still requires the heap channel object and interception o
 the `elab_forms.c`-synthesized `tur_session_new(TUR_DBGPROTO(...))`, not a bare
 one-liner -- so it is meaningfully more than the GC special-case, but self-contained.
 
-### Slice A.5 -- interpreter `spawn` (peer as a fiber)
+### Slice A.5 -- interpreter `spawn` (peer as a fiber) -- DONE (via `async`/`await`)
 
-Add an interpreter-native `spawn` that takes a `TURI_CLOSURE` and creates a
-`TuriFiber` (reuse `EX_ASYNC`, `eval.c:7542`), returning a joinable handle;
-`join` awaits it. This replaces the fixtures' `pthread_create` inline-C, which
-cannot run under the interpreter (it dereferences the compiled fat-closure ABI).
-Provide it under the names the fixtures use, or ship interpreter test variants.
-This is the prerequisite for any send/recv fixture.
+The interpreter already has a closure-to-fiber spawn: `(async (fn [] ...))`
+builds a `TuriFiber` (the `EX_ASYNC` path) and `(await t)` joins it. Rather than
+introduce a second `spawn`/`join` surface, the shipped interpreter test variants
+drive the peer with `async`/`await` -- the "ship interpreter test variants"
+option. The compiled fixtures' `pthread_create` inline-C (which dereferences the
+compiled fat-closure ABI) still cannot run under `--interpret`, so those keep
+running compiled under `tests/run.sh`; the `-turi` variants own the interpreter
+path. A dedicated interpreter-native `spawn`/`join` under the fixtures' own names
+remains possible future work but was not needed to un-carve Slice B.
 
-### Slice B -- cooperative send/recv
+### Slice B -- cooperative send/recv -- DONE
+
+Implemented as `TuriChan` (a heap struct smuggled through a `TURI_INT` pointer,
+bump-allocated from the env value pool so it is leak-clean at teardown) plus the
+`session_send` / `session_recv` / `session_close` park/wake protocol in
+`src/turi/eval.c`, dispatched by `eval_session_intercept` from the `EX_INLINE_C`
+case. Blocking uses `session_park_or_spin`: a fiber suspends via `swapcontext`
+(recorded as the channel's `send_waiter`/`recv_waiter` so its counterpart can
+`turi_sched_enqueue` it); the main context pumps `turi_sched_step`. The compiled
+`state 0/1/2` handshake is preserved verbatim -- send returns only after the
+receiver acks (state 2), and the slot's return-to-idle (state 0) wakes a peer
+parked in the next step's send, so recurring RPC channels that flip
+sender/receiver roles across steps rendezvous correctly.
+
+Original Slice B design note follows:
 
 Implement the `TuriChan` park/wake mailbox and intercept
 `tur_session_send(` / `tur_session_recv(` (and the endpoint-alias
@@ -190,14 +221,48 @@ only after receiver acks" discipline so a fiber cannot race itself. This is the
 bulk of the work -- it introduces the channel value type and the park/resume
 protocol. Un-carve Slice B fixtures (via interpreter `spawn`).
 
-### Slice C -- offer/choose + recv-timeout
+### Slice C -- offer/choose + recv-timeout -- DONE
+
+Implemented. The data-slot send/recv was generalized into `session_send_on` /
+`session_recv_on` (parameterized by a `state`/`slot` pair), so the `branch` slot
+reuses the same park/wake handshake: `session_send_tag` / `session_recv_tag`
+back `choose-left` / `choose-right` (tag 0/1) and `offer`. `eval_session_intercept`
+routes `tur_session_recv_tag(` / `tur_session_send_tag(...0/1)` /
+`tur_session_recv_timeout(` / the `tur__rtv_` read. The `offer` / `recv-timeout`
+`EX_MATCH` gets a `TY_SESSION_OFFER` branch in `eval_match_resolve` that reads
+the tag, re-evaluates the scrutinee inline-C's `val_exprs[0]` for the channel
+(a pure endpoint read), picks the Left (0) / Right (1) arm, and binds the channel
+to the arm variable -- mirroring the compiled `emit_expr.c` TY_SESSION_OFFER
+match. `recv-timeout` does a bounded main-context timed wait (pump
+`turi_sched_step`, re-check the deadline) and stashes the received value in
+`env->session_rtv` -- the interpreter analog of the compiled `tur__rtv_`
+thread-local, read by the recv-pair split. Also fixed `session_send` to drop
+silently on an abandoned channel (return the endpoint) exactly as the compiled
+`tur_session_send` does, instead of erroring -- this is what lets a timed-out
+receiver close its end while a late sender's deposit is discarded.
+
+Original Slice C design note follows:
 
 Add the `branch` slot handshake; intercept `tur_session_recv_tag(` /
 `tur_session_send_tag(...0/1)`. Wire the `offer` `EX_MATCH` on the returned tag
 (compiled path at `emit_expr.c:7663`; interpreter evaluates the tag and picks the
 arm). `recv-timeout` adds a scheduler timer + `tur__rtv_` env-slot analog.
 
-### Slice D -- multi-party roles
+### Slice D -- multi-party roles -- DONE
+
+Implemented as `TuriRouter` (an N x N grid of `TuriChan` cells; `slots[i*N+j]`
+carries role i -> role j) and `TuriRole { router, role_idx }`, both pool-allocated
+so they are reclaimed at env teardown.  Router send/recv reuse Slice B's data-slot
+park/wake verbatim -- `router_send` / `router_recv` just address the right cell
+and call `session_send_on` / `session_recv_on`.  `eval_session_intercept` routes
+`tur_make_roles(` / `tur_get_role(` / `tur_router_send(` / `tur_router_recv(` /
+`tur_role_close(`; the role/peer indices baked into each template are parsed out
+with `session_int_after` (the same non-NUL-terminated-slice-safe scan used for
+the choose tag).  `role-close` drops the router refcount.  Verified against
+2-role bidirectional (ping), 3-role pipeline (three-role), and a 3-message 2-role
+handshake, each with the peer role(s) as async fibers.
+
+Original Slice D design note follows:
 
 Interpreter `TurRouter` analog (N x N `TuriChan` grid) + `TurRole`; intercept
 `tur_make_roles` / `tur_get_role` / `tur_router_send` / `tur_router_recv` /

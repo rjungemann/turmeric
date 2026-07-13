@@ -1,0 +1,20 @@
+;; Interpreter variant of session-timeout-ok (turi-session-types-plan, Slice C').
+;;
+;; The sender peer deposits a value well before the receiver's timeout, so
+;; recv-timeout takes the Left (success) branch and reads the value.  The value
+;; is stashed in env->session_rtv (the interpreter analog of the compiled
+;; `tur__rtv_` thread-local) and read back by the recv-pair destructuring.
+;;
+;; Expected output: 42
+(defn main [] : int
+  (let [[r s] (make-session (Recv int (Timeout Close Close)))]
+    (let [t (async (fn []
+                     (let [s (send s 42)]
+                       (close s))))]
+      (match (recv-timeout r 1000)
+        (Left pair)
+          (let [[v r] pair]
+            (println v) (close r) (await t))
+        (Right r)
+          (do (println "timeout") (close r) (await t)))))
+  0)

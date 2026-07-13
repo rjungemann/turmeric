@@ -1,0 +1,17 @@
+;; Interpreter variant of session-recv (turi-session-types-plan, Slice B).
+;;
+;; The main context recvs; the sender peer runs as an async fiber.  Exercises
+;; the reverse rendezvous direction (main-context receiver parking on the
+;; scheduler while an async fiber deposits the value).
+;;
+;; Expected output: 99
+(defn main [] : int
+  (let [[r s] (make-session (Recv int Close))]
+    (let [t (async (fn []
+                     (let [s (send s 99)]
+                       (close s))))]
+      (let [[n r] (recv r)]
+        (println n)
+        (close r)
+        (await t))))
+  0)

@@ -5378,6 +5378,48 @@ static int eval_match_resolve(TuriEnv *env, EvalFrame *frame, const Expr *e,
     }
     MatchArm *arms   = e->as.match_.arms;
     uint32_t  n_arms = e->as.match_.n_arms;
+
+    /* turi-session-types-plan (Slice C): session offer / recv-timeout match.
+     * The scrutinee (tur_session_recv_tag / tur_session_recv_timeout) returns a
+     * branch tag as an int (0 = Left, 1 = Right); the matching arm binds the
+     * *channel* -- not the tag -- to its arm variable (mirrors the compiled
+     * TY_SESSION_OFFER match in emit_expr.c).  The channel is the scrutinee
+     * inline-C's val_exprs[0], re-evaluated here (a pure endpoint read). */
+    if (e->as.match_.scrutinee->type.kind == TY_SESSION_OFFER) {
+        int64_t     tag   = (val.tag == TURI_INT) ? val.as_int : -1;
+        const Expr *scrut = e->as.match_.scrutinee;
+        TuriValue   chan  = turi_nil();
+        if (scrut->kind == EX_INLINE_C) {
+            InlineC *sic = scrut->as.inline_c_.inline_c;
+            if (sic->n_val_exprs > 0 && sic->val_exprs[0]) {
+                chan = eval_expr(env, frame, sic->val_exprs[0]);
+                if (turi_is_error(chan) || env_signaled(env)) {
+                    *out_val = chan; return -1;
+                }
+            }
+        }
+        for (uint32_t ai = 0; ai < n_arms; ai++) {
+            MatchArm     *arm = &arms[ai];
+            MatchPattern *pat = &arm->pattern;
+            if (!pat->is_wildcard && pat->union_member_idx >= 0 &&
+                pat->union_member_idx != (int)tag)
+                continue;
+            EvalFrame *arm_frame = eval_frame_new(env, frame);
+            if (pat->n_bindings > 0 && pat->bindings[0])
+                frame_bind(env, arm_frame, pat->bindings[0]->name->name, chan);
+            if (arm->guard) {
+                TuriValue gv = eval_expr(env, arm_frame, arm->guard);
+                if (turi_is_error(gv) || env_signaled(env)) {
+                    eval_frame_free(arm_frame); *out_val = gv; return -1;
+                }
+                if (gv.tag != TURI_BOOL || !gv.as_bool) {
+                    eval_frame_free(arm_frame); continue;
+                }
+            }
+            *out_frame = arm_frame; *out_body = arm->body; return 1;
+        }
+        return 0;
+    }
     for (uint32_t ai = 0; ai < n_arms; ai++) {
         MatchArm     *arm = &arms[ai];
         MatchPattern *pat = &arm->pattern;
@@ -7029,6 +7071,387 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
 }
 
 /* -------------------------------------------------------------------------
+ * Cooperative session-channel runtime (turi-session-types-plan)
+ *
+ * The compiled runtime (emit_module.c) backs `make-session` / `send` / `recv` /
+ * `close` with a pthread mutex/condvar one-slot rendezvous.  The tree-walking
+ * interpreter is single-threaded but cooperative, so we mirror the same
+ * `state 0/1/2` handshake discipline on the existing fiber scheduler: a blocked
+ * `recv` parks its fiber (or, in the main context, pumps the scheduler) until
+ * the matching `send` deposits a value and wakes it.
+ *
+ * A channel is a heap TuriChan smuggled through a TURI_INT holding its
+ * pointer -- exactly how the type layer already lowers Session to a machine
+ * pointer/int64.  Both endpoints alias the identical TuriChan (duality is
+ * type-level only).
+ * The struct is bump-allocated from the env value pool, so it is reclaimed en
+ * masse at env teardown (leak-clean under LSan); `close` decrements the refcount
+ * and marks it abandoned but never frees it individually.
+ * ---------------------------------------------------------------------- */
+
+typedef struct TuriChan {
+    TuriValue  data_val;     int data_state;    /* 0=idle 1=ready 2=acked */
+    TuriValue  branch_val;   int branch_state;  /* offer/choose slot (Slice C) */
+    TuriFiber *send_waiter;                     /* parked sender, or NULL */
+    TuriFiber *recv_waiter;                     /* parked receiver, or NULL */
+    int        refcount;                        /* 2 at make-session */
+    int        abandoned;                       /* a peer has closed */
+} TuriChan;
+
+#define TURI_SESS_SENDER   0
+#define TURI_SESS_RECEIVER 1
+
+/* Block the current context until progress is possible.  A fiber suspends via
+ * swapcontext (recorded as the channel's waiter so its counterpart can enqueue
+ * it); the main context pumps one scheduler iteration.  Returns 0 on resume,
+ * -1 if the main context has nothing left to run (deadlock). */
+static int session_park_or_spin(TuriEnv *env, TuriChan *ch, int role) {
+    TuriFiber *cur = env->current_fiber;
+    if (cur) {
+        if (role == TURI_SESS_SENDER) ch->send_waiter = cur;
+        else                          ch->recv_waiter = cur;
+        cur->state = TURI_FIBER_SUSPENDED;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        swapcontext(&cur->ctx, &env->sched_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+        return 0;
+    }
+    return turi_sched_step(env) ? 0 : -1;
+}
+
+static void session_wake(TuriEnv *env, TuriFiber **slot) {
+    if (*slot) { TuriFiber *w = *slot; *slot = NULL; turi_sched_enqueue(env, w); }
+}
+
+/* Generic slot send: wait for the slot to be idle, deposit, wake a parked
+ * receiver, then wait for the receiver's ack (state 2) before returning --
+ * preserving the compiled "send returns only after recv acks" ordering.  A
+ * peer that closes the channel (abandoned) makes send drop the value silently
+ * and return the channel, exactly as the compiled tur_session_send does.  The
+ * `state`/`slot` pair selects the data slot (send/recv) or the branch slot
+ * (choose/offer). */
+static TuriValue session_send_on(TuriEnv *env, TuriChan *ch, TuriValue val,
+                                 int *state, TuriValue *slot) {
+    while (*state != 0 && !ch->abandoned) {
+        if (session_park_or_spin(env, ch, TURI_SESS_SENDER) != 0)
+            return turi_error("eval: session send deadlocked (no receiver)");
+    }
+    if (ch->abandoned) return turi_int((int64_t)(intptr_t)ch);  /* drop */
+    *slot  = val;
+    *state = 1;
+    session_wake(env, &ch->recv_waiter);
+    while (*state != 2 && !ch->abandoned) {
+        if (session_park_or_spin(env, ch, TURI_SESS_SENDER) != 0)
+            return turi_error("eval: session send deadlocked (receiver never acked)");
+    }
+    if (!ch->abandoned) {
+        *state = 0;
+        /* The slot is idle again: wake a peer parked in the next step's send
+         * waiting for exactly this idle transition (e.g. a recurring RPC where
+         * the channel flips sender/receiver roles across steps). */
+        session_wake(env, &ch->send_waiter);
+    }
+    return turi_int((int64_t)(intptr_t)ch);
+}
+
+/* Generic slot recv: wait for a deposited value, take it, ack (state 2), wake
+ * the sender.  Returns the received value. */
+static TuriValue session_recv_on(TuriEnv *env, TuriChan *ch,
+                                 int *state, TuriValue *slot) {
+    while (*state != 1) {
+        if (ch->abandoned)
+            return turi_error("eval: recv on a closed session channel");
+        if (session_park_or_spin(env, ch, TURI_SESS_RECEIVER) != 0)
+            return turi_error("eval: session recv deadlocked (no sender)");
+    }
+    TuriValue v = *slot;
+    *state = 2;
+    session_wake(env, &ch->send_waiter);
+    return v;
+}
+
+static TuriValue session_send(TuriEnv *env, TuriChan *ch, TuriValue val) {
+    return session_send_on(env, ch, val, &ch->data_state, &ch->data_val);
+}
+static TuriValue session_recv(TuriEnv *env, TuriChan *ch) {
+    return session_recv_on(env, ch, &ch->data_state, &ch->data_val);
+}
+
+/* choose-left/right: deposit the branch tag (0/1) on the branch slot. */
+static TuriValue session_send_tag(TuriEnv *env, TuriChan *ch, int64_t tag) {
+    return session_send_on(env, ch, turi_int(tag),
+                           &ch->branch_state, &ch->branch_val);
+}
+/* offer: receive the peer's branch tag (0/1) from the branch slot. */
+static TuriValue session_recv_tag(TuriEnv *env, TuriChan *ch) {
+    return session_recv_on(env, ch, &ch->branch_state, &ch->branch_val);
+}
+
+/* recv-timeout: wait up to `dur_ms` for a deposited value on the data slot.
+ * On success, ack, stash the value in env->session_rtv, and return tag 0
+ * (Left); on timeout (or a peer that closed without sending) return tag 1
+ * (Right).  The receiver runs in the main context in practice (the compiled
+ * fixtures call recv-timeout from the main thread), so the timed wait pumps the
+ * scheduler and re-checks the deadline; poll_io caps each step at 50 ms so the
+ * deadline is observed promptly. */
+static TuriValue session_recv_timeout(TuriEnv *env, TuriChan *ch, int64_t dur_ms) {
+    uint64_t deadline = turi_now_ms() + (dur_ms > 0 ? (uint64_t)dur_ms : 0);
+    while (ch->data_state != 1) {
+        if (ch->abandoned)              return turi_int(1);  /* peer gone -> timeout */
+        if (turi_now_ms() >= deadline)  return turi_int(1);  /* elapsed -> timeout */
+        if (env->current_fiber) {
+            /* Fiber-context timed recv would need a scheduler timer to bound the
+             * park; the shipped variants call recv-timeout from the main context,
+             * so park cooperatively and let a woken deposit / the deadline break
+             * the loop. */
+            if (session_park_or_spin(env, ch, TURI_SESS_RECEIVER) != 0)
+                return turi_int(1);
+        } else {
+            /* Main context: pump one bounded scheduler step, then re-check the
+             * deadline.  turi_sched_step returns false only when nothing is
+             * runnable; the loop then just re-polls the clock until `deadline`. */
+            turi_sched_step(env);
+        }
+    }
+    TuriValue v = ch->data_val;
+    ch->data_state = 2;
+    session_wake(env, &ch->send_waiter);
+    env->session_rtv = v;   /* tur__rtv_ analog: read by the recv-pair split */
+    return turi_int(0);
+}
+
+/* close: mark abandoned, wake any blocked peer, drop the refcount. */
+static TuriValue session_close(TuriEnv *env, TuriChan *ch) {
+    ch->abandoned = 1;
+    session_wake(env, &ch->send_waiter);
+    session_wake(env, &ch->recv_waiter);
+    if (ch->refcount > 0) ch->refcount--;
+    return turi_nil();
+}
+
+/* -------------------------------------------------------------------------
+ * Multi-party session router (turi-session-types-plan, Slice D)
+ *
+ * Mirrors the compiled TurRouter/TurRole (emit_module.c): an N x N grid of
+ * one-slot rendezvous cells, slot[i*N + j] carrying role i -> role j.  Each
+ * cell is a TuriChan, so router send/recv reuse the Slice B data-slot park/wake
+ * (session_send_on / session_recv_on) verbatim -- only the slot addressing is
+ * new.  A TuriRole is {router, role_idx}; both the router (with its slots array)
+ * and each role are pool-allocated, so they are reclaimed at env teardown.
+ * ---------------------------------------------------------------------- */
+
+typedef struct TuriRouter {
+    int       n_roles;
+    int       refcount;   /* live TuriRole endpoints; role-close decrements it */
+    TuriChan *slots;      /* n_roles*n_roles cells */
+} TuriRouter;
+
+typedef struct TuriRole {
+    TuriRouter *router;
+    int         role_idx;
+} TuriRole;
+
+/* make-protocol destructuring vi=0: allocate the router (refcount = n) and the
+ * role-0 endpoint. */
+static TuriValue router_make_roles(TuriEnv *env, int n, int idx) {
+    if (n < 1) n = 1;
+    TuriRouter *r = (TuriRouter *)turi_val_calloc(env, sizeof(TuriRouter));
+    r->n_roles  = n;
+    r->refcount = n;
+    r->slots    = (TuriChan *)turi_val_calloc(env, (size_t)n * n * sizeof(TuriChan));
+    TuriRole *role = (TuriRole *)turi_val_calloc(env, sizeof(TuriRole));
+    role->router   = r;
+    role->role_idx = idx;
+    return turi_int((int64_t)(intptr_t)role);
+}
+
+/* make-protocol destructuring vi=k>0: a peer endpoint on the same router. */
+static TuriValue router_get_role(TuriEnv *env, TuriRole *base, int peer_idx) {
+    TuriRole *role = (TuriRole *)turi_val_calloc(env, sizeof(TuriRole));
+    role->router   = base->router;
+    role->role_idx = peer_idx;
+    return turi_int((int64_t)(intptr_t)role);
+}
+
+/* send-to: rendezvous on slot (role_idx -> to_idx); returns the role endpoint. */
+static TuriValue router_send(TuriEnv *env, TuriRole *role, int to_idx, TuriValue val) {
+    TuriRouter *r = role->router;
+    if (to_idx < 0 || to_idx >= r->n_roles || role->role_idx < 0 ||
+        role->role_idx >= r->n_roles)
+        return turi_error("eval: session router send: role index out of range");
+    TuriChan *ch = &r->slots[role->role_idx * r->n_roles + to_idx];
+    (void)session_send_on(env, ch, val, &ch->data_state, &ch->data_val);
+    return turi_int((int64_t)(intptr_t)role);
+}
+
+/* recv-from: rendezvous on slot (from_idx -> role_idx); returns the value. */
+static TuriValue router_recv(TuriEnv *env, TuriRole *role, int from_idx) {
+    TuriRouter *r = role->router;
+    if (from_idx < 0 || from_idx >= r->n_roles || role->role_idx < 0 ||
+        role->role_idx >= r->n_roles)
+        return turi_error("eval: session router recv: role index out of range");
+    TuriChan *ch = &r->slots[from_idx * r->n_roles + role->role_idx];
+    return session_recv_on(env, ch, &ch->data_state, &ch->data_val);
+}
+
+/* role-close: drop the router refcount (pool-owned; never individually freed). */
+static TuriValue router_role_close(TuriEnv *env, TuriRole *role) {
+    (void)env;
+    if (role->router->refcount > 0) role->router->refcount--;
+    return turi_nil();
+}
+
+/* Parse the decimal integer that immediately follows `needle` in the code
+ * slice (which is a view into source, not NUL-terminated).  Returns -1 if the
+ * needle is absent or no digits follow. */
+static int session_int_after(const char *p, uint32_t n, const char *needle) {
+    size_t nl = strlen(needle);
+    if (nl > n) return -1;
+    for (uint32_t i = 0; i + nl <= n; i++) {
+        if (memcmp(p + i, needle, nl) == 0) {
+            uint32_t j = i + (uint32_t)nl;
+            int  val = 0;
+            bool any = false;
+            while (j < n && p[j] >= '0' && p[j] <= '9') {
+                val = val * 10 + (p[j] - '0'); j++; any = true;
+            }
+            return any ? val : -1;
+        }
+    }
+    return -1;
+}
+
+/* Intercept the session inline-C templates (elab_sessions.c / elab_forms.c) and
+ * route them to the cooperative runtime above.  All templates are captureless;
+ * the channel/value operands arrive as val_exprs.  Returns true (writing *out)
+ * when handled, false to fall through to the clean inline-C carve. */
+static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
+                                   InlineC *ic, TuriValue *out) {
+    if (ic->n_captures != 0 || !ic->code.p) return false;
+    const char *p = ic->code.p;
+    uint32_t    n = ic->code.len;
+#define SESS_PFX(s) (n >= (uint32_t)(sizeof(s) - 1) && \
+                     memcmp(p, (s), sizeof(s) - 1) == 0)
+#define SESS_EVAL(dst, idx)                                             \
+    TuriValue dst = eval_expr(env, frame, ic->val_exprs[idx]);          \
+    if (turi_is_error(dst) || env_signaled(env)) { *out = dst; return true; }
+
+    /* make-session: fresh channel, refcount 2, both endpoints alias it. */
+    if (ic->n_val_exprs == 0 && SESS_PFX("tur_session_new(")) {
+        TuriChan *ch = (TuriChan *)turi_val_calloc(env, sizeof(TuriChan));
+        ch->refcount = 2;
+        *out = turi_int((int64_t)(intptr_t)ch);
+        return true;
+    }
+    /* endpoint alias: the whole body is bare `__TUR_VAL_0__` -- evaluate and
+     * return the operand (the second endpoint / recv-pair channel pointer). */
+    if (ic->n_val_exprs == 1 && n == 13 && memcmp(p, "__TUR_VAL_0__", 13) == 0) {
+        SESS_EVAL(v, 0);
+        *out = v;
+        return true;
+    }
+    /* send: eval channel then value; cooperative send; return the channel. */
+    if (ic->n_val_exprs == 2 && SESS_PFX("__extension__ ({ tur_session_send(")) {
+        SESS_EVAL(cv, 0);
+        SESS_EVAL(vv, 1);
+        *out = session_send(env, (TuriChan *)(intptr_t)cv.as_int, vv);
+        return true;
+    }
+    /* recv: eval channel; cooperative recv; return the received value. */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_session_recv(__TUR_VAL_0__)")) {
+        SESS_EVAL(cv, 0);
+        *out = session_recv(env, (TuriChan *)(intptr_t)cv.as_int);
+        return true;
+    }
+    /* close: eval channel; drop refcount / wake peers. */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_session_close(__TUR_VAL_0__)")) {
+        SESS_EVAL(cv, 0);
+        *out = session_close(env, (TuriChan *)(intptr_t)cv.as_int);
+        return true;
+    }
+    /* offer: eval channel; recv the peer's branch tag (0/1) on the branch slot.
+     * The enclosing EX_MATCH (eval_match_resolve) selects the Left/Right arm on
+     * this tag and binds the channel to the arm variable. */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_session_recv_tag(__TUR_VAL_0__)")) {
+        SESS_EVAL(cv, 0);
+        *out = session_recv_tag(env, (TuriChan *)(intptr_t)cv.as_int);
+        return true;
+    }
+    /* choose-left / choose-right: eval channel; send branch tag 0 / 1. */
+    if (ic->n_val_exprs == 1 &&
+        SESS_PFX("__extension__ ({ tur_session_send_tag(")) {
+        SESS_EVAL(cv, 0);
+        /* The tag literal is baked into the template: `..., (int64_t)0)` or
+         * `..., (int64_t)1)`.  Read the integer after the "(int64_t)" cast. */
+        int tag = session_int_after(p, n, "(int64_t)");
+        *out = session_send_tag(env, (TuriChan *)(intptr_t)cv.as_int,
+                                tag == 1 ? 1 : 0);
+        return true;
+    }
+    /* recv-timeout: eval channel + duration; timed recv on the data slot.
+     * Returns 0 (success, value stashed in env->session_rtv) or 1 (timeout);
+     * the enclosing EX_MATCH selects Left (0) / Right (1). */
+    if (ic->n_val_exprs == 2 && SESS_PFX("tur_session_recv_timeout(")) {
+        SESS_EVAL(cv, 0);
+        SESS_EVAL(dv, 1);
+        int64_t dur = (dv.tag == TURI_INT) ? dv.as_int : 0;
+        *out = session_recv_timeout(env, (TuriChan *)(intptr_t)cv.as_int, dur);
+        return true;
+    }
+    /* tur__rtv_: the recv-timeout Left arm's value slot -- return the value
+     * stashed by the preceding session_recv_timeout success. */
+    if (ic->n_val_exprs == 0 && n == 9 && memcmp(p, "tur__rtv_", 9) == 0) {
+        *out = env->session_rtv;
+        return true;
+    }
+
+    /* --- Multi-party roles (Slice D) ------------------------------------- */
+    /* make-protocol vi=0: tur_make_roles(N, 0) -- new router + role 0. */
+    if (ic->n_val_exprs == 0 && SESS_PFX("tur_make_roles(")) {
+        int nr = session_int_after(p, n, "tur_make_roles(");
+        *out = router_make_roles(env, nr, 0);
+        return true;
+    }
+    /* make-protocol vi=k: tur_get_role(__TUR_VAL_0__, K) -- peer role. */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_get_role(__TUR_VAL_0__,")) {
+        SESS_EVAL(bv, 0);
+        int k = session_int_after(p, n, "tur_get_role(__TUR_VAL_0__, ");
+        *out = router_get_role(env, (TuriRole *)(intptr_t)bv.as_int, k);
+        return true;
+    }
+    /* send-to: tur_router_send(__TUR_VAL_0__, TO_IDX, (int64_t)(__TUR_VAL_1__)). */
+    if (ic->n_val_exprs == 2 && SESS_PFX("__extension__ ({ tur_router_send(")) {
+        SESS_EVAL(rv, 0);
+        SESS_EVAL(vv, 1);
+        int to_idx = session_int_after(p, n, "tur_router_send(__TUR_VAL_0__, ");
+        *out = router_send(env, (TuriRole *)(intptr_t)rv.as_int, to_idx, vv);
+        return true;
+    }
+    /* recv-from: tur_router_recv(__TUR_VAL_0__, FROM_IDX). */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_router_recv(__TUR_VAL_0__,")) {
+        SESS_EVAL(rv, 0);
+        int from_idx = session_int_after(p, n, "tur_router_recv(__TUR_VAL_0__, ");
+        *out = router_recv(env, (TuriRole *)(intptr_t)rv.as_int, from_idx);
+        return true;
+    }
+    /* role-close: tur_role_close((void *)__TUR_VAL_0__). */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_role_close((void *)__TUR_VAL_0__)")) {
+        SESS_EVAL(rv, 0);
+        *out = router_role_close(env, (TuriRole *)(intptr_t)rv.as_int);
+        return true;
+    }
+
+#undef SESS_PFX
+#undef SESS_EVAL
+    return false;
+}
+
+/* -------------------------------------------------------------------------
  * Expression evaluator
  * ---------------------------------------------------------------------- */
 
@@ -7701,6 +8124,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 if (c.len == 12 && memcmp(c.p, "gc_enable();", 12) == 0)  { gc_enable();  return turi_nil(); }
                 if (c.len == 13 && memcmp(c.p, "gc_disable();", 13) == 0) { gc_disable(); return turi_nil(); }
             }
+        }
+        /* turi-session-types-plan: route the session inline-C templates
+         * (make-session / send / recv / close) to the cooperative channel
+         * runtime instead of the carve below.  Additive to the interpreter --
+         * no codegen touched. */
+        {
+            InlineC *ic = e->as.inline_c_.inline_c;
+            TuriValue sess_out;
+            if (ic && eval_session_intercept(env, frame, ic, &sess_out))
+                return sess_out;
         }
         /* This is the documented clean carve for any inline-C-backed function
          * the tree-walker cannot run -- e.g. a content-keyed map's synthesized

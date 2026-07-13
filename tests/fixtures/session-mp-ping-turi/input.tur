@@ -1,0 +1,28 @@
+;; Interpreter variant of session-mp-ping (turi-session-types-plan, Slice D).
+;;
+;; 2-role ping: A sends 42 to B, B sends it back to A.  The B peer runs as an
+;; `async`/`await` fiber over the cooperative multi-party router (an N x N grid
+;; of one-slot rendezvous cells).
+;;
+;; Expected output: 42
+(defprotocol Ping [A B]
+  (-> A B int)
+  (-> B A int))
+
+(defn role-a [^linear ch :(Role Ping A)] : nil
+  (let [ch (send-to ch B 42)]
+    (let [[v ch] (recv-from ch B)]
+      (println v)
+      (close ch))))
+
+(defn role-b [^linear ch :(Role Ping B)] : nil
+  (let [[v ch] (recv-from ch A)]
+    (let [ch (send-to ch A v)]
+      (close ch))))
+
+(defn main [] : int
+  (let [[ra rb] (make-protocol Ping)]
+    (let [t (async (fn [] (role-b rb)))]
+      (role-a ra)
+      (await t)))
+  0)

@@ -1,0 +1,22 @@
+;; Interpreter variant of session-offer (turi-session-types-plan, Slice C).
+;;
+;; The peer selects the Left branch (choose-left) then sends 7; the main context
+;; uses `offer` to learn the branch and recvs the value.  The peer runs as an
+;; `async`/`await` fiber over the cooperative branch-slot rendezvous.
+;;
+;; Expected output: 7
+(defn main [] : int
+  (let [[s r] (make-session (Choose (Send int Close) Close))]
+    (let [t (async (fn []
+                     (let [s (choose-left s)]
+                       (let [s (send s 7)]
+                         (close s)))))]
+      (match (offer r)
+        (Left r)
+          (let [[n r] (recv r)]
+            (close r)
+            (await t)
+            (println n))
+        (Right r)
+          (do (close r) (await t)))))
+  0)
