@@ -59,6 +59,9 @@ STDLIB_FILES=(
     # KB-030: Eq [str] is non-orphan now that the orphan checker credits a
     # built-in primitive type to its designated home file (str -> str.tur).
     stdlib/str.tur
+    # interp-string-natives-and-range-show-plan: dependency-free leaf holding the
+    # str-concat / int->str builders (loaded by str.tur and range-bound.tur).
+    stdlib/str-build.tur
     # KB-027: rc.tur dispatches Functor/Foldable/Clone on the built-in rc<T>
     # constructor (kind * -> *, home rc.tur) instead of ptr<void>.
     stdlib/rc.tur
@@ -92,6 +95,7 @@ STDLIB_FLAGS=(
     "--no-auto-stdlib"
 
     # Bucket B flags
+    ""
     ""
     ""
     ""

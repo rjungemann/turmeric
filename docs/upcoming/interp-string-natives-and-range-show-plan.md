@@ -1,7 +1,17 @@
 # Interpreter string natives + pure-Turmeric `range-show` -- Plan
 
-> **Status:** Not started.
-> **Last Updated:** 2026-07-12
+> **Status:** Done (2026-07-13). Phase 0 natives (`str-concat`/`cstr-len`/
+> `cstr-nth`) landed in `src/turi/interpreter_natives.c`; the string builders
+> (`str-concat`/`int->str`) were factored into the dependency-free leaf
+> `stdlib/str-build.tur` and the two formatters rewritten in pure Turmeric; the
+> `requires.tur-only` carve is gone. `range-show` passes under both
+> `tests/run.sh` (2123/0) and `tests/run-turi.sh`. NB: `int->str` had no
+> compiled twin (interpreter-native only), so a compiled `defn` was added; and
+> the formatters live in `str-build.tur` rather than loading all of `str.tur`
+> because loading `str.tur`'s `Eq [str]` instance into `range-bound`'s graph
+> trips a pre-existing `Eq [Bound]` dispatch bug -- see
+> `docs/reported/eq-bound-misdispatch-extra-instance.md`.
+> **Last Updated:** 2026-07-13
 > **Type:** Interpreter / stdlib
 > **Scope:** Un-carve `tests/fixtures/range-show` (`requires.tur-only`) by giving
 > the tree-walking interpreter a small, layout-exact set of string-building
