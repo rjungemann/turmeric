@@ -1,11 +1,62 @@
 ---
 title: CPS backend -- refcounted owning-value env teardown (Track B / E3)
 category: Planning
-status: open (not started) -- the shared substrate Track B E2/E4 and O1-b P2/P3 all depend on
+status: LARGELY OBSOLETED by P1/P2/E-borrow -- leak-cleanliness for the reachable owning captures is already achieved WITHOUT a teardown (see "Empirical re-scoping" below). The only genuine residual is a CONSUMING multi-field AGGREGATE capture (rare; today hard-fails via a direct-path bug). Recommend NOT building the general teardown; cover the residual narrowly if a real case appears.
 description: The N6 CT-IR backend lifts a continuation body into a heap env struct that is LEAKED with the (also-leaked) DK chain nodes. E-borrow already made the *reachable* owning captures (borrow-only rc handles) leak-clean by riding a bare alias, so E3 is no longer needed for leak-cleanliness of what already emits. E3's remaining job is to ADMIT the shapes that currently evict -- an owning value CONSUMED by a multi-shot continuation, an owning aggregate / carrier handle / ref captured across a control op -- by giving the owning-carrying env a real clone-on-copy / drop-on-teardown discipline. Two phases: E3a attaches per-frame env clone/drop hooks to the DK machine (admits consuming captures memory-safely, still leaking the base ref), and E3b introduces a teardown of the delimited chain at region completion (leak-clean, and it retires the pre-existing DK-node leak). Sound on the fallback today -- missed coverage, not a correctness gap.
 ---
 
 # CPS backend -- refcounted owning-value env teardown (E3)
+
+## Empirical re-scoping (added after P1/P2/E-borrow landed)
+
+Before building any of the teardown below, the reachable owning-capture shapes
+were measured under LeakSanitizer. **Leak-cleanliness is already achieved for
+all of them, with no teardown:**
+
+- **borrow-only rc / aggregate capture** (case READS the capture): rides a bare
+  shallow alias (E-borrow); the enclosing fn drops it exactly once, now lowered
+  into the single-shot continuation by the auto-drop P2 pass
+  ([cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md)).
+  Verified leak-clean across a case that runs 3x.
+- **consuming rc capture** (case DROPS the captured rc, runs N times): E1's
+  incref-on-read-out gives each invocation its own +1, which the case's drop
+  balances; the base +1 is dropped once by the P2-lowered scope-exit auto-drop.
+  **Net zero, freed once -- leak-clean** (verified: a case that drops its rc and
+  runs 3x, LeakSanitizer-clean). This is the case E3a was meant to admit "still
+  leaking the base"; it does not leak.
+- **abortive crossing** (owning value crosses a `shift` whose continuation is
+  discarded): P2 correctly refuses to lower it (`expr_has_unsafe_control`), so it
+  falls back to the direct emitter, which fires the drop on abort via the
+  `tur_frame` defer stack. Correct, no leak.
+
+So the two purposes this plan was written for -- E3a "admit consuming captures
+memory-safely" and E3b "leak-clean via teardown" -- are **both already met by
+cheaper means** (incref-balanced-by-consume + E-borrow bare alias + P2 auto-drop
+lowering). The DK-node leak (`docs/reported/cps-delimited-dk-node-leak.md`)
+remains, but it is a fixed, bounded per-region leak unrelated to owning captures.
+
+### The one genuine residual
+
+A **CONSUMING multi-shot AGGREGATE capture** -- a handler case that DROPS a
+captured by-value struct's owning field and runs N times -- still evicts
+(`collect_caps_case` rejects a consuming non-rc capture, since a struct has no
+scalar incref), and its fallback **hard-fails** to compile (a pre-existing
+direct-path handler-capture bug -- the struct local is referenced undeclared in
+the emitted `__effect_handler_*`; tracked in
+`docs/reported/cps-consuming-aggregate-capture-hardfails.md`).
+
+Why this one is not just "rc with more fields": incref-on-read-out is only
+balanced when the case drops *exactly* the cloned owning fields. For a
+single-owning-field struct it would balance like rc, but for a multi-field
+struct the env-clone would incref fields the case does not drop -> leak. So a
+*correct* admission needs the env to OWN the aggregate (clone all fields on
+copy, drop all fields once per continuation lifetime) -- the actual Option B
+teardown -- OR the case to clone what it consumes. Given the shape is rare and
+hard-fails today only through a separable direct-path bug, the recommendation is:
+**fix the direct-path hard-fail (so it falls back cleanly) rather than build the
+teardown**, unless a real consuming-aggregate case appears.
+
+The original design (below) is retained for the day that case arrives.
 
 ## Why this document exists
 

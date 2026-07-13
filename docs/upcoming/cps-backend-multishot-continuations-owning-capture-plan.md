@@ -338,14 +338,17 @@ captured `defstruct` holding an `rc` field into a handler case, `requires.no-lea
 
 ### E3 -- refcounted env with clone/drop (Option B), leak-clean -- THE substrate
 
-> **Detailed plan:**
+> **Detailed plan (and its obsolescence):**
 > [cps-backend-owning-env-teardown-e3-plan.md](cps-backend-owning-env-teardown-e3-plan.md).
-> That doc supersedes the sketch below, and reframes E3 post-E-borrow: it is no
-> longer needed for leak-cleanliness of what emits today (E-borrow did that) --
-> its job is to ADMIT the currently-evicting consuming / aggregate / carrier / ref
-> captures, in two phases (E3a per-frame env clone/drop hooks; E3b delimited-region
-> teardown, which also retires the DK-node leak). It is the shared substrate O1-b
-> P2/P3 land on.
+> **E3 is LARGELY OBSOLETED.** Empirically (verified under LeakSanitizer), the
+> teardown is NOT needed for leak-cleanliness: a borrow-only capture rides a bare
+> alias (E-borrow) dropped once by P2; a *consuming rc* capture is leak-clean via
+> E1's incref-on-read-out balanced by the case's own drop, with the base dropped
+> by the P2-lowered auto-drop. The one genuine residual is a *consuming multi-field
+> aggregate* capture, which is rare and today hard-fails only through a separable
+> direct-path bug (`docs/reported/cps-consuming-aggregate-capture-hardfails.md`) --
+> recommendation there is to fix that fallback, not build the teardown. The sketch
+> below is retained for the day a real consuming-aggregate case warrants Option B.
 
 Stop leaking the owning-carrying env; give the lifted continuation frame a real
 clone/drop pair, emitted **only when `caps` contains an owning field** (Copy-only
@@ -430,15 +433,25 @@ fixture needs both tracks:
   capstone fixture runs under normal leak detection (unlike E1's Option A
   interim). E1's clone-on-read-out is the Option A stand-in until E3.
 
-## Recommended order
+## Recommended order (as executed -- with the E3 correction)
 
-1. **A1** (two-perform) -- widens the CPS subset, independently valuable, unblocks
-   runtime multi-shot. Lowest risk (proven F3 template).
-2. **E3** (Option B env teardown) -- the shared substrate; also unblocks O1-b
-   P2/P3; makes E1/E2 leak-clean.
-3. **E2**, **A2/A3**, **E4** -- round out the shapes.
-4. **Capstone** (A1 + E3): runtime multi-shot owning-capture fixture, no
-   `requires.no-leak-check`.
+1. **A1** (two-perform) -- LANDED. Widens the CPS subset; unblocks runtime
+   multi-shot.
+2. **A2, A3** -- LANDED. Nested effects in reset/handle continuations + the
+   enclosing-handler fix across delimiter forms.
+3. **E1 + E-borrow** -- LANDED. Leak-clean rc captures via bare aliasing.
+4. **Owning-autodrop P1 + P2** -- LANDED
+   ([cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md)).
+   The actual E2 unblock: lower the non-ref owning scope-exit auto-drop.
+5. **E2** -- LANDED (via P2). Owning-aggregate borrow captures; the capstone
+   `cps-backend-owning-struct-capture-multishot` runs under normal leak
+   detection, no `requires.no-leak-check`.
+6. **E3** -- NOT built, and largely obsoleted: leak-cleanliness turned out to be
+   achievable without a teardown (steps 3-5). Only a rare consuming-aggregate
+   residual remains (a direct-path hard-fail to fix, not a teardown to build).
+7. **E4** (reset/shift resumed >once capturing an owning value) -- open; a
+   distinct axis (multi-shot RESUME is a hard error TUR-E0201 in the CT-IR subset;
+   it rides the cloneable/snapshot path, not this env-capture work).
 
 ## Interaction with other plans
 
