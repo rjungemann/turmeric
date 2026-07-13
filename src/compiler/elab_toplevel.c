@@ -1313,6 +1313,29 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                                         return_kind = TY_PTR_VOID;
                                     } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
                                         return_kind = TY_PTR_VOID;
+                                    } else {
+                                        /* bare-adt-forward-decl-inference: a non-parametric
+                                         * user type name -- `: T` for a `defdata` /
+                                         * `defstruct` / `defopaque` T (RF0 has already
+                                         * registered the stub) -- must forward-declare with
+                                         * that ADT's real result type, not the TY_INT
+                                         * default.  Without this, a sibling caller declared
+                                         * *earlier* in the module (mutual / forward
+                                         * recursion) types the call as `int`, and a `match`
+                                         * arm returning the ADT then reports a spurious
+                                         * "arm types incompatible -- expected int, got adt".
+                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
+                                        for (uint32_t ai = 0; ai < e.n_adt_defs; ai++) {
+                                            if (strcmp(e.adt_defs[ai]->name, kw->name) == 0) {
+                                                Type adt_ty = type_adt(e.adt_defs[ai]);
+                                                Type *tt = (Type *)arena_alloc(
+                                                    arena, sizeof(Type));
+                                                *tt = adt_ty;
+                                                return_kind = adt_ty.kind;
+                                                fwd_result_full = tt;
+                                                break;
+                                            }
+                                        }
                                     }
                                 } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
                                     /* Compound return type: peek at the head symbol to

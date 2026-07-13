@@ -2473,6 +2473,46 @@ Expr *elab_type_app(Elab *e, const Form *call) {
  * node so the bit pattern survives the carrier crossing intact.  Without
  * this, downstream codegen would emit an implicit C value cast that
  * truncates floats and rounds integers. */
+/* An opaque newtype handle -- `(defopaque Name [T...] :base)` -- is carried at
+ * runtime as the int64/pointer carrier slot (a `TY_ADT`/`TY_APP` with
+ * is_opaque set).  When such a handle actually holds a closure box, ascribing
+ * it to/from a `(fn ...)` type is the fat-handle bridge (slot-0 dispatch), the
+ * same way :int / :ptr<void> carriers are. */
+static bool ascribe_type_is_opaque_handle(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_ADT)
+        return t->as.adt_.def && t->as.adt_.def->is_opaque;
+    if (t->kind == TY_APP) {
+        AdtDef *def = type_adt_app_def(t);
+        return def && def->is_opaque;
+    }
+    return false;
+}
+
+/* A non-parametric, non-recursive by-value ADT/struct product
+ * (`(defdata P (P :int :int))`, `defstruct P [x y]`) is a C aggregate with no
+ * int64 handle -- it does NOT ride the carrier ABI (see type_uses_carrier_abi /
+ * adt_is_byvalue_product).  Opaque newtypes, :heap ADTs, and recursive ADTs are
+ * all int64-carried and are excluded: those cast to/from :int soundly.
+ *
+ * Scoped to the non-parametric TY_ADT case (the reported GAP 3 shape).  A
+ * *parametric* by-value monomorph like `(Option int)` is deliberately NOT caught
+ * here -- HKT / typeclass code legitimately erases such containers to the int64
+ * carrier, and `adt_is_byvalue_product` already requires n_type_params == 0, so
+ * a non-parametric product is always TY_ADT, never TY_APP. */
+static bool ascribe_type_is_byvalue_aggregate(const Type *t) {
+    if (!t || t->kind != TY_ADT) return false;
+    const AdtDef *def = t->as.adt_.def;
+    return def && !def->is_opaque && !def->is_heap &&
+           adt_is_byvalue_product(def);
+}
+
+/* A one-word erased carrier that a handle rides -- :int or :ptr<void>.  These
+ * are the reinterpret targets a by-value aggregate has no sound bridge to. */
+static bool ascribe_type_is_word_carrier(const Type *t) {
+    return t && (t->kind == TY_INT || t->kind == TY_PTR_VOID);
+}
+
 Expr *elab_ascribe(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2518,6 +2558,17 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     e->expected_type = saved_expected;
     if (!inner) return NULL;
 
+    /* GAP 3 (byvalue-adt-int-cast-plan Part B): `(:: v :any)` is the explicit
+     * coercion of a value into the `any` erased carrier.  It must heap-box the
+     * value (EX_UNION_INJECT), exactly as passing it to an `any`-typed parameter
+     * does -- NOT merely relabel its static type, which miscompiles a by-value
+     * aggregate (a cc "aggregate used where integer expected" error compiled;
+     * diverging under --interpret).  This is the explicit "box" spelling the
+     * TUR-E0295 diagnostic points at; `(cast h T)` reads it back by value. */
+    if (ascribed->kind == TY_ANY && inner->type.kind != TY_ANY) {
+        return elab_coerce_to_any(e, inner);
+    }
+
     /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
      * an ADT constructor call whose own type is left bare/under-applied.  A
      * parametric struct whose type parameter is not pinned by its field types
@@ -2537,6 +2588,60 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
             ? inner->type.as.adt_.def : type_adt_app_def(&inner->type);
         if (asc_def && asc_def == inner_def)
             inner->type = *ascribed;
+    }
+
+    /* Producer-side fat-boxing: a bare (captureless) closure ascribed to a
+     * pointer-carrier handle -- an opaque newtype whose runtime carrier is the
+     * int64/ptr fat-box slot, or :ptr<void> itself -- must cross as a uniform
+     * { thunk, env } fat box, exactly like a closure escaping into a TY_TYVAR
+     * parameter (see elab_call.c "captureless-closure-lost-through-untyped-vec").
+     * A capturing closure's value is already TY_PTR_VOID (a fat box) and is left
+     * alone; only a bare, unboxed TY_FN is shimmed via EX_FN_TO_FAT.  Without
+     * this, `(:: (fn [s] ...) :Goal)` on a captureless lambda stores a raw code
+     * address that a later slot-0 fat-dispatch reads as a thunk -> SIGSEGV
+     * (docs/reported/logic-port-language-gaps.md GAP 1). */
+    if ((ascribed->kind == TY_PTR_VOID || ascribe_type_is_opaque_handle(ascribed)) &&
+        inner->type.kind == TY_FN && !inner->type.as.fn.boxed) {
+        uint32_t box_ar = inner->type.as.fn.arity;
+        if (box_ar >= 1 && box_ar <= 5) {
+            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *bt = inner->type;
+            bt->as.fn.boxed = true;
+            Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, inner->span);
+            shim->as.fn_to_fat_.inner = inner;
+            inner = shim;
+        }
+    }
+
+    /* GAP 3 (byvalue-adt-int-cast-plan): reject `::` between a by-value
+     * aggregate and a one-word carrier (:int / :ptr<void>) in either direction.
+     * A by-value ADT/struct product is a C aggregate with no int64 handle, so
+     * the reinterpret has no sound lowering: emit would assign an aggregate into
+     * an int slot (a raw cc error) or read an int as the struct (a segfault),
+     * and the two harnesses diverge (the interpreter yields a garbage handle /
+     * throws).  Diagnosing it here -- in the shared elaborator -- fixes both
+     * paths at once.  A recursive ADT rides the carrier and is NOT caught (it
+     * casts soundly); opaque/:heap handles are excluded by the predicate. */
+    if ((ascribe_type_is_byvalue_aggregate(&inner->type) &&
+         ascribe_type_is_word_carrier(ascribed)) ||
+        (ascribe_type_is_word_carrier(&inner->type) &&
+         ascribe_type_is_byvalue_aggregate(ascribed))) {
+        const Type *agg = ascribe_type_is_byvalue_aggregate(&inner->type)
+            ? &inner->type : ascribed;
+        const char *agg_name =
+            (agg->kind == TY_ADT && agg->as.adt_.def) ? agg->as.adt_.def->name
+            : (agg->kind == TY_APP && type_adt_app_def(agg))
+                ? type_adt_app_def(agg)->name
+                : "aggregate";
+        diag_emit_with_code(DIAG_ERROR, call->span,
+            TUR_E0295_BYVALUE_CARRIER_CAST,
+            "cannot reinterpret by-value aggregate '%s' as a one-word carrier "
+            "(:int / :ptr<void>); it is a C struct with no int64 handle. To carry "
+            "it through an erased handle, box it into `any`: `(:: v :any)` (or "
+            "just pass it where an `any` is expected) heap-boxes it, and "
+            "`(cast h %s)` reads it back by value.",
+            agg_name, agg_name);
+        return NULL;
     }
 
     /* TS3.3: if both source and target are scalar same-size kinds and they
@@ -2574,7 +2679,8 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * flips the ^fat arg classifier from shim to pass-through.  See
      * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
     if (ascribed->kind == TY_FN &&
-        (src_kind == TY_INT || src_kind == TY_PTR_VOID)) {
+        (src_kind == TY_INT || src_kind == TY_PTR_VOID ||
+         ascribe_type_is_opaque_handle(&inner->type))) {
         out->type.as.fn.boxed = true;
     }
     return out;

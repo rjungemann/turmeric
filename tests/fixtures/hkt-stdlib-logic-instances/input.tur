@@ -4,28 +4,31 @@
 ;; (plus Functor / Applicative). Disjunction is now `alt-or` and conjunction is
 ;; `do-m` against the new instances, in addition to the bespoke
 ;; disjoined / conjoined combinators.
+;;
+;; logic.tur is now pure Turmeric (no inline-C), so this fixture runs under both
+;; the compiled path and the tree-walking interpreter.
 
 (load "stdlib/logic.tur")
 
 ;; Disjunction via Alternative alt-or: x = 1 OR x = 2.
-(defn x-is-1-or-2 [x : int] : (Goal int)
+(defn x-is-1-or-2 [x : Term] : (Goal int)
   (:: (alt-or (lequal x (term-int 1)) (lequal x (term-int 2))) (Goal int)))
 
-;; Conjunction via Monad do-m: x = 1 AND y = 2 (substitution threaded).
-(defn x1-and-y2 [x : int y : int] : int
+;; Conjunction via Monad do-m: x = 1 AND y = 2 (state threaded).
+(defn x1-and-y2 [x : Term y : Term] : int
   (do-m
     _s (lequal x (term-int 1))
     (lequal y (term-int 2))))
 
 (defn main [] : int
   ;; alt-or: two solutions for x.
-  (let [x (term-var (lvar-next))]
+  (let [x (term-var 0)]
     (let [results (run-logic 5 (x-is-1-or-2 x))]
       (println (bt-length results))                          ; 2
       (println (term-int-val (reify-walk x results)))))      ; 1 (first solution)
   ;; do-m conjunction: one solution binding both x and y.
-  (let [x (term-var (lvar-next))
-        y (term-var (lvar-next))]
+  (let [x (term-var 0)
+        y (term-var 1)]
     (let [results (run-logic 5 (:: (x1-and-y2 x y) (Goal int)))]
       (println (bt-length results))                          ; 1
       (println (term-int-val (reify-walk x results)))        ; 1

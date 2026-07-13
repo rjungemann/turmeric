@@ -1,0 +1,24 @@
+;; Regression: a value typed as an opaque HKT handle (carrier :ptr<void>) cast to
+;; a (fn ...) type and applied must fat-dispatch through slot 0, and a bare
+;; captureless closure ascribed to such a handle must be boxed to a uniform fat
+;; box -- not called as a thin function pointer (which jumps into the env struct
+;; -> SIGSEGV).  See docs/reported/logic-port-language-gaps.md GAP 1.
+
+(defopaque Box [A] :ptr<void>)
+
+;; Apply through the opaque-typed handle (consumer side: :: opaque -> fn).
+(defn apply-box [b : (Box int) x : int] : int ((:: b (fn [int] int)) x))
+
+;; A CAPTURING closure -> already a fat box; opaque-typed apply must slot-0 it.
+(defn mk-capturing [c : int] : (Box int)
+  (:: (let [lc c] (fn [x] (+ x lc))) :Box))
+
+;; A CAPTURELESS closure -> bare fn; producer side must box it to a fat box so
+;; the later slot-0 dispatch is valid.
+(defn mk-captureless [] : (Box int)
+  (:: (fn [x] (+ x 1)) :Box))
+
+(defn main [] : int
+  (println (apply-box (mk-capturing 100) 5))   ; 105
+  (println (apply-box (mk-captureless) 41))     ; 42
+  0)

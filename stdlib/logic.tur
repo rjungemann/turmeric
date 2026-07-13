@@ -1,143 +1,130 @@
 ;;; tur/logic -- miniKanren-style logic programming (unification, goals, streams).
 ;;;
-;;; Terms are tagged heap structs. Goals are functions from substitution to stream.
+;;; Pure Turmeric (no inline-C): terms, substitutions, and the solution stream
+;;; are all `defdata` sum types walked with `match`, so the miniKanren engine
+;;; runs identically under the compiled path and the tree-walking interpreter
+;;; (`tur --interpret` / the WASM REPL).
+;;;
+;;; Representation:
+;;;   Term   -- a tagged union: TInt / TVar / TPair / TNil.
+;;;   Subst  -- the search state: a persistent association list whose base
+;;;             (SNil next) carries the next unused fresh-variable id, so a
+;;;             single value threads both the bindings and the fresh counter.
+;;;             This replaces the old global fresh-var counter.
+;;;   Stream -- the solution stream (the list / backtracking monad): StNil /
+;;;             StCons subst rest. A goal maps a Subst to a Stream of Substs.
+;;;
+;;; Goal is a fat-closure handle `Subst -> Stream`, exposed as a kind-(* -> *)
+;;; opaque `(Goal A)` so it can carry real Functor / Applicative / Monad /
+;;; Alternative instances (disjunction is `alt-or`, conjunction is `do-m`).
 ;;;
 ;;; Since: Phase B1
-;; stdlib/logic.tur -- miniKanren-style logic programming
-;;
-;; Term = tagged heap struct { int64_t tag; int64_t data1; int64_t data2 }
-;;   tag=0: INT,  data1=value
-;;   tag=1: VAR,  data1=var_id
-;;   tag=2: PAIR, data1=first_term_ptr, data2=second_term_ptr
-;;   tag=3: NIL
-;;
-;; Substitution (UState) = alist: 0 (empty) or
-;;   { int64_t var_id; int64_t term_ptr; int64_t next }
-;;
-;; Goal = fat closure: UState -> list UState
-;;   (UState stored as int64_t substitution pointer)
-;;
-;; Result list = Cell list { int64_t value; int64_t next }
-;;   (backtrack monad, inlined from backtrack.tur)
-;;
-;; Calling conventions:
-;;   • Goal constructors return :ptr<void>  (fat closure pointer)
-;;   • Functions accepting goals take :int  (int64_t of pointer)
-;;   • Parameters used in inner lambdas MUST be bound to locals first
-;;
-;; stdlib-hkt-consolidation T3: Goal is exposed as a kind-(* -> *) opaque
-;; `(Goal A)` so it can carry real Functor / Applicative / Monad / Alternative
-;; instances. The runtime carrier is unchanged -- a Goal handle is still the same
-;; `UState -> list UState` fat-closure pointer the raw goal constructors build.
-;; The instances are built on the inlined solution-stream monad (mzero / mreturn
-;; / mplus / mbind) below, which thereby stops being a user-facing hand-rolled
-;; monad interface and becomes the engine the instances delegate to:
-;;
-;;   * Alternative [Goal] -- alt-or is disjunction (miniKanren disj), empty is
-;;     the failing goal.
-;;   * Monad [Goal] -- bind is conjunction: it runs the goal, then feeds each
-;;     resulting substitution into the continuation (the bound value is that
-;;     intermediate substitution, in the MonadState sense). `do-m` / `for` over
-;;     goals thus express conjunction chains without nesting `conjoined`.
-;;; Goal -- a kind-(* -> *) handle over a miniKanren goal `UState -> list
-;;; UState`; carrier is the fat-closure pointer.
+;; Term type for miniKanren.
+;;   TInt  n     -- an integer value
+;;   TVar  id    -- a logic variable identified by id
+;;   TPair a b   -- a cons pair of two sub-terms
+;;   TNil        -- the empty term
+;; :copy -- a Term handle is an immutable tagged value with no owned resources,
+;; so it is freely copyable (like Option/Either).
+(defdata Term :copy
+  (TInt  :int)
+  (TVar  :int)
+  (TPair :Term :Term)
+  (TNil))
+;; Substitution / search state: a persistent association list from var-id to
+;; Term, whose base node carries the next unused fresh-variable id.
+;;   SNil next              -- the empty substitution; next = fresh-var counter
+;;   SBind var-id term rest -- var-id is bound to term, over rest
+;; Prepending bindings preserves the base SNil, so the fresh counter rides along
+;; through unification for free.
+(defdata Subst :copy
+  (SNil  :int)
+  (SBind :int :Term :Subst))
+;; UnifyResult: the tagged outcome of unification -- UFail on mismatch, or
+;; UOk carrying the extended substitution. Replaces the old -1 sentinel.
+(defdata UnifyResult :copy
+  (UFail)
+  (UOk :Subst))
+;; Lookup: the tagged outcome of a substitution lookup -- LMissing when the
+;; variable is unbound, or LFound carrying the bound term.
+(defdata Lookup :copy
+  (LMissing)
+  (LFound :Term))
+;; Stream: the solution stream (list / backtracking monad) of search states.
+;;   StNil             -- no solutions
+;;   StCons subst rest -- one solution substitution, followed by the rest
+(defdata Stream :copy
+  (StNil)
+  (StCons :Subst :Stream))
+;;; Goal -- a kind-(* -> *) handle over a miniKanren goal `Subst -> Stream`;
+;;; carrier is the fat-closure pointer.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
 (defopaque Goal [A] :ptr<void>)
-;;; -- Backtracking monad (inlined) ─────────────────────────────────────────────
-;;; mzero -- the empty result list (no solutions).
+;;; -- Solution stream (list / backtracking monad) ─────────────────────────────
+;;; st-append -- concatenate two solution streams.
+(defn st-append [xs : Stream ys : Stream] : Stream
+  (match xs
+    (StNil)         ys
+    (StCons v rest) (StCons v (st-append rest ys))))
+;;; st-bind -- concatMap: apply f to each state and concatenate the streams.
+;;; f is a `Subst -> Stream` callback (arrives as a first-class `:fn` value).
+(defn st-bind [xs : Stream f : fn] : Stream
+  (match xs
+    (StNil)         (StNil)
+    (StCons v rest) (st-append (:: (f v) :Stream) (st-bind rest f))))
+;;; st-length -- count the states in a solution stream.
+(defn st-length [xs : Stream] : int
+  (match xs
+    (StNil)         0
+    (StCons v rest) (+ 1 (st-length rest))))
+;;; st-take -- keep at most n states from the front of a solution stream.
+(defn st-take [n : int xs : Stream] : Stream
+  (if (<= n 0)
+    (StNil)
+    (match xs
+      (StNil)         (StNil)
+      (StCons v rest) (StCons v (st-take (- n 1) rest)))))
+;;; mzero -- the empty solution stream (no solutions).
 ;;;
 ;;; Returns:
-;;;   0 (null pointer, empty solution list).
-
-(defn mzero [] : int ```c return 0; ```)
-;;; mreturn -- wrap a single substitution as a successful result.
+;;;   An empty Stream.
+(defn mzero [] : Stream (StNil))
+;;; mreturn -- wrap a single substitution as a one-solution stream.
 ;;;
 ;;; Parameters:
-;;;   x -- substitution pointer (:int)
+;;;   s -- the search state (Subst)
 ;;;
 ;;; Returns:
-;;;   A singleton solution list (:int).
-
-(defn mreturn [x] : int
-  ```c
-  struct { int64_t value; int64_t next; } *cell = malloc(sizeof(*cell));
-  cell->value = x; cell->next = 0;
-  return (int64_t)(intptr_t)cell;
-  ```)
-;;; mplus -- concatenate two solution lists.
+;;;   A singleton Stream containing s.
+(defn mreturn [s : Subst] : Stream (StCons s (StNil)))
+;;; mplus -- concatenate (union) two solution streams.
 ;;;
 ;;; Parameters:
-;;;   xs -- first solution list (:int)
-;;;   ys -- second solution list (:int)
+;;;   xs -- first solution stream
+;;;   ys -- second solution stream
 ;;;
 ;;; Returns:
-;;;   A new list with all solutions from xs followed by those from ys (:int).
-
-(defn mplus [xs ys] : int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
-  Cell *xc = (Cell*)(intptr_t)xs;
-  if (!xc) return ys;
-  Cell *head = NULL, *tail = NULL;
-  while (xc) {
-      Cell *n = malloc(sizeof(Cell));
-      n->value = xc->value; n->next = 0;
-      if (tail) tail->next = (int64_t)(intptr_t)n; else head = n;
-      tail = n; xc = (Cell*)(intptr_t)xc->next;
-  }
-  if (tail) tail->next = ys;
-  return (int64_t)(intptr_t)head;
-  ```)
-;;; mbind -- apply a fat-closure continuation to each solution and concatenate.
+;;;   A Stream with all of xs's solutions followed by all of ys's.
+(defn mplus [xs : Stream ys : Stream] : Stream (st-append xs ys))
+;;; mbind -- apply a `Subst -> Stream` continuation to each solution and
+;;; concatenate the results.
 ;;;
 ;;; Parameters:
-;;;   ma -- solution list (:int)
-;;;   fn -- fat closure of type (UState -> list UState)
+;;;   ma -- a solution stream
+;;;   fn -- a `Subst -> Stream` callback
 ;;;
 ;;; Returns:
-;;;   Concatenated solutions (:int).
-
-(defn mbind [ma fn] : int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
-  Cell *cell = (Cell*)(intptr_t)ma;
-  if (!cell) return 0;
-  int64_t *fat = (int64_t*)(intptr_t)fn;
-  int64_t thunk = fat[0];
-  Cell *rev = NULL;
-  while (cell) {
-      int64_t sub = ((int64_t(*)(void*, int64_t))(intptr_t)thunk)((void*)fat, cell->value);
-      Cell *sc = (Cell*)(intptr_t)sub;
-      while (sc) {
-          Cell *n = malloc(sizeof(Cell));
-          n->value = sc->value; n->next = (int64_t)(intptr_t)rev; rev = n;
-          sc = (Cell*)(intptr_t)sc->next;
-      }
-      cell = (Cell*)(intptr_t)cell->next;
-  }
-  Cell *result = NULL;
-  while (rev) {
-      Cell *tmp = (Cell*)(intptr_t)rev->next;
-      rev->next = (int64_t)(intptr_t)result; result = rev; rev = tmp;
-  }
-  return (int64_t)(intptr_t)result;
-  ```)
-;;; bt-length -- count the number of solutions in a result list.
+;;;   The concatenated solution stream.
+(defn mbind [ma : Stream fn : fn] : Stream (st-bind ma fn))
+;;; bt-length -- count the number of solutions in a solution stream.
 ;;;
 ;;; Parameters:
-;;;   xs -- solution list (:int)
+;;;   xs -- solution stream
 ;;;
 ;;; Returns:
-;;;   Number of solutions (:int).
-
-(defn bt-length [xs] : int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
-  int64_t n = 0; Cell *c = (Cell*)(intptr_t)xs;
-  while (c) { n++; c = (Cell*)(intptr_t)c->next; }
-  return n;
-  ```)
+;;;   Number of solutions.
+(defn bt-length [xs : Stream] : int (st-length xs))
 ;;; -- Term constructors ────────────────────────────────────────────────────────
 ;;; term-int -- construct a logic term representing an integer value.
 ;;;
@@ -145,303 +132,232 @@
 ;;;   n -- integer value
 ;;;
 ;;; Returns:
-;;;   Pointer to a term with tag=0, data1=n (:int).
+;;;   A TInt term.
 ;;;
 ;;; Example:
-;;;   (term-int 42)  ; => tagged term pointer for integer 42
-
-
-(defn term-int [n] : int
-  ```c
-  struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
-  t->tag = 0; t->data1 = n; t->data2 = 0;
-  return (int64_t)(intptr_t)t;
-  ```)
+;;;   (term-int 42)  ; => integer term 42
+(defn term-int [n : int] : Term (TInt n))
 ;;; term-var -- construct a logic variable term with the given id.
 ;;;
 ;;; Parameters:
-;;;   id -- unique variable identifier (:int)
+;;;   id -- unique variable identifier
 ;;;
 ;;; Returns:
-;;;   Pointer to a term with tag=1, data1=id (:int).
+;;;   A TVar term.
 ;;;
 ;;; Example:
-;;;   (term-var (lvar-next))  ; => fresh logic variable
-
-(defn term-var [id] : int
-  ```c
-  struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
-  t->tag = 1; t->data1 = id; t->data2 = 0;
-  return (int64_t)(intptr_t)t;
-  ```)
+;;;   (term-var 0)  ; => logic variable 0
+(defn term-var [id : int] : Term (TVar id))
 ;;; term-pair -- construct a logic pair term from two sub-terms.
 ;;;
 ;;; Parameters:
-;;;   a -- first sub-term pointer (:int)
-;;;   b -- second sub-term pointer (:int)
+;;;   a -- first sub-term
+;;;   b -- second sub-term
 ;;;
 ;;; Returns:
-;;;   Pointer to a term with tag=2, data1=a, data2=b (:int).
+;;;   A TPair term.
 ;;;
 ;;; Example:
 ;;;   (term-pair (term-int 1) (term-int 2))  ; => pair term (1 . 2)
-
-(defn term-pair [a b] : int
-  ```c
-  struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
-  t->tag = 2; t->data1 = a; t->data2 = b;
-  return (int64_t)(intptr_t)t;
-  ```)
+(defn term-pair [a : Term b : Term] : Term (TPair a b))
 ;;; term-nil -- construct the nil/empty logic term.
 ;;;
 ;;; Returns:
-;;;   Pointer to a term with tag=3 (:int).
+;;;   A TNil term.
 ;;;
 ;;; Example:
 ;;;   (term-nil)  ; => nil term
-
-(defn term-nil [] : int
-  ```c
-  struct { int64_t tag; int64_t data1; int64_t data2; } *t = malloc(sizeof(*t));
-  t->tag = 3; t->data1 = 0; t->data2 = 0;
-  return (int64_t)(intptr_t)t;
-  ```)
+(defn term-nil [] : Term (TNil))
 ;;; -- Term accessors ───────────────────────────────────────────────────────────
-;;; term-tag -- read the tag field of a logic term.
+;;; term-int-val -- read the integer value from an INT term (0 otherwise).
 ;;;
 ;;; Parameters:
-;;;   t -- term pointer (:int)
+;;;   t -- a Term
 ;;;
 ;;; Returns:
-;;;   0=INT, 1=VAR, 2=PAIR, 3=NIL (:int).
-
-
-(defn term-tag [t] : int
-  ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->tag; ```)
-;;; term-int-val -- read the integer value from an INT term.
+;;;   The integer payload of a TInt, or 0 for any other term.
+(defn term-int-val [t : Term] : int
+  (match t
+    (TInt n) n
+    _        0))
+;;; term-var-id -- read the variable id from a VAR term (0 otherwise).
 ;;;
 ;;; Parameters:
-;;;   t -- term pointer with tag=0 (:int)
+;;;   t -- a Term
 ;;;
 ;;; Returns:
-;;;   The integer value stored in data1 (:int).
-
-(defn term-int-val [t] : int
-  ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
-;;; term-var-id -- read the variable id from a VAR term.
+;;;   The id of a TVar, or 0 for any other term.
+(defn term-var-id [t : Term] : int
+  (match t
+    (TVar id) id
+    _         0))
+;;; term-pair-fst -- read the first sub-term of a PAIR term (TNil otherwise).
 ;;;
 ;;; Parameters:
-;;;   t -- term pointer with tag=1 (:int)
+;;;   t -- a Term
 ;;;
 ;;; Returns:
-;;;   The variable id stored in data1 (:int).
-
-(defn term-var-id [t] : int
-  ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
-;;; term-pair-fst -- read the first sub-term pointer from a PAIR term.
+;;;   The first component of a TPair, or TNil for any other term.
+(defn term-pair-fst [t : Term] : Term
+  (match t
+    (TPair a b) a
+    _           (TNil)))
+;;; term-pair-snd -- read the second sub-term of a PAIR term (TNil otherwise).
 ;;;
 ;;; Parameters:
-;;;   t -- term pointer with tag=2 (:int)
+;;;   t -- a Term
 ;;;
 ;;; Returns:
-;;;   data1 (first sub-term pointer) (:int).
-
-(defn term-pair-fst [t] : int
-  ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data1; ```)
-;;; term-pair-snd -- read the second sub-term pointer from a PAIR term.
-;;;
-;;; Parameters:
-;;;   t -- term pointer with tag=2 (:int)
-;;;
-;;; Returns:
-;;;   data2 (second sub-term pointer) (:int).
-
-(defn term-pair-snd [t] : int
-  ```c return ((struct { int64_t tag; int64_t data1; int64_t data2; } *)(intptr_t)t)->data2; ```)
-;;; -- Fresh variable counter ───────────────────────────────────────────────────
-;;; lvar-next -- allocate the next unique logic variable identifier.
-;;;
-;;; Returns:
-;;;   A fresh monotonically increasing integer id (:int).
-;;;
-;;; Example:
-;;;   (term-var (lvar-next))  ; => a unique logic variable
-
-
-(defn lvar-next [] : int ```c static int64_t n = 0; return n++; ```)
+;;;   The second component of a TPair, or TNil for any other term.
+(defn term-pair-snd [t : Term] : Term
+  (match t
+    (TPair a b) b
+    _           (TNil)))
 ;;; -- Substitution operations ──────────────────────────────────────────────────
-;;; subs-empty -- return the empty substitution (no variable bindings).
+;;; subs-empty -- return the empty substitution (fresh counter at 0).
 ;;;
 ;;; Returns:
-;;;   0 (null pointer representing an empty alist) (:int).
-
-
-(defn subs-empty [] : int ```c return 0; ```)
+;;;   An empty Subst with next fresh-var id 0.
+(defn subs-empty [] : Subst (SNil 0))
+;;; subst-next -- read the next unused fresh-variable id from the base of a
+;;; substitution.
+(defn subst-next [s : Subst] : int
+  (match s
+    (SNil n)            n
+    (SBind v term rest) (subst-next rest)))
+;;; subst-set-next -- set the fresh-variable counter at the base of a
+;;; substitution, preserving all bindings.
+(defn subst-set-next [s : Subst n : int] : Subst
+  (match s
+    (SNil m)            (SNil n)
+    (SBind v term rest) (SBind v term (subst-set-next rest n))))
+;;; subst-lookup -- find the term bound to var-id in a substitution.
+;;; Returns (LFound term) when var-id is bound, (LMissing) otherwise.
+(defn subst-lookup [vid : int subs : Subst] : Lookup
+  (match subs
+    (SNil n)            (LMissing)
+    (SBind v term rest) (if (= v vid) (LFound term) (subst-lookup vid rest))))
 ;;; logic-walk -- follow variable bindings in a substitution until ground.
 ;;;
 ;;; Parameters:
-;;;   t    -- term pointer to walk (:int)
-;;;   subs -- substitution alist pointer (:int)
+;;;   t    -- the term to walk
+;;;   subs -- the substitution
 ;;;
 ;;; Returns:
-;;;   The fully walked term pointer (ground or unbound variable) (:int).
+;;;   The fully walked term (a ground term or an unbound variable).
 ;;;
 ;;; Example:
 ;;;   (logic-walk (term-var 0) subs)  ; => bound term or the variable itself
-;; Walk: follow variable bindings in substitution (iterative)
-
-(defn logic-walk [t subs] : int
-  ```c
-  typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
-  typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
-  int64_t cur = t;
-  for (;;) {
-      Term *ct = (Term*)(intptr_t)cur;
-      if (ct->tag != 1) return cur;
-      int64_t vid = ct->data1;
-      SubsE *s = (SubsE*)(intptr_t)subs;
-      int64_t found = 0;
-      while (s) { if (s->var_id == vid) { found = s->term_ptr; break; } s = (SubsE*)(intptr_t)s->next; }
-      if (!found) return cur;
-      cur = found;
-  }
-  ```)
+(defn logic-walk [t : Term subs : Subst] : Term
+  (match t
+    (TVar vid)
+      (match (subst-lookup vid subs)
+        (LMissing)     t
+        (LFound bound) (logic-walk bound subs))
+    _ t))
+;;; unify-walked -- structural unification of two already-walked terms.
+;;; No occurs check (matching standard miniKanren).
+(defn unify-walked [a : Term b : Term subs : Subst] : UnifyResult
+  (match a
+    (TVar v1)
+      (match b
+        (TVar v2)   (if (= v1 v2) (UOk subs) (UOk (SBind v1 b subs)))
+        _           (UOk (SBind v1 b subs)))
+    (TInt n1)
+      (match b
+        (TInt n2)   (if (= n1 n2) (UOk subs) (UFail))
+        (TVar v2)   (UOk (SBind v2 a subs))
+        _           (UFail))
+    (TNil)
+      (match b
+        (TNil)      (UOk subs)
+        (TVar v2)   (UOk (SBind v2 a subs))
+        _           (UFail))
+    (TPair a1 a2)
+      (match b
+        (TPair b1 b2)
+          (match (unify-walked (logic-walk a1 subs) (logic-walk b1 subs) subs)
+            (UFail)   (UFail)
+            (UOk s2)  (unify-walked (logic-walk a2 s2) (logic-walk b2 s2) s2))
+        (TVar v2)   (UOk (SBind v2 a subs))
+        _           (UFail))))
 ;;; logic-unify -- structurally unify two terms, extending the substitution.
 ;;;
-;;; No occurs check is performed.  Returns -1 on failure.
+;;; No occurs check is performed.  Returns a tagged UnifyResult.
 ;;;
 ;;; Parameters:
-;;;   t1   -- first term pointer (:int)
-;;;   t2   -- second term pointer (:int)
-;;;   subs -- current substitution alist (:int)
+;;;   t1   -- first term
+;;;   t2   -- second term
+;;;   subs -- current substitution
 ;;;
 ;;; Returns:
-;;;   Extended substitution on success, or -1 on unification failure (:int).
+;;;   (UOk subs') on success, or (UFail) on unification failure.
 ;;;
 ;;; Example:
-;;;   (logic-unify (term-var 0) (term-int 5) (subs-empty))  ; => subs with x0=5
-;; Unify: structural unification (no occurs check); returns new subs or -1
-;; Calls logic_walk (forward-declared by Turmeric codegen) and itself recursively.
-
-(defn logic-unify [t1 t2 subs] : int
-  ```c
-  typedef struct { int64_t tag; int64_t data1; int64_t data2; } Term;
-  typedef struct { int64_t var_id; int64_t term_ptr; int64_t next; } SubsE;
-  int64_t wt1 = logic_hywalk(t1, subs);
-  int64_t wt2 = logic_hywalk(t2, subs);
-  Term *ct1 = (Term*)(intptr_t)wt1;
-  Term *ct2 = (Term*)(intptr_t)wt2;
-  if (ct1->tag == 1 && ct2->tag == 1 && ct1->data1 == ct2->data1) return subs;
-  if (ct1->tag == 0 && ct2->tag == 0 && ct1->data1 == ct2->data1) return subs;
-  if (ct1->tag == 3 && ct2->tag == 3) return subs;
-  if (ct1->tag == 1) {
-      SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct1->data1; e->term_ptr = wt2; e->next = subs;
-      return (int64_t)(intptr_t)e;
-  }
-  if (ct2->tag == 1) {
-      SubsE *e = malloc(sizeof(SubsE)); e->var_id = ct2->data1; e->term_ptr = wt1; e->next = subs;
-      return (int64_t)(intptr_t)e;
-  }
-  if (ct1->tag == 2 && ct2->tag == 2) {
-      int64_t s2 = logic_hyunify(ct1->data1, ct2->data1, subs);
-      if (s2 == -1) return -1;
-      return logic_hyunify(ct1->data2, ct2->data2, s2);
-  }
-  return -1;
-  ```)
-;;; -- Fat-closure application ──────────────────────────────────────────────────
-;;; apply-fat -- call any fat closure with a single int64_t argument.
+;;;   (logic-unify (term-var 0) (term-int 5) (subs-empty))  ; => (UOk {x0=5})
+(defn logic-unify [t1 : Term t2 : Term subs : Subst] : UnifyResult
+  (unify-walked (logic-walk t1 subs) (logic-walk t2 subs) subs))
+;;; -- Goal application ─────────────────────────────────────────────────────────
+;;; apply-goal -- run a goal against a search state, yielding a solution stream.
 ;;;
 ;;; Parameters:
-;;;   f   -- fat closure pointer (:int)
-;;;   arg -- argument to pass (:int)
+;;;   g     -- a goal
+;;;   state -- the current search state (Subst)
 ;;;
 ;;; Returns:
-;;;   Return value of the closure (:int).
-;; apply-fat: call any fat closure with one int64_t arg; returns int64_t
-
-
-(defn apply-fat [f : int arg : int] : int ((:: f (fn [int] int)) arg))
-;;; apply-goal -- call a goal fat closure with a substitution (UState).
-;;;
-;;; Parameters:
-;;;   g     -- goal fat closure pointer (:int)
-;;;   state -- current substitution (:int)
-;;;
-;;; Returns:
-;;;   Solution list (list of substitutions) (:int).
-;; apply-goal: call a goal fat closure with a UState
-
-(defn apply-goal [g : int state : int] : int ((:: g (fn [int] int)) state))
+;;;   The solution Stream.
+(defn apply-goal [g : (Goal int) state : Subst] : Stream
+  ((:: g (fn [Subst] Stream)) state))
 ;;; -- Goal constructors ────────────────────────────────────────────────────────
 ;;; unify-goal-impl -- implementation helper: unify two terms against a state.
-
-
-(defn unify-goal-impl [lt1 lt2 state] : int
-  (let [ns (logic-unify lt1 lt2 state)] (if (= ns -1) (mzero) (mreturn ns))))
+(defn unify-goal-impl [lt1 : Term lt2 : Term state : Subst] : Stream
+  (match (logic-unify lt1 lt2 state)
+    (UFail)  (mzero)
+    (UOk s2) (mreturn s2)))
 ;;; lequal -- goal that unifies two terms (miniKanren ==).
 ;;;
 ;;; Parameters:
-;;;   t1 -- first term pointer (:int)
-;;;   t2 -- second term pointer (:int)
+;;;   t1 -- first term
+;;;   t2 -- second term
 ;;;
 ;;; Returns:
-;;;   A goal (:ptr<void>) that succeeds iff t1 and t2 unify.
+;;;   A goal (Goal int) that succeeds iff t1 and t2 unify.
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (lequal (term-int 5) (term-int 5)))  ; => one solution
-;; lequal (miniKanren ==): goal that unifies two terms
-
-(defn lequal [t1 t2] : (Goal int)
+(defn lequal [t1 : Term t2 : Term] : (Goal int)
   (:: (let [lt1 t1
             lt2 t2]
-        (fn [state] (let [_ lt1] (unify-goal-impl lt1 lt2 state))))
+        (fn [state : Subst] (let [_ lt1] (unify-goal-impl lt1 lt2 state))))
     :Goal))
-;;; succeed-impl -- implementation helper for the succeed goal.
-
-(defn succeed-impl [dummy state] : int (mreturn state))
 ;;; succeed -- goal that always succeeds without changing the substitution.
 ;;;
 ;;; Returns:
-;;;   A goal (:ptr<void>) that adds the current state unchanged to the solutions.
+;;;   A goal (Goal int) that adds the current state unchanged to the solutions.
 ;;;
 ;;; Example:
-;;;   (run-logic 1 (succeed))  ; => one solution (empty substitution)
-;; succeed: always succeeds without changing state
-
+;;;   (run-logic 1 (succeed))  ; => one solution
 (defn succeed [] : (Goal int)
-  (:: (let [dummy 0] (fn [state] (let [_ dummy] (succeed-impl dummy state))))
-    :Goal))
-;;; fail-impl -- implementation helper for the fail goal.
-
-(defn fail-impl [dummy state] : int (mzero))
+  (:: (fn [state : Subst] (mreturn state)) :Goal))
 ;;; fail -- goal that always fails, producing no solutions.
 ;;;
 ;;; Returns:
-;;;   A goal (:ptr<void>) that produces an empty solution list.
+;;;   A goal (Goal int) that produces an empty solution stream.
 ;;;
 ;;; Example:
-;;;   (run-logic 1 (fail))  ; => empty list
-;; fail: always fails
-
+;;;   (run-logic 1 (fail))  ; => empty stream
 (defn fail [] : (Goal int)
-  (:: (let [dummy 0] (fn [state] (let [_ dummy] (fail-impl dummy state))))
-    :Goal))
-;;; conjoined-inner -- helper to apply the second goal in a conjunction.
-
-(defn conjoined-inner [lg22 s] : int (let [lg2 lg22] (apply-goal lg2 s)))
+  (:: (fn [state : Subst] (mzero)) :Goal))
 ;;; conjoined-impl -- implementation helper for conjunction.
-
-(defn conjoined-impl [lg1 lg2 state] : int
+(defn conjoined-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
   (let [lg22 lg2]
     (mbind (apply-goal lg1 state)
-      (fn [s] (let [_ lg22] (conjoined-inner lg22 s))))))
-;;; conjoined-raw -- int worker behind conjoined / Monad bind sequencing.
-
-(defn conjoined-raw [g1 g2] : ptr<void>
+      (fn [s : Subst] (let [_ lg22] (apply-goal lg22 s))))))
+;;; conjoined-raw -- worker behind conjoined / Monad bind sequencing.
+(defn conjoined-raw [g1 : (Goal int) g2 : (Goal int)] : (Goal int)
   (let [lg1 g1
         lg2 g2]
-    (fn [state] (let [_ lg1] (conjoined-impl lg1 lg2 state)))))
+    (:: (fn [state : Subst] (let [_ lg1] (conjoined-impl lg1 lg2 state))) :Goal)))
 ;;; conjoined -- goal that applies g1 then g2 to each result (conjunction).
 ;;;
 ;;; Equivalent to sequencing the two goals with `do-m` against the
@@ -458,21 +374,18 @@
 ;;;   (run-logic 1 (conjoined (lequal x (term-int 1)) (succeed)))  ; => [x=1]
 ;;;
 ;;; Since: Phase B1
-
 (defn conjoined [A B]
   [g1 : (Goal A) g2 : (Goal B)]
   : (Goal B)
-  (:: (conjoined-raw (:: g1 :int) (:: g2 :int)) :Goal))
+  (:: (conjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal B)))
 ;;; disjoined-impl -- implementation helper for disjunction.
-
-(defn disjoined-impl [lg1 lg2 state] : int
+(defn disjoined-impl [lg1 : (Goal int) lg2 : (Goal int) state : Subst] : Stream
   (mplus (apply-goal lg1 state) (apply-goal lg2 state)))
-;;; disjoined-raw -- int worker behind disjoined / Alternative alt-or.
-
-(defn disjoined-raw [g1 g2] : ptr<void>
+;;; disjoined-raw -- worker behind disjoined / Alternative alt-or.
+(defn disjoined-raw [g1 : (Goal int) g2 : (Goal int)] : (Goal int)
   (let [lg1 g1
         lg2 g2]
-    (fn [state] (let [_ lg1] (disjoined-impl lg1 lg2 state)))))
+    (:: (fn [state : Subst] (let [_ lg1] (disjoined-impl lg1 lg2 state))) :Goal)))
 ;;; disjoined -- goal that combines results from g1 and g2 (disjunction).
 ;;;
 ;;; This is the worker behind `Alternative [Goal]`'s `alt-or` method.
@@ -489,157 +402,132 @@
 ;;;   ; => [x=1, x=2]
 ;;;
 ;;; Since: Phase B1
-
 (defn disjoined [A]
   [g1 : (Goal A) g2 : (Goal A)]
   : (Goal A)
-  (:: (disjoined-raw (:: g1 :int) (:: g2 :int)) :Goal))
+  (:: (disjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal A)))
 ;;; fresh-impl -- implementation helper for fresh variable introduction.
-
-(defn fresh-impl [lf state] : int
-  (let [nv  (term-var (lvar-next))
-        lf2 lf]
-    (apply-goal (apply-fat lf2 nv) state)))
+;; lf is passed ^fat: it is a `(Term -> Goal)` callback that may capture, so the
+;; callee fat-dispatches it through slot 0.
+(defn fresh-impl [^fat lf : (fn [Term] (Goal int)) state : Subst] : Stream
+  (let [n   (subst-next state)
+        nv  (TVar n)
+        st2 (subst-set-next state (+ n 1))]
+    (apply-goal (lf nv) st2)))
 ;;; fresh -- create a new logic variable and pass it to a goal-building function.
 ;;;
+;;; The callback is taken ^fat, so a capturing lambda -- e.g. the inner goal of a
+;;; nested `fresh` that closes over the outer variable -- dispatches correctly.
+;;; A caller's lambda parameter type is inferred, so `(fresh (fn [x] ...))` needs
+;;; no annotation on `x`.
+;;;
 ;;; Parameters:
-;;;   f -- fat closure of type (term -> goal)
+;;;   f -- a (Term -> Goal) callback
 ;;;
 ;;; Returns:
-;;;   A goal (:ptr<void>) that introduces a fresh variable and runs (f var).
+;;;   A goal (Goal int) that introduces a fresh variable and runs (f var).
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 7)))))  ; => [x=7]
-;; fresh: create a new logic variable, pass it to f (term -> goal)
-
-(defn fresh [f] : (Goal int)
-  (:: (let [lf f] (fn [state] (let [_ lf] (fresh-impl lf state)))) :Goal))
+(defn fresh [^fat f : (fn [Term] (Goal int))] : (Goal int)
+  (:: (let [lf f] (fn [state : Subst] (let [_ lf] (fresh-impl lf state)))) :Goal))
 ;;; -- Runner ───────────────────────────────────────────────────────────────────
-;;; take-n -- return the first n elements of a solution list.
+;;; run-logic -- run a goal with an empty state and return up to n solutions.
 ;;;
 ;;; Parameters:
-;;;   n   -- maximum number of solutions (:int)
-;;;   lst -- solution list (:int)
+;;;   n -- maximum number of solutions
+;;;   g -- goal to run (Goal A)
 ;;;
 ;;; Returns:
-;;;   A truncated solution list of length at most n (:int).
-;; take-n: return the first n elements of a Cell list
-
-
-(defn take-n [n lst] : int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
-  Cell *result = NULL, *tail = NULL;
-  Cell *c = (Cell*)(intptr_t)lst;
-  int64_t count = 0;
-  while (c && count < n) {
-      Cell *nc = malloc(sizeof(Cell));
-      nc->value = c->value; nc->next = 0;
-      if (tail) tail->next = (int64_t)(intptr_t)nc; else result = nc;
-      tail = nc;
-      c = (Cell*)(intptr_t)c->next;
-      count++;
-  }
-  return (int64_t)(intptr_t)result;
-  ```)
-;;; run-logic -- run a goal with an empty substitution and return up to n results.
-;;;
-;;; Parameters:
-;;;   n -- maximum number of solutions (:int)
-;;;   g -- goal to run (:ptr<void>)
-;;;
-;;; Returns:
-;;;   A list of at most n substitutions (solution list) (:int).
+;;;   A Stream of at most n solution states.
 ;;;
 ;;; Example:
 ;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 3)))))  ; => one solution
-;; run-logic: run goal with empty substitution, return up to n results
-
 (defn run-logic [A]
-  [n g : (Goal A)]
-  : int
-  (let [init (subs-empty)] (take-n n (apply-goal (:: g :int) init))))
+  [n : int g : (Goal A)]
+  : Stream
+  (let [init (subs-empty)]
+    (st-take n (apply-goal (:: g (Goal int)) init))))
 ;;; -- Result helpers ───────────────────────────────────────────────────────────
-;;; first-state -- extract the first substitution from a run-logic result list.
+;;; stream-empty? -- is a solution stream empty?
+(defn stream-empty? [xs : Stream] : bool
+  (match xs
+    (StNil) true
+    _       false))
+;;; first-state -- extract the first solution substitution from a run-logic
+;;; stream.
 ;;;
 ;;; Parameters:
-;;;   results -- solution list from run-logic (:int)
+;;;   results -- solution stream from run-logic
 ;;;
 ;;; Returns:
-;;;   The first substitution pointer, or 0 if the list is empty (:int).
-;; first-state: extract the first substitution from a run-logic result list
-
-
-(defn first-state [results] : int
-  ```c
-  typedef struct { int64_t value; int64_t next; } Cell;
-  Cell *c = (Cell*)(intptr_t)results;
-  return c ? c->value : 0;
-  ```)
-;;; reify-walk -- walk a term through the first result's substitution.
+;;;   The first Subst, or the empty substitution if the stream is empty.
+(defn first-state [results : Stream] : Subst
+  (match results
+    (StNil)         (subs-empty)
+    (StCons v rest) v))
+;;; reify-walk -- walk a term through the first solution's substitution.
 ;;;
 ;;; Parameters:
-;;;   t       -- term pointer to reify (:int)
-;;;   results -- solution list from run-logic (:int)
+;;;   t       -- the term to reify
+;;;   results -- solution stream from run-logic
 ;;;
 ;;; Returns:
-;;;   The walked term pointer (ground or unbound variable) (:int).
+;;;   The walked term (ground term or unbound variable); t itself if there are
+;;;   no solutions.
 ;;;
 ;;; Example:
 ;;;   (reify-walk my-var (run-logic 1 my-goal))  ; => ground term or variable
-;; reify-walk: walk a term through the first result's substitution
-;; Returns the walked term (still as int64_t term pointer)
-
-(defn reify-walk [t results] : int
-  (let [subs (first-state results)] (logic-walk t subs)))
+(defn reify-walk [t : Term results : Stream] : Term
+  (if (stream-empty? results)
+    t
+    (logic-walk t (first-state results))))
 ;;; -- HKT typeclass instances (stdlib-hkt-consolidation T3) ────────────────────
 ;;
 ;; Goal is a kind-(* -> *) handle (carrier: the goal fat-closure pointer). The
-;; instances are built on the inlined solution-stream monad above. The
-;; continuation parameter of `fmap` / `bind` arrives as a typeclass-method poly
-;; closure; now that a `:fn` value is a first-class callable, the worker declares
-;; its callback `:fn` and applies it with a plain `(k s)` -- the carrier is
-;; captured into the deferred goal closure and dispatched there (no `^fat`-sink
-;; box, no `apply-fat`).
-;;; bind-goal-raw -- worker: conjunction that threads the substitution into the
-;;; `:fn` continuation, which returns the next goal.
-
-(defn bind-goal-raw [g k : fn] : ptr<void>
+;; instances delegate to the pure solution-stream monad above. The continuation
+;; parameter of `fmap` / `bind` arrives as a typeclass-method poly closure;
+;; because a `:fn` value is a first-class callable, the worker declares its
+;; callback `:fn` and applies it directly.
+;;; bind-goal-raw -- worker: conjunction that threads the state into the `:fn`
+;;; continuation, which returns the next goal.
+(defn bind-goal-raw [g : (Goal int) k : fn] : (Goal int)
   (let [lg g]
-    (fn [state]
-      (let [_ lg] (mbind (apply-goal lg state) (fn [s] (apply-goal (k s) s)))))))
-;;; fmap-goal-raw -- worker: map a `:fn` callback over each solution
-;;; substitution.
-
-(defn fmap-goal-raw [g f : fn] : ptr<void>
+    (:: (fn [state : Subst]
+          (let [_ lg]
+            (mbind (apply-goal lg state)
+              (fn [s : Subst] (apply-goal (:: (k s) (Goal int)) s)))))
+      :Goal)))
+;;; fmap-goal-raw -- worker: map a `:fn` callback over each solution state.
+(defn fmap-goal-raw [g : (Goal int) f : fn] : (Goal int)
   (let [lg g]
-    (fn [state]
-      (let [_ lg] (mbind (apply-goal lg state) (fn [s] (mreturn (f s))))))))
-;;; Functor [Goal] -- map a function over each solution substitution.
+    (:: (fn [state : Subst]
+          (let [_ lg]
+            (mbind (apply-goal lg state)
+              (fn [s : Subst] (mreturn (:: (f s) :Subst))))))
+      :Goal)))
+;;; Functor [Goal] -- map a function over each solution state.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
-
 (definstance Functor [Goal]
-  (fmap [container fn] (:: (fmap-goal-raw (:: container :int) fn) :Goal)))
+  (fmap [container fn] (:: (fmap-goal-raw (:: container (Goal int)) fn) :Goal)))
 ;;; Applicative [Goal] -- pure is the always-succeeding goal (state preserved);
-;;; ap sequences the two goals (conjunction) keeping the second's substitutions.
+;;; ap sequences the two goals (conjunction) keeping the second's states.
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
-
 (definstance Applicative [Goal]
   (pure [x] (succeed))
-  (ap [ff fa] (:: (conjoined-raw (:: ff :int) (:: fa :int)) :Goal)))
+  (ap [ff fa] (:: (conjoined-raw (:: ff (Goal int)) (:: fa (Goal int))) :Goal)))
 ;;; Monad [Goal] -- bind is conjunction: run the goal, then feed each resulting
-;;; substitution into the continuation (which returns the next goal). This is
-;;; what `do-m` / `for` lower onto for goal-conjunction chains.
+;;; state into the continuation (which returns the next goal). This is what
+;;; `do-m` / `for` lower onto for goal-conjunction chains.
 ;;;
 ;;; Example:
 ;;;   (do-m _ (lequal x (term-int 1)) (lequal y (term-int 2)))
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
-
 (definstance Monad [Goal]
-  (bind [ma fn] (:: (bind-goal-raw (:: ma :int) fn) :Goal)))
+  (bind [ma fn] (:: (bind-goal-raw (:: ma (Goal int)) fn) :Goal)))
 ;;; Alternative [Goal] -- empty is the failing goal; alt-or is disjunction (the
 ;;; miniKanren disj): it unions the solutions of both goals.
 ;;;
@@ -647,7 +535,6 @@
 ;;;   (alt-or (lequal x (term-int 1)) (lequal x (term-int 2)))
 ;;;
 ;;; Since: stdlib-hkt-consolidation T3
-
 (definstance Alternative [Goal]
   (empty [a] (fail))
-  (alt-or [a b] (:: (disjoined-raw (:: a :int) (:: b :int)) :Goal)))
+  (alt-or [a b] (:: (disjoined-raw (:: a (Goal int)) (:: b (Goal int))) :Goal)))

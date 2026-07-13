@@ -92,6 +92,10 @@ typedef enum DiagCode {
     TUR_E0297_WITH_UNKNOWN_FIELD, /* `with` override names a field the type lacks */
     TUR_E0298_WITH_DUPLICATE_FIELD, /* `with` overrides the same field twice */
     TUR_E0299_MIXED_POS_KW,     /* construction mixes positional and keyword args */
+    /* GAP 3 (byvalue-adt-int-cast-plan): `::` between a by-value aggregate
+     * (non-recursive ADT/struct product) and a one-word carrier (:int/:ptr<void>)
+     * has no sound lowering -- the aggregate has no int64 handle to reinterpret. */
+    TUR_E0295_BYVALUE_CARRIER_CAST,
     /* IT1: Union type errors (-Xunion-types) */
     TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
     TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
