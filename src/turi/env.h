@@ -230,6 +230,10 @@ typedef struct TuriEnv {
     TuriTimer  *timers_head;        /* sorted timer list (ascending deadline) */
     TuriIoPending *io_pending_head; /* pending non-blocking I/O entries */
     uint32_t    io_pending_count;
+    /* turi-session-types-plan (Slice C): env-slot analog of the compiled
+     * `tur__rtv_` thread-local -- a successful `recv-timeout` stashes the
+     * received value here; the recv-pair split's `tur__rtv_` inline-C reads it. */
+    TuriValue   session_rtv;
     /* turi-value-pool-residual-sites: coroutine execution stacks (fiber +
      * generator), tracked so turi_env_free reclaims them. */
     TuriCoroStack *coro_stacks;

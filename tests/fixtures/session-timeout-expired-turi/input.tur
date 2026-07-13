@@ -1,0 +1,24 @@
+;; Interpreter variant of session-timeout-expired (turi-session-types-plan,
+;; Slice C').
+;;
+;; The sender peer sleeps (async) past the receiver's 50ms deadline, so
+;; recv-timeout takes the Right (timeout) branch.  Exercises the cooperative
+;; timed wait: the main context pumps the scheduler and re-checks the deadline
+;; while the peer is parked on a sleep timer.  When the sleep finally fires the
+;; peer's send lands on an already-closed channel and is dropped silently
+;; (matching the compiled tur_session_send abandoned-drop semantics).
+;;
+;; Expected output: timeout
+(defn main [] : int
+  (let [[r s] (make-session (Recv int (Timeout Close Close)))]
+    (let [t (async (fn []
+                     (await (sleep-async 200))
+                     (let [s (send s 99)]
+                       (close s))))]
+      (match (recv-timeout r 50)
+        (Left pair)
+          (let [[v r] pair]
+            (println v) (close r) (await t))
+        (Right r)
+          (do (println "timeout") (close r) (await t)))))
+  0)

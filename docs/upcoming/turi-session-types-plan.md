@@ -1,15 +1,18 @@
 # Session-typed channels under the interpreter (`tur --interpret`) -- Plan
 
-> **Status:** Slices A + A.5 + B landed (the recommended v1 stopping point).
-> `make-session` / `send` / `recv` / `close` now run under `tur --interpret`
-> via a cooperative fiber rendezvous (`src/turi/eval.c`, cooperative session
-> runtime; `turi_sched_step` in `src/turi/fiber.c`).  The carved
-> `session-close/requires.tur-only` marker is deleted, and interpreter test
-> variants (`session-send-turi`, `session-recv-turi`, `session-calc-rpc-turi`,
-> marked `requires.interp-only`) exercise real send/recv rendezvous under
-> `tests/run-turi.sh`.  Slices C (offer/choose + recv-timeout) and D
-> (multi-party roles) remain open follow-ups; the session inline-C for those
-> ops still falls through to the clean inline-C carve under `--interpret`.
+> **Status:** Slices A + A.5 + B + C landed.  `make-session` / `send` / `recv` /
+> `close` / `offer` / `choose-left` / `choose-right` / `recv-timeout` now run
+> under `tur --interpret` via a cooperative fiber rendezvous (`src/turi/eval.c`,
+> cooperative session runtime; `turi_sched_step` in `src/turi/fiber.c`).  The
+> carved `session-close/requires.tur-only` marker is deleted, and interpreter
+> test variants (`session-send-turi`, `session-recv-turi`,
+> `session-calc-rpc-turi`, `session-offer-turi`, `session-offer-right-turi`,
+> `session-timeout-ok-turi`, `session-timeout-expired-turi`, marked
+> `requires.interp-only`) exercise real send/recv, offer/choose branch selection,
+> and timed receive under `tests/run-turi.sh`.  Slice D (multi-party roles)
+> remains an open follow-up; the router session inline-C
+> (`tur_make_roles` / `tur_get_role` / `tur_router_send` / `tur_router_recv`)
+> still falls through to the clean inline-C carve under `--interpret`.
 > **Last Updated:** 2026-07-13
 > **Type:** Interpreter / runtime
 > **Scope:** Give the tree-walking interpreter a cooperative-fiber session-channel
@@ -216,7 +219,27 @@ only after receiver acks" discipline so a fiber cannot race itself. This is the
 bulk of the work -- it introduces the channel value type and the park/resume
 protocol. Un-carve Slice B fixtures (via interpreter `spawn`).
 
-### Slice C -- offer/choose + recv-timeout
+### Slice C -- offer/choose + recv-timeout -- DONE
+
+Implemented. The data-slot send/recv was generalized into `session_send_on` /
+`session_recv_on` (parameterized by a `state`/`slot` pair), so the `branch` slot
+reuses the same park/wake handshake: `session_send_tag` / `session_recv_tag`
+back `choose-left` / `choose-right` (tag 0/1) and `offer`. `eval_session_intercept`
+routes `tur_session_recv_tag(` / `tur_session_send_tag(...0/1)` /
+`tur_session_recv_timeout(` / the `tur__rtv_` read. The `offer` / `recv-timeout`
+`EX_MATCH` gets a `TY_SESSION_OFFER` branch in `eval_match_resolve` that reads
+the tag, re-evaluates the scrutinee inline-C's `val_exprs[0]` for the channel
+(a pure endpoint read), picks the Left (0) / Right (1) arm, and binds the channel
+to the arm variable -- mirroring the compiled `emit_expr.c` TY_SESSION_OFFER
+match. `recv-timeout` does a bounded main-context timed wait (pump
+`turi_sched_step`, re-check the deadline) and stashes the received value in
+`env->session_rtv` -- the interpreter analog of the compiled `tur__rtv_`
+thread-local, read by the recv-pair split. Also fixed `session_send` to drop
+silently on an abandoned channel (return the endpoint) exactly as the compiled
+`tur_session_send` does, instead of erroring -- this is what lets a timed-out
+receiver close its end while a late sender's deposit is discarded.
+
+Original Slice C design note follows:
 
 Add the `branch` slot handshake; intercept `tur_session_recv_tag(` /
 `tur_session_send_tag(...0/1)`. Wire the `offer` `EX_MATCH` on the returned tag
