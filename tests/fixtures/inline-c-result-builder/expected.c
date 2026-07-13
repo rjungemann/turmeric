@@ -811,11 +811,13 @@ typedef struct DK DK;
 typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);
 typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
 typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);
-typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER } DKKind;
+typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);
+typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER, DKK_RESUME_FRAME } DKKind;
 struct DK {
     DKKind kind; DKFrame fn; intptr_t env; int tag;
     DKBody body; intptr_t body_env;
-    DKHandler handler; intptr_t handler_env; bool shallow; DK *next;
+    DKHandler handler; intptr_t handler_env; bool shallow;
+    DKResumeFrame rfn; DK *next;
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -823,6 +825,9 @@ static DK *dk_new(DKKind kind, DK *next) {
 static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }
 static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env; return k;
+}
+static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;
 }
 static DK *dk_prompt(int tag, DK *next) {
     DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
@@ -849,7 +854,8 @@ static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
-    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow; return c;
+    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
+    c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
     DK *head = NULL, *tail = NULL;
@@ -884,6 +890,7 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
             case DKK_DONE: return v;
             case DKK_PROMPT: case DKK_HANDLER: k = k->next; break;
             case DKK_FRAME: v = k->fn(k->env, v); k = k->next; break;
+            case DKK_RESUME_FRAME: return k->rfn(k->env, v, k->next);
             case DKK_SHIFT:
             case DKK_SHIFT0: {
                 DK *P = k->next;

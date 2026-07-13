@@ -44,9 +44,18 @@ typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
  * outer continuation.  A `resume` inside the case is dk_invoke(subk, v). */
 typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);
 
+/* A suspending continuation frame (multi-suspension lowering, Track A): given
+ * the value flowing in AND its run-time downstream chain `rest` (this node's
+ * next, as spliced by dk_perform to the reinstalled handler tail), produce the
+ * value.  dk_run_impl RETURNS its result rather than continuing, so the frame
+ * owns delivery -- a nested control op in a lifted continuation threads `rest`
+ * to find the correct enclosing handler and delivers exactly once. */
+typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);
+
 /* ---- chain constructors (each returns a fresh heap node) -------------- */
 DK *dk_done(void);
 DK *dk_frame(DKFrame fn, intptr_t env, DK *next);
+DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next);
 DK *dk_prompt(int tag, DK *next);
 DK *dk_shift(int tag, DKBody body, intptr_t body_env, DK *next);
 DK *dk_shift0(int tag, DKBody body, intptr_t body_env, DK *next);

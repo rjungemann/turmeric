@@ -1,0 +1,38 @@
+;; CPS-IR-to-C backend, direct-path fallback capture completeness: a handler
+;; CASE that references a captured by-value struct's OWNING field THROUGH an
+;; owning-value op (`rc/strong-count (.r o)`) must thread the struct local `o`
+;; into the handler's `__env`.  Built with the always-on cps-backend.
+;;
+;; This shape (a by-value struct with an owning `rc` field, captured into a
+;; handler case) EVICTS from the CPS backend (BODY-STRUCT-OR-TAINT) and falls
+;; back to the direct emitter.  The direct emitter collects a handler case's
+;; free variables with collect_handle_captures (emit_core.c).  That walk
+;; descends into ordinary operands but historically NOT into the owning-value
+;; op nodes (EX_RC_OF / EX_RC_CLONE / EX_RC_DROP / EX_RC_PTR / EX_RC_COUNT /
+;; EX_RC_FROM_REF / EX_REF_FROM_RC / EX_WEAK / EX_WEAK_UPGRADE / EX_WEAK_PRED /
+;; EX_REF_PRED), so a local referenced ONLY through such an op -- like `o` in
+;; `(rc/strong-count (.r o))` -- was left uncaptured and the emitted
+;; `__effect_handler_*` referenced it as an undeclared C name (hard compile
+;; error).  See docs/archive/cps-consuming-aggregate-capture-hardfails.md.
+;;
+;; The capture here is a BORROW (rc/strong-count reads, does not consume), so it
+;; is leak-clean: `o.r` starts at strong count 1, is read (not dropped) inside
+;; the case, and is dropped exactly once by f's scope-exit auto-drop.
+;;
+;; g performs E once; the case resumes with o.r's strong count (1); f adds
+;; o.tag (9): 1 + 9 = 10.
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]
+    (let [v (handle (g) (E [] k) (resume k (rc/strong-count (.r o))))]
+      (+ v (.tag o)))))
+
+(defn main [] : int
+  (println (f))
+  0)

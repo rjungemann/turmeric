@@ -1,11 +1,18 @@
 ---
 title: CPS backend -- owning values captured into a continuation env (the env-capture story; O3)
 category: Planning
-status: open (not started) -- gives O3 from the owning-pointers follow-ups a real home
+status: ARCHIVED -- E1 landed (Option A, borrow-style rc capture into a multi-shot handler case). Superseded by docs/upcoming/cps-backend-multishot-continuations-owning-capture-plan.md, which carries E2-E4 forward (Track B) and adds Track A (multi-suspension continuations).
 description: The N6 CT-IR backend lifts a continuation body into a leaked, shallow-copied env struct. `cap_ty_ok` cuts any owning capture (rc/carrier-ADT/owning-aggregate) to the whole-function fallback, admitting one only for a provably single-shot continuation (`g_cap_single_shot`), where the body's drop runs at most once. This plan is the "env-capture story" that O3 in cps-backend-owning-pointers-followups-plan.md keeps forward-referencing: make the CT-IR backend clone/incref an owning capture on continuation clone and decref it on drop, so a multi-shot continuation that captures an owning value CPS-emits correctly instead of falling back. Until this lands the cut is sound (fallback handles it), so this is missed coverage, not a correctness gap.
 ---
 
 # CPS backend -- owning values captured into a continuation env (O3)
+
+> **ARCHIVED / SUPERSEDED.** E1 landed (see the E1 section below). The
+> remaining E2-E4 work and the newly-scoped multi-suspension-continuation
+> feature now live in
+> [cps-backend-multishot-continuations-owning-capture-plan.md](../upcoming/cps-backend-multishot-continuations-owning-capture-plan.md)
+> (Track B = E2-E4; Track A = multi-suspension continuations). This document is
+> kept for the verified mechanism write-up and the E1 landing record.
 
 ## Why this document exists
 
@@ -160,12 +167,31 @@ unsound admit.
 
 ## Phases
 
-### E1 -- gate + single-owning-capture, Option A (unblock coverage)
-Add `cap_owning_ok` and the incref-on-read-out emit. Admit a **single** owning
-capture (rc handle) into a multi-shot handler-case continuation. Fixture
-`tests/fixtures/cps-backend-owning-capture-handler-case`: a handler case body
-that captures one `rc` local, is resumed twice, drops it once per resume;
-`direct == cps`, carries `requires.no-leak-check` (Option A leaks the env +1).
+### E1 -- gate + single-owning-capture, Option A (unblock coverage) -- LANDED
+Added `cap_owning_ok` (`src/compiler/emit_cps_ir.c`), a per-capture `owning[]`
+flag on `CapSet`, and the clone-on-read-out emit (`rc_strong_increment` in the
+lifted `LH_HANDLER_CASE` helper). A single owning `rc` capture is admitted into
+a multi-shot handler-case env. Fixture
+`tests/fixtures/cps-backend-owning-capture-handler-case` carries
+`requires.no-leak-check` (Option A leaks the env +1).
+
+**Reachability finding (see
+[docs/reported/cps-handler-case-consumes-owning-capture-evicts.md](../reported/cps-handler-case-consumes-owning-capture-evicts.md)):**
+the literal "case drops the rc, enclosing fn does not" shape is **unreachable**
+today -- consuming the capture only inside a case makes `is_binding_consumed`
+miss it, so the let-form rc auto-drop injects an `EX_DEFER` that has no CT-IR
+lowering and evicts `f` before the capture gate runs (the O1-b / EX_DEFER hole
+this plan scopes out). The reachable, sound shape landed here is *borrow-style*:
+the case READS the captured rc (e.g. `rc/strong-count`) while `f` drops it
+straight-line. Clone-on-read-out keeps this memory-safe (the case invocation's
+own +1 is leaked with the env; `r`'s real drop stays in `f`) and keeps the
+"case consumes + `f` straight-line drops" double-consume shape balanced too.
+The fixture's `(rc/strong-count r)` reads **2** (f's original + the env clone) --
+a truthful reflection of the env retaining an owning reference, not an artifact
+to hide. A true runtime "resumed twice" case is not CPS-emittable regardless of
+this change (a two-perform `g` is outside the CPS subset and taints `f`), so the
+multi-shot property is exercised via the classifier (`collect_caps_case` forces
+`g_cap_single_shot = false`), not runtime double-invocation.
 
 ### E2 -- aggregate + carrier-ADT owning captures (Option A)
 Extend to a captured aggregate with owning fields and a captured carrier ADT,

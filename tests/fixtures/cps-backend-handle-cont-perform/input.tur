@@ -1,0 +1,40 @@
+;; CPS-IR-to-C backend, Track A / A2 (multi-suspension continuations): the
+;; continuation AFTER a `handle` itself performs an effect handled by an
+;; ENCLOSING handler.  Built with the always-on cps-backend.
+;;
+;; `g` handles effect D around `inner`, then -- in the handle's continuation --
+;; performs effect E, which is handled by the enclosing handler in `f`:
+;;   g = (let [x (handle (inner) (D [] k) (resume k 10))]   ; inner performs D
+;;         (let [y (perform (E))]                            ; continuation performs E
+;;           (+ x y)))
+;; The handle continuation is lifted as a k-carrying reset frame (LH_RESET_CONT)
+;; sitting at the base of g's D-handler chain, so a nested `perform` inside it
+;; threads the enclosing continuation `__kont` (which carries f's E-handler) and
+;; dispatches correctly -- no double delivery (the frame's own `next` is
+;; dk_done(), so only the nested perform delivers, via __kont).
+;;
+;; The only change A2 needed over A1 was a CT_PERFORM arm in joins_closed_rec:
+;; term_core_ok (A1) already admits the nested perform, and the handle
+;; continuation's LH_RESET_CONT lift already threads __kont, so the reset/handle
+;; continuation just had to pass the joins-closed structural check.
+;;
+;; Value: inner performs D -> g's case resumes 10, x = 10; the continuation
+;; performs E -> f's case resumes 5, y = 5; g = x + y = 15.
+
+(defeffect E [] :int)
+(defeffect D [] :int)
+
+(defn inner [] : int
+  (perform (D)))
+
+(defn g [] : int
+  (let [x (handle (inner) (D [] k) (resume k 10))]
+    (let [y (perform (E))]
+      (+ x y))))
+
+(defn f [] : int
+  (handle (g) (E [] k) (resume k 5)))
+
+(defn main [] : int
+  (println (f))
+  0)

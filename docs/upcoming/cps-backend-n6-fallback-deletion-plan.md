@@ -108,4 +108,16 @@ it depends on closing the `BODY-*` gap above.
 
 - Resuming (non-abortive) shift -- its own plan.
 - `SIG-*` colored functions -- permanent direct-emitter routing, never deleted.
-- Owning-field aggregate / carrier crossings -- gate item 4.
+- Owning-field aggregate / carrier crossings -- gate item 4. State of the two
+  handler-case sub-shapes (both feed `BODY-STRUCT-OR-TAINT`):
+  - *Consuming* aggregate capture (case DROPS a captured struct's owning field)
+    is already pre-empted -- it is a hard error, **TUR-E0107**, at elaboration,
+    so it never reaches eviction / the fallback (it would have double-dropped
+    there). No fallback-deletion work needed; the reject is the end-state.
+    See `docs/archive/cps-consuming-aggregate-capture-hardfails.md`.
+  - *Borrow* aggregate capture (case READS a captured struct's field, incl.
+    through an owning-value op) is a legitimate `BODY-STRUCT-OR-TAINT` evictor
+    that is leak-clean on the fallback (fixture
+    `cps-backend-owning-struct-field-op-capture-direct`). It is the real
+    admit-or-carve-out item for this gate -- extend E-borrow to aggregate
+    captures on the CPS path, or keep it carved out with justification.

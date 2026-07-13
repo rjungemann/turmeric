@@ -77,6 +77,7 @@ typedef enum DiagCode {
     /* TY4: Lifetime / borrow-escape errors */
     TUR_E0105_BORROW_ESCAPES_SCOPE,   /* a borrow outlives the value it points to */
     TUR_E0106_CYCLIC_LIFETIME,        /* lifetime outlives-constraints form a cycle */
+    TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER, /* handler case drops an owning field of a captured by-value local (double-drop vs scope auto-drop) */
     /* UT1: Uniqueness type errors (-Xunique-types) */
     TUR_E0200_UNIQUE_ALIASED,      /* value is not unique -- aliased by another binding */
     TUR_E0201_UNIQUE_COPY,         /* cannot copy a unique value (use after consume) */

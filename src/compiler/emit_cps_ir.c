@@ -638,15 +638,54 @@ typedef struct {
     TypeKind       ty[CC_MAX_CAPS];
     const Type    *type[CC_MAX_CAPS];   /* full type (Tier C by-value aggregate); may be NULL */
     bool           polyfn[CC_MAX_CAPS]; /* a rank-2 poly fn value -- env field is tur_poly_fn_t */
+    bool           owning[CC_MAX_CAPS]; /* E1: an owning capture admitted into a MULTI-SHOT
+                                         * continuation -- the lifted helper clones (increfs)
+                                         * it on read-out so each invocation owns its own +1,
+                                         * balanced by the body's drop.  Only set for the
+                                         * multi-shot owning admission (a single-shot owning
+                                         * capture rides by a bare shallow copy, owning=false). */
     int n; bool ok;
 } CapSet;
 
 /* A capture rides the env by value: a scalar (Tier A/B) or an owning-free
  * by-value aggregate (Tier C, slot_box_ty).  Both are Copy, so a leaked env
  * storing them is multi-shot-safe with no retain/drop.  Owning handles / carrier
- * ADTs are rejected (their copy would duplicate a refcount). */
+ * ADTs are rejected here (their copy would duplicate a refcount) -- they route
+ * through cap_owning_ok / clone-on-read-out instead. */
 static bool cap_ty_ok(TypeKind ty, const Type *type) {
     return slot_ty(ty) || slot_box_ty(type);
+}
+
+/* An owning-carrying BY-VALUE aggregate: a by-value struct/ADT product whose def
+ * `needs_drop_glue` (it has an rc/ref/weak field).  slot_box_ty excludes it (that
+ * gate is owning-free only), so it never rides the plain Copy capture gate -- it
+ * routes through cap_owning_ok. */
+static bool owning_byvalue_aggregate(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *d = slot_agg_def(t);
+    return d && d->needs_drop_glue;
+}
+
+/* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
+ * (a handler CASE body).  The env-capture landing is BORROW-ONLY-first (E-borrow):
+ * for the reachable borrow-only shape the capture rides by a bare shallow alias
+ * (no clone, no drop -- the enclosing fn owns it and drops it once, now via the
+ * P2 auto-drop lowering), which collect_caps_case decides via
+ * owning_cap_borrow_only.  cap_owning_ok only says "this owning kind is
+ * admissible into a multi-shot env":
+ *   - `rc<int>` handle (TY_RC): borrow-only -> bare alias; consuming -> incref
+ *     (rc_strong_increment, Option A, memory-safe).
+ *   - a carrier ADT / heap struct handle: borrow-only -> bare pointer alias;
+ *     consuming -> evict (no scalar incref glue -- rides E3's teardown).
+ *   - an owning-carrying by-value aggregate: borrow-only -> bare struct copy;
+ *     consuming -> evict.
+ * A single-shot continuation still admits any owning capture by a bare copy
+ * regardless (g_cap_single_shot, in cap_add).  weak<T> stays excluded. */
+static bool cap_owning_ok(TypeKind ty, const Type *type) {
+    return ty == TY_RC || carrier_handle_ok(type) || owning_byvalue_aggregate(type);
 }
 
 static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type) {
@@ -671,11 +710,21 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
      * (A fn value still routes through the poly path for its tur_poly_fn_t env
      * type; a by-value aggregate through slot_box for its unbox.) */
     bool owning_ok = g_cap_single_shot;
-    if (!is_poly && !borrowed && !owning_ok && !cap_ty_ok(ty, type)) { cs->ok = false; return; }
+    /* E1: an owning capture in a MULTI-SHOT continuation (owning_ok is false) is
+     * admitted iff we can emit its clone glue (cap_owning_ok); the lifted helper
+     * then clones it on read-out so each invocation owns its own +1.  A poly fn,
+     * a `^borrow`, a Copy value, and a single-shot owning capture never need the
+     * clone -- they ride by a bare shallow copy (needs_clone stays false). */
+    bool needs_clone = false;
+    if (!is_poly && !borrowed && !owning_ok && !cap_ty_ok(ty, type)) {
+        if (cap_owning_ok(ty, type)) needs_clone = true;
+        else { cs->ok = false; return; }
+    }
     for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = ty;
-    cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly; cs->n++;
+    cs->type[cs->n] = type; cs->polyfn[cs->n] = is_poly;
+    cs->owning[cs->n] = needs_clone; cs->n++;
 }
 
 /* The C type of capture slot i: a fat closure is `tur_poly_fn_t`, everything
@@ -690,7 +739,8 @@ static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty,
     for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
     if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
     cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
-    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false; cs->n++;
+    cs->ty[cs->n] = ty; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
+    cs->owning[cs->n] = false; cs->n++;
 }
 
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
@@ -859,6 +909,14 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             COL_ATOM(&t->as.await.fut);
             bound[nb] = t->as.await.x.id;
             collect_caps_rec(t->as.await.body, exclude, bound, nb + 1, cs); return;
+        case CT_PERFORM:
+            /* Track A: a nested `perform` in a lifted (RESUME_CONT) perform
+             * continuation -- the second of two sequential performs.  Its arg atoms
+             * may be captures the lifted frame must carry; the performed-effect
+             * result binds x for the rest of the continuation. */
+            for (uint32_t i = 0; i < t->as.perform.n; i++) COL_ATOM(&t->as.perform.args[i]);
+            bound[nb] = t->as.perform.x.id;
+            collect_caps_rec(t->as.perform.body, exclude, bound, nb + 1, cs); return;
         case CT_CALLCC: {
             /* The receiver f may capture enclosing locals (build_callcc admits a
              * capturing closure).  Surface its free vars -- collect_free_vars
@@ -898,6 +956,111 @@ static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
     return cs->ok;
 }
 
+/* ---- E3-lite: leak-clean owning captures (borrow-only) ------------------ *
+ * An owning value captured into a MULTI-SHOT continuation env is only ever
+ * *reachable* here in a BORROW-ONLY shape: a case that consumes (drops/moves)
+ * the capture without the enclosing fn also consuming it evicts upstream (the
+ * fn's scope-exit auto-drop becomes an unlowered EX_DEFER -- see
+ * docs/reported/cps-handler-case-consumes-owning-capture-evicts.md).  For a
+ * borrow-only capture the owner (the enclosing fn) drops the value exactly once
+ * on its straight-line path, so the env needs neither clone nor drop: it rides
+ * by a bare shallow alias -- leak-clean, no double-free, and the observed value
+ * is exact (no incref inflation).  Only a *provably consuming* rc capture (the
+ * rare "drop in the case AND straight-line in the fn" double-consume that still
+ * reaches CPS) keeps the incref-on-read-out (Option A) path, which is memory-safe
+ * (balanced) though it retains the env's clone.  This is the reachable-shape
+ * realization of the env-capture plan's leak-clean bar without a DK teardown. */
+
+/* A delegated op's Expr `e` is a pure borrow READ of `bid` -- rc/strong-count,
+ * rc->ptr, or (weak ..), whose direct operand is `bid`.  These read the handle
+ * without releasing or moving it (the result is a scalar / a non-owning borrow),
+ * so the capture stays owned by the caller. */
+static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e) return false;
+    const Expr *inner = NULL;
+    switch (e->kind) {
+        case EX_RC_COUNT: inner = e->as.rc_count_.expr; break;
+        case EX_RC_PTR:   inner = e->as.rc_ptr_.expr;   break;
+        case EX_WEAK:     inner = e->as.weak_.expr;     break;
+        case EX_GET_FIELD:
+            /* Reading a NON-owning field `(.f o)` of the captured by-value
+             * aggregate is a pure borrow of `o` -- it copies a scalar out, leaving
+             * `o` (and its owning fields) intact.  An OWNING field read yields an
+             * alias that could be consumed, so it is not provably borrow-only:
+             * conservatively reject (the capture then evicts / rides E3). */
+            if (e->type.kind == TY_RC || e->type.kind == TY_REF
+                || e->type.kind == TY_WEAK || e->type.kind == TY_LREF)
+                return false;
+            inner = e->as.get_field_.struct_expr;
+            /* peel a chain of field reads to the root aggregate */
+            while (inner) {
+                while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+                if (inner && inner->kind == EX_GET_FIELD) {
+                    inner = inner->as.get_field_.struct_expr; continue;
+                }
+                break;
+            }
+            break;
+        default: return false;
+    }
+    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    return inner && inner->kind == EX_VAR && inner->as.var.binding
+        && inner->as.var.binding->id == bid;
+}
+
+static bool expr_refs_bid(const Expr *e, uint32_t bid) {
+    uint32_t nfv = 0;
+    Binding **fv = collect_free_vars(e, NULL, 0, NULL, 0, &nfv);
+    bool r = false;
+    for (uint32_t i = 0; i < nfv; i++) if (fv[i] && fv[i]->id == bid) { r = true; break; }
+    free(fv);
+    return r;
+}
+
+static bool cap_atom_is_bid(const CAtom *a, uint32_t bid) {
+    return a->kind == CA_VAR && a->var && a->var->id == bid;
+}
+
+/* True iff every reference to owning capture `bid` in this handler-case body
+ * (handle_case_ok shape) is a pure borrow read.  Conservative: any reference
+ * that is not a recognized borrow -- a consuming delegated op, a move into a
+ * call arg / delivery, or anything unmodelled -- returns false (keep incref). */
+static bool owning_cap_borrow_only(const CTerm *t, uint32_t bid) {
+    while (t) {
+        switch (t->kind) {
+            case CT_APPCONT:
+                return !cap_atom_is_bid(&t->as.appcont.v, bid);
+            case CT_LETVAL:
+                if (cap_atom_is_bid(&t->as.letval.v, bid)) return false;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (cap_atom_is_bid(&t->as.letprim.args[i], bid)) return false;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (cap_atom_is_bid(&t->as.letcall.args[i], bid)) return false;
+                t = t->as.letcall.body; break;
+            case CT_LETRAW:
+                if (expr_refs_bid(t->as.letraw.e, bid)
+                    && !expr_is_pure_borrow_of(t->as.letraw.e, bid))
+                    return false;
+                t = t->as.letraw.body; break;
+            case CT_RESUME:
+                if (cap_atom_is_bid(&t->as.resume.v, bid) || cap_atom_is_bid(&t->as.resume.k, bid))
+                    return false;
+                t = t->as.resume.body; break;
+            case CT_IF:
+                if (cap_atom_is_bid(&t->as.if_.cond, bid)) return false;
+                return owning_cap_borrow_only(t->as.if_.then_, bid)
+                    && owning_cap_borrow_only(t->as.if_.else_, bid);
+            default: return false;
+        }
+    }
+    return true;
+}
+
 /* Collect a handler case body's scalar captures, excluding the case's own params
  * and continuation k (bound by the DKHandler signature).  Same collect-or-bail
  * contract as collect_caps. */
@@ -911,6 +1074,20 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
     g_cap_single_shot = false;   /* a handler case body runs once per perform, not single-shot */
     collect_caps_rec(body, UINT32_MAX, bound, 0, cs);
     g_excl_n = 0;
+    /* E-borrow: a borrow-only owning capture rides by a bare shallow alias
+     * (owning=false) -- leak-clean, since the enclosing fn owns and drops it
+     * exactly once.  A provably-consuming capture keeps owning=true, but only an
+     * rc handle has a scalar incref (rc_strong_increment) for the read-out clone;
+     * a consuming aggregate / carrier handle has no such glue (it needs E3's env
+     * teardown), so evict it rather than emit a wrong incref. */
+    if (cs->ok)
+        for (int i = 0; i < cs->n; i++) {
+            if (!cs->owning[i] || !cs->b[i]) continue;
+            if (owning_cap_borrow_only(body, cs->b[i]->id))
+                cs->owning[i] = false;
+            else if (cs->ty[i] != TY_RC)
+                cs->ok = false;
+        }
     return cs->ok;
 }
 
@@ -947,6 +1124,12 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
+        case CT_PERFORM:
+            /* Track A (A2): a nested `perform` in a reset/handle continuation
+             * body.  The perform delivers to a handler (not a join); its joins are
+             * in its own continuation, so recurse there.  term_core_ok already
+             * gates whether the nested perform is emittable (A1). */
+            return joins_closed_rec(t->as.perform.body, def, nd);
         default: return false;
     }
 }
@@ -1024,6 +1207,56 @@ static bool perform_body_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && perform_body_ok(t->as.if_.then_) && perform_body_ok(t->as.if_.else_);
         default: return false;
+    }
+}
+
+/* Track A (multi-suspension continuations): a perform continuation that is a
+ * FULL CPS body containing a NESTED control op (a further `perform`) -- the
+ * two-perform shape `(let [a (perform E)] (let [b (perform E)] (+ a b)))`.  It is
+ * lifted as a RESUME-FRAME (LH_RESUME_CONT): the frame receives its run-time
+ * downstream chain `__kont` (the reinstalled-handler tail dk_perform splices in)
+ * and threads it, so the nested perform finds the correct enclosing handler and
+ * the value is delivered exactly once.  This mirrors the F3 await gap-2
+ * (await_cont_reset_ok / emit_await), but a nested PERFORM re-dispatches to a
+ * handler (unlike await, which shifts to the root prompt), which is exactly why
+ * the frame must carry its run-time rest rather than a bare `next = cur_k`.
+ *
+ * Bounded like await gap-2: a cps->cps TAIL CALL is rejected (it would recurse
+ * unboundedly through dk_invoke -- an O(N) resume stack), and so is any other
+ * nested control op (handle/shift/await/callcc mixed in) -- those are A2/A3. */
+static bool perform_cont_reset_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            return (t->as.appcont.kont.kind == KK_RET || t->as.appcont.kont.kind == KK_PROMPT)
+                && atom_ok(&t->as.appcont.v);
+        case CT_LETVAL:
+            return atom_ok(&t->as.letval.v) && perform_cont_reset_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+                return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return perform_cont_reset_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!call_arg_ok(&t->as.letcall.args[i], true)) return false;
+            return perform_cont_reset_ok(t->as.letcall.body);
+        case CT_LETRAW:
+            return letraw_ok(t) && perform_cont_reset_ok(t->as.letraw.body);
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && perform_cont_reset_ok(t->as.if_.then_)
+                && perform_cont_reset_ok(t->as.if_.else_);
+        case CT_PERFORM:
+            /* The nested perform's args must be slot atoms; its OWN continuation
+             * is emitted straight-line (perform_body_ok -> a value-transform frame
+             * threading __kont) or as a further resume-frame (this predicate). */
+            for (uint32_t i = 0; i < t->as.perform.n; i++)
+                if (!atom_ok(&t->as.perform.args[i])) return false;
+            return perform_body_ok(t->as.perform.body)
+                || perform_cont_reset_ok(t->as.perform.body);
+        default: return false;   /* CT_TAILCALL and any other nested control op: evict */
     }
 }
 
@@ -1346,7 +1579,12 @@ static bool term_core_ok(const CTerm *t) {
              * (n>1) is heap-packed into one word (emit_perform) and unpacked at the
              * handler case; every arg must be a slot-representable atom.  A single
              * (or zero) arg keeps the original one-word-slot path. */
-            if (!perform_body_ok(t->as.perform.body))
+            /* The continuation is admitted EITHER straight-line (perform_body_ok
+             * -> LH_PERFORM_CONT value-transform) OR as a bounded multi-suspension
+             * body (perform_cont_reset_ok -> LH_RESUME_CONT resume-frame, Track A:
+             * a nested perform). */
+            if (!perform_body_ok(t->as.perform.body)
+                && !perform_cont_reset_ok(t->as.perform.body))
                 return false;
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])) return false;
@@ -2875,6 +3113,11 @@ typedef enum {
     LH_SHIFT_BODY,    /* DKBody  (env, subk):   shift body, KK_PROMPT -> return value */
     LH_PERFORM_CONT,  /* DKFrame (env, xval):   perform continuation, KK_RET -> return value */
     LH_HANDLER_CASE,  /* DKHandler (env, arg, subk): binds params+k, KK_PROMPT -> return */
+    LH_RESUME_CONT,   /* DKResumeFrame (env, xval, __kont): a MULTI-SUSPENSION perform
+                       * continuation (Track A) -- its body contains a nested control op,
+                       * so it is lifted as a resume-frame that receives its run-time
+                       * downstream chain `__kont` and threads it (KK_RET -> dk_run(__kont,..),
+                       * a nested perform/shift threads __kont).  Caps ride env (no __k). */
 } LHMode;
 
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
@@ -2916,6 +3159,16 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
             indent_buf(&tmp, 4);
             buf_printf(&tmp, "%s %s = __cap->f%d;\n", cap_ctype(ce->ctx, caps, i), cn, i);
+            /* E1 (Option A): an owning capture admitted into a multi-shot
+             * continuation is CLONED (increfed) on read-out, so each invocation of
+             * this helper owns its own +1 that the body's drop balances.  The env's
+             * original +1 is intentionally leaked (matching the leaked-DK-node
+             * regime); the fixture carries requires.no-leak-check.  Currently only
+             * an rc handle reaches here (cap_owning_ok gates it). */
+            if (caps->owning[i]) {
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "rc_strong_increment(%s);\n", cn);
+            }
             free(cn);
         }
     }
@@ -2924,7 +3177,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * (reset/perform continuation), or bind the handler case's params/k.  The
      * value-param load leaks a Tier C box (consume=false): this frame can run
      * more than once under a multi-shot resume. */
-    if (mode == LH_RESET_CONT || mode == LH_PERFORM_CONT) {
+    if (mode == LH_RESET_CONT || mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT) {
         char slotexpr[160];
         snprintf(slotexpr, sizeof slotexpr, "%s__slot", xname);
         char *ld = slot_load(ce->ctx, xty, xt, slotexpr, false);
@@ -3002,6 +3255,12 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
             buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot) {\n", name, xname);
             /* With caps, `k` is read from the env struct (above); else env IS k. */
             if (!has_caps) buf_puts(ce->helpers, "    DK *__kont = (DK *)env;\n");
+            break;
+        case LH_RESUME_CONT:
+            /* Track A: a resume-frame.  __kont is the run-time downstream chain
+             * (a DKResumeFrame parameter, not the env); caps (if any) ride env. */
+            buf_printf(ce->helpers, "static intptr_t %s(intptr_t env, intptr_t %s__slot, DK *__kont) {\n", name, xname);
+            if (!has_caps) buf_puts(ce->helpers, "    (void)env;\n");
             break;
     }
     buf_puts(ce->helpers, tmp.data);
@@ -3088,8 +3347,18 @@ static void emit_reset(CE *ce, const CTerm *t) {
     char *envexpr = emit_cont_env(ce, hname, caps, ce->cur_k);
     char pchain[64];
     snprintf(pchain, sizeof(pchain), "__p%d", id);
-    ce_line(ce, "DK *%s = dk_prompt(1, dk_frame(%s, %s, dk_done()));",
-            pchain, hname, envexpr);
+    /* The reset continuation frame buries the enclosing continuation in its env
+     * (`__k`) and its `next` was dk_done() -- so an effect PERFORMED inside the
+     * delimited body (handled by a handler ENCLOSING the reset) could not find
+     * its handler and aborted "unhandled" (a pre-existing miscompile, reachable
+     * now that Track A admits nested effects in more positions).  Splice a copy of
+     * cur_k's enclosing handler markers as the frame's `next`: dk_perform walks
+     * through the reset's prompt to reach them, and the reified sub still includes
+     * the prompt so a shift in the resumed computation stays delimited.  They are
+     * transparent to a returning value (the frame already delivers via
+     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged. */
+    ce_line(ce, "DK *%s = dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s)));",
+            pchain, hname, envexpr, ce->cur_k);
     free(envexpr);
 
     const char *save = ce->cur_k;
@@ -3671,7 +3940,20 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * resume does not re-install it (the effect-side analogue of shift0). */
     const char *hctor = t->as.handle.shallow ? "dk_handler_shallow" : "dk_handler";
     Buf chain; buf_init(&chain);
-    buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
+    /* The base is the handle continuation frame.  For a DEEP handler its `next` is
+     * dk_done() (a resume re-installs the handler, so re-performs are handled
+     * locally).  For a SHALLOW handler (Track A: reachable now that a multi-
+     * suspension body can re-perform after a resume) the enclosing handler markers
+     * must stay reachable so an unhandled re-perform propagates outward: the frame
+     * buries the enclosing continuation in its env (`__k`), so splice a copy of
+     * cur_k's enclosing handler markers as the frame's `next`.  They are
+     * transparent to a returning value (so the normal-completion result is
+     * unchanged -- the frame already delivers via dk_run(__k, v)), and dk_perform's
+     * shallow tail (dk_copy_enclosing_handlers(H->next)) then finds them. */
+    if (t->as.handle.shallow)
+        buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
+    else
+        buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         Buf nxt; buf_init(&nxt);
@@ -3743,7 +4025,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
 
     if (perform_cont_trivial(t)) {
         ce_line(ce, "return dk_perform(%d, %s, %s);", tag, sa, ce->cur_k);
-    } else {
+    } else if (perform_body_ok(t->as.perform.body)) {
         int id = (*ce->helper_ctr)++;
         char pname[256];
         snprintf(pname, sizeof(pname), "%s_pf%d", ce->fn_cn, id);
@@ -3774,6 +4056,29 @@ static void emit_perform(CE *ce, const CTerm *t) {
             ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
                     tag, sa, pname, ce->cur_k);
         }
+    } else {
+        /* Track A: the continuation contains a NESTED control op (a further
+         * perform) -- perform_cont_reset_ok admitted it.  Lift it as a RESUME-FRAME
+         * (LH_RESUME_CONT): the frame's `next` is ce->cur_k so dk_perform finds the
+         * handler and splices the reinstalled-handler tail as the frame's run-time
+         * downstream chain `__kont`, which the helper threads (a nested perform
+         * inside re-dispatches against __kont, and a plain KK_RET delivers via
+         * dk_run(__kont, v)) -- so the value is delivered exactly once.  The env
+         * carries only the body's captures (no __k -- __kont is the runtime rest). */
+        int id = (*ce->helper_ctr)++;
+        char pname[256];
+        snprintf(pname, sizeof(pname), "%s_rf%d", ce->fn_cn, id);
+        char *pxn = cvar_cname(ce, t->as.perform.x);
+        CapSet cs;
+        bool ok = collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
+        const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        emit_lifted(ce, pname, LH_RESUME_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
+                    t->as.perform.body, NULL, caps);
+        free(pxn);
+        char *envexpr = emit_cont_env(ce, pname, caps, NULL);   /* caps-only env */
+        ce_line(ce, "return dk_perform(%d, %s, dk_frame_resume(%s, %s, %s));",
+                tag, sa, pname, envexpr, ce->cur_k);
+        free(envexpr);
     }
     free(sa);
     free(arg);

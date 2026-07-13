@@ -1,0 +1,38 @@
+;; CPS-IR-to-C backend, Track A (multi-suspension continuations): a colored body
+;; that performs TWICE, so the first perform's continuation itself contains a
+;; nested control op (the second perform).  Built with the always-on cps-backend.
+;;
+;; Before Track A a perform whose continuation was not straight-line evicted:
+;; the continuation was lifted only as a value-transform frame (LH_PERFORM_CONT),
+;; which cannot host a suspension.  Track A lifts such a continuation as a
+;; RESUME-FRAME (LH_RESUME_CONT / dk_frame_resume): unlike a value-transform
+;; frame, dk_run hands it its run-time downstream chain `__kont` (the reinstalled-
+;; handler tail dk_perform splices in) and lets it own delivery.  The nested
+;; perform inside then re-dispatches against `__kont` -- finding the correct
+;; enclosing handler -- and the final value is delivered exactly once.
+;;
+;; This is the effect-side analogue of F3's async/await gap-2 (await_cont_reset_ok
+;; / emit_await), but a nested PERFORM re-dispatches to a handler (unlike await,
+;; which shifts to the root prompt), which is exactly why the frame must carry its
+;; run-time rest rather than a bare `next = cur_k` -- a bare cur_k would deliver
+;; the handler-case result to the post-handle continuation twice.
+;;
+;; The handler case resumes with (base + 1); the deep handler reinstalls on each
+;; resume, so both performs are handled.  g CPS-emits (not fallback); the handler
+;; case genuinely runs twice.
+;;
+;; Value: a = (40 + 1) = 41, b = (40 + 1) = 41, g = a + b = 82.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (let [a (perform (E))]
+    (let [b (perform (E))]
+      (+ a b))))
+
+(defn f [base : int] : int
+  (handle (g) (E [] k) (resume k (+ base 1))))
+
+(defn main [] : int
+  (println (f 40))
+  0)

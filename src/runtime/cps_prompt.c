@@ -15,6 +15,7 @@ typedef enum {
     DKK_SHIFT,
     DKK_SHIFT0,
     DKK_HANDLER,
+    DKK_RESUME_FRAME,
 } DKKind;
 
 struct DK {
@@ -27,6 +28,7 @@ struct DK {
     DKHandler handler;   /* DKK_HANDLER */
     intptr_t  handler_env; /* DKK_HANDLER */
     bool      shallow;   /* DKK_HANDLER: true = do NOT reinstall on resume (shift0-like) */
+    DKResumeFrame rfn;   /* DKK_RESUME_FRAME */
     DK       *next;
 };
 
@@ -42,6 +44,12 @@ DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }
 DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_FRAME, next);
     k->fn = fn; k->env = env;
+    return k;
+}
+
+DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_new(DKK_RESUME_FRAME, next);
+    k->rfn = fn; k->env = env;
     return k;
 }
 
@@ -84,6 +92,7 @@ static DK *dk_copy_node(const DK *n) {
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env;
     c->shallow = n->shallow;
+    c->rfn = n->rfn;
     return c;
 }
 
@@ -175,6 +184,10 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                 v = k->fn(k->env, v);
                 k = k->next;
                 break;
+            case DKK_RESUME_FRAME:
+                /* A suspending continuation frame: hand it the run-time
+                 * downstream chain (k->next) and let it own delivery. */
+                return k->rfn(k->env, v, k->next);
             case DKK_SHIFT:
             case DKK_SHIFT0: {
                 /* find the nearest enclosing prompt with this tag */

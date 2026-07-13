@@ -1,0 +1,34 @@
+;; CPS-IR-to-C backend, owning-autodrop-lowering P2: a NON-ref owning value whose
+;; scope-exit auto-drop CROSSES a control op is lowered in place when the crossed
+;; op is SINGLE-SHOT (its post-op continuation runs exactly once).  Built with the
+;; always-on cps-backend.
+;;
+;; P1 only hoisted a non-crossing auto-drop.  Here `r` (a bare rc) and `o` (a
+;; by-value struct with an rc field) are both used AFTER a `handle` -- so their
+;; auto-drops cross it.  Because a `handle` continuation is single-shot, P2 lowers
+;; each auto-drop at scope exit, in the post-handle continuation, where it fires
+;; exactly once (rather than hoisting before the handle, which would drop a value
+;; the continuation still uses, or evicting).  This is the same discipline that
+;; lets an owning value be borrowed across a handle (E1/E2); an abortive `shift`
+;; or a multi-shot crossing keeps falling back (P3).
+;;
+;; direct == cps, LeakSanitizer-clean: handle resumes 100; r's strong count is 1;
+;; o's tag is 9; 100 + 1 + 9 = 110.  Both owning values are dropped exactly once
+;; in the post-handle continuation.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [r (rc/of 5)
+        o (make-struct Own :r (rc/of 7) :tag 9)]
+    (let [v (handle (g) (E [] k) (resume k 100))]
+      (+ (+ v (rc/strong-count r)) (.tag o)))))
+
+(defn main [] : int
+  (println (f))
+  0)

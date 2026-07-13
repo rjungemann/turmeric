@@ -3408,6 +3408,28 @@ Binding **collect_handle_captures(const Expr *body, uint32_t *n_out) {
             }
             case EX_REF: { PUSH_EXPR(cur->as.ref_.expr); break; }
             case EX_DEREF: { PUSH_EXPR(cur->as.deref_.expr); break; }
+            /* Owning-value ops (rc/of, rc/clone, rc/drop, rc->ptr,
+             * rc/strong-count, rc/from-ref, ref/from-rc, weak, upgrade, weak?,
+             * ref?): each wraps a single operand `.expr` whose free variables
+             * must be captured. A handler case that references a local only
+             * through such an op -- e.g. `(rc/drop (.r o))` -- would otherwise
+             * leave `o` uncaptured and emit an undeclared C name in the
+             * handler body. All eleven share the `{ Expr *expr; ... }` leading
+             * layout, so `rc_of_.expr` reads the operand for every one. */
+            case EX_RC_OF:
+            case EX_RC_CLONE:
+            case EX_RC_DROP:
+            case EX_RC_PTR:
+            case EX_RC_COUNT:
+            case EX_RC_FROM_REF:
+            case EX_REF_FROM_RC:
+            case EX_WEAK:
+            case EX_WEAK_UPGRADE:
+            case EX_WEAK_PRED:
+            case EX_REF_PRED: {
+                PUSH_EXPR(cur->as.rc_of_.expr);
+                break;
+            }
             case EX_GET_FIELD: {
                 PUSH_EXPR(cur->as.get_field_.struct_expr);
                 break;

@@ -215,6 +215,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0104_LINEAR_BRANCH_MISMATCH:     return "TUR-E0104";
         case TUR_E0105_BORROW_ESCAPES_SCOPE:       return "TUR-E0105";
         case TUR_E0106_CYCLIC_LIFETIME:            return "TUR-E0106";
+        case TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER: return "TUR-E0107";
         /* ST0: Substructural type errors */
         case TUR_E0150_AFFINE_USED_TWICE:          return "TUR-E0150";
         case TUR_E0151_RELEVANT_DROPPED:           return "TUR-E0151";
@@ -352,6 +353,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0104") == 0) return TUR_E0104_LINEAR_BRANCH_MISMATCH;
     if (strcmp(s, "TUR-E0105") == 0) return TUR_E0105_BORROW_ESCAPES_SCOPE;
     if (strcmp(s, "TUR-E0106") == 0) return TUR_E0106_CYCLIC_LIFETIME;
+    if (strcmp(s, "TUR-E0107") == 0) return TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER;
     /* ST0: Substructural type errors */
     if (strcmp(s, "TUR-E0150") == 0) return TUR_E0150_AFFINE_USED_TWICE;
     if (strcmp(s, "TUR-E0151") == 0) return TUR_E0151_RELEVANT_DROPPED;
@@ -1027,6 +1029,29 @@ static const DiagExplanation diag_explanations_[] = {
       "Fix: if shared ownership is needed, remove the ^unique annotation.\n"
       "\n"
       "Enable with: tur -Xunique-types myfile.tur\n",
+    },
+    /* TY4: captured owning field consumed in a handler case */
+    { TUR_E0107_CAPTURED_FIELD_CONSUMED_IN_HANDLER,
+      "TUR-E0107: Handler case consumes an owning field of a captured value\n"
+      "\n"
+      "A handler case dropped an owning (rc/ref) field of a by-value struct/record\n"
+      "that it captured from an enclosing scope -- e.g. (rc/drop (.r o)) where o is\n"
+      "a `let`-bound aggregate outside the `handle`. This is rejected because the\n"
+      "field would be released twice: once by the handler case and once by o's\n"
+      "scope-exit auto-drop. A handler case also runs once PER perform (0..N times),\n"
+      "so even suppressing the auto-drop cannot make the counts balance -- the field\n"
+      "would be under-dropped when the case never runs and over-dropped when it runs\n"
+      "more than once.\n"
+      "\n"
+      "Example of the error:\n"
+      "  (let [o (make-struct Own :r (rc/of 7) :tag 9)]\n"
+      "    (handle (g)\n"
+      "      (E [] k) (do (rc/drop (.r o)) (resume k 0))))  ; ERROR: case drops o.r\n"
+      "\n"
+      "Fix: do not consume the captured aggregate's owning field inside the handler.\n"
+      "Read it (borrow) instead -- (.tag o), (rc/strong-count (.r o)) -- and let o's\n"
+      "scope-exit auto-drop release the field once; or move ownership out of the\n"
+      "aggregate before the handle so the enclosing scope no longer owns it.\n",
     },
     /* ST1: Substructural type explanations */
     { TUR_E0150_AFFINE_USED_TWICE,
