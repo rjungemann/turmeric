@@ -3212,8 +3212,18 @@ static void emit_reset(CE *ce, const CTerm *t) {
     char *envexpr = emit_cont_env(ce, hname, caps, ce->cur_k);
     char pchain[64];
     snprintf(pchain, sizeof(pchain), "__p%d", id);
-    ce_line(ce, "DK *%s = dk_prompt(1, dk_frame(%s, %s, dk_done()));",
-            pchain, hname, envexpr);
+    /* The reset continuation frame buries the enclosing continuation in its env
+     * (`__k`) and its `next` was dk_done() -- so an effect PERFORMED inside the
+     * delimited body (handled by a handler ENCLOSING the reset) could not find
+     * its handler and aborted "unhandled" (a pre-existing miscompile, reachable
+     * now that Track A admits nested effects in more positions).  Splice a copy of
+     * cur_k's enclosing handler markers as the frame's `next`: dk_perform walks
+     * through the reset's prompt to reach them, and the reified sub still includes
+     * the prompt so a shift in the resumed computation stays delimited.  They are
+     * transparent to a returning value (the frame already delivers via
+     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged. */
+    ce_line(ce, "DK *%s = dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s)));",
+            pchain, hname, envexpr, ce->cur_k);
     free(envexpr);
 
     const char *save = ce->cur_k;

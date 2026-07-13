@@ -1,0 +1,33 @@
+;; CPS-IR-to-C backend, Track A / A3 (reset/shift continuations meet effects): an
+;; effect PERFORMED inside a `reset` delimited body, handled by a handler
+;; ENCLOSING the reset.  Built with the always-on cps-backend.
+;;
+;; `g` runs `(reset (+ 1 (perform (E))))` under `f`'s handler for E.  A reset
+;; installs a prompt (for shift), not an effect handler -- so the perform of E
+;; inside the delimited body must propagate OUT through the reset's prompt to f's
+;; enclosing handler.  This previously miscompiled: the reset continuation frame
+;; buried the enclosing continuation in its env and set its `next` to dk_done(),
+;; so dk_perform could not reach f's handler and aborted "unhandled effect".
+;;
+;; Fixed by splicing dk_copy_enclosing_handlers(cur_k) as the reset continuation
+;; frame's `next` (the same shape as the shallow-handler outer-propagation fix):
+;; dk_perform walks through the reset's prompt to f's handler, the reified
+;; sub-continuation still contains the prompt (so a shift in the resumed
+;; computation stays delimited), and the markers are transparent to the reset's
+;; own returning value -- with no enclosing handler the splice is [done], i.e.
+;; unchanged from before.
+;;
+;; Value: the delimited body performs E -> f's case resumes 5; (+ 1 5) = 6, which
+;; is the reset's value and g's result.
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (reset (+ 1 (perform (E)))))
+
+(defn f [] : int
+  (handle (g) (E [] k) (resume k 5)))
+
+(defn main [] : int
+  (println (f))
+  0)

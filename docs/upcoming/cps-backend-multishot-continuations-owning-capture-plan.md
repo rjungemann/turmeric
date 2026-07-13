@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A A1+A2 landed (nested perform in a perform-continuation via a resume-frame; nested perform in a reset/handle continuation); A3 and Track B (E2-E4) open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: Track A COMPLETE (A1 resume-frame for nested perform in a perform-continuation; A2 nested perform in a reset/handle continuation; A3 reset/shift continuations meet effects + the enclosing-handler fix across all delimiter forms). Track B (E2-E4) open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -208,9 +208,28 @@ lift composes with it.
   structural check. Verified: the p4 shape, a same-effect re-perform in the
   continuation, a branch after the perform, and the A1+A2 combination (a handle
   continuation that performs *twice*, output 20).
-- **A3 -- shift/reset continuation containing a nested control op** beyond the
-  existing nested-reset arm (`collect_caps_rec` already has `CT_RESET`/`CT_SHIFT`
-  arms; A3 extends the *emit* + gate to nested effects there).
+- **A3 -- reset/shift continuations meet effects. LANDED.** Probing found most
+  shapes already worked after A1+A2: a reset continuation that performs, a handle
+  continuation containing a reset/shift, a reset value bound then performed --
+  all CPS-emit correctly. A3's concrete contribution was fixing a **pre-existing
+  miscompile** (present before A1): an effect *performed inside a reset delimited
+  body* and handled by a handler *enclosing* the reset aborted "unhandled
+  effect" -- the reset installs only a prompt, and the enclosing handler was
+  buried in the reset-continuation frame's env with the frame's `next` set to
+  dk_done(). Fixed in `emit_reset` by splicing `dk_copy_enclosing_handlers(cur_k)`
+  as that frame's `next` -- the same buried-enclosing-handler fix as the
+  shallow-handler case in A1, now applied across all delimiter forms. dk_perform
+  walks through the reset's prompt to the enclosing handler; the reified sub still
+  contains the prompt (a shift in the resumed computation stays delimited); with
+  no enclosing handler the splice is `[done]`, unchanged. Fixture
+  `cps-backend-reset-body-perform` (output 6, `direct == cps`). Full suite 2148
+  passed, 0 failed (2 reset snapshots regenerated).
+
+  Still evicting (correct fallback, out of A3 scope -- genuine interleaving of
+  delimited capture and effect dispatch in one delimited body): a shift whose
+  *value computation* performs (`(reset (shift f (+ 1 (perform E))))`), and a
+  reset body containing *both* a perform and a shift
+  (`(reset (+ (perform E) (shift f 7)))`).
 - **Bounded only.** A `cps->cps` tail call in a continuation (recursive /
   unbounded suspensions) stays evicted, matching `await`; note the O(N)-resume
   concern in the fixture comment and keep the report link.
