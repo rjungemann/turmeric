@@ -43,6 +43,13 @@ typedef struct Hamt {
     uint32_t count;      /* Number of key/value pairs */
     uint32_t ref_count;   /* Reference count for the root struct */
     tur_hamt_key_ops key_ops;  /* WKC2: boxed-key ownership (NULL fns = none) */
+    /* Multi-word-value boxing: when true, each entry's VALUE is a
+     * tur_hamt_box_key box owned by the map (retained on structural copy,
+     * released on entry drop / free), mirroring boxed keys.  Selected by bit 1
+     * of the `owned` flag threaded through the _eq_o operations (bit 0 = key,
+     * bit 1 = value).  False for the common single-word value (int/cstr/handle),
+     * which rides the carrier inline and is never freed by the map. */
+    bool val_owned;
 } Hamt;
 
 /* Node types for the tagged union */

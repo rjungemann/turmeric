@@ -2,7 +2,7 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); only the Vec-element / Map-value box-free lifecycle (process-lifetime leak) remains
+status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); key + Map-value box lifecycle done (LSan-clean on free); only the Vec-element box-free lifecycle remains
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
@@ -18,11 +18,16 @@ done: the compiled `map-free` / `set-free` were shallow (they `free`d only the
 interpreter's natives already deep-freed; they now call `tur_hamt_free` too, so a
 `Map[Point int]` / `Set[Point]` with `mk-owned? = 1` struct keys frees the HAMT
 nodes AND releases each boxed key exactly once (verified LSan-clean; refcount-safe
-under structural sharing). The remaining follow-up is the two box classes
-`tur_hamt_free` does NOT reach: **Map VALUE boxes** (the HAMT releases keys via
-its stamped `key_ops`, not values -- needs a symmetric value-ownership op) and
-**Vec element boxes** (`vec-free` frees `data`+header but not the per-element
-boxes -- needs element-type awareness).
+under structural sharing). **Map VALUE boxes are now released too**: a multi-word
+struct value is boxed via `tur_hamt_box_key` and the HAMT retains/releases it
+symmetrically with an owned key, gated by bit 1 of the `owned` flag that
+`map-assoc` threads via `(tur-wide-byval? v)` (an emit-time type query folded per
+monomorphization; the interpreter's pure-Turmeric fallback returns 0 since it
+never C-boxes values).  `map-free` frees each boxed value exactly once
+(LSan-clean, refcount-safe under structural sharing and key-update).  The one
+remaining follow-up is **Vec element boxes** (`vec-free` frees `data`+header but
+not the per-element boxes -- needs element-type awareness;
+`docs/reported/multiword-value-and-vec-element-boxes-leak.md`).
 
 **Done -- Vec multi-word elements (compiled + interpreter).**
 `(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
@@ -136,13 +141,15 @@ case now runs on BOTH the compiled and interpreter paths, bit-for-bit:
 `tur_hamt_box_retain`/`release`), and the compiled `map-free`/`set-free` now
 `tur_hamt_free` the backing HAMT (previously shallow -- a `free(wrapper)` that
 leaked the HAMT and every owned key), so the key boxes are released exactly once
-and LSan-clean when the collection is freed.  Two box classes remain leaked (see
-`docs/reported/multiword-value-and-vec-element-boxes-leak.md`): **Map VALUE
-boxes** (`tur_hamt_free` releases keys via `key_ops`, not values) and **Vec
-element boxes** (`vec-free` is not element-type-aware).  Both, plus the
-intermediate persistent-map versions every `map-assoc` mints, are process-
-lifetime.  The compiled fixtures run under the default
-leak-detection-off program policy.
+and LSan-clean when the collection is freed.  **Map VALUE boxes are released
+too** now: bit 1 of the `owned` flag installs a symmetric value-box refcount on
+the HAMT (`g_hamt_val_retain`/`release` in `src/runtime/hamt.c`), the map-value
+escaping bridge boxes via `tur_hamt_box_key`, and `map-assoc` threads the bit via
+`(tur-wide-byval? v)`.  One box class remains leaked (see
+`docs/reported/multiword-value-and-vec-element-boxes-leak.md`): **Vec element
+boxes** (`vec-free` is not element-type-aware).  That, plus the intermediate
+persistent-map versions every `map-assoc` mints, are process-lifetime.  The
+compiled fixtures run under the default leak-detection-off program policy.
 
 ## The problem, and why it is not just the dispatch bug
 

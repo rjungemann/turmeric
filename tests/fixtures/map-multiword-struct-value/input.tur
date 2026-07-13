@@ -31,4 +31,8 @@
     (println (show (.y (:: (map-get m 2) Point))))   ;; 40
     ;; whole-value read-back + Show[Point]
     (println (show (:: (map-get m 1) Point)))        ;; (7,8)
+    ;; free the map: the boxed struct values are released via the HAMT's
+    ;; value-box ownership (compiled) exactly once; the interpreter native
+    ;; deep-frees too.  Exercises the release path on both paths (no crash).
+    (map-free m)
     0))

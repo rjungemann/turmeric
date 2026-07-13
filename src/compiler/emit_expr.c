@@ -2870,6 +2870,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
         case EX_CALL: {
             Binding *fn_binding = e->as.call_.fn_binding;
 
+            /* multiword-value boxing: `(tur-wide-byval? x)` is an EMIT-TIME type
+             * query -- it folds to the int literal 1 when the argument's
+             * monomorphized type is a wide (> 8 byte) by-value ADT (the same
+             * predicate that decides value boxing), else 0.  map-assoc threads it
+             * as bit 1 of the `owned` flag so the map RELEASES its boxed values.
+             * Evaluated per monomorphization (concrete arg type), so it stays in
+             * lockstep with the boxing decision; the pure-Turmeric fallback body
+             * (returns 0) covers the interpreter, where values are never C-boxed. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                strcmp(fn_binding->name->name, "tur-wide-byval?") == 0 &&
+                e->as.call_.n_args == 1) {
+                Type at = emit_resolve_type(ctx, e->as.call_.args[0]->type);
+                bool wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
+                            type_is_wide_byval_adt(at);
+                return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
+            }
+
             /* CM3 (van-laarhoven-consumer-mono-plan): rewrite a call to an
              * ambiguous consumer -- `(consumer concrete-lens args...)` -- to the
              * box-free clone `<consumer>__lens_<hash>(args...)`, dropping the lens
@@ -4839,9 +4856,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                         !type_is_heap_struct(rarg) && !type_is_heap_adt(rarg) &&
                         type_is_wide_byval_adt(rarg)) {
-                        raw = emit_carrier_bridge_escaping(ctx, body, raw,
-                                                           CK_CONCRETE, CK_CARRIER,
-                                                           rarg);
+                        /* Box the value via tur_hamt_box_key (a refcount+size box)
+                         * rather than a plain malloc, so the map can RELEASE it on
+                         * free / entry-drop: map-assoc threads the value-owned bit
+                         * (bit 1 of `owned`) via (tur-wide-byval? v), and the HAMT
+                         * retains/releases the box symmetrically with an owned key.
+                         * The read side (`(:: (map-get m k) T)`) still just derefs
+                         * the payload pointer -- box_key returns the payload past
+                         * its header, so the aggregate load is unchanged. */
+                        const char *cn = emit_type_c_name(ctx, rarg);
+                        char *spill = fresh_tmp(ctx);
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = %s;\n", cn, spill, raw);
+                        Buf vb; buf_init(&vb);
+                        buf_printf(&vb, "(int64_t)(intptr_t)tur_hamt_box_key("
+                                        "(const void*)&%s, sizeof(%s))", spill, cn);
+                        buf_putc(&vb, '\0');
+                        free(raw);
+                        raw = strdup(vb.data);
+                        buf_free(&vb);
+                        free(spill);
                     }
                 }
                 /* ACB (KB-004): when a specialized call expects a concrete aggregate
