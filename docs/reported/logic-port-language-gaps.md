@@ -1,8 +1,9 @@
 # Language/codegen gaps surfaced by the pure-Turmeric `logic.tur` port
 
-> **Status:** Partially fixed. **GAP 1 fixed 2026-07-13** (see its section); the
-> `logic.tur` goal-handle `:int`-carrier workaround has been removed. GAP 2, 3,
-> and the residual arg-passing facet of GAP 4 remain open.
+> **Status:** GAP 1 **fixed** 2026-07-13 (compiler); GAP 4 **withdrawn** 2026-07-13
+> (not a gap -- it was a missing `^fat` annotation, now applied). Both `logic.tur`
+> workarounds they concerned (the goal-handle `:int` carrier and the `:fn`
+> callback) have been removed. GAP 2 and GAP 3 remain open.
 > **Reported:** 2026-07-13 (during the `stdlib/logic.tur` pure-Turmeric port).
 > **Context:** `logic.tur` is now inline-C-free and runs under both harnesses,
 > but getting there required four workarounds that paper over real gaps. None
@@ -163,49 +164,42 @@ also happens to be a tidy design, but the *reason* is this gap.)
 
 ---
 
-## GAP 4 -- `:fn`-typed parameters erase the callback's argument types -- **LOW**
+## GAP 4 -- callback parameter typing -- **WITHDRAWN 2026-07-13 (not a gap)**
 
-**Summary.** A parameter declared `:fn` (the first-class untyped function type)
-loses its argument types: a lambda passed in has its parameters inferred as
-`int`, so passing a real ADT through it needs an explicit annotation on the
-lambda parameter. Ergonomic papercut, surfaced at every `fresh` call site.
+**Original claim.** A parameter declared `:fn` erases the callback's argument
+types (a passed lambda's parameters infer as `int`), so `logic.tur` used `:fn`
+for `fresh`'s callback and every call site had to annotate its lambda
+`(fn [x : Term] ...)`. I framed the "honest" alternative -- a typed
+`(fn [Term] (Goal int))` parameter -- as blocked, because such a parameter
+segfaulted when handed a *capturing* closure (nested `fresh`).
 
-**Minimal repro.**
+**Why it's withdrawn.** That segfault was **not** a compiler gap -- it was a
+missing `^fat` annotation. A `(fn [T] U)` parameter is thin-dispatched *by
+design* (it expects a bare/global fn reference); a parameter that receives a
+closure which may capture is declared `^fat`, exactly as the rest of stdlib does
+(`^fat cmp-fn : (fn [int int] bool)` in `list.tur`, `^fat f : (fn [A] B)` in
+`arrow.tur`/`either.tur`). With `^fat`, the call site boxes the argument and the
+callee fat-dispatches through slot 0 -- and the typed parameter also *infers*
+the lambda's argument type, so no annotation is needed at the call site:
 
 ```turmeric
-(defdata Term :copy (TInt :int))
-(defn call-it [f : fn] : int (f (TInt 7)))
-(defn use-int [t : Term] : int (match t (TInt n) n))
-(defn main [] : int (println (call-it (fn [t] (use-int t)))))  ; t inferred :int
+;; works today (both harnesses); `x` needs no `: Term`, capturing closures OK:
+(defn fresh-impl [^fat lf : (fn [Term] (Goal int)) state : Subst] : Stream ...)
+(defn fresh      [^fat f  : (fn [Term] (Goal int))] : (Goal int) ...)
+(run-logic 1 (fresh (fn [x] (fresh (fn [y] (inner-goal x y))))))
 ```
 
-`tur run` ->
-`TUR-E0001: function 'use-int' arg 1: expected Term, got int`. Annotating the
-lambda (`(fn [t : Term] (use-int t))`) fixes it.
+I conflated this with GAP 1 (the `::`-cast opaque-handle dispatch, a genuine
+bug). They are distinct: GAP 1 needed the `elab_ascribe` fix; this only needed
+the annotation that already exists.
 
-**Root cause (where known).** `:fn` is intentionally arity/type-erased at the
-call boundary (boxed args). A typed function-type parameter
-(`(fn [Term] (Goal int))`) *does* now preserve the arg type -- after the GAP 1
-fix, a typed callback param even infers an unannotated lambda's parameter type
-(`(fn [t] ...)` binds `t : Term`). **But a residual facet remains:** a
-*capturing* (fat) closure passed into such a typed parameter is still
-mis-dispatched by the callee's *direct* call `(f x)` -- nested `fresh`
-(`(fresh (fn [x : Term] (fresh (fn [y : Term] ...))))`) segfaults compiled if
-`fresh`'s parameter is typed `(fn [Term] (Goal int))`. This is GAP 1's dispatch
-problem on the *argument-passing / direct-call* side (`elab_call`), which the
-`elab_ascribe`-only fix does not cover: a fat-closure argument crossing into a
-plain typed `fn` parameter is not marked `arg_fat`, so the callee calls it thin.
-
-**Fix directions.** Mark a `(fn ...)` parameter that may receive a fat closure
-as `arg_fat` (box the argument via `EX_FN_TO_FAT` at the call site, slot-0
-dispatch in the callee) -- the same producer/consumer pairing GAP 1 got, applied
-to the `elab_call` argument path rather than the `::` path. Until then, a
-callback parameter that can receive a *capturing* closure must stay `:fn`.
-
-**Workaround in the tree (still present).** `stdlib/logic.tur`: `fresh` /
-`apply-fat` / `fresh-impl` keep the callback typed `:fn` (uniform thin/fat
-dispatch); migrated fixtures annotate their lambdas `(fn [x : Term] ...)`. The
-goal-*handle* carriers, by contrast, are now honestly `(Goal int)` (GAP 1 fixed).
+**Resolution in the tree.** `stdlib/logic.tur`: `fresh` / `fresh-impl` now take
+`^fat f : (fn [Term] (Goal int))` (the intermediate `apply-fat` `:fn` shim is
+deleted), and the migrated `logic-fresh` / `logic-reify` fixtures drop their
+`(fn [x : Term] ...)` annotations. No `:fn`-as-type-eraser remains for goal
+callbacks; the only surviving `:fn` parameters are the genuine typeclass-method
+poly continuations of `mbind` / `st-bind` / `bind-goal-raw` / `fmap-goal-raw`,
+which is the correct use of `:fn`.
 
 ---
 
@@ -221,12 +215,11 @@ plumbing is typed end-to-end with no `:int` type-erasure.
       `fmap-goal-raw`, and the `Functor`/`Applicative`/`Monad`/`Alternative`
       instances (now `(:: ... (Goal int))`). Both harnesses green; no thin-call
       segfault.
-- [ ] **GAP 4 residual (arg-passing dispatch) fixed** -> only then retype
-      `fresh`/`apply-fat`/`fresh-impl` callbacks as `(fn [Term] (Goal int))` and
-      drop the `:fn` erasure; then the migrated `logic-*` fixtures can drop the
-      `(fn [x : Term] ...)` annotation. Blocked today: a *capturing* callback
-      into a typed `fn` parameter still mis-dispatches (nested `fresh`
-      segfaults), so `:fn` is retained.
+- [x] **GAP 4 withdrawn** (done 2026-07-13) -> `fresh` / `fresh-impl` now take
+      `^fat f : (fn [Term] (Goal int))` (the `apply-fat` `:fn` shim is deleted),
+      and the `logic-fresh` / `logic-reify` fixtures drop the `(fn [x : Term] ...)`
+      annotation. No compiler change was needed -- `^fat` is the intended idiom
+      for a capturing-closure parameter.
 - [ ] **GAP 3 fixed** -> optionally reintroduce an explicit
       `UState { subst next }` product if it reads more clearly than the
       counter-in-`SNil` encoding (the current encoding stays correct either way;
@@ -237,9 +230,10 @@ plumbing is typed end-to-end with no `:int` type-erasure.
 - [ ] After any of the above, regenerate fixture snapshots / docstrings in the
       same change and re-run `bash tests/run.sh` + `bash tests/run-turi.sh`.
 
-Grep anchor for the workarounds: every `(:: ... :int)` and the `: fn` / `: int`
-carrier annotations in `stdlib/logic.tur`'s goal-machinery section
-(`apply-goal` through the instances) exist because of GAP 1/3/4 above.
+Remaining workaround anchor: the counter-in-`SNil` encoding (GAP 3) is the only
+representation shaped around an open gap; the goal-handle `(Goal int)` typing and
+the `^fat` callbacks are now the honest forms. GAP 2 only affected the shape of
+`logic-walk`/`subst-lookup` (self-recursive rather than mutually recursive).
 
 ---
 
@@ -250,4 +244,8 @@ carrier annotations in `stdlib/logic.tur`'s goal-machinery section
 - `docs/archive/history/logic-pure-turmeric-port-plan.md` -- the port plan, whose
   "Implementation notes" section records the same deviations from the caller's
   perspective.
-- `src/compiler/elab_call.c:984` (`elab_call_head_expr`) -- GAP 1 dispatch site.
+- `src/compiler/elab_types.c` (`elab_ascribe`, `ascribe_type_is_opaque_handle`)
+  -- where the GAP 1 fix landed (producer + consumer fat-boxing across an opaque
+  carrier). `src/compiler/elab_call.c:984` (`elab_call_head_expr`) is the
+  sibling call-head dispatch that already handled the `:ptr<void>`/carrier cases.
+- `tests/fixtures/opaque-fn-carrier-dispatch/` -- GAP 1 regression fixture.

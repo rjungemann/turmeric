@@ -406,31 +406,20 @@
   [g1 : (Goal A) g2 : (Goal A)]
   : (Goal A)
   (:: (disjoined-raw (:: g1 (Goal int)) (:: g2 (Goal int))) (Goal A)))
-;;; apply-fat -- call a (Term -> Goal) callback with a term argument.
-;;;
-;;; The callback arrives as a first-class `:fn` value, which dispatches thin and
-;;; fat closures uniformly. A concrete `(fn [Term] (Goal int))` parameter would
-;;; read better, but a *capturing* callback passed into such a typed parameter is
-;;; still mis-dispatched by the callee's direct call (see
-;;; docs/reported/logic-port-language-gaps.md GAP 4); `:fn` sidesteps that. A
-;;; caller's lambda must annotate its parameter `(fn [x : Term] ...)` since `:fn`
-;;; erases the argument type.
-;;;
-;;; Parameters:
-;;;   f   -- a (Term -> Goal) callback
-;;;   arg -- the term to pass
-;;;
-;;; Returns:
-;;;   The resulting goal.
-(defn apply-fat [f : fn arg : Term] : (Goal int)
-  (:: (f arg) (Goal int)))
 ;;; fresh-impl -- implementation helper for fresh variable introduction.
-(defn fresh-impl [lf : fn state : Subst] : Stream
+;; lf is passed ^fat: it is a `(Term -> Goal)` callback that may capture, so the
+;; callee fat-dispatches it through slot 0.
+(defn fresh-impl [^fat lf : (fn [Term] (Goal int)) state : Subst] : Stream
   (let [n   (subst-next state)
         nv  (TVar n)
         st2 (subst-set-next state (+ n 1))]
-    (apply-goal (apply-fat lf nv) st2)))
+    (apply-goal (lf nv) st2)))
 ;;; fresh -- create a new logic variable and pass it to a goal-building function.
+;;;
+;;; The callback is taken ^fat, so a capturing lambda -- e.g. the inner goal of a
+;;; nested `fresh` that closes over the outer variable -- dispatches correctly.
+;;; A caller's lambda parameter type is inferred, so `(fresh (fn [x] ...))` needs
+;;; no annotation on `x`.
 ;;;
 ;;; Parameters:
 ;;;   f -- a (Term -> Goal) callback
@@ -439,8 +428,8 @@
 ;;;   A goal (Goal int) that introduces a fresh variable and runs (f var).
 ;;;
 ;;; Example:
-;;;   (run-logic 1 (fresh (fn [x : Term] (lequal x (term-int 7)))))  ; => [x=7]
-(defn fresh [f : fn] : (Goal int)
+;;;   (run-logic 1 (fresh (fn [x] (lequal x (term-int 7)))))  ; => [x=7]
+(defn fresh [^fat f : (fn [Term] (Goal int))] : (Goal int)
   (:: (let [lf f] (fn [state : Subst] (let [_ lf] (fresh-impl lf state)))) :Goal))
 ;;; -- Runner ───────────────────────────────────────────────────────────────────
 ;;; run-logic -- run a goal with an empty state and return up to n solutions.

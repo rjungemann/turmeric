@@ -9,7 +9,7 @@
   (conjoined (lequal x (term-int 10)) (lequal y (term-int 20))))
 
 (defn main [] : int
-  (let [goal    (fresh (fn [x : Term] (fresh (fn [y : Term] (inner-goal x y)))))
+  (let [goal    (fresh (fn [x] (fresh (fn [y] (inner-goal x y)))))
         results (run-logic 1 goal)
         subs    (first-state results)]
     (println (bt-length results))
