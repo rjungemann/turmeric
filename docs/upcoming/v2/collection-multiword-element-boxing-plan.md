@@ -12,10 +12,17 @@ status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set la
 Landed all three plan targets: **Vec elements**, **Map values**, and the **key**
 case (**Map keys / Set elements**), each working on BOTH the compiled and
 interpreter paths -- including structural `Eq`/`Show`. The interpreter parity
-gaps are all closed (see the resolved list below). The only remaining follow-up
-is the box release-on-free lifecycle for the Vec-element / Map-value boxes (a
-process-lifetime leak; the KEY box lifecycle IS done -- `mk-owned? = 1` makes it
-LSan-clean).
+gaps are all closed (see the resolved list below). Box lifecycle is now mostly
+done: the compiled `map-free` / `set-free` were shallow (they `free`d only the
+`{void* hamt}` wrapper, leaking the whole HAMT + every owned key box) while the
+interpreter's natives already deep-freed; they now call `tur_hamt_free` too, so a
+`Map[Point int]` / `Set[Point]` with `mk-owned? = 1` struct keys frees the HAMT
+nodes AND releases each boxed key exactly once (verified LSan-clean; refcount-safe
+under structural sharing). The remaining follow-up is the two box classes
+`tur_hamt_free` does NOT reach: **Map VALUE boxes** (the HAMT releases keys via
+its stamped `key_ops`, not values -- needs a symmetric value-ownership op) and
+**Vec element boxes** (`vec-free` frees `data`+header but not the per-element
+boxes -- needs element-type awareness).
 
 **Done -- Vec multi-word elements (compiled + interpreter).**
 `(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
@@ -125,11 +132,16 @@ case now runs on BOTH the compiled and interpreter paths, bit-for-bit:
   dereferenced as a pointer.  (`map-multiword-struct-value` now runs on both
   paths.)
 
-**Lifecycle:** the KEY box lifecycle is done (`mk-owned? = 1` ->
-`tur_hamt_box_retain`/`release`, LSan clean). Boxed **Vec elements / Map values**
-are still `malloc`'d and not released on `vec-free` / map teardown
-(process-lifetime leak); routing those through the same refcount-box discipline
-is the remaining lifecycle follow-up. The compiled fixtures run under the default
+**Lifecycle:** the KEY / Set-element box lifecycle is done (`mk-owned? = 1` ->
+`tur_hamt_box_retain`/`release`), and the compiled `map-free`/`set-free` now
+`tur_hamt_free` the backing HAMT (previously shallow -- a `free(wrapper)` that
+leaked the HAMT and every owned key), so the key boxes are released exactly once
+and LSan-clean when the collection is freed.  Two box classes remain leaked (see
+`docs/reported/multiword-value-and-vec-element-boxes-leak.md`): **Map VALUE
+boxes** (`tur_hamt_free` releases keys via `key_ops`, not values) and **Vec
+element boxes** (`vec-free` is not element-type-aware).  Both, plus the
+intermediate persistent-map versions every `map-assoc` mints, are process-
+lifetime.  The compiled fixtures run under the default
 leak-detection-off program policy.
 
 ## The problem, and why it is not just the dispatch bug
@@ -256,8 +268,12 @@ plan extends the same refcount-box discipline to:
   already partly supported) round-trip + structural `Eq`.
 - `Set[Point]` membership + content dedup.
 - Compiled vs `--interpret` parity fixtures for each (identical output).
-- Persistence: a structurally-shared HAMT with boxed multi-word entries frees
-  each box exactly once (LSan clean).
+- Persistence: a structurally-shared HAMT with boxed multi-word KEYS frees each
+  key box exactly once on `map-free`/`set-free` (LSan-clean, refcount-safe under
+  sharing).  Boxed multi-word VALUES and Vec element boxes are not yet released
+  (`docs/reported/multiword-value-and-vec-element-boxes-leak.md`).  NB: the
+  compiled test harness does not run programs under LSan, so this is verified by
+  hand (emit-c + `-fsanitize=address` + `libturi.a`), not by a fixture.
 
 ## Related
 

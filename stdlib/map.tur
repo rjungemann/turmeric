@@ -606,7 +606,18 @@
   #fx{}
   :void
   ```c
-  free((void*)(intptr_t)m);
+  struct { void *hamt; } *map = (void*)(intptr_t)m;
+  /* Deep-free: release the backing HAMT before the wrapper.  tur_hamt_free is
+   * refcount-safe under structural sharing (it decrements each node's ref_count
+   * and frees only at zero, so nodes shared with a still-live sibling map
+   * survive) and releases every OWNED key box via the map's stamped key_ops --
+   * so a Map[Point int] with mk-owned? = 1 struct keys frees each boxed key
+   * exactly once.  This matches the interpreter's native map-free (set_free_box),
+   * which already deep-frees; the compiled body was shallow and leaked the HAMT
+   * + owned key boxes.  (A one-word / borrowed-key map stamps no release op, so
+   * this stays a plain structural free there.) */
+  if (map->hamt) tur_hamt_free(map->hamt);
+  free(map);
   ```)
 ;;; map-eq? -- compare two maps for structural equality using a value comparator.
 ;;;
