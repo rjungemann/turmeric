@@ -224,11 +224,23 @@ so every existing signature is unaffected.
   effect-desugar path is unblocked on the payload.
 
   So of the cross-function-resume prerequisites, blockers 1 (resume mismatch) and
-  3 (callable + capturing fn payloads) are DONE. What remains is **blocker 2**:
-  the reset -> `__Shift`-handler whole-program transform (wrap resets only when
-  the program uses cross-function resume) plus synthesizing the `__Shift` effect
-  and the `shift` -> `perform` desugar. Also landed earlier: a tailored
-  `TUR-E0016` message (fixture `errors/shift-crossfn-resume`).
+  3 (callable + capturing fn payloads) are DONE, and the reset->handle +
+  shift->perform **mechanism is verified end to end** -- a hand-written `__Shift`
+  desugar runs `direct == turi == 15`, and cross-function resume with a capturing
+  receiver is pinned by fixture `cross-function-resume-via-effect` (= 11). So
+  cross-function resumable continuations WORK today via the effect surface, with
+  the ergonomic `(k v)` resume.
+
+  What remains is the **automatic desugar** of the `shift`/`reset` surface onto
+  this machinery (blocker 2) -- a substantial multi-part change, not a bounded
+  slice: (1) synthesize the `__Shift` effect; (2) `shift`->`perform` at the
+  `TUR-E0016` site; (3) a whole-program `reset`->handle-wrapping pass (gated so
+  the common case is byte-for-byte unchanged); (4) the receiver-convention crux
+  (the user's `(fn [k : cont] (k v))` uses *cloneable* resume, cross-function
+  needs *effect* resume -- a `CONT_EFFECT` flavor / Form-rewrite / runtime bridge
+  / runtime-polymorphic dispatch). Details + the four bridge options in the design
+  doc. Also landed earlier: a tailored `TUR-E0016` message (fixture
+  `errors/shift-crossfn-resume`).
 
   **Item (d) -- retire the redundant spellings -- PARTIALLY LANDED.** `k-shift` /
   `k-reset` (the interim canonical names this plan introduced) are **removed**:

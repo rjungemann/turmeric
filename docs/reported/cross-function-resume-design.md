@@ -100,6 +100,37 @@ shift) is byte-for-byte unchanged. A same-elaboration global flag will not do
 (a reset can be elaborated before the callee's shift sets it); it needs a
 post-elaboration transform.
 
+### Mechanism VERIFIED; the auto-desugar remains
+
+The reset -> handle + shift -> perform mechanism is proven end to end -- a
+*hand-written* `__Shift`-style desugar of a cross-function resuming shift runs
+`direct == turi == 15`, and the capturing, single-resume shape is pinned by
+fixture `cross-function-resume-via-effect` (`= 11`). So cross-function resumable
+continuations WORK today via the effect surface (blockers 1 + 3), with the
+ergonomic `(k v)` resume. What is left is purely the **automatic desugar** of the
+`shift`/`reset` *surface* onto this working machinery -- a substantial multi-part
+change, not a bounded increment:
+
+1. **Synthesize the `__Shift` effect** (program-level, carrying the receiver as a
+   boxed fn payload -- now supported).
+2. **`shift` -> `perform`** for the cross-function resuming case (the site that
+   today raises `TUR-E0016`).
+3. **`reset` -> handle-wrapping** whole-program pass (gated as above).
+4. **The receiver-convention crux.** The user writes `(fn [k : cont] (k v))`,
+   whose `(k v)` is *cloneable* resume; cross-function needs *effect* resume.
+   Four ways to bridge, each a real change: (a) a `CONT_EFFECT` cont flavor whose
+   `(k v)` lowers to `EX_RESUME` (consistent with the existing
+   cloneable/serial/escape flavors; but the user's bare `cont` must be routed to
+   it for the cross-function case); (b) a Form-level rewrite of the receiver's
+   `(k v)` -> `(resume k v)` in the desugar (fiddly: identify continuation
+   applications, handle shadowing); (c) a runtime cloneable-cont *bridge* wrapping
+   the effect continuation so cloneable resume forwards to effect resume;
+   (d) runtime-polymorphic `(k v)` dispatch on the continuation's flavor.
+
+Blocker 1 (`(k v)` on `is_continuation` bindings) already solves the *handler*
+side; the crux (4) is the *receiver* side, where the param is an ordinary `cont`,
+not an `is_continuation` binding.
+
 ## Blocker 3 -- effects carry a callable fn payload -- RESOLVED
 
 Effects now carry a callable fn payload, **capturing or not**. Three fixes:
