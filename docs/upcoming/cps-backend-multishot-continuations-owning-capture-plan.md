@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: open -- supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed). Track A (multi-suspension continuations) and Track B (owning-capture env teardown, E2-E4).
+status: Track A A1 landed (two-perform / nested perform in a continuation now CPS-emits via a resume-frame); A2-A3 and Track B (E2-E4) open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -156,10 +156,45 @@ lift composes with it.
 
 ### Phases
 
-- **A1 -- perform continuation containing a further perform.** The two-perform
-  body. Fixture `cps-backend-two-perform`: `g = (let [a (perform E)] (let [b
-  (perform E)] (+ a b)))`, handled by a resuming case, `direct == cps`. This is
-  the phase that unblocks a *runtime* "handler case runs twice."
+- **A1 -- perform continuation containing a further perform. LANDED.** The
+  two-perform body. Fixture `cps-backend-two-perform`
+  (`g = (let [a (perform E)] (let [b (perform E)] (+ a b)))`, handled by a
+  resuming case, output 82, `direct == cps`). Also verified: three sequential
+  performs (nested resume-frames compose), an effect with an argument, a branch
+  whose one arm re-performs, and no regression to single-perform.
+
+  **Design correction (important -- the plan's "mirror `emit_await` gap-2" was
+  too optimistic).** `await` gap-2 works with `next = dk_done()` because it
+  shifts to the always-present root prompt. `perform` instead dispatches to a
+  *handler* and delivers the handler-case result via `dk_run(H->next, r)`, so a
+  nested perform threading `cur_k` would deliver to the post-handle continuation
+  *twice*. The correct lowering needed a new runtime capability: a **resume-frame**
+  (`DKK_RESUME_FRAME` / `dk_frame_resume`, added to the emitted DK prelude
+  `emit_dk_runtime.c` and the reference machine `cps_prompt.{c,h}`) whose fn
+  receives its *run-time* downstream chain (`k->next`, which `dk_perform` splices
+  to the reinstalled-handler tail) and consumes it (`dk_run_impl` returns its
+  result rather than continuing the loop). The perform continuation is lifted as
+  `LH_RESUME_CONT` (signature `(env, xval, DK *__kont)`); a plain `KK_RET`
+  delivers `dk_run(__kont, v)`, a nested perform threads `__kont`, so the value is
+  delivered exactly once. Gate: `perform_cont_reset_ok` + the relaxed `CT_PERFORM`
+  classification + a `CT_PERFORM` arm in `collect_caps_rec`; bounded-only (a
+  cps->cps tail call still evicts).
+
+  **Shallow-handler fix (A1 exposed a latent bug).** Making a two-perform body
+  CPS-eligible cascaded `effect-shallow-handler` into the all-DK path, which
+  revealed that shallow outer-propagation was broken: the CT-IR handle lifts the
+  enclosing continuation into the continuation frame's *env*, so
+  `dk_copy_enclosing_handlers` could not reach an enclosing handler and a
+  re-performed effect aborted as "unhandled". Fixed in `emit_handle` by splicing
+  `dk_copy_enclosing_handlers(cur_k)` as the shallow handler's continuation-frame
+  `next` (transparent on the normal path; reachable for a re-perform). All
+  `effect-shallow-*` fixtures pass.
+
+  **Owning-capture capstone is NOT here.** A1 makes a handler case that captures
+  an owning `rc` run *twice at runtime* (memory-safe under E1's Option A), but the
+  observed strong count then *accumulates* across runs (2 then 3, sum 5) because
+  E1 leaks the env clone per read-out. The clean count (4) needs Track B / E3's
+  refcounted env. The runtime multi-shot owning-capture fixture rides E3, not A1.
 - **A2 -- handle continuation containing a nested effect** (`(+ (handle ...)
   (perform E))`, the p4 shape).
 - **A3 -- shift/reset continuation containing a nested control op** beyond the

@@ -274,11 +274,19 @@ void emit_cps_runtime_prelude(Buf *out) {
 "typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);\n"
 "typedef intptr_t (*DKBody)(intptr_t env, DK *subk);\n"
 "typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);\n"
-"typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER } DKKind;\n"
+/* A RESUME frame (multi-suspension continuation lowering, Track A): unlike a
+ * plain DKK_FRAME value-transform, it receives its run-time downstream chain
+ * `rest` (this node's k->next as spliced by dk_perform -- the reinstalled
+ * handler tail) and CONSUMES it (dk_run_impl returns rfn's result rather than
+ * continuing the loop).  That is what lets a nested control op inside a lifted
+ * continuation thread the correct enclosing handler and deliver exactly once. */
+"typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);\n"
+"typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER, DKK_RESUME_FRAME } DKKind;\n"
 "struct DK {\n"
 "    DKKind kind; DKFrame fn; intptr_t env; int tag;\n"
 "    DKBody body; intptr_t body_env;\n"
-"    DKHandler handler; intptr_t handler_env; bool shallow; DK *next;\n"
+"    DKHandler handler; intptr_t handler_env; bool shallow;\n"
+"    DKResumeFrame rfn; DK *next;\n"
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
 "    DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;\n"
@@ -286,6 +294,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 "static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }\n"
 "static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env; return k;\n"
+"}\n"
+"static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;\n"
 "}\n"
 "static DK *dk_prompt(int tag, DK *next) {\n"
 "    DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;\n"
@@ -313,7 +324,8 @@ void emit_cps_runtime_prelude(Buf *out) {
 "static DK *dk_copy_node(const DK *n) {\n"
 "    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;\n"
 "    c->body = n->body; c->body_env = n->body_env;\n"
-"    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow; return c;\n"
+"    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;\n"
+"    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
 "    DK *head = NULL, *tail = NULL;\n"
@@ -348,6 +360,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "            case DKK_DONE: return v;\n"
 "            case DKK_PROMPT: case DKK_HANDLER: k = k->next; break;\n"
 "            case DKK_FRAME: v = k->fn(k->env, v); k = k->next; break;\n"
+"            case DKK_RESUME_FRAME: return k->rfn(k->env, v, k->next);\n"
 "            case DKK_SHIFT:\n"
 "            case DKK_SHIFT0: {\n"
 "                DK *P = k->next;\n"
