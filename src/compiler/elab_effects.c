@@ -116,7 +116,10 @@ static Type shift_result_type(const Expr *k, const Expr *body,
 
 /* (reset body) - Establish a continuation boundary.
  */
-static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr);  /* fwd */
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
+                                  bool receiver_effect_flavored);  /* fwd */
+static Form *reflavor_shift_receiver(Elab *e, Form *recv);                   /* fwd */
+static Effect *elab_get_shift_effect(Elab *e);                               /* fwd */
 
 Expr *elab_reset(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
@@ -156,7 +159,22 @@ Expr *elab_shift(Elab *e, const Form *call) {
                   "(shift k body) requires exactly two arguments");
         return NULL;
     }
-    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    /* cps-backend-n6 cross-function resume: a `shift` with no lexically-enclosing
+     * reset (cloneable_reset_depth == 0) whose receiver is a `cont`-param lambda
+     * cannot use the reified (lexically-scoped) path -- it is either an abortive
+     * ignore-k shift or a cross-function resuming shift that lowers onto the
+     * __Shift effect.  Reflavor the receiver's `cont` param to `effect-cont` BEFORE
+     * elaborating (so `(k v)` in the receiver body lowers to EX_RESUME, slice A),
+     * and elaborate that copy ONCE -- avoiding a dead cloneable-flavored lift that
+     * would reference an unlinked cloneable-resume runtime.  Inside a reset (depth
+     * > 0) the reified path is used, so the receiver stays cloneable-flavored. */
+    Form *recv_to_elab = call->as.list.items[1];
+    bool receiver_reflavored = false;
+    if (e->cloneable_reset_depth == 0) {
+        Form *reflav = reflavor_shift_receiver(e, recv_to_elab);
+        if (reflav) { recv_to_elab = reflav; receiver_reflavored = true; }
+    }
+    Expr *k_expr = elab_form(e, recv_to_elab);
     if (!k_expr) return NULL;
     
     /* Check if k_expr is a function, closure, or a var referencing a function */
@@ -187,7 +205,7 @@ Expr *elab_shift(Elab *e, const Form *call) {
     {
         Type dom, cod;
         if (shift_fn_domain_codomain(k_expr, &dom, &cod) && dom.kind == TY_CONT)
-            return elab_cont_shift_core(e, call, k_expr);
+            return elab_cont_shift_core(e, call, k_expr, receiver_reflavored);
     }
 
     Expr *body = elab_form(e, call->as.list.items[2]);
@@ -348,13 +366,103 @@ static bool receiver_ignores_continuation(const Expr *k_expr) {
     return !uses_k;
 }
 
+/* cps-backend-n6 cross-function resume.  Deep-clone a form, replacing every
+ * continuation-flavor annotation naming `from` with `to` (e.g. cont ->
+ * effect-cont).  Recurses through lists / vecs / type-annotations so it catches
+ * the annotation however the reader spelled it (`[k : cont]` -> a keyword,
+ * `[k (cont R)]` -> a list head, a bare `cont` symbol).  Non-matching atoms are
+ * shared (returned as-is); only the spine that changed is rebuilt. */
+static Form *reflavor_cont_sym(Elab *e, Form *f,
+                               const Symbol *from, const Symbol *to) {
+    if (!f) return f;
+    if ((f->tag == F_SYM || f->tag == F_KEYWORD) && f->as.sym == from) {
+        return (f->tag == F_KEYWORD) ? form_keyword(e->arena, f->span, to)
+                                     : form_sym(e->arena, f->span, to);
+    }
+    if (f->tag == F_TYPE_ANN && f->as.list.len >= 1) {
+        Form *inner = reflavor_cont_sym(e, f->as.list.items[0], from, to);
+        if (inner == f->as.list.items[0]) return f;
+        return form_type_ann(e->arena, f->span, inner);
+    }
+    if (f->tag == F_LIST || f->tag == F_VEC) {
+        uint32_t n = f->as.list.len;
+        Form **items = NULL;
+        for (uint32_t i = 0; i < n; i++) {
+            Form *ni = reflavor_cont_sym(e, f->as.list.items[i], from, to);
+            if (ni != f->as.list.items[i] && !items) {
+                items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+                for (uint32_t j = 0; j < i; j++) items[j] = f->as.list.items[j];
+            }
+            if (items) items[i] = ni;
+        }
+        if (!items) return f;  /* nothing changed */
+        return (f->tag == F_VEC) ? form_vec(e->arena, f->span, items, n)
+                                 : form_list(e->arena, f->span, items, n);
+    }
+    return f;
+}
+
+/* cps-backend-n6 cross-function resume.  Reflavor a shift receiver's `cont`
+ * parameter to `effect-cont`, so `(k v)` inside it resumes the effect
+ * continuation (CONT_EFFECT -> EX_RESUME, slice A) rather than a cloneable one.
+ * Only a lambda-literal receiver `(fn [k : cont] ...)` is rewritable from the
+ * call site; a named-fn receiver returns NULL (the caller keeps the E0016 error).
+ * Only the parameter vector is reflavored -- the body is left untouched, so a
+ * body reference to something coincidentally named `cont` is not disturbed. */
+static Form *reflavor_shift_receiver(Elab *e, Form *recv) {
+    if (!recv || recv->tag != F_LIST || recv->as.list.len < 2) return NULL;
+    Form *head = recv->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_fn) return NULL;
+    Form *params = recv->as.list.items[1];
+    if (params->tag != F_VEC && params->tag != F_LIST) return NULL;
+    const Symbol *cont_sym = intern_cstr(e->st, "cont");
+    const Symbol *eff_sym  = intern_cstr(e->st, "effect-cont");
+    Form *new_params = reflavor_cont_sym(e, params, cont_sym, eff_sym);
+    if (new_params == params) return NULL;  /* no `cont` annotation to reflavor */
+    uint32_t fn_n = recv->as.list.len;
+    Form **new_fn = (Form **)arena_alloc(e->arena, fn_n * sizeof(Form *));
+    for (uint32_t i = 0; i < fn_n; i++) new_fn[i] = recv->as.list.items[i];
+    new_fn[1] = new_params;
+    return form_list(e->arena, recv->span, new_fn, fn_n);
+}
+
+/* cps-backend-n6 cross-function resume.  Lazily register the synthetic __Shift
+ * effect, once per program.  It carries the shift's receiver as a boxed fn
+ * payload `(fn [effect-cont] int)` (blocker 3: a one-word {thunk,env} closure so
+ * a capturing receiver fits the effect slot) and returns int (the delimited
+ * result).  Subsequent calls return the cached Effect. */
+static Effect *elab_get_shift_effect(Elab *e) {
+    const Symbol *name = intern_cstr(e->st, "__Shift");
+    Effect *eff = effect_env_lookup(e->effect_env, name);
+    if (eff) return eff;
+    const Symbol **pnames = arena_alloc(e->arena, sizeof(const Symbol *));
+    pnames[0] = intern_cstr(e->st, "recv");
+    TypeKind *ptypes = arena_alloc(e->arena, sizeof(TypeKind));
+    ptypes[0] = TY_FN;
+    eff = effect_env_register(e->effect_env, e->arena, name, pnames, ptypes, 1,
+                              TY_INT, e->current_module_name, false);
+    if (!eff || !eff->constructor) return NULL;
+    /* Preserve the full boxed fn payload type so `(recv k)` is callable in the
+     * synthesized handler (a def-less TY_FN degrades to a 0-arity uncallable fn).
+     * The single arg is the int64-carried effect continuation. */
+    TypeKind argk = TY_INT;
+    Type *fnt = arena_alloc(e->arena, sizeof(Type));
+    *fnt = type_fn(&argk, 1, TY_INT);
+    fnt->as.fn.boxed = true;
+    const Type **full = arena_alloc(e->arena, sizeof(const Type *));
+    full[0] = fnt;
+    eff->constructor->param_full_types = full;
+    return eff;
+}
+
 /* Shared core for the continuation-passing (k-convention) shift: cloneable-shift
  * and a `shift` whose receiver is `cont`-typed (item B).  Takes the
  * already-elaborated receiver `k_expr` so `elab_shift` can dispatch here without
  * re-elaborating.  Routes an ignore-k receiver to the abortive path, else emits
  * the reified EX_CLONEABLE_SHIFT (and records that a resuming shift bound to the
  * enclosing reset, so a plain `reset` promotes itself to a reified delimiter). */
-static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
+                                  bool receiver_effect_flavored) {
     /* Check if k_expr is a function, closure, or a var referencing a function */
     bool is_function = false;
     if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
@@ -403,6 +511,48 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
          * cloneable-shift-outside-reset pins it). */
         bool shift_kw = call->as.list.items[0]->tag == F_SYM
                         && call->as.list.items[0]->as.sym == e->sym_shift;
+        /* cps-backend-n6 cross-function resume: a resuming `shift` with no lexical
+         * reset lowers onto the synthetic __Shift effect instead of erroring --
+         * (shift RECV BODY) -> (perform (__Shift RECV)).  RECV is the already-
+         * reflavored receiver (elab_shift retyped its `cont` param to `effect-cont`
+         * before elaboration, so `(k v)` inside it resumes the delimited
+         * continuation the enclosing reset's whole-program-wrapped __Shift handler
+         * carries -- slice C).  BODY is discarded (the receiver drives the
+         * continuation; matching the target encoding).  A named-fn receiver was
+         * never reflavored (its `k` stays CONT_CLONEABLE), so it falls through to
+         * E0016 -- specializing it would need a copy we cannot synthesize here. */
+        if (shift_kw && receiver_effect_flavored) {
+            Effect *sheff = elab_get_shift_effect(e);
+            if (sheff && sheff->constructor) {
+                /* Box the receiver as the one-word {thunk,env} closure the effect
+                 * slot expects (mirrors elab_perform's fn-payload boxing), so a
+                 * capturing receiver rides along.  A capturing closure is already
+                 * boxed; a bare fn pointer is wrapped via EX_FN_TO_FAT. */
+                Expr *recv = k_expr;
+                if (recv->type.kind == TY_FN && !recv->type.as.fn.boxed) {
+                    Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *bt = recv->type;
+                    bt->as.fn.boxed = true;
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt,
+                                          call->as.list.items[1]->span);
+                    shim->as.fn_to_fat_.inner = recv;
+                    recv = shim;
+                }
+                PerformExpr *perform = arena_alloc(e->arena, sizeof(PerformExpr));
+                perform->effect_name = sheff->name;
+                Expr **pargs = (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                pargs[0] = recv;
+                perform->args = pargs;
+                perform->n_args = 1;
+                Type rt = sheff->constructor->result_full_type
+                        ? *sheff->constructor->result_full_type
+                        : type_from_kind(sheff->constructor->result_type);
+                Expr *out = expr_new(e->arena, EX_PERFORM, rt, call->span);
+                out->as.perform_.perform = perform;
+                e->uses_crossfn_resume = true;
+                return out;
+            }
+        }
         if (shift_kw) {
             diag_emit_with_code(DIAG_ERROR, call->span,
                 TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
@@ -445,7 +595,9 @@ Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     }
     Expr *k_expr = elab_form(e, call->as.list.items[1]);
     if (!k_expr) return NULL;
-    return elab_cont_shift_core(e, call, k_expr);
+    /* The literal `cloneable-shift` keyword never routes onto the __Shift effect
+     * (it keeps its exact reified semantics), so the receiver is never reflavored. */
+    return elab_cont_shift_core(e, call, k_expr, false);
 }
 
 /* (call/cc* f) - multi-shot call/cc that produces a cloneable continuation.

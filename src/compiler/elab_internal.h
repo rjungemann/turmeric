@@ -615,6 +615,13 @@ typedef struct Elab {
      * set by elab_cloneable_shift's reified path at depth d and read by the
      * enclosing reset on exit. */
     bool             reified_shift_at_depth[64];
+    /* cps-backend-n6 cross-function resume: set true the first time a resuming
+     * shift with no lexical reset is lowered onto the synthetic __Shift effect
+     * (elab_cont_shift_core).  Read by the gated post-elaboration pass
+     * (elab_wrap_resets_for_crossfn_resume) so it wraps each reset's body in a
+     * __Shift handler ONLY when the program actually performs one -- keeping every
+     * non-using program's reset codegen byte-for-byte unchanged. */
+    bool             uses_crossfn_resume;
     /* CF7.3: the scope that was active immediately before the current function
      * body's inner scope was pushed (i.e., e->scope just before scope_init in
      * elab_fn/elab_defn).  check_cloneable_capture stops here so bindings
