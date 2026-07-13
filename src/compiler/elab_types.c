@@ -2489,6 +2489,30 @@ static bool ascribe_type_is_opaque_handle(const Type *t) {
     return false;
 }
 
+/* A non-parametric, non-recursive by-value ADT/struct product
+ * (`(defdata P (P :int :int))`, `defstruct P [x y]`) is a C aggregate with no
+ * int64 handle -- it does NOT ride the carrier ABI (see type_uses_carrier_abi /
+ * adt_is_byvalue_product).  Opaque newtypes, :heap ADTs, and recursive ADTs are
+ * all int64-carried and are excluded: those cast to/from :int soundly.
+ *
+ * Scoped to the non-parametric TY_ADT case (the reported GAP 3 shape).  A
+ * *parametric* by-value monomorph like `(Option int)` is deliberately NOT caught
+ * here -- HKT / typeclass code legitimately erases such containers to the int64
+ * carrier, and `adt_is_byvalue_product` already requires n_type_params == 0, so
+ * a non-parametric product is always TY_ADT, never TY_APP. */
+static bool ascribe_type_is_byvalue_aggregate(const Type *t) {
+    if (!t || t->kind != TY_ADT) return false;
+    const AdtDef *def = t->as.adt_.def;
+    return def && !def->is_opaque && !def->is_heap &&
+           adt_is_byvalue_product(def);
+}
+
+/* A one-word erased carrier that a handle rides -- :int or :ptr<void>.  These
+ * are the reinterpret targets a by-value aggregate has no sound bridge to. */
+static bool ascribe_type_is_word_carrier(const Type *t) {
+    return t && (t->kind == TY_INT || t->kind == TY_PTR_VOID);
+}
+
 Expr *elab_ascribe(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2576,6 +2600,36 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
             shim->as.fn_to_fat_.inner = inner;
             inner = shim;
         }
+    }
+
+    /* GAP 3 (byvalue-adt-int-cast-plan): reject `::` between a by-value
+     * aggregate and a one-word carrier (:int / :ptr<void>) in either direction.
+     * A by-value ADT/struct product is a C aggregate with no int64 handle, so
+     * the reinterpret has no sound lowering: emit would assign an aggregate into
+     * an int slot (a raw cc error) or read an int as the struct (a segfault),
+     * and the two harnesses diverge (the interpreter yields a garbage handle /
+     * throws).  Diagnosing it here -- in the shared elaborator -- fixes both
+     * paths at once.  A recursive ADT rides the carrier and is NOT caught (it
+     * casts soundly); opaque/:heap handles are excluded by the predicate. */
+    if ((ascribe_type_is_byvalue_aggregate(&inner->type) &&
+         ascribe_type_is_word_carrier(ascribed)) ||
+        (ascribe_type_is_word_carrier(&inner->type) &&
+         ascribe_type_is_byvalue_aggregate(ascribed))) {
+        const Type *agg = ascribe_type_is_byvalue_aggregate(&inner->type)
+            ? &inner->type : ascribed;
+        const char *agg_name =
+            (agg->kind == TY_ADT && agg->as.adt_.def) ? agg->as.adt_.def->name
+            : (agg->kind == TY_APP && type_adt_app_def(agg))
+                ? type_adt_app_def(agg)->name
+                : "aggregate";
+        diag_emit_with_code(DIAG_ERROR, call->span,
+            TUR_E0295_BYVALUE_CARRIER_CAST,
+            "cannot reinterpret by-value aggregate '%s' as a one-word carrier "
+            "(:int / :ptr<void>); it is a C struct with no int64 handle. Box it "
+            "explicitly to carry it through an erased handle "
+            "(see docs/upcoming/byvalue-adt-int-cast-plan.md).",
+            agg_name);
+        return NULL;
     }
 
     /* TS3.3: if both source and target are scalar same-size kinds and they

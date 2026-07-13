@@ -1,6 +1,8 @@
 # By-value ADT `::` carrier cast (GAP 3) -- Plan
 
-> **Status:** Not started.
+> **Status:** Phase 1 (Part A -- diagnostic) **landed 2026-07-13**; Phase 2
+> (Part B -- explicit `box`/`unbox` bridge) not started. The unsound direct `::`
+> now raises `TUR-E0295` on both harnesses instead of miscompiling.
 > **Last Updated:** 2026-07-13
 > **Type:** compiler / type-erasure soundness + ergonomics
 > **Scope:** Make `(:: v :int)` / `(:: v :ptr<void>)` (and the reverse) *sound*
@@ -158,17 +160,24 @@ stay 0-gap.
 
 ## Phases
 
-### Phase 1 -- diagnostic (Part A)
+### Phase 1 -- diagnostic (Part A) -- DONE 2026-07-13
 
-- In `elab_ascribe`, add the by-value-aggregate ↔ one-word-carrier detection
-  (both directions) using `adt_is_byvalue_product` / `type_uses_carrier_abi` and
-  the struct analogue; emit `TUR-E02xx` with a fix hint.
-- Add negative fixtures under `tests/fixtures/errors/` for both directions
-  (compiled + `--interpret` diagnostic parity is exercised by `run-turi.sh`).
-- Confirm the previously-miscompiling snippets now fail with a clear message on
-  both harnesses; full suite stays green (no legitimate cast is caught -- audit
-  for any stdlib `::` that relied on the accidental behavior; none is expected
-  since it miscompiled).
+- `elab_ascribe` (`src/compiler/elab_types.c`) now rejects `::` between a
+  by-value aggregate and a one-word carrier in either direction, via the new
+  `ascribe_type_is_byvalue_aggregate` + `ascribe_type_is_word_carrier` helpers,
+  raising `TUR-E0295` (new code, registered in `diag.h`/`diag.c` with an
+  `explain` entry). Scoped to the **non-parametric** `TY_ADT` by-value product
+  (the reported shape): `adt_is_byvalue_product` already requires
+  `n_type_params == 0`, and a parametric `(Option int)`-style monomorph is
+  deliberately left alone (HKT/typeclass code legitimately erases those to the
+  carrier). Opaque, `:heap`, and recursive ADTs are excluded and still cast
+  soundly.
+- Negative fixtures: `tests/fixtures/errors/byvalue-adt-cast-to-int` and
+  `.../int-cast-to-byvalue-adt`; both green under `run.sh` and `run-turi.sh`
+  (the diagnostic, being in the shared elaborator, fires identically under
+  `--interpret`).
+- Full suite: 2127 passed, 0 failed -- no legitimate cast was caught; parity
+  checks 0-gap.
 
 ### Phase 2 -- explicit boxing bridge (Part B1)
 

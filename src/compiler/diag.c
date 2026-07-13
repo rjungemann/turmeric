@@ -226,6 +226,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0292_MISSING_FIELD:             return "TUR-E0292";
         case TUR_E0293_DUPLICATE_FIELD:           return "TUR-E0293";
         case TUR_E0294_UNKNOWN_FIELD:             return "TUR-E0294";
+        case TUR_E0295_BYVALUE_CARRIER_CAST:      return "TUR-E0295";
         case TUR_E0296_WITH_NOT_COPY:             return "TUR-E0296";
         case TUR_E0297_WITH_UNKNOWN_FIELD:        return "TUR-E0297";
         case TUR_E0298_WITH_DUPLICATE_FIELD:      return "TUR-E0298";
@@ -362,6 +363,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0292") == 0) return TUR_E0292_MISSING_FIELD;
     if (strcmp(s, "TUR-E0293") == 0) return TUR_E0293_DUPLICATE_FIELD;
     if (strcmp(s, "TUR-E0294") == 0) return TUR_E0294_UNKNOWN_FIELD;
+    if (strcmp(s, "TUR-E0295") == 0) return TUR_E0295_BYVALUE_CARRIER_CAST;
     if (strcmp(s, "TUR-E0296") == 0) return TUR_E0296_WITH_NOT_COPY;
     if (strcmp(s, "TUR-E0297") == 0) return TUR_E0297_WITH_UNKNOWN_FIELD;
     if (strcmp(s, "TUR-E0298") == 0) return TUR_E0298_WITH_DUPLICATE_FIELD;
@@ -1110,6 +1112,25 @@ static const DiagExplanation diag_explanations_[] = {
       "  ; error: unknown field 'diameter' on variant 'Circle' of type 'Shape'\n"
       "\n"
       "Check the field name against the declaration.\n",
+    },
+    { TUR_E0295_BYVALUE_CARRIER_CAST,
+      "TUR-E0295: Cannot reinterpret a by-value aggregate as a carrier\n"
+      "\n"
+      "`::` between a non-recursive by-value ADT/struct product and a one-word\n"
+      "carrier (:int or :ptr<void>), in either direction, has no sound lowering:\n"
+      "a by-value aggregate is a C struct with no int64 handle to reinterpret.\n"
+      "Reinterpreting one as an integer (or an integer back as the struct) would\n"
+      "miscompile -- a stray cc error one way, a segfault the other.\n"
+      "\n"
+      "Example:\n"
+      "  (defdata Pair :copy (Pair :int :int))\n"
+      "  (:: (Pair 3 4) :int)   ; error: cannot reinterpret by-value 'Pair' as int\n"
+      "  (:: h :Pair)           ; error: cannot reinterpret int as by-value 'Pair'\n"
+      "\n"
+      "A *recursive* ADT rides the int64 carrier and does cast cleanly; if you\n"
+      "genuinely need to carry a by-value aggregate through an erased handle, box\n"
+      "it explicitly (heap-box on the way in, unbox on the way out) rather than\n"
+      "reinterpreting the value.  See docs/upcoming/byvalue-adt-int-cast-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"
