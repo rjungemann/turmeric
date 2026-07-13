@@ -242,6 +242,26 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, b
     char *r = strdup(b.data); buf_free(&b); return r;
 }
 
+/* Like slot_store, but when the value is boxed (a Tier-C aggregate riding the
+ * intptr slot as a malloc'd pointer) register the box in the per-run reap list
+ * so it is freed at the outermost entry boundary.  Used at the sites whose box
+ * is read with slot_load(consume=false) -- an effect arg carried through
+ * dk_perform, shared read-only across a multi-shot resume -- and so is never
+ * consume-freed at a load site (that would double-free the reaped box).  A
+ * scalar slot is returned unchanged (no pointer to free).  See
+ * docs/reported/cps-effect-perform-carrier-leak.md. */
+static char *slot_store_reap(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
+    char *s = slot_store(ctx, k, t, e);
+    Type _r; const Type *rt = cps_resolve_ty(t, &_r);
+    if (slot_box_ty(rt)) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "__dk_reap_ptr(%s)", s);
+        buf_putc(&b, '\0');
+        free(s); s = strdup(b.data); buf_free(&b);
+    }
+    return s;
+}
+
 /* The Type a colored function's value has when delivered to KK_RET.  fd->return_type
  * can carry a NULL ADT def (the surface annotation is not def-resolved); the body's
  * type carries the real monomorphized def and the body's value is exactly what is
@@ -4026,10 +4046,15 @@ static void emit_perform(CE *ce, const CTerm *t) {
         snprintf(av, sizeof av, "__eargs%d", aid);
         ce_line(ce, "int64_t *%s = (int64_t *)malloc(%u * sizeof(int64_t));",
                 av, (unsigned)t->as.perform.n);
+        /* The arg array (and any boxed slot within it) is read by the handler via
+         * slot_load(consume=false) and shared read-only across a multi-shot
+         * resume, so it is never freed at a load site; reap it at the outermost
+         * entry boundary (docs/reported/cps-effect-perform-carrier-leak.md). */
+        ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", av);
         for (uint32_t i = 0; i < t->as.perform.n; i++) {
             char *ai = atom_str(ce, &t->as.perform.args[i]);
-            char *si = slot_store(ce->ctx, t->as.perform.args[i].ty,
-                                  t->as.perform.args[i].type, ai);
+            char *si = slot_store_reap(ce->ctx, t->as.perform.args[i].ty,
+                                       t->as.perform.args[i].type, ai);
             ce_line(ce, "%s[%u] = %s;", av, i, si);
             free(si); free(ai);
         }
@@ -4043,7 +4068,9 @@ static void emit_perform(CE *ce, const CTerm *t) {
             ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
         TypeKind argty = (t->as.perform.n >= 1) ? t->as.perform.args[0].ty : TY_NIL;
         const Type *argt = (t->as.perform.n >= 1) ? t->as.perform.args[0].type : NULL;
-        sa = slot_store(ce->ctx, argty, argt, arg);
+        /* A boxed (Tier-C) single arg leaks like the multi-arg array -- read
+         * consume=false by the handler; reap it at the entry boundary. */
+        sa = slot_store_reap(ce->ctx, argty, argt, arg);
     }
 
     if (perform_cont_trivial(t)) {

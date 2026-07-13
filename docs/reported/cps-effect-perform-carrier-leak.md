@@ -1,11 +1,32 @@
 # CPS effect lowering leaks per-perform carrier allocations (arg array + Tier-C value boxes)
 
 **Severity:** low (bounded, per-perform/-resume-execution heap leak; not a
-correctness bug). Keeps `requires.no-leak-check` markers on the affected
-delimited-effect fixtures. Sibling of the just-fixed DK-node leak
-(`docs/archive/cps-delimited-dk-node-leak.md`) -- same family: the CPS effect
+correctness bug). Sibling of the fixed DK-node leak
+(`docs/archive/cps-delimited-dk-node-leak.md`) -- same family: the effect
 lowering heap-allocates a carrier to cross the `intptr`-typed
 `dk_perform`/`resume`/handler ABI and never frees it.
+
+> **PARTIALLY RESOLVED (2026-07-12).** The **DK-path** carriers are fixed: the
+> multi-arg `__eargs` array and any boxed (Tier-C) argument riding `dk_perform`
+> are now registered in the per-run reap list (`__dk_reap_ptr`) and freed at the
+> outermost entry boundary, exactly like the DK env structs. A new
+> `slot_store_reap` helper (`emit_cps_ir.c`) wraps only the boxes read with
+> `slot_load(consume=false)` (shared read-only across a multi-shot resume, so
+> never consume-freed at a load site -- reaping them cannot double-free). This
+> clears `cps-backend-multiarg-effect`, `-multiarg-effect-float`, and
+> `-tierc-effect-arg` (markers dropped).
+>
+> **Still open:** the **fiber-path** Tier-C boxes (`cps-backend-tierc-effect`).
+> That fixture's effect lowers to the ucontext **fiber** runtime
+> (`tur_effect_cont_resume`, `emit_effects.c`), whose `eff_box_expr` boxes the
+> resume value / handler result and whose `eff_slot_load` never frees them, so
+> they leak. Reaping them with `__dk_reap_ptr` is **not** safe in general: the
+> DK reap prelude is emitted only when the program uses DK/CPS delimited control
+> (`emit_module.c:6966`), so a **pure-fiber** effect program would reference an
+> undefined `__dk_reap_ptr`. The fiber runtime needs its own box reclamation
+> (free on fiber/handler teardown, honoring multi-shot resume) -- a separate
+> change in `emit_effects.c` / the fiber runtime. `cps-backend-tierc-effect`
+> keeps `requires.no-leak-check` until then.
 
 ## Summary
 
@@ -69,22 +90,26 @@ which the carrier is dead -- but no free is emitted.
 
 ## Fix directions
 
-1. Free the multi-arg `__eargsN` array after `dk_perform` settles, the same way
-   the perform continuation frame is now single-node freed
-   (`docs/archive/cps-delimited-dk-node-leak.md`): capture the `dk_perform`
-   result, `free(__eargsN)`, then return. The array is dead once the handler has
-   read its slots (the handler runs synchronously inside `dk_perform`).
-2. Tier-C boxes: free the box once its owner has consumed it -- the arg box after
-   the handler unboxes it, the resume-value box after `resume` copies it out, the
-   handler-return box after the caller reads it. Because a resume is multi-shot
-   (the captured continuation may replay), a box that rides a *replayed* value
-   must be reference-counted or copied per replay rather than freed on first use;
-   scope the free to the single-shot boxes first and treat multi-shot boxes with
-   the drop-glue machinery.
-3. Interim: both are bounded per-execution leaks; the affected fixtures keep
-   `requires.no-leak-check` until this is wired.
+1. **DONE (DK path).** The `__eargsN` array and any boxed `dk_perform` argument
+   are registered with `__dk_reap_ptr` at construction and freed at the outermost
+   entry boundary (the per-run reap list from
+   `docs/archive/cps-delimited-dk-node-leak.md`). Boundary reaping is safe for a
+   multi-shot resume: each perform execution allocates a fresh carrier, registers
+   it once, and every replay reads it read-only before the top-level `dk_run`
+   settles. Only boxes read with `slot_load(consume=false)` are wrapped
+   (`slot_store_reap`), so the entry-return box that `slot_load(consume=true)`
+   frees is never double-freed.
+2. **OPEN (fiber path).** The `emit_effects.c` boxes (`eff_box_expr`, resume
+   value / handler result) leak the same way but cannot reuse `__dk_reap_ptr`:
+   the reap prelude is gated on DK/CPS delimited-control usage
+   (`emit_module.c:6966`), so a pure-fiber effect program would not have it. Give
+   the fiber runtime its own box reclamation -- free the box on fiber/handler
+   teardown, honoring multi-shot resume (reference-count or copy-per-replay a box
+   that rides a replayed value rather than freeing it on first read).
 
-## Affected fixtures (retain `requires.no-leak-check`)
+## Affected fixtures
 
-`cps-backend-multiarg-effect`, `cps-backend-multiarg-effect-float`,
-`cps-backend-tierc-effect`, `cps-backend-tierc-effect-arg`.
+- Resolved (marker dropped): `cps-backend-multiarg-effect`,
+  `cps-backend-multiarg-effect-float`, `cps-backend-tierc-effect-arg`.
+- Open (retains `requires.no-leak-check`): `cps-backend-tierc-effect` (fiber
+  path).
