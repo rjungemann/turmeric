@@ -257,13 +257,15 @@ residual leak and keep their markers.
 
 Fully draining the onion is **not** safely doable from C: the runtime gets an
 opaque `int64_t` box and cannot tell a captured-closure field from a captured
-value, and the emitted env field layout is not a stable ABI. The real fix is
-**compiler-generated closure drop glue** -- a per-closure-type drop that frees
-the box and recursively drops its owned captured fields, reached either via a
-drop-fn word in the fat box or a fn->drop registry. That is a language/codegen
-feature with broad ABI reach (and fixture churn), so it is its own project, not
-part of this runtime-ownership pass. Until then the onion inner layers remain a
-bounded, process-lifetime leak behind the existing markers.
+value, and the emitted env field layout is not a stable ABI. The design space
+(runtime closure drop glue via registry or embedded drop-fn; a reified,
+server-owned middleware chain that needs no compiler change; or accepting the
+bounded leak) is worked out in
+[docs/upcoming/closure-drop-glue-plan.md](upcoming/closure-drop-glue-plan.md).
+Its recommendation: these are bounded, process-lifetime leaks with no
+correctness cost, so keep the 17 markers for now and fold the reified-chain fix
+into the next middleware-API revision rather than opening a language-wide ABI
+change solely to reclaim ~1 box per layer at process exit.
 
 The rate-limiter bucket table (`httpd-mw-rate-limit`, ~24 KB) is a separate
 one-time table freed in its own destructor -- fold it into the same follow-up.
