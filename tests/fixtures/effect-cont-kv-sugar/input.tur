@@ -1,0 +1,26 @@
+;; Slice A (cps-backend-n6 cross-function resume): the CONT_EFFECT continuation
+;; flavor.  A receiver `(fn [k : effect-cont] (k v))` resumes an algebraic-effect
+;; handler continuation via the ordinary `(k v)` application sugar -- CONT_EFFECT
+;; lowers `(k v)` to EX_RESUME (the fiber `tur_effect_cont_resume` path), not the
+;; cloneable/serial/escape resume builtins.  This is the receiver-side convention
+;; the shift/reset -> __Shift effect desugar needs: the shift's receiver `k` is
+;; flavored CONT_EFFECT so `(k v)` inside it resumes the delimited continuation
+;; carried by the enclosing reset's synthesized handler.
+;;
+;; The effect is performed in a CALLEE (`producer`) and handled+resumed in a
+;; CALLER (`run`) -- a genuinely cross-function resumable continuation, resumed
+;; through the CONT_EFFECT receiver.  The receiver captures `a`/`b` (a boxed
+;; closure payload).  direct == cps == turi.
+
+(defeffect ShiftE [f : (fn [effect-cont] int)] : int)
+
+(defn producer [a : int b : int] : int
+  (+ 100 (perform (ShiftE (fn [k : effect-cont] : int (k (+ a b)))))))
+
+(defn run [base : int] : int
+  (+ base (handle (producer 3 4)
+            (ShiftE [f] k) (f k))))
+
+(defn main [] : int
+  (println (run 1000))   ; producer resumes (+ 100 []) with 3+4=7 -> 107; +base 1000 = 1107
+  0)

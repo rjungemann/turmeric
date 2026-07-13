@@ -735,7 +735,8 @@ typedef struct Type {
          * (k v) application sugar resumes against (cps-transform-plan):
          *   CONT_CLONEABLE -- cloneable/call-cc* (tur_cloneable_cont_resume)
          *   CONT_ESCAPE    -- call/cc / escape   (tur_escape_resume)
-         *   CONT_SERIAL    -- serial-shift       (tur_serial_cont_resume)  */
+         *   CONT_SERIAL    -- serial-shift       (tur_serial_cont_resume)
+         *   CONT_EFFECT    -- effect handler cont (EX_RESUME / dk_invoke)  */
         struct {
             TypeKind returns;  /* ResetT: the type (k v) yields (the delimited result) */
             TypeKind arg;      /* BodyT: the resume-value type (k) expects; TY_UNKNOWN = unchecked */
@@ -1441,8 +1442,19 @@ static inline Type type_exception(TypeKind payload_type) {
 
 /* Phase 18: Continuation type constructor */
 /* Create a continuation type cont<T> that returns T */
-/* CC4 continuation flavor: which runtime (k v) resumes against. */
-typedef enum { CONT_CLONEABLE = 0, CONT_ESCAPE = 1, CONT_SERIAL = 2 } ContFlavor;
+/* CC4 continuation flavor: which runtime (k v) resumes against.
+ * CONT_EFFECT (cps-backend-n6 cross-function resume): the continuation is an
+ * algebraic-effect handler continuation carried as a plain int64; (k v) lowers
+ * to EX_RESUME (dk_invoke), NOT a cloneable/escape/serial resume builtin.  This
+ * is the flavor the shift/reset -> __Shift effect desugar attaches to a
+ * cross-function resuming shift's receiver `k`, so `(k v)` inside the receiver
+ * resumes the delimited continuation captured by the enclosing reset's handler. */
+typedef enum {
+    CONT_CLONEABLE = 0,
+    CONT_ESCAPE    = 1,
+    CONT_SERIAL    = 2,
+    CONT_EFFECT    = 3
+} ContFlavor;
 
 static inline Type type_cont(TypeKind returns) {
     Type t;
@@ -1479,6 +1491,7 @@ static inline int cont_flavor_from_name(const char *n) {
     if (strcmp(n, "cont") == 0)        return CONT_CLONEABLE;
     if (strcmp(n, "escape-cont") == 0) return CONT_ESCAPE;
     if (strcmp(n, "serial-cont") == 0) return CONT_SERIAL;
+    if (strcmp(n, "effect-cont") == 0) return CONT_EFFECT;
     return -1;
 }
 
