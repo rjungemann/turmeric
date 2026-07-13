@@ -1,7 +1,12 @@
 # `stdlib/logic.tur` pure-Turmeric port (miniKanren) -- Plan
 
-> **Status:** Not started.
-> **Last Updated:** 2026-07-12
+> **Status:** Done (2026-07-13). `stdlib/logic.tur` is now pure Turmeric with
+> zero inline-C; the `hkt-stdlib-logic-instances` carve is dropped and all
+> `logic-*` fixtures run under both harnesses. See "Implementation notes" below
+> for the two deviations from the sketch (a self-contained pure Stream ADT
+> instead of importing `backtrack.tur`, and the fresh counter folded into the
+> `Subst` tail rather than a separate `UState`).
+> **Last Updated:** 2026-07-13
 > **Type:** stdlib / interpreter parity
 > **Scope:** Reimplement `stdlib/logic.tur`'s ~20 inline-C primitives in pure
 > Turmeric so the miniKanren engine runs under both the compiled path and the
@@ -169,6 +174,40 @@ not add them speculatively -- match the current engine's behavior first
   interpreter path with no inline-C).
 
 ---
+
+## Implementation notes (as landed)
+
+The engine came out exactly as the plan predicted -- terms/substitution/state
+are `defdata` + `match`, no new language feature was needed -- with two
+deliberate deviations forced by how the by-value HKT codegen represents things:
+
+1. **Solution stream: a self-contained pure `Stream` ADT, not `import
+   backtrack`.** `backtrack.tur`'s stream is an inline-C `{value,next}` Cell
+   list whose cells the interpreter builds via natives that expose *no* head/tail
+   accessor -- so `reify-walk` / `first-state` (which peek the first solution)
+   cannot be written in pure Turmeric against it. A three-line
+   `(defdata Stream (StNil) (StCons :Subst :Stream))` walked with `match` is
+   already interpreter-native (needs no shim), is peekable, and keeps the whole
+   file inline-C-free. `mzero`/`mreturn`/`mplus`/`mbind`/`bt-length` are thin
+   wrappers over it, so the public monad surface and the HKT instances are
+   unchanged.
+
+2. **Fresh counter folded into the `Subst` base, not a separate `UState`.** The
+   empty substitution is `(SNil next)` carrying the next unused var id; prepending
+   `SBind` nodes preserves that base, so a single `Subst` threads both the
+   bindings and the counter with no extra product type. A non-recursive `UState`
+   struct was tried first but the compiled path represents it by-value, which
+   breaks the `:int`-carrier erasure the goal/stream plumbing relies on
+   (`(:: state :int)` has no int handle to produce); a recursive ADT like `Subst`
+   is heap-boxed and erases cleanly.
+
+Goal application still flows through the `:int` fat-closure carrier
+(`apply-goal [g : int ...]`, `apply-fat`): typing the goal handle `:int` and
+`(:: g (fn [Subst] Stream))` is what makes codegen emit the fat-closure calling
+convention -- a `(Goal int)`-typed or bare-`:ptr<void>` cast emits a *thin* call
+that drops the captured env and segfaults. Callbacks handed to `fresh` are typed
+`:fn` (uniform thin/fat dispatch); a user lambda must annotate its parameter
+`(fn [x : Term] ...)` since `:fn` erases the argument type.
 
 ## See Also
 
