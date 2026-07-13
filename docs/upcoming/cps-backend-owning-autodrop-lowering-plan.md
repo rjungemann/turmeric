@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- lower the NON-ref owning-value scope-exit auto-drop (unblocks E2)
 category: Planning
-status: open (not started) -- the actual blocker under E2 and a whole class of owning-value programs; the missing generalization of O1-b
+status: P1 landed (non-crossing bare-rc + by-value-struct owning auto-drop now CPS-emits); P2 (single-shot crossing, unblocks E2) and P3 (abortive/multi-shot, rides E3) open. The missing generalization of O1-b.
 description: A colored (CPS-emitted) function that carries an elaborator-injected scope-exit auto-drop for an owning value EVICTS to the whole-function fallback, because `EX_DEFER` has no CT-IR lowering. O1-b P1 lowered exactly ONE shape of this -- `(defer (drop! r))` on a bare `ref<T>` var. Every other owning auto-drop is untouched and still evicts: a bare `rc` relying on auto-drop (`(defer (rc/drop r))`), and -- the case that blocks Track B E2 -- a by-value struct/record local with owning fields, whose fix (byvalue-struct-local-owning-field-leak, RESOLVED on the direct path) injects `(defer (rc/drop (.f o)))` / `(defer (drop! (.f o)))` per owning field. This plan generalizes O1-b's auto-drop recognizer + hoist to those shapes. Crucially it corrects an earlier misconception: E2's BORROW captures need this lowering landing in a SINGLE-SHOT continuation, which is sound WITHOUT the E3 teardown -- only genuinely-consuming / abortive crossings ride E3. Sound on the fallback today; missed coverage, not a correctness gap.
 ---
 
@@ -134,11 +134,21 @@ field-read arg, and `drop!` on the direct side (O1-a). The delegated constructor
 
 ### Phasing
 
-- **P1 -- non-crossing (self-contained, no runtime).** Widen the recognizer;
-  `plan_autodrop` hoists a non-crossing bare-rc / struct-field auto-drop before
-  the barrier. Fixture: a colored fn with a by-value struct (rc field) and a bare
-  rc, both dead before a `shift`, delivering a scalar; `direct == cps`,
-  LeakSanitizer-clean. Mirrors O1-b P1 exactly.
+- **P1 -- non-crossing (self-contained, no runtime). LANDED.** Widened the
+  recognizer: `autodrop_defer_ref` -> `autodrop_defer_owning` (`src/passes/cps_ir.c`)
+  now admits `(defer (rc/drop X))` and `(defer (drop! X))` where `X` is a bare
+  owning var OR a field read `(.f o)` (rooted at the by-value local via
+  `autodrop_root_local` for the crossing check), with an owning-type guard so a
+  non-drop free-shape builtin is never matched. `plan_autodrop` /
+  `cps_emit_hoisted_drops` were reusable as-is (they already delegate each drop
+  body via `CT_LETRAW`, and `safe_to_delegate` already admits `make-struct` /
+  `rc/of` / field reads). Fixture `cps-backend-owning-autodrop-noncrossing`: a
+  colored fn binds a bare `rc` and a by-value struct with an `rc` field, uses
+  each before a `shift`, and delivers through a `reset`; both auto-drops hoist,
+  the fn CPS-emits, `direct == cps`, LeakSanitizer-clean. Verified the boundaries
+  hold: a value used at/after the control op still evicts (crossing -> P2/P3), and
+  a user `(defer (println ...))` of arbitrary effects is never hoisted. Full
+  suite 2167 passed, 0 failed (no snapshot churn).
 
 - **P2 -- crossing into a single-shot continuation (unblocks E2).** When the
   crossed control op is provably single-shot (`owning_dropped_before_control`

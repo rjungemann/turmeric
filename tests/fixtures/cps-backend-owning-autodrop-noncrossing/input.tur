@@ -1,0 +1,42 @@
+;; CPS-IR-to-C backend, owning-autodrop-lowering P1: a colored function carrying
+;; a NON-ref owning value whose scope-exit auto-drop does not cross a control op
+;; now CPS-emits instead of falling back.  Built with the always-on cps-backend.
+;;
+;; O1-b P1 lowered exactly one auto-drop shape -- `(defer (drop! r))` on a bare
+;; `ref<T>` var.  Every other elaborator-injected owning auto-drop still evicted
+;; `BODY-UNSUPPORTED ... EX_DEFER`: a bare `rc` relying on auto-drop
+;; (`(defer (rc/drop r))`), and a by-value struct/record local with owning fields
+;; (`(defer (rc/drop (.f o)))` per field -- injected by the resolution of the
+;; direct-path byvalue-struct-local-owning-field-leak).  P1 generalizes O1-b's
+;; recognizer (`autodrop_defer_ref` -> `autodrop_defer_owning`) to those shapes:
+;; it recognizes an `rc/drop` / `drop!` of a bare owning var OR a field read
+;; `(.f o)` (keyed to the by-value local for the crossing check), and the existing
+;; `plan_autodrop` / `cps_emit_hoisted_drops` machinery hoists the drop
+;; straight-line before the first control barrier -- delegated via `CT_LETRAW`
+;; exactly like an explicit drop (O1-a).
+;;
+;; `count-then-shift` binds an `rc` and a by-value struct with an `rc` field, uses
+;; each BEFORE a `shift` (dead after), then shifts.  Both auto-drops are
+;; non-crossing, so both hoist before the shift and the function CPS-emits;
+;; LeakSanitizer-clean (each hoisted drop fires exactly once).  A value used
+;; AT/AFTER the control op stays a crossing case and correctly falls back
+;; (P2/P3); a general user `defer` of arbitrary effects is never hoisted.
+;;
+;; direct == cps: prints the rc strong count (1) and the struct tag (9), then the
+;; reset delimits the shift's abortive value 5 -> prints 5.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defn count-then-shift [] : int
+  (let [r (rc/of 5)
+        o (make-struct Own :r (rc/of 7) :tag 9)]
+    (println (rc/strong-count r))
+    (println (.tag o))
+    (shift (fn [v : int] v) 5)))
+
+(defn run [] : int
+  (reset (count-then-shift)))
+
+(defn main [] : int
+  (println (run))
+  0)

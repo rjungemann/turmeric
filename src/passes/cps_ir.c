@@ -1255,20 +1255,57 @@ static CTerm *build_resume(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
  * or a non-auto-drop user `defer`, keeps falling back -- P2/P3 own those.
  * ======================================================================= */
 
-/* If `e` is the elaborator-injected owning auto-drop `(defer (drop! r))`, return
- * r's binding; else NULL.  Gated to the `drop!` free-shape builtin on a single
- * `ref<T>` var so a general user `defer` of arbitrary effects is never hoisted. */
-static const Binding *autodrop_defer_ref(const Expr *e) {
+static bool autodrop_owning_kind(TypeKind k) {
+    return k == TY_RC || k == TY_REF || k == TY_WEAK || k == TY_LREF;
+}
+
+/* The ROOT LOCAL of an auto-drop's operand: a bare owning var, or the by-value
+ * struct/record local under a field read `(.f o)` (peel EX_GET_FIELD).  This is
+ * the binding whose live range the crossing check keys on -- a field-drop of `o`
+ * counts `o` as the crossed value.  Returns NULL if the operand is not rooted at
+ * a bare local. */
+static const Binding *autodrop_root_local(const Expr *arg) {
+    arg = ascribe_peel(arg);
+    while (arg && arg->kind == EX_GET_FIELD)
+        arg = ascribe_peel(arg->as.get_field_.struct_expr);
+    if (arg && arg->kind == EX_VAR && arg->as.var.binding)
+        return arg->as.var.binding;
+    return NULL;
+}
+
+/* If `e` is an elaborator-injected owning scope-exit auto-drop, return the
+ * discharged value's ROOT LOCAL binding; else NULL.  Generalizes the O1-b `ref`
+ * recognizer to every owning auto-drop shape the elaborator injects (bare rc /
+ * ref / weak / lref, and a by-value struct's owning field), and NOTHING else so
+ * a general user `defer` of arbitrary effects is never hoisted:
+ *   (defer (rc/drop X))   -- X a bare rc var or a field read (.f o)
+ *   (defer (drop! X))     -- X a bare ref/weak/lref var or a field read (.f o)
+ * The body must be a pure drop (`EX_RC_DROP`, or the `drop!` free-shape builtin)
+ * whose operand is an owning value (checked), rooted at a bare local. */
+static const Binding *autodrop_defer_owning(const Expr *e) {
     if (!e || e->kind != EX_DEFER) return NULL;
     const Expr *body = ascribe_peel(e->as.defer_.body);
-    if (!body || body->kind != EX_BUILTIN) return NULL;
-    const BuiltinSpec *sp = body->as.builtin.spec;
-    if (!sp || sp->shape != BS_PREFIX_UNARY_FREE || body->as.builtin.n != 1)
+    if (!body) return NULL;
+    const Expr *arg;
+    if (body->kind == EX_RC_DROP) {
+        arg = body->as.rc_drop_.expr;
+    } else if (body->kind == EX_BUILTIN) {
+        const BuiltinSpec *sp = body->as.builtin.spec;
+        if (!sp || sp->shape != BS_PREFIX_UNARY_FREE || body->as.builtin.n != 1)
+            return NULL;
+        arg = body->as.builtin.args[0];
+    } else {
         return NULL;
-    const Expr *arg = ascribe_peel(body->as.builtin.args[0]);
-    if (!arg || arg->kind != EX_VAR || !arg->as.var.binding) return NULL;
-    if (arg->as.var.binding->type.kind != TY_REF) return NULL;
-    return arg->as.var.binding;
+    }
+    /* the drop operand (a bare owning var or a `(.f o)` field read) must be
+     * owning-typed -- guards against a non-drop free-shape builtin. */
+    const Expr *op = ascribe_peel(arg);
+    TypeKind opk = TY_UNKNOWN;
+    if (op && op->kind == EX_GET_FIELD) opk = op->type.kind;
+    else if (op && op->kind == EX_VAR && op->as.var.binding)
+        opk = op->as.var.binding->type.kind;
+    if (!autodrop_owning_kind(opk)) return NULL;
+    return autodrop_root_local(arg);
 }
 
 /* The `(drop! r)` builtin inside an auto-drop defer, delegated whole to the
@@ -1450,7 +1487,7 @@ static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
     while (n_defer < n) {
         Expr *it = items[n - 1 - n_defer];
         if (it && it->kind == EX_DEFER) {
-            if (!autodrop_defer_ref(it)) return false;  /* user defer -> fall back */
+            if (!autodrop_defer_owning(it)) return false;  /* user defer -> fall back */
             n_defer++;
         } else {
             break;
@@ -1465,7 +1502,7 @@ static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
     for (uint32_t i = 0; i < n_defer; i++) {
         Expr *d = items[n_real + i];
         pl->drops[i] = autodrop_defer_body(d);
-        pl->refs[i]  = autodrop_defer_ref(d);
+        pl->refs[i]  = autodrop_defer_owning(d);
     }
     pl->n_drops = n_defer;
     pl->n_real  = n_real;
