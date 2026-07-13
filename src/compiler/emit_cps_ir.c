@@ -656,20 +656,36 @@ static bool cap_ty_ok(TypeKind ty, const Type *type) {
     return slot_ty(ty) || slot_box_ty(type);
 }
 
-/* E1 (env-capture story, Option A): an OWNING capture whose clone (incref) glue
- * we can emit on read-out, so it may ride the env of a genuinely MULTI-SHOT
- * continuation (a handler CASE body, or a reset/shift resumed more than once).
- * The lifted helper clones it once per invocation (its body's drop balances the
- * clone); the env's original +1 is intentionally leaked (Option A), so a fixture
- * exercising this carries requires.no-leak-check.
- *
- * Currently just an `rc<int>` handle (TY_RC -> RcControlBlock *, cloned by
- * rc_strong_increment).  A carrier ADT / owning-carrying aggregate (E2) and
- * weak<T> are deliberately still excluded -- they fall back until their
- * clone/drop glue is wired here. */
+/* An owning-carrying BY-VALUE aggregate: a by-value struct/ADT product whose def
+ * `needs_drop_glue` (it has an rc/ref/weak field).  slot_box_ty excludes it (that
+ * gate is owning-free only), so it never rides the plain Copy capture gate -- it
+ * routes through cap_owning_ok. */
+static bool owning_byvalue_aggregate(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) return false;
+    if (!type_is_byvalue_adt_product(*(Type *)t)) return false;
+    const AdtDef *d = slot_agg_def(t);
+    return d && d->needs_drop_glue;
+}
+
+/* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
+ * (a handler CASE body).  The env-capture landing is BORROW-ONLY-first (E-borrow):
+ * for the reachable borrow-only shape the capture rides by a bare shallow alias
+ * (no clone, no drop -- the enclosing fn owns it and drops it once, now via the
+ * P2 auto-drop lowering), which collect_caps_case decides via
+ * owning_cap_borrow_only.  cap_owning_ok only says "this owning kind is
+ * admissible into a multi-shot env":
+ *   - `rc<int>` handle (TY_RC): borrow-only -> bare alias; consuming -> incref
+ *     (rc_strong_increment, Option A, memory-safe).
+ *   - a carrier ADT / heap struct handle: borrow-only -> bare pointer alias;
+ *     consuming -> evict (no scalar incref glue -- rides E3's teardown).
+ *   - an owning-carrying by-value aggregate: borrow-only -> bare struct copy;
+ *     consuming -> evict.
+ * A single-shot continuation still admits any owning capture by a bare copy
+ * regardless (g_cap_single_shot, in cap_add).  weak<T> stays excluded. */
 static bool cap_owning_ok(TypeKind ty, const Type *type) {
-    (void)type;
-    return ty == TY_RC;
+    return ty == TY_RC || carrier_handle_ok(type) || owning_byvalue_aggregate(type);
 }
 
 static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type) {
@@ -967,6 +983,25 @@ static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
         case EX_RC_COUNT: inner = e->as.rc_count_.expr; break;
         case EX_RC_PTR:   inner = e->as.rc_ptr_.expr;   break;
         case EX_WEAK:     inner = e->as.weak_.expr;     break;
+        case EX_GET_FIELD:
+            /* Reading a NON-owning field `(.f o)` of the captured by-value
+             * aggregate is a pure borrow of `o` -- it copies a scalar out, leaving
+             * `o` (and its owning fields) intact.  An OWNING field read yields an
+             * alias that could be consumed, so it is not provably borrow-only:
+             * conservatively reject (the capture then evicts / rides E3). */
+            if (e->type.kind == TY_RC || e->type.kind == TY_REF
+                || e->type.kind == TY_WEAK || e->type.kind == TY_LREF)
+                return false;
+            inner = e->as.get_field_.struct_expr;
+            /* peel a chain of field reads to the root aggregate */
+            while (inner) {
+                while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+                if (inner && inner->kind == EX_GET_FIELD) {
+                    inner = inner->as.get_field_.struct_expr; continue;
+                }
+                break;
+            }
+            break;
         default: return false;
     }
     while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
@@ -1039,13 +1074,20 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
     g_cap_single_shot = false;   /* a handler case body runs once per perform, not single-shot */
     collect_caps_rec(body, UINT32_MAX, bound, 0, cs);
     g_excl_n = 0;
-    /* E3-lite: downgrade a borrow-only owning capture from incref-on-read-out
-     * (owning=true) to a bare shallow alias (owning=false) -- leak-clean, since
-     * the enclosing fn owns and drops it exactly once. */
+    /* E-borrow: a borrow-only owning capture rides by a bare shallow alias
+     * (owning=false) -- leak-clean, since the enclosing fn owns and drops it
+     * exactly once.  A provably-consuming capture keeps owning=true, but only an
+     * rc handle has a scalar incref (rc_strong_increment) for the read-out clone;
+     * a consuming aggregate / carrier handle has no such glue (it needs E3's env
+     * teardown), so evict it rather than emit a wrong incref. */
     if (cs->ok)
-        for (int i = 0; i < cs->n; i++)
-            if (cs->owning[i] && cs->b[i] && owning_cap_borrow_only(body, cs->b[i]->id))
+        for (int i = 0; i < cs->n; i++) {
+            if (!cs->owning[i] || !cs->b[i]) continue;
+            if (owning_cap_borrow_only(body, cs->b[i]->id))
                 cs->owning[i] = false;
+            else if (cs->ty[i] != TY_RC)
+                cs->ok = false;
+        }
     return cs->ok;
 }
 

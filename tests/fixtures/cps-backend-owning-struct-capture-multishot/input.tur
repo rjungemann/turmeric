@@ -1,0 +1,47 @@
+;; CPS-IR-to-C backend: an owning-carrying BY-VALUE STRUCT borrowed into a
+;; genuinely MULTI-SHOT handler case, leak-clean.  Built with the always-on
+;; cps-backend.  This is the capstone that combines three pieces:
+;;
+;;   - Track A / A1 (multi-suspension continuations): `g` performs the effect
+;;     TWICE, so the handler case runs twice at runtime.
+;;   - Track B / E2 (owning-aggregate capture): the case captures the by-value
+;;     struct `o` (which has an `rc<int>` field, so it is drop-gluey and never
+;;     rode the Copy capture gate) and reads a non-owning field `(.tag o)` --
+;;     `cap_owning_ok` admits it and `owning_cap_borrow_only` recognizes the
+;;     field read as a pure borrow, so `o` rides the multi-shot env by a BARE
+;;     shallow alias (no clone, no per-invocation drop).
+;;   - Owning-autodrop P2: the by-value struct's scope-exit auto-drop
+;;     `(defer (rc/drop (.r o)))` -- injected because a by-value struct's owning
+;;     field cannot be dropped explicitly (drop! needs ref<T>) -- crosses the
+;;     `handle`, a SINGLE-SHOT control op, so it is lowered in place into the
+;;     post-handle continuation where it fires exactly once (not hoisted before
+;;     the handle, which would drop the field the case still borrows).
+;;
+;; Before these, this shape evicted to the whole-function fallback (first on the
+;; unlowered EX_DEFER, then on the aggregate capture).  Now `f` and `g` CPS-emit,
+;; the case runs twice, and the struct's `rc` field is dropped exactly once --
+;; no leak (runs under normal LeakSanitizer), no double-free.
+;;
+;; A case that CONSUMED the capture, or read its OWNING field, still evicts
+;; (conservative -- rides E3); an abortive-shift crossing keeps the auto-drop on
+;; the fallback (P3).
+;;
+;; direct == cps: the case resumes with (.tag o) = 9 for each of g's two performs,
+;; so g = 9 + 9 = 18 and f = 18.
+
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (let [a (perform (E))]
+    (let [b (perform (E))]
+      (+ a b))))
+
+(defn f [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]
+    (handle (g) (E [] k) (resume k (.tag o)))))
+
+(defn main [] : int
+  (println (f))
+  0)

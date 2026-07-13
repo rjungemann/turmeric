@@ -1383,6 +1383,105 @@ static bool item_has_control(const Expr *e) {
     }
 }
 
+/* P2 gate: does `e` contain a control op whose continuation is NOT single-shot --
+ * i.e. one whose post-op continuation may be DISCARDED (abortive) or run more
+ * than once (delimited-multishot / escape)?  A scope-exit owning drop that
+ * crosses such an op is unsound (the drop is lost or duplicated), so P2 falls
+ * back on it (-> P3 / E3).  Single-shot effect ops (handle / perform / resume:
+ * their post-op continuation runs exactly once in the admitted subset) are NOT
+ * unsafe in themselves, but a nested unsafe op inside their bodies is -- so
+ * recurse into them.  CONSERVATIVE: an un-modelled node returns true (assume
+ * unsafe), so P2 only engages on shapes it can prove single-shot. */
+static bool expr_has_unsafe_control(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    if (is_atomic(e)) return false;
+    switch (e->kind) {
+        /* abortive / delimited-multishot / escape: NOT single-shot. */
+        case EX_SHIFT: case EX_SHIFT0: case EX_RESET:
+        case EX_CLONEABLE_SHIFT: case EX_CLONEABLE_RESET:
+        case EX_SERIAL_SHIFT: case EX_SERIAL_RESET:
+        case EX_CALLCC: case EX_DISCONTINUE:
+        case EX_ASYNC: case EX_AWAIT:
+            return true;
+        /* single-shot effect ops: recurse into bodies (a nested shift is unsafe). */
+        case EX_HANDLE: {
+            const HandleExpr *h = e->as.handle_.handle;
+            if (!h) return true;
+            if (expr_has_unsafe_control(h->body)) return true;
+            for (uint32_t i = 0; i < h->n_cases; i++)
+                if (expr_has_unsafe_control(h->cases[i].body)) return true;
+            return false;
+        }
+        case EX_PERFORM: {
+            const PerformExpr *p = e->as.perform_.perform;
+            if (!p) return true;
+            for (uint32_t i = 0; i < p->n_args; i++)
+                if (expr_has_unsafe_control(p->args[i])) return true;
+            return false;
+        }
+        case EX_RESUME: {
+            const ResumeExpr *r = e->as.resume_.resume;
+            if (!r) return true;
+            return expr_has_unsafe_control(r->k) || expr_has_unsafe_control(r->value);
+        }
+        /* nested fn defs / closures: call-graph boundaries (not run here). */
+        case EX_FN: case EX_FN_DEF: case EX_CLOSURE:
+            return false;
+        /* structural containers: recurse. */
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_has_unsafe_control(e->as.let_.bindings[i].init)) return true;
+            return expr_has_unsafe_control(e->as.let_.body);
+        case EX_IF:
+            return expr_has_unsafe_control(e->as.if_.cond)
+                || expr_has_unsafe_control(e->as.if_.then_)
+                || expr_has_unsafe_control(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_has_unsafe_control(e->as.do_.items[i])) return true;
+            return false;
+        case EX_CALL:
+            if (e->as.call_.fn_expr && expr_has_unsafe_control(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_has_unsafe_control(e->as.call_.args[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_has_unsafe_control(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_WHILE:
+            return expr_has_unsafe_control(e->as.while_.cond)
+                || expr_has_unsafe_control(e->as.while_.body);
+        case EX_MATCH:
+            if (expr_has_unsafe_control(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (e->as.match_.arms[i].guard
+                    && expr_has_unsafe_control(e->as.match_.arms[i].guard)) return true;
+                if (expr_has_unsafe_control(e->as.match_.arms[i].body)) return true;
+            }
+            return false;
+        case EX_DEFER:     return expr_has_unsafe_control(e->as.defer_.body);
+        case EX_RETURN:    return expr_has_unsafe_control(e->as.return_.value);
+        case EX_SET:       return expr_has_unsafe_control(e->as.set_.value);
+        case EX_DEREF:     return expr_has_unsafe_control(e->as.deref_.expr);
+        case EX_CAST:      return expr_has_unsafe_control(e->as.cast_.expr);
+        case EX_GET_FIELD: return expr_has_unsafe_control(e->as.get_field_.struct_expr);
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                if (expr_has_unsafe_control(e->as.make_struct_.field_values[i])) return true;
+            return false;
+        case EX_RC_OF:    return expr_has_unsafe_control(e->as.rc_of_.expr);
+        case EX_RC_CLONE: return expr_has_unsafe_control(e->as.rc_clone_.expr);
+        case EX_RC_DROP:  return expr_has_unsafe_control(e->as.rc_drop_.expr);
+        case EX_RC_COUNT: return expr_has_unsafe_control(e->as.rc_count_.expr);
+        case EX_RC_PTR:   return expr_has_unsafe_control(e->as.rc_ptr_.expr);
+        case EX_REF:      return expr_has_unsafe_control(e->as.ref_.expr);
+        default:
+            return true;   /* conservative: un-modelled -> assume not single-shot */
+    }
+}
+
 /* Conservative "does `e` reference binding `bid`?"  Used to verify a ref's live
  * range does not cross a control op before hoisting its auto-drop.  Over-detection
  * (an un-modelled node -> assume it might reference the ref) only widens the live
@@ -1514,13 +1613,29 @@ static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
     }
     pl->first_ctrl = fc;
 
-    /* Non-crossing: no ref may be referenced at/after the first barrier.  When
-     * there is no barrier (fc == n_real) the range is empty, so the drop lands
-     * at scope exit after the (possibly ref-using) value item. */
-    for (uint32_t i = fc; i < n_real; i++)
+    /* Non-crossing: no owning value may be referenced at/after the first barrier.
+     * When there is no barrier (fc == n_real) the range is empty, so the drop
+     * lands at scope exit after the (possibly owning-value-using) value item. */
+    bool crossing = false;
+    for (uint32_t i = fc; i < n_real && !crossing; i++)
         for (uint32_t k = 0; k < pl->n_drops; k++)
-            if (expr_refs_binding(items[i], pl->refs[k]->id))
-                return false;                   /* crossing ref -> fall back */
+            if (expr_refs_binding(items[i], pl->refs[k]->id)) { crossing = true; break; }
+
+    if (crossing) {
+        /* P2: a CROSSING owning value (used at/after the barrier -- captured into
+         * the control op) whose crossed control op(s) are all SINGLE-SHOT (their
+         * post-op continuation runs exactly once) -- lower the drop at scope exit,
+         * in that single-shot continuation, instead of hoisting (which would drop
+         * a still-live value before its use).  This is how E1's explicit
+         * `(rc/drop r)` after a `handle` already works; it unblocks an owning
+         * value borrowed across a handle (Track B E2).  An abortive / delimited /
+         * multishot crossing keeps falling back (P3 / E3): its post-op
+         * continuation may discard or re-run the drop. */
+        for (uint32_t i = 0; i < n_real; i++)
+            if (expr_has_unsafe_control(items[i]))
+                return false;                   /* not provably single-shot -> fall back */
+        pl->first_ctrl = n_real;                /* route to the drops-at-exit branch */
+    }
 
     pl->engage = true;
     return true;

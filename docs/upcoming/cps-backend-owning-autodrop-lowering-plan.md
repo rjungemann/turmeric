@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- lower the NON-ref owning-value scope-exit auto-drop (unblocks E2)
 category: Planning
-status: P1 landed (non-crossing bare-rc + by-value-struct owning auto-drop now CPS-emits); P2 (single-shot crossing, unblocks E2) and P3 (abortive/multi-shot, rides E3) open. The missing generalization of O1-b.
+status: P1 + P2 landed (non-crossing hoist, and single-shot crossing lowered in place -- P2 unblocked Track B E2); P3 (abortive/multi-shot crossing, rides E3) open. The missing generalization of O1-b.
 description: A colored (CPS-emitted) function that carries an elaborator-injected scope-exit auto-drop for an owning value EVICTS to the whole-function fallback, because `EX_DEFER` has no CT-IR lowering. O1-b P1 lowered exactly ONE shape of this -- `(defer (drop! r))` on a bare `ref<T>` var. Every other owning auto-drop is untouched and still evicts: a bare `rc` relying on auto-drop (`(defer (rc/drop r))`), and -- the case that blocks Track B E2 -- a by-value struct/record local with owning fields, whose fix (byvalue-struct-local-owning-field-leak, RESOLVED on the direct path) injects `(defer (rc/drop (.f o)))` / `(defer (drop! (.f o)))` per owning field. This plan generalizes O1-b's auto-drop recognizer + hoist to those shapes. Crucially it corrects an earlier misconception: E2's BORROW captures need this lowering landing in a SINGLE-SHOT continuation, which is sound WITHOUT the E3 teardown -- only genuinely-consuming / abortive crossings ride E3. Sound on the fallback today; missed coverage, not a correctness gap.
 ---
 
@@ -150,24 +150,29 @@ field-read arg, and `drop!` on the direct side (O1-a). The delegated constructor
   a user `(defer (println ...))` of arbitrary effects is never hoisted. Full
   suite 2167 passed, 0 failed (no snapshot churn).
 
-- **P2 -- crossing into a single-shot continuation (unblocks E2).** When the
-  crossed control op is provably single-shot (`owning_dropped_before_control`
-  returns true -- handle/reset/perform), lower the auto-drop **in place** rather
-  than hoisting: delegate its body via `CT_LETRAW` at its scope-exit position, so
-  it lands in the single-shot continuation and fires once. Combined with the
-  reverted Track B E2 `cap_owning_ok` extension (carrier ADT +
-  `owning_byvalue_aggregate` -> bare alias for the borrow-only read), this makes
-  an owning-aggregate captured borrow-only into a handler case CPS-emit,
-  leak-clean, WITHOUT E3. Fixture: `cps-backend-owning-struct-capture-multishot`
-  (a `defstruct` with an `rc` field, captured into a resuming handler case that
-  reads a field; `direct == cps`, leak-clean).
+- **P2 -- crossing into a single-shot continuation. LANDED (unblocks E2).** When
+  the value's auto-drop crosses a control op whose post-op continuation is
+  SINGLE-SHOT, `plan_autodrop` no longer bails -- it routes to the existing
+  drops-at-exit branch (`pl->first_ctrl = n_real`), lowering the drop in place, in
+  the single-shot continuation, where it fires once (exactly how E1's explicit
+  `(rc/drop r)` after a `handle` works). *Soundness gate*: a self-contained
+  `expr_has_unsafe_control` (`src/passes/cps_ir.c`) -- true iff a real item
+  contains an abortive / delimited / multishot / escape op (`shift`/`shift0`/
+  `reset`/`cloneable`/`serial`/`callcc`/`discontinue`/`async`/`await`), recursing
+  into `handle`/`perform`/`resume` bodies, conservative-true on un-modelled nodes.
+  If any crossed item is unsafe, fall back (P3 / E3).
 
-  *Soundness gate*: emit in place only when every control op the value crosses on
-  the way to the drop is single-shot. An abortive `shift` or a resumable
-  multi-shot crossing keeps falling back (P3). Reuse / factor the
-  `owning_dropped_before_control` logic (`src/compiler/emit_cps_ir.c`) so the same
-  single-shot judgement gates both the explicit-drop path and this lowered
-  auto-drop.
+  Combined with the re-landed Track B E2 `cap_owning_ok` extension (carrier ADT +
+  `owning_byvalue_aggregate`) and `expr_is_pure_borrow_of` recognizing a
+  NON-owning field read `(.f o)` as a pure borrow, this makes an owning-aggregate
+  captured borrow-only into a handler case CPS-emit, leak-clean, WITHOUT E3.
+  Fixtures: `cps-backend-owning-struct-capture-multishot` (a `defstruct` with an
+  `rc` field, captured into a case that RUNS TWICE via a two-perform `g`, reads
+  `.tag`; output 18, leak-clean) and `cps-backend-owning-autodrop-crossing-singleshot`
+  (bare rc + struct used after a handle, auto-dropped in the post-handle
+  continuation; output 110). Boundaries verified: a consuming aggregate case, an
+  owning-field read `(.r o)`, and an abortive-shift crossing all still fall back.
+  Full suite 2168 passed, 0 failed.
 
 - **P3 -- crossing into an abortive / multi-shot continuation.** Rides E3's
   DK-teardown (fire the drop once per continuation lifetime, and on abortive
