@@ -240,7 +240,10 @@ so every existing signature is unaffected.
   needs *effect* resume -- a `CONT_EFFECT` flavor / Form-rewrite / runtime bridge
   / runtime-polymorphic dispatch). Details + the four bridge options in the design
   doc. Also landed earlier: a tailored `TUR-E0016` message (fixture
-  `errors/shift-crossfn-resume`).
+  `errors/shift-crossfn-resume`). **The auto-desugar is scoped as its own story:**
+  [cps-backend-n6-crossfn-resume-desugar-plan.md](cps-backend-n6-crossfn-resume-desugar-plan.md)
+  (slices: `CONT_EFFECT` flavor -> `__Shift` synthesis + `shift`->`perform` ->
+  gated `reset`->handle-wrapping pass -> end-to-end fixture).
 
   **Item (d) -- retire the redundant spellings -- PARTIALLY LANDED.** `k-shift` /
   `k-reset` (the interim canonical names this plan introduced) are **removed**:
