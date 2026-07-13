@@ -1,11 +1,18 @@
 ---
 title: CPS backend -- owning values captured into a continuation env (the env-capture story; O3)
 category: Planning
-status: E1 landed (Option A, borrow-style rc capture into a multi-shot handler case); E2-E4 open -- gives O3 from the owning-pointers follow-ups a real home
+status: ARCHIVED -- E1 landed (Option A, borrow-style rc capture into a multi-shot handler case). Superseded by docs/upcoming/cps-backend-multishot-continuations-owning-capture-plan.md, which carries E2-E4 forward (Track B) and adds Track A (multi-suspension continuations).
 description: The N6 CT-IR backend lifts a continuation body into a leaked, shallow-copied env struct. `cap_ty_ok` cuts any owning capture (rc/carrier-ADT/owning-aggregate) to the whole-function fallback, admitting one only for a provably single-shot continuation (`g_cap_single_shot`), where the body's drop runs at most once. This plan is the "env-capture story" that O3 in cps-backend-owning-pointers-followups-plan.md keeps forward-referencing: make the CT-IR backend clone/incref an owning capture on continuation clone and decref it on drop, so a multi-shot continuation that captures an owning value CPS-emits correctly instead of falling back. Until this lands the cut is sound (fallback handles it), so this is missed coverage, not a correctness gap.
 ---
 
 # CPS backend -- owning values captured into a continuation env (O3)
+
+> **ARCHIVED / SUPERSEDED.** E1 landed (see the E1 section below). The
+> remaining E2-E4 work and the newly-scoped multi-suspension-continuation
+> feature now live in
+> [cps-backend-multishot-continuations-owning-capture-plan.md](../upcoming/cps-backend-multishot-continuations-owning-capture-plan.md)
+> (Track B = E2-E4; Track A = multi-suspension continuations). This document is
+> kept for the verified mechanism write-up and the E1 landing record.
 
 ## Why this document exists
 

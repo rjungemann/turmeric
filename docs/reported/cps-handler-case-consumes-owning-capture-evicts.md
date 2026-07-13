@@ -2,7 +2,8 @@
 
 **Severity:** low (missed coverage, not a correctness gap -- the fallback is
 sound). Surfaced while landing E1 of
-[cps-backend-env-capture-owning-values-plan.md](../upcoming/cps-backend-env-capture-owning-values-plan.md).
+[cps-backend-multishot-continuations-owning-capture-plan.md](../upcoming/cps-backend-multishot-continuations-owning-capture-plan.md)
+(Track B / E3, which owns the resolution).
 
 ## Summary
 
