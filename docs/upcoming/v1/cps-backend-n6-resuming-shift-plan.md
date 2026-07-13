@@ -211,11 +211,17 @@ so every existing signature is unaffected.
   in a callee, `handle` + `(k 5)` in a caller, `direct == turi == 1050`; fixture
   `handler-cont-kv-sugar`). No `CONT_EFFECT` type flavor was needed -- the
   `is_continuation` flag is the hook and `resume` already accepts a continuation
-  *value*. What remains is a whole-program transform that wraps every `reset` in a
-  `__Shift` handler (so a callee's `(perform __Shift)` is caught) *only when the
-  program uses cross-function resume*, keeping the common case byte-for-byte
-  unchanged (see the design doc). Also landed earlier: a tailored `TUR-E0016`
-  message (fixture `errors/shift-crossfn-resume`).
+  *value*. Attempting the reset-wrapping transform next surfaced a further
+  prerequisite (design doc, blocker 3): the `__Shift` effect must carry the
+  receiver as a **callable fn payload**, but effect payloads do not preserve
+  callable fn types today -- a fn-typed handler param reads as a 0-arity,
+  uncallable fn (`(recv k)` -> `TUR-E0002`; `reinterpret` does not recover it).
+  So cross-function resume is a **multi-prerequisite** change: (1) make effect
+  payloads carry callable fn values, (2) the reset -> `__Shift`-handler
+  whole-program transform, (3) the receiver resume-mechanism -- OR the alternative
+  DK-subk architecture (a DK-flavored `cont` + interp support). Not a single
+  transform. Also landed earlier: a tailored `TUR-E0016` message (fixture
+  `errors/shift-crossfn-resume`).
 
   **Item (d) -- retire the redundant spellings -- PARTIALLY LANDED.** `k-shift` /
   `k-reset` (the interim canonical names this plan introduced) are **removed**:

@@ -97,19 +97,56 @@ reset-alias experiment showed are fragile). The safe way to introduce it is a
 **whole-program pass** that wraps resets in the `__Shift` handler *only when the
 program contains a cross-function resuming shift* -- so the common case (no such
 shift) is byte-for-byte unchanged. A same-elaboration global flag will not do
-(a reset can be elaborated before the callee's shift sets it); it needs a post-
-elaboration transform, plus synthesis of the `__Shift` effect (carrying an
-fn-value payload -- confirm effects can carry fn payloads) and the perform/handle
-nodes.
+(a reset can be elaborated before the callee's shift sets it); it needs a
+post-elaboration transform.
+
+## Blocker 3 -- effects cannot carry a callable fn payload -- open
+
+Attempting the reset-wrapping transform surfaced a prerequisite the effect
+desugar *depends on but does not have*: the `__Shift` effect must carry the
+receiver as an **fn-value payload**, and the handler must apply it (`(recv k)`).
+Effects cannot do this today. Probed directly (not via the desugar):
+
+```turmeric
+(defeffect ShiftE [recv : (fn [int] int)] : int)          ; fn-typed payload
+(defn producer [] : int
+  (+ 100 (perform (ShiftE (fn [k : int] : int (resume k 5))))))
+(defn run [] : int
+  (handle (producer) (ShiftE [recv] k) (recv k)))          ; apply the payload
+```
+
+```
+error [TUR-E0002]: function 'recv' returns ?, which is not callable
+  -- did you mean to pass all 0 argument(s)?
+```
+
+The handler param `recv` is bound from `eff->constructor->param_full_types[j]`,
+but a fn-typed effect payload loses its arity/param types across the effect
+constructor -- `recv` reads as a 0-arity fn, so `(recv k)` is uncallable. An
+`unsafe (reinterpret recv (fn [int] int))` does not recover it either (still
+"type int, not callable"). So **effect payloads do not preserve callable fn
+types**, and the `__Shift` desugar is blocked here before the reset-wrapping
+even runs.
+
+The receiver's own resume mechanism is a second latent issue: `(fn [k : cont]
+(k v))` bakes in *cloneable* resume at definition time, which is wrong for a
+handler (dynamic) continuation; the desugar would need the receiver to resume via
+the effect continuation. Blocker 1 fixed `(k v)` on `is_continuation` bindings,
+but a receiver's own `k` param is an ordinary param, not `is_continuation`.
 
 ## Status
 
-- **Foundation landed:** unified resume surface (`(k v)` on handler
-  continuations) -- fixture `handler-cont-kv-sugar`.
-- **Remaining (its own focused change):** the reset -> `__Shift`-handler
-  whole-program transform + `shift` -> `perform` desugar for the cross-function
-  resuming case. This is the deep first-class-continuations work; it is gated
-  only by the reset-wrapping transform now, not the resume mismatch.
+- **Foundation landed (blocker 1 resolved):** unified resume surface -- `(k v)`
+  on handler continuations (`handler-cont-kv-sugar`).
+- **Blocked (blocker 3, newly found):** the `__Shift`-effect desugar cannot be
+  built until effects can carry a *callable* fn payload -- itself a distinct
+  compiler change to the effect-constructor param typing. Plus blocker 2 (the
+  reset-wrapping whole-program transform) and the receiver-resume-mechanism issue.
+  Cross-function resume is therefore a multi-prerequisite change, not a single
+  transform; the two viable architectures are (a) this effect desugar once fn
+  payloads are callable, or (b) DK-subk threading in the CT-IR backend with a
+  DK-flavored continuation (avoids the fn payload, but needs interp support and a
+  dynamic-resume `cont` flavor).
 - Until then the tailored `TUR-E0016` message steers users to a lexical reset or
-  to effects (fixture `errors/shift-crossfn-resume`), which already give
-  cross-function resumable continuations -- now with `(k v)` sugar.
+  to hand-written effects (fixture `errors/shift-crossfn-resume`), which already
+  give cross-function resumable continuations -- now with `(k v)` sugar.
