@@ -405,6 +405,17 @@ run_happy() {
         return
     fi
 
+    # turi-session-types-plan (Slice B): interpreter-only fixtures whose peer
+    # runs as a `tur --interpret` async fiber over the cooperative session
+    # runtime.  They are owned by tests/run-turi.sh; the compiled suite skips
+    # them (a cooperative async fiber cannot rendezvous on the compiled pthread
+    # session channel).  Distinct from requires.interp, which routes through the
+    # compiling `tur run` path, not `--interpret`.
+    if [ -f "$dir/requires.interp-only" ]; then
+        write_result "PASS" "$name" "(interp-only-skipped)" ""
+        return
+    fi
+
     # T19: Read per-fixture timeout (default: 10 seconds; 0 = unlimited).
     local fixture_timeout=10
     if [ -f "$dir/expected.timeout" ]; then

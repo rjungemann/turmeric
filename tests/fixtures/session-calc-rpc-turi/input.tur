@@ -1,0 +1,29 @@
+;; Interpreter variant of session-calc-rpc (turi-session-types-plan, Slice B).
+;;
+;; Calculator RPC: the client sends 21, the double-server replies 42.  The
+;; server peer runs as an async fiber, so the multi-step Send/Recv rendezvous
+;; (the channel flips sender/receiver roles between steps) runs cooperatively
+;; under `tur --interpret`.
+;;
+;; Expected output: 42
+
+;; double-server: receive an int, send back its double, close.
+(defn double-server [^linear ch :(Session (Recv int (Send int Close)))] : nil
+  (let [[n ch] (recv ch)]
+    (let [ch (send ch (* n 2))]
+      (close ch))))
+
+;; rpc-call: send req, recv response, close channel, return response.
+(defn rpc-call [^linear ch :(Session (Send int (Recv int Close))) req : int] : int
+  (let [ch (send ch req)]
+    (let [[resp ch] (recv ch)]
+      (close ch)
+      resp)))
+
+(defn main [] : int
+  (let [[s r] (make-session (Send int (Recv int Close)))]
+    (let [t (async (fn [] (double-server r)))]
+      (let [result (rpc-call s 21)]
+        (println result)
+        (await t))))
+  0)

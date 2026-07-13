@@ -1,7 +1,16 @@
 # Session-typed channels under the interpreter (`tur --interpret`) -- Plan
 
-> **Status:** Not started.
-> **Last Updated:** 2026-07-12
+> **Status:** Slices A + A.5 + B landed (the recommended v1 stopping point).
+> `make-session` / `send` / `recv` / `close` now run under `tur --interpret`
+> via a cooperative fiber rendezvous (`src/turi/eval.c`, cooperative session
+> runtime; `turi_sched_step` in `src/turi/fiber.c`).  The carved
+> `session-close/requires.tur-only` marker is deleted, and interpreter test
+> variants (`session-send-turi`, `session-recv-turi`, `session-calc-rpc-turi`,
+> marked `requires.interp-only`) exercise real send/recv rendezvous under
+> `tests/run-turi.sh`.  Slices C (offer/choose + recv-timeout) and D
+> (multi-party roles) remain open follow-ups; the session inline-C for those
+> ops still falls through to the clean inline-C carve under `--interpret`.
+> **Last Updated:** 2026-07-13
 > **Type:** Interpreter / runtime
 > **Scope:** Give the tree-walking interpreter a cooperative-fiber session-channel
 > runtime so `make-session` / `close` / `send` / `recv` / `offer` / `choose` /
@@ -163,7 +172,7 @@ need an interpreter-friendly `spawn` or test variants.
 
 ## Phases
 
-### Slice A -- make-session Close + close (unblocks the carved fixture)
+### Slice A -- make-session Close + close (unblocks the carved fixture) -- DONE
 
 Intercept `tur_session_new(` (produce a `TuriChan`, refcount 2, both endpoints
 alias) and `tur_session_close(` / `tur_role_close(` (refcount--, free at 0). No
@@ -172,16 +181,33 @@ Smallest step; note it still requires the heap channel object and interception o
 the `elab_forms.c`-synthesized `tur_session_new(TUR_DBGPROTO(...))`, not a bare
 one-liner -- so it is meaningfully more than the GC special-case, but self-contained.
 
-### Slice A.5 -- interpreter `spawn` (peer as a fiber)
+### Slice A.5 -- interpreter `spawn` (peer as a fiber) -- DONE (via `async`/`await`)
 
-Add an interpreter-native `spawn` that takes a `TURI_CLOSURE` and creates a
-`TuriFiber` (reuse `EX_ASYNC`, `eval.c:7542`), returning a joinable handle;
-`join` awaits it. This replaces the fixtures' `pthread_create` inline-C, which
-cannot run under the interpreter (it dereferences the compiled fat-closure ABI).
-Provide it under the names the fixtures use, or ship interpreter test variants.
-This is the prerequisite for any send/recv fixture.
+The interpreter already has a closure-to-fiber spawn: `(async (fn [] ...))`
+builds a `TuriFiber` (the `EX_ASYNC` path) and `(await t)` joins it. Rather than
+introduce a second `spawn`/`join` surface, the shipped interpreter test variants
+drive the peer with `async`/`await` -- the "ship interpreter test variants"
+option. The compiled fixtures' `pthread_create` inline-C (which dereferences the
+compiled fat-closure ABI) still cannot run under `--interpret`, so those keep
+running compiled under `tests/run.sh`; the `-turi` variants own the interpreter
+path. A dedicated interpreter-native `spawn`/`join` under the fixtures' own names
+remains possible future work but was not needed to un-carve Slice B.
 
-### Slice B -- cooperative send/recv
+### Slice B -- cooperative send/recv -- DONE
+
+Implemented as `TuriChan` (a heap struct smuggled through a `TURI_INT` pointer,
+bump-allocated from the env value pool so it is leak-clean at teardown) plus the
+`session_send` / `session_recv` / `session_close` park/wake protocol in
+`src/turi/eval.c`, dispatched by `eval_session_intercept` from the `EX_INLINE_C`
+case. Blocking uses `session_park_or_spin`: a fiber suspends via `swapcontext`
+(recorded as the channel's `send_waiter`/`recv_waiter` so its counterpart can
+`turi_sched_enqueue` it); the main context pumps `turi_sched_step`. The compiled
+`state 0/1/2` handshake is preserved verbatim -- send returns only after the
+receiver acks (state 2), and the slot's return-to-idle (state 0) wakes a peer
+parked in the next step's send, so recurring RPC channels that flip
+sender/receiver roles across steps rendezvous correctly.
+
+Original Slice B design note follows:
 
 Implement the `TuriChan` park/wake mailbox and intercept
 `tur_session_send(` / `tur_session_recv(` (and the endpoint-alias

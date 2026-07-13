@@ -215,6 +215,15 @@ void turi_fiber_reclaim_if_done(TuriEnv *env, TuriFiber *fiber);
 /* Run the event loop until all fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
 
+/* Run a SINGLE scheduler iteration: fire due timers, then run one ready fiber
+ * (or poll I/O once).  Returns true if there was something to do (progress was
+ * possible), false when the ready queue is empty and no timers/I/O remain --
+ * i.e. the caller is blocked with no way to make progress (deadlock).  Used by
+ * the cooperative session-channel runtime (eval.c) to let the main context
+ * pump the scheduler while blocked on a send/recv rendezvous, mirroring how a
+ * fiber suspends via swapcontext. */
+bool turi_sched_step(TuriEnv *env);
+
 /* Run the event loop until the given future resolves or rejects. */
 TuriValue turi_await_future(TuriEnv *env, TuriFuture *f);
 

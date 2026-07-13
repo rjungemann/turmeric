@@ -376,6 +376,47 @@ TuriValue turi_await_future(TuriEnv *env, TuriFuture *f) {
 }
 
 /* -------------------------------------------------------------------------
+ * Single scheduler step (cooperative session runtime, eval.c)
+ * ---------------------------------------------------------------------- */
+
+bool turi_sched_step(TuriEnv *env) {
+    fire_timers(env);
+
+    TuriFiber *fiber = sched_dequeue(env);
+    if (fiber) {
+        env->current_fiber = fiber;
+        fiber->state = TURI_FIBER_RUNNING;
+        g_pending_async_fiber = fiber;
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        swapcontext(&env->sched_ctx, &fiber->ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+        turi_fiber_reclaim_if_done(env, fiber);
+        env->current_fiber = NULL;
+        return true;
+    }
+
+    bool has_timers = (env->timers_head != NULL);
+    bool has_io     = (env->io_pending_count > 0);
+    if (!has_timers && !has_io) return false;
+
+    uint64_t now  = turi_now_ms();
+    uint64_t next = next_timer_deadline(env);
+    int wait_ms   = (next == UINT64_MAX) ? 10
+                  : (next <= now)        ? 0
+                  : (int)(next - now);
+    if (wait_ms > 50) wait_ms = 50;
+
+    poll_io(env, wait_ms);
+    fire_timers(env);
+    return true;
+}
+
+/* -------------------------------------------------------------------------
  * Main event loop
  * ---------------------------------------------------------------------- */
 
