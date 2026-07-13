@@ -1064,6 +1064,29 @@ static TuriValue native_vec_free(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_nil();
 }
 
+/* vec-set-o! -- interpreter override for the boxed-aware vec-set! helper.
+ * The compiled body frees the old element box before overwriting when its
+ * `boxed` flag (a[3]) is set; the tree-walker never boxes multi-word elements
+ * (they ride as TuriStruct pointers it owns), so the flag is irrelevant here --
+ * overwrite the slot exactly like native_vec_set.  vec-set! macro-expands to
+ * `(vec-set-o! v i val (tur-vec-elem-wide? v))` on both paths. */
+static TuriValue native_vec_set_o(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    return native_vec_set(env, a, n, ud);
+}
+
+/* vec-drop-last-o! -- interpreter override for vec-drop-last!'s helper.  Shrinks
+ * len; the `boxed` flag (a[1]) is ignored (the interpreter frees no per-element
+ * boxes -- elements ride as TuriStruct pointers freed at teardown).  Mirrors
+ * native_vec_pop minus the returned value. */
+static TuriValue native_vec_drop_last_o(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    if (n < 1) return turi_nil();
+    int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
+    if (!v || v[1] == 0) return turi_nil();
+    v[1]--;
+    return turi_nil();
+}
+
 /* vec-free-o -- interpreter override for the boxed-aware vec-free-o helper.
  * The compiled body frees per-element heap boxes when its `boxed` flag is set,
  * but the tree-walker never boxes multi-word elements (they ride as TuriStruct
@@ -1239,6 +1262,8 @@ void turi_register_collection_natives(TuriEnv *env) {
     turi_env_register_native(env, "vec-push-ptr!", native_vec_push, NULL);
     turi_env_register_native(env, "vec-pop!", native_vec_pop, NULL);
     turi_env_register_native(env, "vec-set!", native_vec_set, NULL);
+    turi_env_register_native(env, "vec-set-o!", native_vec_set_o, NULL);
+    turi_env_register_native(env, "vec-drop-last-o!", native_vec_drop_last_o, NULL);
     turi_env_register_native(env, "vec-free", native_vec_free, NULL);
     turi_env_register_native(env, "vec-free-o", native_vec_free_o, NULL);
     turi_env_register_native(env, "vec-eq?", native_vec_eq, NULL);

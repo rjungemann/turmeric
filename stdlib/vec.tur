@@ -138,6 +138,16 @@
   ```)
 ;;; vec-pop! -- remove and return the last element of a Vec[A].
 ;;;
+;;; Ownership note for MULTI-WORD (> 8 byte by-value struct/ADT) elements: such
+;;; an element rides its data slot as a heap box pointer.  vec-pop! returns that
+;;; box pointer on the carrier and shrinks len, so ownership of the box TRANSFERS
+;;; OUT to the caller -- vec-free will no longer see it.  The usual read pattern
+;;; `(:: (vec-pop! v) T)` deref-copies the box to a value and then drops the box,
+;;; which leaks it (there is no handle left to free).  To REMOVE the last element
+;;; without keeping it, use vec-drop-last! (which frees the box); to look at it,
+;;; vec-get before popping.  Single-word A (int/cstr/float/opaque/:heap ptr) has
+;;; no box, so vec-pop! is leak-free there.
+;;;
 ;;; Parameters:
 ;;;   v -- Vec[A] pointer
 ;;;
@@ -158,7 +168,100 @@
   if (vec->len == 0) return 0;
   return (int64_t)vec->data[--vec->len];
   ```)
-;;; vec-set! -- overwrite the element at index i.
+;;; vec-drop-last-o! -- remove the last element and (when `boxed`) free its box.
+;;;
+;;; The removal twin of vec-pop! that keeps NOTHING: it shrinks len and, when
+;;; `boxed` is 1 (a wide by-value element whose slot is an owned heap box),
+;;; frees that box so it does not leak.  Unlike vec-pop! it returns no value, so
+;;; there is no ownership-transfer hazard.  Internal helper for the vec-drop-last!
+;;; macro; not called directly.
+;;;
+;;; Parameters:
+;;;   v     -- Vec[A] pointer
+;;;   boxed -- 1 if the last slot is an owned element box, else 0
+;;;
+;;; Since: multiword-element-box-lifecycle
+
+(defn vec-drop-last-o! [A]
+  [v : (Vec A) boxed : int]
+  #fx{}
+  :void
+  ```c
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  if (vec->len == 0) return;
+  vec->len--;
+  if (boxed) {
+    void *box = (void*)(intptr_t)vec->data[vec->len];
+    if (box) free(box);
+  }
+  ```)
+;;; vec-drop-last! -- remove the last element of a Vec[A], freeing its box.
+;;;
+;;; A macro so the multi-word-element decision folds at emit time: it binds v
+;;; once and forwards it to vec-drop-last-o! along with `(tur-vec-elem-wide? v)`.
+;;; For a wide by-value element the removed slot's heap box is freed; for a
+;;; single-word element only len shrinks.  Use this instead of a discarded
+;;; `(vec-pop! v)` when you want to drop the last element without keeping it --
+;;; vec-pop! would transfer the box out and leak it (see vec-pop!).
+;;;
+;;; Parameters:
+;;;   v -- Vec[A] pointer
+;;;
+;;; Example:
+;;;   (vec-drop-last! my-vec)
+;;;
+;;; Since: multiword-element-box-lifecycle
+
+(defmacro vec-drop-last! [v]
+  `(let [__tur_dl__ ~v]
+     (vec-drop-last-o! __tur_dl__ (tur-vec-elem-wide? __tur_dl__))))
+;;; vec-set-o! -- overwrite the element at index i, freeing the old box when
+;;; `boxed`.
+;;;
+;;; Internal helper for the vec-set! macro.  A multi-word by-value element rides
+;;; its data slot as an owned heap box; overwriting the slot orphans the old box,
+;;; so when `boxed` is 1 the old `data[i]` box is freed before the new value is
+;;; stored.  When `boxed` is 0 (single-word A) the slot is an inline value /
+;;; shared pointer the Vec does not own, so it is overwritten directly.
+;;;
+;;; Aliasing caveat: freeing the old box invalidates any raw carrier a caller
+;;; captured from an earlier `(vec-get v i)`.  The normal read pattern
+;;; `(:: (vec-get v i) T)` deref-copies immediately, so no live alias survives
+;;; the overwrite -- this holds under the collection's value-semantics ownership
+;;; model (the Vec owns its element boxes).
+;;;
+;;; Parameters:
+;;;   v     -- Vec[A] pointer
+;;;   i     -- zero-based index
+;;;   val   -- new element value of type A
+;;;   boxed -- 1 if the slot is an owned element box, else 0
+;;;
+;;; Since: multiword-element-box-lifecycle
+
+(defn vec-set-o! [A]
+  [v : (Vec A) i :int val :A boxed :int]
+  #fx{}
+  :void
+  ```c
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  if (i >= 0 && (size_t)i < (size_t)vec->len) {
+    if (boxed) {
+      void *old = (void*)(intptr_t)vec->data[i];
+      if (old) free(old);
+    }
+    vec->data[i] = (int64_t)val;
+    return;
+  }
+  fprintf(stderr, "vec-set! index out of bounds\n");
+  exit(1);
+  ```)
+;;; vec-set! -- overwrite the element at index i (freeing any old element box).
+;;;
+;;; A macro so the multi-word-element decision folds at emit time: it binds v/i/
+;;; val once (preserving left-to-right evaluation) and forwards them to
+;;; vec-set-o! along with `(tur-vec-elem-wide? v)`.  For a wide by-value element
+;;; the overwritten slot's old heap box is freed; for a single-word element the
+;;; slot is overwritten directly.  See vec-set-o! for the aliasing caveat.
 ;;;
 ;;; Parameters:
 ;;;   v   -- Vec[A] pointer
@@ -170,16 +273,11 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-set! [A]
-  [v : (Vec A) i :int val :A]
-  #fx{}
-  :void
-  ```c
-  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
-  if (i >= 0 && (size_t)i < (size_t)vec->len) { vec->data[i] = (int64_t)val; return; }
-  fprintf(stderr, "vec-set! index out of bounds\n");
-  exit(1);
-  ```)
+(defmacro vec-set! [v i val]
+  `(let [__tur_sv__ ~v
+         __tur_si__ ~i
+         __tur_sx__ ~val]
+     (vec-set-o! __tur_sv__ __tur_si__ __tur_sx__ (tur-vec-elem-wide? __tur_sv__))))
 ;;; tur-vec-elem-wide? -- 1 if the Vec's element type A is a multi-word (> 8
 ;;; byte) by-value struct/ADT that rides its data slot as an int64 heap-box
 ;;; pointer, else 0.  Compiler-intercepted (src/compiler/emit_expr.c) as an

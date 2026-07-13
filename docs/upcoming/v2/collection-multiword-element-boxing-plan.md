@@ -2,7 +2,7 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); key + Map-value + Vec-element box lifecycle all done (LSan-clean on free); only minor vec-set!/vec-pop! overwrite residuals remain
+status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); full box lifecycle done (keys, Map values, Vec elements on free, vec-set! overwrite, vec-drop-last!) -- LSan-clean; only the inherent consume-and-drop vec-pop! carrier-ABI limitation remains (documented)
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
@@ -31,9 +31,15 @@ emit-time query (twin of `tur-wide-byval?`) that folds to 1 for a wide by-value
 element; `vec-free-o` then `free`s each owned `data[i]` box before the buffer (a
 Vec is unshared, so it owns its element boxes outright).  Verified LSan-clean; the
 interpreter's `native_vec_free_o` frees the buffer + header (elements ride as
-TuriStruct pointers it owns separately).  The remaining follow-ups are minor: an
-in-place `vec-set!` overwrite and a dropped `vec-pop!` result orphan their old
-box (`docs/reported/vec-set-pop-element-box-leak.md`).
+TuriStruct pointers it owns separately).  The mutation paths that orphaned a box
+are handled too: `vec-set!` (macro -> `vec-set-o!`) frees the overwritten slot's
+old box, and a new `vec-drop-last!` (macro -> `vec-drop-last-o!`) removes+frees
+the last box for the discard case.  The one residual is inherent, not a
+collection leak: a consume-and-drop `(:: (vec-pop! v) T)` on a wide element leaks
+that box, because reading a > 8 byte value out of the carrier needs a live box
+the ascription derefs and nothing owns it afterward -- callers remove-and-inspect
+via `vec-get` + `vec-drop-last!` instead (documented in the archived report
+`docs/archive/vec-set-pop-element-box-leak.md`).
 
 **Done -- Vec multi-word elements (compiled + interpreter).**
 `(vec-of (Point 1 2) (Point 3 4))` for `(defstruct Point :copy [x : int y : int])`
@@ -159,9 +165,11 @@ mutable and NOT structurally shared it owns its element boxes outright, so
 `vec-free-o` `free`s each `data[i]` box before the buffer (verified LSan-clean;
 the only residual on the repro is the unrelated process-lifetime `show` string
 allocs).  The interpreter's `native_vec_free_o` ignores the flag (elements ride
-as TuriStruct pointers it owns separately).  The remaining minor residuals are an
-in-place `vec-set!` overwrite and a dropped `vec-pop!` result orphaning their old
-box (see `docs/reported/vec-set-pop-element-box-leak.md`), plus the intermediate
+as TuriStruct pointers it owns separately).  `vec-set!` (macro -> `vec-set-o!`)
+frees the overwritten slot's old box, and `vec-drop-last!` (macro ->
+`vec-drop-last-o!`) removes+frees the last box for the discard case; the only
+residual is the inherent consume-and-drop `(:: (vec-pop! v) T)` carrier-ABI leak
+(see `docs/archive/vec-set-pop-element-box-leak.md`), plus the intermediate
 persistent-map versions every `map-assoc` mints -- all process-lifetime.  The
 compiled fixtures run under the default leak-detection-off program policy.
 
@@ -233,10 +241,11 @@ plan extends the same refcount-box discipline to:
    the actual boxes are a **plain `malloc` owned pointer**, not the refcount box
    -- because a Vec is mutable and not structurally shared, it owns its element
    boxes outright, so `vec-free` frees them directly (no retain/release).  The
-   remaining element-removal cases (in-place `vec-set!` overwrite, dropped
-   `vec-pop!` result) still orphan their old box -- minor process-lifetime
-   residuals (`docs/reported/vec-set-pop-element-box-leak.md`).  A deep
-   `vec-clone` would need to copy each box.
+   element-removal cases are handled too: `vec-set!` frees the overwritten box
+   and `vec-drop-last!` frees the removed box (both landed); only the inherent
+   consume-and-drop `(:: (vec-pop! v) T)` carrier-ABI leak remains, documented in
+   `docs/archive/vec-set-pop-element-box-leak.md`.  A deep `vec-clone` (not yet
+   present) would need to copy each box.
 2. **Map values.** Today a `:V` value rides the int64 carrier (single word). A
    multi-word by-value struct value boxes exactly like a key does, via a
    value-side `owned` flag threaded into the entry (the HAMT entry's `val` is a
@@ -298,8 +307,10 @@ plan extends the same refcount-box discipline to:
   key box exactly once on `map-free`/`set-free` (LSan-clean, refcount-safe under
   sharing).  Boxed multi-word VALUES are released too (symmetric HAMT value-box
   refcount), and Vec element boxes are released on `vec-free` (plain owned
-  pointer, unshared).  The only residuals are in-place `vec-set!` overwrite and
-  a dropped `vec-pop!` result (`docs/reported/vec-set-pop-element-box-leak.md`).
+  pointer, unshared); `vec-set!` frees the overwritten box and `vec-drop-last!`
+  the removed box.  The only residual is the inherent consume-and-drop
+  `(:: (vec-pop! v) T)` carrier-ABI leak
+  (`docs/archive/vec-set-pop-element-box-leak.md`).
   NB: the compiled test harness does not run programs under LSan, so this is
   verified by hand (emit-c + `-fsanitize=address` + `libturi.a`), not by a
   fixture.
