@@ -165,11 +165,19 @@ non-recursive ADTs (see the by-value-HKT monomorphization notes in
 lowering. Same class of issue bites a poly `:fn` result (a boxed `int`) fed into
 a by-value struct slot: `(:: (f s) :SomeByValueAdt)` also fails.
 
-**Fix directions.** Either (a) reject `::` between a by-value aggregate and
-`:int` with a real Turmeric diagnostic (never leak a `cc` error), and/or (b)
-support an explicit boxing cast (heap-box the aggregate, hand back the handle)
-so erased-carrier plumbing can round-trip a by-value value without needing a
-sham recursive arm.
+Note both directions are unsound *and* the two harnesses disagree: `(:: v :int)`
+is a `cc` error compiled but prints a garbage handle under `--interpret`, and the
+reverse `(:: h :V)` segfaults compiled but throws "match: no arm matched" under
+`--interpret`. Since the elaborator is shared, diagnosing it there fixes both at
+once.
+
+**Fix directions.** Planned in
+[`docs/upcoming/byvalue-adt-int-cast-plan.md`](../upcoming/byvalue-adt-int-cast-plan.md):
+(a) reject the direct `::` between a by-value aggregate and a one-word carrier
+with a real Turmeric diagnostic (never leak a `cc` error / silent segfault), then
+(b) add an explicit `box`/`unbox` bridge reusing the existing
+`emit_agg_box`/`emit_agg_unbox` helpers so erased-carrier plumbing can round-trip
+a by-value value without a sham recursive arm.
 
 **Workaround in the tree.** `stdlib/logic.tur`: the fresh-var counter is folded
 into the recursive `Subst` base node (`(SNil next)`) instead of a natural
