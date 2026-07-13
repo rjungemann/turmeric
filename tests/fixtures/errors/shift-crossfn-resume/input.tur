@@ -1,11 +1,12 @@
-;; Cross-function RESUME auto-desugars onto the __Shift effect, but ONLY when the
-;; receiver is written inline as a lambda `(fn [k : cont] ...)` (its `cont` param
-;; is reflavored to `effect-cont` before elaboration).  A NAMED-function receiver
-;; (`ck` here) cannot be reflavored from the shift call site -- it would need a
-;; specialized copy the compiler cannot synthesize there -- so it still raises
-;; TUR-E0016.  (Inlining `ck` as `(shift (fn [k : cont] ...) 0)` would compile and
-;; run cross-function; see fixture shift-crossfn-resume-works.)
-(defn ck [k : cont] : int (+ (k 1) (k 2)))
-(defn inner [] : int (shift ck 0))
-(defn outer [] : int (reset (+ 10 (inner))))
-(defn main [] : int (println (outer)) 0)
+;; A resuming shift with NO reset anywhere in the program is a compile error
+;; (cps-backend-n6).  Cross-function RESUME works when a reset delimits the shift
+;; from a caller -- the shift desugars to (perform (__Shift RECV)) and the gated
+;; whole-program pass wraps each reset in a catching handler.  But if there is no
+;; reset at all, the performed __Shift can never be handled, so it is rejected up
+;; front (TUR-E0016) rather than aborting at runtime with "Unhandled effect".
+;;
+;; (A named `ck` receiver delimited by a reset in a caller now compiles and runs
+;; cross-function via a multishot-effect-cont specialization -- see fixture
+;; shift-crossfn-resume-named-fn.  The error here is the missing delimiter.)
+(defn inner [] : int (shift (fn [k : cont] : int (+ (k 1) (k 2))) 0))
+(defn main [] : int (println (inner)) 0)   ; no reset anywhere

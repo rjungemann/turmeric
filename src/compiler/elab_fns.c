@@ -3377,6 +3377,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* bare-fat-result-monomorphization: hand the freshly-built clone binding
      * back to elab_specialize_bare_fat, which redirects the call site to it. */
     if (e->bare_fat_spec_active) e->bare_fat_spec_result = b;
+    /* cps-backend-n6 cross-function resume: retain the source form of a fn with a
+     * continuation parameter, so a named-fn resuming receiver used cross-function
+     * (the reset is in a caller) can be re-elaborated into a
+     * `multishot-effect-cont` specialization (elab_specialize_cont_receiver).
+     * Cheap (one pointer) and scoped to cont-param fns; nothing else reads it. */
+    if (!b->defn_form) {
+        for (uint32_t _pi = 0; _pi < n_params; _pi++) {
+            if (params[_pi] && params[_pi]->type.kind == TY_CONT) {
+                b->defn_form = call;
+                break;
+            }
+        }
+    }
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
     /* #[used]: retain with external C linkage under separate compilation */

@@ -85,6 +85,27 @@ static bool shift_fn_domain_codomain(const Expr *k, Type *domain, Type *codomain
     return true;
 }
 
+/* cps-backend-n6 cross-function resume: the Type of a shift receiver's
+ * continuation parameter, read from the receiver's own param binding (which
+ * preserves the cont flavor and copy_kind that `shift_fn_domain_codomain`'s
+ * domain fallback loses).  Works for an inline lambda (EX_FN), a capturing
+ * closure (EX_CLOSURE, env at param 0), and a named-fn reference (EX_VAR ->
+ * source_fn_def).  Returns NULL if the receiver's continuation param is not
+ * reachable (e.g. a forward-referenced named fn not yet elaborated). */
+static const Type *receiver_cont_param_type(const Expr *k_expr) {
+    const FnDef *fn = NULL;
+    uint8_t idx = 0;
+    if (k_expr->kind == EX_FN) {
+        fn = k_expr->as.fn_.fn; idx = 0;
+    } else if (k_expr->kind == EX_CLOSURE && k_expr->as.closure_.closure) {
+        fn = k_expr->as.closure_.closure->fn; idx = 1;  /* env occupies param 0 */
+    } else if (k_expr->kind == EX_VAR && k_expr->as.var.binding) {
+        fn = k_expr->as.var.binding->source_fn_def; idx = 0;
+    }
+    if (!fn || fn->n_params <= idx || !fn->params || !fn->params[idx]) return NULL;
+    return &fn->params[idx]->type;
+}
+
 /* CF2: shared shift/shift0 result-typing.  Verifies the body matches the
  * receiver's domain (rejecting a mistyped shift) and returns the receiver's
  * codomain as the expression's type.  Falls back to `body->type` only when the
@@ -116,8 +137,7 @@ static Type shift_result_type(const Expr *k, const Expr *body,
 
 /* (reset body) - Establish a continuation boundary.
  */
-static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
-                                  bool receiver_effect_flavored);  /* fwd */
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr);  /* fwd */
 static Form *reflavor_shift_receiver(Elab *e, Form *recv);                   /* fwd */
 static Effect *elab_get_shift_effect(Elab *e);                               /* fwd */
 
@@ -184,10 +204,9 @@ Expr *elab_shift(Elab *e, const Form *call) {
      * would reference an unlinked cloneable-resume runtime.  Inside a reset (depth
      * > 0) the reified path is used, so the receiver stays cloneable-flavored. */
     Form *recv_to_elab = call->as.list.items[1];
-    bool receiver_reflavored = false;
     if (e->cloneable_reset_depth == 0) {
         Form *reflav = reflavor_shift_receiver(e, recv_to_elab);
-        if (reflav) { recv_to_elab = reflav; receiver_reflavored = true; }
+        if (reflav) recv_to_elab = reflav;
     }
     Expr *k_expr = elab_form(e, recv_to_elab);
     if (!k_expr) return NULL;
@@ -220,7 +239,7 @@ Expr *elab_shift(Elab *e, const Form *call) {
     {
         Type dom, cod;
         if (shift_fn_domain_codomain(k_expr, &dom, &cod) && dom.kind == TY_CONT)
-            return elab_cont_shift_core(e, call, k_expr, receiver_reflavored);
+            return elab_cont_shift_core(e, call, k_expr);
     }
 
     Expr *body = elab_form(e, call->as.list.items[2]);
@@ -475,6 +494,68 @@ static Effect *elab_get_shift_effect(Elab *e) {
     return eff;
 }
 
+/* cps-backend-n6 cross-function resume: specialize a named-fn receiver whose
+ * continuation parameter is a plain `cont` (CONT_CLONEABLE) into a renamed copy
+ * whose param is `multishot-effect-cont`, so it can drive a cross-function resume
+ * exactly like an inline-lambda receiver.  Reuses the retained `defn_form` +
+ * file-scope re-elaboration path (like bare-fat monomorphization): clone the
+ * defn form, rename it (`NAME$xfn`), reflavor its param vector, elaborate at file
+ * scope, and register the clone for emission.  Deduped by name -- a second shift
+ * on the same receiver finds the already-built clone in global scope.  Returns
+ * the clone binding, or NULL when it cannot be built (no retained form, no `cont`
+ * param to reflavor, elaboration failed). */
+static Binding *elab_specialize_cont_receiver(Elab *e, Binding *callee) {
+    if (!callee || !callee->defn_form || !callee->name) return NULL;
+    const Form *df = callee->defn_form;
+    if (df->tag != F_LIST || df->as.list.len < 3) return NULL;
+
+    /* Fresh name; dedup by looking it up first (so we neither re-elaborate nor
+     * double-register on a second cross-function shift of the same receiver). */
+    char nbuf[300];
+    int wn = snprintf(nbuf, sizeof(nbuf), "%s$xfn", callee->name->name);
+    if (wn <= 0 || wn >= (int)sizeof(nbuf)) return NULL;
+    const Symbol *mname = symtab_intern(e->st, strslice(nbuf, (uint32_t)wn));
+    Binding *existing = scope_lookup(&e->global, mname);
+    if (existing) return existing;
+
+    /* Locate the name symbol (first non-caret F_SYM after `defn`) and the
+     * parameter vector (first F_VEC/F_LIST), mirroring elab_defn's own parse. */
+    uint32_t n = df->as.list.len;
+    int name_idx = -1, params_idx = -1;
+    for (uint32_t i = 1; i < n; i++) {
+        const Form *it = df->as.list.items[i];
+        if (name_idx < 0 && it->tag == F_SYM && it->as.sym->name
+            && it->as.sym->name[0] != '^') { name_idx = (int)i; continue; }
+        if (name_idx >= 0 && (it->tag == F_VEC || it->tag == F_LIST)) {
+            params_idx = (int)i; break;
+        }
+    }
+    if (name_idx < 0 || params_idx < 0) return NULL;
+
+    /* Reflavor the param vec cont -> multishot-effect-cont; bail if there is no
+     * `cont` annotation to reflavor (nothing to specialize). */
+    Form *rp = reflavor_cont_sym(e, df->as.list.items[params_idx],
+                                 intern_cstr(e->st, "cont"),
+                                 intern_cstr(e->st, "multishot-effect-cont"));
+    if (rp == df->as.list.items[params_idx]) return NULL;
+
+    Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+    for (uint32_t i = 0; i < n; i++) items[i] = df->as.list.items[i];
+    items[name_idx]   = form_sym(e->arena, df->as.list.items[name_idx]->span, mname);
+    items[params_idx] = rp;
+    Form *spec_form = form_list(e->arena, df->span, items, n);
+
+    /* Elaborate the clone at file scope (its params must not capture caller
+     * locals), then register it for file-scope emission. */
+    Scope *saved = e->scope;
+    e->scope = &e->global;
+    Expr *def = elab_defn(e, spec_form);
+    e->scope = saved;
+    if (!def) return NULL;
+    if (def->kind == EX_FN_DEF) elab_register_file_def(e, def);
+    return scope_lookup(&e->global, mname);
+}
+
 /* cps-backend-n6 cross-function resume: wrap a reset body B in a __Shift handler
  *   B  ->  (handle B (__Shift [recv] k) (recv k))
  * so a callee's `(perform (__Shift recv))` is caught here and the receiver is
@@ -574,12 +655,19 @@ void elab_wrap_resets_for_crossfn_resume(Elab *e) {
     for (uint32_t i = 0; i < e->n_pending_reset_nodes; i++) {
         Expr *node = e->pending_reset_nodes[i];
         if (!node) continue;
+        /* Only wrap a PLAIN reset (EX_RESET).  An EX_CLONEABLE_RESET has a lexical
+         * reified (resuming/cloneable) shift bound to it, and reifying that shift
+         * walks the reset body under the narrow build_cloneable grammar -- which a
+         * `(handle ...)` wrapper falls outside of (TUR-E0710).  A cross-function
+         * resuming shift's delimiter is always a plain reset (the shift is not
+         * lexically inside it), so wrapping only EX_RESET catches every
+         * cross-function perform while leaving reified resets intact.  (A single
+         * reset that both reifies a lexical shift AND must catch a cross-function
+         * one is unsupported -- rare, and it would need the reified lowering to
+         * tolerate a handler in its delimited context.) */
         if (node->kind == EX_RESET) {
             node->as.reset_.body = wrap_reset_body_with_shift_handler(
                 e, node->as.reset_.body, node->span);
-        } else if (node->kind == EX_CLONEABLE_RESET) {
-            node->as.cloneable_reset_.body = wrap_reset_body_with_shift_handler(
-                e, node->as.cloneable_reset_.body, node->span);
         }
     }
 }
@@ -590,8 +678,7 @@ void elab_wrap_resets_for_crossfn_resume(Elab *e) {
  * re-elaborating.  Routes an ignore-k receiver to the abortive path, else emits
  * the reified EX_CLONEABLE_SHIFT (and records that a resuming shift bound to the
  * enclosing reset, so a plain `reset` promotes itself to a reified delimiter). */
-static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
-                                  bool receiver_effect_flavored) {
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
     /* Check if k_expr is a function, closure, or a var referencing a function */
     bool is_function = false;
     if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
@@ -642,15 +729,45 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
                         && call->as.list.items[0]->as.sym == e->sym_shift;
         /* cps-backend-n6 cross-function resume: a resuming `shift` with no lexical
          * reset lowers onto the synthetic __Shift effect instead of erroring --
-         * (shift RECV BODY) -> (perform (__Shift RECV)).  RECV is the already-
-         * reflavored receiver (elab_shift retyped its `cont` param to `effect-cont`
-         * before elaboration, so `(k v)` inside it resumes the delimited
-         * continuation the enclosing reset's whole-program-wrapped __Shift handler
-         * carries -- slice C).  BODY is discarded (the receiver drives the
-         * continuation; matching the target encoding).  A named-fn receiver was
-         * never reflavored (its `k` stays CONT_CLONEABLE), so it falls through to
-         * E0016 -- specializing it would need a copy we cannot synthesize here. */
-        if (shift_kw && receiver_effect_flavored) {
+         * (shift RECV BODY) -> (perform (__Shift RECV)).  RECV's continuation param
+         * must be `multishot-effect-cont` (CONT_EFFECT + CK_MULTISHOT) so `(k v)`
+         * inside it resumes -- via the snapshot path -- the delimited continuation
+         * the enclosing reset's whole-program-wrapped `^multishot` __Shift handler
+         * carries (slice C).  BODY is discarded (the receiver drives the
+         * continuation; matching the target encoding).
+         *
+         * The flavor is read from the receiver's own param binding, so BOTH an
+         * inline lambda (elab_shift reflavored its `cont` param before elaboration)
+         * AND a named-fn receiver the user annotated `multishot-effect-cont` are
+         * accepted.  A plain-`cont` named receiver (CONT_CLONEABLE) or a one-shot
+         * `effect-cont` one falls through to a tailored E0016 below. */
+        const Type *kpt = receiver_cont_param_type(k_expr);
+        bool kpt_effect = kpt && kpt->kind == TY_CONT
+                          && (ContFlavor)kpt->as.cont.flavor == CONT_EFFECT;
+        bool kpt_multishot = kpt_effect && kpt->copy_kind == CK_MULTISHOT;
+
+        /* A NAMED receiver written with a plain `cont` param (CONT_CLONEABLE)
+         * cannot be reflavored in place (its body was elaborated against a
+         * cloneable continuation), but its retained source form can be
+         * re-elaborated into a `multishot-effect-cont` specialization.  Redirect
+         * the receiver to that clone, then fall through to the perform below --
+         * this makes a named-fn resuming receiver work cross-function without the
+         * user having to annotate its param. */
+        if (shift_kw && !kpt_multishot && k_expr->kind == EX_VAR
+            && k_expr->as.var.binding && kpt && kpt->kind == TY_CONT
+            && (ContFlavor)kpt->as.cont.flavor == CONT_CLONEABLE) {
+            Binding *spec = elab_specialize_cont_receiver(e, k_expr->as.var.binding);
+            if (spec) {
+                Expr *nv = expr_new(e->arena, EX_VAR, spec->type, call->span);
+                nv->as.var.binding = spec;
+                k_expr = nv;
+                kpt = receiver_cont_param_type(k_expr);
+                kpt_effect = kpt && kpt->kind == TY_CONT
+                             && (ContFlavor)kpt->as.cont.flavor == CONT_EFFECT;
+                kpt_multishot = kpt_effect && kpt->copy_kind == CK_MULTISHOT;
+            }
+        }
+        if (shift_kw && kpt_multishot) {
             Effect *sheff = elab_get_shift_effect(e);
             if (sheff && sheff->constructor) {
                 /* Box the receiver as the one-word {thunk,env} closure the effect
@@ -683,23 +800,40 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
                 return out;
             }
         }
+        if (shift_kw && kpt_effect && !kpt_multishot) {
+            /* The receiver's continuation param is a one-shot `effect-cont`, but the
+             * synthesized __Shift handler is `^multishot` -- the two disciplines
+             * must match (a `^multishot` handler captures a snapshot-capable
+             * cloneable cont; a one-shot `(k v)` would resume it as a fiber). */
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a cross-function resuming shift receiver must use a "
+                "`multishot-effect-cont` continuation, not a one-shot `effect-cont`\n"
+                "  = help: declare the receiver's continuation parameter "
+                "`multishot-effect-cont` (single-resume receivers work through it "
+                "too), or inline the receiver as (fn [k : cont] ...) to have it "
+                "reflavored automatically");
+            return NULL;
+        }
         if (shift_kw) {
-            /* Reached only when the receiver is NOT an inline-lambda `cont`
-             * receiver (it was never reflavored to effect-cont) -- e.g. a named-fn
-             * receiver.  A lambda receiver auto-desugars onto the __Shift effect
-             * above (cross-function RESUME), so the remaining unsupported shape is
-             * a named/non-lambda resuming receiver. */
+            /* Reached for a resuming receiver whose continuation param is NOT
+             * CONT_EFFECT -- e.g. a named-fn receiver with a plain `cont` param,
+             * which cannot be reflavored from the call site.  An inline-lambda
+             * receiver is reflavored automatically (cross-function RESUME above);
+             * a named receiver can opt in by declaring its param
+             * `multishot-effect-cont`. */
             diag_emit_with_code(DIAG_ERROR, call->span,
                 TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
                 "a resuming shift (its receiver invokes the continuation) must sit "
                 "inside a lexically-enclosing reset\n"
-                "  = note: cross-function RESUME (the reset in a caller) is "
-                "supported only when the receiver is written inline as "
-                "(fn [k : cont] ...) -- a named-function receiver cannot be lowered "
-                "onto the cross-function resume path\n"
-                "  = help: inline the receiver as a lambda, move the reset to "
-                "enclose the shift lexically, or use algebraic effects (perform / "
-                "handle / resume) directly");
+                "  = note: cross-function RESUME (the reset in a caller) works when "
+                "the receiver is written inline as (fn [k : cont] ...), or is a "
+                "named function whose continuation parameter is declared "
+                "`multishot-effect-cont`\n"
+                "  = help: inline the receiver as a lambda, declare a named "
+                "receiver's continuation param `multishot-effect-cont`, move the "
+                "reset to enclose the shift lexically, or use algebraic effects "
+                "(perform / handle / resume) directly");
             return NULL;
         }
         diag_emit_with_code(DIAG_ERROR, call->span,
@@ -732,8 +866,9 @@ Expr *elab_cloneable_shift(Elab *e, const Form *call) {
     Expr *k_expr = elab_form(e, call->as.list.items[1]);
     if (!k_expr) return NULL;
     /* The literal `cloneable-shift` keyword never routes onto the __Shift effect
-     * (it keeps its exact reified semantics), so the receiver is never reflavored. */
-    return elab_cont_shift_core(e, call, k_expr, false);
+     * (it keeps its exact reified semantics); its receiver is a CONT_CLONEABLE
+     * `cont`, so the CONT_EFFECT perform route in the core never fires for it. */
+    return elab_cont_shift_core(e, call, k_expr);
 }
 
 /* (call/cc* f) - multi-shot call/cc that produces a cloneable continuation.
