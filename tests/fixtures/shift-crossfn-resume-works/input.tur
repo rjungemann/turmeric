@@ -1,0 +1,29 @@
+;; Cross-function RESUME on the plain shift/reset surface (cps-backend-n6).  A
+;; resuming `shift` whose delimiting `reset` is in a CALLER used to raise
+;; TUR-E0016; it now auto-desugars onto the synthetic __Shift effect:
+;;
+;;   (shift RECV BODY)  ->  (perform (__Shift RECV'))     ; RECV' resumes via effect
+;;   (reset BODY)       ->  (reset (handle BODY (__Shift [recv] k) (recv k)))
+;;
+;; RECV's `cont` param is reflavored to `effect-cont` (CONT_EFFECT), so `(k v)`
+;; inside it resumes the delimited continuation the caller's reset captured.  The
+;; reset-wrapping is a gated whole-program pass -- a program with no such shift is
+;; byte-for-byte unchanged.  direct == cps == turi.
+;;
+;; Single-resume is the supported target: the synthesized handler continuation is
+;; one-shot.  A receiver that invokes `k` more than once needs `^multishot`
+;; semantics (a deferred follow-up) -- see docs/reported/crossfn-resume-multishot.md.
+
+;; --- non-capturing receiver: the shift is in a callee, the reset in a caller ---
+(defn inner [] : int (shift (fn [k : cont] : int (k 1)) 0))
+(defn outer [] : int (reset (+ 10 (inner))))   ; k = (+ 10 []); (k 1) = 11
+
+;; --- capturing receiver: the receiver closes over the shift's local `base` ---
+(defn step [base : int] : int
+  (shift (fn [k : cont] : int (k base)) 0))
+(defn run [] : int (reset (+ 100 (step 5))))    ; k = (+ 100 []); (k 5) = 105
+
+(defn main [] : int
+  (println (outer))   ; 11
+  (println (run))     ; 105
+  0)

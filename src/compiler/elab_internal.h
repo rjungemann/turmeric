@@ -622,6 +622,10 @@ typedef struct Elab {
      * __Shift handler ONLY when the program actually performs one -- keeping every
      * non-using program's reset codegen byte-for-byte unchanged. */
     bool             uses_crossfn_resume;
+    /* Span of the first cross-function resuming shift that desugared onto __Shift
+     * -- used by the post-pass to point the "no enclosing reset anywhere" error at
+     * a real source location. */
+    Span             crossfn_resume_span;
     /* cps-backend-n6 cross-function resume: every EX_RESET / EX_CLONEABLE_RESET
      * node created during elaboration is recorded here (by elab_reset /
      * elab_cloneable_reset).  After elaboration, IF uses_crossfn_resume is set,

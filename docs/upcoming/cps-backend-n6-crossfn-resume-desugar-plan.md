@@ -1,7 +1,7 @@
 ---
 title: Auto-desugar the shift/reset surface onto cross-function resume
 category: Planning
-status: open (prerequisites done; this is the remaining auto-desugar -- a substantial multi-part change)
+status: landed for single-resume (slices A/B/C + integration); multi-shot receiver deferred (docs/reported/crossfn-resume-multishot.md)
 description: Cross-function resumable continuations already WORK via the effect surface (perform/handle/resume/(k v)); blockers 1 (unified resume surface) and 3 (capturing fn payloads) landed, and the reset->handle + shift->perform mechanism is verified end to end. This plan is the remaining piece: automatically desugar a cross-function resuming `shift`/`reset` onto that machinery so users write the ordinary shift/reset surface. Split from cps-backend-n6-resuming-shift-plan.md; full analysis in docs/reported/cross-function-resume-design.md.
 ---
 
@@ -56,6 +56,36 @@ desugar of the `shift`/`reset` *surface* onto the working effect encoding.
 lexical abortive/reified shift is `EX_SHIFT` / `EX_CLONEABLE_SHIFT`, not a
 `perform`, so it bypasses the handler and reaches the outer reset unchanged --
 only a cross-function resuming shift performs `__Shift`.
+
+## What landed (single-resume)
+
+Slices A, B, C and the integration fixture are implemented; single-resume
+cross-function resume works on the plain `shift`/`reset` surface, `direct == cps
+== turi`:
+
+- **Slice A** -- `CONT_EFFECT` continuation flavor (`effect-cont`), `(k v)` ->
+  `EX_RESUME` (`types.h`, `elab_call.c`). Fixture `effect-cont-kv-sugar`.
+- **Slice B** -- a resuming `shift` with an inline-lambda `cont` receiver and no
+  lexical reset desugars to `(perform (__Shift RECV))`; the receiver's `cont`
+  param is reflavored to `effect-cont` *before* elaboration (in `elab_shift`) so
+  it is elaborated once (no dead cloneable copy). `__Shift` is registered lazily
+  (`elab_effects.c`).
+- **Slice C** -- reset nodes are recorded at elaboration time; a gated
+  post-elaboration pass (`elab_wrap_resets_for_crossfn_resume`) wraps each in a
+  `__Shift` handler only when `uses_crossfn_resume` is set -- non-using programs
+  are byte-for-byte unchanged (full suite green). A resuming shift with no reset
+  anywhere is a compile error (TUR-E0016).
+- **Integration** -- fixture `shift-crossfn-resume-works` (non-capturing +
+  capturing single-resume receivers). The named-fn-receiver case stays a
+  TUR-E0016 error (`errors/shift-crossfn-resume`), with a message that now points
+  at the inline-lambda form.
+
+**Deferred:** a receiver that resumes `k` more than once (the opening example's
+`(+ (k 1) (k 2))` = 23) needs `^multishot` semantics on the synthesized handler
+continuation -- see `docs/reported/crossfn-resume-multishot.md`. It currently
+returns a wrong value (22), agreeing across `direct`/`turi` (a desugar limit, not
+a backend divergence). Named-fn receivers also stay unsupported (would need a
+reflavored specialization the compiler cannot synthesize at the call site).
 
 ## Slices (ordered; each independently testable)
 

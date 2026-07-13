@@ -1,8 +1,10 @@
-;; Cross-function RESUME is unsupported (one-substrate plan, item c): a resuming
-;; shift (receiver invokes its continuation) is lexically scoped -- its reset
-;; must enclose it lexically.  Here the shift is in `inner` and the reset is in
-;; `outer` (a caller), so it is rejected.  Cross-function ABORT (an ignore-k
-;; receiver) DOES work; cross-function resume needs effects (perform/handle).
+;; Cross-function RESUME auto-desugars onto the __Shift effect, but ONLY when the
+;; receiver is written inline as a lambda `(fn [k : cont] ...)` (its `cont` param
+;; is reflavored to `effect-cont` before elaboration).  A NAMED-function receiver
+;; (`ck` here) cannot be reflavored from the shift call site -- it would need a
+;; specialized copy the compiler cannot synthesize there -- so it still raises
+;; TUR-E0016.  (Inlining `ck` as `(shift (fn [k : cont] ...) 0)` would compile and
+;; run cross-function; see fixture shift-crossfn-resume-works.)
 (defn ck [k : cont] : int (+ (k 1) (k 2)))
 (defn inner [] : int (shift ck 0))
 (defn outer [] : int (reset (+ 10 (inner))))

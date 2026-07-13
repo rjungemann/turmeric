@@ -551,6 +551,20 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
  * elaborated before the callee's shift sets the flag). */
 void elab_wrap_resets_for_crossfn_resume(Elab *e) {
     if (!e || !e->uses_crossfn_resume) return;
+    /* A cross-function resuming shift performed __Shift, but the program has no
+     * reset anywhere to install the catching handler -- the effect can never be
+     * handled.  This is the "genuinely unhandled shift" case: keep it a compile
+     * error (TUR-E0016) rather than a runtime "Unhandled effect: __Shift" abort. */
+    if (e->n_pending_reset_nodes == 0) {
+        diag_emit_with_code(DIAG_ERROR, e->crossfn_resume_span,
+            TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+            "a resuming shift (its receiver invokes the continuation) has no "
+            "enclosing reset anywhere in the program -- there is no delimiter to "
+            "capture the continuation up to\n"
+            "  = help: wrap the computation that (transitively) reaches this shift "
+            "in a (reset ...)");
+        return;
+    }
     for (uint32_t i = 0; i < e->n_pending_reset_nodes; i++) {
         Expr *node = e->pending_reset_nodes[i];
         if (!node) continue;
@@ -658,21 +672,28 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
                         : type_from_kind(sheff->constructor->result_type);
                 Expr *out = expr_new(e->arena, EX_PERFORM, rt, call->span);
                 out->as.perform_.perform = perform;
+                if (!e->uses_crossfn_resume) e->crossfn_resume_span = call->span;
                 e->uses_crossfn_resume = true;
                 return out;
             }
         }
         if (shift_kw) {
+            /* Reached only when the receiver is NOT an inline-lambda `cont`
+             * receiver (it was never reflavored to effect-cont) -- e.g. a named-fn
+             * receiver.  A lambda receiver auto-desugars onto the __Shift effect
+             * above (cross-function RESUME), so the remaining unsupported shape is
+             * a named/non-lambda resuming receiver. */
             diag_emit_with_code(DIAG_ERROR, call->span,
                 TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
                 "a resuming shift (its receiver invokes the continuation) must sit "
                 "inside a lexically-enclosing reset\n"
-                "  = note: cross-function RESUME (the reset in a caller) is not "
-                "supported -- only cross-function ABORT (a receiver that ignores "
-                "the continuation) works across a call boundary\n"
-                "  = help: move the reset to enclose the shift lexically, or use "
-                "algebraic effects (perform / handle / resume) for cross-function "
-                "resumable continuations");
+                "  = note: cross-function RESUME (the reset in a caller) is "
+                "supported only when the receiver is written inline as "
+                "(fn [k : cont] ...) -- a named-function receiver cannot be lowered "
+                "onto the cross-function resume path\n"
+                "  = help: inline the receiver as a lambda, move the reset to "
+                "enclose the shift lexically, or use algebraic effects (perform / "
+                "handle / resume) directly");
             return NULL;
         }
         diag_emit_with_code(DIAG_ERROR, call->span,
