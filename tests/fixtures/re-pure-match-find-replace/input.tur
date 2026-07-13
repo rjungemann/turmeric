@@ -1,0 +1,28 @@
+; Pure-Turmeric regex engine: re/match, re/find-all, re/replace,
+; re/replace-all all run under both the compiled backend and --interpret.
+(load "stdlib/re.tur")
+
+(defn show-match [re : Regex input : cstr] : void
+  (let [m (re/match re input)]
+    (if (some? m) (println (unwrap m)) (println "<none>"))))
+
+(defn show-all [lst : RxStrs] : void
+  (match lst
+    (RxStrsNil)       (println "|")
+    (RxStrsCons s xs) (do (println s) (show-all xs))))
+
+(defn main [] : int
+  (let [num  (re/compile "[0-9]+")
+        word (re/compile "[[:alpha:]]+")
+        vowel (re/compile "[aeiou]")]
+    ; re/match -- leftmost-longest whole match
+    (show-match num "abc123def")     ; 123
+    (show-match num "no-digits")     ; <none>
+    (show-match word "  hello world") ; hello
+    ; re/find-all
+    (show-all (re/find-all num "a1b22c333"))  ; 1 22 333 |
+    ; re/replace / replace-all
+    (println (re/replace num "id=42 x=7" "N"))       ; id=N x=7
+    (println (re/replace-all vowel "regular" "_"))   ; r_g_l_r
+    (println (re/replace-all num "a1b2c3" "X"))      ; aXbXcX
+    0))
