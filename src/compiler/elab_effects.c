@@ -116,14 +116,33 @@ static Type shift_result_type(const Expr *k, const Expr *body,
 
 /* (reset body) - Establish a continuation boundary.
  */
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr);  /* fwd */
+
 Expr *elab_reset(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
                   "(reset body) requires exactly one argument");
         return NULL;
     }
+    /* Item B (resuming-shift plan): a plain `reset` is the abortive delimiter
+     * (EX_RESET) UNLESS a resuming (resume-k) shift binds to it -- then it
+     * promotes to the reified delimiter (EX_CLONEABLE_RESET), so one `reset`
+     * keyword serves both.  Bumping cloneable_reset_depth lets a resuming shift
+     * inside satisfy its lexical-scope requirement; the per-depth flag records
+     * whether one actually bound here.  A reset with only abortive shifts / shift0
+     * (which need EX_RESET -- proven by the reset-alias experiment) stays EX_RESET. */
+    int d = ++e->cloneable_reset_depth;
+    bool track = d >= 0 && d < 64;
+    if (track) e->reified_shift_at_depth[d] = false;
     Expr *body = elab_form(e, call->as.list.items[1]);
+    bool reified = track && e->reified_shift_at_depth[d];
+    e->cloneable_reset_depth--;
     if (!body) return NULL;
+    if (reified) {
+        Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
+        out->as.cloneable_reset_.body = body;
+        return out;
+    }
     Expr *out = expr_new(e->arena, EX_RESET, body->type, call->span);
     out->as.reset_.body = body;
     return out;
@@ -157,7 +176,20 @@ Expr *elab_shift(Elab *e, const Form *call) {
                   "shift requires a function as first argument");
         return NULL;
     }
-    
+
+    /* Item B (resuming-shift plan): keyword collapse.  A `shift` whose receiver
+     * takes a `cont` uses the continuation-passing (k-shift) convention -- route
+     * it to the unified core (resume-k reified, or ignore-k dynamic abort).  A
+     * receiver whose parameter is a plain value keeps the abortive convention
+     * below (receiver applied to the body value).  This makes one `shift` keyword
+     * serve both conventions, dispatched by the receiver's parameter type; every
+     * existing abortive `shift` (non-`cont` receiver) is unchanged. */
+    {
+        Type dom, cod;
+        if (shift_fn_domain_codomain(k_expr, &dom, &cod) && dom.kind == TY_CONT)
+            return elab_cont_shift_core(e, call, k_expr);
+    }
+
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
     /* CF2: the result type of (shift f body) is f's codomain (the result of
@@ -316,47 +348,42 @@ static bool receiver_ignores_continuation(const Expr *k_expr) {
     return !uses_k;
 }
 
-Expr *elab_cloneable_shift(Elab *e, const Form *call) {
-    if (call->as.list.len != 3) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "(cloneable-shift k body) requires exactly two arguments");
-        return NULL;
-    }
-
-    Expr *k_expr = elab_form(e, call->as.list.items[1]);
-    if (!k_expr) return NULL;
-
+/* Shared core for the continuation-passing (k-convention) shift: cloneable-shift,
+ * k-shift, and a `shift` whose receiver is `cont`-typed (item B).  Takes the
+ * already-elaborated receiver `k_expr` so `elab_shift` can dispatch here without
+ * re-elaborating.  Routes an ignore-k receiver to the abortive path, else emits
+ * the reified EX_CLONEABLE_SHIFT (and records that a resuming shift bound to the
+ * enclosing reset, so a plain `reset` promotes itself to a reified delimiter). */
+static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
     /* Check if k_expr is a function, closure, or a var referencing a function */
     bool is_function = false;
     if (k_expr->kind == EX_FN || k_expr->kind == EX_CLOSURE) {
         is_function = true;
     } else if (k_expr->kind == EX_VAR) {
-        /* Check if the binding is a function */
         Binding *b = k_expr->as.var.binding;
         if (b && (b->type.kind == TY_FN || b->closure_fn_binding)) {
             is_function = true;
         }
     }
-
     if (!is_function) {
         diag_emit(DIAG_ERROR, call->as.list.items[1]->span,
                   "cloneable-shift requires a function as first argument");
         return NULL;
     }
 
-    /* Unification (resuming-shift plan): a `k-shift` whose receiver provably
-     * ignores its continuation IS an abortive shift.  Lower it via the dynamic-
-     * abort path (an abortive EX_SHIFT), which works cross-function and under
-     * arbitrary contexts -- so it does NOT require a lexical cloneable-reset
-     * (TUR-E0016) or a build_cloneable-subset context (TUR-E0710).  The receiver
-     * expects a `cont`, but ignores it, so we hand it a null (0) continuation of
-     * the right type.  Gated on `k-shift` (the unified surface) and a see-through
-     * lambda/closure receiver, so `cloneable-shift` and resuming k-shifts are
-     * unaffected. */
-    bool is_kshift = call->as.list.items[0]->tag == F_SYM
-                     && call->as.list.items[0]->as.sym == e->sym_k_shift;
+    /* Unification: a shift whose receiver provably IGNORES its continuation is an
+     * abortive shift.  Lower it via the dynamic-abort path (an abortive EX_SHIFT),
+     * which works cross-function and under arbitrary contexts -- no lexical
+     * cloneable-reset (TUR-E0016) or build_cloneable-subset context (TUR-E0710).
+     * The receiver expects a `cont` but ignores it, so we hand it a null (0)
+     * continuation of the right type.  NOT applied to the literal `cloneable-shift`
+     * keyword (which keeps its exact reified semantics); applied to `k-shift` and
+     * a `cont`-typed `shift`. */
+    bool abort_route = call->as.list.items[0]->tag == F_SYM
+                       && (call->as.list.items[0]->as.sym == e->sym_k_shift
+                           || call->as.list.items[0]->as.sym == e->sym_shift);
     Type kdomain, kcodomain;
-    if (is_kshift && receiver_ignores_continuation(k_expr)
+    if (abort_route && receiver_ignores_continuation(k_expr)
         && shift_fn_domain_codomain(k_expr, &kdomain, &kcodomain)) {
         Expr *zero = expr_new(e->arena, EX_INT_LIT, kdomain, call->span);
         zero->as.i = 0;
@@ -366,8 +393,9 @@ Expr *elab_cloneable_shift(Elab *e, const Form *call) {
         return out;
     }
 
-    /* CPS-CL7: a RESUMING cloneable-shift / k-shift must be inside a
-     * cloneable-reset / k-reset (the reified-context path is lexically scoped). */
+    /* CPS-CL7: a RESUMING shift must be inside a reset (the reified-context path
+     * is lexically scoped).  A plain `reset` counts too (item B): it promotes
+     * itself to a reified delimiter when a resuming shift binds to it. */
     if (e->cloneable_reset_depth == 0) {
         diag_emit_with_code(DIAG_ERROR, call->span,
                             TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
@@ -377,15 +405,28 @@ Expr *elab_cloneable_shift(Elab *e, const Form *call) {
 
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
-    /* The result type of cloneable-shift is the result type of calling k_fn with
-     * a cloneable continuation and body's value. For now, use body's type as placeholder. */
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
     out->as.cloneable_shift_.cont_body = NULL;
+    /* Item B: mark the enclosing reset (at this depth) as needing the reified
+     * delimiter, so a plain `reset` becomes EX_CLONEABLE_RESET. */
+    if (e->cloneable_reset_depth >= 0 && e->cloneable_reset_depth < 64)
+        e->reified_shift_at_depth[e->cloneable_reset_depth] = true;
     /* CPS-CL10: verify all local captures implement Clone at elaboration time */
     check_cloneable_capture(e, call->span);
     return out;
+}
+
+Expr *elab_cloneable_shift(Elab *e, const Form *call) {
+    if (call->as.list.len != 3) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(cloneable-shift k body) requires exactly two arguments");
+        return NULL;
+    }
+    Expr *k_expr = elab_form(e, call->as.list.items[1]);
+    if (!k_expr) return NULL;
+    return elab_cont_shift_core(e, call, k_expr);
 }
 
 /* (call/cc* f) - multi-shot call/cc that produces a cloneable continuation.

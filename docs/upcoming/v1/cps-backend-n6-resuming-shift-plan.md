@@ -1,7 +1,7 @@
 ---
 title: Resumable delimited control -- one substrate (k-reset / k-shift)
 category: Planning
-status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation IN PROGRESS: unification slice 1 LANDED -- k-shift now routes an ignore-k receiver to the dynamic-abort path (cross-function, any context), so ONE k-shift covers both abort and resume (dual lowering). Open: named-fn ignore-k analysis, collapsing shift/reset keywords, cross-function resume, cloneable/serial folding, optional lighter single-shot runtime.
+status: in progress -- slices 1-4 LANDED (k-reset/k-shift on the cloneable substrate; (k v) sugar via `k : cont`; single-shot via `^linear k : cont`, compile-time TUR-E0101; typed `Cont<BodyT,ResetT>` via `(cont BodyT ResetT)`, resume-value checked). Consolidation IN PROGRESS: unification slices 1-3 LANDED -- ONE shift/reset pair now serves abortive + resumable + single-shot + cross-function, dispatched by the receiver's convention (cont-typed -> continuation-passing; plain -> abortive), with `reset` auto-promoting to the reified delimiter only when a resuming shift binds. Open: cross-function resume (CT-IR DK-subk), cloneable/serial folding + deprecating the k-*/cloneable-*/serial-* spellings, optional lighter single-shot runtime.
 description: Split out of cps-backend-n6-fallback-removal-followups-plan.md (Task 1). Rather than reinterpret the abortive `shift` (breaking ~36 fixtures + the interpreter), add a NEW resumable delimited-control surface (`k-reset` / `k-shift`) that lowers to the SAME substrate the cloneable/serial variants already use -- the DK machine in compiled code, the reified-context TuriCont in the interpreter. `cloneable-*` and `serial-*` are capability-specializations that fold into this primitive; abortive `shift`/`shift0` is a distinct dynamic-abort lowering that the unified SURFACE routes to (not deletes) -- see Consolidation.
 ---
 
@@ -174,9 +174,25 @@ so every existing signature is unaffected.
   (lambda/named at 0, closure env-prepended at 1) and only single-continuation
   receivers route. Fixture `k-shift-abort-crossfn` extended with a named case.
 
-  Remaining on this axis: (b) collapse the *keywords* (`shift`/`reset` <-
-  `k-shift`/`k-reset`) once k-shift subsumes abortive's reach; (c) cross-function
-  *resume* (not just abort) via the CT-IR DK-subk threading.
+  **Unification slice 3 (item B) -- LANDED.** One `shift`/`reset` keyword pair
+  now serves every mode, dispatched by the receiver's convention:
+  - `shift` with a `cont`-typed receiver -> the continuation-passing path
+    (resume-k reified, or ignore-k dynamic abort); a plain-value receiver keeps
+    the abortive convention. `elab_shift` dispatches on the receiver's parameter
+    type (`shift_fn_domain_codomain` domain == `TY_CONT`).
+  - `reset` promotes itself from the abortive `EX_RESET` to the reified
+    `EX_CLONEABLE_RESET` **only when a resuming shift binds to it** (tracked by a
+    per-depth flag set in the reified shift path). A reset with only abortive
+    shifts / `shift0` stays `EX_RESET` -- which they need: a blanket
+    `reset -> cloneable-reset` alias was measured to break 8 fixtures (shift0,
+    nested resets, continuation-substrate); the conditional promotion breaks none.
+  So plain `shift`/`reset` cover abortive, resumable, single-shot (`^linear
+  cont`), and cross-function; `k-shift`/`k-reset`/`cloneable-*` are now redundant
+  at the surface. Fixture `shift-unified-keyword`. Full suite 2115, 0 failed.
+
+  Remaining on this axis: (c) cross-function *resume* (not just abort) via the
+  CT-IR DK-subk threading; (d) once the ecosystem moves to `shift`/`reset`,
+  deprecate/retire the `k-*` and `cloneable-*`/`serial-*` spellings.
 - **cloneable-shift / serial-shift** become `k-shift` with a *continuation
   capability* (cloneable = multi-shot clone; serial = marshalable). The capture
   machinery is already shared; only the capability annotation differs. Collapse
