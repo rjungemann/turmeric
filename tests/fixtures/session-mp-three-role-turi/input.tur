@@ -1,0 +1,34 @@
+;; Interpreter variant of session-mp-three-role (turi-session-types-plan,
+;; Slice D).
+;;
+;; 3-role pipeline: A sends 42 to B, B forwards it to C, C prints it.  Two peer
+;; roles (A and B) run as async fibers while the main context is role C, so
+;; distinct cells of the router grid rendezvous cooperatively.
+;;
+;; Expected output: 42
+(defprotocol Pipeline [A B C]
+  (-> A B int)
+  (-> B C int))
+
+(defn role-a [^linear ch :(Role Pipeline A)] : nil
+  (let [ch (send-to ch B 42)]
+    (close ch)))
+
+(defn role-b [^linear ch :(Role Pipeline B)] : nil
+  (let [[v ch] (recv-from ch A)]
+    (let [ch (send-to ch C v)]
+      (close ch))))
+
+(defn role-c [^linear ch :(Role Pipeline C)] : nil
+  (let [[v ch] (recv-from ch B)]
+    (println v)
+    (close ch)))
+
+(defn main [] : int
+  (let [[ra rb rc] (make-protocol Pipeline)]
+    (let [ta (async (fn [] (role-a ra)))]
+      (let [tb (async (fn [] (role-b rb)))]
+        (role-c rc)
+        (await ta)
+        (await tb))))
+  0)

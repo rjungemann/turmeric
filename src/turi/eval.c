@@ -7214,6 +7214,98 @@ static TuriValue session_close(TuriEnv *env, TuriChan *ch) {
     return turi_nil();
 }
 
+/* -------------------------------------------------------------------------
+ * Multi-party session router (turi-session-types-plan, Slice D)
+ *
+ * Mirrors the compiled TurRouter/TurRole (emit_module.c): an N x N grid of
+ * one-slot rendezvous cells, slot[i*N + j] carrying role i -> role j.  Each
+ * cell is a TuriChan, so router send/recv reuse the Slice B data-slot park/wake
+ * (session_send_on / session_recv_on) verbatim -- only the slot addressing is
+ * new.  A TuriRole is {router, role_idx}; both the router (with its slots array)
+ * and each role are pool-allocated, so they are reclaimed at env teardown.
+ * ---------------------------------------------------------------------- */
+
+typedef struct TuriRouter {
+    int       n_roles;
+    int       refcount;   /* live TuriRole endpoints; role-close decrements it */
+    TuriChan *slots;      /* n_roles*n_roles cells */
+} TuriRouter;
+
+typedef struct TuriRole {
+    TuriRouter *router;
+    int         role_idx;
+} TuriRole;
+
+/* make-protocol destructuring vi=0: allocate the router (refcount = n) and the
+ * role-0 endpoint. */
+static TuriValue router_make_roles(TuriEnv *env, int n, int idx) {
+    if (n < 1) n = 1;
+    TuriRouter *r = (TuriRouter *)turi_val_calloc(env, sizeof(TuriRouter));
+    r->n_roles  = n;
+    r->refcount = n;
+    r->slots    = (TuriChan *)turi_val_calloc(env, (size_t)n * n * sizeof(TuriChan));
+    TuriRole *role = (TuriRole *)turi_val_calloc(env, sizeof(TuriRole));
+    role->router   = r;
+    role->role_idx = idx;
+    return turi_int((int64_t)(intptr_t)role);
+}
+
+/* make-protocol destructuring vi=k>0: a peer endpoint on the same router. */
+static TuriValue router_get_role(TuriEnv *env, TuriRole *base, int peer_idx) {
+    TuriRole *role = (TuriRole *)turi_val_calloc(env, sizeof(TuriRole));
+    role->router   = base->router;
+    role->role_idx = peer_idx;
+    return turi_int((int64_t)(intptr_t)role);
+}
+
+/* send-to: rendezvous on slot (role_idx -> to_idx); returns the role endpoint. */
+static TuriValue router_send(TuriEnv *env, TuriRole *role, int to_idx, TuriValue val) {
+    TuriRouter *r = role->router;
+    if (to_idx < 0 || to_idx >= r->n_roles || role->role_idx < 0 ||
+        role->role_idx >= r->n_roles)
+        return turi_error("eval: session router send: role index out of range");
+    TuriChan *ch = &r->slots[role->role_idx * r->n_roles + to_idx];
+    (void)session_send_on(env, ch, val, &ch->data_state, &ch->data_val);
+    return turi_int((int64_t)(intptr_t)role);
+}
+
+/* recv-from: rendezvous on slot (from_idx -> role_idx); returns the value. */
+static TuriValue router_recv(TuriEnv *env, TuriRole *role, int from_idx) {
+    TuriRouter *r = role->router;
+    if (from_idx < 0 || from_idx >= r->n_roles || role->role_idx < 0 ||
+        role->role_idx >= r->n_roles)
+        return turi_error("eval: session router recv: role index out of range");
+    TuriChan *ch = &r->slots[from_idx * r->n_roles + role->role_idx];
+    return session_recv_on(env, ch, &ch->data_state, &ch->data_val);
+}
+
+/* role-close: drop the router refcount (pool-owned; never individually freed). */
+static TuriValue router_role_close(TuriEnv *env, TuriRole *role) {
+    (void)env;
+    if (role->router->refcount > 0) role->router->refcount--;
+    return turi_nil();
+}
+
+/* Parse the decimal integer that immediately follows `needle` in the code
+ * slice (which is a view into source, not NUL-terminated).  Returns -1 if the
+ * needle is absent or no digits follow. */
+static int session_int_after(const char *p, uint32_t n, const char *needle) {
+    size_t nl = strlen(needle);
+    if (nl > n) return -1;
+    for (uint32_t i = 0; i + nl <= n; i++) {
+        if (memcmp(p + i, needle, nl) == 0) {
+            uint32_t j = i + (uint32_t)nl;
+            int  val = 0;
+            bool any = false;
+            while (j < n && p[j] >= '0' && p[j] <= '9') {
+                val = val * 10 + (p[j] - '0'); j++; any = true;
+            }
+            return any ? val : -1;
+        }
+    }
+    return -1;
+}
+
 /* Intercept the session inline-C templates (elab_sessions.c / elab_forms.c) and
  * route them to the cooperative runtime above.  All templates are captureless;
  * the channel/value operands arrive as val_exprs.  Returns true (writing *out)
@@ -7275,17 +7367,10 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
         SESS_PFX("__extension__ ({ tur_session_send_tag(")) {
         SESS_EVAL(cv, 0);
         /* The tag literal is baked into the template: `..., (int64_t)0)` or
-         * `..., (int64_t)1)`.  Scan for the "(int64_t)" argument. */
-        int64_t tag = 0;
-        /* `i + 9 < n` (not `<= n`): p[i + 9] must stay inside the slice, which
-         * is a view into source and not guaranteed NUL-terminated. */
-        for (uint32_t i = 0; i + 9 < n; i++) {
-            if (memcmp(p + i, "(int64_t)", 9) == 0) {
-                tag = (p[i + 9] == '1') ? 1 : 0;
-                break;
-            }
-        }
-        *out = session_send_tag(env, (TuriChan *)(intptr_t)cv.as_int, tag);
+         * `..., (int64_t)1)`.  Read the integer after the "(int64_t)" cast. */
+        int tag = session_int_after(p, n, "(int64_t)");
+        *out = session_send_tag(env, (TuriChan *)(intptr_t)cv.as_int,
+                                tag == 1 ? 1 : 0);
         return true;
     }
     /* recv-timeout: eval channel + duration; timed recv on the data slot.
@@ -7302,6 +7387,42 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
      * stashed by the preceding session_recv_timeout success. */
     if (ic->n_val_exprs == 0 && n == 9 && memcmp(p, "tur__rtv_", 9) == 0) {
         *out = env->session_rtv;
+        return true;
+    }
+
+    /* --- Multi-party roles (Slice D) ------------------------------------- */
+    /* make-protocol vi=0: tur_make_roles(N, 0) -- new router + role 0. */
+    if (ic->n_val_exprs == 0 && SESS_PFX("tur_make_roles(")) {
+        int nr = session_int_after(p, n, "tur_make_roles(");
+        *out = router_make_roles(env, nr, 0);
+        return true;
+    }
+    /* make-protocol vi=k: tur_get_role(__TUR_VAL_0__, K) -- peer role. */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_get_role(__TUR_VAL_0__,")) {
+        SESS_EVAL(bv, 0);
+        int k = session_int_after(p, n, "tur_get_role(__TUR_VAL_0__, ");
+        *out = router_get_role(env, (TuriRole *)(intptr_t)bv.as_int, k);
+        return true;
+    }
+    /* send-to: tur_router_send(__TUR_VAL_0__, TO_IDX, (int64_t)(__TUR_VAL_1__)). */
+    if (ic->n_val_exprs == 2 && SESS_PFX("__extension__ ({ tur_router_send(")) {
+        SESS_EVAL(rv, 0);
+        SESS_EVAL(vv, 1);
+        int to_idx = session_int_after(p, n, "tur_router_send(__TUR_VAL_0__, ");
+        *out = router_send(env, (TuriRole *)(intptr_t)rv.as_int, to_idx, vv);
+        return true;
+    }
+    /* recv-from: tur_router_recv(__TUR_VAL_0__, FROM_IDX). */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_router_recv(__TUR_VAL_0__,")) {
+        SESS_EVAL(rv, 0);
+        int from_idx = session_int_after(p, n, "tur_router_recv(__TUR_VAL_0__, ");
+        *out = router_recv(env, (TuriRole *)(intptr_t)rv.as_int, from_idx);
+        return true;
+    }
+    /* role-close: tur_role_close((void *)__TUR_VAL_0__). */
+    if (ic->n_val_exprs == 1 && SESS_PFX("tur_role_close((void *)__TUR_VAL_0__)")) {
+        SESS_EVAL(rv, 0);
+        *out = router_role_close(env, (TuriRole *)(intptr_t)rv.as_int);
         return true;
     }
 

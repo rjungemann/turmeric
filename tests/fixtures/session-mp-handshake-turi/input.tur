@@ -1,0 +1,32 @@
+;; Interpreter variant of session-mp-handshake (turi-session-types-plan,
+;; Slice D).
+;;
+;; Three-way handshake over a 2-role router: Initiator sends SYN=1, Responder
+;; replies SYN-ACK=2, Initiator sends ACK=3, Responder prints it.  Exercises
+;; several sequential rendezvous that reuse the same router cells across steps.
+;;
+;; Expected output: 3
+(defprotocol Handshake [Initiator Responder]
+  (-> Initiator Responder int)
+  (-> Responder Initiator int)
+  (-> Initiator Responder int))
+
+(defn role-initiator [^linear ch :(Role Handshake Initiator)] : nil
+  (let [ch (send-to ch Responder 1)]
+    (let [[synack ch] (recv-from ch Responder)]
+      (let [ch (send-to ch Responder (+ synack 1))]
+        (close ch)))))
+
+(defn role-responder [^linear ch :(Role Handshake Responder)] : nil
+  (let [[syn ch] (recv-from ch Initiator)]
+    (let [ch (send-to ch Initiator (+ syn 1))]
+      (let [[ack ch] (recv-from ch Initiator)]
+        (println ack)
+        (close ch)))))
+
+(defn main [] : int
+  (let [[ri rr] (make-protocol Handshake)]
+    (let [t (async (fn [] (role-responder rr)))]
+      (role-initiator ri)
+      (await t)))
+  0)
