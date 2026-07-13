@@ -121,6 +121,19 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr,
 static Form *reflavor_shift_receiver(Elab *e, Form *recv);                   /* fwd */
 static Effect *elab_get_shift_effect(Elab *e);                               /* fwd */
 
+/* cps-backend-n6 cross-function resume: record a reset node so the gated
+ * post-elaboration pass can wrap it in a __Shift handler (see Elab field docs). */
+static void record_reset_node(Elab *e, Expr *node) {
+    if (e->n_pending_reset_nodes >= e->cap_pending_reset_nodes) {
+        e->cap_pending_reset_nodes =
+            e->cap_pending_reset_nodes ? e->cap_pending_reset_nodes * 2 : 16;
+        e->pending_reset_nodes = (Expr **)realloc(
+            e->pending_reset_nodes,
+            e->cap_pending_reset_nodes * sizeof(Expr *));
+    }
+    e->pending_reset_nodes[e->n_pending_reset_nodes++] = node;
+}
+
 Expr *elab_reset(Elab *e, const Form *call) {
     if (call->as.list.len != 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -144,10 +157,12 @@ Expr *elab_reset(Elab *e, const Form *call) {
     if (reified) {
         Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
         out->as.cloneable_reset_.body = body;
+        record_reset_node(e, out);
         return out;
     }
     Expr *out = expr_new(e->arena, EX_RESET, body->type, call->span);
     out->as.reset_.body = body;
+    record_reset_node(e, out);
     return out;
 }
 
@@ -319,6 +334,7 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
     if (!body) return NULL;
     Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
     out->as.cloneable_reset_.body = body;
+    record_reset_node(e, out);
     return out;
 }
 
@@ -453,6 +469,99 @@ static Effect *elab_get_shift_effect(Elab *e) {
     full[0] = fnt;
     eff->constructor->param_full_types = full;
     return eff;
+}
+
+/* cps-backend-n6 cross-function resume: wrap a reset body B in a __Shift handler
+ *   B  ->  (handle B (__Shift [recv] k) (recv k))
+ * so a callee's `(perform (__Shift recv))` is caught here and the receiver is
+ * applied to the delimited continuation k.  A lexical abortive/reified shift
+ * bypasses this handler (it is EX_SHIFT / EX_CLONEABLE_SHIFT, never a perform) and
+ * reaches the reset's own lowering unchanged -- only a cross-function resuming
+ * shift performs __Shift and is caught.  The handler body `(recv k)` is built via
+ * the real elaborator in a temp scope binding recv (the boxed fn payload) and k
+ * (an is_continuation binding), so the boxed-payload application and continuation
+ * passing are constructed exactly as a hand-written handler would be. */
+static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span) {
+    Effect *sheff = elab_get_shift_effect(e);
+    if (!sheff || !sheff->constructor || !sheff->constructor->param_full_types)
+        return body_B;
+    /* Names are pure lowercase letters (no underscore, no sigil): a boxed-payload
+     * handler param is DECLARED by its verbatim name but USED through the
+     * injective mangler, which rewrites a literal '_' as "_un" -- so any name with
+     * a byte the mangler touches desyncs the declaration from the use.  These live
+     * in a fresh handler scope, so they cannot collide with user code. */
+    const Symbol *recv_name = intern_cstr(e->st, "xshiftrecv");
+    const Symbol *k_name    = intern_cstr(e->st, "xshiftkont");
+
+    Scope hs;
+    scope_init(&hs, e->scope);
+    Scope *saved = e->scope;
+    e->scope = &hs;
+
+    Type recv_type = *sheff->constructor->param_full_types[0];
+    Binding *recv_b = binding_new(e, recv_name, recv_type, false, false, span);
+    scope_add(&hs, recv_b);
+    /* k is the delimited continuation, carried as an int64 handle.  Affine
+     * (at-most-once) default discipline, matching elab_handle's CK_UNIQUE case. */
+    Binding *k_b = binding_new(e, k_name, TYPE_INT, false, false, span);
+    k_b->is_continuation = true;
+    k_b->is_affine = true;
+    k_b->type.copy_kind = CK_MOVE;
+    scope_add(&hs, k_b);
+
+    /* (recv k) */
+    Form **ci = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    ci[0] = form_sym(e->arena, span, recv_name);
+    ci[1] = form_sym(e->arena, span, k_name);
+    Form *callf = form_list(e->arena, span, ci, 2);
+    Expr *hbody = elab_form(e, callf);
+
+    e->scope = saved;
+    scope_free(&hs);
+    if (!hbody) return body_B;
+
+    HandleCase *cases = (HandleCase *)arena_alloc(e->arena, sizeof(HandleCase));
+    cases[0].effect_name    = sheff->name;
+    cases[0].n_params       = 1;
+    cases[0].param_names    = (const Symbol **)arena_alloc(e->arena, sizeof(const Symbol *));
+    cases[0].param_names[0] = recv_name;
+    cases[0].param_bindings = (Binding **)arena_alloc(e->arena, sizeof(Binding *));
+    cases[0].param_bindings[0] = recv_b;
+    cases[0].k_name         = k_name;
+    cases[0].k_binding      = k_b;
+    cases[0].cont_kind      = CK_UNIQUE;
+    cases[0].body           = hbody;
+
+    HandleExpr *h = (HandleExpr *)arena_alloc(e->arena, sizeof(HandleExpr));
+    h->body            = body_B;
+    h->cases           = cases;
+    h->n_cases         = 1;
+    h->is_unsafe_marker = false;
+
+    Expr *out = expr_new(e->arena, EX_HANDLE, body_B->type, span);
+    out->as.handle_.handle = h;
+    return out;
+}
+
+/* cps-backend-n6 cross-function resume: the gated whole-program pass.  When the
+ * program contains a cross-function resuming shift (uses_crossfn_resume), wrap
+ * every recorded reset node's body in a __Shift handler; otherwise a no-op, so a
+ * program with no such shift keeps byte-for-byte-identical reset codegen.  Runs
+ * post-elaboration (a same-elaboration flag would not do -- a reset can be
+ * elaborated before the callee's shift sets the flag). */
+void elab_wrap_resets_for_crossfn_resume(Elab *e) {
+    if (!e || !e->uses_crossfn_resume) return;
+    for (uint32_t i = 0; i < e->n_pending_reset_nodes; i++) {
+        Expr *node = e->pending_reset_nodes[i];
+        if (!node) continue;
+        if (node->kind == EX_RESET) {
+            node->as.reset_.body = wrap_reset_body_with_shift_handler(
+                e, node->as.reset_.body, node->span);
+        } else if (node->kind == EX_CLONEABLE_RESET) {
+            node->as.cloneable_reset_.body = wrap_reset_body_with_shift_handler(
+                e, node->as.cloneable_reset_.body, node->span);
+        }
+    }
 }
 
 /* Shared core for the continuation-passing (k-convention) shift: cloneable-shift

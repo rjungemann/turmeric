@@ -1468,6 +1468,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         free(e.adt_defs);
         free(e.forward_type_syms);
         free(e.handled_effect_names);
+        free(e.pending_reset_nodes);
         free(e.macros);
         free(e.macro_expansion_stack);
         free((void *)e.load_expanded_paths);
@@ -1520,6 +1521,13 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             }
         }
     }
+
+    /* cps-backend-n6 cross-function resume: gated whole-program reset-wrapping.
+     * Runs after the main pass so uses_crossfn_resume reflects the entire program
+     * (a callee's resuming shift may be elaborated after a caller's reset).  When
+     * the flag is off this is a no-op, keeping every non-using program's reset
+     * codegen byte-for-byte unchanged. */
+    elab_wrap_resets_for_crossfn_resume(&e);
 
     /* used-attr-whole-program: force-load any #[used]-bearing modules that the
      * entry reaches only via a raw mangled C symbol (no `(import)`), so their
@@ -1651,6 +1659,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     free(e.adt_defs);
     free(e.forward_type_syms);
     free(e.handled_effect_names);
+    free(e.pending_reset_nodes);
     free(e.macros);
     free(e.macro_expansion_stack);
     free(e.loaded_modules); /* Phase M2 */
