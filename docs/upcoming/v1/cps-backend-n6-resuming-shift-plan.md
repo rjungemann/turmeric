@@ -190,9 +190,24 @@ so every existing signature is unaffected.
   cont`), and cross-function; `k-shift`/`k-reset`/`cloneable-*` are now redundant
   at the surface. Fixture `shift-unified-keyword`. Full suite 2115, 0 failed.
 
-  Remaining on this axis: (c) cross-function *resume* (not just abort) via the
-  CT-IR DK-subk threading; (d) once the ecosystem moves to `shift`/`reset`,
-  deprecate/retire the `k-*` and `cloneable-*`/`serial-*` spellings.
+  **Item (c) -- cross-function resume -- investigated, scoped as its own change
+  (see [cross-function-resume-design.md](../../reported/cross-function-resume-design.md)).**
+  A resuming shift with the reset in a caller is fundamentally not expressible on
+  the reified (lexically-scoped) path -- and it is the deep first-class-
+  continuations work. Key finding: `perform`/`handle`/`resume` ALREADY do
+  cross-function resumable continuations on both paths (`dk_invoke` compiled,
+  fibers in the interpreter; verified `direct == turi == 1050`). So the tractable
+  design is a **shift/reset -> synthetic `__Shift` effect desugar**, not new
+  DK-subk plumbing. The blocker is a continuation-representation mismatch (a shift
+  receiver's `cont` / `(k v)` vs an effect handler's `resume k`), whose alignment
+  (a `CONT_EFFECT` flavor, or a `(k v)`->`resume` rewrite) is a real multi-part
+  change spanning the type system + elaboration -- a plan of its own, not an
+  incremental slice. Landed now: a tailored `TUR-E0016` message steering users to
+  a lexical reset or to effects (fixture `errors/shift-crossfn-resume`).
+
+  Remaining: (c) the `__Shift`-effect desugar above; (d) once the ecosystem moves
+  to `shift`/`reset`, deprecate/retire the `k-*` and `cloneable-*`/`serial-*`
+  spellings.
 - **cloneable-shift / serial-shift** become `k-shift` with a *continuation
   capability* (cloneable = multi-shot clone; serial = marshalable). The capture
   machinery is already shared; only the capability annotation differs. Collapse

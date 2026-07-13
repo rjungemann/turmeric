@@ -1,0 +1,9 @@
+;; Cross-function RESUME is unsupported (one-substrate plan, item c): a resuming
+;; shift (receiver invokes its continuation) is lexically scoped -- its reset
+;; must enclose it lexically.  Here the shift is in `inner` and the reset is in
+;; `outer` (a caller), so it is rejected.  Cross-function ABORT (an ignore-k
+;; receiver) DOES work; cross-function resume needs effects (perform/handle).
+(defn ck [k : cont] : int (+ (k 1) (k 2)))
+(defn inner [] : int (shift ck 0))
+(defn outer [] : int (reset (+ 10 (inner))))
+(defn main [] : int (println (outer)) 0)

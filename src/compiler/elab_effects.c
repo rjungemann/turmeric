@@ -397,6 +397,27 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * is lexically scoped).  A plain `reset` counts too (item B): it promotes
      * itself to a reified delimiter when a resuming shift binds to it. */
     if (e->cloneable_reset_depth == 0) {
+        /* For the `shift`/`k-shift` surface, tailor the message: the common cause
+         * now is a resuming shift whose reset is in a CALLER (cross-function
+         * resume, unsupported -- only cross-function ABORT works).  Keep the exact
+         * legacy wording for the literal `cloneable-shift` keyword (error fixture
+         * cloneable-shift-outside-reset pins it). */
+        bool shift_kw = call->as.list.items[0]->tag == F_SYM
+                        && (call->as.list.items[0]->as.sym == e->sym_shift
+                            || call->as.list.items[0]->as.sym == e->sym_k_shift);
+        if (shift_kw) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a resuming shift (its receiver invokes the continuation) must sit "
+                "inside a lexically-enclosing reset\n"
+                "  = note: cross-function RESUME (the reset in a caller) is not "
+                "supported -- only cross-function ABORT (a receiver that ignores "
+                "the continuation) works across a call boundary\n"
+                "  = help: move the reset to enclose the shift lexically, or use "
+                "algebraic effects (perform / handle / resume) for cross-function "
+                "resumable continuations");
+            return NULL;
+        }
         diag_emit_with_code(DIAG_ERROR, call->span,
                             TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
                             "cloneable-shift used outside of any cloneable-reset boundary");
