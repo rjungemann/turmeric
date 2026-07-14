@@ -29,11 +29,41 @@ Attempting the approach revealed two things that invalidate this plan:
 (and/or the receiver crossing as the effect argument) taints `__Shift`, so every
 user evicts. Making a colored function that performs/handles `__Shift` emit native
 is the actual problem -- a `__Shift`-effect-taint / native-`(recv k)`-application
-question, NOT a receiver-capture question. This needs someone who understands the
-taint fixpoint (`emit_cps_ir.c` ~:1820-1870) and how `__Shift`'s handler is
-classified; do not reopen this plan as written. The capturing-closure delegation
-idea (the EX_CALLCC analog) is sound in isolation but insufficient here because
-the effect is tainted regardless of the receiver's capture status.
+question, NOT a receiver-capture question. The capturing-closure delegation idea
+(the EX_CALLCC analog) is sound in isolation but insufficient here.
+
+## Root-cause map (2026-07-14, instrumented -- definitive)
+
+Instrumenting the taint fixpoint (`TUR_TRACE_TAINT`) and `term_core_ok`
+(`TUR_TRACE_TCO`) gave ground truth. The taint is a **consequence, not the
+cause**: every `__Shift` user independently fails `term_core_ok` (`in_s=0`,
+seed `core_ok=0`), so each is a genuine fiber function and they mutually taint
+`__Shift`. Even a minimal NON-capturing pair (`inner`/`outer`, no `step`) all
+evict. The `term_core_ok` failures, per node:
+
+- **Performer** (`inner` = `(shift (fn [k] (k 1)) 0)` -> `perform __Shift(recv)`):
+  `CT_PERFORM` fails `atom_ok` on the receiver argument -- the receiver is a
+  `TY_FN` value and `atom_ok` admits neither `TY_FN` in `slot_ty` nor via
+  `carrier_handle_ok` (heap-ADT only). (`body_ok=1 reset_ok=1 args_ok=0 caps=1`.)
+  Admitting a bare (non-fat) `TY_FN` atom is necessary but NOT sufficient (below).
+- **Handler** (`outer` = `(reset (+ 10 (inner)))` ->
+  `(handle (+ 10 (inner)) (__Shift [recv] k) (recv k))`): `CT_HANDLE` fails BOTH
+  `term_core_ok(handle.delim)` -- the handled body `(+ 10 (inner))` whose lowering
+  calls the `__Shift` performer -- AND `reset_body_ok(handle.body)` (the handle's
+  continuation). (`xslot=1 delim=0 body_ok=0`.) The handler CASE `(recv k)` is not
+  even reached, but the indirect application of the receiver `TY_FN` to the
+  continuation `k` is a further predicate to satisfy (`handle_case_ok`).
+
+So native cross-function `__Shift` is a **multi-part feature**, not one predicate:
+`atom_ok` (bare-fn receiver), `term_core_ok(delim)` (a body calling a `__Shift`
+performer), `reset_body_ok` (the handler continuation), and native `(recv k)`
+application in the handler case. Each gap independently evicts, so there is no
+incremental single-predicate win -- the shape stays on the fallback until all are
+satisfied together. This is n6-fallback Task 1 in full; it warrants its own
+scoped project with the direct==cps oracle (`shift-crossfn-resume-works`) and an
+ASan pass, not an incremental poke. `is_delegatable_capturing_closure` (the
+receiver-capture idea) is orthogonal and would only matter after the bare-fn
+receiver + handler gaps are closed.
 
 ## Symptom
 
