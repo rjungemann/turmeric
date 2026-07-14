@@ -1228,13 +1228,31 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (k_type.copy_kind == CK_MULTISHOT) {
             /* MS1: ^multishot k -- snapshot before each resume so k stays usable. */
             char *tmp = fresh_tmp(ctx);
+            char *snap = fresh_tmp(ctx);
             Type vtype = e->as.resume_.resume->value->type;
             bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
             char *v_arg = v_is_nil ? strdup("(int64_t)0")
                                    : eff_slot_store(vtype, v_var);
+            /* Snapshot -> resume -> drop.  tur_continuation_snapshot clones the
+             * cont (a fresh struct + a deep clone of its env); the resume runs
+             * cont_fn on that clone but never reclaims it (cont_fn = __dk_cont_fn
+             * = dk_invoke, which dk_copy_range's the chain and frees only its own
+             * internal copy -- the snapshot's env is left caller-owned).  So the
+             * per-resume snapshot (struct + env) leaked one clone per `(k v)`.
+             * Drop it right after the resume returns: tur_cloneable_cont_drop
+             * fires drop_env (dk_free of the chain clone) then frees the struct --
+             * safe because the resume's dk_invoke never took ownership of the env,
+             * and the returned result is a plain value, not the snapshot.  The
+             * original k is untouched (this frees the clone, not k), so a
+             * subsequent resume of k still works (multi-shot).
+             * (docs/archive/cps-resume-frame-node-leak.md, snapshot sibling.) */
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(tur_continuation_snapshot(%s), %s);\n",
-                       tmp, k_var, v_arg);
+            buf_printf(body, "int64_t %s = tur_continuation_snapshot(%s);\n", snap, k_var);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(%s, %s);\n", tmp, snap, v_arg);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "tur_cloneable_cont_drop(%s);\n", snap);
+            free(snap);
             free(v_arg);
             free(k_var);
             free(v_var);
