@@ -236,6 +236,7 @@ typedef struct { PendItem items[32]; uint32_t n; } Pending;
 /* forward decls */
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
 /* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
  * `rc/strong-count`, `rc->ptr`).  These do not cross a DK slot -- the rc stays a
@@ -434,6 +435,62 @@ static bool is_delegatable_value(const Expr *e) {
 static bool indirect_callee_ok(const Expr *fe) {
     return !(fe && fe->kind == EX_CLOSURE && fe->as.closure_.closure
              && fe->as.closure_.closure->n_captures > 0);
+}
+
+/* Declared in emit_internal.h; forward-declared here to avoid pulling the whole
+ * emitter header into the CPS pass.  Conservative: over-reports escapes (EX_PERFORM
+ * and every unmodeled control form default to "escapes"), so a `false` result
+ * PROVES the binding does not escape `e`. */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
+
+/* Is let-binding `idx` of `let` a capturing closure whose heap fat-env may be
+ * freed when the closure dies?  Mirrors the direct emitter's
+ * let_binding_env_freeable (emit_expr.c), but for a closure that the CPS backend
+ * leaf-admits (delegates via CT_LETRAW) in an effect-bearing body -- where the
+ * direct emitter's let-scope free does NOT run, so the env would otherwise leak.
+ * Sound iff:
+ *   - the initializer is a CAPTURING EX_CLOSURE (a capture-free one is already a
+ *     delegatable value; a __Shift receiver is reaped by the handler-case path,
+ *     P3.d -- exclude it so its env is never reaped twice),
+ *   - the closure returns a SCALAR (its result can never alias the env), and
+ *   - the bound name does not escape the let body or any sibling initializer
+ *     (closure_binding_escapes is conservative, so a false negative merely keeps
+ *     the status-quo leak; it never frees a still-live env). */
+static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    const Binding *b = let->as.let_.bindings[idx].binding;
+    if (!init || !b) return false;
+    if (init->kind != EX_CLOSURE || !init->as.closure_.closure) return false;
+    if (init->as.closure_.closure->n_captures == 0) return false;   /* capture-free: already delegatable */
+    if (init->as.closure_.closure->is_shift_receiver) return false; /* reaped by P3.d */
+    if (b->type.kind != TY_FN) return false;
+    switch (b->type.as.fn.result_kind) {
+        case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+        case TY_BOOL: case TY_NIL: break;
+        default: return false;   /* non-scalar result may alias the env */
+    }
+    if (closure_binding_escapes(let->as.let_.body, b)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (closure_binding_escapes(let->as.let_.bindings[j].init, b)) return false;
+    }
+    return true;
+}
+
+/* Bind let-binding `idx`'s init to `bx`, then run `rest`.  A freeable capturing
+ * closure (cps_closure_env_freeable) is leaf-admitted via CT_LETRAW with
+ * reap_env set -- so the direct emitter builds its heap fat-env and emit_letraw
+ * registers that env for a single-node free at the DK entry boundary, closing
+ * the leak that made a general leaf-admitted closure unsound on the CPS path.
+ * Everything else goes through cps_bind unchanged. */
+static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
+    Expr *init = (Expr *)let->as.let_.bindings[idx].init;
+    if (cps_closure_env_freeable(let, idx)) {
+        CTerm *t = build_letraw(b, init, bx, rest);
+        t->as.letraw.reap_env = true;
+        return t;
+    }
+    return cps_bind(b, init, bx, rest);
 }
 
 /* True if every argument of an EX_CALL is atomic (so the whole call can be
@@ -1809,7 +1866,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         case EX_LET: {
             CTerm *rest = cps_tail(b, e->as.let_.body, kont);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--)
-                rest = cps_bind(b, e->as.let_.bindings[i].init,
+                rest = cps_bind_let_init(b, e, (uint32_t)i,
                                 cvar_of_binding(e->as.let_.bindings[i].binding), rest);
             return rest;
         }
@@ -2073,7 +2130,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_LET: {
             CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--)
-                r = cps_bind(b, e->as.let_.bindings[i].init,
+                r = cps_bind_let_init(b, e, (uint32_t)i,
                              cvar_of_binding(e->as.let_.bindings[i].binding), r);
             return r;
         }

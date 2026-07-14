@@ -3111,6 +3111,16 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs ? rhs : "0");
     } else
         ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
+    /* reap_env (cps_closure_env_freeable): a leaf-admitted, provably non-escaping
+     * capturing closure whose heap fat-env the direct emitter did NOT free at
+     * this leaf position (only emit_value(EX_LET) applies the scoped free).  The
+     * bound value is the malloc'd env pointer; register it for a single-node free
+     * at the outermost DK entry boundary (dead after its lifted body; boundary
+     * reap never double-frees, and never walks -- __dk_reap_ptr is a bare free).
+     * A scalar-captured closure frees cleanly; the freeable gate already excluded
+     * a non-scalar-returning closure (result could alias the env). */
+    if (t->as.letraw.reap_env)
+        ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);

@@ -191,7 +191,13 @@ struct CTerm {
          * __tur_await_body runtime helper (resume-if-ready / park-if-pending). */
         struct { CAtom fut; CVar x; CTerm *body; }                       await;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
-        struct { CVar x; const Expr *e; CTerm *body; }                    letraw;
+        /* reap_env: e is a freeable, provably-non-escaping capturing closure
+         * whose heap fat-env the direct emitter does NOT free at this leaf
+         * position (only emit_value(EX_LET) applies the scoped-env free).  When
+         * set, emit_letraw registers the bound env pointer for a single-node free
+         * at the outermost DK entry boundary (safe: the closure is dead after its
+         * lifted body, and boundary reap never double-frees). */
+        struct { CVar x; const Expr *e; CTerm *body; bool reap_env; }      letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.
