@@ -393,7 +393,13 @@ static bool is_delegatable_value(const Expr *e) {
              * case, never as a general indirect callee, so the has_capture cut /
              * indirect-callee hazard does not apply.  collect_caps walks its
              * scalar (Copy) captures into the lifted env; a non-Copy capture bails
-             * to fallback.  See docs/upcoming/cps-native-handle-in-reset-plan.md. */
+             * to fallback.  See docs/upcoming/cps-native-handle-in-reset-plan.md.
+             *
+             * Admitting a GENERAL capturing closure as a plain value (the Phase-1
+             * keystone) is functionally correct here but leaks its fat-closure env
+             * on the CPS delegation path (the direct emitter's scoped-env free is
+             * not applied); it must land WITH the Phase-3 escaping-fat-closure-env
+             * free, not before.  See the cps-runtime-finish-plan.md Progress log. */
             return e->as.closure_.closure
                 && (e->as.closure_.closure->n_captures == 0
                     || e->as.closure_.closure->is_shift_receiver);

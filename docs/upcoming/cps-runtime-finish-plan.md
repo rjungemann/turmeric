@@ -210,5 +210,31 @@ continuation env never misses a captured item; the three forms (plus
 - **`EX_WHILE`** (2 left) and **`EX_INLINE_C`** (2 left, session-channel
   bodies) likewise contain / neighbour control ops in the colored bodies that
   reach them, so they need native lowering rather than delegation.
-- **`EX_CLOSURE`** (the keystone) is unchanged and remains the highest-leverage
-  Phase-1 item.
+- **`EX_CLOSURE`** (the keystone): the admission itself is FUNCTIONALLY DONE and
+  validated, but it is **gated on Phase 3**, not independent of it. Widening
+  `is_delegatable_value` to admit a general capturing closure as a plain value
+  (`return e->as.closure_.closure != NULL`) makes the corpus's colour-only
+  closure functions emit and run correctly -- `make-adder` becomes fully
+  CPS-admitted and prints 15; 9/10 closure fixtures pass unchanged. The
+  representation is safe (`emit_value(EX_CLOSURE)` yields a single-word env
+  pointer that rides the DK slot via `emit_letraw`'s `TY_FN` carrier store; the
+  2-word `tur_poly_fn_t` fat form only arises through the separate
+  `EX_FN_TO_FAT`/`EX_POLY_WRAP` nodes), the captures are surfaced correctly
+  (`collect_free_vars` reads the closure's explicit `captures` list), and
+  `cap_add` already bails a non-Copy multi-shot capture to fallback. **The
+  blocker is the leak**: the CPS delegation path does NOT apply the direct
+  emitter's scoped-env free (`let_binding_env_freeable`, `emit_expr.c`), so an
+  admitted closure `malloc`s its fat-closure env and never frees it --
+  `make_adder__cps` leaks its env (uncaught, `define-in-fn` has no ASan target),
+  and `run-handler` regresses the `tur_closure_env_leak` ASan target red
+  (verified: 120 bytes leaked in the handler-case helper). So the keystone must
+  land **together with** the escaping-fat-closure-env free on the CPS path
+  (Phase 3), which means Phase 3 is a hard prerequisite for the closure slice,
+  not the "parallel, finish-before-the-ASan-gate" option the ordering section
+  implies. Two shapes need the free: (1) a control-op-free colour-only function
+  (`make-adder`) is cleanest fixed by whole-body-delegating to the direct
+  emitter (which already frees the env) rather than decomposing it into CPS; (2)
+  a closure in a genuinely control-bearing function's lifted body (`run-handler`
+  handler case) needs the free emitted on the CPS lifted-helper path. The
+  admission change was reverted pending that free; the `is_delegatable_value`
+  comment carries a pointer here.
