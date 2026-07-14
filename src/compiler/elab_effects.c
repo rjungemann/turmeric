@@ -465,6 +465,50 @@ static Form *reflavor_shift_receiver(Elab *e, Form *recv) {
     return form_list(e->arena, recv->span, new_fn, fn_n);
 }
 
+/* Does form `f` (recursively) contain a CONTINUATION-RESUME of `kname` --
+ * `(resume kname ...)` OR the `(kname ...)` application sugar (k applied as a
+ * function)?  Either proves kname is a continuation. */
+static bool form_resumes_sym(const Form *f, const Symbol *resume_sym, const Symbol *kname) {
+    if (!f || (f->tag != F_LIST && f->tag != F_VEC)) return false;
+    if (f->as.list.len >= 1) {
+        const Form *h = f->as.list.items[0];
+        if (h->tag == F_SYM) {
+            /* (k ...) -- k applied as a function (resume sugar). */
+            if (h->as.sym == kname) return true;
+            /* (resume k ...) */
+            if (h->as.sym == resume_sym && f->as.list.len >= 2) {
+                const Form *a = f->as.list.items[1];
+                if (a->tag == F_SYM && a->as.sym == kname) return true;
+            }
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (form_resumes_sym(f->as.list.items[i], resume_sym, kname)) return true;
+    return false;
+}
+
+/* cps-dk-multishot-user-effects (Phase C): is `payload` a lambda `(fn [k ...] body)`
+ * whose body RESUMES its first param -- `(resume k ...)` or the `(k ...)` sugar?
+ * The reliable signal that a raw-`int`-typed payload param is actually a
+ * continuation (its type carries no cont flavor), so a `(fn [int] R)` payload can
+ * be reflavored to the DK cloneable substrate WITHOUT disturbing a genuine
+ * non-continuation `(fn [int] R)` payload (which never resumes its param). */
+static bool form_lambda_resumes_first_param(Elab *e, const Form *payload) {
+    if (!payload || payload->tag != F_LIST || payload->as.list.len < 3) return false;
+    const Form *head = payload->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_fn) return false;
+    const Form *params = payload->as.list.items[1];
+    if ((params->tag != F_VEC && params->tag != F_LIST) || params->as.list.len < 1)
+        return false;
+    const Form *p0 = params->as.list.items[0];
+    if (p0->tag != F_SYM) return false;
+    const Symbol *kname = p0->as.sym;
+    const Symbol *resume_sym = intern_cstr(e->st, "resume");
+    for (uint32_t i = 2; i < payload->as.list.len; i++)
+        if (form_resumes_sym(payload->as.list.items[i], resume_sym, kname)) return true;
+    return false;
+}
+
 /* cps-dk-multishot-user-effects (Phase A): reflavor a USER effect's fn PAYLOAD
  * lambda's `effect-cont` param to `multishot-effect-cont` BEFORE elaboration, so
  * `(k v)` inside the payload lowers to the DK-backed `tur_cloneable_cont_resume`
@@ -484,10 +528,18 @@ static Form *reflavor_effect_payload(Elab *e, Form *payload) {
     if (head->tag != F_SYM || head->as.sym != e->sym_fn) return NULL;
     Form *params = payload->as.list.items[1];
     if (params->tag != F_VEC && params->tag != F_LIST) return NULL;
-    const Symbol *from = intern_cstr(e->st, "effect-cont");
-    const Symbol *to   = intern_cstr(e->st, "multishot-effect-cont");
-    Form *new_params = reflavor_cont_sym(e, params, from, to);
-    if (new_params == params) return NULL;  /* no `effect-cont` annotation */
+    const Symbol *to = intern_cstr(e->st, "multishot-effect-cont");
+    /* Reflavor `effect-cont` (the annotated case) OR a raw `int` continuation
+     * handle (cps-dk-multishot Phase C) -- the latter only when the payload body
+     * actually resumes its first param (form_lambda_resumes_first_param), so a
+     * genuine `(fn [int] R)` non-continuation payload is never disturbed.  Both
+     * upgrade to `multishot-effect-cont` so `(k v)`/`resume` lowers to the DK
+     * cloneable substrate.  The int->cont reflavor type-checks: a TY_CONT payload
+     * unifies with the effect's declared `(fn [int] R)` param (int carrier). */
+    Form *new_params = reflavor_cont_sym(e, params, intern_cstr(e->st, "effect-cont"), to);
+    if (new_params == params && form_lambda_resumes_first_param(e, payload))
+        new_params = reflavor_cont_sym(e, params, intern_cstr(e->st, "int"), to);
+    if (new_params == params) return NULL;  /* nothing to reflavor */
     uint32_t fn_n = payload->as.list.len;
     Form **new_fn = (Form **)arena_alloc(e->arena, fn_n * sizeof(Form *));
     for (uint32_t i = 0; i < fn_n; i++) new_fn[i] = payload->as.list.items[i];
@@ -1491,7 +1543,21 @@ Expr *elab_perform(Elab *e, const Form *call) {
          * effect-cont arg is returned unchanged. */
         Form *arg_form = effect_call_f->as.list.items[i + 1];
         Form *reflav = reflavor_effect_payload(e, arg_form);
-        if (reflav) arg_form = reflav;
+        if (reflav) {
+            arg_form = reflav;
+            /* cps-dk-multishot-user-effects (Phase C): a reflavored RAW-INT payload
+             * (form_lambda_resumes_first_param -- the body resumes its param, but
+             * the `(fn [int] R)` declaration carries no cont flavor for defeffect to
+             * detect) marks the effect resumable-payload here, on the shared effect
+             * object, so the enclosing handler (elaborated after the performer)
+             * upgrades its `k` and takes the cloneable-cont wrap too.  Order note:
+             * this relies on the performer being elaborated before the handler
+             * (top-level defns elaborate in source order; the annotated
+             * effect-cont/multishot-effect-cont case is order-independent, detected
+             * at defeffect).  Skips the annotated case (already set). */
+            if (effect->constructor && effect->constructor->resumable_payload_param < 0)
+                effect->constructor->resumable_payload_param = (int)i;
+        }
         args[i] = elab_form(e, arg_form);
         if (!args[i]) return NULL;
         /* cps-dk-multishot-user-effects (Phase A): mark a CAPTURING closure payload

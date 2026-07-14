@@ -1,9 +1,29 @@
 # DK-native multishot continuations for user resumable-payload effects
 
-**Status:** Phase A + Phase B LANDED. `effect-cont-kv-sugar` and
-`multishot-effect-cont-kv-sugar` both CPS-emit end-to-end. Phase C (`int`-typed
-payloads) open. Prepared from investigations P-inv .. P-inv3 in
-`cps-runtime-finish-plan.md`.
+**Status:** Phases A + B + C LANDED -- the WHOLE B1 family CPS-emits
+(`effect-cont-kv-sugar`, `multishot-effect-cont-kv-sugar`,
+`effect-fn-payload-capturing`, `cross-function-resume-via-effect`). Prepared from
+investigations P-inv .. P-inv3 in `cps-runtime-finish-plan.md`.
+
+## Phase C result (landed) -- raw-`int` continuation payloads
+
+`effect-fn-payload-capturing` (`f : (fn [int] int)`, `(resume k v)`) and
+`cross-function-resume-via-effect` (`seed : (fn [int] int)`) now CPS-emit (1107 /
+11, ASan-clean, direct == cps == turi). The `int` carries no cont flavor for
+`defeffect` to detect (and a genuine `(fn [int] R)` payload must not be
+disturbed), so the continuation is identified by the reliable FORM signal that the
+payload body RESUMES its first param -- `(resume k ...)` or the `(k ...)` sugar
+(`form_lambda_resumes_first_param`). When that fires, the payload's `int` param is
+reflavored to `multishot-effect-cont` (which type-checks: a TY_CONT payload
+unifies with the declared `(fn [int] R)` int-carrier param) and the shared effect
+object is marked `resumable_payload_param` at the perform site, so the enclosing
+handler (elaborated after the performer) reuses ALL the Phase A wiring
+(perform-arg gate, `is_effect_payload`, handler `k` upgrade + cloneable wrap).
+Order note: the int case relies on the performer being elaborated before the
+handler (top-level defns elaborate in source order); the annotated
+`effect-cont`/`multishot-effect-cont` case stays order-independent (detected at
+`defeffect`). A `(fn [int] R)` payload that never resumes its param is untouched
+and stays on the fiber path.
 
 ## Phase B result (landed) -- and a corrected diagnosis
 

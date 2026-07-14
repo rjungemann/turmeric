@@ -169,47 +169,37 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 ## Honest distance
 
-Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 13
+Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 11
 per-emit** (see the Progress log: P1.a pure-delegation forms; P1.b/P1.c the
 closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
-receiver-`k` / receiver-env leaks; PA the B1 cont-substrate bridge for
-`effect-cont`-typed resumable payloads -- `effect-cont-kv-sugar` now CPS-emits).
-What remains, and why each is a distinct slice rather than a quick admission:
+receiver-`k` / receiver-env leaks; PA/PB/PC the B1 DK-native resumable-payload
+bridge -- the WHOLE B1 family (`effect-cont-kv-sugar`,
+`multishot-effect-cont-kv-sugar`, `effect-fn-payload-capturing`,
+`cross-function-resume-via-effect`) now CPS-emits, `effect-cont` AND raw-`int`
+continuation payloads). What remains, and why each is a distinct slice rather than
+a quick admission:
 
 - **`EX_CLOSURE` (7) -- actually TWO families (verified, P-inv2 below).** The 7
   split into two distinct blockers; the earlier "all effect-payload" framing was
   wrong.
 
-  **B1. Resumable fn-PAYLOAD effects (3): NOT a bridge slice -- these already
-  evict to fiber; CPS emission is a Phase-2 (taint + DK-multishot-cont) task
-  (verified, P-inv3 below -- corrects P-inv2).** `effect-fn-payload-capturing`
-  (`k:int`), `effect-cont-kv-sugar` (`k:effect-cont`),
-  `cross-function-resume-via-effect` (`k:int`) -- the `(perform (E g))` shape
-  where the handler resumes THROUGH the payload (`(E [f] k) (f k)`). P-inv2
-  guessed the clean multishot sibling `multishot-effect-cont-kv-sugar` "already
-  CPS-emits"; it does NOT. Its `--dump-cps` output (which is dump-only, never
-  wired to codegen) misled the analysis -- under `TUR_TRACE_EVICT` its `inner` /
-  `outer` **evict on `BODY-STRUCT-OR-TAINT`** and run on the FIBER runtime
-  (`tur_handler_dispatch` + a stack-image `tur_cloneable_cont`), not a DK/CPS
-  bridge. A minimal capture-free ONE-SHOT `effect-cont` payload evicts the same
-  way (`BODY-STRUCT-OR-TAINT`, runs correctly via fiber). So the taint fixpoint
-  **correctly evicts every user resumable-payload effect to fiber** -- only the
-  fully-synthesized `__Shift` path CPS-emits. These 3 show `BODY-UNSUPPORTED`
-  (not `-STRUCT-OR-TAINT`) *only* because their payload happens to CAPTURE, so it
-  trips `EX_CLOSURE` during CT-IR translation BEFORE the taint fixpoint would
-  evict them. Admitting the closure alone just moves them to `BODY-STRUCT-OR-TAINT`
-  (the reshuffling the ordering section forbids). The `is_effect_payload` patch
-  ALSO widened the perform-arg `atom_ok` gate, which is **unsound**: it flips the
-  taint `in_s` true, bypassing the correct fiber eviction and forcing an
-  un-bridged CPS emission that miscompiles at runtime (`continuation error: not a
-  capturable continuation`). Patch REVERTED and NOT preserved (it was unsound, not
-  merely gated). The genuine blocker is the DK-side multishot-continuation
-  support the clean multishot sibling also lacks (its `BODY-STRUCT-OR-TAINT`):
-  Phase-2 work, not a bridge. **Scoped in
-  [cps-dk-multishot-user-effects-plan.md](cps-dk-multishot-user-effects-plan.md)**
-  -- generalize the `__Shift` cloneable-cont machinery (admission + reflavor +
-  handler-wrap, landed as one unit) to user resumable-payload effects; this one
-  capability unblocks the whole B1 family at once.
+  **B1. Resumable fn-PAYLOAD effects (was 3): DONE (PA/PB/PC).**
+  `effect-cont-kv-sugar`, `multishot-effect-cont-kv-sugar`,
+  `effect-fn-payload-capturing`, `cross-function-resume-via-effect` -- the
+  `(perform (E g))` shape where the handler resumes THROUGH the payload
+  (`(E [f] k) (f k)`) -- all now CPS-emit (direct == cps == turi, ASan-clean). The
+  `__Shift` cloneable-cont machinery was generalized to user resumable-payload
+  effects (admission + form-level cont reflavor + handler cloneable-wrap, landed as
+  one unit), covering `effect-cont`, `multishot-effect-cont`, AND raw-`int`
+  continuation payloads (identified by the payload body resuming its param). The
+  earlier belief that this was "Phase-2 taint work, not a bridge" (P-inv3) was
+  itself too pessimistic: the taint chain rooted at the performer's perform-arg
+  gate, which the bridge opens soundly (the handler cloneable-wrap makes the
+  earlier `atom_ok` widening sound). Full history:
+  [cps-dk-multishot-user-effects-plan.md](cps-dk-multishot-user-effects-plan.md)
+  and Progress-log PA/PB/PC. NOTE: PB (`handle_delim_ok`) was a GENERAL win beyond
+  B1 -- any effect whose handled body computes through a colored call (e.g.
+  `(handle (+ 10 (inner)) ...)`) now CPS-emits.
 
   **B2. Capturing closure as a VALUE in colored code (4): closure drop-glue /
   HOF handling.** `currying-effect-partial` (a partial-application closure
@@ -245,20 +235,36 @@ What remains, and why each is a distinct slice rather than a quick admission:
   `main`; niche, tied to the session runtime.
 
 **Revised assessment (this session, verified):** the earlier "no conceptual
-blockers remain -- each is a scoped admission+emit slice" is **too optimistic**.
-The `EX_CLOSURE` family is two blockers (B1 cont-bridge x3, B2 closure-drop-glue
-x4), the `EX_DEFER` fixtures are entangled with a co-located
-`BODY-STRUCT-OR-TAINT` blocker, `EX_WHILE` needs a native loop, and `EX_INLINE_C`
-is session-runtime-tied. None of the 14 is a clean standalone admission win. **B1 is NOT the tractable
-slice P-inv2 claimed** -- user resumable-payload effects already evict to fiber
-(the taint fixpoint does this correctly); CPS-emitting them needs DK-side
-multishot-continuation support (Phase-2), which even the clean multishot sibling
-lacks. The remaining genuinely-scoped work is Phase-2 (`BODY-STRUCT-OR-TAINT`,
-the dominant 5518-per-emit surface) plus the B2 closure-drop-glue backstop; there
-is no small Phase-1 admission win left among the 14. The EVICT gate still reads
-`SIG-*` plus these 14 named residuals.
+blockers remain -- each is a scoped admission+emit slice" was **too optimistic**,
+and the follow-up P-inv3 pessimism ("B1 is Phase-2, not a bridge") was ALSO wrong.
+The reality, resolved by PA/PB/PC: **the whole B1 resumable-payload family (4
+fixtures) now CPS-emits** via the generalized `__Shift` cloneable-cont bridge, and
+PB's `handle_delim_ok` was a general win beyond it. `BODY-UNSUPPORTED` is now **11**
+(was 14): `EX_CLOSURE` B2 closure-as-value x4 (`currying-effect-partial`,
+`unsafe-closure-capture`, `free-lift-bind`, `hkt-stdlib-parser-instances` -- need
+closure drop-glue), `EX_DEFER` x4 (entangled with a co-located
+`BODY-STRUCT-OR-TAINT` blocker), `EX_WHILE` x1 (native loop), `EX_INLINE_C` x2
+(session-runtime-tied). The remaining genuinely-scoped work is the B2
+closure-drop-glue backstop and the dominant Phase-2 `BODY-STRUCT-OR-TAINT`
+surface. The EVICT gate now reads `SIG-*` plus these 11 named residuals.
 
 ## Progress log
+
+### Slice PC -- B1 raw-int continuation payloads (whole B1 family now CPS-emits)
+
+`effect-fn-payload-capturing` and `cross-function-resume-via-effect` (both
+`f : (fn [int] int)` payloads resumed via `(resume k v)`) now CPS-emit (1107 / 11,
+ASan-clean, direct == cps == turi). `BODY-UNSUPPORTED` 13 -> 11; the whole B1
+family is cleared. The `int` carries no cont flavor for `defeffect` to detect (and
+a genuine `(fn [int] R)` payload must not be disturbed), so the continuation is
+identified by the reliable FORM signal that the payload body RESUMES its first
+param -- `(resume k ...)` / `(k ...)` (`form_lambda_resumes_first_param`). On that
+signal the payload's `int` param is reflavored to `multishot-effect-cont` (type-
+checks: TY_CONT unifies with the declared int-carrier param) and the shared effect
+object is marked `resumable_payload_param` at the perform, so the handler reuses
+all Phase A wiring. Order note: the int case relies on performer-before-handler
+elaboration (source order); the annotated case stays order-independent. Suite
+2179/0.
 
 ### Slice PB -- top-level handle-body admission for computation-join-to-prompt (general; completes multishot-effect-cont-kv-sugar)
 
