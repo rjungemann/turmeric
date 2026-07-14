@@ -179,31 +179,32 @@ slice rather than a quick admission:
   split into two distinct blockers; the earlier "all effect-payload" framing was
   wrong.
 
-  **B1. Resumable fn-PAYLOAD effects (3): continuation-substrate bridge.**
-  `effect-fn-payload-capturing` (`k:int`), `effect-cont-kv-sugar`
-  (`k:effect-cont`), `cross-function-resume-via-effect` (`k:int`) -- the
-  `(perform (E g))` shape where the handler resumes THROUGH the payload
-  (`(E [f] k) (f k)`), structurally the __Shift receiver under a USER effect. The
-  clean admission (`is_effect_payload` + widened perform-arg gate) makes the
-  performer CPS-emittable, but the handler then hands the direct-emitted payload
-  a raw `DK *` while the payload resumes via the FIBER substrate
-  (`tur_effect_cont_resume`), so it miscompiles (`expected 'int64_t' but argument
-  is of type 'DK *'`). The bridge is the `tur_cloneable_cont`: a GENERIC
-  `cont_fn(env,value)` that __Shift builds with `__dk_cont_fn` (= `dk_invoke`)
-  over a DK-chain env -- i.e. a DK-backed continuation. A payload routes through
-  it *iff* its cont param is `CK_MULTISHOT` (then `resume`/`(k v)` lowers to
-  `tur_cloneable_cont_resume`, not the fiber `tur_effect_cont_resume`). So the
-  bridge = reflavor the payload's cont param to `multishot-effect-cont`
-  (generalize __Shift's `elab_specialize_cont_receiver` to user effects) + fire
-  the handler-case cloneable-wrap (`emit_cps_ir.c` ~3341) for a user effect whose
-  payload param is a cloneable/multishot cont (currently keyed on
-  `is_shift_effect`). **Tractability: clean for `effect-cont`-typed payloads**
-  (`effect-cont-kv-sugar` -- reflavorable, the machinery exists); **hard for
-  `int`-typed payloads** (`effect-fn-payload-capturing`,
-  `cross-function-resume-via-effect` -- a raw-`int` handle IS the fiber substrate,
-  no `copy_kind` to reflavor, so it needs a runtime DK<->fiber dispatch tag or a
-  source-level `^multishot`/`effect-cont` annotation). Reference admission patch:
-  `/tmp/effect-payload-admission.patch` (scratchpad).
+  **B1. Resumable fn-PAYLOAD effects (3): NOT a bridge slice -- these already
+  evict to fiber; CPS emission is a Phase-2 (taint + DK-multishot-cont) task
+  (verified, P-inv3 below -- corrects P-inv2).** `effect-fn-payload-capturing`
+  (`k:int`), `effect-cont-kv-sugar` (`k:effect-cont`),
+  `cross-function-resume-via-effect` (`k:int`) -- the `(perform (E g))` shape
+  where the handler resumes THROUGH the payload (`(E [f] k) (f k)`). P-inv2
+  guessed the clean multishot sibling `multishot-effect-cont-kv-sugar` "already
+  CPS-emits"; it does NOT. Its `--dump-cps` output (which is dump-only, never
+  wired to codegen) misled the analysis -- under `TUR_TRACE_EVICT` its `inner` /
+  `outer` **evict on `BODY-STRUCT-OR-TAINT`** and run on the FIBER runtime
+  (`tur_handler_dispatch` + a stack-image `tur_cloneable_cont`), not a DK/CPS
+  bridge. A minimal capture-free ONE-SHOT `effect-cont` payload evicts the same
+  way (`BODY-STRUCT-OR-TAINT`, runs correctly via fiber). So the taint fixpoint
+  **correctly evicts every user resumable-payload effect to fiber** -- only the
+  fully-synthesized `__Shift` path CPS-emits. These 3 show `BODY-UNSUPPORTED`
+  (not `-STRUCT-OR-TAINT`) *only* because their payload happens to CAPTURE, so it
+  trips `EX_CLOSURE` during CT-IR translation BEFORE the taint fixpoint would
+  evict them. Admitting the closure alone just moves them to `BODY-STRUCT-OR-TAINT`
+  (the reshuffling the ordering section forbids). The `is_effect_payload` patch
+  ALSO widened the perform-arg `atom_ok` gate, which is **unsound**: it flips the
+  taint `in_s` true, bypassing the correct fiber eviction and forcing an
+  un-bridged CPS emission that miscompiles at runtime (`continuation error: not a
+  capturable continuation`). Patch REVERTED and NOT preserved (it was unsound, not
+  merely gated). The genuine blocker is the DK-side multishot-continuation
+  support the clean multishot sibling also lacks (its `BODY-STRUCT-OR-TAINT`):
+  Phase-2 work, not a bridge.
 
   **B2. Capturing closure as a VALUE in colored code (4): closure drop-glue /
   HOF handling.** `currying-effect-partial` (a partial-application closure
@@ -243,15 +244,41 @@ blockers remain -- each is a scoped admission+emit slice" is **too optimistic**.
 The `EX_CLOSURE` family is two blockers (B1 cont-bridge x3, B2 closure-drop-glue
 x4), the `EX_DEFER` fixtures are entangled with a co-located
 `BODY-STRUCT-OR-TAINT` blocker, `EX_WHILE` needs a native loop, and `EX_INLINE_C`
-is session-runtime-tied. None of the 14 is a clean standalone admission win. The
-**single most tractable next slice** is B1 for `effect-cont-kv-sugar`: reflavor
-its `effect-cont` payload param to `multishot-effect-cont` and fire the
-handler-case cloneable-wrap for a user effect (generalize the `is_shift_effect`
-gate at `emit_cps_ir.c` ~3341 to "payload param is a cloneable/multishot cont").
-That routes its resume through the DK-backed `tur_cloneable_cont` and clears 1 of
-the 3. The EVICT gate still reads `SIG-*` plus these 14 named residuals.
+is session-runtime-tied. None of the 14 is a clean standalone admission win. **B1 is NOT the tractable
+slice P-inv2 claimed** -- user resumable-payload effects already evict to fiber
+(the taint fixpoint does this correctly); CPS-emitting them needs DK-side
+multishot-continuation support (Phase-2), which even the clean multishot sibling
+lacks. The remaining genuinely-scoped work is Phase-2 (`BODY-STRUCT-OR-TAINT`,
+the dominant 5518-per-emit surface) plus the B2 closure-drop-glue backstop; there
+is no small Phase-1 admission win left among the 14. The EVICT gate still reads
+`SIG-*` plus these 14 named residuals.
 
 ## Progress log
+
+### Investigation P-inv3 -- B1 is not a bridge slice: user resumable-payload effects already evict to fiber (no code landed; corrects P-inv2)
+
+Attempted the B1 bridge for `effect-cont-kv-sugar` (P-inv2's "single most
+tractable slice") and found the premise false. P-inv2 read
+`multishot-effect-cont-kv-sugar`'s `--dump-cps` output as "already CPS-emits" --
+but `--dump-cps` is dump-only (never wired to codegen), and under
+`TUR_TRACE_EVICT` that clean, capture-free, multishot-annotated fixture EVICTS on
+`BODY-STRUCT-OR-TAINT` and runs on the fiber runtime (`tur_handler_dispatch`
+building a `tur_cloneable_cont` from a fiber STACK IMAGE via `__tur_msdyn_cont`,
+not a DK chain). A minimal capture-free ONE-SHOT `effect-cont` payload
+(`inner`/`outer`, `(k 7)`) evicts the same way and runs correctly (17) via fiber.
+So the taint fixpoint **correctly evicts every user resumable-payload effect to
+the proven fiber path** -- only the fully-synthesized `__Shift` desugar CPS-emits.
+The 3 B1 fixtures surface as `BODY-UNSUPPORTED` (not `-STRUCT-OR-TAINT`) only
+because their payloads CAPTURE, tripping `EX_CLOSURE` in CT-IR translation before
+the taint fixpoint evicts them. Re-applied the `is_effect_payload` admission
+patch to confirm: with it, `effect-cont-kv-sugar`'s performer stops evicting and
+CPS-emits -- then miscompiles at runtime (`continuation error: not a capturable
+continuation`), because the patch's perform-arg `atom_ok` widening flips the
+taint `in_s` true and bypasses the correct fiber eviction. That widening is
+UNSOUND; the patch is reverted and dropped (not preserved -- it forces an
+un-bridged CPS emission, not merely a gated one). Net: no code landed; B1's real
+blocker is the DK-side multishot-cont support the clean multishot sibling also
+lacks (Phase-2), corrected in "Honest distance" above.
 
 ### Investigation P-inv2 -- EX_CLOSURE is two families; the cont-bridge is DK-backed via tur_cloneable_cont (no code landed)
 
