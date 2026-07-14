@@ -25,6 +25,41 @@ if(APPLE)
 endif()
 
 # ---------------------------------------------------------------------------
+# Warnings-as-errors, except during the Windows bring-up.
+#
+# The Windows port is in progress (docs/upcoming/v1/windows-support-plan.md).
+# A first-time portability warning on a platform nobody has compiled for yet is
+# information, not a defect to halt on -- promoting it to a hard error just
+# hides the next twenty behind it.  Restore -Werror here once the port is warning
+# clean; every other platform keeps it today.
+# ---------------------------------------------------------------------------
+if(WIN32)
+    set(TUR_WERROR "")
+else()
+    set(TUR_WERROR -Werror)
+endif()
+
+# ---------------------------------------------------------------------------
+# C standard: gnu11 on Windows, c11 everywhere else.
+#
+# -std=c11 defines __STRICT_ANSI__, and MinGW uses that to hide every
+# non-ISO CRT declaration.  That breaks more than the POSIX calls we reach for
+# (mkdir, getcwd, ...): it breaks MinGW's OWN headers, because <dirent.h>
+# declares a `struct _finddata_t` field whose definition lives behind the same
+# gate in <io.h> -- so <dirent.h> fails to compile with "field 'dd_dta' has
+# incomplete type" before any of our code is even reached.
+#
+# -std=gnu11 is the same language with the platform's declarations left visible.
+# It is not a laxity knob; it is the only spelling under which MinGW's headers
+# are self-consistent.
+# ---------------------------------------------------------------------------
+if(WIN32)
+    set(TUR_CSTD -std=gnu11)
+else()
+    set(TUR_CSTD -std=c11)
+endif()
+
+# ---------------------------------------------------------------------------
 # Phase S1: detect libedit for REPL line editing + history
 # ---------------------------------------------------------------------------
 find_library(LIBEDIT_LIB edit)
@@ -188,17 +223,58 @@ set(TUR_CORE_SOURCES
     cli/lsp_lite.c
 )
 
+# ---------------------------------------------------------------------------
+# Architecture detection
+#
+# Under MSYS2/MinGW, CMake leaves CMAKE_SYSTEM_PROCESSOR *and*
+# CMAKE_HOST_SYSTEM_PROCESSOR empty, and the MSYS2 shell does not export the
+# PROCESSOR_ARCHITECTURE that CMake would otherwise read them from -- so all
+# three of the usual sources come back blank.  Fall through them in order and
+# then ask the compiler directly, which always knows: GCC and Clang both answer
+# `-dumpmachine` with a target triple ("x86_64-w64-mingw32").
+#
+# Case is normalised because native Windows reports "AMD64", not "amd64".
+# ---------------------------------------------------------------------------
+set(TUR_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+if(NOT TUR_ARCH)
+    set(TUR_ARCH "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+endif()
+if(NOT TUR_ARCH)
+    set(TUR_ARCH "$ENV{PROCESSOR_ARCHITECTURE}")
+endif()
+if(NOT TUR_ARCH)
+    execute_process(
+        COMMAND "${CMAKE_C_COMPILER}" -dumpmachine
+        OUTPUT_VARIABLE TUR_ARCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+endif()
+string(TOLOWER "${TUR_ARCH}" TUR_ARCH)
+
 # Architecture-specific assembly (added to both tur and libturi)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+if(WIN32)
+    # fiber_ctx_x64.S is SysV-only: it takes its first argument in %rdi (Windows
+    # uses %rcx) and tur_ctx_t has no slots for the XMM6-15/rdi/rsi that the
+    # Windows x64 ABI requires be preserved.  Reusing it would corrupt state
+    # silently, so Windows gets an aborting stub until WIN3 lands a real
+    # context switch.  See async/fiber_ctx_win.c.
+    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_win.c)
+elseif(TUR_ARCH MATCHES "arm64|aarch64")
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_arm64.S)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+elseif(TUR_ARCH MATCHES "x86_64|amd64")
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_x64.S)
 else()
-    message(FATAL_ERROR "Unsupported architecture '${CMAKE_SYSTEM_PROCESSOR}'; expected arm64/aarch64/x86_64/amd64")
+    message(FATAL_ERROR "Unsupported architecture '${TUR_ARCH}'; expected arm64/aarch64/x86_64/amd64")
 endif()
 
 # Platform-specific I/O backends
-if(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
+if(WIN32)
+    # Windows -- IOCP backend (io.h already selects IO_BACKEND_IOCP here).
+    # Currently a stub: every entry point fails cleanly rather than silently
+    # pretending to poll.  See docs/upcoming/v1/windows-support-plan.md (WIN3).
+    list(APPEND TUR_CORE_SOURCES async/io_iocp.c)
+elseif(UNIX AND NOT APPLE AND NOT FREEBSD AND NOT OPENBSD AND NOT NETBSD)
     # Linux - use epoll
     list(APPEND TUR_CORE_SOURCES async/io_epoll.c)
 elseif(APPLE OR FREEBSD OR OPENBSD OR NETBSD)
@@ -231,7 +307,7 @@ target_include_directories(tur_core PUBLIC ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
 target_compile_options(tur_core PRIVATE
-    -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic -pthread
+    -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD} -pedantic -pthread
     # GCC's -Wformat-truncation flags bounded, memory-safe snprintf path
     # building (pkg.c); clang has no such warning. Keep it non-fatal on GCC.
     $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
@@ -266,7 +342,7 @@ target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 
 # Common warning flags
 target_compile_options(tur PRIVATE
-    -Wall -Wextra -Werror -Wno-unused-parameter -std=c11 -pedantic
+    -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD} -pedantic
     $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
 )
 
@@ -360,7 +436,7 @@ add_executable(tur_eval_basic ${CMAKE_SOURCE_DIR}/tests/turi/eval-basic.c)
 target_include_directories(tur_eval_basic PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_eval_basic PRIVATE libturi)
 target_compile_options(tur_eval_basic PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -378,7 +454,7 @@ add_executable(tur_collections_embed ${CMAKE_SOURCE_DIR}/tests/turi/collections-
 target_include_directories(tur_collections_embed PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_collections_embed PRIVATE libturi)
 target_compile_options(tur_collections_embed PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -396,7 +472,7 @@ add_executable(tur_stdlib_natives_embed ${CMAKE_SOURCE_DIR}/tests/turi/stdlib-na
 target_include_directories(tur_stdlib_natives_embed PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_stdlib_natives_embed PRIVATE libturi)
 target_compile_options(tur_stdlib_natives_embed PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -414,7 +490,7 @@ add_executable(tur_env_teardown ${CMAKE_SOURCE_DIR}/tests/turi/env-teardown.c)
 target_include_directories(tur_env_teardown PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_env_teardown PRIVATE libturi)
 target_compile_options(tur_env_teardown PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -432,7 +508,7 @@ add_executable(tur_env_longlived ${CMAKE_SOURCE_DIR}/tests/turi/env-longlived.c)
 target_include_directories(tur_env_longlived PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_env_longlived PRIVATE libturi)
 target_compile_options(tur_env_longlived PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -450,7 +526,7 @@ add_executable(tur_embed_peripherals ${CMAKE_SOURCE_DIR}/tests/turi/embed-periph
 target_include_directories(tur_embed_peripherals PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_embed_peripherals PRIVATE libturi)
 target_compile_options(tur_embed_peripherals PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -468,7 +544,7 @@ add_executable(tur_eval_sandbox ${CMAKE_SOURCE_DIR}/tests/turi/sandbox-eval.c)
 target_include_directories(tur_eval_sandbox PRIVATE ${TUR_INCLUDE_DIRS})
 target_link_libraries(tur_eval_sandbox PRIVATE libturi)
 target_compile_options(tur_eval_sandbox PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -492,7 +568,7 @@ add_executable(tur_ffi_dispatch_unit
 )
 target_include_directories(tur_ffi_dispatch_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_ffi_dispatch_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -519,7 +595,7 @@ add_executable(tur_experiments_user_config
 )
 target_include_directories(tur_experiments_user_config PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_experiments_user_config PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -544,7 +620,7 @@ add_executable(tur_codegen_carrier_bridge
 )
 target_include_directories(tur_codegen_carrier_bridge PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_codegen_carrier_bridge PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -569,7 +645,7 @@ add_executable(tur_kind_arity_unit
 )
 target_include_directories(tur_kind_arity_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_kind_arity_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -602,7 +678,7 @@ add_executable(tur_kind_row_unit
 )
 target_include_directories(tur_kind_row_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_kind_row_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -627,7 +703,7 @@ add_executable(tur_typerow_unit
 )
 target_include_directories(tur_typerow_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_typerow_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -652,7 +728,7 @@ add_executable(tur_codegen_reinterpret
 )
 target_include_directories(tur_codegen_reinterpret PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_codegen_reinterpret PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -677,7 +753,7 @@ add_executable(tur_lifetime_unit
 )
 target_include_directories(tur_lifetime_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_lifetime_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -702,7 +778,7 @@ add_executable(tur_cps_rt_unit
 )
 target_include_directories(tur_cps_rt_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_cps_rt_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -725,7 +801,7 @@ add_executable(tur_cps_prompt_unit
 )
 target_include_directories(tur_cps_prompt_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_cps_prompt_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -748,7 +824,7 @@ add_executable(tur_image_unit
 )
 target_include_directories(tur_image_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_image_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11 -pthread
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -774,7 +850,7 @@ add_executable(tur_docscanner_unit
 )
 target_include_directories(tur_docscanner_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_docscanner_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -793,7 +869,7 @@ add_executable(tur_mangle_unit
 )
 target_include_directories(tur_mangle_unit PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(tur_mangle_unit PRIVATE
-    -Wall -Wextra -Wno-unused-parameter -std=c11
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
     $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
     $<$<CONFIG:Release>: -O2 -DNDEBUG>
 )
@@ -879,7 +955,7 @@ if(TUR_WASM)
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1
                 -O2
-                -Wall -Wextra -Wno-unused-parameter -std=c11 -pedantic
+                -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pedantic
                 -D_DEFAULT_SOURCE
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             COMMENT "Building Turmeric WASM module (pthreads, lazy pool)"

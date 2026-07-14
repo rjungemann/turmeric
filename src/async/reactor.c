@@ -43,6 +43,24 @@
 #include <sys/signalfd.h>
 #endif
 
+/*
+ * Signal sources need either Linux signalfd, or POSIX sigaction() plus the
+ * self-pipe trick.  Windows has neither -- there is no sigaction, and a Win32
+ * console control handler is a different enough model that faking one here
+ * would be a lie -- and Emscripten has no signals at all.
+ *
+ * Both platforms therefore compile the signal-source path out entirely and fall
+ * through to the "signals not supported" arm, which reports -1 from
+ * tur_reactor_add_signal().  Everything else in the reactor (timers, fd sources,
+ * channel bridges) is unaffected.
+ *
+ * Named rather than repeating `!defined(__EMSCRIPTEN__) && !defined(_WIN32)` at
+ * four sites: the next platform to lack signals should only have to edit here.
+ */
+#if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+#define TUR_REACTOR_HAVE_SIGNALS 1
+#endif
+
 #define REACTOR_INITIAL_CAP 16
 
 /* ------------------------------------------------------------------ */
@@ -65,7 +83,9 @@ typedef struct {
     /* Signal-specific */
     int           signum;
     int           sig_write_fd;    /* kqueue: write end of self-pipe */
+#ifdef TUR_REACTOR_HAVE_SIGNALS
     struct sigaction sig_old_sa;   /* kqueue: saved action for restore */
+#endif
     /* Timer-specific */
     int64_t       deadline_ms;     /* absolute CLOCK_MONOTONIC ms */
     int64_t       interval_ms;     /* 0 for one-shot timers */
@@ -96,7 +116,7 @@ struct TurReactor {
 /* Self-pipe signal dispatch table (macOS / kqueue platforms)          */
 /* ------------------------------------------------------------------ */
 
-#if !defined(IO_BACKEND_EPOLL) && !defined(__EMSCRIPTEN__)
+#if !defined(IO_BACKEND_EPOLL) && defined(TUR_REACTOR_HAVE_SIGNALS)
 static int  g_sig_write_fd[NSIG];
 static bool g_sig_table_init = false;
 
@@ -180,7 +200,7 @@ static void signal_shim(int fd, int events, void *user_data) {
     ssize_t n;
     while ((n = read(fd, &si, sizeof(si))) == (ssize_t)sizeof(si))
         call_tur_fd_cb(src->tur_cb, src->id, (int)si.ssi_signo, src->tur_user_data);
-#elif !defined(__EMSCRIPTEN__)
+#elif defined(TUR_REACTOR_HAVE_SIGNALS)
     uint8_t b;
     while (read(fd, &b, 1) == 1)
         call_tur_fd_cb(src->tur_cb, src->id, (int)b, src->tur_user_data);
@@ -237,7 +257,7 @@ static void cleanup_source(TurReactor *r, TurReactorSource *src) {
             sigaddset(&mask, src->signum);
             sigprocmask(SIG_UNBLOCK, &mask, NULL);
         }
-#elif !defined(__EMSCRIPTEN__)
+#elif defined(TUR_REACTOR_HAVE_SIGNALS)
         io_unregister(r->backend, src->fd);
         sigaction(src->signum, &src->sig_old_sa, NULL);
         if (src->signum >= 0 && src->signum < NSIG)
@@ -464,7 +484,7 @@ int64_t tur_reactor_add_signal(void *rp, int64_t signum_i,
     src->active = true;
     return src->id;
 
-#elif !defined(__EMSCRIPTEN__)
+#elif defined(TUR_REACTOR_HAVE_SIGNALS)
     if (!g_sig_table_init) {
         for (int i = 0; i < NSIG; i++) g_sig_write_fd[i] = -1;
         g_sig_table_init = true;

@@ -33,6 +33,24 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(TUR_DEBUG_SANITIZE
   "Instrument the Debug build with AddressSanitizer + UBSan"
   ON)
+
+# MinGW GCC ships no ASan/UBSan runtime at all -- there is no libasan.a or
+# libubsan.a in the toolchain -- so -fsanitize=address,undefined fails at LINK
+# time with "cannot find -lasan" and no Debug build can succeed.
+#
+# This is not the macOS situation described above and does not contradict the
+# "never auto-disable" rule.  There the runtime exists and merely misbehaves, so
+# staying loud is the right call.  Here the feature does not exist on the
+# toolchain, so the only choices are "disable it" or "no Windows Debug build";
+# the loss of coverage is announced rather than silent.  MSYS2's clang DOES ship
+# compiler-rt, so the opt-out is scoped to GNU rather than to Windows at large.
+if(TUR_DEBUG_SANITIZE AND WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+  set(TUR_DEBUG_SANITIZE OFF)
+  message(STATUS
+    "tur: Debug sanitizers disabled -- MinGW GCC has no ASan/UBSan runtime. "
+    "Build with the MSYS2 clang toolchain to get sanitizer coverage on Windows.")
+endif()
+
 if(TUR_DEBUG_SANITIZE)
   set(TUR_ASAN_FLAGS "-fsanitize=address,undefined")
 else()

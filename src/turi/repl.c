@@ -16,7 +16,11 @@
 #  ifndef _DARWIN_C_SOURCE
 #    define _DARWIN_C_SOURCE
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -1031,7 +1035,13 @@ int turi_repl_run(bool watch_mode) {
     char *hist_path = history_path();
 #ifdef TURI_HAVE_EDITLINE
     using_history();
+#ifndef _WIN32
+    /* wineditline (the libedit MSYS2 ships) implements the core readline API but
+     * not stifle_history.  History simply grows unbounded on Windows -- the file
+     * is trimmed on read anyway, so this costs memory in a long session, nothing
+     * more. */
     stifle_history(1000);
+#endif
     if (hist_path) read_history(hist_path);
     /* E11: install tab-completion generator.
      * editline declares rl_completion_entry_function as Function* (int ret)

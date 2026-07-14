@@ -111,11 +111,103 @@ smoke:
     cd web && npm run test:prod
 
 # ---------------------------------------------------------------------------
+# Windows (MSYS2 / UCRT64)
+#
+# The Windows toolchain lives entirely inside the MSYS2 tree (default
+# C:\msys64) -- no Visual Studio, no MSVC, no VC++ redistributables.  Removing
+# it is `rm -rf` on that one directory.
+#
+# Every recipe below re-enters a login shell with MSYSTEM=UCRT64, so they work
+# from any shell (Git Bash, PowerShell, cmd) -- you do not have to be sitting
+# in the MSYS2 UCRT64 terminal.  Set MSYS2_ROOT if MSYS2 is not at C:/msys64.
+#
+# See "Windows setup" at the bottom of this file for the from-scratch
+# bootstrap (these recipes assume MSYS2 itself is already installed).
+# ---------------------------------------------------------------------------
+
+MSYS2_ROOT := env_var_or_default("MSYS2_ROOT", "C:/msys64")
+
+# Install or refresh the Windows toolchain (gcc, clang, cmake, ninja, just). Idempotent.
+setup-windows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    MSYS_BASH="{{MSYS2_ROOT}}/usr/bin/bash"
+    [ -x "$MSYS_BASH" ] || {
+        echo "error: MSYS2 not found at {{MSYS2_ROOT}}" >&2
+        echo "       install it with:  winget install MSYS2.MSYS2" >&2
+        echo "       or set MSYS2_ROOT to an existing install." >&2
+        exit 2
+    }
+    # `pacman -Syu` can update pacman itself, after which it wants a fresh
+    # shell before it will finish the rest -- hence two passes.
+    MSYSTEM=UCRT64 "$MSYS_BASH" -lc 'pacman -Syu --noconfirm'
+    MSYSTEM=UCRT64 "$MSYS_BASH" -lc 'pacman -Syu --noconfirm'
+    # `just` lives in the plain msys repo, not the ucrt64 one -- pacman pulls
+    # from both in a single transaction.
+    MSYSTEM=UCRT64 "$MSYS_BASH" -lc 'pacman -S --noconfirm --needed \
+        mingw-w64-ucrt-x86_64-gcc \
+        mingw-w64-ucrt-x86_64-clang \
+        mingw-w64-ucrt-x86_64-cmake \
+        mingw-w64-ucrt-x86_64-ninja \
+        just'
+
+# Print Windows toolchain versions and confirm it emits native PE binaries.
+doctor-windows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Run this first when a Windows build misbehaves: it separates "the
+    # toolchain is wrong" from "the port is wrong".
+    MSYSTEM=UCRT64 "{{MSYS2_ROOT}}/usr/bin/bash" -lc '
+        set -e
+        for c in gcc clang cc cmake ninja; do
+            printf "%-6s %s\n" "$c" "$(command -v "$c" || echo MISSING)"
+        done
+        echo
+        gcc --version | head -1
+        clang --version | head -1
+        cmake --version | head -1
+        echo "ninja $(ninja --version)"
+        echo
+        # A UCRT64 gcc must produce a PE32+ binary, not an ELF.  If this line
+        # says ELF, MSYSTEM was not honored and you are in the wrong subsystem.
+        tmp=$(mktemp -d)
+        printf "int main(void){return 0;}\n" > "$tmp/t.c"
+        gcc "$tmp/t.c" -o "$tmp/t.exe"
+        file "$tmp/t.exe"
+        rm -rf "$tmp"
+    '
+
+# Configure a native Windows build into build-win/.
+configure-windows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    MSYS_BASH="{{MSYS2_ROOT}}/usr/bin/bash"
+    # justfile_directory() hands back a backslashed Windows path; bash would
+    # eat the backslashes as escapes, so translate it to a POSIX path first.
+    ROOT=$(MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cygpath -u '{{justfile_directory()}}'")
+    MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cd '$ROOT' && cmake -S . -B build-win -G Ninja \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
+# Build tur.exe / libturi for Windows.
+build-windows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -f build-win/CMakeCache.txt ] || just configure-windows
+    MSYS_BASH="{{MSYS2_ROOT}}/usr/bin/bash"
+    ROOT=$(MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cygpath -u '{{justfile_directory()}}'")
+    MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cd '$ROOT' && cmake --build build-win -j"
+
+# Drop the Windows build tree (leaves the toolchain alone).
+clean-windows:
+    rm -rf build-win
+
+# ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
 
 clean:
-    rm -rf build build-release build-tsan build-wasm tests/out
+    rm -rf build build-release build-tsan build-wasm build-win tests/out
     find tests/fixtures -name 'actual.*' -delete
     find tests/cli -name 'actual.*' -delete
 
@@ -384,3 +476,61 @@ perf-open:
 
 # Full pipeline: run benchmarks → aggregate → analyze → generate docs → open report.
 perf: perf-run perf-aggregate perf-analyze perf-docs perf-viz perf-open
+
+# ---------------------------------------------------------------------------
+# Windows setup -- from a clean machine
+# ---------------------------------------------------------------------------
+#
+# The Windows toolchain is MSYS2 + the UCRT64 mingw-w64 packages.  There is no
+# Visual Studio, no MSVC, and no VC++ redistributable anywhere in this setup:
+# everything lands under one directory (C:\msys64 by default), and uninstalling
+# is deleting that directory (or running C:\msys64\uninstall.exe).
+#
+#   1. Install MSYS2 itself.  winget ships with Windows 11, so:
+#
+#          winget install MSYS2.MSYS2
+#
+#      If MSYS2 ends up somewhere other than C:\msys64, export MSYS2_ROOT to
+#      point at it -- every windows recipe below honors that variable.
+#
+#   2. Install the toolchain (gcc, clang, cmake, ninja, just) into the UCRT64
+#      subsystem.  Chicken-and-egg: `just setup-windows` is what *installs*
+#      just, so the very first time you have to run the pacman lines by hand.
+#      Open C:\msys64\ucrt64.exe and paste:
+#
+#          pacman -Syu --noconfirm            # twice: the first pass may
+#          pacman -Syu --noconfirm            # update pacman itself
+#          pacman -S --noconfirm --needed \
+#              mingw-w64-ucrt-x86_64-gcc   mingw-w64-ucrt-x86_64-clang \
+#              mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja just
+#
+#      After that, `just setup-windows` does the same thing and is idempotent
+#      -- re-run it any time to refresh the toolchain.  (Note `tur run` is NOT
+#      an option for these: it needs a working tur, which is the thing you do
+#      not have yet on a fresh Windows box.)
+#
+#   3. Confirm the toolchain is sane before blaming the build:
+#
+#          just doctor-windows
+#
+#      Every tool should resolve under /ucrt64/bin, and the final `file` line
+#      must say "PE32+ executable ... x86-64".  If it says ELF, MSYSTEM was not
+#      honored and you are in the wrong MSYS2 subsystem.
+#
+#   4. Configure and build:
+#
+#          just configure-windows      # -> build-win/
+#          just build-windows          # -> build-win/tur.exe
+#
+# Working interactively instead?  Launch C:\msys64\ucrt64.exe (Start menu:
+# "MSYS2 UCRT64" -- NOT the plain "MSYS2" entry, which is a different
+# subsystem and will not have the toolchain on PATH).  `echo $MSYSTEM` must
+# print UCRT64.  Inside that shell the raw cmake/ninja commands work directly,
+# with no wrapper.
+#
+# STATUS: the Windows port is not finished -- see
+# docs/upcoming/v1/windows-support-plan.md.  `configure-windows` currently stops
+# at the architecture dispatch in src/CMakeLists.txt (CMAKE_SYSTEM_PROCESSOR is
+# empty under MSYS2).  The toolchain above is correct; the build is what still
+# needs work.
+# ---------------------------------------------------------------------------

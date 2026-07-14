@@ -10,7 +10,11 @@
 #  ifndef _DARWIN_C_SOURCE
 #    define _DARWIN_C_SOURCE
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -21,7 +25,11 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <math.h>
+#ifndef _WIN32
+/* poll(2) has no Windows counterpart for CRT file descriptors; the only user is
+ * the fork-based fixture worker, which is compiled out below. */
 #include <poll.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +38,16 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include "platform_fs.h"  /* realpath/mkdir/setenv/mkstemps/... on Windows */
+#ifdef _WIN32
+#include <io.h>       /* _setmode, _fileno */
+#endif
+#ifndef _WIN32
+/* waitpid() is only used by the fork-based fixture worker, which is compiled out
+ * on Windows.  The WIFEXITED/WEXITSTATUS uses that remain are applied to a
+ * system() return value, and platform_fs.h defines those there. */
 #include <sys/wait.h>
+#endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>     /* SN1: _NSGetExecutablePath for stdlib resolution */
 #endif
@@ -1718,13 +1735,31 @@ static void rewrite_autolink_relative_paths(const char *flags,
 
 /* Build a deterministic path for the intermediate generated-C file so that
  * ccache can cache repeated compilations of the same .tur source.
- * Maps the input path to /tmp/tur-build/<sanitized>.c where non-alphanumeric
+ * Maps the input path to <tmpdir>/tur-build/<sanitized>.c where non-alphanumeric
  * characters (except '-') are replaced with '_'.
- * Creates /tmp/tur-build/ on first call. */
+ * Creates <tmpdir>/tur-build/ on first call.
+ *
+ * The directory comes from tur_temp_dir(), not a literal "/tmp": on Windows a
+ * leading "/" means the root of the current drive, so "/tmp/tur-build" would
+ * point at a C:\tmp that does not exist. */
+/* "<tmpdir>/tur-build/" (with trailing separator), created on first use.
+ * Exposed so the unlink-vs-keep decision after cc can test membership against
+ * the real prefix instead of pattern-matching a hardcoded "/tmp/...". */
+static const char *stable_c_prefix(void) {
+    static char prefix_buf[512];
+    static int  made = 0;
+    if (!made) {
+        char dir[512];
+        snprintf(dir, sizeof(dir), "%s/tur-build", tur_temp_dir());
+        mkdir(dir, 0700);
+        snprintf(prefix_buf, sizeof(prefix_buf), "%s/", dir);
+        made = 1;
+    }
+    return prefix_buf;
+}
+
 static void stable_c_path(const char *input, char *out, size_t cap) {
-    static int dir_made = 0;
-    if (!dir_made) { mkdir("/tmp/tur-build", 0700); dir_made = 1; }
-    const char *prefix = "/tmp/tur-build/";
+    const char *prefix = stable_c_prefix();
     size_t plen = strlen(prefix);
     if (plen + 3 >= cap) { out[0] = '\0'; return; }
     memcpy(out, prefix, plen);
@@ -1777,7 +1812,8 @@ static int cmd_build(const char *input, const char *out_path,
     FILE *tf = tmpl[0] ? fopen(tmpl, "wb") : NULL;
     if (!tf) {
         /* fallback: random temp */
-        char fallback[] = "/tmp/tur-XXXXXX.c";
+        char fallback[512];
+        snprintf(fallback, sizeof(fallback), "%s/tur-XXXXXX.c", tur_temp_dir());
         int fd = mkstemps(fallback, 2);
         if (fd < 0) {
             fprintf(stderr, "tur: cannot create temp file\n");
@@ -2100,9 +2136,16 @@ static int cmd_build(const char *input, const char *out_path,
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
     buf_free(&cmd);
-    /* Leave the stable temp file for ccache; only unlink random fallbacks. */
-    if (tmpl[0] == '/' && strncmp(tmpl, "/tmp/tur-build/", 15) != 0) {
-        unlink(tmpl);
+    /* Leave the stable temp file for ccache; only unlink random fallbacks.
+     * Tested against the real prefix rather than a literal "/tmp/tur-build/":
+     * on Windows the path starts with a drive letter, so the old check was
+     * never true there and every fallback temp file would have been left
+     * behind. */
+    {
+        const char *sp = stable_c_prefix();
+        if (tmpl[0] && strncmp(tmpl, sp, strlen(sp)) != 0) {
+            unlink(tmpl);
+        }
     }
 
     if (sys_rc != 0) {
@@ -2627,7 +2670,7 @@ static char **collect_tur_files(const char *dir, int *n_out) {
 
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
-        if (ent->d_type != DT_REG) continue;
+        if (!tur_dirent_is_reg(dir, ent)) continue;
         size_t len = strlen(ent->d_name);
         if (len >= 4 && strcmp(ent->d_name + len - 4, ".tur") == 0) {
             if (n >= cap) {
@@ -3064,7 +3107,8 @@ static int cmd_run(int argc, char **argv) {
     /* Helper: build 'entry', exec with optional passthrough args.
      * Cleans up user_inc, spice_inc_dirs, and auto_src_run on every exit. */
 #define RUN_ENTRY(entry_path) do {                                       \
-        char out_path[] = "/tmp/tur-run-XXXXXX";                         \
+        char out_path[512]; \
+        snprintf(out_path, sizeof(out_path), "%s/tur-run-XXXXXX", tur_temp_dir()); \
         int _fd = mkstemp(out_path);                                     \
         if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return 2; } \
@@ -3120,7 +3164,8 @@ static int cmd_run(int argc, char **argv) {
     if (explicit_file) {
         /* E6: treat "-" as stdin -- buffer it into a temp .tur file first. */
         if (strcmp(explicit_file, "-") == 0) {
-            char src_tmp[] = "/tmp/tur-stdin-XXXXXX.tur";
+            char src_tmp[512];
+            snprintf(src_tmp, sizeof(src_tmp), "%s/tur-stdin-XXXXXX.tur", tur_temp_dir());
             int src_fd = mkstemps(src_tmp, 4);
             if (src_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
             char ibuf[4096]; size_t nr;
@@ -3134,7 +3179,8 @@ static int cmd_run(int argc, char **argv) {
                 free(user_inc);
                 return 2;
             }
-            char out_path[] = "/tmp/tur-run-XXXXXX";
+            char out_path[512];
+            snprintf(out_path, sizeof(out_path), "%s/tur-run-XXXXXX", tur_temp_dir());
             int out_fd = mkstemp(out_path);
             if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
             close(out_fd);
@@ -3454,7 +3500,8 @@ static int cmd_test(const char *dir) {
     }
 
     for (int i = 0; i < n_files; i++) {
-        char out_path[] = "/tmp/tur-test-XXXXXX";
+        char out_path[512];
+        snprintf(out_path, sizeof(out_path), "%s/tur-test-XXXXXX", tur_temp_dir());
         int fd = mkstemp(out_path);
         if (fd < 0) {
             fprintf(stderr, "tur: mkstemp failed for %s\n", tur_files[i]);
@@ -4764,13 +4811,15 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
             bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
             if (!same) {
                 /* Write original and formatted to temp files, run diff -u. */
-                char orig_tmp[] = "/tmp/tur-fmt-orig-XXXXXX";
+                char orig_tmp[512];
+                snprintf(orig_tmp, sizeof(orig_tmp), "%s/tur-fmt-orig-XXXXXX", tur_temp_dir());
                 int orig_fd = mkstemp(orig_tmp);
                 if (orig_fd >= 0) {
                     ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
                     close(orig_fd);
                 }
-                char new_tmp[] = "/tmp/tur-fmt-new-XXXXXX";
+                char new_tmp[512];
+                snprintf(new_tmp, sizeof(new_tmp), "%s/tur-fmt-new-XXXXXX", tur_temp_dir());
                 int new_fd = mkstemp(new_tmp);
                 if (new_fd >= 0) {
                     ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
@@ -5074,8 +5123,10 @@ static int fmt_process_file(const char *path, ReaderType force_lang,
             return 1;
 
         case FMT_MODE_DIFF: {
-            char orig_tmp[] = "/tmp/tur-fmt-orig-XXXXXX";
-            char new_tmp[]  = "/tmp/tur-fmt-new-XXXXXX";
+            char orig_tmp[512];
+            snprintf(orig_tmp, sizeof(orig_tmp), "%s/tur-fmt-orig-XXXXXX", tur_temp_dir());
+            char new_tmp[512];
+            snprintf(new_tmp, sizeof(new_tmp), "%s/tur-fmt-new-XXXXXX", tur_temp_dir());
             int ofd = mkstemp(orig_tmp);
             if (ofd >= 0) {
                 ssize_t _w1 = write(ofd, src, len); (void)_w1;
@@ -5159,23 +5210,15 @@ static int fmt_walk(const char *path, ReaderType force_lang, FmtMode mode,
         char child[4096];
         snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
 
-        if (ent->d_type == DT_DIR) {
+        /* tur_dirent_is_* fold in the stat() fallback for filesystems (and
+         * Windows) that do not report d_type, so the DT_UNKNOWN arm this used
+         * to carry -- a verbatim copy of both branches below -- is gone. */
+        if (tur_dirent_is_dir(path, ent)) {
             changed += fmt_walk(child, force_lang, mode, err_count);
-        } else if (ent->d_type == DT_REG && fmt_is_tur_file(ent->d_name)) {
+        } else if (tur_dirent_is_reg(path, ent) && fmt_is_tur_file(ent->d_name)) {
             int r = fmt_process_file(child, force_lang, mode);
             if (r < 0) (*err_count)++;
             else if (r > 0) changed++;
-        } else if (ent->d_type == DT_UNKNOWN) {
-            struct stat cs;
-            if (stat(child, &cs) == 0) {
-                if (S_ISDIR(cs.st_mode))
-                    changed += fmt_walk(child, force_lang, mode, err_count);
-                else if (S_ISREG(cs.st_mode) && fmt_is_tur_file(ent->d_name)) {
-                    int r = fmt_process_file(child, force_lang, mode);
-                    if (r < 0) (*err_count)++;
-                    else if (r > 0) changed++;
-                }
-            }
         }
     }
     closedir(d);
@@ -5878,6 +5921,19 @@ static void wk_write_result(const char *results_dir, const char *kind,
 
 /* Drain two read-end pipe fds concurrently into Bufs.
  * Closes both fds on return. */
+#ifndef _WIN32
+/*
+ * Fixture worker (`tur worker`) -- forks a child per fixture so a crashing
+ * fixture cannot take the worker process down with it, then polls the child's
+ * stdout/stderr pipes.
+ *
+ * fork(2) and poll(2) have no Windows counterpart.  Doing this properly means
+ * CreateProcess plus overlapped pipe reads -- a real port, not a shim.  It is
+ * also purely a test-harness fast path: `tur build`, `emit-c` and `check` never
+ * touch it.  So it is compiled out here, and cmd_worker() below reports that it
+ * is unavailable; tests/run.sh then falls back to spawning `tur` once per
+ * fixture, which is slower but correct.
+ */
 static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
     struct pollfd pfds[2];
     pfds[0].fd = fd_out; pfds[0].events = POLLIN;
@@ -5905,6 +5961,8 @@ static void wk_drain_pipes(int fd_out, int fd_err, Buf *out_buf, Buf *err_buf) {
     }
     close(fd_out); close(fd_err);
 }
+
+#endif /* _WIN32 -- wk_drain_pipes */
 
 /* -------------------------------------------------------------------------
  * Native HAMT wrappers for the interpreter (Tier 3).
@@ -5983,6 +6041,8 @@ static int cmd_image_verify(const char *path, const char *binary) {
 /* Run the interpreter on 'input' in a forked child.
  * Returns child exit code; writes captured stdout and stderr into out and err.
  * Caller frees *out and *err. */
+#ifndef _WIN32  /* fork-based fixture worker; see the note above */
+
 static int wk_eval_fixture(const char *input, const char *flags_str,
                             const char *stdin_path, int timeout_secs,
                             char **out, char **err) {
@@ -6418,6 +6478,17 @@ static int cmd_worker(void) {
     }
     return 0;
 }
+
+#else  /* _WIN32 */
+
+static int cmd_worker(void) {
+    fprintf(stderr,
+            "tur worker: not supported on Windows (requires fork/poll).\n"
+            "  Run the fixture suite without the worker fast path.\n");
+    return 1;
+}
+
+#endif /* _WIN32 */
 
 /* GS-M2: scan $PATH for `tur-*` executables and print them as an
  * "External commands:" block beneath the built-in usage. Built-in
@@ -7237,6 +7308,27 @@ static int try_external_subcommand(int argc, char **argv) {
 
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    /*
+     * Put stdout/stderr in binary mode so a newline stays one byte.
+     *
+     * Windows opens them in text mode by default, which silently rewrites every
+     * '\n' to "\r\n" on the way out.  Three things here break on that, and two
+     * of them break silently:
+     *
+     *   - `tur emit-c` writes generated C to stdout, so every line would gain a
+     *     \r and stop matching tests/fixtures/*\/expected.c.
+     *   - The LSP and DAP servers frame messages with a Content-Length byte
+     *     count computed BEFORE the text-mode expansion -- so the count would
+     *     understate the bytes actually written and desynchronise the protocol.
+     *   - `tur fmt --stdout` would rewrite the file's line endings as a side
+     *     effect of printing it.
+     *
+     * Binary mode makes output byte-exact, matching every other platform.
+     */
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
     /* SN1: stash argv[0] for exe-path fallback in resolve_stdlib_root().
      * Platform APIs (_NSGetExecutablePath / /proc/self/exe) are tried
      * first; argv[0] is the last-resort path source. */

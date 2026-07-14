@@ -36,7 +36,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "io.h"
+#include "async_io.h"
 
 typedef struct TurReactor TurReactor;
 

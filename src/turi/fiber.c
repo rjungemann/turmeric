@@ -17,7 +17,11 @@
 #  ifndef _XOPEN_SOURCE
 #    define _XOPEN_SOURCE 700
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -33,7 +37,16 @@
 #include <string.h>
 #include <time.h>
 
-#ifndef __EMSCRIPTEN__
+#if defined(_WIN32)
+/* Windows: mmap is shimmed over VirtualAlloc, but <poll.h> has no counterpart.
+ * WSAPoll only accepts SOCKETs, and the descriptors here are CRT file
+ * descriptors, so there is nothing honest to map poll() onto -- the pending-I/O
+ * scan below compiles out.  Consistent with io_iocp.c, which cannot register an
+ * fd in the first place; interpreter async I/O on Windows is WIN3. */
+#  include "platform_mman.h"
+#  include <fcntl.h>
+#  include <unistd.h>
+#elif !defined(__EMSCRIPTEN__)
 #  include <fcntl.h>
 #  include <poll.h>
 #  include <sys/mman.h>
@@ -212,6 +225,14 @@ void turi_io_write_async(TuriEnv *env, int fd, const char *data, int len,
 static void poll_io(TuriEnv *env, int timeout_ms) {
     if (!env->io_pending_head) return;
 
+#ifdef _WIN32
+    /* No poll(2) for CRT file descriptors on Windows -- see the include block
+     * at the top of this file.  Nothing can be marked ready, so pending entries
+     * would simply be re-scanned forever; returning immediately at least keeps
+     * the scheduler responsive rather than spinning inside a fake poll. */
+    (void)timeout_ms;
+    return;
+#else
     /* Build pollfds array. */
     uint32_t n = env->io_pending_count;
     struct pollfd *pfds = (struct pollfd *)malloc(n * sizeof(struct pollfd));
@@ -272,6 +293,7 @@ static void poll_io(TuriEnv *env, int timeout_ms) {
 
     free(pfds);
     free(pptrs);
+#endif /* !_WIN32 */
 }
 
 #else  /* __EMSCRIPTEN__ — stub out POSIX I/O */
@@ -626,7 +648,23 @@ static TuriValue native_cancel_task(TuriEnv *env, TuriValue *args, uint32_t n,
 }
 
 /* async-pipe-init : () -> nil  (sets up test pipe in env) */
-#ifndef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__)
+static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
+                                        uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_error("async-pipe-init: not supported in WASM");
+}
+#elif defined(_WIN32)
+/* This helper exists to feed poll_io(), which is itself compiled out on Windows
+ * (no poll(2) for CRT file descriptors -- see the include block at the top).
+ * Handing back a working pipe nobody can ever poll would be a trap, so fail
+ * where the mistake is visible. */
+static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
+                                        uint32_t n, void *ud) {
+    (void)env; (void)args; (void)n; (void)ud;
+    return turi_error("async-pipe-init: not supported on Windows");
+}
+#else
 static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
                                         uint32_t n, void *ud) {
     (void)args; (void)n; (void)ud;
@@ -639,12 +677,6 @@ static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
     env->test_pipe_rfd = fds[0];
     env->test_pipe_wfd = fds[1];
     return turi_nil();
-}
-#else
-static TuriValue native_async_pipe_init(TuriEnv *env, TuriValue *args,
-                                        uint32_t n, void *ud) {
-    (void)env; (void)args; (void)n; (void)ud;
-    return turi_error("async-pipe-init: not supported in WASM");
 }
 #endif
 

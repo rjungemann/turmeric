@@ -29,7 +29,12 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#ifndef __EMSCRIPTEN__
+#if defined(_WIN32)
+/* Windows has no fork/exec.  The CRT's _spawnvp/_cwait are the direct
+ * equivalents (spawn-and-return-a-handle, then reap it), so process/spawn and
+ * process/wait are really implemented here rather than stubbed. */
+#include <process.h>
+#elif !defined(__EMSCRIPTEN__)
 /* <sys/wait.h> transitively pulls <signal.h>, whose emscripten build defines
  * its own ucontext_t -- colliding with the WASM fiber-stub ucontext_t in
  * turi/env.h. Process spawn/wait is a no-op under emscripten (no fork/exec in
@@ -3537,18 +3542,34 @@ static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, vo
     { int i = 0; for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
         args[i++] = (char *)(intptr_t)((int64_t *)(intptr_t)t)[0]; }
     args[argc] = NULL;
+#ifdef _WIN32
+    /* _spawnvp(_P_NOWAIT) is fork+execvp in one call: it returns a process
+     * HANDLE (not a pid) that _cwait() below reaps.  The handle is opaque to
+     * callers either way, so ChildHandle keeps its meaning. */
+    intptr_t child = _spawnvp(_P_NOWAIT, path, (const char *const *)args);
+    free(args);
+    if (child == -1) return turi_int(-1);
+    return turi_int((int64_t)child);
+#else
     pid_t pid = fork();
     if (pid < 0) { free(args); return turi_int(-1); }
     if (pid == 0) { execvp(path, args); _exit(127); }
     free(args);
     return turi_int((int64_t)pid);
+#endif
 }
 static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1) return turi_int(-1);
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__)
     /* No process reaping in the browser; process/spawn already returns -1. */
     return turi_int(-1);
+#elif defined(_WIN32)
+    /* _cwait yields the child's exit code directly -- there is no POSIX
+     * wait-status encoding to unpack, so no WIFEXITED/WEXITSTATUS here. */
+    int status = 0;
+    if (_cwait(&status, (intptr_t)a[0].as_int, 0) == -1) return turi_int(-1);
+    return turi_int((int64_t)status);
 #else
     int status = 0;
     if (waitpid((pid_t)a[0].as_int, &status, 0) < 0) return turi_int(-1);

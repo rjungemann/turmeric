@@ -35,13 +35,18 @@
 #  ifndef _DARWIN_C_SOURCE
 #    define _DARWIN_C_SOURCE
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
 #endif
 
 #include "justrun.h"
+#include "platform_fs.h"
 
 extern _Bool use_json_output;
 
@@ -52,7 +57,9 @@ extern _Bool use_json_output;
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
+#ifndef _WIN32
+#include <sys/wait.h>  /* WIFEXITED/WEXITSTATUS; see platform_fs.h on Windows */
+#endif
 #include <unistd.h>
 
 /* ================================================================== */

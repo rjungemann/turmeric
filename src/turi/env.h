@@ -15,7 +15,11 @@
 #include <stdbool.h>
 #include "compiler/diag.h"
 
-#ifndef __EMSCRIPTEN__
+#if defined(_WIN32)
+/* Windows: no <ucontext.h>.  Win32 Fibers are the real equivalent; the shims
+ * live in platform_ucontext_win.h (shared with turi/fiber.h). */
+#  include "platform_ucontext_win.h"
+#elif !defined(__EMSCRIPTEN__)
 #  if defined(__APPLE__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wdeprecated-declarations"

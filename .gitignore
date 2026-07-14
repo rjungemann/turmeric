@@ -8,6 +8,7 @@ build-rel/
 build-release/
 build-tsan/
 build-wasm/
+build-win/
 build_nosub/
 build-release-check/
 *.dSYM/

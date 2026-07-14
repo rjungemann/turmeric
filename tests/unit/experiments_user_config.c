@@ -11,6 +11,7 @@
  * CMakeLists.txt. */
 #include "experiments.h"
 #include "lsp_sym.h"
+#include "platform_fs.h"  /* setenv/mkdir on Windows */
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,6 +1,7 @@
 /* emit_core.c -- shared codegen helpers: naming, atoms, builtins, captures. */
 #include "emit_internal.h"
 #include "mangle.h"
+#include "platform_fs.h"  /* strndup() on Windows */
 
 /* ------------ helpers ------------ */
 

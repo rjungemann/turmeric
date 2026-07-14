@@ -7,6 +7,7 @@
 
 #include "buf.h"
 #include "diag.h"
+#include "platform_fs.h"  /* mkstemps() on Windows */
 
 #include <stdio.h>
 #include <stdlib.h>

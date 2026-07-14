@@ -1,5 +1,6 @@
 /* elab_toplevel.c -- top-level form dispatch and the elaborate_program entry point. */
 #include "elab_internal.h"
+#include "platform_fs.h"  /* realpath() on Windows */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
