@@ -30,37 +30,58 @@ So resuming AND multi-shot receivers are already lowered natively via the base
 shift's synthetic `__Shift` effect (perform/resume desugar). The remaining gap is
 exactly **capture** in the receiver.
 
-## Root cause
+## Root cause -- CORRECTED after starting execution (my original model was wrong)
 
-`src/passes/cps_ir.c:indirect_callee_ok` (:402) rejects a capturing closure as an
-indirect callee: the base-shift lowering synthesizes `(recv val)` -- applying the
-receiver VALUE to the reified continuation -- which the direct emitter's indirect
-call path emits by casting the callee value to a bare fn pointer. A fat (capturing)
-closure's value is its ENV pointer, so that cast would jump into the heap env
-struct as code. To stay sound the classifier evicts (comment at :396-400, which
-still cites the now-deleted `emit_cps.c` as the fallback owner -- stale).
+The original model below (a `(recv val)` synthesis / beta-reduce in
+`cps_shift_body_kf`) is **wrong**: instrumentation shows `cps_shift_body_kf` is
+NEVER called for this fixture -- it is dead for the base cross-function shift path.
 
-The abortive shift path (`emit_shift`, `emit_cps_ir.c`) already lifts the shift
-BODY with its captures (`collect_caps` + `emit_lifted(LH_SHIFT_BODY, caps)`), so
-the capture-carrying mechanism exists; it is only the *resuming* receiver that is
-forced through the `(recv val)` indirect-call synthesis and thus evicts.
+The real mechanism is the `__Shift` effect desugar in
+`src/compiler/elab_effects.c`: a base cross-function shift lowers as
+`(shift RECV BODY) -> (perform (__Shift RECV))` (:745), and a reset body is
+wrapped `B -> (handle B (__Shift [recv] k) (recv k))` (:560) so the handler
+applies the receiver to the captured continuation. So the receiver `RECV` crosses
+as the **`__Shift` perform ARGUMENT**, and is applied `(recv k)` inside the
+handler in the RESET function (cross-function).
 
-## Approach (proposed)
+`--dump-cps` confirms:
+- `inner` (`(fn [k] (k 1))`, non-capturing): `let __t1 = <value>; perform __Shift(__t1)`
+  -- the receiver is lifted to a delegated value (`is_delegatable_value`,
+  cps_ir.c:377-388, admits a closure with `n_captures == 0`).
+- `step` (`(fn [k] (k base))`, captures `base`): the whole body is
+  `<unsupported: EX_CLOSURE (capturing closure)>` -- `is_delegatable_value`
+  rejects `n_captures > 0` (the capture cut can't see its free vars), so the
+  capturing receiver hits `build_unsupported`.
 
-Do not synthesize an indirect `(recv val)` for a capturing resuming receiver.
-Instead lower it the way the non-capturing resuming receivers already lower --
-the `__Shift` perform/resume desugar -- but carry the receiver's captures:
+So the gap is: **a capturing-closure receiver passed as the `__Shift` perform
+argument** (a fat closure crossing the effect ABI, applied `(recv k)` in the
+handler cross-function), NOT anything in `cps_shift_body_kf` / `emit_shift`.
 
-1. **Classifier (`cps_ir.c`).** When the shift receiver is an `EX_CLOSURE` with
-   captures AND references its continuation param, admit it to the `__Shift`
-   desugar with the captured free vars surfaced (as the abortive path already does
-   via `collect_caps`), rather than routing to the `(recv val)` indirect path that
-   `indirect_callee_ok` rejects. `(k v)` in the body is the existing continuation
-   resume (already representable -- that is how `inner`/`twice`/`thrice` lower).
-2. **Emit (`emit_cps_ir.c`).** Reuse the receiver-body lift that carries captures
-   in the lifted env (the `LH_SHIFT_BODY` env struct); `(k v)` lowers to the same
-   resume the non-capturing case emits. No new indirect call. The captured `base`
-   rides the env, `k` is `subk`.
+## Approach (REVISED)
+
+Admit a capturing-closure `__Shift` receiver as a delegated fat-closure value:
+construct it (env carrying `base`) via the direct emitter's closure path
+(CT_LETRAW), surfacing its captured free vars to the has_capture cut so they are
+seen, and pass the fat-closure value as the `perform __Shift` argument. The
+handler side `(recv k)` is already direct-emitted in the reset function and
+applies a fat closure normally.
+
+- The change is in `cps_ir.c`'s delegation / capture-cut logic
+  (`is_delegatable_value` + `has_capture` surfacing), NOT `emit_shift`.
+- The captured free vars (`base`) must ride the fat-closure env constructed at the
+  shift site and travel with the closure value across the `perform __Shift`
+  boundary into the handler; this is cross-function fat-closure env marshaling
+  through the effect argument.
+
+### Increased scope / risk vs the original plan
+
+This is larger and subtler than the original write-up: it is fat-closure-as-effect
+-payload plus indirect fat-closure application, with a cross-function env lifetime,
+gated by the has_capture cut. Miscompile risk (wrong captured value, env lifetime)
+is real. Proceed only with the direct==cps oracle (11/105/23/306) green AND an
+ASan pass; if the capture-cut interaction is not cleanly expressible, re-scope
+rather than force it.
+
 3. **Leaks.** Any Tier-C boxes crossing on this path go through `slot_store_reap`
    already (from the Tier-C-effect-result work); confirm the capturing path is
    covered. NOTE: `shift-crossfn-resume-works`'s 14-box ASan leak is NOT solely
