@@ -6985,8 +6985,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         emit_rt_global(out, shared, "__thread tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "__thread tur_shift_reset_ctx *tur_cur_shift_reset");
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
-     * runtime (emitted above) and the DK machine (just emitted) in scope. */
-    if (shared || cps_uses_cloneable_dk) {
+     * runtime (emitted above) and the DK machine (just emitted) in scope.  A
+     * native cross-function `shift` (the __Shift desugar -- a ^multishot handler)
+     * uses the bridge to wrap its DK subk as a tur_cloneable_cont before invoking
+     * the receiver (emit_cps_ir.c, LH_HANDLER_CASE __Shift branch), so also emit
+     * it whenever the cloneable runtime AND the DK machine are both present -- the
+     * two the bridge references.  The static bridge fns are harmless when unused
+     * (their callees dk_invoke/dk_copy_range/dk_free are guaranteed present). */
+    const bool dk_machine_emitted = shared || cps_uses_delimited || cps_uses_cloneable_dk
+                                 || cps_uses_serial || cps_ir_emittable;
+    if (shared || cps_uses_cloneable_dk || (cps_uses_cloneable_rt && dk_machine_emitted)) {
         emit_cps_cloneable_bridge_prelude(out);
     }
     /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. Gate

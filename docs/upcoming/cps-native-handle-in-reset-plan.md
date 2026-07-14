@@ -1,6 +1,6 @@
 ---
 title: "CPS backend -- native emission of a handle nested in a reset (KK_PROMPT-delivering handle continuation)"
-status: Reduction A LANDED (receiver-free handle-in-reset is native; delim_ok CT_HANDLE case). Reduction B (cross-fn shift) still designed, not landed -- it needs the __Shift-scoped atom_ok + the bridge-wrap emit crux + a capturing-closure receiver (step), and is coupled all-or-nothing by __Shift taint.
+status: BOTH REDUCTIONS LANDED. Reduction A (receiver-free handle-in-reset) and Reduction B (cross-function shift, incl. capturing receiver + single/multi-shot) both emit natively and pass their oracles (106; 11/105/23/306). Memory-safe under ASan; a snapshot-not-freed leak remains (same class the fiber path had, far smaller) -- tracked as a follow-up, fixture carries requires.no-leak-check. Full suite 2179/0.
 description: A `handle` whose continuation delivers into an enclosing `reset`'s prompt (KK_PROMPT) is evicted from the CPS backend to the direct/fiber emitter, where its effect boxes leak. Cross-function `shift` is one instance -- its `__Shift` desugar produces exactly this handle-in-reset nesting. This plan is the authoritative, self-contained reference: it records the reproductions, the exact failing predicates, the proven-feasible mechanism (the `__dk_cont_fn` bridge), the coordinated change, and -- critically -- the dead ends already ruled out, so the next agent does not re-derive them.
 ---
 
@@ -28,21 +28,68 @@ description: A `handle` whose continuation delivers into an enclosing `reset`'s 
   `is_delegatable_capturing_closure`, `cps_shift_body_kf`) were each tried and
   each miscompiles or is inert. They are recorded so you skip them.
 
-## Status update (Reduction A landed)
+## Status update (BOTH reductions landed)
 
-**Reduction A is native as of this branch.** The single admission gap was that a
-`handle` reached inside a reset's delimited body fell through `delim_ok`'s default
-case to `term_core_ok`, whose `reset_body_ok(handle.body)` rejects the KK_PROMPT
-delivery of the handle's continuation. Fix: a dedicated `CT_HANDLE` case in
-`delim_ok` (src/compiler/emit_cps_ir.c) that keeps the handled body core
-(`term_core_ok(handle.delim)`) and the cases on `handle_case_ok`, but admits the
-continuation via `delim_ok(handle.body)` (it may deliver to the enclosing prompt).
-No new codegen was needed -- `emit_handle` already lifts `handle.body` as an
-`LH_RESET_CONT` frame that delivers through `cur_k`. `use-e` and `wrap` now emit
-`__cps`, print `106`, and are ASan/LSan-clean; the full suite stays green
-(2178/0). Covered by `tests/fixtures/cps-backend-handle-in-reset/`.
+Both reductions are native on this branch. What actually landed, precisely, so the
+next agent does not re-derive it:
 
-Reduction B (below) is unchanged: still designed, not landed.
+### Reduction A -- receiver-free handle-in-reset (native)
+
+The single admission gap was that a `handle` reached inside a reset's delimited
+body fell through `delim_ok`'s default case to `term_core_ok`, whose
+`reset_body_ok(handle.body)` rejects the KK_PROMPT delivery of the handle's
+continuation. Fix: a dedicated `CT_HANDLE` case in `delim_ok`
+(src/compiler/emit_cps_ir.c) that admits BOTH the handled body and the
+continuation via `delim_ok` (both deliver to a prompt: the handled body to the
+handle's own prompt, the continuation to the enclosing reset's prompt), with the
+cases on `handle_case_ok`. No new codegen -- `emit_handle` already lifts
+`handle.body` as an `LH_RESET_CONT` frame delivering through `cur_k`. `use-e`/`wrap`
+emit `__cps`, print `106`, ASan/LSan-clean. Fixture:
+`tests/fixtures/cps-backend-handle-in-reset/`.
+
+### Reduction B -- cross-function shift (native, incl. capturing receiver)
+
+Landed as the exact coordinated change the plan predicted, plus one correction to
+the "dead ends":
+
+1. **`delim_ok` CT_HANDLE also checks `handle.delim` via `delim_ok`** (not
+   `term_core_ok`). Reduction B's handled body `(+ 10 (inner))` builds a
+   `letcont j` heap-join whose jbody delivers `(+ 10 t)` to the prompt (KK_PROMPT);
+   term_core_ok rejects that, delim_ok admits it. (Reduction A's plain
+   `tailcall use-e(<prompt>)` delim also passes delim_ok, so this is a widening.)
+2. **`atom_ok` for the `__Shift` receiver, effect-scoped at the CT_PERFORM site.**
+   The receiver rides the perform as a `TY_FN` atom (`CA_VAR`/`CA_CVAR`).
+   `shift_recv_atom_ok` admits it ONLY when `is_shift_effect(perform.effect)` --
+   never via general `atom_ok` (the dead-end miscompile).
+3. **Bridge-wrap emit crux (the only genuinely new codegen).** In `emit_lifted`
+   LH_HANDLER_CASE, when `hcase->effect` is `__Shift`, the continuation `k` is
+   bound as `tur_cloneable_cont_alloc(__dk_cont_fn, dk_copy_range(subk, NULL),
+   __dk_env_clone, __dk_env_drop)` instead of the raw `DK *k = subk`. The receiver
+   `(recv k)` then resumes via `tur_cloneable_cont_resume(tur_continuation_snapshot
+   (k), v)` -> per-resume clone of the DK chain -> `dk_invoke`. Bridge prelude gate
+   in emit_module.c widened to `cps_uses_cloneable_rt && dk_machine_emitted`.
+4. **Capturing receiver (step) -- DEAD END #3 IS RESOLVED by the bridge.** A
+   capturing `(fn [k] (k base))` receiver is delegated (built via CT_LETRAW) by a
+   new `Closure.is_shift_receiver` flag set at the __Shift desugar (elab_effects.c)
+   and honored in `is_delegatable_value` (cps_ir.c). It is invoked only as
+   `(recv k)` in the bridge-wrapping handler case (never indirect-called), so the
+   `indirect_callee_ok` hazard does not apply. Scalar captures ride the lifted env
+   via collect_caps. `is_shift_receiver` MUST be explicitly zero-initialized at all
+   three Closure alloc sites -- arena memory is not zeroed.
+5. **`emit_letraw` casts a `TY_FN` binder store through `(int64_t)(intptr_t)`** so
+   the receiver fat-fn value stops emitting a -Wint-conversion pointer->int store.
+
+All of inner/outer/step/run/twice/thrice/sum2/sum3 emit `__cps`; `direct == cps ==`
+`11`/`105`/`23`/`306` (single- and multi-shot); full suite 2179/0.
+
+**Leak (deferred, tracked).** The native path is memory-SAFE under ASan (no UAF /
+double-free / UB) but LEAKS ~3320 bytes on the fixture: `tur_continuation_snapshot`
+clones the DK chain per resume and nothing frees the snapshot -- the SAME
+snapshot-not-freed leak the fiber path already had (fiber leaked ~4 MB here; the
+native path leaks far less). Fixing it needs resume-drop discipline in the shared
+direct-emitter receiver codegen -- out of this change's scope. The fixture
+`tests/fixtures/shift-crossfn-resume-works/` carries `requires.no-leak-check`; see
+`docs/reported/cps-resume-frame-node-leak.md`.
 
 ## Reproductions (two oracles)
 
@@ -182,12 +229,17 @@ the `__Shift` scoping. Then layer items 2 + 5 for Reduction B.
    for `(fn [] (perform (Ask)))`), so an effect-free check wrongly admits it ->
    `tur: unhandled effect (tag 2)` abort (third miscompile). The scoping MUST be
    by effect identity (`== __Shift`), not by the atom's own effect row.
-3. **`is_delegatable_capturing_closure` (the receiver-capture idea).** Wiring a
-   capturing closure in as a delegated value made `step` build via CT_LETRAW, but
-   the delegated `(recv k)` resume routed through fiber and TAINTED `__Shift`, so
-   `step` flipped `BODY-UNSUPPORTED` -> `BODY-STRUCT-OR-TAINT` -- net zero native,
-   broader taint. The capture idea is orthogonal and only matters AFTER items 1-5;
-   it is not the gap.
+3. **~~`is_delegatable_capturing_closure` (the receiver-capture idea).~~ RESOLVED
+   -- this now WORKS, because the bridge (item 3 above) is in place.** The original
+   failure ("delegated `(recv k)` resume routed through fiber and tainted __Shift")
+   was a PRE-BRIDGE artifact: without the LH_HANDLER_CASE bridge-wrap, the capturing
+   receiver's `(recv k)` resumed a raw DK subk through the fiber cloneable path. With
+   the bridge, `k` is a bridge-wrapped `tur_cloneable_cont`, so a capturing receiver
+   resumes the DK chain like a non-capturing one. As landed, a capturing receiver is
+   delegated via a scoped `Closure.is_shift_receiver` flag (NOT a blanket
+   capturing-closure delegation, which is still unsafe -- `indirect_callee_ok`).
+   `step`/`run` now emit `__cps` and produce `105`. The order the plan gave was
+   right: the capture only works AFTER items 1-3; it is not the gap on its own.
 4. **`cps_shift_body_kf` (`(recv val)` synthesis / beta-reduce).** Instrumentation
    proves it is NEVER called for the cross-function shift path -- it is dead code
    for this shape. The mechanism is the `__Shift` desugar in `elab_effects.c`, not

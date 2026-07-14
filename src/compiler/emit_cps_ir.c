@@ -325,6 +325,27 @@ static bool is_println_shape(BuiltinShape s) {
         || s == BS_PRINTLN_CSTR || s == BS_PRINTLN_FLOAT || s == BS_PRINTLN_FLOAT32;
 }
 
+/* The synthetic effect that a cross-function `shift` desugars onto (see
+ * elab_effects.c `wrap_reset_body_with_shift_handler`).  A `(perform (__Shift
+ * recv))` carries a shift RECEIVER value; the __Shift handler case invokes it as
+ * `(recv k)` after bridge-wrapping the DK continuation.  Recognized by interned
+ * name so the receiver-admission / bridge-wrap relaxations stay strictly scoped
+ * to __Shift and never touch ordinary user effects. */
+static bool is_shift_effect(const Symbol *eff) {
+    return eff && eff->name && strcmp(eff->name, "__Shift") == 0;
+}
+
+/* A __Shift receiver atom: a capture-free `TY_FN` value passed as the single
+ * argument of `(perform (__Shift recv))`.  Admitted ONLY at the __Shift perform
+ * site (never via the general atom_ok, which a global TY_FN widening would
+ * miscompile).  A CAPTURING receiver never reaches here as a clean atom -- it
+ * bails at CPS translation (EX_CLOSURE -> CT_UNSUPPORTED), so a TY_FN atom here
+ * is always the lifted, capture-free receiver the direct emitter materializes as
+ * a plain function pointer that rides the one-word effect slot. */
+static bool shift_recv_atom_ok(const CAtom *a) {
+    return (a->kind == CA_VAR || a->kind == CA_CVAR) && a->ty == TY_FN;
+}
+
 static bool shape_supported(const BuiltinSpec *sp) {
     if (!sp) return false;
     switch (sp->shape) {
@@ -1606,8 +1627,22 @@ static bool term_core_ok(const CTerm *t) {
             if (!perform_body_ok(t->as.perform.body)
                 && !perform_cont_reset_ok(t->as.perform.body))
                 return false;
+            /* A `(perform (__Shift recv))` -- the desugar of a cross-function
+             * `shift` (elab_effects.c) -- carries the shift RECEIVER as its single
+             * argument: a `TY_FN` value (a lifted, capture-free `(fn [k] ...)`)
+             * that the __Shift handler case invokes as `(recv k)` to resume the
+             * captured continuation.  A bare TY_FN fails the generic atom_ok slot
+             * gate, and widening atom_ok for ALL fn atoms miscompiles the effectful-
+             * callback set (see docs/upcoming/cps-native-handle-in-reset-plan.md
+             * "Dead ends").  Admit it ONLY here, scoped to the __Shift effect:
+             * emit_perform stores the fn-pointer word as the effect value and the
+             * handler case (emit_lifted) bridge-wraps the DK subk before the call,
+             * so the receiver resumes the DK chain through __dk_cont_fn. */
+            bool is_shift_perf = is_shift_effect(t->as.perform.effect);
             for (uint32_t i = 0; i < t->as.perform.n; i++)
-                if (!atom_ok(&t->as.perform.args[i])) return false;
+                if (!atom_ok(&t->as.perform.args[i])
+                    && !(is_shift_perf && shift_recv_atom_ok(&t->as.perform.args[i])))
+                    return false;
             CapSet cs;
             return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
         }
@@ -1756,9 +1791,17 @@ static bool delim_ok(const CTerm *t) {
              * emit_handle already lifts handle.body as an LH_RESET_CONT that
              * delivers through cur_k (the enclosing prompt), so no new codegen is
              * needed for this (receiver-free) shape. */
+            /* The handled body (handle.delim) runs under the handle's OWN prompt;
+             * its normal-completion tail -- and any interior join -- delivers to
+             * that prompt (KK_PROMPT), which emit_handle threads as cur_k.  So it
+             * is admitted via delim_ok (KK_PROMPT-delivering), not term_core_ok:
+             * a delimited-body join like `letcont j(t){+10 t; <prompt>}` inside the
+             * handled expression `(+ 10 (inner))` is exactly this shape.  (In
+             * Reduction A the delim was a plain `tailcall use-e(<prompt>)`, which
+             * delim_ok also admits, so this is a strict widening.) */
             CapSet hcs;
             if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
-                || !term_core_ok(t->as.handle.delim)
+                || !delim_ok(t->as.handle.delim)
                 || !delim_ok(t->as.handle.body)
                 || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
                 return false;
@@ -3059,6 +3102,13 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         if (le && le->kind == EX_CALL && rhs && rhs[0])
             ce_line(ce, "%s;", rhs);
         ce_line(ce, "%s = 0;", bn);
+    } else if (t->as.letraw.x.ty == TY_FN) {
+        /* A boxed fn value (a fat closure / fn-pointer word, e.g. a cross-function
+         * __Shift receiver built by the direct emitter) rides the one-word DK slot
+         * as an int64_t binder, but emit_value yields it as a pointer expression --
+         * cast through intptr_t so the store is a clean integer, not a
+         * -Wint-conversion pointer->int assignment. */
+        ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs ? rhs : "0");
     } else
         ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
     free(bn);
@@ -3278,7 +3328,23 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         if (hcase->k) {
             char *kn = name_for_binding(ce->ctx, hcase->k);
             indent_buf(&tmp, 4);
-            buf_printf(&tmp, "DK *%s = subk;\n", kn);
+            if (is_shift_effect(hcase->effect)) {
+                /* Cross-function `shift` bridge crux: the __Shift receiver
+                 * (`recv`) is a direct-emitted `(fn [k : cont] ...)` that resumes
+                 * its continuation via `tur_cloneable_cont_resume(
+                 * tur_continuation_snapshot(k), v)`.  Its `k` must therefore be a
+                 * `tur_cloneable_cont`, not the raw DK `subk`.  Wrap subk with the
+                 * DK<->cloneable bridge (__dk_cont_fn / __dk_env_clone /
+                 * __dk_env_drop, emit_cps_cloneable_bridge_prelude): the bound `k`
+                 * is a cloneable cont whose env is an OWNED copy of the DK chain;
+                 * each `(k v)` snapshots (clones the chain via __dk_env_clone =
+                 * dk_copy_range) before resuming, so a multi-shot receiver
+                 * (`(+ (k 1) (k 2))`) resumes an independent chain per call. */
+                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)tur_cloneable_cont_alloc("
+                                 "__dk_cont_fn, dk_copy_range(subk, NULL), __dk_env_clone, __dk_env_drop);\n", kn);
+            } else {
+                buf_printf(&tmp, "DK *%s = subk;\n", kn);
+            }
             free(kn);
         }
     }

@@ -85,3 +85,15 @@ pick up the single-node free / reap discipline.
   (`docs/upcoming/cps-native-handle-in-reset-plan.md`): making that shape native
   does not touch this node, and this leak persists on the native multi-shot resume
   path regardless.
+- Related sibling on the now-native cross-function shift path
+  (`docs/upcoming/cps-native-handle-in-reset-plan.md`, Reduction B, landed): the
+  __Shift receiver's continuation is bridge-wrapped as a `tur_cloneable_cont` and
+  resumed via `tur_continuation_snapshot` (`tur_cloneable_cont_clone` ->
+  `dk_copy_range`), which clones the DK chain per resume without ever freeing the
+  snapshot -- the same snapshot-not-freed leak the fiber path already had (far
+  smaller now: ~3.3 KB vs ~4 MB on `shift-crossfn-resume-works`). Memory-safe (no
+  UAF/double-free/UB). Fixing it needs a resume-and-drop discipline in the SHARED
+  direct-emitter receiver codegen (the `tur_cloneable_cont_resume(snapshot(k), v)`
+  it emits for `(k v)`), so it affects the fiber path too and is out of scope of the
+  Reduction B admission/emit change. `tests/fixtures/shift-crossfn-resume-works/`
+  carries `requires.no-leak-check` until this is resolved.

@@ -382,7 +382,17 @@ static bool is_delegatable_value(const Expr *e) {
         case EX_FN:
             return true;
         case EX_CLOSURE:
-            return e->as.closure_.closure && e->as.closure_.closure->n_captures == 0;
+            /* A capture-free closure is always delegatable.  A CAPTURING closure
+             * is delegatable ONLY when it is a cross-function `shift` receiver
+             * (is_shift_receiver, set at the __Shift desugar): it is invoked
+             * exclusively as `(recv k)` in the bridge-wrapping __Shift handler
+             * case, never as a general indirect callee, so the has_capture cut /
+             * indirect-callee hazard does not apply.  collect_caps walks its
+             * scalar (Copy) captures into the lifted env; a non-Copy capture bails
+             * to fallback.  See docs/upcoming/cps-native-handle-in-reset-plan.md. */
+            return e->as.closure_.closure
+                && (e->as.closure_.closure->n_captures == 0
+                    || e->as.closure_.closure->is_shift_receiver);
         default:
             return false;
     }

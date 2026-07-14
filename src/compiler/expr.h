@@ -632,6 +632,15 @@ struct Closure {
     Binding      **captures;     /* captured bindings from enclosing scope */
     uint8_t        n_captures;
     const Symbol *env_name;     /* generated name for the env struct type */
+    /* cps-native-handle-in-reset (Reduction B): set when this closure is the
+     * RECEIVER of a cross-function `shift` desugared onto __Shift -- i.e. the
+     * single argument of `(perform (__Shift recv))`.  Such a receiver is invoked
+     * only as `(recv k)` inside the __Shift handler case (never indirect-called
+     * elsewhere), and the handler bridge-wraps its DK continuation, so the CPS
+     * backend may delegate its build via CT_LETRAW even when it CAPTURES scalars
+     * -- unlike a general capturing closure, which is not a valid indirect callee
+     * (see indirect_callee_ok).  Scoped strictly to __Shift receivers. */
+    bool           is_shift_receiver;
 };
 
 typedef struct LetBinding {
