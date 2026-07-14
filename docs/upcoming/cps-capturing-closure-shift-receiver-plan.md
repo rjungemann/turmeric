@@ -1,8 +1,39 @@
 ---
 title: "CPS backend -- native emission of capturing-closure shift receivers (resuming shift, N6.3/N6-Task1)"
-status: proposed
+status: BLOCKED -- premise was a misreading; the real gap is the __Shift effect taint, not the receiver
 description: A `shift` whose receiver is a CAPTURING closure that resumes the captured continuation (e.g. `(shift (fn [k] (k base)) 0)`, capturing `base`) is SIG/BODY-evicted with `EX_CLOSURE (capturing closure)` and falls back to the direct emitter's fiber shift lowering, where it leaks. Non-capturing resuming receivers (`(fn [k] (k 1))`, incl. multi-shot `(+ (k 1) (k 2))`) are ALREADY native via the `perform __Shift` desugar. This plan closes the remaining capturing case by binding `subk` and lifting the receiver body with its captures, instead of synthesizing an indirect `(recv val)` call that a fat closure cannot service.
 ---
+
+## BLOCKED (2026-07-14): executing #1 disproved the premise
+
+Attempting the approach revealed two things that invalidate this plan:
+
+1. **The premise "`inner`/`twice`/`thrice` are already native" was WRONG** -- a
+   misreading of `--dump-cps` (which prints the *built* colored IR, not whether
+   the function actually EMITS native). The `TUR_TRACE_EVICT` trace and the
+   emitted C are definitive: **none** of `inner`/`step`/`twice`/`thrice`/`run`
+   emit a `*__cps` -- all evict to the direct/fiber emitter. `step` evicts
+   `BODY-UNSUPPORTED (EX_CLOSURE)`; the others evict `BODY-STRUCT-OR-TAINT`. So
+   the whole `__Shift`-based cross-function shift is on the fallback, not just the
+   capturing case.
+
+2. **The #1 change (admit a capturing closure as a delegated value) REGRESSES.**
+   Wiring `is_delegatable_capturing_closure` into `cps_bind`/`cps_tail` made
+   `step` build its receiver via CT_LETRAW, but the delegated `(recv k)` resume
+   then routes through the fiber path and **taints the shared `__Shift` effect**,
+   so `step` flips from `BODY-UNSUPPORTED` to `BODY-STRUCT-OR-TAINT` -- net zero
+   native functions, and a broader taint. Reverted; no code landed.
+
+**Real gap (re-scoped):** cross-function base shift lowers onto the synthetic
+`__Shift` effect whose handler applies the receiver `(recv k)`; that application
+(and/or the receiver crossing as the effect argument) taints `__Shift`, so every
+user evicts. Making a colored function that performs/handles `__Shift` emit native
+is the actual problem -- a `__Shift`-effect-taint / native-`(recv k)`-application
+question, NOT a receiver-capture question. This needs someone who understands the
+taint fixpoint (`emit_cps_ir.c` ~:1820-1870) and how `__Shift`'s handler is
+classified; do not reopen this plan as written. The capturing-closure delegation
+idea (the EX_CALLCC analog) is sound in isolation but insufficient here because
+the effect is tainted regardless of the receiver's capture status.
 
 ## Symptom
 
