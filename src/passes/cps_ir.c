@@ -50,6 +50,10 @@ static const char *cps_form_name(const Expr *e) {
         case EX_POLY_WRAP:     return "EX_POLY_WRAP";
         case EX_POLY_TO_FAT:   return "EX_POLY_TO_FAT";
         case EX_WHILE:         return "EX_WHILE";
+        case EX_PANIC:         return "EX_PANIC";
+        case EX_CONS_LIST:     return "EX_CONS_LIST";
+        case EX_BORROW_IMMUT:  return "EX_BORROW_IMMUT";
+        case EX_INLINE_C:      return "EX_INLINE_C";
         case EX_SET:           return "EX_SET (mutation)";
         case EX_SET_DEREF:     return "EX_SET_DEREF";
         case EX_SET_FIELD:     return "EX_SET_FIELD";
@@ -1068,6 +1072,24 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_RC_DROP:  return safe_to_delegate(b, e->as.rc_drop_.expr);
         case EX_RC_COUNT: return safe_to_delegate(b, e->as.rc_count_.expr);
         case EX_RC_PTR:   return safe_to_delegate(b, e->as.rc_ptr_.expr);
+        /* P1 (cps-runtime-finish, Phase 1): control-op-free leaf forms the direct
+         * emitter emits wholesale as pure expressions/terminators.  Each is
+         * delegatable exactly when its operand(s) are -- no control op and no
+         * colored/indirect call can hide inside.
+         *   - EX_PANIC: a no-successor terminator (emit_value emits the abort +
+         *     panic-signal return, then yields a nil placeholder; the CPS
+         *     continuation after it is dead but well-formed C).
+         *   - EX_CONS_LIST: a pure right-folded `__tur_cons_of(...)` heap build
+         *     (the `& rest` variadic argument constructor).
+         *   - EX_BORROW_IMMUT: `(& x)` -- an address-of / pointer expression over
+         *     an in-scope local; no control op, no allocation. */
+        case EX_PANIC:    return safe_to_delegate(b, e->as.panic_.payload);
+        case EX_CONS_LIST:
+            for (uint32_t i = 0; i < e->as.cons_list_.n; i++)
+                if (!safe_to_delegate(b, e->as.cons_list_.items[i])) return false;
+            return true;
+        case EX_BORROW_IMMUT:
+            return safe_to_delegate(b, e->as.borrow_immut_.expr);
         /* O1-b: an owning `ref<T>` constructor is a control-op-free leaf alloc the
          * direct emitter emits with the right malloc/drop glue.  Delegating it is
          * gated in letraw_ok by ref_dropped_before_control: the ref's hoisted

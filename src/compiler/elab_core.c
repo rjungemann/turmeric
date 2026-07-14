@@ -409,6 +409,10 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
                         ls[lsp++] = cur->as.set_lit_.items[i-1];
                     break;
+                case EX_CONS_LIST:
+                    for (uint32_t i = cur->as.cons_list_.n; i > 0; i--)
+                        ls[lsp++] = cur->as.cons_list_.items[i-1];
+                    break;
                 /* (:: expr T) is type-erased; descend into the inner expr so any
                  * `let` bindings under an ascription are still collected. */
                 case EX_ASCRIBE:
@@ -826,6 +830,15 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_SET_LIT:
                 for (uint32_t i = cur->as.set_lit_.n; i > 0; i--) {
                     stack[sp++] = cur->as.set_lit_.items[i-1];
+                }
+                break;
+            case EX_CONS_LIST:
+                /* A `& rest` variadic cons-list build -- its items are ordinary
+                 * expressions that may reference enclosing locals; descend so a
+                 * captured item is surfaced (a delegated cons-list riding a lifted
+                 * CPS continuation env would otherwise miss the capture). */
+                for (uint32_t i = cur->as.cons_list_.n; i > 0; i--) {
+                    stack[sp++] = cur->as.cons_list_.items[i-1];
                 }
                 break;
             case EX_GET_FIELD:
