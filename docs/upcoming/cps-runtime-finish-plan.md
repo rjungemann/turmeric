@@ -175,35 +175,85 @@ closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
 receiver-`k` / receiver-env leaks). What remains, and why each is a distinct
 slice rather than a quick admission:
 
-- **`EX_CLOSURE` (7) -- ESCAPING closures.** A closure used as an effect PAYLOAD
-  (`(perform (E g))`, the `producer` / `then-parser-impl` shape -- structurally
-  the __Shift receiver but under a USER effect) or returned / stored. Admitting
-  it is easy (the __Shift path proves the boxed-closure perform-arg
-  representation); the blocker is the free. It cannot be scoped-freed or
-  boundary-reaped **safely** without knowing whether the consuming HANDLER
-  retains it -- a cross-function / whole-effect escape property `closure_binding_escapes`
-  (a local check) cannot decide. The sound options are (a) reap at the handler
-  case gated on a LOCAL escape check of that case body (generalizing P3.d beyond
-  `is_shift_effect`) -- clears the non-retaining-handler majority; or (b) give
-  closures real RC/drop glue (`escaping-fat-closure-env-leak.md`) for the general
-  case. (a) is the next tractable slice; (b) is the deferred backstop.
-- **`EX_DEFER` (4).** All corpus defers cross a control op. A USER defer
-  (`(defer (println ...))`, `effect-defer`) must fire at a specific scope-exit
-  point, which a boundary reap would move (observable) -- it needs a real
-  CPS-side defer frame. An rc AUTO-drop defer (`unsafe-basic`/`-nested`) has no
-  side effect and *could* ride a boundary reap with a new rc-decrement reap kind,
-  but only for drop-glue-free `rc<scalar>` (delaying a drop with glue is
-  observable) -- a narrow, carefully-gated slice.
-- **`EX_WHILE` (1).** A loop whose body performs / handles -- needs native DK
-  loop lowering (a `term_core_ok` + `emit_term` loop form), not delegation.
+- **`EX_CLOSURE` (7) -- effect-PAYLOAD closures.** A closure used as an effect
+  payload (`(perform (E g))`, the `effect-fn-payload-capturing` / `producer`
+  shape -- structurally the __Shift receiver but under a USER effect) or returned
+  / stored. **The blocker is NOT the free -- it is the continuation-substrate
+  bridge (verified empirically, P-inv below).** The clean admission (mark a
+  capturing-closure perform payload `is_effect_payload`, admit it in
+  `is_delegatable_value`, widen the perform-arg gate to a boxed-fn atom) DOES
+  make `producer` CPS-emittable -- but the handler case then hands the
+  direct-emitted payload a raw `DK *` continuation, while the payload's body
+  resumes via the FIBER substrate (`tur_effect_cont_resume` / `resume`), so it
+  miscompiles (`expected 'int64_t' but argument is of type 'DK *'`;
+  `continuation error: not a capturable continuation`). The __Shift path avoids
+  this only because its desugar **reflavors** the receiver's `cont` param to
+  cloneable (`elab_specialize_cont_receiver`) so its resume matches the handler's
+  cloneable bridge (`__dk_cont_fn` / `dk_copy_range`). A user payload's `k` is
+  typed `int` / `effect-cont` with no `cont` annotation to reflavor, so bridging
+  DK<->fiber-cont needs either that reflavor generalized to user effects or a
+  real DK<->fiber continuation bridge at the handler. This is a
+  continuation-substrate change, **not** the "admit + reap" a local escape check
+  buys. The reference admission patch (correct, but gated on the bridge) is
+  preserved at `/tmp/effect-payload-admission.patch` (scratchpad).
+- **`EX_DEFER` (4) -- two entangled sub-shapes, neither standalone-landable.**
+  (i) USER side-effecting defers (`effect-defer` `(defer (println ...))`,
+  `unsafe-defer`) must fire their side effect at a specific scope-exit point; a
+  boundary reap would move that (observable) -- they need a real CPS-side defer
+  frame. (ii) rc AUTO-drop defers (`unsafe-basic`/`-nested`) evict on the
+  `EX_DEFER` only because `expr_has_unsafe_control` conservatively rejects the
+  pure `(& p)` (`EX_BORROW_IMMUT`, un-modelled -> `default: true`) inside the
+  `unsafe`->`Unsafe` handle, so `plan_autodrop`'s single-shot-crossing
+  drop-at-exit path bails. **Modeling the pure P1 forms there does NOT admit the
+  fixture** -- the `ptr<int>` borrow (`p = rc->ptr r`, `b = (& p)`) crossing the
+  handle is a co-located `BODY-STRUCT-OR-TAINT` blocker, so the eviction just
+  moves category (confirmed; a prior session reverted this as reshuffling). The
+  rc<scalar> boundary-reap alternative hits the same co-located struct blocker.
+- **`EX_WHILE` (1).** A loop (`effect-handler-capture-loop`) whose body
+  handles/performs -- needs native DK loop lowering (a `term_core_ok` +
+  `emit_term` loop form), not delegation.
 - **`EX_INLINE_C` (2).** A session-channel primitive inlined into a colored
   `main`; niche, tied to the session runtime.
 
-No conceptual blockers remain -- each is a scoped admission+emit (or
-admission+reap) slice of the kind shipped repeatedly here. The EVICT gate is the
-measurable exit; it now reads `SIG-*` plus these 14 named residuals.
+**Revised assessment (this session, verified):** the earlier "no conceptual
+blockers remain -- each is a scoped admission+emit slice" is **too optimistic**.
+The dominant `EX_CLOSURE` family needs a continuation-substrate bridge (empirical
+miscompile above), and the `EX_DEFER` fixtures are entangled with a co-located
+`BODY-STRUCT-OR-TAINT` blocker so they cannot flip to CPS on the defer fix alone.
+None of the 14 is a clean standalone admission win; each is either deep
+(cont-bridge, native loop) or Phase-2-entangled. The EVICT gate still reads
+`SIG-*` plus these 14 named residuals.
 
 ## Progress log
+
+### Investigation P-inv -- the residual-14 blockers are deeper than "scoped admission" (no code landed)
+
+A focused pass on the largest residual family (`EX_CLOSURE`, 7) to land the
+plan's designated "next tractable slice" (reap at the handler gated on a local
+escape check). **Finding: the slice as scoped does not exist -- the blocker is
+the continuation substrate, not the env free.** Implemented the clean admission
+(new `Closure.is_effect_payload` flag set at the user-effect perform payload in
+`elab_effects.c`; admitted in `is_delegatable_value`; perform-arg gate widened
+from `is_shift_perf && shift_recv_atom_ok` to `shift_recv_atom_ok` for any
+effect). This correctly stopped `producer` (`effect-fn-payload-capturing`)
+evicting -- but the build then **miscompiled**: the CPS handler case binds `k`
+as a raw `DK *subk` and passes it to the direct-emitted payload `f`, whose
+`(resume k ...)` expects a fiber effect-cont handle (`int64_t`), not a `DK *`
+(`note: expected 'int64_t' but argument is of type 'DK *'`; runtime
+`continuation error: not a capturable continuation`). The __Shift path only
+works because its desugar reflavors the receiver's `cont` param to cloneable so
+the resume matches the handler's cloneable bridge; a user payload's `k` (`int` /
+`effect-cont`) has no annotation to reflavor. Making user resumable-fn-payload
+effects work under CPS therefore needs a DK<->fiber continuation bridge (or the
+reflavor generalized), a substrate change well beyond admission + reap. Reverted
+to a clean tree; preserved the admission patch at
+`/tmp/effect-payload-admission.patch` for when the bridge lands. Also traced the
+`EX_DEFER` family: `unsafe-basic`/`-nested` evict on `EX_DEFER` only because
+`expr_has_unsafe_control` rejects the pure `(& p)` inside the `Unsafe` handle,
+but the `ptr` borrow is a co-located `BODY-STRUCT-OR-TAINT` blocker so a defer
+fix only moves the eviction category (matches the prior revert). Net: no code
+landed; the "Honest distance" section above is rewritten with these verified
+blockers so the roadmap stops under-scoping the residuals.
 
 ### Slice P1.b -- closure KEYSTONE (control-free colour-only shape) landed via whole-body delegation
 
