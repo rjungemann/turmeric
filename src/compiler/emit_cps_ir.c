@@ -3339,9 +3339,26 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * is a cloneable cont whose env is an OWNED copy of the DK chain;
                  * each `(k v)` snapshots (clones the chain via __dk_env_clone =
                  * dk_copy_range) before resuming, so a multi-shot receiver
-                 * (`(+ (k 1) (k 2))`) resumes an independent chain per call. */
+                 * (`(+ (k 1) (k 2))`) resumes an independent chain per call.
+                 *
+                 * The bound `k` (the cont struct + its owned DK-chain env) is only
+                 * ever cloned per resume -- never itself resumed -- so it is dead
+                 * once the receiver returns.  Hoist the env so both halves can be
+                 * reclaimed at the outermost entry boundary (by then every resume
+                 * has settled): the chain env via __dk_reap_keep (dk_free -- it is
+                 * a self-contained dk_copy_range copy), the struct via __dk_reap_ptr
+                 * (plain free -- tur_cloneable_cont_alloc malloc'd it).  Together
+                 * these are tur_cloneable_cont_drop deferred to the boundary, so
+                 * the per-receiver cont no longer leaks
+                 * (docs/upcoming/cps-runtime-finish-plan.md, P3.c). */
+                buf_printf(&tmp, "DK *%s_kenv = dk_copy_range(subk, NULL);\n", kn);
+                indent_buf(&tmp, 4);
                 buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)tur_cloneable_cont_alloc("
-                                 "__dk_cont_fn, dk_copy_range(subk, NULL), __dk_env_clone, __dk_env_drop);\n", kn);
+                                 "__dk_cont_fn, %s_kenv, __dk_env_clone, __dk_env_drop);\n", kn, kn);
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "__dk_reap_keep(%s_kenv);\n", kn);
+                indent_buf(&tmp, 4);
+                buf_printf(&tmp, "__dk_reap_ptr((intptr_t)%s);\n", kn);
             } else {
                 buf_printf(&tmp, "DK *%s = subk;\n", kn);
             }
