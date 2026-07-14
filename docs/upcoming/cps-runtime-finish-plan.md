@@ -179,6 +179,23 @@ exit (the EVICT gate ticking toward `SIG-*`-only).
 
 ## Progress log
 
+### Slice P3.a -- Track-A perform-continuation `dk_frame_resume` node leak fixed (Phase 3)
+
+The nested-control / multi-shot perform-continuation branch of `emit_perform`
+(`emit_cps_ir.c`) returned `dk_perform(..., dk_frame_resume(...))` inline and
+never reclaimed the spliced resume-frame node -- one 88-byte DK node per
+perform execution. Now wrapped in `__dk_reap_node(...)` (single-node free at the
+outermost entry boundary; the node's `->next` is `cur_k`, so a chain-walking
+free is wrong), matching the reset/handle structural-node reaping. Multi-shot
+safe (node outlives every re-entrant `dk_perform`). Validated under ASan/LSan:
+the report's minimal repro plus `cps-backend-two-perform` /
+`cps-backend-owning-struct-capture-multishot` are now leak-clean; suite
+2179/0; the report is archived (`docs/archive/cps-resume-frame-node-leak.md`).
+Phase 3 still open: the **snapshot-not-freed** leak in the shared receiver
+(`tur_cloneable_cont_resume(tur_continuation_snapshot(k), v)`) -- the ~3320-byte
+residual on `shift-crossfn-resume-works`, which keeps its `requires.no-leak-check`
+-- and the escaping-fat-closure-env free (the keystone gate, above).
+
 ### Slice P1.a -- pure-delegation forms landed (`EX_PANIC` / `EX_CONS_LIST` / `EX_BORROW_IMMUT`)
 
 Three control-op-free leaf forms now delegate through `CT_LETRAW` instead of

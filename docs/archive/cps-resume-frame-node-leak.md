@@ -1,8 +1,19 @@
 # Track-A perform continuation leaks its `dk_frame_resume` node (multi-shot / nested-control resume)
 
+**RESOLVED.** The Track-A branch of `emit_perform` now registers the
+`dk_frame_resume` node with `__dk_reap_node(...)` (single-node free at the
+outermost entry boundary), matching the reset/handle structural-node reaping --
+so the node is reclaimed once the computation settles, multi-shot-safe (it
+outlives every re-entrant `dk_perform`) and without walking into `cur_k`.
+Verified under ASan/LSan: the minimal repro below and
+`cps-backend-two-perform` / `cps-backend-owning-struct-capture-multishot` are
+leak-clean. The **separate** snapshot-not-freed leak on
+`shift-crossfn-resume-works` (see "Scope / relationship" below) is untouched and
+remains tracked in `docs/upcoming/cps-runtime-finish-plan.md` (Phase 3); that
+fixture keeps its `requires.no-leak-check` until the snapshot leak is fixed.
+
 **Severity:** low (bounded, per-perform-execution heap leak of one DK node; not a
-correctness bug). Keeps `requires.no-leak-check` on the affected multi-perform /
-multi-shot fixtures. Sibling of the fixed DK-node leaks
+correctness bug). Sibling of the fixed DK-node leaks
 (`docs/archive/cps-delimited-dk-node-leak.md`,
 `docs/archive/cps-effect-perform-carrier-leak.md`).
 
