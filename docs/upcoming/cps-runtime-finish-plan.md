@@ -175,27 +175,50 @@ closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
 receiver-`k` / receiver-env leaks). What remains, and why each is a distinct
 slice rather than a quick admission:
 
-- **`EX_CLOSURE` (7) -- effect-PAYLOAD closures.** A closure used as an effect
-  payload (`(perform (E g))`, the `effect-fn-payload-capturing` / `producer`
-  shape -- structurally the __Shift receiver but under a USER effect) or returned
-  / stored. **The blocker is NOT the free -- it is the continuation-substrate
-  bridge (verified empirically, P-inv below).** The clean admission (mark a
-  capturing-closure perform payload `is_effect_payload`, admit it in
-  `is_delegatable_value`, widen the perform-arg gate to a boxed-fn atom) DOES
-  make `producer` CPS-emittable -- but the handler case then hands the
-  direct-emitted payload a raw `DK *` continuation, while the payload's body
-  resumes via the FIBER substrate (`tur_effect_cont_resume` / `resume`), so it
-  miscompiles (`expected 'int64_t' but argument is of type 'DK *'`;
-  `continuation error: not a capturable continuation`). The __Shift path avoids
-  this only because its desugar **reflavors** the receiver's `cont` param to
-  cloneable (`elab_specialize_cont_receiver`) so its resume matches the handler's
-  cloneable bridge (`__dk_cont_fn` / `dk_copy_range`). A user payload's `k` is
-  typed `int` / `effect-cont` with no `cont` annotation to reflavor, so bridging
-  DK<->fiber-cont needs either that reflavor generalized to user effects or a
-  real DK<->fiber continuation bridge at the handler. This is a
-  continuation-substrate change, **not** the "admit + reap" a local escape check
-  buys. The reference admission patch (correct, but gated on the bridge) is
-  preserved at `/tmp/effect-payload-admission.patch` (scratchpad).
+- **`EX_CLOSURE` (7) -- actually TWO families (verified, P-inv2 below).** The 7
+  split into two distinct blockers; the earlier "all effect-payload" framing was
+  wrong.
+
+  **B1. Resumable fn-PAYLOAD effects (3): continuation-substrate bridge.**
+  `effect-fn-payload-capturing` (`k:int`), `effect-cont-kv-sugar`
+  (`k:effect-cont`), `cross-function-resume-via-effect` (`k:int`) -- the
+  `(perform (E g))` shape where the handler resumes THROUGH the payload
+  (`(E [f] k) (f k)`), structurally the __Shift receiver under a USER effect. The
+  clean admission (`is_effect_payload` + widened perform-arg gate) makes the
+  performer CPS-emittable, but the handler then hands the direct-emitted payload
+  a raw `DK *` while the payload resumes via the FIBER substrate
+  (`tur_effect_cont_resume`), so it miscompiles (`expected 'int64_t' but argument
+  is of type 'DK *'`). The bridge is the `tur_cloneable_cont`: a GENERIC
+  `cont_fn(env,value)` that __Shift builds with `__dk_cont_fn` (= `dk_invoke`)
+  over a DK-chain env -- i.e. a DK-backed continuation. A payload routes through
+  it *iff* its cont param is `CK_MULTISHOT` (then `resume`/`(k v)` lowers to
+  `tur_cloneable_cont_resume`, not the fiber `tur_effect_cont_resume`). So the
+  bridge = reflavor the payload's cont param to `multishot-effect-cont`
+  (generalize __Shift's `elab_specialize_cont_receiver` to user effects) + fire
+  the handler-case cloneable-wrap (`emit_cps_ir.c` ~3341) for a user effect whose
+  payload param is a cloneable/multishot cont (currently keyed on
+  `is_shift_effect`). **Tractability: clean for `effect-cont`-typed payloads**
+  (`effect-cont-kv-sugar` -- reflavorable, the machinery exists); **hard for
+  `int`-typed payloads** (`effect-fn-payload-capturing`,
+  `cross-function-resume-via-effect` -- a raw-`int` handle IS the fiber substrate,
+  no `copy_kind` to reflavor, so it needs a runtime DK<->fiber dispatch tag or a
+  source-level `^multishot`/`effect-cont` annotation). Reference admission patch:
+  `/tmp/effect-payload-admission.patch` (scratchpad).
+
+  **B2. Capturing closure as a VALUE in colored code (4): closure drop-glue /
+  HOF handling.** `currying-effect-partial` (a partial-application closure
+  `add10 = (log-add 10)` called in a handle body), `unsafe-closure-capture` /
+  `free-lift-bind` (a closure literal passed to `free-run`),
+  `hkt-stdlib-parser-instances` (parser-combinator closures). Here the closure is
+  NOT an effect payload -- it is a capturing closure used as an indirect callee /
+  HOF argument inside a control-bearing function, so whole-body delegation (P1.b)
+  does not apply (the function has a real control op) and leaf-admit (P1.c) does
+  not fire (the init is a partial-app CALL, not an `EX_CLOSURE` literal; or the
+  closure is a call ARGUMENT `closure_binding_escapes` conservatively flags as
+  escaping). These need the deferred general **closure RC/drop glue**
+  (`docs/reported/escaping-fat-closure-env-leak.md`), or a HOF-inlining pass --
+  NOT the cont bridge. This is the genuine backstop, shared with the httpd
+  middleware family.
 - **`EX_DEFER` (4) -- two entangled sub-shapes, neither standalone-landable.**
   (i) USER side-effecting defers (`effect-defer` `(defer (println ...))`,
   `unsafe-defer`) must fire their side effect at a specific scope-exit point; a
@@ -217,14 +240,41 @@ slice rather than a quick admission:
 
 **Revised assessment (this session, verified):** the earlier "no conceptual
 blockers remain -- each is a scoped admission+emit slice" is **too optimistic**.
-The dominant `EX_CLOSURE` family needs a continuation-substrate bridge (empirical
-miscompile above), and the `EX_DEFER` fixtures are entangled with a co-located
-`BODY-STRUCT-OR-TAINT` blocker so they cannot flip to CPS on the defer fix alone.
-None of the 14 is a clean standalone admission win; each is either deep
-(cont-bridge, native loop) or Phase-2-entangled. The EVICT gate still reads
-`SIG-*` plus these 14 named residuals.
+The `EX_CLOSURE` family is two blockers (B1 cont-bridge x3, B2 closure-drop-glue
+x4), the `EX_DEFER` fixtures are entangled with a co-located
+`BODY-STRUCT-OR-TAINT` blocker, `EX_WHILE` needs a native loop, and `EX_INLINE_C`
+is session-runtime-tied. None of the 14 is a clean standalone admission win. The
+**single most tractable next slice** is B1 for `effect-cont-kv-sugar`: reflavor
+its `effect-cont` payload param to `multishot-effect-cont` and fire the
+handler-case cloneable-wrap for a user effect (generalize the `is_shift_effect`
+gate at `emit_cps_ir.c` ~3341 to "payload param is a cloneable/multishot cont").
+That routes its resume through the DK-backed `tur_cloneable_cont` and clears 1 of
+the 3. The EVICT gate still reads `SIG-*` plus these 14 named residuals.
 
 ## Progress log
+
+### Investigation P-inv2 -- EX_CLOSURE is two families; the cont-bridge is DK-backed via tur_cloneable_cont (no code landed)
+
+Follow-up on P-inv, tracing the continuation substrate to decide whether the B1
+bridge is feasible. Two findings. (1) The 7 `EX_CLOSURE` evictions are NOT one
+family: 3 are resumable fn-payload effects (B1, cont-bridge) and 4 are capturing
+closures used as indirect-callee / HOF-argument values in colored code (B2,
+closure-drop-glue) -- confirmed by dumping each (`currying-effect-partial` evicts
+on the partial-app closure `__papc1282` in its handle body, not on a payload;
+`unsafe-closure-capture` / `free-lift-bind` evict on the `(fn [inner] ...)` passed
+to `free-run`; `hkt-stdlib-parser-instances` on parser-combinator closures). (2)
+The B1 bridge is real and DK-backed: `tur_cloneable_cont` is a generic
+`cont_fn(env,value)` wrapper that __Shift builds with `__dk_cont_fn` (=
+`dk_invoke`) over a `dk_copy_range` chain env, and the direct emitter's
+`emit_effects_resume` already routes a `CK_MULTISHOT` continuation through
+`tur_cloneable_cont_resume` (that DK-backed path) -- so a user resumable-payload
+effect whose cont param is reflavored to `multishot-effect-cont` resumes through
+the SAME substrate the CPS handler produces. The bridge is thus "generalize
+__Shift's reflavor + handler cloneable-wrap to user effects," tractable for
+`effect-cont`-typed payloads and blocked on a runtime dispatch tag for raw-`int`
+payloads. Documented in "Honest distance" (B1/B2); no code landed -- the bridge
+is a real semantic unification that wants its own scoped slice, not a tail-end
+change.
 
 ### Investigation P-inv -- the residual-14 blockers are deeper than "scoped admission" (no code landed)
 
