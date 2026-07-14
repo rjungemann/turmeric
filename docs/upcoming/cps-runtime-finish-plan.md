@@ -169,13 +169,39 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 ## Honest distance
 
-Control flow: **done.** Remaining: a bounded coverage grind -- ~6-8 Phase-1
-slices, the owning-value plans + higher-order threading in Phase 2 (the bulk of
-the ~90, minus the taint cascade that clears for free), Phase-3 leak discipline,
-then the Phase-4 deletion. No conceptual blockers remain -- every item is a
-scoped admission+emit slice of the kind already shipped twice. It is many
-slices, not one push; but it is now fully enumerated and each has a measurable
-exit (the EVICT gate ticking toward `SIG-*`-only).
+Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 14
+per-emit** (see the Progress log: P1.a pure-delegation forms; P1.b/P1.c the
+closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
+receiver-`k` / receiver-env leaks). What remains, and why each is a distinct
+slice rather than a quick admission:
+
+- **`EX_CLOSURE` (7) -- ESCAPING closures.** A closure used as an effect PAYLOAD
+  (`(perform (E g))`, the `producer` / `then-parser-impl` shape -- structurally
+  the __Shift receiver but under a USER effect) or returned / stored. Admitting
+  it is easy (the __Shift path proves the boxed-closure perform-arg
+  representation); the blocker is the free. It cannot be scoped-freed or
+  boundary-reaped **safely** without knowing whether the consuming HANDLER
+  retains it -- a cross-function / whole-effect escape property `closure_binding_escapes`
+  (a local check) cannot decide. The sound options are (a) reap at the handler
+  case gated on a LOCAL escape check of that case body (generalizing P3.d beyond
+  `is_shift_effect`) -- clears the non-retaining-handler majority; or (b) give
+  closures real RC/drop glue (`escaping-fat-closure-env-leak.md`) for the general
+  case. (a) is the next tractable slice; (b) is the deferred backstop.
+- **`EX_DEFER` (4).** All corpus defers cross a control op. A USER defer
+  (`(defer (println ...))`, `effect-defer`) must fire at a specific scope-exit
+  point, which a boundary reap would move (observable) -- it needs a real
+  CPS-side defer frame. An rc AUTO-drop defer (`unsafe-basic`/`-nested`) has no
+  side effect and *could* ride a boundary reap with a new rc-decrement reap kind,
+  but only for drop-glue-free `rc<scalar>` (delaying a drop with glue is
+  observable) -- a narrow, carefully-gated slice.
+- **`EX_WHILE` (1).** A loop whose body performs / handles -- needs native DK
+  loop lowering (a `term_core_ok` + `emit_term` loop form), not delegation.
+- **`EX_INLINE_C` (2).** A session-channel primitive inlined into a colored
+  `main`; niche, tied to the session runtime.
+
+No conceptual blockers remain -- each is a scoped admission+emit (or
+admission+reap) slice of the kind shipped repeatedly here. The EVICT gate is the
+measurable exit; it now reads `SIG-*` plus these 14 named residuals.
 
 ## Progress log
 
