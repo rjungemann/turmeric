@@ -1,6 +1,6 @@
 ---
 title: "CPS backend -- native emission of capturing-closure shift receivers (resuming shift, N6.3/N6-Task1)"
-status: FEASIBLE (designed, not implemented) -- via the DK<->cloneable bridge; coordinated multi-site change, crux is new handler-case emit (step 6)
+status: REFRAMED -- the real gap is general "native handle-in-reset" (a KK_PROMPT-delivering nested handle), NOT __Shift/receiver-specific; needs its own core delimited-control plan
 description: A `shift` whose receiver is a CAPTURING closure that resumes the captured continuation (e.g. `(shift (fn [k] (k base)) 0)`, capturing `base`) is SIG/BODY-evicted with `EX_CLOSURE (capturing closure)` and falls back to the direct emitter's fiber shift lowering, where it leaks. Non-capturing resuming receivers (`(fn [k] (k 1))`, incl. multi-shot `(+ (k 1) (k 2))`) are ALREADY native via the `perform __Shift` desugar. This plan closes the remaining capturing case by binding `subk` and lifting the receiver body with its captures, instead of synthesizing an indirect `(recv val)` call that a fat closure cannot service.
 ---
 
@@ -150,6 +150,33 @@ through `term_core_ok` (CT_PERFORM + CT_HANDLE), `reset_body_ok`,
 performer, a circular dependency with the performer's own admission. This is a
 larger, more coupled change than "admission widenings"; the general-`atom_ok`
 shortcut is a dead end.
+
+### ROOT REFRAME (2026-07-14): the gap is "handle nested in a reset", not `__Shift`
+
+The implementation attempt's exact CT-IR trace + a reduction test reframe the gap
+entirely. It is NOT `__Shift`- or receiver-specific:
+
+- CT-IR of the `__Shift` desugar's handler is `reset { handle {..} with __Shift..
+  in (<prompt> v) }` -- a **handle nested inside a reset**, whose continuation
+  delivers to the enclosing reset's prompt (`KK_PROMPT`).
+- `term_core_ok`'s `CT_APPCONT` case returns false for `KK_PROMPT` delivery, so
+  `reset_body_ok(handle.body)` rejects that continuation -> the handle evicts.
+- **Reduction test (decisive):** a PLAIN handle-in-reset with no shift at all --
+  `(reset (+ 100 (handle (use-e) (E [] k) (resume k 5))))` -- ALSO evicts
+  (`BODY-STRUCT-OR-TAINT`, 0 `__cps`), while the same handle NOT inside a reset is
+  native (`cps-backend-effect`). So the missing capability is **native emission of
+  a handle nested in a reset**; cross-function `__Shift` is merely one instance
+  (its desugar produces exactly that nesting).
+
+Consequences for this plan:
+- The fix is NOT `__Shift`-scopable -- it is a general delimited-control admission
+  + emit change for a `KK_PROMPT`-delivering handle continuation (and the
+  heap-join `delim`, and the receiver atom for the `__Shift` case specifically).
+  It touches core `term_core_ok` / reset-handle admission with broad blast radius.
+- The right next artifact is a **"native handle-in-reset"** plan (general), with
+  cross-function `__Shift` as a downstream beneficiary, gated by a plain
+  handle-in-reset oracle FIRST (simpler than the shift oracle), then the shift +
+  effectful-callback oracles.
 
 ### Status / recommendation
 
