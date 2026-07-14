@@ -6,6 +6,26 @@ correctness bug). Sibling of the fixed DK-node leak
 lowering heap-allocates a carrier to cross the `intptr`-typed
 `dk_perform`/`resume`/handler ABI and never frees it.
 
+> **RESOLVED (2026-07-14).** Both parts are now fixed.
+> - **DK-path carriers** (multi-arg `__eargs` array, boxed `dk_perform` args):
+>   registered in the per-run reap list via `slot_store_reap`, freed at the
+>   outermost entry boundary. Cleared `cps-backend-multiarg-effect`,
+>   `-multiarg-effect-float`, `-tierc-effect-arg`.
+> - **Fiber-path `tierc-effect`**: resolved as predicted -- by bringing the shape
+>   onto the DK path, NOT by patching the fiber runtime. Two gaps were closed
+>   (see `docs/upcoming/v1/cps-tier-c-effect-result-native-plan.md`): `fn_sig_ok`
+>   never admitted a boxed-aggregate RETURN (so a struct-returning effectful
+>   function SIG-REJECTed and evicted to the fiber fallback), and the DK-path
+>   Tier-C boxes (resume value + handler-case return + deliver) were never freed.
+>   Fix: widen the return gate with `slot_box_ty`; make the per-run reap list the
+>   sole owner of every Tier-C box (`slot_store_reap` at every crossing, entry
+>   unwrap reads consume=false then reaps). `cps-backend-tierc-effect` now emits
+>   natively (`dk_perform`/`dk_handler`) and is leak-clean; marker dropped. Full
+>   suite 2178 passed, 0 failed; ASan sweep of all cps fixtures shows no
+>   double-frees and no tierc leak.
+>
+> Historical notes (superseded by the above):
+>
 > **PARTIALLY RESOLVED (2026-07-12).** The **DK-path** carriers are fixed: the
 > multi-arg `__eargs` array and any boxed (Tier-C) argument riding `dk_perform`
 > are now registered in the per-run reap list (`__dk_reap_ptr`) and freed at the

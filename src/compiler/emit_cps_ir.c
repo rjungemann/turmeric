@@ -1794,8 +1794,14 @@ static bool fn_sig_ok(const FnDef *fd) {
      * return annotation lacks.  A by-value aggregate param passes by value in C
      * directly (never rides the slot) but is admitted through the same gate -- an
      * owning-field aggregate stays out. */
+    /* The return crosses the DK slot: a Tier A/B scalar (sig_slot_ok) OR a Tier C
+     * owning-free by-value aggregate boxed at the boundary (slot_box_ty).  A
+     * by-value aggregate PARAM is NOT widened here -- the CPS param ABI would emit
+     * it by value while the direct emitter's forward decl passes it by pointer;
+     * such a param keeps the function on the fallback (see the param loop below).
+     * See docs/upcoming/v1/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
+    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
@@ -2793,7 +2799,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
         /* In a perform-continuation frame the delivered value IS the result --
          * return it (dk_perform routes it to the handler's outer continuation);
          * otherwise run the function's return continuation. */
-        char *sv = slot_store(ce->ctx, kont->ty, vty, v);
+        char *sv = slot_store_reap(ce->ctx, kont->ty, vty, v);
         if (ce->ret_mode)
             ce_line(ce, "return %s;", sv);
         else
@@ -2802,7 +2808,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
          * value IS the shift result -- return it; otherwise run the prompt chain. */
-        char *sv = slot_store(ce->ctx, kont->ty, vty, v);
+        char *sv = slot_store_reap(ce->ctx, kont->ty, vty, v);
         if (ce->shift_mode)
             ce_line(ce, "return %s;", sv);
         else
@@ -4229,11 +4235,14 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
-    char *sv = slot_store(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);  /* resume value -> slot */
+    /* resume value -> slot; a Tier C box is registered for reap (the resumed
+     * continuation may be re-run, so it is read consume=false and cannot be freed
+     * at the load -- the reap list owns it). */
+    char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
     Buf inv; buf_init(&inv);
     buf_printf(&inv, "dk_invoke((DK *)(%s), %s)", kk, sv);
     buf_putc(&inv, '\0');
-    /* result <- slot; leak a Tier C box (the resumed continuation may be re-run). */
+    /* result <- slot; reaped Tier C box (the resumed continuation may be re-run). */
     char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
     char *bn = cvar_cname(ce, t->as.resume.x);
     ce_line(ce, "%s = %s;", bn, ld);
@@ -4616,6 +4625,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    __dk_entry_depth++;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
         buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
+         * heap box owned by the reap list (consume=false, never freed at a load),
+         * so the reap frees it -- copy the value into a local first, then reap. */
+        if (!mvoid) {
+            char *ld = slot_load(ctx, mrt->kind, mrt, "__r", false);
+            buf_printf(file, "    int __mret = (int)(%s);\n", ld);
+            free(ld);
+        }
         /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
          * lifted continuation copy may still reference __root (a RESET_CONT
          * await frame carries k=__root in its env); leak it rather than dangle.
@@ -4629,9 +4646,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
-            char *ld = slot_load(ctx, mrt->kind, mrt, "__r", true);
-            buf_printf(file, "    return (int)(%s);\n}\n", ld);
-            free(ld);
+            buf_puts(file, "    return __mret;\n}\n");
         }
         ctx->fn_params   = saved_fn_params;
         ctx->n_fn_params = saved_n_fn_params;
@@ -4669,6 +4684,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "__root);\n");
+    /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
+     * box owned by the reap list (consume=false, never freed at a load), so the
+     * reap frees it -- copy the value into a local first, then reap. */
+    if (!void_ret) {
+        char *ld = slot_load(ctx, rt->kind, rt, "__r", false);
+        buf_printf(file, "    %s __ret = %s;\n", rety, ld);
+        free(ld);
+    }
     /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
      * lifted continuation copy may still reference __root (a RESET_CONT
      * await frame carries k=__root in its env); leak it rather than dangle.
@@ -4682,11 +4705,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {
-        /* slot-load the final delivered value back to the real return type.  This
-         * is the single-shot root boundary, so a Tier C box is consumed here. */
-        char *ld = slot_load(ctx, rt->kind, rt, "__r", true);
-        buf_printf(file, "    return %s;\n}\n", ld);
-        free(ld);
+        buf_puts(file, "    return __ret;\n}\n");
     }
 
     ctx->fn_params   = saved_fn_params;
