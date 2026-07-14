@@ -176,3 +176,39 @@ then the Phase-4 deletion. No conceptual blockers remain -- every item is a
 scoped admission+emit slice of the kind already shipped twice. It is many
 slices, not one push; but it is now fully enumerated and each has a measurable
 exit (the EVICT gate ticking toward `SIG-*`-only).
+
+## Progress log
+
+### Slice P1.a -- pure-delegation forms landed (`EX_PANIC` / `EX_CONS_LIST` / `EX_BORROW_IMMUT`)
+
+Three control-op-free leaf forms now delegate through `CT_LETRAW` instead of
+evicting a colored body: a `panic` in a handler case, a `& rest` variadic
+cons-list argument, and an immutable `(& x)` borrow. Each is admitted in
+`safe_to_delegate` (`src/passes/cps_ir.c`) by recursing into its operands, so
+the direct emitter emits it wholesale as the pure expression / no-successor
+terminator it already is. `collect_free_vars` (`elab_core.c`) was extended to
+descend `EX_CONS_LIST` items so a delegated cons-list riding a lifted CPS
+continuation env never misses a captured item; the three forms (plus
+`EX_INLINE_C`) are now named in `cps_form_name`. Gate: `BODY-UNSUPPORTED`
+`EX_PANIC`/`EX_CONS_LIST`/`EX_BORROW_IMMUT` -> 0. Suite green.
+
+### Findings for the remaining Phase-1 forms (still open)
+
+- **`EX_DEFER`** is NOT a pure-delegation slice. A CPS-emitted function
+  establishes no defer frame, so delegating a lone `EX_DEFER` via `CT_LETRAW`
+  would register a defer that never fires. The `plan_autodrop` hoist only
+  covers a *straight-line* owning auto-drop; every `EX_DEFER` eviction left in
+  the corpus (`effect-defer`, `unsafe-defer`, `unsafe-basic`, `unsafe-nested`)
+  crosses a control op -- and notably `(& x)` inside an `unsafe` block
+  elaborates through an `EX_HANDLE` (that borrow-region handle is what colors
+  `main`), so these are genuine control-crossing cases. This needs the native
+  `term_core_ok` + `emit_term` treatment (or a CPS-side defer-frame), not a
+  predicate widening. (Widening `expr_has_unsafe_control` to model borrows as
+  non-control only reshuffles the eviction from `BODY-UNSUPPORTED` into the
+  unnamed `BODY-STRUCT-OR-TAINT` bucket without admitting the function -- not
+  real progress, and it hides the form from the trace; do not land that alone.)
+- **`EX_WHILE`** (2 left) and **`EX_INLINE_C`** (2 left, session-channel
+  bodies) likewise contain / neighbour control ops in the colored bodies that
+  reach them, so they need native lowering rather than delegation.
+- **`EX_CLOSURE`** (the keystone) is unchanged and remains the highest-leverage
+  Phase-1 item.
