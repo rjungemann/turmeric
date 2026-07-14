@@ -235,6 +235,12 @@ continuation env never misses a captured item; the three forms (plus
   (`make-adder`) is cleanest fixed by whole-body-delegating to the direct
   emitter (which already frees the env) rather than decomposing it into CPS; (2)
   a closure in a genuinely control-bearing function's lifted body (`run-handler`
-  handler case) needs the free emitted on the CPS lifted-helper path. The
-  admission change was reverted pending that free; the `is_delegatable_value`
-  comment carries a pointer here.
+  handler case) needs the free emitted on the CPS lifted-helper path. Note this
+  is the **non-escaping** scoped-free that the direct emitter already solves
+  (`let_binding_env_freeable`); it is NOT the deferred *escaping*-closure
+  drop-glue tracked in `docs/reported/escaping-fat-closure-env-leak.md` (that one
+  needs closures to carry RC/drop glue and stays interim-`requires.no-leak-check`).
+  So the keystone's leak gate is a bounded "replicate the direct-path scoped-env
+  free on the CPS delegation path" slice, not the open-ended closure-drop-glue
+  work. The admission change was reverted pending that free; the
+  `is_delegatable_value` comment carries a pointer here.
