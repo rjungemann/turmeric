@@ -149,6 +149,15 @@ typedef struct CHandleCase {
     uint32_t        n_params;
     const Binding  *k;
     CTerm          *case_body;
+    /* cps-dk-multishot-user-effects (Phase A): this case handles a RESUMABLE-PAYLOAD
+     * effect (its constructor has a `(fn [effect-cont] R)` param) and resumes
+     * through the payload.  Selects the DK-backed cloneable-cont wrap for `k` PLUS
+     * the boxed-payload `arg` reap at emit (generalizes the `is_shift_effect`
+     * gate), so the payload's `(k v)` / `resume` resumes the DK chain through
+     * `tur_cloneable_cont_resume`.  Scoped to resumable-payload effects -- NOT set
+     * for a hand-written `^multishot` handler on a non-payload effect (whose `arg`
+     * is not a boxed pointer and must not be reaped as one). */
+    bool            resumable_payload;
 } CHandleCase;
 
 typedef struct CVar {     /* a CPS-introduced binder */
@@ -185,7 +194,7 @@ struct CTerm {
         struct { CVar x; CTerm *delim; CTerm *body;
                  CHandleCase *cases; uint32_t n_cases; bool shallow; }    handle;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
-                 CVar x; CTerm *body; }                                   perform;
+                 CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
          * body = the continuation.  Emitted as a dk_shift whose body is the fixed
          * __tur_await_body runtime helper (resume-if-ready / park-if-pending). */

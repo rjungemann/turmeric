@@ -415,6 +415,7 @@ static bool is_delegatable_value(const Expr *e) {
             return e->as.closure_.closure
                 && (e->as.closure_.closure->n_captures == 0
                     || e->as.closure_.closure->is_shift_receiver
+                    || e->as.closure_.closure->is_effect_payload
                     || g_whole_body_delegate);
         default:
             return false;
@@ -463,6 +464,7 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     if (init->kind != EX_CLOSURE || !init->as.closure_.closure) return false;
     if (init->as.closure_.closure->n_captures == 0) return false;   /* capture-free: already delegatable */
     if (init->as.closure_.closure->is_shift_receiver) return false; /* reaped by P3.d */
+    if (init->as.closure_.closure->is_effect_payload) return false; /* reaped at handler case */
     if (b->type.kind != TY_FN) return false;
     switch (b->type.as.fn.result_kind) {
         case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
@@ -1300,6 +1302,9 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
             cs[ci].params = ps;
         }
         cs[ci].k = c->k_binding;
+        /* cps-dk-multishot-user-effects (Phase A): a resumable-payload handler
+         * needs the DK-backed cloneable-cont wrap + boxed-payload reap at emit. */
+        cs[ci].resumable_payload = c->resumable_payload;
         /* The case clause delivers its value by return (KK_PROMPT), which
          * dk_perform routes to the handler's outer continuation. */
         cs[ci].case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
@@ -1313,6 +1318,7 @@ static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     PerformExpr *pf = e->as.perform_.perform;
     CTerm *t = new_term(b, CT_PERFORM);
     t->as.perform.effect = pf->effect_name;
+    t->as.perform.resumable_payload = pf->resumable_payload;
     t->as.perform.n = pf->n_args;
     CAtom *args = arena_alloc(b->a, (pf->n_args ? pf->n_args : 1) * sizeof(CAtom));
     for (uint32_t i = 0; i < pf->n_args; i++) args[i] = atomize(b, pf->args[i], p);

@@ -1,7 +1,41 @@
 # DK-native multishot continuations for user resumable-payload effects
 
-**Status:** scoping / design (no code landed). Prepared from investigations
-P-inv .. P-inv3 in `cps-runtime-finish-plan.md`.
+**Status:** Phase A LANDED (`effect-cont-kv-sugar` CPS-emits end-to-end). Phase B
+follows for free structurally but a resumable-payload effect that resumes MORE
+than once (the `multishot-effect-cont-kv-sugar` `(+ (k 1) (k 2))` shape) still
+evicts to fiber -- see "Phase A result" below. Phase C (`int`-typed payloads)
+open. Prepared from investigations P-inv .. P-inv3 in
+`cps-runtime-finish-plan.md`.
+
+## Phase A result (landed)
+
+`effect-cont-kv-sugar` now CPS-emits on BOTH the performer (`producer`) and the
+handler (`run`): `BODY-UNSUPPORTED`/`BODY-STRUCT-OR-TAINT` both cleared, output
+1107 on direct == cps == turi, ASan-clean on the CPS path, full suite 2179/0.
+Implemented exactly as designed, landed as one unit:
+
+1. `reflavor_effect_payload` (elab_effects.c) rewrites a `(fn [k : effect-cont] ...)`
+   payload's cont param to `multishot-effect-cont` at the perform site.
+2. A per-effect `resumable_payload_param` (set at `defeffect` from the param type
+   FORM -- the cont flavor collapses to its TY_INT carrier in the stored Type, so
+   the form is the reliable signal) drives both sides.
+3. The handler case auto-upgrades an un-annotated `k` to `CK_MULTISHOT` (fixing
+   the cloneable-runtime emission gate) and carries a precise `resumable_payload`
+   flag.
+4. CPS admission: `PerformExpr.resumable_payload` widens the perform-arg gate to
+   the boxed-fn payload atom; `Closure.is_effect_payload` admits a capturing
+   payload in `is_delegatable_value`.
+5. CPS emit: the handler-case cloneable-cont wrap + boxed-payload `arg` reap
+   (`emit_cps_ir.c` ~3350) fires on `hcase->resumable_payload` (generalizing the
+   `is_shift_effect` gate), scoped precisely so a hand-written `^multishot`
+   handler on a NON-payload effect (whose `arg` is not a boxed pointer) is
+   untouched.
+
+**Not yet flipped:** `multishot-effect-cont-kv-sugar` (payload resumes twice,
+`(+ (k 1) (k 2))`) still evicts to fiber -- a genuinely multi-shot resume through
+the payload hits an admission path Phase A did not open (the double-resume, not
+the substrate). That is the Phase B remainder. Its pre-existing fiber-path leak
+(32 B in `tur_cloneable_cont_alloc`) is unchanged by Phase A.
 
 **One-line:** teach the CPS/DK backend to CPS-emit a USER algebraic effect whose
 handler resumes THROUGH a fn payload (`(defeffect E [f : (fn [cont] R)] ...)`,

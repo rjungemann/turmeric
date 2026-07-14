@@ -169,11 +169,12 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 ## Honest distance
 
-Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 14
+Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 13
 per-emit** (see the Progress log: P1.a pure-delegation forms; P1.b/P1.c the
 closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
-receiver-`k` / receiver-env leaks). What remains, and why each is a distinct
-slice rather than a quick admission:
+receiver-`k` / receiver-env leaks; PA the B1 cont-substrate bridge for
+`effect-cont`-typed resumable payloads -- `effect-cont-kv-sugar` now CPS-emits).
+What remains, and why each is a distinct slice rather than a quick admission:
 
 - **`EX_CLOSURE` (7) -- actually TWO families (verified, P-inv2 below).** The 7
   split into two distinct blockers; the earlier "all effect-payload" framing was
@@ -258,6 +259,32 @@ is no small Phase-1 admission win left among the 14. The EVICT gate still reads
 `SIG-*` plus these 14 named residuals.
 
 ## Progress log
+
+### Slice PA -- B1 cont-substrate bridge LANDED for effect-cont-typed resumable payloads
+
+`effect-cont-kv-sugar` now CPS-emits end-to-end (performer + handler), the first
+user resumable-payload effect to do so outside the synthesized `__Shift` path.
+`BODY-UNSUPPORTED` 14 -> 13. Corrects P-inv3's "not a bridge slice, Phase-2
+only": the bridge IS landable for `effect-cont`-typed payloads (P-inv3's own
+caveat), and this proves it. Mechanism (one unit, per
+[cps-dk-multishot-user-effects-plan.md](cps-dk-multishot-user-effects-plan.md)
+Phase A): (1) `reflavor_effect_payload` upgrades a `(fn [k : effect-cont] ...)`
+payload's cont param to `multishot-effect-cont` at the perform site so its
+`(k v)` lowers to the DK-backed `tur_cloneable_cont_resume`; (2) a per-effect
+`resumable_payload_param` (detected at `defeffect` from the param type FORM --
+the cont flavor collapses to its TY_INT carrier in the stored Type) drives both
+halves; (3) the handler case auto-upgrades an un-annotated `k` to `CK_MULTISHOT`
+(this also flips the cloneable-runtime emission gate); (4) the perform-arg gate
+admits the boxed-fn payload atom (`PerformExpr.resumable_payload`), and
+`is_delegatable_value` admits a capturing payload (`Closure.is_effect_payload`);
+(5) the handler-case cloneable-cont wrap + boxed-payload `arg` reap
+(`emit_cps_ir.c` ~3350) fire on `hcase->resumable_payload`, generalizing the
+`is_shift_effect` gate but scoped precisely so a hand-written `^multishot`
+handler on a non-payload effect is untouched. Verified: output 1107 on
+direct == cps == turi, ASan-clean on the CPS path, suite 2179/0, the `int`-typed
+B1 fixtures (Phase C) unchanged (still evict to fiber). `multishot-effect-cont-kv-sugar`
+(payload resumes twice) still evicts -- the multi-shot-resume admission is the
+Phase B remainder.
 
 ### Investigation P-inv3 -- B1 is not a bridge slice: user resumable-payload effects already evict to fiber (no code landed; corrects P-inv2)
 

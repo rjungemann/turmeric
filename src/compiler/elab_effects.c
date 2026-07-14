@@ -465,6 +465,71 @@ static Form *reflavor_shift_receiver(Elab *e, Form *recv) {
     return form_list(e->arena, recv->span, new_fn, fn_n);
 }
 
+/* cps-dk-multishot-user-effects (Phase A): reflavor a USER effect's fn PAYLOAD
+ * lambda's `effect-cont` param to `multishot-effect-cont` BEFORE elaboration, so
+ * `(k v)` inside the payload lowers to the DK-backed `tur_cloneable_cont_resume`
+ * (CK_MULTISHOT snapshot resume) rather than the fiber `tur_effect_cont_resume`.
+ * This is the user-effect analogue of reflavor_shift_receiver: it lets a
+ * `(perform (E (fn [k : effect-cont] (k v))))` performer + its `(E [f] k) (f k)`
+ * handler CPS-emit through the same cloneable-cont substrate __Shift uses, instead
+ * of co-evicting to fiber.  Multishot is the sound generalization of one-shot
+ * (resume-once behaves identically -- snapshot once, resume once), so upgrading a
+ * one-shot `effect-cont` payload does not change observable behaviour on any
+ * backend.  Only a lambda-literal payload `(fn [k : effect-cont] ...)` is
+ * rewritable from the perform site; anything else returns NULL (unchanged).  Only
+ * the parameter vector is reflavored -- the body is untouched. */
+static Form *reflavor_effect_payload(Elab *e, Form *payload) {
+    if (!payload || payload->tag != F_LIST || payload->as.list.len < 2) return NULL;
+    Form *head = payload->as.list.items[0];
+    if (head->tag != F_SYM || head->as.sym != e->sym_fn) return NULL;
+    Form *params = payload->as.list.items[1];
+    if (params->tag != F_VEC && params->tag != F_LIST) return NULL;
+    const Symbol *from = intern_cstr(e->st, "effect-cont");
+    const Symbol *to   = intern_cstr(e->st, "multishot-effect-cont");
+    Form *new_params = reflavor_cont_sym(e, params, from, to);
+    if (new_params == params) return NULL;  /* no `effect-cont` annotation */
+    uint32_t fn_n = payload->as.list.len;
+    Form **new_fn = (Form **)arena_alloc(e->arena, fn_n * sizeof(Form *));
+    for (uint32_t i = 0; i < fn_n; i++) new_fn[i] = payload->as.list.items[i];
+    new_fn[1] = new_params;
+    return form_list(e->arena, payload->span, new_fn, fn_n);
+}
+
+/* cps-dk-multishot-user-effects (Phase A): does effect `eff` declare a RESUMABLE
+ * fn PAYLOAD -- a param `(fn [<cont>] R)` whose first arg is a continuation
+ * (`effect-cont` / `multishot-effect-cont`, TY_CONT)?  Such an effect is resumed
+ * THROUGH the payload (`(E [f] k) (f k)`): the payload's `(k v)` resumes the
+ * handler continuation.  For the CPS/DK backend to emit performer + handler
+ * through the shared DK-backed cloneable-cont substrate (the __Shift bridge,
+ * generalized), the payload's cont param is reflavored to multishot at the
+ * perform site (reflavor_effect_payload) AND the handler's `k` is auto-upgraded to
+ * CK_MULTISHOT (below) so both halves agree on the cloneable substrate -- matching
+ * a hand-written `^multishot` handler.  Returns the index of the resumable payload
+ * param, or -1. */
+static int effect_resumable_payload_param(const Effect *eff) {
+    if (!eff || !eff->constructor) return -1;
+    return eff->constructor->resumable_payload_param;
+}
+
+/* Does a param TYPE form denote a resumable fn payload -- `(fn [effect-cont] R)`
+ * / `(fn [multishot-effect-cont] R)`?  The `effect-cont` cont flavor collapses to
+ * its TY_INT carrier in the stored Type (arg_kinds), so the FORM is the reliable
+ * signal.  Scans for the flavor symbol as the fn's first param annotation (a bare
+ * symbol, keyword, or type-annotation head) inside the type form's spine. */
+static bool form_type_is_cont_payload(Elab *e, const Form *f) {
+    if (!f) return false;
+    const Symbol *ec  = intern_cstr(e->st, "effect-cont");
+    const Symbol *mec = intern_cstr(e->st, "multishot-effect-cont");
+    if ((f->tag == F_SYM || f->tag == F_KEYWORD)
+        && (f->as.sym == ec || f->as.sym == mec))
+        return true;
+    if ((f->tag == F_LIST || f->tag == F_VEC || f->tag == F_TYPE_ANN)) {
+        for (uint32_t i = 0; i < f->as.list.len; i++)
+            if (form_type_is_cont_payload(e, f->as.list.items[i])) return true;
+    }
+    return false;
+}
+
 /* cps-backend-n6 cross-function resume.  Lazily register the synthetic __Shift
  * effect, once per program.  It carries the shift's receiver as a boxed fn
  * payload `(fn [effect-cont] int)` (blocker 3: a one-word {thunk,env} closure so
@@ -809,6 +874,7 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
                 pargs[0] = recv;
                 perform->args = pargs;
                 perform->n_args = 1;
+                perform->resumable_payload = false;  /* __Shift: own admission path */
                 Type rt = sheff->constructor->result_full_type
                         ? *sheff->constructor->result_full_type
                         : type_from_kind(sheff->constructor->result_type);
@@ -1127,6 +1193,7 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
     const Type **param_full = arena_alloc(e->arena, (n_params ? n_params : 1) * sizeof(const Type *));
     for (uint32_t j = 0; j < n_params; j++) param_full[j] = NULL;
     bool any_agg_param = false;
+    int resumable_payload = -1;   /* index of a `(fn [effect-cont] R)` payload */
 
     {
         uint8_t p = 0;
@@ -1145,8 +1212,10 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
             /* Check if the next item is a type keyword or F_TYPE_ANN */
             TypeKind pk = TY_INT;
             Type *ann = NULL;
+            Form *type_form = NULL;   /* the param's type form, for cont-payload scan */
             if (i + 1 < raw_n) {
                 Form *next = params_f->as.list.items[i + 1];
+                type_form = next;
                 if (next->tag == F_KEYWORD) {
                     pk = typekind_from_symbol(next->as.sym->name);
                     if (pk == TY_UNKNOWN) {
@@ -1182,6 +1251,13 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
                 if (stored->kind == TY_FN) stored->as.fn.boxed = true;
                 param_full[p] = stored;
                 any_agg_param = true;
+                /* cps-dk-multishot-user-effects (Phase A): a `(fn [effect-cont] R)`
+                 * payload marks this a resumable-payload effect (resumed through the
+                 * payload).  Detect from the type FORM -- the cont flavor collapses
+                 * to TY_INT in the stored Type's arg_kinds. */
+                if (stored->kind == TY_FN && resumable_payload < 0
+                    && form_type_is_cont_payload(e, type_form))
+                    resumable_payload = (int)p;
             }
             p++;
         }
@@ -1275,6 +1351,10 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
      * would fail field access in the case body). */
     if (effect->constructor && any_agg_param)
         effect->constructor->param_full_types = param_full;
+    /* cps-dk-multishot-user-effects (Phase A): record a resumable fn-payload param
+     * so perform reflavors the payload cont to multishot and handle upgrades `k`. */
+    if (effect->constructor)
+        effect->constructor->resumable_payload_param = resumable_payload;
 
     /* ET4: Resolve parent effect if ^extends was specified */
     if (parent_name) {
@@ -1404,8 +1484,25 @@ Expr *elab_perform(Elab *e, const Form *call) {
     uint8_t n_args = effect_call_f->as.list.len - 1;
     Expr **args = arena_alloc(e->arena, n_args * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
-        args[i] = elab_form(e, effect_call_f->as.list.items[i + 1]);
+        /* cps-dk-multishot-user-effects (Phase A): reflavor a resumable fn-payload
+         * lambda's `effect-cont` param to `multishot-effect-cont` before elaborating
+         * (see reflavor_effect_payload) so its `(k v)` resumes through the DK-backed
+         * cloneable-cont substrate the CPS handler produces.  A non-lambda / non-
+         * effect-cont arg is returned unchanged. */
+        Form *arg_form = effect_call_f->as.list.items[i + 1];
+        Form *reflav = reflavor_effect_payload(e, arg_form);
+        if (reflav) arg_form = reflav;
+        args[i] = elab_form(e, arg_form);
         if (!args[i]) return NULL;
+        /* cps-dk-multishot-user-effects (Phase A): mark a CAPTURING closure payload
+         * of the resumable-payload param `is_effect_payload` so the CPS backend
+         * delegates its build (is_delegatable_value) even though it captures --
+         * paired with the handler-case boxed-env reap.  A capture-free payload
+         * (EX_FN / EX_FN_TO_FAT) needs no flag (already delegatable). */
+        if ((int)i == effect_resumable_payload_param(effect)
+            && args[i]->kind == EX_CLOSURE && args[i]->as.closure_.closure
+            && args[i]->as.closure_.closure->n_captures > 0)
+            args[i]->as.closure_.closure->is_effect_payload = true;
         /* An fn-value payload is carried as a BOXED closure (one-word `void *` to
          * the heap `{thunk, env}` box; defeffect marks the param `boxed`), so a
          * capturing receiver's env rides along in the one-word effect slot.  A
@@ -1429,6 +1526,9 @@ Expr *elab_perform(Elab *e, const Form *call) {
     perform->effect_name = effect_name;
     perform->args = args;
     perform->n_args = n_args;
+    /* cps-dk-multishot-user-effects (Phase A): flag a resumed-through-payload
+     * effect so the CPS/DK perform-arg gate admits the boxed-fn payload atom. */
+    perform->resumable_payload = effect_resumable_payload_param(effect) >= 0;
     
     /* The return type of perform is the result type of the effect.  Tier C: when
      * the effect declares a by-value aggregate result, use the full Type (which
@@ -1555,6 +1655,7 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
          * 3 items: (Effect [params...] k)             -> CK_UNIQUE (default)
          * 4 items: (Effect [params...] ^annotation k) -> CK_LINEAR or CK_COPY */
         cases[i].cont_kind = CK_UNIQUE;
+        cases[i].resumable_payload = false;
         Form *k_f;
         if (hdr_len == 4) {
             Form *ann_f = case_f->as.list.items[2];
@@ -1573,6 +1674,25 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
             }
         } else {
             k_f = case_f->as.list.items[2];
+        }
+
+        /* cps-dk-multishot-user-effects (Phase A): auto-upgrade an UN-annotated
+         * handler `k` to CK_MULTISHOT when this effect is resumed THROUGH a fn
+         * payload whose cont param the perform site reflavored to multishot
+         * (reflavor_effect_payload).  Both halves must agree on the cloneable
+         * substrate: the payload's `(k v)` lowers to `tur_cloneable_cont_resume`,
+         * so the handler must provide a cloneable `k` (a `^multishot`-equivalent
+         * continuation), not a one-shot fiber cont.  An EXPLICIT annotation always
+         * wins (the user asked for ^linear/^multishot deliberately). */
+        {
+            const Effect *ceff = effect_env_lookup(e->effect_env, cases[i].effect_name);
+            if (ceff && effect_resumable_payload_param(ceff) >= 0) {
+                cases[i].resumable_payload = true;
+                /* Auto-upgrade an UN-annotated `k` to multishot (an explicit
+                 * ^linear/^multishot always wins). */
+                if (cases[i].cont_kind == CK_UNIQUE)
+                    cases[i].cont_kind = CK_MULTISHOT;
+            }
         }
 
         if (k_f->tag != F_SYM) {

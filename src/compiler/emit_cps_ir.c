@@ -1638,10 +1638,17 @@ static bool term_core_ok(const CTerm *t) {
              * emit_perform stores the fn-pointer word as the effect value and the
              * handler case (emit_lifted) bridge-wraps the DK subk before the call,
              * so the receiver resumes the DK chain through __dk_cont_fn. */
-            bool is_shift_perf = is_shift_effect(t->as.perform.effect);
+            /* cps-dk-multishot-user-effects (Phase A): a resumable-payload user
+             * effect carries its boxed-fn payload the same way __Shift carries its
+             * receiver -- a `TY_FN` atom that fails the generic slot gate.  Admit it
+             * at the perform-arg gate (scoped to the boxed payload, never the
+             * generic atom_ok), paired with the handler-case cloneable-wrap
+             * (hcase->multishot).  A non-resumable effect stays on the fiber path. */
+            bool fn_payload_ok = is_shift_effect(t->as.perform.effect)
+                              || t->as.perform.resumable_payload;
             for (uint32_t i = 0; i < t->as.perform.n; i++)
                 if (!atom_ok(&t->as.perform.args[i])
-                    && !(is_shift_perf && shift_recv_atom_ok(&t->as.perform.args[i])))
+                    && !(fn_payload_ok && shift_recv_atom_ok(&t->as.perform.args[i])))
                     return false;
             CapSet cs;
             return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
@@ -3338,7 +3345,12 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         if (hcase->k) {
             char *kn = name_for_binding(ce->ctx, hcase->k);
             indent_buf(&tmp, 4);
-            if (is_shift_effect(hcase->effect)) {
+            /* cps-dk-multishot-user-effects (Phase A): a __Shift receiver OR a
+             * resumable-payload user handler binds `k` as a DK-backed cloneable
+             * cont so the payload's `(k v)` / `resume` resumes the DK chain through
+             * tur_cloneable_cont_resume.  Both take the same wrap + boundary reaps
+             * (the `arg` reap is safe because `arg` is a boxed fn payload here). */
+            if (is_shift_effect(hcase->effect) || hcase->resumable_payload) {
                 /* Cross-function `shift` bridge crux: the __Shift receiver
                  * (`recv`) is a direct-emitted `(fn [k : cont] ...)` that resumes
                  * its continuation via `tur_cloneable_cont_resume(

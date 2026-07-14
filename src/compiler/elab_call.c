@@ -3147,6 +3147,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     pap_closure->n_captures = (uint8_t)n_pap_captures;
     pap_closure->env_name = pap_env_sym;
     pap_closure->is_shift_receiver = false;   /* arena mem is not zeroed */
+    pap_closure->is_effect_payload = false;
 
     /* Wire closure into FnDef (required for emit_fn_def to emit the env struct) */
     pap_fd->closure = pap_closure;
@@ -5903,6 +5904,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     snprintf(en, sizeof(en), "__env_%u", e->next_id++);
     clo->env_name = symtab_intern(e->st, strslice(en, (uint32_t)strlen(en)));
     clo->is_shift_receiver = false;   /* arena mem is not zeroed */
+    clo->is_effect_payload = false;
     M->closure = clo;
     for (uint8_t k = 0; k < n_disp; k++) {
         M->dict_env_classes[k] = (TypeClass *)disp_classes[k];

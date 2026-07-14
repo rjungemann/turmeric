@@ -641,6 +641,14 @@ struct Closure {
      * -- unlike a general capturing closure, which is not a valid indirect callee
      * (see indirect_callee_ok).  Scoped strictly to __Shift receivers. */
     bool           is_shift_receiver;
+    /* cps-dk-multishot-user-effects (Phase A): set when this closure is the fn
+     * PAYLOAD of a resumable-payload user effect (`(perform (E g))` where E is
+     * resumed through g).  The user-effect analogue of is_shift_receiver: it is
+     * boxed into the one-word effect slot and applied once in the handler case
+     * (`(f k)`), never indirect-called elsewhere, so the CPS backend delegates its
+     * build (CT_LETRAW) even though it captures.  Its boxed env is reaped at the
+     * handler case (the generalized __Shift P3.d reap). */
+    bool           is_effect_payload;
 };
 
 typedef struct LetBinding {
@@ -686,6 +694,13 @@ typedef struct PerformExpr {
     const Symbol *effect_name;   /* Name of the effect to perform */
     Expr **args;                /* Arguments to the effect */
     uint8_t n_args;
+    /* cps-dk-multishot-user-effects (Phase A): this effect is resumed THROUGH a fn
+     * payload (its constructor has a `(fn [effect-cont] R)` param).  Set by
+     * elab_perform from the effect's resumable_payload_param.  Lets the CPS/DK
+     * perform-arg gate admit the boxed-fn payload atom (scoped -- a plain non-
+     * resumable fn payload effect stays on the fiber path), paired with the
+     * handler-case cloneable-cont wrap (keyed on the handler's CK_MULTISHOT). */
+    bool resumable_payload;
 } PerformExpr;
 
 /* Handle case: (EffectName [param1 param2 ...] k) body ... */
@@ -701,6 +716,11 @@ typedef struct HandleCase {
      * CK_LINEAR (^linear k): exactly one resume/discontinue required.
      * CK_MULTISHOT (^multishot k): MS1: safe multi-shot via snapshot semantics. */
     CopyKind cont_kind;
+    /* cps-dk-multishot-user-effects (Phase A): this case handles a resumable-payload
+     * effect (constructor has a `(fn [effect-cont] R)` param).  Set at elab; drives
+     * the CPS/DK cloneable-cont wrap + boxed-payload reap.  Distinct from a bare
+     * `^multishot` cont_kind (which a non-payload effect can also carry). */
+    bool resumable_payload;
     Expr *body;                 /* Handler body */
 } HandleCase;
 
