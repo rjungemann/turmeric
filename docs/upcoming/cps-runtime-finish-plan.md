@@ -208,9 +208,37 @@ the **httpd higher-order call family (~30)**, and one `EX_WHILE`. Validated:
 (9) are **effect-bearing** closures (a closure built in a handler-case / shift /
 perform body) -- those genuinely need the lifted-body path (leaf-admission + a
 lifted-env free, the P3.d receiver-reap tactic generalized), NOT whole-body
-delegation, and stay gated on that free. So the keystone splits cleanly: the
-control-free majority is done here; the effect-bearing minority is the remaining
-slice.
+delegation. **Slice P1.c below closes the freeable subset of those.**
+
+### Slice P1.c -- closure KEYSTONE (effect-bearing shape): leaf-admit + boundary-reap the freeable subset
+
+The effect-bearing closures P1.b left evicting -- a closure built in a handler
+case / shift / perform continuation -- are now admitted when they are provably
+**freeable**, generalizing the P3.d receiver-reap tactic. Such a closure is
+leaf-admitted via `CT_LETRAW` and its heap fat-env is registered for a single-node
+free at the outermost DK entry boundary (a new `letraw.reap_env` flag ->
+`__dk_reap_ptr` in `emit_letraw`), closing the leak that made a general
+leaf-admitted closure unsound on the CPS path.
+
+Admission gate `cps_closure_env_freeable` mirrors the direct emitter's
+`let_binding_env_freeable`: the init is a **capturing** closure (capture-free is
+already delegatable; a `__Shift` receiver is **excluded** -- it is reaped by the
+handler-case path P3.d, so never twice), it returns a **scalar** (its result
+cannot alias the env), and the bound name does **not escape** the let body or any
+sibling init. Escape is decided by `closure_binding_escapes`, which is
+conservative -- `EX_PERFORM` and every unmodeled control form default to
+"escapes" -- so a reaped closure PROVABLY does not escape (no early free / UAF),
+and boundary reap of distinct per-construction mallocs never double-frees.
+
+Validated under ASan/LSan: `run-handler` and `rc-auto-drop-closure-capture` are
+admitted and leak-clean; the `closure-env-no-leak` ASan target (multi-shot
+handler-case closure + per-iteration loop closure) stays green; a probe passing a
+closure as a `perform` arg correctly still evicts (no reap -> no UAF), output
+correct. **Gate: `BODY-UNSUPPORTED` 16 -> 14** (`EX_CLOSURE` 9 -> 7). The
+remaining 7 `EX_CLOSURE` evictors escape (used as an effect payload) or return a
+non-scalar -- correctly left evicting, as reaping them would be a UAF or an
+env-aliasing free; they are the GENERAL escaping-closure case (needs closure
+drop-glue, `escaping-fat-closure-env-leak.md`). Suite 2179/0.
 
 ### Slice P3.a -- Track-A perform-continuation `dk_frame_resume` node leak fixed (Phase 3)
 
