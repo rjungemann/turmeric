@@ -204,18 +204,32 @@ works). Validated under ASan/LSan: `shift-crossfn-resume-works` drops
 **3320 -> 1248 bytes** with no UAF; the other multishot fixtures stay clean;
 suite 2179/0.
 
-The **1248-byte residual** on `shift-crossfn-resume-works` is a DISTINCT leak,
-now the last blocker to dropping its `requires.no-leak-check`: the receiver's own
-`k` (`tur_cloneable_cont_alloc(__dk_cont_fn, dk_copy_range(subk, NULL), ...)` in
-the shift handler case, `emit_cps_ir.c:~3343`) is never dropped when the case
-completes (~32 bytes per receiver, plus a 16-byte perform-cont env). Dropping it
-is safe in principle (after the case body no more snapshots are taken of `k`, so
-it is dead), but the handler-case body is emitted by `emit_term` with terminal
-returns inline -- there is no single exit to inject the drop -- so it needs an
-owned-resource-at-scope-exit mechanism, a separate slice from the snapshot fix.
+### Slice P3.c -- reap the shift receiver's bound continuation `k` (Phase 3)
 
-Phase 3 still open: the receiver-`k` drop above; and the escaping-fat-closure-env
-free (the keystone gate, above).
+The other half of the `shift-crossfn-resume-works` residual: the shift handler
+case's bound `k` (a `tur_cloneable_cont` = struct + an owned `dk_copy_range` of
+`subk`, `emit_cps_ir.c:~3343`) was never reclaimed -- one cont struct + chain per
+receiver invocation. `k` is only ever *cloned* per resume (never itself resumed),
+so it is dead once the receiver returns, but the case body is emitted with
+terminal returns inline (no single exit to drop at). Hoist the env and register
+both halves for the outermost entry-boundary reap -- the chain via
+`__dk_reap_keep` (`dk_free`), the struct via `__dk_reap_ptr` (`free`) -- i.e.
+`tur_cloneable_cont_drop` deferred to the boundary (safe: every resume has
+settled by then). Validated under ASan/LSan: `shift-crossfn-resume-works` drops
+**1248 -> 64 bytes**, no UAF, output correct; suite 2179/0.
+
+The final **64-byte residual** is the DEFERRED escaping-fat-closure-env leak
+(`docs/reported/escaping-fat-closure-env-leak.md`): the shift-receiver closures
+themselves (`(fn [k] ...)` capturing e.g. `base`) heap-allocate an env that is
+never freed -- the same class as the keystone gate, needing closures to carry
+RC/drop glue. That is why `shift-crossfn-resume-works` keeps its
+`requires.no-leak-check` (net: the DK-node/snapshot/receiver-`k` leaks are gone,
+3320 -> 64 bytes; only the deferred closure-env class remains).
+
+Phase 3 leak status: the DK-node (P3.a), per-resume snapshot (P3.b), and
+receiver-`k` (P3.c) leaks are fixed; remaining is the escaping-fat-closure-env
+class (the keystone gate, above) -- a single deferred item now blocking both the
+closure keystone and the last leak fixtures.
 
 ### Slice P1.a -- pure-delegation forms landed (`EX_PANIC` / `EX_CONS_LIST` / `EX_BORROW_IMMUT`)
 
