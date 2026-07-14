@@ -54,6 +54,27 @@ evict. The `term_core_ok` failures, per node:
   even reached, but the indirect application of the receiver `TY_FN` to the
   continuation `k` is a further predicate to satisfy (`handle_case_ok`).
 
+### The predicates are COUPLED -- no isolated slice (2026-07-14, tested)
+
+Attempting the smallest "necessary" slice -- admit a bare (non-fat) `TY_FN`
+receiver atom in `atom_ok` -- proved it cannot land in isolation. It is inert for
+the shift fixture (the handler predicates still fail, so nothing goes native) but
+it is NOT non-regressing: it **miscompiles 3 effectful-callback fixtures**
+(`cps-backend-effectful-callback`, `effect-row-ho`, `effect-poly-typeclass` --
+stdout mismatch, wrong values, not a build/snapshot change so it slips past the
+snapshot regen). Root: `fn_sig_ok` admits an *effectful* fn param on purpose,
+relying on the taint discipline -- the callback's effect (performed by the fiber
+callback body) taints the effect so its handler stays co-fiber. Relaxing
+`atom_ok` to admit a bare fn value let such a function flip to native (DK) while
+its callback still performs on the fiber path, splitting handler and performer
+across the two machines -> wrong output.
+
+So the `atom_ok` relaxation must at least be scoped to **effect-free** fn values
+(the `__Shift` receiver is effect-free; an effectful callback is not), AND it only
+matters once the handler predicates are also satisfied -- i.e. the predicates are
+**coupled** and must land as ONE coordinated, oracle-gated change, not as
+independently-verifiable slices. Reverted; suite restored to green.
+
 So native cross-function `__Shift` is a **multi-part feature**, not one predicate:
 `atom_ok` (bare-fn receiver), `term_core_ok(delim)` (a body calling a `__Shift`
 performer), `reset_body_ok` (the handler continuation), and native `(recv k)`
