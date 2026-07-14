@@ -1,6 +1,6 @@
 ---
 title: "CPS backend -- native emission of capturing-closure shift receivers (resuming shift, N6.3/N6-Task1)"
-status: BLOCKED -- premise was a misreading; the real gap is the __Shift effect taint, not the receiver
+status: FEASIBLE (designed, not implemented) -- via the DK<->cloneable bridge; coordinated multi-site change, crux is new handler-case emit (step 6)
 description: A `shift` whose receiver is a CAPTURING closure that resumes the captured continuation (e.g. `(shift (fn [k] (k base)) 0)`, capturing `base`) is SIG/BODY-evicted with `EX_CLOSURE (capturing closure)` and falls back to the direct emitter's fiber shift lowering, where it leaks. Non-capturing resuming receivers (`(fn [k] (k 1))`, incl. multi-shot `(+ (k 1) (k 2))`) are ALREADY native via the `perform __Shift` desugar. This plan closes the remaining capturing case by binding `subk` and lifting the receiver body with its captures, instead of synthesizing an indirect `(recv val)` call that a fat closure cannot service.
 ---
 
@@ -85,6 +85,57 @@ scoped project with the direct==cps oracle (`shift-crossfn-resume-works`) and an
 ASan pass, not an incremental poke. `is_delegatable_capturing_closure` (the
 receiver-capture idea) is orthogonal and would only matter after the bare-fn
 receiver + handler gaps are closed.
+
+## FEASIBILITY RESOLVED (2026-07-14): feasible via the cloneable-cont bridge
+
+Attempting the coordinated change settled the open question -- it is **feasible**,
+not architecturally blocked, and the mechanism is the EXISTING DK<->cloneable
+bridge. Evidence chain:
+
+- The receiver (`__fn_1282`, the `(fn [k] (k 1))`) is COLORED but emitted only as
+  a direct entry `static int64_t __fn_1282(int64_t k)` whose body resumes via
+  `tur_cloneable_cont_resume(tur_continuation_snapshot(k), 1)` -- the cloneable-
+  cont machinery, NOT `dk_invoke`. `(recv k)` in the handler calls it dynamically
+  by fn-pointer value (only the direct entry is reachable through a value).
+- That looked like a hard machine-coherence blocker (a DK subk can't be resumed
+  through `tur_cloneable_cont_resume`). It is NOT: `emit_cps_cloneable_bridge_prelude`
+  already emits `__dk_cont_fn` -- a `tur_cloneable_cont` whose env is a DK chain
+  and whose resume dispatches to `dk_invoke`. So a DK subk WRAPPED via that bridge
+  (`tur_cloneable_cont_alloc(__dk_cont_fn, dk_copy_range(subk,NULL), __dk_env_clone,
+  __dk_env_drop)`) resumes correctly through the receiver's existing
+  `tur_cloneable_cont_resume`. The two continuation machines interoperate at this
+  exact seam.
+
+### What the coordinated change requires (complete map)
+
+To make cross-function `__Shift` native, ALL of the following must land together
+(they are coupled -- no isolated slice, proven above):
+
+1. **`atom_ok`** admits an **effect-free** bare (non-fat) `TY_FN` atom (the
+   receiver). Must exclude effectful fn values or it miscompiles the effectful-
+   callback taint discipline (proven).
+2. **`fn_sig_ok`** for the performer + handler + receiver (the receiver's
+   `cont -> int` param / `CT_RESUME` body must be admitted).
+3. **`term_core_ok(handle.delim)`** -- a body that calls a `__Shift` performer.
+4. **`reset_body_ok`** for the handler continuation.
+5. **`handle_case_ok`** for the `(recv k)` case (a dynamic call of the receiver
+   value with the continuation).
+6. **New emit (the crux):** the DK `__Shift` handler case must BRIDGE-WRAP `subk`
+   via `__dk_cont_fn` before the dynamic `(recv k)` call, so the receiver's
+   `tur_cloneable_cont_resume` resumes the DK chain. This is the only genuinely
+   new codegen; the rest are admission-predicate widenings.
+
+### Status / recommendation
+
+Feasible and fully mapped, but a substantial multi-site implementation whose crux
+(step 6) is new codegen. It must land as one change gated by BOTH oracles:
+`shift-crossfn-resume-works` (direct==cps = 11/105/23/306, single- AND multi-shot)
+AND the effectful-callback set (`cps-backend-effectful-callback`, `effect-row-ho`,
+`effect-poly-typeclass`) which the `atom_ok` widening can break. Not landed here:
+writing step 6's emit speculatively risked a third miscompile, so this hands off a
+verified design rather than broken code. Multi-shot (`twice`/`thrice`) needs the
+bridge's `dk_copy`/clone discipline to give each resume an independent snapshot --
+already what `__dk_env_clone` provides, but verify under ASan.
 
 ## Symptom
 
