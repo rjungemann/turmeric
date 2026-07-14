@@ -157,6 +157,8 @@ void dk_free(DK *k) {
     while (k) { DK *n = k->next; free(k); k = n; }
 }
 
+void dk_free_node(DK *k) { free(k); }
+
 bool dk_has_prompt(const DK *k) {
     for (const DK *p = k; p; p = p->next)
         if (p->kind == DKK_PROMPT) return true;

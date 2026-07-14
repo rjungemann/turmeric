@@ -242,6 +242,26 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, b
     char *r = strdup(b.data); buf_free(&b); return r;
 }
 
+/* Like slot_store, but when the value is boxed (a Tier-C aggregate riding the
+ * intptr slot as a malloc'd pointer) register the box in the per-run reap list
+ * so it is freed at the outermost entry boundary.  Used at the sites whose box
+ * is read with slot_load(consume=false) -- an effect arg carried through
+ * dk_perform, shared read-only across a multi-shot resume -- and so is never
+ * consume-freed at a load site (that would double-free the reaped box).  A
+ * scalar slot is returned unchanged (no pointer to free).  See
+ * docs/reported/cps-effect-perform-carrier-leak.md. */
+static char *slot_store_reap(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
+    char *s = slot_store(ctx, k, t, e);
+    Type _r; const Type *rt = cps_resolve_ty(t, &_r);
+    if (slot_box_ty(rt)) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "__dk_reap_ptr(%s)", s);
+        buf_putc(&b, '\0');
+        free(s); s = strdup(b.data); buf_free(&b);
+    }
+    return s;
+}
+
 /* The Type a colored function's value has when delivered to KK_RET.  fd->return_type
  * can carry a NULL ADT def (the surface annotation is not def-resolved); the body's
  * type carries the real monomorphized def and the body's value is exactly what is
@@ -303,6 +323,27 @@ static bool atom_ok(const CAtom *a) {
 static bool is_println_shape(BuiltinShape s) {
     return s == BS_PRINTLN_INT || s == BS_PRINTLN_BOOL || s == BS_PRINTLN_UINT
         || s == BS_PRINTLN_CSTR || s == BS_PRINTLN_FLOAT || s == BS_PRINTLN_FLOAT32;
+}
+
+/* The synthetic effect that a cross-function `shift` desugars onto (see
+ * elab_effects.c `wrap_reset_body_with_shift_handler`).  A `(perform (__Shift
+ * recv))` carries a shift RECEIVER value; the __Shift handler case invokes it as
+ * `(recv k)` after bridge-wrapping the DK continuation.  Recognized by interned
+ * name so the receiver-admission / bridge-wrap relaxations stay strictly scoped
+ * to __Shift and never touch ordinary user effects. */
+static bool is_shift_effect(const Symbol *eff) {
+    return eff && eff->name && strcmp(eff->name, "__Shift") == 0;
+}
+
+/* A __Shift receiver atom: a capture-free `TY_FN` value passed as the single
+ * argument of `(perform (__Shift recv))`.  Admitted ONLY at the __Shift perform
+ * site (never via the general atom_ok, which a global TY_FN widening would
+ * miscompile).  A CAPTURING receiver never reaches here as a clean atom -- it
+ * bails at CPS translation (EX_CLOSURE -> CT_UNSUPPORTED), so a TY_FN atom here
+ * is always the lifted, capture-free receiver the direct emitter materializes as
+ * a plain function pointer that rides the one-word effect slot. */
+static bool shift_recv_atom_ok(const CAtom *a) {
+    return (a->kind == CA_VAR || a->kind == CA_CVAR) && a->ty == TY_FN;
 }
 
 static bool shape_supported(const BuiltinSpec *sp) {
@@ -1586,8 +1627,22 @@ static bool term_core_ok(const CTerm *t) {
             if (!perform_body_ok(t->as.perform.body)
                 && !perform_cont_reset_ok(t->as.perform.body))
                 return false;
+            /* A `(perform (__Shift recv))` -- the desugar of a cross-function
+             * `shift` (elab_effects.c) -- carries the shift RECEIVER as its single
+             * argument: a `TY_FN` value (a lifted, capture-free `(fn [k] ...)`)
+             * that the __Shift handler case invokes as `(recv k)` to resume the
+             * captured continuation.  A bare TY_FN fails the generic atom_ok slot
+             * gate, and widening atom_ok for ALL fn atoms miscompiles the effectful-
+             * callback set (see docs/upcoming/cps-native-handle-in-reset-plan.md
+             * "Dead ends").  Admit it ONLY here, scoped to the __Shift effect:
+             * emit_perform stores the fn-pointer word as the effect value and the
+             * handler case (emit_lifted) bridge-wraps the DK subk before the call,
+             * so the receiver resumes the DK chain through __dk_cont_fn. */
+            bool is_shift_perf = is_shift_effect(t->as.perform.effect);
             for (uint32_t i = 0; i < t->as.perform.n; i++)
-                if (!atom_ok(&t->as.perform.args[i])) return false;
+                if (!atom_ok(&t->as.perform.args[i])
+                    && !(is_shift_perf && shift_recv_atom_ok(&t->as.perform.args[i])))
+                    return false;
             CapSet cs;
             return collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
         }
@@ -1720,6 +1775,48 @@ static bool delim_ok(const CTerm *t) {
             return shift_body_ok(t->as.shift.body)
                 && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
         }
+        case CT_HANDLE: {
+            /* A `handle` nested inside the enclosing delimited body (e.g.
+             * `(reset (+ 100 (handle (use-e) (E [] k) (resume k 5))))`).  Its
+             * handled body runs under the handle's own prompt (term_core_ok, as
+             * in the core CT_HANDLE case), and its CASES resume/deliver to that
+             * prompt (handle_case_ok) -- unchanged.  What differs from the core
+             * case: the handle's CONTINUATION (handle.body, the `(+ 100 _)` that
+             * consumes the handle result) sits in the enclosing delimited region,
+             * so its tail delivers the value to the ENCLOSING reset's prompt
+             * (KK_PROMPT) -- exactly the delivery the stricter reset_body_ok (via
+             * term_core_ok) forbids, which is why a handle-in-reset used to evict.
+             * Admit the continuation via delim_ok (it may deliver to a prompt),
+             * with scalar-only captures riding the lifted continuation env.
+             * emit_handle already lifts handle.body as an LH_RESET_CONT that
+             * delivers through cur_k (the enclosing prompt), so no new codegen is
+             * needed for this (receiver-free) shape. */
+            /* The handled body (handle.delim) runs under the handle's OWN prompt;
+             * its normal-completion tail -- and any interior join -- delivers to
+             * that prompt (KK_PROMPT), which emit_handle threads as cur_k.  So it
+             * is admitted via delim_ok (KK_PROMPT-delivering), not term_core_ok:
+             * a delimited-body join like `letcont j(t){+10 t; <prompt>}` inside the
+             * handled expression `(+ 10 (inner))` is exactly this shape.  (In
+             * Reduction A the delim was a plain `tailcall use-e(<prompt>)`, which
+             * delim_ok also admits, so this is a strict widening.) */
+            CapSet hcs;
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                || !delim_ok(t->as.handle.delim)
+                || !delim_ok(t->as.handle.body)
+                || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
+                return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
+                if (!handle_case_ok(c->case_body)) return false;
+                if (!collect_caps_case(c->case_body, c, &ccs)) return false;
+            }
+            return true;
+        }
         case CT_RESET: {
             /* U7-reset (nested-reset slice): a `reset` inside the enclosing
              * delimited body.  emit_reset installs a fresh prompt (the DK machine
@@ -1774,8 +1871,14 @@ static bool fn_sig_ok(const FnDef *fd) {
      * return annotation lacks.  A by-value aggregate param passes by value in C
      * directly (never rides the slot) but is admitted through the same gate -- an
      * owning-field aggregate stays out. */
+    /* The return crosses the DK slot: a Tier A/B scalar (sig_slot_ok) OR a Tier C
+     * owning-free by-value aggregate boxed at the boundary (slot_box_ty).  A
+     * by-value aggregate PARAM is NOT widened here -- the CPS param ABI would emit
+     * it by value while the direct emitter's forward decl passes it by pointer;
+     * such a param keeps the function on the fallback (see the param loop below).
+     * See docs/upcoming/v1/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
+    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
@@ -2773,7 +2876,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
         /* In a perform-continuation frame the delivered value IS the result --
          * return it (dk_perform routes it to the handler's outer continuation);
          * otherwise run the function's return continuation. */
-        char *sv = slot_store(ce->ctx, kont->ty, vty, v);
+        char *sv = slot_store_reap(ce->ctx, kont->ty, vty, v);
         if (ce->ret_mode)
             ce_line(ce, "return %s;", sv);
         else
@@ -2782,7 +2885,7 @@ static void emit_deliver_ty(CE *ce, const CKont *kont, const char *v, const Type
     } else if (kont->kind == KK_PROMPT) {
         /* Deliver to the innermost prompt.  In a shift-body helper the delivered
          * value IS the shift result -- return it; otherwise run the prompt chain. */
-        char *sv = slot_store(ce->ctx, kont->ty, vty, v);
+        char *sv = slot_store_reap(ce->ctx, kont->ty, vty, v);
         if (ce->shift_mode)
             ce_line(ce, "return %s;", sv);
         else
@@ -2999,6 +3102,13 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         if (le && le->kind == EX_CALL && rhs && rhs[0])
             ce_line(ce, "%s;", rhs);
         ce_line(ce, "%s = 0;", bn);
+    } else if (t->as.letraw.x.ty == TY_FN) {
+        /* A boxed fn value (a fat closure / fn-pointer word, e.g. a cross-function
+         * __Shift receiver built by the direct emitter) rides the one-word DK slot
+         * as an int64_t binder, but emit_value yields it as a pointer expression --
+         * cast through intptr_t so the store is a clean integer, not a
+         * -Wint-conversion pointer->int assignment. */
+        ce_line(ce, "%s = (int64_t)(intptr_t)(%s);", bn, rhs ? rhs : "0");
     } else
         ce_line(ce, "%s = %s;", bn, rhs ? rhs : "0");
     free(bn);
@@ -3218,7 +3328,23 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
         if (hcase->k) {
             char *kn = name_for_binding(ce->ctx, hcase->k);
             indent_buf(&tmp, 4);
-            buf_printf(&tmp, "DK *%s = subk;\n", kn);
+            if (is_shift_effect(hcase->effect)) {
+                /* Cross-function `shift` bridge crux: the __Shift receiver
+                 * (`recv`) is a direct-emitted `(fn [k : cont] ...)` that resumes
+                 * its continuation via `tur_cloneable_cont_resume(
+                 * tur_continuation_snapshot(k), v)`.  Its `k` must therefore be a
+                 * `tur_cloneable_cont`, not the raw DK `subk`.  Wrap subk with the
+                 * DK<->cloneable bridge (__dk_cont_fn / __dk_env_clone /
+                 * __dk_env_drop, emit_cps_cloneable_bridge_prelude): the bound `k`
+                 * is a cloneable cont whose env is an OWNED copy of the DK chain;
+                 * each `(k v)` snapshots (clones the chain via __dk_env_clone =
+                 * dk_copy_range) before resuming, so a multi-shot receiver
+                 * (`(+ (k 1) (k 2))`) resumes an independent chain per call. */
+                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)tur_cloneable_cont_alloc("
+                                 "__dk_cont_fn, dk_copy_range(subk, NULL), __dk_env_clone, __dk_env_drop);\n", kn);
+            } else {
+                buf_printf(&tmp, "DK *%s = subk;\n", kn);
+            }
             free(kn);
         }
     }
@@ -3293,8 +3419,11 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
 
     char *fn = callee_name(call->as.tailcall.fn);
     char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
-    char frame[512];
-    snprintf(frame, sizeof frame, "dk_frame(%s, 0, %s)", jname, ce->cur_k);
+    /* The join frame is spliced onto cur_k and threaded into the callee in tail
+     * position; register it for a single-node reap at the outermost entry
+     * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+    char frame[560];
+    snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
     if (call->as.tailcall.n)
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
     else
@@ -3324,6 +3453,10 @@ static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const 
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);
         free(cn);
     }
+    /* The env struct outlives its DK frame (shared read-only across multi-shot
+     * resumes) and is never freed at a call site; reap it at the outermost entry
+     * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
     Buf b; buf_init(&b); buf_printf(&b, "(intptr_t)%s", envv); buf_putc(&b, '\0');
     char *s = strdup(b.data); buf_free(&b); return s;
 }
@@ -3356,8 +3489,12 @@ static void emit_reset(CE *ce, const CTerm *t) {
      * through the reset's prompt to reach them, and the reified sub still includes
      * the prompt so a shift in the resumed computation stays delimited.  They are
      * transparent to a returning value (the frame already delivers via
-     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged. */
-    ce_line(ce, "DK *%s = dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s)));",
+     * dk_run(__k, v)); with no enclosing handler this is [done], i.e. unchanged.
+     * The whole chain (prompt + frame + the fresh copied handler markers + done)
+     * is self-contained and installed in tail position, so it cannot be freed
+     * here; register it for reaping at the outermost entry boundary
+     * (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))));",
             pchain, hname, envexpr, ce->cur_k);
     free(envexpr);
 
@@ -3885,9 +4022,18 @@ static void emit_shift(CE *ce, const CTerm *t) {
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     emit_lifted(ce, hname, LH_SHIFT_BODY, NULL, TY_INT, NULL, t->as.shift.body, NULL, caps);
     char *env = emit_cont_env(ce, hname, caps, NULL);   /* k-less env */
-    /* shift0 does NOT reinstall the delimiting prompt; plain shift does. */
-    ce_line(ce, "return dk_run(%s(1, %s, %s, %s), 0);",
+    /* shift0 does NOT reinstall the delimiting prompt; plain shift does.  The
+     * shift node is spliced onto cur_k (its ->next); after dk_run has driven the
+     * captured computation to completion it is dead, so reclaim it with
+     * dk_free_node (a single-node free -- dk_free would walk into cur_k).  See
+     * docs/archive/cps-delimited-dk-node-leak.md. */
+    char snode[48];
+    snprintf(snode, sizeof(snode), "__sd%d", id);
+    ce_line(ce, "DK *%s = %s(1, %s, %s, %s);", snode,
             t->as.shift.shift0 ? "dk_shift0" : "dk_shift", hname, env, ce->cur_k);
+    ce_line(ce, "int64_t %s_r = dk_run(%s, 0);", snode, snode);
+    ce_line(ce, "dk_free_node(%s);", snode);
+    ce_line(ce, "return %s_r;", snode);
     free(env);
 }
 
@@ -3963,7 +4109,10 @@ static void emit_handle(CE *ce, const CTerm *t) {
         chain = nxt;
     }
     buf_putc(&chain, '\0');
-    ce_line(ce, "DK *%s = %s;", hchain, chain.data);
+    /* Installed as cur_k and threaded in tail position (like reset); register the
+     * self-contained chain for reaping at the outermost entry boundary
+     * (docs/archive/cps-delimited-dk-node-leak.md). */
+    ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
     for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }
@@ -4003,10 +4152,15 @@ static void emit_perform(CE *ce, const CTerm *t) {
         snprintf(av, sizeof av, "__eargs%d", aid);
         ce_line(ce, "int64_t *%s = (int64_t *)malloc(%u * sizeof(int64_t));",
                 av, (unsigned)t->as.perform.n);
+        /* The arg array (and any boxed slot within it) is read by the handler via
+         * slot_load(consume=false) and shared read-only across a multi-shot
+         * resume, so it is never freed at a load site; reap it at the outermost
+         * entry boundary (docs/reported/cps-effect-perform-carrier-leak.md). */
+        ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", av);
         for (uint32_t i = 0; i < t->as.perform.n; i++) {
             char *ai = atom_str(ce, &t->as.perform.args[i]);
-            char *si = slot_store(ce->ctx, t->as.perform.args[i].ty,
-                                  t->as.perform.args[i].type, ai);
+            char *si = slot_store_reap(ce->ctx, t->as.perform.args[i].ty,
+                                       t->as.perform.args[i].type, ai);
             ce_line(ce, "%s[%u] = %s;", av, i, si);
             free(si); free(ai);
         }
@@ -4020,7 +4174,9 @@ static void emit_perform(CE *ce, const CTerm *t) {
             ? atom_str(ce, &t->as.perform.args[0]) : strdup("0");
         TypeKind argty = (t->as.perform.n >= 1) ? t->as.perform.args[0].ty : TY_NIL;
         const Type *argt = (t->as.perform.n >= 1) ? t->as.perform.args[0].type : NULL;
-        sa = slot_store(ce->ctx, argty, argt, arg);
+        /* A boxed (Tier-C) single arg leaks like the multi-arg array -- read
+         * consume=false by the handler; reap it at the entry boundary. */
+        sa = slot_store_reap(ce->ctx, argty, argt, arg);
     }
 
     if (perform_cont_trivial(t)) {
@@ -4050,11 +4206,22 @@ static void emit_perform(CE *ce, const CTerm *t) {
                 ce_line(ce, "%s->f%d = %s;", envv, i, cn);
                 free(cn);
             }
-            ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, (intptr_t)%s, %s));",
-                    tag, sa, pname, envv, ce->cur_k);
+            /* Shared read-only across multi-shot resumes; reaped at the outermost
+             * entry boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+            ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
+            /* The perform continuation frame is spliced onto cur_k; dk_perform
+             * copies the captured range and never frees the node we hand it, so
+             * reclaim it single-node after dk_perform settles (dk_free would walk
+             * into cur_k).  See docs/archive/cps-delimited-dk-node-leak.md. */
+            ce_line(ce, "DK *__pfd%d = dk_frame(%s, (intptr_t)%s, %s);", id, pname, envv, ce->cur_k);
+            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
+            ce_line(ce, "dk_free_node(__pfd%d);", id);
+            ce_line(ce, "return __pfr%d;", id);
         } else {
-            ce_line(ce, "return dk_perform(%d, %s, dk_frame(%s, 0, %s));",
-                    tag, sa, pname, ce->cur_k);
+            ce_line(ce, "DK *__pfd%d = dk_frame(%s, 0, %s);", id, pname, ce->cur_k);
+            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
+            ce_line(ce, "dk_free_node(__pfd%d);", id);
+            ce_line(ce, "return __pfr%d;", id);
         }
     } else {
         /* Track A: the continuation contains a NESTED control op (a further
@@ -4168,11 +4335,14 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
-    char *sv = slot_store(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);  /* resume value -> slot */
+    /* resume value -> slot; a Tier C box is registered for reap (the resumed
+     * continuation may be re-run, so it is read consume=false and cannot be freed
+     * at the load -- the reap list owns it). */
+    char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
     Buf inv; buf_init(&inv);
     buf_printf(&inv, "dk_invoke((DK *)(%s), %s)", kk, sv);
     buf_putc(&inv, '\0');
-    /* result <- slot; leak a Tier C box (the resumed continuation may be re-run). */
+    /* result <- slot; reaped Tier C box (the resumed continuation may be re-run). */
     char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
     char *bn = cvar_cname(ce, t->as.resume.x);
     ce_line(ce, "%s = %s;", bn, ld);
@@ -4552,20 +4722,31 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "        _c->next = g_tur_args;\n");
         buf_puts(file, "        g_tur_args = (int64_t)(intptr_t)_c;\n");
         buf_puts(file, "    }\n");
+        buf_puts(file, "    __dk_entry_depth++;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
         buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
+         * heap box owned by the reap list (consume=false, never freed at a load),
+         * so the reap frees it -- copy the value into a local first, then reap. */
+        if (!mvoid) {
+            char *ld = slot_load(ctx, mrt->kind, mrt, "__r", false);
+            buf_printf(file, "    int __mret = (int)(%s);\n", ld);
+            free(ld);
+        }
         /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
-     * lifted continuation copy may still reference __root (a RESET_CONT
-     * await frame carries k=__root in its env); leak it rather than dangle.
-     * tur_async_suspended is always 0 for a synchronous / effect-only body,
-     * so this is byte-identical there. */
-    buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
+         * lifted continuation copy may still reference __root (a RESET_CONT
+         * await frame carries k=__root in its env); leak it rather than dangle.
+         * tur_async_suspended is always 0 for a synchronous / effect-only body,
+         * so this is byte-identical there.  The reap list is gated the same way:
+         * a parked continuation may still reference a registered chain / env
+         * struct / box, so reaping only runs once the body has actually settled
+         * (docs/archive/cps-delimited-dk-node-leak.md). */
+        buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
+        buf_puts(file, "    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
-            char *ld = slot_load(ctx, mrt->kind, mrt, "__r", true);
-            buf_printf(file, "    return (int)(%s);\n}\n", ld);
-            free(ld);
+            buf_puts(file, "    return __mret;\n}\n");
         }
         ctx->fn_params   = saved_fn_params;
         ctx->n_fn_params = saved_n_fn_params;
@@ -4592,6 +4773,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
     emit_params(ctx, file, fd);
     buf_puts(file, ") {\n");
+    buf_puts(file, "    __dk_entry_depth++;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
     for (uint32_t i = 0; i < fd->n_params; i++) {
@@ -4602,20 +4784,28 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
     if (fd->n_params) buf_puts(file, ", ");
     buf_puts(file, "__root);\n");
+    /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
+     * box owned by the reap list (consume=false, never freed at a load), so the
+     * reap frees it -- copy the value into a local first, then reap. */
+    if (!void_ret) {
+        char *ld = slot_load(ctx, rt->kind, rt, "__r", false);
+        buf_printf(file, "    %s __ret = %s;\n", rety, ld);
+        free(ld);
+    }
     /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
      * lifted continuation copy may still reference __root (a RESET_CONT
      * await frame carries k=__root in its env); leak it rather than dangle.
      * tur_async_suspended is always 0 for a synchronous / effect-only body,
-     * so this is byte-identical there. */
+     * so this is byte-identical there.  The reap list is gated the same way:
+     * a parked continuation may still reference a registered chain / env
+     * struct / box, so reaping only runs once the body has actually settled
+     * (docs/archive/cps-delimited-dk-node-leak.md). */
     buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
+    buf_puts(file, "    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {
-        /* slot-load the final delivered value back to the real return type.  This
-         * is the single-shot root boundary, so a Tier C box is consumed here. */
-        char *ld = slot_load(ctx, rt->kind, rt, "__r", true);
-        buf_printf(file, "    return %s;\n}\n", ld);
-        free(ld);
+        buf_puts(file, "    return __ret;\n}\n");
     }
 
     ctx->fn_params   = saved_fn_params;

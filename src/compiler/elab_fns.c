@@ -4509,7 +4509,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
         closure->captures = arena_captures;
         closure->n_captures = n_captures;
         closure->env_name = env_name_sym;
-        
+        closure->is_shift_receiver = false;   /* arena mem is not zeroed */
+
         /* Store closure reference in FnDef for codegen */
         fd->closure = closure;
         

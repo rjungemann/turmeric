@@ -1,4 +1,0 @@
-Delimited control on the CPS backend leaks its heap DK nodes per prompt/shift
-(DK is opaque; see docs/reported/cps-delimited-dk-node-leak.md).  The Tier C
-return box itself is freed at the single-shot entry unwrap; only the DK nodes
-leak, exactly as the sibling cps-backend-xfn-reset fixture.

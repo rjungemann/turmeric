@@ -258,7 +258,7 @@ Once E3a/E3b are in:
 - **The DK-node leak** (`docs/reported/cps-delimited-dk-node-leak.md`): E3b's
   region teardown retires it. Coordinate so the fix is claimed once.
 - **N6.5** (fallback deletion,
-  [cps-backend-n6-fallback-removal-followups-plan.md](cps-backend-n6-fallback-removal-followups-plan.md)):
+  [cps-backend-n6-fallback-removal-followups-plan.md](../archive/cps-backend-n6-fallback-removal-followups-plan.md)):
   consuming / aggregate / ref owning-capture continuations are residual fallback
   cases; E3 removes them (or they stay a named carve-out until E3 lands).
 

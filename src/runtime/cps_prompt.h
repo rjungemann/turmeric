@@ -110,5 +110,9 @@ bool dk_has_handler(const DK *k, int tag);
 /* ---- memory ----------------------------------------------------------- */
 DK *dk_copy(const DK *k);   /* deep copy a chain */
 void dk_free(DK *k);        /* free a chain */
+/* Free a single node without following ->next.  Reclaims a one-off spliced node
+ * (an abortive shift / perform node) whose ->next points into an enclosing
+ * continuation, where dk_free would walk into (and double-free) that chain. */
+void dk_free_node(DK *k);
 
 #endif

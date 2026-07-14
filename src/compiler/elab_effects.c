@@ -788,6 +788,12 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
                  * capturing receiver rides along.  A capturing closure is already
                  * boxed; a bare fn pointer is wrapped via EX_FN_TO_FAT. */
                 Expr *recv = k_expr;
+                /* Mark a capturing-closure receiver so the CPS backend delegates
+                 * its build (CT_LETRAW) even though it captures -- it is only ever
+                 * invoked as `(recv k)` in the bridge-wrapping __Shift handler
+                 * case, never indirect-called elsewhere.  Scoped to __Shift. */
+                if (recv->kind == EX_CLOSURE && recv->as.closure_.closure)
+                    recv->as.closure_.closure->is_shift_receiver = true;
                 if (recv->type.kind == TY_FN && !recv->type.as.fn.boxed) {
                     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
                     *bt = recv->type;

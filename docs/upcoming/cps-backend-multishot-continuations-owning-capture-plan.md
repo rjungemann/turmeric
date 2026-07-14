@@ -40,7 +40,7 @@ both.
 **Nothing here is a correctness gap today.** Every shape both tracks reject is
 handled correctly by the general whole-function fallback. This is coverage, and
 it is what N6.5 (the general fallback deletion,
-[cps-backend-n6-fallback-removal-followups-plan.md](cps-backend-n6-fallback-removal-followups-plan.md))
+[cps-backend-n6-fallback-removal-followups-plan.md](../archive/cps-backend-n6-fallback-removal-followups-plan.md))
 needs covered before it can delete the fallback without hard-erroring these
 shapes.
 
@@ -469,7 +469,7 @@ fixture needs both tracks:
   P2 (abortive-unwind ref drop) rides E3's DK teardown; P3 (resumable-crossing
   ref) is the `ref`-flavored instance of Track B's owning capture. Its state
   line points at the env-capture plan -- redirect it here.
-- **N6.5** ([cps-backend-n6-fallback-removal-followups-plan.md](cps-backend-n6-fallback-removal-followups-plan.md)):
+- **N6.5** ([cps-backend-n6-fallback-removal-followups-plan.md](../archive/cps-backend-n6-fallback-removal-followups-plan.md)):
   Track A shrinks the nested-control-in-continuation fallback surface; Track B
   shrinks the owning-capture fallback surface. Both are residual-fallback line
   items; list them when N6.5 audits residuals, with the bounded-only /
