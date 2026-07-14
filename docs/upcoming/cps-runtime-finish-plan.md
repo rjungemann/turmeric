@@ -218,18 +218,34 @@ both halves for the outermost entry-boundary reap -- the chain via
 settled by then). Validated under ASan/LSan: `shift-crossfn-resume-works` drops
 **1248 -> 64 bytes**, no UAF, output correct; suite 2179/0.
 
-The final **64-byte residual** is the DEFERRED escaping-fat-closure-env leak
-(`docs/reported/escaping-fat-closure-env-leak.md`): the shift-receiver closures
-themselves (`(fn [k] ...)` capturing e.g. `base`) heap-allocate an env that is
-never freed -- the same class as the keystone gate, needing closures to carry
-RC/drop glue. That is why `shift-crossfn-resume-works` keeps its
-`requires.no-leak-check` (net: the DK-node/snapshot/receiver-`k` leaks are gone,
-3320 -> 64 bytes; only the deferred closure-env class remains).
+### Slice P3.d -- reap the __Shift receiver closure env; `shift-crossfn-resume-works` fully leak-clean
 
-Phase 3 leak status: the DK-node (P3.a), per-resume snapshot (P3.b), and
-receiver-`k` (P3.c) leaks are fixed; remaining is the escaping-fat-closure-env
-class (the keystone gate, above) -- a single deferred item now blocking both the
-closure keystone and the last leak fixtures.
+The 64-byte residual was the shift receiver itself -- the `(fn [k] ...)` the
+`__Shift` desugar (`elab_effects.c:~796`) ALWAYS boxes into a fresh heap value: a
+capturing-closure env, or an `EX_FN_TO_FAT` fatshim (`malloc(2*int64)`) for a
+bare / capture-free fn. It is never a raw code pointer, so it is always safe to
+free. It is passed as the `__Shift` effect arg, consumed exactly once by the
+handler case (`recv(k)`), and was not reclaimed at the perform site -- so reap
+its env (the handler param `arg`) at the entry boundary alongside `k`
+(`emit_cps_ir.c`). A scalar-captured receiver frees cleanly; an owning capture
+leaks its captured value (no closure drop glue yet) but never double-frees -- the
+conservative interim of `escaping-fat-closure-env-leak.md`, applied to the one
+non-escaping closure the CPS backend itself constructs.
+
+With P3.a-d, `shift-crossfn-resume-works` is **fully ASan/LSan-clean (3320 -> 0
+bytes)**, output 11/105/23/306, no UAF -- its `requires.no-leak-check` is
+**dropped**. Suite 2179/0.
+
+Phase 3 leak status: the DK-node (P3.a), per-resume snapshot (P3.b), receiver-`k`
+(P3.c), and shift-receiver-env (P3.d) leaks are all fixed. Remaining is the
+GENERAL escaping-fat-closure-env leak (`escaping-fat-closure-env-leak.md`, the
+keystone gate) -- a closure that ESCAPES its constructor (returned / stored,
+possibly with no effects at all, e.g. `make-scaler`), which cannot be reaped at a
+DK boundary (there may be none) and needs closures to carry RC/drop glue so a
+shared closure is not double-freed. That is the deferred item still blocking the
+closure keystone and the httpd / fat-closure leak fixtures. The reap tactic used
+for the shift receiver works precisely because that closure is NON-escaping and
+CPS-backend-constructed; it does not generalize to an escaping closure.
 
 ### Slice P1.a -- pure-delegation forms landed (`EX_PANIC` / `EX_CONS_LIST` / `EX_BORROW_IMMUT`)
 
