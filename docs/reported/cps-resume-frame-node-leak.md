@@ -81,7 +81,7 @@ pick up the single-node free / reap discipline.
 - This is a LEAK, not an eviction and not a miscompile. It does NOT block N6.5
   (fallback deletion); it only blocks dropping `requires.no-leak-check` on the
   multi-perform / multi-shot fixtures above.
-- Independent of the capturing-closure shift-receiver eviction
-  (`docs/upcoming/cps-capturing-closure-shift-receiver-plan.md`): making that
-  shape native does not touch this node, and this leak persists on the native
-  multi-shot resume path regardless.
+- Independent of the native handle-in-reset eviction
+  (`docs/upcoming/cps-native-handle-in-reset-plan.md`): making that shape native
+  does not touch this node, and this leak persists on the native multi-shot resume
+  path regardless.
