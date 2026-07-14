@@ -191,10 +191,31 @@ safe (node outlives every re-entrant `dk_perform`). Validated under ASan/LSan:
 the report's minimal repro plus `cps-backend-two-perform` /
 `cps-backend-owning-struct-capture-multishot` are now leak-clean; suite
 2179/0; the report is archived (`docs/archive/cps-resume-frame-node-leak.md`).
-Phase 3 still open: the **snapshot-not-freed** leak in the shared receiver
-(`tur_cloneable_cont_resume(tur_continuation_snapshot(k), v)`) -- the ~3320-byte
-residual on `shift-crossfn-resume-works`, which keeps its `requires.no-leak-check`
--- and the escaping-fat-closure-env free (the keystone gate, above).
+### Slice P3.b -- per-resume continuation snapshot freed after a multishot resume (Phase 3)
+
+The MS1 multishot resume (`emit_effects_resume`) emitted
+`tur_cloneable_cont_resume(tur_continuation_snapshot(k), v)` and never reclaimed
+the snapshot -- one cont clone (struct + a deep `dk_copy_range` of the chain)
+leaked per `(k v)`. Since the resume's `cont_fn` (`__dk_cont_fn` = `dk_invoke`)
+copies the chain internally and frees only its own copy, the snapshot's env is
+caller-owned; snapshot -> resume -> `tur_cloneable_cont_drop` reclaims it safely
+(no double-free; original `k` untouched, so a subsequent multishot resume still
+works). Validated under ASan/LSan: `shift-crossfn-resume-works` drops
+**3320 -> 1248 bytes** with no UAF; the other multishot fixtures stay clean;
+suite 2179/0.
+
+The **1248-byte residual** on `shift-crossfn-resume-works` is a DISTINCT leak,
+now the last blocker to dropping its `requires.no-leak-check`: the receiver's own
+`k` (`tur_cloneable_cont_alloc(__dk_cont_fn, dk_copy_range(subk, NULL), ...)` in
+the shift handler case, `emit_cps_ir.c:~3343`) is never dropped when the case
+completes (~32 bytes per receiver, plus a 16-byte perform-cont env). Dropping it
+is safe in principle (after the case body no more snapshots are taken of `k`, so
+it is dead), but the handler-case body is emitted by `emit_term` with terminal
+returns inline -- there is no single exit to inject the drop -- so it needs an
+owned-resource-at-scope-exit mechanism, a separate slice from the snapshot fix.
+
+Phase 3 still open: the receiver-`k` drop above; and the escaping-fat-closure-env
+free (the keystone gate, above).
 
 ### Slice P1.a -- pure-delegation forms landed (`EX_PANIC` / `EX_CONS_LIST` / `EX_BORROW_IMMUT`)
 
