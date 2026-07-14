@@ -370,6 +370,17 @@ static bool is_delegatable_struct(const Expr *e) {
     }
 }
 
+/* WHOLE-BODY delegation mode: while checking whether an ENTIRE colour-only
+ * function body can be handed to the direct emitter as one CT_LETRAW (see
+ * whole_body_delegatable / cps_ir_translate_fn), a CAPTURING closure IS a
+ * delegatable value -- the whole `let` is emitted by emit_value(EX_LET), which
+ * heap-allocates the closure env AND frees it at scope exit via
+ * let_binding_env_freeable (the direct emitter's scoped-env free), so no leaf
+ * CT_LETRAW leaks.  This flag NEVER leaks into the per-node cps_tail/cps_bind
+ * path (where admitting a capturing closure as a lone leaf WOULD leak); it is set
+ * only around the whole-body probe. */
+static bool g_whole_body_delegate;
+
 /* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
  * a closure literal with no captured free variables.  Such a value is not a call
  * and not a control op, and (being capture-free) references no enclosing local,
@@ -402,7 +413,8 @@ static bool is_delegatable_value(const Expr *e) {
              * free, not before.  See the cps-runtime-finish-plan.md Progress log. */
             return e->as.closure_.closure
                 && (e->as.closure_.closure->n_captures == 0
-                    || e->as.closure_.closure->is_shift_receiver);
+                    || e->as.closure_.closure->is_shift_receiver
+                    || g_whole_body_delegate);
         default:
             return false;
     }
@@ -2177,6 +2189,27 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
 }
 
+/* Whole-body delegation probe: is the ENTIRE function body a control-op-free,
+ * colored-call-free composite that -- with capturing closures admitted as
+ * delegatable values -- the direct emitter can emit wholesale?  Such a function
+ * is "colored" only because it constructs a capturing closure (a may-capture, not
+ * an effectful, function): it threads no continuation and calls nothing that
+ * does, so handing its whole body to the direct emitter is sound AND leak-clean
+ * (emit_value(EX_LET) frees the closure env via let_binding_env_freeable).  This
+ * is the Phase-1 closure KEYSTONE for the control-free colour-only shape: instead
+ * of leaf-admitting the closure (which leaks the env on the CPS path), the whole
+ * body is one CT_LETRAW so the direct emitter's scoped-env free applies.  A
+ * function that performs / handles / shifts, or calls a colored callee, is NOT
+ * whole-body delegatable (it genuinely needs the DK machine) and stays on the
+ * per-node path. */
+static bool whole_body_delegatable(CpsB *b, const Expr *body) {
+    bool saved = g_whole_body_delegate;
+    g_whole_body_delegate = true;
+    bool ok = safe_to_delegate(b, body);
+    g_whole_body_delegate = saved;
+    return ok;
+}
+
 /* ---- public: translate a function ------------------------------------ */
 
 CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
@@ -2184,6 +2217,20 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     CpsB b;
     b.a = a; b.program = program; b.counter = 0;
     b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
+    /* Phase-1 keystone (control-free colour-only shape): a colored function whose
+     * whole body is delegatable (no control op, no colored call -- colored only by
+     * a capturing closure it builds) emits as a single CT_LETRAW, so the direct
+     * emitter lowers the closure with its scoped-env free instead of the CPS path
+     * leaf-admitting (and leaking) the closure.  The general per-node path handles
+     * every function with a real control op / colored call. */
+    if (whole_body_delegatable(&b, fd->body)) {
+        Expr *body = (Expr *)ascribe_peel(fd->body);
+        if (is_atomic(body)) return cps_tail(&b, body, b.retk);
+        CVar x = fresh_cvar(&b, &body->type);
+        CTerm *ac = new_term(&b, CT_APPCONT);
+        ac->as.appcont.kont = b.retk; ac->as.appcont.v = atom_cvar(x);
+        return build_letraw(&b, body, x, ac);
+    }
     return cps_tail(&b, fd->body, b.retk);
 }
 
