@@ -4243,7 +4243,17 @@ static void emit_perform(CE *ce, const CTerm *t) {
                     t->as.perform.body, NULL, caps);
         free(pxn);
         char *envexpr = emit_cont_env(ce, pname, caps, NULL);   /* caps-only env */
-        ce_line(ce, "return dk_perform(%d, %s, dk_frame_resume(%s, %s, %s));",
+        /* The dk_frame_resume node's ->next is ce->cur_k (an enclosing chain), so
+         * it is a single spliced node dk_perform never frees.  Unlike the
+         * straight-line perform-cont sibling above -- which dk_free_node's its
+         * dk_frame node right after dk_perform settles -- the value here is
+         * returned inline, and under a MULTI-SHOT resume the node may still be
+         * needed after this dk_perform returns.  Register it for a single-node
+         * free at the outermost entry boundary (__dk_reap_node: kind=0, a bare
+         * free that does not walk into cur_k), matching the reset/handle
+         * structural-node reaping discipline (docs/reported/cps-resume-frame-node-leak.md,
+         * docs/archive/cps-delimited-dk-node-leak.md). */
+        ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));",
                 tag, sa, pname, envexpr, ce->cur_k);
         free(envexpr);
     }
