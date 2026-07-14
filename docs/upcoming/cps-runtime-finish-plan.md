@@ -169,15 +169,14 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 ## Honest distance
 
-Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 11
+Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 9
 per-emit** (see the Progress log: P1.a pure-delegation forms; P1.b/P1.c the
 closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
 receiver-`k` / receiver-env leaks; PA/PB/PC the B1 DK-native resumable-payload
-bridge -- the WHOLE B1 family (`effect-cont-kv-sugar`,
-`multishot-effect-cont-kv-sugar`, `effect-fn-payload-capturing`,
-`cross-function-resume-via-effect`) now CPS-emits, `effect-cont` AND raw-`int`
-continuation payloads). What remains, and why each is a distinct slice rather than
-a quick admission:
+bridge -- the WHOLE B1 family now CPS-emits, `effect-cont` AND raw-`int`
+continuation payloads; PD the unsafe-marker whole-body delegation clearing 2 of
+the 4 B2 closure-as-value fixtures). What remains, and why each is a distinct
+slice rather than a quick admission:
 
 - **`EX_CLOSURE` (7) -- actually TWO families (verified, P-inv2 below).** The 7
   split into two distinct blockers; the earlier "all effect-payload" framing was
@@ -201,19 +200,21 @@ a quick admission:
   B1 -- any effect whose handled body computes through a colored call (e.g.
   `(handle (+ 10 (inner)) ...)`) now CPS-emits.
 
-  **B2. Capturing closure as a VALUE in colored code (4): closure drop-glue /
-  HOF handling.** `currying-effect-partial` (a partial-application closure
-  `add10 = (log-add 10)` called in a handle body), `unsafe-closure-capture` /
-  `free-lift-bind` (a closure literal passed to `free-run`),
-  `hkt-stdlib-parser-instances` (parser-combinator closures). Here the closure is
-  NOT an effect payload -- it is a capturing closure used as an indirect callee /
-  HOF argument inside a control-bearing function, so whole-body delegation (P1.b)
-  does not apply (the function has a real control op) and leaf-admit (P1.c) does
-  not fire (the init is a partial-app CALL, not an `EX_CLOSURE` literal; or the
-  closure is a call ARGUMENT `closure_binding_escapes` conservatively flags as
-  escaping). These need the deferred general **closure RC/drop glue**
-  (`docs/reported/escaping-fat-closure-env-leak.md`), or a HOF-inlining pass --
-  NOT the cont bridge. This is the genuine backstop, shared with the httpd
+  **B2. Capturing closure as a VALUE in colored code (was 4; 2 done via PD).**
+  `unsafe-closure-capture` / `free-lift-bind` (a closure literal passed to
+  `free-run` inside an `unsafe` block) now CPS-emit: the `unsafe` block is a pure
+  compile-time MARKER (`is_unsafe_marker`), so an unsafe-marker handle with a
+  delegatable body is itself delegatable (PD) and the whole region -- including the
+  fat-closure arg the direct emitter owns -- whole-body-delegates.  (The fat
+  closure is not dropped -- the deferred escaping-fat-closure-env leak, now marked
+  `requires.no-leak-check` on those two fixtures; present in the emitted C on both
+  paths, the direct `int main` merely hid it from LSan.)  REMAINING (2):
+  `currying-effect-partial` (a partial-application closure `add10 = (log-add 10)`
+  called inside a REAL `Log` handle -- not an unsafe marker) and
+  `hkt-stdlib-parser-instances` (parser-combinator closures).  These need the
+  deferred general **closure RC/drop glue**
+  (`docs/reported/escaping-fat-closure-env-leak.md`) or a HOF-inlining pass. This
+  is the genuine backstop, shared with the httpd
   middleware family.
 - **`EX_DEFER` (4) -- two entangled sub-shapes, neither standalone-landable.**
   (i) USER side-effecting defers (`effect-defer` `(defer (println ...))`,
@@ -239,16 +240,37 @@ blockers remain -- each is a scoped admission+emit slice" was **too optimistic**
 and the follow-up P-inv3 pessimism ("B1 is Phase-2, not a bridge") was ALSO wrong.
 The reality, resolved by PA/PB/PC: **the whole B1 resumable-payload family (4
 fixtures) now CPS-emits** via the generalized `__Shift` cloneable-cont bridge, and
-PB's `handle_delim_ok` was a general win beyond it. `BODY-UNSUPPORTED` is now **11**
-(was 14): `EX_CLOSURE` B2 closure-as-value x4 (`currying-effect-partial`,
-`unsafe-closure-capture`, `free-lift-bind`, `hkt-stdlib-parser-instances` -- need
-closure drop-glue), `EX_DEFER` x4 (entangled with a co-located
+PB's `handle_delim_ok` was a general win beyond it, and PD cleared 2 of the 4 B2
+fixtures via unsafe-marker whole-body delegation. `BODY-UNSUPPORTED` is now **9**
+(was 14): `EX_CLOSURE` B2 closure-as-value x2 (`currying-effect-partial` -- closure
+in a real `Log` handle; `hkt-stdlib-parser-instances` -- parser combinators; both
+need closure drop-glue), `EX_DEFER` x4 (entangled with a co-located
 `BODY-STRUCT-OR-TAINT` blocker), `EX_WHILE` x1 (native loop), `EX_INLINE_C` x2
 (session-runtime-tied). The remaining genuinely-scoped work is the B2
 closure-drop-glue backstop and the dominant Phase-2 `BODY-STRUCT-OR-TAINT`
-surface. The EVICT gate now reads `SIG-*` plus these 11 named residuals.
+surface. The EVICT gate now reads `SIG-*` plus these 9 named residuals.
 
 ## Progress log
+
+### Slice PD -- unsafe-marker whole-body delegation (2 of 4 B2 fixtures)
+
+`free-lift-bind` and `unsafe-closure-capture` now CPS-emit (30 / 37, direct == cps
+== turi). `BODY-UNSUPPORTED` 11 -> 9. Both are functions colored ONLY by an
+`(unsafe ...)` block whose body passes a capturing/fat closure to `free-run`
+(uncolored). An `unsafe` block desugars to a handle on the built-in Unsafe effect,
+but Unsafe is a pure compile-time MARKER never performed (`is_unsafe_marker`, set
+by elab_unsafe): its fiber-lift never suspends and the direct emitter emits the
+body in place. So `safe_to_delegate` now admits an unsafe-marker handle whose body
+is itself delegatable -- the whole region (unsafe scope + `free-run` call + fat
+closure) whole-body-delegates (P1.b) to the direct emitter instead of evicting on
+the closure. The fat closure is not dropped (the deferred
+escaping-fat-closure-env leak, `docs/reported/escaping-fat-closure-env-leak.md`):
+it is present in the emitted C on BOTH the direct and CPS paths -- the direct
+`int main` merely hid it from LeakSanitizer via stack reachability, so the two
+fixtures carry a `requires.no-leak-check` marker until closures get drop glue.
+Suite 2179/0. The other 2 B2 fixtures (`currying-effect-partial`,
+`hkt-stdlib-parser-instances`) are colored by real effects, not `unsafe`, and
+remain on the drop-glue backstop.
 
 ### Slice PC -- B1 raw-int continuation payloads (whole B1 family now CPS-emits)
 

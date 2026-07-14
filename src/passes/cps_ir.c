@@ -1023,8 +1023,22 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
     if (is_atomic(e)) return true;
     if (is_delegatable_value(e)) return true;   /* capture-free fn value */
     switch (e->kind) {
+        /* An `(unsafe ...)` block desugars to a handle on the built-in Unsafe
+         * effect, but Unsafe is a pure compile-time MARKER that is never performed
+         * (is_unsafe_marker) -- the handle's fiber-lift never suspends and the
+         * direct emitter emits the body directly in place.  So an unsafe-marker
+         * handle whose body is itself delegatable is delegatable: the whole region
+         * (unsafe scope + body, including a fat-closure arg the direct emitter owns)
+         * emits through the direct emitter, which also frees any scoped closure env.
+         * This lets a function colored ONLY by an `unsafe` block (e.g. `free-lift-bind`
+         * / `unsafe-closure-capture`: a capturing/fat closure passed to `free-run`
+         * inside `unsafe`) whole-body-delegate instead of evicting on the closure. */
+        case EX_HANDLE:
+            return e->as.handle_.handle
+                && e->as.handle_.handle->is_unsafe_marker
+                && safe_to_delegate(b, e->as.handle_.handle->body);
         /* control operators: never delegatable (they thread a continuation). */
-        case EX_PERFORM: case EX_HANDLE: case EX_RESUME: case EX_DISCONTINUE:
+        case EX_PERFORM: case EX_RESUME: case EX_DISCONTINUE:
         case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
         case EX_CLONEABLE_SHIFT:
         case EX_SERIAL_SHIFT:
