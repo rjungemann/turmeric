@@ -191,7 +191,7 @@ account for; P2/P3 wait for a real crossing-ref case, per the original caveat.
   capture clone/drop, E1-E4) depend on. P2/P3 must not build a parallel teardown
   path.
 - **N6.5** (fallback deletion,
-  [cps-backend-n6-fallback-removal-followups-plan.md](cps-backend-n6-fallback-removal-followups-plan.md)):
+  [cps-backend-n6-fallback-removal-followups-plan.md](../archive/cps-backend-n6-fallback-removal-followups-plan.md)):
   a colored function with a `ref` auto-drop is a residual fallback case. P1
   removes the non-crossing subset; the crossing subset stays fallback (or a named
   carve-out) until P2/P3 land. List that explicitly when N6.5 audits residuals.

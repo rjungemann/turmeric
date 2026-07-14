@@ -82,11 +82,11 @@ pick up the single-node free / reap discipline.
   (fallback deletion); it only blocks dropping `requires.no-leak-check` on the
   multi-perform / multi-shot fixtures above.
 - Independent of the native handle-in-reset eviction
-  (`docs/upcoming/cps-native-handle-in-reset-plan.md`): making that shape native
+  (`docs/archive/cps-native-handle-in-reset-plan.md`): making that shape native
   does not touch this node, and this leak persists on the native multi-shot resume
   path regardless.
 - Related sibling on the now-native cross-function shift path
-  (`docs/upcoming/cps-native-handle-in-reset-plan.md`, Reduction B, landed): the
+  (`docs/archive/cps-native-handle-in-reset-plan.md`, Reduction B, landed): the
   __Shift receiver's continuation is bridge-wrapped as a `tur_cloneable_cont` and
   resumed via `tur_continuation_snapshot` (`tur_cloneable_cont_clone` ->
   `dk_copy_range`), which clones the DK chain per resume without ever freeing the

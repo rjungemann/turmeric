@@ -50,7 +50,7 @@ fallback," never "route everything through CPS."
 - **The control-flow surface is closed.** Cross-function / resuming `shift` --
   long flagged as "the sole remaining control-flow gap" and even "not
   expressible" -- now emits natively on DK, single- and multi-shot, including a
-  capturing receiver (`cps-native-handle-in-reset-plan.md`, Reductions A+B;
+  capturing receiver (`../archive/cps-native-handle-in-reset-plan.md`, Reductions A+B;
   `shift-crossfn-resume-works` = 11/105/23/306 all `__cps`). What remains in
   BODY-* is **value representation and form coverage**, not control flow. There
   are no known conceptual blockers left in the effect/continuation machinery.
@@ -109,7 +109,7 @@ Current `BODY-*` (the only rows that must reach zero):
 The shape of every slice is the one Reductions A/B used: find the failing
 admission predicate with a `TUR_TRACE_EVICT` + a temporary `term_core_ok` probe,
 widen the predicate for the specific shape (scoped, never a blanket widening --
-see the Dead Ends in `cps-native-handle-in-reset-plan.md`), add emit if the
+see the Dead Ends in `../archive/cps-native-handle-in-reset-plan.md`), add emit if the
 shape is genuinely new, regenerate snapshots, keep the suite green.
 
 **Phase 1 -- BODY-UNSUPPORTED forms (small, contained, high signal).**
@@ -163,8 +163,8 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 - Phase 1 before Phase 2 (closures/forms are Phase-2 roots' building blocks).
 - Phase 3 can run in parallel with 1-2 but must finish before the ASan gate.
 - Phase 4 is last and is mechanical once the gate is empty modulo `SIG-*`.
-- The resuming-shift plan (`cps-backend-n6-resuming-shift-plan.md`) and the
-  fallback-deletion plan (`cps-backend-n6-fallback-deletion-plan.md`) are
+- The resuming-shift plan (`../archive/cps-backend-n6-resuming-shift-plan.md`) and the
+  fallback-deletion plan (`../archive/cps-backend-n6-fallback-deletion-plan.md`) are
   subsumed here: the former is done, the latter is Phase 4.
 
 ## Honest distance
