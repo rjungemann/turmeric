@@ -409,6 +409,7 @@ static const CTerm *first_unsupported(const CTerm *t) {
 
 static bool term_core_ok(const CTerm *t);
 static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
+static bool handle_delim_ok(const CTerm *t);  /* top-level handle-body admission (join-to-prompt, no interior control op) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
 
@@ -1591,9 +1592,25 @@ static bool term_core_ok(const CTerm *t) {
             /* C4/N6.2/N6.3: N-case handler; each case <=1 effect param + zero-
              * capture straight-line body; the continuation may carry scalar
              * captures in its env. */
+            /* The handled body (handle.delim) runs under the handle's OWN prompt,
+             * which emit_handle threads as cur_k; its normal-completion tail AND any
+             * interior COMPUTATION join deliver to that prompt (KK_PROMPT).  Admit it
+             * via handle_delim_ok -- like term_core_ok but permitting the KK_PROMPT
+             * delivery of a pure-computation join, so a handled expression that
+             * computes its value through a join before the prompt, e.g.
+             * `(+ 10 (inner))` lowering to
+             * `letcont j(t){+10 t; <prompt>} in tailcall inner(j)`, is admitted.  It
+             * does NOT relax interior CONTROL ops (a direct `(perform ...)` /
+             * nested `handle` / `reset` in the handled body) to prompt delivery --
+             * those still take the stricter term_core_ok, which the top-level
+             * emit_handle cannot lower for a delimited-prompt-delivering interior
+             * control op (verified: relaxing them regresses effect-error-codes /
+             * effect-handler-capture-nested / handle-effectful-fn-param-same-fn).
+             * The handle CONTINUATION (handle.body) delivers to the enclosing return
+             * and keeps the reset_body_ok check. */
             CapSet hcs;
             if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
-                || !term_core_ok(t->as.handle.delim)
+                || !handle_delim_ok(t->as.handle.delim)
                 || !reset_body_ok(t->as.handle.body)
                 || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
                 return false;
@@ -1845,6 +1862,69 @@ static bool delim_ok(const CTerm *t) {
         default:
             /* Nested handle/perform/resume/unsupported: keep the stricter core
              * admission -- not relaxed by this slice. */
+            return term_core_ok(t);
+    }
+}
+
+/* cps-dk-multishot-user-effects (Phase B): admission for a TOP-LEVEL `handle`'s
+ * handled body (handle.delim).  emit_handle installs the handle's own prompt as
+ * cur_k and threads the handled body under it, so the body's normal-completion
+ * tail -- and any interior COMPUTATION join -- delivers its value to that prompt
+ * (KK_PROMPT).  This is like term_core_ok but permits that KK_PROMPT delivery for
+ * pure-computation / join / call shapes: a handled expression `(+ 10 (inner))`
+ * lowers to `letcont j(t){+10 t; <prompt>} in tailcall inner(j)`, which term_core_ok
+ * rejects (its CT_APPCONT forbids KK_PROMPT) but emit_handle emits correctly.
+ *
+ * It deliberately does NOT relax an interior CONTROL op (a direct `(perform ...)`,
+ * a nested `handle`/`reset`/`shift`/`await` in the handled body) to prompt
+ * delivery -- those fall to term_core_ok, which the top-level emit_handle cannot
+ * lower when they would deliver through the prompt (relaxing them regresses
+ * effect-error-codes / effect-handler-capture-nested / handle-effectful-fn-param-same-fn).
+ * The nested-in-a-reset handle keeps its own (delim_ok) admission unchanged. */
+static bool handle_delim_ok(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_APPCONT:
+            return atom_ok(&t->as.appcont.v);   /* KK_PROMPT / KK_VAR delivery OK */
+        case CT_LETVAL:
+            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+                && atom_ok(&t->as.letval.v)
+                && handle_delim_ok(t->as.letval.body);
+        case CT_LETPRIM:
+            if (!shape_supported(t->as.letprim.spec)) return false;
+            for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            return handle_delim_ok(t->as.letprim.body);
+        case CT_LETCALL:
+            for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                if (!atom_ok(&t->as.letcall.args[i])) return false;
+            return handle_delim_ok(t->as.letcall.body);
+        /* NOTE: no CT_LETRAW case -- a delegated (direct-emitted) call in the
+         * handled body performs its effects on the FIBER runtime, NOT the handle's
+         * DK prompt, so a `(handle (f) ...)` whose body is
+         * `let x = f() [direct]; <prompt> x` must NOT be admitted here (E would be
+         * unhandled -- regresses handle-effectful-fn-param-same-fn).  A CT_LETRAW
+         * falls to term_core_ok below, which rejects the subsequent KK_PROMPT
+         * delivery, so the handler evicts to the (correct) fiber path.  Interior
+         * effects reach the DK prompt only through a cps->cps TAILCALL. */
+        case CT_IF:
+            return atom_ok(&t->as.if_.cond)
+                && handle_delim_ok(t->as.if_.then_)
+                && handle_delim_ok(t->as.if_.else_);
+        case CT_LETCONT:
+            return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
+                && handle_delim_ok(t->as.letcont.jbody)
+                && handle_delim_ok(t->as.letcont.body);
+        case CT_TAILCALL: {
+            bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                if (!call_arg_ok(&t->as.tailcall.args[i], cps_to_direct))
+                    return false;
+            return true;
+        }
+        default:
+            /* Interior control op / anything else: stricter core admission (no
+             * KK_PROMPT delivery relaxation). */
             return term_core_ok(t);
     }
 }

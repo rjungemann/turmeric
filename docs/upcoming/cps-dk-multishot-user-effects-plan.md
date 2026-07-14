@@ -1,11 +1,39 @@
 # DK-native multishot continuations for user resumable-payload effects
 
-**Status:** Phase A LANDED (`effect-cont-kv-sugar` CPS-emits end-to-end). Phase B
-follows for free structurally but a resumable-payload effect that resumes MORE
-than once (the `multishot-effect-cont-kv-sugar` `(+ (k 1) (k 2))` shape) still
-evicts to fiber -- see "Phase A result" below. Phase C (`int`-typed payloads)
-open. Prepared from investigations P-inv .. P-inv3 in
+**Status:** Phase A + Phase B LANDED. `effect-cont-kv-sugar` and
+`multishot-effect-cont-kv-sugar` both CPS-emit end-to-end. Phase C (`int`-typed
+payloads) open. Prepared from investigations P-inv .. P-inv3 in
 `cps-runtime-finish-plan.md`.
+
+## Phase B result (landed) -- and a corrected diagnosis
+
+Phase B was scoped as "multi-shot resume." That was WRONG (verified): a
+resumable-payload effect whose payload resumes twice (`(+ (k 1) (k 2))`) with a
+DIRECT handled body already CPS-emits after Phase A (a minimal probe returns 3).
+The real blocker for `multishot-effect-cont-kv-sugar` was its handled body
+`(+ 10 (inner))` -- a **general** admission gap, not multishot/payload-specific: a
+plain `(defeffect Ask [] :int)` with the same `(handle (+ 10 (inner)) ...)` shape
+evicted identically. A top-level `handle`'s handled body was admitted with the
+strict `term_core_ok`, which forbids the interior KK_PROMPT delivery that a
+computation join emits (`(+ 10 (inner))` lowers to
+`letcont j(t){+10 t; <prompt>} in tailcall inner(j)`), so it evicted to fiber.
+
+Fix: a new `handle_delim_ok` (emit_cps_ir.c) admits the top-level handled body
+like `term_core_ok` but permitting KK_PROMPT delivery through pure-computation /
+join / cps->cps-tailcall shapes. It deliberately does NOT admit an interior
+CONTROL op or a delegated (`CT_LETRAW`) call in the handled body: a
+direct-emitted effectful call performs on the FIBER runtime, not the handle's DK
+prompt, so `(handle (f) ...)` with an effectful fn-param `f` must stay on the
+fiber path (relaxing it made E "unhandled"). Interior effects reach the DK prompt
+only through a cps->cps tailcall. `multishot-effect-cont-kv-sugar` now CPS-emits
+(23, ASan-clean), and the general shape `(handle (+ 10 (colored-call)) ...)` now
+CPS-emits for plain effects too. Suite 2179/0.
+
+Landing was iterative: the first cut (relax the delim to the existing `delim_ok`)
+regressed 3 fixtures (`effect-error-codes`, `effect-handler-capture-nested`,
+`handle-effectful-fn-param-same-fn`) by admitting interior control ops / delegated
+effectful calls that the top-level `emit_handle` cannot lower; `handle_delim_ok`
+is the precise predicate that admits the win without those.
 
 ## Phase A result (landed)
 
@@ -31,11 +59,11 @@ Implemented exactly as designed, landed as one unit:
    handler on a NON-payload effect (whose `arg` is not a boxed pointer) is
    untouched.
 
-**Not yet flipped:** `multishot-effect-cont-kv-sugar` (payload resumes twice,
-`(+ (k 1) (k 2))`) still evicts to fiber -- a genuinely multi-shot resume through
-the payload hits an admission path Phase A did not open (the double-resume, not
-the substrate). That is the Phase B remainder. Its pre-existing fiber-path leak
-(32 B in `tur_cloneable_cont_alloc`) is unchanged by Phase A.
+**Note:** `multishot-effect-cont-kv-sugar` was NOT flipped by Phase A alone --
+but not for the reason first assumed (the double-resume). Its blocker was the
+`(+ 10 (inner))` handled body, a general handle-delim admission gap fixed in
+Phase B (below). After Phase B it CPS-emits (its pre-existing 32 B fiber-path leak
+in `tur_cloneable_cont_alloc` disappears with it).
 
 **One-line:** teach the CPS/DK backend to CPS-emit a USER algebraic effect whose
 handler resumes THROUGH a fn payload (`(defeffect E [f : (fn [cont] R)] ...)`,

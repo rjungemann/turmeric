@@ -260,6 +260,27 @@ is no small Phase-1 admission win left among the 14. The EVICT gate still reads
 
 ## Progress log
 
+### Slice PB -- top-level handle-body admission for computation-join-to-prompt (general; completes multishot-effect-cont-kv-sugar)
+
+`multishot-effect-cont-kv-sugar` now CPS-emits (23, ASan-clean). The blocker was
+NOT the double-resume (Phase A's substrate already handles `(+ (k 1) (k 2))` -- a
+direct-body probe returns 3) but its handled body `(+ 10 (inner))`: a top-level
+`handle`'s handled body was admitted with the strict `term_core_ok`, which forbids
+the interior KK_PROMPT delivery a computation join emits
+(`letcont j(t){+10 t; <prompt>} in tailcall inner(j)`). This is a GENERAL gap --
+a plain `(defeffect Ask [] :int)` with the same `(handle (+ 10 (inner)) ...)`
+shape evicted identically. Fix: `handle_delim_ok` (emit_cps_ir.c) admits the
+handled body like `term_core_ok` but permitting KK_PROMPT delivery through
+pure-computation / join / cps->cps-tailcall shapes, while deliberately NOT
+admitting an interior control op or a delegated (`CT_LETRAW`) effectful call
+(which performs on the fiber runtime, not the DK prompt -- so `(handle (f) ...)`
+with an effectful fn-param stays on fiber). Iterative landing: the first cut
+(reuse `delim_ok`) regressed effect-error-codes / effect-handler-capture-nested /
+handle-effectful-fn-param-same-fn; `handle_delim_ok` is the precise predicate.
+Suite 2179/0. This is a `BODY-STRUCT-OR-TAINT` reduction (the multishot sibling
+was never `BODY-UNSUPPORTED`), and a general one -- any effect fixture whose
+handle body computes through a colored call now CPS-emits.
+
 ### Slice PA -- B1 cont-substrate bridge LANDED for effect-cont-typed resumable payloads
 
 `effect-cont-kv-sugar` now CPS-emits end-to-end (performer + handler), the first
