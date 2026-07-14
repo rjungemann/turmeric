@@ -1,6 +1,6 @@
 ---
 title: "CPS backend -- native emission of a handle nested in a reset (KK_PROMPT-delivering handle continuation)"
-status: designed, not landed -- feasible via the DK<->cloneable bridge; a coupled multi-site core change gated by two oracles
+status: Reduction A LANDED (receiver-free handle-in-reset is native; delim_ok CT_HANDLE case). Reduction B (cross-fn shift) still designed, not landed -- it needs the __Shift-scoped atom_ok + the bridge-wrap emit crux + a capturing-closure receiver (step), and is coupled all-or-nothing by __Shift taint.
 description: A `handle` whose continuation delivers into an enclosing `reset`'s prompt (KK_PROMPT) is evicted from the CPS backend to the direct/fiber emitter, where its effect boxes leak. Cross-function `shift` is one instance -- its `__Shift` desugar produces exactly this handle-in-reset nesting. This plan is the authoritative, self-contained reference: it records the reproductions, the exact failing predicates, the proven-feasible mechanism (the `__dk_cont_fn` bridge), the coordinated change, and -- critically -- the dead ends already ruled out, so the next agent does not re-derive them.
 ---
 
@@ -27,6 +27,22 @@ description: A `handle` whose continuation delivers into an enclosing `reset`'s 
   "obvious" first moves (general `atom_ok` widening, effect-free scoping,
   `is_delegatable_capturing_closure`, `cps_shift_body_kf`) were each tried and
   each miscompiles or is inert. They are recorded so you skip them.
+
+## Status update (Reduction A landed)
+
+**Reduction A is native as of this branch.** The single admission gap was that a
+`handle` reached inside a reset's delimited body fell through `delim_ok`'s default
+case to `term_core_ok`, whose `reset_body_ok(handle.body)` rejects the KK_PROMPT
+delivery of the handle's continuation. Fix: a dedicated `CT_HANDLE` case in
+`delim_ok` (src/compiler/emit_cps_ir.c) that keeps the handled body core
+(`term_core_ok(handle.delim)`) and the cases on `handle_case_ok`, but admits the
+continuation via `delim_ok(handle.body)` (it may deliver to the enclosing prompt).
+No new codegen was needed -- `emit_handle` already lifts `handle.body` as an
+`LH_RESET_CONT` frame that delivers through `cur_k`. `use-e` and `wrap` now emit
+`__cps`, print `106`, and are ASan/LSan-clean; the full suite stays green
+(2178/0). Covered by `tests/fixtures/cps-backend-handle-in-reset/`.
+
+Reduction B (below) is unchanged: still designed, not landed.
 
 ## Reproductions (two oracles)
 

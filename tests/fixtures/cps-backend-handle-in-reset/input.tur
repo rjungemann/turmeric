@@ -1,0 +1,13 @@
+;; cps-native-handle-in-reset: a `handle` nested inside a `reset`.  The handle's
+;; continuation `(+ 100 _)` sits in the enclosing reset's delimited region, so it
+;; delivers the handle result to the enclosing prompt (KK_PROMPT) -- the delivery
+;; term_core_ok forbids in core position.  delim_ok's CT_HANDLE case admits it
+;; (the handled body stays core; only the continuation may deliver to the prompt),
+;; so both `use-e` and `wrap` emit natively (DK) instead of evicting to the fiber
+;; effect runtime.  Not shift-specific and receiver-free -- the smallest oracle
+;; for the KK_PROMPT-delivering handle continuation.  direct == cps == 106.
+(defeffect E [] :int)
+(defn use-e [] : int (+ 1 (perform (E))))
+(defn wrap [] : int
+  (reset (+ 100 (handle (use-e) (E [] k) (resume k 5)))))
+(defn main [] : int (println (wrap)) 0)

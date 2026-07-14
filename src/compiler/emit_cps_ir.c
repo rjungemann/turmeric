@@ -1740,6 +1740,40 @@ static bool delim_ok(const CTerm *t) {
             return shift_body_ok(t->as.shift.body)
                 && collect_caps(t->as.shift.body, t->as.shift.k.id, &scs);
         }
+        case CT_HANDLE: {
+            /* A `handle` nested inside the enclosing delimited body (e.g.
+             * `(reset (+ 100 (handle (use-e) (E [] k) (resume k 5))))`).  Its
+             * handled body runs under the handle's own prompt (term_core_ok, as
+             * in the core CT_HANDLE case), and its CASES resume/deliver to that
+             * prompt (handle_case_ok) -- unchanged.  What differs from the core
+             * case: the handle's CONTINUATION (handle.body, the `(+ 100 _)` that
+             * consumes the handle result) sits in the enclosing delimited region,
+             * so its tail delivers the value to the ENCLOSING reset's prompt
+             * (KK_PROMPT) -- exactly the delivery the stricter reset_body_ok (via
+             * term_core_ok) forbids, which is why a handle-in-reset used to evict.
+             * Admit the continuation via delim_ok (it may deliver to a prompt),
+             * with scalar-only captures riding the lifted continuation env.
+             * emit_handle already lifts handle.body as an LH_RESET_CONT that
+             * delivers through cur_k (the enclosing prompt), so no new codegen is
+             * needed for this (receiver-free) shape. */
+            CapSet hcs;
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                || !term_core_ok(t->as.handle.delim)
+                || !delim_ok(t->as.handle.body)
+                || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
+                return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
+                if (!handle_case_ok(c->case_body)) return false;
+                if (!collect_caps_case(c->case_body, c, &ccs)) return false;
+            }
+            return true;
+        }
         case CT_RESET: {
             /* U7-reset (nested-reset slice): a `reset` inside the enclosing
              * delimited body.  emit_reset installs a fresh prompt (the DK machine
