@@ -204,7 +204,11 @@ slice rather than a quick admission:
   capturable continuation`). Patch REVERTED and NOT preserved (it was unsound, not
   merely gated). The genuine blocker is the DK-side multishot-continuation
   support the clean multishot sibling also lacks (its `BODY-STRUCT-OR-TAINT`):
-  Phase-2 work, not a bridge.
+  Phase-2 work, not a bridge. **Scoped in
+  [cps-dk-multishot-user-effects-plan.md](cps-dk-multishot-user-effects-plan.md)**
+  -- generalize the `__Shift` cloneable-cont machinery (admission + reflavor +
+  handler-wrap, landed as one unit) to user resumable-payload effects; this one
+  capability unblocks the whole B1 family at once.
 
   **B2. Capturing closure as a VALUE in colored code (4): closure drop-glue /
   HOF handling.** `currying-effect-partial` (a partial-application closure
