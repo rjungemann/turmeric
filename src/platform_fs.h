@@ -320,6 +320,87 @@ static inline const char *tur_temp_dir(void) {
     return cached;
 }
 
+/* ---- Executables and shell quoting (all platforms) ------------------------
+ *
+ * TUR_SHQ -- the quote character for a path inside a system() command string.
+ * POSIX sh takes '...'; cmd.exe treats a single quote as an ordinary character
+ * and chokes on the result with "The filename, directory name, or volume label
+ * syntax is incorrect."  Anything handed to system() must use this.
+ */
+#ifdef _WIN32
+#define TUR_SHQ "\""
+#else
+#define TUR_SHQ "'"
+#endif
+
+/*
+ * Give an executable path the platform's extension.
+ *
+ * The MinGW linker appends ".exe" to any -o name that lacks an extension.  So a
+ * path handed to cc as "X" comes back as "X.exe" -- and Windows' execv()/system()
+ * do NOT fall back to the .exe name the way MSYS bash does.  Every site that
+ * builds an executable and then runs it must therefore agree on the name, or the
+ * build silently succeeds and the exec silently fails.
+ *
+ * Idempotent, so it is safe to apply more than once along a path.
+ */
+static inline void tur_exe_path(char *path, size_t cap) {
+#ifdef _WIN32
+    size_t n = strlen(path);
+    if (n >= 4 && _stricmp(path + n - 4, ".exe") == 0) {
+        return;
+    }
+    if (n + 4 < cap) {
+        memcpy(path + n, ".exe", 5);
+    }
+#else
+    (void)path;
+    (void)cap;
+#endif
+}
+
+/*
+ * Make `-o <out>` really produce a file at <out>.
+ *
+ * MinGW's linker appends ".exe" to any -o name that has no extension, so
+ * `cc -o /tmp/tur-test-abc123` silently writes /tmp/tur-test-abc123.exe and
+ * leaves nothing at the name the caller asked for.  Callers then exec the path
+ * they passed and get either "not found" or -- worse -- the empty placeholder
+ * that mktemp(1) created there, which execs as a zero-byte file and produces no
+ * output and no error.  (That is exactly how tests/run.sh fails on Windows: it
+ * mktemps $exe, builds to $exe, and runs $exe.)
+ *
+ * Rather than teach every call site about ".exe", settle it here: after a
+ * successful link, move <out>.exe back onto <out>.  A PE file is executable
+ * regardless of its extension when launched by full path, which is how every
+ * caller here launches it.  No-op on non-Windows, and no-op when the caller
+ * already asked for a .exe.
+ *
+ * Returns 0 on success (including the no-op cases), -1 on a failed move.
+ */
+static inline int tur_settle_exe_output(const char *out_path) {
+#ifdef _WIN32
+    struct stat st;
+    char        linked[1024];
+    size_t      n = strlen(out_path);
+    if (n >= 4 && _stricmp(out_path + n - 4, ".exe") == 0) {
+        return 0;  /* caller asked for .exe; the linker wrote exactly that */
+    }
+    if (n + 5 > sizeof(linked)) {
+        return -1;
+    }
+    snprintf(linked, sizeof(linked), "%s.exe", out_path);
+    if (stat(linked, &st) != 0) {
+        return 0;  /* linker did not append after all -- nothing to settle */
+    }
+    remove(out_path);  /* drop mktemp's empty placeholder, if any */
+    return rename(linked, out_path);
+#else
+    (void)out_path;
+    return 0;
+#endif
+}
+
 /* ---- Directory entry kind (all platforms) ---------------------------------
  *
  * struct dirent::d_type is a BSD/glibc extension, not POSIX.  MinGW omits the

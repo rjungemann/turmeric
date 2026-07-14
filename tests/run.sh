@@ -35,7 +35,9 @@ export XDG_CONFIG_HOME="$_TUR_EMPTY_XDG"
 # RESULTS_DIR cleanup below (a later `trap ... EXIT` would otherwise replace
 # an earlier one).
 
-TUR="./build/tur"
+# Overridable so a non-default build tree can be tested without editing this
+# file -- notably Windows, where the binary is build-win/tur.exe.
+TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
 # TI8 (turi-parity-post-v1-plan): CI ratchet -- fail fast if any EX_* expression

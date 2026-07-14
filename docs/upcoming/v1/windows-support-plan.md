@@ -1,8 +1,103 @@
 # Windows Support Plan
 
-**Status:** Not started.
+**Status:** WIN0 and WIN1 landed. `tur.exe` builds, and `tur build` compiles
+and runs real programs on Windows. WIN2 (Godot shim) and WIN3 (async) are open.
 
-**Last updated:** 2026-06-25
+**Last updated:** 2026-07-14
+
+---
+
+## Toolchain: MinGW/UCRT64, not Clang-cl
+
+The plan below names **Clang-cl** as canonical and puts MinGW/MSYS2 under *Out
+of scope*. **That was reversed during WIN0**, deliberately. The tree is far
+closer to MinGW than to MSVC:
+
+- The codegen preamble emits `<pthread.h>` and `<unistd.h>`, and the runtime
+  uses `select()` and `clock_gettime()`. MinGW (UCRT64) has all of them; MSVC
+  has none.
+- `tur build` shells out to `cc` with `-O2 -fPIC -shared -lm`. MSYS2 ships a
+  real `cc.exe` that takes those flags verbatim.
+- MSYS2 even supplies libedit (via `wineditline`), so the REPL keeps line
+  editing -- contradicting WIN4's claim that it must fall back to `fgets`.
+
+MinGW also needs no Visual Studio install: the whole toolchain lives in
+`C:\msys64` and is managed with `pacman`. Setup is `just setup-windows`; see
+the "Windows setup" block at the bottom of the Justfile.
+
+Clang-cl may still matter for WIN2 if the Godot `.dll` must match an MSVC-built
+Godot -- GDExtension is a C ABI and godot-cpp supports `use_mingw=yes`, so this
+is expected to be fine, but it is unverified.
+
+## What actually blocked WIN0 (none of it was in this plan)
+
+The real blockers were not the POSIX-API list below. They were:
+
+1. **`src/async/io.h` shadowed the CRT's `<io.h>`.** `-Isrc/async` is on the
+   include path, and GCC searches `-I` dirs before system dirs *even for
+   angle-bracket includes*. MinGW's `<io.h>` was therefore never included, so
+   `_finddata_t` was undefined (which breaks `<dirent.h>` itself) and
+   `mkdir`/`getcwd` were never declared. Renamed to `async_io.h`. Invisible on
+   Linux/macOS, which have no system `<io.h>`.
+2. **`_POSIX_C_SOURCE` was defined on Windows** by an `#else` branch meant for
+   glibc. MinGW reads that macro as "hide the Win32 CRT names" -- the exact
+   opposite of its intent.
+3. **`-std=c11` sets `__STRICT_ANSI__`**, under which MinGW's own headers are
+   not self-consistent. Windows builds use `-std=gnu11`.
+4. **Text-mode stdout.** Windows rewrites every `\n` to `\r\n`, which corrupted
+   generated C, `tur fmt --stdout`, the Content-Length framing of the LSP/DAP
+   servers, and the output of every compiled Turmeric program. Both `tur` and
+   generated `main()` now set binary mode.
+5. **No `.gitattributes`**, so Git for Windows checked sources out as CRLF --
+   and the reader copies inline-C bodies verbatim, leaking `\r` into codegen.
+
+## Verified
+
+- `tur.exe` builds under MSYS2/UCRT64 (`just build-windows`).
+- `tur emit-c` is **byte-identical** to the Linux-generated snapshots on all
+  140 fixtures carrying an `expected.c` (checked before regenerating them).
+- `tur build` compiles and runs real fixtures end to end.
+- `--version`, `check`, `emit-c`, `interpret` all work.
+
+### Suite result
+
+`TUR=./build-win/tur.exe bash tests/run.sh` -- **2115 passed, 64 failed, 0
+timeouts, 21m21s** (vs ~4-5 min on Linux; the gap is process-spawn cost plus
+Defender scanning every freshly-linked .exe -- worth an exclusion on the temp
+dir before treating 21 min as the real number).
+
+The 64:
+
+- **49** are `httpd-*` / `reactor-*` / `async-*` / `scheduler-io-park` /
+  `taskgroup-async` -- all routed through the `io_iocp.c` stub. Expected; WIN3.
+- **2** are `fh-multishot-value` / `multishot-effect-cont-kv-sugar` -- a real bug
+  in the Win32-Fiber ucontext shim. See
+  [docs/reported/win32-fiber-multishot-abort.md](../../reported/win32-fiber-multishot-abort.md).
+- **13** are uncategorised (`image-*`, `tmpfile-*`, `map`/`set-multiword-*`,
+  `serial-*`, `io-stdlib-roundtrip`, `childhandle-linear`, ...). Not yet looked
+  at. `tmpfile-*` almost certainly hit the hardcoded-`/tmp` class of bug that
+  `tur_temp_dir()` fixed elsewhere.
+
+### Two bugs the port surfaced that are NOT Windows bugs
+
+- Generated C has type errors that **GCC >= 14 rejects** (permerrors). MSYS2
+  ships GCC 16, so it failed 137 fixtures there; a Linux box on GCC 14+ fails
+  identically. Worked around with `-Wno-error=`; see
+  [docs/reported/codegen-gcc14-permerrors.md](../../reported/codegen-gcc14-permerrors.md).
+- At `-O0` the generated C fails to link: `tur_get_contract_handler` /
+  `tur_set_contract_handler` are declared but never defined. At `-O1`+ the calls
+  are optimised away, which is why nobody has noticed.
+
+## Deferred, and failing loudly rather than silently
+
+- `src/async/io_iocp.c` -- async I/O backend is a stub (WIN3).
+- `src/async/fiber_ctx_win.c` -- the SysV context switch takes its first
+  argument in `%rdi` (Windows uses `%rcx`) and `tur_ctx_t` has no slots for the
+  XMM6-15 the Windows x64 ABI requires preserved. Reusing it would corrupt
+  state, so it aborts (WIN3).
+- POSIX `<regex.h>` has no MinGW equivalent, so a program using `stdlib/re.tur`
+  gets a `#error` naming the cause.
+- Signals, DAP stdout capture, and the fork-based fixture worker compile out.
 
 ---
 

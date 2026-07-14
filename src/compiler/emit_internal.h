@@ -630,6 +630,12 @@ bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e);
  * by address.  Defined in emit_core.c. */
 bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
+/* WIN1: emit the binary-stdout prologue for a generated main(). Windows opens
+ * stdout in text mode, which would turn every 
+ into 
+. */
+void emit_win_binary_stdio_prologue(Buf *out);
+
 void emit_c_string(Buf *out, StrSlice s);
 char *atom_nil(void);
 char *atom_bool(bool b);

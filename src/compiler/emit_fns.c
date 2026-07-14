@@ -3359,6 +3359,13 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         }
     }
 
+    /* WIN1: binary stdout/stderr, before any user code runs.  This is the
+     * user-defined-main path; the synthesized-main paths in emit_module.c and
+     * the CPS D2b wrapper in emit_cps_ir.c call the same helper. */
+    if (is_main) {
+        emit_win_binary_stdio_prologue(file);
+    }
+
     /* Phase R6: Inject g_panic_trace initialization at start of main */
     if (is_main && g_emit_panic_trace) {
         ctx->indent += 4;

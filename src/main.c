@@ -2131,7 +2131,27 @@ static int cmd_build(const char *input, const char *out_path,
      * libm lives in libSystem so -lm is a no-op there too. Linking it
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
+    /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
+     * warnings to hard errors.  The generated C trips both -- that is a real
+     * codegen defect (see docs/reported/codegen-gcc14-permerrors.md), NOT a
+     * Windows problem: it would break any Linux box on GCC >= 14 too.  MSYS2
+     * ships GCC 16, so it surfaces there first, while CI's older GCC still only
+     * warns.  Downgrade them back to warnings so the latent defect does not
+     * block builds today, and so a CI toolchain bump does not detonate.
+     *
+     * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
+     * accidentally drop them. */
+    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
+                   " -Wno-error=int-conversion");
     buf_puts(&cmd, " -lm");
+#ifdef _WIN32
+    /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
+     * On glibc both live in libc; MinGW puts pthreads in winpthreads and
+     * select() in Winsock, so they must be linked explicitly.  This is a LINK
+     * decision about the host toolchain, not codegen, so keying it off the
+     * host is correct -- the generated C itself stays portable. */
+    buf_puts(&cmd, " -lpthread -lws2_32");
+#endif
     /* Ensure the command string is null-terminated before passing to system(). */
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
@@ -2146,6 +2166,13 @@ static int cmd_build(const char *input, const char *out_path,
         if (tmpl[0] && strncmp(tmpl, sp, strlen(sp)) != 0) {
             unlink(tmpl);
         }
+    }
+
+    /* Windows: the linker may have appended ".exe" to a -o with no extension.
+     * Put the binary back where the caller asked for it. */
+    if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
+        fprintf(stderr, "tur: could not place the linked binary at '%s'\n", out_path);
+        return 2;
     }
 
     if (sys_rc != 0) {
@@ -3113,6 +3140,7 @@ static int cmd_run(int argc, char **argv) {
         if (_fd < 0) { fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return 2; } \
         close(_fd);                                                      \
+        tur_exe_path(out_path, sizeof(out_path));                        \
         int _n_inc = n_user_inc + n_spice_inc_dirs;                      \
         const char **_inc = NULL;                                        \
         if (_n_inc > 0) {                                                \
@@ -3127,10 +3155,10 @@ static int cmd_run(int argc, char **argv) {
         if (_rc != 0) { unlink(out_path); for (int _i = 0; _i < n_spice_inc_dirs; _i++) free((char *)spice_inc_dirs[_i]); free(spice_inc_dirs); free(user_inc); free_reader_macro_paths(rm_paths_owned, n_rm_paths); for (int _i = 0; _i < n_auto_run_owned; _i++) free(auto_run_owned[_i]); \
         free(auto_run_owned); ls2_resolver_ctx_dispose(&run_ls2); return _rc; } \
         Buf _cmd; buf_init(&_cmd);                                       \
-        buf_printf(&_cmd, "'%s'", out_path);                             \
+        buf_printf(&_cmd, TUR_SHQ "%s" TUR_SHQ, out_path);               \
         if (passthrough_start >= 0) {                                    \
             for (int _i = passthrough_start; _i < argc; _i++)           \
-                buf_printf(&_cmd, " '%s'", argv[_i]);                   \
+                buf_printf(&_cmd, " " TUR_SHQ "%s" TUR_SHQ, argv[_i]);  \
         }                                                                \
         buf_putc(&_cmd, '\0');                                           \
         int _sys = system(_cmd.data);                                    \
@@ -3184,6 +3212,7 @@ static int cmd_run(int argc, char **argv) {
             int out_fd = mkstemp(out_path);
             if (out_fd < 0) { unlink(src_tmp); fprintf(stderr, "tur: mkstemp failed\n"); free(user_inc); return 2; }
             close(out_fd);
+            tur_exe_path(out_path, sizeof(out_path));
             /* SC2: stdin mode never enters project setup, so spice_inc_dirs
              * is empty here; we can pass user_inc straight through. */
             int brc = cmd_build(src_tmp, out_path,
@@ -3192,10 +3221,10 @@ static int cmd_run(int argc, char **argv) {
             unlink(src_tmp);
             if (brc != 0) { unlink(out_path); free(user_inc); return brc; }
             Buf run_cmd; buf_init(&run_cmd);
-            buf_printf(&run_cmd, "'%s'", out_path);
+            buf_printf(&run_cmd, TUR_SHQ "%s" TUR_SHQ, out_path);
             if (passthrough_start >= 0)
                 for (int i = passthrough_start; i < argc; i++)
-                    buf_printf(&run_cmd, " '%s'", argv[i]);
+                    buf_printf(&run_cmd, " " TUR_SHQ "%s" TUR_SHQ, argv[i]);
             buf_putc(&run_cmd, '\0');
             int sys = system(run_cmd.data);
             buf_free(&run_cmd);
@@ -3510,6 +3539,7 @@ static int cmd_test(const char *dir) {
             continue;
         }
         close(fd);
+        tur_exe_path(out_path, sizeof(out_path));
 
         int rm_n = 0;
         char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
@@ -3519,7 +3549,14 @@ static int cmd_test(const char *dir) {
         free_reader_macro_paths(rm_p, rm_n);
         int run_rc = 1;
         if (build_rc == 0) {
-            int status = system(out_path);
+            /* Quoted: the temp dir is user-controlled (TMP/TMPDIR) and may
+             * contain spaces -- "C:\Users\Foo Bar\AppData\Local\Temp" is a
+             * perfectly ordinary Windows path. */
+            Buf test_cmd; buf_init(&test_cmd);
+            buf_printf(&test_cmd, TUR_SHQ "%s" TUR_SHQ, out_path);
+            buf_putc(&test_cmd, '\0');
+            int status = system(test_cmd.data);
+            buf_free(&test_cmd);
             run_rc = decode_exit_status(status);
         }
         unlink(out_path);
@@ -4271,7 +4308,27 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * libm lives in libSystem so -lm is a no-op there too. Linking it
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
+    /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
+     * warnings to hard errors.  The generated C trips both -- that is a real
+     * codegen defect (see docs/reported/codegen-gcc14-permerrors.md), NOT a
+     * Windows problem: it would break any Linux box on GCC >= 14 too.  MSYS2
+     * ships GCC 16, so it surfaces there first, while CI's older GCC still only
+     * warns.  Downgrade them back to warnings so the latent defect does not
+     * block builds today, and so a CI toolchain bump does not detonate.
+     *
+     * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
+     * accidentally drop them. */
+    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
+                   " -Wno-error=int-conversion");
     buf_puts(&cmd, " -lm");
+#ifdef _WIN32
+    /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
+     * On glibc both live in libc; MinGW puts pthreads in winpthreads and
+     * select() in Winsock, so they must be linked explicitly.  This is a LINK
+     * decision about the host toolchain, not codegen, so keying it off the
+     * host is correct -- the generated C itself stays portable. */
+    buf_puts(&cmd, " -lpthread -lws2_32");
+#endif
     /* Ensure null termination before passing to system(). */
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
@@ -4285,6 +4342,14 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * so re-runs can ccache them and so users can inspect generated C. The
      * build dir is .gitignore'd on creation, so they don't leak into VCS. */
     (void)main_c_path; (void)rt_c_path; (void)rt_h_path;
+
+    /* Windows: the linker may have appended ".exe" to a -o with no extension.
+     * Put the binary back where the caller asked for it.  (Shared builds pass
+     * an out_path that already carries an extension, so this is inert there.) */
+    if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
+        fprintf(stderr, "tur: could not place the linked binary at '%s'\n", out_path);
+        return 2;
+    }
 
     if (sys_rc != 0) {
         buf_free(&manifest);
