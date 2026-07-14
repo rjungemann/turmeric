@@ -3359,6 +3359,21 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                 buf_printf(&tmp, "__dk_reap_keep(%s_kenv);\n", kn);
                 indent_buf(&tmp, 4);
                 buf_printf(&tmp, "__dk_reap_ptr((intptr_t)%s);\n", kn);
+                /* P3.d (escaping-fat-closure-env free, scoped to __Shift): the
+                 * receiver -- the effect argument `arg` -- is the shift's
+                 * `(fn [k] ...)`, which the __Shift desugar ALWAYS boxes into a
+                 * fresh heap value: a capturing-closure env, or an EX_FN_TO_FAT
+                 * fatshim (`malloc(2*int64)`) for a bare / capture-free fn (never a
+                 * raw code pointer).  It is consumed exactly once here (`recv(k)`)
+                 * and is not reclaimed at the perform site, so reap its env at the
+                 * outermost entry boundary (plain free -- it is a bare malloc).
+                 * A scalar-captured receiver frees cleanly; an owning capture
+                 * leaks its captured value (no closure drop glue yet) but never
+                 * double-frees -- the conservative interim of
+                 * docs/reported/escaping-fat-closure-env-leak.md, applied to the
+                 * one non-escaping closure the CPS backend itself constructs. */
+                indent_buf(&tmp, 4);
+                buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
             } else {
                 buf_printf(&tmp, "DK *%s = subk;\n", kn);
             }
