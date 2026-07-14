@@ -125,6 +125,32 @@ To make cross-function `__Shift` native, ALL of the following must land together
    `tur_cloneable_cont_resume` resumes the DK chain. This is the only genuinely
    new codegen; the rest are admission-predicate widenings.
 
+### Implementation attempt (2026-07-14): the relaxations must be `__Shift`-SCOPED
+
+Pushing into the implementation established a hard constraint the design missed.
+Step 1 (relax `atom_ok` to admit a bare fn atom) cannot be gated by general
+slot-representability -- not even scoped to "effect-free":
+
+- `effect_row` on the CROSSING atom's type is unreliable. A lambda-lifted
+  effectful callback (`(fn [] (perform (Ask)))`, type `(fn [] #fx{Ask} int)`)
+  reaches `atom_ok` with `a->type->as.fn.effect_row == NULL` (the row is erased
+  through lifting), so an "effect-free `TY_FN`" check WRONGLY admits it.
+- Consequence (third miscompile, tested): admitting it flips `run`/`apply-cb`
+  (`cps-backend-effectful-callback`) to native -- `Ask`'s handler becomes a DK
+  `dk_handler` while the callback still performs `Ask` on the fiber path -->
+  `tur: unhandled effect (tag 2)` -> abort. General slot-widening breaks the
+  effectful-callback taint discipline regardless of an effect-row check.
+
+So EVERY relaxation must be scoped to the `__Shift` effect specifically -- admit
+the receiver arg ONLY at a `CT_PERFORM`/`CT_HANDLE` whose effect is `__Shift`,
+never for atoms/effects in general. That threads an "is this `__Shift`?" test
+through `term_core_ok` (CT_PERFORM + CT_HANDLE), `reset_body_ok`,
+`handle_case_ok`, AND the emit -- and some failures are entangled: the handler's
+`term_core_ok(delim)` fails partly because `delim` calls the (not-yet-admissible)
+performer, a circular dependency with the performer's own admission. This is a
+larger, more coupled change than "admission widenings"; the general-`atom_ok`
+shortcut is a dead end.
+
 ### Status / recommendation
 
 Feasible and fully mapped, but a substantial multi-site implementation whose crux
