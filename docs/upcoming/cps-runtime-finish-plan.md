@@ -179,6 +179,39 @@ exit (the EVICT gate ticking toward `SIG-*`-only).
 
 ## Progress log
 
+### Slice P1.b -- closure KEYSTONE (control-free colour-only shape) landed via whole-body delegation
+
+The `EX_CLOSURE` keystone is landed for the shape that dominates the count: a
+function "colored" **only** because it constructs a capturing closure (it threads
+no continuation and calls nothing that does). Rather than leaf-admit the closure
+on the CPS path (which leaks its fat-closure env -- the scoped-env free is not
+applied there), such a function now emits as a **single `CT_LETRAW` delegating
+its whole body** to the direct emitter, whose `emit_value(EX_LET)` lowers the
+closure with the `let_binding_env_freeable` scoped free. No leak, no reap, no
+escape analysis on the CPS side -- the direct emitter's existing, sound machinery
+does it all.
+
+Mechanism (`cps_ir_translate_fn`): a `whole_body_delegatable` probe runs
+`safe_to_delegate` with a scoped flag (`g_whole_body_delegate`) that admits a
+capturing closure as a delegatable value. The flag is confined to the probe and
+never reaches the per-node `cps_tail`/`cps_bind` path (a lone-leaf closure there
+would still leak). The probe succeeds only when the body has **no control op and
+no colored call**, so direct emission is behaviour-equivalent -- no
+effect-threading / fiber concern. A function with a real `perform`/`handle`/
+`shift` or a colored callee stays on the per-node DK path.
+
+Gate effect: **`BODY-UNSUPPORTED` 52 -> 16.** Cleared the control-free colour-only
+`EX_CLOSURE` evictions (`make-adder`, `let-star`, `letrec-self-in-nested-closure`),
+the **httpd higher-order call family (~30)**, and one `EX_WHILE`. Validated:
+`define-in-fn` / `let-star` / `letrec-*` are ASan-clean with correct output, the
+`closure-env-no-leak` ASan target stays green, suite 2179/0. Remaining `EX_CLOSURE`
+(9) are **effect-bearing** closures (a closure built in a handler-case / shift /
+perform body) -- those genuinely need the lifted-body path (leaf-admission + a
+lifted-env free, the P3.d receiver-reap tactic generalized), NOT whole-body
+delegation, and stay gated on that free. So the keystone splits cleanly: the
+control-free majority is done here; the effect-bearing minority is the remaining
+slice.
+
 ### Slice P3.a -- Track-A perform-continuation `dk_frame_resume` node leak fixed (Phase 3)
 
 The nested-control / multi-shot perform-continuation branch of `emit_perform`
