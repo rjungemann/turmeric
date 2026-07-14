@@ -44,4 +44,15 @@ separately here because the allocation site and fix differ.
 2. This needs the closure to participate in the RC/drop / uniqueness analysis so
    a shared closure is not double-freed. Until closures carry drop glue, the
    conservative interim is the current leak.
-3. Interim: `cps-backend-fn-param` keeps `requires.no-leak-check`.
+3. Interim: `cps-backend-fn-param`, `free-lift-bind`, `unsafe-closure-capture`
+   keep `requires.no-leak-check`.
+
+## Scoped fix
+
+A concrete, phased design lives in
+[docs/upcoming/closure-drop-glue-plan.md](../upcoming/closure-drop-glue-plan.md):
+an env drop-glue function (`drop_glue_env_N` -- walk owning captures, then free),
+S1 a scoped free for NON-escaping closures (partial-app + non-retaining HOF arg,
+no ownership tracking), and S2 move-based drop glue for ESCAPING (stored)
+closures. S1 clears this leak for the non-escaping fixtures; S2 covers stored
+closures (parser combinators, httpd middleware).

@@ -212,10 +212,13 @@ slice rather than a quick admission:
   `currying-effect-partial` (a partial-application closure `add10 = (log-add 10)`
   called inside a REAL `Log` handle -- not an unsafe marker) and
   `hkt-stdlib-parser-instances` (parser-combinator closures).  These need the
-  deferred general **closure RC/drop glue**
-  (`docs/reported/escaping-fat-closure-env-leak.md`) or a HOF-inlining pass. This
-  is the genuine backstop, shared with the httpd
-  middleware family.
+  deferred general **closure env drop glue**, scoped in
+  [closure-drop-glue-plan.md](closure-drop-glue-plan.md): S1 a scoped free for
+  NON-escaping closures (partial-app + non-retaining HOF arg -- clears
+  `currying-effect-partial` and the two PD leak fixtures, no ownership tracking)
+  and S2 move-based drop glue for ESCAPING (stored) closures -- clears
+  `hkt-stdlib-parser-instances` and the httpd middleware family. Tracked in
+  `docs/reported/escaping-fat-closure-env-leak.md`.
 - **`EX_DEFER` (4) -- two entangled sub-shapes, neither standalone-landable.**
   (i) USER side-effecting defers (`effect-defer` `(defer (println ...))`,
   `unsafe-defer`) must fire their side effect at a specific scope-exit point; a
