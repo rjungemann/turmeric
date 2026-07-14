@@ -3,13 +3,20 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
+#ifndef _WIN32
 #define _XOPEN_SOURCE 700
 #include <ucontext.h>
 #undef _XOPEN_SOURCE
+#endif
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -17,6 +24,83 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <stdarg.h>
+#ifndef TUR_WIN_FIBER_STACK_SIZE
+#define TUR_WIN_FIBER_STACK_SIZE 262144
+#endif
+typedef struct { void *ss_sp; size_t ss_size; } tur_win_stack_t;
+typedef struct tur_ucontext {
+    LPVOID                fiber;
+    void                (*entry)(void);
+    struct tur_ucontext  *uc_link;
+    tur_win_stack_t       uc_stack;
+    int                   argc;
+    int                   argv[2];
+} ucontext_t;
+static int tur_win_ensure_fiber(void) {
+    if (!IsThreadAFiber()) {
+        if (ConvertThreadToFiber(NULL) == NULL) return -1;
+    }
+    return 0;
+}
+static VOID WINAPI tur_win_fiber_trampoline(LPVOID param) {
+    struct tur_ucontext *u = (struct tur_ucontext *)param;
+    if (u->entry) {
+        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);
+        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);
+        else                   u->entry();
+    }
+    if (u->uc_link && u->uc_link->fiber) { SwitchToFiber(u->uc_link->fiber); return; }
+    fprintf(stderr, "turmeric: fiber entry returned with no uc_link\n");
+    fflush(stderr);
+    abort();
+}
+static int tur_win_getcontext(ucontext_t *u) {
+    memset(u, 0, sizeof(*u));
+    if (tur_win_ensure_fiber() != 0) return -1;
+    u->fiber = GetCurrentFiber();
+    return 0;
+}
+static void tur_win_makecontext(ucontext_t *u, void (*fn)(void), int argc, ...) {
+    va_list ap;
+    int i;
+    if (argc > 2) { fprintf(stderr, "turmeric: makecontext argc>2 unsupported\n"); fflush(stderr); abort(); }
+    va_start(ap, argc);
+    for (i = 0; i < argc; i++) u->argv[i] = va_arg(ap, int);
+    va_end(ap);
+    u->argc  = argc;
+    u->entry = fn;
+    if (tur_win_ensure_fiber() != 0) { u->fiber = NULL; return; }
+    u->fiber = CreateFiber((SIZE_T)(u->uc_stack.ss_size ? u->uc_stack.ss_size : TUR_WIN_FIBER_STACK_SIZE), tur_win_fiber_trampoline, u);
+}
+static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
+    if (tur_win_ensure_fiber() != 0) return -1;
+    if (!to || !to->fiber) {
+        fprintf(stderr, "turmeric: swapcontext into an uninitialised context (target fiber is NULL)\n");
+        fflush(stderr);
+        abort();
+    }
+    from->fiber = GetCurrentFiber();
+    SwitchToFiber(to->fiber);
+    return 0;
+}
+#define getcontext(u)            tur_win_getcontext(u)
+#define swapcontext(f, t)        tur_win_swapcontext((f), (t))
+#define makecontext(u, fn, ...)  tur_win_makecontext((u), (fn), __VA_ARGS__)
+#include <io.h>
+#include <fcntl.h>
+#endif /* _WIN32 */
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
 static int __tur_set_cmp(const void *a, const void *b) {
@@ -6647,6 +6731,10 @@ static int64_t res_hypayload(int64_t r) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
         /* *args*: build cons list from argv[1..argc-1] */
         g_tur_args = 0;
         for (int _ai = argc - 1; _ai >= 1; _ai--) {
