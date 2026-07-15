@@ -61,22 +61,29 @@ The real blockers were not the POSIX-API list below. They were:
 
 ### Suite result
 
-`TUR=./build-win/tur.exe bash tests/run.sh` -- **2115 passed, 64 failed, 0
-timeouts, 21m21s** (vs ~4-5 min on Linux; the gap is process-spawn cost plus
-Defender scanning every freshly-linked .exe -- worth an exclusion on the temp
-dir before treating 21 min as the real number).
+`TUR=./build-win/tur.exe bash tests/run.sh` -- **2128 passed, 51 failed, ~20 min**
+(vs ~4-5 min on Linux; the gap is process-spawn cost plus Defender scanning
+every freshly-linked .exe -- worth an exclusion on the temp dir before treating
+20 min as the real number).
 
-The 64:
+Every one of the 51 is the deferred async/fiber runtime:
 
-- **49** are `httpd-*` / `reactor-*` / `async-*` / `scheduler-io-park` /
+- **48** are `httpd-*` / `reactor-*` / `async-*` / `scheduler-io-park` /
   `taskgroup-async` -- all routed through the `io_iocp.c` stub. Expected; WIN3.
-- **2** are `fh-multishot-value` / `multishot-effect-cont-kv-sugar` -- a real bug
-  in the Win32-Fiber ucontext shim. See
-  [docs/reported/win32-fiber-multishot-abort.md](../../reported/win32-fiber-multishot-abort.md).
-- **13** are uncategorised (`image-*`, `tmpfile-*`, `map`/`set-multiword-*`,
-  `serial-*`, `io-stdlib-roundtrip`, `childhandle-linear`, ...). Not yet looked
-  at. `tmpfile-*` almost certainly hit the hardcoded-`/tmp` class of bug that
-  `tur_temp_dir()` fixed elsewhere.
+- **2** are `fh-multishot-value` / `multishot-effect-cont-kv-sugar` -- the
+  Win32-Fiber multishot abort.
+- **1** is `scheduler-multithread` -- Win32 Fibers are thread-affine, so a fiber
+  cannot migrate across a multithread scheduler's worker threads. Same root cause
+  as the multishot abort; nondeterministic (occasionally hangs under load).
+
+Both fiber issues are in
+[docs/reported/win32-fiber-multishot-abort.md](../../reported/win32-fiber-multishot-abort.md);
+the real fix for both is WIN3's register-snapshot context switch, which is
+re-entrant and thread-agnostic where Win32 Fibers are neither.
+
+The 13 non-async failures from the first pass are all fixed (image self-exe,
+fnmatch->PathMatchSpecA, process spawn->_spawnvp, the `__has_include` hoister
+wrap, a missing-hamt.h implicit decl, two dead `printf_s` externs, and `C:\tmp`).
 
 ### Two bugs the port surfaced that are NOT Windows bugs
 
