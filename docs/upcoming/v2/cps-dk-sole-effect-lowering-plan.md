@@ -614,10 +614,41 @@ The ~1990 pure `eff=0` SIG-* evictions are out of scope. The real remaining surf
 is **~48 effectful functions**: ~39 BODY roots (the same "drive effectful BODY
 shapes to DK-admission" work v1 did for the shipping config, now under the flag),
 8 non-scalar signatures (E1), 2 inline-C (E5); the 22 SIG-TAINT then dissolve.
-This is what Stages C-F now cover concretely. **Next: drive the 39 effectful BODY
-roots to DK-admission under the flag (largest bucket, same technique as v1), then
-E1 for the 8 non-scalar signatures, then E5, then the taint empties and Stage G
-(deletion) is unblocked.**
+This is what Stages C-F now cover concretely.
+
+### Session 2 (cont.) -- the 39 BODY roots characterized into concrete slices
+
+Minimal probes under the flag pinpoint what actually admits vs what the ~39 BODY
+roots need (they are NOT 39 independent shapes -- most cascade from two roots):
+
+**Already admits (verified, so these are taint-driven, not body-shape blockers):**
+- Non-tail perform as an operand -- `(+ (perform (C)) n)` -> works (=> 142). So
+  `effect-reopen:counted-sum` evicts only via TAINT from `main`, not its own body.
+- Sequential nil-effect performs -- `(do (perform (W "a")) (perform (W "b")))` -> works.
+
+**The two genuine roots the BODY bucket cascades from:**
+1. **Join (`CT_LETCONT`) inside a perform continuation.** `(let [n (perform (R))]
+   (perform (W (if (> n 0) "pos" "neg"))))` evicts: the second perform's arg is a
+   value produced by a branch, which lowers to a `CT_LETCONT` join, and
+   `perform_cont_reset_ok` (`emit_cps_ir.c:1398`) has no `CT_LETCONT` case.
+   **Slice C1: admit a join in a perform continuation** (lift the join as its own
+   frame, like the reset/handle join path). Clears the effect-row / re-opening
+   fixtures (`effect-do-union`, `effect-reopen`, `effect-row-*`).
+2. **Effectful fn-value param + effectful fn-value (E1+E2).** `run-with-write
+   (fn [] (println "pure"))` etc.: the fn-value-param callee is SIG-REJECT ->
+   fiber, so the effect it performs runs on fiber and the enclosing DK handle
+   cannot catch it -> the whole main evicts. This is the dominant remaining bucket
+   (`effect-subtype-*`, `effect-poly-*`, `handle-effectful-fn-param-*`, every
+   `__fn_*` root) and needs **E1** (admit the fn-value-param signature, carrier-ABI)
+   + **E2** (the `__fn_cps` slot so the callback's perform threads the DK). This is
+   the large, coupled ABI change (plan Stage C/E); the kill-probe already proved it
+   feasible end to end.
+
+**Ordered remaining slices:** C1 (join-in-perform-cont, bounded) -> E1 fn-value-param
+signature admission -> E2 fn-value `__fn_cps` ABI (the big one) -> E5 (2 inline-C)
+-> SIG-TAINT empties -> promote off the `--enable` gate (default BODY=0 re-verified)
+-> Stage G deletion. **Next concrete step: Slice C1 (admit `CT_LETCONT` in the
+perform continuation), then the E1/E2 fn-value ABI.**
 
 ---
 
