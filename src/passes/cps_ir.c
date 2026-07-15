@@ -1356,6 +1356,12 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * Shallow handlers (F2) do NOT re-install on resume, so an interior
              * re-perform is handled DIFFERENTLY -- keep them off this path. */
             if (!g_whole_body_delegate || h->shallow) return false;
+            /* E7/E1 (cps-tramp-resume): under the flag a deep handle must DK-lower
+             * (build_handle -> CT_HANDLE), not whole-body-delegate to fiber -- that
+             * is what dissolves the handler-installer's base taint (ensure_S:2814)
+             * and lets its effects leave the fiber runtime.  Default (flag off)
+             * keeps the delegation, so codegen is unchanged. */
+            if (g_opt_cps_tramp_resume) return false;
             if (g_wbd_n_handled + (int)h->n_cases > WBD_MAX_HANDLED) return false;
             int base = g_wbd_n_handled;
             for (uint8_t i = 0; i < h->n_cases; i++)

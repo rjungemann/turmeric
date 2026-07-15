@@ -560,13 +560,37 @@ assumption. Probe it FIRST, in isolation, before committing to Stages A-D:
 perform+handle keeps its performer/handler SIG-TAINT after E3, because the
 handler-installer `run` is a **whole-body delegation** that seeds its effect into
 the base taint (`emit_cps_ir.c:2814`, the comment at :2809 names exactly this).
-So a `handle` only leaves fiber once it DK-lowers -- which is **E1 (Stage C)**.
-Therefore E7 (the runtime) cannot be *exercised from source* until E1 lands; the
-two hand-C probes are its validation until then. This matches the plan's staging:
-E7 is the Stage-0 runtime; effectful bodies leave fiber in Stages C-E. **Next
-concrete step: E1 (carrier-ABI handle admission) so `run`'s handle DK-lowers, then
-the deep-loop fixture under `--enable=cps-tramp-resume` becomes the stackless
-sign-off.**
+So a `handle` only leaves fiber once it DK-lowers.
+
+### Session 2 -- Stage 0 COMPLETE end-to-end (gated)
+
+Landed the full E7 emitter path + a scalar-signature slice of E1, all gated on
+`--enable=cps-tramp-resume`, so a Turmeric effectful program now runs flat on the
+DK path from source:
+
+- **Scalar-signature handle DK-lowering (E1-lite).** Under the flag, a deep
+  `handle` is no longer whole-body-delegatable (`cps_ir.c:1358` returns false), so
+  it routes `build_handle -> CT_HANDLE` and DK-lowers. This dissolves the
+  handler-installer's base taint -- `run`/`once`/`main` now CPS-emit; a shallow
+  perform+handle runs entirely on the DK (`dk_perform`), verified `=> 42`. (Full
+  non-scalar E1 -- carrier-ABI `__cps` for non-scalar signatures -- is still Stage C.)
+- **E7 tail-recursive-perform admission.** `perform_cont_reset_ok` now admits a
+  `CT_TAILCALL` perform-continuation under the flag (lifts as a `RESUME_FRAME`).
+- **E7 emission wiring.** `case_body_tail_resumes` marks a tail-resume case;
+  `emit_handle` installs it with `dk_handler_tail`; `emit_resume` emits
+  `dk_tail_resume` (yield) for a tail resume in a handler case; the d2b-main entry
+  wrapper installs the `setjmp` driver (`__dk_drive_after`).
+- **End-to-end result.** A 1e6-deep tail-recursive effectful loop under a resuming
+  handler runs **flat** (10e6 also flat; inline resume SIGSEGVs by ~50k); the
+  accumulator form threads the resumed value correctly (`3*1e6 = 3000000`);
+  **valgrind: 0 errors, 0 leaks**. Fixture `tests/fixtures/cps-tramp-resume-deep`.
+- **Suite: 2180/0** (2179 unchanged + the new fixture; flag-off byte-identical).
+
+**This is the stackless sign-off (Sec 8 item 4) passing from source, gated.** The
+Stage-0 prerequisite the kill-probe surfaced is done and demonstrated end-to-end.
+**Next: promote off the gate by doing the taint-dissolution stages for real --
+Stage C (full non-scalar E1 carrier-ABI) and Stage D (E4 exports) -- so effectful
+bodies leave fiber by default, not only under `--enable`.**
 
 ---
 

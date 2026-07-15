@@ -1427,7 +1427,18 @@ static bool perform_cont_reset_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             return perform_body_ok(t->as.perform.body)
                 || perform_cont_reset_ok(t->as.perform.body);
-        default: return false;   /* CT_TAILCALL and any other nested control op: evict */
+        case CT_TAILCALL:
+            /* E7 (cps-tramp-resume): admit a TAIL CALL in the perform continuation.
+             * It lifts as a RESUME_FRAME whose rfn threads its run-time `rest` (the
+             * reinstalled-handler tail) as the callee's continuation, and the
+             * trampolined tail-resume runtime keeps the recursion flat instead of
+             * the O(N) dk_invoke stack this predicate otherwise (correctly) rejects.
+             * Gated: default keeps the eviction. Args must be slot atoms. */
+            if (!g_opt_cps_tramp_resume) return false;
+            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
+                if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
+            return true;
+        default: return false;   /* any other nested control op: evict */
     }
 }
 
@@ -3116,6 +3127,8 @@ typedef struct {
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
     bool        ret_mode;    /* true inside a perform-continuation frame: KK_RET -> return value */
+    bool        handler_case_mode;  /* E7: true directly inside a LH_HANDLER_CASE body -- a
+                                     * terminal tail `resume` here emits dk_tail_resume (yield) */
     /* Full Type a value has when it crosses the slot at each continuation target,
      * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
      * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
@@ -3664,6 +3677,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * or KK_PROMPT), so it sets both return modes. */
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
+    hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding).  A reset/handle
@@ -4511,6 +4525,36 @@ static void emit_shift(CE *ce, const CTerm *t) {
     free(env);
 }
 
+/* E7: is this resume a TAIL resume -- the resumed value is delivered straight to
+ * the handler case's return (KK_RET/KK_PROMPT), with nothing after?  Then the
+ * handler does no post-resume work and dk_perform can trampoline it. */
+static bool resume_is_tail(const CTerm *t) {
+    const CTerm *b = t->as.resume.body;
+    return b && b->kind == CT_APPCONT
+        && (b->as.appcont.kont.kind == KK_RET || b->as.appcont.kont.kind == KK_PROMPT)
+        && b->as.appcont.v.kind == CA_CVAR
+        && b->as.appcont.v.cvar_id == t->as.resume.x.id;
+}
+
+/* E7: does a handler CASE body reduce (down its straight-line tail) to a single
+ * TAIL resume?  Such a case is installed with dk_handler_tail and its resume
+ * emits dk_tail_resume (yield to the entry driver), keeping deep recursion flat.
+ * A branching or post-resume-working case is NOT a tail-resume -- it keeps the
+ * inline dk_handler / dk_invoke path (correct, just not trampolined). */
+static bool case_body_tail_resumes(const CTerm *t) {
+    while (t) {
+        switch (t->kind) {
+            case CT_RESUME:  return resume_is_tail(t);
+            case CT_LETVAL:  t = t->as.letval.body; break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_LETRAW:  t = t->as.letraw.body; break;
+            default: return false;
+        }
+    }
+    return false;
+}
+
 /* ---- C4: algebraic effects (handle / perform / resume) --------------- *
  * handle mirrors reset: lift the handle continuation to a DKFrame, install a
  * dk_handler (carrying the case as a DKHandler), and run the handled body
@@ -4574,8 +4618,15 @@ static void emit_handle(CE *ce, const CTerm *t) {
     buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
+        /* E7: a deep case that reduces to a TAIL resume installs with
+         * dk_handler_tail so dk_perform yields it to the entry driver (flat).
+         * emit_resume for that case emits the matching dk_tail_resume. */
+        const char *ctor = hctor;
+        if (g_opt_cps_tramp_resume && !t->as.handle.shallow
+            && case_body_tail_resumes(t->as.handle.cases[ci].case_body))
+            ctor = "dk_handler_tail";
         Buf nxt; buf_init(&nxt);
-        buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", hctor, tag, cnames[ci], cenvs[ci],
+        buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", ctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         buf_free(&chain);
         chain = nxt;
@@ -4817,6 +4868,18 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* resume k v = dk_invoke((DK*)k, v); slot-load the result and continue. */
     char *kk = atom_str(ce, &t->as.resume.k);
     char *vv = atom_str(ce, &t->as.resume.v);
+    /* E7: a TAIL resume directly inside a handler case yields to the entry driver
+     * (dk_tail_resume) instead of resuming inline (dk_invoke) -- the trampoline
+     * keeps deep effectful recursion flat.  dk_perform installed this case with
+     * dk_handler_tail (case_body_tail_resumes agrees), so it queued the H->next
+     * delivery and this yield hands off the resumed chain; the value is delivered
+     * by the driver, so nothing follows here. */
+    if (g_opt_cps_tramp_resume && ce->handler_case_mode && resume_is_tail(t)) {
+        char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);
+        free(sv); free(kk); free(vv);
+        return;
+    }
     /* resume value -> slot; a Tier C box is registered for reap (the resumed
      * continuation may be re-run, so it is read consume=false and cannot be freed
      * at the load -- the reap list owns it). */
@@ -5262,7 +5325,18 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    }\n");
         buf_puts(file, "    __dk_entry_depth++;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-        buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        if (g_opt_cps_tramp_resume) {
+            /* E7: install the trampoline driver.  A tail-resume longjmps here; the
+             * else-branch runs the meta-stack trampoline to completion. */
+            if (!mvoid) buf_puts(file, "    int64_t __r;\n");
+            buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+            buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(__root); }\n",
+                       mvoid ? "(void)" : "__r = ", cn);
+            buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+            buf_puts(file, "    g_dk_driver = __dksave;\n");
+        } else {
+            buf_printf(file, "    %s%s__cps(__root);\n", mvoid ? "(void)" : "int64_t __r = ", cn);
+        }
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
          * so the reap frees it -- copy the value into a local first, then reap. */

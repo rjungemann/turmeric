@@ -1,0 +1,19 @@
+;; E7 (cps-tramp-resume): a 1e6-deep tail-recursive effectful loop under a
+;; resuming handler must run FLAT on the DK path -- the trampolined tail-resume
+;; keeps the C stack constant instead of the O(N) inline-resume stack that would
+;; SIGSEGV well before 1e6. The accumulator threads the resumed value, so a wrong
+;; resume also shows up: result = 3 * 1000000 = 3000000.
+(defeffect Ask [] :int)
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (loop (- n 1) (+ acc (perform (Ask))))))
+
+(defn run [] : int
+  (handle (loop 1000000 0)
+    (Ask [] k) (resume k 3)))
+
+(defn main [] : int
+  (println (run))
+  0)
