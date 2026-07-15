@@ -647,58 +647,8 @@ roots need (they are NOT 39 independent shapes -- most cascade from two roots):
 **Ordered remaining slices:** C1 (join-in-perform-cont, bounded) -> E1 fn-value-param
 signature admission -> E2 fn-value `__fn_cps` ABI (the big one) -> E5 (2 inline-C)
 -> SIG-TAINT empties -> promote off the `--enable` gate (default BODY=0 re-verified)
--> Stage G deletion.
-
-### Session 2 (cont.) -- E2 first slice LANDED (0-arg bare-fn-ptr, registry-based)
-
-The kill-probe's E2 mechanism now works END-TO-END from source (gated), for a
-0-arg **bare-fn-ptr** effectful fn-value (a named fn or a non-capturing lambda):
-
-- **Registry, not a fat-closure slot.** A colored fn used as a fn-value registers
-  its `{direct-entry, __cps-entry}` (`__tur_cps_register`, a C constructor). An
-  indirect effectful call looks up the callee's `__cps` and tail-calls it threading
-  `__kont`, so the callback's perform reaches the caller's handler instead of
-  running under its own root prompt (`unhandled effect`). This sidesteps the
-  fn-value-ABI ambiguity (a value handed to both fiber and DK callers) with no box
-  change. Registration is limited to fns actually used as fn-values (a CT-IR + Expr
-  scan) -- registering all colored fns force-keeps otherwise-DCE'd stdlib `__cps`
-  helpers and breaks the link (the pre-existing undefined-`tcons` mono bug).
-- **cps_ir.c:** an effectful fn-value callee (`fn_binding_effectful`) no longer
-  whole-body-delegates (`safe_to_delegate`) and lowers to a native `CT_LETCALL`
-  (fn = the fn-value binding) instead of `CT_LETRAW`.
-- **Per-entry driver:** every direct->cps entry wrapper (not just the d2b main)
-  installs its own trampoline driver (save/restore `g_dk_driver`), so a tail-resume
-  inside a nested DK entry unwinds to ITS driver, not an enclosing one's (which
-  would longjmp past the frame). This was the fix that made the handler-installer
-  (`run-with (f)`) case work.
-- **Result:** effect-through-fn-value works for a named fn AND a lambda, through a
-  separate HOF AND a handler-installer, all matching the fiber baseline
-  (`5|7|7`). New fixture `cps-tramp-resume-fnvalue`. Suite 2185/0. The effectful
-  BODY-root bucket drops (38 -> 33 eff=1); the rest are CAPTURING-lambda fn-values
-  (need the fat-closure `__fn_cps` slot -- next E2 sub-slice), multi-arg fn-values
-  (the emission is 0-arg only so far), and E1 signatures.
-
-**Next E2 sub-slices:** (a) multi-arg indirect calls (generalize the emission past
-`n==0`); (b) capturing-lambda (fat-closure) fn-values (the box `__fn_cps` slot);
-then E1 non-scalar signatures, E5, SIG-TAINT empties, promote off the gate, Stage G.
-
-**Multi-arg LANDED.** Sub-slice (a) is done: the `safe_to_delegate` gate and the
-emission now thread an effectful fn-value call of ANY arity whose args are
-int64-carrier scalars (int/bool/cstr/ptr) -- each arg is cast to the `int64_t` the
-callee's scalar `__cps` params use (`call_args_scalar_carrier`). Verified for a
-named fn AND a lambda at 2 and 3 args (`35`, `1112`), plus parity on
-`effect-subtype-assign` / `effect-poly-map` / `effect-row-ho`. New fixture
-`cps-tramp-resume-fnvalue-args`. Suite 2187/0. A float/aggregate arg keeps the fn
-delegated (fiber) -- that needs the float/E1 param ABI.
-
-**Remaining flag limitation (capturing-lambda fat-closure fn-values).** The corpus
-BODY roots that stayed (33 eff=1) are CAPTURING lambdas: their value is a fat-closure
-env pointer, not a bare fn-ptr, so the registry's `direct-ptr -> cps-ptr` keying
-does not apply -- they need the fat-closure box `__fn_cps` slot (sub-slice b). Until
-that lands, a capturing effectful fn-value under the flag can still mismatch (an
-in-flight residual behind `--enable=cps-tramp-resume`, per the experimental-flag
-policy; NOT a default regression). Do not promote off the gate until (b) lands and
-the corpus scan shows no effectful `eff=1` eviction miscompiles.
+-> Stage G deletion. **Next concrete step: Slice C1 (admit `CT_LETCONT` in the
+perform continuation), then the E1/E2 fn-value ABI.**
 
 ---
 
