@@ -2646,6 +2646,21 @@ static void reach_backward(uint64_t *set, size_t n, size_t nwords) {
     }
 }
 
+/* A colored function whose CT-IR is a WHOLE-BODY delegation: `cps_ir_translate_fn`
+ * emits it as a single `CT_LETRAW` (the entire body, direct-emitted) tailed by an
+ * `appcont` to the function's own return (KK_RET).  Such a function runs its
+ * effects on the FIBER runtime (the direct emitter's global_effect_handler_chain),
+ * not the DK -- so any effect that ESCAPES it (its non-empty net effect) is a
+ * fiber effect and must taint every DK peer sharing it, exactly like a non-in_s
+ * function's effect.  Detected by shape; a control-free single-owning-op body
+ * (e.g. `hamt/new`) also matches but has an empty effect set, so seeding it is a
+ * no-op. */
+static bool term_is_whole_body_delegation(const CTerm *t) {
+    return t && t->kind == CT_LETRAW && t->as.letraw.body
+        && t->as.letraw.body->kind == CT_APPCONT
+        && t->as.letraw.body->as.appcont.kont.kind == KK_RET;
+}
+
 static void ensure_S(const Expr *program) {
     /* Cached -- but G3b's mono-template classification needs g_emit_ctx (the
      * spec set).  If a prior run classified under a different ctx (e.g. a NULL
@@ -2719,6 +2734,18 @@ static void ensure_S(const Expr *program) {
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi;
+                /* A whole-body-delegated colored fn runs its effects on the FIBER
+                 * runtime (direct emitter), so its effects are fiber -- seed them
+                 * into the base taint like a non-in_s fn.  This keeps an effect
+                 * that a delegated HANDLER-INSTALLER discharges (e.g. `run`'s Ask)
+                 * OR a delegated performer raises (e.g. `apply-cb`'s Ask via an
+                 * indirect call) classified as fiber, so its evicted performers /
+                 * DK peers never split across the two machines.  A control-free
+                 * single-op body matches the shape but has empty effects (no-op). */
+                if (candidate && term_is_whole_body_delegation(t)) {
+                    base_lo |= en->eff_lo;
+                    base_hi |= en->eff_hi;
+                }
                 g_ents_n++;
                 continue;
             }

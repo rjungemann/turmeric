@@ -405,6 +405,40 @@ static bool wbd_effect_handled(const Symbol *name) {
     return false;
 }
 
+/* Are ALL of colored global callee `fn`'s effects discharged by an enclosing
+ * delegated handle (their names are in g_wbd_handled)?  If so the callee runs
+ * entirely under the local FIBER handler the delegated handle installs on the
+ * global_effect_handler_chain: its performs (even those reached through an
+ * indirect fn-value call, which the direct emitter lowers as a fiber perform)
+ * land on that chain and are caught locally, never escaping to the enclosing DK.
+ * So delegating the call to the direct emitter is sound even though the callee is
+ * colored -- e.g. `run`'s `(apply-cb ...)` where `apply-cb : #fx{Ask}` and `run`
+ * handles `Ask`.  The taint model co-classifies such a delegated handler-installer
+ * as FIBER for its handled effect (ensure_S seeds a whole-body-delegated fn's
+ * effects into the base fiber taint), so the whole cluster stays consistently on
+ * the fiber runtime.  Conservative: a non-concrete effect row (var / union /
+ * unresolved) or ANY effect not in g_wbd_handled returns false (keep native). */
+static bool callee_effects_all_wbd_handled(CpsB *b, const Binding *fn) {
+    if (g_wbd_n_handled == 0 || !fn || !b->program
+        || b->program->kind != EX_PROGRAM)
+        return false;
+    FnDef *cfd = NULL;
+    for (uint32_t i = 0; i < b->program->as.program.n; i++) {
+        Expr *it = b->program->as.program.items[i];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
+            && it->as.fn_def_.fn->binding == fn) { cfd = it->as.fn_def_.fn; break; }
+    }
+    if (!cfd) return false;
+    EffectRow *row = cfd->inferred_effect_row;
+    if (!row && fn->type.kind == TY_FN) row = fn->type.as.fn.effect_row;
+    if (!row || row->kind != ERK_CONCRETE) return false;
+    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+        Effect *e = row->as.concrete.effects[i];
+        if (!e || !wbd_effect_handled(e->name)) return false;
+    }
+    return row->as.concrete.n_effects > 0;
+}
+
 /* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
  * a closure literal with no captured free variables.  Such a value is not a call
  * and not a control op, and (being capture-free) references no enclosing local,
@@ -1169,7 +1203,21 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) return false;                 /* indirect: unknown coloring */
-            if (callee_colored(b, fn)) return false;
+            if (callee_colored(b, fn)) {
+                /* A colored GLOBAL callee whose effects are ALL discharged by the
+                 * enclosing delegated handle runs entirely under the local fiber
+                 * handler -- its performs land on the global chain the handle
+                 * installs, never escaping to the enclosing DK -- so the call is
+                 * safe to delegate to the direct emitter (which calls the callee's
+                 * direct entry).  This lets a handler-installer like `run`
+                 * (`(handle (apply-cb ...) (Ask ..))`, apply-cb : #fx{Ask})
+                 * whole-body-delegate instead of evicting.  Any other colored
+                 * callee (an unhandled or DK-threaded effect, an fn-value callee)
+                 * stays native. */
+                if (!(fn->is_global && !e->as.call_.fn_expr
+                      && callee_effects_all_wbd_handled(b, fn)))
+                    return false;
+            }
             /* P5: inside a delegated handle, a call through a fn-VALUE (a non-global
              * fn-typed binding -- a param or a local closure -- or any indirect
              * fn_expr callee) can reach a COLORED fn-value that performs via the DK.
