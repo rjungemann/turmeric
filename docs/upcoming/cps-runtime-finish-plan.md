@@ -139,6 +139,37 @@ capturing + cps->cps-tailcall case for that lift mode. High regression surface
 suite pass. This supersedes the "scattered value-representation" framing above as
 the STRUCT-OR-TAINT priority.
 
+**Attempt 1 (reverted) -- two blockers the RESET-style lift must first solve.**
+The `LH_RESET_CONT` lift above was implemented and DOES admit + correctly run the
+three target functions (`set-eq-loop`/`map-eq-loop`/`__cons-fmap`: verified
+`set_eq_loop__cps` emits, `data-literal-set-eq`/`map-eq`/`hamt-lisp-eq` green).
+But relaxing `needs_heap_join` admits MANY more heap joins corpus-wide (140
+codegen snapshots moved), and two of them miscompiled -- so the lift is not yet
+general enough to land. The next attempt must handle both:
+
+1. **Nil-typed call in the jbody (`contract-nested`, C build error "void value
+   not ignored").** A jbody whose lifted body binds a `:nil`/`:void` cps->direct
+   call (e.g. `tur_contract_check`, which returns void) emits `__t0 = void_fn(...)`
+   -- the CT_LETCALL emit in the lifted frame does not apply the nil-result
+   special-case (emit-as-statement, bind the unit placeholder) that
+   `emit_letraw`/the top-level path use. Fix: route a nil-typed call through the
+   statement form inside the lifted frame too.
+2. **Delivery bug in a multi-join sequential function (`hamt-delete`
+   `test-del-present`: a chain of `hamt/free` colored calls -> heap-joins j0..j8;
+   segfault, and empty output once `next` was set to `dk_done()`).** A function
+   that is a *straight-line sequence* of colored calls (each its own heap join,
+   each capturing the growing live set) chains RESET-style frames, and the value
+   fails to reach the final continuation. The frame's own `dk_run(__k, v)` /
+   `f__cps(args, __kont)` delivery composes wrong with the `dk_frame` `next` here
+   (unlike `emit_reset`, which sits under a prompt). The RESET-style splice needs
+   the correct `next`/prompt discipline for a *bare* (non-delimited) join before
+   it is sound for arbitrary sequential-colored-call bodies.
+
+So: the admission relaxation and the 3-function win are real, but must be gated
+to the shapes the lift actually handles (or the lift generalized to cover nil
+jbody calls + sequential multi-join delivery) before landing. Do NOT re-land the
+blanket `needs_heap_join` relaxation without fixing both.
+
 ## Ordered execution (each slice: land + full suite + re-measure the gate)
 
 The shape of every slice is the one Reductions A/B used: find the failing
