@@ -469,6 +469,16 @@ hard, Windows consoles have no `O_NONBLOCK`; needs overlapped I/O or a reader
 thread) and `httpd.tur` (its own accept/close/fcntl loop plus pthreads, which
 winpthreads already provides).
 
+**Bind test listeners to 127.0.0.1, not INADDR_ANY.** When the socket fixtures
+are ported to run on Windows, their server side must bind `INADDR_LOOPBACK`
+(127.0.0.1), not `INADDR_ANY`. A loopback-only listener does not trigger the
+Windows Defender Firewall "allow this app" dialog, whereas `INADDR_ANY` does --
+and the suite builds each fixture to a fresh temp path, so `INADDR_ANY` would pop
+that dialog dozens of times per run. The fixtures are same-process server+client
+tests that already connect to "127.0.0.1", so this is functionally a no-op for
+them. This applies to the *fixtures* only; `async_socket.tur` itself stays
+`INADDR_ANY` (a real server wants all interfaces).
+
 **C. Fiber context switch (TODO).** The 3 remaining are the Win32-Fiber shim's
 multishot abort and thread-affinity hang (`fh-multishot-value`,
 `multishot-effect-cont-kv-sugar`, `scheduler-multithread`). These need the real
