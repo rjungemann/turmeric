@@ -378,10 +378,35 @@ callback on the fiber path and still prints 27.
 Cleared roots (all match `expected.stdout`): `test-map` / `test-filter`
 (hamt-lisp-map-filter, pass `double-val`/`keep-big` into `hamt/map`/`hamt/filter`),
 `test-merge-with` (hamt-lisp-merge-with), `then-parser-impl`
-(hkt-stdlib-parser-instances). The `test-option-eq-*` sibling stays evicted on a
-DIFFERENT blocker -- a by-value `(Option int)` ADT arg (`TY_APP`) that fails the
-call-arg slot gate -- which is the owning/by-value-aggregate track, not fn-value
-threading.
+(hkt-stdlib-parser-instances).
+
+**Post-PK census -- the 22 remaining STRUCT-OR-TAINT roots split into THREE
+tracks (ground truth for the next slice):**
+
+1. **Effectful fn-value / fiber<->DK interop (~16, the dominant wall).** `run`,
+   `run-all`, `run-with`, `map-list`, `apply-logged`, `my-eff`, the lifted
+   callbacks `__fn_1281/1282/1283/1285`, and their taint victims (`counted-sum`,
+   `do-write-line`, `log-add`, `greet`, `f`, `g`, `inner`, `main`). Shape: a HOF
+   (`apply-cb`) reaches an effect through a DIRECT-EMITTED indirect (fn-value)
+   call `(f)`; the DK backend cannot thread a continuation through an opaque
+   fn-value call, so the effect must be performed on the FIBER runtime and its
+   handler (`run`) must be a fiber handler. Verified sound + intended (the
+   `cps-backend-effectful-callback` fixture comment states Ask goes through the
+   fiber dynamic-handler chain). This is genuinely un-CPS-emittable for the
+   current backend; solving it needs a fat-closure `__cps` ABI so an indirect
+   call can thread the DK -- the "indirect-callee admission" the top-of-doc table
+   anticipates. A large slice, not a widening.
+2. **By-value-ADT arg into a SIG-REJECT (direct) callee (`test-option-eq-*`, 3).**
+   `option-eq?` is permanently `SIG-REJECT` (its `(Option A)` params are by-value
+   aggregates the CPS signature cannot spell), so `test-option-eq-same/diff/nones`
+   call it cps->DIRECT, threading a by-value `(Option int)` arg (or, for `(none)`,
+   a generic Option ERASED to the bare `int64_t` carrier) that `call_arg_ok`
+   rejects for a cps->direct call. The direct emitter BOXES such an arg
+   (`emit_byvalue_carrier_abi`); the CPS delegation does not. Fix direction: box a
+   by-value-ADT arg in the cps->direct delegation (admission + `atoms_csv` emit),
+   the carrier-ABI/owning track.
+3. **Struct return/threading (`re-parse-class`, 1).** A pure `defstruct`-returning
+   function colored may-capture; the owning/by-value-aggregate track.
 
 ### Slice PG/PH -- `with-abort-panic` family (TY_NEVER + nested-handle-in-continuation)
 
