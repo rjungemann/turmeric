@@ -1276,13 +1276,28 @@ static bool reset_body_ok(const CTerm *t) {
 /* A shift body in the C3 subset: straight-line (letval/letprim/letcall) ending
  * in delivery of a scalar atom to the prompt.  No branches, tail calls, joins,
  * or nested delimiters. */
+/* An abortive shift receiver `(fn [k : cont] ...)` that ignores its continuation
+ * is applied to the shift's value operand, binding its `cont`-typed parameter to
+ * a placeholder literal (`let k = 0`, typed TY_CONT).  The binding is dead -- the
+ * receiver never references `k` -- so the placeholder never crosses a slot; it is
+ * only there to keep the receiver's parameter in scope.  The generic atom_ok slot
+ * gate rejects a TY_CONT literal (a continuation is not slot-representable), which
+ * would evict an otherwise-native abortive shift.  Admit the dead cont placeholder
+ * here (scoped to the shift body), where the DK backend materializes it as an
+ * unused local. */
+static bool shift_cont_placeholder(const CAtom *a) {
+    return (a->kind == CA_INT || a->kind == CA_UNIT || a->kind == CA_BOOL)
+        && a->ty == TY_CONT;
+}
+
 static bool shift_body_ok(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
         case CT_APPCONT:
             return t->as.appcont.kont.kind == KK_PROMPT && atom_ok(&t->as.appcont.v);
         case CT_LETVAL:
-            return atom_ok(&t->as.letval.v) && shift_body_ok(t->as.letval.body);
+            return (atom_ok(&t->as.letval.v) || shift_cont_placeholder(&t->as.letval.v))
+                && shift_body_ok(t->as.letval.body);
         case CT_LETPRIM:
             if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
                 return false;

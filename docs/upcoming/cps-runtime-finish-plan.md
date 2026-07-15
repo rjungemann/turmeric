@@ -347,6 +347,36 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PS (LANDED) -- native abortive cross-function shift (`inner`)
+
+STRUCT-OR-TAINT distinct roots **5 -> 4**. Suite 2179/0, no codegen churn on any
+other fixture. The `inner` root in `shift-abort-crossfn`
+(`(shift (fn [k : cont] (+ x 5)) 0)` -- an abortive shift whose `reset` is in the
+caller `outer`) was NOT a control-flow gap after all: the CT-IR translator already
+lowers it to a native `CT_SHIFT` whose `dk_shift` captures up to the
+*dynamically* nearest prompt (the caller's reset) -- which is exactly correct
+cross-function abort semantics on the DK chain. The ONLY blocker was admission:
+`term_core_ok`'s CT_SHIFT case runs `shift_body_ok`, and the abortive receiver's
+applied body starts `let k = 0` -- binding the receiver's `cont`-typed parameter
+`k` to a placeholder literal (the shift's value operand `0`, typed TY_CONT). The
+generic `atom_ok` slot gate rejects a TY_CONT literal (a continuation is not
+slot-representable), evicting an otherwise-native shift. The binding is DEAD (an
+abortive receiver never references `k`), so it never crosses a slot -- the DK
+backend materializes it as an unused local. Fix: `shift_cont_placeholder` admits a
+`CA_INT`/`CA_UNIT`/`CA_BOOL` literal typed TY_CONT in `shift_body_ok`'s CT_LETVAL
+case (scoped to the shift body, never the generic `atom_ok`). `inner` now emits
+`inner__cps`; `shift-abort-crossfn` prints 105/7/42 natively. `discard-ctx`
+(same-function abortive shift) was already native; the resuming cross-function
+family (`shift-crossfn-resume-works`) is unchanged. This confirms the plan's
+"control-flow surface is closed" claim -- the last shift-flavored eviction was an
+admission-predicate gap, not missing machinery.
+
+### The remaining 4 STRUCT-OR-TAINT roots (after PS)
+
+`log-add`, `main`, `re-parse-class`, `test-option-eq-nones` -- the three
+non-control-flow infrastructure areas below (EX_CLOSURE partial-app drop-glue;
+by-value-struct-with-drop-glue owning path; erased-generic monomorph resolution).
+
 ### The remaining 5 STRUCT-OR-TAINT roots (after this session's PK-PR, 26 -> 5)
 
 Four distinct infrastructure areas, none a bounded predicate widening:
