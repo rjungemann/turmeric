@@ -369,34 +369,42 @@ instrument -> isolate the one failing predicate -> widen soundly). Suite 2179/0.
 
 STRUCT-OR-TAINT distinct fns 53 -> 52.
 
-### Slice PI (REVERTED) -- println-in-handler exposes deeper DK-dispatch bugs
+### Slice PI (LANDED, PI-1/PI-2/PI-3) -- printing handlers + three DK soundness fixes
 
-Attempted: drop the `is_println_shape` rejection in `handle_case_ok` -- a handler
-that prints (`(Write [s] k) (do (println s) (resume k 0))`) is the COMMONEST
-effect shape, and `emit_term`'s CT_LETPRIM already emits `println` (emit_println)
-in a lifted frame, so the gate looked purely conservative.  It cleared **9
-fixtures** (STRUCT-OR-TAINT 52 -> 47, evicting fixtures 71 -> 62) -- but 3 of the
-9 then MISCOMPILED (`unhandled effect` abort), so it was reverted.  The 3 reveal
-two PRE-EXISTING bugs that eviction was masking (these fixtures ran on the fiber
-path before), and are the real blockers to admitting printing handlers:
+Dropping the `is_println_shape` rejection in `handle_case_ok` (a handler that
+prints is the COMMONEST effect shape; `emit_term`'s CT_LETPRIM already emits
+`println` in a lifted frame) cleared **9 fixtures** but first exposed **three
+latent DK soundness bugs** that eviction had been masking (these fixtures ran on
+the fiber path before, and each bug reproduces WITHOUT println on a minimal
+repro).  All three fixed, then the relaxation landed:
 
-1. **Taint-fixpoint completeness gap (`effect-poly-infer`).** `apply-logged`
-   performs `Log` through a fn-value CALLBACK closure and evicts to fiber, but
-   `main` (the `Log` handler) is admitted to DK -> split -> `Log` unhandled.  The
-   `ensure_S` Rule B/C taint does not co-classify a performer embedded in a
-   closure/indirect callee, so the handler is not evicted alongside it.  Fixing
-   this (taint the effect when ANY reachable performer -- including one inside a
-   non-in_s closure/callee -- is on fiber) is the higher-leverage fix: it is a
-   real soundness gap, not just an admission nicety.
-2. **Multi-effect deep-handler re-installation on DK (`try-with-basic`).** A
-   2-case handler (`Write` then `Read`) with BOTH performer and handler admitted
-   to DK still aborts `unhandled (tag 3)`: after the `Write` case resumes, the
-   continuation performs `Read` but the deep handler is not re-installed for it.
-   A native multi-effect deep-handler dispatch bug, independent of the split.
+1. **Taint via fn-value data flow (PI-1, `60b7e11`).** A colored performer reached
+   as a fn-VALUE passed to a higher-order callee (`apply-logged` hands a
+   Log-performing lifted closure to `apply`, which calls `(f x)`) left the
+   `ensure_S` call graph with no edge, so Rule C's handler->performer path never
+   spanned the fiber intermediary -> handler on DK, performer's chain severed ->
+   `unhandled`.  Fix: `expr_collect_effects_acc` records an `EX_VAR` naming a
+   colored fn-value as a reachable callee (the precise data-flow edge -- NOT the
+   `edges_all` over-approximation, which regressed ~19 fixtures in a discarded
+   attempt).
+2. **Multi-effect deep-handler re-installation (PI-2, `2c41f84`).** A handle with
+   N cases emits one `dk_handler` node per effect; on a deep resume `dk_perform`
+   re-installed only the SINGLE performed tag, so a sibling effect performed in the
+   resumed continuation escaped (perform-order dependent).  Fix: re-install the
+   maximal consecutive `DKK_HANDLER` run (the whole group).
+3. **Enclosing-handler propagation (PI-3, `a7d3b4e`).** A deep handle's
+   continuation-frame `next` was `dk_done()`, burying the enclosing handlers in
+   the frame's `__k` env -- so an effect an inner handle does NOT handle, performed
+   in its body, could not propagate to an outer handler (`inner` handles Write, its
+   body performs Log -> `main`'s Log handler).  Fix: the frame `next` carries the
+   enclosing handler markers (`dk_copy_enclosing_handlers(cur_k)`), same as shallow
+   and `emit_reset`; the markers are transparent to the returning value.
 
-So printing handlers are NOT a standalone admission slice -- they gate on fixing
-(1) the taint completeness gap and (2) multi-effect deep-handler re-installation.
-Do NOT re-land the `handle_case_ok` println relaxation before both are fixed.
+Gate: cleared `effect-dump`, `effect-handle-reduce`, `effect-handler-subtype`,
+`effect-hierarchy`, `effect-let-subsumption`, `effect-log`, `effect-stdlib-io`,
+`effect-strict-mode`, `try-with-basic` (and `effect-poly-infer` now correct on
+DK).  STRUCT-OR-TAINT 52 -> 47 distinct fns, 71 -> 62 evicting fixtures.  Suite
+2179/0.  The three fixes are independent soundness wins beyond the println payoff.
 
 ### Slice PF -- self-contained handle delegation clears EX_WHILE
 
