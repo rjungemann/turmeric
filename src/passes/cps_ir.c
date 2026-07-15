@@ -73,6 +73,22 @@ static bool fn_binding_effectful(const Binding *fb) {
     struct EffectRow *r = fb->type.as.fn.effect_row;
     return r && r->kind != ERK_EMPTY;
 }
+/* E2/taint-completeness (cps-tramp-resume): is this call THROUGH A FN-VALUE that
+ * performs an effect (a fn-typed param/local, or an fn_expr callee, with a
+ * non-empty effect row)?  Such a call cannot yet thread the DK (E2 needs the
+ * fat-closure __fn_cps slot), so delegating it to fiber inside a CPS body would
+ * ESCAPE the effect (the enclosing handle is DK).  Under the flag we EVICT the
+ * enclosing function so it stays fiber (correct), until real E2 threading lands. */
+static bool call_is_effectful_fnvalue(const Expr *e) {
+    const Binding *fb = e->as.call_.fn_binding;
+    if (fb) return fn_binding_effectful(fb);
+    const Expr *fe = e->as.call_.fn_expr;
+    if (fe && fe->type.kind == TY_FN) {
+        struct EffectRow *r = fe->type.as.fn.effect_row;
+        return r && r->kind != ERK_EMPTY;
+    }
+    return false;
+}
 static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
     e = ascribe_peel(e);
     if (!e || depth > 64) return false;
@@ -2410,6 +2426,15 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return fold_pending(b, &p, t);
         }
         case EX_CALL: {
+            /* E2/taint-completeness: an effectful fn-value call cannot thread the
+             * DK yet; delegating it to fiber under a DK handle escapes the effect.
+             * Evict so the whole fn stays fiber (its effect taints -> the DK
+             * handler-installer co-classifies to fiber). */
+            if (g_opt_cps_tramp_resume && call_is_effectful_fnvalue(e)) {
+                CTerm *t = new_term(b, CT_UNSUPPORTED);
+                t->as.unsupported.why = "effectful fn-value call (E2 pending)";
+                return t;
+            }
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) {
                 /* Indirect call: the fn VALUE is the callee's direct entry point
@@ -2749,6 +2774,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return fold_pending(b, &p, t);
         }
         case EX_CALL: {
+            /* E2/taint-completeness: evict an effectful fn-value call (see cps_tail). */
+            if (g_opt_cps_tramp_resume && call_is_effectful_fnvalue(e)) {
+                CTerm *t = new_term(b, CT_UNSUPPORTED);
+                t->as.unsupported.why = "effectful fn-value call (E2 pending)";
+                return t;
+            }
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) {
                 /* Indirect call: the fn value is the callee's direct entry, which
