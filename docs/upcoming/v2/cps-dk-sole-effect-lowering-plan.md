@@ -315,6 +315,54 @@ every effectful sig_perm source, the permanent-taint fixpoint has no seed and
 are done. If SIG-TAINT does not empty after E1-E5, an effectful source was missed:
 `TUR_TRACE_EVICT` + the `g_perm` seed dump name it.
 
+### E7 -- Trampolined tail-resume (NEW; surfaced by the Sec 9 kill-probe)
+
+**The kill-probe (Sec 9) revealed a wrong assumption in this plan's framing.** The
+DK model is *not* already stackless for resumptive recursion. The current
+`dk_perform` runs a resume by calling `H->handler(...)` which calls `dk_run(sub, v)`
+**inline** -- so a resumed continuation that performs again nests a fresh
+`dk_perform` -> `handler` -> `dk_run` chain on the C stack. Measured cost:
+**~160 bytes of C stack per resumed perform** (`docs/upcoming/v2/probes/e2-killprobe.out`),
+i.e. ~153 MB at 1e6 -- a guaranteed SIGSEGV. This is *exactly why* the compiler's
+`perform_cont_reset_ok` (`emit_cps_ir.c:1398`) **rejects** a perform-continuation
+that ends in a tail call and evicts it to the fiber emitter ("would recurse
+unboundedly through dk_invoke -- an O(N) resume stack"). The fiber runtime is
+today the *only* thing keeping deep effectful tail-recursion flat.
+
+**Consequence:** deleting the fiber effect runtime without first making the DK
+resume flat would REGRESS every deep effectful tail-recursive program from
+"works" to "stack overflow." So a trampolined tail-resume is a **hard
+prerequisite** for the deletion, not an optional nicety.
+
+**Fix (proven feasible by the kill-probe, `e2-killprobe.c` version B):** for a
+**tail-resume** handler case (body ends in `(resume k <expr>)`), `dk_perform`
+must NOT call `dk_run` inline. Instead it unwinds to a driver loop (the outermost
+direct->cps entry, `dk_run_root`) carrying `(resumed_chain, resume_value)`; the
+driver re-enters `dk_run` on the resumed chain from the top. C-stack depth then
+stays bounded by a single inter-perform slice (**measured 263 bytes, constant, at
+N=1e6**), not by the recursion length. This composes with the E2 fn-value `DK*`
+threading with **no per-call prompt** and does not disturb the handler search.
+
+- Tail-resume (`(Eff [x] k) ... (resume k e)`): trampolinable, flat. This is the
+  deep-recursion case and the one that matters.
+- Abortive (no `resume`): trivial -- return the handler value, never yields.
+- Non-tail resume (work after `resume` returns): the post-resume work is a bounded
+  DK frame that rides on the resumed chain, so it stays flat too; needs care but
+  is structurally the same unwind-to-driver.
+- Multishot (`resume` called >1x): out of the flatness target; keeps the existing
+  `dk_invoke` copy-and-run (bounded by the multishot fan-out, not the recursion).
+
+**Sequencing:** E7 lands as **Stage 0**, before Stage E's deep-recursion migration
+and before the Sec 8 stackless-sign-off fixture. Stages A-D (mains, inline-C,
+carrier-ABI, exports) do not depend on it as long as the bodies they move are not
+1e6-deep resumptive; E7 is what lets the tail-recursive effectful cluster leave
+fiber without regressing, and what the Stage-G deletion rests on.
+
+**Risk:** HIGH -- it changes the core resume mechanism in `dk_perform`. Bounded by:
+the driver boundary already exists (`dk_run_root` / the reap boundary), the tail-
+resume shape is already recognized by the classifier (it just evicts today), and
+the kill-probe demonstrates the exact unwind-and-re-enter structure end to end.
+
 ---
 
 ## 6. Staged execution (ordered; each stage independently verifiable, suite-green)
@@ -323,6 +371,13 @@ Preconditions carried from v1: `BODY-* = 0` and the hard-error gate (PZ) are liv
 so every stage is protected -- a regression that pushes a function off the DK path
 in the shipping config fails the build.
 
+- **Stage 0 -- E7 (trampolined tail-resume).** The prerequisite the kill-probe
+  surfaced. Make `dk_perform` unwind a tail-resume to the `dk_run_root` driver
+  instead of resuming inline, so deep effectful tail-recursion is flat *before* any
+  effectful body leaves the fiber runtime. Gate: a new 1e6-deep effectful-loop
+  fixture runs flat (no SIGSEGV) through the DK path; suite green; ASan clean. This
+  is the load-bearing stage -- if it cannot be made suite-green, revisit E7's risk
+  note before proceeding to A-G.
 - **Stage A -- E3 (all mains).** Smallest, self-contained, high signal (clears W2,
   shrinks SIG-MAIN to 0). Gate: SIG-MAIN = 0 in the corpus scan; suite green.
 - **Stage B -- E5 (inline-C leaves).** Classification tidy-up; SIG-INLINE-C = 0.
@@ -439,3 +494,32 @@ DK (E2). Prove that with the kill-probe first. If it holds, Stages A-F are an
 ordered, gated grind with the v1 hard-error gate protecting every step, ending in
 the Stage-G deletion. If it does not hold, we have found the wall that decides the
 project -- and we will know it in one focused probe rather than after months.
+
+### 9a. KILL-PROBE RESULT -- GO (with a refinement)
+
+Run: `docs/upcoming/v2/probes/e2-killprobe.c` (embeds the verbatim DK runtime from
+`src/compiler/emit_dk_runtime.c`); output captured in `probes/e2-killprobe.out`.
+Build/run: `cc -O2 -o /tmp/e2probe docs/upcoming/v2/probes/e2-killprobe.c && /tmp/e2probe`.
+
+The probe builds the exact E2 scenario -- a tail-recursive effectful loop whose
+callback is reached **indirectly through a fat-closure `fn_cps(void*, int64_t, DK*)`
+slot** (the precise E2 ABI addition), under a `dk_handler` that tail-resumes -- two
+ways: the current inline-resume model and a trampolined tail-resume.
+
+| Question (Sec 9) | Result |
+|---|---|
+| (a) Does the callback's `perform`, reached through the fn-value `__fn_cps` slot, find the CALLER's handler? | **YES** -- `side_sum` matches `sum(i+1)` exactly; handler search crosses the fn-value. No per-call prompt. |
+| (b) Does deep (1e6) tail-resume recursion stay flat? | **YES**, trampolined: `max_stack = 263 bytes`, constant in N. |
+| (b') Is the *current* inline-resume model O(N) stack? | **YES** -- 160 B/element -> ~153 MB at 1e6 (guaranteed SIGSEGV). |
+
+**Verdict: E2 is NOT impossible as framed** -- the fat-closure box can carry a
+`DK*`-threading thunk that composes with `dk_perform` with no per-call prompt and
+no broken handler search. **The project is not dead at this gate.**
+
+**Refinement forced by the probe:** the plan's premise that "the DK model is
+already stackless" was **wrong for resumptive recursion**. The current DK resume is
+O(N) C stack; the fiber runtime is presently the only thing keeping deep effectful
+tail-recursion flat. Deleting it therefore REQUIRES a **trampolined tail-resume**
+first -- added as enabler **E7 (Stage 0)** above. E2's fn-value plumbing is the easy
+half; E7 is the load-bearing runtime change, and it is proven feasible end-to-end
+by version B of this same probe.
