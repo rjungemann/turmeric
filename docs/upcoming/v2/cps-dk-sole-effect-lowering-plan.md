@@ -363,6 +363,47 @@ the driver boundary already exists (`dk_run_root` / the reap boundary), the tail
 resume shape is already recognized by the classifier (it just evicts today), and
 the kill-probe demonstrates the exact unwind-and-re-enter structure end to end.
 
+#### E7 validated algorithm (full-fidelity probe, `probes/e7-fidelity-probe.c`)
+
+A second probe reproduced the ACTUAL `emit_handle` chain layout
+(`HANDLER -> FRAME(kname handle-continuation) -> enclosing handlers`), a deep
+tail-resume loop through the fn-value `__fn_cps` slot, AND an enclosing handle for
+a different effect. It converged on the correct algorithm only after two wrong
+turns that a naive implementation would also hit -- both now documented so the
+runtime port avoids them:
+
+1. **A naive trampoline must NOT flatten by appending `H->next` onto the resumed
+   chain.** That loses delivery ORDER: with an enclosing handle, the outermost
+   handle-continuation and the nested deliveries have to run in LIFO (nesting)
+   order. Flattening ran the enclosing continuation zero times (value right by
+   luck, delivery wrong).
+2. **The fix is a heap meta-stack of pending deliveries.** On a tail-resume,
+   `dk_perform` pushes the handler's `H->next` (what the inline
+   `dk_run_impl(H->next, r)` would run) onto a LIFO heap stack and yields the
+   resumed chain to the driver. The driver runs the chain to `DONE`, then pops and
+   runs the top delivery on the result, repeating -- preserving nesting order with
+   the C stack flat. A delivery that is only `HANDLER`/`DONE` nodes is a **no-op**
+   (it runs after a `DONE`, can perform nothing) and is **elided**, which keeps the
+   meta-stack O(nesting) instead of O(N).
+3. **The perform-continuation of a tail-recursive effectful loop must be a
+   `DKK_RESUME_FRAME`, not a plain `DKK_FRAME`.** A `RESUME_FRAME` receives its
+   run-time downstream chain `rest` (the reinstalled-handler tail) and threads THAT
+   into the recursion, so subsequent performs find the REINSTALLED handler (whose
+   `H->next` is a no-op) rather than the original handle chain. Without this, every
+   iteration re-finds the original handler and re-runs the real handle-continuation
+   (measured: `kframe` ran N+1 times). This node kind and threading already exist
+   in the runtime and in `emit_perform`'s Track A (`LH_RESUME_CONT`); E7 extends
+   their use to the tail-recursive-loop shape the classifier currently evicts.
+
+Full-fidelity result at N=1e6: **max C stack 152 bytes (flat), handle-continuation
+runs exactly once, enclosing handle catches the propagated effect, side effects
+correct, meta-stack high-water = 1** (`probes/e7-fidelity-probe.out`). The runtime
+port is: (a) a meta-stack + trampoline in `dk_perform`/`dk_run_root`
+(`emit_module.c` / `emit_dk_runtime.c`), guarded so non-tail/multishot/abort keep
+today's inline path byte-identical; (b) relax `perform_cont_reset_ok`
+(`emit_cps_ir.c:1398`) to ADMIT the tail-call-in-perform-continuation shape,
+emitting it as a `RESUME_FRAME`, now that the runtime keeps it flat.
+
 ---
 
 ## 6. Staged execution (ordered; each stage independently verifiable, suite-green)
