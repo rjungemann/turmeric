@@ -163,10 +163,33 @@ static bool carrier_handle_ok(const Type *t) {
  * the full Type is available (the bare-TypeKind slot_ty stays for scalar-only
  * sites).  It is deliberately WIDER than cap_ty_ok: a value may cross a slot by a
  * single move even when it may not be duplicated into a capture env. */
+/* An ADT/struct application with an UNRESOLVED type-variable argument -- the
+ * erased generic case, e.g. `(none) : (Option A)` where `A` never gets pinned
+ * (both args are the nullary `none`, so nothing constrains the element).  In a
+ * polymorphic/erased context such a value rides the uniform int64 CARRIER ABI:
+ * the direct emitter passes it as a plain `int64_t` (see the generic
+ * `option_hyeq_qu(int64_t, int64_t, int64_t)` carrier signature the erased call
+ * resolves to), so it crosses a DK slot / a cps->direct call arg as one word,
+ * exactly like `carrier_handle_ok`.  It cannot key a concrete monomorph clone
+ * (there is no element type), so a mono-template call with such an arg takes the
+ * emit's no-clone cps->direct fallback (CT_TAILCALL: `mclone == NULL` -> direct
+ * call to the generic carrier callee).  Admitting it here lets the ERASED-generic
+ * caller (`test-option-eq-nones`) CPS-emit instead of evicting. */
+static bool erased_adt_carrier(const Type *t) {
+    if (!t) return false;
+    Type tt = *(Type *)t;
+    if (tt.kind != TY_APP) return false;
+    AdtDef *def = NULL; Type args[16]; uint8_t n_args = 0;
+    if (!type_extract_adt_app(&tt, &def, args, &n_args)) return false;
+    for (uint8_t i = 0; i < n_args; i++)
+        if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return true;
+    return false;
+}
+
 static bool slot_ok_t(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
-    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r);
+    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r) || erased_adt_carrier(r);
 }
 
 /* Signature-position slot gate (a colored function's PARAMS and RETURN).  It is

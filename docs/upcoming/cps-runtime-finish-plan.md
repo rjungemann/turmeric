@@ -347,6 +347,31 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PY (LANDED) -- erased-generic carrier admission: BODY-* REACHES ZERO
+
+**The N6.5 readiness gate is MET: `TUR_TRACE_EVICT` shows ONLY SIG-* across the
+whole corpus** (BODY-UNSUPPORTED = 0 AND BODY-STRUCT-OR-TAINT = 0). Suite 2179/0.
+The last BODY root, `test-option-eq-nones` (`(option-eq? (none) (none) cmp)`), is
+now CPS-native. The erased `(none) : (Option A)` has an unresolved element tyvar
+(both args are the nullary `none`, so nothing pins `A`), so it cannot key a
+concrete monomorph clone -- but in a polymorphic/erased context it rides the
+uniform int64 CARRIER ABI (the direct emitter already lowered the call to the
+generic `option_hyeq_qu(int64_t, int64_t, int64_t)`). The ONLY blocker was
+admission: `atom_ok((Option A))` = false because `slot_ok_t` recognized neither a
+flat product (`slot_box_ty`, needs a known element size) nor a heap handle
+(`carrier_handle_ok`). Added `erased_adt_carrier`: an ADT/struct application with
+a `TY_TYVAR`/`TY_UNKNOWN` argument crosses a slot as a plain int64 word, so
+`slot_ok_t` now admits it. The emit path needed NO change -- the CT_TAILCALL
+no-clone fallback (`mclone == NULL` && callee not `in_s` -> cps->direct) already
+routes the erased call to the generic carrier callee. `test-option-eq-nones` emits
+`__t0 = none(); __t1 = none(); __t2 = <cmp>; option_hyeq_qu(__t0,__t1,__t2)
+/* cps->direct */; dk_run(...)` -- and `option-basic` prints the full expected
+sequence (last line `true` = None == None). No other fixture's codegen moved.
+
+With BODY-* empty, the plan's readiness gate for the N6.5 deletion (flip
+`emit_cps_ir_try_fn` so a colored non-SIG-* fn is CPS-only; delete the direct/
+fiber whole-function fallback; hard-error residual forms) is now satisfied.
+
 ### Slice PX (LANDED) -- coloring precision: inline-C callee is not an indirect call
 
 **BODY-STRUCT-OR-TAINT collapses from 3 distinct roots to 1** -- both sized
