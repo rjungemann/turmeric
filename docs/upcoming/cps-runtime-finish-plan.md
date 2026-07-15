@@ -347,6 +347,24 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### The remaining 5 STRUCT-OR-TAINT roots (after this session's PK-PR, 26 -> 5)
+
+Four distinct infrastructure areas, none a bounded predicate widening:
+- **`log-add` + `main`** (currying-effect-partial): the EX_CLOSURE partial-app
+  keystone -- a capturing closure `(log-add 10)` the handle body binds + calls;
+  admitting it leaks the fat-closure env (ASan) without the Phase-3 drop-glue.
+- **`re-parse-class`**: a NON-generic defn returning a by-value STRUCT `RxParse =
+  (RxPR :Regex :int)` -- a Regex (heap) field gives it DROP GLUE, so it is not a
+  `slot_box_ty` flat product (PR's gate correctly excludes it).  Needs the owning-
+  value / drop-glue signature path, same family as the EX_CLOSURE track.
+- **`test-option-eq-nones`**: `(option-eq? (none) (none) cmp)` -- the erased
+  `(none) : (Option A)` is an int64 CARRIER (not a `TY_APP` aggregate), so
+  `slot_ok_t` rejects the arg AND `find_mono_clone_for_call` has no aggregate arg
+  to key the `(Option int)` clone on.  Needs erased-generic monomorph resolution.
+- **`inner`** (shift-abort-crossfn): a CROSS-FUNCTION capturing shift
+  (`(shift (fn [k] (+ x 5)) 0)` whose `reset` is in `outer`) -- control-flow
+  (shift/reset) territory, the cross-function-resume machinery, not effect taint.
+
 ### Slice PR (LANDED) -- CPS-emit by-value-flat-product monomorphs of ordinary defns
 
 STRUCT-OR-TAINT distinct roots **7 -> 5**. Suite 2179/0 (4 by-value Option
