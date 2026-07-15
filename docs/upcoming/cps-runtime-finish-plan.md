@@ -370,6 +370,27 @@ by-value-aggregate-with-drop-glue crossing as `re-parse-class` (area 1), plus a
 colored-SIG-REJECT-callee-with-continuation wrinkle -- genuine drop-glue +
 signature codegen, not a predicate widening.
 
+**Why `assert-len!` is colored (the cascade source), diagnosed further.** Its
+body `(require-msg! (= (sized-bitvec-len bv) (size-eval expected)) "...")` has no
+real control op (`cps_directly_uses_control` = 0 once the unsafe-marker handle is
+excluded -- verified). It is colored purely by `cps_collect_calls`' `has_indirect`
+seed: `require-msg!` expands to `(tur-contract-check condition msg)`, and
+`tur-contract-check` (a `defmodule tur/contract` inline-C `defn`) does NOT resolve
+via `cps_find_node` at the call site, so the call is treated as an UNRESOLVED
+(indirect) call and conservatively colors the function. That coloring cascades:
+`assert-len!` colored -> SIG-REJECTs on its `Size` param -> `main`'s tail call to
+it is a colored tailcall to a SIG-REJECT callee -> `main` evicts. So the sized
+`main` root has a SECOND, independent lever besides the by-value-Size crossing:
+resolve (or safely non-color) the `tur-contract-check` call. Two sub-questions to
+pin next: (a) why does `cps_find_node` miss the module-qualified
+`tur-contract-check` binding when other `defmodule` fns (hamt/*) resolve fine --
+a binding-identity mismatch between the call site and the top-level node? and (b)
+is a known-safe-runtime-call whitelist (like the existing `ctor == NULL` skip at
+cps.c ~464) the right shape for contract/runtime helpers. NOTE: excluding the
+unsafe-marker handle from `cps_directly_uses_control` (the natural companion to
+Slice PW) is CORRECT but INSUFFICIENT alone -- `has_indirect` still colors
+`assert-len!` -- so it was not landed on its own.
+
 ### Slice PV (LANDED) -- partial-application inlining clears the EX_CLOSURE keystone
 
 **BODY-UNSUPPORTED -> 0** (the last `EX_CLOSURE` root gone) and STRUCT-OR-TAINT
