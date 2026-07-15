@@ -22,7 +22,11 @@
 #  ifndef _XOPEN_SOURCE
 #    define _XOPEN_SOURCE 700
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -40,7 +44,13 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifndef __EMSCRIPTEN__
+#if defined(_WIN32)
+/* Windows: <sys/mman.h> and <ucontext.h> do not exist.  Both are shimmed --
+ * mmap over VirtualAlloc, ucontext over Win32 Fibers -- so the coroutine and
+ * effect-handler machinery below works unchanged. */
+#  include "platform_mman.h"
+#  include "platform_ucontext_win.h"
+#elif !defined(__EMSCRIPTEN__)
 #  include <sys/mman.h>
 /* ucontext is POSIX and deprecated on macOS but still functional.
  * Suppress the deprecation warning so -Werror doesn't fail the build. */

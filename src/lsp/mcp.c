@@ -27,7 +27,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/wait.h>
+#ifdef _WIN32
+#  include <fcntl.h>    /* _O_BINARY */
+#  include <io.h>       /* _pipe, _dup, _dup2, _close, _read */
+#  include <process.h>  /* _spawnvp, _cwait */
+#else
+#  include <sys/wait.h>
+#endif
 #include <dirent.h>
 
 /* -------------------------------------------------------------------------
@@ -168,6 +174,60 @@ static void send_error_response(int fd_out, const char *id_raw, size_t id_len,
  * Subprocess helper (safe fork/exec -- no shell interpolation)
  * --------------------------------------------------------------------- */
 
+#ifdef _WIN32
+/*
+ * Windows has no fork, so the redirection has to happen in the parent: point
+ * stdout/stderr at the pipe, spawn (the child inherits them), then put the
+ * parent's own descriptors back.  _spawnvp is execvp+fork in one call.
+ *
+ * The write end is closed in the parent immediately after the spawn, so that
+ * the read loop below sees EOF once the child exits and its inherited copies
+ * are closed.  Without that, the read would block forever on a pipe that still
+ * has a live writer -- us.
+ */
+static int run_subprocess(const char *cmd, char *const argv[], Buf *out) {
+    int pfd[2];
+    if (_pipe(pfd, 65536, _O_BINARY) != 0) return -1;
+
+    int saved_out = _dup(1);
+    int saved_err = _dup(2);
+    if (saved_out < 0 || saved_err < 0) {
+        _close(pfd[0]); _close(pfd[1]);
+        if (saved_out >= 0) _close(saved_out);
+        if (saved_err >= 0) _close(saved_err);
+        return -1;
+    }
+
+    fflush(stdout);
+    fflush(stderr);
+    _dup2(pfd[1], 1);
+    _dup2(pfd[1], 2);
+
+    intptr_t child = _spawnvp(_P_NOWAIT, cmd, (const char *const *)argv);
+
+    /* Restore ours before touching the pipe, so a failure below still leaves
+     * this process with working stdout/stderr. */
+    _dup2(saved_out, 1); _close(saved_out);
+    _dup2(saved_err, 2); _close(saved_err);
+    _close(pfd[1]);
+
+    if (child == -1) {
+        _close(pfd[0]);
+        return -1;
+    }
+
+    char tmp[4096];
+    int  n;
+    while ((n = _read(pfd[0], tmp, sizeof(tmp))) > 0)
+        buf_write(out, tmp, (size_t)n);
+    _close(pfd[0]);
+
+    int status = 0;
+    if (_cwait(&status, child, 0) == -1) return -1;
+    /* _cwait yields the exit code directly -- no POSIX status word to unpack. */
+    return status;
+}
+#else
 static int run_subprocess(const char *cmd, char *const argv[], Buf *out) {
     int pfd[2];
     if (pipe(pfd) < 0) return -1;
@@ -198,6 +258,7 @@ static int run_subprocess(const char *cmd, char *const argv[], Buf *out) {
     waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
+#endif /* _WIN32 */
 
 /* -------------------------------------------------------------------------
  * Per-request file analysis

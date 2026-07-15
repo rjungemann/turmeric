@@ -1,6 +1,7 @@
 /* emit_core.c -- shared codegen helpers: naming, atoms, builtins, captures. */
 #include "emit_internal.h"
 #include "mangle.h"
+#include "platform_fs.h"  /* strndup() on Windows */
 
 /* ------------ helpers ------------ */
 
@@ -2432,6 +2433,44 @@ bool inline_c_has_cname_template(const InlineC *ic) {
 extern char    **g_hoisted_includes;
 extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
+
+/* Emit one hoisted `#include` line, making system (angle-bracket) headers
+ * fail-soft across platforms.
+ *
+ * A hoisted `#include <X>` loses its surrounding `#ifdef` (the hoister only
+ * consumes bare leading directives, see tur_hoist_top_includes_scan), so a
+ * header that exists on one platform but not another -- <sys/wait.h> and
+ * <fnmatch.h> on Windows are the ones that bite -- would hard-fail the build on
+ * the platform that lacks it. Wrapping angle includes in __has_include skips a
+ * missing system header instead. This keeps the emitted C portable, which is
+ * the WIN1 contract.
+ *
+ * Quoted `#include "X"` is left bare: those are project/vendored headers where
+ * "missing" is a genuine error and should stay a loud "no such file", not a
+ * silent skip. __has_include is defined by every toolchain that compiles this
+ * code (GCC 5+, Clang, MSVC 2017+, Emscripten). */
+void tur_emit_hoisted_include(Buf *out, const char *line) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    /* An angle include has '<' after "#include"; a quoted one has '"'. */
+    const char *lt = strchr(p, '<');
+    const char *qt = strchr(p, '"');
+    int is_angle = (lt != NULL && (qt == NULL || lt < qt));
+    if (is_angle) {
+        const char *gt = strchr(lt, '>');
+        if (gt) {
+            buf_puts(out, "#if __has_include(");
+            /* the exact <...> spec */
+            for (const char *c = lt; c <= gt; c++) buf_putc(out, *c);
+            buf_puts(out, ")\n");
+            buf_puts(out, line);
+            buf_puts(out, "\n#endif\n");
+            return;
+        }
+    }
+    buf_puts(out, line);
+    buf_puts(out, "\n");
+}
 
 void tur_hoist_include_add(const char *line, size_t n) {
     /* Trim trailing whitespace/CR. */

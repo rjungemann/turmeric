@@ -28,7 +28,11 @@
 #  ifndef _XOPEN_SOURCE
 #    define _XOPEN_SOURCE 700
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -37,7 +41,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#ifndef __EMSCRIPTEN__
+#if defined(_WIN32)
+/* Windows: no <ucontext.h>.  Win32 Fibers are the real equivalent; the shims
+ * live in platform_ucontext_win.h (shared with turi/env.h). */
+#  include "platform_ucontext_win.h"
+#elif !defined(__EMSCRIPTEN__)
 #  if defined(__APPLE__)
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wdeprecated-declarations"

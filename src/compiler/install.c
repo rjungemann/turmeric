@@ -22,7 +22,11 @@
 #  ifndef _DARWIN_C_SOURCE
 #    define _DARWIN_C_SOURCE
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -46,6 +50,10 @@
 #include "buf.h"
 #include "global.h"
 #include "pkg.h"
+#include "platform_fs.h"
+#ifdef _WIN32
+#include <windows.h>  /* GetModuleFileNameA */
+#endif
 
 /* Storage for the --json global. main.c sets this from argv parsing; we
  * (and other TUs) read it via extern declaration. */
@@ -59,7 +67,7 @@ bool use_json_output = false;
  * on success. Falls back to "tur" (PATH resolution at exec time) when no
  * platform API succeeds. */
 static bool inst_self_exe(char *out, size_t cap) {
-#ifdef __APPLE__
+#if defined(__APPLE__)
     uint32_t sz = (uint32_t)cap;
     if (_NSGetExecutablePath(out, &sz) == 0) {
         char real[4096];
@@ -69,6 +77,13 @@ static bool inst_self_exe(char *out, size_t cap) {
         }
         return true;
     }
+#elif defined(_WIN32)
+    /* No /proc on Windows.  GetModuleFileNameA(NULL, ...) yields the running
+     * image's full path, which is what readlink("/proc/self/exe") gives us on
+     * Linux.  It does not NUL-terminate on truncation, so treat a full-buffer
+     * return as failure rather than reading past the end. */
+    DWORD n = GetModuleFileNameA(NULL, out, (DWORD)cap);
+    if (n > 0 && n < cap) { out[n] = '\0'; return true; }
 #else
     ssize_t n = readlink("/proc/self/exe", out, cap - 1);
     if (n > 0) { out[n] = '\0'; return true; }

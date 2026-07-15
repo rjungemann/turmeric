@@ -2,7 +2,7 @@
  * io_kqueue.c - kqueue-based I/O backend for BSD/macOS (SCH-P1)
  */
 
-#include "io.h"
+#include "async_io.h"
 #include <sys/event.h>
 #include <sys/types.h>
 #include <unistd.h>

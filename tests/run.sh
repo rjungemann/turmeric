@@ -35,8 +35,26 @@ export XDG_CONFIG_HOME="$_TUR_EMPTY_XDG"
 # RESULTS_DIR cleanup below (a later `trap ... EXIT` would otherwise replace
 # an earlier one).
 
-TUR="./build/tur"
+# Overridable so a non-default build tree can be tested without editing this
+# file -- notably Windows, where the binary is build-win/tur.exe.
+TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
+
+# A handful of fixtures write to a literal "/tmp/..." from inline-C fopen. On
+# POSIX that always exists; a compiled Windows binary resolves "/tmp" against the
+# current drive (C:\tmp), which is not present by default. Create it so those
+# fixtures behave the same as everywhere else. Guarded on MSYSTEM so this is a
+# no-op off Windows.
+case "${MSYSTEM:-}" in
+  UCRT64|MINGW64|CLANG64|MINGW32) mkdir -p /c/tmp 2>/dev/null || true ;;
+esac
+
+# Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY. On Windows this
+# stops the Defender Firewall "allow this app" dialog from popping for every
+# freshly-built fixture binary; elsewhere it is a harmless tightening (the
+# fixtures are same-process loopback tests). The stdlib socket/httpd listen code
+# reads this env at runtime and only then binds loopback.
+export TUR_BIND_LOOPBACK=1
 
 # TI8 (turi-parity-post-v1-plan): CI ratchet -- fail fast if any EX_* expression
 # kind the compiler emits has no `case` arm in src/turi/eval.c and is not a
@@ -91,7 +109,12 @@ fi
 # Override with TUR_CC_FLAGS="-O1 -std=c99" for faster (but less safe) builds.
 # NOTE: -O0 causes SIGTRAP on Apple Silicon; -O1 exposes latent UB in some
 #       emitted functions missing a return path — keep -O2 for safety.
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -Lbuild/src}"
+# The `-L` for libturi.a is derived from where $TUR actually lives, not
+# hardcoded to build/src -- otherwise a non-default build tree (Windows uses
+# build-win/) can't resolve the `-lturi` autolink that reactor/async fixtures
+# emit, and every one of them fails to link.
+_tur_build_dir=$(dirname "$TUR")
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.

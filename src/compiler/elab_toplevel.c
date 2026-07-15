@@ -1,5 +1,6 @@
 /* elab_toplevel.c -- top-level form dispatch and the elaborate_program entry point. */
 #include "elab_internal.h"
+#include "platform_fs.h"  /* realpath() on Windows */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
@@ -582,6 +583,22 @@ Expr *elab_form(Elab *e, Form *f) {
                     for (uint32_t i = 0; i + nlen <= f->as.cblock.len; ++i) {
                         if (memcmp(f->as.cblock.p + i, needle, nlen) == 0) {
                             g_needs_regex_h = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            /* WIN3-B: flag socket-using inline-C so the Winsock compat shim is
+             * emitted on Windows.  "AF_INET" is present in every socket program
+             * (both listen and connect set up a sockaddr_in) and nowhere else. */
+            extern bool g_needs_winsock;
+            if (!g_needs_winsock && f->as.cblock.p) {
+                const char *needle = "AF_INET";
+                size_t nlen = 7;
+                if (f->as.cblock.len >= nlen) {
+                    for (uint32_t i = 0; i + nlen <= f->as.cblock.len; ++i) {
+                        if (memcmp(f->as.cblock.p + i, needle, nlen) == 0) {
+                            g_needs_winsock = true;
                             break;
                         }
                     }

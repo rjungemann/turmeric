@@ -3,13 +3,20 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
+#ifndef _WIN32
 #define _XOPEN_SOURCE 700
 #include <ucontext.h>
 #undef _XOPEN_SOURCE
+#endif
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -17,6 +24,105 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <stdarg.h>
+#ifndef TUR_WIN_FIBER_STACK_SIZE
+#define TUR_WIN_FIBER_STACK_SIZE 262144
+#endif
+typedef struct { void *ss_sp; size_t ss_size; } tur_win_stack_t;
+typedef struct tur_ucontext {
+    uintptr_t rip, rsp, rbx, rbp, rsi, rdi, r12, r13, r14, r15;
+    unsigned char xmm[10*16];
+    tur_win_stack_t       uc_stack;
+    struct tur_ucontext  *uc_link;
+    void                (*entry)(void);
+    int                   argc;
+    int                   argv[2];
+} ucontext_t;
+extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);
+extern void __tur_uctx_tramp(void);
+__asm__(
+".text\n"
+".globl __tur_uctx_swap\n"
+".def __tur_uctx_swap; .scl 2; .type 32; .endef\n"
+"__tur_uctx_swap:\n"
+"  mov (%rsp), %rax\n  mov %rax, 0(%rcx)\n"
+"  lea 8(%rsp), %rax\n mov %rax, 8(%rcx)\n"
+"  mov %rbx, 16(%rcx)\n mov %rbp, 24(%rcx)\n"
+"  mov %rsi, 32(%rcx)\n mov %rdi, 40(%rcx)\n"
+"  mov %r12, 48(%rcx)\n mov %r13, 56(%rcx)\n"
+"  mov %r14, 64(%rcx)\n mov %r15, 72(%rcx)\n"
+"  movups %xmm6, 80(%rcx)\n movups %xmm7, 96(%rcx)\n"
+"  movups %xmm8, 112(%rcx)\n movups %xmm9, 128(%rcx)\n"
+"  movups %xmm10, 144(%rcx)\n movups %xmm11, 160(%rcx)\n"
+"  movups %xmm12, 176(%rcx)\n movups %xmm13, 192(%rcx)\n"
+"  movups %xmm14, 208(%rcx)\n movups %xmm15, 224(%rcx)\n"
+"  movups 224(%rdx), %xmm15\n movups 208(%rdx), %xmm14\n"
+"  movups 192(%rdx), %xmm13\n movups 176(%rdx), %xmm12\n"
+"  movups 160(%rdx), %xmm11\n movups 144(%rdx), %xmm10\n"
+"  movups 128(%rdx), %xmm9\n movups 112(%rdx), %xmm8\n"
+"  movups 96(%rdx), %xmm7\n movups 80(%rdx), %xmm6\n"
+"  mov 72(%rdx), %r15\n mov 64(%rdx), %r14\n"
+"  mov 56(%rdx), %r13\n mov 48(%rdx), %r12\n"
+"  mov 40(%rdx), %rdi\n mov 32(%rdx), %rsi\n"
+"  mov 24(%rdx), %rbp\n mov 16(%rdx), %rbx\n"
+"  mov 8(%rdx), %rsp\n jmp *0(%rdx)\n"
+".globl __tur_uctx_tramp\n"
+".def __tur_uctx_tramp; .scl 2; .type 32; .endef\n"
+"__tur_uctx_tramp:\n"
+"  mov %r12, %rcx\n sub $32, %rsp\n call __tur_uctx_run\n call abort\n ud2\n"
+);
+void __tur_uctx_run(struct tur_ucontext *u) {
+    if (u->entry) {
+        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);
+        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);
+        else                   u->entry();
+    }
+    if (u->uc_link) __tur_uctx_swap(u, u->uc_link);
+    fprintf(stderr, "turmeric: fiber entry returned with no uc_link\n");
+    fflush(stderr);
+    abort();
+}
+static int tur_win_getcontext(ucontext_t *u) {
+    memset(u, 0, sizeof(*u));
+    return 0;
+}
+static void tur_win_makecontext(ucontext_t *u, void (*fn)(void), int argc, ...) {
+    va_list ap;
+    int i;
+    if (argc > 2) { fprintf(stderr, "turmeric: makecontext argc>2 unsupported\n"); fflush(stderr); abort(); }
+    va_start(ap, argc);
+    for (i = 0; i < argc; i++) u->argv[i] = va_arg(ap, int);
+    va_end(ap);
+    u->argc  = argc;
+    u->entry = fn;
+    uintptr_t __top = (uintptr_t)((char*)u->uc_stack.ss_sp + u->uc_stack.ss_size);
+    __top &= ~(uintptr_t)15;
+    u->rsp = __top;
+    u->rip = (uintptr_t)__tur_uctx_tramp;
+    u->r12 = (uintptr_t)u;
+}
+static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
+    if (!to) { fprintf(stderr, "turmeric: swapcontext into a null context\n"); fflush(stderr); abort(); }
+    __tur_uctx_swap(from, to);
+    return 0;
+}
+#define getcontext(u)            tur_win_getcontext(u)
+#define swapcontext(f, t)        tur_win_swapcontext((f), (t))
+#define makecontext(u, fn, ...)  tur_win_makecontext((u), (fn), __VA_ARGS__)
+#include <io.h>
+#include <fcntl.h>
+#endif /* _WIN32 */
 /* Phase X3: tur_set_t — sorted int64_t array */
 typedef struct { int64_t *items; uint32_t n; } tur_set_t;
 static int __tur_set_cmp(const void *a, const void *b) {
@@ -6614,6 +6720,10 @@ static int64_t make_hyshower(int64_t x) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
         /* *args*: build cons list from argv[1..argc-1] */
         g_tur_args = 0;
         for (int _ai = argc - 1; _ai >= 1; _ai--) {

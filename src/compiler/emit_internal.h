@@ -61,6 +61,11 @@ extern uint32_t  g_cap_hoisted_includes;
  * trailing newline) to the deduped global set. */
 void   tur_hoist_include_add(const char *line, size_t n);
 
+/* Emit one hoisted `#include` line; angle (system) headers are wrapped in
+ * `#if __has_include(...)` so a platform-missing header is skipped rather than
+ * hard-failing the build.  Quoted (project) headers are emitted bare. */
+void   tur_emit_hoisted_include(Buf *out, const char *line);
+
 /* Scan `body` (length `len`) for leading blank/comment/`#include` lines,
  * append each `#include` to the global set, and return the byte count
  * consumed at the start of `body`. The caller should `memmove` to drop the
@@ -630,6 +635,12 @@ bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e);
  * by address.  Defined in emit_core.c. */
 bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
+/* WIN1: emit the binary-stdout prologue for a generated main(). Windows opens
+ * stdout in text mode, which would turn every 
+ into 
+. */
+void emit_win_binary_stdio_prologue(Buf *out);
+
 void emit_c_string(Buf *out, StrSlice s);
 char *atom_nil(void);
 char *atom_bool(bool b);

@@ -583,9 +583,10 @@ void dap_begin_session(void *state, TuriEnv *env) {
  * corrupt the JSON-RPC channel; forward it as `output` events. */
 static void dap_run_program(DapState *s, DapLaunchFn launch, void *ud,
                             const char *program, char **args, int n_args) {
-    int p[2];
     int saved = -1;
     s->out_pipe_r = -1;
+#ifndef _WIN32
+    int p[2];
     if (pipe(p) == 0) {
         fcntl(p[0], F_SETFL, O_NONBLOCK);
 #ifdef F_SETPIPE_SZ
@@ -597,6 +598,20 @@ static void dap_run_program(DapState *s, DapLaunchFn launch, void *ud,
         dup2(p[1], STDOUT_FILENO);
         close(p[1]);
     }
+#else
+    /*
+     * Not captured on Windows.  _pipe/_dup2 exist, but the non-blocking read
+     * this relies on does not: fcntl/O_NONBLOCK have no counterpart for a Win32
+     * anonymous pipe, so dap_drain_output() would block on an empty pipe whose
+     * write end is still open -- a hang, which is worse than the problem being
+     * solved.
+     *
+     * Consequence: with out_pipe_r left at -1, drain is a no-op and the
+     * debuggee's stdout goes to the real stdout, where it can interleave with
+     * the JSON-RPC channel.  So the DAP debugger is effectively unsupported on
+     * Windows until this is done properly with overlapped I/O (WIN3).
+     */
+#endif
 
     int rc = launch(program, args, n_args, s, ud);
 

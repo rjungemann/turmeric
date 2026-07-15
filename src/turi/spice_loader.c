@@ -16,9 +16,14 @@
  */
 
 #include "spice_loader.h"
+#include "platform_fs.h"  /* realpath/mkdir/getline on Windows */
 
 #include <dirent.h>
-#include <dlfcn.h>
+#ifdef _WIN32
+#  include "platform_dl.h"  /* dlopen/dlsym/dlclose over LoadLibrary */
+#else
+#  include <dlfcn.h>
+#endif
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>

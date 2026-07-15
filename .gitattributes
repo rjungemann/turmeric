@@ -1,0 +1,27 @@
+# Normalise line endings to LF in the working tree on every platform.
+#
+# This is not cosmetic.  Git for Windows defaults to core.autocrlf=true, which
+# checks sources out with CRLF -- and the Turmeric reader copies inline-C block
+# bodies VERBATIM into the generated C.  A CRLF checkout therefore leaks stray
+# \r bytes into codegen output, so `tur emit-c` on Windows no longer matches the
+# committed tests/fixtures/*/expected.c snapshots even though the compiler is
+# behaving identically.
+#
+# Forcing eol=lf keeps the working tree byte-for-byte consistent with what CI
+# and the snapshots expect, on Windows as much as anywhere else.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.wasm binary
+*.a    binary
+*.o    binary
+*.so   binary
+*.dll  binary
+*.dylib binary
+*.exe  binary

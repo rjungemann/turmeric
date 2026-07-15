@@ -11,7 +11,11 @@
 #  ifndef _DARWIN_C_SOURCE
 #    define _DARWIN_C_SOURCE
 #  endif
-#else
+#elif !defined(_WIN32)
+/* Windows is excluded deliberately: MinGW reads _POSIX_C_SOURCE as "hide the
+ * Win32 CRT names", which un-declares mkdir/getcwd and hides _finddata_t --
+ * which in turn breaks <dirent.h> itself.  glibc needs this macro to EXPOSE
+ * those declarations; on Windows it does the exact opposite. */
 #  ifndef _POSIX_C_SOURCE
 #    define _POSIX_C_SOURCE 200809L
 #  endif
@@ -35,6 +39,7 @@
 #include "pkg.h"
 #include "reader.h"
 #include "symbols.h"
+#include "platform_fs.h"
 
 /* ================================================================== */
 /* Internal helpers                                                     */

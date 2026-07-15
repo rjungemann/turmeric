@@ -59,6 +59,14 @@ bool g_needs_hamt = false;
  * preamble so multiple re_* functions can share the typedef. */
 bool g_needs_regex_h = false;
 
+/* WIN3-B: track when any inline-C references the BSD socket API (detected by
+ * "AF_INET"). When true and targeting Windows, the emitter writes a Winsock
+ * compatibility shim into the preamble so POSIX socket idioms
+ * (fcntl(O_NONBLOCK), errno EWOULDBLOCK, close on a socket) compile and behave.
+ * Gated because the shim remaps close/recv/send/etc., which must NOT happen in
+ * a program that has no sockets. */
+bool g_needs_winsock = false;
+
 /* inline-c-function-scope-include-guards fix: deduped set of
  * `#include <...>` / `#include "..."` directives lifted from the top of
  * inline-C bodies during elaboration. Emitted at file scope by emit_program

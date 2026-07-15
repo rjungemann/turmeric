@@ -5975,6 +5975,219 @@ static bool preamble_uses_serial(const Expr *e) {
     }
 }
 
+/*
+ * WIN1: first statements of every generated main().
+ *
+ * Windows opens stdout/stderr in text mode, which silently rewrites each \n to
+ * \r\n on the way out.  A Turmeric program would then emit CRLF where the same
+ * program on Linux/macOS emits LF -- diverging from every expected.stdout in
+ * the fixture suite, and corrupting any program that writes binary data to
+ * stdout.  Binary mode makes program output byte-identical across platforms.
+ *
+ * Shared because main() is emitted from three places (the direct emitter, the
+ * shared-library emitter, and the CPS backend's D2b entry wrapper); a prologue
+ * this easy to forget should exist once.
+ */
+void emit_win_binary_stdio_prologue(Buf *out) {
+    buf_puts(out, "#ifdef _WIN32\n");
+    buf_puts(out, "    _setmode(_fileno(stdout), _O_BINARY);\n");
+    buf_puts(out, "    _setmode(_fileno(stderr), _O_BINARY);\n");
+    buf_puts(out, "#endif\n");
+}
+
+/*
+ * WIN1: emit a ucontext implementation backed by Win32 Fibers.
+ *
+ * MinGW has no <ucontext.h>.  Win32 Fibers are the genuine equivalent -- both
+ * are cooperative contexts that switch only when told to -- so this is a real
+ * implementation, not a stub, and the FiberBlock runtime below works unchanged.
+ *
+ * This duplicates src/platform_ucontext_win.h rather than including it, because
+ * generated C is standalone: it is compiled outside this tree and cannot see our
+ * headers.  Keep the two in step.
+ *
+ * Two divergences from POSIX, both harmless here:
+ *   - CreateFiber allocates its own stack, so the caller's uc_stack.ss_sp buffer
+ *     is unused (ss_size is honoured as the requested size).
+ *   - No DeleteFiber: ucontext has no destructor to hang one on, so each
+ *     makecontext'd context leaks one fiber.  Same trade-off the header makes.
+ */
+static void emit_win_ucontext_shim(Buf *out) {
+    buf_puts(out, "#ifdef _WIN32\n");
+    buf_puts(out, "#ifndef WIN32_LEAN_AND_MEAN\n#define WIN32_LEAN_AND_MEAN\n#endif\n");
+    buf_puts(out, "#ifndef NOGDI\n#define NOGDI\n#endif\n");
+    buf_puts(out, "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n");
+    buf_puts(out, "#include <windows.h>\n");
+    buf_puts(out, "#include <stdarg.h>\n");
+    buf_puts(out, "#ifndef TUR_WIN_FIBER_STACK_SIZE\n");
+    buf_puts(out, "#define TUR_WIN_FIBER_STACK_SIZE 262144\n");
+    buf_puts(out, "#endif\n");
+    /* WIN3-C: register-snapshot ucontext (same mechanism as libturi's
+     * fiber_ctx_x64_win.S), NOT Win32 Fibers. A register snapshot is re-entrant
+     * and thread-agnostic, where a Win32 fiber is thread-affine -- which is what
+     * made scheduler-multithread hang and complicated multishot. The register
+     * save area is at offset 0 so the emitted asm below can use fixed offsets;
+     * keep the two in lockstep. XMM6-15 preserved; TEB fields omitted (GCC's
+     * ___chkstk_ms does not consult them). */
+    buf_puts(out, "typedef struct { void *ss_sp; size_t ss_size; } tur_win_stack_t;\n");
+    buf_puts(out, "typedef struct tur_ucontext {\n");
+    buf_puts(out, "    uintptr_t rip, rsp, rbx, rbp, rsi, rdi, r12, r13, r14, r15;\n");
+    buf_puts(out, "    unsigned char xmm[10*16];\n");
+    buf_puts(out, "    tur_win_stack_t       uc_stack;\n");
+    buf_puts(out, "    struct tur_ucontext  *uc_link;\n");
+    buf_puts(out, "    void                (*entry)(void);\n");
+    buf_puts(out, "    int                   argc;\n");
+    buf_puts(out, "    int                   argv[2];\n");
+    buf_puts(out, "} ucontext_t;\n");
+    buf_puts(out, "extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);\n");
+    buf_puts(out, "extern void __tur_uctx_tramp(void);\n");
+    /* The context switch and entry trampoline, emitted as file-scope asm. This
+     * is the exact code validated in fiber_ctx_x64_win.S, re-emitted here
+     * because generated C is standalone and cannot link that object. */
+    buf_puts(out, "__asm__(\n");
+    buf_puts(out, "\".text\\n\"\n");
+    buf_puts(out, "\".globl __tur_uctx_swap\\n\"\n");
+    buf_puts(out, "\".def __tur_uctx_swap; .scl 2; .type 32; .endef\\n\"\n");
+    buf_puts(out, "\"__tur_uctx_swap:\\n\"\n");
+    buf_puts(out, "\"  mov (%rsp), %rax\\n  mov %rax, 0(%rcx)\\n\"\n");
+    buf_puts(out, "\"  lea 8(%rsp), %rax\\n mov %rax, 8(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %rbx, 16(%rcx)\\n mov %rbp, 24(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %rsi, 32(%rcx)\\n mov %rdi, 40(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %r12, 48(%rcx)\\n mov %r13, 56(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %r14, 64(%rcx)\\n mov %r15, 72(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm6, 80(%rcx)\\n movups %xmm7, 96(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm8, 112(%rcx)\\n movups %xmm9, 128(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm10, 144(%rcx)\\n movups %xmm11, 160(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm12, 176(%rcx)\\n movups %xmm13, 192(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm14, 208(%rcx)\\n movups %xmm15, 224(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups 224(%rdx), %xmm15\\n movups 208(%rdx), %xmm14\\n\"\n");
+    buf_puts(out, "\"  movups 192(%rdx), %xmm13\\n movups 176(%rdx), %xmm12\\n\"\n");
+    buf_puts(out, "\"  movups 160(%rdx), %xmm11\\n movups 144(%rdx), %xmm10\\n\"\n");
+    buf_puts(out, "\"  movups 128(%rdx), %xmm9\\n movups 112(%rdx), %xmm8\\n\"\n");
+    buf_puts(out, "\"  movups 96(%rdx), %xmm7\\n movups 80(%rdx), %xmm6\\n\"\n");
+    buf_puts(out, "\"  mov 72(%rdx), %r15\\n mov 64(%rdx), %r14\\n\"\n");
+    buf_puts(out, "\"  mov 56(%rdx), %r13\\n mov 48(%rdx), %r12\\n\"\n");
+    buf_puts(out, "\"  mov 40(%rdx), %rdi\\n mov 32(%rdx), %rsi\\n\"\n");
+    buf_puts(out, "\"  mov 24(%rdx), %rbp\\n mov 16(%rdx), %rbx\\n\"\n");
+    buf_puts(out, "\"  mov 8(%rdx), %rsp\\n jmp *0(%rdx)\\n\"\n");
+    buf_puts(out, "\".globl __tur_uctx_tramp\\n\"\n");
+    buf_puts(out, "\".def __tur_uctx_tramp; .scl 2; .type 32; .endef\\n\"\n");
+    buf_puts(out, "\"__tur_uctx_tramp:\\n\"\n");
+    buf_puts(out, "\"  mov %r12, %rcx\\n sub $32, %rsp\\n call __tur_uctx_run\\n call abort\\n ud2\\n\"\n");
+    buf_puts(out, ");\n");
+    /* Entry helper the trampoline calls (external so the asm `call` resolves and
+     * the optimiser cannot drop it as unreferenced). */
+    buf_puts(out, "void __tur_uctx_run(struct tur_ucontext *u) {\n");
+    buf_puts(out, "    if (u->entry) {\n");
+    buf_puts(out, "        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);\n");
+    buf_puts(out, "        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);\n");
+    buf_puts(out, "        else                   u->entry();\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (u->uc_link) __tur_uctx_swap(u, u->uc_link);\n");
+    buf_puts(out, "    fprintf(stderr, \"turmeric: fiber entry returned with no uc_link\\n\");\n");
+    buf_puts(out, "    fflush(stderr);\n");
+    buf_puts(out, "    abort();\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_win_getcontext(ucontext_t *u) {\n");
+    buf_puts(out, "    memset(u, 0, sizeof(*u));\n");  /* filled by makecontext */
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_win_makecontext(ucontext_t *u, void (*fn)(void), int argc, ...) {\n");
+    buf_puts(out, "    va_list ap;\n");
+    buf_puts(out, "    int i;\n");
+    buf_puts(out, "    if (argc > 2) { fprintf(stderr, \"turmeric: makecontext argc>2 unsupported\\n\"); fflush(stderr); abort(); }\n");
+    buf_puts(out, "    va_start(ap, argc);\n");
+    buf_puts(out, "    for (i = 0; i < argc; i++) u->argv[i] = va_arg(ap, int);\n");
+    buf_puts(out, "    va_end(ap);\n");
+    buf_puts(out, "    u->argc  = argc;\n");
+    buf_puts(out, "    u->entry = fn;\n");
+    /* 16-align the stack top, seed rip/rsp/r12 so the first swap enters the
+     * trampoline with the context pointer in r12. */
+    buf_puts(out, "    uintptr_t __top = (uintptr_t)((char*)u->uc_stack.ss_sp + u->uc_stack.ss_size);\n");
+    buf_puts(out, "    __top &= ~(uintptr_t)15;\n");
+    buf_puts(out, "    u->rsp = __top;\n");
+    buf_puts(out, "    u->rip = (uintptr_t)__tur_uctx_tramp;\n");
+    buf_puts(out, "    u->r12 = (uintptr_t)u;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {\n");
+    buf_puts(out, "    if (!to) { fprintf(stderr, \"turmeric: swapcontext into a null context\\n\"); fflush(stderr); abort(); }\n");
+    buf_puts(out, "    __tur_uctx_swap(from, to);\n");
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "#define getcontext(u)            tur_win_getcontext(u)\n");
+    buf_puts(out, "#define swapcontext(f, t)        tur_win_swapcontext((f), (t))\n");
+    buf_puts(out, "#define makecontext(u, fn, ...)  tur_win_makecontext((u), (fn), __VA_ARGS__)\n");
+    /* _setmode/_fileno/_O_BINARY for the binary-stdout prologue in main(). */
+    buf_puts(out, "#include <io.h>\n");
+    buf_puts(out, "#include <fcntl.h>\n");
+    buf_puts(out, "#endif /* _WIN32 */\n");
+}
+
+/*
+ * WIN3-B: make POSIX BSD-socket inline-C compile and behave on Windows.
+ *
+ * Emitted only when g_needs_winsock (the program's inline-C mentions AF_INET),
+ * because it remaps close/recv/send/accept/connect/socket/fcntl -- which must
+ * not happen in a program that has no sockets (it would hijack file close()).
+ *
+ * It closes two gaps that BSD-vs-Winsock differ on:
+ *   1. Compile: F_GETFL/F_SETFL/O_NONBLOCK/fcntl don't exist for Winsock. The
+ *      only fcntl idiom used is setting O_NONBLOCK, which maps to
+ *      ioctlsocket(FIONBIO).
+ *   2. Runtime: a would-block socket op reports via WSAGetLastError(), not
+ *      errno -- so `errno == EWOULDBLOCK` in the fixtures would never be true.
+ *      The recv/send/accept/connect wrappers copy WSAGetLastError() into errno.
+ *
+ * close() is socket-aware (getsockopt SO_TYPE distinguishes a socket from a CRT
+ * fd) so it can safely stand in for BOTH file and socket close in a socket
+ * program.  socket() lazily runs WSAStartup on first use.
+ *
+ * The wrapper functions are defined BEFORE the #defines so their own bodies
+ * still call the real recv/send/... rather than recursing into themselves.
+ */
+static void emit_winsock_compat_shim(Buf *out) {
+    buf_puts(out, "#ifdef _WIN32\n");
+    buf_puts(out, "/* WIN3-B: POSIX socket compat over Winsock (socket programs only). */\n");
+    buf_puts(out, "#ifndef F_GETFL\n#define F_GETFL 3\n#endif\n");
+    buf_puts(out, "#ifndef F_SETFL\n#define F_SETFL 4\n#endif\n");
+    buf_puts(out, "#ifndef O_NONBLOCK\n#define O_NONBLOCK 0x800\n#endif\n");
+    buf_puts(out, "static void tur_wsa_ensure(void){\n");
+    buf_puts(out, "    static LONG __done = 0;\n");
+    buf_puts(out, "    if (InterlockedExchange(&__done, 1) == 0) { WSADATA __w; WSAStartup(MAKEWORD(2,2), &__w); }\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_wsa_seterrno(void){\n");
+    buf_puts(out, "    int __e = WSAGetLastError();\n");
+    buf_puts(out, "    if (__e == WSAEWOULDBLOCK) errno = EWOULDBLOCK;\n");
+    buf_puts(out, "    else if (__e == WSAEINPROGRESS) errno = EINPROGRESS;\n");
+    buf_puts(out, "    else if (__e) errno = __e;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_compat_socket(int __af,int __ty,int __pr){ tur_wsa_ensure(); return (int)socket(__af,__ty,__pr); }\n");
+    buf_puts(out, "static int tur_compat_fcntl(int __fd,int __cmd,int __arg){\n");
+    buf_puts(out, "    if (__cmd == F_SETFL) { u_long __m = (__arg & O_NONBLOCK) ? 1 : 0; return ioctlsocket((SOCKET)__fd, FIONBIO, &__m); }\n");
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_compat_recv(int __fd,void*__b,size_t __n,int __f){ int __r = recv((SOCKET)__fd,(char*)__b,(int)__n,__f); if (__r<0) tur_wsa_seterrno(); return __r; }\n");
+    buf_puts(out, "static int tur_compat_send(int __fd,const void*__b,size_t __n,int __f){ int __r = send((SOCKET)__fd,(const char*)__b,(int)__n,__f); if (__r<0) tur_wsa_seterrno(); return __r; }\n");
+    buf_puts(out, "static int tur_compat_accept(int __fd,struct sockaddr*__a,socklen_t*__l){ SOCKET __s = accept((SOCKET)__fd,__a,__l); if (__s==INVALID_SOCKET){ tur_wsa_seterrno(); return -1; } return (int)__s; }\n");
+    /* connect() is special: a non-blocking connect still in flight reports
+     * WSAEWOULDBLOCK on Windows but EINPROGRESS on POSIX, and callers branch on
+     * EINPROGRESS.  Map it there rather than to EWOULDBLOCK. */
+    buf_puts(out, "static int tur_compat_connect(int __fd,const struct sockaddr*__a,socklen_t __l){\n");
+    buf_puts(out, "    int __r = connect((SOCKET)__fd,__a,(int)__l);\n");
+    buf_puts(out, "    if (__r != 0) { errno = (WSAGetLastError()==WSAEWOULDBLOCK) ? EINPROGRESS : WSAGetLastError(); }\n");
+    buf_puts(out, "    return __r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_compat_close(int __fd){ int __t; int __tl=(int)sizeof(__t); if (getsockopt((SOCKET)__fd,SOL_SOCKET,SO_TYPE,(char*)&__t,&__tl)==0) return closesocket((SOCKET)__fd); return _close(__fd); }\n");
+    buf_puts(out, "#define socket(a,b,c)  tur_compat_socket((a),(b),(c))\n");
+    buf_puts(out, "#define fcntl(a,b,c)   tur_compat_fcntl((a),(b),(c))\n");
+    buf_puts(out, "#define recv(a,b,c,d)  tur_compat_recv((a),(b),(c),(d))\n");
+    buf_puts(out, "#define send(a,b,c,d)  tur_compat_send((a),(b),(c),(d))\n");
+    buf_puts(out, "#define accept(a,b,c)  tur_compat_accept((a),(b),(c))\n");
+    buf_puts(out, "#define connect(a,b,c) tur_compat_connect((a),(b),(c))\n");
+    buf_puts(out, "#define close(a)       tur_compat_close((a))\n");
+    buf_puts(out, "#endif /* _WIN32 */\n");
+}
+
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
@@ -5993,6 +6206,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+    /* WIN1 (windows-support-plan): the emitted C is portable, so the platform
+     * split lives in the OUTPUT as #ifdef _WIN32 rather than being decided by
+     * whichever host ran `tur emit-c`.  A snapshot generated on Linux therefore
+     * still compiles on Windows, and cross-compiling stays possible. */
+    buf_puts(out, "#ifdef _WIN32\n");
+    /* Windows has no BSD socket headers.  Winsock covers the same ground:
+     * winsock2.h supplies select/fd_set/timeval/sockaddr_in, ws2tcpip.h the
+     * inet_pton/getaddrinfo half.  winsock2.h MUST precede any windows.h, or
+     * the older winsock.h gets pulled in first and the two collide. */
+    buf_puts(out, "#include <winsock2.h>\n");
+    buf_puts(out, "#include <ws2tcpip.h>\n");
+    buf_puts(out, "#else\n");
     /* Phase T24: BSD networking headers (sys/socket.h, netinet/in.h, arpa/inet.h)
      * MUST come before ucontext.h.  On macOS, #define _XOPEN_SOURCE 700 suppresses
      * BSD extensions; once any header is processed with _XOPEN_SOURCE active, its
@@ -6003,6 +6228,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <sys/socket.h>\n");
     buf_puts(out, "#include <netinet/in.h>\n");
     buf_puts(out, "#include <arpa/inet.h>\n");
+    buf_puts(out, "#endif\n");
+
+    buf_puts(out, "#ifndef _WIN32\n");
     /* Phase T21: ucontext.h must come before setjmp.h and pthread.h.
      * On macOS, setjmp.h indirectly includes a minimal ucontext.h without
      * _XOPEN_SOURCE, locking in the small 56-byte ucontext_t via include guards.
@@ -6010,22 +6238,40 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#define _XOPEN_SOURCE 700\n");
     buf_puts(out, "#include <ucontext.h>\n");
     buf_puts(out, "#undef _XOPEN_SOURCE\n");
+    buf_puts(out, "#endif\n");
     buf_puts(out, "#include <setjmp.h>\n");
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
-    /* Phase T19: Thread primitives - pthread on all supported platforms */
+    /* Phase T19: Thread primitives - pthread on all supported platforms
+     * (MinGW supplies these via winpthreads, so no split is needed). */
     buf_puts(out, "#include <pthread.h>\n");
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
     buf_puts(out, "#include <string.h>\n");
+    /* WIN1: ucontext over Win32 Fibers.  Emitted rather than #included because
+     * generated C is standalone -- it cannot reach src/platform_ucontext_win.h.
+     * Kept in lockstep with that header; see it for the full rationale.
+     *
+     * Unlike the interpreter (which always calls makecontext with argc == 0),
+     * the FiberBlock code below calls it with argc == 2, splitting a 64-bit
+     * pointer into two ints -- the classic ucontext workaround for its
+     * int-only varargs.  The trampoline therefore has to re-dispatch on argc. */
+    emit_win_ucontext_shim(out);
     /* POSIX regex (stdlib/re.tur): hoist regex.h to file scope so every
      * generated re_* function sees regex_t and friends. Per-function
      * `#include <regex.h>` only works for the first function due to header
      * include guards; lifting it here unblocks all re-module functions.
      * Gated so non-regex programs don't churn codegen snapshots. */
     if (g_needs_regex_h) {
+        /* MinGW ships no POSIX <regex.h>.  Fail at compile time with a sentence
+         * that names the cause, rather than emitting a call to a regcomp that
+         * does not exist and letting the linker say "undefined reference". */
+        buf_puts(out, "#ifdef _WIN32\n");
+        buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
+        buf_puts(out, "#else\n");
         buf_puts(out, "#include <regex.h>\n");
+        buf_puts(out, "#endif\n");
     }
     /* inline-c-function-scope-include-guards fix: emit every `#include`
      * directive that elab lifted from the top of an inline-C body so
@@ -6034,8 +6280,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the directives from each body at substitute time, so they appear
      * exactly once -- here. */
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        buf_puts(out, g_hoisted_includes[i]);
-        buf_puts(out, "\n");
+        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
     /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
     if (g_has_variadics) {
@@ -6507,6 +6752,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <fcntl.h>\n");
     buf_puts(out, "#include <errno.h>\n");
     buf_puts(out, "\n");
+    /* WIN3-B: Winsock POSIX-socket compat, emitted only for socket-using
+     * programs (winsock2.h/windows.h/io.h/errno.h are all in scope by here). */
+    {
+        extern bool g_needs_winsock;
+        if (g_needs_winsock) {
+            emit_winsock_compat_shim(out);
+        }
+    }
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
     /* Phase B5: backtrack depth cap (0 = unlimited) */
@@ -10353,6 +10606,7 @@ int emit_program(Buf *out, const Expr *program) {
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_emit_panic_trace) {
             buf_puts(out, "    g_panic_trace = 1;\n");
@@ -10581,8 +10835,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * own .c) sees the typedefs, instead of having the second/third user
      * silently miss them due to the system header's include guards. */
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        buf_puts(out, g_hoisted_includes[i]);
-        buf_puts(out, "\n");
+        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
     buf_puts(out, "\n");
 
@@ -11468,6 +11721,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_emit_panic_trace) {
             buf_puts(out, "    g_panic_trace = 1;\n");

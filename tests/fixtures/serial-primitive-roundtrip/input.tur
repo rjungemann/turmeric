@@ -5,7 +5,6 @@
 (load "stdlib/serial.tur")
 
 (extern-c printf [^cstr fmt ^int v] :int)
-(extern-c printf_s [^cstr fmt ^cstr s] :int)
 
 ;; Helper: check int round-trip
 (defn check-int [expected : int] : int

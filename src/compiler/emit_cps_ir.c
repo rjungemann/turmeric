@@ -4711,6 +4711,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
         bool mvoid = (mrt->kind == TY_NIL);
         buf_puts(file, "int main(int argc, char **argv) {\n");
+        emit_win_binary_stdio_prologue(file);
         if (g_emit_panic_trace)
             buf_puts(file, "    g_panic_trace = 1;\n");
         buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1] */\n");
