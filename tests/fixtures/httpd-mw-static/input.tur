@@ -21,7 +21,12 @@
 
 (defn setup-fs [] : nil
   ```c
+  #include <direct.h>
+#ifdef _WIN32
+  _mkdir("/tmp/turmeric-mw-static-test");
+#else
   mkdir("/tmp/turmeric-mw-static-test", 0755);
+#endif
   FILE *f = fopen("/tmp/turmeric-mw-static-test/hello.txt", "w");
   if (f) { fwrite("hello, world", 1, 12, f); fclose(f); }
   ```)
