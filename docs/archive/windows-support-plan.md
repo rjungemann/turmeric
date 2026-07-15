@@ -6,7 +6,7 @@ investigation. WIN0, WIN1, and the hard core of WIN3 (async I/O + both fiber
 context switches) are DONE on the `windows-bringup` branch. Remaining work --
 WIN2 (the turmeric-godot GDExtension), the WIN3 async tail, WIN4, and the codegen
 defects the port surfaced -- has moved to
-[docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md).
+[windows-remaining-plan.md](windows-remaining-plan.md).
 
 ---
 
