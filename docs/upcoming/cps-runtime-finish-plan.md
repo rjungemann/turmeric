@@ -169,7 +169,7 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 ## Honest distance
 
-Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 5
+Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 4
 per-emit** (see the Progress log: P1.a pure-delegation forms; P1.b/P1.c the
 closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
 receiver-`k` / receiver-env leaks; PA/PB/PC the B1 DK-native resumable-payload
@@ -234,9 +234,12 @@ quick admission:
   handle is a co-located `BODY-STRUCT-OR-TAINT` blocker, so the eviction just
   moves category (confirmed; a prior session reverted this as reshuffling). The
   rc<scalar> boundary-reap alternative hits the same co-located struct blocker.
-- **`EX_WHILE` (1).** A loop (`effect-handler-capture-loop`) whose body
-  handles/performs -- needs native DK loop lowering (a `term_core_ok` +
-  `emit_term` loop form), not delegation.
+- **`EX_WHILE` (0). DONE (Slice PF).** `effect-handler-capture-loop` now
+  CPS-emits: the loop was never the blocker (`EX_WHILE` delegates when its
+  cond+body do); the self-contained per-iteration `handle` was. A real handle
+  that fully discharges its effect delegates to the direct emitter's fiber frame
+  (which runs inside a `__cps` body), gated by a `g_wbd_handled` effect stack so
+  no DK-threaded perform is enclosed. See the Progress log.
 - **`EX_INLINE_C` (2).** A session-channel primitive inlined into a colored
   `main`; niche, tied to the session runtime.
 
@@ -248,16 +251,51 @@ fixtures) now CPS-emits** via the generalized `__Shift` cloneable-cont bridge, a
 PB's `handle_delim_ok` was a general win beyond it, and PD cleared 2 of the 4 B2
 fixtures via unsafe-marker whole-body delegation, and Slice PE cleared 3 of 4
 `EX_DEFER` (whole-body-delegated) + 1 of 2 `EX_CLOSURE` (parser `mbind` borrow
-drop-glue). `BODY-UNSUPPORTED` is now **5** (was 14): `EX_CLOSURE` x1
+drop-glue), and Slice PF cleared `EX_WHILE` via self-contained handle
+delegation. `BODY-UNSUPPORTED` is now **4** (was 14): `EX_CLOSURE` x1
 (`currying-effect-partial` -- an indirect call through a capturing closure that
 itself performs `Log`; the harder B1-style case), `EX_DEFER` x1 (`effect-defer`
--- native defer-frame + co-located `perform`), `EX_WHILE` x1 (native loop), and
-`EX_INLINE_C` x2 (session-runtime-tied). The remaining genuinely-scoped work is
+-- native defer-frame + co-located `perform`), and `EX_INLINE_C` x2
+(session-runtime-tied). The remaining genuinely-scoped work is
 the colored-capturing-closure indirect-call case, native lowering for the
 defer/while/inline-C residuals, and the dominant Phase-2 `BODY-STRUCT-OR-TAINT`
-surface. The EVICT gate now reads `SIG-*` plus these 5 named residuals.
+surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
+
+### Slice PF -- self-contained handle delegation clears EX_WHILE
+
+`BODY-UNSUPPORTED` **5 -> 4** (`EX_WHILE` -> 0). Suite 2179/0.
+`effect-handler-capture-loop` -- a `while` loop whose body installs a fresh
+per-iteration `handle` (Ask, resumed with `cur*10`) -- now CPS-emits (`run__cps`),
+prints 100.
+
+The loop was never the blocker (`EX_WHILE` was already delegatable when its
+cond+body are); the blocker was the real (non-`unsafe`) `handle` in the body.
+A handle that fully discharges its effect is SELF-CONTAINED: the direct emitter
+emits its own fiber handler frame (which falls back to
+`global_effect_handler_chain` when no fiber is active, so it runs inside a
+`__cps` body), and the whole while+handle region delegates as one CT_LETRAW,
+then `dk_run` delivers to the DK continuation. `safe_to_delegate` now admits a
+real handle under `g_whole_body_delegate`, pushing its handled effects onto a
+`g_wbd_handled` stack; an interior `perform` is delegatable ONLY when its effect
+is on that stack (discharged locally), a `resume` only inside a delegated handle.
+
+The soundness hazard is fiber<->DK non-interop: a delegated (fiber) handle must
+not enclose a perform that threads the DK. Two guards enforce this: (1) a
+`perform` of an effect NOT locally handled stays native (its function keeps a
+non-empty net effect and never whole-body-delegates -- verified: a `while`+bare
+`perform` handled by the CALLER stays evicted); (2) inside a delegated handle, a
+call through a fn-VALUE (a colored param/closure, or any indirect callee -- which
+`callee_colored` cannot see) is rejected, since it could perform via the DK
+past the fiber frame. Guard (2) was found by regression: without it,
+`currying-effect-partial` (handle body calls a colored closure) and
+`handle-effectful-fn-param-same-fn` (handle body calls a colored fn-param) were
+wrongly delegated and crashed `unhandled effect`; both are now correct (the
+former stays a residual `EX_CLOSURE` eviction, the latter CPS-emits natively).
+
+Residual `BODY-UNSUPPORTED` (4): `EX_CLOSURE` x1 (`currying-effect-partial`),
+`EX_DEFER` x1 (`effect-defer`), `EX_INLINE_C` x2 (session-channel).
 
 ### Slice PE -- EX_DEFER whole-body delegation + parser closure drop-glue
 

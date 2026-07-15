@@ -382,6 +382,29 @@ static bool is_delegatable_struct(const Expr *e) {
  * only around the whole-body probe. */
 static bool g_whole_body_delegate;
 
+/* P5 (cps-runtime-finish, EX_WHILE / self-contained-handle delegation): while a
+ * WHOLE-BODY probe runs, this is the stack of effect names discharged by the
+ * delegated `handle`s currently enclosing the node under inspection.  A `perform`
+ * is delegatable ONLY when its effect is on this stack (handled by an enclosing
+ * delegated handle, so it never escapes to the caller's DK -- the direct
+ * emitter's fiber handler chain, which the delegated region reuses, is
+ * self-contained); a `resume` is delegatable only inside some delegated handle.
+ * A `perform` whose effect is NOT on the stack is handled by the CALLER and must
+ * stay native.  The stack has a small fixed cap; overflow bails conservatively
+ * (the enclosing handle reports non-delegatable). Only meaningful while
+ * g_whole_body_delegate is set. */
+#define WBD_MAX_HANDLED 32
+static const Symbol *g_wbd_handled[WBD_MAX_HANDLED];
+static int g_wbd_n_handled;
+
+/* Is effect `name` discharged by an enclosing delegated handle? */
+static bool wbd_effect_handled(const Symbol *name) {
+    if (!name) return false;
+    for (int i = 0; i < g_wbd_n_handled; i++)
+        if (g_wbd_handled[i] == name) return true;
+    return false;
+}
+
 /* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
  * a closure literal with no captured free variables.  Such a value is not a call
  * and not a control op, and (being capture-free) references no enclosing local,
@@ -1033,12 +1056,54 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * This lets a function colored ONLY by an `unsafe` block (e.g. `free-lift-bind`
          * / `unsafe-closure-capture`: a capturing/fat closure passed to `free-run`
          * inside `unsafe`) whole-body-delegate instead of evicting on the closure. */
-        case EX_HANDLE:
-            return e->as.handle_.handle
-                && e->as.handle_.handle->is_unsafe_marker
-                && safe_to_delegate(b, e->as.handle_.handle->body);
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            /* An `(unsafe ...)` marker handle: Unsafe is never performed, so the
+             * body emits directly in place regardless of control shape. */
+            if (h->is_unsafe_marker)
+                return safe_to_delegate(b, h->body);
+            /* P5: a REAL, self-contained handle under a WHOLE-BODY probe.  The
+             * direct emitter emits the whole handle (its own fiber handler frame +
+             * body + cases) as one self-contained region; its handler chain falls
+             * back to global_effect_handler_chain when no fiber is active, so it
+             * runs correctly inside a __cps body PROVIDED every effect it performs
+             * is discharged within the region (never reaches the enclosing DK).
+             * Push this handle's effects so an interior `perform` of them is
+             * admitted; a `perform` of any OTHER effect (handled by the caller)
+             * stays native and forces the whole body off the delegation path.
+             * Shallow handlers (F2) do NOT re-install on resume, so an interior
+             * re-perform is handled DIFFERENTLY -- keep them off this path. */
+            if (!g_whole_body_delegate || h->shallow) return false;
+            if (g_wbd_n_handled + (int)h->n_cases > WBD_MAX_HANDLED) return false;
+            int base = g_wbd_n_handled;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                g_wbd_handled[g_wbd_n_handled++] = h->cases[i].effect_name;
+            bool ok = safe_to_delegate(b, h->body);
+            for (uint8_t i = 0; ok && i < h->n_cases; i++)
+                ok = safe_to_delegate(b, h->cases[i].body);
+            g_wbd_n_handled = base;
+            return ok;
+        }
+        /* P5: a `perform` is delegatable only when its effect is discharged by an
+         * enclosing delegated handle (self-contained); a `resume` only inside one.
+         * Both are otherwise control operators that thread the DK continuation. */
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            if (!g_whole_body_delegate || !pf
+                || !wbd_effect_handled(pf->effect_name)) return false;
+            for (uint8_t i = 0; i < pf->n_args; i++)
+                if (!safe_to_delegate(b, pf->args[i])) return false;
+            return true;
+        }
+        case EX_RESUME: {
+            ResumeExpr *rs = e->as.resume_.resume;
+            return g_whole_body_delegate && g_wbd_n_handled > 0 && rs
+                && safe_to_delegate(b, rs->k)
+                && safe_to_delegate(b, rs->value);
+        }
         /* control operators: never delegatable (they thread a continuation). */
-        case EX_PERFORM: case EX_RESUME: case EX_DISCONTINUE:
+        case EX_DISCONTINUE:
         case EX_RESET: case EX_SHIFT: case EX_SHIFT0:
         case EX_CLONEABLE_SHIFT:
         case EX_SERIAL_SHIFT:
@@ -1105,6 +1170,19 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             const Binding *fn = e->as.call_.fn_binding;
             if (!fn) return false;                 /* indirect: unknown coloring */
             if (callee_colored(b, fn)) return false;
+            /* P5: inside a delegated handle, a call through a fn-VALUE (a non-global
+             * fn-typed binding -- a param or a local closure -- or any indirect
+             * fn_expr callee) can reach a COLORED fn-value that performs via the DK.
+             * The delegated handle installs a FIBER handler frame, which does not
+             * catch a DK-threaded perform (fiber<->DK non-interop), so such a call
+             * would leave the effect unhandled.  callee_colored only knows global
+             * FnDefs, so it misses fn-value callees -- reject them here so the
+             * handle stays native (its perform lowers to CT_PERFORM on the DK).
+             * Only tightens the P5 handle-delegation path (g_wbd_n_handled > 0); the
+             * closure-only whole-body delegation is unchanged (no enclosing handle,
+             * and any escaping perform there is caught by the empty-effect shape). */
+            if (g_wbd_n_handled > 0 && (e->as.call_.fn_expr || !fn->is_global))
+                return false;
             if (e->as.call_.fn_expr && !safe_to_delegate(b, e->as.call_.fn_expr))
                 return false;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
@@ -2301,9 +2379,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
  * per-node path. */
 static bool whole_body_delegatable(CpsB *b, const Expr *body) {
     bool saved = g_whole_body_delegate;
+    int saved_nh = g_wbd_n_handled;
     g_whole_body_delegate = true;
+    g_wbd_n_handled = 0;                 /* P5: fresh handled-effect scope */
     bool ok = safe_to_delegate(b, body);
     g_whole_body_delegate = saved;
+    g_wbd_n_handled = saved_nh;
     return ok;
 }
 
