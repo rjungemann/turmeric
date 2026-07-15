@@ -1068,8 +1068,25 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
     if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
     DK *sub = dk_copy_range(k, H);
-    DK *tail = H->shallow ? dk_copy_enclosing_handlers(H->next)
-                          : dk_handler(tag, H->handler, H->handler_env, dk_done());
+    DK *tail;
+    if (H->shallow) {
+        tail = dk_copy_enclosing_handlers(H->next);
+    } else {
+        /* Deep: re-install H AND its consecutive SIBLING handlers -- the rest of
+         * this handle's dk_handler group (a multi-effect handle emits one
+         * dk_handler node per case, chained: HANDLER(A)->HANDLER(B)->cont-frame).
+         * dk_copy_range(k,H) already copied the siblings BEFORE H; the siblings
+         * AFTER H live in H->next and would otherwise be lost, so a re-perform of
+         * a sibling effect (e.g. perform B in the continuation resumed by the A
+         * case) escaped -> `unhandled effect`.  Re-install the maximal run of
+         * DKK_HANDLER nodes starting at H (it ends at the first non-handler node,
+         * the handle's continuation frame), so the full group is present in the
+         * resumed sub-continuation.  A single-case handle copies just H (identical
+         * to the old dk_handler(tag,...) re-install). */
+        const DK *ge = H;
+        while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
+        tail = dk_append(dk_copy_range(H, ge), dk_done());
+    }
     sub = dk_append(sub, tail);
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
