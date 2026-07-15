@@ -347,6 +347,39 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PN (LANDED) -- delegate a fully-handled fn-value call in a handler-installer
+
+STRUCT-OR-TAINT distinct roots **14 -> 12**. Suite 2179/0. A `handle` whose body
+INDIRECT-calls a fn-value whose entire (concrete, non-empty) effect row is
+discharged locally -- `run-with` = `(handle (f) (E [] k) (resume k 5))`,
+`f : (fn [] #fx{E} int)`. `fnvalue_call_wbd_delegatable` relaxes guard (2) for this
+shape; Slice PL's base-taint seeding keeps E fiber, closing the historical
+fiber<->DK split that made the guard necessary. Cleared `run-with`, `my-eff`.
+Both historical-regression fixtures (handle-effectful-fn-param-same-fn,
+currying-effect-partial) recategorize AND print correct output.
+
+### The remaining 12 STRUCT-OR-TAINT roots + the leaf-fiber-HOF next slice
+
+After PK-PN the still-BODY roots are: **(a) leaf-fiber HOFs** `map-list`
+(`(+ (f n) (map-list (- n 1) f))`) and `apply-logged` (`(apply callback x)`) --
+a colored function that INDIRECT-calls an effectful fn-value (permanently fiber)
+and either self-recurses or calls another polymorphic HOF, with the effect
+ESCAPING (no local handle); plus their taint victims (`__fn_1282/1283`,
+`do-write-line`, `inner`, `log-add`, `main` in those fixtures). **(b) the owning
+by-value-ADT track** `test-option-eq-*` (3) + `re-parse-class`.
+
+**Attempted + REVERTED: a blanket self-recursive-call delegation.** Allowing ANY
+self-call (`fn == cur_fn`) to whole-body-delegate DOES clear `map-list` (verified
+correct output), but it is far too broad: it routes NORMAL recursive functions
+(defn-basic, letrec-*, continuation-*, dozens more) from native CPS onto the
+direct-emitter delegation path, a step BACKWARD (delegation relies on the very
+direct fallback the endgame deletes) -- a large codegen churn / regression. The
+sound version must GATE the self-call (and cross-HOF) delegation to a function
+that is genuinely leaf-fiber -- i.e. its body contains an indirect call THROUGH A
+FN-VALUE (a fn-typed param / local closure), which makes its effect permanently
+fiber. That whole-function property (scan the body for an indirect fn-value call)
+is the next slice; without the gate the relaxation regresses.
+
 ### Slice PM (LANDED) -- delegate an effect-polymorphic HOF call in a handler-installer
 
 STRUCT-OR-TAINT distinct roots **16 -> 14**. Suite 2179/0. Extends PL to a callee
