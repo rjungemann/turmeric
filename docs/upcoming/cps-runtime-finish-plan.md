@@ -233,14 +233,42 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 **Phase 4 -- N6.5 deletion + verification.**
 
-1. Flip `emit_cps_ir_try_fn`: for a colored function that is not a `SIG-*`
-   routing and whose body is not in the subset, **hard error** naming the form
-   (`cps_form_name`) instead of returning false.
-2. Delete the direct-emitter colored-body fallback in `emit_fns.c:emit_fn_def`
-   (keep uncolored + `SIG-*` colored on the direct emitter).
-3. Delete the fiber effect runtime paths now unreachable from colored code.
-4. Verify: `TUR_TRACE_EVICT` shows only `SIG-*`; full suite green; stackless
-   sign-off probe green; ASan clean.
+1. **DONE (Slice PZ).** Flip `emit_cps_ir_try_fn`: a colored function that is not
+   a `SIG-*` routing and whose body left the subset now raises
+   `diag_emit(DIAG_ERROR, ...)` naming the function + residual form instead of
+   returning false; main.c's post-emit `diag_had_error()` gate makes it a build
+   failure. Experimental admission-expanding flags (`cps-async`) are exempt until
+   they graduate.
+2. **CONSTRAINED BY THE SIG-* CARVE-OUT -- no clean deletable surface (analysis
+   below).** `emit_fn_def` does NOT branch on `cps_colored` after the
+   `emit_cps_ir_try_fn` call at emit_fns.c:2624 -- once `try_fn` returns false the
+   remainder is a SINGLE uniform direct-emit path (with the Phase-19 per-fiber
+   effect routing) shared by BOTH uncolored functions AND `SIG-*` colored
+   functions. There is no distinct "non-SIG-* colored fallback" block to delete:
+   the non-SIG-* colored case is now a build error (step 1), and every other
+   fall-through (uncolored, and the permanent `SIG-*` colored routings the plan
+   explicitly KEEPS on the direct emitter) still needs that exact path.
+3. **LIKEWISE CONSTRAINED.** The fiber effect runtime is not "unreachable from
+   colored code": `SIG-*` colored functions are colored precisely because they
+   perform/handle effects (e.g. `deferred-ask` = SIG-TAINT performs `Ask`;
+   `main` handlers; exported effectful fns), and they run that effect machinery on
+   the fiber runtime by design. So the fiber effect runtime is PERMANENTLY needed
+   for `SIG-*` colored + uncolored effectful code; there is no colored-only subset
+   to remove. (The old whole-program delimited-lowering machine `emit_cps.c` was
+   already deleted pre-Phase-4; that was the deletable delimited surface.) The
+   "CPS/DK is the SOLE lowering for colored functions" endgame statement is
+   precise only for **non-`SIG-*`** colored functions -- the `SIG-*` carve-out is
+   permanent and keeps the fiber runtime alive.
+4. Verify: `TUR_TRACE_EVICT` shows only `SIG-*` (met); full suite green (met,
+   2179/0); stackless sign-off probe; ASan clean.
+
+**Net Phase 4 outcome:** the readiness gate (BODY-* = 0) is achieved and now
+build-time ENFORCED for the shipping backend (steps 1 + 4-partial). Steps 2-3 as
+originally written (delete the fiber runtime for colored code) are not applicable
+as stated: the direct/fiber path is shared with the permanent `SIG-*` colored
+routings and cannot be removed without moving those off the direct emitter, which
+the plan deliberately does not do. The remaining optional work is diagnostic
+(stackless sign-off probe, an ASan sweep) rather than deletion.
 
 ## Ordering / dependencies
 
