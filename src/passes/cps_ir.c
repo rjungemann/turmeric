@@ -557,16 +557,29 @@ static bool colored_call_wbd_delegatable(CpsB *b, const Expr *e) {
      * onto the direct delegation path.  An un-handled `perform` still blocks
      * delegation, so a DK-effect leaf-fiber self-recursion stays native. */
     if (fn && b->cur_fn && fn == b->cur_fn && b->cur_fn_leaf_fiber) return true;
-    if (g_wbd_n_handled == 0 || !fn || !fn->is_global || e->as.call_.fn_expr
+    if (!fn || !fn->is_global || e->as.call_.fn_expr
         || !b->program || b->program->kind != EX_PROGRAM)
         return false;
-    FnDef *cfd = NULL;
-    for (uint32_t i = 0; i < b->program->as.program.n; i++) {
-        Expr *it = b->program->as.program.items[i];
-        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
-            && it->as.fn_def_.fn->binding == fn) { cfd = it->as.fn_def_.fn; break; }
-    }
+    FnDef *cfd = fndef_of_binding(b, fn);
     if (!cfd) return false;
+    /* CROSS-HOF leaf-fiber: a call to a colored GLOBAL HOF whose OWN body indirect-
+     * calls an effectful fn-value (leaf-fiber -- permanently fiber), passing at
+     * least one CONCRETE-effectful fn-value argument.  The effect flows through
+     * the callee's indirect call, so it is permanently fiber and escapes to a
+     * caller's fiber handler; the call delegates to the direct emitter even with
+     * NO local handle.  Admits `apply-logged = (apply callback x)` where
+     * `apply : #fx{e}` indirect-calls its param and `callback : #fx{Log}`.  A
+     * DK-effect caller of such an escaping-effect fn would itself have to handle
+     * the effect, but a handle over a fn-value-reached effect cannot be DK
+     * (handle_delim_ok rejects it), so the taint model keeps the effect fiber. */
+    if (cfd->body && expr_has_indirect_fnvalue_call(cfd->body, 0)) {
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+            EffectRow *ar = expr_fn_effect_row(b, e->as.call_.args[i]);
+            if (ar && ar->kind == ERK_CONCRETE && ar->as.concrete.n_effects > 0)
+                return true;
+        }
+    }
+    if (g_wbd_n_handled == 0) return false;
     /* The DECLARED row (type annotation) carries the row VARIABLE of a
      * effect-polymorphic callee (`map-list : #fx{e}`); the INFERRED row collapses
      * a bare variable to empty (map-list's own body performs no concrete effect).
