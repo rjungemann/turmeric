@@ -440,12 +440,34 @@ So WIN3 for the compiled fixtures is three tiers, none of them IOCP:
 `build-win/`, so every reactor/async fixture failed to *link*. `tests/run.sh`
 now derives the `-L` from `$(dirname $TUR)/src`. Unblocked ~32 fixtures.
 
-**B. Winsock stdlib port (TODO).** `async_socket.tur`, `async_pipe.tur`,
-`async_file.tur`, `httpd.tur` use POSIX socket idioms in inline-C:
-`fcntl(F_GETFL/F_SETFL, O_NONBLOCK)` -> `ioctlsocket(FIONBIO)`, `close` ->
-`closesocket`, `pipe` -> `_pipe`, plus a one-time `WSAStartup`. Note the SOCKET
-handle is 64-bit on Win64, so the `int fd` locals need widening. ~30 fixtures
-(`httpd-*`, `async-echo-server`, `async-file`).
+**B. Winsock socket port (IN PROGRESS).** `async_socket.tur` is ported and
+verified (WSAStartup / ioctlsocket / closesocket / WSAGetLastError). But that
+alone fixes no fixture, because the failing socket fixtures do NOT use the stdlib
+module -- **~31 of them carry their own `socket(AF_INET...)` inline-C** and
+reimplement the same POSIX idioms (`fcntl(F_GETFL/F_SETFL, O_NONBLOCK)`,
+`close(fd)`, `errno == EWOULDBLOCK`). So the surface is distributed across the
+fixtures, not centralized in stdlib.
+
+Two incompatibility classes, and the second is the harder one:
+
+- *Compile-time*: `F_GETFL`/`F_SETFL`/`O_NONBLOCK`/`fcntl` don't exist for
+  Windows sockets.
+- *Runtime*: the would-block check reads `errno`, but Winsock reports through
+  `WSAGetLastError()` -- so even if it compiled, the fiber would never park and
+  the async loop would spin or break.
+
+Editing 31 fixtures is the wrong fix. The right one is a **Winsock compat shim
+emitted into the preamble** (gated on a socket-reachability flag so it doesn't
+churn the 140 non-socket snapshots): define `F_GETFL/F_SETFL/O_NONBLOCK`, a
+`fcntl` that maps `F_SETFL|O_NONBLOCK` to `ioctlsocket(FIONBIO)`, and route the
+would-block check. `close(fd)` on a socket is the one that resists a clean
+macro (it collides with file `close`); options are a socket-tracking set or
+accepting the leak (the process exits anyway).
+
+Still TODO after that: `async_pipe.tur` (stdin/stdout non-blocking -- genuinely
+hard, Windows consoles have no `O_NONBLOCK`; needs overlapped I/O or a reader
+thread) and `httpd.tur` (its own accept/close/fcntl loop plus pthreads, which
+winpthreads already provides).
 
 **C. Fiber context switch (TODO).** The 3 remaining are the Win32-Fiber shim's
 multishot abort and thread-affinity hang (`fh-multishot-value`,
