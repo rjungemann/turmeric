@@ -2091,6 +2091,14 @@ typedef struct {
      * fixpoint evicts it (mono_template=false, reverting to tainting) if its
      * effect is tainted by a genuine fiber peer. */
     bool mono_template;
+    /* PERMANENT SIG routing: this fn can NEVER be CPS-admitted -- an exported C
+     * symbol, the `main` entry, or an ABI-incompatible signature (`!fn_sig_ok`:
+     * a poly-fat / by-value-aggregate param the DK ABI cannot spell).  Distinct
+     * from a `!term_core_ok` BODY reason, which IS fixable admission work.  Backs
+     * the SIG-cascade trace category: an effect touched by a sig_perm fn is
+     * PERMANENTLY tainted, so a fn evicted only because it shares such an effect
+     * is itself permanent routing (no BODY-* fix exists), not a fixable BODY root. */
+    bool sig_perm;
 } SEnt;
 
 /* The program entry point `main` (never module-prefixed). */
@@ -2121,6 +2129,13 @@ static Arena       g_arena;     /* owns the cached CTerms (+ coloring) */
 static bool        g_arena_live;
 static SEnt       *g_ents;
 static size_t      g_ents_n;
+/* Permanently-tainted effects: the effect set that stays fiber-tainted even when
+ * every BODY-fixable function is admitted (i.e. only sig_perm fns + base code +
+ * their call-path conduits are fiber).  A colored fn evicted ONLY because it
+ * shares such an effect is permanent SIG-cascade routing -- no BODY-* fix could
+ * admit it -- so the EVICT trace reports it as SIG-TAINT, not BODY-STRUCT-OR-TAINT.
+ * Computed by ensure_S (a fixpoint over sig_perm sources); read by the trace. */
+static uint64_t    g_perm_lo, g_perm_hi;
 static bool        g_fwd_done;  /* __cps forward decls emitted for g_prog */
 
 /* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
@@ -2611,9 +2626,10 @@ static void ensure_S(const Expr *program) {
                  * a fixed-ABI `int main` wrapper (emitted in emit_cps_ir_try_fn).
                  * Either way a `handle`/`perform` in an excluded fn still taints. */
                 bool candidate = true;
-                if (fd->binding->c_export_name) candidate = false;
-                if (fn_is_main(fd) && !fn_is_d2b_main(fd)) candidate = false;
-                if (candidate && !fn_sig_ok(fd)) candidate = false;
+                bool sig_perm = false;
+                if (fd->binding->c_export_name) { candidate = false; sig_perm = true; }
+                if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
+                if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 if (candidate && !term_core_ok(t)) candidate = false;
                 /* G3b: a colored generic sig-rejects (candidate=false) but if all
@@ -2627,6 +2643,7 @@ static void ensure_S(const Expr *program) {
                 g_ents[g_ents_n].term = t;
                 g_ents[g_ents_n].in_s = candidate;
                 g_ents[g_ents_n].mono_template = mono_tmpl;
+                g_ents[g_ents_n].sig_perm = sig_perm;
                 SEnt *en = &g_ents[g_ents_n];
                 en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
                 en->edges = NULL; en->edges_all = false;
@@ -2760,6 +2777,46 @@ static void ensure_S(const Expr *program) {
             }
         }
     }
+
+    /* PERMANENT taint (trace categorization only -- does NOT affect in_s/admission).
+     * The taint that survives in a world where every BODY-fixable function is
+     * admitted: only sig_perm fns (+ base code + their call-path conduits) are
+     * fiber.  A fixpoint mirroring the main one, but seeded ONLY from sig_perm
+     * sources: a non-sig_perm fn tainted here is FORCED fiber by a permanent
+     * source and can never be admitted by BODY-* work, so it cascades into
+     * perm_fiber too.  At convergence, g_perm_lo/hi holds the permanently-tainted
+     * effects; the EVICT trace reports a fn evicted only via these as SIG-TAINT. */
+    {
+        bool *pf = (bool *)calloc(g_ents_n ? g_ents_n : 1, sizeof(bool));
+        for (size_t i = 0; i < g_ents_n; i++) pf[i] = g_ents[i].sig_perm;
+        uint64_t plo = base_lo, phi = base_hi;
+        bool pch = true;
+        while (pch) {
+            pch = false;
+            plo = base_lo; phi = base_hi;
+            for (size_t i = 0; i < g_ents_n; i++)
+                if (pf[i] && !g_ents[i].mono_template) { plo |= g_ents[i].eff_lo; phi |= g_ents[i].eff_hi; }
+            for (int b = 0; b < CPS_MAX_EFFECTS; b++) {
+                if (!path_nodes[b]) continue;
+                bool already = (b < 64) ? ((plo >> b) & 1) : ((phi >> (b - 64)) & 1);
+                if (already) continue;
+                for (size_t i = 0; i < g_ents_n; i++) {
+                    if (!ent_bit(path_nodes[b], i)) continue;
+                    if (pf[i] && !g_ents[i].mono_template) {
+                        if (b < 64) plo |= (uint64_t)1 << b; else phi |= (uint64_t)1 << (b - 64);
+                        break;
+                    }
+                }
+            }
+            for (size_t i = 0; i < g_ents_n; i++) {
+                bool tainted = (g_ents[i].eff_lo & plo) || (g_ents[i].eff_hi & phi);
+                if (!pf[i] && !g_ents[i].mono_template && tainted) { pf[i] = true; pch = true; }
+            }
+        }
+        g_perm_lo = plo; g_perm_hi = phi;
+        free(pf);
+    }
+
     g_ents_ctx = g_emit_ctx;   /* G3b: record the ctx this classification used */
 }
 
@@ -4876,7 +4933,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
             else if (!fn_sig_ok(fd))                        cat = "SIG-REJECT";
             else {
                 const CTerm *u = se ? first_unsupported(se->term) : NULL;
+                /* SIG-TAINT: evicted ONLY because it shares an effect with a
+                 * PERMANENT sig_perm fn (exported / main / ABI-reject) -- no
+                 * BODY-* fix could admit it, so it is permanent routing, not a
+                 * fixable BODY root.  A genuine BODY-UNSUPPORTED form still reports
+                 * as such (the form is the real blocker even if also perm-tainted);
+                 * only the taint-only (STRUCT-OR-TAINT) case reclassifies. */
+                bool perm_tainted = se && ((se->eff_lo & g_perm_lo) || (se->eff_hi & g_perm_hi));
                 if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
+                else if (perm_tainted) cat = "SIG-TAINT";
                 else   cat = "BODY-STRUCT-OR-TAINT";
             }
             fprintf(stderr, "[EVICT] %-22s %s %s\n", cat, nm, why);
