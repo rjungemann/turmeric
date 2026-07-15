@@ -2737,6 +2737,98 @@ static bool term_is_whole_body_delegation(const CTerm *t) {
         && t->as.letraw.body->as.appcont.kont.kind == KK_RET;
 }
 
+/* E2: bindings referenced as fn-VALUES (a CA_VAR atom of fn type -- passed as a
+ * call argument, delivered, etc.).  ONLY such a fn needs its {direct,__cps}
+ * registered for indirect-call DK threading (__tur_cps_register): registering every
+ * colored fn would force-keep (address-take) stdlib __cps helpers that carry
+ * unreachable, otherwise-DCE'd codegen and break the link.  Collected by a walk of
+ * every entry's CT-IR after classification. */
+static const Binding *g_fnval_refs[4096];
+static int g_fnval_n;
+static void fnval_add_atom(const CAtom *a) {
+    if (a->kind != CA_VAR || a->ty != TY_FN || !a->var) return;
+    for (int i = 0; i < g_fnval_n; i++) if (g_fnval_refs[i] == a->var) return;
+    if (g_fnval_n < 4096) g_fnval_refs[g_fnval_n++] = a->var;
+}
+static void fnval_scan(const CTerm *t) {
+    if (!t) return;
+    switch (t->kind) {
+        case CT_APPCONT:  fnval_add_atom(&t->as.appcont.v); return;
+        case CT_LETVAL:   fnval_add_atom(&t->as.letval.v); fnval_scan(t->as.letval.body); return;
+        case CT_LETPRIM: {
+            for (uint32_t i=0;i<t->as.letprim.n;i++) { fnval_add_atom(&t->as.letprim.args[i]); }
+            fnval_scan(t->as.letprim.body); return;
+        }
+        case CT_LETCALL: {
+            for (uint32_t i=0;i<t->as.letcall.n;i++) { fnval_add_atom(&t->as.letcall.args[i]); }
+            fnval_scan(t->as.letcall.body); return;
+        }
+        case CT_TAILCALL: {
+            for (uint32_t i=0;i<t->as.tailcall.n;i++) { fnval_add_atom(&t->as.tailcall.args[i]); }
+            return;
+        }
+        case CT_LETCONT:  fnval_scan(t->as.letcont.jbody); fnval_scan(t->as.letcont.body); return;
+        case CT_IF:       fnval_add_atom(&t->as.if_.cond);
+                          fnval_scan(t->as.if_.then_); fnval_scan(t->as.if_.else_); return;
+        case CT_RESET:    fnval_scan(t->as.reset.delim); fnval_scan(t->as.reset.body); return;
+        case CT_SHIFT:    fnval_scan(t->as.shift.body); return;
+        case CT_HANDLE: {
+            fnval_scan(t->as.handle.delim); fnval_scan(t->as.handle.body);
+            for (uint32_t i=0;i<t->as.handle.n_cases;i++) { fnval_scan(t->as.handle.cases[i].case_body); }
+            return;
+        }
+        case CT_PERFORM: {
+            for (uint32_t i=0;i<t->as.perform.n;i++) { fnval_add_atom(&t->as.perform.args[i]); }
+            fnval_scan(t->as.perform.body); return;
+        }
+        case CT_AWAIT:    fnval_add_atom(&t->as.await.fut); fnval_scan(t->as.await.body); return;
+        case CT_RESUME:   fnval_add_atom(&t->as.resume.k); fnval_add_atom(&t->as.resume.v);
+                          fnval_scan(t->as.resume.body); return;
+        case CT_LETRAW:   fnval_scan(t->as.letraw.body); return;  /* the Expr goes fiber; body may host CPS */
+        default: return;   /* CT_DONE-like leaves, cloneable/callcc (delegated) */
+    }
+}
+static void fnval_add_binding(const Binding *b) {
+    if (!b || b->type.kind != TY_FN || !b->is_global) return;
+    for (int i = 0; i < g_fnval_n; i++) if (g_fnval_refs[i] == b) return;
+    if (g_fnval_n < 4096) g_fnval_refs[g_fnval_n++] = b;
+}
+/* E2: also scan the SOURCE Expr -- a fn-value passed in DELEGATED (CT_LETRAW) code
+ * (e.g. `(println (run-with perf))`, where the call is delegated) never appears as
+ * a CT-IR atom, so the CTerm scan misses it. */
+static void fnval_scan_expr(const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR: fnval_add_binding(e->as.var.binding); return;
+        case EX_CALL: {
+            for (uint32_t i=0;i<e->as.call_.n_args;i++) fnval_scan_expr(e->as.call_.args[i]);
+            if (!e->as.call_.fn_binding) fnval_scan_expr(e->as.call_.fn_expr);
+            return;
+        }
+        case EX_LET: case EX_LETREC: {
+            for (uint32_t i=0;i<e->as.let_.n;i++) { fnval_scan_expr(e->as.let_.bindings[i].init); }
+            fnval_scan_expr(e->as.let_.body); return;
+        }
+        case EX_DO: {
+            for (uint32_t i=0;i<e->as.do_.n;i++) { fnval_scan_expr(e->as.do_.items[i]); }
+            return;
+        }
+        case EX_IF:
+            fnval_scan_expr(e->as.if_.cond); fnval_scan_expr(e->as.if_.then_);
+            fnval_scan_expr(e->as.if_.else_or_null); return;
+        case EX_BUILTIN: {
+            for (uint32_t i=0;i<e->as.builtin.n;i++) { fnval_scan_expr(e->as.builtin.args[i]); }
+            return;
+        }
+        default: return;
+    }
+}
+static bool fn_used_as_value(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_fnval_n; i++) if (g_fnval_refs[i] == b) return true;
+    return false;
+}
+
 static void ensure_S(const Expr *program) {
     /* Cached -- but G3b's mono-template classification needs g_emit_ctx (the
      * spec set).  If a prior run classified under a different ctx (e.g. a NULL
@@ -3005,6 +3097,20 @@ static void ensure_S(const Expr *program) {
     }
 
     g_ents_ctx = g_emit_ctx;   /* G3b: record the ctx this classification used */
+
+    /* E2: collect the fns referenced as fn-values, so registration is limited to
+     * them (see g_fnval_refs). */
+    g_fnval_n = 0;
+    if (g_opt_cps_tramp_resume) {
+        for (size_t i = 0; i < g_ents_n; i++) fnval_scan(g_ents[i].term);
+        /* also scan every top-level fn's SOURCE body for fn-values in delegated code */
+        if (program && program->kind == EX_PROGRAM)
+            for (uint32_t i = 0; i < program->as.program.n; i++) {
+                Expr *it = program->as.program.items[i];
+                if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
+                    fnval_scan_expr(it->as.fn_def_.fn->body);
+            }
+    }
 }
 
 static SEnt *ent_of(const FnDef *fd) {
@@ -3380,6 +3486,34 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_LETCALL: {
+            /* E2: an indirect call THROUGH A FN-VALUE (a TY_FN-typed binding, not a
+             * CPS-emitted global) whose continuation is trivial (deliver the result
+             * straight to this function's continuation).  Thread the DK: look up the
+             * callee's __cps entry (registered iff it is colored/effectful) and tail-
+             * call it with __kont, so an effect performed inside reaches the caller's
+             * handler.  An unregistered (pure/external) callee returns 0 from the
+             * lookup and falls through to the direct call below -- byte-safe. */
+            const Binding *cfn0 = t->as.letcall.fn;
+            bool indirect_fv = cfn0 && cfn0->type.kind == TY_FN && !binding_in_s(cfn0);
+            const CTerm *lcb = t->as.letcall.body;
+            bool trivial_cont = lcb && lcb->kind == CT_APPCONT
+                && (lcb->as.appcont.kont.kind == KK_RET || lcb->as.appcont.kont.kind == KK_PROMPT)
+                && lcb->as.appcont.v.kind == CA_CVAR
+                && lcb->as.appcont.v.cvar_id == t->as.letcall.x.id;
+            if (g_opt_cps_tramp_resume && indirect_fv && trivial_cont && t->as.letcall.n == 0) {
+                int id = (*ce->helper_ctr)++;
+                char *fexpr = callee_name(t->as.letcall.fn);
+                const char *thread = (lcb->as.appcont.kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+                ce_line(ce, "int64_t __cpsfp%d = __tur_cps_lookup((int64_t)(intptr_t)(%s));", id, fexpr);
+                ce_line(ce, "if (__cpsfp%d) return ((int64_t (*)(DK *))(intptr_t)__cpsfp%d)(%s);",
+                        id, id, thread);
+                /* Unregistered (pure/external) callee: call the direct entry with a
+                 * proper fn-ptr cast (the value is an int64 carrier) and deliver. */
+                ce_line(ce, "return dk_run(%s, (intptr_t)(((int64_t (*)(void))(intptr_t)(%s))()));",
+                        thread, fexpr);
+                free(fexpr);
+                break;
+            }
             /* cps->direct: an uncolored callee runs to completion and returns an
              * ordinary value; no continuation is threaded in. */
             char *fn = callee_name(t->as.letcall.fn);
@@ -5406,15 +5540,31 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, ") {\n");
     buf_puts(file, "    __dk_entry_depth++;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-    buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
+    /* Build the "<params>, __root" argument list once. */
+    Buf pcsv; buf_init(&pcsv);
     for (uint32_t i = 0; i < fd->n_params; i++) {
-        if (i) buf_puts(file, ", ");
+        if (i) buf_puts(&pcsv, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
-        buf_puts(file, pn);
+        buf_puts(&pcsv, pn);
         free(pn);
     }
-    if (fd->n_params) buf_puts(file, ", ");
-    buf_puts(file, "__root);\n");
+    if (fd->n_params) buf_puts(&pcsv, ", ");
+    buf_puts(&pcsv, "__root");
+    buf_putc(&pcsv, '\0');
+    if (g_opt_cps_tramp_resume) {
+        /* E7/E2: this entry establishes its OWN trampoline driver (save/restore the
+         * enclosing one), so a tail-resume inside this DK extent unwinds HERE, not
+         * to an enclosing entry's driver -- which would longjmp past this frame. */
+        if (!void_ret) buf_puts(file, "    int64_t __r;\n");
+        buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(%s); }\n",
+                   void_ret ? "(void)" : "__r = ", cn, pcsv.data);
+        buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
+        buf_puts(file, "    g_dk_driver = __dksave;\n");
+    } else {
+        buf_printf(file, "    %s%s__cps(%s);\n", void_ret ? "(void)" : "int64_t __r = ", cn, pcsv.data);
+    }
+    buf_free(&pcsv);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
      * box owned by the reap list (consume=false, never freed at a load), so the
      * reap frees it -- copy the value into a local first, then reap. */
@@ -5437,6 +5587,16 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    return;\n}\n");
     } else {
         buf_puts(file, "    return __ret;\n}\n");
+    }
+
+    if (g_opt_cps_tramp_resume && fn_used_as_value(fd->binding)) {
+        /* E2: register this colored fn's {direct-entry, __cps-entry} so an indirect
+         * effectful call to it (as a fn-value) can thread the DK via __tur_cps_lookup.
+         * Only fns actually used as fn-values are registered -- registering all colored
+         * fns would force-keep otherwise-DCE'd stdlib __cps helpers and break the link. */
+        buf_printf(file, "__attribute__((constructor)) static void __cpsreg_%s(void) {\n", cn);
+        buf_printf(file, "    __tur_cps_register((int64_t)(intptr_t)&%s, (int64_t)(intptr_t)&%s__cps);\n", cn, cn);
+        buf_puts(file, "}\n");
     }
 
     ctx->fn_params   = saved_fn_params;

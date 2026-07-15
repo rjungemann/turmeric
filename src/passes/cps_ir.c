@@ -1502,6 +1502,12 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * Only tightens the P5 handle-delegation path (g_wbd_n_handled > 0); the
              * closure-only whole-body delegation is unchanged (no enclosing handle,
              * and any escaping perform there is caught by the empty-effect shape). */
+            /* E2 (cps-tramp-resume): an EFFECTFUL fn-value callee (a non-global
+             * TY_FN binding with a non-empty effect row) must go NATIVE, never
+             * whole-body-delegate -- its perform has to thread the DK to the
+             * caller's handler instead of running on the fiber and escaping. */
+            if (g_opt_cps_tramp_resume && fn_binding_effectful(fn))
+                return false;
             if (g_wbd_n_handled > 0 && (e->as.call_.fn_expr || !fn->is_global)
                 && !fnvalue_call_wbd_delegatable(b, e))
                 return false;
@@ -2432,6 +2438,25 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                /* E2 (cps-tramp-resume): an EFFECTFUL fn-value callee (a var of fn
+                 * type with a non-empty effect row) threads the DK -- build a native
+                 * CT_LETCALL (fn = the fn-value binding) so the emitter looks up the
+                 * callee's __cps entry and passes __kont, letting the effect reach
+                 * the caller's handler instead of escaping via the direct entry.
+                 * 0-arg only for now. */
+                {
+                    const Expr *fe = e->as.call_.fn_expr;
+                    const Binding *fvb = (fe && fe->kind == EX_VAR) ? fe->as.var.binding : NULL;
+                    if (g_opt_cps_tramp_resume && fn_binding_effectful(fvb)
+                        && e->as.call_.n_args == 0) {
+                        Pending p2 = {0};
+                        CTerm *t = new_term(b, CT_LETCALL);
+                        t->as.letcall.x = x; t->as.letcall.fn = fvb;
+                        t->as.letcall.args = arena_alloc(b->a, sizeof(CAtom));
+                        t->as.letcall.n = 0; t->as.letcall.body = ac;
+                        return fold_pending(b, &p2, t);
+                    }
+                }
                 return build_letraw(b, e, x, ac);
             }
             /* A cps->direct call to an uncolored callee with atomic args is
@@ -2442,6 +2467,21 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                /* E2 (cps-tramp-resume): an EFFECTFUL fn-value call threads the DK.
+                 * Build a native CT_LETCALL (fn = the fn-value binding) so the
+                 * emitter looks up the callee's __cps entry and passes __kont -- the
+                 * effect performed inside reaches the caller's handler instead of
+                 * escaping through the callee's own root prompt (`unhandled effect`).
+                 * 0-arg only for now (the emission handles n==0). */
+                if (g_opt_cps_tramp_resume && fn_binding_effectful(fn)
+                    && e->as.call_.n_args == 0 && call_args_atomic(e)) {
+                    Pending p2 = {0};
+                    CTerm *t = new_term(b, CT_LETCALL);
+                    t->as.letcall.x = x; t->as.letcall.fn = fn;
+                    t->as.letcall.args = arena_alloc(b->a, sizeof(CAtom));
+                    t->as.letcall.n = 0; t->as.letcall.body = ac;
+                    return fold_pending(b, &p2, t);
+                }
                 return build_letraw(b, e, x, ac);
             }
             Pending p = {0};
