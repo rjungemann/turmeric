@@ -6098,6 +6098,71 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "#endif /* _WIN32 */\n");
 }
 
+/*
+ * WIN3-B: make POSIX BSD-socket inline-C compile and behave on Windows.
+ *
+ * Emitted only when g_needs_winsock (the program's inline-C mentions AF_INET),
+ * because it remaps close/recv/send/accept/connect/socket/fcntl -- which must
+ * not happen in a program that has no sockets (it would hijack file close()).
+ *
+ * It closes two gaps that BSD-vs-Winsock differ on:
+ *   1. Compile: F_GETFL/F_SETFL/O_NONBLOCK/fcntl don't exist for Winsock. The
+ *      only fcntl idiom used is setting O_NONBLOCK, which maps to
+ *      ioctlsocket(FIONBIO).
+ *   2. Runtime: a would-block socket op reports via WSAGetLastError(), not
+ *      errno -- so `errno == EWOULDBLOCK` in the fixtures would never be true.
+ *      The recv/send/accept/connect wrappers copy WSAGetLastError() into errno.
+ *
+ * close() is socket-aware (getsockopt SO_TYPE distinguishes a socket from a CRT
+ * fd) so it can safely stand in for BOTH file and socket close in a socket
+ * program.  socket() lazily runs WSAStartup on first use.
+ *
+ * The wrapper functions are defined BEFORE the #defines so their own bodies
+ * still call the real recv/send/... rather than recursing into themselves.
+ */
+static void emit_winsock_compat_shim(Buf *out) {
+    buf_puts(out, "#ifdef _WIN32\n");
+    buf_puts(out, "/* WIN3-B: POSIX socket compat over Winsock (socket programs only). */\n");
+    buf_puts(out, "#ifndef F_GETFL\n#define F_GETFL 3\n#endif\n");
+    buf_puts(out, "#ifndef F_SETFL\n#define F_SETFL 4\n#endif\n");
+    buf_puts(out, "#ifndef O_NONBLOCK\n#define O_NONBLOCK 0x800\n#endif\n");
+    buf_puts(out, "static void tur_wsa_ensure(void){\n");
+    buf_puts(out, "    static LONG __done = 0;\n");
+    buf_puts(out, "    if (InterlockedExchange(&__done, 1) == 0) { WSADATA __w; WSAStartup(MAKEWORD(2,2), &__w); }\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_wsa_seterrno(void){\n");
+    buf_puts(out, "    int __e = WSAGetLastError();\n");
+    buf_puts(out, "    if (__e == WSAEWOULDBLOCK) errno = EWOULDBLOCK;\n");
+    buf_puts(out, "    else if (__e == WSAEINPROGRESS) errno = EINPROGRESS;\n");
+    buf_puts(out, "    else if (__e) errno = __e;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_compat_socket(int __af,int __ty,int __pr){ tur_wsa_ensure(); return (int)socket(__af,__ty,__pr); }\n");
+    buf_puts(out, "static int tur_compat_fcntl(int __fd,int __cmd,int __arg){\n");
+    buf_puts(out, "    if (__cmd == F_SETFL) { u_long __m = (__arg & O_NONBLOCK) ? 1 : 0; return ioctlsocket((SOCKET)__fd, FIONBIO, &__m); }\n");
+    buf_puts(out, "    return 0;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_compat_recv(int __fd,void*__b,size_t __n,int __f){ int __r = recv((SOCKET)__fd,(char*)__b,(int)__n,__f); if (__r<0) tur_wsa_seterrno(); return __r; }\n");
+    buf_puts(out, "static int tur_compat_send(int __fd,const void*__b,size_t __n,int __f){ int __r = send((SOCKET)__fd,(const char*)__b,(int)__n,__f); if (__r<0) tur_wsa_seterrno(); return __r; }\n");
+    buf_puts(out, "static int tur_compat_accept(int __fd,struct sockaddr*__a,socklen_t*__l){ SOCKET __s = accept((SOCKET)__fd,__a,__l); if (__s==INVALID_SOCKET){ tur_wsa_seterrno(); return -1; } return (int)__s; }\n");
+    /* connect() is special: a non-blocking connect still in flight reports
+     * WSAEWOULDBLOCK on Windows but EINPROGRESS on POSIX, and callers branch on
+     * EINPROGRESS.  Map it there rather than to EWOULDBLOCK. */
+    buf_puts(out, "static int tur_compat_connect(int __fd,const struct sockaddr*__a,socklen_t __l){\n");
+    buf_puts(out, "    int __r = connect((SOCKET)__fd,__a,(int)__l);\n");
+    buf_puts(out, "    if (__r != 0) { errno = (WSAGetLastError()==WSAEWOULDBLOCK) ? EINPROGRESS : WSAGetLastError(); }\n");
+    buf_puts(out, "    return __r;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int tur_compat_close(int __fd){ int __t; int __tl=(int)sizeof(__t); if (getsockopt((SOCKET)__fd,SOL_SOCKET,SO_TYPE,(char*)&__t,&__tl)==0) return closesocket((SOCKET)__fd); return _close(__fd); }\n");
+    buf_puts(out, "#define socket(a,b,c)  tur_compat_socket((a),(b),(c))\n");
+    buf_puts(out, "#define fcntl(a,b,c)   tur_compat_fcntl((a),(b),(c))\n");
+    buf_puts(out, "#define recv(a,b,c,d)  tur_compat_recv((a),(b),(c),(d))\n");
+    buf_puts(out, "#define send(a,b,c,d)  tur_compat_send((a),(b),(c),(d))\n");
+    buf_puts(out, "#define accept(a,b,c)  tur_compat_accept((a),(b),(c))\n");
+    buf_puts(out, "#define connect(a,b,c) tur_compat_connect((a),(b),(c))\n");
+    buf_puts(out, "#define close(a)       tur_compat_close((a))\n");
+    buf_puts(out, "#endif /* _WIN32 */\n");
+}
+
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
@@ -6662,6 +6727,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <fcntl.h>\n");
     buf_puts(out, "#include <errno.h>\n");
     buf_puts(out, "\n");
+    /* WIN3-B: Winsock POSIX-socket compat, emitted only for socket-using
+     * programs (winsock2.h/windows.h/io.h/errno.h are all in scope by here). */
+    {
+        extern bool g_needs_winsock;
+        if (g_needs_winsock) {
+            emit_winsock_compat_shim(out);
+        }
+    }
     /* Phase 7 follow-up: minimal in-process test registry for stdlib/test.tur. */
     buf_puts(out, "#define TUR_TEST_REGISTRY_MAX 1024\n");
     /* Phase B5: backtrack depth cap (0 = unlimited) */

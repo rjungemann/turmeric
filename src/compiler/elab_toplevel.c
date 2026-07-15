@@ -588,6 +588,22 @@ Expr *elab_form(Elab *e, Form *f) {
                     }
                 }
             }
+            /* WIN3-B: flag socket-using inline-C so the Winsock compat shim is
+             * emitted on Windows.  "AF_INET" is present in every socket program
+             * (both listen and connect set up a sockaddr_in) and nowhere else. */
+            extern bool g_needs_winsock;
+            if (!g_needs_winsock && f->as.cblock.p) {
+                const char *needle = "AF_INET";
+                size_t nlen = 7;
+                if (f->as.cblock.len >= nlen) {
+                    for (uint32_t i = 0; i + nlen <= f->as.cblock.len; ++i) {
+                        if (memcmp(f->as.cblock.p + i, needle, nlen) == 0) {
+                            g_needs_winsock = true;
+                            break;
+                        }
+                    }
+                }
+            }
             /* inline-c-function-scope-include-guards fix: pre-populate the
              * hoisted-include set during elaboration so emit_module can
              * write the directives at file scope before any function body
