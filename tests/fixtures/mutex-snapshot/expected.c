@@ -41,35 +41,60 @@
 #endif
 typedef struct { void *ss_sp; size_t ss_size; } tur_win_stack_t;
 typedef struct tur_ucontext {
-    LPVOID                fiber;
-    void                (*entry)(void);
-    struct tur_ucontext  *uc_link;
+    uintptr_t rip, rsp, rbx, rbp, rsi, rdi, r12, r13, r14, r15;
+    unsigned char xmm[10*16];
     tur_win_stack_t       uc_stack;
+    struct tur_ucontext  *uc_link;
+    void                (*entry)(void);
     int                   argc;
     int                   argv[2];
 } ucontext_t;
-static int tur_win_ensure_fiber(void) {
-    if (!IsThreadAFiber()) {
-        if (ConvertThreadToFiber(NULL) == NULL) return -1;
-    }
-    return 0;
-}
-static VOID WINAPI tur_win_fiber_trampoline(LPVOID param) {
-    struct tur_ucontext *u = (struct tur_ucontext *)param;
+extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);
+extern void __tur_uctx_tramp(void);
+__asm__(
+".text\n"
+".globl __tur_uctx_swap\n"
+".def __tur_uctx_swap; .scl 2; .type 32; .endef\n"
+"__tur_uctx_swap:\n"
+"  mov (%rsp), %rax\n  mov %rax, 0(%rcx)\n"
+"  lea 8(%rsp), %rax\n mov %rax, 8(%rcx)\n"
+"  mov %rbx, 16(%rcx)\n mov %rbp, 24(%rcx)\n"
+"  mov %rsi, 32(%rcx)\n mov %rdi, 40(%rcx)\n"
+"  mov %r12, 48(%rcx)\n mov %r13, 56(%rcx)\n"
+"  mov %r14, 64(%rcx)\n mov %r15, 72(%rcx)\n"
+"  movups %xmm6, 80(%rcx)\n movups %xmm7, 96(%rcx)\n"
+"  movups %xmm8, 112(%rcx)\n movups %xmm9, 128(%rcx)\n"
+"  movups %xmm10, 144(%rcx)\n movups %xmm11, 160(%rcx)\n"
+"  movups %xmm12, 176(%rcx)\n movups %xmm13, 192(%rcx)\n"
+"  movups %xmm14, 208(%rcx)\n movups %xmm15, 224(%rcx)\n"
+"  movups 224(%rdx), %xmm15\n movups 208(%rdx), %xmm14\n"
+"  movups 192(%rdx), %xmm13\n movups 176(%rdx), %xmm12\n"
+"  movups 160(%rdx), %xmm11\n movups 144(%rdx), %xmm10\n"
+"  movups 128(%rdx), %xmm9\n movups 112(%rdx), %xmm8\n"
+"  movups 96(%rdx), %xmm7\n movups 80(%rdx), %xmm6\n"
+"  mov 72(%rdx), %r15\n mov 64(%rdx), %r14\n"
+"  mov 56(%rdx), %r13\n mov 48(%rdx), %r12\n"
+"  mov 40(%rdx), %rdi\n mov 32(%rdx), %rsi\n"
+"  mov 24(%rdx), %rbp\n mov 16(%rdx), %rbx\n"
+"  mov 8(%rdx), %rsp\n jmp *0(%rdx)\n"
+".globl __tur_uctx_tramp\n"
+".def __tur_uctx_tramp; .scl 2; .type 32; .endef\n"
+"__tur_uctx_tramp:\n"
+"  mov %r12, %rcx\n sub $32, %rsp\n call __tur_uctx_run\n call abort\n ud2\n"
+);
+void __tur_uctx_run(struct tur_ucontext *u) {
     if (u->entry) {
         if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);
         else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);
         else                   u->entry();
     }
-    if (u->uc_link && u->uc_link->fiber) { SwitchToFiber(u->uc_link->fiber); return; }
+    if (u->uc_link) __tur_uctx_swap(u, u->uc_link);
     fprintf(stderr, "turmeric: fiber entry returned with no uc_link\n");
     fflush(stderr);
     abort();
 }
 static int tur_win_getcontext(ucontext_t *u) {
     memset(u, 0, sizeof(*u));
-    if (tur_win_ensure_fiber() != 0) return -1;
-    u->fiber = GetCurrentFiber();
     return 0;
 }
 static void tur_win_makecontext(ucontext_t *u, void (*fn)(void), int argc, ...) {
@@ -81,18 +106,15 @@ static void tur_win_makecontext(ucontext_t *u, void (*fn)(void), int argc, ...) 
     va_end(ap);
     u->argc  = argc;
     u->entry = fn;
-    if (tur_win_ensure_fiber() != 0) { u->fiber = NULL; return; }
-    u->fiber = CreateFiber((SIZE_T)(u->uc_stack.ss_size ? u->uc_stack.ss_size : TUR_WIN_FIBER_STACK_SIZE), tur_win_fiber_trampoline, u);
+    uintptr_t __top = (uintptr_t)((char*)u->uc_stack.ss_sp + u->uc_stack.ss_size);
+    __top &= ~(uintptr_t)15;
+    u->rsp = __top;
+    u->rip = (uintptr_t)__tur_uctx_tramp;
+    u->r12 = (uintptr_t)u;
 }
 static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {
-    if (tur_win_ensure_fiber() != 0) return -1;
-    if (!to || !to->fiber) {
-        fprintf(stderr, "turmeric: swapcontext into an uninitialised context (target fiber is NULL)\n");
-        fflush(stderr);
-        abort();
-    }
-    from->fiber = GetCurrentFiber();
-    SwitchToFiber(to->fiber);
+    if (!to) { fprintf(stderr, "turmeric: swapcontext into a null context\n"); fflush(stderr); abort(); }
+    __tur_uctx_swap(from, to);
     return 0;
 }
 #define getcontext(u)            tur_win_getcontext(u)
