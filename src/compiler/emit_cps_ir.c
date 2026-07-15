@@ -971,6 +971,26 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             for (uint32_t i = 0; i < t->as.perform.n; i++) COL_ATOM(&t->as.perform.args[i]);
             bound[nb] = t->as.perform.x.id;
             collect_caps_rec(t->as.perform.body, exclude, bound, nb + 1, cs); return;
+        case CT_HANDLE:
+            /* A nested `handle` in a lifted continuation (two SEQUENTIAL handles:
+             * the second lands in the first's continuation -- effect-abort `main`).
+             * Its delim runs under a separately-lifted prompt, and each handler case
+             * is lifted into its own frame; those frames' envs are BUILT in this
+             * enclosing helper's scope, so their free captures must ride this helper
+             * too (mirrors CT_RESET / CT_AWAIT / CT_PERFORM above).  Each case binds
+             * its effect params + `k`; the continuation (handle.body) binds the
+             * handle result and continues in this same helper. */
+            collect_caps_rec(t->as.handle.delim, exclude, bound, nb, cs);
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases && cs->ok; ci++) {
+                const CHandleCase *hc = &t->as.handle.cases[ci];
+                uint32_t cnb = nb;
+                for (uint32_t pi = 0; pi < hc->n_params && cnb < CC_MAX_BOUND; pi++)
+                    if (hc->params[pi]) bound[cnb++] = hc->params[pi]->id;
+                if (hc->k && cnb < CC_MAX_BOUND) bound[cnb++] = hc->k->id;
+                collect_caps_rec(hc->case_body, exclude, bound, cnb, cs);
+            }
+            if (nb < CC_MAX_BOUND) bound[nb] = t->as.handle.x.id;
+            collect_caps_rec(t->as.handle.body, exclude, bound, nb + 1, cs); return;
         case CT_CALLCC: {
             /* The receiver f may capture enclosing locals (build_callcc admits a
              * capturing closure).  Surface its free vars -- collect_free_vars
@@ -1184,6 +1204,24 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
              * in its own continuation, so recurse there.  term_core_ok already
              * gates whether the nested perform is emittable (A1). */
             return joins_closed_rec(t->as.perform.body, def, nd);
+        case CT_HANDLE:
+            /* A nested `handle` in a reset/handle CONTINUATION (e.g. two sequential
+             * `handle`s: the first's continuation contains the second -- effect-abort
+             * `main`).  The continuation (handle.body) runs in the SAME join scope, so
+             * recurse with the current def set.  The delim and handler cases are each
+             * lifted into their OWN DK frame (emit_lifted, n_joins reset), so a join
+             * they reference must be defined WITHIN them -- an outer-join reference
+             * there is unemittable; check them with a FRESH (empty) def set so such a
+             * reference is correctly rejected.  term_core_ok already gates the nested
+             * handle's structural emittability (handle_delim_ok / handle_case_ok). */
+            {
+                uint32_t hdef[CC_MAX_BOUND];
+                if (!joins_closed_rec(t->as.handle.delim, hdef, 0)) return false;
+                for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
+                    if (!joins_closed_rec(t->as.handle.cases[ci].case_body, hdef, 0))
+                        return false;
+                return joins_closed_rec(t->as.handle.body, def, nd);
+            }
         default: return false;
     }
 }
