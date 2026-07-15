@@ -347,6 +347,34 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PP (LANDED) -- cross-HOF leaf-fiber delegation clears apply-logged
+
+STRUCT-OR-TAINT distinct roots **11 -> 10**. Suite 2179/0. The cross-function
+analogue of PO: a colored fn whose body calls ANOTHER leaf-fiber HOF with an
+effectful callback (`apply-logged = (apply callback x)`, `apply : #fx{e}` indirect-
+calls its param, `callback : #fx{Log}`) is itself permanently fiber and now whole-
+body-delegates. `colored_call_wbd_delegatable` admits a call to a colored GLOBAL
+callee whose own body `expr_has_indirect_fnvalue_call`s, when >=1 argument is a
+concrete-effectful fn-value -- no local handle required (the effect is permanently
+fiber, escaping to a caller's fiber handler; a DK handler over a fn-value-reached
+effect is impossible, so taint keeps it fiber). Cleared `apply-logged`.
+
+**This session's arc: STRUCT-OR-TAINT distinct roots 26 -> 10** (Slices PK, PL,
+PM, PN, PO, PP; suite 2179/0 throughout). The remaining 10 need three NEW shapes,
+each a distinct slice:
+- **`do-write-line`** (capability-effect-poly): a bare `(perform (Write ..))`
+  invoked INDIRECTLY through a STRUCT FIELD (a `Printer` capability). Its handler-
+  installer `main` calls the capability via `EX_GET_FIELD` + call, a fn-value shape
+  `fnvalue_call_wbd_delegatable` does not yet cover -> extend it to a struct-field
+  fn-value callee.
+- **`log-add`** (currying-effect-partial): a concrete-effect fn PARTIALLY applied
+  (`(log-add 10)`) into a capturing closure that `main` then calls -- `main` evicts
+  BODY-UNSUPPORTED on `EX_CLOSURE`. This is the documented capturing-closure-as-
+  value keystone; the handler-installer delegation needs the closure admitted.
+- **`test-option-eq-*` (3) + `re-parse-class`**: the owning by-value-ADT track
+  (carrier-box a by-value ADT arg in the cps->direct delegation).
+`__fn_1282/1283`, `inner`, `main` are taint victims that clear once their root does.
+
 ### Slice PO (LANDED) -- leaf-fiber self-recursive HOF whole-body delegation
 
 STRUCT-OR-TAINT distinct roots **12 -> 11**. Suite 2179/0, no codegen churn.
