@@ -66,7 +66,9 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  /* INADDR_ANY by default; TUR_BIND_LOOPBACK forces loopback for the test suite
+   * so Windows Firewall does not prompt per fixture binary. */
+  addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port = htons((uint16_t)port);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 #ifdef _WIN32

@@ -49,6 +49,13 @@ case "${MSYSTEM:-}" in
   UCRT64|MINGW64|CLANG64|MINGW32) mkdir -p /c/tmp 2>/dev/null || true ;;
 esac
 
+# Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY. On Windows this
+# stops the Defender Firewall "allow this app" dialog from popping for every
+# freshly-built fixture binary; elsewhere it is a harmless tightening (the
+# fixtures are same-process loopback tests). The stdlib socket/httpd listen code
+# reads this env at runtime and only then binds loopback.
+export TUR_BIND_LOOPBACK=1
+
 # TI8 (turi-parity-post-v1-plan): CI ratchet -- fail fast if any EX_* expression
 # kind the compiler emits has no `case` arm in src/turi/eval.c and is not a
 # documented carve-out (docs/artifacts/turi-carve-out.txt).  Cheap, deterministic, and

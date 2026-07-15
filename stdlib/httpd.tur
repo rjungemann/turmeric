@@ -679,7 +679,10 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family      = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  /* Default to INADDR_ANY (a real server wants all interfaces). The test suite
+   * exports TUR_BIND_LOOPBACK to force loopback-only, which stops Windows
+   * Firewall prompting "allow this app" for every fixture binary. */
+  addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port        = htons((uint16_t)port);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
   if (listen(fd, 128) < 0) { close(fd); return NULL; }
@@ -2703,7 +2706,10 @@
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family      = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  /* Default to INADDR_ANY (a real server wants all interfaces). The test suite
+   * exports TUR_BIND_LOOPBACK to force loopback-only, which stops Windows
+   * Firewall prompting "allow this app" for every fixture binary. */
+  addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port        = htons((uint16_t)port);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
   if (listen(fd, 128) < 0) { close(fd); return NULL; }
