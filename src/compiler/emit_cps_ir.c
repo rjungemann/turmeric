@@ -2224,8 +2224,15 @@ static bool fn_is_main(const FnDef *fd) {
  * delimited op) stay excluded -- CPS-emitting them is pure overhead and removes
  * no direct-lowering caller. */
 static bool fn_is_d2b_main(const FnDef *fd) {
-    return fn_is_main(fd) && fd->n_params == 0
-        && fd->body && cps_expr_contains_shift(fd->body);
+    if (!(fn_is_main(fd) && fd->n_params == 0 && fd->body)) return false;
+    /* E3 (v2 sole-effect-lowering, gated on cps-tramp-resume for now): every
+     * zero-arg main gets the int-main -> main__cps trampoline, not only a main
+     * that contains delimited control.  This CPS-emits an effect-only main so its
+     * handlers install on the DK, dissolving the SIG-MAIN taint seed that pins
+     * effectful mains (and their peers) to the fiber runtime.  Default (flag off)
+     * keeps the historical `contains shift` gate, so codegen is unchanged. */
+    if (g_opt_cps_tramp_resume) return true;
+    return cps_expr_contains_shift(fd->body);
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */

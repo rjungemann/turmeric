@@ -530,6 +530,46 @@ assumption. Probe it FIRST, in isolation, before committing to Stages A-D:
   concurrency `FiberBlock` axis. They do not block the deletion; folding them in
   turns a bounded effect-runtime deletion into an unbounded ABI rewrite.
 
+## 10. Progress log
+
+### Session 1 -- gate cleared, E7 runtime landed (gated)
+
+- **Kill-probe: GO.** `probes/e2-killprobe.c` -- an effectful callback reached
+  through a fat-closure `fn_cps(void*,int64_t,DK*)` slot performs an effect that
+  reaches the caller's `dk_handler` with no per-call prompt. E2 is feasible; the
+  project is not dead at the gate. It also disproved the "DK is already stackless"
+  premise (inline resume is 160 B/elt -> O(N)); recorded as enabler **E7**.
+- **E7 algorithm validated at full fidelity.** `probes/e7-fidelity-probe.c`
+  reproduces the real `emit_handle` chain layout + a deep tail-resume loop through
+  the fn-value slot + an enclosing handle. Correct algorithm = heap meta-stack of
+  pending deliveries (no-op-elided, O(nesting)) + `DKK_RESUME_FRAME`-threaded
+  perform-continuation. Result at N=1e6: 152 B C stack (flat), handle-continuation
+  once, enclosing propagation correct, meta-stack hwm=1.
+- **E7 runtime machinery LANDED, gated (`--enable=cps-tramp-resume`).** The
+  `struct DK.tail_resume` flag, `dk_handler_tail`, the meta-stack, `dk_tail_resume`,
+  `__dk_drive_after`, and `dk_perform`'s yield branch are emitted only under the
+  flag (`emit_cps_runtime_prelude_ex`); flag-off output is byte-identical (verified
+  0 tramp tokens across 60 fixtures; flag-on C compiles). Experiment registered.
+- **E3 (all mains CPS-emit) LANDED, gated.** `fn_is_d2b_main` returns true for any
+  zero-arg main under the flag, dissolving the SIG-MAIN taint seed. Verified: an
+  effectful main compiles and runs correctly under the flag (d2b `main` calling a
+  still-fiber effect fn is fine).
+- **Suite green: 2179/0** (flag off = default = unchanged).
+
+**Key finding blocking an end-to-end `.tur` E7 test.** Even a *shallow*
+perform+handle keeps its performer/handler SIG-TAINT after E3, because the
+handler-installer `run` is a **whole-body delegation** that seeds its effect into
+the base taint (`emit_cps_ir.c:2814`, the comment at :2809 names exactly this).
+So a `handle` only leaves fiber once it DK-lowers -- which is **E1 (Stage C)**.
+Therefore E7 (the runtime) cannot be *exercised from source* until E1 lands; the
+two hand-C probes are its validation until then. This matches the plan's staging:
+E7 is the Stage-0 runtime; effectful bodies leave fiber in Stages C-E. **Next
+concrete step: E1 (carrier-ABI handle admission) so `run`'s handle DK-lowers, then
+the deep-loop fixture under `--enable=cps-tramp-resume` becomes the stackless
+sign-off.**
+
+---
+
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
 DK (E2). Prove that with the kill-probe first. If it holds, Stages A-F are an
 ordered, gated grind with the v1 hard-error gate protecting every step, ending in
