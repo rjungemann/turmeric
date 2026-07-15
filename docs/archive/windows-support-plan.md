@@ -1,7 +1,19 @@
-# Windows Support Plan
+# Windows Support Plan (ARCHIVED)
 
-**Status:** WIN0 and WIN1 landed. `tur.exe` builds, and `tur build` compiles
-and runs real programs on Windows. WIN2 (Godot shim) and WIN3 (async) are open.
+**This is the original end-to-end plan, kept for its history:** the toolchain
+rationale, the WIN0/WIN1 blockers, the (macOS-only) Wine loop, and the full WIN3
+investigation. WIN0, WIN1, and the hard core of WIN3 (async I/O + both fiber
+context switches) are DONE on the `windows-bringup` branch. Remaining work --
+WIN2 (the turmeric-godot GDExtension), the WIN3 async tail, WIN4, and the codegen
+defects the port surfaced -- has moved to
+[docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md).
+
+---
+
+**Status (final, before archiving):** WIN0 and WIN1 landed. `tur.exe` builds, and
+`tur build` compiles and runs real programs on Windows. WIN3's select() reactor
+backend and register-snapshot fiber switches landed; the async subset passes ~65
+fixtures. WIN2 (Godot shim) is not started.
 
 **Last updated:** 2026-07-14
 
