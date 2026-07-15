@@ -5097,21 +5097,22 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     if (!mono_emit && (!se || !se->in_s)) {
-        /* N6.5 readiness measurement (TUR_TRACE_EVICT): for every COLORED function
-         * that falls back to the direct emitter, report WHY it was not admitted to
-         * the CPS set S, in a category that says whether the general whole-function
-         * fallback is being exercised (BODY-*) or the function is on a permanent,
-         * non-fallback routing (SIG-*: exported symbol / program entry / ABI-
-         * incompatible signature the direct emitter owns).  Deleting the general
-         * fallback (gate item 7) is only safe once BODY-* is empty modulo the
-         * delimited-control carve-out; this trace is how that gate is checked.
-         * Off by default (one getenv per evicted colored fn); no codegen effect. */
-        if (getenv("TUR_TRACE_EVICT") && fd->cps_colored) {
-            const char *nm = (fd->binding && fd->binding->name) ? fd->binding->name->name : "?";
-            const char *cat; const char *why = "";
-            if (fd->binding->c_export_name)                cat = "SIG-EXPORT";
-            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) cat = "SIG-MAIN";
-            else if (!fn_sig_ok(fd))                        cat = "SIG-REJECT";
+        /* N6.5 gate: a COLORED function that falls back to the direct emitter must
+         * be doing so for a PERMANENT signature reason (SIG-*) -- exported symbol,
+         * program entry, ABI-incompatible signature, permanent taint, or an opaque
+         * inline-C body the CPS backend can never own.  The fixable BODY-* eviction
+         * surface has been driven to zero (docs/upcoming/cps-runtime-finish-plan.md),
+         * so a BODY-* fallback now means a regression reintroduced a root the CPS
+         * backend must own.  Categorize every colored fallback; a BODY-* one is a
+         * HARD ERROR naming the residual, caught at build time instead of silently
+         * routing to the (being-retired) fiber path.  The TUR_TRACE_EVICT trace
+         * (readiness measurement) rides the same categorization. */
+        if (fd->cps_colored && fd->binding) {
+            const char *nm = fd->binding->name ? fd->binding->name->name : "?";
+            const char *cat; const char *why = ""; bool sig_perm_route = false;
+            if (fd->binding->c_export_name)                { cat = "SIG-EXPORT"; sig_perm_route = true; }
+            else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { cat = "SIG-MAIN";   sig_perm_route = true; }
+            else if (!fn_sig_ok(fd))                        { cat = "SIG-REJECT"; sig_perm_route = true; }
             else {
                 const CTerm *u = se ? first_unsupported(se->term) : NULL;
                 /* SIG-TAINT: evicted ONLY because it shares an effect with a
@@ -5123,14 +5124,33 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                 bool perm_tainted = se && ((se->eff_lo & g_perm_lo) || (se->eff_hi & g_perm_hi));
                 bool inline_c = u && u->as.unsupported.why
                              && strstr(u->as.unsupported.why, "EX_INLINE_C");
-                if (inline_c)          cat = "SIG-INLINE-C";  /* permanent: inline-C can't thread a DK cont */
+                if (inline_c)          { cat = "SIG-INLINE-C"; sig_perm_route = true; }  /* permanent: inline-C can't thread a DK cont */
                 else if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
-                else if (perm_tainted) cat = "SIG-TAINT";
+                else if (perm_tainted) { cat = "SIG-TAINT"; sig_perm_route = true; }
                 else   cat = "BODY-STRUCT-OR-TAINT";
             }
-            fprintf(stderr, "[EVICT] %-22s %s %s\n", cat, nm, why);
+            if (getenv("TUR_TRACE_EVICT"))
+                fprintf(stderr, "[EVICT] %-22s %s %s\n", cat, nm, why);
+            /* The N6.5 gate governs the SHIPPING backend.  An experimental
+             * `--enable` feature that EXPANDS the colored surface (e.g.
+             * `cps-async`, which CPS-lowers `async`/`await` instead of running it
+             * on the fiber runtime) may still carry in-flight BODY residuals its
+             * own admission has not closed -- those are the feature's remaining
+             * work, gated behind its flag, not a regression in the graduated path.
+             * Exempt such flags from the hard error; they keep the fallback until
+             * the feature graduates.  The default (shipping) config stays strict. */
+            bool experimental_surface = g_opt_cps_async;
+            if (!sig_perm_route && !experimental_surface)
+                diag_emit(DIAG_ERROR, fd->binding->span,
+                          "cps-backend: colored function '%s' fell back to the direct "
+                          "emitter for a non-signature reason (%s%s%s) -- the CPS/DK "
+                          "backend must own it, but its body left the admissible subset. "
+                          "The direct/fiber whole-function fallback for colored code has "
+                          "been retired (N6.5); admit the form natively in the CT-IR/DK "
+                          "backend or route the function through a permanent SIG-* case.",
+                          nm, cat, why[0] ? ": " : "", why);
         }
-        return false;   /* fall back */
+        return false;   /* fall back (SIG-* colored, or uncolored) */
     }
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }

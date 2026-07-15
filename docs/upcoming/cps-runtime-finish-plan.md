@@ -347,6 +347,28 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PZ (LANDED) -- Phase 4 step 1: the N6.5 gate is now ENFORCED
+
+The direct/fiber whole-function fallback for colored code is now a HARD ERROR
+when it would be taken for a non-signature reason. `emit_cps_ir_try_fn`
+categorizes every colored fallback (the same SIG-*/BODY-* split the
+`TUR_TRACE_EVICT` trace uses) and, for a BODY-* fallback in the shipping config,
+raises a `diag_emit(DIAG_ERROR, ...)` naming the function + residual form instead
+of silently returning false. main.c's post-emit `diag_had_error()` gate turns that
+into a build failure, so any regression that reintroduces a fixable BODY root is
+caught at build time rather than quietly routing to the retired fiber path.
+Permanent SIG-* routings (export / main / ABI-reject signature / permanent taint /
+opaque inline-C body) still fall back cleanly. Suite 2179/0.
+
+Scope: the hard error governs the SHIPPING backend only. An experimental
+`--enable` feature that EXPANDS the colored surface -- currently `cps-async`, which
+CPS-lowers `async`/`await` -- may still carry in-flight BODY residuals its own
+admission has not closed (e.g. `add-cap-let`'s `(let [c (fn [] ...)] (await (async
+c)))` capturing-closure-as-async-arg), so `g_opt_cps_async` exempts the flag from
+the hard error; those keep the fallback until the feature graduates. This is Phase
+4 step 1 of 4; steps 2-3 (delete the direct-emitter colored-body fallback in
+emit_fns.c; remove the now-unreachable fiber effect-runtime paths) remain.
+
 ### Slice PY (LANDED) -- erased-generic carrier admission: BODY-* REACHES ZERO
 
 **The N6.5 readiness gate is MET: `TUR_TRACE_EVICT` shows ONLY SIG-* across the
