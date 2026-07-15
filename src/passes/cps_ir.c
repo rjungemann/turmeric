@@ -2319,6 +2319,60 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 }
                 return rest;
             }
+            /* P5b (cps-runtime-finish): a `do` carrying explicit `(defer D)`
+             * items alongside a control op (perform / colored call) the
+             * whole-body path does not own.  A `__cps` function establishes no
+             * defer frame, so a lone defer normally evicts (see safe_to_delegate
+             * EX_DEFER).  But an explicit defer's effect is exactly "run D at this
+             * block's scope exit, LIFO" -- which the continuation models directly:
+             * thread each defer body into the block's continuation so it fires
+             * after the tail value is produced (through any perform) and before
+             * the value is delivered, in reverse-declaration order.  Scoped to a
+             * value-producing tail (not itself a defer) whose every defer body is
+             * control-free (safe_to_delegate); anything else falls through and
+             * evicts as before.  Runs only on the per-node path (g_whole_body_-
+             * delegate already delegated the whole do), so it can only turn an
+             * eviction into a native emit -- never alter a working delegated
+             * defer.  Matches the direct emitter's tur_frame fire-LIFO order
+             * (e.g. `effect-defer`: `(do (defer (println "cleanup")) (perform
+             * (Ask)))` prints cleanup then returns the resumed value). */
+            {
+                Expr **items = e->as.do_.items;
+                bool has_defer = false, defer_ok = true, tail_is_defer = false;
+                for (uint32_t i = 0; i < n; i++) {
+                    const Expr *it = ascribe_peel(items[i]);
+                    if (it && it->kind == EX_DEFER) {
+                        has_defer = true;
+                        if (!safe_to_delegate(b, it->as.defer_.body)) defer_ok = false;
+                        if (i == n - 1) tail_is_defer = true;
+                    }
+                }
+                if (has_defer && defer_ok && !tail_is_defer) {
+                    CVar x = fresh_cvar(b, &items[n - 1]->type);
+                    CTerm *deliver = new_term(b, CT_APPCONT);
+                    deliver->as.appcont.kont = kont;
+                    deliver->as.appcont.v = atom_cvar(x);
+                    /* Thread defer bodies in declaration order so they EXECUTE in
+                     * reverse-declaration (LIFO) order after x is bound. */
+                    CTerm *chain = deliver;
+                    for (uint32_t i = 0; i < n; i++) {
+                        const Expr *it = ascribe_peel(items[i]);
+                        if (!it || it->kind != EX_DEFER) continue;
+                        CVar d = fresh_cvar(b, &it->as.defer_.body->type);
+                        chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
+                    }
+                    /* Bind the tail value (threading any perform continuation). */
+                    chain = cps_bind(b, items[n - 1], x, chain);
+                    /* Prepend the non-defer, non-tail statements in program order. */
+                    for (int i = (int)n - 2; i >= 0; i--) {
+                        const Expr *it = ascribe_peel(items[i]);
+                        if (it && it->kind == EX_DEFER) continue;
+                        CVar discard = fresh_cvar(b, &items[i]->type);
+                        chain = cps_bind(b, items[i], discard, chain);
+                    }
+                    return chain;
+                }
+            }
             CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
             for (int i = (int)n - 2; i >= 0; i--) {
                 CVar discard = fresh_cvar(b, &e->as.do_.items[i]->type);

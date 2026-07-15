@@ -347,6 +347,27 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PT (LANDED) -- defer-as-continuation: `(do (defer D) <control>)` native
+
+BODY-UNSUPPORTED `EX_DEFER` root (`effect-defer`'s `deferred-ask`) cleared. Suite
+2179/0, no codegen churn on any other fixture. A `do` block carrying an explicit
+`(defer D)` alongside a control op (perform / colored call) the whole-body path
+does not own used to evict on `EX_DEFER` -- a `__cps` function establishes no
+defer frame. But an explicit defer's meaning is exactly "run `D` at this block's
+scope exit, LIFO", which the DK continuation models directly: thread each defer
+body into the block's continuation so it fires after the tail value is produced
+(through any perform) and before the value is delivered, in reverse-declaration
+order. Implemented in `cps_ir.c`'s `cps_tail` EX_DO case, scoped to a value-
+producing tail whose every defer body is control-free (`safe_to_delegate`);
+anything else falls through and evicts as before. It runs ONLY on the per-node
+path (`g_whole_body_delegate` already delegates the whole `do`), so it can only
+turn an eviction into a native emit -- never alter a working delegated defer.
+`deferred-ask` now lowers to `let __t0 = perform Ask(); let __t1 = (println
+"cleanup"); (k __t0)` -- and, since the program's `main` handles `Ask` on the
+FIBER runtime (uncolored/direct), `deferred-ask` is now honestly SIG-TAINT
+(permanent DK<->fiber non-interop routing, same class as the PL-PQ effectful
+cluster), not a fixable BODY root. `effect-defer` still prints `cleanup` / `42`.
+
 ### Slice PS (LANDED) -- native abortive cross-function shift (`inner`)
 
 STRUCT-OR-TAINT distinct roots **5 -> 4**. Suite 2179/0, no codegen churn on any
