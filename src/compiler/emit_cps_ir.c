@@ -11,6 +11,7 @@
 #include "globals.h"
 #include "arena.h"
 #include "expr.h"
+#include "effect.h"   /* E2: credit an indirect fn-value's declared effect row */
 
 /* The elaborator's complete free-variable walker (backs the closure-capture
  * pass).  Reused here to find every enclosing var a delegated *composite*
@@ -2511,6 +2512,26 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
             else if (e->as.call_.fn_expr && acc->callees && acc->callee_overflow)
                 *acc->callee_overflow = true;
+            /* E2 (cps-tramp-resume): a call THROUGH A FN-VALUE performs the
+             * fn-value's DECLARED effect row.  Credit its concrete effects as
+             * performs so an effect reached ONLY through a fn-value (e.g.
+             * `map-list`'s Log via `(f n)`, where `f` is a fn-typed PARAM -- so
+             * fn_binding is the param, not NULL) taints correctly.  Without this a
+             * fn evicted for a non-tail effectful fn-value call seeds nothing and
+             * its DK handler-installer fails to co-classify -> the effect escapes.
+             * Gated: flag-off keeps the historical accumulation byte-identical. */
+            if (g_opt_cps_tramp_resume) {
+                const Type *ft = NULL;
+                const Binding *fb = e->as.call_.fn_binding;
+                if (fb && !fb->is_global && fb->type.kind == TY_FN) ft = &fb->type;
+                else if (!fb && e->as.call_.fn_expr && e->as.call_.fn_expr->type.kind == TY_FN)
+                    ft = &e->as.call_.fn_expr->type;
+                const struct EffectRow *row = ft ? ft->as.fn.effect_row : NULL;
+                if (row && row->kind == ERK_CONCRETE)
+                    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++)
+                        if (row->as.concrete.effects[i])
+                            mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
             REC(e->as.call_.fn_expr); REC(e->as.call_.dict_arg); return;
         case EX_RETURN: REC(e->as.return_.value); return;
@@ -2897,6 +2918,15 @@ static void ensure_S(const Expr *program) {
                     const CTerm *u = first_unsupported(t);
                     if (u && u->as.unsupported.why
                         && strstr(u->as.unsupported.why, "EX_INLINE_C"))
+                        sig_perm = true;
+                    /* E2 (cps-tramp-resume): a fn evicted for a NON-TAIL effectful
+                     * fn-value call runs its effect on the fiber (the call is not
+                     * yet DK-threaded).  Treat it as a permanent fiber source so its
+                     * effect perm-taints and any DK handler-installer of that effect
+                     * co-classifies to fiber -- otherwise the handler DK-lowers while
+                     * the performer stays fiber and the effect escapes. */
+                    if (u && u->as.unsupported.why
+                        && strstr(u->as.unsupported.why, "effectful fn-value call (E2 pending)"))
                         sig_perm = true;
                 }
                 /* G3b: a colored generic sig-rejects (candidate=false) but if all

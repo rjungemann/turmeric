@@ -2823,7 +2823,26 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
                 }
+                /* E2 (cps-tramp-resume): a NON-TAIL effectful fn-value call cannot
+                 * yet thread the DK (only the tail-position call in cps_tail does),
+                 * and delegating it to fiber here would ESCAPE the effect (the
+                 * enclosing fn is DK) -> `unhandled effect`.  Evict so the whole fn
+                 * stays fiber (correct) until non-tail threading lands. */
+                const Expr *fe = e->as.call_.fn_expr;
+                const Binding *fvb = (fe && fe->kind == EX_VAR) ? fe->as.var.binding : NULL;
+                if (g_opt_cps_tramp_resume && fn_binding_effectful(fvb)) {
+                    CTerm *t = new_term(b, CT_UNSUPPORTED);
+                    t->as.unsupported.why = "non-tail effectful fn-value call (E2 pending)";
+                    return t;
+                }
                 return build_letraw(b, e, x, rest);
+            }
+            /* E2: a non-tail effectful fn-value call via a resolved (param) binding
+             * -- same escape hazard; evict rather than fiber-delegate under a DK fn. */
+            if (g_opt_cps_tramp_resume && fn_binding_effectful(fn)) {
+                CTerm *t = new_term(b, CT_UNSUPPORTED);
+                t->as.unsupported.why = "non-tail effectful fn-value call (E2 pending)";
+                return t;
             }
             /* cps->direct call to an uncolored callee with atomic args: delegate
              * to the direct emitter (monomorphized callee names). */
