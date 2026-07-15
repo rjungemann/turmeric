@@ -7382,7 +7382,7 @@ int main(int argc, char **argv) {
      * of them break silently:
      *
      *   - `tur emit-c` writes generated C to stdout, so every line would gain a
-     *     \r and stop matching tests/fixtures/*\/expected.c.
+     *     \r and stop matching the tests/fixtures/<name>/expected.c snapshots.
      *   - The LSP and DAP servers frame messages with a Content-Length byte
      *     count computed BEFORE the text-mode expansion -- so the count would
      *     understate the bytes actually written and desynchronise the protocol.
