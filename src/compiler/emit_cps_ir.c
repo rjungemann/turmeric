@@ -435,10 +435,36 @@ static bool atom_is_fat_fn(const CAtom *a) {
     return a->kind == CA_VAR && a->var && a->var->is_poly_fn;
 }
 
+/* A fn-VALUE atom (a plain `TY_FN` closure/fn-pointer, or a poly-fat closure).
+ * Threading one into a call argument is admitted only when the CALLEE is provably
+ * effect-free (callee_effect_free), so this just recognizes the atom shape. */
+static bool atom_is_fn_value(const CAtom *a) {
+    if (atom_is_fat_fn(a)) return true;
+    return (a->kind == CA_VAR || a->kind == CA_CVAR) && a->ty == TY_FN;
+}
+
+/* Is the statically-known callee provably effect-free -- its DECLARED effect row
+ * is empty (NULL / ERK_EMPTY; a row VARIABLE or any concrete effect reads as
+ * non-empty and is rejected, so this is conservative and fixpoint-independent --
+ * the row is set at elaboration, not by the taint pass)?  An effect-free callee
+ * cannot perform an effect THROUGH a fn-value argument: were the callback
+ * effectful and invoked, that effect would propagate into the callee's own
+ * signature (row polymorphism -- `apply-cb` calling `f : (fn [] #fx{Ask} int)` is
+ * itself `#fx{Ask}`).  So threading ANY fn value into an effect-free callee can
+ * never create the fiber<->DK effect mismatch that keeps an EFFECTFUL callback on
+ * the fiber path (the `unhandled effect` hazard in the handle_delim_ok NOTE).
+ * An indirect / unknown callee (fn == NULL) is conservatively NOT effect-free. */
+static bool callee_effect_free(const Binding *fn) {
+    if (!fn || fn->type.kind != TY_FN) return false;
+    return effect_row_is_empty(fn->type.as.fn.effect_row);
+}
+
 /* Whether an atom may cross into a call ARGUMENT slot.
  *
  *  - A poly-fat closure never can (spilling it to a temp slot miscompiles),
- *    regardless of whether the call is cps->cps or cps->direct.
+ *    regardless of whether the call is cps->cps or cps->direct.  (A fn value
+ *    threaded into an EFFECT-FREE callee is admitted separately at the call site
+ *    via callee_effect_free, before this predicate runs.)
  *  - A Tier C by-value-aggregate atom (slot_box_ty, e.g. `tur_adt_Option__int`)
  *    can cross a cps->cps call (the callee's `__cps` params match the CPS ABI)
  *    but NOT a cps->DIRECT call: there the delegated call emits the arg RAW to
@@ -454,6 +480,20 @@ static bool call_arg_ok(const CAtom *a, bool cps_to_direct) {
     if (cps_to_direct && (a->kind == CA_VAR || a->kind == CA_CVAR)
         && slot_box_ty(a->type))
         return false;
+    return true;
+}
+
+/* Every arg of a call to `fn` admissible as a call arg?  A fn-VALUE arg is
+ * admitted when `fn` is effect-free (callee_effect_free) -- pure higher-order
+ * value threading (option-eq? / hamt map+filter / parser combinators passing a
+ * comparator/mapper); every other arg takes the ordinary call_arg_ok gate. */
+static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
+                         bool cps_to_direct) {
+    bool cef = callee_effect_free(fn);
+    for (uint32_t i = 0; i < n; i++) {
+        if (cef && atom_is_fn_value(&args[i])) continue;
+        if (!call_arg_ok(&args[i], cps_to_direct)) return false;
+    }
     return true;
 }
 
@@ -1589,8 +1629,8 @@ static bool term_core_ok(const CTerm *t) {
              * arg must ride the callee's carrier ABI -- reject it (call_arg_ok
              * cps_to_direct=true) so the function evicts rather than emit a
              * raw-struct-for-int64 arg. */
-            for (uint32_t i = 0; i < t->as.letcall.n; i++)
-                if (!call_arg_ok(&t->as.letcall.args[i], true)) return false;
+            if (!call_args_ok(t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n, true))
+                return false;
             return term_core_ok(t->as.letcall.body);
         }
         case CT_LETRAW:
@@ -1615,10 +1655,8 @@ static bool term_core_ok(const CTerm *t) {
              * params the CPS backend emits with the matching ABI, so the wider
              * atom_ok admits the by-value aggregate there. */
             bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
-            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
-                if (!call_arg_ok(&t->as.tailcall.args[i], cps_to_direct))
-                    return false;
-            return true;
+            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
+                                t->as.tailcall.n, cps_to_direct);
         }
         case CT_LETCONT:
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
@@ -1975,10 +2013,8 @@ static bool handle_delim_ok(const CTerm *t) {
                 && handle_delim_ok(t->as.letcont.body);
         case CT_TAILCALL: {
             bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
-            for (uint32_t i = 0; i < t->as.tailcall.n; i++)
-                if (!call_arg_ok(&t->as.tailcall.args[i], cps_to_direct))
-                    return false;
-            return true;
+            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
+                                t->as.tailcall.n, cps_to_direct);
         }
         case CT_HANDLE: {
             /* A NESTED handle in this handle's handled body (e.g. `(handle (handle
