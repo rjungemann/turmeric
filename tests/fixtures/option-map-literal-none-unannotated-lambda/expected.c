@@ -7012,22 +7012,32 @@ static tur_adt_Option__int none__spec__tur_adt_Option__int() {
         return __ps_178;
 }
 
-static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o, int64_t f) {
-        tur_adt_Option__int __t179;
-        if ((bool)(o).is_some) {
-            __auto_type __ps_180 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), (int64_t)(o).value));
-            if (tur_panicking) return (tur_adt_Option__int){0};
-            __auto_type __ps_181 = (some__spec__tur_adt_Option__int_int64_t(__ps_180));
-            if (tur_panicking) return (tur_adt_Option__int){0};
-            __t179 = __ps_181;
-        } else {
-            __auto_type __ps_182 = (none__spec__tur_adt_Option__int());
-            if (tur_panicking) return (tur_adt_Option__int){0};
-            __t179 = __ps_182;
-        }
-        return __t179;
+static int64_t option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o, int64_t f, DK *__kont) {
+    tur_adt_Option__int __t0;
+    tur_adt_Option__int __t179;
+    if ((bool)(o).is_some) {
+        __auto_type __ps_180 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), (int64_t)(o).value));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        __auto_type __ps_181 = (some__spec__tur_adt_Option__int_int64_t(__ps_180));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        __t179 = __ps_181;
+    } else {
+        __auto_type __ps_182 = (none__spec__tur_adt_Option__int());
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        __t179 = __ps_182;
+    }
+    __t0 = __t179;
+    return dk_run(__kont, __dk_reap_ptr((intptr_t)({ tur_adt_Option__int *__bx = (tur_adt_Option__int *)malloc(sizeof(tur_adt_Option__int)); *__bx = (__t0); __bx; })));
 }
-
+__attribute__((unused)) static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o, int64_t f) {
+    __dk_entry_depth++;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    int64_t __r = option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(o, f, __root);
+    tur_adt_Option__int __ret = (*(tur_adt_Option__int *)(__r));
+    if (!tur_async_suspended) dk_free(__root);
+    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    return __ret;
+}
 
 static void __tur_module_def_init(void) __attribute__((constructor));
 static void __tur_module_def_init(void) {

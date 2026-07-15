@@ -423,6 +423,7 @@ static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PRO
 static bool handle_delim_ok(const CTerm *t);  /* top-level handle-body admission (join-to-prompt, no interior control op) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
+static bool binding_cps_reachable(const Binding *b);  /* in_s OR mono-template */
 
 /* A poly-fat closure (`tur_poly_fn_t`) is a multi-word aggregate.  When such a
  * value is THREADED as a call argument the CT-IR spills it to an intermediate
@@ -1654,7 +1655,7 @@ static bool term_core_ok(const CTerm *t) {
              * it (evict).  A cps->cps tail call threads through `f__cps`, whose
              * params the CPS backend emits with the matching ABI, so the wider
              * atom_ok admits the by-value aggregate there. */
-            bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
+            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
             return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
                                 t->as.tailcall.n, cps_to_direct);
         }
@@ -2012,7 +2013,7 @@ static bool handle_delim_ok(const CTerm *t) {
                 && handle_delim_ok(t->as.letcont.jbody)
                 && handle_delim_ok(t->as.letcont.body);
         case CT_TAILCALL: {
-            bool cps_to_direct = !binding_in_s(t->as.tailcall.fn);
+            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
             return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
                                 t->as.tailcall.n, cps_to_direct);
         }
@@ -2223,6 +2224,12 @@ static bool binding_in_s(const Binding *b) {
     if (!b) return false;
     for (size_t i = 0; i < g_ents_n; i++)
         if (g_ents[i].bind == b) return g_ents[i].in_s;
+    return false;
+}
+static bool binding_cps_reachable(const Binding *b) {
+    if (!b) return false;
+    for (size_t i = 0; i < g_ents_n; i++)
+        if (g_ents[i].bind == b) return g_ents[i].in_s || g_ents[i].mono_template;
     return false;
 }
 
@@ -2943,6 +2950,7 @@ static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
         bool ok = true;
         for (uint32_t j = 0; j < n && ok; j++) {
             if (!args[j].type) continue;   /* untyped scalar atom: not discriminating */
+            if (args[j].ty != TY_APP && args[j].ty != TY_ADT && args[j].ty != TY_STRUCT) continue;
             const char *ac = emit_type_c_name(ctx, *(Type *)args[j].type);
             const char *sc = emit_type_c_name(ctx, spec->arg_types[j]);
             if (!ac || !sc || strcmp(ac, sc) != 0) ok = false;
@@ -4929,16 +4937,40 @@ bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b) {
 static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind)) return false;
+    /* A CONCRETE monomorph of an ORDINARY defn has a single concrete C signature
+     * (its clone name is unique to this specialization), so a by-value-aggregate
+     * param / return -- which the scalar-only `sig_slot_ok` rejects for the shared
+     * generic base name -- IS spellable: admit it via the wider `slot_ok_t` gate.
+     * This makes a by-value-ADT-signature defn (`option-eq? : (Option A) params`)
+     * a mono-template so its callers thread the mono `__cps` (cps->cps, which
+     * crosses the by-value arg) instead of a cps->direct call that cannot.
+     *
+     * A TYPECLASS-INSTANCE method (`spec->typeclass_inst != NULL`) is the ONE
+     * exception: its clone is ALSO emitted with the uniform CARRIER ABI
+     * (`_Bool(int64_t, int64_t)`) for the dict-dispatch path, so a concrete
+     * by-value CPS re-emission (`_Bool(tur_adt_Map__X *, ...)`) collides
+     * (`conflicting types for <clone>`).  Keep the strict scalar-only gate for
+     * instance methods so they stay SIG-REJECT (no CPS clone, no collision). */
+    bool is_inst = spec && spec->typeclass_inst != NULL;
+    /* Widen ONLY to a by-value FLAT PRODUCT (`slot_box_ty`: an owning-free Tier-C
+     * aggregate boxed into the slot, e.g. `tur_adt_Option__int`), NOT to a
+     * heap-ADT/struct HANDLE (`carrier_handle_ok`).  A heap handle threaded
+     * through the concrete mono `__cps` mishandles its interior carrier fields
+     * (show-collections: a Map with cstr keys printed the key POINTERS), so those
+     * stay on the strict scalar gate.  A scalar always passes `sig_slot_ok`. */
+    #define MONO_SLOT_OK(t, k) (is_inst ? sig_slot_ok((t), (k)) \
+                                        : (sig_slot_ok((t), (k)) || slot_box_ty(t)))
+    if (rt->kind != TY_NIL && !MONO_SLOT_OK(rt, rt->kind)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         const Type *pt = (i < spec->n_args) ? &spec->arg_types[i] : &p->type;
-        if (p->is_poly_fn) return false;   /* poly-fat param -- evict (see fn_sig_ok) */
-        bool fn_param_ok = pt->kind == TY_FN;   /* effectful admitted -- see fn_sig_ok */
+        if (p->is_poly_fn) return false;
+        bool fn_param_ok = pt->kind == TY_FN;
         if (!p->is_borrow && !fn_param_ok
-            && !sig_slot_ok(pt, pt->kind)) return false;
+            && !MONO_SLOT_OK(pt, pt->kind)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
+    #undef MONO_SLOT_OK
     return true;
 }
 

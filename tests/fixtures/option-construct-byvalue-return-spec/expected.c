@@ -4193,6 +4193,8 @@ static int64_t map_hyeq_hyloop__cps(void * iter_751, void * m2_hyhamt_752, void 
 static int64_t list_hyeq_qu__cps(int64_t l1_997, int64_t l2_998, int64_t cmp_fn, DK *__kont);
 static int64_t _un_uncons_hyfmap__cps(int64_t cell_1009, void * f_1010, DK *__kont);
 static int64_t set_hyeq_hyloop__cps(void * iter_1086, void * s2_hyhamt_1087, void * keyeq_1088, DK *__kont);
+static int64_t keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_bool__cps(tur_adt_Option__int o_1304, int64_t pred, DK *__kont);
+static int64_t keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_bool__cps(tur_adt_Option__float o_1304, int64_t pred, DK *__kont);
 static int64_t hamt_slnew__cps(DK *__kont) {
     void * __t0;
     __auto_type __ps_40 = (tur_hamt_new());
@@ -7117,56 +7119,76 @@ static tur_adt_Option__float some__spec__tur_adt_Option__float_double(double x) 
         return __ps_185;
 }
 
-static tur_adt_Option__int keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_bool(tur_adt_Option__int o, int64_t pred) {
-        tur_adt_Option__int __t186;
-        if ((bool)(o).is_some) {
-            tur_adt_Option__int __t187;
-            __auto_type __ps_188 = ((*( tur_thunk_bool_int64_t_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (int64_t)(o).value));
-            if (tur_panicking) return (tur_adt_Option__int){0};
-            if (__ps_188) {
-                __t187 = o;
-            } else {
-                __auto_type __ps_189 = (none__spec__tur_adt_Option__int());
-                if (tur_panicking) return (tur_adt_Option__int){0};
-                __t187 = __ps_189;
-            }
-            __t186 = __t187;
+static int64_t keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_bool__cps(tur_adt_Option__int o, int64_t pred, DK *__kont) {
+    tur_adt_Option__int __t0;
+    tur_adt_Option__int __t186;
+    if ((bool)(o).is_some) {
+        tur_adt_Option__int __t187;
+        __auto_type __ps_188 = ((*( tur_thunk_bool_int64_t_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (int64_t)(o).value));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        if (__ps_188) {
+            __t187 = o;
         } else {
-            __auto_type __ps_190 = (none__spec__tur_adt_Option__int());
-            if (tur_panicking) return (tur_adt_Option__int){0};
-            __t186 = __ps_190;
+            __auto_type __ps_189 = (none__spec__tur_adt_Option__int());
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            __t187 = __ps_189;
         }
-        return __t186;
+        __t186 = __t187;
+    } else {
+        __auto_type __ps_190 = (none__spec__tur_adt_Option__int());
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        __t186 = __ps_190;
+    }
+    __t0 = __t186;
+    return dk_run(__kont, __dk_reap_ptr((intptr_t)({ tur_adt_Option__int *__bx = (tur_adt_Option__int *)malloc(sizeof(tur_adt_Option__int)); *__bx = (__t0); __bx; })));
 }
-
+__attribute__((unused)) static tur_adt_Option__int keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_bool(tur_adt_Option__int o, int64_t pred) {
+    __dk_entry_depth++;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    int64_t __r = keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_bool__cps(o, pred, __root);
+    tur_adt_Option__int __ret = (*(tur_adt_Option__int *)(__r));
+    if (!tur_async_suspended) dk_free(__root);
+    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    return __ret;
+}
 static tur_adt_Option__int none__spec__tur_adt_Option__int() {
         __auto_type __ps_191 = (ctor_Option__int(false, (int64_t){0}));
         if (tur_panicking) return (tur_adt_Option__int){0};
         return __ps_191;
 }
 
-static tur_adt_Option__float keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_bool(tur_adt_Option__float o, int64_t pred) {
-        tur_adt_Option__float __t192;
-        if ((bool)(o).is_some) {
-            tur_adt_Option__float __t193;
-            __auto_type __ps_194 = ((*( tur_thunk_bool_double_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (double)(o).value));
-            if (tur_panicking) return (tur_adt_Option__float){0};
-            if (__ps_194) {
-                __t193 = o;
-            } else {
-                __auto_type __ps_195 = (none__spec__tur_adt_Option__float());
-                if (tur_panicking) return (tur_adt_Option__float){0};
-                __t193 = __ps_195;
-            }
-            __t192 = __t193;
+static int64_t keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_bool__cps(tur_adt_Option__float o, int64_t pred, DK *__kont) {
+    tur_adt_Option__float __t0;
+    tur_adt_Option__float __t192;
+    if ((bool)(o).is_some) {
+        tur_adt_Option__float __t193;
+        __auto_type __ps_194 = ((*( tur_thunk_bool_double_t *)((void *)(intptr_t)(pred)))((void *)(intptr_t)(pred), (double)(o).value));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        if (__ps_194) {
+            __t193 = o;
         } else {
-            __auto_type __ps_196 = (none__spec__tur_adt_Option__float());
-            if (tur_panicking) return (tur_adt_Option__float){0};
-            __t192 = __ps_196;
+            __auto_type __ps_195 = (none__spec__tur_adt_Option__float());
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            __t193 = __ps_195;
         }
-        return __t192;
+        __t192 = __t193;
+    } else {
+        __auto_type __ps_196 = (none__spec__tur_adt_Option__float());
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        __t192 = __ps_196;
+    }
+    __t0 = __t192;
+    return dk_run(__kont, __dk_reap_ptr((intptr_t)({ tur_adt_Option__float *__bx = (tur_adt_Option__float *)malloc(sizeof(tur_adt_Option__float)); *__bx = (__t0); __bx; })));
 }
-
+__attribute__((unused)) static tur_adt_Option__float keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_bool(tur_adt_Option__float o, int64_t pred) {
+    __dk_entry_depth++;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    int64_t __r = keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_bool__cps(o, pred, __root);
+    tur_adt_Option__float __ret = (*(tur_adt_Option__float *)(__r));
+    if (!tur_async_suspended) dk_free(__root);
+    if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
+    return __ret;
+}
 static tur_adt_Option__float none__spec__tur_adt_Option__float() {
         __auto_type __ps_197 = (ctor_Option__float(false, (double){0}));
         if (tur_panicking) return (tur_adt_Option__float){0};
