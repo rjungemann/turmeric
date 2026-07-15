@@ -588,9 +588,36 @@ DK path from source:
 
 **This is the stackless sign-off (Sec 8 item 4) passing from source, gated.** The
 Stage-0 prerequisite the kill-probe surfaced is done and demonstrated end-to-end.
-**Next: promote off the gate by doing the taint-dissolution stages for real --
-Stage C (full non-scalar E1 carrier-ABI) and Stage D (E4 exports) -- so effectful
-bodies leave fiber by default, not only under `--enable`.**
+
+### Session 2 (cont.) -- Stage F `eff` column + the REMAINING surface is measured
+
+Added the Stage-F `eff=N` column to `TUR_TRACE_EVICT` (`eff=1` marks a fn that
+performs/handles an effect -- the ONLY evictions that keep the fiber effect
+runtime alive; pure `eff=0` SIG-REJECT/SIG-EXPORT are out of scope per Sec 4). Also
+exempted `--enable=cps-tramp-resume` from the N6.5 hard-error gate (like
+`cps-async`): the flag EXPANDS the colored surface and legitimately carries
+in-flight BODY residuals until it graduates.
+
+**Corpus scan under the flag (275 effect-bearing fixtures) -- the actual remaining
+work for the deletion is BOUNDED and small:**
+
+| Category | all | **eff=1 (blocks deletion)** | stage |
+|---|---|---|---|
+| SIG-REJECT | 1171 | **7** | E1 (non-scalar carrier-ABI) |
+| SIG-EXPORT | 828 | **1** | E1/E4 |
+| SIG-INLINE-C | 2 | **2** | E5 |
+| SIG-TAINT | 22 | **22** | dissolves when above clear |
+| BODY-STRUCT-OR-TAINT | 44 | **38** | native DK admission (v1-style) |
+| BODY-UNSUPPORTED | 2 | **1** | native DK admission |
+
+The ~1990 pure `eff=0` SIG-* evictions are out of scope. The real remaining surface
+is **~48 effectful functions**: ~39 BODY roots (the same "drive effectful BODY
+shapes to DK-admission" work v1 did for the shipping config, now under the flag),
+8 non-scalar signatures (E1), 2 inline-C (E5); the 22 SIG-TAINT then dissolve.
+This is what Stages C-F now cover concretely. **Next: drive the 39 effectful BODY
+roots to DK-admission under the flag (largest bucket, same technique as v1), then
+E1 for the 8 non-scalar signatures, then E5, then the taint empties and Stage G
+(deletion) is unblocked.**
 
 ---
 

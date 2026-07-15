@@ -5199,8 +5199,14 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                 else if (perm_tainted) { cat = "SIG-TAINT"; sig_perm_route = true; }
                 else   cat = "BODY-STRUCT-OR-TAINT";
             }
-            if (getenv("TUR_TRACE_EVICT"))
-                fprintf(stderr, "[EVICT] %-22s %s %s\n", cat, nm, why);
+            if (getenv("TUR_TRACE_EVICT")) {
+                /* Stage F (v2): an `eff=1` column marks a fn that performs or
+                 * handles an effect -- the ONLY evictions that keep the fiber
+                 * effect runtime alive.  A pure SIG-REJECT/SIG-EXPORT (eff=0) is
+                 * out of scope for the deletion (plan Sec 4). */
+                int eff = (se && (se->eff_lo || se->eff_hi)) ? 1 : 0;
+                fprintf(stderr, "[EVICT] %-22s eff=%d %s %s\n", cat, eff, nm, why);
+            }
             /* The N6.5 gate governs the SHIPPING backend.  An experimental
              * `--enable` feature that EXPANDS the colored surface (e.g.
              * `cps-async`, which CPS-lowers `async`/`await` instead of running it
@@ -5209,7 +5215,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
              * work, gated behind its flag, not a regression in the graduated path.
              * Exempt such flags from the hard error; they keep the fallback until
              * the feature graduates.  The default (shipping) config stays strict. */
-            bool experimental_surface = g_opt_cps_async;
+            bool experimental_surface = g_opt_cps_async || g_opt_cps_tramp_resume;
             if (!sig_perm_route && !experimental_surface)
                 diag_emit(DIAG_ERROR, fd->binding->span,
                           "cps-backend: colored function '%s' fell back to the direct "
