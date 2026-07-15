@@ -1980,6 +1980,37 @@ static bool handle_delim_ok(const CTerm *t) {
                     return false;
             return true;
         }
+        case CT_HANDLE: {
+            /* A NESTED handle in this handle's handled body (e.g. `(handle (handle
+             * (do-write-read) (Read ..)) (Write ..))`: do-write-read performs Read
+             * -- handled by the inner handle -- and Write, which propagates to the
+             * outer).  The inner handle runs under its OWN prompt, so its delim +
+             * cases take the strict checks (via term_core_ok's own CT_HANDLE gate);
+             * but its normal-completion CONTINUATION delivers the inner result to
+             * THIS (enclosing) handle's prompt (KK_PROMPT), so admit the inner
+             * body via handle_delim_ok -- the same computation-join-to-prompt
+             * relaxation the top-level delim gets.  term_core_ok(CT_HANDLE)'s
+             * `reset_body_ok(body)` rejects that KK_PROMPT delivery, which is why
+             * the default->term_core_ok path below evicts an otherwise-emittable
+             * nested handle. */
+            CapSet hcs;
+            if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
+                || !handle_delim_ok(t->as.handle.delim)
+                || !handle_delim_ok(t->as.handle.body)
+                || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
+                return false;
+            for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
+                const CHandleCase *c = &t->as.handle.cases[ci];
+                CapSet ccs;
+                if (c->n_params > 1)
+                    for (uint32_t pi = 0; pi < c->n_params; pi++)
+                        if (!slot_ok_t(&c->params[pi]->type, c->params[pi]->type.kind))
+                            return false;
+                if (!handle_case_ok(c->case_body)) return false;
+                if (!collect_caps_case(c->case_body, c, &ccs)) return false;
+            }
+            return true;
+        }
         default:
             /* Interior control op / anything else: stricter core admission (no
              * KK_PROMPT delivery relaxation). */
