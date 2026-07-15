@@ -347,6 +347,42 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PK (LANDED) -- pure fn-value threading into an effect-free callee
+
+STRUCT-OR-TAINT distinct roots **26 -> 22**. Suite 2179/0.
+
+A colored function that threads a fn-VALUE (a plain `TY_FN` closure/fn-pointer or
+a poly-fat closure) as a call ARGUMENT used to always evict on that arg:
+`call_arg_ok` rejects a fat-fn atom, and a plain `TY_FN` atom fails the slot gate.
+That kept the pure higher-order-value-threading family on the fiber path.
+
+New `call_args_ok(fn, args, n, cps_to_direct)` admits a fn-value arg when the
+CALLEE is provably effect-free (`callee_effect_free`: its DECLARED effect row is
+empty -- NULL / `ERK_EMPTY`; a row variable or any concrete effect reads
+non-empty and is rejected, so the gate is conservative and fixpoint-independent,
+reading the elaboration-time row, not the taint pass). Wired into the three
+call-arg admission sites (`term_core_ok` CT_LETCALL/CT_TAILCALL, `handle_delim_ok`
+CT_TAILCALL).
+
+**Soundness.** An effect-free callee cannot perform an effect THROUGH a fn-value
+argument: were the callback effectful and invoked, that effect would propagate
+into the callee's own signature by row polymorphism (`apply-cb` calling
+`f : (fn [] #fx{Ask} int)` is itself `#fx{Ask}`). So no fiber<->DK effect mismatch
+can arise (the `unhandled effect` hazard in the `handle_delim_ok` NOTE), and the
+fat / one-word carrier crosses the call by value inline via `atoms_csv` -- no
+one-word slot spill. Verified the EFFECTFUL callback family stays correctly
+evicted: a minimal `apply-cb` repro (callback performs Ask through a direct-
+emitted indirect call, `run` installs a DK prompt) keeps `run` + the lifted
+callback on the fiber path and still prints 27.
+
+Cleared roots (all match `expected.stdout`): `test-map` / `test-filter`
+(hamt-lisp-map-filter, pass `double-val`/`keep-big` into `hamt/map`/`hamt/filter`),
+`test-merge-with` (hamt-lisp-merge-with), `then-parser-impl`
+(hkt-stdlib-parser-instances). The `test-option-eq-*` sibling stays evicted on a
+DIFFERENT blocker -- a by-value `(Option int)` ADT arg (`TY_APP`) that fails the
+call-arg slot gate -- which is the owning/by-value-aggregate track, not fn-value
+threading.
+
 ### Slice PG/PH -- `with-abort-panic` family (TY_NEVER + nested-handle-in-continuation)
 
 Two composable STRUCT-OR-TAINT slices via the root-profiling method (`ensure_S`
