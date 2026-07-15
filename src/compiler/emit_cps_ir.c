@@ -3500,17 +3500,39 @@ static void emit_term(CE *ce, const CTerm *t) {
                 && (lcb->as.appcont.kont.kind == KK_RET || lcb->as.appcont.kont.kind == KK_PROMPT)
                 && lcb->as.appcont.v.kind == CA_CVAR
                 && lcb->as.appcont.v.cvar_id == t->as.letcall.x.id;
-            if (g_opt_cps_tramp_resume && indirect_fv && trivial_cont && t->as.letcall.n == 0) {
+            /* E2: args must be int64-carrier-safe scalars (int/bool/cstr/ptr).  A
+             * float or aggregate arg needs a different __cps param ABI (float /
+             * E1 territory) -- leave those to the fallthrough. */
+            bool args_ok_cps = true;
+            for (uint32_t i = 0; i < t->as.letcall.n; i++) {
+                TypeKind k = t->as.letcall.args[i].ty;
+                if (k == TY_FLOAT || k == TY_FLOAT32 || k == TY_FLOAT64 || !slot_ty(k)) {
+                    args_ok_cps = false; break;
+                }
+            }
+            if (g_opt_cps_tramp_resume && indirect_fv && trivial_cont && args_ok_cps) {
                 int id = (*ce->helper_ctr)++;
+                uint32_t n = t->as.letcall.n;
                 char *fexpr = callee_name(t->as.letcall.fn);
                 const char *thread = (lcb->as.appcont.kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+                /* arg values cast to the int64 carrier the scalar __cps params use */
+                Buf av; buf_init(&av);     /* "(int64_t)(a0), (int64_t)(a1)" (no trailing) */
+                Buf sg; buf_init(&sg);     /* "int64_t, int64_t"            (no trailing) */
+                for (uint32_t i = 0; i < n; i++) {
+                    char *a = atom_str(ce, &t->as.letcall.args[i]);
+                    buf_printf(&av, "%s(int64_t)(%s)", i ? ", " : "", a);
+                    buf_printf(&sg, "%sint64_t", i ? ", " : "");
+                    free(a);
+                }
+                buf_putc(&av, '\0'); buf_putc(&sg, '\0');
                 ce_line(ce, "int64_t __cpsfp%d = __tur_cps_lookup((int64_t)(intptr_t)(%s));", id, fexpr);
-                ce_line(ce, "if (__cpsfp%d) return ((int64_t (*)(DK *))(intptr_t)__cpsfp%d)(%s);",
-                        id, id, thread);
+                ce_line(ce, "if (__cpsfp%d) return ((int64_t (*)(%s%sDK *))(intptr_t)__cpsfp%d)(%s%s%s);",
+                        id, sg.data, n ? ", " : "", id, av.data, n ? ", " : "", thread);
                 /* Unregistered (pure/external) callee: call the direct entry with a
                  * proper fn-ptr cast (the value is an int64 carrier) and deliver. */
-                ce_line(ce, "return dk_run(%s, (intptr_t)(((int64_t (*)(void))(intptr_t)(%s))()));",
-                        thread, fexpr);
+                ce_line(ce, "return dk_run(%s, (intptr_t)(((int64_t (*)(%s))(intptr_t)(%s))(%s)));",
+                        thread, n ? sg.data : "void", fexpr, av.data);
+                buf_free(&av); buf_free(&sg);
                 free(fexpr);
                 break;
             }

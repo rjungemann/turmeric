@@ -682,15 +682,23 @@ The kill-probe's E2 mechanism now works END-TO-END from source (gated), for a
 `n==0`); (b) capturing-lambda (fat-closure) fn-values (the box `__fn_cps` slot);
 then E1 non-scalar signatures, E5, SIG-TAINT empties, promote off the gate, Stage G.
 
-**Known flag limitation (multi-arg / fat-closure fn-values).** The `safe_to_delegate`
-gate is scoped to `n==0` (only 0-arg effectful fn-value calls go native + thread the
-DK); a MULTI-ARG or capturing-lambda effectful fn-value under the flag can still
-mismatch (the callee runs on the fiber while the caller's handle is DK -> `unhandled
-effect`). This is a pre-existing flag-exposed gap (an in-flight residual behind
-`--enable=cps-tramp-resume`, per the experimental-flag policy), NOT a default-config
-regression -- it is exactly what sub-slices (a)/(b) close before the gate is
-promoted. Do not promote off the gate until multi-arg + fat-closure threading land
-and the corpus scan shows no effectful `eff=1` eviction miscompiles.
+**Multi-arg LANDED.** Sub-slice (a) is done: the `safe_to_delegate` gate and the
+emission now thread an effectful fn-value call of ANY arity whose args are
+int64-carrier scalars (int/bool/cstr/ptr) -- each arg is cast to the `int64_t` the
+callee's scalar `__cps` params use (`call_args_scalar_carrier`). Verified for a
+named fn AND a lambda at 2 and 3 args (`35`, `1112`), plus parity on
+`effect-subtype-assign` / `effect-poly-map` / `effect-row-ho`. New fixture
+`cps-tramp-resume-fnvalue-args`. Suite 2187/0. A float/aggregate arg keeps the fn
+delegated (fiber) -- that needs the float/E1 param ABI.
+
+**Remaining flag limitation (capturing-lambda fat-closure fn-values).** The corpus
+BODY roots that stayed (33 eff=1) are CAPTURING lambdas: their value is a fat-closure
+env pointer, not a bare fn-ptr, so the registry's `direct-ptr -> cps-ptr` keying
+does not apply -- they need the fat-closure box `__fn_cps` slot (sub-slice b). Until
+that lands, a capturing effectful fn-value under the flag can still mismatch (an
+in-flight residual behind `--enable=cps-tramp-resume`, per the experimental-flag
+policy; NOT a default regression). Do not promote off the gate until (b) lands and
+the corpus scan shows no effectful `eff=1` eviction miscompiles.
 
 ---
 
