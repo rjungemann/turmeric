@@ -472,18 +472,42 @@ static bool wbd_effect_handled(const Symbol *name) {
     return false;
 }
 
-/* Every concrete effect of `row` discharged by an enclosing delegated handle?
- * An EMPTY row is trivially satisfied; a non-concrete (var / union / unresolved)
- * row returns false (the caller decides how to treat a bare row variable). */
+/* Every named effect of `row` discharged by an enclosing delegated handle?  An
+ * EMPTY row is trivially satisfied.  A CONCRETE row checks each effect's name; an
+ * UNRESOLVED row (a capability field's `#fx{Write}` annotation is parsed but not
+ * effect-lowered at CT-IR time) checks each symbolic name -- an uppercase name is
+ * a concrete effect, and it is compared by interned Symbol against g_wbd_handled
+ * exactly like a handle case's effect name.  A row VARIABLE / UNION returns false
+ * (the caller decides how to treat a bare row variable). */
 static bool row_concrete_all_wbd_handled(const EffectRow *row) {
     if (!row) return false;
     if (row->kind == ERK_EMPTY) return true;
-    if (row->kind != ERK_CONCRETE) return false;
-    for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
-        Effect *e = row->as.concrete.effects[i];
-        if (!e || !wbd_effect_handled(e->name)) return false;
+    if (row->kind == ERK_CONCRETE) {
+        for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            Effect *e = row->as.concrete.effects[i];
+            if (!e || !wbd_effect_handled(e->name)) return false;
+        }
+        return true;
     }
-    return true;
+    if (row->kind == ERK_UNRESOLVED) {
+        if (row->as.unresolved.n_sym_names == 0) return false;
+        for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++)
+            if (!wbd_effect_handled(row->as.unresolved.sym_names[i])) return false;
+        return true;
+    }
+    return false;
+}
+
+/* Is `row` a non-empty effect row all of whose names are wbd-handled?  (CONCRETE
+ * with >=1 effect, or UNRESOLVED with >=1 handled name.)  A pure/empty row is
+ * NOT a match here -- the caller wants an EFFECTFUL fn value. */
+static bool row_nonempty_all_wbd_handled(const EffectRow *row) {
+    if (!row) return false;
+    if (row->kind == ERK_CONCRETE) return row->as.concrete.n_effects > 0
+        && row_concrete_all_wbd_handled(row);
+    if (row->kind == ERK_UNRESOLVED) return row->as.unresolved.n_sym_names > 0
+        && row_concrete_all_wbd_handled(row);
+    return false;
 }
 
 /* Look up the top-level FnDef whose binding is `bind` (a lifted closure / defn),
@@ -523,6 +547,18 @@ static EffectRow *expr_fn_effect_row(CpsB *b, const Expr *e) {
         if (e->as.var.binding->type.kind == TY_FN)
             return e->as.var.binding->type.as.fn.effect_row;
     }
+    /* A struct-field access yielding an effect-annotated capability fn
+     * (`[print-line : fn #fx{Write}]`): the row lives on the record ctor field,
+     * not the field-access node's type.  Admits `(.print-line cap "..")` -- an
+     * EX_CALL whose fn_expr is a `.field` read. */
+    if (e->kind == EX_GET_FIELD) {
+        const CtorDef *c = e->as.get_field_.adt_ctor;
+        uint32_t fi = e->as.get_field_.field_idx;
+        if (c && fi < c->n_fields) return c->fields[fi].effect_row;
+    }
+    /* Fallback: any other fn-TYPED expression carries its declared row. */
+    if (e->type.kind == TY_FN)
+        return e->type.as.fn.effect_row;
     return NULL;
 }
 
@@ -623,9 +659,7 @@ static bool fnvalue_call_wbd_delegatable(CpsB *b, const Expr *e) {
     else if (e->as.call_.fn_binding
              && e->as.call_.fn_binding->type.kind == TY_FN)
         row = e->as.call_.fn_binding->type.as.fn.effect_row;
-    if (!row || row->kind != ERK_CONCRETE || row->as.concrete.n_effects == 0)
-        return false;
-    return row_concrete_all_wbd_handled(row);
+    return row_nonempty_all_wbd_handled(row);
 }
 
 /* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
@@ -1391,7 +1425,21 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         }
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
-            if (!fn) return false;                 /* indirect: unknown coloring */
+            if (!fn) {
+                /* An indirect callee with no binding -- e.g. a capability CALL
+                 * `(.print-line cap "..")` whose callee is a `.field` access
+                 * yielding an effect-annotated fn `[print-line : fn #fx{Write}]`.
+                 * Delegatable inside a delegated handle when the fn-value's entire
+                 * (concrete, non-empty) effect row is discharged locally
+                 * (fnvalue_call_wbd_delegatable reads the effect row off the field
+                 * fn type): the invoked capability performs exactly those fiber
+                 * effects on the global chain the handle installs, caught locally.
+                 * Its arguments must also delegate (a value-carrier arg is fine). */
+                if (!fnvalue_call_wbd_delegatable(b, e)) return false;
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                    if (!safe_to_delegate(b, e->as.call_.args[i])) return false;
+                return true;
+            }
             if (callee_colored(b, fn)) {
                 /* A colored GLOBAL callee whose effects are ALL discharged by the
                  * enclosing delegated handle runs entirely under the local fiber
