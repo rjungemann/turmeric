@@ -347,6 +347,27 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PO (LANDED) -- leaf-fiber self-recursive HOF whole-body delegation
+
+STRUCT-OR-TAINT distinct roots **12 -> 11**. Suite 2179/0, no codegen churn.
+Implements the gated self-call delegation the PN note called for: a colored HOF
+that INDIRECT-calls an EFFECTFUL fn-value and self-recurses (`map-list =
+(+ (f n) (map-list (- n 1) f))`, `f : #fx{e}`) is permanently fiber and now
+whole-body-delegates its recursion instead of evicting (moved into S; same direct
+body). The gate `expr_has_indirect_fnvalue_call` requires the fn-value callee's
+effect row NON-EMPTY -- which is exactly what keeps P6's `__cons-fmap` (indirect-
+calls a PURE fmap, empty row) on its native heap-join path, and keeps normal
+recursive functions native. Cleared `map-list`.
+
+**Remaining 11 roots.** `apply-logged` (a CROSS-HOF leaf-fiber case: calls
+`apply`, itself a leaf-fiber HOF, passing an effectful callback -- not self-
+recursive, no local handle) + its taint victims (`__fn_1282/1283`,
+`do-write-line`, `inner`, `log-add`, `main` in those fixtures); and the owning
+by-value-ADT track `test-option-eq-*` (3) + `re-parse-class`. Next slices: (1)
+extend leaf-fiber delegation to a call to ANOTHER leaf-fiber HOF with an effectful
+callback and an escaping effect (apply-logged); (2) carrier-box a by-value ADT arg
+in the cps->direct delegation (test-option-eq-*).
+
 ### Slice PN (LANDED) -- delegate a fully-handled fn-value call in a handler-installer
 
 STRUCT-OR-TAINT distinct roots **14 -> 12**. Suite 2179/0. A `handle` whose body
