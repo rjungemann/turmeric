@@ -443,8 +443,20 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
                  * argument is still caught by the seed scan (cps_directly_uses_
                  * control) and the arg recursion below, so skipping the call
                  * itself is sound.  See
-                 * docs/archive/history/cps-coloring-overcolors-nonnode-calls.md. */
-                if (e->as.call_.ctor == NULL)
+                 * docs/archive/history/cps-coloring-overcolors-nonnode-calls.md.
+                 *
+                 * Same reasoning for a RESOLVED call whose callee's body is
+                 * inline-C (`body_is_inline_c`): an inline-C body is opaque C with
+                 * NO Turmeric control op, so it can never reach a perform/handle/
+                 * shift -- it is a leaf exactly like a constructor.  This stops a
+                 * contract macro (`require-msg!` -> `tur-contract-check`, an
+                 * embedded inline-C `defn` absent from the node set) from
+                 * spuriously coloring an otherwise-pure function, which then
+                 * SIG-REJECTs and cascades its callers onto the fiber path (the
+                 * sized-bitvec/matrix `main`s tail-call such a contract helper). */
+                bool callee_inline_c = e->as.call_.fn_binding
+                    && e->as.call_.fn_binding->body_is_inline_c;
+                if (e->as.call_.ctor == NULL && !callee_inline_c)
                     self->has_indirect = true;
             }
             cps_collect_calls(e->as.call_.fn_expr, nodes, n_nodes, self);

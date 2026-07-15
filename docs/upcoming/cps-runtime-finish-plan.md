@@ -347,6 +347,31 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PX (LANDED) -- coloring precision: inline-C callee is not an indirect call
+
+**BODY-STRUCT-OR-TAINT collapses from 3 distinct roots to 1** -- both sized
+`main`s AND `re-parse-class` cleared in one fix; only `test-option-eq-nones`
+remains. Suite 2179/0 (one codegen snapshot, `load-inside-defmodule-injects-names`,
+regenerated -- ~3 functions correctly lost their needless `__cps` variant).
+
+`cps_collect_calls` set `has_indirect` (-> colors the function) for ANY call whose
+callee is not a top-level coloring node -- including a RESOLVED call to an
+inline-C-bodied `defn`. The doc `docs/archive/history/cps-coloring-overcolors-
+nonnode-calls.md` already carved out constructors (a non-node leaf that reaches no
+control op); an inline-C body is the same case -- opaque C with NO Turmeric
+control op, so it can never reach a perform/handle/shift. Extended the carve-out:
+a resolved call whose `fn_binding->body_is_inline_c` is set no longer colors its
+caller. This stops a contract macro (`require-msg!` -> `tur-contract-check`, an
+embedded inline-C `defn` absent from the node set) from spuriously coloring an
+otherwise-pure function like `sized-bitvec-assert-len!`; that de-coloring cascades
+correctly -- `assert-len!` uncolored -> `main`'s call to it delegates to the direct
+emitter (which handles the by-value `Size` GADT natively) -> the sized `main`s and
+`re-parse-class` all drop out of BODY-*. Corpus-wide the fix also un-colored a
+class of spuriously-colored inline-C-calling functions (SIG-REJECT 8209->8156,
+SIG-MAIN 430->406) -- the coverage win the history doc predicted. Over-coloring was
+always SAFE (never a miscompile), so this is purely a coverage/precision gain,
+verified by the green runtime suite.
+
 ### Slice PW (LANDED) -- unsafe-marker handle lowers transparently to its body
 
 An `(unsafe ...)` block desugars to a handle on the built-in `Unsafe` effect, but
