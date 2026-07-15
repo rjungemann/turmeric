@@ -25,7 +25,74 @@ typedef struct CpsB {
     Expr  *program;     /* for colored-callee lookup */
     uint32_t counter;   /* fresh-id source */
     CKont  retk;        /* the function's return continuation (KK_RET) */
+    const Binding *cur_fn;   /* binding of the fn being translated (self-call detection) */
+    bool cur_fn_leaf_fiber;  /* the fn's body indirect-calls a fn-VALUE -> permanently fiber */
 } CpsB;
+
+static const Expr *ascribe_peel(const Expr *e);   /* fwd */
+
+/* Does `e` (recursively) contain a call THROUGH AN EFFECTFUL FN-VALUE -- an
+ * indirect call whose callee binding is a fn-typed NON-global (a param or local
+ * closure) with a NON-EMPTY effect row (concrete effects, or a row variable)?
+ * Such a call cannot thread the DK (the callee is opaque) AND performs an effect,
+ * so a function whose body contains one is PERMANENTLY fiber: its effect is
+ * reached through the indirect call and can never be DK-emitted.  Used to gate
+ * the self-recursive-call whole-body delegation to genuinely leaf-fiber HOFs
+ * (map-list `f : #fx{e}`, apply-logged), so that neither a normal recursive
+ * function NOR a PURE higher-order function that CPS-emits natively via a
+ * heap-join (P6: `__cons-fmap` indirect-calls a PURE fmap `f` and recurses --
+ * empty effect row, so NOT matched) is wrongly routed onto the direct path.
+ * A bare fn-value with no effect annotation (empty row) is NOT leaf-fiber.
+ * Bounded depth guard against pathological nesting. */
+static bool fn_binding_effectful(const Binding *fb) {
+    if (!fb || fb->is_global || fb->type.kind != TY_FN) return false;
+    struct EffectRow *r = fb->type.as.fn.effect_row;
+    return r && r->kind != ERK_EMPTY;
+}
+static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
+    e = ascribe_peel(e);
+    if (!e || depth > 64) return false;
+    #define IFC(x) expr_has_indirect_fnvalue_call((x), depth + 1)
+    switch (e->kind) {
+        case EX_CALL: {
+            if (fn_binding_effectful(e->as.call_.fn_binding)) return true;
+            if (e->as.call_.fn_expr && IFC(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (IFC(e->as.call_.args[i])) return true;
+            return false;
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (IFC(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (IFC(e->as.do_.items[i])) return true;
+            return false;
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (IFC(e->as.let_.bindings[i].init)) return true;
+            return IFC(e->as.let_.body);
+        case EX_IF:
+            return IFC(e->as.if_.cond) || IFC(e->as.if_.then_)
+                || (e->as.if_.else_or_null && IFC(e->as.if_.else_or_null));
+        case EX_HANDLE:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                if (IFC(h->body)) return true;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    if (IFC(h->cases[i].body)) return true;
+            }
+            return false;
+        case EX_WHILE:
+            return IFC(e->as.while_.cond) || IFC(e->as.while_.body);
+        case EX_SET:      return IFC(e->as.set_.value);
+        case EX_CAST:     return IFC(e->as.cast_.expr);
+        case EX_RETURN:   return IFC(e->as.return_.value);
+        default:          return false;
+    }
+    #undef IFC
+}
 
 /* ---- small allocation helpers ----------------------------------------- */
 
@@ -479,6 +546,17 @@ static EffectRow *expr_fn_effect_row(CpsB *b, const Expr *e) {
  * Conservative: anything not matching returns false (keep native). */
 static bool colored_call_wbd_delegatable(CpsB *b, const Expr *e) {
     const Binding *fn = e->as.call_.fn_binding;
+    /* A SELF-recursive call in a LEAF-FIBER function (one whose body indirect-calls
+     * a fn-value, so it is permanently fiber and evicts anyway) has the same
+     * classification as the function: if the rest of the body whole-body-delegates
+     * (fiber), the self-call is fiber-to-fiber.  Admitting it lets a leaf-fiber HOF
+     * (`map-list = (+ (f n) (map-list (- n 1) f))`) whole-body-delegate its
+     * recursion instead of evicting -- no codegen regression, since it was already
+     * on the direct path.  The leaf-fiber gate is essential: WITHOUT it, a normal
+     * recursive function (which should CPS-emit natively) would be wrongly routed
+     * onto the direct delegation path.  An un-handled `perform` still blocks
+     * delegation, so a DK-effect leaf-fiber self-recursion stays native. */
+    if (fn && b->cur_fn && fn == b->cur_fn && b->cur_fn_leaf_fiber) return true;
     if (g_wbd_n_handled == 0 || !fn || !fn->is_global || e->as.call_.fn_expr
         || !b->program || b->program->kind != EX_PROGRAM)
         return false;
@@ -2548,6 +2626,8 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     CpsB b;
     b.a = a; b.program = program; b.counter = 0;
     b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
+    b.cur_fn = fd->binding;
+    b.cur_fn_leaf_fiber = expr_has_indirect_fnvalue_call(fd->body, 0);
     /* Phase-1 keystone (control-free colour-only shape): a colored function whose
      * whole body is delegatable (no control op, no colored call -- colored only by
      * a capturing closure it builds) emits as a single CT_LETRAW, so the direct
