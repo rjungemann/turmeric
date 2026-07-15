@@ -347,6 +347,47 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PL (LANDED) -- permanent-fiber classification for whole-body-delegated effects
+
+STRUCT-OR-TAINT distinct roots **22 -> 16**. Suite 2179/0. No codegen change (the
+recategorized fns were already evicted to the direct emitter; only the EVICT
+CATEGORY moves BODY-STRUCT-OR-TAINT -> SIG-TAINT).
+
+An effect reached through a direct-emitted indirect (fn-value) call is
+PERMANENTLY fiber for the current backend -- the DK machine cannot thread a
+continuation through an opaque fn-value call -- so its taint cascade is permanent
+SIG routing, NOT a fixable BODY root. The taint model did not recognize this: a
+whole-body-delegated colored fn (`apply-cb`, body = one CT_LETRAW around the
+indirect call; `run`, handle delegated) runs its effects on the FIBER runtime,
+yet its effects were not in the base (permanent) fiber taint.
+
+- **ensure_S** seeds a whole-body-delegated candidate's effects
+  (`term_is_whole_body_delegation`: a single CT_LETRAW tailed by an appcont to
+  KK_RET) into `base_lo/base_hi`, which feeds BOTH the main and permanent taint
+  fixpoints -> the effect classifies permanently fiber. A control-free single-op
+  body matches the shape but has empty effects (no-op).
+- **safe_to_delegate** lets a handler-installer (`run` = `(handle (apply-cb ..)
+  (Ask ..))`, apply-cb : #fx{Ask}) whole-body-delegate a call to a colored GLOBAL
+  callee when ALL the callee's declared effects are discharged by the enclosing
+  delegated handle (`callee_effects_all_wbd_handled`) -- so run's term becomes a
+  whole-body delegation and the seeding above fires.
+
+Cleared (BODY -> SIG-TAINT): `run`, `run-all`, `counted-sum`, `f`, `g`, `greet`.
+Verified: effectful-callback repro still prints 27; effect-poly / effect-row /
+currying-effect-partial fixtures match expected output.
+
+**Remaining 16 STRUCT-OR-TAINT roots + the extension that clears most.** The
+still-BODY effectful-fn-value roots (`__fn_1281/1282/1283/1285`, `apply-logged`,
+`map-list`, `run-with`, `my-eff`, + taint victims `do-write-line`, `inner`,
+`log-add`, `main`) have a handler-installer whose delegated body calls a callee
+with a POLYMORPHIC effect row (`map-list : #fx{e}`), which `callee_effects_all_
+wbd_handled` rejects (it requires ERK_CONCRETE). The instantiated effect at the
+call site is the fn-value ARGUMENT's effect (the callback's `Log`), which the
+handle discharges -- so the sound extension is: for a callee with an ERK_VAR row,
+require every fn-typed argument's effect row to be concrete and subset of
+`g_wbd_handled`. `test-option-eq-*` (3) stay on the owning by-value-ADT-arg track
+(unrelated).
+
 ### Slice PK (LANDED) -- pure fn-value threading into an effect-free callee
 
 STRUCT-OR-TAINT distinct roots **26 -> 22**. Suite 2179/0.
