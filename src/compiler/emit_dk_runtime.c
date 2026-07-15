@@ -263,7 +263,9 @@ void emit_cps_serial_runtime_prelude(Buf *out) {
 
 /* ---- runtime prelude: a faithful C port of src/runtime/cps_prompt.c ----- */
 
-void emit_cps_runtime_prelude(Buf *out) {
+void emit_cps_runtime_prelude(Buf *out) { emit_cps_runtime_prelude_ex(out, false); }
+
+void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
     buf_puts(out,
 "/* CPS substrate (cps-transform-plan): multi-prompt delimited-control machine.\n"
 " * Heap-reified continuation chains (DK); a reset is a prompt, a shift slices\n"
@@ -286,7 +288,10 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    DKKind kind; DKFrame fn; intptr_t env; int tag;\n"
 "    DKBody body; intptr_t body_env;\n"
 "    DKHandler handler; intptr_t handler_env; bool shallow;\n"
-"    DKResumeFrame rfn; DK *next;\n"
+"    DKResumeFrame rfn; DK *next;\n");
+    if (tramp) buf_puts(out,
+"    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n");
+    buf_puts(out,
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
 "    DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;\n"
@@ -318,13 +323,23 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
 "static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
 "    return dk_handler_impl(tag, fn, env, true, next);\n"
-"}\n"
+"}\n");
+    if (tramp) buf_puts(out,
+"/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry\n"
+" * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
+"static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
+"    DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;\n"
+"}\n");
+    buf_puts(out,
 "static DK *dk_copy_node(const DK *n);\n");
     buf_puts(out,
 "static DK *dk_copy_node(const DK *n) {\n"
 "    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;\n"
 "    c->body = n->body; c->body_env = n->body_env;\n"
-"    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;\n"
+"    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;\n");
+    if (tramp) buf_puts(out,
+"    c->tail_resume = n->tail_resume;\n");
+    buf_puts(out,
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
@@ -427,6 +442,56 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
+    if (tramp) buf_puts(out,
+"/* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *\n"
+" * A tail-resume handler does not resume inline (which nests ~160 B of C stack\n"
+" * per resumed perform -> O(N)); instead dk_perform yields the resumed chain to\n"
+" * the entry driver, which re-enters it from the top. Pending handle-continuation\n"
+" * deliveries (what dk_run_impl(H->next,r) would run) ride a heap meta-stack in\n"
+" * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is\n"
+" * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at\n"
+" * N=1e6 by docs/upcoming/v2/probes/e7-fidelity-probe.c. */\n"
+"static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */\n"
+"static DK      *g_dk_resume_chain = NULL;\n"
+"static intptr_t g_dk_resume_val = 0;\n"
+"static DK     **g_dk_meta = NULL;\n"
+"static size_t   g_dk_meta_n = 0, g_dk_meta_cap = 0;\n"
+"static void __dk_meta_push(DK *d) {\n"
+"    if (g_dk_meta_n == g_dk_meta_cap) {\n"
+"        g_dk_meta_cap = g_dk_meta_cap ? g_dk_meta_cap * 2 : 16;\n"
+"        g_dk_meta = (DK **)realloc(g_dk_meta, g_dk_meta_cap * sizeof(DK *));\n"
+"    }\n"
+"    g_dk_meta[g_dk_meta_n++] = d;\n"
+"}\n"
+"static bool __dk_delivery_noop(const DK *d) {   /* only HANDLER/DONE -> identity */\n"
+"    for (const DK *p = d; p; p = p->next)\n"
+"        if (p->kind != DKK_HANDLER && p->kind != DKK_DONE) return false;\n"
+"    return true;\n"
+"}\n"
+"/* tail-resume: yield the resumed chain to the driver (never returns). */\n"
+"static intptr_t dk_tail_resume(DK *sub, intptr_t v) {\n"
+"    g_dk_resume_chain = sub; g_dk_resume_val = v;\n"
+"    longjmp(*g_dk_driver, 1);\n"
+"    return 0; /* unreachable */\n"
+"}\n"
+"/* Run the meta-stack trampoline to completion after a tail-resume longjmp landed\n"
+" * in the entry wrapper. Owns its own jmp_buf so further yields land here. */\n"
+"static intptr_t __dk_drive_after(void) {\n"
+"    jmp_buf jb; g_dk_driver = &jb;\n"
+"    intptr_t r;\n"
+"    for (;;) {\n"
+"        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
+"        if (setjmp(jb) == 0) {\n"
+"            r = dk_run_impl(ch, rv, false);\n"
+"            dk_free(ch);\n"
+"            if (g_dk_meta_n == 0) return r;\n"
+"            g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];\n"
+"            g_dk_resume_val = r;\n"
+"        } else {\n"
+"            dk_free(ch);   /* yielded again mid-run: loop, flat */\n"
+"        }\n"
+"    }\n"
+"}\n");
     buf_puts(out,
 "static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {\n"
 "    DK *H = k;\n"
@@ -460,7 +525,17 @@ void emit_cps_runtime_prelude(Buf *out) {
 "         * handler it is [done], i.e. unchanged from before. */\n"
 "        tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));\n"
 "    }\n"
-"    sub = dk_append(sub, tail);\n"
+"    sub = dk_append(sub, tail);\n");
+    if (tramp) buf_puts(out,
+"    /* E7: a tail-resume handler under an active driver yields the resumed chain\n"
+"     * rather than resuming inline; queue its H->next delivery (unless a no-op) so\n"
+"     * it runs after the resumed chain settles, in nesting order. */\n"
+"    if (H->tail_resume && g_dk_driver) {\n"
+"        DK *__deliv = dk_copy_range(H->next, NULL);\n"
+"        if (__dk_delivery_noop(__deliv)) dk_free(__deliv); else __dk_meta_push(__deliv);\n"
+"        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
+"    }\n");
+    buf_puts(out,
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
 "    dk_free(sub);\n"
 "    return dk_run_impl(H->next, r, false);\n"
