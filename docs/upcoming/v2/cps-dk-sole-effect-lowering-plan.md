@@ -692,6 +692,48 @@ perform continuation), then the E1/E2 fn-value ABI.**
   flag, diff vs baseline) must be part of every future stage's gate -- the main
   suite does not cover flag-on behavior.
 
+### Session 3 (cont.) -- drove the flag-on soundness sweep 7 mismatches -> 3
+
+Built a repeatable **flag-on soundness sweep** (build+run the 274 effect fixtures
+under `--enable=cps-tramp-resume`, diff vs baseline, distinguishing build-fails
+from runtime divergence -- an earlier ad-hoc sweep was unreliable because it reused
+stale binaries). Starting point after the E2 revert: 261 sound / 3 build-fail / 7
+runtime mismatch. Landed four soundness fixes, all gated:
+
+1. **Reverted aggressive E3.** Making EVERY zero-arg main d2b broke a main that
+   transitively reaches fiber effect code (the DK entry does not activate the fiber
+   effect runtime): SIGSEGV / skipped-println / unhandled-effect, and it triggered
+   the pre-existing `tur_poly_fn_t/void*` build error. Restored the historical
+   `contains shift` gate on both configs.
+2. **E7 driver in the direct->cps wrapper** (not only the d2b main), so a colored
+   body reached from a plain main (`(println (run))`) still trampolines flat.
+3. **Shallow-handler tail-resume fix.** `emit_resume` must yield (`dk_tail_resume`)
+   only for a case installed with `dk_handler_tail` -- a DEEP tail-resume. A shallow
+   case was yielding while `dk_perform` queued no delivery, dropping the handle's
+   post-continuation (`(* 10 (handle-shallow ...))` -> 42 not 420). Threaded via a
+   new `CE.case_tail_resume` flag.
+4. **Evict + taint effectful fn-value CALLS.** An effectful fn-value call can't
+   thread the DK (needs E2); it now evicts `CT_UNSUPPORTED`, is `sig_perm`, and the
+   fn-value's concrete effect row is credited as a perform so the effect taints and
+   the DK handler co-classifies to fiber.
+
+**Result: 268 / 274 sound, 0 build-fails.** Default suite 2185/0; E7 fixtures
+unchanged. **Three mismatches remain, each a genuine taint-completeness gap:**
+
+- `effect-poly-infer` -- an effectful LAMBDA is CPS-emitted (DK) but USED AS A
+  VALUE; its direct entry, invoked indirectly, installs a fresh DK root, so its
+  `perform` escapes. Fix: an effectful fn *used as a fn-value* (a lambda, or an
+  address-taken named fn) must EVICT to fiber so its effect taints and the handler
+  co-evicts. (A name-prefix `__fn` heuristic is tempting but risks regressing
+  effectful lambdas that currently work; needs a proper "address-taken" analysis.)
+- `fiber-effect`, `p19-8-fiber-effect-chain` -- CONCURRENCY fibers (`spawn`) mixed
+  with effects. A handle DK-lowers while an effect is performed inside a spawned
+  fiber, which the taint model does not co-classify across the fiber boundary.
+
+These are the last flag-on escapes; they gate promotion and are the concrete
+next-session targets (alongside the fat-closure `__fn_cps` E2 ABI, which is what
+would let these paths thread the DK instead of merely evicting).
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
