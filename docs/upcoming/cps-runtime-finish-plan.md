@@ -347,6 +347,30 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PQ (LANDED) -- capability (struct-field fn-value) call delegation
+
+STRUCT-OR-TAINT distinct roots **10 -> 7**. Suite 2179/0. A `handle` whose body
+invokes an effect-annotated fn-value stored in a STRUCT FIELD -- `(.print-line cap
+"..")`, `Printer.print-line : fn #fx{Write}`, handler handles Write -- is an
+EX_CALL with `fn_binding == NULL` (an indirect `.field` callee) that
+safe_to_delegate rejected outright.  Now: (1) a binding-less indirect callee
+routes through `fnvalue_call_wbd_delegatable`; (2) `expr_fn_effect_row` reads a
+capability field's row off the record ctor field (`CtorField.effect_row`); (3)
+that row is ERK_UNRESOLVED at CT-IR time, so `row_concrete_all_wbd_handled` now
+matches an UNRESOLVED row by symbolic effect name too.  `main` whole-body-
+delegates -> PL seeds Write fiber -> `do-write-line` + the `__fn_128*` callback
+victims reclassify to SIG-TAINT.  Cleared `do-write-line`, `__fn_1282`,
+`__fn_1283`.
+
+**Remaining 7 roots** (this session: STRUCT-OR-TAINT 26 -> 7 across PK-PQ, suite
+2179/0 throughout): `log-add` + `main` (currying-effect-partial) need the
+EX_CLOSURE partial-app keystone -- `(log-add 10)` is a capturing closure (a
+partial application of a colored fn) that `main`'s handle body binds and calls;
+`main` evicts BODY-UNSUPPORTED on that EX_CLOSURE, so it never reaches the
+handler-installer delegation.  `test-option-eq-*` (3) + `re-parse-class` are the
+owning by-value-ADT track (carrier-box a by-value ADT arg in the cps->direct
+delegation).  `inner` is a taint victim.
+
 ### Slice PP (LANDED) -- cross-HOF leaf-fiber delegation clears apply-logged
 
 STRUCT-OR-TAINT distinct roots **11 -> 10**. Suite 2179/0. The cross-function
