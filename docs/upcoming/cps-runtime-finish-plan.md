@@ -347,6 +347,29 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PW (LANDED) -- unsafe-marker handle lowers transparently to its body
+
+An `(unsafe ...)` block desugars to a handle on the built-in `Unsafe` effect, but
+`Unsafe` is a compile-time MARKER that is never performed at runtime
+(`is_unsafe_marker`) -- the handler never fires. `build_handle` now lowers such a
+handle directly to its body (`cps_bind(h->body, ...)`) instead of a `CT_HANDLE`.
+This keeps the body's operations in the plain function body, where `term_core_ok`
+admits a `CT_LETRAW`, rather than inside a handle delim where `handle_delim_ok`
+(correctly) rejects a fiber-runtime `CT_LETRAW`. Suite 2179/0, no regressions;
+the `sized-sz3-bitvec`/`-matrix` mains now translate to a flat let-chain with no
+spurious handles (a real simplification + the correct lowering).
+
+This does NOT by itself clear the sized `main` STRUCT-OR-TAINT root: the residual
+blocker, now precisely diagnosed, is the tail `tailcall sized-bitvec-assert-len!
+(bv __t3 j4)` where (a) `__t3 : Size` is a recursive GADT lowered as a BY-VALUE
+ADT WITH DROP GLUE (`is_heap` is only set by an explicit `:heap` kw, never auto-
+detected for a recursive type; so `slot_ok_t(Size)` = false -> `atom_ok` rejects
+the arg), and (b) `assert-len!` SIG-REJECTs on its `Size` param, so the colored
+tailcall threading `j4` targets a callee with no `__cps` variant. This is the same
+by-value-aggregate-with-drop-glue crossing as `re-parse-class` (area 1), plus a
+colored-SIG-REJECT-callee-with-continuation wrinkle -- genuine drop-glue +
+signature codegen, not a predicate widening.
+
 ### Slice PV (LANDED) -- partial-application inlining clears the EX_CLOSURE keystone
 
 **BODY-UNSUPPORTED -> 0** (the last `EX_CLOSURE` root gone) and STRUCT-OR-TAINT

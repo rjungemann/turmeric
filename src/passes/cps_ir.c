@@ -1713,6 +1713,17 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
         u->as.unsupported.why = "handle: no cases";
         return u;
     }
+    /* An `(unsafe ...)` block desugars to a handle on the built-in Unsafe effect,
+     * but Unsafe is a pure compile-time MARKER that is never performed at runtime
+     * (is_unsafe_marker): the handler never fires.  So the handle is semantically
+     * transparent -- lower it to its body directly rather than a CT_HANDLE.  This
+     * keeps the body's operations (e.g. delegated owning inline-C allocs in the
+     * sized-bitvec/matrix mains) in the plain function body, where term_core_ok
+     * admits a CT_LETRAW -- instead of inside a handle delim, where handle_delim_ok
+     * (correctly) rejects a fiber-runtime CT_LETRAW.  A REAL effect performed
+     * inside the body still threads the enclosing DK continuation natively. */
+    if (h->is_unsafe_marker)
+        return cps_bind(b, (Expr *)h->body, x, cont);
     CTerm *t = new_term(b, CT_HANDLE);
     t->as.handle.x = x;
     t->as.handle.delim = cps_tail(b, h->body, kont_prompt(e->type.kind));
