@@ -650,6 +650,48 @@ signature admission -> E2 fn-value `__fn_cps` ABI (the big one) -> E5 (2 inline-
 -> Stage G deletion. **Next concrete step: Slice C1 (admit `CT_LETCONT` in the
 perform continuation), then the E1/E2 fn-value ABI.**
 
+### Session 3 -- C1 landed; E2 attempted, REVERTED (unsound); the flag is provably
+### incomplete in intermediate states
+
+- **C1 LANDED (gated):** `perform_cont_reset_ok` admits a `CT_LETCONT` join and a
+  `KK_VAR` join-jump under the flag, so a branch feeding a subsequent perform lifts
+  into the RESUME_FRAME. `effect-do-union` clears; parity holds on the effect-row
+  fixtures. Fixture `cps-tramp-resume-join`. (This slice is sound and kept.)
+- **E2 ATTEMPTED then REVERTED.** Built a `__tur_cps_lookup(direct-ptr -> cps-ptr)`
+  registry + tail-position threading (0-arg, then multi-arg scalar). It works for a
+  BARE function pointer (named fn / non-capturing lambda) -- verified `5`, `35`,
+  `1112`. **But it is unsound for a CAPTURING closure**: the fn-value there is an
+  ENV pointer, not a thunk pointer, so the registry lookup misses and the fallback
+  calls the env as a function -> wrong value / crash. There is NO way to tell a
+  bare-fn-ptr from a capturing-closure at the call site without the fat-closure box
+  `__fn_cps` slot, so the registry approach is a dead end. Reverted (commit
+  e92609f). **E2 genuinely requires the fat-closure box `__fn_cps` slot (plan E2 as
+  originally written), not a side registry.**
+- **CRITICAL FINDING -- partial migration is unsound behind the flag.** A soundness
+  sweep of the effect fixtures UNDER THE FLAG (the main suite only exercises them
+  flag-OFF, so it never caught this) shows that even WITHOUT E2, the E1-lite/C1
+  handle-DK-lowering leaves several shapes ESCAPING (`unhandled effect`):
+  `cps-backend-capture-fnvalue`, `cps-backend-indirect-call`, `effect-poly-infer`,
+  `fiber-effect`. Root: a handle DK-lowers, but its effect is still performed
+  through an unthreadable path (a capturing fn-value, an indirect call, a fiber)
+  that stays fiber, and the taint model does not co-classify that performer with
+  the DK handler. **The flag cannot be sound until (a) every effect path can thread
+  the DK (full E1+E2) AND (b) the taint model conservatively evicts any handle
+  whose effect could be performed through a not-yet-threadable path.** This is
+  inherent to a partial migration; the DEFAULT config stays sound (suite 2187/0),
+  and the flag is a genuine in-flight experiment that MUST NOT be promoted until
+  both hold.
+- **Revised guidance for the next session:** do NOT extend gated admission
+  piecemeal -- each increment that moves a handle to DK without a *complete* taint
+  guard adds an escape. The sound path is: (1) implement the fat-closure `__fn_cps`
+  ABI (E2) and the carrier-ABI `__cps` for non-scalar signatures (E1) so effect
+  paths are actually threadable; (2) add a taint-completeness guard that keeps a
+  handle on fiber unless ALL performers of its effect are DK-threadable; (3) only
+  then does the gated corpus become escape-free and the gate promotable. A
+  per-stage `--enable` soundness sweep (build+run the effect fixtures UNDER the
+  flag, diff vs baseline) must be part of every future stage's gate -- the main
+  suite does not cover flag-on behavior.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
