@@ -112,3 +112,24 @@ A correct fix may require the real Windows x64 context switch that WIN3 defers
 (`fiber_ctx_x64_win.asm`) rather than Win32 Fibers, since a hand-rolled context
 switch stores a register snapshot -- the same thing ucontext does -- whereas a
 Win32 fiber is an opaque OS-owned execution unit.
+
+## Related: cross-thread fiber migration (`scheduler-multithread`)
+
+Same root cause, different symptom. `scheduler-multithread` runs two fibers on a
+2-thread scheduler and expects each to print a distinct thread id. On Windows it
+is **nondeterministic**: it often prints the same id twice (`1 1` / `2 2`), and
+under the parallel suite's CPU load it occasionally **hangs** (exit 124). It
+"passes" only when the scheduler happens to place the fibers so their ids differ.
+
+The cause is that **Win32 Fibers are thread-affine**: a fiber created (via
+`CreateFiber`) on thread A cannot be resumed with `SwitchToFiber` on thread B --
+that is undefined and can deadlock. A multithread scheduler migrates fibers
+across worker threads, which the ucontext model (a portable register snapshot)
+supports and Win32 Fibers do not.
+
+This is NOT a regression from the WIN1 fixture work -- the fixture's emitted C is
+byte-identical before and after it -- it is the same Win32-Fiber limitation as
+the multishot abort above, and it lands in the same place: WIN3's real x64
+context switch, which is thread-agnostic and re-entrant, is the actual fix. Until
+then, turmeric-side multithread scheduling is unsupported on Windows (consistent
+with the `io_iocp.c` async stub).

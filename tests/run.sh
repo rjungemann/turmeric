@@ -40,6 +40,15 @@ export XDG_CONFIG_HOME="$_TUR_EMPTY_XDG"
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
+# A handful of fixtures write to a literal "/tmp/..." from inline-C fopen. On
+# POSIX that always exists; a compiled Windows binary resolves "/tmp" against the
+# current drive (C:\tmp), which is not present by default. Create it so those
+# fixtures behave the same as everywhere else. Guarded on MSYSTEM so this is a
+# no-op off Windows.
+case "${MSYSTEM:-}" in
+  UCRT64|MINGW64|CLANG64|MINGW32) mkdir -p /c/tmp 2>/dev/null || true ;;
+esac
+
 # TI8 (turi-parity-post-v1-plan): CI ratchet -- fail fast if any EX_* expression
 # kind the compiler emits has no `case` arm in src/turi/eval.c and is not a
 # documented carve-out (docs/artifacts/turi-carve-out.txt).  Cheap, deterministic, and

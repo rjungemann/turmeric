@@ -2142,7 +2142,8 @@ static int cmd_build(const char *input, const char *out_path,
      * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
      * accidentally drop them. */
     buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
-                   " -Wno-error=int-conversion");
+                   " -Wno-error=int-conversion"
+                   " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -2150,7 +2151,7 @@ static int cmd_build(const char *input, const char *out_path,
      * select() in Winsock, so they must be linked explicitly.  This is a LINK
      * decision about the host toolchain, not codegen, so keying it off the
      * host is correct -- the generated C itself stays portable. */
-    buf_puts(&cmd, " -lpthread -lws2_32");
+    buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
 #endif
     /* Ensure the command string is null-terminated before passing to system(). */
     buf_putc(&cmd, '\0');
@@ -4319,7 +4320,8 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
      * accidentally drop them. */
     buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
-                   " -Wno-error=int-conversion");
+                   " -Wno-error=int-conversion"
+                   " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -4327,7 +4329,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * select() in Winsock, so they must be linked explicitly.  This is a LINK
      * decision about the host toolchain, not codegen, so keying it off the
      * host is correct -- the generated C itself stays portable. */
-    buf_puts(&cmd, " -lpthread -lws2_32");
+    buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
 #endif
     /* Ensure null termination before passing to system(). */
     buf_putc(&cmd, '\0');

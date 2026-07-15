@@ -147,7 +147,11 @@
   #fx{Proc}
   : ChildHandle
   ```c
+#ifdef _WIN32
+  #include <process.h>
+#else
   #include <unistd.h>
+#endif
   int argc = 0;
   int64_t tmp = argv;
   while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
@@ -159,11 +163,20 @@
     tmp = cell[1];
   }
   args[argc] = NULL;
+#ifdef _WIN32
+  /* No fork on Windows.  _spawnvp(_P_NOWAIT) is fork+execvp in one call and
+   * returns a process HANDLE (not a pid) that process/wait reaps with _cwait.
+   * ChildHandle is opaque to callers, so its meaning is unchanged. */
+  intptr_t child = _spawnvp(_P_NOWAIT, path, (const char *const *)args);
+  free(args);
+  return (int64_t)child;   /* -1 on failure, matching the POSIX branch */
+#else
   pid_t pid = fork();
   if (pid < 0) { free(args); return -1; }
   if (pid == 0) { execvp(path, args); _exit(127); }
   free(args);
   return (int64_t)pid;
+#endif
   ```)
 ;;; process/wait -- wait for a child process to exit, consuming its handle.
 ;;;
@@ -182,11 +195,20 @@
   #fx{Proc}
   : int
   ```c
+#ifdef _WIN32
+  /* _cwait yields the child's exit code directly -- there is no POSIX
+   * wait-status word to unpack, so no WIFEXITED/WEXITSTATUS here. */
+  #include <process.h>
+  int status = 0;
+  if (_cwait(&status, (intptr_t)child, 0) == -1) return -1;
+  return (int64_t)status;
+#else
   #include <sys/wait.h>
   int status = 0;
   if (waitpid((pid_t)child, &status, 0) < 0) return -1;
   if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
   return -1;
+#endif
   ```)
 ;;; process/run -- spawn a child process and wait for it to finish.
 ;;;

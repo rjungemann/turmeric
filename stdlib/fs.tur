@@ -212,7 +212,14 @@
   : int
   ```c
   #include <sys/stat.h>
+  /* MinGW's mkdir takes one argument (the legacy MSVC signature); Windows has
+   * no POSIX permission bits, so the 0755 is dropped rather than translated. */
+#ifdef _WIN32
+  #include <direct.h>
+  return (int64_t)_mkdir(path);
+#else
   return (int64_t)mkdir(path, 0755);
+#endif
   ```)
 ;;; fs/mkdirp -- create a directory and all missing parent directories.
 ;;;
@@ -234,17 +241,26 @@
   ```c
   #include <sys/stat.h>
   #include <errno.h>
+  /* One-arg mkdir on MinGW (see fs/mkdir).  A body-local macro keeps both call
+   * sites below identical across platforms. */
+#ifdef _WIN32
+  #include <direct.h>
+  #define __tur_mkdir(p) _mkdir(p)
+#else
+  #define __tur_mkdir(p) mkdir((p), 0755)
+#endif
   char *p = strdup(path);
   int ret = 0;
   for (char *s = p + 1; *s; s++) {
     if (*s == '/') {
       *s = '\0';
-      if (mkdir(p, 0755) != 0 && errno != EEXIST) { ret = -1; break; }
+      if (__tur_mkdir(p) != 0 && errno != EEXIST) { ret = -1; break; }
       *s = '/';
     }
   }
-  if (ret == 0 && mkdir(p, 0755) != 0 && errno != EEXIST) ret = -1;
+  if (ret == 0 && __tur_mkdir(p) != 0 && errno != EEXIST) ret = -1;
   free(p);
+  #undef __tur_mkdir
   return ret;
   ```)
 ;;; fs/rmdir -- remove an empty directory.
@@ -358,7 +374,15 @@
   : int
   ```c
   #include <dirent.h>
+  /* fnmatch(3) is POSIX and absent on MinGW.  Windows' PathMatchSpecA does the
+   * same wildcard job ('*' and '?'), takes (name, pattern) instead of
+   * (pattern, name), and returns TRUE on a match instead of 0.  Links shlwapi
+   * (added to the Windows link line in src/main.c alongside ws2_32). */
+#ifdef _WIN32
+  #include <shlwapi.h>
+#else
   #include <fnmatch.h>
+#endif
   DIR *d = opendir(dir);
   if (!d) return 0;
   int64_t head = 0;
@@ -366,7 +390,11 @@
   size_t dlen = strlen(dir);
   while ((ent = readdir(d))) {
     if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+#ifdef _WIN32
+    if (!PathMatchSpecA(ent->d_name, pattern)) continue;
+#else
     if (fnmatch(pattern, ent->d_name, 0) != 0) continue;
+#endif
     int sep = (dlen > 0 && dir[dlen - 1] != '/') ? 1 : 0;
     size_t nlen = strlen(ent->d_name);
     char *full = malloc(dlen + sep + nlen + 1);

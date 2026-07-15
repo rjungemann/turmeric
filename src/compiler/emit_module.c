@@ -6190,8 +6190,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the directives from each body at substitute time, so they appear
      * exactly once -- here. */
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        buf_puts(out, g_hoisted_includes[i]);
-        buf_puts(out, "\n");
+        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
     /* AR8: Variadic rest-list cons-cell helper -- only emit when module has variadics */
     if (g_has_variadics) {
@@ -10738,8 +10737,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * own .c) sees the typedefs, instead of having the second/third user
      * silently miss them due to the system header's include guards. */
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
-        buf_puts(out, g_hoisted_includes[i]);
-        buf_puts(out, "\n");
+        tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
     buf_puts(out, "\n");
 

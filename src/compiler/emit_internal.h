@@ -61,6 +61,11 @@ extern uint32_t  g_cap_hoisted_includes;
  * trailing newline) to the deduped global set. */
 void   tur_hoist_include_add(const char *line, size_t n);
 
+/* Emit one hoisted `#include` line; angle (system) headers are wrapped in
+ * `#if __has_include(...)` so a platform-missing header is skipped rather than
+ * hard-failing the build.  Quoted (project) headers are emitted bare. */
+void   tur_emit_hoisted_include(Buf *out, const char *line);
+
 /* Scan `body` (length `len`) for leading blank/comment/`#include` lines,
  * append each `#include` to the global set, and return the byte count
  * consumed at the start of `body`. The caller should `memmove` to drop the
