@@ -2249,13 +2249,15 @@ static bool fn_is_main(const FnDef *fd) {
  * no direct-lowering caller. */
 static bool fn_is_d2b_main(const FnDef *fd) {
     if (!(fn_is_main(fd) && fd->n_params == 0 && fd->body)) return false;
-    /* E3 (v2 sole-effect-lowering, gated on cps-tramp-resume for now): every
-     * zero-arg main gets the int-main -> main__cps trampoline, not only a main
-     * that contains delimited control.  This CPS-emits an effect-only main so its
-     * handlers install on the DK, dissolving the SIG-MAIN taint seed that pins
-     * effectful mains (and their peers) to the fiber runtime.  Default (flag off)
-     * keeps the historical `contains shift` gate, so codegen is unchanged. */
-    if (g_opt_cps_tramp_resume) return true;
+    /* E3 (v2 sole-effect-lowering): a zero-arg main gets the int-main -> main__cps
+     * trampoline when it contains delimited control.  An earlier revision made
+     * EVERY main d2b under cps-tramp-resume to dissolve the SIG-MAIN taint, but a
+     * d2b (DK-entry) main that transitively reaches FIBER effect code (a shallow
+     * handler, a fiber-performed effect, an un-threadable fn-value) breaks: the
+     * fiber effect runtime is not correctly active under the DK entry (observed:
+     * SIGSEGV / print-skipped / unhandled-effect on fiber-effect, shallow-*,
+     * effect-poly-infer).  Until a taint-completeness guard can prove a main is
+     * DK-clean, keep the historical `contains shift` gate on both configs. */
     return cps_expr_contains_shift(fd->body);
 }
 
@@ -5406,15 +5408,32 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, ") {\n");
     buf_puts(file, "    __dk_entry_depth++;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-    buf_printf(file, "    %s%s__cps(", void_ret ? "(void)" : "int64_t __r = ", cn);
+    /* Build the argument list "<params>, __root" once. */
+    Buf __args; buf_init(&__args);
     for (uint32_t i = 0; i < fd->n_params; i++) {
-        if (i) buf_puts(file, ", ");
+        if (i) buf_puts(&__args, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
-        buf_puts(file, pn);
+        buf_puts(&__args, pn);
         free(pn);
     }
-    if (fd->n_params) buf_puts(file, ", ");
-    buf_puts(file, "__root);\n");
+    if (fd->n_params) buf_puts(&__args, ", ");
+    buf_puts(&__args, "__root");
+    buf_putc(&__args, '\0');
+    if (g_opt_cps_tramp_resume) {
+        /* E7: install the trampoline driver at this direct->cps entry too (not only
+         * the d2b main), so a colored body reached from a non-d2b caller (`run`
+         * called by a plain main) still trampolines a deep tail-resume flat. */
+        if (!void_ret) buf_puts(file, "    int64_t __r;\n");
+        buf_puts(file, "    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_printf(file, "    if (setjmp(__dkjb) == 0) { %s%s__cps(%s); }\n",
+                   void_ret ? "(void)" : "__r = ", cn, __args.data);
+        buf_printf(file, "    else { %s__dk_drive_after(); }\n", void_ret ? "(void)" : "__r = ");
+        buf_puts(file, "    g_dk_driver = __dksave;\n");
+    } else {
+        buf_printf(file, "    %s%s__cps(%s);\n",
+                   void_ret ? "(void)" : "int64_t __r = ", cn, __args.data);
+    }
+    buf_free(&__args);
     /* Read the delivered value out BEFORE the reap: a Tier-C return rides a heap
      * box owned by the reap list (consume=false, never freed at a load), so the
      * reap frees it -- copy the value into a local first, then reap. */
