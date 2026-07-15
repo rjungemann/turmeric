@@ -408,6 +408,51 @@ tracks (ground truth for the next slice):**
 3. **Struct return/threading (`re-parse-class`, 1).** A pure `defstruct`-returning
    function colored may-capture; the owning/by-value-aggregate track.
 
+#### Track 1 design -- the fat-closure `__cps` ABI (the critical path)
+
+This is the dominant remaining wall (~16 roots) and the confirmed hard core of
+N6.5. It is NOT a recategorization: no honest `SIG-*` relabel applies, because a
+function like `run` has a REAL control op (a `handle`) that needs an effect
+runtime -- unlike a `SIG-REJECT` fn, which by definition contains no control op
+and lets the direct emitter own its ABI. `run` genuinely must lower its handle on
+SOME machine; the only reason it can't be the DK machine today is that the effect
+it handles is reached through a direct-emitted indirect (fn-value) call inside a
+callee (`apply-cb`'s `(f)`), and the DK backend cannot thread `__kont` through an
+opaque fn-value call. So the effect stays fiber, taints every fn touching it, and
+the whole cluster evicts.
+
+The fix makes an indirect fn-value call DK-threadable so the effect becomes a DK
+effect and the cluster CPS-emits together:
+
+1. **Colored callbacks already have a `__cps` body** (`__fn_1283` has
+   `term_core_ok = 1` -- it is admissible; it evicts ONLY by taint). Emit the
+   `__cps` variant even for a callback that is currently taint-evicted, so a
+   `<fn>__cps(env, args, DK *__kont)` entry exists.
+2. **The fat closure (`tur_poly_fn_t` / the ordinary closure record) must carry
+   the `__cps` entry** alongside the direct `fn` pointer -- a second function
+   pointer field (`fn_cps`), populated when the closed-over function is colored
+   and CPS-emitted. A pure/uncolored closure leaves it NULL.
+3. **The indirect-call lowering** (`cps_ir.c` `indirect_callee_ok` / the
+   `CT_LETRAW` delegation for `(f ...)`) must, inside a `__cps` body, emit
+   `f.fn_cps(f.env, args, __kont)` when `fn_cps` is non-NULL, threading the
+   enclosing continuation -- instead of the direct `f.fn(f.env, args)`.
+4. **Effect classification** (`ensure_S`): an effect reached through an indirect
+   call whose callee carries a `fn_cps` entry is NO LONGER forced fiber -- drop
+   the indirect-call fiber-taint seed for that case so `Ask` classifies as a DK
+   effect, `run`'s handle lowers as a DK prompt, and `apply-cb` / `__fn_1283`
+   join `S`.
+5. **Fallback**: a fn-value with a NULL `fn_cps` (pure, or an uncolored/foreign
+   closure) still lowers to the direct indirect call and keeps its effect (if
+   any) fiber -- so mixed programs stay correct during the transition.
+
+Validate on `cps-backend-effectful-callback` first (expect `run` + `__fn_1283`
+to leave the EVICT list and the program to still print 27), then the
+`effect-poly-*` / `effect-row-*` family. High regression surface (touches the
+closure record layout + every indirect call), so land behind a full suite pass
+and expect a large snapshot regen. This is the last large slice before the
+Phase-4 deletion; Tracks 2/3 (carrier-ABI arg boxing / monomorph resolution) are
+smaller and independent.
+
 ### Slice PG/PH -- `with-abort-panic` family (TY_NEVER + nested-handle-in-continuation)
 
 Two composable STRUCT-OR-TAINT slices via the root-profiling method (`ensure_S`
