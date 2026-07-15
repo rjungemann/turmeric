@@ -1399,8 +1399,21 @@ static bool perform_cont_reset_ok(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
         case CT_APPCONT:
+            /* E7/C1 (cps-tramp-resume): a jump to a join (KK_VAR) bound by an
+             * enclosing CT_LETCONT in this same continuation -- admitted so a branch
+             * whose merged result feeds a subsequent perform lifts into the frame. */
+            if (t->as.appcont.kont.kind == KK_VAR && g_opt_cps_tramp_resume)
+                return atom_ok(&t->as.appcont.v);
             return (t->as.appcont.kont.kind == KK_RET || t->as.appcont.kont.kind == KK_PROMPT)
                 && atom_ok(&t->as.appcont.v);
+        case CT_LETCONT:
+            /* E7/C1: a JOIN in the perform continuation -- `letcont j(x) = jbody in
+             * body`, where body branches and jumps to j, and jbody (the merged
+             * continuation) may itself perform.  Admit when both sides are reset-ok;
+             * emit_lifted lowers the join as local control flow inside the frame. */
+            if (!g_opt_cps_tramp_resume) return false;
+            return perform_cont_reset_ok(t->as.letcont.jbody)
+                && perform_cont_reset_ok(t->as.letcont.body);
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_cont_reset_ok(t->as.letval.body);
         case CT_LETPRIM:
