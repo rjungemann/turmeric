@@ -682,6 +682,16 @@ The kill-probe's E2 mechanism now works END-TO-END from source (gated), for a
 `n==0`); (b) capturing-lambda (fat-closure) fn-values (the box `__fn_cps` slot);
 then E1 non-scalar signatures, E5, SIG-TAINT empties, promote off the gate, Stage G.
 
+**Known flag limitation (multi-arg / fat-closure fn-values).** The `safe_to_delegate`
+gate is scoped to `n==0` (only 0-arg effectful fn-value calls go native + thread the
+DK); a MULTI-ARG or capturing-lambda effectful fn-value under the flag can still
+mismatch (the callee runs on the fiber while the caller's handle is DK -> `unhandled
+effect`). This is a pre-existing flag-exposed gap (an in-flight residual behind
+`--enable=cps-tramp-resume`, per the experimental-flag policy), NOT a default-config
+regression -- it is exactly what sub-slices (a)/(b) close before the gate is
+promoted. Do not promote off the gate until multi-arg + fat-closure threading land
+and the corpus scan shows no effectful `eff=1` eviction miscompiles.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the

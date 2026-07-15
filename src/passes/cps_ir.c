@@ -1505,8 +1505,11 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             /* E2 (cps-tramp-resume): an EFFECTFUL fn-value callee (a non-global
              * TY_FN binding with a non-empty effect row) must go NATIVE, never
              * whole-body-delegate -- its perform has to thread the DK to the
-             * caller's handler instead of running on the fiber and escaping. */
-            if (g_opt_cps_tramp_resume && fn_binding_effectful(fn))
+             * caller's handler instead of running on the fiber and escaping.
+             * Scoped to the arity the emitter threads (0-arg) so a multi-arg call
+             * still delegates cleanly (fiber) rather than half-lowering. */
+            if (g_opt_cps_tramp_resume && fn_binding_effectful(fn)
+                && e->as.call_.n_args == 0)
                 return false;
             if (g_wbd_n_handled > 0 && (e->as.call_.fn_expr || !fn->is_global)
                 && !fnvalue_call_wbd_delegatable(b, e))
