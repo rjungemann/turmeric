@@ -1188,6 +1188,26 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * crossing ref -- whose auto-drop defer is not hoisted and stays an
          * unlowered EX_DEFER, or a moved ref with no in-scope drop -- falls back. */
         case EX_REF:      return safe_to_delegate(b, e->as.ref_.expr);
+        /* P4 (cps-runtime-finish): a `defer` -- explicit `(defer ...)` or the
+         * auto-inserted RC-drop / owning-value cleanup -- runs its body at the
+         * enclosing block's scope exit via the direct emitter's `tur_frame`
+         * discipline (init / push_defer / fire_lifo).  A `__cps` function
+         * establishes NO defer frame of its own, so a defer is delegatable ONLY
+         * inside a WHOLE-BODY delegation (g_whole_body_delegate): there the direct
+         * emitter emits the entire body region -- frame setup, the defer push, the
+         * guarded code, and the scope-exit fire -- as one CT_LETRAW, then the DK
+         * continuation runs, so the defer fires exactly at its lexical scope.
+         * Outside a whole-body probe (per-node decompose), delegating a lone defer
+         * would register it into a sub-region frame that pops early -- or push it
+         * where no frame is emitted -- so it stays non-delegatable and the function
+         * evicts honestly on EX_DEFER (e.g. `effect-defer`: a defer sharing a `do`
+         * with a `perform` genuinely needs native defer-frame lowering).  This
+         * admits the control-op-free colored bodies -- `unsafe`-marked mains
+         * carrying an rc/of auto-drop (`unsafe-basic`/`-nested`/`-defer`) -- whose
+         * whole body the direct emitter owns, without the reshuffle-into-
+         * STRUCT-OR-TAINT that a gateless widening would cause. */
+        case EX_DEFER:    return g_whole_body_delegate
+                              && safe_to_delegate(b, e->as.defer_.body);
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }

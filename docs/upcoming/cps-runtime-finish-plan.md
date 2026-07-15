@@ -169,14 +169,16 @@ on CPS effect/continuation fixtures; ASan/LSan clean corpus-wide.
 
 ## Honest distance
 
-Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 9
+Control flow: **done.** The `BODY-UNSUPPORTED` surface has been driven **65 -> 5
 per-emit** (see the Progress log: P1.a pure-delegation forms; P1.b/P1.c the
 closure keystone for every non-escaping shape; P3.a-d the DK-node / snapshot /
 receiver-`k` / receiver-env leaks; PA/PB/PC the B1 DK-native resumable-payload
 bridge -- the WHOLE B1 family now CPS-emits, `effect-cont` AND raw-`int`
 continuation payloads; PD the unsafe-marker whole-body delegation clearing 2 of
-the 4 B2 closure-as-value fixtures). What remains, and why each is a distinct
-slice rather than a quick admission:
+the 4 B2 closure-as-value fixtures; PE the EX_DEFER whole-body delegation
+clearing 3 of 4 defers plus the parser `mbind` borrow drop-glue clearing 1 of 2
+remaining closures). What remains, and why each is a distinct slice rather than a
+quick admission:
 
 - **`EX_CLOSURE` (7) -- actually TWO families (verified, P-inv2 below).** The 7
   split into two distinct blockers; the earlier "all effect-payload" framing was
@@ -244,16 +246,55 @@ and the follow-up P-inv3 pessimism ("B1 is Phase-2, not a bridge") was ALSO wron
 The reality, resolved by PA/PB/PC: **the whole B1 resumable-payload family (4
 fixtures) now CPS-emits** via the generalized `__Shift` cloneable-cont bridge, and
 PB's `handle_delim_ok` was a general win beyond it, and PD cleared 2 of the 4 B2
-fixtures via unsafe-marker whole-body delegation. `BODY-UNSUPPORTED` is now **9**
-(was 14): `EX_CLOSURE` B2 closure-as-value x2 (`currying-effect-partial` -- closure
-in a real `Log` handle; `hkt-stdlib-parser-instances` -- parser combinators; both
-need closure drop-glue), `EX_DEFER` x4 (entangled with a co-located
-`BODY-STRUCT-OR-TAINT` blocker), `EX_WHILE` x1 (native loop), `EX_INLINE_C` x2
-(session-runtime-tied). The remaining genuinely-scoped work is the B2
-closure-drop-glue backstop and the dominant Phase-2 `BODY-STRUCT-OR-TAINT`
-surface. The EVICT gate now reads `SIG-*` plus these 9 named residuals.
+fixtures via unsafe-marker whole-body delegation, and Slice PE cleared 3 of 4
+`EX_DEFER` (whole-body-delegated) + 1 of 2 `EX_CLOSURE` (parser `mbind` borrow
+drop-glue). `BODY-UNSUPPORTED` is now **5** (was 14): `EX_CLOSURE` x1
+(`currying-effect-partial` -- an indirect call through a capturing closure that
+itself performs `Log`; the harder B1-style case), `EX_DEFER` x1 (`effect-defer`
+-- native defer-frame + co-located `perform`), `EX_WHILE` x1 (native loop), and
+`EX_INLINE_C` x2 (session-runtime-tied). The remaining genuinely-scoped work is
+the colored-capturing-closure indirect-call case, native lowering for the
+defer/while/inline-C residuals, and the dominant Phase-2 `BODY-STRUCT-OR-TAINT`
+surface. The EVICT gate now reads `SIG-*` plus these 5 named residuals.
 
 ## Progress log
+
+### Slice PE -- EX_DEFER whole-body delegation + parser closure drop-glue
+
+Two independent eviction cuts, `BODY-UNSUPPORTED` **9 -> 5**. Suite 2179/0.
+
+- **EX_DEFER (4 -> 1).** `safe_to_delegate` now admits `EX_DEFER` -- but ONLY
+  under `g_whole_body_delegate` (the whole-body probe), not per-node decompose.
+  A `__cps` function establishes no defer frame of its own, so a lone delegated
+  defer would register into a sub-region frame that pops early. Gated to
+  whole-body delegation, the direct emitter emits the ENTIRE body region --
+  `tur_frame` init / `push_defer` / `fire_lifo` -- as one CT_LETRAW, then the DK
+  continuation runs, so the defer fires at its true lexical scope. This
+  genuinely admits `unsafe-basic` / `unsafe-nested` / `unsafe-defer` (colored
+  only by an `unsafe` marker carrying an `rc/of` auto-drop defer; `main__cps`
+  emits and runs correctly, verified 200/100/42 ordering on a discriminating
+  probe). `effect-defer` (a defer sharing a `do` with a `perform`) is NOT
+  whole-body-delegatable, so it stays honestly evicted on `EX_DEFER` -- the gate
+  avoids the reshuffle-into-`STRUCT-OR-TAINT` that a gateless widening causes
+  (the anti-pattern the Phase-1 findings warned against). This CORRECTS the
+  earlier finding that "every EX_DEFER eviction ... crosses a control op": with
+  the unsafe-marker handle already delegatable (PD), the 3 unsafe-* bodies are
+  control-op-free and whole-body-delegatable; only `effect-defer` genuinely
+  crosses.
+- **EX_CLOSURE parser combinator (2 -> 1).** Annotated stdlib `mbind`'s callback
+  param `^borrow ^fat` (parsec.tur). `mbind` invokes the callback in a loop and
+  returns a fresh Cell list -- it borrows, never retains -- so the existing S1.2
+  `hoist_borrowed_closure_args` + `cps_closure_env_freeable` path now admits AND
+  frees the inline capturing closure in `then-parser-impl`, clearing its
+  `EX_CLOSURE` eviction (`then-parser-raw`/`then-parser` closures likewise free).
+  `currying-effect-partial` (a partial-app of a COLORED fn -- an indirect call
+  through a capturing closure that itself performs `Log`) is the harder B1-style
+  case and remains.
+
+Residual `BODY-UNSUPPORTED` (5): `EX_CLOSURE` x1 (`currying-effect-partial`,
+colored capturing-closure indirect call), `EX_DEFER` x1 (`effect-defer`, native
+defer-frame + perform), `EX_WHILE` x1 (`effect-handler-capture-loop`), and
+`EX_INLINE_C` x2 (`session-effects` / `session-mp-effects`, session-channel).
 
 ### Slice PD -- unsafe-marker whole-body delegation (2 of 4 B2 fixtures)
 
@@ -559,19 +600,19 @@ continuation env never misses a captured item; the three forms (plus
 
 ### Findings for the remaining Phase-1 forms (still open)
 
-- **`EX_DEFER`** is NOT a pure-delegation slice. A CPS-emitted function
-  establishes no defer frame, so delegating a lone `EX_DEFER` via `CT_LETRAW`
-  would register a defer that never fires. The `plan_autodrop` hoist only
-  covers a *straight-line* owning auto-drop; every `EX_DEFER` eviction left in
-  the corpus (`effect-defer`, `unsafe-defer`, `unsafe-basic`, `unsafe-nested`)
-  crosses a control op -- and notably `(& x)` inside an `unsafe` block
-  elaborates through an `EX_HANDLE` (that borrow-region handle is what colors
-  `main`), so these are genuine control-crossing cases. This needs the native
-  `term_core_ok` + `emit_term` treatment (or a CPS-side defer-frame), not a
-  predicate widening. (Widening `expr_has_unsafe_control` to model borrows as
-  non-control only reshuffles the eviction from `BODY-UNSUPPORTED` into the
-  unnamed `BODY-STRUCT-OR-TAINT` bucket without admitting the function -- not
-  real progress, and it hides the form from the trace; do not land that alone.)
+- **`EX_DEFER`** (1 left after Slice PE; was 4). A lone `EX_DEFER` delegated via
+  `CT_LETRAW` in per-node position would register into a sub-region frame that
+  pops early (a `__cps` function establishes no defer frame of its own) -- so a
+  gateless widening is wrong and only reshuffles the eviction into the unnamed
+  `BODY-STRUCT-OR-TAINT` bucket. BUT under `g_whole_body_delegate` the direct
+  emitter emits the WHOLE body region (frame init / push_defer / fire_lifo) as
+  one CT_LETRAW, and the defer fires at its true scope. Slice PE landed exactly
+  that gating and admitted `unsafe-basic` / `-nested` / `-defer` (once the
+  `unsafe`-marker handle is delegatable per PD, those bodies are control-op-free
+  and whole-body-delegatable). What remains is `effect-defer`: a defer sharing a
+  `do` with a `perform` is genuinely control-crossing, is not
+  whole-body-delegatable, and needs native `term_core_ok` + `emit_term`
+  defer-frame lowering rather than delegation.
 - **`EX_WHILE`** (2 left) and **`EX_INLINE_C`** (2 left, session-channel
   bodies) likewise contain / neighbour control ops in the colored bodies that
   reach them, so they need native lowering rather than delegation.

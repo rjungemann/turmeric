@@ -101,7 +101,7 @@
 ;;; Example:
 ;;;   (mbind (mreturn 1) (fn [x] (mreturn (* x 2))))  ; => Cell{2}
 
-(defn mbind [ma fn] : int
+(defn mbind [ma : int ^borrow ^fat fn : int] : int
   ```c
   typedef struct { int64_t value; int64_t next; } Cell;
   Cell *cell = (Cell*)(intptr_t)ma;
