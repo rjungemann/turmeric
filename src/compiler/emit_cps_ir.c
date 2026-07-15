@@ -2447,6 +2447,20 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             return;
         case EX_FN_DEF: if (e->as.fn_def_.fn) REC(e->as.fn_def_.fn->body); return;
         case EX_FN:     if (e->as.fn_.fn)     REC(e->as.fn_.fn->body);     return;
+        /* A fn-VALUE USE: referencing a top-level (colored) fn as a value -- to
+         * pass it as a higher-order argument, store it, or return it -- means that
+         * fn may be CALLED downstream through the value.  Record it as a reachable
+         * callee so the call-path taint (ensure_S Rule C) spans the DATA FLOW: a
+         * fiber intermediary that hands a colored performer to a DK conduit (e.g.
+         * `apply-logged` passing a Log-performing lifted closure to `apply`) sits
+         * on the handler->performer path and must taint the effect, or the DK
+         * performer runs with the intermediary having severed the handler's DK
+         * chain (`unhandled effect`).  Precise -- adds only the SPECIFIC fn, not the
+         * `edges_all` over-approximation that evicts every higher-order caller. */
+        case EX_VAR:
+            if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN)
+                eff_acc_add_callee(acc, e->as.var.binding);
+            return;
         case EX_SELECT:
             for (uint32_t i = 0; i < e->as.select_.n_clauses; i++) {
                 REC(e->as.select_.clauses[i].chan);
