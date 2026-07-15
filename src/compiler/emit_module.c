@@ -6022,44 +6022,74 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "#ifndef TUR_WIN_FIBER_STACK_SIZE\n");
     buf_puts(out, "#define TUR_WIN_FIBER_STACK_SIZE 262144\n");
     buf_puts(out, "#endif\n");
+    /* WIN3-C: register-snapshot ucontext (same mechanism as libturi's
+     * fiber_ctx_x64_win.S), NOT Win32 Fibers. A register snapshot is re-entrant
+     * and thread-agnostic, where a Win32 fiber is thread-affine -- which is what
+     * made scheduler-multithread hang and complicated multishot. The register
+     * save area is at offset 0 so the emitted asm below can use fixed offsets;
+     * keep the two in lockstep. XMM6-15 preserved; TEB fields omitted (GCC's
+     * ___chkstk_ms does not consult them). */
     buf_puts(out, "typedef struct { void *ss_sp; size_t ss_size; } tur_win_stack_t;\n");
     buf_puts(out, "typedef struct tur_ucontext {\n");
-    buf_puts(out, "    LPVOID                fiber;\n");
-    buf_puts(out, "    void                (*entry)(void);\n");
-    buf_puts(out, "    struct tur_ucontext  *uc_link;\n");
+    buf_puts(out, "    uintptr_t rip, rsp, rbx, rbp, rsi, rdi, r12, r13, r14, r15;\n");
+    buf_puts(out, "    unsigned char xmm[10*16];\n");
     buf_puts(out, "    tur_win_stack_t       uc_stack;\n");
+    buf_puts(out, "    struct tur_ucontext  *uc_link;\n");
+    buf_puts(out, "    void                (*entry)(void);\n");
     buf_puts(out, "    int                   argc;\n");
     buf_puts(out, "    int                   argv[2];\n");
     buf_puts(out, "} ucontext_t;\n");
-    buf_puts(out, "static int tur_win_ensure_fiber(void) {\n");
-    buf_puts(out, "    if (!IsThreadAFiber()) {\n");
-    buf_puts(out, "        if (ConvertThreadToFiber(NULL) == NULL) return -1;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    return 0;\n");
-    buf_puts(out, "}\n");
-    buf_puts(out, "static VOID WINAPI tur_win_fiber_trampoline(LPVOID param) {\n");
-    buf_puts(out, "    struct tur_ucontext *u = (struct tur_ucontext *)param;\n");
-    /* makecontext's varargs carry ints only, so argc is 0, 1 or 2 here.  The
-     * FiberBlock path uses 2 (a pointer split into hi/lo halves). */
+    buf_puts(out, "extern void __tur_uctx_swap(ucontext_t *from, ucontext_t *to);\n");
+    buf_puts(out, "extern void __tur_uctx_tramp(void);\n");
+    /* The context switch and entry trampoline, emitted as file-scope asm. This
+     * is the exact code validated in fiber_ctx_x64_win.S, re-emitted here
+     * because generated C is standalone and cannot link that object. */
+    buf_puts(out, "__asm__(\n");
+    buf_puts(out, "\".text\\n\"\n");
+    buf_puts(out, "\".globl __tur_uctx_swap\\n\"\n");
+    buf_puts(out, "\".def __tur_uctx_swap; .scl 2; .type 32; .endef\\n\"\n");
+    buf_puts(out, "\"__tur_uctx_swap:\\n\"\n");
+    buf_puts(out, "\"  mov (%rsp), %rax\\n  mov %rax, 0(%rcx)\\n\"\n");
+    buf_puts(out, "\"  lea 8(%rsp), %rax\\n mov %rax, 8(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %rbx, 16(%rcx)\\n mov %rbp, 24(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %rsi, 32(%rcx)\\n mov %rdi, 40(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %r12, 48(%rcx)\\n mov %r13, 56(%rcx)\\n\"\n");
+    buf_puts(out, "\"  mov %r14, 64(%rcx)\\n mov %r15, 72(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm6, 80(%rcx)\\n movups %xmm7, 96(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm8, 112(%rcx)\\n movups %xmm9, 128(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm10, 144(%rcx)\\n movups %xmm11, 160(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm12, 176(%rcx)\\n movups %xmm13, 192(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups %xmm14, 208(%rcx)\\n movups %xmm15, 224(%rcx)\\n\"\n");
+    buf_puts(out, "\"  movups 224(%rdx), %xmm15\\n movups 208(%rdx), %xmm14\\n\"\n");
+    buf_puts(out, "\"  movups 192(%rdx), %xmm13\\n movups 176(%rdx), %xmm12\\n\"\n");
+    buf_puts(out, "\"  movups 160(%rdx), %xmm11\\n movups 144(%rdx), %xmm10\\n\"\n");
+    buf_puts(out, "\"  movups 128(%rdx), %xmm9\\n movups 112(%rdx), %xmm8\\n\"\n");
+    buf_puts(out, "\"  movups 96(%rdx), %xmm7\\n movups 80(%rdx), %xmm6\\n\"\n");
+    buf_puts(out, "\"  mov 72(%rdx), %r15\\n mov 64(%rdx), %r14\\n\"\n");
+    buf_puts(out, "\"  mov 56(%rdx), %r13\\n mov 48(%rdx), %r12\\n\"\n");
+    buf_puts(out, "\"  mov 40(%rdx), %rdi\\n mov 32(%rdx), %rsi\\n\"\n");
+    buf_puts(out, "\"  mov 24(%rdx), %rbp\\n mov 16(%rdx), %rbx\\n\"\n");
+    buf_puts(out, "\"  mov 8(%rdx), %rsp\\n jmp *0(%rdx)\\n\"\n");
+    buf_puts(out, "\".globl __tur_uctx_tramp\\n\"\n");
+    buf_puts(out, "\".def __tur_uctx_tramp; .scl 2; .type 32; .endef\\n\"\n");
+    buf_puts(out, "\"__tur_uctx_tramp:\\n\"\n");
+    buf_puts(out, "\"  mov %r12, %rcx\\n sub $32, %rsp\\n call __tur_uctx_run\\n call abort\\n ud2\\n\"\n");
+    buf_puts(out, ");\n");
+    /* Entry helper the trampoline calls (external so the asm `call` resolves and
+     * the optimiser cannot drop it as unreferenced). */
+    buf_puts(out, "void __tur_uctx_run(struct tur_ucontext *u) {\n");
     buf_puts(out, "    if (u->entry) {\n");
     buf_puts(out, "        if (u->argc == 2)      ((void(*)(int,int))u->entry)(u->argv[0], u->argv[1]);\n");
     buf_puts(out, "        else if (u->argc == 1) ((void(*)(int))u->entry)(u->argv[0]);\n");
     buf_puts(out, "        else                   u->entry();\n");
     buf_puts(out, "    }\n");
-    /* Falling off the end of a Win32 fiber terminates the whole thread, which
-     * would look like a hang.  Resume uc_link if there is one, else be loud. */
-    buf_puts(out, "    if (u->uc_link && u->uc_link->fiber) { SwitchToFiber(u->uc_link->fiber); return; }\n");
-    /* fflush before abort(): UCRT's abort() goes through __fastfail, which tears
-     * the process down without flushing stdio.  Without this the diagnostic is
-     * lost and the only evidence is a bare 0xC0000409 exit code. */
+    buf_puts(out, "    if (u->uc_link) __tur_uctx_swap(u, u->uc_link);\n");
     buf_puts(out, "    fprintf(stderr, \"turmeric: fiber entry returned with no uc_link\\n\");\n");
     buf_puts(out, "    fflush(stderr);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static int tur_win_getcontext(ucontext_t *u) {\n");
-    buf_puts(out, "    memset(u, 0, sizeof(*u));\n");
-    buf_puts(out, "    if (tur_win_ensure_fiber() != 0) return -1;\n");
-    buf_puts(out, "    u->fiber = GetCurrentFiber();\n");
+    buf_puts(out, "    memset(u, 0, sizeof(*u));\n");  /* filled by makecontext */
     buf_puts(out, "    return 0;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void tur_win_makecontext(ucontext_t *u, void (*fn)(void), int argc, ...) {\n");
@@ -6071,22 +6101,17 @@ static void emit_win_ucontext_shim(Buf *out) {
     buf_puts(out, "    va_end(ap);\n");
     buf_puts(out, "    u->argc  = argc;\n");
     buf_puts(out, "    u->entry = fn;\n");
-    buf_puts(out, "    if (tur_win_ensure_fiber() != 0) { u->fiber = NULL; return; }\n");
-    buf_puts(out, "    u->fiber = CreateFiber((SIZE_T)(u->uc_stack.ss_size ? u->uc_stack.ss_size : TUR_WIN_FIBER_STACK_SIZE), tur_win_fiber_trampoline, u);\n");
+    /* 16-align the stack top, seed rip/rsp/r12 so the first swap enters the
+     * trampoline with the context pointer in r12. */
+    buf_puts(out, "    uintptr_t __top = (uintptr_t)((char*)u->uc_stack.ss_sp + u->uc_stack.ss_size);\n");
+    buf_puts(out, "    __top &= ~(uintptr_t)15;\n");
+    buf_puts(out, "    u->rsp = __top;\n");
+    buf_puts(out, "    u->rip = (uintptr_t)__tur_uctx_tramp;\n");
+    buf_puts(out, "    u->r12 = (uintptr_t)u;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static int tur_win_swapcontext(ucontext_t *from, ucontext_t *to) {\n");
-    buf_puts(out, "    if (tur_win_ensure_fiber() != 0) return -1;\n");
-    /* Callers treat swapcontext as never returning -- the generated fiber shim
-     * puts abort() directly after it.  A silent -1 therefore does not surface as
-     * a failed switch; it surfaces as a bare 0xC0000409 from that abort with no
-     * clue where it came from.  Say what actually went wrong. */
-    buf_puts(out, "    if (!to || !to->fiber) {\n");
-    buf_puts(out, "        fprintf(stderr, \"turmeric: swapcontext into an uninitialised context (target fiber is NULL)\\n\");\n");
-    buf_puts(out, "        fflush(stderr);\n");
-    buf_puts(out, "        abort();\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    from->fiber = GetCurrentFiber();\n");
-    buf_puts(out, "    SwitchToFiber(to->fiber);\n");
+    buf_puts(out, "    if (!to) { fprintf(stderr, \"turmeric: swapcontext into a null context\\n\"); fflush(stderr); abort(); }\n");
+    buf_puts(out, "    __tur_uctx_swap(from, to);\n");
     buf_puts(out, "    return 0;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "#define getcontext(u)            tur_win_getcontext(u)\n");
