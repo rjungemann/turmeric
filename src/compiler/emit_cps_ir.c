@@ -2735,7 +2735,24 @@ static void ensure_S(const Expr *program) {
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
-                if (candidate && !term_core_ok(t)) candidate = false;
+                if (candidate && !term_core_ok(t)) {
+                    candidate = false;
+                    /* An un-lowerable inline-C form in a colored body is a
+                     * PERMANENT carve-out, not a fixable BODY root: inline-C
+                     * declares a fixed C signature and cannot thread a DK
+                     * continuation, so no BODY-* admission can ever pull it into
+                     * the CPS set.  Mark it sig_perm (like an ABI-reject
+                     * signature) so it routes as a permanent SIG-* eviction and
+                     * does not count against the BODY-UNSUPPORTED endgame gate;
+                     * the direct emitter owns it unchanged.  Only the genuinely
+                     * un-delegatable inline-C reaches here -- a whole-body-
+                     * delegatable inline-C leaf (unsafe-* mains) translates to a
+                     * CT_LETRAW owning-op, never a residual CT_UNSUPPORTED. */
+                    const CTerm *u = first_unsupported(t);
+                    if (u && u->as.unsupported.why
+                        && strstr(u->as.unsupported.why, "EX_INLINE_C"))
+                        sig_perm = true;
+                }
                 /* G3b: a colored generic sig-rejects (candidate=false) but if all
                  * its monomorphs are CPS-admissible it is a mono-template -- it
                  * stands in for its DK monomorphs and must NOT taint its effects.
@@ -5081,7 +5098,10 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                  * as such (the form is the real blocker even if also perm-tainted);
                  * only the taint-only (STRUCT-OR-TAINT) case reclassifies. */
                 bool perm_tainted = se && ((se->eff_lo & g_perm_lo) || (se->eff_hi & g_perm_hi));
-                if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
+                bool inline_c = u && u->as.unsupported.why
+                             && strstr(u->as.unsupported.why, "EX_INLINE_C");
+                if (inline_c)          cat = "SIG-INLINE-C";  /* permanent: inline-C can't thread a DK cont */
+                else if (u) { cat = "BODY-UNSUPPORTED"; why = u->as.unsupported.why ? u->as.unsupported.why : "?"; }
                 else if (perm_tainted) cat = "SIG-TAINT";
                 else   cat = "BODY-STRUCT-OR-TAINT";
             }

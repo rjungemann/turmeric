@@ -347,6 +347,22 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PU (LANDED) -- un-lowerable inline-C is a permanent SIG-* carve-out
+
+BODY-UNSUPPORTED `EX_INLINE_C` roots (`session-effects`, `session-mp-effects`
+mains) cleared: 2 -> 0. Suite 2179/0, no codegen churn. An inline-C block declares
+a fixed C signature and cannot thread a DK continuation, so no BODY-* admission
+can ever pull a colored function whose body contains an un-lowerable inline-C into
+the CPS set -- it is a PERMANENT carve-out, exactly like an ABI-reject signature,
+not a fixable BODY root. When a colored function fails `term_core_ok` and its
+`first_unsupported` residual is an `EX_INLINE_C` form, classification now sets
+`sig_perm = true` (the direct emitter owns it unchanged; the routing does not
+move, only the taint class and the EVICT label). The EVICT trace reports it as
+`SIG-INLINE-C`. Only the genuinely un-delegatable case reaches here: a whole-body-
+delegatable inline-C leaf (`unsafe-*` mains, an rc/of auto-drop) translates to a
+`CT_LETRAW` owning-op, never a residual `CT_UNSUPPORTED`, so those stay native/
+SIG-TAINT as before. BODY-UNSUPPORTED is now down to a single `EX_CLOSURE` root.
+
 ### Slice PT (LANDED) -- defer-as-continuation: `(do (defer D) <control>)` native
 
 BODY-UNSUPPORTED `EX_DEFER` root (`effect-defer`'s `deferred-ask`) cleared. Suite
