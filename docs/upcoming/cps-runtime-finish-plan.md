@@ -170,6 +170,24 @@ to the shapes the lift actually handles (or the lift generalized to cover nil
 jbody calls + sequential multi-join delivery) before landing. Do NOT re-land the
 blanket `needs_heap_join` relaxation without fixing both.
 
+**Attempt 2 (LANDED). Suite 2179/0.** Both blockers fixed; the blanket
+relaxation lands green:
+- The lift is an **LH_RESUME_CONT resume-frame** (`dk_frame_resume`), not
+  LH_RESET_CONT.  A `DKK_RESUME_FRAME` rfn RECEIVES its run-time downstream chain
+  as the `__kont` PARAMETER (`dk_run_impl` passes `k->next`) and CONSUMES it
+  (returns rfn's result, never re-processing `next`) -- so a KK_RET delivery
+  lowers `dk_run(__kont, v)` and a recursive `f__cps(args, __kont)` threads it,
+  delivered EXACTLY ONCE.  This is the same frame kind the Track-A nested-perform
+  continuation uses; captures ride a caps-only env (no `__k` field -- `__kont` is
+  the runtime param).  The earlier RESET_CONT double-delivery (bug 2) is gone.
+- **Nil jbody call** (bug 1): `emit_term`'s `CT_LETCALL` now emits a
+  `:nil`/`:void` cps->direct call as a bare statement + unit-placeholder bind
+  (`fn(args); x = 0;`) instead of `x = void_fn(...)`.
+- Result: `set-eq-loop`, `map-eq-loop`, `__cons-fmap` CPS-emit; the STRUCT-OR-TAINT
+  per-function census drops from 87 distinct fns to 53, and the three
+  ~1762-fixture-wide evictions are eliminated (top evictor is now `main` at 38).
+  140 codegen snapshots regenerated.
+
 ## Ordered execution (each slice: land + full suite + re-measure the gate)
 
 The shape of every slice is the one Reductions A/B used: find the failing

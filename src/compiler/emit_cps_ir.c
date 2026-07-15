@@ -653,6 +653,7 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
     #undef CC_ATOM
 }
 
+__attribute__((unused))
 static bool has_capture(const CTerm *t, uint32_t exclude) {
     uint32_t bound[CC_MAX_BOUND];
     g_excl_n = 0;
@@ -2148,13 +2149,19 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_LETCONT:
             if (letcont_is_heap_join(t)) {
                 /* The join is lifted into a DK frame; the handled tailcall (body)
-                 * is not walked.  The frame carries only the enclosing
-                 * continuation, so the join body must not capture other locals,
-                 * nor itself contain a cps->cps tail call (the frame fn has no `k`
-                 * to thread -- see jbody_has_cps_tailcall). */
-                if (has_capture(t->as.letcont.jbody, t->as.letcont.param.id))
-                    return true;
-                if (jbody_has_cps_tailcall(t->as.letcont.jbody))
+                 * is not walked.  P6 (cps-runtime-finish, heap-join-over-recursion):
+                 * a jbody that CAPTURES enclosing locals and/or itself makes a
+                 * cps->cps tail call (e.g. `set-eq-loop`/`__cons-fmap`: call a
+                 * colored helper, then recurse) is emittable -- emit_heap_join lifts
+                 * it as an LH_RESUME_CONT resume-frame (dk_frame_resume) whose
+                 * run-time `__kont` parameter is the downstream chain the DK passes
+                 * in, so a KK_RET delivery lowers `dk_run(__kont, v)` and a recursive
+                 * cps->cps tail call threads `__kont` -- delivered exactly once (the
+                 * DKK_RESUME_FRAME rfn consumes its downstream).  The only remaining
+                 * unemittable case is a NON-slot capture (collect_caps fails);
+                 * recurse for deeper joins in the jbody. */
+                CapSet _cs;
+                if (!collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &_cs))
                     return true;
                 return needs_heap_join(t->as.letcont.jbody);
             }
@@ -2941,6 +2948,7 @@ static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
+static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr);
 static char *cvar_cname(CE *ce, CVar x);
 
 /* The full Type a value has when delivered to continuation `kont` (the target's
@@ -3059,7 +3067,17 @@ static void emit_term(CE *ce, const CTerm *t) {
             char *fn = callee_name(t->as.letcall.fn);
             char *argv = atoms_csv(ce, t->as.letcall.args, t->as.letcall.n);
             char *bn = cvar_cname(ce, t->as.letcall.x);
-            ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+            /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
+             * no value: emit the call as a bare statement and bind the unit
+             * placeholder, never `x = void_fn(...)` (a C "void value not ignored"
+             * error).  Mirrors emit_letraw's nil handling; needed once a nil
+             * cps->direct call rides a lifted join/frame body (P6). */
+            if (t->as.letcall.x.ty == TY_NIL) {
+                ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
+                ce_line(ce, "%s = 0;", bn);
+            } else {
+                ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
+            }
             free(bn); free(fn); free(argv);
             emit_term(ce, t->as.letcall.body);
             break;
@@ -3547,17 +3565,44 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     char jname[256];
     snprintf(jname, sizeof(jname), "%s_j%d", ce->fn_cn, id);
     char *xn = cvar_cname(ce, t->as.letcont.param);
-    emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
-                t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
-    free(xn);
+
+    /* P6 (heap-join-over-recursion): a jbody that captures enclosing locals or
+     * makes a cps->cps tail call (the recursion in `set-eq-loop`/`__cons-fmap`,
+     * or a chain of colored calls each capturing the growing live set) cannot
+     * ride the value-only LH_PERFORM_CONT frame (which has no `k` and no captures,
+     * and whose return would be re-delivered down `next`).  Lift it as an
+     * LH_RESUME_CONT resume-frame instead: the DKK_RESUME_FRAME rfn RECEIVES its
+     * run-time downstream chain as the `__kont` parameter (dk_run_impl passes
+     * `k->next`) and CONSUMES it (returns rfn's result, never re-processing
+     * `next`), so a KK_RET delivery lowers `dk_run(__kont, v)` and a recursive
+     * `f__cps(args, __kont)` threads it -- delivered exactly once.  Captures ride
+     * the env; `__kont` is the runtime param, not the env, so no `__k` field.  The
+     * leaner value-only case (no caps, no cps->cps tail) keeps LH_PERFORM_CONT. */
+    CapSet cs;
+    bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
+    const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
+    bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody);
 
     char *fn = callee_name(call->as.tailcall.fn);
     char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
      * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
-    char frame[560];
-    snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
+    char frame[720];
+    if (caps || needs_kont) {
+        emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
+                    t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
+        char *envexpr = emit_cont_env(ce, jname, caps, NULL);   /* caps-only env */
+        snprintf(frame, sizeof frame,
+                 "__dk_reap_node(dk_frame_resume(%s, %s, %s))", jname, envexpr, ce->cur_k);
+        free(envexpr);
+    } else {
+        emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
+                    t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
+        snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
+    }
+    free(xn);
+
     if (call->as.tailcall.n)
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
     else
