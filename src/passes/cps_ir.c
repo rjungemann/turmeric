@@ -515,6 +515,28 @@ static bool colored_call_wbd_delegatable(CpsB *b, const Expr *e) {
     return false;
 }
 
+/* Is a call THROUGH A FN-VALUE (an indirect `(f ..)` -- a fn-typed param, local
+ * closure, or fn_expr callee) inside a delegated handle safe to delegate?  Sound
+ * only when the fn-value's ENTIRE effect row is CONCRETE, non-empty, and fully
+ * discharged by the enclosing delegated handle: then the invoked fn performs
+ * exactly those (fiber) effects on the global chain the handle installs, caught
+ * locally, never escaping to the enclosing DK.  This admits `run-with` =
+ * `(handle (f) (E [] k) (resume k 5))` with `f : (fn [] #fx{E} int)`.  The taint
+ * model keeps E fiber (ensure_S seeds the delegated handler-installer's handled
+ * effect into the base fiber taint), so performer/handler never split machines. */
+static bool fnvalue_call_wbd_delegatable(CpsB *b, const Expr *e) {
+    if (g_wbd_n_handled == 0) return false;
+    EffectRow *row = NULL;
+    if (e->as.call_.fn_expr)
+        row = expr_fn_effect_row(b, e->as.call_.fn_expr);
+    else if (e->as.call_.fn_binding
+             && e->as.call_.fn_binding->type.kind == TY_FN)
+        row = e->as.call_.fn_binding->type.as.fn.effect_row;
+    if (!row || row->kind != ERK_CONCRETE || row->as.concrete.n_effects == 0)
+        return false;
+    return row_concrete_all_wbd_handled(row);
+}
+
 /* A capture-free fn-value wrapper -- a bare fn coerced to a fat/poly callable, or
  * a closure literal with no captured free variables.  Such a value is not a call
  * and not a control op, and (being capture-free) references no enclosing local,
@@ -1301,10 +1323,18 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * would leave the effect unhandled.  callee_colored only knows global
              * FnDefs, so it misses fn-value callees -- reject them here so the
              * handle stays native (its perform lowers to CT_PERFORM on the DK).
+             *
+             * EXCEPTION (PN): a fn-value whose ENTIRE effect row is CONCRETE and
+             * discharged by the enclosing delegated handle is safe -- its perform
+             * lands on the global chain the handle installs (the effect is fiber,
+             * kept so by ensure_S seeding the delegated handler-installer's effect
+             * into the base taint), never escaping to the DK.  This admits
+             * `run-with` = `(handle (f) (E ..))` where `f : (fn [] #fx{E} int)`.
              * Only tightens the P5 handle-delegation path (g_wbd_n_handled > 0); the
              * closure-only whole-body delegation is unchanged (no enclosing handle,
              * and any escaping perform there is caught by the empty-effect shape). */
-            if (g_wbd_n_handled > 0 && (e->as.call_.fn_expr || !fn->is_global))
+            if (g_wbd_n_handled > 0 && (e->as.call_.fn_expr || !fn->is_global)
+                && !fnvalue_call_wbd_delegatable(b, e))
                 return false;
             if (e->as.call_.fn_expr && !safe_to_delegate(b, e->as.call_.fn_expr))
                 return false;
