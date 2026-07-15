@@ -347,10 +347,24 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
-### Owning by-value-ADT track -- investigation findings (attempted, reverted)
+### Slice PR (LANDED) -- CPS-emit by-value-flat-product monomorphs of ordinary defns
 
-Ground truth for the next session, from an attempt that got `test-option-eq-same`
-/ `diff` to CPS-emit CORRECTLY before reverting on a broader regression:
+STRUCT-OR-TAINT distinct roots **7 -> 5**. Suite 2179/0 (4 by-value Option
+snapshots regenerated, output unchanged). The owning-track mono-template route, now
+landed with the two gates the investigation below identified: `mono_sig_ok` widens
+to a by-value FLAT PRODUCT (`slot_box_ty`) for an ORDINARY defn only, EXCLUDING (a)
+a typeclass-instance method (`spec->typeclass_inst` -- dict carrier ABI collides)
+and (b) a heap-ADT/struct handle (`carrier_handle_ok` -- interior carrier fields
+mishandled).  Plus `binding_cps_reachable` (so `cps_to_direct` sees a mono-template)
+and aggregate-only `find_mono_clone_for_call` matching.  Cleared `test-option-eq-
+same` / `test-option-eq-diff`.  Remaining owning roots: `test-option-eq-nones` (the
+erased `(none)` : `(Option A)` is an int64 carrier, not a `TY_APP` aggregate, so no
+clone resolves) and `re-parse-class` (a by-value STRUCT return/threading -- check
+whether `RxParse` is a `slot_box_ty` flat product or carries drop glue).
+
+### Owning by-value-ADT track -- investigation findings (root cause, now fixed by PR)
+
+Ground truth (the PR above implements the "bounded fix" this identified):
 
 - **Root cause confirmed.** `test-option-eq-*` call `option-eq?` (SIG-REJECT: its
   `(Option A)` params are by-value aggregates `sig_slot_ok` cannot spell), so the
