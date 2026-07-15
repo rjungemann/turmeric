@@ -20,6 +20,21 @@
  * continuation (CT_LETCONT) names the call's result. See cps_ir.h.
  * ========================================================================= */
 
+/* Partial-application inlining (currying-effect-partial keystone): a let-bound
+ * closure `f = (partial-app TARGET captured...)` whose ONLY use is a saturated
+ * direct call `(f rest...)` is rewritten to the underlying saturated call
+ * `(TARGET captured... rest...)` -- no fat closure, no env drop-glue, and (when
+ * TARGET is colored) a native DK tailcall that threads `k`.  The capture bindings
+ * stay in scope (emitted from the closure's prelude let), so the rewrite only
+ * substitutes the callee + prepends the capture var-refs. */
+typedef struct PapInline {
+    const Binding *var;      /* the let-bound closure var (e.g. add10) */
+    const Binding *target;   /* the underlying fn the pap wraps (e.g. log-add) */
+    Binding **caps;          /* captured arg bindings, in leftmost-first arg order */
+    uint32_t  n_caps;
+    uint32_t  rem_arity;     /* args a saturated call to `var` supplies (= target arity - n_caps) */
+} PapInline;
+
 typedef struct CpsB {
     Arena *a;
     Expr  *program;     /* for colored-callee lookup */
@@ -27,7 +42,16 @@ typedef struct CpsB {
     CKont  retk;        /* the function's return continuation (KK_RET) */
     const Binding *cur_fn;   /* binding of the fn being translated (self-call detection) */
     bool cur_fn_leaf_fiber;  /* the fn's body indirect-calls a fn-VALUE -> permanently fiber */
+    PapInline pap[32];       /* active pap-inline registrations (scoped per-let) */
+    uint32_t  n_pap;
 } CpsB;
+
+static const PapInline *pap_lookup(CpsB *b, const Binding *v) {
+    if (!v) return NULL;
+    for (int i = (int)b->n_pap - 1; i >= 0; i--)
+        if (b->pap[i].var == v) return &b->pap[i];
+    return NULL;
+}
 
 static const Expr *ascribe_peel(const Expr *e);   /* fwd */
 
@@ -2169,10 +2193,171 @@ static CTerm *cps_emit_hoisted_drops(CpsB *b, const AutodropPlan *pl, CTerm *res
     return rest;
 }
 
+/* Extract the inlinable partial application from a let-binding init.  The
+ * elaborator lowers `(TARGET c0 c1 ...)` (an under-saturated call) to
+ * `(let [__papc0 c0 ...] CLOSURE)` -- a capture-binding prelude wrapping an
+ * EX_CLOSURE over a synthesized `__pap` thunk whose body is the saturated
+ * `(TARGET __papc0 ... rem...)`.  Recognize that shape (and a bare CLOSURE):
+ * on success, `*target` = the underlying fn, `*caps`/`*n_caps` = the captured
+ * arg bindings (leftmost-first), `*rem_arity` = the args a saturated call to the
+ * closure supplies, and `*prelude` = the wrapping EX_LET (whose capture bindings
+ * are emitted, whose CLOSURE body is dropped) or NULL for a bare closure. */
+static bool pap_extract(const Expr *init, const Binding **target,
+                        Binding ***caps, uint32_t *n_caps, uint32_t *rem_arity,
+                        const Expr **prelude) {
+    init = ascribe_peel(init);
+    if (!init) return false;
+    const Expr *pl = NULL;
+    const Expr *clo = init;
+    if (init->kind == EX_LET) { pl = init; clo = ascribe_peel(init->as.let_.body); }
+    if (!clo || clo->kind != EX_CLOSURE || !clo->as.closure_.closure) return false;
+    struct Closure *c = clo->as.closure_.closure;
+    if (c->n_captures == 0) return false;                  /* capture-free: already a value */
+    if (c->is_shift_receiver || c->is_effect_payload) return false;  /* reaped elsewhere */
+    if (!c->fn || !c->fn->body) return false;
+    const Expr *cbody = ascribe_peel(c->fn->body);
+    if (!cbody || cbody->kind != EX_CALL) return false;    /* wrapper must be a single call */
+    const Binding *tgt = cbody->as.call_.fn_binding;
+    if (!tgt || tgt->type.kind != TY_FN) return false;     /* direct call to a named fn */
+    uint32_t tarity = tgt->type.as.fn.arity;
+    /* The wrapper body must be a FULLY saturated call to TARGET (n_caps captured +
+     * remaining), so `(var rest)` reconstructs the complete arg list. */
+    if (cbody->as.call_.n_args != tarity || tarity < c->n_captures) return false;
+    *target = tgt; *caps = c->captures; *n_caps = c->n_captures;
+    *rem_arity = tarity - c->n_captures; *prelude = pl;
+    return true;
+}
+
+/* Conservative, complete check: is EVERY use of `var` in `e` a saturated direct
+ * call `(var <rem_arity args>)`?  Paired with `closure_binding_escapes(e,var) ==
+ * false` (which proves `var` appears ONLY as a call callee), this makes the
+ * partial-application inlining sound: any unmodeled form returns false (bail, do
+ * not inline), and any wrong-arity call to `var` returns false. */
+static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_arity) {
+    e = ascribe_peel(e);
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT: case EX_VAR:
+            return true;
+        case EX_CALL: {
+            const Expr *fe = e->as.call_.fn_expr;
+            bool is_var_callee =
+                (e->as.call_.fn_binding == var)
+                || (fe && ascribe_peel(fe)->kind == EX_VAR
+                    && ascribe_peel(fe)->as.var.binding == var);
+            if (is_var_callee && e->as.call_.n_args != rem_arity) return false;
+            /* fn_expr (when not the var callee) and every arg must also be clean. */
+            if (fe && !(ascribe_peel(fe)->kind == EX_VAR
+                        && ascribe_peel(fe)->as.var.binding == var)
+                && !pap_calls_saturated(fe, var, rem_arity)) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!pap_calls_saturated(e->as.call_.args[i], var, rem_arity)) return false;
+            return true;
+        }
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!pap_calls_saturated(e->as.let_.bindings[i].init, var, rem_arity)) return false;
+            return pap_calls_saturated(e->as.let_.body, var, rem_arity);
+        case EX_IF:
+            return pap_calls_saturated(e->as.if_.cond, var, rem_arity)
+                && pap_calls_saturated(e->as.if_.then_, var, rem_arity)
+                && pap_calls_saturated(e->as.if_.else_or_null, var, rem_arity);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!pap_calls_saturated(e->as.do_.items[i], var, rem_arity)) return false;
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!pap_calls_saturated(e->as.builtin.args[i], var, rem_arity)) return false;
+            return true;
+        case EX_HANDLE:
+            if (!pap_calls_saturated(e->as.handle_.handle->body, var, rem_arity)) return false;
+            for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++)
+                if (!pap_calls_saturated(e->as.handle_.handle->cases[i].body, var, rem_arity)) return false;
+            return true;
+        case EX_PERFORM:
+            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                if (!pap_calls_saturated(e->as.perform_.perform->args[i], var, rem_arity)) return false;
+            return true;
+        case EX_ASCRIBE:
+            return pap_calls_saturated(e->as.ascribe_.inner, var, rem_arity);
+        default:
+            /* Unmodeled form: conservatively refuse to inline (sound). */
+            return false;
+    }
+}
+
+/* Build the saturated call that a pap-var call inlines to: `(TARGET cap0 ...
+ * capN rest...)`.  The capture bindings stay in scope (emitted from the pap
+ * prelude), so we reference them by fresh EX_VAR nodes; the remaining args come
+ * straight from the original `(var rest...)` call. */
+static Expr *pap_build_saturated_call(CpsB *b, const PapInline *pe, const Expr *call) {
+    uint32_t n = pe->n_caps + call->as.call_.n_args;
+    Expr **args = arena_alloc(b->a, (n ? n : 1) * sizeof(Expr *));
+    for (uint32_t i = 0; i < pe->n_caps; i++) {
+        Expr *v = expr_new(b->a, EX_VAR, pe->caps[i]->type, call->span);
+        v->as.var.binding = pe->caps[i];
+        args[i] = v;
+    }
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++)
+        args[pe->n_caps + i] = call->as.call_.args[i];
+    Expr *nc = expr_new(b->a, EX_CALL, call->type, call->span);
+    nc->as.call_.fn_binding = (Binding *)pe->target;
+    nc->as.call_.fn_expr = NULL;
+    nc->as.call_.args = args;
+    nc->as.call_.n_args = n;
+    nc->as.call_.dict_arg = NULL;
+    return nc;
+}
+
+/* If `e` is a saturated call to a pap-registered var, rewrite it to the
+ * underlying saturated call; otherwise return `e` unchanged. */
+static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
+    if (!e || e->kind != EX_CALL) return e;
+    const Binding *callee = e->as.call_.fn_binding;
+    if (!callee && e->as.call_.fn_expr) {
+        const Expr *fe = ascribe_peel(e->as.call_.fn_expr);
+        if (fe && fe->kind == EX_VAR) callee = fe->as.var.binding;
+    }
+    const PapInline *pe = pap_lookup(b, callee);
+    if (!pe || e->as.call_.n_args != pe->rem_arity) return e;
+    return pap_build_saturated_call(b, pe, e);
+}
+
+/* Register any pap-inlinable let bindings of `let` (a closure whose sole use in
+ * the body is a saturated call).  Returns the count pushed (pop with the saved
+ * b->n_pap after the let is fully translated). */
+static void pap_register_let(CpsB *b, const Expr *let) {
+    for (uint32_t i = 0; i < let->as.let_.n && b->n_pap < 32; i++) {
+        const Binding *vb = let->as.let_.bindings[i].binding;
+        const Binding *tgt; Binding **caps; uint32_t nc, rem; const Expr *pl;
+        if (vb
+            && pap_extract(let->as.let_.bindings[i].init, &tgt, &caps, &nc, &rem, &pl)
+            && !closure_binding_escapes(let->as.let_.body, vb)
+            && pap_calls_saturated(let->as.let_.body, vb, rem)) {
+            b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = tgt;
+            b->pap[b->n_pap].caps = caps;   b->pap[b->n_pap].n_caps = nc;
+            b->pap[b->n_pap].rem_arity = rem;
+            b->n_pap++;
+        }
+    }
+}
+
+/* Was let-binding `idx` of `let` pap-inlined (registered in [saved, n_pap))?  If
+ * so, its closure is dropped; only its prelude capture bindings need emitting. */
+static bool pap_binding_inlined(CpsB *b, const Expr *let, uint32_t idx, uint32_t saved) {
+    const Binding *vb = let->as.let_.bindings[idx].binding;
+    for (uint32_t j = saved; j < b->n_pap; j++)
+        if (b->pap[j].var == vb) return true;
+    return false;
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     e = (Expr *)ascribe_peel(e);
+    e = pap_maybe_rewrite(b, e);
     if (!e) {
         CTerm *t = new_term(b, CT_UNSUPPORTED);
         t->as.unsupported.why = "null";
@@ -2274,10 +2459,24 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return fold_pending(b, &p, t);
         }
         case EX_LET: {
+            uint32_t saved_pap = b->n_pap;
+            pap_register_let(b, e);
             CTerm *rest = cps_tail(b, e->as.let_.body, kont);
-            for (int i = (int)e->as.let_.n - 1; i >= 0; i--)
+            for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
+                if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
+                    /* Closure dropped; emit only its prelude capture bindings so
+                     * the inlined saturated call's capture refs stay in scope. */
+                    const Expr *init = ascribe_peel(e->as.let_.bindings[i].init);
+                    if (init && init->kind == EX_LET)
+                        for (int j = (int)init->as.let_.n - 1; j >= 0; j--)
+                            rest = cps_bind_let_init(b, init, (uint32_t)j,
+                                        cvar_of_binding(init->as.let_.bindings[j].binding), rest);
+                    continue;
+                }
                 rest = cps_bind_let_init(b, e, (uint32_t)i,
                                 cvar_of_binding(e->as.let_.bindings[i].binding), rest);
+            }
+            b->n_pap = saved_pap;
             return rest;
         }
         case EX_DO: {
@@ -2511,6 +2710,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
+    e = pap_maybe_rewrite(b, e);
     if (is_atomic(e)) {
         CTerm *t = new_term(b, CT_LETVAL);
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
@@ -2592,10 +2792,22 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return fold_pending(b, &p, t);
         }
         case EX_LET: {
+            uint32_t saved_pap = b->n_pap;
+            pap_register_let(b, e);
             CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
-            for (int i = (int)e->as.let_.n - 1; i >= 0; i--)
+            for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
+                if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
+                    const Expr *init = ascribe_peel(e->as.let_.bindings[i].init);
+                    if (init && init->kind == EX_LET)
+                        for (int j = (int)init->as.let_.n - 1; j >= 0; j--)
+                            r = cps_bind_let_init(b, init, (uint32_t)j,
+                                        cvar_of_binding(init->as.let_.bindings[j].binding), r);
+                    continue;
+                }
                 r = cps_bind_let_init(b, e, (uint32_t)i,
                              cvar_of_binding(e->as.let_.bindings[i].binding), r);
+            }
+            b->n_pap = saved_pap;
             return r;
         }
         case EX_DO: {
@@ -2743,6 +2955,7 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
     b.cur_fn = fd->binding;
     b.cur_fn_leaf_fiber = expr_has_indirect_fnvalue_call(fd->body, 0);
+    b.n_pap = 0;
     /* Phase-1 keystone (control-free colour-only shape): a colored function whose
      * whole body is delegatable (no control op, no colored call -- colored only by
      * a capturing closure it builds) emits as a single CT_LETRAW, so the direct

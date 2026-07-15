@@ -347,6 +347,28 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PV (LANDED) -- partial-application inlining clears the EX_CLOSURE keystone
+
+**BODY-UNSUPPORTED -> 0** (the last `EX_CLOSURE` root gone) and STRUCT-OR-TAINT
+`log-add` + `main` (currying-effect-partial) cleared in ONE fix. Suite 2179/0, no
+codegen churn elsewhere. A let-bound closure that is a PARTIAL APPLICATION
+(`(let [add10 (log-add 10)] (add10 32))`) and whose sole use is a saturated direct
+call is rewritten to the underlying saturated call `(log-add 10 32)` -- a native
+DK colored tailcall that threads `k`, with NO fat closure and NO env drop-glue.
+The elaborator lowers `(log-add 10)` to `(let [__papc 10] CLOSURE{__pap1288})`;
+`pap_extract` peels that capture-prelude, reads the underlying `log-add` +
+captured bindings off the `__pap` wrapper body, and `pap_maybe_rewrite`
+reconstructs `(log-add __papc rest...)` at each call site (the capture bindings
+stay in scope, emitted from the prelude; the closure is dropped). Soundness rests
+on the proven, complete, conservative `closure_binding_escapes` (from emit_core.c;
+`default -> escapes`) -- inlining fires ONLY when the closure var never appears as
+a value, plus `pap_calls_saturated` (conservative `default -> false`) confirming
+every use is a full-arity call. `log-add` was only STRUCT-OR-TAINT as a taint
+victim of `main`; making `main` native cleared both. `currying-effect-partial`
+prints `step` / `42`; all 10 currying fixtures pass. Remaining BODY surface: 3
+STRUCT-OR-TAINT roots -- `main` (a DIFFERENT fixture), `re-parse-class`,
+`test-option-eq-nones`.
+
 ### Slice PU (LANDED) -- un-lowerable inline-C is a permanent SIG-* carve-out
 
 BODY-UNSUPPORTED `EX_INLINE_C` roots (`session-effects`, `session-mp-effects`
