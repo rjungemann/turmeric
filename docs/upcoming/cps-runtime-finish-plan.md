@@ -430,45 +430,30 @@ family (`shift-crossfn-resume-works`) is unchanged. This confirms the plan's
 "control-flow surface is closed" claim -- the last shift-flavored eviction was an
 admission-predicate gap, not missing machinery.
 
-### The whole remaining BODY-* surface (after PS+PT+PU) -- THREE distinct areas
+### The whole remaining BODY-* surface (after PS+PT+PU+PV) -- TWO areas
 
-Corpus scan after this session's PS/PT/PU: **BODY-UNSUPPORTED = 1**
-(`EX_CLOSURE`), **BODY-STRUCT-OR-TAINT = 4 distinct roots** (`log-add`, `main`,
-`re-parse-class`, `test-option-eq-nones`). SIG-* now also carries a new
-`SIG-INLINE-C` permanent category (2 fns). Those 5 BODY rows collapse to just
-THREE independent problem areas -- and area 1 alone accounts for 3 of the 5 rows:
+Corpus scan after this session (PS/PT/PU/PV): **BODY-UNSUPPORTED = 0** (cleared)
+and **BODY-STRUCT-OR-TAINT = 6 fns / 3 distinct roots** (`main` in
+`sized-sz3-bitvec` + `sized-sz3-matrix`, `re-parse-class`, `test-option-eq-nones`).
+SIG-* carries the `SIG-INLINE-C` permanent category (2 fns). The `currying-effect-
+partial` area (was 3 of 5 rows) is LANDED via PV; what remains are two independent
+infrastructure areas:
 
-1. **currying-effect-partial** (`log-add` STRUCT + `main` STRUCT + `main`
-   UNSUPPORTED = 3 of the 5 rows, ONE fix). `(defn log-add [a b] #fx{Log} ...)`;
-   `main` does `(handle (let [add10 (log-add 10)] (add10 32)) (Log ...))`.
-   `(log-add 10)` is a PARTIAL APPLICATION -> an `EX_CLOSURE` over a synthesized
-   pap-wrapper `__pap1288`. The wrapper is ALREADY CPS-perfect --
-   `cps-fn __pap1288 [env b] -> tailcall log-add(__papc=10 b k)` (threads `k`
-   cps->cps) -- but it SIG-REJECTs on its fat env signature, and `main`
-   materializes the fat closure + does an indirect call, which is the
-   `EX_CLOSURE`/indirect-through-capturing-closure eviction. `log-add` itself is
-   NATIVE (`perform Log; (+ a b); (k)`) and is ONLY STRUCT-OR-TAINT as a TAINT
-   VICTIM of `main` (main handles Log but evicts, so Log is non-permanently
-   tainted). => Admitting the closure in `main` clears ALL THREE rows at once.
-   The clean native path is **partial-application inlining**: `pap_fd->body`
-   (elab_call.c ~3174) IS the saturated `(log-add captured... remaining...)`
-   call, so a `(let [f <pap EX_CLOSURE>] ... (f rest) ...)` where `f` does not
-   escape (used only in saturated call position) rewrites to the saturated
-   colored call `(log-add 10 32)` -- native DK, threads `k`, no fat closure, no
-   env drop-glue. Bounded by an escape/use check on the let body; broad blast
-   radius (currying is pervasive) so it needs a full-suite gate. The alternative
-   (materialize fat closure + indirect colored DK call + env drop-glue) is the
-   heavier Phase-3 route.
-2. **`re-parse-class`**: a NON-generic defn returning a by-value STRUCT `RxParse =
-   (RxPR :Regex :int)` -- a Regex (heap) field gives it DROP GLUE, so it is not a
-   `slot_box_ty` flat product (PR's gate correctly excludes it). Needs the owning-
-   value / drop-glue signature path.
-3. **`test-option-eq-nones`**: `(option-eq? (none) (none) cmp)` -- the erased
-   `(none) : (Option A)` is a TY_APP whose element tyvar is unresolved, so
-   `slot_ok_t`/`atom_ok` reject the cps->cps tailcall arg (`option-eq?` is a
-   mono-template) AND `find_mono_clone_for_call` has no aggregate arg to key the
-   `(Option int)` clone on. Needs erased-generic monomorph resolution (admit the
-   erased Option carrier + a fallback-clone pick for the element-free `none`).
+1. **Owning value crossing a control op** (`main` in sized-sz3-bitvec/matrix,
+   `re-parse-class`). The sized mains handle `#fx{Unsafe}` blocks whose bodies are
+   owning bitvec/matrix ops (`<owning-op>` CT_LETRAW); `re-parse-class` is a non-
+   generic defn returning a by-value STRUCT `RxParse = (RxPR :Regex :int)` whose
+   heap `Regex` field gives it DROP GLUE (not a `slot_box_ty` flat product; PR's
+   gate correctly excludes it). Both need the owning-value / drop-glue signature +
+   scope-exit-drop path (the open owning plans:
+   `cps-backend-owning-autodrop-lowering-plan.md`,
+   `cps-backend-ref-scope-exit-drop-plan.md`).
+2. **Erased-generic monomorph resolution** (`test-option-eq-nones`).
+   `(option-eq? (none) (none) cmp)` -- the erased `(none) : (Option A)` is a TY_APP
+   whose element tyvar is unresolved, so `slot_ok_t`/`atom_ok` reject the cps->cps
+   tailcall arg (`option-eq?` is a mono-template) AND `find_mono_clone_for_call`
+   has no aggregate arg to key the `(Option int)` clone on. Needs admitting the
+   erased Option carrier + a fallback-clone pick for the element-free `none`.
 
 ### The remaining 5 STRUCT-OR-TAINT roots (after this session's PK-PR, 26 -> 5)
 
