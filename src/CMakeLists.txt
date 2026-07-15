@@ -263,12 +263,9 @@ string(TOLOWER "${TUR_ARCH}" TUR_ARCH)
 
 # Architecture-specific assembly (added to both tur and libturi)
 if(WIN32)
-    # fiber_ctx_x64.S is SysV-only: it takes its first argument in %rdi (Windows
-    # uses %rcx) and tur_ctx_t has no slots for the XMM6-15/rdi/rsi that the
-    # Windows x64 ABI requires be preserved.  Reusing it would corrupt state
-    # silently, so Windows gets an aborting stub until WIN3 lands a real
-    # context switch.  See async/fiber_ctx_win.c.
-    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_win.c)
+    # WIN3 tier C: real Windows x64 context switch (RCX first-arg, preserves
+    # RSI/RDI/XMM6-15). Replaces the earlier aborting fiber_ctx_win.c stub.
+    list(APPEND TUR_CORE_SOURCES async/fiber_ctx_x64_win.S)
 elseif(TUR_ARCH MATCHES "arm64|aarch64")
     list(APPEND TUR_CORE_SOURCES async/fiber_ctx_arm64.S)
 elseif(TUR_ARCH MATCHES "x86_64|amd64")
