@@ -123,7 +123,7 @@
 ;;; Since: Phase RF3
 ;;; Updated: TS5 -- replaced fat-pointer extraction with TS1 typed thunk call.
 
-(defn free-run [^fat interp : int free : int]
+(defn free-run [^borrow ^fat interp : int free : int]
   #fx{Unsafe}
   : int
   ```c

@@ -1,6 +1,5 @@
-The `(fn [inner] ...)` interp closure is passed to `free-run` as a `^fat`
-tur_poly_fn_t and never dropped by the caller -- the deferred
-escaping-fat-closure-env leak (docs/reported/escaping-fat-closure-env-leak.md).
-The leak is present in the emitted C on BOTH the direct and the (now) CPS path;
-the direct-emitter `int main` merely hid it from LeakSanitizer via stack
-reachability. Once the closure carries RC/drop glue this marker can be removed.
+The interp closure's env is now freed (closure-drop-glue S1: free-run's interp is
+^borrow, so the inline capturing closure is hoisted to a let and reclaimed at
+scope exit). What still leaks (16 B) is the free-monad `Suspend` node from
+`(free-lift ...)` -- a separate ADT/owning-value drop issue, NOT a closure. Drop
+this marker once free-monad programs carry drop glue.

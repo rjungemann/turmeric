@@ -1,8 +1,38 @@
 # Closure env drop glue -- freeing captured fat-closure environments
 
-**Status:** scoping / design (no code landed). Prepared from
+**Status:** S1.2 (borrowed HOF-arg free) LANDED; the rest of S1 (owning-capture
+walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
+
+## Landed: S1.2 -- borrowed HOF-arg closure free
+
+A capturing closure passed INLINE to a `^borrow` fn-param now has its heap env
+reclaimed at scope exit. `free-lift-bind` / `unsafe-closure-capture` (the
+`(free-run (fn [inner] (* inner scale)) ...)` shape) dropped from a 32 B leak to
+16 B -- the closure env is freed; the residual 16 B is a SEPARATE free-monad
+`Suspend` ADT leak (not a closure), so those fixtures keep `requires.no-leak-check`
+for that reason now. Suite 2179/0. Mechanism (no ownership hazard -- these
+captures are scalar):
+1. `free-run`'s interp param is annotated `^borrow` (it invokes but does not
+   retain the closure -- a natural transformation is reused, so the CALLER owns
+   and frees it, not the callee).
+2. `binding_escapes_impl` (emit_core.c) treats a closure passed to a `FA_BORROW`
+   param as NON-escaping (same only-greenlights-a-free posture as the box-accessor
+   whitelist).
+3. `hoist_borrowed_closure_args` (elab_call.c, applied in the `elab_call_fn`
+   wrapper) hoists an inline capturing-closure `^borrow` arg into a fresh
+   let-binding, so the existing `let_binding_env_freeable` scope-exit `free`
+   reclaims it -- the inline env otherwise has no name to target.
+
+Also fixed a pre-existing latent bug this surfaced: `elab_unsafe` allocated its
+`HandleExpr` via `arena_alloc` and never initialized `shallow`, so effect_check
+read an uninitialized bool (UBSan `load of value 190`); the arena layout shift
+from the hoist made the garbage non-zero. Now `handle->shallow = false`.
+
+Remaining S1: the OWNING-capture case still needs capture-time clone + the
+`drop_glue_env_N` walk-glue (Implementation findings below); the `^borrow` free
+here is hazard-free only because these payload captures are scalar.
 
 **One-line:** give a captured ("fat") closure's heap env struct a real lifecycle
 -- freed when the closure dies, dropped-through when stored, walk-glued when its
