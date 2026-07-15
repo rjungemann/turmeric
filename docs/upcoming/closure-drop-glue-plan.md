@@ -146,15 +146,60 @@ the ABI cost of R is high and the corpus does not yet need it.
 
 ## Phasing
 
-- **Phase 1 (S1, bounded):** env drop-glue function + widen the scoped free to
-  partial-app and non-retaining-HOF-arg closures + CPS boundary-reap wiring for
-  owning captures. Clears `currying-effect-partial` and the two PD leak fixtures.
-  No ABI change, no ownership tracking. **Start here.**
+- **Phase 1 (S1) -- NOT bounded; must land as one atomic ownership unit (see
+  Implementation findings).** Order forced by the double-free hazard:
+  (1a) capture-time retain/clone for OWNING captures (a bare capture aliases
+  today, so an env-drop would double-free), (1b) `drop_glue_env_N` walk-glue on
+  top, (1c) the non-retaining-callee (`^once`) annotation + a post-call free hook
+  in EX_CALL emission for inline HOF args. 1a+1b are atomic (1a alone leaks MORE;
+  1b alone double-frees). Clears the two PD leak fixtures (scalar-capture, so 1c +
+  the emit hook, not the walk-glue, is what they need). NOT a "start here quick
+  win" -- it is the ownership feature. `currying-effect-partial` is RE-CLASSIFIED
+  out of S1 (it is a partial-app of a colored fn -- a B1-style colored closure,
+  not a value closure).
 - **Phase 2 (S2 / Model U):** closures participate in the move system; struct/ADT
   drop glue drops closure-typed fields via `drop_glue_env_N`. Clears
   `hkt-stdlib-parser-instances` and the httpd middleware family.
 - **Phase 3 (S2 / Model R, only if needed):** refcounted env for genuinely shared
   closures. ABI change; deferred until a fixture demands it.
+
+## Implementation findings (verified before starting S1)
+
+A tractability pass on S1 established that it is NOT a quick bounded slice -- every
+sub-path has either a soundness hazard or needs new analysis/machinery. Three
+facts, each verified against the emitter:
+
+1. **Capturing an owning value does NOT clone it.** The env-fill emission
+   (`emit_expr.c` ~5793) is a bare `fat_tmp->field = <value>;` per capture -- no
+   `rc` increment, no closure retain. So the walk-glue (dropping owning captures
+   in `drop_glue_env_N`) is UNSOUND on its own: dropping a captured `rc` that the
+   original owner still drops is a double-free. **The walk-glue REQUIRES
+   capture-time retain/clone first** (the "retain when duplicated" half of the
+   fix). Scalar (Copy) captures are safe (no ownership) -- so a scalar-only env
+   drop is a bare `free`, hazard-free; an owning-capture env drop is blocked on
+   capture-cloning.
+
+2. **No post-call free hook exists for inline HOF-arg closures.** `free-lift-bind`
+   / `unsafe-closure-capture` pass the closure INLINE to `free-run` (not a let
+   binding), so `let_binding_env_freeable`'s scope-exit free (the only closure
+   free that exists) does not reach it. Freeing it needs (a) a new "free this
+   malloc'd env after the enclosing call/statement" mechanism in the EX_CALL
+   emission, AND (b) proof the callee does NOT retain the closure -- `free-run` is
+   inline-C whose non-retention is not analyzable; it needs a `^once`/non-retaining
+   fn-param annotation or a whitelist. Even though these closures capture only a
+   scalar (hazard-free to free), the emit hook + non-retention property are real
+   prerequisites.
+
+3. **`currying-effect-partial` is a partial-application of a COLORED fn.** `add10 =
+   (log-add 10)` where `log-add` performs `Log`; the "closure" performs when
+   called, so it is not a value closure at all -- it belongs with the B1-style
+   colored-call handling, not S1 value-closure drop. It should be re-classified
+   out of S1.
+
+Net revised S1 order: (a) capture-time retain/clone for owning captures, then (b)
+`drop_glue_env_N` walk-glue on top of it, then (c) the non-retaining-callee
+annotation + post-call free for HOF args. Only step (a) unblocks a hazard-free
+`drop_glue_env_N`; steps done out of order double-free.
 
 ## Risks / open questions
 
