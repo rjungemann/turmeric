@@ -7,8 +7,8 @@ compiles and runs real programs, and the async/reactor/httpd/fiber subset passes
 ~65 fixtures. This plan tracks only what is left.
 
 The original end-to-end plan (toolchain rationale, the WIN0/WIN1 blockers, the
-Wine loop, the full WIN3 investigation) is at
-[windows-support-plan.md](windows-support-plan.md).
+Wine loop, the full WIN3 investigation) is archived at
+[docs/archive/windows-support-plan.md](../../archive/windows-support-plan.md).
 
 **Toolchain:** MinGW-w64 / UCRT64 via MSYS2 (`C:\msys64`), not Clang-cl. Build
 with `just build-windows`; run the suite with
