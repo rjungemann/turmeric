@@ -279,7 +279,11 @@ static const Type *fn_ret_type(const FnDef *fd) {
 /* The C type used to declare a let-binder of type kind `ty` (TY_NIL binders are
  * unit placeholders stored as int64_t). */
 static const char *binder_ctype(EmitCtx *ctx, TypeKind ty) {
-    if (ty == TY_NIL || ty == TY_UNKNOWN) return "int64_t";
+    /* TY_NEVER (`!`) is the dead placeholder of a diverging computation (a `panic`
+     * handler case): declare it as the int64_t nil-placeholder word, never `void`
+     * (`type_c_name(TY_NEVER)` -> "void", which yields an illegal `void __t;`
+     * local).  atom_ok admits TY_NEVER for the same reason. */
+    if (ty == TY_NIL || ty == TY_UNKNOWN || ty == TY_NEVER) return "int64_t";
     return emit_type_c_name(ctx, emit_type_from_kind(ty));
 }
 
@@ -298,7 +302,14 @@ static const char *binder_ctype_full(EmitCtx *ctx, TypeKind ty, const Type *t) {
     return binder_ctype(ctx, ty);
 }
 
-/* Atom types we can materialize as a slot-representable value. */
+/* Atom types we can materialize as a slot-representable value.
+ * TY_NEVER (`!`, the bottom type) is admitted like TY_NIL: it only arises as the
+ * DEAD result placeholder of a diverging computation -- e.g. a handler case that
+ * ends in `(panic ...)` yields a `!`-typed word that the CPS translation still
+ * threads to the prompt, but the panic aborts before that delivery is reached.
+ * The placeholder rides the slot as the nil word (0), so crossing it is sound;
+ * without this a `(panic ...)`-terminated handler evicts the whole function
+ * (e.g. `with-abort-panic` in effect-abort -> main + safe-divide off CPS). */
 static bool atom_ok(const CAtom *a) {
     switch (a->kind) {
         case CA_INT:  return slot_ty(a->ty) || a->ty == TY_UNKNOWN;  /* any <=64-bit int width */
@@ -314,8 +325,8 @@ static bool atom_ok(const CAtom *a) {
              * so rejecting it here only blocks the unsound slot-crossing use and
              * evicts a function that threads a poly-fn value as a plain value. */
             if (a->var && a->var->is_poly_fn) return false;
-            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
-        case CA_CVAR: return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL;
+            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
+        case CA_CVAR: return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
         default:      return false;  /* CA_OTHER */
     }
 }
@@ -3201,7 +3212,10 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * only realized if we emit it as a statement here.  Other nil ops (rc/drop,
      * set!, while, ...) already emitted their statements and return a unit
      * placeholder, so they must NOT be re-emitted (that would double the effect). */
-    if (t->as.letraw.x.ty == TY_NIL) {
+    if (t->as.letraw.x.ty == TY_NIL || t->as.letraw.x.ty == TY_NEVER) {
+        /* TY_NEVER: a diverging op (a `panic`), whose emit_value already emitted
+         * the abort statement and returned a void placeholder -- bind the nil word
+         * (0), never `x = ((void)0)`.  Same shape as the nil case. */
         const Expr *le = t->as.letraw.e;
         while (le && le->kind == EX_ASCRIBE) le = le->as.ascribe_.inner;
         if (le && le->kind == EX_CALL && rhs && rhs[0])
