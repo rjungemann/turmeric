@@ -104,6 +104,41 @@ Current `BODY-*` (the only rows that must reach zero):
    in the cluster at once. So the real root count is materially smaller than ~90;
    **measure roots by fixing them, not by counting names.**
 
+#### THE dominant STRUCT-OR-TAINT root: heap-join-over-recursion (Rule A) -- measured
+
+A per-function census (`TUR_TRACE_EVICT` counting fixtures) found the surface is
+overwhelmingly **three stdlib functions**, each evicting in **~1762 fixtures**
+(i.e. every fixture that imports stdlib): `set-eq-loop`, `map-eq-loop`,
+`__cons-fmap`. Instrumenting `ensure_S` shows all three pass the initial
+candidate gate (sig + `term_core_ok`) and are then evicted by the **fixpoint
+Rule A: `needs_heap_join`** -- NOT by taint. Root cause is precise
+(`needs_heap_join` case 2, `jbody_has_cps_tailcall`):
+
+- Each is the pattern **"call a colored helper, then recurse (or return)"**:
+  `set-eq-loop` calls `hamt/has-dynamic?` (colored: it invokes a `keyeq` fat
+  comparator) then tail-recurses; `__cons-fmap` calls its `^fat f` then recurses
+  in the `tcons` arg. The colored call's continuation becomes a `letcont` heap
+  join (`emit_heap_join` reifies it as a DK frame -- already supported).
+- The join is rejected because its **jbody itself contains a cps->cps tail call**
+  (the recursion, threading the function's `KK_RET` continuation). The heap-join
+  frame is lifted `LH_PERFORM_CONT` (KK_RET -> `return value`), which has NO `k`
+  in scope to thread to the recursive `set_eq_loop__cps(args, k)` -- so the lifted
+  frame would reference an undeclared `k`. The jbody also **captures** outer
+  locals (`iter`/`s2-hamt`/`keyeq`), so it is a *capturing* heap join too
+  (`needs_heap_join` case 1).
+
+**This one shape dominates the entire STRUCT-OR-TAINT surface** -- it is the
+highest-leverage slice in the whole plan (3 fns x ~1762 fixtures, plus every
+caller that taint-cascades off them). Fix direction: lift a heap join whose
+jbody has a `KK_RET` cps->cps tail call as a **RESET-style frame**
+(`LH_RESET_CONT` already carries `k = enclosing continuation` in its env and
+lowers `KK_RET -> dk_run(k, ..)`), building the frame env with `__k = cur_k` plus
+the jbody's scalar captures; then relax `needs_heap_join` to admit the
+capturing + cps->cps-tailcall case for that lift mode. High regression surface
+(1762 fixtures currently pass via the direct fallback), so land behind a careful
+suite pass. This supersedes the "scattered value-representation" framing above as
+the STRUCT-OR-TAINT priority.
+
 ## Ordered execution (each slice: land + full suite + re-measure the gate)
 
 The shape of every slice is the one Reductions A/B used: find the failing
