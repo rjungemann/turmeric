@@ -1,0 +1,5 @@
+(defeffect E [] :int)
+(defn once [] : int (perform (E)))
+(defn run [] : int
+  (handle (once) (E [] k) (+ 100 (resume k 5))))
+(defn main [] : int (println (run)) 0)
