@@ -3144,6 +3144,8 @@ typedef struct {
     bool        ret_mode;    /* true inside a perform-continuation frame: KK_RET -> return value */
     bool        handler_case_mode;  /* E7: true directly inside a LH_HANDLER_CASE body -- a
                                      * terminal tail `resume` here emits dk_tail_resume (yield) */
+    bool        case_tail_resume;   /* E7: this case was installed with dk_handler_tail (DEEP +
+                                     * tail-resume); a SHALLOW case keeps the inline dk_invoke */
     /* Full Type a value has when it crosses the slot at each continuation target,
      * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
      * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
@@ -3693,6 +3695,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.shift_mode = (mode == LH_SHIFT_BODY || mode == LH_HANDLER_CASE || mode == LH_PERFORM_CONT);
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
     hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
+    hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding).  A reset/handle
@@ -4606,8 +4609,16 @@ static void emit_handle(CE *ce, const CTerm *t) {
         CapSet ccs;
         bool cok = collect_caps_case(t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], &ccs);
         const CapSet *ccaps = (cok && ccs.n > 0) ? &ccs : NULL;
+        /* E7: emit_resume yields (dk_tail_resume) ONLY for a case installed with
+         * dk_handler_tail -- a DEEP tail-resume.  A SHALLOW case keeps the inline
+         * dk_invoke (its dk_perform never queues an H->next delivery to trampoline).
+         * Must agree with the per-case ctor decision below. */
+        bool save_ctr = ce->case_tail_resume;
+        ce->case_tail_resume = g_opt_cps_tramp_resume && !t->as.handle.shallow
+            && case_body_tail_resumes(t->as.handle.cases[ci].case_body);
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
                     t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], ccaps);
+        ce->case_tail_resume = save_ctr;
         cenvs[ci] = emit_cont_env(ce, cnames[ci], ccaps, NULL);   /* k-less env */
     }
 
@@ -4889,7 +4900,7 @@ static void emit_resume(CE *ce, const CTerm *t) {
      * dk_handler_tail (case_body_tail_resumes agrees), so it queued the H->next
      * delivery and this yield hands off the resumed chain; the value is delivered
      * by the driver, so nothing follows here. */
-    if (g_opt_cps_tramp_resume && ce->handler_case_mode && resume_is_tail(t)) {
+    if (g_opt_cps_tramp_resume && ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);
         free(sv); free(kk); free(vv);
