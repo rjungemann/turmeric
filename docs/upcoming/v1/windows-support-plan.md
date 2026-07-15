@@ -419,7 +419,43 @@ load it in a stock Godot 4 binary.
 
 ---
 
-## Phase WIN3 -- Deferred: full async subsystem on Windows
+## Phase WIN3 -- async on Windows (in progress; the plan below was wrong)
+
+**The original WIN3 framing -- "add io_iocp.c, add a MASM fiber stub" -- was
+written for Clang-cl and does not match how compiled programs actually work.**
+Investigation on MinGW/UCRT64 found:
+
+- A compiled async program does NOT use the `io_backend` abstraction
+  (epoll/kqueue/iocp). It emits a **`select()`-based reactor** and LINKS the
+  `tur_reactor_*` implementation from `libturi.a`. `select()` works on Windows
+  (Winsock), so **no IOCP backend is needed for the compiled path at all**.
+- `async-sleep`, `reactor-timer`, `reactor-linear`, `reactor-chan-bridge` and
+  friends already run correctly on Windows once linked.
+
+So WIN3 for the compiled fixtures is three tiers, none of them IOCP:
+
+**A. libturi.a resolution (DONE).** The `-lturi` autolink resolver only finds an
+*installed* SDK (`share/turmeric`); dev builds rely on `-Lbuild/src` from
+`TUR_CC_FLAGS`. That was hardcoded to `build/src`, but the Windows build lives in
+`build-win/`, so every reactor/async fixture failed to *link*. `tests/run.sh`
+now derives the `-L` from `$(dirname $TUR)/src`. Unblocked ~32 fixtures.
+
+**B. Winsock stdlib port (TODO).** `async_socket.tur`, `async_pipe.tur`,
+`async_file.tur`, `httpd.tur` use POSIX socket idioms in inline-C:
+`fcntl(F_GETFL/F_SETFL, O_NONBLOCK)` -> `ioctlsocket(FIONBIO)`, `close` ->
+`closesocket`, `pipe` -> `_pipe`, plus a one-time `WSAStartup`. Note the SOCKET
+handle is 64-bit on Win64, so the `int fd` locals need widening. ~30 fixtures
+(`httpd-*`, `async-echo-server`, `async-file`).
+
+**C. Fiber context switch (TODO).** The 3 remaining are the Win32-Fiber shim's
+multishot abort and thread-affinity hang (`fh-multishot-value`,
+`multishot-effect-cont-kv-sugar`, `scheduler-multithread`). These need the real
+register-snapshot x64 context switch below.
+
+The original deferred content follows, kept for the fiber-context-switch design
+(tier C) which is still accurate:
+
+## Phase WIN3 (original) -- full async subsystem on Windows
 
 **Goal:** make turmeric-side concurrency (`spawn`, channels, STM, async
 I/O) work inside the Windows runtime.

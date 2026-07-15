@@ -102,7 +102,12 @@ fi
 # Override with TUR_CC_FLAGS="-O1 -std=c99" for faster (but less safe) builds.
 # NOTE: -O0 causes SIGTRAP on Apple Silicon; -O1 exposes latent UB in some
 #       emitted functions missing a return path — keep -O2 for safety.
-export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -Lbuild/src}"
+# The `-L` for libturi.a is derived from where $TUR actually lives, not
+# hardcoded to build/src -- otherwise a non-default build tree (Windows uses
+# build-win/) can't resolve the `-lturi` autolink that reactor/async fixtures
+# emit, and every one of them fails to link.
+_tur_build_dir=$(dirname "$TUR")
+export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -Wall -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
 # T19: ThreadSanitizer (TSan) support.
 # Set TUR_TSAN=1 to compile and run all fixtures with -fsanitize=thread.
