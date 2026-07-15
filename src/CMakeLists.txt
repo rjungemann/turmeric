@@ -8,6 +8,15 @@ cmake_minimum_required(VERSION 3.20)
 # ---------------------------------------------------------------------------
 add_compile_definitions(_DEFAULT_SOURCE)
 
+# WIN3: the reactor's Windows I/O backend (async/io_iocp.c) links against
+# Winsock. tur_core is an OBJECT library, so its Winsock dependency does not
+# propagate to the many executables that embed its objects (tur, the tur_*
+# test harnesses). A directory-scoped link_libraries applies to every target
+# defined below, which is the simplest way to cover them all.
+if(WIN32)
+    link_libraries(ws2_32)
+endif()
+
 # ---------------------------------------------------------------------------
 # Feature-test macro: macOS gates the POSIX-XSI ucontext_t (used by
 # TuriEnv::sched_ctx for the async scheduler) behind _XOPEN_SOURCE.
@@ -396,6 +405,10 @@ target_link_libraries(libturi INTERFACE ${CMAKE_DL_LIBS})
 # overrides auto-registered for every interpreter env), whose math shims
 # reference sqrt/floor -- propagate libm to anyone linking libturi.
 target_link_libraries(libturi INTERFACE m)
+# WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock).
+if(WIN32)
+    target_link_libraries(libturi INTERFACE ws2_32)
+endif()
 if(HAVE_EDITLINE)
     target_link_libraries(libturi INTERFACE ${LIBEDIT_LIB})
 endif()
