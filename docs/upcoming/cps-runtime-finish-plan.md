@@ -347,6 +347,57 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PG/PH -- `with-abort-panic` family (TY_NEVER + nested-handle-in-continuation)
+
+Two composable STRUCT-OR-TAINT slices via the root-profiling method (`ensure_S`
+instrument -> isolate the one failing predicate -> widen soundly). Suite 2179/0.
+
+- **PG (`TY_NEVER` panic placeholder).** A handler case ending in `(panic ...)`
+  diverges; the CPS translation still threads a `!`-typed (bottom) placeholder
+  word to the prompt, but the panic aborts first.  `atom_ok` rejected `TY_NEVER`,
+  evicting the handling fn -> tainting the effect -> evicting the performer.  Fix:
+  admit `TY_NEVER` like `TY_NIL` in `atom_ok`; lower a `TY_NEVER` binder as the
+  int64_t nil word in `binder_ctype` + `emit_letraw` (not `void __t;` /
+  `= ((void)0)`).  Cleared `effect-abort-panic`.
+- **PH (nested handle in a handle/reset continuation).** Two sequential handles
+  (`effect-abort` `main`) failed because neither `joins_closed_rec` nor
+  `collect_caps_rec` had a `CT_HANDLE` case (both hit `default`).  Added it to
+  both, mirroring `CT_RESET`/`CT_AWAIT`/`CT_PERFORM`: the continuation is
+  same-scope; the delim/case frames are lifted (fresh join scope) and their env
+  captures ride the enclosing helper; each case binds its params + `k`.  Cleared
+  `effect-abort`.
+
+STRUCT-OR-TAINT distinct fns 53 -> 52.
+
+### Slice PI (REVERTED) -- println-in-handler exposes deeper DK-dispatch bugs
+
+Attempted: drop the `is_println_shape` rejection in `handle_case_ok` -- a handler
+that prints (`(Write [s] k) (do (println s) (resume k 0))`) is the COMMONEST
+effect shape, and `emit_term`'s CT_LETPRIM already emits `println` (emit_println)
+in a lifted frame, so the gate looked purely conservative.  It cleared **9
+fixtures** (STRUCT-OR-TAINT 52 -> 47, evicting fixtures 71 -> 62) -- but 3 of the
+9 then MISCOMPILED (`unhandled effect` abort), so it was reverted.  The 3 reveal
+two PRE-EXISTING bugs that eviction was masking (these fixtures ran on the fiber
+path before), and are the real blockers to admitting printing handlers:
+
+1. **Taint-fixpoint completeness gap (`effect-poly-infer`).** `apply-logged`
+   performs `Log` through a fn-value CALLBACK closure and evicts to fiber, but
+   `main` (the `Log` handler) is admitted to DK -> split -> `Log` unhandled.  The
+   `ensure_S` Rule B/C taint does not co-classify a performer embedded in a
+   closure/indirect callee, so the handler is not evicted alongside it.  Fixing
+   this (taint the effect when ANY reachable performer -- including one inside a
+   non-in_s closure/callee -- is on fiber) is the higher-leverage fix: it is a
+   real soundness gap, not just an admission nicety.
+2. **Multi-effect deep-handler re-installation on DK (`try-with-basic`).** A
+   2-case handler (`Write` then `Read`) with BOTH performer and handler admitted
+   to DK still aborts `unhandled (tag 3)`: after the `Write` case resumes, the
+   continuation performs `Read` but the deep handler is not re-installed for it.
+   A native multi-effect deep-handler dispatch bug, independent of the split.
+
+So printing handlers are NOT a standalone admission slice -- they gate on fixing
+(1) the taint completeness gap and (2) multi-effect deep-handler re-installation.
+Do NOT re-land the `handle_case_ok` println relaxation before both are fixed.
+
 ### Slice PF -- self-contained handle delegation clears EX_WHILE
 
 `BODY-UNSUPPORTED` **5 -> 4** (`EX_WHILE` -> 0). Suite 2179/0.
