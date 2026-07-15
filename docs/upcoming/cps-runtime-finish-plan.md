@@ -347,6 +347,37 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Owning by-value-ADT track -- investigation findings (attempted, reverted)
+
+Ground truth for the next session, from an attempt that got `test-option-eq-same`
+/ `diff` to CPS-emit CORRECTLY before reverting on a broader regression:
+
+- **Root cause confirmed.** `test-option-eq-*` call `option-eq?` (SIG-REJECT: its
+  `(Option A)` params are by-value aggregates `sig_slot_ok` cannot spell), so the
+  call is cps->direct and the by-value `(Option int)` arg cannot cross.
+- **The mono-template route works for a DIRECTLY-called by-value-ADT generic.**
+  Three coordinated changes made `option-eq?` a mono-template and its callers
+  native-CPS: (1) `mono_sig_ok` admits a by-value-aggregate CONCRETE param/return
+  via the wider `slot_ok_t` (a concrete clone name is unique, no carrier/concrete
+  divergence); (2) a `binding_cps_reachable` helper (`in_s || mono_template`) so
+  `term_core_ok`'s `cps_to_direct` agrees with emit_term's `binding_in_s || mclone`;
+  (3) `find_mono_clone_for_call` must match on AGGREGATE args ONLY (`TY_APP` /
+  `TY_ADT` / `TY_STRUCT`) -- a fn-value comparator arg is carried as `void *` and
+  never matches the generic fn-param C type, so matching on it spuriously fails.
+  With these, option-basic COMPILED and printed the correct `true/false/true`.
+- **Why it reverted: the mono_sig_ok relaxation collides for DICT-reached clones.**
+  A typeclass-instance monomorph (Eq/Show: `eqmap-*`, `set-*`, `show-collections`,
+  ~12 fixtures) has its `<clone>` emitted BOTH by the CPS backend (concrete `__cps`
+  + wrapper) AND via the carrier/dict path -> duplicate-definition / type-mismatch
+  `cc` failures (exactly the `sig_slot_ok` comment's warning).  The direct-called
+  `option-eq?` had no dict path, so it was collision-free.
+- **The bounded fix** is to gate the `mono_sig_ok` by-value relaxation to a clone
+  that is NOT also emitted via a carrier/dict path (or make the direct emitter
+  skip a specific CPS-owned clone -- the skip is currently per-binding, not
+  per-clone).  `test-option-eq-nones` additionally needs the erased `(none)`
+  `(Option A)` (an int64 carrier, not a `TY_APP` aggregate) to resolve a clone.
+  `re-parse-class` is the same by-value-struct-signature family.
+
 ### Slice PQ (LANDED) -- capability (struct-field fn-value) call delegation
 
 STRUCT-OR-TAINT distinct roots **10 -> 7**. Suite 2179/0. A `handle` whose body
