@@ -1,9 +1,21 @@
 # Multishot effect fixtures abort on Windows (Win32-Fiber ucontext shim)
 
+**Status:** RESOLVED (WIN3-C). The generated-program ucontext was reimplemented
+as a register-snapshot context switch (thread-agnostic, re-entrant) instead of
+Win32 Fibers -- see `emit_win_ucontext_shim` in src/compiler/emit_module.c and
+the sibling libturi asm in src/async/fiber_ctx_x64_win.S. `fh-multishot-value`,
+`multishot-effect-cont-kv-sugar`, and the related `scheduler-multithread` hang
+all pass now. The root cause never needed pinning down at the Win32-Fiber level:
+replacing the mechanism with a real register snapshot removed both the
+re-entrancy and the thread-affinity problems at once. Original investigation
+notes preserved below.
+
+---
+
 **Severity:** medium -- 2 fixtures of ~2180. Windows only. Blocks nothing else;
 plain (one-shot) effect handlers and generators work.
 
-**Status:** open. Root cause narrowed but NOT identified.
+**Status (at time of writing):** open. Root cause narrowed but NOT identified.
 
 ## Symptom
 

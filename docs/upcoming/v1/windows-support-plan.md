@@ -70,16 +70,11 @@ Every one of the 51 is the deferred async/fiber runtime:
 
 - **48** are `httpd-*` / `reactor-*` / `async-*` / `scheduler-io-park` /
   `taskgroup-async` -- all routed through the `io_iocp.c` stub. Expected; WIN3.
-- **2** are `fh-multishot-value` / `multishot-effect-cont-kv-sugar` -- the
-  Win32-Fiber multishot abort.
-- **1** is `scheduler-multithread` -- Win32 Fibers are thread-affine, so a fiber
-  cannot migrate across a multithread scheduler's worker threads. Same root cause
-  as the multishot abort; nondeterministic (occasionally hangs under load).
-
-Both fiber issues are in
-[docs/reported/win32-fiber-multishot-abort.md](../../reported/win32-fiber-multishot-abort.md);
-the real fix for both is WIN3's register-snapshot context switch, which is
-re-entrant and thread-agnostic where Win32 Fibers are neither.
+- ~~2 multishot + 1 multithread~~ **FIXED (WIN3-C).** The generated-program
+  ucontext moved from Win32 Fibers to a register-snapshot switch (thread-agnostic
+  + re-entrant), so `fh-multishot-value`, `multishot-effect-cont-kv-sugar`, and
+  `scheduler-multithread` all pass. The report is archived at
+  [docs/archive/win32-fiber-multishot-abort.md](../../archive/win32-fiber-multishot-abort.md).
 
 The 13 non-async failures from the first pass are all fixed (image self-exe,
 fnmatch->PathMatchSpecA, process spawn->_spawnvp, the `__has_include` hoister
