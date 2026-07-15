@@ -347,6 +347,20 @@ surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
 
+### Slice PM (LANDED) -- delegate an effect-polymorphic HOF call in a handler-installer
+
+STRUCT-OR-TAINT distinct roots **16 -> 14**. Suite 2179/0. Extends PL to a callee
+with a POLYMORPHIC (`#fx{e}`) effect row: it performs only its fn-value arguments'
+effects, so `main`'s `(map-list 3 callback)` inside a delegated handle is safe to
+delegate when every fn-typed arg's effect row is concrete + fully handled (`main`
+handles Log; `callback : #fx{Log}`). `colored_call_wbd_delegatable` walks the
+args via `expr_fn_effect_row` (the referent lifted closure's `inferred_effect_row`
+-- the lifted binding's own fn type drops the row). Cleared `__fn_1281`,
+`__fn_1285`; `main`/`__fn_128*` clear in many more fixtures. `map-list` itself
+stays a genuine BODY root (a polymorphic HOF that threads + indirect-calls an
+effectful fn-value with no concrete effect to perm-taint -- fat-closure __cps ABI
+territory).
+
 ### Slice PL (LANDED) -- permanent-fiber classification for whole-body-delegated effects
 
 STRUCT-OR-TAINT distinct roots **22 -> 16**. Suite 2179/0. No codegen change (the
