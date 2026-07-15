@@ -1407,10 +1407,18 @@ static bool handle_case_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && handle_case_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* println/print IS emittable in a lifted handler case: emit_term's
+             * CT_LETPRIM path emits the print statement (emit_println) and binds
+             * the nil placeholder, exactly as at top level.  A handler that prints
+             * (`(Write [s] k) (do (println s) (resume k 0))`) is the commonest
+             * effect shape.  Admitting it was gated on two now-fixed soundness
+             * bugs: the taint-via-fn-value-data-flow split (PI-1) and multi-effect
+             * deep-handler re-installation (PI-2). */
+            if (!shape_supported(t->as.letprim.spec))
                 return false;
-            for (uint32_t i = 0; i < t->as.letprim.n; i++)
-                if (!atom_ok(&t->as.letprim.args[i])) return false;
+            if (!is_println_shape(t->as.letprim.spec->shape))
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (!atom_ok(&t->as.letprim.args[i])) return false;
             return handle_case_ok(t->as.letprim.body);
         case CT_LETCALL:
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
@@ -4331,20 +4339,18 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * resume does not re-install it (the effect-side analogue of shift0). */
     const char *hctor = t->as.handle.shallow ? "dk_handler_shallow" : "dk_handler";
     Buf chain; buf_init(&chain);
-    /* The base is the handle continuation frame.  For a DEEP handler its `next` is
-     * dk_done() (a resume re-installs the handler, so re-performs are handled
-     * locally).  For a SHALLOW handler (Track A: reachable now that a multi-
-     * suspension body can re-perform after a resume) the enclosing handler markers
-     * must stay reachable so an unhandled re-perform propagates outward: the frame
-     * buries the enclosing continuation in its env (`__k`), so splice a copy of
-     * cur_k's enclosing handler markers as the frame's `next`.  They are
-     * transparent to a returning value (so the normal-completion result is
-     * unchanged -- the frame already delivers via dk_run(__k, v)), and dk_perform's
-     * shallow tail (dk_copy_enclosing_handlers(H->next)) then finds them. */
-    if (t->as.handle.shallow)
-        buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
-    else
-        buf_printf(&chain, "dk_frame(%s, %s, dk_done())", kname, hkenv);
+    /* The base is the handle continuation frame.  Its `next` must carry the
+     * ENCLOSING handler markers (a copy of cur_k's handlers, past this handle's
+     * frame) for BOTH deep and shallow handlers: an effect this handle does NOT
+     * handle, performed in its body, must propagate outward to the enclosing
+     * handler (e.g. `inner` handles Write but its body also performs Log, which
+     * must reach the enclosing Log handler in `main`).  The frame buries the
+     * enclosing CONTINUATION in its env (`__k`) and delivers a returning value via
+     * dk_run(__k, v), so the copied handler markers are transparent to the normal-
+     * completion result; they only matter to dk_perform's chain walk.  Using
+     * dk_done() here (the old deep default) severed that propagation ->
+     * `unhandled effect` for an effect that escapes an inner handle. */
+    buf_printf(&chain, "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))", kname, hkenv, ce->cur_k);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         Buf nxt; buf_init(&nxt);

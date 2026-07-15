@@ -1085,7 +1085,15 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
          * to the old dk_handler(tag,...) re-install). */
         const DK *ge = H;
         while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
-        tail = dk_append(dk_copy_range(H, ge), dk_done());
+        /* Terminate the re-installed group with the ENCLOSING handler markers, not
+         * dk_done(): a deep handler leaves the outer handlers in place, so an
+         * effect the group does NOT handle, performed in the resumed continuation,
+         * propagates outward (e.g. inner handles Write, its body also performs Log
+         * which must reach the enclosing Log handler).  dk_done() cut that off ->
+         * `unhandled effect`.  dk_copy_enclosing_handlers(ge) copies the outer
+         * HANDLER markers past this handle's continuation frame; with no enclosing
+         * handler it is [done], i.e. unchanged from before. */
+        tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));
     }
     sub = dk_append(sub, tail);
     intptr_t r = H->handler(H->handler_env, arg, sub);
