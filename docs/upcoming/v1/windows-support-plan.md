@@ -479,10 +479,37 @@ tests that already connect to "127.0.0.1", so this is functionally a no-op for
 them. This applies to the *fixtures* only; `async_socket.tur` itself stays
 `INADDR_ANY` (a real server wants all interfaces).
 
-**C. Fiber context switch (TODO).** The 3 remaining are the Win32-Fiber shim's
-multishot abort and thread-affinity hang (`fh-multishot-value`,
-`multishot-effect-cont-kv-sugar`, `scheduler-multithread`). These need the real
-register-snapshot x64 context switch below.
+**C. Fiber context switch (TODO).** The Win32-Fiber shim's multishot abort and
+thread-affinity hang (`fh-multishot-value`, `multishot-effect-cont-kv-sugar`,
+`scheduler-multithread`). These need the real register-snapshot x64 context
+switch below.
+
+### WIN3-B results so far
+
+On the `reactor-/async-/scheduler-/taskgroup/httpd-` subset: **55 passed, 21
+failed** (was 32 with tier A alone). Landed:
+
+- Winsock compat shim (`g_needs_winsock`, emitted for socket programs) --
+  fcntl->ioctlsocket, WSAGetLastError->errno, socket-aware close, WSAStartup.
+- `async_socket.tur` ported; `TUR_BIND_LOOPBACK` so the suite binds 127.0.0.1
+  and never trips the firewall.
+- **A real select()-based reactor I/O backend** (`io_iocp.c`, replacing the
+  stub). Verified: async-echo-server and the core httpd fixtures (h1/h2/h3/h5/h7,
+  the mw-* middleware set) build and run byte-identical on Windows.
+
+The 21 that remain are the genuinely-hard tail, and two clusters are Windows
+platform limits rather than missing work:
+
+- **`reactor-fd-*` (pipe polling): a hard `select()` limit.** These create a
+  `pipe()` and register the pipe fds with the reactor. Windows `select()` is
+  **socket-only** -- it cannot poll pipe/file fds at all. Making them work needs
+  pipe->loopback-socketpair AND read/write->recv/send routing (which collides
+  with file I/O). Intricate, fragile, and outside the turmeric-godot north star
+  (Godot scripts don't poll pipes). Left as honest build failures.
+- **`httpd-async-*` / `reactor-fibers-*` / `taskgroup-async` (stdout mismatch):**
+  multi-fiber concurrency under the select backend -- timing/scheduling
+  divergence, not yet diagnosed.
+- **`scheduler-multithread`:** the tier-C Win32-Fiber thread-affinity hang.
 
 The original deferred content follows, kept for the fiber-context-switch design
 (tier C) which is still accurate:
