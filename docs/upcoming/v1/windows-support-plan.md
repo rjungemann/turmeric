@@ -484,10 +484,15 @@ thread-affinity hang (`fh-multishot-value`, `multishot-effect-cont-kv-sugar`,
 `scheduler-multithread`). These need the real register-snapshot x64 context
 switch below.
 
-### WIN3-B results so far
+### WIN3 results so far
 
-On the `reactor-/async-/scheduler-/taskgroup/httpd-` subset: **55 passed, 21
-failed** (was 32 with tier A alone). Landed:
+On the `reactor-/async-/scheduler-/taskgroup/httpd-` subset: **64 passed, 12
+failed** (was 32 with tier A alone, 55 after the select backend). The 12
+remaining are: 8 `pipe()` build failures (the socket-only-select limit below, a
+platform boundary) and 3 concurrency stdout mismatches (httpd-h4-keepalive,
+httpd-h6-routing, taskgroup-async).
+
+Landed:
 
 - Winsock compat shim (`g_needs_winsock`, emitted for socket programs) --
   fcntl->ioctlsocket, WSAGetLastError->errno, socket-aware close, WSAStartup.
@@ -496,6 +501,14 @@ failed** (was 32 with tier A alone). Landed:
 - **A real select()-based reactor I/O backend** (`io_iocp.c`, replacing the
   stub). Verified: async-echo-server and the core httpd fixtures (h1/h2/h3/h5/h7,
   the mw-* middleware set) build and run byte-identical on Windows.
+- **WIN3-C: a real Windows x64 fiber context switch** (`fiber_ctx_x64_win.S`,
+  replacing the aborting stub). libturi's internal fibers (the reactor's
+  `tur_ctx_swap` path) now run instead of aborting -- fixing the
+  `reactor-fibers-*` cluster and the httpd-async fixtures that share it.
+  RCX-first-arg ABI, preserves RSI/RDI/XMM6-15; TEB stack fields omitted because
+  GCC's `___chkstk_ms` does not consult them. NOTE: this is the libturi fiber
+  path; the generated-program ucontext (Win32 Fibers) is separate and still has
+  the multishot abort / thread-affinity issues.
 
 The 21 that remain are the genuinely-hard tail, and two clusters are Windows
 platform limits rather than missing work:
