@@ -43,24 +43,45 @@
   #fx{Unsafe Net}
   : Fd
   ```c
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  /* Winsock needs one-time init before any socket call, and differs from BSD
+   * sockets in a few spots: non-blocking is ioctlsocket(FIONBIO) not
+   * fcntl(O_NONBLOCK), teardown is closesocket() not close(), and setsockopt
+   * takes char* not void*. Socket handles fit in int here (Windows hands out
+   * small values), so the reactor's int-fd model is preserved. */
+#ifdef _WIN32
+  { static LONG __wsa = 0;
+    if (InterlockedExchange(&__wsa, 1) == 0) { WSADATA __wd; WSAStartup(MAKEWORD(2,2), &__wd); } }
+#endif
+  int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
   int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
   /* Set non-blocking */
+#ifdef _WIN32
+  { u_long __nb = 1; ioctlsocket(fd, FIONBIO, &__nb); }
+#else
   int flags = fcntl(fd, F_GETFL, 0);
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#endif
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_ANY);
   addr.sin_port = htons((uint16_t)port);
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+#ifdef _WIN32
+    closesocket(fd);
+#else
     close(fd);
+#endif
     return -1;
   }
   if (listen(fd, (int)backlog) < 0) {
+#ifdef _WIN32
+    closesocket(fd);
+#else
     close(fd);
+#endif
     return -1;
   }
   return (int64_t)fd;
@@ -86,14 +107,22 @@
   : Fd
   ```c
   while (1) {
-    int cfd = accept((int)listen_fd, NULL, NULL);
+    int cfd = (int)accept((int)listen_fd, NULL, NULL);
     if (cfd >= 0) {
       /* Set client socket non-blocking */
+#ifdef _WIN32
+      { u_long __nb = 1; ioctlsocket(cfd, FIONBIO, &__nb); }
+#else
       int flags = fcntl(cfd, F_GETFL, 0);
       fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
+#endif
       return (int64_t)cfd;
     }
+#ifdef _WIN32
+    if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
+#endif
       FiberBlock *me = tur_current_fiber;
       if (me && tur_scheduler) {
         tur_io_register((int)listen_fd, TUR_IO_READ, me);
@@ -127,10 +156,18 @@
   #fx{Unsafe Net}
   : Fd
   ```c
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
+#ifdef _WIN32
+  { static LONG __wsa = 0;
+    if (InterlockedExchange(&__wsa, 1) == 0) { WSADATA __wd; WSAStartup(MAKEWORD(2,2), &__wd); } }
+#endif
+  int fd = (int)socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return -1;
+#ifdef _WIN32
+  { u_long __nb = 1; ioctlsocket(fd, FIONBIO, &__nb); }
+#else
   int flags = fcntl(fd, F_GETFL, 0);
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#endif
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
@@ -138,7 +175,13 @@
   inet_pton(AF_INET, host, &addr.sin_addr);
   int ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
   if (ret == 0) return (int64_t)fd;
+  /* A non-blocking connect that is still in flight reports EINPROGRESS on POSIX
+   * and WSAEWOULDBLOCK on Windows. */
+#ifdef _WIN32
+  if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
   if (errno == EINPROGRESS) {
+#endif
     FiberBlock *me = tur_current_fiber;
     if (me && tur_scheduler) {
       tur_io_register(fd, TUR_IO_WRITE, me);
@@ -147,11 +190,15 @@
       /* Check if connection succeeded */
       int err = 0;
       socklen_t errlen = sizeof(err);
-      getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+      getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &errlen);
       if (err == 0) return (int64_t)fd;
     }
   }
+#ifdef _WIN32
+  closesocket(fd);
+#else
   close(fd);
+#endif
   return -1;
   ```)
 ;; Send data on a connected socket.
@@ -183,7 +230,11 @@
       total += n;
       continue;
     }
+#ifdef _WIN32
+    if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
+#endif
       FiberBlock *me = tur_current_fiber;
       if (me && tur_scheduler) {
         tur_io_register((int)fd, TUR_IO_WRITE, me);
@@ -230,7 +281,11 @@
       }
       return (int64_t)n;
     }
+#ifdef _WIN32
+    if (WSAGetLastError() == WSAEWOULDBLOCK) {
+#else
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
+#endif
       FiberBlock *me = tur_current_fiber;
       if (me && tur_scheduler) {
         tur_io_register((int)fd, TUR_IO_READ, me);
@@ -295,5 +350,9 @@
   : nil
   ```c
   tur_io_unregister((int)fd);
+#ifdef _WIN32
+  closesocket((int)fd);
+#else
   close((int)fd);
+#endif
   ```)
