@@ -765,6 +765,62 @@ DK handler is responsible for. **Next: E2 (fat-closure `__fn_cps`), then re-run 
 sweep -- each fn-value that threads the DK is one more removed from the fiber set;
 the gate promotes when that set is empty.**
 
+### E2 design spec (grounded, so the next session executes without the earlier misstep)
+
+The current effectful eviction surface under the flag (all guards active): **62
+SIG-TAINT** (the cascade), 8 BODY-STRUCT-OR-TAINT, 7 SIG-REJECT, 3 BODY-UNSUPPORTED
+(2 "effectful fn-value call (E2 pending)" + 1 EX_WHILE), 2 SIG-INLINE-C, 1
+SIG-EXPORT. The 62 SIG-TAINT dissolve once the effectful fn-value ROOTS thread the
+DK -- that is E2.
+
+**Why the earlier registry attempt was unsound (do NOT repeat it).** A fn-value is
+carried in THREE distinct C representations, and a single `int64` carrier at the
+call site cannot be reliably interpreted as one versus another:
+
+1. **Bare `int64` fn-ptr** -- a monomorphic `(fn [int] int)` value that is a named
+   fn or a captureless lambda; the carrier IS the direct-entry address.
+2. **`tur_poly_fn_t { void *env; int64_t (*fn)(void*, int64_t); }`** -- a rank-2
+   (`is_poly_fn`) param, or a value boxed via `EX_FN_TO_FAT`; the carrier is a
+   pointer to this struct.
+3. **Fat-closure box `struct <env> { int64_t __fn; captures... }`** -- a capturing
+   lambda; the carrier is the env pointer, slot 0 is the thunk.
+
+A `__tur_cps_lookup(carrier -> cps-ptr)` registry keys correctly only on
+representation (1). For (2)/(3) the carrier is an env/box pointer, not a thunk
+address, so the lookup misses and the fallback calls the pointer as a function ->
+wrong value / crash. There is no call-site test to disambiguate.
+
+**The sound design: give each representation its own `DK*`-threading channel, and
+choose it STATICALLY from the callee's C type at the call site (which the emitter
+already knows -- `is_poly_fn`, the closure env type, the mono carrier).**
+
+- `tur_poly_fn_t` -> `{ void *env; int64_t (*fn)(void*, int64_t); int64_t
+  (*fn_cps)(void*, int64_t, DK*); }`. Call an effectful poly fn-value as
+  `f.fn_cps(f.env, args, __kont)`. `EX_FN_TO_FAT` / `__tur_poly_to_fat` populate
+  `fn_cps` alongside `fn`. This is the cleanest representation and the place to
+  START (contained; no ambiguity -- a `tur_poly_fn_t` is always a struct).
+- Fat-closure box -> add a second slot `int64_t (*__fn_cps)(void*, ..., DK*)` after
+  `__fn`. The indirect call on a box reads `box->__fn_cps`.
+- Bare `int64` fn-ptr -> the ONLY case the registry handles soundly (verified this
+  session: 0-arg/multi-arg tail threading gave `5`/`35`/`1112`). Keep the registry
+  ONLY for the statically-known-bare-fn-ptr call site; do not use it where the
+  callee could be (2)/(3).
+
+For EACH, the `__fn_cps`/`fn_cps` thunk is the CPS variant of the fn body
+(`<name>__cps(env..., args..., DK*)`); the indirect-call CT-IR admits an effectful
+fn-value callee as a native `CT_LETCALL`/`CT_TAILCALL` threading `__kont` (replacing
+this session's eviction guard), and the perform inside reaches the caller's prompt
+(kill-probe-proven). Sequence: (E2a) `tur_poly_fn_t.fn_cps` end-to-end with a
+flag-on sweep; (E2b) fat-closure box slot; (E2c) bare-ptr via the registry, only at
+statically-bare sites; after each, the "effectful fn-value call (E2 pending)"
+eviction and its SIG-TAINT cascade shrink. When the effectful eviction surface
+reaches only genuinely-pure `eff=0` SIG-*, the gate promotes and Stage G deletes.
+
+**Non-negotiable process:** run the flag-on soundness sweep (build+run the 274
+effect fixtures under `--enable`, diff vs baseline) after every E2 sub-slice -- it
+is the only check that covers flag-on behavior, and it is what caught the earlier
+unsound attempt.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
