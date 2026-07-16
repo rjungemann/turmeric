@@ -2453,7 +2453,36 @@ typedef struct {
     int       *n_callees;
     int        cap_callees;
     bool      *callee_overflow;
+    /* E2 threadability analysis (cps-tramp-resume): when count_target is non-NULL,
+     * every EX_VAR reference to it (a value-USE of that binding, anywhere in the
+     * walked tree including nested lambda bodies) increments *count_out.  A direct
+     * call's callee is carried in fn_binding, not as an EX_VAR node, so it is not
+     * counted -- only genuine fn-VALUE uses are.  Zero-initialized by the positional
+     * initializers that predate these fields (trailing omitted => zero). */
+    const Binding *count_target;
+    int           *count_out;
+    /* E2 threadability (cps-tramp-resume): when thr_ok is non-NULL, every EX_CALL
+     * whose arg[i] peels to count_target and whose global callee's param i is a
+     * THREADING param increments *thr_ok.  Run in the SAME walk as count_out so
+     * total (count_out) and threadable-arg (thr_ok) uses are directly comparable
+     * over one exhaustive traversal (covers handle/reset/match/... uniformly). */
+    const Expr    *thr_program;
+    int           *thr_ok;
+    /* E2 (param_is_threading): when callee_target is non-NULL, every EX_CALL whose
+     * fn_binding IS it increments *callee_out.  A param called as `(p x)` carries p
+     * in fn_binding (no EX_VAR node), so counting fn_binding is how a param's
+     * callee-uses are tallied exhaustively.  NOT set when count_target is a global
+     * fn (a direct call to it is not a fn-value use). */
+    const Binding *callee_target;
+    int           *callee_out;
 } EffAcc;
+
+/* Forward decls: the walker's EX_CALL threadability probe uses these, but they
+ * depend on expr_count_var_uses (which drives this walker), so they are defined
+ * after it. */
+static const Expr  *peel_fn_value(const Expr *e);
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
+static bool         param_is_threading(const FnDef *fd, uint32_t pi);
 
 static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
     if (!acc->callees) return;
@@ -2531,6 +2560,9 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
             else if (e->as.call_.fn_expr && acc->callees && acc->callee_overflow)
                 *acc->callee_overflow = true;
+            if (acc->callee_target && e->as.call_.fn_binding == acc->callee_target
+                && acc->callee_out)
+                (*acc->callee_out)++;
             /* E2/taint-completeness (cps-tramp-resume): a call THROUGH a fn-value
              * performs the fn-value's DECLARED effect row.  Credit its concrete
              * effects as performs (whether the callee is a fn-typed param binding or
@@ -2548,6 +2580,19 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     for (uint8_t i = 0; i < row->as.concrete.n_effects; i++)
                         if (row->as.concrete.effects[i])
                             mark_effect(row->as.concrete.effects[i]->name, acc->plo, acc->phi);
+            }
+            /* E2 threadability probe: is count_target passed here as arg[i] to a
+             * THREADING param of a resolvable global callee?  Counted alongside the
+             * total-use walk below, so the caller can test total == threadable. */
+            if (acc->thr_ok && acc->count_target && acc->thr_program) {
+                const FnDef *cfd = e->as.call_.fn_binding
+                    ? fd_for_binding(acc->thr_program, e->as.call_.fn_binding) : NULL;
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    const Expr *a = peel_fn_value(e->as.call_.args[i]);
+                    if (a && a->kind == EX_VAR && a->as.var.binding == acc->count_target
+                        && cfd && param_is_threading(cfd, i))
+                        (*acc->thr_ok)++;
+                }
             }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
             REC(e->as.call_.fn_expr); REC(e->as.call_.dict_arg); return;
@@ -2662,6 +2707,9 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
          * chain (`unhandled effect`).  Precise -- adds only the SPECIFIC fn, not the
          * `edges_all` over-approximation that evicts every higher-order caller. */
         case EX_VAR:
+            if (acc->count_target && e->as.var.binding == acc->count_target
+                && acc->count_out)
+                (*acc->count_out)++;
             if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN) {
                 eff_acc_add_callee(acc, e->as.var.binding);
                 /* E2/taint-completeness (cps-tramp-resume): a fn-value reference in
@@ -2693,8 +2741,170 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
 /* Combined "performs-or-handles" effect set (no callee collection) -- the shape
  * every existing caller uses.  Perform and handle tags fold into the same set. */
 static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
-    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL };
+    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                   NULL, NULL };
     expr_collect_effects_acc(e, &acc);
+}
+
+/* ---- E2 fn-value threadability analysis (cps-tramp-resume) ------------------
+ *
+ * A codegen-NEUTRAL coloring pass that answers: for an effectful fn-value (an
+ * address-taken named fn or an effectful lifted lambda) currently EVICTED to the
+ * fiber, could it instead thread the DK continuation?  Per the plan's coloring
+ * invariant (docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md, "the invariant
+ * that makes E2 a COLORING problem"): a fn-value is DK-threadable ONLY IF *every*
+ * one of its value-uses is a DK-threadable site.  If ANY use is un-threadable (an
+ * inline-C fn-ptr cast, a fiber HOF, a non-threading argument position, a stored
+ * dict slot), the fn-value must stay on the fiber -- else its direct entry installs
+ * a fresh root at that site and a perform escapes.
+ *
+ * This pass computes that decision but does NOT yet consume it: g_threadable_fn is
+ * populated and traced ([E2-COLOR]) so the concrete E2 target surface is measured
+ * against the effect corpus BEFORE any ABI change.  Because nothing reads the set,
+ * emission is byte-identical on both configs; the coloring is validated first, the
+ * threading channel (E2a/b/c) lands on top of it.  The seed relation implemented
+ * here: "every value-use is arg[i] to a THREADING param of a colored callee." */
+
+/* Exhaustive count of ALL uses of `b` in `e`: every EX_VAR(b) reference (value
+ * uses AND fn_expr-carried callees) PLUS every EX_CALL whose fn_binding is `b` (a
+ * param called as `(b x)` carries b in fn_binding with no EX_VAR node).  Reuses the
+ * audited effect-walk traversal so no form is missed -- an exhaustive count, which
+ * is what makes the "all uses are tail-callee" test below sound.  A direct call to
+ * a GLOBAL fn also lands in fn_binding, so this must only be used to count PARAM
+ * uses (a param's fn_binding-call is genuinely a use); it is not used for global
+ * fn-values (see fn_value_threadable, which leaves callee_target NULL). */
+static int expr_count_all_uses(const Expr *e, const Binding *b) {
+    if (!e || !b) return 0;
+    int n = 0;
+    uint64_t dl = 0, dh = 0;
+    EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL, b, &n };
+    expr_collect_effects_acc(e, &acc);
+    return n;
+}
+
+/* Count TAIL-position calls whose callee is `p`: `(p args...)` in a tail position
+ * of `e`, where the callee is carried either in fn_binding (== p) or as an EX_VAR(p)
+ * fn_expr.  Each such call contributes exactly 1 (matching its contribution to
+ * expr_count_all_uses -- 1 via fn_binding or 1 via the fn_expr EX_VAR).  A partial
+ * walk over tail-yielding forms only. */
+static int count_tail_callee_uses(const Expr *e, const Binding *p) {
+    if (!e) return 0;
+    switch (e->kind) {
+        case EX_CALL: {
+            bool by_bind = e->as.call_.fn_binding == p;
+            bool by_expr = e->as.call_.fn_expr
+                        && e->as.call_.fn_expr->kind == EX_VAR
+                        && e->as.call_.fn_expr->as.var.binding == p;
+            return (by_bind || by_expr) ? 1 : 0;
+        }
+        case EX_DO:
+            return e->as.do_.n
+                ? count_tail_callee_uses(e->as.do_.items[e->as.do_.n - 1], p) : 0;
+        case EX_LET:     return count_tail_callee_uses(e->as.let_.body, p);
+        case EX_IF:      return count_tail_callee_uses(e->as.if_.then_, p)
+                              + count_tail_callee_uses(e->as.if_.else_or_null, p);
+        case EX_ASCRIBE: return count_tail_callee_uses(e->as.ascribe_.inner, p);
+        case EX_MATCH: {
+            int n = 0;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                n += count_tail_callee_uses(e->as.match_.arms[i].body, p);
+            return n;
+        }
+        default: return 0;
+    }
+}
+
+/* Is param `pi` of colored `fd` a THREADING param -- used ONLY as the callee of a
+ * tail call that threads fd's DK continuation?  True iff EVERY use of the param
+ * (exhaustive: EX_VAR refs + fn_binding-carried calls) is such a tail-callee use,
+ * and there is at least one.  `(defn apply [f x] (f x))` qualifies; a param also
+ * passed as an argument, stored, or called in non-tail position does not. */
+static bool param_is_threading(const FnDef *fd, uint32_t pi) {
+    if (!fd || !fd->cps_colored || !fd->body || !fd->params || pi >= fd->n_params)
+        return false;
+    /* Honesty gate: threading `__kont` to the fn-value requires the HOF ITSELF to
+     * CPS-emit -- a fn whose signature ABI-rejects (a fn-value parameter is exactly
+     * such a rejection) is emitted by the direct/fiber path, where the fn-value call
+     * cannot carry a DK continuation.  So a param of a SIG-REJECT HOF is NOT a
+     * threading param today; it becomes one only after E1 gives non-scalar
+     * signatures a carrier-ABI `__cps` entry.  Requiring fn_sig_ok here makes the
+     * measurement report "threadable given current emission", not "threadable in
+     * principle" -- surfacing that E2's reach is gated by E1. */
+    if (!fn_sig_ok(fd)) return false;
+    const Binding *p = fd->params[pi];
+    if (!p) return false;
+    int total = expr_count_all_uses(fd->body, p);
+    int tail  = count_tail_callee_uses(fd->body, p);
+    return tail >= 1 && total == tail;
+}
+
+/* Peel the representation wrappers a fn-value acquires at a call site -- an
+ * ascription, or the fat/poly boxing (EX_FN_TO_FAT / EX_POLY_TO_FAT) that a named
+ * fn or captureless lambda gets when passed where a `(-> ...)` value is expected --
+ * down to the underlying expression (usually the EX_VAR naming the fn). */
+static const Expr *peel_fn_value(const Expr *e) {
+    while (e) {
+        switch (e->kind) {
+            case EX_ASCRIBE:     e = e->as.ascribe_.inner;     break;
+            case EX_FN_TO_FAT:   e = e->as.fn_to_fat_.inner;   break;
+            case EX_POLY_TO_FAT: e = e->as.poly_to_fat_.inner; break;
+            case EX_POLY_WRAP:   e = e->as.poly_wrap_.inner;   break;
+            case EX_CAST:        e = e->as.cast_.expr;         break;
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr;  break;
+            default:             return e;
+        }
+    }
+    return e;
+}
+
+/* Resolve a global fn binding to its FnDef by scanning the program items. */
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b) {
+    if (!program || !b || program->kind != EX_PROGRAM) return NULL;
+    uint32_t np = program->as.program.n;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
+            && it->as.fn_def_.fn->binding == b)
+            return it->as.fn_def_.fn;
+    }
+    return NULL;
+}
+
+/* The DK-threadable fn-value set: effectful address-taken fns / lifted lambdas
+ * whose every value-use is a threadable argument.  Computed for measurement only
+ * (traced [E2-COLOR]); not yet consumed by classification. */
+static const Binding *g_threadable_fn[1024];
+static int            g_threadable_fn_n;
+static void threadable_add(const Binding *b) {
+    for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return;
+    if (g_threadable_fn_n < (int)(sizeof(g_threadable_fn)/sizeof(g_threadable_fn[0])))
+        g_threadable_fn[g_threadable_fn_n++] = b;
+}
+
+/* Whole-program threadability for fn-value `fv`: over ONE exhaustive walk of the
+ * program, count every value-use of fv (total) and every use that is a threadable
+ * argument (ok).  Threadable iff there is at least one use and ALL uses are
+ * threadable-args -- the coloring invariant.  The two counts ride the same
+ * traversal (expr_collect_effects_acc with count_out + thr_ok both set), so no
+ * form is missed and the comparison is exact.  Returns the counts via out-params
+ * so the trace can show why a fn-value is or is not threadable. */
+static bool fn_value_threadable(const Expr *program, const Binding *fv,
+                                int *out_total, int *out_ok) {
+    int total = 0, ok = 0;
+    uint64_t dl = 0, dh = 0;
+    uint32_t np = program->as.program.n;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it;
+        EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
+                       fv, &total, program, &ok, NULL, NULL };
+        expr_collect_effects_acc(body, &acc);
+    }
+    if (out_total) *out_total = total;
+    if (out_ok)    *out_ok = ok;
+    return total >= 1 && total == ok;
 }
 
 /* G3b: is `fd` a colored GENERIC whose EVERY monomorph spec is CPS-admissible
@@ -2834,6 +3044,35 @@ static void ensure_S(const Expr *program) {
         g_addr_collecting = false;
     }
 
+    /* E2 threadability measurement (cps-tramp-resume): decide, for each EFFECTFUL
+     * fn-value that today evicts to the fiber (an address-taken named fn or a
+     * lifted lambda), whether all its value-uses are DK-threadable -- the coloring
+     * that a future E2 threading channel needs.  Codegen-neutral: g_threadable_fn is
+     * populated and traced only; classification below is unchanged.  Runs after the
+     * address-taken pre-pass (it needs the full g_addr_taken set) and before
+     * classification. */
+    g_threadable_fn_n = 0;
+    if (g_opt_cps_tramp_resume && getenv("TUR_TRACE_EVICT")) {
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = program->as.program.items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            FnDef *fd = it->as.fn_def_.fn;
+            if (!fd->binding || !fd->body) continue;
+            bool is_fnval = fd->binding->is_lifted_lambda || addr_taken_has(fd->binding);
+            if (!is_fnval) continue;
+            uint64_t lo = 0, hi = 0;
+            expr_collect_effects(fd->body, &lo, &hi);
+            if (!(lo || hi)) continue;   /* only effectful fn-values keep the fiber alive */
+            int total = 0, ok = 0;
+            bool thr = fn_value_threadable(program, fd->binding, &total, &ok);
+            if (thr) threadable_add(fd->binding);
+            const char *nm = fd->binding->name ? fd->binding->name->name : "?";
+            fprintf(stderr, "[E2-COLOR] %-24s thr=%c uses=%d ok=%d %s\n",
+                    nm, thr ? 'Y' : 'N', total, ok,
+                    fd->binding->is_lifted_lambda ? "lambda" : "named");
+        }
+    }
+
     /* base_taint: effects performed/handled by any top-level code that is NEVER
      * CPS-emitted -- an uncolored function (whose sole control op is hidden from
      * coloring but still emits a fiber effect op) or a top-level def initializer.
@@ -2915,7 +3154,8 @@ static void ensure_S(const Expr *program) {
                 en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
                 en->edges = NULL; en->edges_all = false;
                 EffAcc acc = { &en->perf_lo, &en->perf_hi,
-                               &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL };
+                               &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
+                               NULL, NULL, NULL, NULL, NULL, NULL };
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi;
@@ -2958,7 +3198,8 @@ static void ensure_S(const Expr *program) {
         int ncb = 0; bool overflow = false;
         uint64_t scratch_lo = 0, scratch_hi = 0;
         EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
-                       cbuf, &ncb, CALLEE_CAP, &overflow };
+                       cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
+                       NULL, NULL };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
         g_ents[i].edges_all = overflow;
         for (int k = 0; k < ncb; k++)

@@ -858,6 +858,51 @@ effort rather than a quick continuation: the ABI plumbing (the three `fn_cps`
 channels) is the easy half; the fn-value-threading coloring that keeps it sound is
 the load-bearing half.
 
+#### E2 threadability analysis LANDED (codegen-neutral) -- the coloring, measured
+
+The load-bearing half above is now implemented as a **codegen-neutral** coloring
+pass (`emit_cps_ir.c`, gated on `cps-tramp-resume`; runs only under
+`TUR_TRACE_EVICT`, so it changes no emission -- default suite 2185/0, flag-on sweep
+0 build-fails / 0 real mismatches, both byte-identical). It answers, per effectful
+fn-value that today evicts to the fiber: could it thread the DK? Implementation:
+
+- `param_is_threading(fd, i)` -- param `i` of colored HOF `fd` is a THREADING param
+  iff EVERY use of it (counted exhaustively: `EX_VAR` refs + `fn_binding`-carried
+  calls, over the audited effect-walk so no form is missed) is a **tail-position**
+  callee use, and `fd` itself CPS-emits (`fn_sig_ok`). `(defn apply [f x] (f x))`
+  qualifies; `(defn run-twice [f] (+ (f) (f)))` does not (non-tail).
+- `fn_value_threadable(fv)` -- over ONE exhaustive program walk, count fv's total
+  value-uses and its threadable-arg uses (fv passed, wrappers peeled through
+  `EX_POLY_WRAP`/`EX_FN_TO_FAT`/`EX_POLY_TO_FAT`/ascription, as arg `i` to a
+  threading param). Threadable iff **all** uses are threadable-args -- the coloring
+  invariant. Traced as `[E2-COLOR] <fn> thr=Y/N uses=N ok=N`.
+
+**Measured surface (runnable effect corpus): 4 threadable, 15 not.** The finding
+reorders the endgame:
+
+- The 4 `thr=Y` are the simplest shape -- an effectful lifted lambda passed as the
+  sole tail-call arg of a HOF with a scalar-carrier fn-value param (`call-writer
+  [f] (f ...)`, `run-asker [f] (f)`, `run-teller`, `effect-poly-infer`). These are
+  E2a/E2b's first, contained targets.
+- The 15 `thr=N` split into two gated buckets: (a) **non-tail** fn-value calls
+  (`run-twice [f] (+ (f) (f))`, `map-list [n f] (+ (f n) (map-list ... f))`) --
+  threadable in principle but only once the coloring admits a non-tail fn-value
+  call lowered as a `__kont`-threading `CT_LETCALL` (a coloring generalization,
+  still gated by the next point); and (b) the HOF itself **SIG-REJECTs** (a
+  fn-value parameter is a non-scalar signature), so its body emits on the direct/
+  fiber path where no `__kont` exists to thread. **Bucket (b) is E1.**
+
+**Net: E2's reach is gated by E1.** Almost every effectful fn-value in the corpus
+flows into a HOF that takes a fn-value parameter; until **E1** (carrier-ABI `__cps`
+for non-scalar signatures) makes those HOFs CPS-emit, their fn-value calls cannot
+thread the DK, so the fn-value cannot leave the fiber. The honesty gate
+(`fn_sig_ok` inside `param_is_threading`) makes `thr=Y` mean "threadable given
+current emission", which is why only the 4 scalar-carrier-param cases show green.
+**Revised order: E1 (carrier-ABI `__cps`) BEFORE the bulk of E2**; E2a/E2b can land
+the 4 green cases first as a proof-of-channel, but the fiber set only collapses once
+E1 opens the SIG-REJECT HOFs. The coloring pass is the instrument that will confirm
+each E1/E2 step: re-run the `[E2-COLOR]` trace and watch `thr=N -> thr=Y` migrate.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
