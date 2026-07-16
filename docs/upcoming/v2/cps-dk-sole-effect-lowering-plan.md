@@ -1190,6 +1190,19 @@ sweep.  Ordered by tractability, with the specific new work each needs:
    `expr_has_handle(fd->body)`), so it stays fiber.  The fix is to make the capture
    collector (`collect_caps`/`has_capture_rec`) carry a `via_registry` tailcall's
    callee as a captured var so the lifted frame's env holds `f`.
+   NOT BOUNDED (assessed): the capture gate itself rejects this callee.  A captureless
+   effectful fn-value param is NOT `is_poly_fn` (the whole E2a premise -- it rides as a
+   bare `int64` direct-entry fn-ptr, not a `tur_poly_fn_t`), so in `cap_add` the
+   `is_poly`/`borrowed`/single-shot escapes are all false and it falls to
+   `cap_ty_ok(TY_FN, ...)` = `slot_ty(TY_FN) || slot_box_ty(type)` -- and `slot_ty(TY_FN)`
+   is false, so `cap_add` sets `cs->ok = false` (capture fails).  Carrying `f` on the
+   lifted frame's env therefore requires WIDENING the capture gate to admit a bare-int64
+   fn-ptr scalar carrier for a captureless `TY_FN` param: `cap_ty_ok`/`cap_add` (accept
+   it), `cap_ctype` (env-field type = `int64_t`), and `emit_heap_join` (read `env->fN`,
+   not raw `f`, for the `__tur_cps_lookup` arg).  That touches the capture gate used by
+   every lifted continuation -- not a ~1-fixture-sized change -- so the PT_E1 guard
+   (sound: the HOF stays on the fiber) is retained deliberately.  Fold this into E2b,
+   which widens the fn-value channel anyway.
 2. **named address-taken fns** (not just lifted lambdas).  New work: a no-direct-
    escaping-call guard -- a lambda is never called directly so relaxing it is
    automatically safe, but a named fn CAN be `(cb x)`-called under a handle, whose
