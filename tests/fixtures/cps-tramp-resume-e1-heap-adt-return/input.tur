@@ -1,0 +1,31 @@
+;; E1 (cps-dk-sole-effect-lowering, heap-ADT/struct HANDLE return): a colored
+;; function returning a heap-allocated ADT handle (`(Vec int)` ->
+;; `tur_adt_Vec__int *`) is admitted onto the CPS/DK backend under
+;; --enable=cps-tramp-resume.  Before this slice `fn_sig_ok`'s return gate accepted
+;; only a scalar (sig_slot_ok) or an owning-free by-value box (slot_box_ty), so a
+;; carrier-handle return sig-rejected and `mkvec` stayed on the fiber; now
+;; `fn_carrier_ret_ok` admits it (single-concrete-signature only), the `__cps` entry
+;; returns int64_t and delivers the handle through the DK slot by a plain `(T *)__r`
+;; cast (carrier_handle_ok), and `g`'s effect E de-taints onto the DK.
+;;
+;; `v` is produced INSIDE the handle continuation and returned by move-out (never
+;; captured across a control op -- a captured owning handle stays excluded by the
+;; capture gate), so the crossing is a clean single move.  The fixture asserts the
+;; VALUE is correct (1): a mis-crossed handle (double-indirected, or a freed non-box)
+;; flips the output to 0 or crashes.
+(load "stdlib/vec.tur")
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn mkvec [] : (Vec int)
+  (let [n (handle (g) (E [] k) (resume k 3))]
+    (let [v (vec-new)]
+      (vec-push! v n)
+      v)))
+
+(defn main [] : int
+  (println (vec-len (mkvec)))
+  0)

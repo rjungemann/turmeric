@@ -2147,26 +2147,46 @@ static bool param_name_clashes_cps(const Binding *b) {
     return false;
 }
 
-/* E1 (cps-dk-sole-effect-lowering, by-value-aggregate PARAM): admit an owning-
- * free by-value aggregate param (`slot_box_ty` -- a flat product with no rc/ref/
- * weak field) into a colored signature, matching the direct emitter's by-value
- * spelling.  Gated on `--enable=cps-tramp-resume` and restricted to a fn with a
- * SINGLE concrete C signature: NOT a typeclass instance method (`owner_instance`
- * -- those route an existential-witness param BY POINTER via
- * exwit_inst_param_by_ptr, disagreeing with emit_params' by-value spelling), NOT
- * a dict-clone (`n_dict_clone` -- a rank-2 carrier value), and constraint-free
- * (`n_constraints == 0` -- a constrained/generic fn whose base name is ALSO
- * specialized as an int64 carrier, so a concrete `__cps` signature would collide
- * per the sig_slot_ok name-collision hazard).  A plain concrete defn (`run [c :
- * Cfg]`) has exactly one C signature the direct emitter also emits by value
- * (`static int64_t run(tur_adt_Cfg c)`), so admitting its aggregate param is
- * ABI-safe -- the `__cps` entry, its forward decl, and the direct wrapper all
- * spell it identically through emit_params. */
+/* E1 (cps-dk-sole-effect-lowering): a fn with a SINGLE concrete C signature --
+ * NOT a typeclass instance method (`owner_instance` -- those route an existential-
+ * witness param BY POINTER via exwit_inst_param_by_ptr, and their base name is
+ * reached through the per-method dict ABI), NOT a dict-clone (`n_dict_clone` -- a
+ * rank-2 carrier value), and constraint-free (`n_constraints == 0` -- a
+ * constrained/generic fn whose base name is ALSO specialized as an int64 carrier).
+ * These three are exactly the fns the sig_slot_ok name-collision hazard guards
+ * against: their concrete `__cps` signature would clash with the uniform
+ * carrier/dict spelling of the same base name.  A plain concrete defn has one C
+ * signature the direct emitter also emits, so a non-scalar signature position is
+ * ABI-safe there. */
+static bool fn_single_concrete_sig(const FnDef *fd) {
+    return !fd->owner_instance && !fd->n_dict_clone
+        && !fd->constraints.n_constraints;
+}
+
+/* E1, by-value-aggregate PARAM: admit an owning-free by-value aggregate param
+ * (`slot_box_ty` -- a flat product with no rc/ref/weak field), matching the direct
+ * emitter's by-value spelling (`static int64_t run(tur_adt_Cfg c)`).  Gated on
+ * `--enable=cps-tramp-resume` + a single concrete signature -- the `__cps` entry,
+ * its forward decl, and the direct wrapper all spell it identically through
+ * emit_params. */
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
-    if (!g_opt_cps_tramp_resume) return false;
-    if (fd->owner_instance || fd->n_dict_clone
-        || fd->constraints.n_constraints) return false;
-    return slot_box_ty(&p->type);
+    return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+        && slot_box_ty(&p->type);
+}
+
+/* E1, heap-ADT/struct HANDLE return: admit a carrier-handle return (`(Vec int)` ->
+ * `tur_adt_Vec__int *`, an owning int64 carrier that crosses the DK slot by a plain
+ * `(T *)__r` cast, never a box).  The `__cps` entry returns `int64_t` and delivers
+ * the handle THROUGH the slot -- slot_store/slot_load already carry it via
+ * carrier_handle_ok (see slot_ok_t) -- so only the signature gate blocked it.  Same
+ * single-concrete-signature guard + flag.  The dangerous shape (a handle CAPTURED
+ * live across a control op, which would duplicate an owning pointer into a possibly
+ * multi-shot env) is independently rejected by the capture gate (cap_ty_ok excludes
+ * carrier handles), so a fn that captures such a handle still evicts on the capture;
+ * admitting the RETURN move-out is safe. */
+static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
+    return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+        && carrier_handle_ok(rt);
 }
 
 static bool fn_sig_ok(const FnDef *fd) {
@@ -2184,7 +2204,8 @@ static bool fn_sig_ok(const FnDef *fd) {
      * such a param keeps the function on the fallback (see the param loop below).
      * See docs/upcoming/v1/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)) return false;
+    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
+        && !fn_carrier_ret_ok(fd, rt)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
         const Binding *p = fd->params[i];
         /* A poly fn param crosses as a fat closure (tur_poly_fn_t); a `^borrow`
