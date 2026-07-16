@@ -1,9 +1,24 @@
 # A delegated user-fn call in a reified heap-join continuation evicts (BODY-STRUCT-OR-TAINT)
 
-**Severity:** medium (blocks a class of real-effect fixtures from the CPS/DK backend;
-correctness is fine -- they fall back to the fiber and run correctly). Gated behind
-`--enable=cps-tramp-resume` (the v2 sole-effect-lowering track); does not affect the
-shipping backend.
+**STATUS: RESOLVED.** Fixed by adding a `letraw_effect_free`-gated `CT_LETRAW` case to
+`handle_delim_ok` (src/compiler/emit_cps_ir.c): a PURE delegated op (a call to an
+effect-free callee, or a raw rc/field/struct op) inside a handled body's delimited
+position is now admitted, so the subsequent `KK_PROMPT` delivery stays the handle's own
+result and `term_core_ok` no longer rejects it. An EFFECTFUL delegated call still falls to
+`term_core_ok` and evicts (handle-effectful-fn-param-same-fn unchanged). Always-on (a
+shipping-backend BODY-* reduction, not flag-gated); default suite 2190/0. Regression
+fixture `cps-pure-delegated-call-in-handle`. The minimal repro below now CPS-emits.
+
+NOTE the corpus fixtures listed under "Affected real fixtures" did NOT move off the fiber
+yet -- each has a COMPOUND cause (effect-row-poly: a `#{e}` row-variable call reads as
+non-effect-free via callee_effect_free; effect-subtype-capability: an effectful-fn-in-
+struct-field, E2-adjacent). This fix removes the delegated-call LAYER of their blocker
+stack; those other causes remain separate future work.
+
+Retained for the paper trail below (severity/repro/analysis as originally filed).
+
+**Severity:** medium (blocked a class of real-effect fixtures from the CPS/DK backend;
+correctness was fine -- they fell back to the fiber and ran correctly).
 
 **One-line:** When a colored function makes a NON-tail call to a colored helper and the
 reified continuation contains a *delegated (direct-emitted) user-function call*

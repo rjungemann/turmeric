@@ -454,6 +454,7 @@ static bool term_core_ok(const CTerm *t);
 static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PROMPT delivery) */
 static bool handle_delim_ok(const CTerm *t);  /* top-level handle-body admission (join-to-prompt, no interior control op) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
+static bool letraw_effect_free(const CTerm *t);  /* CT_LETRAW performs no fiber effect */
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
 static bool binding_cps_reachable(const Binding *b);  /* in_s OR mono-template */
 
@@ -2067,14 +2068,24 @@ static bool handle_delim_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.letcall.n; i++)
                 if (!atom_ok(&t->as.letcall.args[i])) return false;
             return handle_delim_ok(t->as.letcall.body);
-        /* NOTE: no CT_LETRAW case -- a delegated (direct-emitted) call in the
-         * handled body performs its effects on the FIBER runtime, NOT the handle's
-         * DK prompt, so a `(handle (f) ...)` whose body is
-         * `let x = f() [direct]; <prompt> x` must NOT be admitted here (E would be
-         * unhandled -- regresses handle-effectful-fn-param-same-fn).  A CT_LETRAW
-         * falls to term_core_ok below, which rejects the subsequent KK_PROMPT
-         * delivery, so the handler evicts to the (correct) fiber path.  Interior
-         * effects reach the DK prompt only through a cps->cps TAILCALL. */
+        case CT_LETRAW:
+            /* A delegated (direct-emitted) call in the handled body performs its
+             * effects on the FIBER runtime, NOT the handle's DK prompt, so a
+             * `(handle (f) ...)` whose body is `let x = f() [direct]; <prompt> x`
+             * must NOT be admitted when `f` is EFFECTFUL (E would be unhandled --
+             * regresses handle-effectful-fn-param-same-fn).  But a PURE delegated
+             * op -- a call to an effect-free callee, or a raw rc/field/struct op --
+             * runs no effect at all, so nothing escapes to the fiber and the
+             * subsequent KK_PROMPT delivery stays the handle's own result: admit it
+             * (letraw_effect_free), recursing via handle_delim_ok so the join-to-
+             * prompt is allowed.  An EFFECTFUL or owning raw op falls to
+             * term_core_ok (identical to the historical no-case fall-through),
+             * which rejects the delivery so the handler evicts to the fiber path.
+             * `(println (add-int 3 4))` inside a handled body is exactly the pure
+             * case this admits. */
+            if (letraw_ok(t) && letraw_effect_free(t))
+                return handle_delim_ok(t->as.letraw.body);
+            return term_core_ok(t);
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_delim_ok(t->as.if_.then_)
@@ -2850,6 +2861,29 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
                    NULL, NULL, NULL };
     expr_collect_effects_acc(e, &acc);
+}
+
+/* A CT_LETRAW (delegated direct-emitted op) that performs NO fiber effect: its
+ * delegated expr `e` contains no direct perform/handle (even one buried in a
+ * delegated match/do/let, which the raw walk surfaces), and every callee it
+ * invokes is provably effect-free (callee_effect_free -- a declared-empty row is
+ * the sound transitive summary: an effect-free callee performs nothing, directly
+ * or transitively).  An indirect / over-cap callee (callee_overflow -> `ov`) is
+ * conservatively NOT effect-free.  Used by handle_delim_ok to admit a pure
+ * delegated op inside a handled body's delimited position -- it cannot leave an
+ * effect unhandled by the handle's DK prompt, so the subsequent KK_PROMPT
+ * delivery stays the handle's own result. */
+static bool letraw_effect_free(const CTerm *t) {
+    if (!t || t->kind != CT_LETRAW || !t->as.letraw.e) return false;
+    uint64_t lo = 0, hi = 0; bool ov = false;
+    const Binding *callees[64]; int nc = 0;
+    EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    expr_collect_effects_acc(t->as.letraw.e, &acc);
+    if (lo || hi || ov) return false;
+    for (int i = 0; i < nc; i++)
+        if (!callee_effect_free(callees[i])) return false;
+    return true;
 }
 
 /* ---- E2 fn-value threadability analysis (cps-tramp-resume) ------------------
