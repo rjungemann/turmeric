@@ -1303,14 +1303,29 @@ BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 perman
 - **E2b / tier-nontail-in-handle (2 BODY-UNSUPPORTED fn-value).**  The guarded
   `cps-backend-fn-param-effectful` + `handle-effectful-fn-param-same-fn`; both need the
   capture-gate widening recorded under roadmap item 1 (fold into E2b).
+- **BODY-STRUCT-OR-TAINT (7 real).**  These are COMPOUND -- each has more than one cause,
+  so no single fix moves them yet.  One LAYER is now cleared: a PURE delegated call in a
+  handled body's reified continuation (`(println (add-int 3 4))` after a colored call) used
+  to evict because `handle_delim_ok` had no `CT_LETRAW` case and the delegated op fell to
+  `term_core_ok`, whose `CT_APPCONT` gate rejects the following `KK_PROMPT` deliver (a
+  `term_core_ok`/`first_unsupported` INCONSISTENCY -- see the minimal repro in
+  docs/archive/cps-delegated-call-in-heap-join-cont-evicts.md).  `letraw_effect_free` now
+  admits the pure case (effectful delegated calls still evict -- handle-effectful-fn-param-
+  same-fn unchanged), always-on.  REMAINING per-fixture causes: `effect-row-poly` -- a
+  `#{e}` ROW-VARIABLE call reads as non-effect-free (`callee_effect_free` rejects a row
+  variable), so `greet`/`main` stay evicted; `effect-subtype-capability` -- an EFFECTFUL
+  fn-value stored in a struct field and called via `(.run act ...)` (E2-adjacent, harder
+  than E2a's param case); `effect-reopen` -- nested re-handled effects; the
+  owning-struct-field-op-capture pair.  Each is its own slice.
 - **SIG-EXPORT (2), SIG-INLINE-C (2).**  Exported typeclass instances stay sig_perm;
   inline-C bodies are permanent (can't thread a DK cont) -- out of scope for deletion.
 
 No bounded corpus-moving slice remains: every root above is a substantial, per-shape
-piece of work.  Recommended next lever: **E1**, starting with the by-value-aggregate
-PARAM sub-family (clearest fix direction, several corpus fixtures).  The invariant held
-throughout this session's landings: default `2188 passed, 0 failed` (flag-off byte-
-identical), flag-on sweep clean.
+piece of work.  The two E1 easy wins (by-value-aggregate params, heap-ADT returns) are
+LANDED; the remaining real blockers are E2b (fat-closure fn-value channel), session-typed
+effects, native CPS loop-lowering, and the compound BODY-STRUCT-OR-TAINT causes above.
+The invariant held throughout this session's landings: default `2190 passed, 0 failed`
+(flag-off byte-identical), flag-on sweep clean.
 
 ---
 
