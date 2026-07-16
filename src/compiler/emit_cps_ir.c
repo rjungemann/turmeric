@@ -2278,6 +2278,23 @@ static size_t      g_ents_n;
 static uint64_t    g_perm_lo, g_perm_hi;
 static bool        g_fwd_done;  /* __cps forward decls emitted for g_prog */
 
+/* E2/taint-completeness: the set of global fns whose ADDRESS is taken (referenced
+ * as a fn-value, not called directly).  Populated by a pre-pass over the program
+ * (g_addr_collecting) and read in ensure_S to force an effectful address-taken fn
+ * to the fiber (its DK direct-entry would escape a perform when invoked indirectly). */
+static const Binding *g_addr_taken[1024];
+static int            g_addr_taken_n;
+static bool           g_addr_collecting;
+static void addr_taken_add(const Binding *b) {
+    for (int i = 0; i < g_addr_taken_n; i++) if (g_addr_taken[i] == b) return;
+    if (g_addr_taken_n < (int)(sizeof(g_addr_taken)/sizeof(g_addr_taken[0])))
+        g_addr_taken[g_addr_taken_n++] = b;
+}
+static bool addr_taken_has(const Binding *b) {
+    for (int i = 0; i < g_addr_taken_n; i++) if (g_addr_taken[i] == b) return true;
+    return false;
+}
+
 /* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
  * interned effect Symbol always maps to the same tag, so a handle and a matching
  * perform agree.  Reset per program. */
@@ -2645,8 +2662,17 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
          * chain (`unhandled effect`).  Precise -- adds only the SPECIFIC fn, not the
          * `edges_all` over-approximation that evicts every higher-order caller. */
         case EX_VAR:
-            if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN)
+            if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN) {
                 eff_acc_add_callee(acc, e->as.var.binding);
+                /* E2/taint-completeness (cps-tramp-resume): a fn-value reference in
+                 * VALUE position (this EX_VAR is not a direct-call callee -- those
+                 * carry fn_binding with fn_expr=NULL and never reach here) means the
+                 * fn's ADDRESS is taken; its DK direct-entry, invoked indirectly,
+                 * escapes a perform.  Record the global fn as address-taken so an
+                 * effectful one is forced to fiber (see ensure_S). */
+                if (g_addr_collecting && e->as.var.binding->is_global)
+                    addr_taken_add(e->as.var.binding);
+            }
             return;
         case EX_SELECT:
             for (uint32_t i = 0; i < e->as.select_.n_clauses; i++) {
@@ -2787,6 +2813,27 @@ static void ensure_S(const Expr *program) {
      * and are skipped entirely. */
     uint32_t np = program->as.program.n;
     g_ents = (SEnt *)calloc(np ? np : 1, sizeof(SEnt));
+
+    /* E2/taint-completeness pre-pass: collect every global fn whose ADDRESS is
+     * taken (referenced as a fn-value anywhere in the program), so classification
+     * below can force an effectful address-taken fn to the fiber.  Must run BEFORE
+     * the classification loop -- a forward reference (a fn passed as a value later
+     * in the file) would otherwise be missed. */
+    g_addr_taken_n = 0;
+    if (g_opt_cps_tramp_resume) {
+        g_addr_collecting = true;
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = program->as.program.items[i];
+            if (!it) continue;
+            uint64_t dlo = 0, dhi = 0;   /* throwaway effect sink */
+            if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
+                expr_collect_effects(it->as.fn_def_.fn->body, &dlo, &dhi);
+            else
+                expr_collect_effects(it, &dlo, &dhi);
+        }
+        g_addr_collecting = false;
+    }
+
     /* base_taint: effects performed/handled by any top-level code that is NEVER
      * CPS-emitted -- an uncolored function (whose sole control op is hidden from
      * coloring but still emits a fiber effect op) or a top-level def initializer.
@@ -2809,15 +2856,17 @@ static void ensure_S(const Expr *program) {
                 if (fd->binding->c_export_name) { candidate = false; sig_perm = true; }
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
-                /* E2/taint-completeness (cps-tramp-resume): a lifted lambda is ALWAYS
-                 * used as a fn-value -- its DK direct-entry, invoked indirectly,
-                 * installs a fresh root, so a CPS-emitted lambda's `perform` escapes
-                 * (no caller handler in scope).  An EFFECTFUL lifted lambda must run
-                 * on the fiber (dynamic handler lookup) instead; mark it a permanent
-                 * fiber source so its effect taints and any DK handler-installer of
-                 * that effect co-classifies to fiber.  Cleared once E2 gives fn-values
+                /* E2/taint-completeness (cps-tramp-resume): a fn USED AS A FN-VALUE
+                 * -- a lifted lambda (always a value) OR an address-taken named fn
+                 * (referenced as a value in the pre-pass) -- has its DK direct-entry
+                 * invoked indirectly, which installs a fresh root, so a CPS-emitted
+                 * EFFECTFUL such fn's `perform` escapes (no caller handler in scope).
+                 * It must run on the fiber (dynamic handler lookup); mark it a
+                 * permanent fiber source so its effect taints and any DK handler-
+                 * installer co-classifies to fiber.  Cleared once E2 gives fn-values
                  * a DK-threading (__fn_cps) entry. */
-                if (candidate && g_opt_cps_tramp_resume && fd->binding->is_lifted_lambda) {
+                if (candidate && g_opt_cps_tramp_resume
+                    && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))) {
                     uint64_t lo = 0, hi = 0;
                     expr_collect_effects(fd->body, &lo, &hi);
                     if (lo || hi) { candidate = false; sig_perm = true; }
