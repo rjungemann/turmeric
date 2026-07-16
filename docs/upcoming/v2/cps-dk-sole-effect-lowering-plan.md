@@ -1020,6 +1020,62 @@ emit `__cps` + registration; lower the threaded call) + `cps_ir.c` (emit the thr
 is green. The mechanism is proven (probe); the obligations above are what a correct
 landing must satisfy.
 
+#### THE decisive blocker found by building slice 1 fully (reverted): the handler is in `main`
+
+A second attempt built the ENTIRE slice-1 machinery -- registry runtime, the
+`param_thread_class` concrete-effect gate (row-poly params -> `PT_E1`, which un-broke
+`effect-poly-infer`), `param_is_thread_safe` (the param->value converse), the
+`g_thread_params` cross-file bridge (`cps_ir.h` API + `cps_ir.c` set), the
+`via_registry` `CT_TAILCALL` flag, and its registry-lookup emission. It compiled and
+the concrete-gated baseline swept **185/0/0 clean**. But the target fixture STILL did
+not thread, and the trace showed why:
+
+```
+[E2-COLOR] __fn_1282   thr=Y tier=now ...       <- lambda IS colored threadable
+[EVICT]    SIG-TAINT   eff=1 call-writer         <- but its HOF still evicts, TAINTED
+```
+
+`call-writer` evicts **SIG-TAINT on `Write`**, and the taint source is **`main`**:
+`main` is the program entry (`fn_is_main && !fn_is_d2b_main` -> `sig_perm`), it
+*handles* `Write`, and `fn_is_d2b_main` only admits a `shift`-containing body, NOT a
+`handle`-containing one. So `main`'s handler runs on the **fiber** (confirmed: the
+emitted C carries `__eff_frame_*` / `tur_effect_perform`, no `main__cps`), which
+permanently taints `Write`, which co-classifies `call-writer` AND the lambda back to
+fiber. **All four tier-`now` corpus fixtures put their `handle` in `main`.**
+
+**So E2a fn-value threading is necessary but NOT sufficient for this corpus.** The
+gating blocker is orthogonal and larger: *the effect handler itself is on the fiber
+because it lives in `main`, and `main` is not d2b for a `handle` body*. Threading the
+performer to a fiber handler changes nothing. The real dependency graph is a
+whole-program fixpoint:
+
+> `main` d2b-for-handle  <=>  handler DK  <=>  performer (the lambda) DK  <=>
+> fn-value threaded (E2a)  <=>  `main` d2b-for-handle
+
+None of these can flip alone; they flip together or not at all. This is the same
+"whole chain flips together" wall, now traced to its root: **the entry `main`'s
+handler.** Two ways forward, both larger than E2a-in-isolation:
+
+1. **Prerequisite E3' -- `main` d2b for a `handle` body.** Extend `fn_is_d2b_main`
+   (or the entry-wrapper path) to CPS-emit a `main` whose body is a `handle` (install
+   a DK prompt + the setjmp driver, exactly like the d2b-shift-main already does),
+   GATED so it only fires when the handled effects are fully DK-threadable (else the
+   aggressive-E3 regression returns: a `main` reaching fiber effect code SIGSEGVs).
+   That gate is the same coloring fixpoint above. With `main`'s handler on DK, the
+   Write taint clears, `call-writer` CPS-emits, and the E2a threaded call delivers the
+   perform to `main`'s DK handler -- the whole chain flips.
+2. **A handler-in-helper fixture.** A program whose effect HANDLER lives in a
+   non-`main` helper (already DK-emittable) + a tier-`now` HOF + captureless lambda
+   would let E2a land in ISOLATION (no `main`-d2b dependency). The current corpus has
+   none; a synthetic fixture (`effect-fn-value-helper-handle`) would be the minimal
+   first sound E2a landing, decoupled from E3'.
+
+Recommendation: land **E3' (main d2b-for-handle, coloring-gated)** first -- it is the
+true prerequisite the corpus needs -- OR add the handler-in-helper fixture to land
+E2a decoupled. The slice-1 machinery above is correct and reusable; it was reverted
+only because, without one of these two, it cannot move a corpus fixture and so cannot
+be sweep-verified as doing anything.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
