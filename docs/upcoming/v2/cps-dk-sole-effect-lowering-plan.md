@@ -912,6 +912,62 @@ separate, smaller concern that gates none of these 9. The `[E2-COLOR]` trace is 
 instrument: re-run it after each E2 slice and watch the sinks hold while the
 `now`/`nontail` set migrates off the fiber.
 
+#### E2a REGISTRY PROBE -- tier-`now` bare-fn-ptr threading is sound (GO)
+
+Before wiring the emitter, the tier-`now` mechanism was proven end-to-end in
+`docs/upcoming/v2/probes/e2a-registry-probe.c` (output `e2a-registry-probe.out`;
+`cc -O2 -o /tmp/e2a docs/upcoming/v2/probes/e2a-registry-probe.c && /tmp/e2a`). The
+kill-probe proved a fat-closure `fn_cps` SLOT threads; this probe proves the OTHER
+path the coloring needs -- recovering the `__cps` entry by LOOKING UP a bare
+direct-entry fn-ptr, because (confirmed from the emitted C) a captureless effectful
+lambda is carried as `(int64_t)__fn_NNNN` with no slot to read.
+
+The probe models `effect-fn-type-annot` verbatim and **PASSES**: register
+`(int64)__fn_1282 -> __fn_1282__cps` at startup; `call_writer__cps(f, __kont)`
+recovers `cps = tur_cps_lookup(f)` and tail-calls `cps("...", __kont)`;
+`__fn_1282__cps` does `dk_perform(WRITE_TAG, s, __kont)`; the perform's handler
+search crosses the fn-value to main's DK handler, which prints and `dk_invoke`s the
+resume -- string printed once, `result == 0`. So the registry indirection (the only
+new element over the kill-probe) is sound for representation (1).
+
+#### E2a implementation checklist (ordered, gated, revert-safe per step)
+
+Grounded in the confirmed ABI (`__fn_NNNN` is a bare `int64` direct-entry;
+`call_hywriter((int64)__fn_NNNN)` passes it bare) and the passing probe. Each step
+is gated on `cps-tramp-resume`, per-fn-value gated by `thr=Y tier=now`, and verified
+by the flag-on sweep; land only when the sweep is clean, else revert.
+
+1. **Registry runtime** (`emit_dk_runtime.c`, gated on `tramp`). Emit
+   `tur_cps_register(intptr_t direct, void *cps)` + `tur_cps_lookup(intptr_t)` and a
+   small static table, exactly as the probe. Consumed by steps 3-5, so it is not
+   dead code once they land (land it WITH step 2, not before).
+2. **Lambda `__cps` emission.** For a `g_threadable_fn` captureless effectful
+   lambda `__fn_N`, route its body through the CPS emitter to emit
+   `__fn_N__cps(int64 args..., DK *__kont)` beside its existing direct entry. Its
+   `perform` lowers to `dk_perform(TAG, arg, __kont)` (already how a colored fn
+   lowers a perform). This requires **not** `sig_perm`-ing the threadable lambda
+   (relax the fix-#5/#6 guard for `g_threadable_fn` members) so it enters S.
+3. **Register at startup.** Emit `tur_cps_register((intptr_t)__fn_N, __fn_N__cps);`
+   in the program's entry preamble for each registered lambda.
+4. **Threaded call site.** Replace the `call_is_effectful_fnvalue` eviction
+   (`cps_ir.c`, the "effectful fn-value call (E2 pending)" CT_UNSUPPORTED) for a
+   tier-`now` call with a `CT_TAILCALL` that threads `__kont`; the emitter
+   (`emit_cps_ir.c`) lowers it as `cps = tur_cps_lookup(f); return ((cps_t)cps)(args,
+   __kont);` at the statically-bare call site.
+5. **Let the taint model co-classify the handler.** With the lambda in S and its
+   perform DK-lowered, its effect is no longer fiber-tainted, so the enclosing
+   `handle` (e.g. `main`'s) co-classifies to DK automatically -- no separate change,
+   but the whole chain (lambda perform -> HOF call -> handler) must flip together,
+   which is exactly what the per-fn-value `thr=Y` gate guarantees.
+6. **Verify + iterate.** Re-run `[E2-COLOR]` (the `now` fn-value should now emit a
+   `__cps` + registration and its HOF a threaded call) and the flag-on sweep. When
+   the 4 `now` cases are off the fiber and sound, extend to **tier `nontail`**
+   (step 4 becomes a `CT_LETCALL` binding the result, threading `__kont`).
+
+Only `is_poly_fn`/capturing fn-values (tier `e1`, currently 0 in the corpus) need
+the `tur_poly_fn_t.fn_cps` / fat-box `__fn_cps` channels; those are E2b/E1 and gate
+none of the 9.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
