@@ -2475,14 +2475,31 @@ typedef struct {
      * fn (a direct call to it is not a fn-value use). */
     const Binding *callee_target;
     int           *callee_out;
+    /* E2 tiering: when thr_tier is non-NULL, each in-surface threadable-arg use of
+     * count_target raises *thr_tier to max(*thr_tier, param_thread_class) so the
+     * trace can report the hardest E2 tier a fn-value needs (PT_NOW/NONTAIL/E1). */
+    int           *thr_tier;
 } EffAcc;
 
+/* E2 param-threading tiers -- how ready a HOF param is to thread the DK to the
+ * fn-value it binds, in ASCENDING implementation difficulty.  PT_NONE = not a
+ * threading param (the fn-value escapes as a value, is called under the HOF's own
+ * handle, or lives in a form the classifier does not cover -> stays fiber). */
+typedef enum {
+    PT_NONE = 0,   /* not threadable: value-use / handler-body / sink */
+    PT_NOW,        /* tail-only callee, scalar-carrier param -- easiest E2 target */
+    PT_NONTAIL,    /* callee-only but some call is non-tail -- needs a threaded
+                    * CT_LETCALL for the fn-value call (E2 emission work) */
+    PT_E1,         /* callee-only but the param is is_poly_fn (rank-2/capturing) --
+                    * needs E1's carrier-ABI __cps before it can thread */
+} PtClass;
+
 /* Forward decls: the walker's EX_CALL threadability probe uses these, but they
- * depend on expr_count_var_uses (which drives this walker), so they are defined
+ * depend on expr_count_all_uses (which drives this walker), so they are defined
  * after it. */
 static const Expr  *peel_fn_value(const Expr *e);
 static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
-static bool         param_is_threading(const FnDef *fd, uint32_t pi);
+static PtClass      param_thread_class(const FnDef *fd, uint32_t pi);
 
 static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
     if (!acc->callees) return;
@@ -2590,8 +2607,14 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                     const Expr *a = peel_fn_value(e->as.call_.args[i]);
                     if (a && a->kind == EX_VAR && a->as.var.binding == acc->count_target
-                        && cfd && param_is_threading(cfd, i))
-                        (*acc->thr_ok)++;
+                        && cfd) {
+                        PtClass cls = param_thread_class(cfd, i);
+                        if (cls != PT_NONE) {
+                            (*acc->thr_ok)++;
+                            if (acc->thr_tier && (int)cls > *acc->thr_tier)
+                                *acc->thr_tier = (int)cls;
+                        }
+                    }
                 }
             }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
@@ -2742,7 +2765,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
  * every existing caller uses.  Perform and handle tags fold into the same set. */
 static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                   NULL, NULL };
+                   NULL, NULL, NULL };
     expr_collect_effects_acc(e, &acc);
 }
 
@@ -2777,66 +2800,104 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
     if (!e || !b) return 0;
     int n = 0;
     uint64_t dl = 0, dh = 0;
-    EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL, b, &n };
+    EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
+                   b, &n, NULL };
     expr_collect_effects_acc(e, &acc);
     return n;
 }
 
-/* Count TAIL-position calls whose callee is `p`: `(p args...)` in a tail position
- * of `e`, where the callee is carried either in fn_binding (== p) or as an EX_VAR(p)
- * fn_expr.  Each such call contributes exactly 1 (matching its contribution to
- * expr_count_all_uses -- 1 via fn_binding or 1 via the fn_expr EX_VAR).  A partial
- * walk over tail-yielding forms only. */
-static int count_tail_callee_uses(const Expr *e, const Binding *p) {
-    if (!e) return 0;
+/* Classify how param `p` of a HOF is used, tracking tail position: count its
+ * value-uses (escapes -- passed as an arg, stored, bare ref), its tail-position
+ * callee-calls, and its non-tail callee-calls.  A call to `p` under a `handle`/
+ * `reset` body installed by the HOF itself is counted as a value-use: threading
+ * `__kont` there would route the callee's perform past the HOF's OWN handler, so
+ * it is not a clean thread.  Any occurrence of `p` inside a form this walk does not
+ * structurally cover is absorbed (via the exhaustive counter) into value-uses --
+ * a conservative default that keeps a miss from ever inflating threadability. */
+static void ptc_walk(const Expr *e, const Binding *p, bool tail,
+                     int *val, int *tailc, int *ntc) {
+    if (!e) return;
     switch (e->kind) {
         case EX_CALL: {
-            bool by_bind = e->as.call_.fn_binding == p;
-            bool by_expr = e->as.call_.fn_expr
-                        && e->as.call_.fn_expr->kind == EX_VAR
-                        && e->as.call_.fn_expr->as.var.binding == p;
-            return (by_bind || by_expr) ? 1 : 0;
+            bool callee_is_p = e->as.call_.fn_binding == p
+                || (e->as.call_.fn_expr && e->as.call_.fn_expr->kind == EX_VAR
+                    && e->as.call_.fn_expr->as.var.binding == p);
+            if (callee_is_p) { if (tail) (*tailc)++; else (*ntc)++; }
+            else ptc_walk(e->as.call_.fn_expr, p, false, val, tailc, ntc);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = peel_fn_value(e->as.call_.args[i]);
+                if (a && a->kind == EX_VAR && a->as.var.binding == p) (*val)++;
+                else ptc_walk(e->as.call_.args[i], p, false, val, tailc, ntc);
+            }
+            ptc_walk(e->as.call_.dict_arg, p, false, val, tailc, ntc);
+            return;
         }
+        case EX_VAR:  if (e->as.var.binding == p) (*val)++; return;
         case EX_DO:
-            return e->as.do_.n
-                ? count_tail_callee_uses(e->as.do_.items[e->as.do_.n - 1], p) : 0;
-        case EX_LET:     return count_tail_callee_uses(e->as.let_.body, p);
-        case EX_IF:      return count_tail_callee_uses(e->as.if_.then_, p)
-                              + count_tail_callee_uses(e->as.if_.else_or_null, p);
-        case EX_ASCRIBE: return count_tail_callee_uses(e->as.ascribe_.inner, p);
-        case EX_MATCH: {
-            int n = 0;
-            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
-                n += count_tail_callee_uses(e->as.match_.arms[i].body, p);
-            return n;
-        }
-        default: return 0;
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                ptc_walk(e->as.do_.items[i], p, tail && (i + 1 == e->as.do_.n),
+                         val, tailc, ntc);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                ptc_walk(e->as.let_.bindings[i].init, p, false, val, tailc, ntc);
+            ptc_walk(e->as.let_.body, p, tail, val, tailc, ntc);
+            return;
+        case EX_IF:
+            ptc_walk(e->as.if_.cond, p, false, val, tailc, ntc);
+            ptc_walk(e->as.if_.then_, p, tail, val, tailc, ntc);
+            ptc_walk(e->as.if_.else_or_null, p, tail, val, tailc, ntc);
+            return;
+        case EX_ASCRIBE: ptc_walk(e->as.ascribe_.inner, p, tail, val, tailc, ntc); return;
+        case EX_RETURN:  ptc_walk(e->as.return_.value, p, false, val, tailc, ntc); return;
+        case EX_BUILTIN:  /* arithmetic / operator args are non-tail */
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                ptc_walk(e->as.builtin.args[i], p, false, val, tailc, ntc);
+            return;
+        case EX_WHILE:
+            ptc_walk(e->as.while_.cond, p, false, val, tailc, ntc);
+            ptc_walk(e->as.while_.body, p, false, val, tailc, ntc);
+            return;
+        case EX_SET:  ptc_walk(e->as.set_.value, p, false, val, tailc, ntc); return;
+        case EX_DEF:  ptc_walk(e->as.def_.init, p, false, val, tailc, ntc); return;
+        case EX_MAKE_STRUCT:  /* a fn-value stored in a field is a value-use (sink) */
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
+                ptc_walk(e->as.make_struct_.field_values[i], p, false, val, tailc, ntc);
+            return;
+        case EX_MATCH:
+            ptc_walk(e->as.match_.scrutinee, p, false, val, tailc, ntc);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                ptc_walk(e->as.match_.arms[i].guard, p, false, val, tailc, ntc);
+                ptc_walk(e->as.match_.arms[i].body, p, tail, val, tailc, ntc);
+            }
+            return;
+        default:
+            /* Uncovered form (incl. EX_HANDLE / EX_RESET, where a call to p runs
+             * under the HOF's own prompt): treat every occurrence of p as a
+             * value-use so the param cannot be judged threadable through it. */
+            *val += expr_count_all_uses(e, p);
+            return;
     }
 }
 
-/* Is param `pi` of colored `fd` a THREADING param -- used ONLY as the callee of a
- * tail call that threads fd's DK continuation?  True iff EVERY use of the param
- * (exhaustive: EX_VAR refs + fn_binding-carried calls) is such a tail-callee use,
- * and there is at least one.  `(defn apply [f x] (f x))` qualifies; a param also
- * passed as an argument, stored, or called in non-tail position does not. */
-static bool param_is_threading(const FnDef *fd, uint32_t pi) {
+/* Tier the threadability of param `pi` of colored `fd` (see PtClass).  A param is
+ * a threading candidate iff it NEVER escapes as a value -- every use is a call to
+ * it.  The tier then records how hard that thread is: PT_NOW (tail-only, scalar
+ * carrier), PT_NONTAIL (a non-tail call needs a threaded CT_LETCALL), or PT_E1
+ * (an is_poly_fn / capturing param needs E1's carrier ABI first). */
+static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
     if (!fd || !fd->cps_colored || !fd->body || !fd->params || pi >= fd->n_params)
-        return false;
-    /* Honesty gate: threading `__kont` to the fn-value requires the HOF ITSELF to
-     * CPS-emit -- a fn whose signature ABI-rejects (a fn-value parameter is exactly
-     * such a rejection) is emitted by the direct/fiber path, where the fn-value call
-     * cannot carry a DK continuation.  So a param of a SIG-REJECT HOF is NOT a
-     * threading param today; it becomes one only after E1 gives non-scalar
-     * signatures a carrier-ABI `__cps` entry.  Requiring fn_sig_ok here makes the
-     * measurement report "threadable given current emission", not "threadable in
-     * principle" -- surfacing that E2's reach is gated by E1. */
-    if (!fn_sig_ok(fd)) return false;
+        return PT_NONE;
     const Binding *p = fd->params[pi];
-    if (!p) return false;
-    int total = expr_count_all_uses(fd->body, p);
-    int tail  = count_tail_callee_uses(fd->body, p);
-    return tail >= 1 && total == tail;
+    if (!p) return PT_NONE;
+    int val = 0, tc = 0, ntc = 0;
+    ptc_walk(fd->body, p, true, &val, &tc, &ntc);
+    if (val > 0 || (tc + ntc) < 1) return PT_NONE;   /* escapes, or never called */
+    if (!fn_sig_ok(fd)) return PT_E1;                /* is_poly_fn / capturing param */
+    if (ntc > 0)        return PT_NONTAIL;           /* a non-tail fn-value call */
+    return PT_NOW;                                    /* tail-only, scalar carrier */
 }
+
 
 /* Peel the representation wrappers a fn-value acquires at a call site -- an
  * ascription, or the fat/poly boxing (EX_FN_TO_FAT / EX_POLY_TO_FAT) that a named
@@ -2889,8 +2950,8 @@ static void threadable_add(const Binding *b) {
  * form is missed and the comparison is exact.  Returns the counts via out-params
  * so the trace can show why a fn-value is or is not threadable. */
 static bool fn_value_threadable(const Expr *program, const Binding *fv,
-                                int *out_total, int *out_ok) {
-    int total = 0, ok = 0;
+                                int *out_total, int *out_ok, int *out_tier) {
+    int total = 0, ok = 0, tier = 0;
     uint64_t dl = 0, dh = 0;
     uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
@@ -2899,11 +2960,12 @@ static bool fn_value_threadable(const Expr *program, const Binding *fv,
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
         EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
-                       fv, &total, program, &ok, NULL, NULL };
+                       fv, &total, program, &ok, NULL, NULL, &tier };
         expr_collect_effects_acc(body, &acc);
     }
     if (out_total) *out_total = total;
     if (out_ok)    *out_ok = ok;
+    if (out_tier)  *out_tier = tier;
     return total >= 1 && total == ok;
 }
 
@@ -3063,13 +3125,17 @@ static void ensure_S(const Expr *program) {
             uint64_t lo = 0, hi = 0;
             expr_collect_effects(fd->body, &lo, &hi);
             if (!(lo || hi)) continue;   /* only effectful fn-values keep the fiber alive */
-            int total = 0, ok = 0;
-            bool thr = fn_value_threadable(program, fd->binding, &total, &ok);
+            int total = 0, ok = 0, tier = 0;
+            bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
             if (thr) threadable_add(fd->binding);
             const char *nm = fd->binding->name ? fd->binding->name->name : "?";
-            fprintf(stderr, "[E2-COLOR] %-24s thr=%c uses=%d ok=%d %s\n",
-                    nm, thr ? 'Y' : 'N', total, ok,
-                    fd->binding->is_lifted_lambda ? "lambda" : "named");
+            /* tier reports the HARDEST E2 step this fn-value needs; blank when it
+             * is not in the surface (thr=N: a sink use keeps it fiber). */
+            const char *tiers[] = { "-", "now", "nontail", "e1" };
+            fprintf(stderr, "[E2-COLOR] %-24s thr=%c tier=%-7s uses=%d ok=%d %s\n",
+                    nm, thr ? 'Y' : 'N',
+                    thr ? tiers[tier >= 0 && tier <= 3 ? tier : 0] : "-",
+                    total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
         }
     }
 
@@ -3155,7 +3221,7 @@ static void ensure_S(const Expr *program) {
                 en->edges = NULL; en->edges_all = false;
                 EffAcc acc = { &en->perf_lo, &en->perf_hi,
                                &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
-                               NULL, NULL, NULL, NULL, NULL, NULL };
+                               NULL, NULL, NULL, NULL, NULL, NULL, NULL };
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi;
@@ -3199,7 +3265,7 @@ static void ensure_S(const Expr *program) {
         uint64_t scratch_lo = 0, scratch_hi = 0;
         EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
                        cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
-                       NULL, NULL };
+                       NULL, NULL, NULL };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
         g_ents[i].edges_all = overflow;
         for (int k = 0; k < ncb; k++)

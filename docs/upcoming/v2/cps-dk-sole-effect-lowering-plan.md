@@ -858,50 +858,59 @@ effort rather than a quick continuation: the ABI plumbing (the three `fn_cps`
 channels) is the easy half; the fn-value-threading coloring that keeps it sound is
 the load-bearing half.
 
-#### E2 threadability analysis LANDED (codegen-neutral) -- the coloring, measured
+#### E2 threadability analysis LANDED (codegen-neutral) -- the coloring, measured + tiered
 
 The load-bearing half above is now implemented as a **codegen-neutral** coloring
 pass (`emit_cps_ir.c`, gated on `cps-tramp-resume`; runs only under
 `TUR_TRACE_EVICT`, so it changes no emission -- default suite 2185/0, flag-on sweep
 0 build-fails / 0 real mismatches, both byte-identical). It answers, per effectful
-fn-value that today evicts to the fiber: could it thread the DK? Implementation:
+fn-value that today evicts to the fiber: could it thread the DK, and how hard?
 
-- `param_is_threading(fd, i)` -- param `i` of colored HOF `fd` is a THREADING param
-  iff EVERY use of it (counted exhaustively: `EX_VAR` refs + `fn_binding`-carried
-  calls, over the audited effect-walk so no form is missed) is a **tail-position**
-  callee use, and `fd` itself CPS-emits (`fn_sig_ok`). `(defn apply [f x] (f x))`
-  qualifies; `(defn run-twice [f] (+ (f) (f)))` does not (non-tail).
+- `param_thread_class(fd, i)` -- classifies param `i` of colored HOF `fd`.
+  `ptc_walk` counts, with tail-position tracking, the param's value-uses (escapes),
+  its tail callee-calls, and its non-tail callee-calls; a call under the HOF's own
+  `handle`/`reset` body, or an occurrence in an uncovered form, is absorbed into
+  value-uses (conservative). A param that NEVER escapes (all uses are calls to it)
+  is a threading candidate, tiered by difficulty: **PT_NOW** (tail-only, scalar
+  carrier), **PT_NONTAIL** (a non-tail call needs a `__kont`-threading `CT_LETCALL`),
+  **PT_E1** (an `is_poly_fn` / capturing param needs E1's carrier ABI first).
 - `fn_value_threadable(fv)` -- over ONE exhaustive program walk, count fv's total
-  value-uses and its threadable-arg uses (fv passed, wrappers peeled through
-  `EX_POLY_WRAP`/`EX_FN_TO_FAT`/`EX_POLY_TO_FAT`/ascription, as arg `i` to a
-  threading param). Threadable iff **all** uses are threadable-args -- the coloring
-  invariant. Traced as `[E2-COLOR] <fn> thr=Y/N uses=N ok=N`.
+  value-uses and its in-surface threadable-arg uses (fv passed, wrappers peeled
+  through `EX_POLY_WRAP`/`EX_FN_TO_FAT`/`EX_POLY_TO_FAT`/ascription, as arg `i` to a
+  threading-tier param), and the hardest tier among them. Threadable iff **all**
+  uses are threadable-args. Traced `[E2-COLOR] <fn> thr=Y/N tier=now/nontail/e1 ...`.
 
-**Measured surface (runnable effect corpus): 4 threadable, 15 not.** The finding
-reorders the endgame:
+**Measured surface (runnable effect corpus): 9 threadable, 10 fiber sinks.** The
+tier breakdown of the 9 corrects an earlier misread of this data:
 
-- The 4 `thr=Y` are the simplest shape -- an effectful lifted lambda passed as the
-  sole tail-call arg of a HOF with a scalar-carrier fn-value param (`call-writer
-  [f] (f ...)`, `run-asker [f] (f)`, `run-teller`, `effect-poly-infer`). These are
-  E2a/E2b's first, contained targets.
-- The 15 `thr=N` split into two gated buckets: (a) **non-tail** fn-value calls
-  (`run-twice [f] (+ (f) (f))`, `map-list [n f] (+ (f n) (map-list ... f))`) --
-  threadable in principle but only once the coloring admits a non-tail fn-value
-  call lowered as a `__kont`-threading `CT_LETCALL` (a coloring generalization,
-  still gated by the next point); and (b) the HOF itself **SIG-REJECTs** (a
-  fn-value parameter is a non-scalar signature), so its body emits on the direct/
-  fiber path where no `__kont` exists to thread. **Bucket (b) is E1.**
+| tier | count | shape | E2 work |
+|---|---|---|---|
+| `now` | 4 | tail-only callee, scalar-carrier param (`call-writer [f] (f ...)`, `effect-poly-infer`, `effect-row-compose`) | admit an effectful fn-value TAIL call as a `__kont`-threading `CT_TAILCALL` |
+| `nontail` | 5 | callee-only but a call is non-tail (`use-writer [f] (do (f "hi") n)`, `run-twice [f] (+ (f) (f))`, `effect-poly-bracket`) | admit an effectful fn-value NON-TAIL call as a `__kont`-threading `CT_LETCALL` |
+| `e1` | **0** | -- | -- |
 
-**Net: E2's reach is gated by E1.** Almost every effectful fn-value in the corpus
-flows into a HOF that takes a fn-value parameter; until **E1** (carrier-ABI `__cps`
-for non-scalar signatures) makes those HOFs CPS-emit, their fn-value calls cannot
-thread the DK, so the fn-value cannot leave the fiber. The honesty gate
-(`fn_sig_ok` inside `param_is_threading`) makes `thr=Y` mean "threadable given
-current emission", which is why only the 4 scalar-carrier-param cases show green.
-**Revised order: E1 (carrier-ABI `__cps`) BEFORE the bulk of E2**; E2a/E2b can land
-the 4 green cases first as a proof-of-channel, but the fiber set only collapses once
-E1 opens the SIG-REJECT HOFs. The coloring pass is the instrument that will confirm
-each E1/E2 step: re-run the `[E2-COLOR]` trace and watch `thr=N -> thr=Y` migrate.
+The 10 `thr=N` are **genuine fiber sinks**, correctly staying fiber: a fiber
+inline-C block casts the fn to a raw fn-ptr (`fiber-effect`, `p19-8` x2), the
+fn-value is stored in a capability / struct field (`capability-effect-poly`,
+`effect-struct-field-row`), it is called under the HOF's OWN `handle`
+(`handle-effectful-fn-param-same-fn` -- threading past that handler would be wrong),
+or it is passed as a recursive arg the conservative coloring does not yet chase
+(`effect-poly-map`).
+
+**Correction -- E2 is NOT gated by E1.** An earlier note here claimed the surface
+was dominated by SIG-REJECT HOFs and that E1 must precede E2. The tiered data
+refutes it: `fn_sig_ok` ADMITS a plain (non-`is_poly_fn`) effectful `TY_FN` param,
+so HOFs like `apply-cb`/`use-writer`/`run-twice` already CPS-emit; the blocker is
+NOT their signature but that the effectful fn-value CALL inside them is currently
+lowered as a delegated (uncolored) indirect call rather than a `__kont`-threading
+one. **Zero** of the threadable-surface fn-values need E1. So E2's real, contained
+work is: admit the effectful fn-value call as a DK-threading call -- **tier `now`
+first** (4 cases, `CT_TAILCALL` threading `__kont`), then **tier `nontail`** (5
+cases, `CT_LETCALL` threading `__kont`) -- each gated per-fn-value by this coloring
+(`thr=Y`), verified by the flag-on sweep. E1 (`is_poly_fn` carrier ABI) is a
+separate, smaller concern that gates none of these 9. The `[E2-COLOR]` trace is the
+instrument: re-run it after each E2 slice and watch the sinks hold while the
+`now`/`nontail` set migrates off the fiber.
 
 ---
 
