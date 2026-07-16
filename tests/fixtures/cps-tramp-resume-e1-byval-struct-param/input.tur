@@ -1,0 +1,24 @@
+;; E1 (cps-dk-sole-effect-lowering, by-value-aggregate PARAM): a colored function
+;; whose parameter is an owning-free by-value struct (`Cfg` = two ints) is admitted
+;; onto the CPS/DK backend under --enable=cps-tramp-resume.  Before this slice
+;; `run` sig-rejected (fn_sig_ok admitted only scalar params) and stayed on the
+;; fiber effect runtime; now it emits `run__cps(tur_adt_Cfg c, DK *)` and runs the
+;; Ask handler on the DK.  The handler body captures `c` across the perform/resume
+;; boundary and reads both fields, so this also exercises the by-value aggregate
+;; riding a handler-continuation env (cap_ty_ok via slot_box_ty).
+;;
+;; Result: 10 * mult + off = 10*3 + 7 = 37.  A mis-crossed struct param (boxed
+;; where by-value is expected, or fields read from the wrong offsets) flips the
+;; output away from 37.
+(defstruct Cfg [mult :int off :int])
+(defeffect Ask [] :int)
+
+(defn run [c : Cfg] : int
+  (handle
+    (perform (Ask))
+    (Ask [] k)
+    (resume k (+ (* 10 (.mult c)) (.off c)))))
+
+(defn main [] : int
+  (println (run (make-struct Cfg 3 7)))
+  0)

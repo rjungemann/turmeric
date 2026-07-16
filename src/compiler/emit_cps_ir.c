@@ -2147,6 +2147,28 @@ static bool param_name_clashes_cps(const Binding *b) {
     return false;
 }
 
+/* E1 (cps-dk-sole-effect-lowering, by-value-aggregate PARAM): admit an owning-
+ * free by-value aggregate param (`slot_box_ty` -- a flat product with no rc/ref/
+ * weak field) into a colored signature, matching the direct emitter's by-value
+ * spelling.  Gated on `--enable=cps-tramp-resume` and restricted to a fn with a
+ * SINGLE concrete C signature: NOT a typeclass instance method (`owner_instance`
+ * -- those route an existential-witness param BY POINTER via
+ * exwit_inst_param_by_ptr, disagreeing with emit_params' by-value spelling), NOT
+ * a dict-clone (`n_dict_clone` -- a rank-2 carrier value), and constraint-free
+ * (`n_constraints == 0` -- a constrained/generic fn whose base name is ALSO
+ * specialized as an int64 carrier, so a concrete `__cps` signature would collide
+ * per the sig_slot_ok name-collision hazard).  A plain concrete defn (`run [c :
+ * Cfg]`) has exactly one C signature the direct emitter also emits by value
+ * (`static int64_t run(tur_adt_Cfg c)`), so admitting its aggregate param is
+ * ABI-safe -- the `__cps` entry, its forward decl, and the direct wrapper all
+ * spell it identically through emit_params. */
+static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
+    if (!g_opt_cps_tramp_resume) return false;
+    if (fd->owner_instance || fd->n_dict_clone
+        || fd->constraints.n_constraints) return false;
+    return slot_box_ty(&p->type);
+}
+
 static bool fn_sig_ok(const FnDef *fd) {
     /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate).  A
      * nil/void return is admitted too: the body still delivers a unit (0) to the
@@ -2199,7 +2221,8 @@ static bool fn_sig_ok(const FnDef *fd) {
         if (p->is_poly_fn) return false;
         bool fn_param_ok = p->type.kind == TY_FN;
         if (!p->is_borrow && !fn_param_ok
-            && !sig_slot_ok(&p->type, p->type.kind)) return false;
+            && !sig_slot_ok(&p->type, p->type.kind)
+            && !fn_byval_agg_param_ok(fd, p)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
     return true;
