@@ -2809,6 +2809,19 @@ static void ensure_S(const Expr *program) {
                 if (fd->binding->c_export_name) { candidate = false; sig_perm = true; }
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
+                /* E2/taint-completeness (cps-tramp-resume): a lifted lambda is ALWAYS
+                 * used as a fn-value -- its DK direct-entry, invoked indirectly,
+                 * installs a fresh root, so a CPS-emitted lambda's `perform` escapes
+                 * (no caller handler in scope).  An EFFECTFUL lifted lambda must run
+                 * on the fiber (dynamic handler lookup) instead; mark it a permanent
+                 * fiber source so its effect taints and any DK handler-installer of
+                 * that effect co-classifies to fiber.  Cleared once E2 gives fn-values
+                 * a DK-threading (__fn_cps) entry. */
+                if (candidate && g_opt_cps_tramp_resume && fd->binding->is_lifted_lambda) {
+                    uint64_t lo = 0, hi = 0;
+                    expr_collect_effects(fd->body, &lo, &hi);
+                    if (lo || hi) { candidate = false; sig_perm = true; }
+                }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 if (candidate && !term_core_ok(t)) {
                     candidate = false;
