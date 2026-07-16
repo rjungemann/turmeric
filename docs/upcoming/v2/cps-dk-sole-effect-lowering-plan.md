@@ -1129,6 +1129,46 @@ Both halves plus the registry runtime are one atomic landing, verified by the sw
 The machinery for E2a-call is proven; E2a-pass (fn-value-arg admission) is the last,
 now-isolated piece. Reverted clean (default 2185/0); no code lands.
 
+#### E2a LANDED -- the first effectful fn-value runs on the DK
+
+Both halves landed together and the first effectful fn-value now threads the DK
+instead of running on the fiber effect runtime.  Fixture
+`tests/fixtures/cps-tramp-resume-e2a-fnvalue` (`call-writer` HOF + a captureless
+`Write`-performing lambda + a helper `run` handler): under `--enable=cps-tramp-
+resume` the emitted C carries `run__cps` (DK handler), the registration constructor
+`__tur_e2reg___fn_NNNN`, and the threaded call `return ((int64_t(*)(int64_t,DK*))
+__tur_cps_lookup((intptr_t)f))("threaded", __kont);` -- and ZERO fiber `Write`
+performs (the only `tur_effect_perform` left is the unused preamble definition).
+Output `threaded`, correct.
+
+The landing is exactly the atomic change scoped above:
+- **emit_dk_runtime.c** -- the `__tur_cps_register` / `__tur_cps_lookup` table (gated
+  on `tramp`).
+- **cps_ir.h / cps_ir.c** -- the `via_registry` CT_TAILCALL flag; the
+  `g_thread_params` set + API; `cps_tail`'s eviction emits a `via_registry` tailcall
+  for a thread-param callee; `safe_to_delegate` refuses to whole-body-delegate a
+  thread-param call (so it takes the per-node path).
+- **emit_cps_ir.c** -- `param_thread_class`'s concrete-effect gate (row-poly ->
+  PT_E1); `param_is_thread_safe` (the param->value converse); the tier-`now`
+  `g_threadable_fn` + `g_thread_params` population; `sig_perm` relaxed for a
+  threadable lambda; the `via_registry` tailcall emission (null-terminated cast --
+  `buf_write` does NOT NUL-terminate, which was the one codegen crash); the per-lambda
+  registration constructor; and **E2a-pass** -- `atom_ok` admits a captureless
+  (`!is_poly_fn`) `TY_FN` atom as a scalar carrier (gated on the flag).
+
+Verified: flag-on sweep **185 / 0 build-fails / 0 mismatches**; default suite 2185/0
+(flag-off byte-identical -- every change is gated on `g_opt_cps_tramp_resume`).
+
+**Scope of this first slice:** tier-`now` only -- a captureless (bare int64 fn-ptr)
+effectful lambda, passed to a HOF whose param is a concrete-effect, thread-safe,
+tail-only threading param, whose effect handler is CPS-emittable (a helper, not
+`main`).  The remaining surface -- tier `nontail` (a non-tail fn-value call ->
+`CT_LETCALL`), the effect-polymorphic HOFs (monomorph-aware threading), the
+handler-in-`main` corpus cases (E3': `main` d2b-for-handle), and `is_poly_fn`/
+capturing fn-values (E2b) -- reuses this machinery and lands on top, each gated by
+the same coloring and verified by the sweep.  But the keystone is proven in the
+codegen now, not just a probe: **an effectful fn-value can leave the fiber.**
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the

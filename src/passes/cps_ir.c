@@ -55,6 +55,21 @@ static const PapInline *pap_lookup(CpsB *b, const Binding *v) {
 
 static const Expr *ascribe_peel(const Expr *e);   /* fwd */
 
+/* E2a thread-param set (populated by emit_cps_ir.c before each fn is translated). */
+static const Binding *g_thread_params[256];
+static int            g_thread_params_n;
+void cps_ir_thread_param_reset(void) { g_thread_params_n = 0; }
+void cps_ir_thread_param_add(const Binding *p) {
+    if (!p) return;
+    for (int i = 0; i < g_thread_params_n; i++) if (g_thread_params[i] == p) return;
+    if (g_thread_params_n < 256) g_thread_params[g_thread_params_n++] = p;
+}
+bool cps_ir_thread_param_has(const Binding *p) {
+    if (!p) return false;
+    for (int i = 0; i < g_thread_params_n; i++) if (g_thread_params[i] == p) return true;
+    return false;
+}
+
 /* Does `e` (recursively) contain a call THROUGH AN EFFECTFUL FN-VALUE -- an
  * indirect call whose callee binding is a fn-typed NON-global (a param or local
  * closure) with a NON-EMPTY effect row (concrete effects, or a row variable)?
@@ -1471,6 +1486,10 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         }
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
+            /* E2a: a thread-param call takes the per-node path (cps_tail) so it
+             * threads the DK via the registry -- never whole-body-delegate to fiber. */
+            if (g_opt_cps_tramp_resume && fn && cps_ir_thread_param_has(fn))
+                return false;
             if (!fn) {
                 /* An indirect callee with no binding -- e.g. a capability CALL
                  * `(.print-line cap "..")` whose callee is a `.field` access
@@ -2431,6 +2450,20 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * Evict so the whole fn stays fiber (its effect taints -> the DK
              * handler-installer co-classifies to fiber). */
             if (g_opt_cps_tramp_resume && call_is_effectful_fnvalue(e)) {
+                /* E2a: a tier-`now` thread-param call THREADS the DK via the registry. */
+                const Binding *pf = e->as.call_.fn_binding;
+                if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
+                    Pending pp = {0};
+                    uint32_t n = e->as.call_.n_args;
+                    CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                    for (uint32_t i = 0; i < n; i++)
+                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                    CTerm *t = new_term(b, CT_TAILCALL);
+                    t->as.tailcall.fn = pf; t->as.tailcall.args = args;
+                    t->as.tailcall.n = n; t->as.tailcall.kont = kont;
+                    t->as.tailcall.via_registry = true;
+                    return fold_pending(b, &pp, t);
+                }
                 CTerm *t = new_term(b, CT_UNSUPPORTED);
                 t->as.unsupported.why = "effectful fn-value call (E2 pending)";
                 return t;

@@ -178,7 +178,7 @@ struct CTerm {
         struct { CVar x; CAtom v; CTerm *body; }                          letval;
         struct { CVar x; const char *op; const BuiltinSpec *spec; CAtom *args; uint32_t n; CTerm *body; } letprim;
         struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body; } letcall;
-        struct { const Binding *fn; CAtom *args; uint32_t n; CKont kont; } tailcall;
+        struct { const Binding *fn; CAtom *args; uint32_t n; CKont kont; bool via_registry; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
@@ -265,5 +265,10 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent);
 /* --dump-cps: color `program`, then translate and print every colored
  * user-level top-level function in CPS form. */
 void cps_ir_dump_program(Arena *a, Expr *program, FILE *out);
+
+/* E2a: fn-value PARAM bindings whose effectful tail calls thread the DK. */
+void cps_ir_thread_param_reset(void);
+void cps_ir_thread_param_add(const Binding *param);
+bool cps_ir_thread_param_has(const Binding *param);
 
 #endif

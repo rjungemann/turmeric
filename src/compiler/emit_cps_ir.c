@@ -349,8 +349,16 @@ static bool atom_ok(const CAtom *a) {
              * so rejecting it here only blocks the unsound slot-crossing use and
              * evicts a function that threads a poly-fn value as a plain value. */
             if (a->var && a->var->is_poly_fn) return false;
+            /* E2a-pass (cps-tramp-resume): a CAPTURELESS (non-poly) fn-value is a bare
+             * int64 fn-ptr -- a scalar that rides the slot -- so admit it as an atom
+             * (e.g. passing a lambda into a HOF-call inside a DK handler's delim).
+             * Gated: flag-off keeps the historical rejection byte-identical. */
+            if (g_opt_cps_tramp_resume && a->ty == TY_FN && !(a->var && a->var->is_poly_fn))
+                return true;
             return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
-        case CA_CVAR: return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
+        case CA_CVAR:
+            if (g_opt_cps_tramp_resume && a->ty == TY_FN) return true;
+            return slot_ok_t(a->type, a->ty) || a->ty == TY_NIL || a->ty == TY_NEVER;
         default:      return false;  /* CA_OTHER */
     }
 }
@@ -2894,6 +2902,12 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
     ptc_walk(fd->body, p, true, &val, &tc, &ntc);
     if (val > 0 || (tc + ntc) < 1) return PT_NONE;   /* escapes, or never called */
     if (!fn_sig_ok(fd)) return PT_E1;                /* is_poly_fn / capturing param */
+    /* E2a registry threading needs a CONCRETE effect row on the param (row-poly
+     * params delegate to a fresh-root direct entry -> escape); tier those PT_E1. */
+    if (p->type.kind == TY_FN) {
+        const struct EffectRow *pr = p->type.as.fn.effect_row;
+        if (!pr || pr->kind != ERK_CONCRETE) return PT_E1;
+    }
     if (ntc > 0)        return PT_NONTAIL;           /* a non-tail fn-value call */
     return PT_NOW;                                    /* tail-only, scalar carrier */
 }
@@ -2941,6 +2955,11 @@ static void threadable_add(const Binding *b) {
     if (g_threadable_fn_n < (int)(sizeof(g_threadable_fn)/sizeof(g_threadable_fn[0])))
         g_threadable_fn[g_threadable_fn_n++] = b;
 }
+static bool threadable_has(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return true;
+    return false;
+}
 
 /* Whole-program threadability for fn-value `fv`: over ONE exhaustive walk of the
  * program, count every value-use of fv (total) and every use that is a threadable
@@ -2967,6 +2986,74 @@ static bool fn_value_threadable(const Expr *program, const Binding *fv,
     if (out_ok)    *out_ok = ok;
     if (out_tier)  *out_tier = tier;
     return total >= 1 && total == ok;
+}
+
+/* E2a param->value converse: is EVERY fn-value flowing into param `pi` of `fd` a
+ * REGISTERED (threadable) fn-value?  Walks all direct calls to `fd`. */
+static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t pi) {
+    if (!program || program->kind != EX_PROGRAM || !fd || !fd->binding) return false;
+    uint32_t np = program->as.program.n;
+    int seen = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it;
+        const Expr *stack[512]; int sp = 0; stack[sp++] = body;
+        while (sp > 0) {
+            const Expr *e = stack[--sp];
+            if (!e) continue;
+            if (e->kind == EX_CALL && e->as.call_.fn_binding == fd->binding) {
+                if (pi >= e->as.call_.n_args) return false;
+                const Expr *a = peel_fn_value(e->as.call_.args[pi]);
+                if (!a || a->kind != EX_VAR || !threadable_has(a->as.var.binding))
+                    return false;
+                seen++;
+            }
+            switch (e->kind) {
+                case EX_CALL:
+                    for (uint32_t k = 0; k < e->as.call_.n_args && sp < 510; k++)
+                        stack[sp++] = e->as.call_.args[k];
+                    if (sp < 511) stack[sp++] = e->as.call_.fn_expr;
+                    break;
+                case EX_DO:
+                    for (uint32_t k = 0; k < e->as.do_.n && sp < 511; k++) stack[sp++] = e->as.do_.items[k];
+                    break;
+                case EX_LET:
+                    for (uint32_t k = 0; k < e->as.let_.n && sp < 511; k++) stack[sp++] = e->as.let_.bindings[k].init;
+                    if (sp < 511) stack[sp++] = e->as.let_.body;
+                    break;
+                case EX_IF:
+                    if (sp < 509) { stack[sp++] = e->as.if_.cond; stack[sp++] = e->as.if_.then_; stack[sp++] = e->as.if_.else_or_null; }
+                    break;
+                case EX_ASCRIBE:
+                    if (sp < 511) stack[sp++] = e->as.ascribe_.inner;
+                    break;
+                case EX_RETURN:
+                    if (sp < 511) stack[sp++] = e->as.return_.value;
+                    break;
+                case EX_MATCH:
+                    if (sp < 511) stack[sp++] = e->as.match_.scrutinee;
+                    for (uint32_t k = 0; k < e->as.match_.n_arms && sp < 511; k++) stack[sp++] = e->as.match_.arms[k].body;
+                    break;
+                case EX_BUILTIN:
+                    for (uint32_t k = 0; k < e->as.builtin.n && sp < 511; k++) stack[sp++] = e->as.builtin.args[k];
+                    break;
+                case EX_HANDLE:
+                    if (e->as.handle_.handle) {
+                        HandleExpr *h = e->as.handle_.handle;
+                        if (sp < 511) stack[sp++] = h->body;
+                        for (uint8_t k = 0; k < h->n_cases && sp < 511; k++) stack[sp++] = h->cases[k].body;
+                    }
+                    break;
+                case EX_FN_DEF:
+                    if (e->as.fn_def_.fn && sp < 511) stack[sp++] = e->as.fn_def_.fn->body;
+                    break;
+                default: break;
+            }
+        }
+    }
+    return seen >= 1;
 }
 
 /* G3b: is `fd` a colored GENERIC whose EVERY monomorph spec is CPS-admissible
@@ -3114,7 +3201,9 @@ static void ensure_S(const Expr *program) {
      * address-taken pre-pass (it needs the full g_addr_taken set) and before
      * classification. */
     g_threadable_fn_n = 0;
-    if (g_opt_cps_tramp_resume && getenv("TUR_TRACE_EVICT")) {
+    cps_ir_thread_param_reset();
+    if (g_opt_cps_tramp_resume) {
+        bool trace = getenv("TUR_TRACE_EVICT") != NULL;
         for (uint32_t i = 0; i < np; i++) {
             Expr *it = program->as.program.items[i];
             if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
@@ -3127,15 +3216,27 @@ static void ensure_S(const Expr *program) {
             if (!(lo || hi)) continue;   /* only effectful fn-values keep the fiber alive */
             int total = 0, ok = 0, tier = 0;
             bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
-            if (thr) threadable_add(fd->binding);
-            const char *nm = fd->binding->name ? fd->binding->name->name : "?";
-            /* tier reports the HARDEST E2 step this fn-value needs; blank when it
-             * is not in the surface (thr=N: a sink use keeps it fiber). */
-            const char *tiers[] = { "-", "now", "nontail", "e1" };
-            fprintf(stderr, "[E2-COLOR] %-24s thr=%c tier=%-7s uses=%d ok=%d %s\n",
-                    nm, thr ? 'Y' : 'N',
-                    thr ? tiers[tier >= 0 && tier <= 3 ? tier : 0] : "-",
-                    total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
+            /* E2a: a tier-`now` concrete captureless lambda is threaded onto the DK. */
+            if (thr && tier == (int)PT_NOW && fd->binding->is_lifted_lambda)
+                threadable_add(fd->binding);
+            if (trace) {
+                const char *nm = fd->binding->name ? fd->binding->name->name : "?";
+                const char *tiers[] = { "-", "now", "nontail", "e1" };
+                fprintf(stderr, "[E2-COLOR] %-24s thr=%c tier=%-7s uses=%d ok=%d %s\n",
+                        nm, thr ? 'Y' : 'N',
+                        thr ? tiers[tier >= 0 && tier <= 3 ? tier : 0] : "-",
+                        total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
+            }
+        }
+        /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = program->as.program.items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            FnDef *fd = it->as.fn_def_.fn;
+            for (uint32_t pi = 0; pi < fd->n_params; pi++)
+                if (param_thread_class(fd, pi) == PT_NOW
+                    && param_is_thread_safe(program, fd, pi))
+                    cps_ir_thread_param_add(fd->params[pi]);
         }
     }
 
@@ -3171,7 +3272,8 @@ static void ensure_S(const Expr *program) {
                  * installer co-classifies to fiber.  Cleared once E2 gives fn-values
                  * a DK-threading (__fn_cps) entry. */
                 if (candidate && g_opt_cps_tramp_resume
-                    && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))) {
+                    && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
+                    && !threadable_has(fd->binding)) {
                     uint64_t lo = 0, hi = 0;
                     expr_collect_effects(fd->body, &lo, &hi);
                     if (lo || hi) { candidate = false; sig_perm = true; }
@@ -3802,6 +3904,28 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_TAILCALL: {
+            if (t->as.tailcall.via_registry) {
+                /* E2a: callee is a fn-value PARAM; recover its CPS entry from the
+                 * registry and thread __kont so its perform reaches the caller's
+                 * handler.  __cps ABI: int64_t (*)(int64_t args..., DK*). */
+                char *pf = callee_name(t->as.tailcall.fn);
+                char *argv = atoms_csv(ce, t->as.tailcall.args, t->as.tailcall.n);
+                const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
+                    ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
+                char cast[512]; int off = snprintf(cast, sizeof cast, "int64_t (*)(");
+                for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
+                    off += snprintf(cast + off, sizeof cast - (size_t)off, "int64_t, ");
+                snprintf(cast + off, sizeof cast - (size_t)off, "DK *)");
+                if (t->as.tailcall.n)
+                    ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value */",
+                            cast, pf, argv, thread);
+                else
+                    ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value */",
+                            cast, pf, thread);
+                free(pf); free(argv);
+                break;
+            }
             /* G3b: a colored-generic mono-template callee -- resolve this call
              * site to the monomorph clone so we thread `<clone>__cps` (the DK
              * monomorph), not the unresolved generic name. */
@@ -5864,6 +5988,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    return;\n}\n");
     } else {
         buf_puts(file, "    return __ret;\n}\n");
+    }
+
+    /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
+     * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
+    if (g_opt_cps_tramp_resume && threadable_has(fd->binding)) {
+        buf_printf(file,
+            "static void __attribute__((constructor)) __tur_e2reg_%s(void) {\n"
+            "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"
+            "}\n", cn, cn, cn);
     }
 
     ctx->fn_params   = saved_fn_params;

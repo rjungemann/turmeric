@@ -375,6 +375,20 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 " * (dk_free would walk into that continuation and risk a double free).  See\n"
 " * docs/archive/cps-delimited-dk-node-leak.md. */\n"
 "__attribute__((unused)) static void dk_free_node(DK *k) { free(k); }\n");
+    if (tramp) buf_puts(out,
+"/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
+"typedef intptr_t (*__tur_cps_fn)();\n"
+"static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];\n"
+"static int __tur_cps_reg_n = 0;\n"
+"__attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {\n"
+"    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;\n"
+"        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }\n"
+"}\n"
+"__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {\n"
+"    for (int i = 0; i < __tur_cps_reg_n; i++)\n"
+"        if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;\n"
+"    return (__tur_cps_fn)0;\n"
+"}\n");
     buf_puts(out,
 "/* Structural-chain reaping (docs/archive/cps-delimited-dk-node-leak.md).\n"
 " * reset/handle install a prompt/handler chain as the current continuation and\n"
