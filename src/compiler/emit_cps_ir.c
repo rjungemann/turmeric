@@ -457,6 +457,8 @@ static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guar
 static bool letraw_effect_free(const CTerm *t);  /* CT_LETRAW performs no fiber effect */
 static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
 static const Expr *g_prog;   /* fwd (defined below): program the classifier is keyed on */
+static void ptc_walk(const Expr *e, const Binding *p, bool tail,
+                     int *val, int *tailc, int *ntc);  /* fwd: param value/callee-use walk */
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
 static bool binding_cps_reachable(const Binding *b);  /* in_s OR mono-template */
 
@@ -538,7 +540,15 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
                          bool cps_to_direct) {
     bool cef = callee_effect_free(fn);
     for (uint32_t i = 0; i < n; i++) {
-        if (cef && atom_is_fn_value(&args[i])) continue;
+        /* Pure higher-order value threading into an effect-free callee is admitted
+         * for a SCALAR fn value (a bare fn-ptr / closure carrier that crosses the
+         * arg slot as one word).  A FAT closure (`tur_poly_fn_t`, is_poly_fn) is a
+         * multi-word aggregate that CANNOT cross the one-word arg slot (the CT-IR
+         * spills it to a `void *` temp -- a hard C error), so it is NOT admitted by
+         * this fast path even into an effect-free callee: it falls to call_arg_ok,
+         * whose atom_is_fat_fn reject evicts the caller (E2b keeps a fat-fn param
+         * that is only CALLED/CAPTURED, never re-threaded as an arg). */
+        if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
         if (!call_arg_ok(&args[i], cps_to_direct)) return false;
     }
     return true;
@@ -2194,8 +2204,31 @@ static bool fn_single_concrete_sig(const FnDef *fd) {
  * its forward decl, and the direct wrapper all spell it identically through
  * emit_params. */
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
+    /* The direct emitter passes SOME aggregates BY POINTER (`const tur_adt_H *` --
+     * a defdata record ADT, a large by-value product; type_struct_pass_by_ptr),
+     * not by value.  emit_params spells the CPS param BY VALUE (`tur_adt_H`), so
+     * admitting a by-pointer aggregate makes the `__cps` entry / wrapper disagree
+     * with the direct emitter's forward decl -- a `conflicting types` C error
+     * (conv-adt-record-typed-fn-field-call).  Restrict this admission to an
+     * aggregate the direct emitter ALSO passes by value (a defstruct-lowered
+     * `tur_adt_Cfg`), so all three spellings match through emit_params. */
     return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
-        && slot_box_ty(&p->type);
+        && slot_box_ty(&p->type) && !type_struct_pass_by_ptr(p->type);
+}
+
+/* E2b soundness gate: the fat-closure (is_poly_fn) param `p` is only CALLED (as a
+ * callee, possibly captured into a continuation env and called there), never used
+ * as a VALUE -- passed as a call ARGUMENT, stored, or bare-referenced.  A fat
+ * closure (`tur_poly_fn_t`) is a multi-word aggregate that cannot cross a one-word
+ * slot, so a value-use would spill it to a `void *` temp and miscompile (the
+ * caller/callee is_poly_fn ABI can also diverge); a callee-use goes through a
+ * delegated indirect call (CT_LETRAW) or a captured `tur_poly_fn_t` env field
+ * (cap_add), neither of which crosses a slot.  ptc_walk's `val` counts exactly the
+ * value-uses, so `val == 0` is the sound admission condition. */
+static bool fatparam_only_called(const FnDef *fd, const Binding *p) {
+    int val = 0, tailc = 0, ntc = 0;
+    ptc_walk(fd->body, p, true, &val, &tailc, &ntc);
+    return val == 0;
 }
 
 /* E1, heap-ADT/struct HANDLE return: admit a carrier-handle return (`(Vec int)` ->
@@ -2263,8 +2296,19 @@ static bool fn_sig_ok(const FnDef *fd) {
          * emitter (which owns the fat-closure ABI).  A plain effect-free `TY_FN`
          * param -- a bare function pointer that fits the int64 carrier -- stays
          * admitted below (the delegated indirect call the comment describes). */
-        if (p->is_poly_fn) return false;
-        bool fn_param_ok = p->type.kind == TY_FN;
+        /* E2b (cps-tramp-resume): a rank-2 poly-fat closure param (tur_poly_fn_t)
+         * is a multi-word aggregate the CPS backend cannot thread through a
+         * one-word slot -- but emit_params spells it `tur_poly_fn_t` (matching the
+         * direct emitter) and a fat closure that is only CALLED (a delegated
+         * indirect call, CT_LETRAW) or CAPTURED BY VALUE (cap_add admits an
+         * is_poly_fn env field) never crosses a slot.  Admit it under the flag for a
+         * single-concrete-signature fn; the atom gates (atom_is_fat_fn in
+         * call_arg_ok / atom_ok) still EVICT a fn that threads the fat closure
+         * through a DK/call-arg slot. */
+        if (p->is_poly_fn
+            && !(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+                 && fatparam_only_called(fd, p))) return false;
+        bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
         if (!p->is_borrow && !fn_param_ok
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)) return false;
