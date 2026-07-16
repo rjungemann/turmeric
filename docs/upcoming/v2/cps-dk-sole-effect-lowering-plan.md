@@ -1162,12 +1162,46 @@ Verified: flag-on sweep **185 / 0 build-fails / 0 mismatches**; default suite 21
 **Scope of this first slice:** tier-`now` only -- a captureless (bare int64 fn-ptr)
 effectful lambda, passed to a HOF whose param is a concrete-effect, thread-safe,
 tail-only threading param, whose effect handler is CPS-emittable (a helper, not
-`main`).  The remaining surface -- tier `nontail` (a non-tail fn-value call ->
-`CT_LETCALL`), the effect-polymorphic HOFs (monomorph-aware threading), the
-handler-in-`main` corpus cases (E3': `main` d2b-for-handle), and `is_poly_fn`/
-capturing fn-values (E2b) -- reuses this machinery and lands on top, each gated by
-the same coloring and verified by the sweep.  But the keystone is proven in the
-codegen now, not just a probe: **an effectful fn-value can leave the fiber.**
+`main`).  Confirmed general within that scope: single-arg (`cps-tramp-resume-e2a-
+fnvalue`) and multi-arg (`cps-tramp-resume-e2a-fnvalue-multiarg`) both thread and
+run correctly.  The keystone is proven in the codegen now, not just a probe: **an
+effectful fn-value can leave the fiber.**
+
+#### Remaining E2 surface -- ordered, each reuses the E2a machinery
+
+Each slice below sits on top of the landed tier-`now` machinery (registry, coloring,
+`via_registry` tailcall, E2a-pass atom admission), gated by the same coloring +
+sweep.  Ordered by tractability, with the specific new work each needs:
+
+1. **tier `nontail`** -- a non-tail fn-value call (`(do (f x) rest)`, `(+ (f) (f))`).
+   New work: the CPS pass produces a `CT_LETCONT { j, jbody=rest, body=via_registry
+   CT_TAILCALL(kont=KK_VAR j) }` (exactly the colored-callee non-tail shape at
+   `cps_bind`:2842), and `letcont_is_heap_join` + `emit_heap_join` must recognize a
+   `via_registry` callee and thread the reified join frame (`dk_frame(j, env, __kont)`)
+   to `__tur_cps_lookup(f)` instead of `__kont`.  Contained but multi-piece.  NOTE:
+   the corpus nontail cases (`run-twice` etc.) are ALSO handler-in-`main`, so this
+   slice moves only synthetic fixtures until E3' lands -- verify with a helper fixture.
+2. **named address-taken fns** (not just lifted lambdas).  New work: a no-direct-
+   escaping-call guard -- a lambda is never called directly so relaxing it is
+   automatically safe, but a named fn CAN be `(cb x)`-called under a handle, whose
+   direct entry now installs a fresh root and escapes.  Admit a named fn only when it
+   has NO direct-call site (or its direct calls are DK-safe).  Low corpus value now
+   (all corpus tier-`now` fn-values are lambdas).
+3. **E3' -- `main` d2b for a `handle` body** (the real corpus lever).  Most corpus
+   fixtures put the handler in `main`; `main` is `sig_perm` (SIG-MAIN, not d2b) so its
+   handle runs on the fiber and taints the effect, blocking the whole chain even
+   though E2a can now thread the performers.  New work is a CIRCULAR-fixpoint
+   restructure: `fn_is_d2b_main` currently gates on `cps_expr_contains_shift`, a cheap
+   syntactic check; admitting a `handle`-body main needs the taint fixpoint to prove
+   the handle's subtree is DK-clean, but that fixpoint depends on whether `main` is
+   d2b.  Resolve by tentatively treating a handle-body `main` as d2b-able (don't
+   `sig_perm` it), running the fixpoint, and keeping it d2b iff its handle + subtree
+   all land in S (else revert to fiber -- preserving the aggressive-E3 safety: a
+   fiber-reaching `main` keeps its current path).  With E3', `effect-fn-type-annot`
+   (a real corpus fixture) flips fully to DK.  Larger + riskier (main-entry emission).
+4. **E2b -- `is_poly_fn` / capturing fn-values** (tier `e1`, 0 in the corpus).  New
+   work: the `tur_poly_fn_t.fn_cps` slot / fat-closure `__fn_cps` channel (kill-probe-
+   proven) instead of the bare-ptr registry.  Gates none of the current corpus.
 
 ---
 
