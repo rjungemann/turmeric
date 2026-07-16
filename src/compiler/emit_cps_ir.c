@@ -455,6 +455,8 @@ static bool delim_ok(const CTerm *t);   /* reset-delim admission (permits KK_PRO
 static bool handle_delim_ok(const CTerm *t);  /* top-level handle-body admission (join-to-prompt, no interior control op) */
 static bool letraw_ok(const CTerm *t);  /* CT_LETRAW soundness (owning-drop guard) */
 static bool letraw_effect_free(const CTerm *t);  /* CT_LETRAW performs no fiber effect */
+static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
+static const Expr *g_prog;   /* fwd (defined below): program the classifier is keyed on */
 static bool binding_in_s(const Binding *b);  /* callee CPS-emitted? (cps->cps vs cps->direct) */
 static bool binding_cps_reachable(const Binding *b);  /* in_s OR mono-template */
 
@@ -490,7 +492,18 @@ static bool atom_is_fn_value(const CAtom *a) {
  * An indirect / unknown callee (fn == NULL) is conservatively NOT effect-free. */
 static bool callee_effect_free(const Binding *fn) {
     if (!fn || fn->type.kind != TY_FN) return false;
-    return effect_row_is_empty(fn->type.as.fn.effect_row);
+    if (effect_row_is_empty(fn->type.as.fn.effect_row)) return true;
+    /* A ROW-VARIABLE declared row (`#fx{e}`) reads as non-empty, but the fn may be
+     * runtime-PURE: its INFERRED row (computed over the body by the P19-2 effect
+     * pass, stable before codegen so still fixpoint-independent) is the sound
+     * summary of what it ACTUALLY performs.  A row-variable fn that invokes no
+     * effectful callback has an EMPTY inferred row -> genuinely effect-free (e.g.
+     * `run-twice [x] #fx{e} = (+ x x)`).  Fall back to it when the declared row is
+     * a non-empty row variable. */
+    const FnDef *fd = g_prog ? fd_for_binding(g_prog, fn) : NULL;
+    if (fd && fd->inferred_effect_row && effect_row_is_empty(fd->inferred_effect_row))
+        return true;
+    return false;
 }
 
 /* Whether an atom may cross into a call ARGUMENT slot.
