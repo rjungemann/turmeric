@@ -821,6 +821,43 @@ effect fixtures under `--enable`, diff vs baseline) after every E2 sub-slice -- 
 is the only check that covers flag-on behavior, and it is what caught the earlier
 unsound attempt.
 
+#### The invariant that makes E2 a COLORING problem, not a set of local sub-slices
+
+Two facts, verified this session, together mean E2 cannot be landed as isolated
+call-site rewrites -- it needs a whole-program fn-value-threading decision:
+
+1. **Representation is statically knowable at the call site.** A mono `(fn [int]
+   int)` param is a bare `int64` fn-ptr UNLESS a capturing closure can reach it, in
+   which case `EX_FN_TO_FAT` boxes it and the param becomes `is_poly_fn`
+   (`tur_poly_fn_t`). Confirmed: `apply1(tur_poly_fn_t f, ...)` when passed a
+   capturing `(fn [v] (+ v base))`; `run_hywith(int64_t f)` when passed a
+   captureless one. So the emitter can pick the right `fn_cps` channel from
+   `is_poly_fn` -- there is no runtime ambiguity to resolve.
+
+2. **A CPS-emitted (DK) fn-value escapes at ANY unthreaded call site.** Its direct
+   entry installs a fresh root, so a `perform` inside finds no handler. Therefore a
+   fn-value may thread the DK ONLY IF *every* site that invokes it threads `__kont`
+   -- a bare-ptr tail call in a DK body, a `tur_poly_fn_t.fn_cps` call, a box
+   `__fn_cps` call. If ANY use is unthreadable (a fiber HOF invokes it, a non-tail
+   position that can't carry `__kont`, an inline-C `((fn_ptr)f)()` like the fiber
+   fixtures), the fn-value MUST stay fiber (direct entry, dynamic handler lookup).
+
+This is why the session's taint-completeness guards EVICT effectful fn-values
+rather than thread them: eviction is the sound default, and it is correct until the
+coordinated decision exists. **E2 is therefore a coloring fixpoint over fn-values:**
+a fn-value is "DK-threadable" iff all its invocation sites are DK-threadable and it
+does not flow into an un-threadable sink (inline-C fn-ptr cast, a fiber-block body,
+a dict slot not yet given a `__cps` method); the fixpoint seeds from the
+un-threadable sinks and propagates. A fn-value in the DK-threadable set gets a
+`fn_cps`/`__fn_cps` channel and every call site threads it; one outside the set
+keeps this session's eviction. Only when the fixpoint marks an effectful fn-value
+DK-threadable do its `__cps` entry, the call-site threading, and the removal of the
+"E2 pending" eviction all land together -- atomically per fn-value, verified by the
+sweep. This is the real shape of E2, and the reason it is a focused multi-day
+effort rather than a quick continuation: the ABI plumbing (the three `fn_cps`
+channels) is the easy half; the fn-value-threading coloring that keeps it sound is
+the load-bearing half.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
