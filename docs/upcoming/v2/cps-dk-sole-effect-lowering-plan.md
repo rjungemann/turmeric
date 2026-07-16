@@ -1187,18 +1187,23 @@ sweep.  Ordered by tractability, with the specific new work each needs:
    direct entry now installs a fresh root and escapes.  Admit a named fn only when it
    has NO direct-call site (or its direct calls are DK-safe).  Low corpus value now
    (all corpus tier-`now` fn-values are lambdas).
-3. **E3' -- `main` d2b for a `handle` body** (the real corpus lever).  Most corpus
-   fixtures put the handler in `main`; `main` is `sig_perm` (SIG-MAIN, not d2b) so its
-   handle runs on the fiber and taints the effect, blocking the whole chain even
-   though E2a can now thread the performers.  New work is a CIRCULAR-fixpoint
-   restructure: `fn_is_d2b_main` currently gates on `cps_expr_contains_shift`, a cheap
-   syntactic check; admitting a `handle`-body main needs the taint fixpoint to prove
-   the handle's subtree is DK-clean, but that fixpoint depends on whether `main` is
-   d2b.  Resolve by tentatively treating a handle-body `main` as d2b-able (don't
-   `sig_perm` it), running the fixpoint, and keeping it d2b iff its handle + subtree
-   all land in S (else revert to fiber -- preserving the aggressive-E3 safety: a
-   fiber-reaching `main` keeps its current path).  With E3', `effect-fn-type-annot`
-   (a real corpus fixture) flips fully to DK.  Larger + riskier (main-entry emission).
+3. **E3' -- `main` d2b for a `handle` body** (the real corpus lever) -- **LANDED.**
+   Most corpus fixtures put the handler in `main`; `main` was `sig_perm` (SIG-MAIN,
+   not d2b) so its handle ran on the fiber and tainted the effect, blocking the whole
+   chain even though E2a can now thread the performers.  The circular fixpoint
+   resolved more simply than feared: `fn_is_d2b_main` now returns true for a handle-
+   body main (under the flag) as a d2b CANDIDATE, and the EXISTING architecture does
+   the rest -- `emit_cps_ir_try_fn` only reaches the d2b `int main` wrapper when the
+   main is `in_s`, and the taint fixpoint drops a handle-main whose subtree reaches
+   fiber code (so `try_fn` returns false BEFORE the wrapper and the direct/fiber main
+   is emitted -- its historical path, no forced-d2b regression).  The gate IS the
+   fixpoint; the aggressive-E3 SIGSEGV is avoided because nothing is FORCED d2b.
+   Change: an `expr_has_handle` helper + `... || (g_opt_cps_tramp_resume &&
+   expr_has_handle(fd->body))` in `fn_is_d2b_main`.  Result: `effect-fn-type-annot`
+   (a real corpus fixture) now emits `main__cps` + the E2a threaded fn-value and runs
+   FULLY on the DK (correct output, zero real fiber `Write` performs); **32 handle-
+   containing fixtures now emit a DK `main`** (handle-mains were never d2b before).
+   Verified: flag-on sweep 187/0/0; default 2185/0 (flag-off byte-identical).
 4. **E2b -- `is_poly_fn` / capturing fn-values** (tier `e1`, 0 in the corpus).  New
    work: the `tur_poly_fn_t.fn_cps` slot / fat-closure `__fn_cps` channel (kill-probe-
    proven) instead of the bare-ptr registry.  Gates none of the current corpus.

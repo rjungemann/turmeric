@@ -2256,18 +2256,47 @@ static bool fn_is_main(const FnDef *fd) {
  * `int main(...)` wrapper trampolines into `main__cps`.  Effect-only mains (no
  * delimited op) stay excluded -- CPS-emitting them is pure overhead and removes
  * no direct-lowering caller. */
+/* E3': does `e` directly contain an effect `handle`?  (partial structural walk over
+ * the forms a `main` body takes: a bare handle, or one wrapped in do/let/if/...).
+ * A miss only leaves `main` on its historical fiber path -- conservative. */
+static bool expr_has_handle(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_HANDLE: return true;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_has_handle(e->as.do_.items[i])) return true;
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_has_handle(e->as.let_.bindings[i].init)) return true;
+            return expr_has_handle(e->as.let_.body);
+        case EX_IF:
+            return expr_has_handle(e->as.if_.cond) || expr_has_handle(e->as.if_.then_)
+                || expr_has_handle(e->as.if_.else_or_null);
+        case EX_ASCRIBE: return expr_has_handle(e->as.ascribe_.inner);
+        case EX_RETURN:  return expr_has_handle(e->as.return_.value);
+        default: return false;
+    }
+}
+
 static bool fn_is_d2b_main(const FnDef *fd) {
     if (!(fn_is_main(fd) && fd->n_params == 0 && fd->body)) return false;
     /* E3 (v2 sole-effect-lowering): a zero-arg main gets the int-main -> main__cps
      * trampoline when it contains delimited control.  An earlier revision made
-     * EVERY main d2b under cps-tramp-resume to dissolve the SIG-MAIN taint, but a
-     * d2b (DK-entry) main that transitively reaches FIBER effect code (a shallow
-     * handler, a fiber-performed effect, an un-threadable fn-value) breaks: the
-     * fiber effect runtime is not correctly active under the DK entry (observed:
-     * SIGSEGV / print-skipped / unhandled-effect on fiber-effect, shallow-*,
-     * effect-poly-infer).  Until a taint-completeness guard can prove a main is
-     * DK-clean, keep the historical `contains shift` gate on both configs. */
-    return cps_expr_contains_shift(fd->body);
+     * EVERY main d2b under cps-tramp-resume, which broke a main that transitively
+     * reaches FIBER effect code (SIGSEGV / print-skipped / unhandled-effect).
+     *
+     * E3' (cps-tramp-resume): a main that ITSELF installs a `handle` is now a d2b
+     * CANDIDATE -- NOT unconditionally d2b.  It enters the taint fixpoint like any
+     * candidate; if its handle subtree reaches fiber effect code the fixpoint drops
+     * it from S, and emit_cps_ir_try_fn returns false BEFORE the d2b wrapper (line
+     * ~5863), so a fiber-reaching main falls back to the historical direct/fiber
+     * main -- exactly its current behaviour, with NO forced-d2b regression.  The
+     * gate is thus the fixpoint (the "taint-completeness guard" the note asked for),
+     * unlocked now that E2a threads the effectful fn-values a handle-main performs. */
+    return cps_expr_contains_shift(fd->body)
+        || (g_opt_cps_tramp_resume && expr_has_handle(fd->body));
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */
