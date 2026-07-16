@@ -1076,6 +1076,59 @@ E2a decoupled. The slice-1 machinery above is correct and reusable; it was rever
 only because, without one of these two, it cannot move a corpus fixture and so cannot
 be sweep-verified as doing anything.
 
+#### DEEPEST trace: the handler-in-helper attempt (reverted) -- the full E2a landing chain
+
+The handler-in-helper path was built end-to-end against a synthetic fixture
+(`run` handles Write in a helper; `main` just calls `run`). This got the furthest
+yet -- the threading MACHINERY works -- and it exposed the complete chain of
+admission gaps E2a must close. Three were SOLVED in the attempt; a fourth remains.
+
+Order of blockers hit, each fixed before the next surfaced:
+
+1. **Whole-body delegation intercepts the HOF (SOLVED).** `call-writer`'s body
+   `(f "...")` never reached `cps_tail` -- `cps_ir_translate_fn` whole-body-delegates
+   any body whose leaf is a fn-value call (`safe_to_delegate` returns true for an
+   effectful fn-value call with no enclosing handle). Fix: `safe_to_delegate`'s
+   EX_CALL returns false for a `cps_ir_thread_param_has(fn)` callee, so a thread-param
+   call takes the per-node path. After this, `[e2-call] cur=call-writer effv=1` fires.
+2. **The threaded call emits (SOLVED).** With the call reaching `cps_tail`, the
+   `via_registry` CT_TAILCALL + `((int64_t(*)(int64_t,DK*))__tur_cps_lookup((intptr_t)
+   f))(arg, __kont)` emission + the per-lambda registration constructor all work.
+3. **The `main` taint clears (SOLVED by the helper structure).** With the handler in
+   `run` (a non-`sig_perm` helper), `main` no longer taints Write; the eviction
+   category dropped from **SIG-TAINT** (permanent) to **BODY-STRUCT-OR-TAINT**
+   (fixable), and `main` left the effect picture entirely. Confirmed the helper
+   decoupling is real.
+4. **REMAINING -- the handler fn fails `term_core_ok` on the "pass-the-lambda"
+   admission.** `run` is classified `candidate=0` (traced: `unsupp=(none)`, so not a
+   `CT_UNSUPPORTED` -- a structural `term_core_ok` reject). Pinpointed:
+   `term_core_ok(run's CT_HANDLE)` -> `handle_delim_ok(delim)=0`. The delim is the
+   cps->cps tail call `(call-writer __fn_1283)`, and `handle_delim_ok`'s CT_TAILCALL
+   case -> `call_args_ok(call-writer, [__fn_1283], ...)` REJECTS the captureless
+   fn-value ARGUMENT `__fn_1283` (a `TY_FN` atom). `run` then evicts, taints Write,
+   and cascades the whole cluster back to fiber (BODY-STRUCT-OR-TAINT on `__fn_1283`,
+   `call-writer`, `run`).
+
+**So the true final gap is orthogonal to threading: passing a captureless effectful
+fn-value as an ARGUMENT into a CPS-emitted call (here, into the handler's delim tail
+call) is not admitted** (`atom_ok`/`slot_ty`/`call_args_ok` for a `TY_FN` arg). E2a
+built the "CALL the fn-value through the DK" half; the missing half is "PASS the
+fn-value into a DK-emitted callee." Both are needed for even one fixture:
+
+- **E2a-call** (built, works): thread an effectful fn-value tail call via the
+  registry. Gated by the `g_thread_params` coloring; `safe_to_delegate` +
+  `cps_tail` + `via_registry` emission + registration.
+- **E2a-pass** (the remaining gap): admit a captureless (`!is_poly_fn`) `TY_FN`
+  atom as a scalar carrier arg through `atom_ok`/`call_args_ok`/`handle_delim_ok`,
+  so the HOF-call that hands the lambda to the HOF is itself DK-emittable. This is a
+  narrower, targeted admission change (a bare fn-ptr IS a scalar int64), but it
+  touches the shared `atom_ok` path, so it must be gated and swept carefully -- it
+  was NOT attempted, to avoid a broad unverified change.
+
+Both halves plus the registry runtime are one atomic landing, verified by the sweep.
+The machinery for E2a-call is proven; E2a-pass (fn-value-arg admission) is the last,
+now-isolated piece. Reverted clean (default 2185/0); no code lands.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
