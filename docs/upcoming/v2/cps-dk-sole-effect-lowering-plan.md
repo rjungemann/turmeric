@@ -1249,8 +1249,26 @@ $ for f in tests/fixtures/*/; do TUR_TRACE_EVICT=1 tur emit-c --enable=cps-tramp
 **49 fixtures still keep the fiber alive** (was 52 before the E1 slices below).  The
 SIG-TAINT bucket (57) is entirely DOWNSTREAM -- each entry is evicted only because it
 shares an effect with one of the permanent/root sources below, and the taint fixpoint
-releases it automatically once that source goes DK.  The real remaining ROOTS,
-largest-lever first:
+releases it automatically once that source goes DK.
+
+> **CORRECTION -- the `eff=1` count OVER-reports fiber liveness (6 of the 49 are
+> non-blockers).**  `eff=1` fires on any fn that performs or handles an effect *tag* --
+> but `Unsafe` is a COMPILE-TIME marker, not a fiber effect: `(unsafe expr)` is
+> discharged inline and emits ZERO fiber/perform/handler calls (verified -- the direct
+> emit of `sized-buf-*` is a plain `raw(x); return;`, no `Unsafe` C symbol at all).  So
+> the **6 `Unsafe`-marker-only fixtures are already fiber-free** and are NOT deletion
+> blockers: `sized-buf-cross-param-accept`, `generic-inline-c-struct-through-unsafe`,
+> `free-interpreter`, `free-lift-bind`, `typeclass-unsafe-passbyptr-struct-arg`,
+> `unsafe-closure-capture`.  **The true count is 43 real fiber-live fixtures.**  Do NOT
+> spend E1 effort chasing the `sized-buf`/`dense` shape onto the DK -- an opaque-carrier
+> + `k`-param widening was built and REVERTED once this was found: it admitted their
+> signatures but the fixtures stayed fiber (their inline-C `*-raw` helpers permanently
+> taint `Unsafe`), and moving them changes nothing at runtime.  Filter `eff=1` by a real
+> `defeffect`/`perform`/`handle`/`shift`/`reset` before treating an eviction as a blocker.
+
+The real remaining ROOTS among the **43 real** fiber-live fixtures, largest-lever first
+(SIG-REJECT 4: `exchange`/`role-a` session effects + `f`x2 fat-closure fn-values;
+BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 permanent):
 
 - **E1 -- non-scalar signatures (10 SIG-REJECT remaining).**  The single biggest
   fixable root.  **Two sub-families LANDED**, both via the shared
@@ -1267,10 +1285,14 @@ largest-lever first:
       in slot_ok_t).  Moved `cps-backend-heap-adt-return` (`mkvec [] : (Vec int)`).
       ASan-verified move-out (no double-free).  Fixture
       `cps-tramp-resume-e1-heap-adt-return`.
-  REMAINING E1 shapes, each its own per-shape slice: fat-closure `is_poly_fn` fn-value
-  params (`cps-backend-capture-fnvalue`, `-indirect-call` -> E2b); by-value aggregate
-  params behind `inline-C` / `defopaque` phantom handles (`sized-buf-*`, `dense-*`);
-  session-typed effects (`session-effects`, `session-mp-effects`).
+  REMAINING **real-effect** E1 shapes, each its own per-shape slice: fat-closure
+  `is_poly_fn` fn-value params (`cps-backend-capture-fnvalue`, `-indirect-call` -> E2b);
+  session-typed effects (`session-effects` `exchange`, `session-mp-effects` `role-a`).
+  NOTE: the `sized-buf-*` / `dense-*` opaque-carrier shape is NOT a real target -- those
+  fixtures are `Unsafe`-marker-only (already fiber-free; see the CORRECTION above).  An
+  opaque-carrier param/return admission (`type_is_opaque_carrier` + a `k`-param widening)
+  WAS built and reverted: sound, but moved 0 real fixtures (their inline-C `*-raw`
+  helpers permanently taint `Unsafe`, keeping the wrappers SIG-TAINT regardless).
 - **native CPS loop-lowering (1 EX_WHILE root: `effect-handler-capture-loop`).**  Flag-
   on DE-TAINTED `run` (its self-contained handle no longer shares a tainted effect), so
   it is now a d2b candidate whose ONLY blocker is the raw `EX_WHILE` in its body -- the
