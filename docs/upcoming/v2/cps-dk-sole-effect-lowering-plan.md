@@ -1311,12 +1311,15 @@ BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 perman
   `term_core_ok`/`first_unsupported` INCONSISTENCY -- see the minimal repro in
   docs/archive/cps-delegated-call-in-heap-join-cont-evicts.md).  `letraw_effect_free` now
   admits the pure case (effectful delegated calls still evict -- handle-effectful-fn-param-
-  same-fn unchanged), always-on.  REMAINING per-fixture causes: `effect-row-poly` -- a
-  `#{e}` ROW-VARIABLE call reads as non-effect-free (`callee_effect_free` rejects a row
-  variable), so `greet`/`main` stay evicted; `effect-subtype-capability` -- an EFFECTFUL
-  fn-value stored in a struct field and called via `(.run act ...)` (E2-adjacent, harder
-  than E2a's param case); `effect-reopen` -- nested re-handled effects; the
-  owning-struct-field-op-capture pair.  Each is its own slice.
+  same-fn unchanged), always-on.  A SECOND layer is now cleared too: `effect-row-poly` -- a `#{e}` ROW-VARIABLE call that
+  is runtime-PURE (`twice [x] #fx{e} = (+ x x)`) used to read as effectful in
+  `callee_effect_free` (declared row only).  `callee_effect_free` now falls back to the
+  INFERRED row (the sound runtime-effect summary), so a pure row-variable call is admitted;
+  `effect-row-poly` moved FULLY onto the DK (43 -> 42 real, BODY-STRUCT-OR-TAINT 7 -> 5).
+  Regression fixture `cps-rowvar-pure-call-in-handle`.  REMAINING per-fixture causes:
+  `effect-subtype-capability` -- an EFFECTFUL fn-value stored in a struct field and called
+  via `(.run act ...)` (E2-adjacent, harder than E2a's param case); `effect-reopen` --
+  nested re-handled effects; the owning-struct-field-op-capture pair.  Each is its own slice.
 - **SIG-EXPORT (2), SIG-INLINE-C (2).**  Exported typeclass instances stay sig_perm;
   inline-C bodies are permanent (can't thread a DK cont) -- out of scope for deletion.
 
