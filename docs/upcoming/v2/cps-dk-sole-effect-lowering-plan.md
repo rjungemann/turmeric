@@ -729,19 +729,41 @@ Then a 5th fix took it to **269 / 274 sound**:
    caught by dynamic lookup). Verified: `effect-poly-infer` matches baseline;
    `effect-poly-map` + E7 fixtures unchanged.
 
-**Result: 269 / 274 sound, 0 build-fails.** Default suite 2185/0; E7 fixtures
-unchanged. **Two mismatches remain, both the same taint-completeness gap:**
+Then a 6th fix took it to a **CLEAN sweep**:
 
-- `fiber-effect`, `p19-8-fiber-effect-chain` -- CONCURRENCY fibers (`spawn`) mixed
-  with effects. A handle DK-lowers while an effect is performed inside a spawned
-  fiber, which the taint model does not co-classify across the fiber boundary.
+6. **Address-taken effectful fns evict to fiber.** Generalized fix #5 to ANY fn
+   used as a fn-value. A program-wide pre-pass (`g_addr_collecting`) records every
+   global fn referenced in value position (reusing the `EX_VAR` fn-value detection
+   in `expr_collect_effects_acc`; a direct-call callee never reaches it --
+   `fn_binding` with `fn_expr=NULL`). `ensure_S` forces an effectful address-taken
+   fn (or lifted lambda) to `sig_perm`. Fixed both fiber cases -- `fiber-effect`
+   (10|99), `p19-8-fiber-effect-chain` (20|30|99) -- where an effectful body is
+   passed as a fn-value to a fiber-creating inline-C fn.
 
-These are the last flag-on escapes; they gate promotion and are the concrete
-next-session targets (alongside the fat-closure `__fn_cps` E2 ABI, which is what
-would let effectful fn-values thread the DK instead of merely evicting). The
-remaining "used as a fn-value" gap beyond lambdas -- an *address-taken NAMED*
-effectful fn -- is not exercised by the current corpus but needs the same
-`sig_perm` treatment via a program-wide address-taken scan when it arises.
+**Result: the flag-on soundness sweep is CLEAN -- 271 / 274 sound, 0 build-fails,
+0 runtime mismatches** (the 3 uncounted are fixtures baseline itself does not
+build). Default suite 2185/0; E7 + poly fixtures unchanged.
+
+### Where the gate stands now
+
+`--enable=cps-tramp-resume` is **escape-free across the effect corpus**: every
+effect either DK-lowers correctly (deep tail-resume flat) or evicts to fiber and is
+handled there, with the taint model co-classifying performers and handlers. What it
+does NOT yet do is move the effectful fn-value / non-scalar-signature cases OFF the
+fiber -- they EVICT (soundly) rather than thread the DK. So the gate is a sound
+in-flight state, not yet promotable: promotion still needs
+
+- **E2** -- the fat-closure `__fn_cps` slot so an effectful fn-value threads the DK
+  (instead of evicting), which is what actually shrinks the fiber effect runtime's
+  live set toward empty; and
+- **E1** -- carrier-ABI `__cps` for non-scalar signatures.
+
+The taint-completeness guards built this session (fn-value-call eviction,
+address-taken/lambda `sig_perm`, indirect-effect crediting) are exactly the
+invariant Stage G's deletion assertion needs: no effect ever reaches a fiber that a
+DK handler is responsible for. **Next: E2 (fat-closure `__fn_cps`), then re-run the
+sweep -- each fn-value that threads the DK is one more removed from the fiber set;
+the gate promotes when that set is empty.**
 
 ---
 
