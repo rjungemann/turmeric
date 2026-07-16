@@ -1230,7 +1230,7 @@ sweep.  Ordered by tractability, with the specific new work each needs:
    work: the `tur_poly_fn_t.fn_cps` slot / fat-closure `__fn_cps` channel (kill-probe-
    proven) instead of the bare-ptr registry.  Gates none of the current corpus.
 
-#### Current landscape (measured after E2a + E3' + tier-nontail + E1-byval-param)
+#### Current landscape (measured after E2a + E3' + tier-nontail + E1-byval-param + E1-carrier-ret)
 
 Measured with the flag on across the whole corpus via the `TUR_TRACE_EVICT` readiness
 trace (`eff=1` = an eviction that actually keeps the fiber effect runtime alive):
@@ -1238,35 +1238,39 @@ trace (`eff=1` = an eviction that actually keeps the fiber effect runtime alive)
 ```
 $ for f in tests/fixtures/*/; do TUR_TRACE_EVICT=1 tur emit-c --enable=cps-tramp-resume \
     "$f/input.tur" 2>&1 >/dev/null | grep 'eff=1'; done | count-by-category
-  58  SIG-TAINT            (downstream: de-taints for free when a root below goes DK)
-  11  SIG-REJECT           (E1 -- remaining non-scalar signatures; the biggest ROOT)
+  57  SIG-TAINT            (downstream: de-taints for free when a root below goes DK)
+  10  SIG-REJECT           (E1 -- remaining non-scalar signatures; the biggest ROOT)
    7  BODY-STRUCT-OR-TAINT (downstream of the row-poly / fn-value / while roots)
    3  BODY-UNSUPPORTED     (1 EX_WHILE + 2 guarded fn-value-in-handle)
    2  SIG-INLINE-C         (PERMANENT -- inline-C can't thread a DK cont; out of scope)
    2  SIG-EXPORT           (exported typeclass instances; sig_perm)
 ```
 
-**50 fixtures still keep the fiber alive** (was 52 before the E1 by-value-aggregate-
-param slice below).  The SIG-TAINT bucket (58) is entirely DOWNSTREAM -- each entry is
-evicted only because it shares an effect with one of the permanent/root sources below,
-and the taint fixpoint releases it automatically once that source goes DK.  The real
-remaining ROOTS, largest-lever first:
+**49 fixtures still keep the fiber alive** (was 52 before the E1 slices below).  The
+SIG-TAINT bucket (57) is entirely DOWNSTREAM -- each entry is evicted only because it
+shares an effect with one of the permanent/root sources below, and the taint fixpoint
+releases it automatically once that source goes DK.  The real remaining ROOTS,
+largest-lever first:
 
-- **E1 -- non-scalar signatures (11 SIG-REJECT remaining).**  The single biggest
-  fixable root.  **First sub-family LANDED:** owning-free by-value aggregate PARAMs
-  (`fn_byval_agg_param_ok`, emit_cps_ir.c) -- `fn_sig_ok` now admits a `slot_box_ty`
-  param for a single-concrete-signature fn (not an instance method / dict-clone /
-  constrained), matching the direct emitter's by-value spelling.  Moved
-  `effect-handler-capture-struct` (`run [c : Cfg]`) and `cps-backend-capture-nonscalar`
-  off the fiber; regression fixture `cps-tramp-resume-e1-byval-struct-param`.  The
-  documented by-pointer/collision worry (emit_cps_ir.c:2160) applies only to instance
-  methods (`exwit_inst_param_by_ptr`) and carrier-specialized generics, which the
-  single-signature guard excludes.  REMAINING E1 shapes are heterogeneous: fat-closure
-  `is_poly_fn` fn-value params (`cps-backend-capture-fnvalue`, `-indirect-call` -> E2b),
-  by-value aggregate params behind `inline-C` / `defopaque` phantom handles
-  (`sized-buf-*`, `dense-*`), owning-field / heap-ADT returns
-  (`cps-backend-heap-adt-return`), session-typed effects (`session-effects`,
-  `session-mp-effects`).  Each is its own per-shape slice.
+- **E1 -- non-scalar signatures (10 SIG-REJECT remaining).**  The single biggest
+  fixable root.  **Two sub-families LANDED**, both via the shared
+  `fn_single_concrete_sig` guard (not an instance method / dict-clone / constrained --
+  exactly the fns the sig_slot_ok name-collision hazard targets; a plain concrete defn
+  has one C signature the direct emitter also emits):
+    - owning-free by-value aggregate PARAMs (`fn_byval_agg_param_ok`) -- `fn_sig_ok`
+      admits a `slot_box_ty` param, matching the direct emitter's by-value spelling.
+      Moved `effect-handler-capture-struct` (`run [c : Cfg]`) +
+      `cps-backend-capture-nonscalar`.  Fixture `cps-tramp-resume-e1-byval-struct-param`.
+    - heap-ADT/struct HANDLE returns (`fn_carrier_ret_ok`) -- `fn_sig_ok`'s return gate
+      admits a `carrier_handle_ok` return; the `__cps` entry returns int64_t and
+      delivers the handle through the DK slot by a `(T *)__r` cast (machinery already
+      in slot_ok_t).  Moved `cps-backend-heap-adt-return` (`mkvec [] : (Vec int)`).
+      ASan-verified move-out (no double-free).  Fixture
+      `cps-tramp-resume-e1-heap-adt-return`.
+  REMAINING E1 shapes, each its own per-shape slice: fat-closure `is_poly_fn` fn-value
+  params (`cps-backend-capture-fnvalue`, `-indirect-call` -> E2b); by-value aggregate
+  params behind `inline-C` / `defopaque` phantom handles (`sized-buf-*`, `dense-*`);
+  session-typed effects (`session-effects`, `session-mp-effects`).
 - **native CPS loop-lowering (1 EX_WHILE root: `effect-handler-capture-loop`).**  Flag-
   on DE-TAINTED `run` (its self-contained handle no longer shares a tainted effect), so
   it is now a d2b candidate whose ONLY blocker is the raw `EX_WHILE` in its body -- the
