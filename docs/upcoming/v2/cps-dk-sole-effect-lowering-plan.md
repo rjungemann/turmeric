@@ -1226,9 +1226,24 @@ sweep.  Ordered by tractability, with the specific new work each needs:
    FULLY on the DK (correct output, zero real fiber `Write` performs); **32 handle-
    containing fixtures now emit a DK `main`** (handle-mains were never d2b before).
    Verified: flag-on sweep 187/0/0; default 2188/0 (flag-off byte-identical).
-4. **E2b -- `is_poly_fn` / capturing fn-values** (tier `e1`, 0 in the corpus).  New
-   work: the `tur_poly_fn_t.fn_cps` slot / fat-closure `__fn_cps` channel (kill-probe-
-   proven) instead of the bare-ptr registry.  Gates none of the current corpus.
+4. **E2b -- `is_poly_fn` / capturing fn-values** (tier `e1`) -- **CALL/CAPTURE-ONLY
+   SLICE LANDED.**  The corpus fixtures (`cps-backend-capture-fnvalue`,
+   `-indirect-call`) carry a fat-closure (`tur_poly_fn_t`) fn-value param that is only
+   CALLED / captured-then-called -- NOT an effectful fn-value threaded through the DK, so
+   they need neither the registry (E2a) nor the `fn_cps` channel: the emission machinery
+   (emit_params `tur_poly_fn_t` spelling, `cap_add` is_poly_fn env field, CT_LETRAW
+   delegated indirect call) was already in place; only `fn_sig_ok`'s blanket `is_poly_fn`
+   reject blocked them.  Relaxed under the flag for a single-concrete-signature fn, guarded
+   by `fatparam_only_called` (the fat param is used ONLY as a callee -- `ptc_walk` `val ==
+   0`; a fn that THREADS the closure as an arg safely SIG-REJECTs, since a fat closure
+   cannot cross a one-word slot / the caller/callee is_poly_fn ABI can diverge).  Moved both
+   fixtures onto the DK (42 -> 40 real, SIG-REJECT 4 -> 2).  Regression fixtures
+   `cps-tramp-resume-e2b-{capture-fnvalue,indirect-call}`.
+   STILL FUTURE WORK -- an EFFECTFUL fat-closure fn-value THREADED through the DK (the
+   `tur_poly_fn_t.fn_cps` / fat-box `__fn_cps` channel, kill-probe-proven): 0 in the current
+   corpus, so not landed.  Also exposed + fixed a latent flag-on bug in the E1 by-value-
+   aggregate-param slice: a defdata RECORD param is passed BY POINTER by the direct emitter
+   (`type_struct_pass_by_ptr`), so `fn_byval_agg_param_ok` now excludes by-pointer aggregates.
 
 #### Current landscape (measured after E2a + E3' + tier-nontail + E1-byval-param + E1-carrier-ret)
 
