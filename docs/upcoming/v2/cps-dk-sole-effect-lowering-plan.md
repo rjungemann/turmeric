@@ -968,6 +968,58 @@ Only `is_poly_fn`/capturing fn-values (tier `e1`, currently 0 in the corpus) nee
 the `tur_poly_fn_t.fn_cps` / fat-box `__fn_cps` channels; those are E2b/E1 and gate
 none of the 9.
 
+#### Obligations discovered by ATTEMPTING slice 1 (empirical, reverted)
+
+A first attempt at slice 1 (registry runtime landed + step 2's `sig_perm` relaxation
+for tier-`now` `g_threadable_fn` members) was built and swept; it was **reverted**
+because the flag-on sweep went red (`effect-poly-infer`: `unhandled effect (tag 2)`,
+abort). The failure is instructive and sharpens the checklist:
+
+- **Steps 2 and 4 are ATOMIC -- never relax the lambda's gate before its callers
+  thread.** Relaxing `sig_perm` alone had two outcomes across the corpus: on
+  `effect-fn-type-annot` it was INERT (the lambda stayed fiber anyway, because
+  `call-writer`'s still-evicting `(f ...)` call taints `Write`, and the taint model
+  co-classifies the lambda back to fiber); on `effect-poly-infer` it was UNSOUND (the
+  lambda's taint path differed, so it entered S, CPS-emitted its `perform` on the DK,
+  and that `perform` ESCAPED at the still-unthreaded call site -> unhandled effect).
+  This is a concrete, reproduced proof of the plan's fact #2 ("a CPS-emitted fn-value
+  escapes at ANY unthreaded call site"). So the lambda `__cps` (step 2), its
+  registration (step 3), and the threaded call site (step 4) must land in ONE change,
+  per fn-value, verified by the sweep before the gate is relaxed for that fn-value.
+
+- **A NEW soundness obligation -- two-directional coloring.** `g_threadable_fn` is a
+  value->param property (the lambda's every use is a threadable-arg). Threading a
+  call `(f ...)` in a HOF also needs the CONVERSE param->value property: EVERY
+  fn-value that can flow to param `f` must be registered. Otherwise a threaded call
+  site could `__tur_cps_lookup` a fn-value that was never registered (a lambda that
+  is `thr=N` because one of its OTHER uses is a sink, yet still flows to this
+  threading param) -> lookup returns NULL -> abort. Add `param_is_thread_safe(program,
+  fd, i)` = every call `(fd ... arg_i ...)` passes an `arg_i` that peels to a member
+  of `g_threadable_fn`; thread `(f ...)` iff `f`'s param is BOTH `PT_NOW` AND
+  thread-safe. (In the corpus each tier-`now` HOF receives exactly one registered
+  lambda, so this holds trivially -- but the check is load-bearing in general.)
+
+- **Cross-file bridge.** The eviction decision lives in `cps_ir.c` (the pass), but the
+  threading decision needs the program + coloring, which live in `emit_cps_ir.c`.
+  Bridge with a global set of param bindings (`g_e2_thread_params`) that
+  `emit_cps_ir.c` populates (params that are `PT_NOW` and thread-safe) before
+  `cps_ir_translate_fn` runs; `cps_ir.c`'s `call_is_effectful_fnvalue` eviction then
+  checks membership and, for a member, emits a threaded `CT_TAILCALL` instead of
+  `CT_UNSUPPORTED`.
+
+- **Registry runtime is trivial + verified.** Step 1 (the `emit_dk_runtime.c`
+  `__tur_cps_register`/`__tur_cps_lookup` table, gated on `tramp`, `__attribute__
+  ((unused))`) built and swept clean on its own -- it is the one piece that can land
+  ahead, but per the atomicity point it should land WITH steps 2-4 for a fn-value, not
+  as lone dead code.
+
+Net: slice 1 is a single atomic change spanning `emit_dk_runtime.c` (registry) +
+`emit_cps_ir.c` (relax gate for thread-safe tier-`now`; populate `g_e2_thread_params`;
+emit `__cps` + registration; lower the threaded call) + `cps_ir.c` (emit the threaded
+`CT_TAILCALL` for a `g_e2_thread_params` callee), landed only when the flag-on sweep
+is green. The mechanism is proven (probe); the obligations above are what a correct
+landing must satisfy.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the
