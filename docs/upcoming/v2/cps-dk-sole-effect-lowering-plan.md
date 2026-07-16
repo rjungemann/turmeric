@@ -1225,10 +1225,59 @@ sweep.  Ordered by tractability, with the specific new work each needs:
    (a real corpus fixture) now emits `main__cps` + the E2a threaded fn-value and runs
    FULLY on the DK (correct output, zero real fiber `Write` performs); **32 handle-
    containing fixtures now emit a DK `main`** (handle-mains were never d2b before).
-   Verified: flag-on sweep 187/0/0; default 2185/0 (flag-off byte-identical).
+   Verified: flag-on sweep 187/0/0; default 2188/0 (flag-off byte-identical).
 4. **E2b -- `is_poly_fn` / capturing fn-values** (tier `e1`, 0 in the corpus).  New
    work: the `tur_poly_fn_t.fn_cps` slot / fat-closure `__fn_cps` channel (kill-probe-
    proven) instead of the bare-ptr registry.  Gates none of the current corpus.
+
+#### Current landscape (measured after E2a + E3' + tier-nontail)
+
+Measured with the flag on across the whole corpus via the `TUR_TRACE_EVICT` readiness
+trace (`eff=1` = an eviction that actually keeps the fiber effect runtime alive):
+
+```
+$ for f in tests/fixtures/*/; do TUR_TRACE_EVICT=1 tur emit-c --enable=cps-tramp-resume \
+    "$f/input.tur" 2>&1 >/dev/null | grep 'eff=1'; done | count-by-category
+  59  SIG-TAINT            (downstream: de-taints for free when a root below goes DK)
+  13  SIG-REJECT           (E1 -- non-scalar signatures; the biggest fixable ROOT)
+   7  BODY-STRUCT-OR-TAINT (downstream of the row-poly / fn-value / while roots)
+   3  BODY-UNSUPPORTED     (1 EX_WHILE + 2 guarded fn-value-in-handle)
+   2  SIG-INLINE-C         (PERMANENT -- inline-C can't thread a DK cont; out of scope)
+   2  SIG-EXPORT           (exported typeclass instances; sig_perm)
+```
+
+**52 fixtures still keep the fiber alive.** The SIG-TAINT bucket (59) is entirely
+DOWNSTREAM -- each entry is evicted only because it shares an effect with one of the
+permanent/root sources below, and the taint fixpoint releases it automatically once
+that source goes DK.  The real remaining ROOTS, largest-lever first:
+
+- **E1 -- non-scalar signatures (13 SIG-REJECT).**  The single biggest fixable root.
+  Heterogeneous: fat-closure `is_poly_fn` fn-value params (`cps-backend-capture-*`,
+  `-indirect-call`), by-value aggregate params (`sized-buf-*`, `dense-*`,
+  `effect-handler-capture-struct`), owning-field / heap-ADT returns
+  (`cps-backend-heap-adt-return`), session-typed effects (`session-effects`,
+  `session-mp-effects`).  `fn_sig_ok` (emit_cps_ir.c:2150) rejects each.  Cracking a
+  sub-family (e.g. by-value aggregate PARAMS -- the documented gap at
+  emit_cps_ir.c:2160: the CPS param ABI emits by value while the direct forward decl
+  passes by pointer) is a real per-shape ABI slice, not a bounded change.
+- **native CPS loop-lowering (1 EX_WHILE root: `effect-handler-capture-loop`).**  Flag-
+  on DE-TAINTED `run` (its self-contained handle no longer shares a tainted effect), so
+  it is now a d2b candidate whose ONLY blocker is the raw `EX_WHILE` in its body -- the
+  CPS transform has no loop lowering (task-15's "EX_WHILE" was whole-body *delegation*
+  to the FIBER direct emitter, which does not move it onto the DK).  A true DK landing
+  needs a loop join point with the `^mut` loop vars threaded as loop-carried
+  continuation args.  Real slice.
+- **E2b / tier-nontail-in-handle (2 BODY-UNSUPPORTED fn-value).**  The guarded
+  `cps-backend-fn-param-effectful` + `handle-effectful-fn-param-same-fn`; both need the
+  capture-gate widening recorded under roadmap item 1 (fold into E2b).
+- **SIG-EXPORT (2), SIG-INLINE-C (2).**  Exported typeclass instances stay sig_perm;
+  inline-C bodies are permanent (can't thread a DK cont) -- out of scope for deletion.
+
+No bounded corpus-moving slice remains: every root above is a substantial, per-shape
+piece of work.  Recommended next lever: **E1**, starting with the by-value-aggregate
+PARAM sub-family (clearest fix direction, several corpus fixtures).  The invariant held
+throughout this session's landings: default `2188 passed, 0 failed` (flag-off byte-
+identical), flag-on sweep clean.
 
 ---
 
