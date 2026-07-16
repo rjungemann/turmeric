@@ -717,22 +717,31 @@ runtime mismatch. Landed four soundness fixes, all gated:
    fn-value's concrete effect row is credited as a perform so the effect taints and
    the DK handler co-classifies to fiber.
 
-**Result: 268 / 274 sound, 0 build-fails.** Default suite 2185/0; E7 fixtures
-unchanged. **Three mismatches remain, each a genuine taint-completeness gap:**
+Then a 5th fix took it to **269 / 274 sound**:
 
-- `effect-poly-infer` -- an effectful LAMBDA is CPS-emitted (DK) but USED AS A
-  VALUE; its direct entry, invoked indirectly, installs a fresh DK root, so its
-  `perform` escapes. Fix: an effectful fn *used as a fn-value* (a lambda, or an
-  address-taken named fn) must EVICT to fiber so its effect taints and the handler
-  co-evicts. (A name-prefix `__fn` heuristic is tempting but risks regressing
-  effectful lambdas that currently work; needs a proper "address-taken" analysis.)
+5. **An effectful lifted lambda evicts to fiber.** A captureless lifted lambda
+   (`Binding.is_lifted_lambda`) is ALWAYS used as a fn-value; its DK direct-entry,
+   invoked indirectly, installs a fresh root, so a CPS-emitted effectful lambda's
+   `perform` escapes (`effect-poly-infer`: `(apply (fn [v] (do (perform (Log ..))
+   v)) x)` -> unhandled effect). Now, in `ensure_S`, an effectful lifted lambda is
+   `candidate=false + sig_perm` -- a fiber source, so its effect taints and the DK
+   handler-installer co-classifies to fiber (the lambda's fiber perform is then
+   caught by dynamic lookup). Verified: `effect-poly-infer` matches baseline;
+   `effect-poly-map` + E7 fixtures unchanged.
+
+**Result: 269 / 274 sound, 0 build-fails.** Default suite 2185/0; E7 fixtures
+unchanged. **Two mismatches remain, both the same taint-completeness gap:**
+
 - `fiber-effect`, `p19-8-fiber-effect-chain` -- CONCURRENCY fibers (`spawn`) mixed
   with effects. A handle DK-lowers while an effect is performed inside a spawned
   fiber, which the taint model does not co-classify across the fiber boundary.
 
 These are the last flag-on escapes; they gate promotion and are the concrete
 next-session targets (alongside the fat-closure `__fn_cps` E2 ABI, which is what
-would let these paths thread the DK instead of merely evicting).
+would let effectful fn-values thread the DK instead of merely evicting). The
+remaining "used as a fn-value" gap beyond lambdas -- an *address-taken NAMED*
+effectful fn -- is not exercised by the current corpus but needs the same
+`sig_perm` treatment via a program-wide address-taken scan when it arises.
 
 ---
 
