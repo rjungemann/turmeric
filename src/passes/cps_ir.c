@@ -2809,6 +2809,28 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         case EX_CALL: {
             /* E2/taint-completeness: evict an effectful fn-value call (see cps_tail). */
             if (g_opt_cps_tramp_resume && call_is_effectful_fnvalue(e)) {
+                /* E2a tier-`nontail`: a thread-param call in BIND position threads the
+                 * DK by reifying the continuation `rest` as a heap join `j(x)` and
+                 * threading it to the fn-value's __cps (via the registry).  Same shape
+                 * as a colored-callee non-tail call (below), but via_registry. */
+                const Binding *pf = e->as.call_.fn_binding;
+                if (pf && cps_ir_thread_param_has(pf) && call_args_atomic(e)) {
+                    Pending pp = {0};
+                    uint32_t n = e->as.call_.n_args;
+                    CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                    for (uint32_t i = 0; i < n; i++)
+                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                    CVar j = fresh_cvar(b, x.type);
+                    j.name = arena_strdup(b->a, "j", 1);
+                    CTerm *call = new_term(b, CT_TAILCALL);
+                    call->as.tailcall.fn = pf; call->as.tailcall.args = args;
+                    call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
+                    call->as.tailcall.via_registry = true;
+                    CTerm *t = new_term(b, CT_LETCONT);
+                    t->as.letcont.j = j; t->as.letcont.param = x;
+                    t->as.letcont.jbody = rest; t->as.letcont.body = call;
+                    return fold_pending(b, &pp, t);
+                }
                 CTerm *t = new_term(b, CT_UNSUPPORTED);
                 t->as.unsupported.why = "effectful fn-value call (E2 pending)";
                 return t;

@@ -1173,14 +1173,23 @@ Each slice below sits on top of the landed tier-`now` machinery (registry, color
 `via_registry` tailcall, E2a-pass atom admission), gated by the same coloring +
 sweep.  Ordered by tractability, with the specific new work each needs:
 
-1. **tier `nontail`** -- a non-tail fn-value call (`(do (f x) rest)`, `(+ (f) (f))`).
-   New work: the CPS pass produces a `CT_LETCONT { j, jbody=rest, body=via_registry
-   CT_TAILCALL(kont=KK_VAR j) }` (exactly the colored-callee non-tail shape at
-   `cps_bind`:2842), and `letcont_is_heap_join` + `emit_heap_join` must recognize a
-   `via_registry` callee and thread the reified join frame (`dk_frame(j, env, __kont)`)
-   to `__tur_cps_lookup(f)` instead of `__kont`.  Contained but multi-piece.  NOTE:
-   the corpus nontail cases (`run-twice` etc.) are ALSO handler-in-`main`, so this
-   slice moves only synthetic fixtures until E3' lands -- verify with a helper fixture.
+1. **tier `nontail`** -- a non-tail fn-value call (`{(f) * 2} + base`) -- **LANDED
+   (handle-free HOF).**  The CPS pass produces a `CT_LETCONT { j, jbody=rest,
+   body=via_registry CT_TAILCALL(kont=KK_VAR j) }` (the colored-callee non-tail shape
+   at `cps_bind`), `letcont_is_heap_join` admits a `via_registry` body, and
+   `emit_heap_join` threads the reified join frame to `__tur_cps_lookup(f)` instead of
+   `<fn>__cps`.  Result: `cps-backend-effectful-callback` (`apply-cb [f base] {{(f) *
+   2} + base}`, handler in helper `run`) now threads its non-tail call -- zero fiber
+   performs, prints `27`.  Regression fixture `cps-tramp-resume-e2a-fnvalue-nontail`.
+   Flag-on sweep 187/0/0.
+   REMAINING refinement -- a non-tail fn-value call inside a HOF that ALSO installs a
+   `handle` (`use-writer [f] (let [n (handle (g)...)] (do (f "hi") n))`) sits in the
+   handle's LIFTED continuation frame, which does not capture the fn-value param, so
+   the threaded `__tur_cps_lookup(f)` references an out-of-scope `f` (build error).
+   GUARDED for now: `param_thread_class` tiers such a param `PT_E1` (via
+   `expr_has_handle(fd->body)`), so it stays fiber.  The fix is to make the capture
+   collector (`collect_caps`/`has_capture_rec`) carry a `via_registry` tailcall's
+   callee as a captured var so the lifted frame's env holds `f`.
 2. **named address-taken fns** (not just lifted lambdas).  New work: a no-direct-
    escaping-call guard -- a lambda is never called directly so relaxing it is
    automatically safe, but a named fn CAN be `(cb x)`-called under a handle, whose

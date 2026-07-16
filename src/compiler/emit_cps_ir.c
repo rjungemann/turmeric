@@ -2368,7 +2368,9 @@ static bool letcont_is_heap_join(const CTerm *t) {
     return b && b->kind == CT_TAILCALL
         && b->as.tailcall.kont.kind == KK_VAR
         && b->as.tailcall.kont.id == t->as.letcont.j.id
-        && binding_in_s(b->as.tailcall.fn);
+        /* colored callee threads `<fn>__cps`, OR (E2a tier-`nontail`) a fn-value
+         * callee threads via the registry -- both reify this join as a DK frame. */
+        && (binding_in_s(b->as.tailcall.fn) || b->as.tailcall.via_registry);
 }
 
 /* A heap-join jbody is lowered into a value-transform frame fn `(env, value)`
@@ -2937,7 +2939,17 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
         const struct EffectRow *pr = p->type.as.fn.effect_row;
         if (!pr || pr->kind != ERK_CONCRETE) return PT_E1;
     }
-    if (ntc > 0)        return PT_NONTAIL;           /* a non-tail fn-value call */
+    if (ntc > 0) {
+        /* A non-tail fn-value call inside a HOF that ALSO installs a `handle` sits in
+         * the handle's LIFTED continuation frame, which does not capture the fn-value
+         * param -- the threaded `__tur_cps_lookup(f)` call would reference an
+         * out-of-scope `f`.  Threading it needs the capture collector to carry the
+         * via_registry callee (a later refinement); until then tier it PT_E1 so the
+         * concrete nontail slice skips it.  A handle-free HOF has its non-tail call in
+         * its direct body, where the param is in scope. */
+        if (g_opt_cps_tramp_resume && expr_has_handle(fd->body)) return PT_E1;
+        return PT_NONTAIL;                            /* a non-tail fn-value call */
+    }
     return PT_NOW;                                    /* tail-only, scalar carrier */
 }
 
@@ -3245,8 +3257,11 @@ static void ensure_S(const Expr *program) {
             if (!(lo || hi)) continue;   /* only effectful fn-values keep the fiber alive */
             int total = 0, ok = 0, tier = 0;
             bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
-            /* E2a: a tier-`now` concrete captureless lambda is threaded onto the DK. */
-            if (thr && tier == (int)PT_NOW && fd->binding->is_lifted_lambda)
+            /* E2a: a concrete captureless lambda is threaded onto the DK -- tier
+             * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
+             * heap-join frame threaded to its __cps). */
+            if (thr && (tier == (int)PT_NOW || tier == (int)PT_NONTAIL)
+                && fd->binding->is_lifted_lambda)
                 threadable_add(fd->binding);
             if (trace) {
                 const char *nm = fd->binding->name ? fd->binding->name->name : "?";
@@ -3262,10 +3277,12 @@ static void ensure_S(const Expr *program) {
             Expr *it = program->as.program.items[i];
             if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
             FnDef *fd = it->as.fn_def_.fn;
-            for (uint32_t pi = 0; pi < fd->n_params; pi++)
-                if (param_thread_class(fd, pi) == PT_NOW
+            for (uint32_t pi = 0; pi < fd->n_params; pi++) {
+                PtClass pc = param_thread_class(fd, pi);
+                if ((pc == PT_NOW || pc == PT_NONTAIL)
                     && param_is_thread_safe(program, fd, pi))
                     cps_ir_thread_param_add(fd->params[pi]);
+            }
         }
     }
 
@@ -4480,7 +4497,20 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     }
     free(xn);
 
-    if (call->as.tailcall.n)
+    if (call->as.tailcall.via_registry) {
+        /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
+         * join `frame` to its CPS entry recovered from the registry. */
+        char cast[512]; int coff = snprintf(cast, sizeof cast, "int64_t (*)(");
+        for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
+            coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
+        snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
+        if (call->as.tailcall.n)
+            ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value heap join */",
+                    cast, fn, argv, frame);
+        else
+            ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value heap join */",
+                    cast, fn, frame);
+    } else if (call->as.tailcall.n)
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
     else
         ce_line(ce, "return %s__cps(%s); /* cps->cps heap join */", fn, frame);
