@@ -1,0 +1,25 @@
+;; cps-tramp-resume: a while-loop in a HANDLE's CONTINUATION reads loop-invariant
+;; free vars (a fn param `base`, the handle result `n`) that are not loop-carried.
+;; The loop helper must thread those invariants as extra params (entry + each
+;; back-edge).  Regression guard for
+;; docs/reported/cps-loop-in-handle-continuation-invariant-threading.md.
+;;
+;; g performs E, handled to resume 3 -> n=3; the loop adds base (10) n times to
+;; acc(=base): 10 + 10*3 = 40.
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [base : int] : int
+  (let [n (handle (g) (E [] k) (resume k 3))]
+    (let [^mut acc base]
+      (let [^mut i 0]
+        (while (< i n)
+          (set! acc (+ acc base))
+          (set! i (+ i 1)))
+        acc))))
+
+(defn main [] : int
+  (println (f 10))
+  0)

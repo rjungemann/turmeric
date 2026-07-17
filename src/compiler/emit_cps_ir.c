@@ -771,6 +771,16 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
         case CT_CONTINUE:   /* cps-while-native: back-edge args are captures like a tailcall's */
             for (uint32_t i = 0; i < t->as.cont_.n; i++) CC_ATOM(&t->as.cont_.args[i]);
             return false;
+        case CT_LOOP: {
+            /* cps-while-native: a CT_LOOP in a lifted continuation (e.g. a while
+             * loop in a handle's continuation) captures its init atoms and the
+             * outer vars its body reads; the loop-carried params are bound. */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++) CC_ATOM(&t->as.loop.inits[i]);
+            uint32_t nnb = nb;
+            for (uint32_t i = 0; i < t->as.loop.n_params && nnb < CC_MAX_BOUND; i++)
+                if (t->as.loop.params[i].bind) bound[nnb++] = t->as.loop.params[i].bind->id;
+            return has_capture_rec(t->as.loop.body, exclude, bound, nnb);
+        }
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
@@ -986,6 +996,17 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
         case CT_CONTINUE:   /* cps-while-native: back-edge args, like a tailcall */
             for (uint32_t i = 0; i < t->as.cont_.n; i++) COL_ATOM(&t->as.cont_.args[i]);
             return;
+        case CT_LOOP: {
+            /* cps-while-native: mirror has_capture_rec's CT_LOOP -- collect the
+             * init atoms + the outer vars the loop body reads; bind the carried
+             * params.  Lets a while loop in a handle continuation collect its
+             * captures instead of bailing (cs->ok = false). */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++) COL_ATOM(&t->as.loop.inits[i]);
+            uint32_t nnb = nb;
+            for (uint32_t i = 0; i < t->as.loop.n_params && nnb < CC_MAX_BOUND; i++)
+                if (t->as.loop.params[i].bind) bound[nnb++] = t->as.loop.params[i].bind->id;
+            collect_caps_rec(t->as.loop.body, exclude, bound, nnb, cs); return;
+        }
         case CT_IF:
             COL_ATOM(&t->as.if_.cond);
             collect_caps_rec(t->as.if_.then_, exclude, bound, nb, cs);
@@ -4009,6 +4030,12 @@ typedef struct {
     const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
                                 * so a CT_CONTINUE back-edge (possibly inside a lifted
                                 * handle continuation) re-enters it. */
+    const char *cur_loop_inv;  /* cps-while-native: CSV of the enclosing loop's
+                                * loop-INVARIANT extra args (free vars the loop body
+                                * reads that are not carried params -- e.g. a fn param
+                                * or handle result read by a loop in a handle
+                                * continuation).  Appended, unchanged, after the
+                                * carried args at each back-edge.  NULL if none. */
     const char *fn_cn;       /* enclosing function's mangled name (helper naming) */
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
@@ -4907,11 +4934,42 @@ static void emit_loop(CE *ce, const CTerm *t) {
     snprintf(lname, sizeof(lname), "%s_loop%d", ce->fn_cn, id);
     uint32_t np = t->as.loop.n_params;
 
+    /* cps-while-native: collect the loop body's loop-INVARIANT free vars -- source
+     * vars/CVars it reads that are NOT loop-carried params (e.g. a fn param or a
+     * handle result a loop in a handle continuation reads).  They thread as extra
+     * helper params, passed unchanged on every back-edge.  A collect bail
+     * (cs->ok=false) falls back to no-extras (prior behaviour). */
+    CapSet inv; inv.n = 0; inv.ok = true;
+    {
+        uint32_t bnd[CC_MAX_BOUND]; uint32_t nbnd = 0;
+        for (uint32_t i = 0; i < np && nbnd < CC_MAX_BOUND; i++)
+            if (t->as.loop.params[i].bind) bnd[nbnd++] = t->as.loop.params[i].bind->id;
+        collect_caps_rec(t->as.loop.body, UINT32_MAX, bnd, nbnd, &inv);
+        if (!inv.ok) inv.n = 0;
+    }
+    /* Shared name CSV: helper params, entry-call args, and back-edge args all name
+     * the invariants identically (name_for_binding / cvname), since each is in
+     * scope at the entry site and a param inside the helper. */
+    char *inv_names = NULL;
+    if (inv.n > 0) {
+        Buf nbuf; buf_init(&nbuf);
+        for (int i = 0; i < inv.n; i++) {
+            char *cn = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i]) : strdup(inv.cvname[i]);
+            buf_printf(&nbuf, "%s%s", i ? ", " : "", cn);
+            free(cn);
+        }
+        buf_putc(&nbuf, '\0');
+        inv_names = strdup(nbuf.data);
+        buf_free(&nbuf);
+    }
+
     /* 1. Forward declaration (before nested helpers reference it). */
     buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
     for (uint32_t i = 0; i < np; i++)
         buf_printf(ce->helpers, "%s, ",
                    binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type));
+    for (int i = 0; i < inv.n; i++)
+        buf_printf(ce->helpers, "%s, ", cap_ctype(ce->ctx, &inv, i));
     buf_puts(ce->helpers, "DK *);\n");
 
     /* 2. Emit the loop body into a temp buffer; nested handle/reset helpers
@@ -4923,6 +4981,7 @@ static void emit_loop(CE *ce, const CTerm *t) {
     hc.n_joins = 0;
     hc.cur_k = "__kont";
     hc.cur_loop_name = lname;
+    hc.cur_loop_inv = inv_names;
     hc.shift_mode = false;
     hc.ret_mode = false;
     hc.handler_case_mode = false;
@@ -4944,19 +5003,30 @@ static void emit_loop(CE *ce, const CTerm *t) {
                    binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type), pn);
         free(pn);
     }
+    for (int i = 0; i < inv.n; i++) {
+        char *cn = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i]) : strdup(inv.cvname[i]);
+        buf_printf(ce->helpers, "%s %s, ", cap_ctype(ce->ctx, &inv, i), cn);
+        free(cn);
+    }
     buf_puts(ce->helpers, "DK *__kont) {\n");
     buf_puts(ce->helpers, tmp.data);
     buf_puts(ce->helpers, "}\n");
     buf_free(&tmp);
 
-    /* 4. The loop entry: tail-call the helper with the entry values, threading the
-     * enclosing continuation (KK_RET -> this fn's __kont, KK_PROMPT -> cur_k). */
+    /* 4. The loop entry: tail-call the helper with the entry values (+ invariants),
+     * threading the enclosing continuation (KK_RET -> this fn's __kont, KK_PROMPT
+     * -> cur_k). */
     char *argv = atoms_csv(ce, t->as.loop.inits, np);
     const char *thread = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
-    if (np)
+    if (np && inv_names)
+        ce_line(ce, "return %s__cps(%s, %s, %s); /* cps-while-native loop entry */", lname, argv, inv_names, thread);
+    else if (np)
         ce_line(ce, "return %s__cps(%s, %s); /* cps-while-native loop entry */", lname, argv, thread);
+    else if (inv_names)
+        ce_line(ce, "return %s__cps(%s, %s); /* cps-while-native loop entry */", lname, inv_names, thread);
     else
         ce_line(ce, "return %s__cps(%s); /* cps-while-native loop entry */", lname, thread);
+    free(inv_names);
     free(argv);
 }
 
@@ -4966,12 +5036,16 @@ static void emit_loop(CE *ce, const CTerm *t) {
  * as env->__k). */
 static void emit_continue(CE *ce, const CTerm *t) {
     char *argv = atoms_csv(ce, t->as.cont_.args, t->as.cont_.n);
-    if (t->as.cont_.n)
-        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */",
-                ce->cur_loop_name ? ce->cur_loop_name : "0", argv);
+    const char *inv = ce->cur_loop_inv;   /* loop-invariant extra args, unchanged */
+    const char *lname = ce->cur_loop_name ? ce->cur_loop_name : "0";
+    if (t->as.cont_.n && inv)
+        ce_line(ce, "return %s__cps(%s, %s, __kont); /* cps-while-native back-edge */", lname, argv, inv);
+    else if (t->as.cont_.n)
+        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */", lname, argv);
+    else if (inv)
+        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */", lname, inv);
     else
-        ce_line(ce, "return %s__cps(__kont); /* cps-while-native back-edge */",
-                ce->cur_loop_name ? ce->cur_loop_name : "0");
+        ce_line(ce, "return %s__cps(__kont); /* cps-while-native back-edge */", lname);
     free(argv);
 }
 
