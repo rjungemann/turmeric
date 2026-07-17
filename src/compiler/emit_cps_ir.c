@@ -446,7 +446,8 @@ static const CTerm *first_unsupported(const CTerm *t) {
         case CT_RESUME:   return first_unsupported(t->as.resume.body);
         case CT_CLONEABLE: return first_unsupported(t->as.cloneable.body);
         case CT_CALLCC:   return first_unsupported(t->as.callcc.body);
-        default: return NULL;   /* CT_APPCONT / CT_TAILCALL: leaves */
+        case CT_LOOP:     return first_unsupported(t->as.loop.body);
+        default: return NULL;   /* CT_APPCONT / CT_TAILCALL / CT_CONTINUE: leaves */
     }
 }
 
@@ -756,6 +757,9 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.callcc.x.id;
             return has_capture_rec(t->as.callcc.body, exclude, bound, nb + 1);
         }
+        case CT_CONTINUE:   /* cps-while-native: back-edge args are captures like a tailcall's */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) CC_ATOM(&t->as.cont_.args[i]);
+            return false;
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
@@ -936,6 +940,9 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
+            return;
+        case CT_CONTINUE:   /* cps-while-native: back-edge args, like a tailcall */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) COL_ATOM(&t->as.cont_.args[i]);
             return;
         case CT_IF:
             COL_ATOM(&t->as.if_.cond);
@@ -1319,6 +1326,11 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
                         return false;
                 return joins_closed_rec(t->as.handle.body, def, nd);
             }
+        /* cps-while-native: a back-edge references the loop helper, not a join; a
+         * CT_LOOP's internal joins are a separate scope (checked when its own body
+         * is admitted).  Neither leaves an outer join open here. */
+        case CT_CONTINUE: return true;
+        case CT_LOOP:     return true;
         default: return false;
     }
 }
@@ -1942,6 +1954,24 @@ static bool term_core_ok(const CTerm *t) {
              * slot-representable call/cc result and a core continuation body. */
             return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
                 && term_core_ok(t->as.callcc.body);
+        case CT_LOOP: {
+            /* cps-while-native: the loop-carried params + entry atoms must be
+             * slot-representable, and the loop body (a CT_IF around the interior
+             * handle + back-edge) admissible. */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!(slot_ok_t(t->as.loop.params[i].type, t->as.loop.params[i].ty)
+                      || t->as.loop.params[i].ty == TY_NIL))
+                    return false;
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!atom_ok(&t->as.loop.inits[i])) return false;
+            return term_core_ok(t->as.loop.body);
+        }
+        case CT_CONTINUE:
+            /* The back-edge args ride the recursive `__cps` call like tail-call
+             * args -- each must be slot-representable. */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!atom_ok(&t->as.cont_.args[i])) return false;
+            return true;
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -3885,6 +3915,8 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
              * it is transparent to effect co-classification -- recurse the body
              * (matching the prior CT_LETRAW-delegated behavior). */
             return is_cps_island(t->as.callcc.body, handled, nh);
+        case CT_LOOP:     return is_cps_island(t->as.loop.body, handled, nh);
+        case CT_CONTINUE: return true;
         case CT_RESET:
         case CT_SHIFT:
         default:
@@ -3905,6 +3937,9 @@ typedef struct {
     struct { uint32_t id; const char *param; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
+    const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
+                                * so a CT_CONTINUE back-edge (possibly inside a lifted
+                                * handle continuation) re-enters it. */
     const char *fn_cn;       /* enclosing function's mangled name (helper naming) */
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
@@ -4037,6 +4072,8 @@ static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
+static void emit_loop(CE *ce, const CTerm *t);       /* cps-while-native */
+static void emit_continue(CE *ce, const CTerm *t);   /* cps-while-native */
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr);
 static char *cvar_cname(CE *ce, CVar x);
 
@@ -4278,6 +4315,8 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_LETRAW:  emit_letraw(ce, t); break;
         case CT_CLONEABLE: emit_cloneable(ce, t); break;
         case CT_CALLCC:  emit_callcc(ce, t); break;
+        case CT_LOOP:    emit_loop(ce, t); break;
+        case CT_CONTINUE: emit_continue(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -4435,6 +4474,8 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             emit_binder_decls(ce, t->as.callcc.body);
             break;
         }
+        case CT_LOOP:     break;   /* cps-while-native: loop body decls live in the helper fn */
+        case CT_CONTINUE: break;   /* terminal back-edge -- no binders */
         default: break;
     }
 }
@@ -4781,6 +4822,88 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     else
         ce_line(ce, "return %s__cps(%s); /* cps->cps heap join */", fn, frame);
     free(fn); free(argv);
+}
+
+/* ---- cps-while-native: CT_LOOP / CT_CONTINUE ------------------------------ *
+ * A CT_LOOP emits a synthesized tail-recursive colored helper
+ * `<fn>_loop<id>__cps(<params>, DK *__kont)` at file scope (into ce->helpers,
+ * like emit_lifted's helpers) whose body is the loop's CT_IF; a CT_CONTINUE
+ * back-edge re-enters it.  The helper is FORWARD-declared first so both its own
+ * self-recursion and the interior handle's lifted continuation (which carries the
+ * back-edge) can call it before its definition appears in the buffer.  At the loop
+ * site, the caller emits `return <helper>__cps(<inits>, <thread>)`. */
+static void emit_loop(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char lname[256];
+    snprintf(lname, sizeof(lname), "%s_loop%d", ce->fn_cn, id);
+    uint32_t np = t->as.loop.n_params;
+
+    /* 1. Forward declaration (before nested helpers reference it). */
+    buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
+    for (uint32_t i = 0; i < np; i++)
+        buf_printf(ce->helpers, "%s, ",
+                   binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type));
+    buf_puts(ce->helpers, "DK *);\n");
+
+    /* 2. Emit the loop body into a temp buffer; nested handle/reset helpers
+     * accumulate into ce->helpers ahead of the loop helper definition. */
+    Buf tmp; buf_init(&tmp);
+    CE hc = *ce;
+    hc.out = &tmp;
+    hc.indent = 4;
+    hc.n_joins = 0;
+    hc.cur_k = "__kont";
+    hc.cur_loop_name = lname;
+    hc.shift_mode = false;
+    hc.ret_mode = false;
+    hc.handler_case_mode = false;
+    hc.case_tail_resume = false;
+    /* The exit arm delivers the live-after var to the helper's KK_RET; its
+     * crossing type matches what the caller's continuation expects. */
+    hc.ret_ty = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_ty : ce->ret_ty;
+    emit_binder_decls(&hc, t->as.loop.body);
+    emit_term(&hc, t->as.loop.body);
+    buf_putc(&tmp, '\0');
+
+    /* 3. Emit the helper definition. */
+    buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
+    for (uint32_t i = 0; i < np; i++) {
+        char *pn = t->as.loop.params[i].bind
+            ? name_for_binding(ce->ctx, t->as.loop.params[i].bind)
+            : strdup(t->as.loop.params[i].name);
+        buf_printf(ce->helpers, "%s %s, ",
+                   binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type), pn);
+        free(pn);
+    }
+    buf_puts(ce->helpers, "DK *__kont) {\n");
+    buf_puts(ce->helpers, tmp.data);
+    buf_puts(ce->helpers, "}\n");
+    buf_free(&tmp);
+
+    /* 4. The loop entry: tail-call the helper with the entry values, threading the
+     * enclosing continuation (KK_RET -> this fn's __kont, KK_PROMPT -> cur_k). */
+    char *argv = atoms_csv(ce, t->as.loop.inits, np);
+    const char *thread = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+    if (np)
+        ce_line(ce, "return %s__cps(%s, %s); /* cps-while-native loop entry */", lname, argv, thread);
+    else
+        ce_line(ce, "return %s__cps(%s); /* cps-while-native loop entry */", lname, thread);
+    free(argv);
+}
+
+/* The loop back-edge: re-enter the enclosing loop helper with the next-iteration
+ * values (the $next CVars a set! bound), threading this frame's own continuation
+ * (__kont -- the loop helper's k, reachable inside a lifted handle continuation
+ * as env->__k). */
+static void emit_continue(CE *ce, const CTerm *t) {
+    char *argv = atoms_csv(ce, t->as.cont_.args, t->as.cont_.n);
+    if (t->as.cont_.n)
+        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */",
+                ce->cur_loop_name ? ce->cur_loop_name : "0", argv);
+    else
+        ce_line(ce, "return %s__cps(__kont); /* cps-while-native back-edge */",
+                ce->cur_loop_name ? ce->cur_loop_name : "0");
+    free(argv);
 }
 
 /* N6.3: emit the alloc+populate of a lifted continuation's env (the body's

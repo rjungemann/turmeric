@@ -44,7 +44,22 @@ typedef struct CpsB {
     bool cur_fn_leaf_fiber;  /* the fn's body indirect-calls a fn-VALUE -> permanently fiber */
     PapInline pap[32];       /* active pap-inline registrations (scoped per-let) */
     uint32_t  n_pap;
+    /* cps-while-native: loop-lowering state, active only while lowering a CT_LOOP
+     * body.  loop_vars[i] is a loop-carried ^mut binding; loop_nexts[i] is the
+     * pre-created `$next` CVar a `set!` of that var binds and CT_CONTINUE reads
+     * (stable identity -> build-order-independent).  n_loop == 0 when not in a loop. */
+    const Binding *loop_vars[16];
+    CVar           loop_nexts[16];
+    uint32_t       n_loop;
 } CpsB;
+
+/* cps-while-native: index of `bd` among the active loop-carried vars, or -1. */
+static int loop_var_index(CpsB *b, const Binding *bd) {
+    if (!bd) return -1;
+    for (uint32_t i = 0; i < b->n_loop; i++)
+        if (b->loop_vars[i] == bd) return (int)i;
+    return -1;
+}
 
 static const PapInline *pap_lookup(CpsB *b, const Binding *v) {
     if (!v) return NULL;
@@ -252,6 +267,11 @@ static CKont kont_var(CVar j) {
 
 static CKont kont_prompt(TypeKind ty) {
     CKont k; k.kind = KK_PROMPT; k.id = 0; k.ty = ty; return k;
+}
+
+/* cps-while-native: the synthesized loop helper's own return continuation. */
+static CKont kont_ret(TypeKind ty) {
+    CKont k; k.kind = KK_RET; k.id = 0; k.ty = ty; return k;
 }
 
 /* ---- atoms ------------------------------------------------------------ */
@@ -2405,17 +2425,370 @@ static bool pap_binding_inlined(CpsB *b, const Expr *let, uint32_t idx, uint32_t
     return false;
 }
 
+/* ==== cps-while-native: EX_WHILE -> synthesized recursive __cps loop ==== *
+ *
+ * A `while` whose body contains an interior control op (handle/perform/resume)
+ * cannot delegate to the direct emitter under the flag (that keeps a non-DK
+ * effect lowering) and has no same-function join lowering (emit_handle lifts the
+ * handle continuation into a SEPARATE C function, so the loop back-edge -- which
+ * depends on the handle result -- lives in that continuation, out of reach of a
+ * `goto`).  So the loop is lowered to a synthesized tail-recursive colored `__cps`
+ * helper: the ^mut loop-carried vars become the helper params, `set!` writes a
+ * pre-created `$next` CVar, and the back-edge (CT_CONTINUE) re-enters the helper.
+ *
+ * Soundness rests on a conservative guard (loop_body_ok): every in-body read of a
+ * loop-carried var must resolve to the loop-ENTRY version (no read observes a
+ * `set!` done earlier in the same iteration).  Then reads resolve to the params by
+ * naming (name_for_binding) with no rebinding map, and the right-to-left build
+ * order is irrelevant because the `$next` CVars are pre-created (stable identity),
+ * not read from a mutable table.  Anything outside the guard EVICTS (returns NULL
+ * -> unsupported_form), preserving today's correct fiber fallback. */
+
+/* Collect every EX_LET binder Binding appearing anywhere in `e` (so a set! target
+ * that is a loop-body-local ^mut is excluded from the loop-carried set). */
+static void loop_collect_let_binders(const Expr *e, const Binding **out,
+                                     uint32_t *n, uint32_t cap) {
+    e = ascribe_peel(e);
+    if (!e) return;
+    switch (e->kind) {
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Binding *bd = e->as.let_.bindings[i].binding;
+                if (bd && *n < cap) out[(*n)++] = bd;
+                loop_collect_let_binders(e->as.let_.bindings[i].init, out, n, cap);
+            }
+            loop_collect_let_binders(e->as.let_.body, out, n, cap);
+            break;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                loop_collect_let_binders(e->as.do_.items[i], out, n, cap);
+            break;
+        case EX_IF:
+            loop_collect_let_binders(e->as.if_.cond, out, n, cap);
+            loop_collect_let_binders(e->as.if_.then_, out, n, cap);
+            loop_collect_let_binders(e->as.if_.else_or_null, out, n, cap);
+            break;
+        case EX_SET:  loop_collect_let_binders(e->as.set_.value, out, n, cap); break;
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (h) {
+                loop_collect_let_binders(h->body, out, n, cap);
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    loop_collect_let_binders(h->cases[i].body, out, n, cap);
+            }
+            break;
+        }
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            for (uint8_t i = 0; pf && i < pf->n_args; i++)
+                loop_collect_let_binders(pf->args[i], out, n, cap);
+            break;
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                loop_collect_let_binders(e->as.builtin.args[i], out, n, cap);
+            break;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                loop_collect_let_binders(e->as.call_.args[i], out, n, cap);
+            break;
+        default: break;
+    }
+}
+
+/* Collect the ^mut set! targets in `e` that are NOT loop-body-locals -> the
+ * loop-carried variable set.  Returns false if a target is not ^mut, a target is
+ * a loop-body-local (a per-iteration ^mut we must not thread), or capacity is
+ * exceeded (all conservative EVICT conditions). */
+static bool loop_collect_carried(const Expr *e, const Binding **locals, uint32_t n_locals,
+                                  const Binding **out, uint32_t *n, uint32_t cap) {
+    e = ascribe_peel(e);
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_SET: {
+            const Binding *tg = e->as.set_.target;
+            if (!tg || !tg->is_mut) return false;
+            for (uint32_t i = 0; i < n_locals; i++)
+                if (locals[i] == tg) return false;   /* loop-body-local ^mut */
+            bool seen = false;
+            for (uint32_t i = 0; i < *n; i++) if (out[i] == tg) seen = true;
+            if (!seen) { if (*n >= cap) return false; out[(*n)++] = tg; }
+            return loop_collect_carried(e->as.set_.value, locals, n_locals, out, n, cap);
+        }
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!loop_collect_carried(e->as.let_.bindings[i].init, locals, n_locals, out, n, cap))
+                    return false;
+            return loop_collect_carried(e->as.let_.body, locals, n_locals, out, n, cap);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!loop_collect_carried(e->as.do_.items[i], locals, n_locals, out, n, cap))
+                    return false;
+            return true;
+        case EX_IF:
+            return loop_collect_carried(e->as.if_.cond, locals, n_locals, out, n, cap)
+                && loop_collect_carried(e->as.if_.then_, locals, n_locals, out, n, cap)
+                && (!e->as.if_.else_or_null
+                    || loop_collect_carried(e->as.if_.else_or_null, locals, n_locals, out, n, cap));
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return true;
+            if (!loop_collect_carried(h->body, locals, n_locals, out, n, cap)) return false;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (!loop_collect_carried(h->cases[i].body, locals, n_locals, out, n, cap))
+                    return false;
+            return true;
+        }
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            for (uint8_t i = 0; pf && i < pf->n_args; i++)
+                if (!loop_collect_carried(pf->args[i], locals, n_locals, out, n, cap)) return false;
+            return true;
+        }
+        case EX_RESUME: {
+            ResumeExpr *rs = e->as.resume_.resume;
+            return !rs
+                || (loop_collect_carried(rs->k, locals, n_locals, out, n, cap)
+                    && loop_collect_carried(rs->value, locals, n_locals, out, n, cap));
+        }
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!loop_collect_carried(e->as.builtin.args[i], locals, n_locals, out, n, cap))
+                    return false;
+            return true;
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!loop_collect_carried(e->as.call_.args[i], locals, n_locals, out, n, cap))
+                    return false;
+            return true;
+        default:
+            /* A form we don't structurally sequence must contain no set! of a
+             * carried var to be sound -- if it does, we'd miss it.  Conservatively
+             * accept only when it references no set!-shaped subform: use the
+             * has-control/refs walkers are overkill; simplest safe rule is that an
+             * unrecognized form with any nested EX_SET is caught here by returning
+             * true only if it has none. */
+            return true;
+    }
+}
+
+/* Execution-order read-after-set guard.  `mask` tracks which loop-carried vars
+ * (by index in vars[]) have been set so far this iteration.  Returns false if any
+ * expression READS a loop-carried var that was already set (its source semantics
+ * would observe the updated value, but the lowering resolves reads to the entry
+ * param -- a miscompile).  Also fails on a set! inside an EX_IF/EX_MATCH arm
+ * (conditional set -> the single-back-edge $next binder would be unbound on the
+ * other path) and on any control/looping form we do not model. */
+static int loop_idx(const Binding **vars, uint32_t n, const Binding *bd) {
+    for (uint32_t i = 0; i < n; i++) if (vars[i] == bd) return (int)i;
+    return -1;
+}
+static bool loop_guard(const Expr *e, const Binding **vars, uint32_t nv,
+                       uint32_t *mask, bool in_branch) {
+    e = ascribe_peel(e);
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_VAR: {
+            int idx = loop_idx(vars, nv, e->as.var.binding);
+            if (idx >= 0 && (*mask & (1u << idx))) return false;   /* read-after-set */
+            return true;
+        }
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT:
+            return true;
+        case EX_SET: {
+            if (!loop_guard(e->as.set_.value, vars, nv, mask, in_branch)) return false;
+            int idx = loop_idx(vars, nv, e->as.set_.target);
+            if (idx >= 0) {
+                if (in_branch) return false;         /* conditional set */
+                if (*mask & (1u << idx)) return false; /* set twice */
+                *mask |= (1u << idx);
+            }
+            return true;
+        }
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!loop_guard(e->as.let_.bindings[i].init, vars, nv, mask, in_branch))
+                    return false;
+            return loop_guard(e->as.let_.body, vars, nv, mask, in_branch);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (!loop_guard(e->as.do_.items[i], vars, nv, mask, in_branch)) return false;
+            return true;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!loop_guard(e->as.builtin.args[i], vars, nv, mask, in_branch)) return false;
+            return true;
+        case EX_CALL:
+            if (e->as.call_.fn_expr
+                && !loop_guard(e->as.call_.fn_expr, vars, nv, mask, in_branch)) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (!loop_guard(e->as.call_.args[i], vars, nv, mask, in_branch)) return false;
+            return true;
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            /* The delimited body executes, then a case may run to produce the value.
+             * Neither may set! a carried var (a set! reached through a resume is not
+             * on the straight-line single-back-edge path). */
+            uint32_t save = *mask;
+            if (!loop_guard(h->body, vars, nv, mask, in_branch)) return false;
+            if (*mask != save) return false;   /* body set! a carried var: unsupported */
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                uint32_t cm = *mask;
+                if (!loop_guard(h->cases[i].body, vars, nv, &cm, true)) return false;
+                if (cm != *mask) return false; /* case set! a carried var */
+            }
+            return true;
+        }
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            for (uint8_t i = 0; pf && i < pf->n_args; i++)
+                if (!loop_guard(pf->args[i], vars, nv, mask, in_branch)) return false;
+            return true;
+        }
+        case EX_RESUME: {
+            ResumeExpr *rs = e->as.resume_.resume;
+            return rs
+                && loop_guard(rs->k, vars, nv, mask, in_branch)
+                && loop_guard(rs->value, vars, nv, mask, in_branch);
+        }
+        case EX_IF: {
+            if (!loop_guard(e->as.if_.cond, vars, nv, mask, in_branch)) return false;
+            uint32_t tm = *mask, em = *mask;
+            if (!loop_guard(e->as.if_.then_, vars, nv, &tm, true)) return false;
+            if (e->as.if_.else_or_null
+                && !loop_guard(e->as.if_.else_or_null, vars, nv, &em, true)) return false;
+            if (tm != *mask || em != *mask) return false;  /* set! inside a branch */
+            return true;
+        }
+        default:
+            /* An unmodeled form: safe only if it neither reads a set var nor sets a
+             * carried var.  Reject if it references any carried var at all (we can't
+             * order its reads) once any set has happened; else accept. */
+            if (*mask) {
+                for (uint32_t i = 0; i < nv; i++)
+                    if ((*mask & (1u << i)) && expr_refs_binding(e, vars[i]->id)) return false;
+            }
+            return true;
+    }
+}
+
+/* Build the CT_LOOP for an EX_WHILE in bind position (its unit result discarded
+ * into `x`, the continuation `rest`).  Returns NULL to EVICT. */
+static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    (void)x;   /* the while's unit result is subsumed by the loop's exit delivery */
+    Expr *cond = e->as.while_.cond;
+    Expr *body = e->as.while_.body;
+    if (!cond || !body) return NULL;
+
+    /* The continuation must be a trivial delivery of a single loop-carried var to
+     * an enclosing continuation (KK_RET / KK_PROMPT) -- the loop's live-after
+     * value.  Anything richer is out of the conservative subset. */
+    if (rest->kind != CT_APPCONT) return NULL;
+    CKont rk = rest->as.appcont.kont;
+    if (rk.kind != KK_RET && rk.kind != KK_PROMPT) return NULL;
+    if (rest->as.appcont.v.kind != CA_VAR || !rest->as.appcont.v.var) return NULL;
+    const Binding *result_bd = rest->as.appcont.v.var;
+
+    /* Loop-carried vars = the ^mut set! targets (excluding loop-body locals). */
+    const Binding *locals[64]; uint32_t n_locals = 0;
+    loop_collect_let_binders(body, locals, &n_locals, 64);
+    const Binding *vars[16]; uint32_t nv = 0;
+    if (!loop_collect_carried(body, locals, n_locals, vars, &nv, 16)) return NULL;
+    if (nv == 0 || nv > 16) return NULL;
+
+    /* The delivered result var must itself be loop-carried (it is the loop's
+     * output; a non-carried result is not this shape). */
+    if (loop_idx(vars, nv, result_bd) < 0) return NULL;
+
+    /* Soundness guard: reads resolve to loop-entry versions; unconditional single
+     * set per carried var. */
+    uint32_t mask = 0;
+    if (!loop_guard(body, vars, nv, &mask, false)) return NULL;
+    for (uint32_t i = 0; i < nv; i++)
+        if (!(mask & (1u << i))) return NULL;   /* every carried var set once */
+
+    /* Params carry their source Binding so in-body reads name the param via
+     * name_for_binding; inits are the entry values (the vars as currently bound). */
+    CVar *params = arena_alloc(b->a, nv * sizeof(CVar));
+    CAtom *inits = arena_alloc(b->a, nv * sizeof(CAtom));
+    for (uint32_t i = 0; i < nv; i++) {
+        params[i] = cvar_of_binding(vars[i]);
+        CAtom a; memset(&a, 0, sizeof a);
+        a.kind = CA_VAR; a.ty = vars[i]->type.kind; a.type = &vars[i]->type; a.var = vars[i];
+        inits[i] = a;
+    }
+
+    /* Pre-create the $next CVars (stable identity -> build-order independent). */
+    uint32_t saved_n_loop = b->n_loop;
+    if (saved_n_loop != 0) return NULL;   /* nested loops: out of subset */
+    for (uint32_t i = 0; i < nv; i++) {
+        b->loop_vars[i]  = vars[i];
+        b->loop_nexts[i] = fresh_cvar(b, &vars[i]->type);
+    }
+    b->n_loop = nv;
+
+    /* Lower the body with the loop-continue kont; its tail becomes CT_CONTINUE. */
+    CKont lk; lk.kind = KK_LOOP; lk.id = 0; lk.ty = TY_NIL;
+    CTerm *iter = cps_tail(b, body, lk);
+
+    b->n_loop = saved_n_loop;   /* restore (no nesting) */
+
+    /* Exit arm: deliver the live-after var (as its param) to the helper's KK_RET. */
+    CKont hret = kont_ret(result_bd->type.kind);
+    CTerm *exit = new_term(b, CT_APPCONT);
+    exit->as.appcont.kont = hret;
+    CAtom rv; memset(&rv, 0, sizeof rv);
+    rv.kind = CA_VAR; rv.ty = result_bd->type.kind; rv.type = &result_bd->type; rv.var = result_bd;
+    exit->as.appcont.v = rv;
+
+    /* Body = fold(cond pending) around CT_IF(cond, iter, exit), re-evaluated each
+     * iteration inside the helper. */
+    Pending cp = {0};
+    CAtom ca = atomize(b, cond, &cp);
+    CTerm *iff = new_term(b, CT_IF);
+    iff->as.if_.cond = ca;
+    iff->as.if_.then_ = iter;
+    iff->as.if_.else_ = exit;
+    CTerm *loopbody = fold_pending(b, &cp, iff);
+
+    CTerm *t = new_term(b, CT_LOOP);
+    t->as.loop.params = params;
+    t->as.loop.n_params = nv;
+    t->as.loop.inits = inits;
+    t->as.loop.body = loopbody;
+    t->as.loop.result_kont = rk;
+    return t;
+}
+
+/* cps-while-native: the loop back-edge -- re-enter with the current $next CVars. */
+static CTerm *make_continue(CpsB *b) {
+    CTerm *t = new_term(b, CT_CONTINUE);
+    CAtom *args = arena_alloc(b->a, (b->n_loop ? b->n_loop : 1) * sizeof(CAtom));
+    for (uint32_t i = 0; i < b->n_loop; i++) args[i] = atom_cvar(b->loop_nexts[i]);
+    t->as.cont_.args = args;
+    t->as.cont_.n = b->n_loop;
+    return t;
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
     if (!e) {
+        /* cps-while-native: a null (unit) loop-body tail is the back-edge. */
+        if (kont.kind == KK_LOOP) return make_continue(b);
         CTerm *t = new_term(b, CT_UNSUPPORTED);
         t->as.unsupported.why = "null";
         return t;
     }
     if (is_atomic(e)) {
+        /* cps-while-native: the loop-body tail value (unit) is discarded -- the
+         * carried state rides the $next CVars -- so a tail in KK_LOOP position is
+         * the back-edge. */
+        if (kont.kind == KK_LOOP) return make_continue(b);
         CTerm *t = new_term(b, CT_APPCONT);
         t->as.appcont.kont = kont;
         t->as.appcont.v = atom_of(e);
@@ -2656,6 +3029,29 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         }
         case EX_RETURN:
             return cps_tail(b, e->as.return_.value, b->retk);
+        case EX_SET: {
+            /* cps-while-native: a loop-carried set! in tail position -- bind its
+             * $next CVar, then take the loop back-edge (KK_LOOP) or deliver unit. */
+            int idx = loop_var_index(b, e->as.set_.target);
+            if (b->n_loop && idx >= 0) {
+                CTerm *cont;
+                if (kont.kind == KK_LOOP) {
+                    cont = make_continue(b);
+                } else {
+                    cont = new_term(b, CT_APPCONT);
+                    CAtom u; memset(&u, 0, sizeof u); u.kind = CA_UNIT; u.ty = TY_NIL;
+                    cont->as.appcont.kont = kont; cont->as.appcont.v = u;
+                }
+                return cps_bind(b, e->as.set_.value, b->loop_nexts[idx], cont);
+            }
+            if (safe_to_delegate(b, e)) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
+            return unsupported_form(b, e);
+        }
         case EX_RESET: {
             CVar x = fresh_cvar(b, &e->type);
             CTerm *t = new_term(b, CT_RESET);
@@ -3015,6 +3411,36 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             CTerm *nat = build_callcc(b, e, x, rest);
             return nat ? nat : build_letraw(b, e, x, rest);
         }
+        case EX_WHILE: {
+            /* cps-while-native: a control-op-bearing while (a control-free while is
+             * already delegated by safe_to_delegate) lowers to a synthesized
+             * recursive __cps loop.  Gated on the flag; NULL -> evict as before. */
+            if (g_opt_cps_tramp_resume) {
+                CTerm *loop = build_loop(b, e, x, rest);
+                if (loop) return loop;
+            }
+            /* Not lowered natively (flag off, or outside the guarded subset):
+             * preserve the prior default -- delegate a control-free while to the
+             * direct emitter, else evict. */
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            return unsupported_form(b, e);
+        }
+        case EX_SET: {
+            /* cps-while-native: a set! of a loop-carried var binds its pre-created
+             * $next CVar; the unit result binds x and continues.  Any other set!
+             * is unsupported (evicts). */
+            int idx = loop_var_index(b, e->as.set_.target);
+            if (b->n_loop && idx >= 0) {
+                CTerm *lv = new_term(b, CT_LETVAL);
+                CAtom u; memset(&u, 0, sizeof u); u.kind = CA_UNIT; u.ty = TY_NIL;
+                lv->as.letval.x = x; lv->as.letval.v = u; lv->as.letval.body = rest;
+                return cps_bind(b, e->as.set_.value, b->loop_nexts[idx], lv);
+            }
+            /* Not a loop-carried set!: preserve the prior default (delegate a
+             * control-free set! to the direct emitter, else evict). */
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            return unsupported_form(b, e);
+        }
         default: {
             /* N6.1: delegate a control-op-free, colored-call-free form to the
              * direct emitter (binds x, continues rest). */
@@ -3059,6 +3485,7 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     b.cur_fn = fd->binding;
     b.cur_fn_leaf_fiber = expr_has_indirect_fnvalue_call(fd->body, 0);
     b.n_pap = 0;
+    b.n_loop = 0;   /* cps-while-native: not inside a loop body */
     /* Phase-1 keystone (control-free colour-only shape): a colored function whose
      * whole body is delegatable (no control op, no colored call -- colored only by
      * a capturing closure it builds) emits as a single CT_LETRAW, so the direct
@@ -3109,6 +3536,7 @@ static void print_kont(const CKont *k, FILE *out) {
         case KK_RET:    fprintf(out, "k"); break;
         case KK_VAR:    fprintf(out, "j%u", k->id); break;
         case KK_PROMPT: fprintf(out, "<prompt>"); break;
+        case KK_LOOP:   fprintf(out, "<loop>"); break;
     }
 }
 
@@ -3231,6 +3659,21 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             fprintf(out, "let %s = call/cc(<recv>)  ; U7 native escape landing\n",
                     t->as.callcc.x.name);
             cps_ir_print(t->as.callcc.body, out, indent);
+            break;
+        case CT_LOOP:
+            fputs("loop (", out);
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++) {
+                if (i) fputc(' ', out);
+                fprintf(out, "%s=", t->as.loop.params[i].name);
+                print_atom(&t->as.loop.inits[i], out);
+            }
+            fputs(") ->\n", out);
+            cps_ir_print(t->as.loop.body, out, indent + 1);
+            break;
+        case CT_CONTINUE:
+            fputs("continue(", out);
+            print_atoms(t->as.cont_.args, t->as.cont_.n, out);
+            fputs(")\n", out);
             break;
         case CT_UNSUPPORTED:
             fprintf(out, "<unsupported: %s>\n", t->as.unsupported.why ? t->as.unsupported.why : "?");

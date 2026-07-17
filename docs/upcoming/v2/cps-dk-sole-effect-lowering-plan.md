@@ -1360,7 +1360,20 @@ BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 perman
   opaque-carrier param/return admission (`type_is_opaque_carrier` + a `k`-param widening)
   WAS built and reverted: sound, but moved 0 real fixtures (their inline-C `*-raw`
   helpers permanently taint `Unsafe`, keeping the wrappers SIG-TAINT regardless).
-- **native CPS loop-lowering (1 EX_WHILE root: `effect-handler-capture-loop`).**  Flag-
+- **native CPS loop-lowering (1 EX_WHILE root: `effect-handler-capture-loop`).**  LANDED
+  (2026-07-17) as `CT_LOOP`/`CT_CONTINUE`: an `EX_WHILE` with an interior control op lowers
+  to a synthesized tail-recursive colored `__cps` helper (params = the `^mut` loop vars,
+  back-edge = a `CT_TAILCALL`-style re-entry, exit = deliver the live-after var to KK_RET),
+  gated on `--enable=cps-tramp-resume`.  `run` emits `run__cps` (zero `eff=1`), prints `100`;
+  default suite `2200 passed, 0 failed` (flag-off byte-identical).  Reads resolve to the
+  loop-entry version by naming and `set!` writes pre-created `$next` CVars (build-order
+  safe); a conservative `loop_guard` evicts read-after-set / conditional-set / multi-live
+  shapes.  Regression fixtures: `cps-tramp-resume-while-handle`,
+  `-while-handle-escape`, `-while-readset`.  Paper trail:
+  `docs/archive/history/cps-while-loop-with-interior-handle-no-native-lowering.md`.  Below
+  is the pre-landing analysis (retained for context):
+
+  Flag-
   on DE-TAINTED `run` (its self-contained handle no longer shares a tainted effect), so
   it is now a d2b candidate whose ONLY blocker is the raw `EX_WHILE` in its body -- the
   CPS transform has no loop lowering (task-15's "EX_WHILE" was whole-body *delegation*

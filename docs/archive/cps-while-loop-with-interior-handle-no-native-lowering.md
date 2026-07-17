@@ -1,5 +1,20 @@
 # effect-handler-capture-loop: a while loop with an interior control op has no native CPS lowering
 
+**RESOLVED** (2026-07-17) -- landed as `CT_LOOP`/`CT_CONTINUE`: an `EX_WHILE`
+with an interior control op now lowers to a synthesized tail-recursive colored
+`__cps` helper under `--enable=cps-tramp-resume`.  `run` emits `run__cps` (zero
+`eff=1`) and prints `100`.  Implementation paper trail:
+`docs/archive/history/cps-while-loop-with-interior-handle-no-native-lowering.md`.
+Regression fixtures: `cps-tramp-resume-while-handle` (1507),
+`cps-tramp-resume-while-handle-escape` (effect escapes outward -> 50),
+`cps-tramp-resume-while-readset` (read-after-set -> guard evicts -> 10).  The
+SUPERSEDING FINDING below is what shipped: NOT the `CT_LOOP`-as-same-function-join
+of the DEEPER SCOPE section, but a real recursive `__cps` function (forced by
+`emit_handle` lifting the handle continuation into a separate C function).
+
+---
+
+
 **Severity:** medium (blocks `effect-handler-capture-loop` from the CPS/DK backend under
 `--enable=cps-tramp-resume`; correctness is fine -- it runs on the fiber via whole-body
 delegation, output `100`). This is a REAL fiber-live fixture (performs+handles `Ask`), so it

@@ -1,0 +1,15 @@
+;; cps-while-native soundness companion: a `while` whose interior `perform` ESCAPES
+;; to an OUTER handler (the handle wraps the loop, not per-iteration).  The native
+;; loop lowering must not miscompile this -- it lowers correctly or cleanly evicts
+;; to the fiber; either way the result is 5*10 = 50.
+(defeffect Ask [] :int)
+(defn run [] : int
+  (handle
+    (let [^mut i     0
+          ^mut total 0]
+      (while (< i 5)
+        (set! total (+ total (perform (Ask))))
+        (set! i (+ i 1)))
+      total)
+    (Ask [] k) (resume k 10)))
+(println (run))
