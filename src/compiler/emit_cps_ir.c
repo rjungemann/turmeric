@@ -1513,6 +1513,18 @@ static bool perform_cont_reset_ok(const CTerm *t) {
             for (uint32_t i = 0; i < t->as.tailcall.n; i++)
                 if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
             return true;
+        case CT_CONTINUE:
+            /* cps-while-native: a loop back-edge in a perform continuation -- the
+             * ESCAPING-effect shape (`while` body performs an effect handled by an
+             * OUTER handler; the perform's own continuation carries the back-edge).
+             * Like CT_TAILCALL it re-enters the loop helper threading __kont, so it
+             * must ride an LH_RESUME_CONT resume-frame (which has __kont) -- guaranteed
+             * because perform_body_ok has no CT_CONTINUE case, so emit_perform takes
+             * the resume-frame branch.  Args must be slot atoms. */
+            if (!g_opt_cps_tramp_resume) return false;
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!call_arg_ok(&t->as.cont_.args[i], true)) return false;
+            return true;
         default: return false;   /* any other nested control op: evict */
     }
 }

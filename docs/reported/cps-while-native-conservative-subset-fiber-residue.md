@@ -18,14 +18,24 @@ discharged within the loop. Every richer `while`-with-effect shape still evicts
 
 Measured on branch `claude/effect-reopen-report-w2n5zh` (2026-07-17):
 
-| Shape | Fixture | Eviction under the flag |
+| Shape | Fixture | Status under the flag |
 | --- | --- | --- |
-| A `set!` reads a var an EARLIER `set!` wrote this iteration | `tests/fixtures/cps-tramp-resume-while-readset` | `BODY-UNSUPPORTED eff=1 run unsupported form: EX_WHILE` |
-| Interior `perform` ESCAPES to an OUTER handler | `tests/fixtures/cps-tramp-resume-while-handle-escape` | `BODY-STRUCT-OR-TAINT eff=1 run` |
+| A `set!` reads a var an EARLIER `set!` wrote this iteration | `tests/fixtures/cps-tramp-resume-while-readset` | still `BODY-UNSUPPORTED eff=1` (open) |
+| Interior `perform` ESCAPES to an OUTER handler | `tests/fixtures/cps-tramp-resume-while-handle-escape` | **RESOLVED 2026-07-17** -- DK-lowers (`run__cps`, eff=0), prints 50 |
 
 Also uncovered (no dedicated fixture yet, but the guards reject them): a `set!`
 inside an `if`/`match` arm (conditional set), more than one live-after loop var,
 and nested loops.
+
+**Escaping-effect landed** (fix direction 3): the loop helper already threads its
+`__kont` (the enclosing handle's prompt chain), so the interior `perform` reaches
+the outer handler.  It only needed the perform continuation -- which carries the
+loop back-edge (`CT_CONTINUE`) -- to be admitted into `perform_cont_reset_ok`
+(mirroring its `CT_TAILCALL` case) so `emit_perform` lifts it as an
+`LH_RESUME_CONT` resume-frame (carrying `__kont`).  Verified against
+`cps-tramp-resume-while-handle-escape` (50) plus a non-zero-init `i*perform`
+variant (63) and a two-escaping-effect data-dependent recurrence (`total*2+1` ->
+31).  The remaining open shapes are the mutation-width ones below.
 
 ## Root cause (by design -- the guards trade coverage for soundness)
 
@@ -52,15 +62,16 @@ CVars. That is sound ONLY inside a narrow subset, enforced by:
   (installed in `run__cps` around the entry call), so an interior `perform` could
   thread out to it -- it is simply not admitted yet.
 
-## Self-caveat -- the two guard-test companions are themselves fiber-dependent
+## Self-caveat -- the remaining guard-test companion is still fiber-dependent
 
-`cps-tramp-resume-while-readset` and `cps-tramp-resume-while-handle-escape` were
-added to prove the guard EVICTS these shapes without miscompiling (they print the
-correct value via the fiber). They therefore DEPEND on the fiber runtime existing.
-At actual endgame they must be revisited: either the lowering widens to cover them
-(then they become `run__cps`, zero `eff=1`), or they convert to
-expected-hard-error. They are correct tests of TODAY's conservative behavior but
-are NOT endgame-neutral -- do not read their green status as "no fiber needed."
+`cps-tramp-resume-while-handle-escape` now DK-lowers (fix direction 3 landed), so it
+is endgame-neutral.  `cps-tramp-resume-while-readset` is still an eviction test: it
+prints the correct value via the fiber and therefore DEPENDS on the fiber runtime
+existing.  At endgame it must be revisited -- either the mutation-width widening
+(fix direction 1) covers it (then it becomes `run__cps`, zero `eff=1`), or it
+converts to expected-hard-error.  It is a correct test of TODAY's conservative
+behavior but is NOT endgame-neutral -- do not read its green status as "no fiber
+needed."
 
 ## Fix directions
 
@@ -76,13 +87,15 @@ are NOT endgame-neutral -- do not read their green status as "no fiber needed."
    synthesized tuple/struct delivered to the caller's continuation, which then
    destructures. (The report's obstacle-2 "multi-arg join" concern, now on the
    exit side rather than the back-edge.)
-3. **Escaping interior effect.** Admit a `while` whose interior `perform` is
-   handled by an ENCLOSING handler into `build_loop`: the loop helper already
-   threads `__kont` (which chains to the outer handler), so the interior perform
-   should reach it. Needs the admission path to stop diverting to
-   `BODY-STRUCT-OR-TAINT` and to verify the perform's continuation (which contains
-   the back-edge) lowers. Verify with `cps-tramp-resume-while-handle-escape`
-   flipping to `run__cps` (zero `eff=1`), output unchanged (`50`).
+3. **Escaping interior effect.** LANDED (2026-07-17).  `build_loop` already fired
+   for this shape; the block was that the interior `perform`'s continuation (which
+   carries the `CT_CONTINUE` back-edge) was not admitted.  Added a `CT_CONTINUE`
+   case to `perform_cont_reset_ok` (mirroring `CT_TAILCALL`), so `emit_perform`
+   lifts the continuation as an `LH_RESUME_CONT` resume-frame (carrying `__kont`)
+   and the back-edge threads out to the enclosing handler.
+   `cps-tramp-resume-while-handle-escape` now DK-lowers to `run__cps` (eff=0),
+   output `50`.  Paper trail:
+   `docs/archive/history/cps-while-loop-with-interior-handle-no-native-lowering.md`.
 4. **Nested loops.** Lift the `n_loop != 0` reject (`:2725`) once the loop state in
    `CpsB` is a stack rather than a single frame.
 

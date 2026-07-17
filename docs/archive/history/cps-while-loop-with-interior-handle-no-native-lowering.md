@@ -97,6 +97,25 @@ companion exercises an effect that leaves the loop.)
   no mutation miscompile.  `effect-handler-capture-loop` is the only corpus fixture
   that emits a native `CT_LOOP`.
 
+## Follow-on: escaping interior effect (2026-07-17)
+
+The initial landing left a `while` whose interior `perform` ESCAPES to an OUTER
+handler on the fiber (`cps-tramp-resume-while-handle-escape` ->
+`BODY-STRUCT-OR-TAINT eff=1`).  Diagnosed: `build_loop` DID fire (the CT_LOOP was
+built cleanly, no `CT_UNSUPPORTED`), but admission rejected the whole term because
+the interior `perform`'s continuation ends in `CT_CONTINUE` (the back-edge), which
+`perform_body_ok`/`perform_cont_reset_ok` did not admit.  Since `perform_body_ok`
+has no `CT_CONTINUE` case, adding one to `perform_cont_reset_ok` (mirroring its
+`CT_TAILCALL` case, gated on the flag) makes `emit_perform` lift the continuation
+as an `LH_RESUME_CONT` resume-frame -- which carries `__kont` -- and the back-edge
+emits `return <loop>__cps(args, __kont)` reaching the outer handler through the
+loop helper's threaded prompt chain.  One-line admission add; `run` now DK-lowers
+(eff=0).  Verified: `-while-handle-escape` (50), a non-zero-init `i*perform`
+variant (63), a two-escaping-effect `total*2+1` recurrence (31); default suite
+`2200 passed, 0 failed`; flag-on sweep unchanged (all 39 mismatches are
+pre-existing 0-`CT_LOOP` artifacts).  Residue tracker updated:
+`docs/reported/cps-while-native-conservative-subset-fiber-residue.md`.
+
 ## Known follow-ups (NOT this fix)
 
 - The subset is conservative by design (single live-after var, unconditional single
