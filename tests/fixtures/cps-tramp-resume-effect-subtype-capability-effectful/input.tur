@@ -1,0 +1,18 @@
+;; Guardrail companion to cps-tramp-resume-effect-subtype-capability:
+;; the SAME capability field `[run : fn #fx{Write}]` holding a genuinely
+;; Write-performing value must still produce correct output.  Its stored fn is
+;; address-taken -> a permanent fiber source, so the effect base-taints and the
+;; handler co-evicts (SIG-TAINT); the whole thing runs on the fiber effect
+;; runtime.  The re-opened Write reaches the handler and prints once.
+
+(defeffect Write [s :cstr] :nil)
+(defstruct Action :copy [run : fn #fx{Write}])
+
+(defn eff-greet [msg : cstr] #fx{Write}
+  (perform (Write msg)))
+
+(defn main [] : int
+  (let [act (make-struct Action eff-greet)]
+    (handle
+      (do (.run act "via handler") 0)
+      (Write [s] k) (do (println s) (resume k nil)))))

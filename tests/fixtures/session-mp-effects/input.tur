@@ -2,6 +2,18 @@
 ;;
 ;; A MpLog effect is declared for logging. Role A sends a value to B while
 ;; performing log effects; the handler intercepts MpLog and prints the message.
+;;
+;; NOTE -- permanent fiber client (NOT a CPS/DK migration target).  This program
+;; performs AND handles a real algebraic effect (MpLog) entirely on the fiber
+;; effect runtime, and stays there BY DESIGN: `main` is anchored by inline-C (raw
+;; pthread spawn/join + inline-C session channel ops), so its body is
+;; SIG-INLINE-C and can never thread a DK continuation; the role parameter is
+;; TY_ROLE (SIG-REJECT).  The pthread + inline-C session/channel runtime is a
+;; SEPARATE concurrency subsystem from the delimited-continuation DK effect
+;; machine.  Do not attempt to CPS-admit it -- even admitting the role param only
+;; reclassifies `role-a` SIG-REJECT -> SIG-TAINT off `main`'s permanent handling.
+;; Analysis + decision: docs/archive/
+;; cps-session-effects-permanently-fiber-bound.md.  Correct on the fiber today.
 
 (defprotocol Echo [A B]
   (-> A B int)

@@ -61,6 +61,9 @@ typedef enum CKontKind {
     KK_RET,       /* the function's return continuation parameter `k : cont<T>` */
     KK_VAR,       /* a local continuation variable introduced by CT_LETCONT */
     KK_PROMPT,    /* the value delivered to the nearest delimited prompt (reset) */
+    KK_LOOP,      /* cps-while-native: transform-internal marker -- a body tail in
+                   * this position is the loop back-edge (lowered to CT_CONTINUE);
+                   * never reaches emission. */
 } CKontKind;
 
 typedef struct CKont {
@@ -99,6 +102,19 @@ typedef enum CTermKind {
                       * an upward tur_escape_resume delivers), continue body.  Does
                       * NOT thread the DK continuation.  Native for a capture-free
                       * receiver f; a capturing receiver still delegates via LETRAW. */
+    CT_LOOP,         /* cps-while-native: a `while` with an interior control op,
+                      * lowered to a synthesized tail-recursive colored `__cps`
+                      * helper.  The ^mut loop-carried vars are the helper params;
+                      * the body is a CT_IF(cond, iter, exit) whose iter arm ends in
+                      * a CT_CONTINUE back-edge and whose exit arm delivers the
+                      * live-after var to KK_RET.  The interior handle lowers as a
+                      * normal CT_HANDLE inside the body; its continuation carries the
+                      * back-edge, which is why a same-function join is impossible and
+                      * the loop must be a real recursive fn (see
+                      * docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md). */
+    CT_CONTINUE,     /* the CT_LOOP back-edge: re-enter the loop helper with the
+                      * next-iteration argument atoms (the pre-created `$next` CVars
+                      * a `set!` binds), threading the helper's own continuation. */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -251,6 +267,16 @@ struct CTerm {
          * type = e->type).  The receiver is capture-free (a named fn or a
          * zero-capture fn value), so no env rides the escape landing. */
         struct { CVar x; const Expr *e; CTerm *body; }                    callcc;
+        /* cps-while-native.  params/inits: the loop-carried ^mut vars (each param
+         * CVar carries its source Binding so every in-body read of the var names
+         * the param via name_for_binding -- reads resolve to the loop-ENTRY version
+         * by naming, no rebinding map).  body: CT_IF(cond, iter, exit).  result_kont
+         * is the caller's continuation kind (KK_RET / KK_PROMPT) -- the emitter uses
+         * it only to pick the threaded continuation for the entry call; the exit arm
+         * itself delivers to the helper's own KK_RET. */
+        struct { CVar *params; uint32_t n_params; CAtom *inits;
+                 CTerm *body; CKont result_kont; }                        loop;
+        struct { CAtom *args; uint32_t n; }                               cont_;
         struct { const char *why; }                                       unsupported;
     } as;
 };

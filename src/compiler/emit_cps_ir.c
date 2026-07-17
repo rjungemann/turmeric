@@ -446,7 +446,8 @@ static const CTerm *first_unsupported(const CTerm *t) {
         case CT_RESUME:   return first_unsupported(t->as.resume.body);
         case CT_CLONEABLE: return first_unsupported(t->as.cloneable.body);
         case CT_CALLCC:   return first_unsupported(t->as.callcc.body);
-        default: return NULL;   /* CT_APPCONT / CT_TAILCALL: leaves */
+        case CT_LOOP:     return first_unsupported(t->as.loop.body);
+        default: return NULL;   /* CT_APPCONT / CT_TAILCALL / CT_CONTINUE: leaves */
     }
 }
 
@@ -767,6 +768,9 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             bound[nb] = t->as.callcc.x.id;
             return has_capture_rec(t->as.callcc.body, exclude, bound, nb + 1);
         }
+        case CT_CONTINUE:   /* cps-while-native: back-edge args are captures like a tailcall's */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) CC_ATOM(&t->as.cont_.args[i]);
+            return false;
         default: return true;   /* nested reset/shift/handle/perform in a lifted body: bail */
     }
     #undef CC_ATOM
@@ -978,6 +982,9 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                     if (_f) cap_add_fn_scalar(cs, fn);
                 }
             }
+            return;
+        case CT_CONTINUE:   /* cps-while-native: back-edge args, like a tailcall */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++) COL_ATOM(&t->as.cont_.args[i]);
             return;
         case CT_IF:
             COL_ATOM(&t->as.if_.cond);
@@ -1372,6 +1379,11 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
                         return false;
                 return joins_closed_rec(t->as.handle.body, def, nd);
             }
+        /* cps-while-native: a back-edge references the loop helper, not a join; a
+         * CT_LOOP's internal joins are a separate scope (checked when its own body
+         * is admitted).  Neither leaves an outer join open here. */
+        case CT_CONTINUE: return true;
+        case CT_LOOP:     return true;
         default: return false;
     }
 }
@@ -1449,7 +1461,17 @@ static bool perform_body_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_body_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* println/print IS emittable in a perform continuation: emit_lifted
+             * emits the frame body through emit_term (the same path a handler case
+             * uses, handle_case_ok, which admits println), so the print statement
+             * lands in the LH_PERFORM_CONT frame.  A multi-shot resume re-runs the
+             * frame and prints again -- the correct semantics (the continuation
+             * genuinely runs more than once), exactly as a re-run handler case does.
+             * Gated on --enable=cps-tramp-resume so the default (shipping) config's
+             * perform-continuation admission stays byte-identical; the historical
+             * exclusion was conservative from before the case-body println path. */
+            if (!shape_supported(t->as.letprim.spec)
+                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1503,7 +1525,14 @@ static bool perform_cont_reset_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_cont_reset_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* E7/C1: println/print in a Track-A resume-frame continuation -- same
+             * emit_term path as a handler case (handle_case_ok), so the print lands
+             * in the LH_RESUME_CONT frame body.  Already flag-gated (this predicate
+             * only fires under --enable=cps-tramp-resume), so no extra gate needed --
+             * but keep the historical exclusion for the flag-off path by mirroring
+             * the perform_body_ok guard. */
+            if (!shape_supported(t->as.letprim.spec)
+                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1536,6 +1565,18 @@ static bool perform_cont_reset_ok(const CTerm *t) {
             if (!g_opt_cps_tramp_resume) return false;
             for (uint32_t i = 0; i < t->as.tailcall.n; i++)
                 if (!call_arg_ok(&t->as.tailcall.args[i], true)) return false;
+            return true;
+        case CT_CONTINUE:
+            /* cps-while-native: a loop back-edge in a perform continuation -- the
+             * ESCAPING-effect shape (`while` body performs an effect handled by an
+             * OUTER handler; the perform's own continuation carries the back-edge).
+             * Like CT_TAILCALL it re-enters the loop helper threading __kont, so it
+             * must ride an LH_RESUME_CONT resume-frame (which has __kont) -- guaranteed
+             * because perform_body_ok has no CT_CONTINUE case, so emit_perform takes
+             * the resume-frame branch.  Args must be slot atoms. */
+            if (!g_opt_cps_tramp_resume) return false;
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!call_arg_ok(&t->as.cont_.args[i], true)) return false;
             return true;
         default: return false;   /* any other nested control op: evict */
     }
@@ -1628,6 +1669,19 @@ static bool handle_case_ok(const CTerm *t) {
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
+        case CT_PERFORM:
+            /* Effect re-opening (docs/reported/cps-handler-case-effect-reopening-
+             * needs-emission.md): a handler CASE body that itself performs an
+             * effect handled by an ENCLOSING handler.  The interior perform
+             * dispatches against the case's enclosing handler markers -- emit_lifted
+             * declares `__kont = dk_case_enclosing(...)` for a re-opening case and
+             * emit_perform threads it as cur_k (both its straight-line LH_PERFORM_CONT
+             * and Track A LH_RESUME_CONT paths).  Args must be slot atoms; the
+             * continuation stays in the CASE context (it may resume the case's own
+             * `k`), so it is admitted by handle_case_ok, not perform_body_ok. */
+            for (uint32_t i = 0; i < t->as.perform.n; i++)
+                if (!atom_ok(&t->as.perform.args[i])) return false;
+            return handle_case_ok(t->as.perform.body);
         default: return false;
     }
 }
@@ -1965,6 +2019,24 @@ static bool term_core_ok(const CTerm *t) {
              * slot-representable call/cc result and a core continuation body. */
             return (slot_ok_t(t->as.callcc.x.type, t->as.callcc.x.ty) || t->as.callcc.x.ty == TY_NIL)
                 && term_core_ok(t->as.callcc.body);
+        case CT_LOOP: {
+            /* cps-while-native: the loop-carried params + entry atoms must be
+             * slot-representable, and the loop body (a CT_IF around the interior
+             * handle + back-edge) admissible. */
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!(slot_ok_t(t->as.loop.params[i].type, t->as.loop.params[i].ty)
+                      || t->as.loop.params[i].ty == TY_NIL))
+                    return false;
+            for (uint32_t i = 0; i < t->as.loop.n_params; i++)
+                if (!atom_ok(&t->as.loop.inits[i])) return false;
+            return term_core_ok(t->as.loop.body);
+        }
+        case CT_CONTINUE:
+            /* The back-edge args ride the recursive `__cps` call like tail-call
+             * args -- each must be slot-representable. */
+            for (uint32_t i = 0; i < t->as.cont_.n; i++)
+                if (!atom_ok(&t->as.cont_.args[i])) return false;
+            return true;
         default: /* CT_UNSUPPORTED */
             return false;
     }
@@ -2566,6 +2638,32 @@ static bool jbody_has_cps_tailcall(const CTerm *t) {
     }
 }
 
+/* A heap-join jbody that itself PERFORMS an effect also needs `__kont` in scope:
+ * the interior dk_perform threads cur_k (== the frame's runtime downstream chain)
+ * so the effect reaches the enclosing handler.  A value-only LH_PERFORM_CONT
+ * frame fn `(env, value)` has no `__kont`, so a perform lowered inside it emits an
+ * undeclared `__kont` (the compound `effect-reopen` shape:
+ * `perform E; let x = colored(...); perform E2; ...`).  Detecting a perform in the
+ * jbody promotes the frame to an LH_RESUME_CONT resume-frame, which RECEIVES its
+ * downstream chain as the `__kont` param, exactly like the cps->cps-tailcall case.
+ * See docs/archive/cps-perform-cont-heap-join-eviction.md. */
+static bool jbody_has_perform(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_PERFORM:  return true;
+        case CT_LETVAL:   return jbody_has_perform(t->as.letval.body);
+        case CT_LETPRIM:  return jbody_has_perform(t->as.letprim.body);
+        case CT_LETCALL:  return jbody_has_perform(t->as.letcall.body);
+        case CT_LETRAW:   return jbody_has_perform(t->as.letraw.body);
+        case CT_RESUME:   return jbody_has_perform(t->as.resume.body);
+        case CT_IF:       return jbody_has_perform(t->as.if_.then_)
+                              || jbody_has_perform(t->as.if_.else_);
+        case CT_LETCONT:  return jbody_has_perform(t->as.letcont.jbody)
+                              || jbody_has_perform(t->as.letcont.body);
+        default:          return false;
+    }
+}
+
 /* Does `t` contain a heap join the backend CANNOT emit?  A non-tail cps->cps
  * call reifies its join continuation as a DK frame; that is now supported for
  * the direct CT_LETCONT-body form, provided the join body is zero-capture (the
@@ -2779,8 +2877,39 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
              * reach any colored peer).  fn_expr is NULL for a resolved direct
              * call, non-NULL only for the indirect/higher-order case. */
             if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
-            else if (e->as.call_.fn_expr && acc->callees && acc->callee_overflow)
-                *acc->callee_overflow = true;
+            else if (e->as.call_.fn_expr) {
+                /* Effect subtyping / capability field (docs/reported/
+                 * cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
+                 * a call THROUGH a lowered `.field` capability access (fn_expr is
+                 * an EX_GET_FIELD carrying an adt_ctor) is credited with the
+                 * FIELD's PRECISE effect row -- mirroring effect_check's
+                 * collect_effects_in_expr field path -- rather than the blunt
+                 * "reaches every colored peer" overflow.  So a handled body whose
+                 * only interior call is a capability invocation whose inferred row
+                 * is empty (a pure value stored in an effectful-typed field, which
+                 * the compiler already proves -- it raises TUR-W0033) is NOT
+                 * force-evicted.  A genuinely effectful field VALUE is still caught
+                 * globally: its stored fn is address-taken -> a permanent fiber
+                 * source -> the effect base-taints and the handler co-evicts
+                 * (SIG-TAINT), independent of this local crediting.  Gated on
+                 * cps-tramp-resume so the shipping classifier stays byte-identical
+                 * (flag-off keeps the unconditional overflow). */
+                const struct CtorDef *fac = NULL; uint32_t ffidx = 0;
+                if (g_opt_cps_tramp_resume && e->as.call_.fn_expr->kind == EX_GET_FIELD) {
+                    fac   = e->as.call_.fn_expr->as.get_field_.adt_ctor;
+                    ffidx = e->as.call_.fn_expr->as.get_field_.field_idx;
+                }
+                if (fac) {
+                    const struct EffectRow *fr = (ffidx < fac->n_fields)
+                        ? fac->fields[ffidx].effect_row : NULL;
+                    if (fr && fr->kind == ERK_CONCRETE)
+                        for (uint8_t i = 0; i < fr->as.concrete.n_effects; i++)
+                            if (fr->as.concrete.effects[i])
+                                mark_effect(fr->as.concrete.effects[i]->name, acc->plo, acc->phi);
+                } else if (acc->callees && acc->callee_overflow) {
+                    *acc->callee_overflow = true;
+                }
+            }
             if (acc->callee_target && e->as.call_.fn_binding == acc->callee_target
                 && acc->callee_out)
                 (*acc->callee_out)++;
@@ -3855,6 +3984,8 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
              * it is transparent to effect co-classification -- recurse the body
              * (matching the prior CT_LETRAW-delegated behavior). */
             return is_cps_island(t->as.callcc.body, handled, nh);
+        case CT_LOOP:     return is_cps_island(t->as.loop.body, handled, nh);
+        case CT_CONTINUE: return true;
         case CT_RESET:
         case CT_SHIFT:
         default:
@@ -3875,6 +4006,9 @@ typedef struct {
     struct { uint32_t id; const char *param; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
+    const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
+                                * so a CT_CONTINUE back-edge (possibly inside a lifted
+                                * handle continuation) re-enters it. */
     const char *fn_cn;       /* enclosing function's mangled name (helper naming) */
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
@@ -4007,6 +4141,8 @@ static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
+static void emit_loop(CE *ce, const CTerm *t);       /* cps-while-native */
+static void emit_continue(CE *ce, const CTerm *t);   /* cps-while-native */
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr);
 static char *cvar_cname(CE *ce, CVar x);
 
@@ -4248,6 +4384,8 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_LETRAW:  emit_letraw(ce, t); break;
         case CT_CLONEABLE: emit_cloneable(ce, t); break;
         case CT_CALLCC:  emit_callcc(ce, t); break;
+        case CT_LOOP:    emit_loop(ce, t); break;
+        case CT_CONTINUE: emit_continue(ce, t); break;
         default:
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
@@ -4405,6 +4543,8 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             emit_binder_decls(ce, t->as.callcc.body);
             break;
         }
+        case CT_LOOP:     break;   /* cps-while-native: loop body decls live in the helper fn */
+        case CT_CONTINUE: break;   /* terminal back-edge -- no binders */
         default: break;
     }
 }
@@ -4428,6 +4568,30 @@ typedef enum {
                        * downstream chain `__kont` and threads it (KK_RET -> dk_run(__kont,..),
                        * a nested perform/shift threads __kont).  Caps ride env (no __k). */
 } LHMode;
+
+/* Effect re-opening: does this handler CASE body itself perform an effect (which,
+ * being unhandled by its own handle, reaches an ENCLOSING handler)?  A re-opening
+ * case needs `__kont` -- the enclosing handler markers -- declared at entry so
+ * emit_perform's cur_k resolves.  Scans the case's own straight-line/branch
+ * structure (handle_case_ok admits no nested handle in a case body, so there is
+ * no inner effect scope to descend past). */
+static bool case_reopens(const CTerm *t) {
+    while (t) {
+        switch (t->kind) {
+            case CT_PERFORM: return true;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_RESUME:  t = t->as.resume.body;  break;
+            case CT_LETRAW:  t = t->as.letraw.body;  break;
+            case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_IF:
+                return case_reopens(t->as.if_.then_) || case_reopens(t->as.if_.else_);
+            default: return false;
+        }
+    }
+    return false;
+}
 
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
  * parameter name (reset/perform continuation result var); `xt` its full Type
@@ -4580,11 +4744,30 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * one non-escaping closure the CPS backend itself constructs. */
                 indent_buf(&tmp, 4);
                 buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
+            } else if (case_reopens(body)) {
+                /* Effect re-opening: `k` is captured into a perform-continuation
+                 * env whose field is the int64_t word (k is typed TY_INT).  Bind
+                 * it as that word -- not `DK *` -- so the env store matches its
+                 * field type with no int-from-pointer warning; emit_resume casts
+                 * `(DK *)k` at each use. */
+                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)subk;\n", kn);
             } else {
                 buf_printf(&tmp, "DK *%s = subk;\n", kn);
             }
             free(kn);
         }
+    }
+    /* Effect re-opening: a case body that performs an outer-handled effect needs
+     * the ENCLOSING handler markers as `__kont`.  dk_perform set
+     * g_dk_case_reopen_hnode to this case's handler node just before calling us;
+     * read it (into a local, at entry, before any interior perform can overwrite
+     * the global) and derive the transparent enclosing chain.  emit_perform threads
+     * `__kont` as cur_k so the interior effect reaches the enclosing handler while
+     * this case's own value returns to the H->next boundary.  __dk_reap_keep frees
+     * the fresh copy at the outermost entry boundary. */
+    if (mode == LH_HANDLER_CASE && case_reopens(body)) {
+        indent_buf(&tmp, 4);
+        buf_puts(&tmp, "DK *__kont = __dk_reap_keep(dk_case_enclosing(g_dk_case_reopen_hnode));\n");
     }
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
@@ -4667,7 +4850,8 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     CapSet cs;
     bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
     const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
-    bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody);
+    bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody)
+                   || jbody_has_perform(t->as.letcont.jbody);
 
     char *fn = callee_name(call->as.tailcall.fn);
     char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
@@ -4707,6 +4891,88 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     else
         ce_line(ce, "return %s__cps(%s); /* cps->cps heap join */", fn, frame);
     free(fn); free(argv);
+}
+
+/* ---- cps-while-native: CT_LOOP / CT_CONTINUE ------------------------------ *
+ * A CT_LOOP emits a synthesized tail-recursive colored helper
+ * `<fn>_loop<id>__cps(<params>, DK *__kont)` at file scope (into ce->helpers,
+ * like emit_lifted's helpers) whose body is the loop's CT_IF; a CT_CONTINUE
+ * back-edge re-enters it.  The helper is FORWARD-declared first so both its own
+ * self-recursion and the interior handle's lifted continuation (which carries the
+ * back-edge) can call it before its definition appears in the buffer.  At the loop
+ * site, the caller emits `return <helper>__cps(<inits>, <thread>)`. */
+static void emit_loop(CE *ce, const CTerm *t) {
+    int id = (*ce->helper_ctr)++;
+    char lname[256];
+    snprintf(lname, sizeof(lname), "%s_loop%d", ce->fn_cn, id);
+    uint32_t np = t->as.loop.n_params;
+
+    /* 1. Forward declaration (before nested helpers reference it). */
+    buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
+    for (uint32_t i = 0; i < np; i++)
+        buf_printf(ce->helpers, "%s, ",
+                   binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type));
+    buf_puts(ce->helpers, "DK *);\n");
+
+    /* 2. Emit the loop body into a temp buffer; nested handle/reset helpers
+     * accumulate into ce->helpers ahead of the loop helper definition. */
+    Buf tmp; buf_init(&tmp);
+    CE hc = *ce;
+    hc.out = &tmp;
+    hc.indent = 4;
+    hc.n_joins = 0;
+    hc.cur_k = "__kont";
+    hc.cur_loop_name = lname;
+    hc.shift_mode = false;
+    hc.ret_mode = false;
+    hc.handler_case_mode = false;
+    hc.case_tail_resume = false;
+    /* The exit arm delivers the live-after var to the helper's KK_RET; its
+     * crossing type matches what the caller's continuation expects. */
+    hc.ret_ty = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_ty : ce->ret_ty;
+    emit_binder_decls(&hc, t->as.loop.body);
+    emit_term(&hc, t->as.loop.body);
+    buf_putc(&tmp, '\0');
+
+    /* 3. Emit the helper definition. */
+    buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
+    for (uint32_t i = 0; i < np; i++) {
+        char *pn = t->as.loop.params[i].bind
+            ? name_for_binding(ce->ctx, t->as.loop.params[i].bind)
+            : strdup(t->as.loop.params[i].name);
+        buf_printf(ce->helpers, "%s %s, ",
+                   binder_ctype_full(ce->ctx, t->as.loop.params[i].ty, t->as.loop.params[i].type), pn);
+        free(pn);
+    }
+    buf_puts(ce->helpers, "DK *__kont) {\n");
+    buf_puts(ce->helpers, tmp.data);
+    buf_puts(ce->helpers, "}\n");
+    buf_free(&tmp);
+
+    /* 4. The loop entry: tail-call the helper with the entry values, threading the
+     * enclosing continuation (KK_RET -> this fn's __kont, KK_PROMPT -> cur_k). */
+    char *argv = atoms_csv(ce, t->as.loop.inits, np);
+    const char *thread = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_k : "__kont";
+    if (np)
+        ce_line(ce, "return %s__cps(%s, %s); /* cps-while-native loop entry */", lname, argv, thread);
+    else
+        ce_line(ce, "return %s__cps(%s); /* cps-while-native loop entry */", lname, thread);
+    free(argv);
+}
+
+/* The loop back-edge: re-enter the enclosing loop helper with the next-iteration
+ * values (the $next CVars a set! bound), threading this frame's own continuation
+ * (__kont -- the loop helper's k, reachable inside a lifted handle continuation
+ * as env->__k). */
+static void emit_continue(CE *ce, const CTerm *t) {
+    char *argv = atoms_csv(ce, t->as.cont_.args, t->as.cont_.n);
+    if (t->as.cont_.n)
+        ce_line(ce, "return %s__cps(%s, __kont); /* cps-while-native back-edge */",
+                ce->cur_loop_name ? ce->cur_loop_name : "0", argv);
+    else
+        ce_line(ce, "return %s__cps(__kont); /* cps-while-native back-edge */",
+                ce->cur_loop_name ? ce->cur_loop_name : "0");
+    free(argv);
 }
 
 /* N6.3: emit the alloc+populate of a lifted continuation's env (the body's
@@ -5432,8 +5698,15 @@ static void emit_handle(CE *ce, const CTerm *t) {
     buf_putc(&chain, '\0');
     /* Installed as cur_k and threaded in tail position (like reset); register the
      * self-contained chain for reaping at the outermost entry boundary
-     * (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
+     * (docs/archive/cps-delimited-dk-node-leak.md).  Under the re-opening path,
+     * stamp this handle's sibling case-handlers with a shared group id (dk_hgroup)
+     * so dk_case_enclosing / dk_perform can tell them apart from an enclosing
+     * handle's handlers once a re-install flattens the chain (else a re-opened
+     * outer effect in a multi-suspension continuation escapes). */
+    if (g_opt_cps_tramp_resume)
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup(%s));", hchain, chain.data);
+    else
+        ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
     for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }
