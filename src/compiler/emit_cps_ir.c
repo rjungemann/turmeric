@@ -3277,7 +3277,14 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
     if (!fn_sig_ok(fd)) return PT_E1;                /* is_poly_fn / capturing param */
     /* E2a registry threading needs a CONCRETE effect row on the param (row-poly
      * params delegate to a fresh-root direct entry -> escape); tier those PT_E1. */
-    if (p->type.kind == TY_FN) {
+    /* E2a registry threading needs a CONCRETE effect row on the param.  A ROW-
+     * VARIABLE param (`#fx{e}`) threads its callback's `__kont` just the same (the
+     * DK thread is effect-agnostic), and the cross-HOF leaf-fiber delegation that
+     * used to make this unsound is now skipped under the flag
+     * (colored_call_wbd_delegatable), so admit row-variable params under
+     * cps-tramp-resume.  Flag-off keeps the concrete-row requirement (codegen
+     * unchanged). */
+    if (!g_opt_cps_tramp_resume && p->type.kind == TY_FN) {
         const struct EffectRow *pr = p->type.as.fn.effect_row;
         if (!pr || pr->kind != ERK_CONCRETE) return PT_E1;
     }

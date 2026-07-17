@@ -691,7 +691,15 @@ static bool colored_call_wbd_delegatable(CpsB *b, const Expr *e) {
      * DK-effect caller of such an escaping-effect fn would itself have to handle
      * the effect, but a handle over a fn-value-reached effect cannot be DK
      * (handle_delim_ok rejects it), so the taint model keeps the effect fiber. */
-    if (cfd->body && expr_has_indirect_fnvalue_call(cfd->body, 0)) {
+    /* E2 (cps-tramp-resume): under the flag an effectful concrete fn-value arg
+     * THREADS the DK (the row-variable param gate is relaxed), so this cross-HOF
+     * leaf-fiber delegation's premise -- that the callback stays fiber -- no
+     * longer holds.  Delegating the HOF here while the callback threads splits the
+     * performer/handler across the two runtimes (effect-poly-infer aborted).
+     * Skip the delegation: the caller then threads the HOF's __cps, or evicts and
+     * the taint model co-classifies the callback to the fiber consistently. */
+    if (!g_opt_cps_tramp_resume
+        && cfd->body && expr_has_indirect_fnvalue_call(cfd->body, 0)) {
         for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
             EffectRow *ar = expr_fn_effect_row(b, e->as.call_.args[i]);
             if (ar && ar->kind == ERK_CONCRETE && ar->as.concrete.n_effects > 0)
