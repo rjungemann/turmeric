@@ -190,6 +190,80 @@ effect-escapes-outward companion fixtures.
 
 ---
 
+## SUPERSEDING FINDING (2026-07-17, branch `claude/effect-reopen-report-w2n5zh`)
+
+Two things were pinned against the emitter this session; both change the plan.
+
+### 1. The loop CANNOT be a same-function join -- it must be a recursive `__cps` fn
+
+The DEEPER SCOPE section (and the `CT_LOOP`/`CT_CONTINUE` sketch) assumed the loop
+back-edge could be a same-function multi-arg JOIN (a C label + `goto`, the way
+`CT_LETCONT` lowers -- `emit_cps_ir.c:4233-4256`).  **Measured against
+`emit_handle` (`emit_cps_ir.c:5428-5530`): it cannot.**  `emit_handle` lifts the
+handle's continuation (`t->as.handle.body`) into a SEPARATE C function via
+`emit_lifted(..., LH_RESET_CONT, ...)` (line 5438), installed as a `dk_frame`
+(line 5490).  In this fixture the loop-carried update is
+`total' = total + <handle result>` -- the new `total` is produced INSIDE that
+lifted continuation function, so the back-edge (`total += h; i++; iterate`)
+necessarily lives in the `_hk` continuation fn, a DIFFERENT C function from the
+loop entry.  A C `goto` cannot cross that boundary, so a same-function join is
+impossible for a loop whose carried state depends on an interior handle result.
+
+Therefore the back-edge MUST be a real function call, which forces the loop to be
+a **synthesized recursive colored `__cps` function** rather than a `CT_LOOP` join:
+
+```
+run$loop__cps(i, total, k):          # synthesized colored fn; params = the ^mut vars
+  if (< i 5):
+    cur = i
+    <CT_HANDLE  perform(Ask) / case Ask k' -> resume k' (cur*10)>   # delim
+    # ...continuation (the lifted _hk fn) receives the handle result h:
+    total' = (+ total h)
+    i'     = (+ i 1)
+    return run$loop__cps(i', total', k)     # CT_TAILCALL back-edge (self-recursion)
+  else:
+    return k(total)                          # exit delivers the live-after value
+# and run__cps(k)  ==>  return run$loop__cps(0, 0, k)
+```
+
+This is STRICTLY BETTER than the `CT_LOOP` design: the back-edge is an ordinary
+`CT_TAILCALL` to a colored callee, which `emit_term` ALREADY lowers
+(`emit_cps_ir.c:4207-4218`: `return <fn>__cps(args, thread)`), and it composes
+with the E7 trampoline (a tail-resume inside the loop is the existing flat path).
+No new looping-join emitter construct is needed.  The `CT_LOOP`/`CT_CONTINUE` IR
+nodes in the DEEPER SCOPE plan are RETRACTED in favor of function synthesis.
+
+**The remaining work is the synthesis + injection, and it is the real cost:**
+a colored recursive `__cps` function does not exist in the source, so the pass
+must (a) BUILD a `Binding`/`FnDef` for it (name, 2-param colored fn type,
+result type), (b) INJECT it into the classification pass so `binding_in_s`
+(`emit_cps_ir.c:2491`) returns true, a forward decl is emitted
+(`emit_forward_decls`, line 5870), and the body is emitted as `run$loop__cps`
+(main driver, lines 5980-6230), and (c) run the `EX_WHILE` transform with
+loop-scoped mutation rebinding (reads of `i`/`total` resolve to the synthesized
+params; `set!` values become the back-edge `CT_TAILCALL` args) under the sound
+loop-entry-version-only guard.  Steps (a)/(b) are cross-cutting plumbing into the
+classifier/emitter (`emit_cps_ir.c:3442-3670`); there is still no testable partial
+(none of synthesis / injection / transform moves the fixture alone).
+
+### 2. Delegating the self-contained region (CT_LETRAW) is a NON-solution
+
+Tempting shortcut: since flag-OFF keeps the fixture correct by delegating the
+whole self-contained handle region to the direct emitter, add an `EX_WHILE` case
+that does the same under the flag (a `CT_LETRAW` region), so `run` emits
+`run__cps` with zero `eff=1`.  **This does not satisfy the plan.**  A
+direct-emitted self-contained handle runs on `global_effect_handler_chain`
+(`safe_to_delegate` EX_HANDLE comment, `cps_ir.c:1382`), which is a SEPARATE,
+non-DK effect lowering -- exactly what `cps-dk-sole-effect-lowering-plan.md` wants
+to DELETE alongside the fiber runtime.  Delegating would move `run` off the fiber
+onto `global_effect_handler_chain` (still non-DK), not onto the DK machine.  That
+is why `safe_to_delegate`'s EX_HANDLE case already returns `false` under the flag
+(`cps_ir.c:1395`): the flag's whole purpose is to force interior handles onto the
+DK.  Only the native recursive-`__cps` lowering (finding 1) puts the interior
+`Ask` perform/resume on the DK machine.  A `CT_LETRAW` delegation is ruled out.
+
+---
+
 ## Why native DK lowering is a real slice (not a gate change)
 
 The DK/CPS machine has no mutation and no loops -- it is tail calls + continuations. Lowering

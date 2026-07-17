@@ -1369,11 +1369,21 @@ BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 perman
   continuation args.  Real slice -- and BIGGER than a lone `case EX_WHILE`: measured,
   the CPS IR has NO mutation representation (`atom_of` maps a var directly to its source
   `Binding`; no rebinding map in `CpsB`) and `CT_LETCONT` is SINGLE-param (no multi-arg
-  loop join), and `emit_heap_join` has no self-recursive loop emission.  So it is three
-  coupled foundational pieces -- a `Binding->CVar` rebinding env for native `set!`/`^mut`,
-  a multi-arg loop join (IR + emitter), and the `EX_WHILE` transform -- landing together
-  (no sound partial moves the fixture; a transform that admits `EX_WHILE` without correct
-  mutation SSA MISCOMPILES).  Full scope + implementation order:
+  loop join), and `emit_heap_join` has no self-recursive loop emission.  **SUPERSEDING
+  (2026-07-17): the multi-arg-loop-join design is RETRACTED.**  Pinned against
+  `emit_handle` (`emit_cps_ir.c:5438`): it lifts the handle continuation into a SEPARATE
+  C function, and this loop's carried update (`total += <handle result>`) is produced
+  inside that lifted continuation -- so a same-function `goto` back-edge is impossible.
+  The loop is FORCED to be a synthesized recursive colored `__cps` function whose
+  back-edge is an ordinary `CT_TAILCALL` (already lowered by `emit_term`).  That removes
+  the new-emitter-construct risk but adds the real cost: SYNTHESIZE a `Binding`/`FnDef`
+  for the loop fn and INJECT it into the classifier so `binding_in_s`/forward-decls/
+  emission pick it up (`emit_cps_ir.c:3442-3670,5870,5980-6230`), plus the `EX_WHILE`
+  transform with loop-scoped `set!`/`^mut` rebinding under the loop-entry-version-only
+  guard.  Still no sound partial moves the fixture.  Also ruled out this session: a
+  `CT_LETRAW` delegation of the self-contained region -- it runs on
+  `global_effect_handler_chain` (non-DK), which the plan wants deleted too, so it does
+  not put `run` on the DK.  Full scope + the superseding shape:
   `docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md`.
 - **E2b / tier-nontail-in-handle (2 BODY-UNSUPPORTED fn-value).**  The guarded
   `cps-backend-fn-param-effectful` + `handle-effectful-fn-param-same-fn`; both need the
