@@ -290,7 +290,10 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    DKHandler handler; intptr_t handler_env; bool shallow;\n"
 "    DKResumeFrame rfn; DK *next;\n");
     if (tramp) buf_puts(out,
-"    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n");
+"    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
+"    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
+"                        * distinguishes this handle's cases from an enclosing\n"
+"                        * handle's handlers once a re-install flattens the chain */\n");
     buf_puts(out,
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
@@ -329,6 +332,18 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 " * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
 "static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;\n"
+"}\n"
+"/* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at\n"
+" * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's\n"
+" * continuation frame) with a fresh, shared group id.  dk_case_enclosing and\n"
+" * dk_perform's re-install then skip only same-group handlers, so an enclosing\n"
+" * handle's handlers that become ADJACENT after a chain-flattening re-install are\n"
+" * no longer mistaken for this handle's siblings (they carry a different id). */\n"
+"static int g_dk_hgroup_ctr = 0;\n"
+"static DK *dk_hgroup(DK *head) {\n"
+"    int g = ++g_dk_hgroup_ctr;\n"
+"    for (DK *p = head; p && p->kind == DKK_HANDLER; p = p->next) p->hgroup = g;\n"
+"    return head;\n"
 "}\n");
     buf_puts(out,
 "static DK *dk_copy_node(const DK *n);\n");
@@ -338,7 +353,8 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    c->body = n->body; c->body_env = n->body_env;\n"
 "    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;\n");
     if (tramp) buf_puts(out,
-"    c->tail_resume = n->tail_resume;\n");
+"    c->tail_resume = n->tail_resume;\n"
+"    c->hgroup = n->hgroup;\n");
     buf_puts(out,
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
@@ -365,8 +381,17 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "static DK *dk_case_enclosing(const DK *H) {\n"
 "    if (!H) return dk_done();\n"
 "    const DK *ge = H;\n"
-"    if (H->shallow) ge = H->next;\n"
-"    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n"
+"    if (H->shallow) ge = H->next;\n");
+    /* Deep skip: a flattening re-install can make an enclosing handle's handlers
+     * ADJACENT to H, so "consecutive DKK_HANDLER" over-skips them.  Under the
+     * re-opening-capable path (tramp), skip only H's own sibling GROUP (same
+     * hgroup); the default path keeps the historical consecutive-HANDLER walk
+     * (no re-install ever makes distinct handles adjacent there). */
+    if (tramp) buf_puts(out,
+"    else while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;\n");
+    else buf_puts(out,
+"    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n");
+    buf_puts(out,
 "    return dk_copy_enclosing_handlers(ge);\n"
 "}\n"
 "static DK *dk_copy_range(const DK *from, const DK *stop) {\n"
@@ -552,8 +577,15 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "         * the handle's continuation frame), so the full group is present in the\n"
 "         * resumed sub-continuation.  A single-case handle copies just H (identical\n"
 "         * to the old dk_handler(tag,...) re-install). */\n"
-"        const DK *ge = H;\n"
-"        while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n"
+"        const DK *ge = H;\n");
+    /* Same sibling-group boundary fix as dk_case_enclosing: under the re-opening
+     * path skip only H's own hgroup, so a prior re-install that flattened an
+     * enclosing handle adjacent to H does not fold it into H's re-installed group. */
+    if (tramp) buf_puts(out,
+"        while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;\n");
+    else buf_puts(out,
+"        while (ge && ge->kind == DKK_HANDLER) ge = ge->next;\n");
+    buf_puts(out,
 "        /* Terminate the re-installed group with the ENCLOSING handler markers, not\n"
 "         * dk_done(): a deep handler leaves the outer handlers in place, so an\n"
 "         * effect the group does NOT handle, performed in the resumed continuation,\n"

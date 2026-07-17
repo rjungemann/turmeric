@@ -1396,7 +1396,17 @@ static bool perform_body_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_body_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* println/print IS emittable in a perform continuation: emit_lifted
+             * emits the frame body through emit_term (the same path a handler case
+             * uses, handle_case_ok, which admits println), so the print statement
+             * lands in the LH_PERFORM_CONT frame.  A multi-shot resume re-runs the
+             * frame and prints again -- the correct semantics (the continuation
+             * genuinely runs more than once), exactly as a re-run handler case does.
+             * Gated on --enable=cps-tramp-resume so the default (shipping) config's
+             * perform-continuation admission stays byte-identical; the historical
+             * exclusion was conservative from before the case-body println path. */
+            if (!shape_supported(t->as.letprim.spec)
+                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -1450,7 +1460,14 @@ static bool perform_cont_reset_ok(const CTerm *t) {
         case CT_LETVAL:
             return atom_ok(&t->as.letval.v) && perform_cont_reset_ok(t->as.letval.body);
         case CT_LETPRIM:
-            if (!shape_supported(t->as.letprim.spec) || is_println_shape(t->as.letprim.spec->shape))
+            /* E7/C1: println/print in a Track-A resume-frame continuation -- same
+             * emit_term path as a handler case (handle_case_ok), so the print lands
+             * in the LH_RESUME_CONT frame body.  Already flag-gated (this predicate
+             * only fires under --enable=cps-tramp-resume), so no extra gate needed --
+             * but keep the historical exclusion for the flag-off path by mirroring
+             * the perform_body_ok guard. */
+            if (!shape_supported(t->as.letprim.spec)
+                || (is_println_shape(t->as.letprim.spec->shape) && !g_opt_cps_tramp_resume))
                 return false;
             for (uint32_t i = 0; i < t->as.letprim.n; i++)
                 if (!atom_ok(&t->as.letprim.args[i])) return false;
@@ -2522,6 +2539,32 @@ static bool jbody_has_cps_tailcall(const CTerm *t) {
                               || jbody_has_cps_tailcall(t->as.if_.else_);
         case CT_LETCONT:  return jbody_has_cps_tailcall(t->as.letcont.jbody)
                               || jbody_has_cps_tailcall(t->as.letcont.body);
+        default:          return false;
+    }
+}
+
+/* A heap-join jbody that itself PERFORMS an effect also needs `__kont` in scope:
+ * the interior dk_perform threads cur_k (== the frame's runtime downstream chain)
+ * so the effect reaches the enclosing handler.  A value-only LH_PERFORM_CONT
+ * frame fn `(env, value)` has no `__kont`, so a perform lowered inside it emits an
+ * undeclared `__kont` (the compound `effect-reopen` shape:
+ * `perform E; let x = colored(...); perform E2; ...`).  Detecting a perform in the
+ * jbody promotes the frame to an LH_RESUME_CONT resume-frame, which RECEIVES its
+ * downstream chain as the `__kont` param, exactly like the cps->cps-tailcall case.
+ * See docs/archive/cps-perform-cont-heap-join-eviction.md. */
+static bool jbody_has_perform(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_PERFORM:  return true;
+        case CT_LETVAL:   return jbody_has_perform(t->as.letval.body);
+        case CT_LETPRIM:  return jbody_has_perform(t->as.letprim.body);
+        case CT_LETCALL:  return jbody_has_perform(t->as.letcall.body);
+        case CT_LETRAW:   return jbody_has_perform(t->as.letraw.body);
+        case CT_RESUME:   return jbody_has_perform(t->as.resume.body);
+        case CT_IF:       return jbody_has_perform(t->as.if_.then_)
+                              || jbody_has_perform(t->as.if_.else_);
+        case CT_LETCONT:  return jbody_has_perform(t->as.letcont.jbody)
+                              || jbody_has_perform(t->as.letcont.body);
         default:          return false;
     }
 }
@@ -4697,7 +4740,8 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     CapSet cs;
     bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
     const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
-    bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody);
+    bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody)
+                   || jbody_has_perform(t->as.letcont.jbody);
 
     char *fn = callee_name(call->as.tailcall.fn);
     char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
@@ -5462,8 +5506,15 @@ static void emit_handle(CE *ce, const CTerm *t) {
     buf_putc(&chain, '\0');
     /* Installed as cur_k and threaded in tail position (like reset); register the
      * self-contained chain for reaping at the outermost entry boundary
-     * (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
+     * (docs/archive/cps-delimited-dk-node-leak.md).  Under the re-opening path,
+     * stamp this handle's sibling case-handlers with a shared group id (dk_hgroup)
+     * so dk_case_enclosing / dk_perform can tell them apart from an enclosing
+     * handle's handlers once a re-install flattens the chain (else a re-opened
+     * outer effect in a multi-suspension continuation escapes). */
+    if (g_opt_cps_tramp_resume)
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup(%s));", hchain, chain.data);
+    else
+        ce_line(ce, "DK *%s = __dk_reap_keep(%s);", hchain, chain.data);
     buf_free(&chain);
     free(hkenv);
     for (uint32_t ci = 0; ci < nc; ci++) { free(cnames[ci]); free(cenvs[ci]); }

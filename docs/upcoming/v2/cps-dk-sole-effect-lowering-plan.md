@@ -1397,6 +1397,50 @@ effects, native CPS loop-lowering, and the compound BODY-STRUCT-OR-TAINT causes 
 The invariant held throughout this session's landings: default `2190 passed, 0 failed`
 (flag-off byte-identical), flag-on sweep clean.
 
+#### `effect-reopen` LANDED -- the first compound BODY-STRUCT-OR-TAINT root moves to the DK
+
+One of the "compound BODY-STRUCT-OR-TAINT causes above" -- `effect-reopen` (nested
+handle + effect re-opening + a colored call in a perform continuation) -- now
+DK-lowers fully under the flag (`start`/`done`/`142`, no `eff=1` eviction).  Its
+admission had THREE stacked gaps, all fixed together (gated on
+`--enable=cps-tramp-resume`; flag-off byte-identical -- `dk_hgroup`/`hgroup` absent
+from default emit):
+
+1. **`println` in a perform continuation** -- `perform_body_ok` /
+   `perform_cont_reset_ok` rejected `is_println_shape` (stale conservatism;
+   `handle_case_ok` already admits it through the same `emit_term` frame path).
+   Admitted under the flag.
+2. **Heap join whose jbody performs** (resolves
+   `docs/archive/cps-perform-cont-heap-join-eviction.md`) -- `emit_heap_join`'s
+   `needs_kont` was `jbody_has_cps_tailcall` only, so a join whose jbody PERFORMS
+   lifted as a value-only `LH_PERFORM_CONT` frame with no `__kont` and the interior
+   `dk_perform` referenced an undeclared `__kont`.  New `jbody_has_perform` promotes
+   it to `LH_RESUME_CONT`.
+3. **Re-opening across a nested handle with a multi-suspension continuation** -- a
+   pre-existing defect in the re-opening runtime (`dk_case_enclosing`, commit
+   `ffd878897`), dormant because `effect-reopen` had always evicted so the
+   re-opening DK path NEVER RAN.  `dk_case_enclosing` skipped "consecutive
+   `DKK_HANDLER`" to find enclosing handlers, but `dk_perform`'s re-install flattens
+   the chain (drops inter-handle frames), so an enclosing handle's handler becomes
+   adjacent and got wrongly skipped -> a re-opened outer effect in the resumed
+   continuation escaped (`unhandled effect`).  Fix: a per-handle group id
+   (`dk_hgroup` stamps a handle's sibling cases; `dk_case_enclosing` and the
+   re-install skip only same-`hgroup` handlers).  Robust for any nesting depth.
+
+Verified: `effect-reopen` output matches `expected.stdout`; bisection fixtures
+(single-handle heap-join-perform; nested re-opening inline; two sequential
+re-opening performs; single-effect repro `142`) all correct; regression fixture
+`tests/fixtures/cps-tramp-resume-reopen`.  Known follow-up (does NOT block; compiled
+fixtures are not leak-checked by the suite): the re-opening DK path leaks DK nodes
+O(N) per re-opened perform (the trampoline yield branch never frees its `sub`) --
+filed `docs/reported/cps-reopen-perform-onode-leak.md`.
+
+This clears ONE of the compound BODY-STRUCT-OR-TAINT roots.  Remaining in that
+bucket (each still its own slice): `effect-subtype-capability` (effectful fn-value
+in a struct field, called via `.run`), the owning-struct-field-op-capture pair.
+The larger roots (E2b fat-closure fn-value channel, session-typed effects, native
+CPS loop-lowering) are unchanged.
+
 ---
 
 **Bottom line:** the deletion is achievable iff effectful fn-values can thread the

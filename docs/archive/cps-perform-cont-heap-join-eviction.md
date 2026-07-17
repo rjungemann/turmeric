@@ -1,5 +1,19 @@
 # A `perform` continuation containing a non-tail cps->cps call (heap join) evicts
 
+**RESOLVED** -- fixed as part of the `effect-reopen` DK-admission slice; see
+`docs/archive/history/cps-perform-cont-heap-join-eviction.md`.  The heap-join
+half is `jbody_has_perform` (`emit_cps_ir.c`): `emit_heap_join` now lifts a
+join whose jbody itself PERFORMS as an `LH_RESUME_CONT` resume-frame (which
+carries `__kont`) instead of a value-only `LH_PERFORM_CONT` frame (which has no
+`__kont`, so the interior `dk_perform` referenced an undeclared `__kont`).  Two
+companion admissions were needed for the full `effect-reopen` shape: `println`
+in a perform continuation (`perform_body_ok`/`perform_cont_reset_ok`), and a
+handle-group id (`dk_hgroup`) so effect RE-OPENING across a nested handle with a
+multi-suspension continuation dispatches correctly.  All gated on
+`--enable=cps-tramp-resume`; `effect-reopen` now DK-lowers (no `eff=1` eviction)
+and prints `start`/`done`/`142`.  Regression fixture
+`tests/fixtures/cps-tramp-resume-reopen`.
+
 **Severity:** low-medium (blocks the CPS/DK admission of the compound
 `effect-reopen` fixture and any `perform; let x = <colored-callee>; ...` shape;
 correctness is fine -- the function runs on the fiber).  Not a shipping-backend
