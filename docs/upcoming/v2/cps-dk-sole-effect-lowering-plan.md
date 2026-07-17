@@ -584,6 +584,55 @@ assumption. Probe it FIRST, in isolation, before committing to Stages A-D:
 
 ## 10. Progress log
 
+### Session 5 -- readset (delicate) landed; E2 STARTED (Stage E sub-slice 1, the ABI slot)
+
+- **while-native read-after-set (LANDED).**  `set! total (+ total prev)` after
+  `set! prev X` reads `prev` after its set.  The loop body lowers BACKWARD
+  (EX_DO `for i downto 0`), so a during-lowering mask can't see the later set --
+  the fix is a FORWARD pre-pass (`loop_rs_scan`, mirrors `loop_guard`'s walk) that
+  records, by Expr-node identity, each straight-line carried-var read following its
+  `set!`; `atomize` resolves such a read to the var's `$next` CVar.  Reads inside a
+  branch / handle case still evict (their lifted frame can't reach `$next`).
+  `cps-tramp-resume-while-readset` -> `run__cps`, prints 10; a chained
+  read-after-set probe (`a=i+1; b=a+a; i+=b`) prints 6 flag-on and flag-off
+  identically.  (A bug found + fixed mid-slice: `CpsB.rs_n` was uninitialised, an
+  ASan stack overflow in `atomize` -- diagnosed from the trace, not reverted.)
+
+- **E2 Stage E sub-slice 1 -- `tur_poly_fn_t` ABI slot (LANDED).**  The effectful
+  fn-value channel starts with the cleanest, unambiguous representation:
+  `tur_poly_fn_t { void *env; int64_t (*fn)(void*,int64_t); }` gains a third slot
+  `int64_t (*fn_cps)(void*,int64_t, struct DK *)`.  Purely additive: every existing
+  `(tur_poly_fn_t){env,fn}` positional literal zero-inits `fn_cps` to NULL and no
+  code reads it, so behaviour is identical (`struct DK *` is an incomplete-pointer
+  type -- the struct precedes DK in the preamble -- completed later, compatibly).
+  Verified: 140 preamble snapshots regenerate with exactly ONE changed line each
+  (the typedef); a full flag-off compile sweep is clean (the only failures are the
+  standing `httpd-*` `-lturi` / `hamt.h` / dedicated-runner false-positives, all
+  flag- and change-independent).
+
+  **Sub-slice 2 (the atomic hard core -- NEXT).**  Interconnected, must land
+  together for one fixture end-to-end:
+  1. **Extend threadability.**  `fn_value_threadable` / `expr_collect_effects_acc`
+     (thr_ok) must count a CALL of an `is_poly_fn` effectful param, in a HOF that
+     will thread it through `fn_cps`, as a threadable use -- so the effectful lambda
+     flowing in is marked `threadable_has`.
+  2. **Reverse the fiber classification** (`emit_cps_ir.c:3663`): the
+     `is_lifted_lambda || addr_taken -> sig_perm` forcing already exempts
+     `threadable_has(binding)`; step 1 makes an `fn_cps`-threaded effectful lambda
+     threadable, so it becomes a CPS candidate with a real `__cps` entry.
+  3. **Thread the call.**  At the effectful poly-fn call site (`cps_ir.c` EX_CALL,
+     the "E2 pending" eviction ~2931/3312), emit a CT_TAILCALL variant (new
+     `via_poly_fn_cps` flag) that lowers to `f.fn_cps(f.env, args, __kont)` instead
+     of `CT_UNSUPPORTED`.  Start with the TAIL case (a non-tail call needs the
+     heap-join frame, like E2c).
+  4. **Populate `fn_cps` at construction** (`emit_expr.c:7213/7218/7265`,
+     `EX_POLY_WRAP` / `__tur_poly_to_fat`): set `fn_cps = &<lambda>__cps` when the
+     wrapped fn is effectful and CPS-emitted.
+  Verify: the target fixture prints the correct value (effect reaches the caller's
+  handler), flag-off byte-identical, flag-on compile sweep clean, effect-poly family
+  outputs unchanged, deep-recursion stackless probe green.  Then sub-slice 3
+  migrates the cluster (effect-poly-*/-row-*/-subtype-*/-ho, run-with).
+
 ### Session 4 -- top-level-handle fold + loop-in-continuation (gated); prerequisite roots driven down
 
 Focus: Stage A/E3 completion for the idiomatic top-level handler, plus two of the
