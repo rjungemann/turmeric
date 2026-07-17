@@ -1182,6 +1182,35 @@ int effect_check_pass(Arena *a, Expr *program, EffectEnv *env) {
         }
     }
 
+    /* --- Step 0a2: Resolve ERK_UNRESOLVED effect rows on record-ADT capability
+     * fields (`[run : fn #fx{Eff}]`).  elab_structs.c parses the trailing
+     * `#fx{...}` on a fn-typed field as ERK_UNRESOLVED (the effect env is not yet
+     * built at elaboration time); resolve it IN PLACE on the CtorField now that
+     * `env` is populated.  Without this the row stays symbolic, so
+     * `effect_row_contains` (which returns false for ERK_UNRESOLVED) never sees
+     * the effect: a `(.run v)` capability call is dropped from the enclosing
+     * body's inferred row (spurious TUR-W0033) and the CPS coloring cannot match
+     * the field call against the handler.  Both effect_check and the CPS pass
+     * (cps_ir.c expr_fn_effect_row) read the same CtorField.effect_row, so an
+     * in-place resolve fixes both. */
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *item = program->as.program.items[i];
+        if (!item) continue;
+        AdtDef *adt = NULL;
+        if (item->kind == EX_DEFDATA) adt = item->as.defdata_.def;
+        else if (item->kind == EX_DEFGADT) adt = item->as.defgadt_.def;
+        if (!adt) continue;
+        for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+            CtorDef *ctor = adt->ctors[ci];
+            if (!ctor) continue;
+            for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+                EffectRow *fr = ctor->fields[fi].effect_row;
+                if (fr && fr->kind == ERK_UNRESOLVED)
+                    ctor->fields[fi].effect_row = effect_row_resolve(fr, env, a);
+            }
+        }
+    }
+
     /* --- Step 0b: Resolve typeclass method effect rows + update instance method bindings. ---
      * Pass 1: Resolve all ERK_UNRESOLVED effect rows on typeclass method signatures. */
     for (uint32_t i = 0; i < program->as.program.n; i++) {
