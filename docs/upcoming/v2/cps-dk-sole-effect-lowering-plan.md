@@ -584,6 +584,60 @@ assumption. Probe it FIRST, in isolation, before committing to Stages A-D:
 
 ## 10. Progress log
 
+### Session 4 -- top-level-handle fold + loop-in-continuation (gated); prerequisite roots driven down
+
+Focus: Stage A/E3 completion for the idiomatic top-level handler, plus two of the
+4 non-permanent CPS roots.  All gated on `--enable=cps-tramp-resume`; flag-off
+byte-identical (default suite 2202/0 throughout); flag-on build sweep clean (0
+regressions) after each landing.
+
+- **Top-level-handle fold (THE SIG-TAINT lever).** Root: top-level non-`defn`
+  forms are bare exprs in `EX_PROGRAM.items`, never a `FnDef`, so the idiomatic
+  `(println (handle (compute) ...))` was direct/fiber-emitted into a synthesized
+  `int main()` that never reached the CPS classifier -- base_tainting its effect
+  and cascading SIG-TAINT to every performer (~33 fixtures).  `elaborate_program`
+  now folds trailing top-level statements into a synthesized
+  `(defn main [] : int (do <stmts> 0))` that flows through `fn_is_d2b_main` +
+  `emit_cps_ir` like a user main.  Conservative + macro-safe (`fold_stmt_is_risky`
+  skips nested-handle / escaping-mut-`set!` shapes the DK can't lower yet).
+  Result: real fiber-live fixtures 39 -> 29 (10 effect fixtures DK-lower;
+  `effect-handler` emits `compute__cps`, output 104).  Report:
+  docs/reported/cps-toplevel-synthesized-main-bypasses-dk.md.
+- **Loop-in-handle-continuation (2 CPS roots).**  A `while` loop in a handle
+  continuation evicted BODY-STRUCT-OR-TAINT.  Fixed: (1) `has_capture_rec` /
+  `collect_caps_rec` gained `CT_LOOP` cases (a loop in a lifted continuation was
+  bailing the capture collection); (2) `emit_loop` now threads the loop body's
+  loop-INVARIANT free vars (a fn param / handle result the loop reads) as extra
+  helper params, passed unchanged at the entry call and every back-edge (new
+  `CE.cur_loop_inv`).  Moves `cps-backend-composite-in-continuation` +
+  `cps-oracle-shift-under-handle` onto the DK (output 40).  Archived:
+  docs/archive/cps-loop-in-handle-continuation-invariant-threading.md.
+- **Owning-field borrow in a handler case.**  `expr_is_pure_borrow_of` now peels a
+  field-read chain in its rc/weak arms, so `(rc/strong-count (.r o))` is a pure
+  borrow -> the owning by-value aggregate capture is admitted.
+
+**Remaining prerequisites (all the harder / multi-session stages):**
+- **E2 (Stage E, THE hard stage) -- effectful fn-value `fn_cps` channel.** Blocks
+  the whole effect-poly/-row/-subtype/-ho family (~11 SIG-TAINT fixtures whose
+  effectful lambda passed to a HOF taints the effect) + `run-with` (handle-body
+  fn-value).  Multi-slice per the Stage E plan; not startable as a quick win.
+- **While-native mutation-width residue (`cps-tramp-resume-while-readset`).**
+  Read-after-set (`set! total (+ total prev)` after `set! prev ...`).  Requires a
+  forward SSA-renaming PRE-PASS: the loop body lowers BACKWARD (continuation-
+  first), so a read of `prev` after its `set!` is lowered before the `set!` is
+  processed -- a during-lowering version mask cannot see it.  The pre-pass must
+  compute per-read versions and feed them to the backward lowering.  Delicate;
+  1 fixture.
+- **By-reference mutable capture (`effect-capture-k`).**  A `^mut` written in a
+  lifted handler case + resumed after the handle needs a heap-cell capture
+  (`collect_caps` walks only a `set!`'s value, captures copy in by value).  New DK
+  feature.
+- **Nested-handle `__kont` threading (`effect-nested`).**  Inner handle's
+  continuation needs `__kont` from the sub-continuation.
+- **Permanent carve-outs:** `session-effects` / `session-mp-effects` (pthread +
+  inline-C session runtime) and `typeclass-effect-row-caller` (exported instance)
+  -- scoped OUT of the deletion (Sec 7/Stage G carve-out), not DK targets.
+
 ### Session 1 -- gate cleared, E7 runtime landed (gated)
 
 - **Kill-probe: GO.** `probes/e2-killprobe.c` -- an effectful callback reached
