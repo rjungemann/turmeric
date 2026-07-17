@@ -1,5 +1,23 @@
 # Effect re-opening (a handler case that performs an outer-handled effect) needs emission work
 
+**RESOLVED** (see `docs/archive/history/cps-handler-case-effect-reopening-needs-emission.md`).
+A handler CASE body that performs an outer-handled effect now DK-emits: `dk_perform`
+records the running case's handler node (`g_dk_case_reopen_hnode`), a re-opening case
+reads it at entry into `__kont = dk_case_enclosing(...)` -- the transparent enclosing
+handler markers -- and `emit_perform` threads that as `cur_k`, so the interior effect
+reaches the enclosing handler while the case's own value returns to the `H->next`
+boundary for `dk_perform` to thread exactly once.  `handle_case_ok` admits the
+interior `CT_PERFORM`.  The minimal repro prints `start` once; the `effect-reopen`
+fixture prints `start`/`done`/`142`; the suite is green.
+
+NOTE: the `effect-reopen` *fixture* still evicts under `--enable=cps-tramp-resume`, but
+NOT for the re-opening reason -- it hits a SEPARATE, pre-existing gap (a `perform` whose
+continuation contains a non-tail cps->cps heap join), tracked in
+`docs/reported/cps-perform-cont-heap-join-eviction.md`.  The re-opening emission this
+report called for is complete and verified by its own minimal repro.
+
+---
+
 **Severity:** medium (blocks `effect-reopen` and the compound half of a couple other
 BODY-STRUCT-OR-TAINT fixtures from the CPS/DK backend under `--enable=cps-tramp-resume`;
 correctness is fine -- they run on the fiber). Not a shipping-backend regression.

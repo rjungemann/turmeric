@@ -1575,6 +1575,19 @@ static bool handle_case_ok(const CTerm *t) {
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok(t->as.if_.then_) && handle_case_ok(t->as.if_.else_);
+        case CT_PERFORM:
+            /* Effect re-opening (docs/reported/cps-handler-case-effect-reopening-
+             * needs-emission.md): a handler CASE body that itself performs an
+             * effect handled by an ENCLOSING handler.  The interior perform
+             * dispatches against the case's enclosing handler markers -- emit_lifted
+             * declares `__kont = dk_case_enclosing(...)` for a re-opening case and
+             * emit_perform threads it as cur_k (both its straight-line LH_PERFORM_CONT
+             * and Track A LH_RESUME_CONT paths).  Args must be slot atoms; the
+             * continuation stays in the CASE context (it may resume the case's own
+             * `k`), so it is admitted by handle_case_ok, not perform_body_ok. */
+            for (uint32_t i = 0; i < t->as.perform.n; i++)
+                if (!atom_ok(&t->as.perform.args[i])) return false;
+            return handle_case_ok(t->as.perform.body);
         default: return false;
     }
 }
@@ -4372,6 +4385,30 @@ typedef enum {
                        * a nested perform/shift threads __kont).  Caps ride env (no __k). */
 } LHMode;
 
+/* Effect re-opening: does this handler CASE body itself perform an effect (which,
+ * being unhandled by its own handle, reaches an ENCLOSING handler)?  A re-opening
+ * case needs `__kont` -- the enclosing handler markers -- declared at entry so
+ * emit_perform's cur_k resolves.  Scans the case's own straight-line/branch
+ * structure (handle_case_ok admits no nested handle in a case body, so there is
+ * no inner effect scope to descend past). */
+static bool case_reopens(const CTerm *t) {
+    while (t) {
+        switch (t->kind) {
+            case CT_PERFORM: return true;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_RESUME:  t = t->as.resume.body;  break;
+            case CT_LETRAW:  t = t->as.letraw.body;  break;
+            case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_IF:
+                return case_reopens(t->as.if_.then_) || case_reopens(t->as.if_.else_);
+            default: return false;
+        }
+    }
+    return false;
+}
+
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
  * parameter name (reset/perform continuation result var); `xt` its full Type
  * (may be NULL for a scalar) so a Tier C aggregate value-param unboxes.  `hcase`
@@ -4523,11 +4560,30 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * one non-escaping closure the CPS backend itself constructs. */
                 indent_buf(&tmp, 4);
                 buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
+            } else if (case_reopens(body)) {
+                /* Effect re-opening: `k` is captured into a perform-continuation
+                 * env whose field is the int64_t word (k is typed TY_INT).  Bind
+                 * it as that word -- not `DK *` -- so the env store matches its
+                 * field type with no int-from-pointer warning; emit_resume casts
+                 * `(DK *)k` at each use. */
+                buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)subk;\n", kn);
             } else {
                 buf_printf(&tmp, "DK *%s = subk;\n", kn);
             }
             free(kn);
         }
+    }
+    /* Effect re-opening: a case body that performs an outer-handled effect needs
+     * the ENCLOSING handler markers as `__kont`.  dk_perform set
+     * g_dk_case_reopen_hnode to this case's handler node just before calling us;
+     * read it (into a local, at entry, before any interior perform can overwrite
+     * the global) and derive the transparent enclosing chain.  emit_perform threads
+     * `__kont` as cur_k so the interior effect reaches the enclosing handler while
+     * this case's own value returns to the H->next boundary.  __dk_reap_keep frees
+     * the fresh copy at the outermost entry boundary. */
+    if (mode == LH_HANDLER_CASE && case_reopens(body)) {
+        indent_buf(&tmp, 4);
+        buf_puts(&tmp, "DK *__kont = __dk_reap_keep(dk_case_enclosing(g_dk_case_reopen_hnode));\n");
     }
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);

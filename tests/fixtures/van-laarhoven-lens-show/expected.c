@@ -973,6 +973,22 @@ static DK *dk_copy_enclosing_handlers(const DK *from) {
     if (!head) return done;
     tail->next = done; return head;
 }
+/* Effect re-opening: the enclosing handler markers in effect at the dynamic
+ * point a handler case body runs -- i.e. the handlers OUTSIDE this handle.  A
+ * `perform` in a case body (the case re-opens an outer effect) dispatches
+ * against this transparent (handler-marker-only, done-terminated) chain, so the
+ * effect reaches the enclosing handler while the case's own value returns to the
+ * H->next boundary for dk_perform to thread exactly once.  For a deep handler we
+ * skip the whole dk_handler sibling group starting at H (its case shares the
+ * handle's continuation context, so a sibling effect propagates OUTWARD, matching
+ * dk_perform's own `ge` walk); a shallow handler skips only H itself. */
+static DK *dk_case_enclosing(const DK *H) {
+    if (!H) return dk_done();
+    const DK *ge = H;
+    if (H->shallow) ge = H->next;
+    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
+    return dk_copy_enclosing_handlers(ge);
+}
 static DK *dk_copy_range(const DK *from, const DK *stop) {
     DK *head = NULL, *tail = NULL;
     for (const DK *p = from; p && p != stop; p = p->next) {
@@ -1060,6 +1076,11 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
     DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
 }
+/* Effect re-opening: the handler node whose case is currently running, set just
+ * before dk_perform calls the case.  A re-opening case reads it (into a local, at
+ * entry, before any interior perform can overwrite it) to recover its enclosing
+ * handler markers via dk_case_enclosing. */
+static const DK *g_dk_case_reopen_hnode = NULL;
 static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
@@ -1093,6 +1114,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));
     }
     sub = dk_append(sub, tail);
+    g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
     return dk_run_impl(H->next, r, false);
