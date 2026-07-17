@@ -15,19 +15,34 @@ hard-error rather than fiber. **Flag-on payoff: real fiber-live fixtures 39 -> 2
 linear-effect-handler; `effect-handler` emits `compute__cps`, zero `eff=1`, output
 `104`).
 
-**Two FLAG-ON follow-on gaps (not flag-off; the fold merely EXPOSED pre-existing
-DK codegen limits by routing these top-level handles onto the DK):**
-`effect-capture-k` and `effect-nested` MISCOMPILE flag-on (`k_hystore_*`
-undeclared across the lifted-frame boundary). Both STORE the captured continuation
-`k` in a `^mut` and `resume` it AFTER the handle exits -- an escaping/stored
-(multishot-style) continuation whose DK lowering emits the `k` capture in one
-function and reads it in another (a cross-frame scoping bug in the escaping-cont
-codegen, independent of this fold). Flag-off both are byte-identical and green.
-Remaining SIG-TAINT after the fold is the effect-poly/-row/-subtype family (E2b /
+**Fold is now CONSERVATIVE -- zero flag-on regressions.** Two top-level-handle
+shapes the DK backend cannot lower yet were routed onto the DK by the initial fold
+and MISCOMPILED flag-on; both are pre-existing DK gaps the fold merely EXPOSED, not
+caused. `fold_stmt_is_risky` (elab_toplevel.c) now leaves them on the historical
+fiber path (a statement whose handle subtree has >=2 handle heads, or a `set!`
+alongside a handle, is not folded):
+
+- `effect-capture-k` -- ESCAPING MUTABLE: a `set!` writes the captured continuation
+  `k` into an outer `^mut`, resumed AFTER the handle exits. The DK backend has no
+  by-reference mutable capture (`collect_caps` walks only a `set!`'s VALUE, not its
+  TARGET, and captures are copied in by value -- src/compiler/emit_cps_ir.c:2872,
+  4636), so the `k` store emits as a bare local write in the lifted handler case
+  (`k_hystore_* undeclared`). Fixing it is a real DK feature: heap-cell (by-ref)
+  capture of a mutable shared across lifted continuation/handler frames.
+- `effect-nested` -- NESTED HANDLE: an inner handle whose continuation needs
+  `__kont` threaded from the sub-continuation (`__kont undeclared`); the
+  handler-case-in-handler-continuation `__kont` threading gap
+  (cps-handler-case-effect-reopening-needs-emission.md family).
+
+Net after the guard: **10 effect fixtures fold to the DK, zero flag-on
+regressions** (flag-off byte-identical 2202/0; full flag-on build sweep clean).
+Remaining SIG-TAINT is the effect-poly/-row/-subtype family (E2b /
 effect-subtype-capability adjacent), the permanent session/export carve-outs, and
-the 4 non-permanent CPS roots. Follow-on: fix the escaping-cont `k`-capture
-cross-frame scoping so the stored-continuation shapes DK-lower, then graduate the
-fold to always-on and regen the top-level-expr snapshots.
+the 4 non-permanent CPS roots. Follow-ons to graduate the fold: (1) by-reference
+mutable capture in the DK backend (unblocks the `set!`-in-handle shape); (2)
+nested-handle `__kont` threading; then broaden the base subset / retire N6.5 so the
+fold can go always-on, drop the `--enable` gate, and regen the top-level-expr
+snapshots.
 
 ---
 
