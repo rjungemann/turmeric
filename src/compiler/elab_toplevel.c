@@ -1032,6 +1032,38 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
     return type_tyvar_named("_");
 }
 
+/* Recursively count `handle`/`handle-shallow` heads and detect a `set!` head in
+ * a form's subtree.  Used by the top-level-main fold (below) to SKIP shapes the
+ * CPS/DK backend cannot yet lower and would MISCOMPILE flag-on: an escaping-
+ * mutable capture (a `set!` inside a handle case -- the DK has no by-reference
+ * mut capture, effect-capture-k) or a nested handle (the inner handle's
+ * continuation needs `__kont` threaded from the sub-continuation -- effect-nested).
+ * Conservative: a false positive only forgoes the fold, leaving the historical
+ * fiber behaviour untouched. */
+static void fold_scan_handle_risk(const Elab *e, const Form *f,
+                                  uint32_t *n_handle, bool *has_set) {
+    if (!f) return;
+    if (f->tag != F_LIST && f->tag != F_VEC && f->tag != F_MAP && f->tag != F_SET)
+        return;
+    if (f->as.list.len > 0 && f->as.list.items[0]
+        && f->as.list.items[0]->tag == F_SYM) {
+        const Symbol *h = f->as.list.items[0]->as.sym;
+        if (h == e->sym_handle || h == e->sym_handle_shallow) (*n_handle)++;
+        else if (h == e->sym_set) *has_set = true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        fold_scan_handle_risk(e, f->as.list.items[i], n_handle, has_set);
+}
+
+/* A top-level statement is fold-unsafe when its handle subtree carries a shape the
+ * DK backend cannot lower yet: a nested handle (>=2 handle heads) or a set! that
+ * may write an escaping continuation into a captured mutable. */
+static bool fold_stmt_is_risky(const Elab *e, const Form *f) {
+    uint32_t n_handle = 0; bool has_set = false;
+    fold_scan_handle_risk(e, f, &n_handle, &has_set);
+    return n_handle >= 2 || (n_handle >= 1 && has_set);
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -1294,7 +1326,10 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             for (uint32_t m = 0; m < n_macro; m++)
                 if (macro_names[m] == hs) { is_macro = true; break; }
             if (is_macro) { ambiguous = true; break; }
-            /* otherwise a plain call: a genuine top-level statement */
+            /* a plain call: a genuine top-level statement -- but abort the fold
+             * if its handle subtree is a shape the DK backend miscompiles (nested
+             * handle / escaping-mut set!), leaving it on the historical fiber path. */
+            if (fold_stmt_is_risky(&e, f)) { ambiguous = true; break; }
             any_stmt = true;
         }
         free(macro_names);
