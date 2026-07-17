@@ -1193,6 +1193,15 @@ static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
     if (!e) return false;
     const Expr *inner = NULL;
     switch (e->kind) {
+        /* rc/weak ops READ their handle operand without releasing or moving it
+         * (the result is a scalar count, a borrowed inner ptr, or a fresh weak),
+         * so they are a pure borrow of the operand.  The operand may itself be an
+         * OWNING field read `(.r o)` of the captured by-value aggregate: the op
+         * then borrows that owning field, leaving `o` (and its owning fields)
+         * intact, so it is a pure borrow of the root `o`.  The shared peel below
+         * walks the operand's field-read chain to that root -- letting a borrow
+         * THROUGH an owning field read be recognized, not only a bare-var
+         * operand `(rc/strong-count o)`. */
         case EX_RC_COUNT: inner = e->as.rc_count_.expr; break;
         case EX_RC_PTR:   inner = e->as.rc_ptr_.expr;   break;
         case EX_WEAK:     inner = e->as.weak_.expr;     break;
@@ -1200,24 +1209,26 @@ static bool expr_is_pure_borrow_of(const Expr *e, uint32_t bid) {
             /* Reading a NON-owning field `(.f o)` of the captured by-value
              * aggregate is a pure borrow of `o` -- it copies a scalar out, leaving
              * `o` (and its owning fields) intact.  An OWNING field read yields an
-             * alias that could be consumed, so it is not provably borrow-only:
-             * conservatively reject (the capture then evicts / rides E3). */
+             * alias that could be consumed, so a STANDALONE owning field read is
+             * not provably borrow-only: conservatively reject (the capture then
+             * evicts / rides E3).  (An owning field read WRAPPED in an rc/weak op
+             * is handled by those arms above, which borrow rather than move it.) */
             if (e->type.kind == TY_RC || e->type.kind == TY_REF
                 || e->type.kind == TY_WEAK || e->type.kind == TY_LREF)
                 return false;
             inner = e->as.get_field_.struct_expr;
-            /* peel a chain of field reads to the root aggregate */
-            while (inner) {
-                while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
-                if (inner && inner->kind == EX_GET_FIELD) {
-                    inner = inner->as.get_field_.struct_expr; continue;
-                }
-                break;
-            }
             break;
         default: return false;
     }
-    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    /* Peel a chain of field reads to the root aggregate (shared by the rc/weak
+     * and get-field arms). */
+    while (inner) {
+        while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+        if (inner && inner->kind == EX_GET_FIELD) {
+            inner = inner->as.get_field_.struct_expr; continue;
+        }
+        break;
+    }
     return inner && inner->kind == EX_VAR && inner->as.var.binding
         && inner->as.var.binding->id == bid;
 }

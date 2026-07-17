@@ -1,5 +1,23 @@
 # Owning-field borrow in a handler case evicts the HOF from the CPS backend
 
+**STATUS: RESOLVED.** `expr_is_pure_borrow_of` (`src/compiler/emit_cps_ir.c`) now
+peels a field-read chain to the root aggregate in its `EX_RC_COUNT` /
+`EX_RC_PTR` / `EX_WEAK` arms (the same peel the `EX_GET_FIELD` arm already did),
+so a borrow THROUGH an owning field read -- `(rc/strong-count (.r o))` -- is
+recognized as a pure borrow of the captured aggregate `o`.
+`owning_cap_borrow_only` then holds, `collect_caps_case` demotes the capture to
+a leak-clean shallow alias, and the HOF CPS-emits on the DK instead of evicting
+BODY-STRUCT-OR-TAINT. Verified: `f__cps` emitted, zero `eff=1` evictions, output
+`10` (unchanged); default suite 2195/0 (flag-off byte-identical); flag-on build
+sweep clean. Regression fixture:
+`tests/fixtures/cps-tramp-resume-owning-field-borrow-handler-case/` (flag-on
+CPS-emit) alongside the existing
+`tests/fixtures/cps-backend-owning-struct-field-op-capture-direct/` (direct
+fallback). This was the last owning-by-value-aggregate capture in the
+BODY-STRUCT-OR-TAINT eviction set.
+
+---
+
 **Severity:** low (bounded admission gap; correctness is fine -- the fixture runs
 on the direct emitter, output `10`). This is the LAST owning-capture eviction
 root: a colored fn whose handler CASE borrows a captured by-value struct's OWNING
