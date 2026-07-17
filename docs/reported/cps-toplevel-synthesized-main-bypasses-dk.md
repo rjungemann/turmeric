@@ -29,10 +29,20 @@ alongside a handle, is not folded):
   4636), so the `k` store emits as a bare local write in the lifted handler case
   (`k_hystore_* undeclared`). Fixing it is a real DK feature: heap-cell (by-ref)
   capture of a mutable shared across lifted continuation/handler frames.
-- `effect-nested` -- NESTED HANDLE: an inner handle whose continuation needs
+- `effect-nested` -- NESTED HANDLE IN VALUE POSITION: an inner handle whose result
+  feeds arithmetic (`(+ (get-val) (handle ...))`), so its continuation needs
   `__kont` threaded from the sub-continuation (`__kont undeclared`); the
   handler-case-in-handler-continuation `__kont` threading gap
   (cps-handler-case-effect-reopening-needs-emission.md family).
+
+**Refinement (later):** the blanket `n_handle >= 2` rejection is now narrowed to
+only a nested handle in a VALUE position (`fold_handle_in_value_position`).  A
+cleanly STACKED nested handle -- each inner handle the direct body/case of its
+enclosing handle, `(handle (handle ...) ...)` -- DK-lowers fine, so it now folds:
+`effect-console` (`(handle (handle (echo-doubled) (Write ..)) (Read ..))`) DK-
+lowers (zero `eff=1`, output `result:` / `42`).  `effect-nested` stays on the
+fiber (its handle is a `+` operand) with correct output `52`.  Flag-off byte-
+identical; flag-on sweep clean.
 
 Net after the guard: **10 effect fixtures fold to the DK, zero flag-on
 regressions** (flag-off byte-identical 2202/0; full flag-on build sweep clean).
