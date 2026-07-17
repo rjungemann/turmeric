@@ -2542,6 +2542,11 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
             ctor->fields[fi].kind = fkind;
             ctor->fields[fi].inner_kind = TY_UNKNOWN;
             ctor->fields[fi].name = NULL; /* CONV-S0: positional */
+            /* A positional/GADT ctor field carries no `#fx{...}` capability row;
+             * initialize the pointer explicitly (arena_alloc does not zero) so
+             * readers -- effect_check's CtorField-row resolve, cps_ir's
+             * expr_fn_effect_row -- never dereference uninitialized garbage. */
+            ctor->fields[fi].effect_row = NULL;
             /* TP2: populate full_type when the field references a declared type
              * parameter (e.g. `a` in `(MkBox a : (Box a))`).  The C-level kind
              * stays TY_INT; full_type is elaboration-only. */
