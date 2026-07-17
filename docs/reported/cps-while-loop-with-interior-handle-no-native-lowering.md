@@ -124,20 +124,50 @@ transform that admits `EX_WHILE` without correct mutation SSA would silently mis
 flag-on mutating loop. So this is a coordinated foundational transform, not an incremental
 admission widening.
 
-### Recommended implementation order (each verified before the next)
+### Obstacle 4 (THE crux) -- build order is continuation-first; mutation is execution-order
 
-1. **Rebinding environment + native `set!` / `^mut` read, STRAIGHT-LINE only** (no loop).
-   Add a `Binding* -> CVar` scope map to `CpsB` (or thread it as a param); `EX_SET` lowers the
-   value and rebinds; `atom_of`/`EX_VAR` resolves `^mut` reads through it. Gate on the flag.
-   Verify with a straight-line `^mut`+`set!`+read fixture (must DK-lower, correct value) and
-   the flag-on sweep. This is self-contained and testable even though it moves no LOOP fixture.
-2. **Multi-arg loop join** -- prefer Obstacle-2 option (a) (extend `CT_LETCONT` to N params +
-   the emitter self-loop) over aggregate packing; wire `needs_heap_join`/`collect_caps`.
-3. **`EX_WHILE` transform** -- compute the loop-carried set (the `^mut` bindings WRITTEN in the
-   body; a read-only `^mut` stays a capture), build the N-param loop join with the entry values
-   as initial args, `(< i 5)` as the guard `CT_IF`, the body lowered normally (the interior
-   `handle` lowers as anywhere), and the back-edge re-entering with the map's current values;
-   the false arm delivers the live-after vars to the enclosing continuation.
+Measured: `cps_tail`'s `EX_DO` (`cps_ir.c:2650`) lowers items RIGHT-TO-LEFT -- it builds the
+last item's term first (`rest = cps_tail(items[n-1], kont)`) then wraps earlier items
+(`rest = cps_bind(items[i], _, rest)` for `i = n-2 .. 0`).  So a naive mutable `Binding ->
+CVar` map in `CpsB` -- the report's original "rebinding environment" -- is **UNSOUND**: it
+would be updated by later-EXECUTION `set!`s before earlier ones are lowered, so a `^mut` read
+would resolve to the wrong version.  General correctness needs either an SSA-renaming PRE-PASS
+(compute versions in a forward walk, then run the mutation-free CPS transform) or an explicit
+forward-threaded environment (a structural change to `cps_tail`/`cps_bind`).
+
+### The sound, contained algorithm (sidesteps general SSA -- covers the counter-loop idiom)
+
+The build-order hazard only bites when a `set!`'s value reads a mut var that ANOTHER `set!`
+wrote earlier in the SAME iteration.  Restrict to loops where every in-body read of a
+loop-carried var resolves to the loop-ENTRY (loop-param) version -- i.e. no `set!` value
+observes another `set!`'s result within the iteration.  Then reads resolve to the fixed
+loop-param CVars regardless of build order, and no forward env / SSA pass is needed.  This
+covers the fizzbuzz/counter idiom and the fixture (its `set! total` and `set! i` each read
+only entry versions; `cur = i` reads the entry `i`).  Concretely:
+
+1. **A dedicated `CT_LOOP` IR node** (NOT extending single-param `CT_LETCONT`, which would
+   disturb every existing heap-join).  `{ CVar *params; uint32_t n; CTerm *body; }`, plus a
+   `CT_CONTINUE { CAtom *args; uint32_t n; }` back-edge.  Body = `CT_IF(cond, <iter>, <exit>)`;
+   `<iter>` ends in `CT_CONTINUE(next values)`; `<exit>` delivers the live-after vars to the
+   enclosing continuation.
+2. **Loop-scoped read resolution.**  Only while lowering a `CT_LOOP` body, `atomize`
+   (`cps_ir.c:1663`, already takes `b`) resolves a loop-carried `^mut` read to the loop-param
+   CVar; `EX_SET` records the var's exit CVar in a loop-local table (no global `CpsB` map).
+   `EX_SET` outside a loop, or a value that reads an already-set var this iteration -> EVICT
+   (conservative, sound).
+3. **`CT_LOOP` emission** (`emit_cps_ir.c`): a C `while (1) { <body> }` with the params as C
+   locals; `CT_CONTINUE` assigns them and `continue`s; the exit delivers.  The interior
+   `CT_HANDLE` emits its DK chain per iteration (it installs + resolves within the iteration,
+   so it returns to straight-line before the back-edge); verify flat under the E7 trampoline.
+
+### Recommended build order (all gated on the flag; each verified against suite + flag-on sweep)
+
+1. `CT_LOOP`/`CT_CONTINUE` IR + emitter (additive; nothing produces them yet).
+2. The `EX_WHILE` transform + loop-scoped read/`set!` handling + the conservative guard, so the
+   fixture emits `run__cps` (zero `eff=1`) and prints `100`.  Companion fixtures: interior
+   self-contained handle -> DK; effect ESCAPES outward -> lower-or-cleanly-evict (no
+   miscompile); no-control-op while -> stays delegated, unchanged; a `set!`-reads-earlier-`set!`
+   loop -> cleanly EVICTS (guard holds).
 
 ### Gate / verification (unchanged from below, plus the mutation guards)
 
