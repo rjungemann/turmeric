@@ -160,6 +160,16 @@ only entry versions; `cur = i` reads the entry `i`).  Concretely:
    `CT_HANDLE` emits its DK chain per iteration (it installs + resolves within the iteration,
    so it returns to straight-line before the back-edge); verify flat under the E7 trampoline.
 
+### Ruled out -- "just emit a C `while` with C mutation and the handle inline"
+
+Tempting (C has loops + mutation, so `set!` -> C assignment, `while` -> C loop, `^mut` read ->
+C local), but UNSOUND for this construct: `emit_handle` lifts the handle's continuation
+(`handle.body`) as an `LH_RESET_CONT` **DK frame** (`emit_cps_ir.c:5445`), so the interior
+handle delivers its result through a DK continuation chain, NOT by returning to inline C.  The
+loop back-edge (`total += h; i++; iterate`) is part of that continuation, so it must live in
+the DK world -- a C `continue` cannot re-enter a DK continuation.  Hence the loop MUST be a
+continuation-based DK loop (`CT_LOOP` + multi-arg join), not a C loop wrapping the handle.
+
 ### Recommended build order (all gated on the flag; each verified against suite + flag-on sweep)
 
 1. `CT_LOOP`/`CT_CONTINUE` IR + emitter (additive; nothing produces them yet).
