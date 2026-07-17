@@ -1,11 +1,14 @@
 # E2c: an effectful fn-value stored in a STRUCT FIELD, called via `.field`, evicts (capability-field cluster)
 
-**STATUS: prerequisite landed; threading is follow-on.** The effect-row
-resolution prerequisite (commit 4801664 -- resolve ERK_UNRESOLVED CtorField
-effect rows in effect_check Step 0a2) is IN.  It clears the spurious TUR-W0033
-on this cluster and lets both effect_check and the CPS coloring see the field's
-effect.  The actual DK threading of the `.field` call is the remaining work
-pinned here.
+**STATUS: prerequisite landed (suite green 2203/0); threading is follow-on.**
+The effect-row resolution prerequisite (commit 4801664 -- resolve
+ERK_UNRESOLVED CtorField effect rows in effect_check Step 0a2) is IN, together
+with its root-cause companion (commit 13aa356 -- zero-init CtorField.effect_row
+on the positional/GADT ctor path, which the new resolve reader exposed as a
+latent uninitialized-pointer).  Together they clear the spurious TUR-W0033 on
+this cluster and let both effect_check and the CPS coloring see the field's
+effect, with the full suite green.  The actual DK threading of the `.field`
+call is the remaining work pinned here.
 
 **Severity:** low-medium (correct on the fiber; endgame migration target).
 Cluster (measured, all SIG-TAINT + eff=1 under `--enable=cps-tramp-resume`,
