@@ -2739,8 +2739,39 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
              * reach any colored peer).  fn_expr is NULL for a resolved direct
              * call, non-NULL only for the indirect/higher-order case. */
             if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
-            else if (e->as.call_.fn_expr && acc->callees && acc->callee_overflow)
-                *acc->callee_overflow = true;
+            else if (e->as.call_.fn_expr) {
+                /* Effect subtyping / capability field (docs/reported/
+                 * cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
+                 * a call THROUGH a lowered `.field` capability access (fn_expr is
+                 * an EX_GET_FIELD carrying an adt_ctor) is credited with the
+                 * FIELD's PRECISE effect row -- mirroring effect_check's
+                 * collect_effects_in_expr field path -- rather than the blunt
+                 * "reaches every colored peer" overflow.  So a handled body whose
+                 * only interior call is a capability invocation whose inferred row
+                 * is empty (a pure value stored in an effectful-typed field, which
+                 * the compiler already proves -- it raises TUR-W0033) is NOT
+                 * force-evicted.  A genuinely effectful field VALUE is still caught
+                 * globally: its stored fn is address-taken -> a permanent fiber
+                 * source -> the effect base-taints and the handler co-evicts
+                 * (SIG-TAINT), independent of this local crediting.  Gated on
+                 * cps-tramp-resume so the shipping classifier stays byte-identical
+                 * (flag-off keeps the unconditional overflow). */
+                const struct CtorDef *fac = NULL; uint32_t ffidx = 0;
+                if (g_opt_cps_tramp_resume && e->as.call_.fn_expr->kind == EX_GET_FIELD) {
+                    fac   = e->as.call_.fn_expr->as.get_field_.adt_ctor;
+                    ffidx = e->as.call_.fn_expr->as.get_field_.field_idx;
+                }
+                if (fac) {
+                    const struct EffectRow *fr = (ffidx < fac->n_fields)
+                        ? fac->fields[ffidx].effect_row : NULL;
+                    if (fr && fr->kind == ERK_CONCRETE)
+                        for (uint8_t i = 0; i < fr->as.concrete.n_effects; i++)
+                            if (fr->as.concrete.effects[i])
+                                mark_effect(fr->as.concrete.effects[i]->name, acc->plo, acc->phi);
+                } else if (acc->callees && acc->callee_overflow) {
+                    *acc->callee_overflow = true;
+                }
+            }
             if (acc->callee_target && e->as.call_.fn_binding == acc->callee_target
                 && acc->callee_out)
                 (*acc->callee_out)++;
