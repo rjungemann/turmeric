@@ -1,5 +1,15 @@
 # E2 residual: a PURE lambda subtyped into an EFFECTFUL fn-value param evicts (effect-subtype cluster)
 
+**STATUS: PARTIALLY LANDED (2 of 6).** effect-subtype-ho + effect-subtype-assign
+DK-lower via the two-part fix (force-color the pure lambda in cps.c + un-skip a
+colored pure fn-value in the E2 registration loop, emit_cps_ir.c).  The remaining
+4 (effect-type-alias, effect-struct-field-row, capability-effect-poly,
+fh-discharge-row) have a DISTINCT residual (still SIG-TAINT, correct output) --
+the lambda there is likely not a bare-EX_VAR lifted node the force-coloring peel
+reaches (inline / boxed differently), or the HOF call chain differs.  Flag-off
+byte-identical; effect family flag-on == baseline.
+
+
 **Severity:** low-medium (correct on the fiber; endgame migration target).  The
 effect-subtype/-type-alias/-struct-field-row cluster (~6 fixtures) stays SIG-TAINT
 under `--enable=cps-tramp-resume` AFTER the E2 row-poly cluster landed
