@@ -1,0 +1,31 @@
+;; E2c (cps-dk-sole-effect-lowering): an EFFECTFUL fn-value param called NON-TAIL
+;; inside a HOF that ALSO installs a `handle`, where the call sits in the handle's
+;; lifted continuation frame, is threaded onto the CPS/DK backend under
+;; --enable=cps-tramp-resume.
+;;
+;; `use-writer` handles E internally (on the DK), then calls its effectful callback
+;; `f "hi"` in the continuation after the handle; `f` performs Write, which escapes
+;; to main's outer Write handler.  Before E2c, `f` (the fn-value param) was not
+;; captured into the handle's lifted continuation frame, so the threaded
+;; `__tur_cps_lookup(f)` referenced an out-of-scope `f` (build error) and the whole
+;; HOF was guarded to the fiber (BODY-UNSUPPORTED "effectful fn-value call (E2
+;; pending)").  E2c captures the via_registry callee on the frame's env as a bare
+;; int64 fn-ptr (cap_add_fn_scalar + the collect_caps/has_capture CT_TAILCALL
+;; cases), so `use-writer` now emits use_writer__cps and threads `f "hi"`.
+;;
+;; Output: hi (main's Write handler prints the callback's arg), then 5 (the E
+;; handler's resume value that use-writer returns).
+(defeffect Write [s :cstr] :nil)
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn use-writer [f : (fn [cstr] #fx{Write} nil)] #fx{Write} : int
+  (let [n (handle (g) (E [] k) (resume k 5))]
+    (do (f "hi") n)))
+
+(defn main [] : int
+  (handle
+    (do (println (use-writer (fn [s] (perform (Write s))))) 0)
+    (Write [s] k) (do (println s) (resume k nil))))

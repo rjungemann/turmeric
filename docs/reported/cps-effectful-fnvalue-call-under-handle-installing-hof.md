@@ -1,10 +1,28 @@
 # Effectful fn-value call inside a handle-installing HOF ("E2 pending")
 
-**Severity:** medium (blocks `handle-effectful-fn-param-same-fn` and
+**STATUS: PARTIALLY LANDED (E2c).** The CONTINUATION-side case
+(`cps-backend-fn-param-effectful` / `use-writer`) is FIXED -- it now CPS-emits on the DK.
+The HANDLE-BODY case (`handle-effectful-fn-param-same-fn` / `run-with`) remains (a distinct,
+deeper mechanism -- see "Remaining" below). Both still run correctly on the fiber if evicted.
+
+**What landed (E2c, `--enable=cps-tramp-resume`, always-on capture machinery):** a non-tail
+effectful fn-value call in the LIFTED continuation frame of a handle the HOF installs
+(`use-writer`: `f "hi"` in the continuation after `(handle (g) ...)`, `f` performs Write
+escaping to main) is now threaded. The frame CAPTURES the `via_registry` callee `f` as a
+bare int64 direct-entry fn-ptr scalar (`cap_add_fn_scalar` + `cap_ctype` TY_FN -> int64 + the
+`collect_caps_rec`/`has_capture_rec` CT_TAILCALL cases), so `__tur_cps_lookup((intptr_t)f)`
+reads `f` from the env instead of an out-of-scope param. The `param_thread_class`
+`expr_has_handle -> PT_E1` guard is removed; a FAT (is_poly_fn) `f` still evicts (the capture
+bails, `needs_heap_join` catches it) until the fn_cps channel lands. Verified: default suite
+2194/0 (flag-off byte-identical); `use-writer` -> `hi`/`5` on the DK. Regression fixture
+`cps-tramp-resume-e2c-effectful-fnvalue-nontail`.
+
+---
+
+**Severity (original):** medium (blocked `handle-effectful-fn-param-same-fn` and
 `cps-backend-fn-param-effectful` from the CPS/DK backend under `--enable=cps-tramp-resume`).
-Correctness is fine -- both currently EVICT and run correctly on the fiber (`5`/`5` and
-`hi`/`5`). These are REAL fiber-live fixtures (an effectful callback is invoked), so they are
-genuine migration targets.
+Correctness is fine -- both run correctly on the fiber (`5`/`5` and `hi`/`5`). These are REAL
+fiber-live fixtures (an effectful callback is invoked), so they are genuine migration targets.
 
 ## The two fixtures
 
@@ -118,6 +136,28 @@ Distinguish the two fixtures during bring-up: `run-with` handles `f`'s effect wi
 handle (delimited, self-contained); `use-writer` lets `f`'s effect ESCAPE to an outer handler
 (main). The threaded perform must reach the correct prompt in each -- `run-with`'s own prompt,
 `use-writer`'s caller chain.
+
+## Remaining after E2c: run-with (the handle-BODY case)
+
+`use-writer` is landed; `run-with` is NOT, and it is a DIFFERENT mechanism from the E2c
+capture fix. In `run-with`, the effectful fn-value call IS the handle's DELIMITED BODY
+(`(handle (f) ...)`), not a call in the continuation. Findings from the E2c attempt:
+
+- `ptc_walk` deliberately treats a fn-value occurrence inside an `EX_HANDLE` as a value-use
+  ("runs under the HOF's own prompt"), so `f` classifies PT_NONE and is never a thread-param.
+  Adding an `EX_HANDLE` case that walks the handle BODY makes `f` classify PT_NOW and register
+  as a thread-param (verified: val=0, tc=1) -- but `run-with` STILL evicts `E2 pending`.
+- So the blocker is DEEPER than classification: the handle-BODY lowering does not route the
+  fn-value call `(f)` through the `cps_tail` `via_registry` EX_CALL branch (which threads to
+  the handle's prompt). The handle's delimited body is lowered by the `EX_HANDLE` transform
+  path, which emits `CT_UNSUPPORTED` for an effectful fn-value body rather than threading it
+  to `__h0`. Threading `(handle (f) ...)` needs that path to emit
+  `__tur_cps_lookup(f)(__h0)` (the handle prompt as the fn-value's kont), with `f` in scope
+  (it is the `__cps` param -- likely no capture needed, unlike use-writer).
+- The `ptc_walk` EX_HANDLE descent was REVERTED in the E2c commit (it made `f` a thread-param
+  but the transform still evicted, and it broadened classification with no payoff); reinstate
+  it as part of the handle-body-threading work, together with the `EX_HANDLE` transform
+  change.
 
 ## Verification
 

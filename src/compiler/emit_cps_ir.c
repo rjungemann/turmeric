@@ -661,6 +661,17 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             return has_capture_rec(t->as.letcall.body, exclude, bound, nb + 1);
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) CC_ATOM(&t->as.tailcall.args[i]);
+            /* E2c: a `via_registry` tailcall's fn-value callee is a capture when it
+             * is an enclosing (non-local, non-global) param -- mirrors the
+             * collect_caps_rec CT_TAILCALL case. */
+            if (t->as.tailcall.via_registry) {
+                const Binding *fn = t->as.tailcall.fn;
+                if (fn && !fn->is_global && !binding_excluded(fn)) {
+                    uint32_t _id = fn->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) return true;
+                }
+            }
             return false;
         case CT_IF:
             CC_ATOM(&t->as.if_.cond);
@@ -882,7 +893,26 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
  * else its scalar / by-value-aggregate binder type. */
 static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
     if (caps->polyfn[i]) return "tur_poly_fn_t";
+    /* E2c: a captureless-effectful fn-value param (a via_registry callee carried
+     * by cap_add_fn_scalar) rides the env as a bare int64 direct-entry fn-ptr --
+     * `binder_ctype_full(TY_FN)` would leak a bad spelling. */
+    if (caps->ty[i] == TY_FN) return "int64_t";
     return binder_ctype_full(ctx, caps->ty[i], caps->type[i]);
+}
+
+/* E2c: capture a captureless-effectful fn-value PARAM (a `via_registry` tailcall's
+ * callee) as a bare int64 direct-entry fn-ptr scalar, so a lifted continuation
+ * frame that threads `f` (`__tur_cps_lookup((intptr_t)f)`) reads it from its env
+ * instead of an out-of-scope param.  Only a NON-poly `TY_FN` binding qualifies (a
+ * fat closure `tur_poly_fn_t` is the separate fn_cps channel); everything else
+ * bails the capture set (cs->ok = false) exactly like cap_add. */
+static void cap_add_fn_scalar(CapSet *cs, const Binding *b) {
+    if (!b || b->type.kind != TY_FN || b->is_poly_fn) { cs->ok = false; return; }
+    for (int i = 0; i < cs->n; i++) if (cs->b[i] == b) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = b; cs->cvname[cs->n] = NULL; cs->ty[cs->n] = TY_FN;
+    cs->type[cs->n] = &b->type; cs->polyfn[cs->n] = false;
+    cs->owning[cs->n] = false; cs->n++;
 }
 
 static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty, const Type *type) {
@@ -936,6 +966,18 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
+            /* E2c: a `via_registry` tailcall threads its fn-value CALLEE through
+             * `__tur_cps_lookup(f)`; when that callee is an enclosing param (not a
+             * local of this lifted body), carry it on the frame env as an int64
+             * fn-ptr scalar so the emitted lookup resolves `f`. */
+            if (t->as.tailcall.via_registry) {
+                const Binding *fn = t->as.tailcall.fn;
+                if (fn && !fn->is_global && !binding_excluded(fn)) {
+                    uint32_t _id = fn->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) cap_add_fn_scalar(cs, fn);
+                }
+            }
             return;
         case CT_IF:
             COL_ATOM(&t->as.if_.cond);
@@ -3048,7 +3090,11 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
         default:
             /* Uncovered form (incl. EX_HANDLE / EX_RESET, where a call to p runs
              * under the HOF's own prompt): treat every occurrence of p as a
-             * value-use so the param cannot be judged threadable through it. */
+             * value-use so the param cannot be judged threadable through it.  (The
+             * handle-BODY fn-value call -- `(handle (f) ...)` in run-with -- would
+             * need the handle-body lowering to thread the call to the handle's own
+             * prompt; a distinct, deeper mechanism than the continuation-side
+             * capture E2c lands.) */
             *val += expr_count_all_uses(e, p);
             return;
     }
@@ -3075,14 +3121,14 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
         if (!pr || pr->kind != ERK_CONCRETE) return PT_E1;
     }
     if (ntc > 0) {
-        /* A non-tail fn-value call inside a HOF that ALSO installs a `handle` sits in
-         * the handle's LIFTED continuation frame, which does not capture the fn-value
-         * param -- the threaded `__tur_cps_lookup(f)` call would reference an
-         * out-of-scope `f`.  Threading it needs the capture collector to carry the
-         * via_registry callee (a later refinement); until then tier it PT_E1 so the
-         * concrete nontail slice skips it.  A handle-free HOF has its non-tail call in
-         * its direct body, where the param is in scope. */
-        if (g_opt_cps_tramp_resume && expr_has_handle(fd->body)) return PT_E1;
+        /* E2c: a non-tail fn-value call inside a HOF that ALSO installs a `handle`
+         * sits in the handle's LIFTED continuation frame.  That frame now CAPTURES
+         * the via_registry callee as an int64 fn-ptr scalar (cap_add_fn_scalar +
+         * the collect_caps/has_capture CT_TAILCALL cases), so the threaded
+         * `__tur_cps_lookup(f)` reads `f` from the env instead of an out-of-scope
+         * param.  A FAT (is_poly_fn) `f` fails the capture (cap_add_fn_scalar bails),
+         * so collect_caps fails and needs_heap_join evicts it -- correct until the
+         * fn_cps channel lands.  So a non-tail call always tiers PT_NONTAIL now. */
         return PT_NONTAIL;                            /* a non-tail fn-value call */
     }
     return PT_NOW;                                    /* tail-only, scalar carrier */
