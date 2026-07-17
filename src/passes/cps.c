@@ -9,6 +9,7 @@
 #include "arena.h"
 #include "expr.h"
 #include "typeclass.h"
+#include "effect.h"   /* effect_row_is_empty */
 #include "globals.h"   /* F3: g_opt_cps_async */
 
 /* Phase 18: CPS transformation for delimited continuations
@@ -543,6 +544,94 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
     }
 }
 
+/* E2 (cps-tramp-resume): peel a fn-value ARG's wrappers to the EX_VAR naming a
+ * (lifted-lambda) binding. */
+static const Expr *cps_peel_fnvalue_arg(const Expr *e) {
+    while (e) {
+        switch (e->kind) {
+            case EX_ASCRIBE:     e = e->as.ascribe_.inner;     break;
+            case EX_FN_TO_FAT:   e = e->as.fn_to_fat_.inner;   break;
+            case EX_POLY_TO_FAT: e = e->as.poly_to_fat_.inner; break;
+            case EX_POLY_WRAP:   e = e->as.poly_wrap_.inner;   break;
+            case EX_CAST:        e = e->as.cast_.expr;         break;
+            case EX_REINTERPRET: e = e->as.reinterpret_.expr;  break;
+            default:             return e;
+        }
+    }
+    return e;
+}
+
+/* E2 (cps-tramp-resume): force-color a lifted lambda passed as an arg to an
+ * effectful TY_FN param, so a PURE such lambda still gets a __cps entry the HOF's
+ * registry thread needs (effect-subtype cluster).  Best-effort recursion. */
+static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32_t n) {
+    if (!e) return false;
+    bool ch = false;
+    switch (e->kind) {
+        case EX_CALL: {
+            if (e->as.call_.fn_binding) {
+                int ci = cps_find_node(nodes, n, e->as.call_.fn_binding);
+                if (ci >= 0) {
+                    FnDef *cfd = nodes[ci].fd;
+                    uint32_t np = cfd->n_params;
+                    for (uint32_t p = 0; p < np && p < e->as.call_.n_args; p++) {
+                        const Binding *pb = cfd->params ? cfd->params[p] : NULL;
+                        if (!pb || pb->type.kind != TY_FN) continue;
+                        EffectRow *pr = (EffectRow *)pb->type.as.fn.effect_row;
+                        if (effect_row_is_empty(pr)) continue;
+                        const Expr *arg = cps_peel_fnvalue_arg(e->as.call_.args[p]);
+                        if (arg && arg->kind == EX_VAR && arg->as.var.binding) {
+                            int li = cps_find_node(nodes, n, arg->as.var.binding);
+                            if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                        }
+                    }
+                }
+            }
+            if (cps_force_color_eff_fnval_args(e->as.call_.fn_expr, nodes, n)) ch = true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (cps_force_color_eff_fnval_args(e->as.call_.args[i], nodes, n)) ch = true;
+            return ch;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cps_force_color_eff_fnval_args(e->as.let_.bindings[i].init, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.let_.body, nodes, n)) ch = true;
+            return ch;
+        case EX_IF:
+            if (cps_force_color_eff_fnval_args(e->as.if_.cond, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.if_.then_, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.if_.else_or_null, nodes, n)) ch = true;
+            return ch;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cps_force_color_eff_fnval_args(e->as.do_.items[i], nodes, n)) ch = true;
+            return ch;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (cps_force_color_eff_fnval_args(e->as.builtin.args[i], nodes, n)) ch = true;
+            return ch;
+        case EX_WHILE:
+            if (cps_force_color_eff_fnval_args(e->as.while_.cond, nodes, n)) ch = true;
+            if (cps_force_color_eff_fnval_args(e->as.while_.body, nodes, n)) ch = true;
+            return ch;
+        case EX_SET:    return cps_force_color_eff_fnval_args(e->as.set_.value, nodes, n);
+        case EX_RETURN: return cps_force_color_eff_fnval_args(e->as.return_.value, nodes, n);
+        case EX_DEFER:  return cps_force_color_eff_fnval_args(e->as.defer_.body, nodes, n);
+        case EX_DEF:    return cps_force_color_eff_fnval_args(e->as.def_.init, nodes, n);
+        case EX_ASCRIBE:return cps_force_color_eff_fnval_args(e->as.ascribe_.inner, nodes, n);
+        case EX_RESET:  return cps_force_color_eff_fnval_args(e->as.reset_.body, nodes, n);
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (cps_force_color_eff_fnval_args(h->body, nodes, n)) ch = true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (cps_force_color_eff_fnval_args(h->cases[i].body, nodes, n)) ch = true;
+            return ch;
+        }
+        default: return false;
+    }
+}
+
 void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;
@@ -581,6 +670,24 @@ void cps_color_program(Arena *a, Expr *program) {
                     changed = true;
                     break;
                 }
+            }
+        }
+    }
+
+    if (g_opt_cps_tramp_resume) {
+        bool fc = true;
+        while (fc) {
+            fc = false;
+            for (uint32_t i = 0; i < n; i++)
+                if (cps_force_color_eff_fnval_args(nodes[i].fd->body, nodes, n)) fc = true;
+        }
+        changed = true;
+        while (changed) {
+            changed = false;
+            for (uint32_t i = 0; i < n; i++) {
+                if (nodes[i].colored) continue;
+                for (uint32_t e = 0; e < nodes[i].n_edges; e++)
+                    if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
             }
         }
     }

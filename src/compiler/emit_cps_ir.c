@@ -3603,7 +3603,14 @@ static void ensure_S(const Expr *program) {
             if (!is_fnval) continue;
             uint64_t lo = 0, hi = 0;
             expr_collect_effects(fd->body, &lo, &hi);
-            if (!(lo || hi)) continue;   /* only effectful fn-values keep the fiber alive */
+            /* An effectful fn-value keeps the fiber alive.  A PURE fn-value
+             * normally does not -- EXCEPT one the coloring pass force-colored
+             * because it flows into an EFFECTFUL fn-value param (effect-subtype
+             * cluster): the HOF threads that param via the registry, which needs
+             * even a pure callback to be `threadable_add`ed with a `__cps` entry,
+             * else `param_is_thread_safe` fails and the HOF sig_perms "E2 pending".
+             * So a colored pure lambda proceeds to the threadability check. */
+            if (!(lo || hi) && !fd->cps_colored) continue;
             int total = 0, ok = 0, tier = 0;
             bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
             /* E2a: a concrete captureless lambda is threaded onto the DK -- tier
