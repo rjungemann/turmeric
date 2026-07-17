@@ -129,7 +129,14 @@ The direct/fiber effect **emitters** (`src/compiler/emit_effects.c`):
 `emit_cps_ir_try_fn` (`emit_fns.c:2624`, def `emit_cps_ir.c:5057`): returns true =
 DK lowering; false = fall through to the direct/fiber emitter. **The fiber effect
 runtime is dead exactly when no effectful colored function makes this return
-false.** The deletion is safe when that holds.
+false** -- *except the session/thread subsystem carve-out* (W5 correction): the
+`session-effects` / `session-mp-effects` mains are permanent fiber clients whose
+inline-C pthread/session-channel body cannot thread a DK, so they legitimately
+return false while handling `SessionLog` / `MpLog`. The gate's target is "no
+effect on a fiber **via the DK-lowerable path**"; the thread/session-channel
+runtime is a separate subsystem the deletion does not target. The deletion is
+safe when that holds for every effectful colored function that is not a member of
+that carve-out.
 
 ---
 
@@ -194,8 +201,25 @@ direct-emitted only when it is `SIG-*`. So the effectful work-list is:
   (nothing seeds `g_perm` -> the taint fixpoint empties).
 - **(W5) `SIG-INLINE-C`.** An inline-C body performs no *Turmeric* effect (opaque
   C, no `perform`), so it never fires the fiber emitters. It is already a leaf --
-  reclassify it as one (**E5**); no runtime effect migration needed. (The two
-  corpus instances are also mains -> also covered by E3.)
+  reclassify it as one (**E5**); no runtime effect migration needed.
+
+  **Correction (session-effects / session-mp-effects are NOT covered by E3).**
+  The two SIG-INLINE-C corpus instances (`session-effects`, `session-mp-effects`
+  mains) are the exception this row originally glossed as "also mains -> covered
+  by E3." They are NOT: each `main` HANDLES a real algebraic effect
+  (`SessionLog` / `MpLog`) that IS performed on the fiber, and its inline-C is
+  **load-bearing** -- raw `pthread` `spawn`/`join` + inline-C session/channel
+  primitives -- not an opaque no-effect leaf. E3's fixed-ABI DK entry wrapper
+  cannot help: the CPS backend can never thread a DK continuation through that
+  inline-C, so `main` stays SIG-INLINE-C and permanently taints the effect
+  (the session/role param SIG-REJECTs, and would only reclassify to SIG-TAINT if
+  admitted -- a net-zero widening). These two are a **separate concurrency
+  subsystem** (OS threads + inline-C session channels), NOT the
+  delimited-continuation DK effect machine this plan deletes, so they are
+  **permanent fiber clients, explicitly out of scope for the deletion**: "delete
+  the fiber effect runtime" means "delete the DK effect machine's fiber path,"
+  which the thread/session-channel runtime is not part of. Analysis + decision:
+  [docs/archive/cps-session-effects-permanently-fiber-bound.md](../../archive/cps-session-effects-permanently-fiber-bound.md).
 
 **Pure indirect-call-colored functions are NOT on this list.** `option-eq?`,
 `fmap`, `bind`, a comparator `__fn_*` -- colored only because they apply a
@@ -450,7 +474,13 @@ in the shipping config fails the build.
 1. Add a build-time assertion in the classifier: **no colored function with a
    non-empty net effect row may return false from `emit_cps_ir_try_fn`** (extend
    the PZ hard error to fire for an effectful SIG-* fallback too, in the shipping
-   config). This makes "no effect on a fiber" a compiler invariant.
+   config). This makes "no effect on a fiber" a compiler invariant. **Carve-out:**
+   the assertion must whitelist the session/thread subsystem (W5 correction) --
+   an effectful SIG-INLINE-C fn whose inline-C is load-bearing pthread/session
+   runtime (`session-effects` / `session-mp-effects`) is a permanent fiber client,
+   not a missed DK root. Key the exemption on the SIG-INLINE-C-with-effect shape
+   (or an explicit fixture allowlist), NOT on the effect name, so a genuine
+   regression still fires.
 2. Delete the `emit_effects.c` direct emitters (Sec 2a) and their `emit_value`
    dispatch. Replace with a hard error ("effect reached the direct emitter -- v2
    invariant violated") so any resurrection is caught.
@@ -458,7 +488,12 @@ in the shipping config fails the build.
    `EffectHandlerFrame`/`Case`, `global_effect_handler_chain`, `tur_handler_dispatch`
    + msdyn, `tur_effect_cont_*`, `tur_handler_table_t`, and the two `FiberBlock`
    effect fields. Keep `FiberBlock` (concurrency) and `tur_cloneable_cont` (DK
-   bridge).
+   bridge). **Blocked (W5 correction):** `session-effects` / `session-mp-effects`
+   still emit and use `tur_effect_perform` / `global_effect_handler_chain` /
+   `EffectHandlerFrame` / `tur_handler_dispatch` (their mains handle
+   `SessionLog` / `MpLog` on the fiber). This step cannot proceed until those two
+   permanent fiber clients are rewritten or bucketed out -- see Sec 7 and
+   [docs/archive/cps-session-effects-permanently-fiber-bound.md](../../archive/cps-session-effects-permanently-fiber-bound.md).
 4. Verify (Sec 8).
 
 ---
@@ -469,12 +504,29 @@ in the shipping config fails the build.
   in any emitted `.c` = **0**.
 - `emit_effects.c` contains only the delimited-control passthroughs; the direct
   perform/handle/resume emitters are gone.
-- `emit_cps_ir_try_fn` never returns false for an effectful colored function; the
-  invariant is asserted at build time.
+- `emit_cps_ir_try_fn` never returns false for an effectful colored function
+  **outside the session/thread carve-out**; the invariant is asserted at build
+  time (with that carve-out whitelisted -- see Sec 6 step 1).
 - Full suite green (2179/0), ASan clean, stackless probe green.
-- The CPS/DK backend is the **sole effect lowering**. (Pure indirect-call-colored
-  functions may still direct-emit -- that is correct and touches no effect
-  runtime.)
+- The CPS/DK backend is the **sole effect lowering** for the delimited-
+  continuation effect machine. (Pure indirect-call-colored functions may still
+  direct-emit -- correct, touches no effect runtime.)
+
+  **Blocker to deleting the fiber effect runtime C to ZERO (W5 correction,
+  measured):** `session-effects` / `session-mp-effects` emit and *use* the fiber
+  effect runtime symbols Sec 6 step 3 wants to delete -- their emitted C contains
+  `tur_effect_perform`, `global_effect_handler_chain`, `EffectHandlerFrame`, and
+  `tur_handler_dispatch` (their `main` handles `SessionLog` / `MpLog` on the fiber
+  chain). So the Sec 7 "grep = 0" and the Sec 6 step 3 deletion **cannot be
+  reached while these two fixtures stand**. This is the report's honest framing:
+  the fiber effect runtime cannot be deleted to zero without first addressing the
+  thread-based session model. Resolve before Stage G by one of: (a) rewrite the
+  two fixtures so the log effect is handled in a non-inline-C helper (E3'-style),
+  leaving only threaded session I/O on the fiber; (b) move them to a `requires.*`
+  bucket and scope the "grep = 0" target to non-session fixtures; or (c) retain a
+  minimal fiber-style effect path for the session/thread subsystem and redefine
+  "done" as "no effect on the DK-lowerable path." See
+  [docs/archive/cps-session-effects-permanently-fiber-bound.md](../../archive/cps-session-effects-permanently-fiber-bound.md).
 
 ---
 

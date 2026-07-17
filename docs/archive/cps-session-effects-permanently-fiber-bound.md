@@ -6,13 +6,21 @@
 **Decision:** accept `session-effects` and `session-mp-effects` as **permanent fiber
 clients** and scope them OUT of the CPS/DK admission work.  The report's own recommendation
 ("Do NOT treat these as CPS-backend admission targets ... Do not land such an admission") is
-adopted: no compiler change was made.  Instead the analysis was reproduced and confirmed
-verbatim on this branch, and a durable "permanent fiber client -- NOT a CPS/DK migration
-target" note was added to each fixture's header so the eviction analysis is not re-derived
-and nobody re-attempts the (net-zero) admission.  The pthread + inline-C session/channel
-runtime is a SEPARATE concurrency subsystem from the delimited-continuation DK effect
-machine; "delete the fiber effect runtime" (docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md)
-means delete the DK effect machine's fiber path, not this thread/channel runtime.
+adopted: no compiler change was made.  The analysis was reproduced and confirmed verbatim on
+this branch; a durable "permanent fiber client -- NOT a CPS/DK migration target" note was
+added to each fixture's header (so the eviction analysis is not re-derived and nobody
+re-attempts the net-zero admission); and the deletion plan
+`docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md` (part of this same
+cps-runtime-finish-plan line) was corrected -- Sec 4/W5 no longer claims these mains are
+"covered by E3", and the decisive gate (2c), the build-time assertion (Sec 6 step 1), and
+the "done" definition (Sec 7) now carry the session/thread carve-out.  Measured and recorded
+there: the two fixtures' emitted C actually uses `tur_effect_perform` /
+`global_effect_handler_chain` / `EffectHandlerFrame` / `tur_handler_dispatch`, so Sec 6
+step 3 ("delete the fiber effect runtime C") and the Sec 7 "grep = 0" cannot be reached until
+these two are rewritten or bucketed out.  The pthread + inline-C session/channel runtime is a
+SEPARATE concurrency subsystem from the delimited-continuation DK effect machine; "delete the
+fiber effect runtime" means delete the DK effect machine's fiber path, not this thread/channel
+runtime.
 
 Reproduced on this branch (`TUR_TRACE_EVICT=1 tur emit-c --enable=cps-tramp-resume`):
 `SIG-REJECT exchange` + `SIG-INLINE-C main` (session-effects); `SIG-REJECT role-a` +

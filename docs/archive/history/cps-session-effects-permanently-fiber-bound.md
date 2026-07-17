@@ -30,18 +30,29 @@ decision durably, not writing code.
    net-zero admission is not re-attempted.  ASCII-only; comments only, so no
    codegen/output change (both fixtures still pass).
 
+4. **Corrected the deletion plan** `docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md`
+   (this branch is part of the same cps-runtime-finish-plan line -- the plan is
+   ours to maintain):
+   - **Sec 4 / W5:** added the correction that the two SIG-INLINE-C session mains
+     are NOT "covered by E3" -- they HANDLE a real effect and their inline-C is
+     load-bearing pthread/session runtime, so they are permanent fiber clients of
+     a separate concurrency subsystem, out of scope for the deletion.
+   - **Sec 2c (decisive gate)** and **Sec 7 (done)**: qualified the
+     "no effectful colored fn falls back" invariant with the session/thread
+     carve-out.
+   - **Sec 6 step 1 (build-time assertion):** must whitelist that carve-out.
+   - **Sec 6 step 3 + Sec 7 (measured blocker):** the two fixtures' emitted C
+     actually USES `tur_effect_perform` / `global_effect_handler_chain` /
+     `EffectHandlerFrame` / `tur_handler_dispatch` (verified), so "delete the
+     fiber effect runtime C" and "grep = 0" **cannot be reached** until they are
+     rewritten or bucketed out. Recorded the three resolution options.
+
 ## What was deliberately NOT done
 
 - **No compiler change.** A TY_SESSION/TY_ROLE param signature widening moves
   zero fixtures (the SIG-INLINE-C `main` still permanently taints the effect) and
   adds gated signature surface for no gain -- exactly the reverted opaque-carrier
   slice.  The report is explicit that such an admission must not land.
-- **No edit to `docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md`.** That
-  living plan is owned by the parallel `cps-runtime-finish-plan` effort; the
-  correction it implies to Sec 4 / W5 (the session-effect mains are NOT cleared
-  by E3 -- their inline-C is load-bearing pthread/session runtime, not an opaque
-  leaf) is captured here and in the archived report, to avoid cross-branch
-  divergence on that document.
 
 ## The framing (for the fiber-runtime deletion)
 
