@@ -1,5 +1,36 @@
 # Top-level `(handle ...)` in a synthesized main bypasses the CPS/DK backend (THE endgame taint root)
 
+**STATUS: PARTIALLY LANDED (Approach A, gated on `--enable=cps-tramp-resume`).**
+`elaborate_program` (src/compiler/elab_toplevel.c) now folds trailing top-level
+STATEMENT forms into a synthesized `(defn main [] : int (do <stmts> 0))` so a
+top-level handler flows through `fn_is_d2b_main` + `emit_cps_ir` like a user main.
+Conservative + macro-safe (fires only when there is no user `main` and every
+user-region form is a def*/directive or a plain non-macro call; any macro / `do`
+/ ambiguous head aborts the fold). **Flag-off is byte-identical** (default suite
+2202/0) -- the fold is gated because flag-off the base CPS subset is narrower and
+the N6.5 fallback is retired, so a synthesized d2b main leaving the subset would
+hard-error rather than fiber. **Flag-on payoff: real fiber-live fixtures 39 -> 27**
+(12 effect-* fixtures now DK-lower: effect-handler/-nested*/-multiple/-oneshot/
+-perform-handle/-resume-value/-declaration/-console/-defer/-rc/-capture-k*/
+linear-effect-handler; `effect-handler` emits `compute__cps`, zero `eff=1`, output
+`104`).
+
+**Two FLAG-ON follow-on gaps (not flag-off; the fold merely EXPOSED pre-existing
+DK codegen limits by routing these top-level handles onto the DK):**
+`effect-capture-k` and `effect-nested` MISCOMPILE flag-on (`k_hystore_*`
+undeclared across the lifted-frame boundary). Both STORE the captured continuation
+`k` in a `^mut` and `resume` it AFTER the handle exits -- an escaping/stored
+(multishot-style) continuation whose DK lowering emits the `k` capture in one
+function and reads it in another (a cross-frame scoping bug in the escaping-cont
+codegen, independent of this fold). Flag-off both are byte-identical and green.
+Remaining SIG-TAINT after the fold is the effect-poly/-row/-subtype family (E2b /
+effect-subtype-capability adjacent), the permanent session/export carve-outs, and
+the 4 non-permanent CPS roots. Follow-on: fix the escaping-cont `k`-capture
+cross-frame scoping so the stored-continuation shapes DK-lower, then graduate the
+fold to always-on and regen the top-level-expr snapshots.
+
+---
+
 **Severity:** HIGH for the endgame (the single largest lever). Correctness is
 fine -- these programs run correctly on the fiber. But this one root is why
 **~33 ordinary effect fixtures still ride the fiber effect runtime flag-on**
