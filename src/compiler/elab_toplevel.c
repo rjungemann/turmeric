@@ -1,6 +1,7 @@
 /* elab_toplevel.c -- top-level form dispatch and the elaborate_program entry point. */
 #include "elab_internal.h"
 #include "platform_fs.h"  /* realpath() on Windows */
+#include "globals.h"      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
@@ -1211,6 +1212,134 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             Type t = type_adt(stub);
             Binding *b = binding_new(&e, type_name, t, false, true, name_f->span);
             scope_add(&e.global, b);
+        }
+    }
+
+    /* v2 sole-effect-lowering (top-level-handle taint root): fold trailing
+     * top-level STATEMENT forms into a synthesized `(defn main [] : int
+     * (do <stmts> 0))` so an effect handler written at top level -- the idiomatic
+     * `(println (handle ...))` with no explicit `main` -- flows through the CPS/DK
+     * backend like a user main.  Without this the statements are direct/fiber-
+     * emitted into a synthesized `int main()` that never reaches the CPS
+     * classifier, so the top-level handle stays on the fiber, base_taints its
+     * effect, and every performer of that effect is forced onto the fiber
+     * (SIG-TAINT).  See docs/reported/cps-toplevel-synthesized-main-bypasses-dk.md.
+     *
+     * CONSERVATIVE + macro-safe: only fires when there is NO user `main` and
+     * every user-region top-level form is cleanly classifiable WITHOUT expanding
+     * macros -- either a definition/directive (head name starts with "def", or a
+     * known module directive; stays top-level) or a plain non-macro call (folded
+     * into main).  A macro call is ambiguous (it may expand to a top-level def OR
+     * a statement -- see macro-emits-multiple-top-level-forms), a top-level `do`
+     * progn may carry defs, and a bare atom would be dropped once the historical
+     * synthesized-main path is suppressed; ANY of these in the user region aborts
+     * the fold and preserves the historical behaviour exactly.  Only the entry
+     * unit is transformed (never a separately-compiled module).
+     *
+     * GATED on --enable=cps-tramp-resume: flag-off, the base CPS admissible
+     * subset is narrower and the N6.5 direct/fiber fallback is retired, so a
+     * synthesized d2b `main` whose handle subtree leaves the subset would HARD-
+     * ERROR instead of gracefully fibering.  The historical synthesized-`int
+     * main()` path (never subject to the CPS classifier) stays the flag-off
+     * behaviour; the fold only fires under the experiment, keeping flag-off
+     * codegen byte-identical. */
+    if (g_opt_cps_tramp_resume && !separate_compilation && stdlib_prefix <= nforms) {
+        /* Collect every defmacro name (user + stdlib) so a macro-headed
+         * top-level statement can be detected and aborted on. */
+        const Symbol **macro_names = NULL;
+        uint32_t n_macro = 0, cap_macro = 0;
+        for (uint32_t i = 0; i < nforms; i++) {
+            Form *f = forms[i];
+            if (!f || f->tag != F_LIST || f->as.list.len < 2) continue;
+            Form *h = f->as.list.items[0];
+            if (!h || h->tag != F_SYM || h->as.sym != e.sym_defmacro) continue;
+            Form *nm = f->as.list.items[1];
+            if (!nm || nm->tag != F_SYM) continue;
+            if (n_macro == cap_macro) {
+                cap_macro = cap_macro ? cap_macro * 2 : 16;
+                macro_names = realloc(macro_names, cap_macro * sizeof(*macro_names));
+            }
+            macro_names[n_macro++] = nm->as.sym;
+        }
+        bool have_user_main = false, ambiguous = false, any_stmt = false;
+        for (uint32_t i = stdlib_prefix; i < nforms && !ambiguous; i++) {
+            Form *f = forms[i];
+            if (!f) continue;
+            if (f->tag == F_CBLOCK) continue;             /* file-scope C stays */
+            if (f->tag != F_LIST || f->as.list.len == 0) { ambiguous = true; break; }
+            Form *head = f->as.list.items[0];
+            if (!head || head->tag != F_SYM || !head->as.sym->name) { ambiguous = true; break; }
+            const Symbol *hs = head->as.sym;
+            const char *hn = hs->name;
+            /* definition: any def* head stays top-level */
+            if (hn[0] == 'd' && hn[1] == 'e' && hn[2] == 'f') {
+                if (hs == e.sym_defn) {
+                    uint32_t ni = 1;   /* skip ^attr / (export-as ..) prefix syms */
+                    while (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
+                           && f->as.list.items[ni]->as.sym->name
+                           && f->as.list.items[ni]->as.sym->name[0] == '^') ni++;
+                    if (ni < f->as.list.len && f->as.list.items[ni]->tag == F_SYM
+                        && f->as.list.items[ni]->as.sym->len == 4
+                        && memcmp(f->as.list.items[ni]->as.sym->name, "main", 4) == 0)
+                        have_user_main = true;
+                }
+                continue;
+            }
+            /* module directives stay top-level */
+            if (hs == e.sym_import || hs == e.sym_load || hs == e.sym_export
+                || hs == e.sym_extern_c || hs == e.sym_defmodule) continue;
+            /* macro call / do progn / quote form: ambiguous -> abort the fold */
+            if (hs == e.sym_do) { ambiguous = true; break; }
+            bool is_macro = false;
+            for (uint32_t m = 0; m < n_macro; m++)
+                if (macro_names[m] == hs) { is_macro = true; break; }
+            if (is_macro) { ambiguous = true; break; }
+            /* otherwise a plain call: a genuine top-level statement */
+            any_stmt = true;
+        }
+        free(macro_names);
+
+        if (!have_user_main && !ambiguous && any_stmt) {
+            /* Build `(defn main [] : int (do <stmts...> 0))`, keeping every
+             * definition/directive in place and collecting the statement forms
+             * in source order. */
+            Span sp = (nforms > 0) ? forms[nforms - 1]->span : (Span){0,0,0,0,0,0};
+            Form **new_forms = (Form **)arena_alloc(arena, (nforms + 1) * sizeof(Form *));
+            uint32_t nn = 0;
+            Form **stmts = (Form **)arena_alloc(arena, (nforms + 1) * sizeof(Form *));
+            uint32_t n_stmts = 0;
+            for (uint32_t i = 0; i < nforms; i++) {
+                Form *f = forms[i];
+                bool is_stmt = false;
+                if (i >= stdlib_prefix && f && f->tag == F_LIST && f->as.list.len > 0
+                    && f->as.list.items[0]->tag == F_SYM) {
+                    const char *hn = f->as.list.items[0]->as.sym->name;
+                    const Symbol *hs = f->as.list.items[0]->as.sym;
+                    bool is_def = hn && hn[0]=='d' && hn[1]=='e' && hn[2]=='f';
+                    bool is_dir = (hs == e.sym_import || hs == e.sym_load
+                                   || hs == e.sym_export || hs == e.sym_extern_c
+                                   || hs == e.sym_defmodule);
+                    is_stmt = !is_def && !is_dir;
+                }
+                if (is_stmt) stmts[n_stmts++] = f;
+                else         new_forms[nn++] = f;
+            }
+            /* do-body: (do stmt1 .. stmtN 0) */
+            Form **do_items = (Form **)arena_alloc(arena, (n_stmts + 2) * sizeof(Form *));
+            do_items[0] = form_sym(arena, sp, e.sym_do);
+            for (uint32_t i = 0; i < n_stmts; i++) do_items[i + 1] = stmts[i];
+            do_items[n_stmts + 1] = form_int(arena, sp, 0);
+            Form *do_body = form_list(arena, sp, do_items, n_stmts + 2);
+            /* (defn main [] : int <do_body>) */
+            Form **defn_items = (Form **)arena_alloc(arena, 5 * sizeof(Form *));
+            defn_items[0] = form_sym(arena, sp, e.sym_defn);
+            defn_items[1] = form_sym(arena, sp, intern_cstr(st, "main"));
+            defn_items[2] = form_vec(arena, sp, NULL, 0);
+            defn_items[3] = form_type_ann(arena, sp, form_sym(arena, sp, intern_cstr(st, "int")));
+            defn_items[4] = do_body;
+            new_forms[nn++] = form_list(arena, sp, defn_items, 5);
+            forms = (Form *const *)new_forms;
+            nforms = nn;
         }
     }
 
