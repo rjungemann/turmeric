@@ -584,6 +584,39 @@ assumption. Probe it FIRST, in isolation, before committing to Stages A-D:
 
 ## 10. Progress log
 
+### Session 6 -- E2 row-poly fn-value cluster onto the DK (Stage E, real fixture movement)
+
+The effect-poly/-row/-subtype SIG-TAINT cluster was blocked NOT on the
+fat-closure `fn_cps` channel (sub-slice 1) but on the ROW-VARIABLE effect
+fn-value param gate.  A `(fn [] #fx{e} int)` param tiered PT_E1, forcing the
+callback lambda to the fiber; those callbacks are bare int64 fn-ptrs threadable
+via the E2a registry (the DK thread is effect-agnostic).  Two gated changes land
+the cluster:
+
+1. `param_thread_class` (emit_cps_ir.c): admit a row-variable TY_FN param under
+   `--enable=cps-tramp-resume` (drop the `ERK_CONCRETE` requirement).
+2. `colored_call_wbd_delegatable` (cps_ir.c): under the flag, skip the cross-HOF
+   leaf-fiber delegation (`apply-logged = (apply callback x)`).  Its premise --
+   the callback stays fiber -- no longer holds once (1) threads the callback;
+   delegating the HOF while the callback threads splits performer/handler across
+   runtimes (effect-poly-infer aborted).  Skipping it threads the HOF's `__cps`
+   through the whole chain (`main -> apply-logged__cps -> apply__cps -> lambda`).
+
+Moved onto the DK: `effect-poly-typeclass` (2), `-bracket` (release),
+`effect-row-ho` (42), `-compose` (42), and the multi-hop `effect-poly-infer`
+(calling).  Real fiber-live fixtures **27 -> ~18**.  Flag-off byte-identical
+(default suite 2203/0); the whole effect family flag-on == baseline; full flag-on
+soundness sweep clean (the mandatory gate for this cluster -- the earlier E2
+attempt was reverted here for unsoundness).  Paper trail:
+docs/archive/cps-e2-rowpoly-fnvalue-threading-boundary.md.
+
+**Remaining fiber-live roots** (post-cluster): effect-subtype-* / -type-alias /
+-struct-field-row / capability-effect-poly / fh-discharge-row (partial -- residual
+eff=1 but correct output), effect-poly-map (non-tail leaf-fiber recursion),
+effect-ref / effect-capture-k (owning-across-control / by-ref mut capture),
+effect-nested (nested-handle), the while-native mutation-width residue, and the
+permanent session/export carve-outs.
+
 ### Session 5 -- readset (delicate) landed; E2 STARTED (Stage E sub-slice 1, the ABI slot)
 
 - **while-native read-after-set (LANDED).**  `set! total (+ total prev)` after

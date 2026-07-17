@@ -1,5 +1,16 @@
 # E2: row-polymorphic effect fn-value threading -- sound for direct-under-handler HOFs, unsound for cross-HOF-delegated multi-hop
 
+**STATUS: RESOLVED (commit 4b8ea6b).** The sound landing turned out cleaner than
+either route below: relax the row-variable param gate under the flag AND, under
+the flag, skip the cross-HOF leaf-fiber delegation in
+`colored_call_wbd_delegatable` (cps_ir.c) -- so the caller threads the HOF's
+`__cps` through the whole chain (`main -> apply-logged__cps -> apply__cps ->
+lambda`) instead of delegating `apply` to fiber.  poly-infer DK-lowers correctly
+(no route-1 "leave it on fiber" needed).  Verified: the whole effect family
+flag-on == flag-off baseline, real fiber-live 27 -> ~18, default suite 2203/0
+(flag-off byte-identical), full flag-on soundness sweep clean.  The two-route
+analysis below is retained as the paper trail.
+
 **Severity:** medium (a precise, verified E2 sub-slice boundary; no code landed --
 the blanket relaxation is UNSOUND on one fixture, so it must NOT ship as-is).
 This report records a deep investigation so the sound version executes without
