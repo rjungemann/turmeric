@@ -1370,7 +1370,12 @@ BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 perman
   safe); a conservative `loop_guard` evicts read-after-set / conditional-set / multi-live
   shapes.  Regression fixtures: `cps-tramp-resume-while-handle`,
   `-while-handle-escape`, `-while-readset`.  Paper trail:
-  `docs/archive/history/cps-while-loop-with-interior-handle-no-native-lowering.md`.  Below
+  `docs/archive/history/cps-while-loop-with-interior-handle-no-native-lowering.md`.
+  **Residue (endgame blocker):** the subset is conservative, so read-after-set,
+  conditional/multi-var `set!`, multiple live-after vars, nested loops, and an
+  ESCAPING interior effect still evict `eff=1` to the fiber -- they must DK-lower
+  before the fiber runtime can be deleted.  Filed:
+  `docs/reported/cps-while-native-conservative-subset-fiber-residue.md`.  Below
   is the pre-landing analysis (retained for context):
 
   Flag-
