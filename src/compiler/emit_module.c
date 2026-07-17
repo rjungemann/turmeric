@@ -6383,6 +6383,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * per-module header emission dedupe to one tur_poly_fn_t. Single-file mode
      * emits it bare (byte-identical). */
     if (shared) buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n#define TUR_POLY_FN_T_DEFINED\n");
+    buf_puts(out, "struct DK;\n");  /* E2: forward-declare so fn_cps's DK* is the real type, not typedef-scoped */
     buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;\n");  /* E2: fn_cps DK-threading slot (NULL for pure fn-values) */
     if (shared) buf_puts(out, "#endif\n");
     /* ET3: handler runtime type.
@@ -10853,6 +10854,7 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         buf_puts(out, "/* rank-2 polymorphic closure carrier (typeclass-method params) */\n");
         buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n");
         buf_puts(out, "#define TUR_POLY_FN_T_DEFINED\n");
+        buf_puts(out, "struct DK;\n");  /* E2: forward-declare so fn_cps's DK* is the real type, not typedef-scoped */
         buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;\n");  /* E2: fn_cps DK-threading slot (NULL for pure fn-values) */
         buf_puts(out, "#endif\n\n");
     }

@@ -4170,6 +4170,33 @@ static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
     return s;
 }
 
+/* Like atoms_csv, but for CALL-argument positions where a bare `TY_FN`
+ * fn-value flows into an HOF whose fn-value param is declared `int64_t` (the
+ * threading ABI carries fn-values as int64).  The lifted lambda is emitted as a
+ * plain C function pointer (`void (*)(...)`), so passing it raw is an
+ * int-from-pointer warning; cast it through intptr_t.  A FAT closure
+ * (`tur_poly_fn_t`) is a struct value, not a bare pointer, so it is left
+ * untouched.  Non-fn atoms are emitted exactly as atoms_csv would, so any call
+ * with no fn-value arg is byte-identical. */
+static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        if (!atom_is_fat_fn(&args[i]) &&
+            (args[i].kind == CA_VAR || args[i].kind == CA_CVAR) &&
+            args[i].ty == TY_FN)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
 static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
 static void emit_reset(CE *ce, const CTerm *t);
@@ -4301,7 +4328,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             /* cps->direct: an uncolored callee runs to completion and returns an
              * ordinary value; no continuation is threaded in. */
             char *fn = callee_name(t->as.letcall.fn);
-            char *argv = atoms_csv(ce, t->as.letcall.args, t->as.letcall.n);
+            char *argv = atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n);
             char *bn = cvar_cname(ce, t->as.letcall.x);
             /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
              * no value: emit the call as a bare statement and bind the unit
@@ -4324,7 +4351,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * registry and thread __kont so its perform reaches the caller's
                  * handler.  __cps ABI: int64_t (*)(int64_t args..., DK*). */
                 char *pf = callee_name(t->as.tailcall.fn);
-                char *argv = atoms_csv(ce, t->as.tailcall.args, t->as.tailcall.n);
+                char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
                 /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
@@ -4350,7 +4377,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 mclone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
                                                   t->as.tailcall.args, t->as.tailcall.n);
             char *fn = mclone ? strdup(mclone) : callee_name(t->as.tailcall.fn);
-            char *argv = atoms_csv(ce, t->as.tailcall.args, t->as.tailcall.n);
+            char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
             if (binding_in_s(t->as.tailcall.fn) || mclone) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
@@ -4895,7 +4922,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                    || jbody_has_perform(t->as.letcont.jbody);
 
     char *fn = callee_name(call->as.tailcall.fn);
-    char *argv = atoms_csv(ce, call->as.tailcall.args, call->as.tailcall.n);
+    char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
      * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
