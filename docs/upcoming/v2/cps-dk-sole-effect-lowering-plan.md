@@ -1366,7 +1366,15 @@ BODY-STRUCT-OR-TAINT 7; BODY-UNSUPPORTED 3; SIG-INLINE-C 2 + SIG-EXPORT 1 perman
   CPS transform has no loop lowering (task-15's "EX_WHILE" was whole-body *delegation*
   to the FIBER direct emitter, which does not move it onto the DK).  A true DK landing
   needs a loop join point with the `^mut` loop vars threaded as loop-carried
-  continuation args.  Real slice.
+  continuation args.  Real slice -- and BIGGER than a lone `case EX_WHILE`: measured,
+  the CPS IR has NO mutation representation (`atom_of` maps a var directly to its source
+  `Binding`; no rebinding map in `CpsB`) and `CT_LETCONT` is SINGLE-param (no multi-arg
+  loop join), and `emit_heap_join` has no self-recursive loop emission.  So it is three
+  coupled foundational pieces -- a `Binding->CVar` rebinding env for native `set!`/`^mut`,
+  a multi-arg loop join (IR + emitter), and the `EX_WHILE` transform -- landing together
+  (no sound partial moves the fixture; a transform that admits `EX_WHILE` without correct
+  mutation SSA MISCOMPILES).  Full scope + implementation order:
+  `docs/reported/cps-while-loop-with-interior-handle-no-native-lowering.md`.
 - **E2b / tier-nontail-in-handle (2 BODY-UNSUPPORTED fn-value).**  The guarded
   `cps-backend-fn-param-effectful` + `handle-effectful-fn-param-same-fn`; both need the
   capture-gate widening recorded under roadmap item 1 (fold into E2b).
