@@ -51,6 +51,14 @@ typedef struct CpsB {
     const Binding *loop_vars[16];
     CVar           loop_nexts[16];
     uint32_t       n_loop;
+    /* cps-while-native read-after-set: a forward pre-pass over the straight-line
+     * loop body records, by Expr-node identity, each carried-var READ that occurs
+     * AFTER that var's `set!` this iteration -- such a read must resolve to the
+     * var's `$next` CVar, not the entry param.  Consulted in atomize().  Computed
+     * BEFORE lowering (which is backward), so ordering is not an issue. */
+    const Expr    *rs_nodes[64];
+    CVar           rs_cvars[64];
+    uint32_t       rs_n;
 } CpsB;
 
 /* cps-while-native: index of `bd` among the active loop-carried vars, or -1. */
@@ -1681,7 +1689,15 @@ static bool call_args_delegatable(CpsB *b, const Expr *e) {
 }
 
 static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
-    if (is_atomic(e)) return atom_of(e);
+    if (is_atomic(e)) {
+        /* cps-while-native read-after-set: a straight-line read of a carried var
+         * after its set! resolves to the var's `$next` CVar (recorded by
+         * loop_rs_scan, keyed by node identity). */
+        const Expr *pe = ascribe_peel(e);
+        for (uint32_t i = 0; i < b->rs_n; i++)
+            if (b->rs_nodes[i] == pe) return atom_cvar(b->rs_cvars[i]);
+        return atom_of(e);
+    }
     CVar x = fresh_cvar(b, e ? &e->type : NULL);
     if (p->n < 32) { p->items[p->n].expr = e; p->items[p->n].x = x; p->n++; }
     return atom_cvar(x);
@@ -2590,7 +2606,12 @@ static bool loop_guard(const Expr *e, const Binding **vars, uint32_t nv,
     switch (e->kind) {
         case EX_VAR: {
             int idx = loop_idx(vars, nv, e->as.var.binding);
-            if (idx >= 0 && (*mask & (1u << idx))) return false;   /* read-after-set */
+            /* A read of an already-set carried var on the STRAIGHT-LINE path is now
+             * admitted -- loop_rs_scan records it and atomize resolves it to the
+             * var's `$next` CVar.  A read inside a BRANCH / handle case (in_branch)
+             * still evicts: those bodies are lifted into separate frames where the
+             * loop helper's `$next` local is out of scope. */
+            if (idx >= 0 && (*mask & (1u << idx)) && in_branch) return false;
             return true;
         }
         case EX_INT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
@@ -2674,6 +2695,85 @@ static bool loop_guard(const Expr *e, const Binding **vars, uint32_t nv,
     }
 }
 
+/* cps-while-native read-after-set: a forward pre-pass mirroring loop_guard's walk.
+ * Records, by Expr-node identity, each STRAIGHT-LINE carried-var READ that occurs
+ * after that var's `set!` this iteration; atomize() resolves such a read to the
+ * var's `$next` CVar instead of the entry param.  `mask` is the set-so-far bits;
+ * branch/handle-case bodies scan with a mask copy and in_branch=true (their reads
+ * are not recorded -- loop_guard evicts a read-after-set there). */
+static void loop_rs_scan(CpsB *b, const Expr *e, uint32_t *mask, bool in_branch) {
+    e = ascribe_peel(e);
+    if (!e) return;
+    switch (e->kind) {
+        case EX_VAR: {
+            int idx = loop_var_index(b, e->as.var.binding);
+            if (idx >= 0 && (*mask & (1u << idx)) && !in_branch && b->rs_n < 64) {
+                b->rs_nodes[b->rs_n] = e;
+                b->rs_cvars[b->rs_n] = b->loop_nexts[idx];
+                b->rs_n++;
+            }
+            return;
+        }
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_FLOAT_LIT: case EX_CSTR_LIT:
+            return;
+        case EX_SET: {
+            loop_rs_scan(b, e->as.set_.value, mask, in_branch);
+            int idx = loop_var_index(b, e->as.set_.target);
+            if (idx >= 0) *mask |= (1u << idx);
+            return;
+        }
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                loop_rs_scan(b, e->as.let_.bindings[i].init, mask, in_branch);
+            loop_rs_scan(b, e->as.let_.body, mask, in_branch);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                loop_rs_scan(b, e->as.do_.items[i], mask, in_branch);
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                loop_rs_scan(b, e->as.builtin.args[i], mask, in_branch);
+            return;
+        case EX_CALL:
+            if (e->as.call_.fn_expr) loop_rs_scan(b, e->as.call_.fn_expr, mask, in_branch);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                loop_rs_scan(b, e->as.call_.args[i], mask, in_branch);
+            return;
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return;
+            loop_rs_scan(b, h->body, mask, in_branch);
+            for (uint8_t i = 0; i < h->n_cases; i++) {
+                uint32_t cm = *mask;
+                loop_rs_scan(b, h->cases[i].body, &cm, true);
+            }
+            return;
+        }
+        case EX_PERFORM: {
+            PerformExpr *pf = e->as.perform_.perform;
+            for (uint8_t i = 0; pf && i < pf->n_args; i++)
+                loop_rs_scan(b, pf->args[i], mask, in_branch);
+            return;
+        }
+        case EX_RESUME: {
+            ResumeExpr *rs = e->as.resume_.resume;
+            if (rs) { loop_rs_scan(b, rs->k, mask, in_branch);
+                      loop_rs_scan(b, rs->value, mask, in_branch); }
+            return;
+        }
+        case EX_IF: {
+            loop_rs_scan(b, e->as.if_.cond, mask, in_branch);
+            uint32_t tm = *mask, em = *mask;
+            loop_rs_scan(b, e->as.if_.then_, &tm, true);
+            if (e->as.if_.else_or_null) loop_rs_scan(b, e->as.if_.else_or_null, &em, true);
+            return;
+        }
+        default: return;   /* unmodeled forms: loop_guard rejects any that ref a set var */
+    }
+}
+
 /* Build the CT_LOOP for an EX_WHILE in bind position (its unit result discarded
  * into `x`, the continuation `rest`).  Returns NULL to EVICT. */
 static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
@@ -2729,10 +2829,16 @@ static CTerm *build_loop(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
     b->n_loop = nv;
 
+    /* Read-after-set pre-pass: record straight-line carried-var reads that follow
+     * that var's set! so atomize resolves them to `$next` (see loop_rs_scan). */
+    uint32_t saved_rs_n = b->rs_n;
+    { uint32_t rsmask = 0; loop_rs_scan(b, body, &rsmask, false); }
+
     /* Lower the body with the loop-continue kont; its tail becomes CT_CONTINUE. */
     CKont lk; lk.kind = KK_LOOP; lk.id = 0; lk.ty = TY_NIL;
     CTerm *iter = cps_tail(b, body, lk);
 
+    b->rs_n = saved_rs_n;       /* drop this loop's read-set entries */
     b->n_loop = saved_n_loop;   /* restore (no nesting) */
 
     /* Exit arm: deliver the live-after var (as its param) to the helper's KK_RET. */
@@ -3486,6 +3592,7 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     b.cur_fn_leaf_fiber = expr_has_indirect_fnvalue_call(fd->body, 0);
     b.n_pap = 0;
     b.n_loop = 0;   /* cps-while-native: not inside a loop body */
+    b.rs_n = 0;     /* cps-while-native: read-after-set version map empty */
     /* Phase-1 keystone (control-free colour-only shape): a colored function whose
      * whole body is delegatable (no control op, no colored call -- colored only by
      * a capturing closure it builds) emits as a single CT_LETRAW, so the direct
