@@ -1073,6 +1073,45 @@ static bool fold_stmt_is_risky(const Elab *e, const Form *f) {
     return false;
 }
 
+/* Classify a `(defmacro name [params] TEMPLATE)` form: does its expansion
+ * produce a STATEMENT (fold-safe) rather than a top-level definition/directive?
+ *
+ * A top-level macro CALL is normally ambiguous to the synthesized-main fold --
+ * it may expand to a top-level `defn`/`defmodule` (stays top-level) OR to a
+ * statement like `(handle ...)` (should fold into main's do-body and DK-lower).
+ * The fold runs BEFORE macros are registered, so we cannot expand the call; but
+ * we can inspect the macro's DEFINITION.  Return true only when the body is a
+ * single template form whose direct head is a symbol that provably cannot be a
+ * top-level definition: not a `def*` head, not a module directive / `do` /
+ * quote / quasiquote head, and not itself another macro (whose expansion we
+ * cannot see through here).  A statement-form head (`handle`, `reset`, `let`,
+ * `if`, or a plain function call) qualifies.  Conservative by construction:
+ * quasiquoted templates (distinct F_QUASIQUOTE tag), multi-form bodies, and
+ * macro-of-macro templates all return false and keep the historical fiber path.
+ * On success `*out_template` is the template form, for the risky-shape check. */
+static bool macro_form_stmt_safe(const Elab *e, const Form *dm,
+                                 const Symbol *const *macro_names, uint32_t n_macro,
+                                 const Form **out_template) {
+    *out_template = NULL;
+    /* exactly `(defmacro name [params] TEMPLATE)` -- 4 items, single body form */
+    if (dm->tag != F_LIST || dm->as.list.len != 4) return false;
+    const Form *tmpl = dm->as.list.items[3];
+    if (!tmpl || tmpl->tag != F_LIST || tmpl->as.list.len == 0) return false;
+    const Form *th = tmpl->as.list.items[0];
+    if (!th || th->tag != F_SYM || !th->as.sym->name) return false;
+    const Symbol *ths = th->as.sym;
+    const char *thn = ths->name;
+    if (thn[0] == 'd' && thn[1] == 'e' && thn[2] == 'f') return false; /* def* */
+    if (ths == e->sym_import || ths == e->sym_load || ths == e->sym_export
+        || ths == e->sym_extern_c || ths == e->sym_defmodule
+        || ths == e->sym_do || ths == e->sym_quote || ths == e->sym_quasiquote)
+        return false;
+    for (uint32_t m = 0; m < n_macro; m++)
+        if (macro_names[m] == ths) return false;   /* macro-of-macro: opaque */
+    *out_template = tmpl;
+    return true;
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -1286,8 +1325,12 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
      * codegen byte-identical. */
     if (g_opt_cps_tramp_resume && !separate_compilation && stdlib_prefix <= nforms) {
         /* Collect every defmacro name (user + stdlib) so a macro-headed
-         * top-level statement can be detected and aborted on. */
+         * top-level statement can be detected.  Also record each macro's
+         * defmacro form so a statement-producing macro (template head is a
+         * special form / plain call, provably not a top-level def) can be
+         * FOLDED into the synthesized main instead of aborting the fold. */
         const Symbol **macro_names = NULL;
+        const Form **macro_defs = NULL;
         uint32_t n_macro = 0, cap_macro = 0;
         for (uint32_t i = 0; i < nforms; i++) {
             Form *f = forms[i];
@@ -1299,7 +1342,9 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             if (n_macro == cap_macro) {
                 cap_macro = cap_macro ? cap_macro * 2 : 16;
                 macro_names = realloc(macro_names, cap_macro * sizeof(*macro_names));
+                macro_defs  = realloc(macro_defs,  cap_macro * sizeof(*macro_defs));
             }
+            macro_defs[n_macro]    = f;
             macro_names[n_macro++] = nm->as.sym;
         }
         bool have_user_main = false, ambiguous = false, any_stmt = false;
@@ -1331,10 +1376,27 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 || hs == e.sym_extern_c || hs == e.sym_defmodule) continue;
             /* macro call / do progn / quote form: ambiguous -> abort the fold */
             if (hs == e.sym_do) { ambiguous = true; break; }
-            bool is_macro = false;
+            int macro_idx = -1;
             for (uint32_t m = 0; m < n_macro; m++)
-                if (macro_names[m] == hs) { is_macro = true; break; }
-            if (is_macro) { ambiguous = true; break; }
+                if (macro_names[m] == hs) { macro_idx = (int)m; break; }
+            if (macro_idx >= 0) {
+                /* A macro whose template provably expands to a STATEMENT (head is
+                 * a special form / plain call, not a def / directive / do / nested
+                 * macro) is fold-safe: folded into main's do-body it expands there
+                 * and DK-lowers, exactly like a literal top-level handle.  Reject
+                 * (keep the historical fiber path) when we cannot prove that, or
+                 * when the template OR the call args carry a fold-risky shape
+                 * (escaping-mutable set!-in-handle). */
+                const Form *tmpl = NULL;
+                if (!macro_form_stmt_safe(&e, macro_defs[macro_idx],
+                                          macro_names, n_macro, &tmpl)
+                    || fold_stmt_is_risky(&e, tmpl)
+                    || fold_stmt_is_risky(&e, f)) {
+                    ambiguous = true; break;
+                }
+                any_stmt = true;
+                continue;
+            }
             /* a plain call: a genuine top-level statement -- but abort the fold
              * if its handle subtree is a shape the DK backend miscompiles (nested
              * handle / escaping-mut set!), leaving it on the historical fiber path. */
@@ -1342,6 +1404,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
             any_stmt = true;
         }
         free(macro_names);
+        free(macro_defs);
 
         if (!have_user_main && !ambiguous && any_stmt) {
             /* Build `(defn main [] : int (do <stmts...> 0))`, keeping every
