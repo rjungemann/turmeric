@@ -389,7 +389,20 @@ CPS-emits, `main`'s handle body threads it as a normal cps->cps call
 
 ### B7 -- escaping / multishot continuation via `set!` (1 fixture) -- FIXABLE, hardest
 
-**Fixture:** `effect-capture-k`.
+**Fixture:** `effect-capture-k`. **Diagnosed to the emit level (2026-07-18); a
+dedicated implementation plan is in
+[cps-b7-escaping-continuation-plan.md](cps-b7-escaping-continuation-plan.md).**
+
+The DK backend already emits a structurally-close handler-case + continuation-frame
+pair; three concrete defects keep it broken (`k_hystore undeclared`): (1) the
+capture walkers never record a `^mut` that is WRITTEN in a lifted case body, so the
+case's `env` is `0`; (2) even captured, a by-VALUE case capture cannot carry the
+`set!` write back to the continuation frame -- the mutable must be a SHARED cell
+captured BY REFERENCE; (3) the stored `subk` is not cloned, so it dangles once
+`dk_perform` frees the captured chain (needs copy-on-store via `dk_copy`).  The fix
+is a new by-reference (heap-cell) capture flavor threaded through the capture
+machinery + copy-on-store -- a multi-slice feature, distinct from the bounded
+single-mechanism fixes B4-B6.  See the plan doc for the full design.
 
 **Measured root cause.** The genuinely hard one -- the handler captures its
 continuation into an outer mutable and resumes it **after** the handle exits:
