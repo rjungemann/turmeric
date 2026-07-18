@@ -2696,6 +2696,32 @@ static bool jbody_has_perform(const CTerm *t) {
     }
 }
 
+/* A heap-join jbody that installs a NESTED delimited-control op in VALUE position
+ * (a `handle`/`reset` whose result feeds an enclosing expression, e.g.
+ * `(+ x (handle ...))`) needs `__kont` in scope: the nested handle's lifted
+ * continuation frame captures the enclosing continuation (`__ce->__k = __kont`),
+ * so the join must ride an LH_RESUME_CONT resume-frame (which RECEIVES its
+ * downstream chain as `__kont`) rather than a value-only LH_PERFORM_CONT frame
+ * (which has no `__kont`).  See docs/reported/cps-toplevel-synthesized-main-
+ * bypasses-dk.md (effect-nested). */
+static bool jbody_has_delim(const CTerm *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case CT_HANDLE:   return true;
+        case CT_RESET:    return true;
+        case CT_LETVAL:   return jbody_has_delim(t->as.letval.body);
+        case CT_LETPRIM:  return jbody_has_delim(t->as.letprim.body);
+        case CT_LETCALL:  return jbody_has_delim(t->as.letcall.body);
+        case CT_LETRAW:   return jbody_has_delim(t->as.letraw.body);
+        case CT_RESUME:   return jbody_has_delim(t->as.resume.body);
+        case CT_IF:       return jbody_has_delim(t->as.if_.then_)
+                              || jbody_has_delim(t->as.if_.else_);
+        case CT_LETCONT:  return jbody_has_delim(t->as.letcont.jbody)
+                              || jbody_has_delim(t->as.letcont.body);
+        default:          return false;
+    }
+}
+
 /* Does `t` contain a heap join the backend CANNOT emit?  A non-tail cps->cps
  * call reifies its join continuation as a DK frame; that is now supported for
  * the direct CT_LETCONT-body form, provided the join body is zero-capture (the
@@ -4186,6 +4212,15 @@ typedef struct {
                                      * terminal tail `resume` here emits dk_tail_resume (yield) */
     bool        case_tail_resume;   /* E7: this case was installed with dk_handler_tail (DEEP +
                                      * tail-resume); a SHALLOW case keeps the inline dk_invoke */
+    bool        borrowed_kont;      /* cur_k (`__kont`) is a RESUME_FRAME's BORROWED downstream
+                                     * chain (driver-owned, dk_free'd after the frame yields), not
+                                     * an owned param.  A reset/handle continuation env that
+                                     * captures it OUTLIVES the frame (it is read when the nested
+                                     * continuation is delivered, after the yield), so the capture
+                                     * must COPY the chain (reaped), never alias it -- else a
+                                     * value-position nested handle use-after-frees the enclosing
+                                     * continuation.  See docs/reported/cps-toplevel-synthesized-
+                                     * main-bypasses-dk.md (effect-nested). */
     /* Full Type a value has when it crosses the slot at each continuation target,
      * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
      * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
@@ -4824,6 +4859,10 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
     hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
     hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
+    /* A RESUME_FRAME's `__kont` is the driver-owned downstream chain, freed after
+     * the frame yields; a reset/handle continuation captured inside it must COPY
+     * `__kont`, not alias it (see emit_cont_env / CE.borrowed_kont). */
+    hc.borrowed_kont     = (mode == LH_RESUME_CONT);
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding).  A reset/handle
@@ -5055,7 +5094,8 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     CapSet cs;
     bool caps_ok = collect_caps(t->as.letcont.jbody, t->as.letcont.param.id, &cs);
     const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
-    bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody)
+    bool needs_kont = (g_opt_cps_tramp_resume && jbody_has_delim(t->as.letcont.jbody))
+                   || jbody_has_cps_tailcall(t->as.letcont.jbody)
                    || jbody_has_perform(t->as.letcont.jbody);
 
     char *fn = call->as.tailcall.fn ? callee_name(call->as.tailcall.fn)
@@ -5235,16 +5275,28 @@ static void emit_continue(CE *ce, const CTerm *t) {
  * expr for the DK frame env: the env struct pointer when there are captures, else
  * plain (intptr_t)k (or 0 when k-less).  The struct is leaked with the DK nodes. */
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr) {
+    /* A reset/handle continuation env captured inside a RESUME_FRAME must COPY the
+     * frame's borrowed (driver-owned) `__kont`, not alias it: the env is read when
+     * the nested continuation is delivered, AFTER the resume frame has yielded and
+     * the driver has dk_free'd its downstream chain.  The copy is reaped at the
+     * outermost entry boundary (like every other delimited DK chain). */
+    char k_capture[256];
+    const char *k_store = k_expr;
+    if (k_expr && ce->borrowed_kont && strcmp(k_expr, "__kont") == 0) {
+        snprintf(k_capture, sizeof k_capture,
+                 "__dk_reap_keep(dk_copy_range((const DK *)%s, NULL))", k_expr);
+        k_store = k_capture;
+    }
     if (!caps || caps->n == 0) {
         Buf b; buf_init(&b);
-        if (k_expr) buf_printf(&b, "(intptr_t)%s", k_expr); else buf_puts(&b, "0");
+        if (k_store) buf_printf(&b, "(intptr_t)%s", k_store); else buf_puts(&b, "0");
         buf_putc(&b, '\0');
         char *s = strdup(b.data); buf_free(&b); return s;
     }
     char envv[300];
     snprintf(envv, sizeof envv, "__ce_%s", hname);
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
-    if (k_expr) ce_line(ce, "%s->__k = %s;", envv, k_expr);
+    if (k_store) ce_line(ce, "%s->__k = %s;", envv, k_store);
     for (int i = 0; i < caps->n; i++) {
         char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
         ce_line(ce, "%s->f%d = %s;", envv, i, cn);

@@ -15,12 +15,10 @@ hard-error rather than fiber. **Flag-on payoff: real fiber-live fixtures 39 -> 2
 linear-effect-handler; `effect-handler` emits `compute__cps`, zero `eff=1`, output
 `104`).
 
-**Fold is now CONSERVATIVE -- zero flag-on regressions.** Two top-level-handle
-shapes the DK backend cannot lower yet were routed onto the DK by the initial fold
-and MISCOMPILED flag-on; both are pre-existing DK gaps the fold merely EXPOSED, not
-caused. `fold_stmt_is_risky` (elab_toplevel.c) now leaves them on the historical
-fiber path (a statement whose handle subtree has >=2 handle heads, or a `set!`
-alongside a handle, is not folded):
+**Fold is now CONSERVATIVE -- zero flag-on regressions.** ONE top-level-handle
+shape the DK backend cannot lower yet is left on the historical fiber path.
+`fold_stmt_is_risky` (elab_toplevel.c) does not fold a statement whose handle
+subtree carries a `set!` alongside a handle:
 
 - `effect-capture-k` -- ESCAPING MUTABLE: a `set!` writes the captured continuation
   `k` into an outer `^mut`, resumed AFTER the handle exits. The DK backend has no
@@ -29,46 +27,37 @@ alongside a handle, is not folded):
   4636), so the `k` store emits as a bare local write in the lifted handler case
   (`k_hystore_* undeclared`). Fixing it is a real DK feature: heap-cell (by-ref)
   capture of a mutable shared across lifted continuation/handler frames.
-- `effect-nested` -- NESTED HANDLE IN VALUE POSITION: an inner handle whose result
-  feeds arithmetic (`(+ (get-val) (handle ...))`), so its continuation needs
-  `__kont` threaded from the sub-continuation (`__kont undeclared`); the
-  handler-case-in-handler-continuation `__kont` threading gap
-  (cps-handler-case-effect-reopening-needs-emission.md family).
 
-  **Precise diagnosis (2026):** the OUTER handle's heap-join frame (`main_j1`,
-  emitted by `emit_heap_join`, emit_cps_ir.c) reifies `(+ __t2 <inner-handle>)`.
-  Its body INSTALLS the inner handle, whose own continuation frame captures the
-  enclosing continuation (`main_hk2_env->__k = __kont`) -- but `main_j1` is emitted
-  as an `LH_PERFORM_CONT` DKFrame `(env, value)` with no `__kont`, so `__kont` is
-  undeclared.  `needs_kont` (= `jbody_has_cps_tailcall || jbody_has_perform`) does
-  not detect a nested handle/reset in the jbody.  ATTEMPTED FIX + INSUFFICIENT
-  (reverted): adding `jbody_has_delim` (a nested `CT_HANDLE`/`CT_RESET` in the
-  jbody) to `needs_kont` promotes `main_j1` to an `LH_RESUME_CONT` resume-frame so
-  it COMPILES -- but the program then HANGS (infinite loop) at run time.  So the
-  value-position nested handle needs more than threading `__kont` into the join:
-  the resume-frame's downstream-chain semantics for a nested handle whose result
-  is consumed by an outer expression are wrong (the inner handle's re-install /
-  `dk_copy_enclosing_handlers` loops).  A real fix must get the nested handle's
-  continuation to deliver its value to the join's `__kont` exactly once, not
-  re-enter the enclosing handler chain.
+**RESOLVED: `effect-nested` (NESTED HANDLE IN VALUE POSITION) now DK-lowers.** An
+inner handle whose result feeds arithmetic (`(+ (get-val) (handle ...))`) rides the
+DK: the value-position rejection (`n_handle >= 2 && fold_handle_in_value_position`)
+is removed from `fold_stmt_is_risky`, and the emit gap is closed in two pieces:
 
-**Refinement (later):** the blanket `n_handle >= 2` rejection is now narrowed to
-only a nested handle in a VALUE position (`fold_handle_in_value_position`).  A
-cleanly STACKED nested handle -- each inner handle the direct body/case of its
-enclosing handle, `(handle (handle ...) ...)` -- DK-lowers fine, so it now folds:
-`effect-console` (`(handle (handle (echo-doubled) (Write ..)) (Read ..))`) DK-
-lowers (zero `eff=1`, output `result:` / `42`).  `effect-nested` stays on the
-fiber (its handle is a `+` operand) with correct output `52`.  Flag-off byte-
-identical; flag-on sweep clean.
+1. **`jbody_has_delim`** (emit_cps_ir.c) detects a nested `CT_HANDLE`/`CT_RESET` in
+   a heap-join jbody and adds it to `needs_kont`, so the outer join `main_j1` is
+   lifted as an `LH_RESUME_CONT` resume-frame that RECEIVES its downstream chain as
+   `__kont` (flag-gated on `g_opt_cps_tramp_resume`).
+2. **`CE.borrowed_kont`** (emit_cps_ir.c) fixes the use-after-free that made the
+   naive `jbody_has_delim`-only fix HANG: a RESUME_FRAME's `__kont` is the
+   DRIVER-OWNED downstream chain, `dk_free`'d after the frame yields.  The inner
+   handle's continuation env (`main_hk2_env->__k`) is read LATER (when that
+   continuation is delivered via the meta-stack, after the yield), so aliasing the
+   borrowed `__kont` into it dangles -- `dk_run` then walks a freed node whose
+   `->next` self-cycles (infinite loop).  `emit_cont_env` now COPIES the borrowed
+   `__kont` (`__dk_reap_keep(dk_copy_range(__kont, NULL))`) into the env, so the
+   nested handle delivers its value to the enclosing continuation exactly once, with
+   no use-after-free.  Verified: output `52`, zero `eff=1`, ASan clean (repro +
+   fixture); flag-off byte-identical (140/140 snapshots); flag-on soundness sweep
+   clean; full suite 2203/0.
 
-Net after the guard: **10 effect fixtures fold to the DK, zero flag-on
-regressions** (flag-off byte-identical 2202/0; full flag-on build sweep clean).
-Remaining SIG-TAINT is the effect-poly/-row/-subtype family (E2b /
-effect-subtype-capability adjacent), the permanent session/export carve-outs, and
-the 4 non-permanent CPS roots. Follow-ons to graduate the fold: (1) by-reference
-mutable capture in the DK backend (unblocks the `set!`-in-handle shape); (2)
-nested-handle `__kont` threading; then broaden the base subset / retire N6.5 so the
-fold can go always-on, drop the `--enable` gate, and regen the top-level-expr
+A cleanly STACKED nested handle -- each inner handle the direct body/case of its
+enclosing handle, `(handle (handle ...) ...)` -- already DK-lowered via Slice PH
+(`effect-console`).
+
+Net: **effect-nested folds to the DK** (only `effect-capture-k` remains carved out).
+Follow-on to graduate the fold: by-reference mutable capture in the DK backend
+(unblocks the `set!`-in-handle shape); then broaden the base subset / retire N6.5 so
+the fold can go always-on, drop the `--enable` gate, and regen the top-level-expr
 snapshots.
 
 ---

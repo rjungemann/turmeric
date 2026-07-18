@@ -1055,65 +1055,21 @@ static void fold_scan_handle_risk(const Elab *e, const Form *f,
         fold_scan_handle_risk(e, f->as.list.items[i], n_handle, has_set);
 }
 
-/* Does a `handle`/`handle-shallow` appear in a VALUE position anywhere in `f` --
- * i.e. as an operand of a call / arithmetic builtin, where its result is consumed
- * rather than being a statement or the direct body of an enclosing handle?  The
- * synthesized d2b main MISCOMPILES that shape (effect-nested's
- * `(+ (get-val) (handle ...))` emits empty output), whereas a cleanly STACKED
- * handle -- each inner handle the direct body/case of its enclosing handle -- DK-
- * lowers fine (effect-console).  `in_value` is true when the current form's value
- * is consumed by an enclosing operator/call arg.  A handle's own body and case
- * bodies are statement regions (in_value=false); every other list form is a
- * call/builtin whose arguments are value positions (in_value=true).  Conservative:
- * an over-broad true only forgoes the fold (keeps the historical fiber path). */
-static bool fold_handle_in_value_position(const Elab *e, const Form *f,
-                                          bool in_value) {
-    if (!f) return false;
-    if (f->tag != F_LIST && f->tag != F_VEC && f->tag != F_MAP && f->tag != F_SET)
-        return false;
-    const Symbol *head = (f->as.list.len > 0 && f->as.list.items[0]
-                          && f->as.list.items[0]->tag == F_SYM)
-                         ? f->as.list.items[0]->as.sym : NULL;
-    bool is_handle = (head == e->sym_handle || head == e->sym_handle_shallow);
-    if (is_handle) {
-        if (in_value) return true;
-        /* body + case bodies are statement regions */
-        for (uint32_t i = 1; i < f->as.list.len; i++)
-            if (fold_handle_in_value_position(e, f->as.list.items[i], false))
-                return true;
-        return false;
-    }
-    if (head == e->sym_do) {
-        /* a `do` inherits its enclosing position for its (last) value; recursing
-         * every item at the inherited position is conservative. */
-        for (uint32_t i = 1; i < f->as.list.len; i++)
-            if (fold_handle_in_value_position(e, f->as.list.items[i], in_value))
-                return true;
-        return false;
-    }
-    /* any other list form is a call / builtin: its arguments are value positions. */
-    for (uint32_t i = 1; i < f->as.list.len; i++)
-        if (fold_handle_in_value_position(e, f->as.list.items[i], true))
-            return true;
-    return false;
-}
-
 /* A top-level statement is fold-unsafe when its handle subtree carries a shape the
- * DK backend cannot lower yet: a nested handle whose inner handle sits in a VALUE
- * position (its result feeds arithmetic / a call arg -- effect-nested's
- * `(+ (get-val) (handle ...))`, which the synthesized d2b main MISCOMPILES to
- * empty output), or a set! that may write an escaping continuation into a captured
- * mutable (effect-capture-k).  A nested handle where each inner handle is the
- * DIRECT body of its enclosing handle (a cleanly STACKED handle -- effect-console's
- * `(handle (handle ...) ...)`) IS foldable: the CPS/DK backend threads `__kont`
- * through it (Slice PH).  So reject only a VALUE-position nested handle, not a
- * stacked one. */
+ * DK backend cannot lower yet: a set! that may write an escaping continuation into
+ * a captured mutable (effect-capture-k -- the DK has no by-reference mutable
+ * capture).  A VALUE-position nested handle (effect-nested's
+ * `(+ (get-val) (handle ...))`) USED to be rejected here, but now DK-lowers: the
+ * join rides an LH_RESUME_CONT resume-frame whose borrowed `__kont` is COPIED into
+ * the nested handle's continuation env (emit_cps_ir.c CE.borrowed_kont), so the
+ * nested handle delivers its value to the enclosing continuation exactly once
+ * without a use-after-free.  A cleanly STACKED nested handle (effect-console's
+ * `(handle (handle ...) ...)`) already folded via Slice PH.  So only the set!
+ * escaping-mutable shape remains fold-unsafe. */
 static bool fold_stmt_is_risky(const Elab *e, const Form *f) {
     uint32_t n_handle = 0; bool has_set = false;
     fold_scan_handle_risk(e, f, &n_handle, &has_set);
     if (n_handle >= 1 && has_set) return true;
-    if (n_handle >= 2 && fold_handle_in_value_position(e, f, false))
-        return true;
     return false;
 }
 
