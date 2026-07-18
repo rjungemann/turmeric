@@ -708,19 +708,44 @@ void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;
 
-    /* Collect top-level function nodes. */
+    /* Collect top-level function nodes -- AND the function members nested inside
+     * `(defmodule ...)` bodies.  A module member never appears as a top-level
+     * EX_FN_DEF (it lives in EX_DEFMODULE's `mod->body`), so without descending
+     * here an effectful module `defn` (e.g. a `run` that installs a `handle`) is
+     * never colored and silently falls to the fiber effect runtime -- the same
+     * self-contained handle DK-lowers fine as a bare top-level defn.  Only
+     * control-using members become colored (cps_directly_uses_control); pure
+     * module members stay uncolored, so the blast radius is effectful code. */
     uint32_t cap = 16, n = 0;
     CpsNode *nodes = calloc(cap, sizeof(CpsNode));
+    #define CPS_ADD_FN_NODE(FDEXPR) do {                                        \
+        FnDef *_fd = (FDEXPR)->as.fn_def_.fn;                                   \
+        if (_fd) {                                                              \
+            _fd->cps_colored = false; /* reset (idempotent) */                 \
+            if (n == cap) { cap *= 2; nodes = realloc(nodes, cap * sizeof(CpsNode)); } \
+            memset(&nodes[n], 0, sizeof(CpsNode));                              \
+            nodes[n].fd = _fd;                                                  \
+            n++;                                                               \
+        }                                                                      \
+    } while (0)
     for (uint32_t i = 0; i < program->as.program.n; i++) {
         Expr *item = program->as.program.items[i];
-        if (!item || item->kind != EX_FN_DEF || !item->as.fn_def_.fn) continue;
-        FnDef *fd = item->as.fn_def_.fn;
-        fd->cps_colored = false; /* reset (idempotent) */
-        if (n == cap) { cap *= 2; nodes = realloc(nodes, cap * sizeof(CpsNode)); }
-        memset(&nodes[n], 0, sizeof(CpsNode));
-        nodes[n].fd = fd;
-        n++;
+        if (!item) continue;
+        if (item->kind == EX_FN_DEF && item->as.fn_def_.fn) {
+            CPS_ADD_FN_NODE(item);
+        } else if (g_opt_cps_tramp_resume
+                   && item->kind == EX_DEFMODULE && item->as.defmodule_.mod) {
+            /* Flag-gated: descending into module members changes which fns are
+             * colored, so it must not perturb the shipping (flag-off) path. */
+            DefModule *m = item->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn)
+                    CPS_ADD_FN_NODE(mb);
+            }
+        }
     }
+    #undef CPS_ADD_FN_NODE
 
     /* Seed + build edges. */
     for (uint32_t i = 0; i < n; i++) {

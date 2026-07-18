@@ -3386,9 +3386,21 @@ static const FnDef *fd_for_binding(const Expr *program, const Binding *b) {
     uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = program->as.program.items[i];
-        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn
             && it->as.fn_def_.fn->binding == b)
             return it->as.fn_def_.fn;
+        /* A module member's FnDef lives in the EX_DEFMODULE body, not as a
+         * top-level item -- descend so a colored module member resolves. */
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn
+                    && mb->as.fn_def_.fn->binding == b)
+                    return mb->as.fn_def_.fn;
+            }
+        }
     }
     return NULL;
 }
@@ -3673,6 +3685,12 @@ static bool term_is_whole_body_delegation(const CTerm *t) {
         && t->as.letraw.body->as.appcont.kont.kind == KK_RET;
 }
 
+/* Flattens EX_PROGRAM items, expanding EX_DEFMODULE bodies (and top-level do)
+ * into their members -- the same view the main emitter emits.  Declared here
+ * (defined in emit_core.c) so the CPS classifier sees module-member fns as
+ * ordinary top-level defns instead of an opaque effect-bearing module node. */
+const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
+
 static void ensure_S(const Expr *program) {
     /* Cached -- but G3b's mono-template classification needs g_emit_ctx (the
      * spec set).  If a prior run classified under a different ctx (e.g. a NULL
@@ -3700,7 +3718,13 @@ static void ensure_S(const Expr *program) {
      * CPS peer, since the two effect machines (DK vs fiber) do not interoperate.
      * Uncolored functions never contain a control op, so they touch no effect
      * and are skipped entirely. */
-    uint32_t np = program->as.program.n;
+    /* Iterate the FLATTENED program (module members hoisted) so a `(defmodule
+     * ...)` member fn is classified as an ordinary top-level defn.  Without this
+     * the whole EX_DEFMODULE node hit the "non-fn top-level item" catch-all
+     * below, dumping EVERY module effect into base_taint and pinning every
+     * module member to the fiber. */
+    uint32_t np = 0;
+    const Expr **items = flatten_program_items(program, &np);
     g_ents = (SEnt *)calloc(np ? np : 1, sizeof(SEnt));
 
     /* E2/taint-completeness pre-pass: collect every global fn whose ADDRESS is
@@ -3712,7 +3736,7 @@ static void ensure_S(const Expr *program) {
     if (g_opt_cps_tramp_resume) {
         g_addr_collecting = true;
         for (uint32_t i = 0; i < np; i++) {
-            Expr *it = program->as.program.items[i];
+            Expr *it = (Expr *)items[i];
             if (!it) continue;
             uint64_t dlo = 0, dhi = 0;   /* throwaway effect sink */
             if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->body)
@@ -3735,7 +3759,7 @@ static void ensure_S(const Expr *program) {
     if (g_opt_cps_tramp_resume) {
         bool trace = getenv("TUR_TRACE_EVICT") != NULL;
         for (uint32_t i = 0; i < np; i++) {
-            Expr *it = program->as.program.items[i];
+            Expr *it = (Expr *)items[i];
             if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
             FnDef *fd = it->as.fn_def_.fn;
             if (!fd->binding || !fd->body) continue;
@@ -3784,7 +3808,7 @@ static void ensure_S(const Expr *program) {
         }
         /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
         for (uint32_t i = 0; i < np; i++) {
-            Expr *it = program->as.program.items[i];
+            Expr *it = (Expr *)items[i];
             if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
             FnDef *fd = it->as.fn_def_.fn;
             for (uint32_t pi = 0; pi < fd->n_params; pi++) {
@@ -3802,7 +3826,7 @@ static void ensure_S(const Expr *program) {
      * These permanently taint their effects. */
     uint64_t base_lo = 0, base_hi = 0;
     for (uint32_t i = 0; i < np; i++) {
-        Expr *it = program->as.program.items[i];
+        Expr *it = (Expr *)items[i];
         if (!it) continue;
         if (it->kind == EX_FN_DEF && it->as.fn_def_.fn) {
             FnDef *fd = it->as.fn_def_.fn;
@@ -3905,6 +3929,7 @@ static void ensure_S(const Expr *program) {
         /* non-fn top-level item (e.g. a def whose init performs). */
         expr_collect_effects(it, &base_lo, &base_hi);
     }
+    free((void *)items);   /* flattened view is only needed for the loops above */
 
     /* Build the colored call graph backing the call-path taint.  Each entry's
      * `edges` bitset names the directly-called colored peers; `edges_all` marks

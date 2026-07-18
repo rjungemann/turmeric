@@ -377,14 +377,29 @@ static CAtom atom_cvar(CVar v) {
 
 /* ---- colored-callee lookup -------------------------------------------- */
 
-/* True if `fn` resolves to a colored top-level function. */
+/* True if `fn` resolves to a colored top-level function -- including a function
+ * that is a MEMBER of a top-level `(defmodule ...)` (its FnDef lives in the
+ * module body, never as a top-level program item).  Without the module descent
+ * a colored module member reads as uncolored, so a caller in the same module
+ * emits a DIRECT (unthreaded) call instead of the DK-threaded `__cps` call, and
+ * an effect performed in the callee escapes the caller's handler. */
 static bool callee_colored(CpsB *b, const Binding *fn) {
     if (!fn || !b->program || b->program->kind != EX_PROGRAM) return false;
     for (uint32_t i = 0; i < b->program->as.program.n; i++) {
         Expr *it = b->program->as.program.items[i];
-        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
             it->as.fn_def_.fn->binding == fn)
             return it->as.fn_def_.fn->cps_colored;
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn &&
+                    mb->as.fn_def_.fn->binding == fn)
+                    return mb->as.fn_def_.fn->cps_colored;
+            }
+        }
     }
     return false;
 }
