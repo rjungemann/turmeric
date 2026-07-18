@@ -1647,6 +1647,18 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++)
                 if (!safe_to_delegate(b, e->as.make_struct_.field_values[i])) return false;
             return true;
+        /* B3 part 2: a first-class handler VALUE construction (a `(handler ...)`
+         * literal or `(compose-handlers ...)`) is a pure, control-op-free value
+         * the direct emitter builds as a tur_handler_table_t* -- and, under the
+         * flag, also emits DK-ABI case fns into the table (emit_effects_handler_lit)
+         * so a downstream dynamic with-handler can install it on the DK.  Delegate
+         * the whole construction (e.g. `(HRow (handler ...))`) so the enclosing
+         * colored fn is not evicted by an "unsupported EX_HANDLER_LIT" form. */
+        case EX_HANDLER_LIT:
+            return true;
+        case EX_COMPOSE_HANDLERS:
+            return safe_to_delegate(b, e->as.compose_handlers_.h1)
+                && safe_to_delegate(b, e->as.compose_handlers_.h2);
         case EX_DEFAULT_OF:
             return true;
         /* Owning-value ops (rc/of, rc/clone, rc/drop, rc/strong-count, rc->ptr)
@@ -1944,9 +1956,25 @@ static CTerm *build_with_handler(CpsB *b, Expr *e, CVar x, CTerm *cont) {
             return build_handle_core(b, merged, body, e->type.kind, x, cont);
         }
     }
-    CTerm *u = new_term(b, CT_UNSUPPORTED);
-    u->as.unsupported.why = "with-handler (dynamic handler value)";
-    return u;
+    /* B3 part 2: DYNAMIC handler value (a variable, a `(.field obj)` read, a
+     * compose with a dynamic leaf) -- the cases are not statically known.  Bind
+     * the handler value to a temp, then install a DK handler group from its
+     * runtime table (dk_hgroup_from_table) over the with-handler body.  The DK
+     * case fns were emitted at the handler literal's creation site (step 2).  A
+     * value whose literals were NOT DK-emittable carries dk_fn=0 entries; the
+     * runtime install skips those, so such an effect surfaces as unhandled rather
+     * than a crash (a value all of whose cases DK-lower installs fully). */
+    CVar tvar = fresh_cvar(b, hv ? &hv->type : NULL);
+    CTerm *h = new_term(b, CT_HANDLE);
+    h->as.handle.x = x;
+    h->as.handle.delim = cps_tail(b, body, kont_prompt(e->type.kind));
+    h->as.handle.n_cases = 0;
+    h->as.handle.cases = NULL;
+    h->as.handle.shallow = false;
+    h->as.handle.dyn = true;
+    h->as.handle.dyn_table = atom_cvar(tvar);
+    h->as.handle.body = cont;
+    return cps_bind(b, (Expr *)hv, tvar, h);
 }
 
 static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {

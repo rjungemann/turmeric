@@ -207,8 +207,14 @@ struct DK;
 typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;
 /* ET3: algebraic effect handler runtime type */
 typedef struct { void *env; int64_t (*fn)(int64_t *, int, int64_t, void *); } tur_handler_t;
-/* FH1: first-class handler dispatch-table entry */
-typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;
+/* FH1: first-class handler dispatch-table entry.
+ * B3: `dk_tag`/`dk_fn` carry the DK-ABI variant of the case (emitted at the
+ * handler-literal site when it is created inside colored code), so a dynamic
+ * `(with-handler <value> body)` can install a DK handler group from the table
+ * (dk_hgroup_from_table) instead of running the body on the fiber.  The fiber
+ * path leaves them 0 (calloc-zeroed) and never reads them. */
+struct DK;
+typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; int dk_tag; intptr_t (*dk_fn)(intptr_t, intptr_t, struct DK *); } tur_handler_entry_t;
 /* FH1: first-class handler value -- effect-keyed dispatch table */
 typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;
 static tur_handler_table_t *tur_handler_table_new(int n) {
@@ -955,6 +961,26 @@ static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
 }
 static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
     return dk_handler_impl(tag, fn, env, true, next);
+}
+/* B3: install a DK handler group from a runtime first-class handler table -- the
+ * DK-side analogue of running a with-handler body under a dynamic handler value.
+ * Each entry contributes a dk_handler(dk_tag, dk_fn, env, ...) node, chained
+ * h1-outer (entry 0 outermost, matching tur_handler_table_concat order and the
+ * static handle chain) over `base` (the with-handler continuation frame), then
+ * stamped as one hgroup.  The DK case fns + tags were emitted at the handler
+ * literal's creation site (colored context). */
+__attribute__((unused))
+static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {
+    DK *head = base;
+    if (t) for (int i = t->n_entries - 1; i >= 0; i--) {
+        tur_handler_entry_t *e = &t->entries[i];
+        if (!e->dk_fn) continue;  /* case not DK-emittable -> leave unhandled, don't crash */
+        /* The emitted DK case fns always end in a tail `return dk_tail_resume`,
+         * so install as a tail handler (dk_perform yields the resumed chain to
+         * the entry driver), matching the static handle path. */
+        head = dk_handler_tail(e->dk_tag, (DKHandler)e->dk_fn, (intptr_t)e->env, head);
+    }
+    return dk_hgroup(head);
 }
 static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {

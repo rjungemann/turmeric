@@ -73,6 +73,10 @@ static bool slot_ty(TypeKind k) {
         case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
         case TY_CSTR:
         case TY_PTR_VOID:   /* raw pointer: Copy, non-owning -- casts through the slot */
+        case TY_HANDLER:    /* B3: a first-class handler value is a one-word
+                             * tur_handler_table_t* -- crosses the slot like a ptr,
+                             * so a handler-typed param/return is CPS-admissible
+                             * (e.g. run-with taking a handler param). */
         case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:  /* Tier B: bit-reinterpret */
             return true;
         default:
@@ -2910,7 +2914,6 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             }
             return;
         case EX_HANDLE:
-        case EX_HANDLER_LIT:
             if (e->as.handle_.handle) {
                 HandleExpr *h = e->as.handle_.handle;
                 REC(h->body);
@@ -2918,6 +2921,19 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     mark_effect(h->cases[i].effect_name, acc->hlo, acc->hhi);
                     REC(h->cases[i].body);
                 }
+            }
+            return;
+        case EX_HANDLER_LIT:
+            /* B3 part 2: a bare `(handler ...)` VALUE construction does NOT handle
+             * its effects here -- only the with-handler / handle APPLICATION does
+             * (EX_WITH_HANDLER marks the discharge from the handler type row).
+             * Marking the handled effect at the construction site would wrongly
+             * attribute it to the constructing fn (e.g. a `main` that builds a
+             * handler value and passes it on), permanently tainting the effect.
+             * Still recurse into the case bodies for any OTHER effect they perform. */
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                for (uint8_t i = 0; i < h->n_cases; i++) REC(h->cases[i].body);
             }
             return;
         case EX_RESUME:
@@ -2929,7 +2945,23 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 REC(e->as.discontinue_.discontinue->exception);
             }
             return;
-        case EX_WITH_HANDLER:   REC(e->as.with_handler_.handler); REC(e->as.with_handler_.body); return;
+        case EX_WITH_HANDLER: {
+            /* B3 part 2: mark the effects this handler value DISCHARGES (from its
+             * type's handled_row) into the HAND set.  Recursing into a `(handler
+             * ...)` LITERAL already marks its inline cases, but a DYNAMIC handler
+             * value (a parameter / `(.field obj)` read) has no inline cases, so
+             * without this a fn that discharges an effect via a handler parameter
+             * (e.g. run-with) is wrongly seen as leaving the effect unhandled and
+             * co-taints to the fiber.  The type row covers both. */
+            const Type *ht = &e->as.with_handler_.handler->type;
+            if (ht->kind == TY_HANDLER && ht->as.handler_.handled_row) {
+                const Symbol *effs[32]; uint8_t neff = 0;
+                effect_row_collect_names(ht->as.handler_.handled_row, effs, &neff, 32);
+                for (uint8_t i = 0; i < neff; i++)
+                    mark_effect(effs[i], acc->hlo, acc->hhi);
+            }
+            REC(e->as.with_handler_.handler); REC(e->as.with_handler_.body); return;
+        }
         case EX_COMPOSE_HANDLERS: REC(e->as.compose_handlers_.h1); REC(e->as.compose_handlers_.h2); return;
         /* --- structural / binding forms: recurse into every sub-expression --- */
         case EX_LET:
@@ -5973,6 +6005,32 @@ static void emit_handle(CE *ce, const CTerm *t) {
                 t->as.handle.body, NULL, caps);
     free(hxn);
     char *hkenv = emit_cont_env(ce, kname, caps, ce->cur_k);
+
+    /* B3 part 2: a DYNAMIC with-handler installs the handler group from the
+     * runtime handler table (dk_hgroup_from_table) instead of a static per-case
+     * chain -- no case fns are emitted here (they were emitted at the handler
+     * literal's creation site).  The base frame carries the enclosing handlers
+     * (an effect the table does not handle propagates outward) exactly like the
+     * static path. */
+    if (t->as.handle.dyn) {
+        char hchain_d[64];
+        snprintf(hchain_d, sizeof(hchain_d), "__h%d", id);
+        char *tblv = atom_str(ce, &t->as.handle.dyn_table);
+        ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup_from_table("
+                    "(const tur_handler_table_t *)(intptr_t)%s, "
+                    "dk_frame(%s, %s, dk_copy_enclosing_handlers(%s))));",
+                hchain_d, tblv, kname, hkenv, ce->cur_k);
+        free(tblv);
+        free(hkenv);
+        const char *save_d = ce->cur_k;
+        const Type *save_ty_d = ce->cur_ty;
+        ce->cur_k = arena_strdup(&g_arena, hchain_d, strlen(hchain_d));
+        ce->cur_ty = t->as.handle.x.type;
+        emit_term(ce, t->as.handle.delim);
+        ce->cur_k = save_d;
+        ce->cur_ty = save_ty_d;
+        return;
+    }
 
     /* Lift each handler case as its own DKHandler and chain a dk_handler per case
      * onto the continuation.  dk_perform searches the chain by effect tag, so N

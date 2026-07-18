@@ -211,8 +211,16 @@ struct CTerm {
          * shallow == true (from `handle-shallow`, F2) lowers each case to
          * dk_handler_shallow (NOT re-installed on resume, the effect-side analogue
          * of shift0); false is a plain deep dk_handler. */
+        /* B3 part 2: `dyn` marks a DYNAMIC first-class with-handler -- the handler
+         * cases are not statically known; `dyn_table` is the runtime
+         * tur_handler_table_t* value (a variable / field read).  The emitter
+         * installs the handler group via dk_hgroup_from_table(dyn_table, ...)
+         * instead of the static per-case chain, and emits no case fns
+         * (they were emitted at the handler literal's creation site).  n_cases is
+         * 0 for a dyn handle. */
         struct { CVar x; CTerm *delim; CTerm *body;
-                 CHandleCase *cases; uint32_t n_cases; bool shallow; }    handle;
+                 CHandleCase *cases; uint32_t n_cases; bool shallow;
+                 bool dyn; CAtom dyn_table; }                             handle;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
