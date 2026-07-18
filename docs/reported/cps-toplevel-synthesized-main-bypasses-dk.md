@@ -35,6 +35,23 @@ alongside a handle, is not folded):
   handler-case-in-handler-continuation `__kont` threading gap
   (cps-handler-case-effect-reopening-needs-emission.md family).
 
+  **Precise diagnosis (2026):** the OUTER handle's heap-join frame (`main_j1`,
+  emitted by `emit_heap_join`, emit_cps_ir.c) reifies `(+ __t2 <inner-handle>)`.
+  Its body INSTALLS the inner handle, whose own continuation frame captures the
+  enclosing continuation (`main_hk2_env->__k = __kont`) -- but `main_j1` is emitted
+  as an `LH_PERFORM_CONT` DKFrame `(env, value)` with no `__kont`, so `__kont` is
+  undeclared.  `needs_kont` (= `jbody_has_cps_tailcall || jbody_has_perform`) does
+  not detect a nested handle/reset in the jbody.  ATTEMPTED FIX + INSUFFICIENT
+  (reverted): adding `jbody_has_delim` (a nested `CT_HANDLE`/`CT_RESET` in the
+  jbody) to `needs_kont` promotes `main_j1` to an `LH_RESUME_CONT` resume-frame so
+  it COMPILES -- but the program then HANGS (infinite loop) at run time.  So the
+  value-position nested handle needs more than threading `__kont` into the join:
+  the resume-frame's downstream-chain semantics for a nested handle whose result
+  is consumed by an outer expression are wrong (the inner handle's re-install /
+  `dk_copy_enclosing_handlers` loops).  A real fix must get the nested handle's
+  continuation to deliver its value to the join's `__kont` exactly once, not
+  re-enter the enclosing handler chain.
+
 **Refinement (later):** the blanket `n_handle >= 2` rejection is now narrowed to
 only a nested handle in a VALUE position (`fold_handle_in_value_position`).  A
 cleanly STACKED nested handle -- each inner handle the direct body/case of its
