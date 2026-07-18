@@ -1,3 +1,18 @@
+# session-effects / session-mp-effects: ~~permanently fiber-bound~~ SUPERSEDED (WRONG VERDICT)
+
+**CORRECTION (2026-07-18): this WONT-FIX verdict was wrong and is superseded by**
+`docs/upcoming/v2/cps-b8-session-effects-plan.md`.  The conclusion rested on the
+premise that a body containing inline-C can never CPS-lower.  That is false: the
+session ops (make-session/send/recv/close) are control-free inline-C EXPRESSIONS
+and delegate via CT_LETRAW like any other value op.  Adding  to
+safe_to_delegate (commit 61242b1) moves  off SIG-INLINE-C; the residual
+blockers (session  carrier param, capturing spawn-closure) are ordinary
+B4/B6-class admission work, not a permanent wall.  The effect is performed AND
+handled on the SAME thread -- nothing crosses .  Original analysis
+retained below for the record; its DECISION is rescinded.
+
+---
+
 # session-effects / session-mp-effects: permanently fiber-bound (pthread + inline-C session runtime)
 
 **RESOLVED -- decision recorded (WONT-FIX as a CPS target)**, see

@@ -435,10 +435,20 @@ and `docs/upcoming/cps-dk-multishot-user-effects-plan.md`.
 
 ---
 
-### B8 -- fiber-substrate-entangled (4 fixtures) -- PERMANENT CANDIDATES
+### B8 -- fiber-substrate-entangled (4 fixtures) -- FIXABLE (was mislabeled PERMANENT)
 
 **Fixtures:** `fiber-effect`, `p19-8-fiber-effect-chain`, `session-effects`,
 `session-mp-effects`.
+
+**Status (2026-07-18): NOT permanent.** `fiber-effect`/`p19-8` already emit
+perform=0. `session-effects`/`session-mp-effects` were mislabeled permanent on the
+false premise that inline-C can never CPS-lower; slice 1 (delegate control-free
+inline-C expressions, commit 61242b1) disproves it -- `main` moves off
+SIG-INLINE-C. Remaining: a session `void*` carrier param + a capturing spawn
+closure (ordinary B4/B6-class admission). Full plan:
+[cps-b8-session-effects-plan.md](cps-b8-session-effects-plan.md). The old WONT-FIX
+analysis (`docs/archive/cps-session-effects-permanently-fiber-bound.md`) is
+superseded.
 
 **Measured root cause.**
 
