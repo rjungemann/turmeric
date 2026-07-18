@@ -394,6 +394,21 @@ static bool cps_directly_uses_control(const Expr *e) {
         case EX_WITH_HANDLER:
         case EX_COMPOSE_HANDLERS:
             return g_opt_cps_tramp_resume;
+        /* A control op (perform / shift / handle / ...) inside a `match` arm colors
+         * its function just like one in an `if` branch -- without this recursion a
+         * `(defn pick [b] (match b (Full v) (+ v (perform (Choose))) ...))` reads as
+         * uncolored and fiber-performs the effect, tainting it for the enclosing
+         * DK handler (cps-backend-effect-under-match).  Flag-gated: flag-off such a
+         * fn is uncolored and fiber-lowered today, and coloring it there perturbs
+         * the shipping path -- so seed only under the experiment. */
+        case EX_MATCH:
+            if (!g_opt_cps_tramp_resume) return false;
+            if (cps_directly_uses_control(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (cps_directly_uses_control(e->as.match_.arms[i].body)) return true;
+                if (cps_directly_uses_control(e->as.match_.arms[i].guard)) return true;
+            }
+            return false;
         /* Nested function definitions are call-graph boundaries. */
         case EX_FN_DEF:
         case EX_FN:

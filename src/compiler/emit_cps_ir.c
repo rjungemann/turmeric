@@ -2407,6 +2407,23 @@ static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
         && carrier_handle_ok(rt);
 }
 
+/* B4: admit an opaque-carrier ADT PARAM -- a boxed sum-type / non-by-value ADT
+ * (e.g. `Box`) whose C spelling is the `int64_t` carrier.  BOTH the direct
+ * emitter's forward decl AND emit_params (binder_ctype_full -> emit_type_c_name
+ * -> type_c_name) spell such a param `int64_t`, so the `__cps` ABI is consistent
+ * -- the fn_sig_ok param gate was the only thing rejecting it.  A by-value
+ * PRODUCT ADT (adt_byval_c_name, e.g. `tur_adt_Cfg`) is NOT this and is handled
+ * by fn_byval_agg_param_ok instead.  This lets a `perform` reachable only
+ * through such a param -- e.g. `pick [b : Box]`'s match-arm perform under a DK
+ * handler (cps-backend-effect-under-match) -- keep the whole call chain on the
+ * DK.  Same single-concrete-signature + flag guard as the other admissions. */
+static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
+    if (!(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd))) return false;
+    TypeKind k = p->type.kind;
+    if (k != TY_ADT && k != TY_APP) return false;
+    return strcmp(type_c_name(p->type), "int64_t") == 0;
+}
+
 static bool fn_sig_ok(const FnDef *fd) {
     /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate).  A
      * nil/void return is admitted too: the body still delivers a unit (0) to the
@@ -2472,7 +2489,8 @@ static bool fn_sig_ok(const FnDef *fd) {
         bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
         if (!p->is_borrow && !fn_param_ok
             && !sig_slot_ok(&p->type, p->type.kind)
-            && !fn_byval_agg_param_ok(fd, p)) return false;
+            && !fn_byval_agg_param_ok(fd, p)
+            && !fn_carrier_param_ok(fd, p)) return false;
         if (param_name_clashes_cps(p)) return false;
     }
     return true;
