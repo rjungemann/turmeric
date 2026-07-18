@@ -335,25 +335,26 @@ ADT-ABI depth, B4 is a proper multi-slice effort, not a quick win like B1-B3.
 
 ---
 
-### B5 -- async x effect interaction (2 fixtures) -- 1 of 2 DONE
+### B5 -- async x effect interaction (2 fixtures) -- DONE (both DK-lower)
 
-**Fixtures:** `effects-async` (DONE), `async-with-handler` (deferred to cps-async).
-
-**Status (2026-07-18):**
+**Status (2026-07-18): BOTH fixtures DK-lower to perform=0, output 15, ASan-clean,
+suite 2203/0.**
 - `effects-async` -- `(async (fn [] (handle (perform E) (E ...))))`, an async
-  closure that HANDLES its own effect -- now DK-lowers to perform=0, output 15,
-  ASan-clean. (commit 8501075) The E2 taint-completeness rule was perm-tainting it
-  because `expr_collect_effects` folds performed+handled into one set; the new
-  `fn_net_escaping_acc` gates the rule on the NET escaping effect (performed but
-  not discharged by an enclosing handle in the same body), so a self-handling
-  fn-value is admitted and its interior handle installs its own DK prompt.
+  closure that HANDLES its own effect. (commit 8501075) The E2 taint-completeness
+  rule was perm-tainting it because `expr_collect_effects` folds performed+handled
+  into one set; the new `fn_net_escaping_acc` gates the rule on the NET escaping
+  effect (performed but not discharged by an enclosing handle in the same body),
+  so a self-handling fn-value is admitted and its interior handle installs its own
+  DK prompt.
 - `async-with-handler` -- `(async (with-handler ...))`, the SAME program without
-  the explicit `(fn [] ...)` wrapper -- still fibers. The bare handle inlines into
-  the async region (direct emitter) instead of a colored lambda; verified
-  identical to `effects-async` once wrapped in a lambda. Normalizing
-  `(async bare-expr)` to thunk-wrap is a broad async-lowering change (async
-  Send-check of captures + snapshot churn), so it belongs with the `cps-async`
-  experiment. See `docs/reported/cps-async-with-handler-bare-form-fibers.md`.
+  the explicit `(fn [] ...)` wrapper. `elab_async` now NORMALIZES a bare (non-fn)
+  async argument into `(async (fn [] EXPR))` -- semantically `(async EXPR)` is
+  already a thunk, and making it an explicit lambda routes the body through the
+  lifted-fn pipeline (a colored fn whose interior handle CPS-lowers) instead of
+  the inline fiber thunk.  A fn-VALUED arg (explicit lambda / named fn) is left
+  untouched.  The bare-expr thunk path already forbids capturing outer locals, so
+  the synthesized lambda is capture-free (no new Send obligation).  Blast radius
+  was a single fixture -- every other bare async site passes a fn value.
 
 Related (and correctly by-design) is `cps-async-recursive-await-eviction`
 (archived) -- recursive `await` deliberately evicts.
