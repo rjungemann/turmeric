@@ -5149,7 +5149,12 @@ static void emit_letraw(CE *ce, const CTerm *t) {
          * (0), never `x = ((void)0)`.  Same shape as the nil case. */
         const Expr *le = t->as.letraw.e;
         while (le && le->kind == EX_ASCRIBE) le = le->as.ascribe_.inner;
-        if (le && le->kind == EX_CALL && rhs && rhs[0])
+        /* B8: a nil-returning inline-C op (e.g. a session `close`, whose value is
+         * `:nil`) is returned by emit_value as an un-emitted expression exactly
+         * like a void EX_CALL -- so its side effect must be realized here, or the
+         * op is silently dropped (a delegated `(close ch)` never runs, leaking the
+         * channel).  Emit it as a statement, same as the EX_CALL case. */
+        if (le && (le->kind == EX_CALL || le->kind == EX_INLINE_C) && rhs && rhs[0])
             ce_line(ce, "%s;", rhs);
         ce_line(ce, "%s = 0;", bn);
     } else if (t->as.letraw.x.ty == TY_FN) {

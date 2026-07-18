@@ -3888,6 +3888,18 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
             return unsupported_form(b, e);
         }
+        case EX_CLOSURE: {
+            /* B8 slice-3 (probe): delegate a capturing closure with reap_env. */
+            const struct Closure *cl = e->as.closure_.closure;
+            if (g_opt_cps_tramp_resume && cl && cl->n_captures > 0
+                && !cl->is_shift_receiver && !cl->is_effect_payload) {
+                CTerm *t = build_letraw(b, e, x, rest);
+                t->as.letraw.reap_env = true;
+                return t;
+            }
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            return unsupported_form(b, e);
+        }
         default: {
             /* N6.1: delegate a control-op-free, colored-call-free form to the
              * direct emitter (binds x, continues rest). */
