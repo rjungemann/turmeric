@@ -267,31 +267,34 @@ fn-value calling convention) so a colored fn-value parameter called under a
 handle threads the DK; and ensure colored `__cps` propagation reaches a
 `perform` under `match` in a transitively-called callee.
 
-**Progress (2026-07-18): 2 of 4 layers of fixture 1 LANDED (gated, suite 2203/0);
-the remaining blocker is a substantial standalone feature.**
+**Progress (2026-07-18): fixture 1 (`cps-backend-effect-under-match`) DONE --
+DK-lowers perform=0, both paths output 8, suite 2203/0. Fixture 2 (the E2
+effectful-fn-value root) remains.**
 
 - **LANDED -- layer 1 (match-arm coloring):** `cps_directly_uses_control` now
   recurses into `EX_MATCH` (flag-gated), so a `perform` in a match arm colors its
-  fn. `pick` is now colored.
+  fn. `pick` is colored. (commit 187bb6a)
 - **LANDED -- layer 2 (opaque-ADT carrier param):** `fn_carrier_param_ok` admits
   an int64-carrier ADT param (`type_c_name` == "int64_t", i.e. a boxed sum type,
   NOT a by-value product). Both emitters already spell it `int64_t`, so the ABI
   was consistent -- only the sig gate rejected it. `pick` cleared SIG-REJECT.
-- **REMAINING -- layer 3 (the real blocker): `EX_MATCH` CT-IR lowering.** With
-  layers 1-2, `pick` now evicts as `BODY-UNSUPPORTED: EX_MATCH` -- the CPS IR
-  (cps_ir.c) has no `EX_MATCH` translation, so a `match` containing a control op
-  hits `CT_UNSUPPORTED`. This is a substantial feature on par with the while-loop
-  lowering (CT_LOOP, task-sized): a `CT_MATCH` term (scrutinee atom + arms, each
-  arm a pattern + a CPS-translated body) whose emit reuses the direct emitter's
-  tag-dispatch + field-binding (emit_expr.c `EX_MATCH`, which is intricate --
-  carrier bridging, by-value aggregates, spec handling) with each arm body
-  delivered to the join like `CT_IF` arms, wired through every CTerm walker
-  (term_core_ok / first_unsupported / collect_effects / needs_heap_join / ...).
-  Restricting to simple ctor-arm matches (no guards/literals/unions) would cover
-  this fixture with less surface.
-- **layer 4 (downstream):** once the match lowers, `route` (constructs `(Full 7)`,
-  a heap-ADT construction in a colored fn -- likely another small admission) and
-  `run` (SIG-TAINT) should follow.
+  (commit 187bb6a)
+- **LANDED -- layer 3 (`EX_MATCH` CT-IR lowering):** a `CT_MATCH` term (scrutinee
+  atom + ctor arms, each arm's field bindings + a CPS-translated body). Scope
+  restricted (match_dk_ok) to a BOXED tagged-sum ADT scrutinee, ctor arms +
+  trailing wildcard, no guards/literals/by-value-products; anything outside falls
+  through to the existing wholesale CT_LETRAW delegation (so int/enum matches are
+  byte-identical to before). `emit_match` mirrors the direct emitter's
+  `->tag`/`->as.Ctor._N` dispatch; `adt_int64_carrier` admits the boxed-sum
+  scrutinee atom through the slot gate. Wired through every CTerm walker
+  (term_core_ok / first_unsupported / needs_heap_join / collect_caps_rec /
+  has_capture_rec / jbody_has_* / emit_binder_decls). (commit 37fb373)
+- **layer 4 (downstream) -- LANDED as a consequence:** with the match lowered,
+  `route` (constructs `(Full 7)`) and `run` (was SIG-TAINT) both DK-lower;
+  `emit-c --enable=cps-tramp-resume` on the fixture emits 0 `tur_effect_perform`.
+- **Known flag-on rough edge:** `emit_match` does not drop the scrutinee node, so
+  the flag-on path leaks it (16 bytes) atop the universal DK-node baseline leak;
+  flag-off is leak-clean. See `docs/reported/cps-match-scrutinee-not-dropped.md`.
 
 Original 4-layer analysis (for reference):
 
