@@ -435,7 +435,12 @@ and `docs/upcoming/cps-dk-multishot-user-effects-plan.md`.
 
 ---
 
-### B8 -- fiber-substrate-entangled (4 fixtures) -- FIXABLE (was mislabeled PERMANENT)
+### B8 -- fiber-substrate-entangled (4 fixtures) -- DONE (was mislabeled PERMANENT)
+
+**All four DK-lower to perform=0 (2026-07-18).** session-effects/session-mp-effects
+via the inline-C-expr delegation + session/role void* carrier param + the nil
+inline-C side-effect fix + capturing spawn-closure delegation.  Full 1792-fixture
+sweep: zero fiber-live `tur_effect_perform`.  See cps-b8-session-effects-plan.md.
 
 **Fixtures:** `fiber-effect`, `p19-8-fiber-effect-chain`, `session-effects`,
 `session-mp-effects`.

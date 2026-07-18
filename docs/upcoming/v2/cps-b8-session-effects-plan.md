@@ -1,5 +1,17 @@
 # B8 -- session-effects / session-mp-effects DK lowering plan
 
+**STATUS: DONE (2026-07-18).** All four B8 fixtures emit `tur_effect_perform` = 0
+under `--enable=cps-tramp-resume`; both session fixtures run correctly on both
+paths, ASan shows only the 104-byte DK-node baseline leak that
+cps-backend-option-effect/struct-effect already ship with, suite 2203/0.
+Slices: 1 (inline-C expr delegation, 61242b1), 2 (session void* carrier param,
+9f19f35), 3 (nil inline-C side effect + capturing spawn-closure delegation,
+2ed823e; TY_ROLE carrier, 686abfc).  A full sweep of 1792 fixtures finds ZERO
+fiber-live `tur_effect_perform` call sites.
+
+---
+
+
 **Supersedes** the WONT-FIX verdict in
 `docs/archive/cps-session-effects-permanently-fiber-bound.md`, which was **wrong**:
 it concluded these fixtures are "permanent fiber clients" from the premise that a
