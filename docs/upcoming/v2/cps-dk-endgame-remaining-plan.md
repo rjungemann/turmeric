@@ -70,10 +70,17 @@ Recommended execution order is by leverage: **B3 (7) -> B1+B2 (7) -> B4/B5/B6
 > into one multi-effect DK handler group -- landing fh-handler-value,
 > with-handler-value, fh-multishot-value, fh-compose-handlers.
 >
-> **B3 part 2 (remaining 3):** the DYNAMIC handler-value cases --
-> `fh-multi-effect-type` (handler passed as a PARAMETER), `defstruct-field-handler`
-> and `-multi` (handler stored in / read back from a struct field).
-> Remaining fixable: **B3-part-2 (3) + B4-B7 (9)**.
+> **B3 part 2 -- DONE (2026-07-18):** all 3 DYNAMIC handler-value cases DK-lower
+> -- `fh-multi-effect-type` (handler PARAMETER), `defstruct-field-handler` and
+> `-multi` (handler in a struct field). Whole B3 bucket (7) is now DK; **fiber-live
+> 24 -> 10**. Steps 1-4 landed: handler-table entry `dk_tag`/`dk_fn` +
+> `dk_hgroup_from_table`; DK-ABI case fn at the handler literal site
+> (emit_effects_handler_lit); a `dyn` CT_HANDLE installing from the runtime table
+> (build_with_handler + emit_handle); `slot_ty` admits TY_HANDLER (handler param
+> sig-ok); and taint completeness (EX_WITH_HANDLER marks the handled_row as
+> discharged; a bare EX_HANDLER_LIT value no longer marks handled). Verified:
+> output == fiber, ASan-clean, suite green (benign preamble snapshot regen only).
+> Remaining fixable: **B4-B7 (9)**.
 
 #### B3 part 2 -- STEP 1 LANDED + concrete plan for the rest
 
