@@ -267,6 +267,38 @@ fn-value calling convention) so a colored fn-value parameter called under a
 handle threads the DK; and ensure colored `__cps` propagation reaches a
 `perform` under `match` in a transitively-called callee.
 
+**Scoping notes (2026-07-18, attempted; deeper than B1-B3, reverted to keep the
+tree clean).** B4 is materially harder than B1-B3 -- each fixture needs several
+coordinated changes, not one:
+
+- `cps-backend-effect-under-match` has FOUR layers, all required together:
+  1. `cps_directly_uses_control` (cps.c) has no `EX_MATCH` recursion, so a
+     `perform` in a match arm never colors its fn (`pick` reads UNCOLORED ->
+     fiber-performs `Choose` -> taints it). Adding an `EX_MATCH` seed IS correct
+     but must be **flag-gated** -- coloring `pick` flag-off broke the shipping
+     path (it then evicts and the fixture stopped printing `8`).
+  2. Even colored, `pick [b : Box]` is **SIG-REJECT** on its ADT param. `Box` is
+     a boxed SUM type: kind is `TY_ADT`, def non-NULL, but `def->is_heap` is
+     **false**, so `carrier_handle_ok` (heap-adt/heap-struct only) does NOT match
+     it -- yet the direct emitter passes it as an `int64_t` carrier. A
+     `fn_carrier_param_ok` mirroring `fn_carrier_ret_ok` therefore does NOT admit
+     `Box`; admitting it needs a broader "boxed-ADT int64-carrier param"
+     predicate AND an emit_params ABI that spells it to match the caller
+     (binder_ctype_full currently spells the ADT pointer, not int64).
+  3. `route` is `BODY-STRUCT-OR-TAINT` -- it constructs `(Full 7)` (a heap-ADT
+     construction) in a colored fn, itself an admission gap.
+  4. `run` is `SIG-TAINT` only as a consequence of 1-3; it should clear once the
+     chain admits.
+- `handle-effectful-fn-param-same-fn` is the E2 effectful-fn-value root: a
+  `(fn [] #fx{E} int)` PARAM called under a handle (`(handle (f) ...)`) must
+  thread the DK so `f`'s `perform` reaches the caller's handler. No small
+  bridge; it is the DK-threaded fn-value calling convention.
+
+Recommended order when resumed: land the gated `EX_MATCH` control seed first
+(sound, isolated), then the boxed-ADT carrier-param ABI (2) + heap-ADT
+construction admission (3) together, then E2 for the second fixture. Given the
+ADT-ABI depth, B4 is a proper multi-slice effort, not a quick win like B1-B3.
+
 ---
 
 ### B5 -- async x effect interaction (2 fixtures) -- FIXABLE (scope: async lowering)
