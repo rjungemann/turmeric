@@ -59,13 +59,26 @@ Fixable: **B1-B7 (20 fixtures)**. Permanent-candidate carve-outs: **B8 (4)**.
 Recommended execution order is by leverage: **B3 (7) -> B1+B2 (7) -> B4/B5/B6
 -> B7 -> decide B8**.
 
-> **PROGRESS (2026-07-18):** **B1 (3) and B2 (4) are DONE** -- fiber-live surface
-> **24 -> 17**. B1 landed via classifying each `defmacro` by its template head so a
-> macro that expands to a statement folds into the synthesized main
-> (elab_toplevel.c). B2 landed by making three passes descend into `EX_DEFMODULE`
-> bodies -- coloring (cps.c, flag-gated), classification (ensure_S now iterates
-> the flattened program), and colored-callee resolution (`callee_colored` +
-> `fd_for_binding`). Remaining fixable: **B3-B7 (13)**. Next by leverage: **B3**.
+> **PROGRESS (2026-07-18):** **B1 (3), B2 (4), and B3 part 1 (4) are DONE** --
+> fiber-live surface **24 -> 13**. B1: classify each `defmacro` by template head so
+> a statement-expanding macro folds into the synthesized main (elab_toplevel.c).
+> B2: three passes descend into `EX_DEFMODULE` bodies -- coloring (cps.c,
+> flag-gated), classification (ensure_S iterates the flattened program), and
+> colored-callee resolution (`callee_colored` + `fd_for_binding`). B3 part 1:
+> seed `EX_WITH_HANDLER`/`EX_COMPOSE_HANDLERS` in `cps_directly_uses_control`
+> (flag-gated) + `expr_has_handle`, and merge a `compose-handlers` of literals
+> into one multi-effect DK handler group -- landing fh-handler-value,
+> with-handler-value, fh-multishot-value, fh-compose-handlers.
+>
+> **B3 part 2 (remaining 3, harder):** the DYNAMIC handler-value cases --
+> `fh-multi-effect-type` (handler passed as a PARAMETER), `defstruct-field-handler`
+> and `-multi` (handler stored in / read back from a struct field). The fiber path
+> lowers these to a runtime `tur_handler_table_t*` dispatched by
+> `tur_handler_dispatch`; DK-lowering them needs a NEW dynamic-DK-handler
+> primitive -- a DK handler group that dispatches performed effects through a
+> runtime handler table (not compile-time-known cases) while threading the DK
+> continuation. Real runtime + codegen feature, not a bridge; its own slice.
+> Remaining fixable: **B3-part-2 (3) + B4-B7 (9)**.
 
 ---
 
