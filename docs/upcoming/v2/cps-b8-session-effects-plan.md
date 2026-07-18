@@ -67,21 +67,29 @@ fat-closure env (the documented Phase-1-keystone / Phase-3 gap: the CPS
 delegation path does not apply the direct emitter's scoped-env free). So the
 lowering is CORRECT; the only work is the env free.
 
-**The clean landing.** The existing `reap_env` mechanism
-(`cps_bind_let_init` -> `build_letraw` with `reap_env=true`, freed at the DK
-entry boundary) closes exactly this leak, but is only wired for a `let`-bound
-freeable closure -- not a closure passed as a CALL ARG (`(spawn <closure>)`,
-which reaches `cps_bind` via `atomize`'s Pending). Slice 3 =
+**Attempted (2026-07-18) -- the leak is NOT the closure env; it is the `^linear`
+session channel's scope-exit drop, which the CPS delegation path does not apply.**
+Wiring an `EX_CLOSURE` + `reap_env` delegation into `cps_bind` (freed at the
+outermost DK entry boundary) makes `session-effects` DK-lower and run CORRECTLY
+(`sending 99` / `received 99` / `99`, perform=0, plain run exit 0), but ASan still
+shows a **264-byte leak from `tur_session_new` in `main__cps`** -- the session
+CHANNEL itself. Flag-off, the direct emitter applies the `^linear` value's
+scope-exit drop (`close`/free); on the CPS path the delegated `make-session`
+inline-C runs but the linear drop is never inserted, so the channel leaks. This is
+the Phase-3 owning/linear-value teardown gap (E3/E4 in
+`cps-backend-multishot-continuations-owning-capture-plan.md`, explicitly OPEN),
+NOT a closure-env issue -- `reap_env` cannot touch it. `session-mp-effects`
+additionally does not reach perform=0 with the closure change alone (its
+role-a/role-b structure needs more). The probe was reverted (a leaky, partial
+change against the leak discipline is not a landing).
 
-1. In `cps_bind`, handle an `EX_CLOSURE` capturing closure whose env is
-   freeable (reuse `closure_binding_escapes` for the escape check -- the spawn
-   thunk's env is consumed by the pthread and bounded by `join`, which precedes
-   the entry boundary) by delegating via `build_letraw` with `reap_env = true`.
-2. Gate on `g_opt_cps_tramp_resume`; verify `session-effects` /
-   `session-mp-effects` ASan-clean (env reaped), suite green, flag-off identical.
-
-A broad "admit every capturing closure" is NOT the landing (it leaks every
-flag-on closure env); the escape-checked + reap_env version is.
+**The real slice 3** is therefore the Phase-3 work: apply the `^linear`
+session-channel (and general owning-value) scope-exit drop on the CPS delegation
+path, so a DK-lowered `make-session`/`recv` value is freed exactly as the direct
+emitter frees it. That closes the 264-byte channel leak; the closure-env
+`reap_env` piece rides along. Until then, the session fixtures are FIXABLE (the
+lowering is proven correct) but not leak-clean, so they should not be flipped on
+in the suite. This is the last genuine piece before `grep tur_effect_perform == 0`.
 
 ## Verification
 
