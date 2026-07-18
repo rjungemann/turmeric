@@ -59,6 +59,14 @@ Fixable: **B1-B7 (20 fixtures)**. Permanent-candidate carve-outs: **B8 (4)**.
 Recommended execution order is by leverage: **B3 (7) -> B1+B2 (7) -> B4/B5/B6
 -> B7 -> decide B8**.
 
+> **PROGRESS (2026-07-18):** **B1 (3) and B2 (4) are DONE** -- fiber-live surface
+> **24 -> 17**. B1 landed via classifying each `defmacro` by its template head so a
+> macro that expands to a statement folds into the synthesized main
+> (elab_toplevel.c). B2 landed by making three passes descend into `EX_DEFMODULE`
+> bodies -- coloring (cps.c, flag-gated), classification (ensure_S now iterates
+> the flattened program), and colored-callee resolution (`callee_colored` +
+> `fd_for_binding`). Remaining fixable: **B3-B7 (13)**. Next by leverage: **B3**.
+
 ---
 
 ### B1 -- macro-expanded top-level handle (3 fixtures) -- FIXABLE
