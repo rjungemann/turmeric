@@ -1,5 +1,11 @@
 # Effect performed inside an inner handle does not pass through to an outer handler
 
+**STATUS: RESOLVED (verified 2026-07-18).** The minimal repro (`mixer` handles
+`A` locally, performs `B`, expects `B` to reach `main`'s handler) now prints
+`12` on BOTH the fiber path (`tur run`, no flag) and the DK path
+(`--enable=cps-tramp-resume`), exit 0. Effect pass-through through an inner
+handler for a different effect works. Archived from `docs/reported/`.
+
 **Severity:** high (soundness/expressiveness -- a fundamental algebraic-effects
 property is broken; both the compiled path AND the turi interpreter abort).
 

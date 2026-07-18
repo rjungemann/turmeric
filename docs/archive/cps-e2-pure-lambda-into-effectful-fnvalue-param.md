@@ -1,5 +1,15 @@
 # E2 residual: a PURE lambda subtyped into an EFFECTFUL fn-value param evicts (effect-subtype cluster)
 
+**STATUS: RESOLVED (verified 2026-07-18).** The whole effect-subtype cluster now
+DK-lowers under `--enable=cps-tramp-resume`: `effect-subtype-ho`,
+`effect-subtype-assign`, `effect-subtype-capability`, `effect-type-alias`, and
+`effect-struct-field-row` all emit zero `tur_effect_perform("` call sites with
+the flag on (measured). On the fiber path (no flag) they still ride the fiber by
+design (not opted in), which is the expected pre-graduation state. Archived from
+`docs/reported/`.
+
+(Historical status below.)
+
 **STATUS: PARTIALLY LANDED (2 of 6).** effect-subtype-ho + effect-subtype-assign
 DK-lower via the two-part fix (force-color the pure lambda in cps.c + un-skip a
 colored pure fn-value in the E2 registration loop, emit_cps_ir.c).  The remaining

@@ -6,6 +6,16 @@ severity: existential. If the fiber effect runtime cannot be deleted, this proje
 
 # v2 -- Make CPS/DK the sole lowering for effectful colored code, then delete the fiber effect runtime
 
+> **UPDATE 2026-07-18 -- measured remaining surface.** The concrete, current
+> work-list lives in **`cps-dk-endgame-remaining-plan.md`** (tactical companion).
+> Measured precisely (count of `tur_effect_perform("` call sites under
+> `--enable=cps-tramp-resume`, NOT the over/under-counting `eff=1` column): the 22
+> opted-in `cps-tramp-resume-*` fixtures are 100% fiber-clean, and **24
+> non-opted-in fixtures** remain fiber-bound, bucketed B1-B8 (20 fixable, 4
+> permanent-candidate carve-outs). The `SIG-*` inventory in Sec 1/2 below is the
+> original strategic framing; the companion doc supersedes it for day-to-day
+> execution and states the measurement methodology explicitly.
+
 ## 0. Why this document exists
 
 The v1 finish plan (`../cps-runtime-finish-plan.md`) drove the CPS/DK backend to

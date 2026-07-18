@@ -1,5 +1,28 @@
 # Top-level `(handle ...)` in a synthesized main bypasses the CPS/DK backend (THE endgame taint root)
 
+**UPDATE (2026-07-18):** Re-measured against a precise ground truth (count of
+`tur_effect_perform("` call sites under `--enable=cps-tramp-resume`, not the
+over/under-counting `eff=1` column). Fiber-live is now **24 fixtures** (was 39 ->
+27 -> 24 as effect-nested and later slices landed). The residual that is still
+*this report's* territory has narrowed to two precise, measured root causes:
+
+- **B1 -- macro-expanded top-level handle (3 fixtures:** `effect-with-write`,
+  `effect-with-fail`, `effect-with-getenv`**).** A *literal* top-level handle
+  DK-lowers today (`(handle (do (perform ...)) (E [] k) (resume k v))` emits 0
+  perform sites); a **macro-expanded** one does not. The fold gate distinguishes
+  them (it aborts on a macro head), so a `(defmacro with-write ...)` -> `(handle
+  ...)` expansion never reaches the synthesized-main d2b path.
+- **B2 -- handle inside `(defmodule ...)` (4 fixtures:** `module-effect-private`,
+  `module-cross-module-effect`, `effect-export-explicit`,
+  `effect-row-cross-private`**).** Isolated to the module wrapper itself -- NOT
+  the export and NOT `^private`. A bare `(defn run [] (handle ...))` called from
+  `main` DK-lowers (0 perform); wrapping the identical code in `(defmodule ...)`
+  reintroduces the fiber lowering.
+
+Full remaining-surface enumeration (B1-B8, 24 fixtures) and fix directions live in
+**docs/upcoming/v2/cps-dk-endgame-remaining-plan.md**. This report stays open until
+B1 + B2 close.
+
 **STATUS: PARTIALLY LANDED (Approach A, gated on `--enable=cps-tramp-resume`).**
 `elaborate_program` (src/compiler/elab_toplevel.c) now folds trailing top-level
 STATEMENT forms into a synthesized `(defn main [] : int (do <stmts> 0))` so a

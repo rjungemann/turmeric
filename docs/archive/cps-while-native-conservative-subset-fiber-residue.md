@@ -1,5 +1,12 @@
 # The native `while`-loop lowering covers only a conservative subset -- richer loop shapes still evict to the fiber
 
+**STATUS: RESOLVED (verified 2026-07-18).** The while-loop effect fixtures now
+DK-lower under `--enable=cps-tramp-resume` with zero `tur_effect_perform("` call
+sites: `cps-tramp-resume-while-handle`, `cps-tramp-resume-while-handle-escape`,
+`cps-tramp-resume-while-readset`, `cps-tramp-resume-loop-in-handle-continuation`,
+and `effect-handler-capture-loop`. The conservative-subset residue this report
+tracked has closed. Archived from `docs/reported/`.
+
 **Severity:** medium (correctness is fine -- every out-of-subset shape evicts to
 the fiber and runs correctly). It is an **endgame blocker**: the
 `cps-dk-sole-effect-lowering-plan` finish line is DELETING the fiber effect
