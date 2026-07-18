@@ -361,20 +361,29 @@ Related (and correctly by-design) is `cps-async-recursive-await-eviction`
 
 ---
 
-### B6 -- effectful typeclass instance method (1 fixture) -- FIXABLE
+### B6 -- effectful typeclass instance method (1 fixture) -- DONE
 
-**Fixture:** `typeclass-effect-row-caller`.
+**Fixture:** `typeclass-effect-row-caller`. DK-lowers to perform=0, output 42,
+ASan-clean, suite 2203/0. (commit dbc94be)
 
-**Measured root cause.** An instance method that performs an effect
-(`(io-show [x] :nil (perform (Write "42")))` for `IOShow int`), reached through
-a dict slot. The instance method is `SIG-EXPORT` (`c_export_name` pinned,
-`__inst_IOShow_io_hyshow_int`) and effectful, so it routes to the fiber.
+**Root cause.** An instance method's `c_export_name` is pinned to its INTERNAL
+mangled dict-slot name (`__inst_IOShow_io_hyshow_int`), so the CPS backend
+SIG-EXPORT-evicted it like a user ABI export -- it stayed fiber, tainting Write,
+so `main`'s handler co-classified to fiber (SIG-TAINT).
 
-**Fix direction.** An effectful `__inst_*` method needs a `__cps` variant
-reachable through the dict slot (a DK-threaded instance-method calling
-convention), or the caller's handle must DK-lower across the dict-dispatched
-effectful call. This is the "effectful exported instance" case the master plan's
-`SIG-EXPORT` row flagged as "only the effectful instances."
+**Fix (all gated on `g_opt_cps_tramp_resume`, flag-off byte-identical):**
+- New `Binding.is_instance_method`, set in `elab_typeclasses` where the dict-slot
+  name is pinned -- marks the export as internal, not a user `^:export-as`.
+- The SIG-EXPORT rule (candidate gate + eviction categorization) no longer
+  perm-routes an instance-method export under the flag, so the CPS backend owns
+  it: it emits the `__cps` variant AND keeps the exported direct entry the dict
+  slot references (`.io_hyshow = __inst_IOShow_io_hyshow_int`).
+- `fn_ret_type`: an instance method's declared return is left `TY_UNKNOWN` by elab
+  (a placeholder), failing the sig gate; defer to the inferred body type (`TY_NIL`).
+
+The `(.io-show 42)` call statically resolves to the instance method, so once it
+CPS-emits, `main`'s handle body threads it as a normal cps->cps call
+(`__inst_IOShow_io_hyshow_int__cps(42, __kont)`) -- no dynamic-dict work needed.
 
 ---
 
