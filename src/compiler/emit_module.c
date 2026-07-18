@@ -6411,8 +6411,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * double-free shared envs -- it is the application site (with-handler) that
      * frees, and only the outermost owner frees.  See
      * docs/first-class-handlers-semantics.md (FH1.2 invariant). */
-    buf_puts(out, "/* FH1: first-class handler dispatch-table entry */\n");
-    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;\n");
+    buf_puts(out, "/* FH1: first-class handler dispatch-table entry.\n");
+    buf_puts(out, " * B3: `dk_tag`/`dk_fn` carry the DK-ABI variant of the case (emitted at the\n");
+    buf_puts(out, " * handler-literal site when it is created inside colored code), so a dynamic\n");
+    buf_puts(out, " * `(with-handler <value> body)` can install a DK handler group from the table\n");
+    buf_puts(out, " * (dk_hgroup_from_table) instead of running the body on the fiber.  The fiber\n");
+    buf_puts(out, " * path leaves them 0 (calloc-zeroed) and never reads them. */\n");
+    buf_puts(out, "struct DK;\n");
+    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; int dk_tag; intptr_t (*dk_fn)(intptr_t, intptr_t, struct DK *); } tur_handler_entry_t;\n");
     buf_puts(out, "/* FH1: first-class handler value -- effect-keyed dispatch table */\n");
     buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;\n");
     buf_puts(out, "static tur_handler_table_t *tur_handler_table_new(int n) {\n");

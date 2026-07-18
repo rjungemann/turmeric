@@ -349,6 +349,23 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    return head;\n"
 "}\n");
     buf_puts(out,
+"/* B3: install a DK handler group from a runtime first-class handler table -- the\n"
+" * DK-side analogue of running a with-handler body under a dynamic handler value.\n"
+" * Each entry contributes a dk_handler(dk_tag, dk_fn, env, ...) node, chained\n"
+" * h1-outer (entry 0 outermost, matching tur_handler_table_concat order and the\n"
+" * static handle chain) over `base` (the with-handler continuation frame), then\n"
+" * stamped as one hgroup.  The DK case fns + tags were emitted at the handler\n"
+" * literal's creation site (colored context). */\n"
+"__attribute__((unused))\n"
+"static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {\n"
+"    DK *head = base;\n"
+"    if (t) for (int i = t->n_entries - 1; i >= 0; i--) {\n"
+"        tur_handler_entry_t *e = &t->entries[i];\n"
+"        head = dk_handler(e->dk_tag, (DKHandler)e->dk_fn, (intptr_t)e->env, head);\n"
+"    }\n"
+"    return dk_hgroup(head);\n"
+"}\n");
+    buf_puts(out,
 "static DK *dk_copy_node(const DK *n);\n");
     buf_puts(out,
 "static DK *dk_copy_node(const DK *n) {\n"
