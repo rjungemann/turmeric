@@ -1802,8 +1802,13 @@ static CTerm *cps_shift_body(CpsB *b, Expr *e) {
  * term (an APPCONT to the enclosing kont in tail position, or the `rest` term in
  * bind position).  perform/resume atomize their sub-expressions into `p`. */
 
-static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
-    HandleExpr *h = e->as.handle_.handle;
+/* Build a CT_HANDLE from a HandleExpr `h` (its CASES) run over `body_expr` (the
+ * delimited region), delivering the result to `cont` bound at `x`.  `result_ty` is
+ * the delim body's value type.  Shared by EX_HANDLE (body == h->body) and
+ * EX_WITH_HANDLER with a handler-literal (body == the with-handler body, cases
+ * from the literal). */
+static CTerm *build_handle_core(CpsB *b, HandleExpr *h, Expr *body_expr,
+                                TypeKind result_ty, CVar x, CTerm *cont) {
     if (!h || h->n_cases < 1) {
         CTerm *u = new_term(b, CT_UNSUPPORTED);
         u->as.unsupported.why = "handle: no cases";
@@ -1819,10 +1824,10 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
      * (correctly) rejects a fiber-runtime CT_LETRAW.  A REAL effect performed
      * inside the body still threads the enclosing DK continuation natively. */
     if (h->is_unsafe_marker)
-        return cps_bind(b, (Expr *)h->body, x, cont);
+        return cps_bind(b, body_expr, x, cont);
     CTerm *t = new_term(b, CT_HANDLE);
     t->as.handle.x = x;
-    t->as.handle.delim = cps_tail(b, h->body, kont_prompt(e->type.kind));
+    t->as.handle.delim = cps_tail(b, body_expr, kont_prompt(result_ty));
     t->as.handle.n_cases = h->n_cases;
     t->as.handle.shallow = h->shallow;   /* F2: handle-shallow -> dk_handler_shallow */
     CHandleCase *cs = arena_alloc(b->a, h->n_cases * sizeof(CHandleCase));
@@ -1847,6 +1852,28 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
     t->as.handle.cases = cs;
     t->as.handle.body = cont;
     return t;
+}
+
+static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
+    HandleExpr *h = e->as.handle_.handle;
+    return build_handle_core(b, h, h ? (Expr *)h->body : NULL, e->type.kind, x, cont);
+}
+
+/* E2 (cps-tramp-resume): `(with-handler hv body)` where hv is a `(handler ...)`
+ * LITERAL is exactly `(handle body <hv-cases>)` -- reuse build_handle_core with the
+ * literal's cases and the with-handler body, so a fn that discharges one effect via
+ * with-handler and leaves a leftover (fh-discharge-row's do-work) DK-lowers, its
+ * leftover threading to the enclosing handler.  A DYNAMIC handler value (a variable,
+ * not a literal) is not statically known here -> evict (unchanged). */
+static CTerm *build_with_handler(CpsB *b, Expr *e, CVar x, CTerm *cont) {
+    const Expr *hv = ascribe_peel(e->as.with_handler_.handler);
+    Expr *body = e->as.with_handler_.body;
+    if (hv && hv->kind == EX_HANDLER_LIT)
+        return build_handle_core(b, hv->as.handler_lit_.handle, body,
+                                 e->type.kind, x, cont);
+    CTerm *u = new_term(b, CT_UNSUPPORTED);
+    u->as.unsupported.why = "with-handler (dynamic handler value)";
+    return u;
 }
 
 static CTerm *build_perform(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
@@ -2955,6 +2982,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
         return build_cont_pred(b, e, x, ac);
     }
+    /* (with-handler <literal> body) in tail position (flag-on): a handle over body. */
+    if (g_opt_cps_tramp_resume && e->kind == EX_WITH_HANDLER) {
+        CVar x = fresh_cvar(b, &e->type);
+        CTerm *ac = new_term(b, CT_APPCONT);
+        ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+        return build_with_handler(b, e, x, ac);
+    }
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};
@@ -3367,6 +3401,9 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     /* (cont? k) in bind position (flag-on): bind the unconsumed-check to x. */
     if (g_opt_cps_tramp_resume && e->kind == EX_CONT_PRED)
         return build_cont_pred(b, e, x, rest);
+    /* (with-handler <literal> body) in bind position (flag-on). */
+    if (g_opt_cps_tramp_resume && e->kind == EX_WITH_HANDLER)
+        return build_with_handler(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};
