@@ -1,5 +1,16 @@
 # Top-level `(handle ...)` in a synthesized main bypasses the CPS/DK backend (THE endgame taint root)
 
+**RESOLVED (2026-07-18).** All root causes closed: B1 (macro-expanded top-level
+handle), B2 (handle inside `defmodule`), and the last escaping-mutable holdout
+`effect-capture-k` (B7 -- by-reference heap-cell mutable capture + copy-on-store,
+commit 5098a0a) all DK-lower to perform=0 under `--enable=cps-tramp-resume`.
+`fold_stmt_is_risky` no longer excludes any top-level statement.  Suite 2203/0.
+Archived; retained below for the historical paper trail.
+
+---
+
+# Top-level `(handle ...)` in a synthesized main bypasses the CPS/DK backend (THE endgame taint root)
+
 **UPDATE (2026-07-18):** Re-measured against a precise ground truth (count of
 `tur_effect_perform("` call sites under `--enable=cps-tramp-resume`, not the
 over/under-counting `eff=1` column). Fiber-live is now **24 fixtures** (was 39 ->

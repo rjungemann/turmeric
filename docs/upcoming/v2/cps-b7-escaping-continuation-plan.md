@@ -1,9 +1,10 @@
 # B7 -- escaping / multishot continuation via `set!` (DK lowering plan)
 
 **Fixture:** `tests/fixtures/effect-capture-k` (expected `0` then `10`).
-**Status:** diagnosed to the emit level; NOT yet implemented. This is the last
-fiber-live effect bucket and the genuinely hard one -- a real multi-part feature,
-not a single-mechanism admission fix like B4-B6.
+**Status:** LANDED (commit 5098a0a). `effect-capture-k` DK-lowers to perform=0,
+output 0/10, ASan-clean, suite 2203/0. The by-reference heap-cell capture +
+copy-on-store described below is implemented and gated on g_opt_cps_tramp_resume;
+the fold_stmt_is_risky escaping-mutable exclusion is lifted.
 
 ## The program
 

@@ -387,11 +387,18 @@ CPS-emits, `main`'s handle body threads it as a normal cps->cps call
 
 ---
 
-### B7 -- escaping / multishot continuation via `set!` (1 fixture) -- FIXABLE, hardest
+### B7 -- escaping / multishot continuation via `set!` (1 fixture) -- DONE
 
-**Fixture:** `effect-capture-k`. **Diagnosed to the emit level (2026-07-18); a
-dedicated implementation plan is in
-[cps-b7-escaping-continuation-plan.md](cps-b7-escaping-continuation-plan.md).**
+**Fixture:** `effect-capture-k`. **DK-lowers to perform=0, output 0/10, ASan-clean,
+suite 2203/0 (commit 5098a0a).** The escaping continuation (`(set! m k)` in a
+handler case, `resume`d after the handle exits) is lowered via a by-reference heap
+cell: the mutable's C name binds a shared `int64_t *` cell captured by reference
+into the lifted handler case + continuation, and the stored continuation is
+deep-copied (`dk_copy_range`) at the store so it survives `dk_perform`'s free
+(reaped at the entry boundary).  The `fold_stmt_is_risky` escaping-mutable
+exclusion that kept the fixture on the fiber path is lifted.  Full design +
+emit-level diagnosis in
+[cps-b7-escaping-continuation-plan.md](cps-b7-escaping-continuation-plan.md).
 
 The DK backend already emits a structurally-close handler-case + continuation-frame
 pair; three concrete defects keep it broken (`k_hystore undeclared`): (1) the
