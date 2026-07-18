@@ -1032,44 +1032,23 @@ static Type fwd_shallow_type_arg(Elab *e, const Form *af,
     return type_tyvar_named("_");
 }
 
-/* Recursively count `handle`/`handle-shallow` heads and detect a `set!` head in
- * a form's subtree.  Used by the top-level-main fold (below) to SKIP shapes the
- * CPS/DK backend cannot yet lower and would MISCOMPILE flag-on: an escaping-
- * mutable capture (a `set!` inside a handle case -- the DK has no by-reference
- * mut capture, effect-capture-k) or a nested handle (the inner handle's
- * continuation needs `__kont` threaded from the sub-continuation -- effect-nested).
- * Conservative: a false positive only forgoes the fold, leaving the historical
- * fiber behaviour untouched. */
-static void fold_scan_handle_risk(const Elab *e, const Form *f,
-                                  uint32_t *n_handle, bool *has_set) {
-    if (!f) return;
-    if (f->tag != F_LIST && f->tag != F_VEC && f->tag != F_MAP && f->tag != F_SET)
-        return;
-    if (f->as.list.len > 0 && f->as.list.items[0]
-        && f->as.list.items[0]->tag == F_SYM) {
-        const Symbol *h = f->as.list.items[0]->as.sym;
-        if (h == e->sym_handle || h == e->sym_handle_shallow) (*n_handle)++;
-        else if (h == e->sym_set) *has_set = true;
-    }
-    for (uint32_t i = 0; i < f->as.list.len; i++)
-        fold_scan_handle_risk(e, f->as.list.items[i], n_handle, has_set);
-}
-
-/* A top-level statement is fold-unsafe when its handle subtree carries a shape the
- * DK backend cannot lower yet: a set! that may write an escaping continuation into
- * a captured mutable (effect-capture-k -- the DK has no by-reference mutable
- * capture).  A VALUE-position nested handle (effect-nested's
- * `(+ (get-val) (handle ...))`) USED to be rejected here, but now DK-lowers: the
- * join rides an LH_RESUME_CONT resume-frame whose borrowed `__kont` is COPIED into
- * the nested handle's continuation env (emit_cps_ir.c CE.borrowed_kont), so the
- * nested handle delivers its value to the enclosing continuation exactly once
- * without a use-after-free.  A cleanly STACKED nested handle (effect-console's
- * `(handle (handle ...) ...)`) already folded via Slice PH.  So only the set!
- * escaping-mutable shape remains fold-unsafe. */
+/* A top-level statement USED to be fold-unsafe when its handle subtree carried a
+ * `set!` (the escaping-mutable shape, effect-capture-k -- the DK had no
+ * by-reference mutable capture) or a value-position nested handle (effect-nested).
+ * BOTH now DK-lower:
+ *  - the nested handle rides an LH_RESUME_CONT resume-frame whose borrowed `__kont`
+ *    is copied into the nested handle's continuation env (CE.borrowed_kont);
+ *  - the escaping mutable is lowered to a by-reference heap cell (B7): a `(set! m k)`
+ *    store of a continuation deep-copies the chain into a shared cell captured by
+ *    reference into the lifted handler case + continuation (emit_cps_ir.c
+ *    g_byref_muts / dk_copy_range copy-on-store).
+ * A synthesized d2b main whose shape the CPS subset still cannot admit is dropped
+ * by the taint fixpoint and falls back to the historical direct/fiber main
+ * (emit_cps_ir_try_fn returns false before the d2b wrapper) -- never a hard error.
+ * So nothing is categorically fold-unsafe here now; keep the scan helper for
+ * future shape-specific gating. */
 static bool fold_stmt_is_risky(const Elab *e, const Form *f) {
-    uint32_t n_handle = 0; bool has_set = false;
-    fold_scan_handle_risk(e, f, &n_handle, &has_set);
-    if (n_handle >= 1 && has_set) return true;
+    (void)e; (void)f;
     return false;
 }
 

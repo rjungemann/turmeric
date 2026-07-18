@@ -21,6 +21,10 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             Binding **self_exclude, uint32_t n_self_exclude,
                             uint32_t *n_out);
 
+/* B7 fwd decls (defined after the CE struct). */
+static bool is_byref_mut(const Binding *b);
+static const struct Binding *byref_set_target(const Expr *e);
+
 /* B4 (CT_MATCH emit): the ADT-aggregate field-access helpers.  Declared in
  * emit_internal.h, which this file does not include; forward-declared here so
  * emit_match can spell `(tur_adt_<Name> *)->as.<Ctor>._N` field reads exactly as
@@ -959,6 +963,8 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
  * else its scalar / by-value-aggregate binder type. */
 static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
     if (caps->polyfn[i]) return "tur_poly_fn_t";
+    /* B7: a by-reference mutable rides the env as its cell POINTER. */
+    if (caps->b[i] && is_byref_mut(caps->b[i])) return "int64_t *";
     /* E2c: a captureless-effectful fn-value param (a via_registry callee carried
      * by cap_add_fn_scalar) rides the env as a bare int64 direct-entry fn-ptr --
      * `binder_ctype_full(TY_FN)` would leak a bad spelling. */
@@ -1167,6 +1173,15 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                 if (_f) cap_add(cs, b, b->type.kind, &b->type);
             }
             free(fv);
+            /* B7: `(set! m k)`'s TARGET is a WRITE, not a free-var read, so
+             * collect_free_vars never surfaces it -- but the lifted body writes the
+             * shared cell `*m`, so `m` (the cell pointer) must be captured. */
+            const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(le) : NULL;
+            if (bref && !bref->is_global && !binding_excluded(bref)) {
+                uint32_t _id = bref->id; bool _f = (_id != exclude);
+                for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                if (_f) cap_add(cs, bref, bref->type.kind, &bref->type);
+            }
             bound[nb] = t->as.letraw.x.id;
             collect_caps_rec(t->as.letraw.body, exclude, bound, nb + 1, cs); return;
         }
@@ -4471,6 +4486,76 @@ static bool is_cps_island(const CTerm *t, const Symbol **handled, int nh) {
 
 #define MAX_JOINS 64
 
+/* ---- B7: escaping-continuation mutables as by-reference heap cells --------
+ * A `^mut` that a handler case STORES its continuation into (`(set! m k)`, `k` a
+ * continuation) and the program later `resume`s outlives the handler's dynamic
+ * extent: `dk_perform` frees the captured chain when the case returns, so the
+ * stored `k` must be cloned (copy-on-store, `dk_copy`) and the mutable must be a
+ * SHARED heap cell captured BY REFERENCE into every lifted body that touches it
+ * (the case that writes it, the continuation / later code that resumes it).  A
+ * by-value capture would snapshot the value and lose the write.  `g_byref_muts`
+ * is the set of such bindings for the function currently being emitted; the
+ * mutable's C name binds the CELL POINTER (`int64_t *`), reads/writes deref it,
+ * and the pointer (a scalar) rides the existing scalar-capture machinery.  Whole
+ * feature gated on g_opt_cps_tramp_resume. */
+static const Binding *g_byref_muts[64];
+static int            g_byref_muts_n;
+
+static bool is_byref_mut(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_byref_muts_n; i++) if (g_byref_muts[i] == b) return true;
+    return false;
+}
+
+/* If Expr `e` (ascribe-peeled) is `(set! <mut> <cont>)` -- a store of a
+ * continuation value into a mutable -- return the mutable target, else NULL. */
+static const Binding *byref_set_target(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_SET || !e->as.set_.target || !e->as.set_.target->is_mut)
+        return NULL;
+    const Expr *v = e->as.set_.value;
+    while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+    if (v && v->kind == EX_VAR && v->as.var.binding && v->as.var.binding->is_continuation)
+        return e->as.set_.target;
+    return NULL;
+}
+
+/* Populate g_byref_muts by scanning the whole function term for a delegated
+ * `(set! m k)` continuation store. */
+static void byref_scan(const CTerm *t) {
+    if (!t) return;
+    switch (t->kind) {
+        case CT_LETRAW: {
+            const Binding *tgt = byref_set_target(t->as.letraw.e);
+            if (tgt && !is_byref_mut(tgt) && g_byref_muts_n < 64)
+                g_byref_muts[g_byref_muts_n++] = tgt;
+            byref_scan(t->as.letraw.body); return;
+        }
+        case CT_LETVAL:  byref_scan(t->as.letval.body); return;
+        case CT_LETPRIM: byref_scan(t->as.letprim.body); return;
+        case CT_LETCALL: byref_scan(t->as.letcall.body); return;
+        case CT_LETCONT: byref_scan(t->as.letcont.jbody); byref_scan(t->as.letcont.body); return;
+        case CT_IF:      byref_scan(t->as.if_.then_); byref_scan(t->as.if_.else_); return;
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             byref_scan(t->as.match.arms[i].body);
+                         return;
+        case CT_RESET:   byref_scan(t->as.reset.delim); byref_scan(t->as.reset.body); return;
+        case CT_SHIFT:   byref_scan(t->as.shift.body); return;
+        case CT_HANDLE:
+            byref_scan(t->as.handle.delim); byref_scan(t->as.handle.body);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                byref_scan(t->as.handle.cases[i].case_body);
+            return;
+        case CT_PERFORM: byref_scan(t->as.perform.body); return;
+        case CT_AWAIT:   byref_scan(t->as.await.body); return;
+        case CT_RESUME:  byref_scan(t->as.resume.body); return;
+        case CT_CLONEABLE: byref_scan(t->as.cloneable.body); return;
+        case CT_CALLCC:  byref_scan(t->as.callcc.body); return;
+        case CT_LOOP:    byref_scan(t->as.loop.body); return;
+        default: return;
+    }
+}
+
 typedef struct {
     EmitCtx    *ctx;
     Buf        *out;         /* current function/helper body buffer */
@@ -4536,7 +4621,17 @@ static char *atom_str(CE *ce, const CAtom *a) {
         case CA_UNIT: return strdup("0");
         case CA_STR:  return atom_cstr(a->str);
         case CA_FLOAT: return a->ty == TY_FLOAT32 ? atom_float32(a->f) : atom_float(a->f);
-        case CA_VAR:  return atom_var(ce->ctx, a->var);
+        case CA_VAR:
+            /* B7: a by-reference mutable's C name binds the cell POINTER; a read
+             * of its value derefs it. */
+            if (is_byref_mut(a->var)) {
+                char *nm = atom_var(ce->ctx, a->var);
+                char *r = malloc(strlen(nm) + 5);
+                sprintf(r, "(*%s)", nm);
+                free(nm);
+                return r;
+            }
+            return atom_var(ce->ctx, a->var);
         case CA_CVAR: return strdup(a->cvar_name ? a->cvar_name : "0");
         default:      return strdup("0");
     }
@@ -4748,7 +4843,16 @@ static void emit_term(CE *ce, const CTerm *t) {
         case CT_LETVAL: {
             char *v = atom_str(ce, &t->as.letval.v);
             char *bn = cvar_cname(ce, t->as.letval.x);
-            ce_line(ce, "%s = %s;", bn, v);
+            if (is_byref_mut(t->as.letval.x.bind)) {
+                /* B7: allocate the shared heap cell and store the initial value.
+                 * The cell is leaked with the DK nodes (reaped at the outermost
+                 * entry boundary) -- a stored continuation may still be resumed
+                 * after this fn's dynamic extent, so it cannot be freed here. */
+                ce_line(ce, "%s = (int64_t *)malloc(sizeof(int64_t)); *%s = %s;", bn, bn, v);
+                ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
+            } else {
+                ce_line(ce, "%s = %s;", bn, v);
+            }
             free(bn); free(v);
             emit_term(ce, t->as.letval.body);
             break;
@@ -4990,6 +5094,31 @@ static char *letraw_binder_name(CE *ce, const CTerm *t) {
 }
 
 static void emit_letraw(CE *ce, const CTerm *t) {
+    /* B7: a `(set! m k)` that stores a continuation into a by-reference mutable is
+     * emitted natively as a copy-on-store into the shared cell.  dk_perform frees
+     * the captured chain when the handler case returns, so the stored continuation
+     * is deep-copied (dk_copy_range) into an independent chain that outlives the
+     * handler and can be resumed later.  Bypasses the direct-emitter delegation
+     * (which would write the cell POINTER name without a deref). */
+    const Binding *bref = g_opt_cps_tramp_resume ? byref_set_target(t->as.letraw.e) : NULL;
+    if (bref && is_byref_mut(bref)) {
+        const Expr *se = t->as.letraw.e;
+        while (se && se->kind == EX_ASCRIBE) se = se->as.ascribe_.inner;
+        int si = ce->ctx->indent; ce->ctx->indent = ce->indent;
+        char *val = emit_value(ce->ctx, ce->out, se->as.set_.value);
+        ce->ctx->indent = si;
+        char *cell = name_for_binding(ce->ctx, bref);
+        /* __dk_reap_keep registers the cloned chain for a boundary dk_free (chain
+         * walk) -- the stored continuation is resumed before the outermost entry
+         * returns, then reaped, so it neither dangles nor leaks. */
+        ce_line(ce, "*%s = (int64_t)(intptr_t)__dk_reap_keep(dk_copy_range((DK *)(intptr_t)(%s), NULL));",
+                cell, val ? val : "0");
+        char *bn2 = letraw_binder_name(ce, t);
+        ce_line(ce, "%s = 0;", bn2);
+        free(bn2); free(cell); free(val);
+        emit_term(ce, t->as.letraw.body);
+        return;
+    }
     int saved = ce->ctx->indent;
     ce->ctx->indent = ce->indent;           /* line the delegated statements up */
     char *rhs = emit_value(ce->ctx, ce->out, t->as.letraw.e);
@@ -5045,7 +5174,11 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_APPCONT: break;
         case CT_LETVAL: {
             char *bn = cvar_cname(ce, t->as.letval.x);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
+            /* B7: a by-reference mutable's binder is the cell POINTER. */
+            if (is_byref_mut(t->as.letval.x.bind))
+                ce_line(ce, "int64_t *%s;", bn);
+            else
+                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letval.x.ty, t->as.letval.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.letval.body);
             break;
@@ -7036,6 +7169,10 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     ce.ctx = ctx; ce.out = &body_buf; ce.helpers = &helpers; ce.indent = 4;
     ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
+    /* B7: pre-scan this function's term for escaping-continuation mutables, which
+     * emit as by-reference heap cells (see g_byref_muts). */
+    g_byref_muts_n = 0;
+    if (g_opt_cps_tramp_resume) byref_scan(se->term);
     emit_binder_decls(&ce, se->term);
     emit_term(&ce, se->term);
     buf_putc(&body_buf, '\0');
