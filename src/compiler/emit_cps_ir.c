@@ -3443,14 +3443,31 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
                 ptc_walk(e->as.match_.arms[i].body, p, tail, val, tailc, ntc);
             }
             return;
+        case EX_HANDLE: {
+            /* E2 (cps-tramp-resume): a call to `p` in the handle BODY threads to
+             * the handle's OWN installed prompt -- the delim's `cur_k`, which
+             * carries this handler at its head -- NOT the bare outer `__kont`.  So
+             * p's perform reaches this handler (matching effect) or walks past it
+             * to an outer handler (non-matching) -- a clean thread either way,
+             * exactly `(handle (f) (E ...) ...)` in `run-with`.  A TAIL-position
+             * body call is therefore a threadable tail call, not a value-use.
+             * Calls to `p` inside the handler CASE bodies run per-perform in the
+             * handler's own frame (a distinct continuation); keep those as
+             * value-uses.  An `unsafe`-marker handle is transparent (body emitted
+             * in place, no real prompt), so threading its body's tail call to the
+             * enclosing `__kont` is equally clean -- the same recursion covers it. */
+            HandleExpr *h = e->as.handle_.handle;
+            if (h) {
+                ptc_walk((const Expr *)h->body, p, tail, val, tailc, ntc);
+                for (uint32_t i = 0; i < h->n_cases; i++)
+                    *val += expr_count_all_uses(h->cases[i].body, p);
+            }
+            return;
+        }
         default:
-            /* Uncovered form (incl. EX_HANDLE / EX_RESET, where a call to p runs
-             * under the HOF's own prompt): treat every occurrence of p as a
-             * value-use so the param cannot be judged threadable through it.  (The
-             * handle-BODY fn-value call -- `(handle (f) ...)` in run-with -- would
-             * need the handle-body lowering to thread the call to the handle's own
-             * prompt; a distinct, deeper mechanism than the continuation-side
-             * capture E2c lands.) */
+            /* Uncovered form (incl. EX_RESET, where a call to p runs under the
+             * HOF's own prompt): treat every occurrence of p as a value-use so the
+             * param cannot be judged threadable through it. */
             *val += expr_count_all_uses(e, p);
             return;
     }
@@ -3916,11 +3933,17 @@ static void ensure_S(const Expr *program) {
             if (!(lo || hi) && !fd->cps_colored) continue;
             int total = 0, ok = 0, tier = 0;
             bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
-            /* E2a: a concrete captureless lambda is threaded onto the DK -- tier
+            /* E2a: a concrete captureless fn-value is threaded onto the DK -- tier
              * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
-             * heap-join frame threaded to its __cps). */
+             * heap-join frame threaded to its __cps).  Covers BOTH a lifted lambda
+             * (`(fn [] (perform E))`) AND an address-taken NAMED fn (`my-eff`
+             * passed by name): both are carried as a direct-entry function pointer
+             * word, register (that addr -> `<name>__cps`) at startup so a threaded
+             * call site (`__tur_cps_lookup((intptr_t)f)`) recovers the CPS variant
+             * and the fn-value's perform reaches the caller's handler.  The named
+             * case backs the handle-body threading (`run-with(my-eff)`). */
             if (thr && (tier == (int)PT_NOW || tier == (int)PT_NONTAIL)
-                && fd->binding->is_lifted_lambda)
+                && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding)))
                 threadable_add(fd->binding);
             /* E2c: an EFFECTFUL fn-value (lambda or named) stored in a struct
              * field is called via `(.field obj)` and threaded via the registry;
