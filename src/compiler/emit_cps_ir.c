@@ -3299,6 +3299,83 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     expr_collect_effects_acc(e, &acc);
 }
 
+/* B5 (cps-tramp-resume): the NET escaping effect set of `e` -- the effects
+ * PERFORMED in `e` that are NOT discharged by a `handle` enclosing the perform
+ * WITHIN `e`.  A self-handling body -- `(fn [] (handle (perform E) (E [x] k)
+ * (resume k ...)))`, the async-closure shape in `effects-async` -- performs E
+ * but handles it in the same body, so E does not escape when the fn is invoked
+ * indirectly (its interior handle installs its own DK prompt).  Structural, so a
+ * perform sitting OUTSIDE a same-effect handle still escapes -- unlike a blunt
+ * performed-minus-handled set-subtract (which would wrongly clear
+ * `(do (perform E) (handle pure (E ...)))`).  A handler CASE body's own performs
+ * DO escape (they run in the handler frame, above this prompt), so they are
+ * counted.  An uncovered form falls back to the raw union (conservative: it
+ * over-counts handled effects as escaping, never under-counts). */
+static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
+    if (!e) return;
+    #define NESC(x) fn_net_escaping_acc((x), lo, hi)
+    switch (e->kind) {
+        case EX_PERFORM:
+            if (e->as.perform_.perform) {
+                mark_effect(e->as.perform_.perform->effect_name, lo, hi);
+                for (uint32_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                    NESC(e->as.perform_.perform->args[i]);
+            }
+            return;
+        case EX_HANDLE:
+            if (e->as.handle_.handle) {
+                HandleExpr *h = e->as.handle_.handle;
+                /* the body's net-escaping effects, MINUS the effects this handle
+                 * discharges */
+                uint64_t blo = 0, bhi = 0;
+                fn_net_escaping_acc((const Expr *)h->body, &blo, &bhi);
+                uint64_t hlo = 0, hhi = 0;
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    mark_effect(h->cases[i].effect_name, &hlo, &hhi);
+                *lo |= (blo & ~hlo);
+                *hi |= (bhi & ~hhi);
+                /* case bodies run in the handler frame -- their performs escape */
+                for (uint8_t i = 0; i < h->n_cases; i++)
+                    NESC(h->cases[i].body);
+            }
+            return;
+        case EX_ASCRIBE: NESC(e->as.ascribe_.inner); return;
+        case EX_RETURN:  NESC(e->as.return_.value);  return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) NESC(e->as.do_.items[i]);
+            return;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) NESC(e->as.let_.bindings[i].init);
+            NESC(e->as.let_.body);
+            return;
+        case EX_IF:
+            NESC(e->as.if_.cond); NESC(e->as.if_.then_); NESC(e->as.if_.else_or_null);
+            return;
+        case EX_MATCH:
+            NESC(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                NESC(e->as.match_.arms[i].guard);
+                NESC(e->as.match_.arms[i].body);
+            }
+            return;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++) NESC(e->as.builtin.args[i]);
+            return;
+        case EX_CALL:
+            NESC(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) NESC(e->as.call_.args[i]);
+            NESC(e->as.call_.dict_arg);
+            return;
+        default:
+            /* Uncovered form: fall back to the raw union (perform+handle folded),
+             * which over-counts a nested handled effect as escaping -- sound (it
+             * never clears a genuinely-escaping perform), just conservative. */
+            expr_collect_effects(e, lo, hi);
+            return;
+    }
+    #undef NESC
+}
+
 /* A CT_LETRAW (delegated direct-emitted op) that performs NO fiber effect: its
  * delegated expr `e` contains no direct perform/handle (even one buried in a
  * delegated match/do/let, which the raw walk surfaces), and every callee it
@@ -4016,8 +4093,15 @@ static void ensure_S(const Expr *program) {
                 if (candidate && g_opt_cps_tramp_resume
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding)) {
+                    /* B5: perm-taint only on the NET ESCAPING effect -- a perform
+                     * this fn-value DISCHARGES internally (a self-handling body,
+                     * e.g. the `(fn [] (handle (perform E) (E ...)))` async closure
+                     * in effects-async) does not reach a fresh indirect-call root,
+                     * so it is not a fiber-escape source.  Its interior handle
+                     * installs its own DK prompt and CPS-lowers.  A genuinely
+                     * escaping perform still taints. */
                     uint64_t lo = 0, hi = 0;
-                    expr_collect_effects(fd->body, &lo, &hi);
+                    fn_net_escaping_acc(fd->body, &lo, &hi);
                     if (lo || hi) { candidate = false; sig_perm = true; }
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
