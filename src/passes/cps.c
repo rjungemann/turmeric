@@ -648,6 +648,62 @@ static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32
     }
 }
 
+/* E2 (cps-tramp-resume): does `e` contain a `with-handler` anywhere (structural,
+ * no descent into nested fn bodies)?  Used to color a fn that discharges one
+ * effect via with-handler but leaves a LEFTOVER (fh-discharge-row's do-work) --
+ * gated additionally on the fn having a non-empty effect row, so the top-level
+ * with-handler mains that discharge EVERYTHING (empty row) are NOT colored and
+ * keep their existing DK-lowering. */
+static bool cps_body_has_with_handler(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_WITH_HANDLER: {
+            /* Only a LITERAL handler is translatable (build_with_handler); a dynamic
+             * handler value (a `handler`-typed param, e.g. run-with's `h`, or a
+             * compose-handlers) would evict -- do NOT color those, so they keep
+             * their existing lowering. */
+            const Expr *hv = e->as.with_handler_.handler;
+            while (hv && hv->kind == EX_ASCRIBE) hv = hv->as.ascribe_.inner;
+            return hv && hv->kind == EX_HANDLER_LIT;
+        }
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (cps_body_has_with_handler(e->as.let_.bindings[i].init)) return true;
+            return cps_body_has_with_handler(e->as.let_.body);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (cps_body_has_with_handler(e->as.do_.items[i])) return true;
+            return false;
+        case EX_IF:
+            return cps_body_has_with_handler(e->as.if_.cond)
+                || cps_body_has_with_handler(e->as.if_.then_)
+                || cps_body_has_with_handler(e->as.if_.else_or_null);
+        case EX_ASCRIBE: return cps_body_has_with_handler(e->as.ascribe_.inner);
+        case EX_RETURN:  return cps_body_has_with_handler(e->as.return_.value);
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (cps_body_has_with_handler(h->body)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (cps_body_has_with_handler(h->cases[i].body)) return true;
+            return false;
+        }
+        default: return false;
+    }
+}
+
+/* The fn's declared/inferred effect row is non-empty -- it has a LEFTOVER effect
+ * that escapes (not fully discharged by an internal with-handler). */
+static bool cps_fn_has_leftover_effect(const FnDef *fd) {
+    if (!fd) return false;
+    if (fd->inferred_effect_row && !effect_row_is_empty(fd->inferred_effect_row))
+        return true;
+    if (fd->binding && fd->binding->type.kind == TY_FN
+        && !effect_row_is_empty(fd->binding->type.as.fn.effect_row))
+        return true;
+    return false;
+}
+
 void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;
@@ -669,6 +725,16 @@ void cps_color_program(Arena *a, Expr *program) {
     /* Seed + build edges. */
     for (uint32_t i = 0; i < n; i++) {
         nodes[i].colored = cps_directly_uses_control(nodes[i].fd->body);
+        /* E2 (cps-tramp-resume): a fn that discharges an effect via `with-handler`
+         * but leaves a LEFTOVER (non-empty effect row) must be colored so its
+         * leftover threads to the enclosing DK handler instead of fiber-emitting
+         * (fh-discharge-row's do-work).  Narrow: only fires for a genuine-leftover
+         * fn, so a with-handler main / helper that discharges EVERYTHING (empty
+         * row) is untouched and keeps its existing lowering. */
+        if (!nodes[i].colored && g_opt_cps_tramp_resume
+            && cps_fn_has_leftover_effect(nodes[i].fd)
+            && cps_body_has_with_handler(nodes[i].fd->body))
+            nodes[i].colored = true;
         cps_collect_calls(nodes[i].fd->body, nodes, n, &nodes[i]);
         if (nodes[i].has_indirect) nodes[i].colored = true;
     }

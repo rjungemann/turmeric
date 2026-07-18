@@ -1,12 +1,35 @@
-# fh-discharge-row: a `with-handler` that discharges one effect and leaves a LEFTOVER evicts (do-work not colored)
+# fh-discharge-row: a `with-handler` that discharges one effect and leaves a LEFTOVER (RESOLVED)
 
-**Severity:** low-medium (correct on the fiber; endgame migration target).  ONE
-fiber-live fixture: `fh-discharge-row`.
+**STATUS: RESOLVED.** `fh-discharge-row` DK-lowers (output `inner`, zero eff=1),
+and all four already-DK-lowering with-handler mains STAY at zero eff=1
+(fh-handler-value, fh-compose-handlers, fh-multishot-value, fh-multi-effect-type).
+Net +1.  Flag-off byte-identical; flag-on effect soundness sweep clean; full
+suite green (2203/0).
 
-**ATTEMPTED + REVERTED (do not repeat as-is).** A first cut (color EX_WITH_HANDLER
-as a control seed + translate `(with-handler <literal> body)` as a handle) DID
-DK-lower fh-discharge-row, but it REGRESSED four already-DK-lowering fixtures --
-see the pitfall below.  Reverted.
+## The fix (a NARROW coloring signal + literal translation)
+
+The first attempt (below) failed because coloring EX_WITH_HANDLER broadly
+regressed the mains.  The resolved version colors ONLY the case that needs it:
+- **cps.c** `cps_color_program`: color a fn iff its body contains a
+  `with-handler` with a HANDLER LITERAL (`cps_body_has_with_handler` requires
+  EX_HANDLER_LIT) AND the fn has a non-empty declared/inferred effect row
+  (`cps_fn_has_leftover_effect`).  `do-work` (#fx{Other} leftover, literal
+  handler) is colored; a with-handler main that discharges EVERYTHING (empty row)
+  or uses a DYNAMIC handler (`run-with`'s `h`, a `compose-handlers`) is NOT --
+  those keep their existing lowering, so no regression.
+- **cps_ir.c**: `build_handle_core` (splits a HandleExpr's cases from its body)
+  backs both `build_handle` and `build_with_handler`; `build_with_handler`
+  translates `(with-handler <literal> body)` as a handle over body.  A dynamic
+  handler still evicts (but is never colored, so never reached for those fns).
+
+The two narrowings -- literal handler AND non-empty row -- each independently
+exclude the regressed fixtures; together they make the change strictly additive.
+
+## Original diagnosis + pitfall (retained)
+
+**ATTEMPTED + REVERTED (first cut).** Coloring EX_WITH_HANDLER as a broad control
+seed DID DK-lower fh-discharge-row, but REGRESSED four already-DK-lowering
+fixtures -- see the pitfall below.  Reverted, then re-landed narrowly (above).
 
 ## The shape
 
