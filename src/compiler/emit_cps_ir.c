@@ -3183,6 +3183,13 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
     return n;
 }
 
+/* Self-recursion context for ptc_walk: the fn whose param is being tiered and the
+ * param's own position.  Set by param_thread_class before each ptc_walk so a
+ * `(fd ... p ...)` recursive call passing `p` back at position `self_pi` is not
+ * miscounted as an escape.  NULL/0 disables the exemption. */
+static const Binding *g_ptc_self_bind;
+static uint32_t       g_ptc_self_pi;
+
 /* Classify how param `p` of a HOF is used, tracking tail position: count its
  * value-uses (escapes -- passed as an arg, stored, bare ref), its tail-position
  * callee-calls, and its non-tail callee-calls.  A call to `p` under a `handle`/
@@ -3203,7 +3210,19 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             else ptc_walk(e->as.call_.fn_expr, p, false, val, tailc, ntc);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = peel_fn_value(e->as.call_.args[i]);
-                if (a && a->kind == EX_VAR && a->as.var.binding == p) (*val)++;
+                if (a && a->kind == EX_VAR && a->as.var.binding == p) {
+                    /* E2 (cps-tramp-resume): a SELF-recursive call passing param `p`
+                     * back at its OWN position is NOT an escape -- it is the same
+                     * row-poly fn-value threading through the recursion, so it does
+                     * not disqualify `p` as a thread-param (effect-poly-map).  Every
+                     * other value-use (stored, passed elsewhere, bare ref) still
+                     * counts. */
+                    if (g_opt_cps_tramp_resume && g_ptc_self_bind
+                        && e->as.call_.fn_binding == g_ptc_self_bind
+                        && i == g_ptc_self_pi)
+                        continue;
+                    (*val)++;
+                }
                 else ptc_walk(e->as.call_.args[i], p, false, val, tailc, ntc);
             }
             ptc_walk(e->as.call_.dict_arg, p, false, val, tailc, ntc);
@@ -3272,7 +3291,9 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
     const Binding *p = fd->params[pi];
     if (!p) return PT_NONE;
     int val = 0, tc = 0, ntc = 0;
+    g_ptc_self_bind = fd->binding; g_ptc_self_pi = pi;
     ptc_walk(fd->body, p, true, &val, &tc, &ntc);
+    g_ptc_self_bind = NULL; g_ptc_self_pi = 0;
     if (val > 0 || (tc + ntc) < 1) return PT_NONE;   /* escapes, or never called */
     if (!fn_sig_ok(fd)) return PT_E1;                /* is_poly_fn / capturing param */
     /* E2a registry threading needs a CONCRETE effect row on the param (row-poly
@@ -3470,7 +3491,15 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
             if (e->kind == EX_CALL && e->as.call_.fn_binding == fd->binding) {
                 if (pi >= e->as.call_.n_args) return false;
                 const Expr *a = peel_fn_value(e->as.call_.args[pi]);
-                if (!a || a->kind != EX_VAR || !threadable_has(a->as.var.binding))
+                if (!a || a->kind != EX_VAR) return false;
+                /* E2 (cps-tramp-resume): a SELF-recursive call passing fd's OWN
+                 * param `pi` back at position `pi` threads the same row-poly
+                 * fn-value -- it introduces no new fn-value, so it is trivially
+                 * thread-safe (effect-poly-map).  Any OTHER arg must be a registered
+                 * threadable fn-value. */
+                if (!(g_opt_cps_tramp_resume && fd->params
+                      && a->as.var.binding == fd->params[pi])
+                    && !threadable_has(a->as.var.binding))
                     return false;
                 seen++;
             }

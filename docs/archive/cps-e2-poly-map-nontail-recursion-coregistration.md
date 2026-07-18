@@ -1,9 +1,39 @@
-# E2/E1: effect-poly-map evicts on a mutual-recursion co-registration cycle (non-tail fn-value HOF + fn-value-arg recursion)
+# E2: effect-poly-map -- non-tail effect-poly HOF whose fn-value param threads through the recursion
 
-**Severity:** medium (a precise, pinned E2 boundary; correct on the fiber).
-`effect-poly-map` stays SIG-TAINT under `--enable=cps-tramp-resume` -- the
-effect-poly HOF `map-list` DK-lowers (`map_hylist__cps` is emitted) but its
-fn-value param `f` never threads, so the callback `__fn_1283` and `main` ride the
+**STATUS: RESOLVED.** `effect-poly-map` DK-lowers with correct output
+(`tick`/`tick`/`tick`), zero `eff=1`.  The fix turned out FAR smaller than the
+greatest-fixpoint co-registration feared below: a self-recursive call passing a
+param back at its OWN position is simply not an escape, so recognizing that in the
+two structural predicates seeds the whole chain -- no fixpoint needed.
+
+## The fix (a self-recursion arg is not an escape)
+
+Two flag-gated, precisely-scoped changes (emit_cps_ir.c):
+1. **`ptc_walk` / `param_thread_class`**: a `(fd ... p ...)` recursive call passing
+   fd's own param `p` back at position `pi` no longer counts `p` as an escaping
+   value-use (via `g_ptc_self_bind`/`g_ptc_self_pi` set by `param_thread_class`).
+   So `param_thread_class(map-list, f)` returns PT_NONTAIL, not PT_NONE.  This is
+   the SEED: it is structural (independent of the threadable set), so the
+   value->param registration pass (A) can now count `__fn_1283`'s "pass to
+   map-list f" use as OK and register it.
+2. **`param_is_thread_safe`**: the recursion self-arg (`f` passed back at its own
+   position) is trivially thread-safe -- it introduces no new fn-value.  So pass B
+   registers `f` as a thread-param once `__fn_1283` is registered.
+
+The exemption is exact -- only `p` at `p`'s OWN position in a self-recursive call;
+`p` flowing to a DIFFERENT param position (or any other value-use) still counts as
+an escape.  No greatest-fixpoint or optimistic seeding was required.
+
+Flag-off byte-identical (all fixture snapshots unchanged); flag-on effect
+soundness sweep clean; full suite green (2203/0).
+
+---
+
+## Original diagnosis (retained)
+
+`effect-poly-map` stayed SIG-TAINT under `--enable=cps-tramp-resume` -- the
+effect-poly HOF `map-list` DK-lowered (`map_hylist__cps` emitted) but its
+fn-value param `f` never threaded, so the callback `__fn_1283` and `main` rode the
 fiber.
 
 ## The shape
