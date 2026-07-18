@@ -383,6 +383,17 @@ static bool cps_directly_uses_control(const Expr *e) {
             /* Ascription is erased at codegen; seed on a control op that is
              * only reachable through (:: <control-op> T). */
             return cps_directly_uses_control(e->as.ascribe_.inner);
+        /* B3 (cps-tramp-resume): a `(with-handler hv body)` / `(compose-handlers
+         * ...)` is a delimited handler install -- a control seed under the flag,
+         * so a `main`/fn whose only control op is a first-class handler value is
+         * colored and its inner `perform` is not hidden.  build_with_handler
+         * DK-lowers a literal (or compose-of-literals) handler value; a dynamic
+         * handler value evicts and falls back gracefully under the experiment.
+         * Flag-off the with-handler path is fiber-lowered and was never colored
+         * here (default: false), so preserve that exactly. */
+        case EX_WITH_HANDLER:
+        case EX_COMPOSE_HANDLERS:
+            return g_opt_cps_tramp_resume;
         /* Nested function definitions are call-graph boundaries. */
         case EX_FN_DEF:
         case EX_FN:

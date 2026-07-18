@@ -2545,6 +2545,14 @@ static bool expr_has_handle(const Expr *e) {
                 || expr_has_handle(e->as.if_.else_or_null);
         case EX_ASCRIBE: return expr_has_handle(e->as.ascribe_.inner);
         case EX_RETURN:  return expr_has_handle(e->as.return_.value);
+        /* A `(with-handler hv body)` is a delimited handler install just like
+         * `handle`.  When hv is a `(handler ...)` literal (or a compose of them)
+         * build_with_handler DK-lowers it via build_handle_core; a dynamic
+         * handler value evicts to CT_UNSUPPORTED and falls back gracefully under
+         * the experiment.  Either way main must be a d2b candidate so the literal
+         * form reaches the DK backend instead of the fiber. */
+        case EX_WITH_HANDLER: return true;
+        case EX_COMPOSE_HANDLERS: return true;
         default: return false;
     }
 }

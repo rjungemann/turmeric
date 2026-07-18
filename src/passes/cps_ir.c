@@ -1874,18 +1874,76 @@ static CTerm *build_handle(CpsB *b, Expr *e, CVar x, CTerm *cont) {
     return build_handle_core(b, h, h ? (Expr *)h->body : NULL, e->type.kind, x, cont);
 }
 
+/* B3: is `hv` a compose-tree whose every leaf is a `(handler ...)` LITERAL?
+ * Such a tree is statically knowable -- its cases merge into one multi-effect
+ * DK handler group.  A dynamic leaf (a variable / field read) is not. */
+static bool compose_all_literal(const Expr *hv) {
+    hv = ascribe_peel(hv);
+    if (!hv) return false;
+    if (hv->kind == EX_HANDLER_LIT) return true;
+    if (hv->kind == EX_COMPOSE_HANDLERS)
+        return compose_all_literal(hv->as.compose_handlers_.h1)
+            && compose_all_literal(hv->as.compose_handlers_.h2);
+    return false;
+}
+
+/* Count the total handler cases across a compose-tree of literals. */
+static uint32_t compose_case_count(const Expr *hv) {
+    hv = ascribe_peel(hv);
+    if (!hv) return 0;
+    if (hv->kind == EX_HANDLER_LIT)
+        return hv->as.handler_lit_.handle ? hv->as.handler_lit_.handle->n_cases : 0;
+    if (hv->kind == EX_COMPOSE_HANDLERS)
+        return compose_case_count(hv->as.compose_handlers_.h1)
+             + compose_case_count(hv->as.compose_handlers_.h2);
+    return 0;
+}
+
+/* Copy every case of a compose-tree of literals into `out` (in h1-outer order,
+ * matching the fiber-path table concatenation in emit_effects_compose_handlers). */
+static void compose_fill_cases(const Expr *hv, HandleCase *out, uint32_t *k) {
+    hv = ascribe_peel(hv);
+    if (!hv) return;
+    if (hv->kind == EX_HANDLER_LIT) {
+        HandleExpr *h = hv->as.handler_lit_.handle;
+        if (h) for (uint32_t i = 0; i < h->n_cases; i++) out[(*k)++] = h->cases[i];
+    } else if (hv->kind == EX_COMPOSE_HANDLERS) {
+        compose_fill_cases(hv->as.compose_handlers_.h1, out, k);
+        compose_fill_cases(hv->as.compose_handlers_.h2, out, k);
+    }
+}
+
 /* E2 (cps-tramp-resume): `(with-handler hv body)` where hv is a `(handler ...)`
  * LITERAL is exactly `(handle body <hv-cases>)` -- reuse build_handle_core with the
  * literal's cases and the with-handler body, so a fn that discharges one effect via
  * with-handler and leaves a leftover (fh-discharge-row's do-work) DK-lowers, its
- * leftover threading to the enclosing handler.  A DYNAMIC handler value (a variable,
- * not a literal) is not statically known here -> evict (unchanged). */
+ * leftover threading to the enclosing handler.
+ *
+ * B3: a `(compose-handlers ...)` whose leaves are all literals merges its cases
+ * into a single multi-effect DK handler group over the body (a multi-case handle
+ * dispatches per effect tag, exactly what compose installs).  A DYNAMIC handler
+ * value (a variable, a `(.field obj)` read, a compose with a dynamic leaf) is not
+ * statically known here -> evict (unchanged). */
 static CTerm *build_with_handler(CpsB *b, Expr *e, CVar x, CTerm *cont) {
     const Expr *hv = ascribe_peel(e->as.with_handler_.handler);
     Expr *body = e->as.with_handler_.body;
     if (hv && hv->kind == EX_HANDLER_LIT)
         return build_handle_core(b, hv->as.handler_lit_.handle, body,
                                  e->type.kind, x, cont);
+    if (hv && hv->kind == EX_COMPOSE_HANDLERS && compose_all_literal(hv)) {
+        uint32_t nc = compose_case_count(hv);
+        if (nc >= 1 && nc <= 255) {
+            HandleCase *cases = arena_alloc(b->a, nc * sizeof(HandleCase));
+            uint32_t k = 0;
+            compose_fill_cases(hv, cases, &k);
+            HandleExpr *merged = arena_alloc(b->a, sizeof(HandleExpr));
+            memset(merged, 0, sizeof(HandleExpr));
+            merged->cases = cases;
+            merged->n_cases = (uint8_t)nc;
+            merged->shallow = false;   /* compose installs deep handlers */
+            return build_handle_core(b, merged, body, e->type.kind, x, cont);
+        }
+    }
     CTerm *u = new_term(b, CT_UNSUPPORTED);
     u->as.unsupported.why = "with-handler (dynamic handler value)";
     return u;
