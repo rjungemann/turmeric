@@ -3049,6 +3049,65 @@ static CTerm *build_cont_pred(CpsB *b, Expr *e, CVar x, CTerm *body) {
 
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
+/* B4: is a `match` DK-lowerable to CT_MATCH?  Restricted to the tractable shape:
+ * a HEAP-ADT (int64-carrier, tagged) scrutinee, arms that are constructor
+ * patterns (an optional trailing wildcard catch-all), no guards, no literal /
+ * union / by-value-product arms.  Anything else evicts (CT_UNSUPPORTED).  Gated:
+ * flag-off a colored fn's match is fiber-lowered as before. */
+static bool match_dk_ok(const Expr *e) {
+    if (!g_opt_cps_tramp_resume) return false;
+    const Expr *scrut = e->as.match_.scrutinee;
+    if (!scrut) return false;
+    Type st = scrut->type;
+    if (st.kind != TY_ADT || !st.as.adt_.def) return false;
+    const AdtDef *def = st.as.adt_.def;
+    /* Target a BOXED TAGGED SUM ADT: >=2 constructors (so it carries a `tag`
+     * word) AND at least one field-bearing ctor (so a value is a pointer to a
+     * `tur_adt_<Name>` struct read via `->tag` / `->Ctor.fieldN`, the int64
+     * carrier the emitter casts).  This excludes bare-int enums (all-nullary --
+     * the value IS the tag, no struct) and by-value / flat-product ADTs. */
+    if (def->n_ctors < 2) return false;
+    bool has_field_ctor = false;
+    for (uint32_t c = 0; c < def->n_ctors; c++)
+        if (def->ctors[c] && def->ctors[c]->n_fields > 0) { has_field_ctor = true; break; }
+    if (!has_field_ctor) return false;
+    uint32_t n = e->as.match_.n_arms;
+    if (n == 0) return false;
+    for (uint32_t i = 0; i < n; i++) {
+        const MatchArm *arm = &e->as.match_.arms[i];
+        if (arm->guard) return false;
+        const MatchPattern *pat = &arm->pattern;
+        /* The scrutinee is TY_ADT (unions are excluded above), so union_member_idx
+         * here is the ctor index, not a union tag -- do not reject on it. */
+        if (pat->is_literal) return false;
+        if (pat->ctor) continue;                        /* ctor arm: ok */
+        if (pat->is_wildcard && i == n - 1) continue;   /* trailing catch-all: ok */
+        return false;                                    /* var catch-all / mid wildcard: evict */
+    }
+    return true;
+}
+
+/* Build a CT_MATCH whose arms each deliver to `kont` (tail).  Each ctor arm's
+ * field bindings are recorded for the emitter to extract from the scrutinee. */
+static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
+    CTerm *t = new_term(b, CT_MATCH);
+    t->as.match.scrut = scrut;
+    t->as.match.adt = e->as.match_.scrutinee->type.as.adt_.def;
+    uint32_t n = e->as.match_.n_arms;
+    t->as.match.n_arms = n;
+    CMatchArm *arms = arena_alloc(b->a, (n ? n : 1) * sizeof(CMatchArm));
+    for (uint32_t i = 0; i < n; i++) {
+        const MatchArm *arm = &e->as.match_.arms[i];
+        const MatchPattern *pat = &arm->pattern;
+        arms[i].ctor = pat->ctor;
+        arms[i].fields = (const struct Binding **)pat->bindings;
+        arms[i].n_fields = pat->ctor ? pat->n_bindings : 0;
+        arms[i].body = cps_tail(b, arm->body, kont);
+    }
+    t->as.match.arms = arms;
+    return t;
+}
+
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
@@ -3215,6 +3274,26 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ? cps_tail(b, e->as.if_.else_or_null, kont)
                 : cps_tail(b, NULL, kont);
             return fold_pending(b, &p, t);
+        }
+        case EX_MATCH: {
+            /* B4: DK-lower a restricted heap-ADT ctor match to CT_MATCH.  A match
+             * outside that shape (an int/enum match, a by-value product, a match
+             * with guards) is NOT intercepted -- it falls through to the wholesale
+             * direct-emitter delegation (safe_to_delegate -> CT_LETRAW) the default
+             * case owns, exactly as before this case existed. */
+            if (match_dk_ok(e)) {
+                Pending p = {0};
+                CAtom scrut = atomize(b, e->as.match_.scrutinee, &p);
+                CTerm *t = build_match_term(b, e, scrut, kont);
+                return fold_pending(b, &p, t);
+            }
+            if (safe_to_delegate(b, e)) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return build_letraw(b, e, x, ac);
+            }
+            return unsupported_form(b, e);
         }
         case EX_LET: {
             uint32_t saved_pap = b->n_pap;
@@ -3630,6 +3709,25 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             t->as.letcont.jbody = rest; t->as.letcont.body = body;
             return fold_pending(b, &p, t);
         }
+        case EX_MATCH: {
+            /* B4: bind-position DK-lowering -- a restricted heap-ADT ctor match
+             * whose result flows into `rest` becomes a CT_MATCH wrapped in a join
+             * point (CT_LETCONT), mirroring the EX_IF bind case.  A match outside
+             * the shape falls through to the wholesale direct delegation. */
+            if (match_dk_ok(e)) {
+                Pending p = {0};
+                CAtom scrut = atomize(b, e->as.match_.scrutinee, &p);
+                CVar j = fresh_cvar(b, x.type);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *body = build_match_term(b, e, scrut, kont_var(j));
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = body;
+                return fold_pending(b, &p, t);
+            }
+            if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            return unsupported_form(b, e);
+        }
         case EX_LET: {
             uint32_t saved_pap = b->n_pap;
             pap_register_let(b, e);
@@ -3929,6 +4027,16 @@ void cps_ir_print(const CTerm *t, FILE *out, int indent) {
             cps_ir_print(t->as.if_.then_, out, indent + 1);
             print_indent(out, indent); fputs("else\n", out);
             cps_ir_print(t->as.if_.else_, out, indent + 1);
+            break;
+        case CT_MATCH:
+            fputs("match ", out); print_atom(&t->as.match.scrut, out); fputs("\n", out);
+            for (uint32_t ai = 0; ai < t->as.match.n_arms; ai++) {
+                print_indent(out, indent);
+                fprintf(out, "case %s ->\n",
+                        t->as.match.arms[ai].ctor && t->as.match.arms[ai].ctor->name
+                            ? t->as.match.arms[ai].ctor->name : "_");
+                cps_ir_print(t->as.match.arms[ai].body, out, indent + 1);
+            }
             break;
         case CT_RESET:
             fprintf(out, "reset %s {\n", t->as.reset.x.name);

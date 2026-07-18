@@ -21,6 +21,13 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             Binding **self_exclude, uint32_t n_self_exclude,
                             uint32_t *n_out);
 
+/* B4 (CT_MATCH emit): the ADT-aggregate field-access helpers.  Declared in
+ * emit_internal.h, which this file does not include; forward-declared here so
+ * emit_match can spell `(tur_adt_<Name> *)->as.<Ctor>._N` field reads exactly as
+ * the direct emitter (emit_expr.c) does. */
+char *mangle_field_name(const char *name);
+char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
+
 /* True for a NULL or `{}` (ERK_EMPTY) effect row.  Used to distinguish a
  * provably effect-free `TY_FN` param (safe to delegate an indirect call
  * through) from an effectful callback (whose call would need DK threading).
@@ -191,10 +198,27 @@ static bool erased_adt_carrier(const Type *t) {
     return false;
 }
 
+/* B4 (cps-tramp-resume): a BOXED TAGGED-SUM ADT (a `defdata` with >=2 ctors and
+ * a field-bearing ctor, e.g. `Box`) is malloc'd and carried as an int64 POINTER
+ * word -- its `type_c_name` is "int64_t" -- even though `def->is_heap` is false
+ * (is_heap tracks the growable-container ADTs, not every boxed sum).  Like a
+ * heap-ADT handle (`carrier_handle_ok`) it crosses a DK slot by a plain cast, so
+ * admit it as a slot carrier.  A BY-VALUE product ADT keeps its aggregate
+ * `type_c_name` (`tur_adt_<Name>`), so this correctly rejects it -- those ride
+ * the Tier-C box path (`slot_box_ty`) instead.  Gated: flag-off keeps the
+ * historical (is_heap-only) admission byte-identical. */
+static bool adt_int64_carrier(const Type *t) {
+    if (!g_opt_cps_tramp_resume || !t) return false;
+    TypeKind k = t->kind;
+    if (k != TY_ADT && k != TY_APP) return false;
+    return strcmp(type_c_name(*(Type *)t), "int64_t") == 0;
+}
+
 static bool slot_ok_t(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
-    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r) || erased_adt_carrier(r);
+    return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r)
+        || erased_adt_carrier(r) || adt_int64_carrier(r);
 }
 
 /* Signature-position slot gate (a colored function's PARAMS and RETURN).  It is
@@ -434,6 +458,12 @@ static const CTerm *first_unsupported(const CTerm *t) {
         case CT_IF:
             r = first_unsupported(t->as.if_.then_);
             return r ? r : first_unsupported(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++) {
+                r = first_unsupported(t->as.match.arms[i].body);
+                if (r) return r;
+            }
+            return NULL;
         case CT_RESET:
             r = first_unsupported(t->as.reset.delim);
             return r ? r : first_unsupported(t->as.reset.body);
@@ -682,6 +712,16 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             CC_ATOM(&t->as.if_.cond);
             return has_capture_rec(t->as.if_.then_, exclude, bound, nb)
                 || has_capture_rec(t->as.if_.else_, exclude, bound, nb);
+        case CT_MATCH:
+            CC_ATOM(&t->as.match.scrut);
+            for (uint32_t ai = 0; ai < t->as.match.n_arms; ai++) {
+                const CMatchArm *arm = &t->as.match.arms[ai];
+                uint32_t nnb = nb;
+                for (uint32_t bi = 0; bi < arm->n_fields && nnb < CC_MAX_BOUND; bi++)
+                    if (arm->fields[bi]) bound[nnb++] = arm->fields[bi]->id;
+                if (has_capture_rec(arm->body, exclude, bound, nnb)) return true;
+            }
+            return false;
         case CT_LETCONT:
             bound[nb] = t->as.letcont.param.id;
             return has_capture_rec(t->as.letcont.jbody, exclude, bound, nb + 1)
@@ -1015,6 +1055,19 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             COL_ATOM(&t->as.if_.cond);
             collect_caps_rec(t->as.if_.then_, exclude, bound, nb, cs);
             collect_caps_rec(t->as.if_.else_, exclude, bound, nb, cs); return;
+        case CT_MATCH:
+            /* The scrutinee atom may be an enclosing capture; each arm's field
+             * bindings are locally bound (extracted from the scrutinee at emit),
+             * so add them to the bound set before walking the arm body. */
+            COL_ATOM(&t->as.match.scrut);
+            for (uint32_t ai = 0; ai < t->as.match.n_arms && cs->ok; ai++) {
+                const CMatchArm *arm = &t->as.match.arms[ai];
+                uint32_t nnb = nb;
+                for (uint32_t bi = 0; bi < arm->n_fields && nnb < CC_MAX_BOUND; bi++)
+                    if (arm->fields[bi]) bound[nnb++] = arm->fields[bi]->id;
+                collect_caps_rec(arm->body, exclude, bound, nnb, cs);
+            }
+            return;
         case CT_LETCONT:
             bound[nb] = t->as.letcont.param.id;
             collect_caps_rec(t->as.letcont.jbody, exclude, bound, nb + 1, cs);
@@ -1905,6 +1958,17 @@ static bool term_core_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && term_core_ok(t->as.if_.then_)
                 && term_core_ok(t->as.if_.else_);
+        case CT_MATCH:
+            /* B4: an N-way tag dispatch on a heap-ADT carrier scrutinee.  The
+             * scrutinee must be slot-representable (it is read as `->tag` /
+             * `->as.Ctor._N`) and every arm body core-emittable.  The arm field
+             * bindings are extracted inline at emit (no cross-slot check needed --
+             * a binding that DOES cross into a lifted continuation rides that
+             * frame's env via collect_caps, exactly like a `let` binder). */
+            if (!atom_ok(&t->as.match.scrut)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!term_core_ok(t->as.match.arms[i].body)) return false;
+            return true;
         case CT_RESET: {
             /* C3/N6.3: delimited body + a self-contained continuation whose
              * captures (if any) are all scalar source vars (carried in the env). */
@@ -2698,6 +2762,9 @@ static bool jbody_has_cps_tailcall(const CTerm *t) {
         case CT_LETRAW:   return jbody_has_cps_tailcall(t->as.letraw.body);
         case CT_IF:       return jbody_has_cps_tailcall(t->as.if_.then_)
                               || jbody_has_cps_tailcall(t->as.if_.else_);
+        case CT_MATCH:    for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                              if (jbody_has_cps_tailcall(t->as.match.arms[i].body)) return true;
+                          return false;
         case CT_LETCONT:  return jbody_has_cps_tailcall(t->as.letcont.jbody)
                               || jbody_has_cps_tailcall(t->as.letcont.body);
         default:          return false;
@@ -2724,6 +2791,9 @@ static bool jbody_has_perform(const CTerm *t) {
         case CT_RESUME:   return jbody_has_perform(t->as.resume.body);
         case CT_IF:       return jbody_has_perform(t->as.if_.then_)
                               || jbody_has_perform(t->as.if_.else_);
+        case CT_MATCH:    for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                              if (jbody_has_perform(t->as.match.arms[i].body)) return true;
+                          return false;
         case CT_LETCONT:  return jbody_has_perform(t->as.letcont.jbody)
                               || jbody_has_perform(t->as.letcont.body);
         default:          return false;
@@ -2750,6 +2820,9 @@ static bool jbody_has_delim(const CTerm *t) {
         case CT_RESUME:   return jbody_has_delim(t->as.resume.body);
         case CT_IF:       return jbody_has_delim(t->as.if_.then_)
                               || jbody_has_delim(t->as.if_.else_);
+        case CT_MATCH:    for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                              if (jbody_has_delim(t->as.match.arms[i].body)) return true;
+                          return false;
         case CT_LETCONT:  return jbody_has_delim(t->as.letcont.jbody)
                               || jbody_has_delim(t->as.letcont.body);
         default:          return false;
@@ -2799,6 +2872,10 @@ static bool needs_heap_join(const CTerm *t) {
         case CT_IF:
             return needs_heap_join(t->as.if_.then_)
                 || needs_heap_join(t->as.if_.else_);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (needs_heap_join(t->as.match.arms[i].body)) return true;
+            return false;
         case CT_RESET:
             return needs_heap_join(t->as.reset.delim)
                 || needs_heap_join(t->as.reset.body);
@@ -4461,6 +4538,7 @@ static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static void emit_loop(CE *ce, const CTerm *t);       /* cps-while-native */
 static void emit_continue(CE *ce, const CTerm *t);   /* cps-while-native */
+static void emit_match(CE *ce, const CTerm *t);      /* B4 */
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps, const char *k_expr);
 static char *cvar_cname(CE *ce, CVar x);
 
@@ -4702,6 +4780,7 @@ static void emit_term(CE *ce, const CTerm *t) {
             ce_line(ce, "}");
             break;
         }
+        case CT_MATCH:   emit_match(ce, t); break;
         case CT_RESET:   emit_reset(ce, t); break;
         case CT_SHIFT:   emit_shift(ce, t); break;
         case CT_HANDLE:  emit_handle(ce, t); break;
@@ -4717,6 +4796,61 @@ static void emit_term(CE *ce, const CTerm *t) {
             ce_line(ce, "abort(); /* cps-backend: unreachable */");
             break;
     }
+}
+
+/* B4: emit a restricted `match` on a heap-ADT carrier scrutinee (match_dk_ok).
+ * The scrutinee is bound ONCE as a typed carrier pointer; each ctor arm tests
+ * `->tag` in an if/else-if chain and reads its pattern fields inline via
+ * adt_field_member_path (exactly as the direct emitter, emit_expr.c, does); the
+ * arm body is emitted in the arm's block scope so its own captures (a perform
+ * continuation, a nested join) ride the enclosing frame the same way a `let`
+ * binder does.  A trailing catch-all (ctor == NULL) becomes the final `else`;
+ * with no catch-all the (exhaustive, elaborator-guaranteed) fallthrough aborts. */
+static void emit_match(CE *ce, const CTerm *t) {
+    const AdtDef *adt = t->as.match.adt;
+    char *scrut = atom_str(ce, &t->as.match.scrut);
+    char *mn = mangle_field_name(adt->name);
+    char *sv = fresh_tmp(ce->ctx);
+    ce_line(ce, "tur_adt_%s *%s = (tur_adt_%s *)(intptr_t)(%s);", mn, sv, mn, scrut);
+    free(scrut);
+
+    uint32_t n = t->as.match.n_arms;
+    bool chain_open = false;
+    for (uint32_t i = 0; i < n; i++) {
+        const CMatchArm *arm = &t->as.match.arms[i];
+        if (arm->ctor) {
+            if (!chain_open) { ce_line(ce, "if (%s->tag == %u) {", sv, arm->ctor->tag); chain_open = true; }
+            else               ce_line(ce, "} else if (%s->tag == %u) {", sv, arm->ctor->tag);
+        } else {
+            /* catch-all: trailing `else`, or an unconditional block if it stands alone */
+            if (chain_open) ce_line(ce, "} else {");
+            else            ce_line(ce, "{");
+        }
+        ce->indent += 4;
+        /* bind the pattern's field vars from the carrier struct */
+        for (uint32_t bi = 0; bi < arm->n_fields; bi++) {
+            const Binding *fb = arm->fields[bi];
+            if (!fb) continue;
+            const char *ctype = type_c_name(fb->type);
+            char *bname = name_for_binding(ce->ctx, fb);
+            char *mp = adt_field_member_path(arm->ctor->adt, arm->ctor, bi);
+            ce_line(ce, "%s %s = (%s)%s->%s;", ctype, bname, ctype, sv, mp);
+            free(mp); free(bname);
+        }
+        emit_term(ce, arm->body);
+        ce->indent -= 4;
+    }
+    /* Close the chain.  With no trailing catch-all the match is exhaustive by
+     * elaboration, so the fallthrough is unreachable (abort keeps -Wreturn quiet). */
+    bool trailing_catchall = (n > 0 && t->as.match.arms[n - 1].ctor == NULL);
+    if (chain_open && !trailing_catchall) {
+        ce_line(ce, "} else {");
+        ce->indent += 4;
+        ce_line(ce, "abort(); /* exhaustive match: unreachable */");
+        ce->indent -= 4;
+    }
+    ce_line(ce, "}");
+    free(mn); free(sv);
 }
 
 /* Emit an owning-value op (rc/of, rc/drop, ...) by delegating to the direct
@@ -4835,6 +4969,14 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
         case CT_IF:
             emit_binder_decls(ce, t->as.if_.then_);
             emit_binder_decls(ce, t->as.if_.else_);
+            break;
+        case CT_MATCH:
+            /* The scrutinee temp + pattern field bindings are declared INLINE at
+             * the emit site (block-scoped inside each arm); only the arm bodies'
+             * CPS binders (CT_LETVAL/LETPRIM/... assigned, not declared, in
+             * emit_term) need the function-scope forward declaration. */
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                emit_binder_decls(ce, t->as.match.arms[i].body);
             break;
         case CT_RESET:
             /* Only the delimited body lives in this function; reset.body is

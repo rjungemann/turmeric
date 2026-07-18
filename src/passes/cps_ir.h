@@ -115,6 +115,9 @@ typedef enum CTermKind {
     CT_CONTINUE,     /* the CT_LOOP back-edge: re-enter the loop helper with the
                       * next-iteration argument atoms (the pre-created `$next` CVars
                       * a `set!` binds), threading the helper's own continuation. */
+    CT_MATCH,        /* B4: a `match` on a heap-ADT scrutinee -- an N-way tag
+                      * dispatch (each arm binds its ctor fields and delivers its
+                      * CPS body to the match continuation, like CT_IF's arms). */
     CT_UNSUPPORTED,  /* a source form outside the CPS2 subset (carries a reason) */
 } CTermKind;
 
@@ -176,6 +179,19 @@ typedef struct CHandleCase {
     bool            resumable_payload;
 } CHandleCase;
 
+/* B4: one arm of a restricted `match` on a heap-ADT scrutinee.  `ctor` selects
+ * the arm (its ->tag is tested against the scrutinee's tag word; ->adt gives the
+ * C aggregate name); `fields` are the pattern's field bindings extracted from
+ * the scrutinee (via adt_field_member_path); `body` is the CPS-translated arm
+ * body, delivered to the match continuation.  A catch-all (wildcard / bare var)
+ * arm has ctor == NULL and is emitted as the trailing `else`. */
+typedef struct CMatchArm {
+    const struct CtorDef *ctor;
+    const struct Binding **fields;
+    uint32_t              n_fields;
+    CTerm                *body;
+} CMatchArm;
+
 typedef struct CVar {     /* a CPS-introduced binder */
     uint32_t    id;
     const char *name;
@@ -221,6 +237,12 @@ struct CTerm {
         struct { CVar x; CTerm *delim; CTerm *body;
                  CHandleCase *cases; uint32_t n_cases; bool shallow;
                  bool dyn; CAtom dyn_table; }                             handle;
+        /* B4: `scrut` is the heap-ADT carrier atom; `adt` the ADT def (for the C
+         * aggregate name / tag word); `arms` the ctor arms (last may be a
+         * ctor==NULL catch-all).  Each arm delivers its body to the enclosing
+         * continuation (tail) or to a join point (bind), like CT_IF. */
+        struct { CAtom scrut; const struct AdtDef *adt;
+                 CMatchArm *arms; uint32_t n_arms; }                      match;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
