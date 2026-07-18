@@ -1,9 +1,22 @@
 # Effectful fn-value call inside a handle-installing HOF ("E2 pending")
 
-**STATUS: PARTIALLY LANDED (E2c).** The CONTINUATION-side case
-(`cps-backend-fn-param-effectful` / `use-writer`) is FIXED -- it now CPS-emits on the DK.
-The HANDLE-BODY case (`handle-effectful-fn-param-same-fn` / `run-with`) remains (a distinct,
-deeper mechanism -- see "Remaining" below). Both still run correctly on the fiber if evicted.
+**STATUS: RESOLVED (both cases DK-lower).** BOTH shapes now CPS-emit on the DK under
+`--enable=cps-tramp-resume`:
+- CONTINUATION-side (`cps-backend-fn-param-effectful` / `use-writer`): fixed via E2c
+  (capture the `via_registry` callee as an int64 fn-ptr scalar in the lifted frame env).
+- HANDLE-BODY (`handle-effectful-fn-param-same-fn` / `run-with`): fixed in commit ad31ec5.
+  `ptc_walk` now classifies a call to the fn-value param in the handle BODY as a threadable
+  tail call (it threads the delim's `cur_k` -- the prompt carrying this handler -- not the
+  bare outer `__kont`); and the E2a registry registration now covers an address-taken NAMED
+  effectful fn (`my-eff`), not only lifted lambdas, so `__tur_cps_lookup` resolves the named
+  arg. `handle-effectful-fn-param-same-fn` DK-lowers to perform=0, output 5/5, ASan-clean;
+  suite 2203/0.
+
+NOTE: a DISTINCT shape -- an effectful callback passed to a HOF whose fn-value parameter is
+represented as a FAT closure (`tur_poly_fn_t`), e.g. `apply-cb [f : (-> int int)]` -- still
+miscompiles (pre-existing, reproduces flag-off too); tracked separately in
+`docs/reported/effectful-fnvalue-param-miscompile.md`. It is orthogonal to the handle-body
+threading resolved here.
 
 **What landed (E2c, `--enable=cps-tramp-resume`, always-on capture machinery):** a non-tail
 effectful fn-value call in the LIFTED continuation frame of a handle the HOF installs

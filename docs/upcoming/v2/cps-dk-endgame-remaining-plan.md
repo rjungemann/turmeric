@@ -247,7 +247,14 @@ multishot/multi-effect, then compose/struct-field.
 
 ---
 
-### B4 -- cross-function effect propagation (2 fixtures) -- FIXABLE
+### B4 -- cross-function effect propagation (2 fixtures) -- DONE (both DK-lower)
+
+**Status (2026-07-18): BOTH fixtures land, suite 2203/0.**
+- `cps-backend-effect-under-match`: perform=0, output 8. (commits 187bb6a, 37fb373)
+- `handle-effectful-fn-param-same-fn`: perform=0, output 5/5, ASan-clean. (commit ad31ec5)
+  Threaded the fn-value param called in a handle body to the handle's OWN prompt
+  (ptc_walk EX_HANDLE case) + registered address-taken named effectful fns for
+  the `__tur_cps_lookup` registry (not just lifted lambdas).
 
 **Fixtures:** `cps-backend-effect-under-match`, `handle-effectful-fn-param-same-fn`.
 
@@ -267,9 +274,9 @@ fn-value calling convention) so a colored fn-value parameter called under a
 handle threads the DK; and ensure colored `__cps` propagation reaches a
 `perform` under `match` in a transitively-called callee.
 
-**Progress (2026-07-18): fixture 1 (`cps-backend-effect-under-match`) DONE --
-DK-lowers perform=0, both paths output 8, suite 2203/0. Fixture 2 (the E2
-effectful-fn-value root) remains.**
+**Progress (2026-07-18): BOTH fixtures DONE -- suite 2203/0. Fixture 1 below;
+fixture 2 (handle-body effectful fn-value threading) landed in ad31ec5 (see the
+status block at the top of this B4 section for its two gated changes).**
 
 - **LANDED -- layer 1 (match-arm coloring):** `cps_directly_uses_control` now
   recurses into `EX_MATCH` (flag-gated), so a `perform` in a match arm colors its
