@@ -126,6 +126,13 @@ struct Binding {
     const Symbol *defining_module_name; /* owning module's name, or NULL for top-level */
     /* Phase M6: explicit C symbol name from ^:export-as attribute, or NULL */
     const char   *c_export_name;
+    /* B6 (cps-tramp-resume): true for a typeclass INSTANCE METHOD.  Its
+     * c_export_name is an INTERNAL mangled name (`__inst_<class>_<method>_<ty>`)
+     * pinned only so the definition matches the dict-slot use site -- NOT a
+     * user-facing ABI export.  The CPS/DK backend may therefore emit a `__cps`
+     * variant for an effectful instance method (its exported direct entry still
+     * backs the dict slot), unlike a genuine `^:export-as` symbol. */
+    bool          is_instance_method;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
     /* LT1: Linear type checking — whether this binding holds a linear value */

@@ -324,6 +324,14 @@ static const Type *fn_ret_type(const FnDef *fd) {
         if ((bk == TY_ADT || bk == TY_APP || bk == TY_STRUCT)
             && slot_agg_def(&fd->body->type))
             return &fd->body->type;
+        /* B6: a typeclass INSTANCE METHOD's declared return annotation is left
+         * TY_UNKNOWN by elab_typeclasses (a placeholder never resolved), so an
+         * effectful `:nil`-returning method would fail the sig gate on an
+         * unresolved return.  Defer to the inferred body type (here TY_NIL), which
+         * is what the direct emitter already uses to spell the `void` entry. */
+        if (g_opt_cps_tramp_resume && fd->binding && fd->binding->is_instance_method
+            && fd->return_type.kind == TY_UNKNOWN && bk != TY_UNKNOWN)
+            return &fd->body->type;
     }
     return &fd->return_type;
 }
@@ -4078,7 +4086,13 @@ static void ensure_S(const Expr *program) {
                  * Either way a `handle`/`perform` in an excluded fn still taints. */
                 bool candidate = true;
                 bool sig_perm = false;
-                if (fd->binding->c_export_name) { candidate = false; sig_perm = true; }
+                /* B6: a typeclass INSTANCE METHOD's c_export_name is an internal
+                 * dict-slot name, not a user ABI export, so the CPS backend may
+                 * own it (emit its exported direct entry AND a `__cps` variant).
+                 * A genuine `^:export-as` export still perm-routes. */
+                if (fd->binding->c_export_name
+                    && !(g_opt_cps_tramp_resume && fd->binding->is_instance_method))
+                    { candidate = false; sig_perm = true; }
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
                 /* E2/taint-completeness (cps-tramp-resume): a fn USED AS A FN-VALUE
@@ -6923,7 +6937,9 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         if (fd->cps_colored && fd->binding) {
             const char *nm = fd->binding->name ? fd->binding->name->name : "?";
             const char *cat; const char *why = ""; bool sig_perm_route = false;
-            if (fd->binding->c_export_name)                { cat = "SIG-EXPORT"; sig_perm_route = true; }
+            if (fd->binding->c_export_name
+                && !(g_opt_cps_tramp_resume && fd->binding->is_instance_method))
+                                                           { cat = "SIG-EXPORT"; sig_perm_route = true; }
             else if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { cat = "SIG-MAIN";   sig_perm_route = true; }
             else if (!fn_sig_ok(fd))                        { cat = "SIG-REJECT"; sig_perm_route = true; }
             else {
