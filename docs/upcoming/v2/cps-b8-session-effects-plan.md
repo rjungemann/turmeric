@@ -48,19 +48,40 @@ Crossing it into a `perform` continuation is sound iff the resume is single-shot
 linear channel -- reject a session capture in a multi-shot continuation
 (`g_cap_single_shot` gate already distinguishes these), so linearity is preserved.
 
+## Slice 2 status (LANDED, commit 9f19f35)
+
+`type_is_session` + `carrier_handle_ok`/`fn_carrier_param_ok` admit the void*
+session param. `exchange` clears SIG-REJECT; suite 2203/0, flag-off byte-identical.
+
 ## Slice 3 -- capturing closure passed to `spawn` (`main` EX_CLOSURE)
 
-The spawn thunk captures the session channel `r`. It performs no effect, so it
-only needs to be a delegatable VALUE. Two options:
-- (a) admit a capturing closure as a delegatable fat-closure value in the CPS
-  body (emit the `{thunk, env}` box, pass it to the `spawn` inline-C call), or
-- (b) recognize the specific `(spawn <closure>)` shape and delegate the whole
-  `spawn` call (inline-C + its closure arg) as one `CT_LETRAW`, since `spawn` is
-  itself an inline-C sink that runs the closure on another thread and the closure
-  is effect-free.
+The spawn thunk captures the session channel `r`, performs no effect, and is
+handed straight to the inline-C pthread wrapper. It only needs to be a
+delegatable VALUE.
 
-Option (b) is smaller and matches how the fixture uses it (the closure never
-escapes into the DK; it is handed straight to an inline-C pthread wrapper).
+**Empirically validated (probe, NOT landed).** Admitting a general capturing
+closure as a delegatable value under the flag makes `session-effects` DK-lower
+END-TO-END: `tur_effect_perform` = 0, runs correctly (`sending 99` / `received
+99` / `99`), suite 2203/0, and ASan shows **no use-after-free** -- only a leaked
+fat-closure env (the documented Phase-1-keystone / Phase-3 gap: the CPS
+delegation path does not apply the direct emitter's scoped-env free). So the
+lowering is CORRECT; the only work is the env free.
+
+**The clean landing.** The existing `reap_env` mechanism
+(`cps_bind_let_init` -> `build_letraw` with `reap_env=true`, freed at the DK
+entry boundary) closes exactly this leak, but is only wired for a `let`-bound
+freeable closure -- not a closure passed as a CALL ARG (`(spawn <closure>)`,
+which reaches `cps_bind` via `atomize`'s Pending). Slice 3 =
+
+1. In `cps_bind`, handle an `EX_CLOSURE` capturing closure whose env is
+   freeable (reuse `closure_binding_escapes` for the escape check -- the spawn
+   thunk's env is consumed by the pthread and bounded by `join`, which precedes
+   the entry boundary) by delegating via `build_letraw` with `reap_env = true`.
+2. Gate on `g_opt_cps_tramp_resume`; verify `session-effects` /
+   `session-mp-effects` ASan-clean (env reaped), suite green, flag-off identical.
+
+A broad "admit every capturing closure" is NOT the landing (it leaks every
+flag-on closure env); the escape-checked + reap_env version is.
 
 ## Verification
 
