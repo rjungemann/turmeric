@@ -168,8 +168,17 @@ static bool slot_box_ty(const Type *t) {
  * g_cap_single_shot (a handler CASE body, which runs per-perform, still bails).
  * As a slot value / atom / call-arg it just threads the pointer by move, matching
  * the direct emitter (whose owning ops are delegated via CT_LETRAW either way). */
+/* B8: a session-protocol type is an opaque `void*` channel handle (a
+ * `TurChannel *` / session-pair box), a pointer carrier that crosses the DK slot
+ * by a plain cast exactly like a heap-ADT handle. */
+static bool type_is_session(TypeKind k) {
+    return k == TY_SESSION || k == TY_SESSION_REC || k == TY_SESSION_PAIR
+        || k == TY_SESSION_RECV_PAIR || k == TY_SESSION_OFFER;
+}
+
 static bool carrier_handle_ok(const Type *t) {
     if (!t) return false;
+    if (g_opt_cps_tramp_resume && type_is_session(t->kind)) return true;
     return (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t));
 }
 
@@ -2507,6 +2516,9 @@ static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
 static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
     if (!(g_opt_cps_tramp_resume && fn_single_concrete_sig(fd))) return false;
     TypeKind k = p->type.kind;
+    /* B8: an opaque session-channel param is a void* carrier -- emit_params spells
+     * it `void*` (matching the direct emitter), so the __cps ABI is consistent. */
+    if (type_is_session(k)) return true;
     if (k != TY_ADT && k != TY_APP) return false;
     return strcmp(type_c_name(p->type), "int64_t") == 0;
 }
