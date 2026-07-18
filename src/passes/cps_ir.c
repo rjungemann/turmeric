@@ -2886,6 +2886,28 @@ static CTerm *make_continue(CpsB *b) {
     return t;
 }
 
+/* (cont? k): lower to a LETPRIM whose sentinel spec (c_op "TUR_DK_CONT_PRED")
+ * the CT emitter special-cases to `!((DK *)k)->consumed`.  The DK `consumed`
+ * flag is set at the user resume site (emit_resume), so this matches the fiber
+ * `tur_effect_cont_valid` semantics (true while unconsumed, false after resume).
+ * Shared by the tail and bind translations; intercepted before their switches so
+ * flag-off (no `consumed` field) keeps the historical direct-emit/unsupported
+ * behaviour byte-identical. */
+static const BuiltinSpec s_cont_pred_spec = {
+    "cont?", NULL, 1, 1, {0}, {0}, BS_PREFIX_UNARY, "TUR_DK_CONT_PRED"
+};
+static CTerm *build_cont_pred(CpsB *b, Expr *e, CVar x, CTerm *body) {
+    Pending p = {0};
+    CAtom *args = arena_alloc(b->a, sizeof(CAtom));
+    args[0] = atomize(b, e->as.cont_pred_.expr, &p);
+    CTerm *t = new_term(b, CT_LETPRIM);
+    t->as.letprim.x = x; t->as.letprim.op = "cont?";
+    t->as.letprim.spec = &s_cont_pred_spec;
+    t->as.letprim.args = args; t->as.letprim.n = 1;
+    t->as.letprim.body = body;
+    return fold_pending(b, &p, t);
+}
+
 /* ---- cps_tail: deliver e's value to `kont` ---------------------------- */
 
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
@@ -2914,6 +2936,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
         CTerm *ac = new_term(b, CT_APPCONT);
         ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
         return build_letraw(b, e, x, ac);
+    }
+    /* (cont? k) in tail position (flag-on): deliver the unconsumed-check to kont. */
+    if (g_opt_cps_tramp_resume && e->kind == EX_CONT_PRED) {
+        CVar x = fresh_cvar(b, &e->type);
+        CTerm *ac = new_term(b, CT_APPCONT);
+        ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+        return build_cont_pred(b, e, x, ac);
     }
     switch (e->kind) {
         case EX_BUILTIN: {
@@ -3303,6 +3332,9 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     }
     if (is_delegatable_owning(e) || is_delegatable_struct(e) || is_delegatable_value(e))
         return build_letraw(b, e, x, rest);
+    /* (cont? k) in bind position (flag-on): bind the unconsumed-check to x. */
+    if (g_opt_cps_tramp_resume && e->kind == EX_CONT_PRED)
+        return build_cont_pred(b, e, x, rest);
     switch (e->kind) {
         case EX_BUILTIN: {
             Pending p = {0};

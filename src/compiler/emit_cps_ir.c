@@ -4310,7 +4310,13 @@ static void emit_term(CE *ce, const CTerm *t) {
             for (uint32_t i = 0; i < n; i++) as[i] = atom_str(ce, &t->as.letprim.args[i]);
             const BuiltinSpec *sp = t->as.letprim.spec;
             char *bn = cvar_cname(ce, t->as.letprim.x);
-            if (is_println_shape(sp->shape)) {
+            if (sp->c_op && strcmp(sp->c_op, "TUR_DK_CONT_PRED") == 0) {
+                /* (cont? k): the DK handler-case continuation is unconsumed until
+                 * a user `resume` sets its `consumed` flag (emit_resume).  The k
+                 * atom is `int64_t` or `DK *` depending on the case; `(DK *)(intptr_t)`
+                 * normalizes both. */
+                ce_line(ce, "%s = !((DK *)(intptr_t)(%s))->consumed;", bn, n ? as[0] : "0");
+            } else if (is_println_shape(sp->shape)) {
                 emit_println(ce, sp->shape, n ? as[0] : "0");
                 ce_line(ce, "%s = 0;", bn);  /* nil result */
             } else {
@@ -6060,6 +6066,11 @@ static void emit_resume(CE *ce, const CTerm *t) {
      * dk_handler_tail (case_body_tail_resumes agrees), so it queued the H->next
      * delivery and this yield hands off the resumed chain; the value is delivered
      * by the driver, so nothing follows here. */
+    /* (cont? k) support: mark k consumed at the user resume site so a later
+     * `cont?` on the same k reads false (matches the fiber path).  Flag-gated --
+     * the DK `consumed` field only exists under cps-tramp-resume. */
+    if (g_opt_cps_tramp_resume)
+        ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
     if (g_opt_cps_tramp_resume && ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);

@@ -293,7 +293,10 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
 "    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
 "                        * distinguishes this handle's cases from an enclosing\n"
-"                        * handle's handlers once a re-install flattens the chain */\n");
+"                        * handle's handlers once a re-install flattens the chain */\n"
+"    bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until\n"
+"                        * the program `resume`s it; set at the user resume site so\n"
+"                        * `cont?` can read `!k->consumed` (matches the fiber path). */\n");
     buf_puts(out,
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
