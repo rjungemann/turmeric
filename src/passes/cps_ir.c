@@ -1717,6 +1717,15 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * STRUCT-OR-TAINT that a gateless widening would cause. */
         case EX_DEFER:    return g_whole_body_delegate
                               && safe_to_delegate(b, e->as.defer_.body);
+        /* B8: a control-op-free inline-C EXPRESSION (a session channel op --
+         * make-session/send/recv/close -- lowers to one, a synchronous
+         * value-returning `tur_session_*` call) is delegatable exactly like a
+         * direct-emitted value op (EX_RC_OF, EX_MAKE_STRUCT): it runs to
+         * completion and never threads a DK continuation, so a body that
+         * interleaves `perform` with inline-C session ops CPS-lowers with the
+         * inline-C as a CT_LETRAW.  Gated on the flag (flag-off the CPS subset is
+         * narrower and delegating inline-C could reshuffle evictions). */
+        case EX_INLINE_C:  return g_opt_cps_tramp_resume;
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }
