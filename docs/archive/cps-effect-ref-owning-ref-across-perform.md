@@ -1,8 +1,36 @@
-# effect-ref: an owning `ref<T>` deref'd in the same expression as a `perform` evicts (BODY-STRUCT-OR-TAINT)
+# effect-ref: an owning `ref<T>` across a `perform` (RESOLVED via the RC single-shot pass)
 
-**Severity:** low-medium (correct on the fiber; endgame migration target).  ONE
-fiber-live fixture: `effect-ref` (`sum-with-base` + `main`, both
-BODY-STRUCT-OR-TAINT).
+**STATUS: RESOLVED.** `effect-ref` DK-lowers -- both `sum-with-base` and `main`
+(output `142`, zero eff=1).  The fix was much smaller than the CT-level
+drop-at-last-use feared below: grant a `ref` the SAME single-shot-continuation
+pass RC already has.
+
+## The fix (grant a ref RC's single-shot pass; verified memory-safe by ASan)
+
+`ref_dropped_before_control` (emit_cps_ir.c) returned false at every control op,
+so a ref crossing a perform evicted -- the source comment claimed the "DK
+teardown that frees a captured ref" substrate did not exist.  It DOES: granting
+`ref_dropped_before_control` the same CT_PERFORM/CT_HANDLE/CT_RESET/CT_AWAIT ->
+true pass that `owning_dropped_before_control` gives RC (flag-gated) makes the ref
+captured into the single-shot continuation's env and freed there, exactly like an
+RC handle.  The capture-admission gates (collect_caps single-shot vs
+collect_caps_case multi-run) already prevent the multi-shot double-free, so the
+soundness argument is identical to RC's.
+
+**Memory-safety verification (this is drop analysis -- the important part):**
+- effect-ref runs correct (`142`); under ASan the `ref<int>` is FREED -- the only
+  leak is a 104-byte DK continuation NODE, and a ref-FREE variant
+  (`(+ 100 (perform ...))`) leaks the IDENTICAL node, so the leak is the general
+  perform-continuation pattern, NOT introduced by the ref capture.
+- ASan sweep over ALL 26 ref-using fixtures: ZERO use-after-free / double-free /
+  heap-overflow.
+- Flag-off byte-identical; flag-on effect soundness sweep clean; full suite green
+  (2203/0, Debug ASan build -- the compiler path is leak-checked).
+
+The CT-level drop-at-last-use plan below is NOT needed -- the capture-into-
+continuation path handles it.
+
+## Original diagnosis (retained)
 
 ## The shape
 

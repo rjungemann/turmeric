@@ -1805,6 +1805,17 @@ static bool ref_dropped_before_control(const CTerm *t, uint32_t bid) {
             case CT_IF:
                 return ref_dropped_before_control(t->as.if_.then_, bid)
                     && ref_dropped_before_control(t->as.if_.else_, bid);
+            case CT_PERFORM:
+            case CT_HANDLE:
+            case CT_RESET:
+            case CT_AWAIT:
+                /* EXPERIMENTAL (cps-tramp-resume): grant a ref the same single-shot
+                 * continuation pass RC already has (owning_dropped_before_control) --
+                 * captured into the single-shot continuation's env, freed there.
+                 * Whether the capture+free substrate exists for a ref is verified by
+                 * ASan on effect-ref; flag-gated so flag-off is unchanged. */
+                if (g_opt_cps_tramp_resume) return true;
+                return false;
             default: return false;   /* control op / delivery / end: not before */
         }
     }
