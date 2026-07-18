@@ -335,26 +335,28 @@ ADT-ABI depth, B4 is a proper multi-slice effort, not a quick win like B1-B3.
 
 ---
 
-### B5 -- async x effect interaction (2 fixtures) -- FIXABLE (scope: async lowering)
+### B5 -- async x effect interaction (2 fixtures) -- 1 of 2 DONE
 
-**Fixtures:** `effects-async`, `async-with-handler`.
+**Fixtures:** `effects-async` (DONE), `async-with-handler` (deferred to cps-async).
 
-**Measured root cause.** A `handle` / `with-handler` **inside an `async`
-closure**:
+**Status (2026-07-18):**
+- `effects-async` -- `(async (fn [] (handle (perform E) (E ...))))`, an async
+  closure that HANDLES its own effect -- now DK-lowers to perform=0, output 15,
+  ASan-clean. (commit 8501075) The E2 taint-completeness rule was perm-tainting it
+  because `expr_collect_effects` folds performed+handled into one set; the new
+  `fn_net_escaping_acc` gates the rule on the NET escaping effect (performed but
+  not discharged by an enclosing handle in the same body), so a self-handling
+  fn-value is admitted and its interior handle installs its own DK prompt.
+- `async-with-handler` -- `(async (with-handler ...))`, the SAME program without
+  the explicit `(fn [] ...)` wrapper -- still fibers. The bare handle inlines into
+  the async region (direct emitter) instead of a colored lambda; verified
+  identical to `effects-async` once wrapped in a lambda. Normalizing
+  `(async bare-expr)` to thunk-wrap is a broad async-lowering change (async
+  Send-check of captures + snapshot churn), so it belongs with the `cps-async`
+  experiment. See `docs/reported/cps-async-with-handler-bare-form-fibers.md`.
 
-```turmeric
-(async (fn [] (handle (perform (AddTen 5)) (AddTen [x] k) (resume k (+ x 10)))))
-```
-
-The effect handle inside the async-spawned closure stays on the fiber. Related
-(and correctly by-design) is `cps-async-recursive-await-eviction` (archived) --
-recursive `await` deliberately evicts. This bucket is specifically the
-handle-inside-async body.
-
-**Fix direction.** The async closure body must DK-lower its interior handle like
-any other function body. Coordinate with the `cps-async` experiment
-(`g_opt_cps_async`) -- if async is itself CPS-lowered, the interior handle
-should compose with it. May be gated behind `cps-async` graduation.
+Related (and correctly by-design) is `cps-async-recursive-await-eviction`
+(archived) -- recursive `await` deliberately evicts.
 
 ---
 
