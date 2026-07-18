@@ -267,9 +267,33 @@ fn-value calling convention) so a colored fn-value parameter called under a
 handle threads the DK; and ensure colored `__cps` propagation reaches a
 `perform` under `match` in a transitively-called callee.
 
-**Scoping notes (2026-07-18, attempted; deeper than B1-B3, reverted to keep the
-tree clean).** B4 is materially harder than B1-B3 -- each fixture needs several
-coordinated changes, not one:
+**Progress (2026-07-18): 2 of 4 layers of fixture 1 LANDED (gated, suite 2203/0);
+the remaining blocker is a substantial standalone feature.**
+
+- **LANDED -- layer 1 (match-arm coloring):** `cps_directly_uses_control` now
+  recurses into `EX_MATCH` (flag-gated), so a `perform` in a match arm colors its
+  fn. `pick` is now colored.
+- **LANDED -- layer 2 (opaque-ADT carrier param):** `fn_carrier_param_ok` admits
+  an int64-carrier ADT param (`type_c_name` == "int64_t", i.e. a boxed sum type,
+  NOT a by-value product). Both emitters already spell it `int64_t`, so the ABI
+  was consistent -- only the sig gate rejected it. `pick` cleared SIG-REJECT.
+- **REMAINING -- layer 3 (the real blocker): `EX_MATCH` CT-IR lowering.** With
+  layers 1-2, `pick` now evicts as `BODY-UNSUPPORTED: EX_MATCH` -- the CPS IR
+  (cps_ir.c) has no `EX_MATCH` translation, so a `match` containing a control op
+  hits `CT_UNSUPPORTED`. This is a substantial feature on par with the while-loop
+  lowering (CT_LOOP, task-sized): a `CT_MATCH` term (scrutinee atom + arms, each
+  arm a pattern + a CPS-translated body) whose emit reuses the direct emitter's
+  tag-dispatch + field-binding (emit_expr.c `EX_MATCH`, which is intricate --
+  carrier bridging, by-value aggregates, spec handling) with each arm body
+  delivered to the join like `CT_IF` arms, wired through every CTerm walker
+  (term_core_ok / first_unsupported / collect_effects / needs_heap_join / ...).
+  Restricting to simple ctor-arm matches (no guards/literals/unions) would cover
+  this fixture with less surface.
+- **layer 4 (downstream):** once the match lowers, `route` (constructs `(Full 7)`,
+  a heap-ADT construction in a colored fn -- likely another small admission) and
+  `run` (SIG-TAINT) should follow.
+
+Original 4-layer analysis (for reference):
 
 - `cps-backend-effect-under-match` has FOUR layers, all required together:
   1. `cps_directly_uses_control` (cps.c) has no `EX_MATCH` recursion, so a
