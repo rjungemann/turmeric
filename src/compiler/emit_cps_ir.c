@@ -173,7 +173,8 @@ static bool slot_box_ty(const Type *t) {
  * by a plain cast exactly like a heap-ADT handle. */
 static bool type_is_session(TypeKind k) {
     return k == TY_SESSION || k == TY_SESSION_REC || k == TY_SESSION_PAIR
-        || k == TY_SESSION_RECV_PAIR || k == TY_SESSION_OFFER;
+        || k == TY_SESSION_RECV_PAIR || k == TY_SESSION_OFFER
+        || k == TY_ROLE;   /* B8: a multi-party Role endpoint is a void* carrier too */
 }
 
 static bool carrier_handle_ok(const Type *t) {
