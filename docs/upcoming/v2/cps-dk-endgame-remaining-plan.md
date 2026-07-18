@@ -70,15 +70,73 @@ Recommended execution order is by leverage: **B3 (7) -> B1+B2 (7) -> B4/B5/B6
 > into one multi-effect DK handler group -- landing fh-handler-value,
 > with-handler-value, fh-multishot-value, fh-compose-handlers.
 >
-> **B3 part 2 (remaining 3, harder):** the DYNAMIC handler-value cases --
+> **B3 part 2 (remaining 3):** the DYNAMIC handler-value cases --
 > `fh-multi-effect-type` (handler passed as a PARAMETER), `defstruct-field-handler`
-> and `-multi` (handler stored in / read back from a struct field). The fiber path
-> lowers these to a runtime `tur_handler_table_t*` dispatched by
-> `tur_handler_dispatch`; DK-lowering them needs a NEW dynamic-DK-handler
-> primitive -- a DK handler group that dispatches performed effects through a
-> runtime handler table (not compile-time-known cases) while threading the DK
-> continuation. Real runtime + codegen feature, not a bridge; its own slice.
+> and `-multi` (handler stored in / read back from a struct field).
 > Remaining fixable: **B3-part-2 (3) + B4-B7 (9)**.
+
+#### B3 part 2 -- STEP 1 LANDED + concrete plan for the rest
+
+The fiber path lowers a handler value to a runtime `tur_handler_table_t*` (entry
+= `{const char *eff_name; int64_t (*fn)(args,n,k,env); void *env; uint8_t
+cont_kind}`, emit_module.c preamble) and runs the body in a fiber dispatching
+against the table. DK-lowering it installs a DK handler group from the table.
+
+**STEP 1 -- LANDED (commit "B3 part 2 step 1", behavior-neutral):**
+- `tur_handler_entry_t` gains `int dk_tag; intptr_t (*dk_fn)(intptr_t,intptr_t,
+  struct DK*);` (fiber path calloc-zeroes them).
+- `dk_hgroup_from_table(const tur_handler_table_t *t, DK *base)` (emit_dk_runtime.c):
+  folds the table into `dk_hgroup(dk_handler(e.dk_tag, e.dk_fn, e.env, ...))`
+  over `base`, h1-outer. Unused until Steps 2-3 wire it.
+
+Refined approach found while scoping (more tractable than a full CT-IR rewrite):
+keep the handler literal on the DIRECT emitter but have it ALSO emit a DK-ABI
+case fn; only the dynamic with-handler INSTALL needs a CPS-side term.
+
+**STEP 2 -- DK case fn at the literal site (emit_effects.c, direct path).**
+`emit_effects_handler_lit` already emits the fiber case body via the direct
+emitter (`__effect_handler_N`); the case body is IDENTICAL for the DK variant
+except `resume`/`k`. Add an `EmitCtx` DK-case mode: emit a second fn
+`__dk_hcase_N(intptr_t env, intptr_t arg, DK *subk)` that reuses the body
+emission, and in `emit_effects_resume` (the `k_type.kind==TY_INT` branch) emit,
+under the mode, `((DK*)k)->consumed = 1; return dk_tail_resume((DK*)k, <v>);`
+with `k` bound to `subk`. Target shape (verified from with-handler-value):
+```c
+static intptr_t __dk_hcase_N(intptr_t env, intptr_t arg, DK *subk) {
+    /* env unpack (captures) + arg unpack (0/1 effect param) */
+    /* side-effect stmts (e.g. puts(s)) */
+    ((DK*)subk)->consumed = 1;
+    return dk_tail_resume((DK*)subk, (intptr_t)(<v>));
+}
+```
+Populate `entries[i].dk_tag = effect_tag(eff)` (compile-time constant) and
+`.dk_fn = __dk_hcase_N`, `.env` = same heap env as the fiber entry. Gate on
+`g_opt_cps_tramp_resume`. Compose is free (concat copies the new fields). The 3
+target case bodies are all single-shot tail resumes (no `^multishot`) -- so this
+restricted emit suffices; a `^multishot` dynamic handler stays evicting until a
+follow-up. NEUTRAL until Step 3 (the fns are unused).
+
+**STEP 3 -- dynamic with-handler install (CPS side).** `build_with_handler`
+(cps_ir.c) currently evicts the dynamic case (`CT_UNSUPPORTED`). Add a CT term
+`CT_WITH_HANDLER_DYN { CAtom table; CVar x; CTerm *delim; CTerm *body }` (or
+reuse CT_HANDLE with a `dyn_table` atom + empty cases). Translate
+`(with-handler <dynamic hv> body)` -> eval hv (emit_value -> table var), then
+emit exactly like CT_HANDLE (emit_cps_ir.c ~5960) but with the handler chain
+replaced by:
+```c
+DK *__hN = __dk_reap_keep(dk_hgroup_from_table(<table>,
+             dk_frame(<hk>, (intptr_t)__kont, dk_copy_enclosing_handlers(__kont))));
+```
+where `<hk>` is the with-handler continuation (LH_RESET_CONT over the body).
+Run the body as the delim under `__hN`; deliver the result. Wire the new term
+through term_core_ok / first_unsupported / collect_effects / the CTerm walkers.
+
+**STEP 4 -- semantics + verify.** Env ownership/free timing (the fiber path frees
+the table at with-handler exit; on the DK path the table + case envs must be
+reaped once -- reuse `__dk_reap_keep`/boundary reap), and the body's OWN
+unhandled effects propagating outward (the base frame already carries
+`dk_copy_enclosing_handlers`). Verify per Sec 2: fiber-vs-DK output equivalence
++ ASan-clean on all 3 fixtures, then the suite.
 
 ---
 
