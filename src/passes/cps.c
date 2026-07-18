@@ -587,6 +587,22 @@ static bool cps_force_color_eff_fnval_args(const Expr *e, CpsNode *nodes, uint32
                     }
                 }
             }
+            /* E2c: a `(make-struct S ...)` lowers to a CONSTRUCTOR call.  A fn-value
+             * stored in an EFFECTFUL capability field (`[run : fn #fx{E}]`) is
+             * threaded via the registry at each `(.run obj)` call, which needs even
+             * a PURE such fn-value force-colored so it gets a __cps entry to
+             * register (effect-subtype-capability). */
+            if (e->as.call_.ctor) {
+                const CtorDef *ctor = e->as.call_.ctor;
+                for (uint32_t p = 0; p < e->as.call_.n_args && p < ctor->n_fields; p++) {
+                    if (effect_row_is_empty(ctor->fields[p].effect_row)) continue;
+                    const Expr *arg = cps_peel_fnvalue_arg(e->as.call_.args[p]);
+                    if (arg && arg->kind == EX_VAR && arg->as.var.binding) {
+                        int li = cps_find_node(nodes, n, arg->as.var.binding);
+                        if (li >= 0 && !nodes[li].colored) { nodes[li].colored = true; ch = true; }
+                    }
+                }
+            }
             if (cps_force_color_eff_fnval_args(e->as.call_.fn_expr, nodes, n)) ch = true;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (cps_force_color_eff_fnval_args(e->as.call_.args[i], nodes, n)) ch = true;

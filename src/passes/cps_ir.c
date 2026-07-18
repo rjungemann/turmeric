@@ -121,6 +121,17 @@ static bool call_is_effectful_fnvalue(const Expr *e) {
     const Binding *fb = e->as.call_.fn_binding;
     if (fb) return fn_binding_effectful(fb);
     const Expr *fe = e->as.call_.fn_expr;
+    /* E2c: a struct-field fn-value call `(.f obj)` -- the effect row of an
+     * effect-annotated capability field lives on the record CtorField, not the
+     * field-access node's TY_FN type (which reads empty).  Read it off the ctor. */
+    if (fe && fe->kind == EX_GET_FIELD) {
+        const CtorDef *c = fe->as.get_field_.adt_ctor;
+        uint32_t fi = fe->as.get_field_.field_idx;
+        if (c && fi < c->n_fields) {
+            struct EffectRow *r = c->fields[fi].effect_row;
+            if (r && r->kind != ERK_EMPTY) return true;
+        }
+    }
     if (fe && fe->type.kind == TY_FN) {
         struct EffectRow *r = fe->type.as.fn.effect_row;
         return r && r->kind != ERK_EMPTY;
@@ -2980,6 +2991,27 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     t->as.tailcall.via_registry = true;
                     return fold_pending(b, &pp, t);
                 }
+                /* E2c: an effectful fn-value stored in a STRUCT FIELD, called via
+                 * `(.f obj args)` -- the callee is a field load (fn_expr =
+                 * EX_GET_FIELD), not a param.  Thread it via the registry keyed on
+                 * the field-load atom, delivering __kont so the fn-value's perform
+                 * reaches the caller's handler.  The field-stored fn-value is
+                 * force-registered (emit_cps_ir.c registration loop). */
+                if (!pf && e->as.call_.fn_expr
+                    && e->as.call_.fn_expr->kind == EX_GET_FIELD
+                    && call_args_atomic(e)) {
+                    Pending pp = {0};
+                    CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
+                    uint32_t n = e->as.call_.n_args;
+                    CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                    for (uint32_t i = 0; i < n; i++)
+                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                    CTerm *t = new_term(b, CT_TAILCALL);
+                    t->as.tailcall.fn = NULL; t->as.tailcall.fn_atom = fnatom;
+                    t->as.tailcall.args = args; t->as.tailcall.n = n;
+                    t->as.tailcall.kont = kont; t->as.tailcall.via_registry = true;
+                    return fold_pending(b, &pp, t);
+                }
                 CTerm *t = new_term(b, CT_UNSUPPORTED);
                 t->as.unsupported.why = "effectful fn-value call (E2 pending)";
                 return t;
@@ -3367,6 +3399,30 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     CTerm *call = new_term(b, CT_TAILCALL);
                     call->as.tailcall.fn = pf; call->as.tailcall.args = args;
                     call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
+                    call->as.tailcall.via_registry = true;
+                    CTerm *t = new_term(b, CT_LETCONT);
+                    t->as.letcont.j = j; t->as.letcont.param = x;
+                    t->as.letcont.jbody = rest; t->as.letcont.body = call;
+                    return fold_pending(b, &pp, t);
+                }
+                /* E2c (bind position): an effectful struct-field fn-value call
+                 * `(.f obj args)` -- reify `rest` as a heap join and thread it to
+                 * the field-load callee via the registry (fn_atom key). */
+                if (!pf && e->as.call_.fn_expr
+                    && e->as.call_.fn_expr->kind == EX_GET_FIELD
+                    && call_args_atomic(e)) {
+                    Pending pp = {0};
+                    CAtom fnatom = atomize(b, e->as.call_.fn_expr, &pp);
+                    uint32_t n = e->as.call_.n_args;
+                    CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                    for (uint32_t i = 0; i < n; i++)
+                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                    CVar j = fresh_cvar(b, x.type);
+                    j.name = arena_strdup(b->a, "j", 1);
+                    CTerm *call = new_term(b, CT_TAILCALL);
+                    call->as.tailcall.fn = NULL; call->as.tailcall.fn_atom = fnatom;
+                    call->as.tailcall.args = args; call->as.tailcall.n = n;
+                    call->as.tailcall.kont = kont_var(j);
                     call->as.tailcall.via_registry = true;
                     CTerm *t = new_term(b, CT_LETCONT);
                     t->as.letcont.j = j; t->as.letcont.param = x;

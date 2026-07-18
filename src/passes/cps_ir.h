@@ -194,7 +194,11 @@ struct CTerm {
         struct { CVar x; CAtom v; CTerm *body; }                          letval;
         struct { CVar x; const char *op; const BuiltinSpec *spec; CAtom *args; uint32_t n; CTerm *body; } letprim;
         struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body; } letcall;
-        struct { const Binding *fn; CAtom *args; uint32_t n; CKont kont; bool via_registry; } tailcall;
+        /* fn_atom is the callee key when fn == NULL (E2c: a via_registry call
+         * whose callee is a struct-field fn-value load `(.f obj)`, not a named
+         * binding).  The emitter uses fn_atom's atom_str as the `__tur_cps_lookup`
+         * key in that case. */
+        struct { const Binding *fn; CAtom fn_atom; CAtom *args; uint32_t n; CKont kont; bool via_registry; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;

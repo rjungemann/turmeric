@@ -3358,6 +3358,80 @@ static bool threadable_has(const Binding *b) {
  * traversal (expr_collect_effects_acc with count_out + thr_ok both set), so no
  * form is missed and the comparison is exact.  Returns the counts via out-params
  * so the trace can show why a fn-value is or is not threadable. */
+/* E2c: is fn-value `fv` stored as a value in a `make-struct` field anywhere in
+ * `e`?  An effectful fn-value stored in a struct field is called via `(.field
+ * obj)` and threaded via the registry (cps_ir.c), so it must be registered even
+ * though its make-struct store is not a "threadable ARG" use in the param sense.
+ * Recurses the common containers; a miss only forgoes registration (conservative). */
+static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                const Expr *v = peel_fn_value(e->as.make_struct_.field_values[i]);
+                if (v && v->kind == EX_VAR && v->as.var.binding == fv) return true;
+                if (expr_stores_fnval_in_struct(e->as.make_struct_.field_values[i], fv)) return true;
+            }
+            return false;
+        case EX_LET:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, fv)) return true;
+            return expr_stores_fnval_in_struct(e->as.let_.body, fv);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_stores_fnval_in_struct(e->as.do_.items[i], fv)) return true;
+            return false;
+        case EX_IF:
+            return expr_stores_fnval_in_struct(e->as.if_.cond, fv)
+                || expr_stores_fnval_in_struct(e->as.if_.then_, fv)
+                || expr_stores_fnval_in_struct(e->as.if_.else_or_null, fv);
+        case EX_CALL: {
+            /* A `(make-struct S ...)` lowers to a CONSTRUCTOR call (e->as.call_.ctor
+             * set), so a fn-value stored in a struct field arrives here, not as
+             * EX_MAKE_STRUCT.  Match a fn-value arg whose ctor field carries an
+             * EFFECTFUL row -- that field is called via `(.field obj)` and threaded. */
+            const CtorDef *ctor = e->as.call_.ctor;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *v = peel_fn_value(e->as.call_.args[i]);
+                if (ctor && v && v->kind == EX_VAR && v->as.var.binding == fv
+                    && i < ctor->n_fields
+                    && !effect_row_is_empty(ctor->fields[i].effect_row))
+                    return true;
+                if (expr_stores_fnval_in_struct(e->as.call_.args[i], fv)) return true;
+            }
+            return expr_stores_fnval_in_struct(e->as.call_.fn_expr, fv);
+        }
+        case EX_HANDLE: {
+            HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (expr_stores_fnval_in_struct(h->body, fv)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (expr_stores_fnval_in_struct(h->cases[i].body, fv)) return true;
+            return false;
+        }
+        case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, fv);
+        case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, fv);
+        case EX_SET:     return expr_stores_fnval_in_struct(e->as.set_.value, fv);
+        case EX_DEF:     return expr_stores_fnval_in_struct(e->as.def_.init, fv);
+        case EX_WHILE:   return expr_stores_fnval_in_struct(e->as.while_.cond, fv)
+                             || expr_stores_fnval_in_struct(e->as.while_.body, fv);
+        default:         return false;
+    }
+}
+
+/* E2c: does fn-value `fv` flow into a make-struct field anywhere in the program? */
+static bool fnval_stored_in_struct(const Expr *program, const Binding *fv) {
+    if (!program || program->kind != EX_PROGRAM) return false;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it;
+        if (expr_stores_fnval_in_struct(body, fv)) return true;
+    }
+    return false;
+}
+
 static bool fn_value_threadable(const Expr *program, const Binding *fv,
                                 int *out_total, int *out_ok, int *out_tier) {
     int total = 0, ok = 0, tier = 0;
@@ -3618,6 +3692,20 @@ static void ensure_S(const Expr *program) {
              * heap-join frame threaded to its __cps). */
             if (thr && (tier == (int)PT_NOW || tier == (int)PT_NONTAIL)
                 && fd->binding->is_lifted_lambda)
+                threadable_add(fd->binding);
+            /* E2c: an EFFECTFUL fn-value (lambda or named) stored in a struct
+             * field is called via `(.field obj)` and threaded via the registry;
+             * register it so `__tur_cps_lookup(obj.field)` resolves and its perform
+             * reaches the caller's handler.  The struct-field store is not a
+             * threadable-ARG use, so this is a separate admission from the E2a
+             * param path above. */
+            /* E2c: register a fn-value stored in an EFFECTFUL struct field
+             * (fnval_stored_in_struct already checks the field row is effectful),
+             * so `(.field obj)` threads to its __cps.  Includes a PURE fn stored in
+             * an effectful field (effect subtyping) once the coloring pass has
+             * force-colored it (so it reaches here with a __cps entry). */
+            if (fnval_stored_in_struct(program, fd->binding)
+                && (lo || hi || fd->cps_colored))
                 threadable_add(fd->binding);
             if (trace) {
                 const char *nm = fd->binding->name ? fd->binding->name->name : "?";
@@ -4355,8 +4443,11 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (t->as.tailcall.via_registry) {
                 /* E2a: callee is a fn-value PARAM; recover its CPS entry from the
                  * registry and thread __kont so its perform reaches the caller's
-                 * handler.  __cps ABI: int64_t (*)(int64_t args..., DK*). */
-                char *pf = callee_name(t->as.tailcall.fn);
+                 * handler.  __cps ABI: int64_t (*)(int64_t args..., DK*).  E2c: when
+                 * fn == NULL the callee is a struct-field fn-value LOAD carried in
+                 * fn_atom -- use its atom expression as the lookup key. */
+                char *pf = t->as.tailcall.fn ? callee_name(t->as.tailcall.fn)
+                                             : atom_str(ce, &t->as.tailcall.fn_atom);
                 char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
@@ -4927,7 +5018,8 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     bool needs_kont = jbody_has_cps_tailcall(t->as.letcont.jbody)
                    || jbody_has_perform(t->as.letcont.jbody);
 
-    char *fn = callee_name(call->as.tailcall.fn);
+    char *fn = call->as.tailcall.fn ? callee_name(call->as.tailcall.fn)
+                                    : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
     char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
