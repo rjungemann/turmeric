@@ -326,14 +326,6 @@ static bool cps_directly_uses_control(const Expr *e) {
         case EX_AWAIT:
             if (g_opt_cps_async) return true;
             return cps_directly_uses_control(e->as.await_.fut_expr);
-        /* E2 (cps-tramp-resume): `with-handler` applies a handler value to a body
-         * -- a delimited-control install like EX_HANDLE.  A fn whose body discharges
-         * one effect via with-handler but leaves a LEFTOVER effect (fh-discharge-row's
-         * do-work: handles Write, performs Other) must be colored so its leftover
-         * threads to the enclosing DK handler instead of fiber-emitting.  Gated so
-         * flag-off coloring (and codegen) is byte-identical (old default -> false). */
-        case EX_WITH_HANDLER:
-            return g_opt_cps_tramp_resume;
         /* Structural recursion (no descent into nested fn bodies). */
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
