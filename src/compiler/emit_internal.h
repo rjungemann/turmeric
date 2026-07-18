@@ -496,6 +496,10 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
+/* B3 part 2: per-effect integer tag (memoized by symbol) used by the DK backend
+ * (dk_perform / dk_handler tags).  Defined in emit_cps_ir.c; called from
+ * emit_effects.c to stamp a first-class handler entry's DK case tag. */
+int effect_tag(const struct Symbol *eff);
 /* Phase 5 dead-instance elimination: is this HKT typeclass instance live (any
  * method base directly referenced)?  Used to skip dead instances' dict + bases
  * in lockstep.  Defined in emit_module.c. */

@@ -361,7 +361,10 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    DK *head = base;\n"
 "    if (t) for (int i = t->n_entries - 1; i >= 0; i--) {\n"
 "        tur_handler_entry_t *e = &t->entries[i];\n"
-"        head = dk_handler(e->dk_tag, (DKHandler)e->dk_fn, (intptr_t)e->env, head);\n"
+"        /* The emitted DK case fns always end in a tail `return dk_tail_resume`,\n"
+"         * so install as a tail handler (dk_perform yields the resumed chain to\n"
+"         * the entry driver), matching the static handle path. */\n"
+"        head = dk_handler_tail(e->dk_tag, (DKHandler)e->dk_fn, (intptr_t)e->env, head);\n"
 "    }\n"
 "    return dk_hgroup(head);\n"
 "}\n");

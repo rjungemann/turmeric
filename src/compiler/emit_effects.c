@@ -12,6 +12,7 @@
  * emit_module.c -- see emit-effects-extraction-plan.md §EE4 for rationale.
  */
 #include "emit_internal.h"
+#include "globals.h"   /* B3 part 2: g_opt_cps_tramp_resume */
 
 /* =========================================================================
  * Region C -- algebraic effects
@@ -851,6 +852,99 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
     return atom_nil();
 }
 
+/* B3 part 2: emit a DK-ABI case fn for a first-class handler literal case, so a
+ * dynamic `(with-handler <value> body)` can install it on the DK
+ * (dk_hgroup_from_table).  Restricted to the shape the 3 dynamic-handler target
+ * fixtures use: a case body that is `[non-control stmt]* then a TAIL single-shot
+ * (resume k V)`, with at most one effect parameter.  Returns true (and writes the
+ * fn to `hbuf`) when emittable; false leaves dk_fn=0 so the dynamic install
+ * evicts gracefully.  The non-tail prefix is emitted with the normal direct
+ * emitter; only the tail resume is hand-lowered to dk_tail_resume (the fiber
+ * emitter would emit tur_effect_cont_resume). */
+static bool emit_dk_handler_case_fn(EmitCtx *ctx, Buf *hbuf, const char *dkfn_name,
+                                    HandleCase *c, const char *env_type,
+                                    const char *env_var, bool has_caps,
+                                    Binding **caps, uint32_t n_caps) {
+    if (!c || c->n_params > 1) return false;
+    const Expr *cbody = c->body;
+    const Expr *tail = cbody;
+    const Expr *const *prefix = NULL;
+    uint32_t n_prefix = 0;
+    if (cbody && cbody->kind == EX_DO && cbody->as.do_.n >= 1) {
+        prefix = (const Expr *const *)cbody->as.do_.items;
+        n_prefix = cbody->as.do_.n - 1;
+        tail = cbody->as.do_.items[cbody->as.do_.n - 1];
+    }
+    if (!tail || tail->kind != EX_RESUME || !tail->as.resume_.resume) return false;
+    ResumeExpr *r = tail->as.resume_.resume;
+    if (!r->k || r->k->type.copy_kind == CK_MULTISHOT) return false;  /* single-shot only */
+
+    Buf fn; buf_init(&fn);
+    Buf pend; buf_init(&pend);
+    buf_puts(&fn, "    (void)__dkenv; (void)__dkarg; (void)__dksubk;\n");
+    if (has_caps)
+        buf_printf(&fn, "    %s *%s = (%s *)(void *)(intptr_t)__dkenv;\n",
+                   env_type, env_var, env_type);
+    /* the single effect param (if any) arrives in __dkarg */
+    if (c->n_params == 1 && c->param_bindings && c->param_bindings[0]) {
+        const char *ct = type_c_name(c->param_bindings[0]->type);
+        char *raw = raw_name_for_binding(c->param_bindings[0]);
+        char *ld = eff_slot_load(c->param_bindings[0]->type, "((int64_t)__dkarg)");
+        bool fnval = c->param_bindings[0]->type.kind == TY_FN
+                     && !c->param_bindings[0]->type.as.fn.boxed;
+        if (fnval) buf_printf(&fn, "    %s %s = %s;\n", ct, raw, ld);
+        else       buf_printf(&fn, "    %s %s_%u = %s;\n", ct, raw,
+                              (unsigned)c->param_bindings[0]->id, ld);
+        free(ld); free(raw);
+    }
+    /* the continuation binding holds the DK subk (as an int64, like the fiber k) */
+    if (c->k_binding) {
+        char *raw = raw_name_for_binding(c->k_binding);
+        buf_printf(&fn, "    int64_t %s_%u = (int64_t)(intptr_t)__dksubk;\n",
+                   raw, (unsigned)c->k_binding->id);
+        free(raw);
+    }
+    EmitCtx hc = *ctx;
+    hc.file = &fn; hc.pending_handler_fns = &pend; hc.indent = 4;
+    hc.fn_params = NULL; hc.n_fn_params = 0; hc.closure = NULL;
+    hc.env_var_name = has_caps ? env_var : NULL;
+    hc.defer_captures = NULL; hc.n_defer_captures = 0; hc.frame_var = NULL;
+    hc.return_emitted = false;
+    hc.handle_captures = has_caps ? caps : NULL;
+    hc.n_handle_captures = has_caps ? n_caps : 0;
+    hc.handle_env_name = has_caps ? env_var : NULL;
+    /* non-tail prefix statements (e.g. (println s)) -- ordinary direct emit */
+    for (uint32_t i = 0; i < n_prefix; i++) emit_stmt(&hc, &fn, prefix[i]);
+    /* tail (resume k V): consume the continuation and tail-resume it on the DK */
+    char *kv = emit_value(&hc, &fn, r->k);
+    Type vtype = r->value ? r->value->type : (Type){0};
+    bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+    char *v_arg;
+    if (v_is_nil) {
+        v_arg = strdup("(intptr_t)0");
+    } else {
+        char *vv = emit_value(&hc, &fn, r->value);
+        char *sv = eff_slot_store(vtype, vv);
+        Buf vb; buf_init(&vb);
+        buf_printf(&vb, "(intptr_t)(%s)", sv);
+        buf_putc(&vb, '\0');
+        v_arg = strdup(vb.data);
+        buf_free(&vb); free(sv); free(vv);
+    }
+    buf_printf(&fn, "    ((struct DK *)(intptr_t)%s)->consumed = 1;\n", kv);
+    buf_printf(&fn, "    return dk_tail_resume((struct DK *)(intptr_t)%s, %s);\n", kv, v_arg);
+    free(kv); free(v_arg);
+    ctx->tmp_n = hc.tmp_n;
+    if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
+    buf_free(&pend);
+    buf_printf(hbuf, "static intptr_t %s(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);\n", dkfn_name);
+    buf_printf(hbuf, "static intptr_t %s(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {\n", dkfn_name);
+    buf_write(hbuf, fn.data, fn.len);
+    buf_puts(hbuf, "}\n\n");
+    buf_free(&fn);
+    return true;
+}
+
 /* FH2: emit a handler literal as a runtime tur_handler_table_t* value.
  * Emits the single case as a static __effect_handler_<id> function (same ABI
  * and capture-via-__env scheme as emit_effects_handle), heap-allocates the
@@ -966,6 +1060,14 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_free(&fn);
     }
 
+    /* B3 part 2: also emit a DK-ABI case fn (when the case shape allows) so a
+     * dynamic with-handler over this value can install it on the DK. */
+    char dkfn_name[64];
+    snprintf(dkfn_name, sizeof(dkfn_name), "__dk_hcase_%d", id);
+    bool dk_emitted = g_opt_cps_tramp_resume
+        && emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type, env_var,
+                                   has_caps, caps, n_caps);
+
     /* Inline: heap-alloc the capture env, build a one-entry owning table. */
     char env_inl[64];
     snprintf(env_inl, sizeof(env_inl), "__hlenv_inl_%d", id);
@@ -993,6 +1095,12 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "%s->entries[0].env = %s;\n", tbl, has_caps ? env_inl : "NULL");
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s->entries[0].cont_kind = %d;\n", tbl, (int)c->cont_kind);
+    if (dk_emitted) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s->entries[0].dk_tag = %d;\n", tbl, effect_tag(c->effect_name));
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s->entries[0].dk_fn = %s;\n", tbl, dkfn_name);
+    }
     free(caps);
     return tbl;
 }

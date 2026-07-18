@@ -2616,7 +2616,11 @@ static bool addr_taken_has(const Binding *b) {
 static const Symbol *g_eff_syms[CPS_MAX_EFFECTS];
 static int           g_eff_n;
 
-static int effect_tag(const Symbol *eff) {
+/* Non-static (B3 part 2): the direct-path handler-literal emitter
+ * (emit_effects_handler_lit) calls this to stamp a DK case entry's `dk_tag` with
+ * the SAME per-effect integer the body's `dk_perform(tag, ...)` uses -- the tag
+ * is memoized by symbol, so first-seen order is irrelevant to consistency. */
+int effect_tag(const Symbol *eff) {
     for (int i = 0; i < g_eff_n; i++)
         if (g_eff_syms[i] == eff) return i + 2;
     if (g_eff_n < CPS_MAX_EFFECTS) { g_eff_syms[g_eff_n] = eff; return (g_eff_n++) + 2; }
