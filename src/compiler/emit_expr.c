@@ -7647,6 +7647,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                 }
             }
+            /* gcc14-int-conversion (carrier-to-typed-param): a PARAMETRIC opaque
+             * `(Goal A)` (kind * -> *, `defopaque Goal [A] :ptr<void>`) lowers to
+             * the uniform int64 HKT carrier in every applied position -- the
+             * function C return type of `: (Goal int)` is `int64_t`, and a binder
+             * of that type is `int64_t`.  But ascribing a POINTER value into the
+             * bare `:Goal` -- `(:: (fn ...) :Goal)` yields a fat-closure `void *`,
+             * `(:: someHandle :Goal)` a `:ptr<void>` -- relabels to a pointer,
+             * which then mismatches the int64 carrier at the return/binding
+             * (-Wint-conversion, a hard error under GCC >= 14).  Reinterpret the
+             * pointer as the int64 carrier so value, binder, and return agree.
+             * Only for a PARAMETRIC opaque (n_type_params > 0): a non-parametric
+             * opaque keeps its declared pointer carrier and is left untouched. */
+            if (e->type.kind == TY_ADT && e->type.as.adt_.def &&
+                e->type.as.adt_.def->is_opaque &&
+                e->type.as.adt_.def->n_type_params > 0) {
+                const char *icty = emit_type_c_name(ctx, e->as.ascribe_.inner->type);
+                size_t iL = icty ? strlen(icty) : 0;
+                if (icty && iL >= 1 && icty[iL - 1] == '*') {
+                    Buf cb; buf_init(&cb);
+                    buf_printf(&cb, "(int64_t)(intptr_t)(%s)", inner_val);
+                    buf_putc(&cb, '\0');
+                    free(inner_val);
+                    inner_val = strdup(cb.data);
+                    buf_free(&cb);
+                }
+            }
             return inner_val;
         }
         /* Phase HRT2 / EX1e / EXG1: existential pack.
