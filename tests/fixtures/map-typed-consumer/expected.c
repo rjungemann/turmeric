@@ -7375,19 +7375,19 @@ static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map_
 static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool(tur_adt_Map__int__int * m1, tur_adt_Map__int__int * m2, int64_t val_cmp) {
         bool __t209;
         {
-            __auto_type __ps_210 = (map_hyhamt((tur_adt_Map__int__int *)(intptr_t)((int64_t)(intptr_t)(m1))));
+            __auto_type __ps_210 = (map_hyhamt((int64_t)(intptr_t)(m1)));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_211 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_210)));
             if (tur_panicking) return (bool){0};
             void * iter_747 = __ps_211;
             (void)iter_747;
-            __auto_type __ps_212 = (map_hyhamt((tur_adt_Map__int__int *)(intptr_t)((int64_t)(intptr_t)(m1))));
+            __auto_type __ps_212 = (map_hyhamt((int64_t)(intptr_t)(m1)));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_213 = (hamt_slkeyeq((void *)(intptr_t)(__ps_212)));
             if (tur_panicking) return (bool){0};
             void * keyeq_748 = __ps_213;
             (void)keyeq_748;
-            __auto_type __ps_214 = (map_hyhamt((tur_adt_Map__int__int *)(intptr_t)((int64_t)(intptr_t)(m2))));
+            __auto_type __ps_214 = (map_hyhamt((int64_t)(intptr_t)(m2)));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_215 = (map_hyeq_hyloop((void *)(intptr_t)(iter_747), (void *)(intptr_t)(__ps_214), (void *)(intptr_t)(keyeq_748), (int64_t)(intptr_t)(val_cmp)));
             if (tur_panicking) return (bool){0};

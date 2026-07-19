@@ -466,6 +466,17 @@ bool inline_c_has_ty_template(const InlineC *ic);
  * never hardcodes the name-mangling scheme). */
 bool inline_c_has_cname_template(const InlineC *ic);
 const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
+/* gcc14-int-conversion (carrier-representation-tracking): a side table recording
+ * the ACTUAL emitted C parameter-type string of each function, keyed by emitted
+ * C name.  Populated from the forward-declaration pass (ground truth, since the
+ * monomorphized source type collides between a generic carrier-ABI callee and a
+ * concrete-pointer callee).  A call site consults it to bridge int64<->pointer
+ * against what the callee's signature really is.  emit_sig_reset() clears it at
+ * the start of each program emission. */
+void emit_sig_reset(void);
+void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
+                                 const char *ctype);
+const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

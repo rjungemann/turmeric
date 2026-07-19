@@ -5718,7 +5718,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                            type_is_heap_adt(raw_at) ||
                                            raw_at.kind == TY_APP;
                     Type pf = *fn_binding->type.as.fn.arg_full_types[i];
-                    if (arg_is_heap_ptr && pf.kind != TY_TYVAR &&
+                    /* gcc14-int-conversion (carrier-representation-tracking):
+                     * consult the callee's ACTUAL emitted param C-type (recorded
+                     * from the forward-decl pass, ground truth).  When it is the
+                     * int64 carrier (a generic carrier-ABI callee such as
+                     * `map-hamt [K V]` whose `(Map K V)` param emits int64_t), the
+                     * arg was correctly bridged to int64 upstream and must NOT be
+                     * re-cast to a concrete pointer -- the monomorphized `pf`
+                     * c-names to `tur_adt_X *` and would fool the cast below.  Only
+                     * fire when the recorded param is genuinely a concrete pointer
+                     * (a concrete callee such as `size-of (m : (Map int int))`). */
+                    const char *rec_pty = emit_sig_lookup_param_ctype(fn_name, i);
+                    bool callee_real_param_is_carrier =
+                        rec_pty && !(strlen(rec_pty) >= 1 &&
+                                     rec_pty[strlen(rec_pty) - 1] == '*');
+                    if (arg_is_heap_ptr && !callee_real_param_is_carrier &&
+                        pf.kind != TY_TYVAR &&
                         pf.kind != TY_FORALL && pf.kind != TY_EXISTS) {
                         const char *pty = emit_type_c_name(ctx, pf);
                         size_t L = pty ? strlen(pty) : 0;

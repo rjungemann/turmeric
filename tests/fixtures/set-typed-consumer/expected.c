@@ -7253,9 +7253,9 @@ static bool __inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int_
 }
 
 static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * s1, tur_adt_Set__int * s2) {
-        __auto_type __ps_190 = (set_hycount((tur_adt_Set__int *)(intptr_t)((int64_t)(intptr_t)(s1))));
+        __auto_type __ps_190 = (set_hycount((int64_t)(intptr_t)(s1)));
         if (tur_panicking) return (bool){0};
-        __auto_type __ps_191 = (set_hycount((tur_adt_Set__int *)(intptr_t)((int64_t)(intptr_t)(s2))));
+        __auto_type __ps_191 = (set_hycount((int64_t)(intptr_t)(s2)));
         if (tur_panicking) return (bool){0};
         bool __t189 = (__ps_190) == (__ps_191);
         if (__t189) {
