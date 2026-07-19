@@ -4067,7 +4067,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
 
 static int64_t __inst_TestFunctor_fmap_option(int64_t container, tur_poly_fn_t fn) {
         struct { bool is_some; int64_t value; } *c =
-        (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+        (void *)(intptr_t)container;
     if (!c || !c->is_some) return 0;
     struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
     r->is_some = true;
@@ -7111,14 +7111,14 @@ static int64_t __opt_none() {
 
 static bool _un_unopt_unsome_qu(int64_t o) {
         struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return p != 0 && p->is_some;
   
 }
 
 static int64_t __opt_unwrap(int64_t o) {
         struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return (int)(p->value);
   
 }

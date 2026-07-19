@@ -50,7 +50,7 @@
 (defn seq-out-vec-push! [v : int val : int] : void
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-    (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+    (void *)(intptr_t)v;
   if (vec->len == vec->cap) {
     vec->cap = vec->cap ? vec->cap * 2 : 8;
     vec->data = (int64_t *)realloc(vec->data,

@@ -11,14 +11,14 @@
 (defn my-vec-len [^unique ^mut v] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   return (int)vec->len;
   ```)
 
 (defn my-vec-push! [^unique ^mut v val]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   if (vec->len >= vec->cap) {
     size_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
     int64_t *nd = malloc(sizeof(int64_t) * new_cap);
@@ -31,7 +31,7 @@
 (defn my-vec-free [^unique v]
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-      (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   free(vec->data); free(vec);
   ```)
 
