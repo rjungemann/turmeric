@@ -1052,6 +1052,32 @@ static bool fold_stmt_is_risky(const Elab *e, const Form *f) {
     return false;
 }
 
+/* True when `f` contains a `(perform ...)` that is NOT lexically guarded by an
+ * enclosing `handle`/`reset` and NOT inside a nested `fn`/lambda.  Such a perform
+ * is a TOP-LEVEL unhandled effect: elaboration rejects it with a compile-time
+ * TUR-E0008 via the `fn_body_depth == 0 && !is_effect_handled` check
+ * (elab_effects.c).  Folding the statement into the synthesized main body would
+ * put the perform at `fn_body_depth > 0`, suppressing that diagnostic and
+ * deferring to a bare runtime abort instead (errors/effect-unhandled).  A perform
+ * UNDER a handle/reset (the idiomatic B1 `(println (handle (perform E) (E ..) ..))`
+ * top-level effect statement) is conservatively assumed handled, so the fold still
+ * fires for it; a perform inside a nested `fn` runs at fn_body_depth > 0 either way
+ * and never carried the top-level diagnostic, so it does not block the fold. */
+static bool form_has_toplevel_unhandled_perform(const Elab *e, const Form *f) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head && head->tag == F_SYM) {
+        const Symbol *hs = head->as.sym;
+        if (hs == e->sym_perform) return true;
+        /* a handle/reset guards its subtree; a nested fn/lambda is its own body */
+        if (hs == e->sym_handle || hs == e->sym_reset
+            || hs == e->sym_fn || hs == e->sym_lambda) return false;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (form_has_toplevel_unhandled_perform(e, f->as.list.items[i])) return true;
+    return false;
+}
+
 /* Classify a `(defmacro name [params] TEMPLATE)` form: does its expansion
  * produce a STATEMENT (fold-safe) rather than a top-level definition/directive?
  *
@@ -1364,6 +1390,10 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
              * top-level and keeps its correct diagnostic -- such a program is a
              * compile error either way, so the historical path is exactly right. */
             if (hs == e.sym_question || hs == e.sym_return) { ambiguous = true; break; }
+            /* a top-level unhandled perform must keep its compile-time TUR-E0008
+             * (elab_effects.c) rather than be folded into main and deferred to a
+             * runtime abort (errors/effect-unhandled) -- abort the fold for it. */
+            if (form_has_toplevel_unhandled_perform(&e, f)) { ambiguous = true; break; }
             int macro_idx = -1;
             for (uint32_t m = 0; m < n_macro; m++)
                 if (macro_names[m] == hs) { macro_idx = (int)m; break; }
