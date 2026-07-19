@@ -1,11 +1,24 @@
 # cps-async: heap `await` is not a superset of the fiber path for two shapes
 
-**Severity:** medium (blocks the `cps-async` graduation; the feature ships fine
-behind its flag -- the default build is unaffected).
+**Severity:** medium (blocked the `cps-async` graduation).
 
-**Status:** open (2026-07-19). Surfaced by the cps-async graduation attempt
-(`docs/upcoming/cps-async-graduation-plan.md`), whose superset confirmation check
-came back red. Graduation is deferred until this gap closes.
+**STATUS: RESOLVED (2026-07-19).** Both shapes below were fixed so the heap path
+is a strict superset of the fiber path, and `cps-async` graduated the same day
+(`docs/archive/cps-async-graduation-plan.md`). The fixes:
+
+1. `taskgroup-async` -- the heap await runtime `__tur_await_body` now drains the
+   scheduler run-queue on a pending future (`while (!done && run_queue_len > 0)
+   tur_scheduler_run_one(...)`) and resumes inline once it resolves, mirroring
+   `tur_await_future`'s non-fiber branch. Bounded by `run_queue_len` so the F3.2
+   deferred/reactor park still applies when the scheduler cannot progress. See
+   `src/compiler/emit_module.c` (`__tur_await_body`).
+2. `async-effect-spawn` -- an `await` inside a handler-case body now delegates to
+   the fiber path (`build_letraw` -> `CT_LETRAW`, admitted by `handle_case_ok`)
+   instead of building a `CT_AWAIT` the handler-case admission cannot host,
+   tracked by the new `CpsB.in_handler_case` depth counter (set in
+   `build_handle_core`, consulted at the `EX_AWAIT` sites in `src/passes/cps_ir.c`).
+
+Retained as the investigation record. Archived from `docs/reported/`.
 
 ## Summary
 

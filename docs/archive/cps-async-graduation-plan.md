@@ -1,16 +1,14 @@
 ---
 title: Graduate cps-async -- retire the gate now that F4 is declined
 category: Planning
-status: open -- graduation DEFERRED (2026-07-19). Part 1 (framing corrections +
-  F4 archival) landed. Part 2 (graduate: delete the flag, heap async/await goes
-  always-on) was attempted and reverted: the superset confirmation check came
-  back red -- forcing async heap-only regressed `taskgroup-async` (fiber-
-  scheduler-dependent await -> empty output) and `async-effect-spawn` (await in an
-  effect handler -> build-time internal error). Per this plan's Contingency
-  section the flag STAYS gated (criterion repointed off F4 onto the new fiber-
-  interop gap; expires_at bumped 0.30.0 -> 0.31.0; gap tracked in
-  docs/reported/cps-async-heap-fiber-interop-gap.md). See the 2026-07-19 progress
-  note below. Plan of record for eventual graduation is unchanged.
+status: DONE -- cps-async GRADUATED (2026-07-19). Part 1 (framing corrections +
+  F4 archival) and Part 2 (graduate: flag deleted, heap async/await unconditional)
+  both landed. The superset check first came back red on two fiber-interop shapes
+  (`taskgroup-async`, `async-effect-spawn`); both gaps were closed (heap `await`
+  now drives the scheduler run-queue; a handler-case `await` delegates to the
+  fiber path via CpsB.in_handler_case) so the heap path is a genuine strict
+  superset, then the flag was removed and `cps-async` moved to GRADUATED[]. Full
+  suite green. See the 2026-07-19 progress note below.
 description: F3 shipped async/await on the DK heap-continuation representation
   behind `--enable=cps-async`. Its only remaining graduation blocker was F4
   (stackless recursive await), which has been re-investigated and DECLINED --
@@ -23,68 +21,54 @@ description: F3 shipped async/await on the DK heap-continuation representation
 
 # Graduate cps-async
 
-## Progress (2026-07-19) -- graduation DEFERRED; superset check came back red
+## Progress (2026-07-19) -- gaps fixed; cps-async GRADUATED
 
-Part 1 (framing corrections) landed as written: the stale F4-based graduation
-comment is gone, the recursive-await eviction is documented as by-design in
-`emit_cps_ir.c`, the report citation now points at `docs/archive/`, and the F4
-plan (`compiled-stackless-recursive-await-plan.md`) is archived as the decision
-record.
+Part 1 (framing corrections) landed as written, and Part 2 (graduate) landed
+after first closing the two gaps the initial superset check surfaced.
 
-Part 2 (graduate: delete the flag, make the heap lowering unconditional) was
-**attempted and reverted** because the pre-landing confirmation check -- "the
-heap representation is a functional strict superset of the fiber path for async"
--- came back **red**. Forcing async heap-only as the sole lowering regressed two
-in-tree fixtures that pass today on the fiber path:
+**Initial superset check (red), then fixed.** Forcing async heap-only regressed
+two in-tree fixtures that passed on the fiber path. The root cause of both was
+that graduation removes the U5 fiber-delegation path for `await`. Rather than
+keep the flag, both gaps were closed so the heap path is a genuine strict
+superset:
 
-- **`taskgroup-async`** (wrong result): the program manually spawns ucontext
+- **`taskgroup-async`** (was: empty output). The program manually spawns ucontext
   fibers via inline-C (`tur_scheduler_spawn`) and relies on `(await fut)` to
-  *drive the fiber scheduler* until each spawned fiber completes. On the heap
-  `dk_shift` path, `await` parks its continuation on the reactor and never drives
-  the ucontext scheduler, so the spawned fibers never run and the futures never
-  fulfill. Output is empty instead of `10 / 20 / 30 / done`.
-- **`async-effect-spawn`** (build-time internal error): an `await` sits inside an
-  effect handler's `resume` body. Graduation colors the `await`, which forces the
-  whole handler-bearing function to evict to the direct emitter when the combined
-  shape is inadmissible on the heap path -- and the direct emitter can no longer
-  emit effects (`fiber effect runtime deleted`, from cps-tramp-resume's
-  graduation). The result is `internal error: effect form (EX kind 57) reached
-  the direct/fiber emitter`.
+  *drive the fiber scheduler* until each spawned fiber completes. Fix: the heap
+  await runtime `__tur_await_body` now, on a pending future, drains the scheduler
+  run-queue (`while (!done && run_queue_len > 0) tur_scheduler_run_one(...)`) and
+  resumes the captured continuation inline once the future resolves -- mirroring
+  `tur_await_future`'s non-fiber branch. Bounded by `run_queue_len`, so a future
+  that can only complete asynchronously still falls through to the deferred park
+  (the F3.2 reactor path). See `src/compiler/emit_module.c` (`__tur_await_body`).
+- **`async-effect-spawn`** (was: build-time internal error). An `await` sits in a
+  handler-case `resume` body; graduation built it as a `CT_AWAIT` that
+  `handle_case_ok` cannot host, so the whole colored function evicted to the
+  (effect-incapable) direct emitter. Fix: an `await` lexically inside a
+  handler-case body now delegates to the fiber path (`build_letraw` -> `CT_LETRAW`,
+  which `handle_case_ok` admits) instead of heap-lowering. This is tracked by a
+  new `CpsB.in_handler_case` depth counter, bumped around the case-body build in
+  `build_handle_core` and consulted at the two `EX_AWAIT` lowering sites in
+  `cps_ir.c`. The effect handler still DK-lowers; only the self-contained async
+  region delegates -- exactly the pre-graduation shape, which was known-good.
 
-Root cause (both): graduation removes the U5 fiber-delegation path for `await`
-(`is_delegatable` -> false, `EX_AWAIT` always lowers to `build_await`). That
-delegation is exactly what let a fiber-scheduler-dependent await, or an await
-nested in a colored effect body, keep working on the proven fiber runtime. The
-heap `dk_shift` await is therefore **not** a strict superset for these shapes:
-it neither drives the ucontext scheduler nor composes with a colored effect body.
+With both closed, the heap path is a functional strict superset of the fiber
+path (the fiber runtime stays as the async scheduler and as the delegation target
+for handler-case awaits -- both explicitly in scope to remain). Graduation then
+landed as written below:
 
-Per this plan's own "Contingency only" section, graduation does **not** proceed
-this cycle:
+- The `cps-async` row is deleted from `EXPERIMENTS[]`; `"cps-async"` is added to
+  `GRADUATED[]` (a lingering `--enable=cps-async` is a TUR-W0063 no-op).
+- `g_opt_cps_async` is removed; every read site is unconditional.
+- The F4 plan stays archived; the fiber-interop gap report is resolved and
+  archived (`docs/archive/cps-async-heap-fiber-interop-gap.md`).
 
-- The `cps-async` row stays in `EXPERIMENTS[]` (flag still gates the feature).
-- Its comment is repointed off the (now-settled) F4 criterion onto the concrete
-  fiber-interop gap above, and `plan_path` points back at this plan.
-- `expires_at` is bumped `0.30.0 -> 0.31.0` so the 0.30.0 release cut is not
-  blocked by an unmet contract.
-- The gap is tracked in
-  `docs/reported/cps-async-heap-fiber-interop-gap.md`.
+Verification: full suite green (12-minute timeout); F3 fixtures
+(`async-await-cps` / `-pending` / `-two` / `-repark`) and the two formerly-red
+fixtures all pass on the graduated (flag-gone) default path; `--enable=cps-async`
+compiles as a TUR-W0063 no-op.
 
-### To graduate later
-
-Close the gap, then re-run Part 2 as written:
-
-1. Make the heap `await` path drive the ucontext scheduler when a future is
-   pending and runnable fibers exist (so `taskgroup-async`-style manual-spawn +
-   await keeps working), **or** retire the fiber-scheduler-dependent await
-   pattern from the fixtures and stdlib and confirm no supported surface needs it.
-2. Make `async`/`await` compose inside a colored effect body without evicting to
-   the (effect-incapable) direct emitter, so `async-effect-spawn` colors cleanly.
-3. Re-confirm the superset check (all async fixtures green with the flag forced
-   on as the only path), then delete the flag and move `cps-async` to
-   `GRADUATED[]`.
-
-The rest of this document is the original graduation plan, retained as the
-plan of record for that eventual graduation.
+The rest of this document is the original graduation plan.
 
 ## Why this document exists
 

@@ -7154,15 +7154,19 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                 int eff = (se && (se->eff_lo || se->eff_hi)) ? 1 : 0;
                 fprintf(stderr, "[EVICT] %-22s eff=%d %s %s\n", cat, eff, nm, why);
             }
-            /* The N6.5 gate governs the SHIPPING backend.  An experimental
-             * `--enable` feature that EXPANDS the colored surface (e.g.
-             * `cps-async`, which CPS-lowers `async`/`await` instead of running it
-             * on the fiber runtime) may still carry in-flight BODY residuals its
-             * own admission has not closed -- those are the feature's remaining
-             * work, gated behind its flag, not a regression in the graduated path.
-             * Exempt such flags from the hard error; they keep the fallback until
-             * the feature graduates.  The default (shipping) config stays strict. */
-            bool experimental_surface = g_opt_cps_async || g_opt_cps_tramp_resume;
+            /* The N6.5 gate governs the SHIPPING backend.  The now-graduated CPS
+             * surface -- `cps-async` (CPS-lowers `async`/`await`) and
+             * `cps-tramp-resume` (trampolined effect tail-resume) -- deliberately
+             * routes some bodies to the direct emitter by design: e.g. a recursive
+             * `await` is a ready future the direct emitter handles in O(1) via its
+             * inline readiness check + `goto __tur_tailcall` loop, so it evicts
+             * rather than recurse through dk_invoke on the heap path.  (An `await`
+             * inside a handler case instead delegates a fiber region without
+             * evicting the whole function -- see b->in_handler_case in cps_ir.c.)
+             * Exempt this surface from the hard error.  g_opt_cps_tramp_resume
+             * defaults on, so this is unconditionally true in the shipping build;
+             * the guard is retained for the diagnostic path. */
+            bool experimental_surface = g_opt_cps_tramp_resume;
             if (!sig_perm_route && !experimental_surface)
                 diag_emit(DIAG_ERROR, fd->binding->span,
                           "cps-backend: colored function '%s' fell back to the direct "

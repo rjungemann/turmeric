@@ -215,11 +215,6 @@ bool g_dump_mono_specs = false;
  * monomorphs (G1 of the generic-monomorph-classification plan).  Analysis only. */
 bool g_dump_cps_mono = false;
 
-/* F3: enables the `async`/`await` heap-continuation representation; flipped by
- * the `cps-async` experiment.  See globals.h and
- * docs/archive/compiled-async-heap-continuations-plan.md. */
-bool g_opt_cps_async = false;
-
 /* E7 (v2 cps-dk-sole-effect-lowering-plan): enables the trampolined tail-resume
  * lowering -- a perform-continuation ending in a tail call is admitted as a
  * DKK_RESUME_FRAME and its handler tail-resume unwinds to the entry driver
