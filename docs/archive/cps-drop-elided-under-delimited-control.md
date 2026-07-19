@@ -1,5 +1,37 @@
 # Heap ADT drop is elided when its owning function contains delimited control
 
+> **Archived 2026-07-19 -- premise DISPROVEN; subsumed by
+> `cps-owning-adt-value-not-dropped-under-match` (the non-`rc` heap-value memory
+> model).** The report's root cause -- "the drop insertion is being lost across
+> the CPS transformation" -- assumes the direct (no-effect) path DROPS the Vec.
+> It does not. Emitting the no-effect `mkvec` shows **zero** `drop_glue`/`*_free`
+> calls for the `(Vec int)` on any path; the value flows `v -> return -> caller`
+> and is never freed. The single-vec no-effect program only *appears* leak-clean
+> because LeakSanitizer's conservative stack scan still finds the one live Vec
+> pointer at exit. Force that pointer unreachable and the "clean" version leaks
+> too, with **no effect and no CPS**:
+>
+> ```turmeric
+> (defn mkvec [] : (Vec int) (let [v (vec-new)] (vec-push! v 3) v))
+> (defn main [] : int
+>   (let [a (vec-len (mkvec))]          ; first Vec pointer dies here
+>     (let [b (vec-len (mkvec))]        ; second Vec keeps a live pointer
+>       (println (+ a b)))) 0)
+> ;; => LSan: 56 bytes leaked (the FIRST Vec: vec_new 24B + push backing 32B)
+> ```
+>
+> So a `(Vec int)` is a non-`rc` heap value that is never auto-freed -- the same
+> documented model (`docs/guides/gc-guide.md`) covered by the sibling
+> `cps-owning-adt-value-not-dropped-under-match` report. Delimited control did not
+> *elide* a drop; it merely routes the Vec pointer through DK heap nodes that are
+> freed, so the last reference becomes unreachable and LSan reports what was always
+> an unmanaged allocation. There is no CPS-specific drop-insertion bug to fix here.
+> Making `Vec`/boxed ADTs auto-free is the same language-level memory-model
+> decision noted in the sibling report (RC-by-default, or an ownership-tracked
+> scope-exit drop in the **direct** emitter that both paths inherit), not a
+> targeted CPS fix. `cps-backend-heap-adt-return` keeps `requires.no-leak-check`
+> for the same reason every unmanaged-ADT fixture does.
+
 **Severity:** low-to-medium (heap leak of a whole collection; not a crash or
 miscompile). Keeps `requires.no-leak-check` on `cps-backend-heap-adt-return`.
 
