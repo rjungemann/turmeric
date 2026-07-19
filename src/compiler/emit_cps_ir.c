@@ -6666,18 +6666,20 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * entry boundary (docs/archive/cps-delimited-dk-node-leak.md). */
             ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
             /* The perform continuation frame is spliced onto cur_k; dk_perform
-             * copies the captured range and never frees the node we hand it, so
-             * reclaim it single-node after dk_perform settles (dk_free would walk
-             * into cur_k).  See docs/archive/cps-delimited-dk-node-leak.md. */
-            ce_line(ce, "DK *__pfd%d = dk_frame(%s, (intptr_t)%s, %s);", id, pname, envv, ce->cur_k);
-            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
-            ce_line(ce, "dk_free_node(__pfd%d);", id);
-            ce_line(ce, "return __pfr%d;", id);
+             * copies the captured range and never frees the node we hand it, so it
+             * must be reclaimed single-node (dk_free would walk into cur_k).  A
+             * post-dk_perform `dk_free_node` is SKIPPED when the handler tail-
+             * resumes (E7: dk_perform yields via longjmp and never returns here),
+             * leaking the frame (104 bytes, cps-perform-cont-frame-leak-on-tail-
+             * resume.md).  Register it for a single-node free at the outermost entry
+             * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
+             * cur_k) -- reached on both the normal-return and the tail-resume-yield
+             * paths -- exactly like the Track-B resume-frame sibling below. */
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s)));",
+                    tag, sa, pname, envv, ce->cur_k);
         } else {
-            ce_line(ce, "DK *__pfd%d = dk_frame(%s, 0, %s);", id, pname, ce->cur_k);
-            ce_line(ce, "int64_t __pfr%d = dk_perform(%d, %s, __pfd%d);", id, tag, sa, id);
-            ce_line(ce, "dk_free_node(__pfd%d);", id);
-            ce_line(ce, "return __pfr%d;", id);
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame(%s, 0, %s)));",
+                    tag, sa, pname, ce->cur_k);
         }
     } else {
         /* Track A: the continuation contains a NESTED control op (a further
