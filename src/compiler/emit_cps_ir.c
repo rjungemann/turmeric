@@ -4879,6 +4879,36 @@ static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
     return s;
 }
 
+/* gcc14-int-conversion: the E2a threaded-fn-value dispatch calls through a
+ * synthesized `int64_t (*)(int64_t..., DK *)` pointer, so EVERY argument slot is
+ * the int64 carrier.  Unlike the ordinary call CSV (which passes each arg in its
+ * natural C type to a real callee), here a pointer-like arg -- a cstr literal, a
+ * `ptr<void>`, an rc/weak/ref handle, a fn value, a continuation -- must be cast
+ * to `(int64_t)(intptr_t)`, else it "makes integer from pointer" at the call, a
+ * hard error under GCC >= 14.  int/bool pass through as int64 already; float args
+ * do not occur on this carrier path. */
+static bool atom_ty_is_ptr_carrier(TypeKind k) {
+    return k == TY_FN || k == TY_PTR_VOID || k == TY_CSTR || k == TY_RC ||
+           k == TY_WEAK || k == TY_REF || k == TY_REF_IMMUT || k == TY_REF_MUT ||
+           k == TY_CONT || k == TY_CLONEABLE_CONT || k == TY_FORALL;
+}
+static char *atoms_csv_call_cps(CE *ce, const CAtom *args, uint32_t n) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        if (!atom_is_fat_fn(&args[i]) && atom_ty_is_ptr_carrier(args[i].ty))
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
 static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
 static void emit_reset(CE *ce, const CTerm *t);
@@ -5072,7 +5102,9 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * fn_atom -- use its atom expression as the lookup key. */
                 char *pf = t->as.tailcall.fn ? callee_name(t->as.tailcall.fn)
                                              : atom_str(ce, &t->as.tailcall.fn_atom);
-                char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
+                /* E2a carrier ABI: every arg slot is int64_t, so pointer-like args
+                 * must be carrier-cast (gcc14-int-conversion). */
+                char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
                 /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
@@ -5773,12 +5805,15 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
             coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
         snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
+        /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
+        char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
         if (call->as.tailcall.n)
             ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value heap join */",
-                    cast, fn, argv, frame);
+                    cast, fn, argv_cps, frame);
         else
             ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value heap join */",
                     cast, fn, frame);
+        free(argv_cps);
     } else if (call->as.tailcall.n)
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
     else
