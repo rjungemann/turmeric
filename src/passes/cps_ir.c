@@ -3437,17 +3437,34 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * (Ask)))` prints cleanup then returns the resumed value). */
             {
                 Expr **items = e->as.do_.items;
-                bool has_defer = false, defer_ok = true, tail_is_defer = false;
+                bool has_defer = false, defer_ok = true;
+                int tail_idx = -1;   /* last NON-defer item -- the do's value */
                 for (uint32_t i = 0; i < n; i++) {
                     const Expr *it = ascribe_peel(items[i]);
                     if (it && it->kind == EX_DEFER) {
                         has_defer = true;
                         if (!safe_to_delegate(b, it->as.defer_.body)) defer_ok = false;
-                        if (i == n - 1) tail_is_defer = true;
+                    } else {
+                        tail_idx = (int)i;
                     }
                 }
-                if (has_defer && defer_ok && !tail_is_defer) {
-                    CVar x = fresh_cvar(b, &items[n - 1]->type);
+                /* E3b (owning-cloneable-capture): the elaborator APPENDS an
+                 * auto-inserted scope-exit drop `(defer (rc/drop r))` AFTER the
+                 * real body, so the value item is not the last item -- trailing
+                 * defer(s) follow it.  The original P5b threading bailed on a
+                 * defer tail (`tail_idx != n-1`); under the experiment gate, allow
+                 * it, using the last non-defer item as the value and threading the
+                 * trailing defer into the continuation (fires after the value is
+                 * produced -- through the reset -- before delivery), exactly the
+                 * straight-line drop the explicit-drop channel already emits.  This
+                 * is what lets an owning `rc` the CPS-colored fn OWNS ride a
+                 * cloneable capture without a hand-written drop.  Off-gate a defer
+                 * tail still bails (behavior + snapshots unchanged). */
+                bool tail_is_defer = (tail_idx != (int)n - 1);
+                bool allow_tail_defer = g_opt_owning_cloneable_capture;
+                if (has_defer && defer_ok && tail_idx >= 0
+                    && (!tail_is_defer || allow_tail_defer)) {
+                    CVar x = fresh_cvar(b, &items[tail_idx]->type);
                     CTerm *deliver = new_term(b, CT_APPCONT);
                     deliver->as.appcont.kont = kont;
                     deliver->as.appcont.v = atom_cvar(x);
@@ -3460,10 +3477,10 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                         CVar d = fresh_cvar(b, &it->as.defer_.body->type);
                         chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
                     }
-                    /* Bind the tail value (threading any perform continuation). */
-                    chain = cps_bind(b, items[n - 1], x, chain);
-                    /* Prepend the non-defer, non-tail statements in program order. */
-                    for (int i = (int)n - 2; i >= 0; i--) {
+                    /* Bind the value item (threading any perform continuation). */
+                    chain = cps_bind(b, items[tail_idx], x, chain);
+                    /* Prepend the non-defer statements before the value, in order. */
+                    for (int i = tail_idx - 1; i >= 0; i--) {
                         const Expr *it = ascribe_peel(items[i]);
                         if (it && it->kind == EX_DEFER) continue;
                         CVar discard = fresh_cvar(b, &items[i]->type);

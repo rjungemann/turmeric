@@ -158,7 +158,11 @@ Either also retires the pre-existing DK-node leak (already archived as
   continuation -- the region-end teardown must still run. The arena option makes
   this uniform. (Same obligation O1-b P2's "fire on abandon" carries.)
 
-## E3b auto-defer lowering -- design sketch (2026-07-19)
+## E3b auto-defer lowering -- design sketch (2026-07-19, IMPLEMENTED)
+
+> Landed via the P5b trailing-defer extension in `cps_tail`'s `do`-lowering
+> (`cps_ir.c`), gated on the experiment; fixture
+> `cloneable-owning-autodrop-crossing`. The sketch below is the rationale.
 
 Scoped after landing the explicit-drop channel. The remaining ergonomic gap is
 narrow and tractable -- it is NOT the full "arbitrary `defer` in a CPS body"
@@ -230,15 +234,19 @@ path is the one E3 needs.
     only lets the frame BORROW the rc (never dropped inside the multi-shot
     continuation) -- the owner drops it once, after a reset that completes
     normally. Fixture `cloneable-owning-explicit-drop-crossing` (leak-clean).
-  - **Auto-inserted drop -- E3b, still open.** Without an explicit drop the
-    compiler auto-inserts the scope-exit drop as an `EX_DEFER`, which is
-    `unsupported_form` on the CPS path (`term_core_ok` -> CT_UNSUPPORTED
-    "unsupported form: EX_DEFER" -> whole-fn eviction -> TUR-E0710). So the
-    ergonomic case needs **CPS `defer` lowering**: run the deferred scope-exit
-    drop at delimited-region completion (bind the `dk_run` result, run the drop,
-    then deliver -- the non-tail region / per-region arena of E3b). This does NOT
-    silently leak today: an owning capture without an explicit drop simply does
-    not compile (the EX_DEFER evicts).
+  - **Auto-inserted drop -- LANDED.** The elaborator auto-inserts the scope-exit
+    drop as `(defer (rc/drop r))`, APPENDED after the real body of the enclosing
+    `do`. The `cps_tail` `do`-lowering's P5b defer-threading already threads a
+    control-free defer body into the block continuation (fires after the value,
+    before delivery, LIFO) -- it only bailed when the value item was not the last
+    item (a defer tail). Extended (under the gate) to use the last NON-defer item
+    as the value and thread the trailing defer, so the auto-drop lowers to the
+    same straight-line `CT_LETRAW` drop the explicit channel emits -- no full
+    "CPS defer runtime" needed. Fixture `cloneable-owning-autodrop-crossing`
+    (leak-clean, no hand-written drop). Off-gate a defer tail still bails, so
+    every non-experiment snapshot is byte-identical. (The `cps_bind` `do`-path
+    uses the O1-b hoist instead of P5b; a bind-position owning-autodrop-crossing
+    is a contrived shape, not yet wired -- a small follow-on if it surfaces.)
 - **O1-b P2 / P3** ([cps-backend-ref-scope-exit-drop-plan.md](cps-backend-ref-scope-exit-drop-plan.md)):
   P2 (abortive-unwind ref drop) rides E3b's region teardown; P3
   (resumable-crossing ref) is the `ref`-flavored instance of the owning capture
@@ -306,12 +314,11 @@ frame never drops the rc, so the existing shallow-shared frame env is
 read-only-correct across resumes and the owner (the caller) drops it exactly
 once. The `dk_frame_owning` substrate is reserved for the *consuming* case.
 
-**Remaining scope.** The harder shape is an owning value the **enclosing fn owns**
-and must drop after the cloneable-reset: its scope-exit drop is an `EX_DEFER`,
-which is unsupported in a CPS-colored fn, so the whole fn evicts (TUR-E0710). See
-"What rides E3" below for the pinned root cause -- it needs CPS `defer` lowering
-(run the drop at region completion), the E3b delimited-region teardown, not a
-local guard relaxation. Also unbuilt: carrier-handle / owning-aggregate clone glue
+**Remaining scope.** An owning value the **enclosing fn owns** and drops after the
+cloneable-reset now works both ways: with an explicit `(rc/drop r)` and -- via the
+P5b trailing-defer extension -- with the auto-inserted scope-exit drop (no
+hand-written drop). See "What rides E3" below. Still unbuilt: carrier-handle /
+owning-aggregate clone glue
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.
