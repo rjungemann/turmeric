@@ -74,6 +74,40 @@ callee was emitted with the **concrete monomorph** signature
 The uniform tell across all ~20 fixtures is the note
 `expected 'tur_adt_X *' (or 'void *') but argument is of type 'long int'`.
 
+## Progress + multi-path finding (2026-07-19)
+
+Landed the **regular-call path** (commit on-branch): a heap-container argument
+(`(Vec int)`/`(Set int)`, carried on int64) into a callee with a concrete pointer
+param (`sum_hyvec(tur_adt_Vec__int *)`) is now cast to the param's own C type in
+the regular-call arg loop (`emit_expr.c`, keyed on the param C type ending in `*`
+and not being int64/void*/RcControlBlock/tyvar). Fixes 3 fixtures
+(`letrec-self-recursive-closure` + peers), low churn, full suite green.
+
+**The remaining ~33 go through OTHER emit paths, and each needs the SAME
+param-type-aware cast -- a blanket carrier cast does NOT work.** Concretely
+proven this session: casting every pointer-like arg to int64 in the cps->cps
+path (`emit_cps_ir.c`) fixed `list_hyeq_qu__cps` (int64 param) but BROKE
+`map_hyeq_hyloop__cps`, whose param is `void *` (pointer->void* was fine;
+int64->void* is a new error). So the `__cps` callees do NOT have uniform int64
+params -- the cast must consult each callee's ACTUAL param C type, exactly like
+the regular-call path now does. That change was reverted; the CPS path remains.
+
+Remaining paths, by callee family:
+- **cps->cps / cps->direct `__cps` calls** (`emit_cps_ir.c`, `atoms_csv_call`):
+  `list-basic`, `option-basic`, `hamt-lisp-*`, the `logic-*` suite,
+  `gde-generic-dict-eq-map`. Needs a param-type-aware CSV (thread each callee's
+  param C types, cast per-param), not the blanket `atoms_csv_call_cps`.
+- **existential `ctor_Box`**: `exg4-pack-into-struct(-via-let)`.
+- **by-value aggregate element pointer**: `list-homog/length-byvalue-aggregate-element`.
+- **extern-c `free`**: `mutex-linear` (void* param, int64 arg).
+- **stdlib inline-C** (`future.tur` etc.): `future-*`.
+- **misc carrier sinks**: `map-typed-consumer` (size_hyof), `mutmap-typed-consumer`
+  (sum_hyvals), `heap-make-struct-roundtrip` (bump_hyint), `fat-closure-ascription`,
+  `generic-relay-aggregate-result`, `httpd-mw-fold-many`, `data-literal-nested`,
+  `opaque-*`, `letrec-self-in-nested-closure`, `hkt-stdlib-{logic,parser}-instances`,
+  `list-count-phantom-opaque-aggregate-element`,
+  `constrained-loop-vec-push-byvalue-result-element`.
+
 ## Fix direction (updated)
 
 The principled fix reconciles the two views: either (a) resolve `matched_spec` /
