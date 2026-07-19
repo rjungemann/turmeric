@@ -25,28 +25,45 @@ implemented and in-tree (commits on `claude/tractable-report-execution-1yvqp9`):
   CSV (like cps->cps), and a fat-fn arg into an int64 fn-carrier param is bridged.
   **Fixes `option-basic` (1->0)**; reduces `gde-generic-dict-eq-map` (6->1).
 
-All three fixes verified against the full suite: **2202 passed, 0 failed** each.
+A further **Class B forward straddle** fix then landed at the let/loop
+binding-init emitter (emit_expr.c): a pointer-declared binder fed a value emitted
+as the int64 carrier (the `(int64_t)` prefix is the signal, since the init TYPE
+c-names to the pointer) is reinterpreted to the binder's pointer type. **Fixes
+`list-homog-byvalue-aggregate-element` and `list-length-byvalue-aggregate-element`
+(2->0 each).**
 
-**Remaining: 9 fixtures**, in two deeper sub-layers the table alone does not
-reach (their representation gap is at the field-read / binder-decl / spec-dispatch
-sites, not the call-arg site):
+All fixes verified against the full suite: **2202 passed, 0 failed** each. Net
+this session: **5 fixtures fixed** (map-typed-consumer, set-typed-consumer,
+option-basic, list-homog, list-length) + `gde` 6->1, on top of the ground-truth
+side table now in tree for reuse.
+
+**Remaining: 7 fixtures**, all needing the init/arg VALUE's emitted C
+representation (not derivable from its type, which collides under the duality):
 
 - `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch call
-  passes a `tur_adt_Map__cstr__int *` arg into the spec's int64 param.
-- Class B binder-init straddle (8): `list-homog/length/count-*-aggregate-element`,
-  `generic-relay-aggregate-result`, `fat-closure-ascription`,
-  `letrec-self-in-nested-closure`, `httpd-mw-fold-many`,
-  `constrained-loop-vec-push-byvalue-result-element`. Root-caused this session to
-  the FIELD-READ layer: e.g. `(:: (.tail xs) (Cons (Option int)))` emits
-  `tur_adt_Cons__Option__int * t0 = (int64_t)(...)->tail;` -- the `.tail` field
-  read emits the int64 carrier while the binder's declared C type is the concrete
-  pointer. The types agree (`(Cons (Option int))` on both sides); only the emitted
-  representations differ, so it is the same duality one layer down. It cannot be
-  fixed at the ascription site: KB-021 (emit_expr.c:7589) requires an ascription
-  NOT to change a carrier-ABI aggregate's representation, because a sibling
-  consumer (`vec-push!`, `ok`, ...) reads the same value as the int64 carrier --
-  the correct representation depends on the CONSUMER, which the ascription cannot
-  see. The field-read emit must record/emit the binder-consumed representation.
+  passes a `tur_adt_Map__cstr__int *` arg into the spec's int64 param (regular
+  call, reverse direction: pointer arg -> int64 param).
+- **Reverse binder-init straddle** (int64 binder <- pointer VALUE):
+  `list-count-phantom-opaque-aggregate-element` (`int64_t zs = __t169;` where
+  `__t169` is a Cons pointer), `fat-closure-ascription` (`int64_t __t160 =
+  __ps_159;`), `letrec-self-in-nested-closure`,
+  `constrained-loop-vec-push-byvalue-result-element`. The forward fix keyed on the
+  value's `(int64_t)` prefix; the reverse has NO distinctive prefix -- the init is
+  a bare temp whose declared C type is a pointer -- so it needs the temp's tracked
+  emitted C type, not a string signal.
+- `generic-relay-aggregate-result` (1) -- a distinct narrow site: a union-default
+  read `((union { int64_t s; void * d; }){.s = 0}).d` yields `void *` into an
+  int64 binder; the `.d`-vs-`.s` member choice must follow the consumer.
+- `httpd-mw-fold-many` (1) -- one reverse straddle plus an unrelated
+  `httpd_tls_ops`/`HttpdConn`-undeclared emit gap (separate concern).
+
+The forward field-read straddle CANNOT be fixed at the ascription site: KB-021
+(emit_expr.c:7589) requires an ascription NOT to change a carrier-ABI aggregate's
+representation, because a sibling consumer (`vec-push!`, `ok`, ...) reads the same
+value as the int64 carrier -- the correct representation depends on the CONSUMER.
+The landed fix is therefore at the consumer (binding init); the reverse cases need
+the same consumer-side treatment but with a tracked value representation rather
+than a string prefix.
 
 ## Why the tractable fixes stopped here
 
