@@ -223,6 +223,14 @@ bool g_dump_cps_mono = false;
  * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
 bool g_opt_cps_tramp_resume = true;
 
+/* E3a: admit an owning value captured into a multi-shot (cloneable/serializable)
+ * continuation, emitting per-frame env clone/drop glue so each resume owns its
+ * own refcounted copy.  Default OFF -- a surface-semantics widening (it admits
+ * captures the compiler currently rejects with TUR-E0014/E0018), so it rides the
+ * `owning-cloneable-capture` experiment gate.  See globals.h and
+ * docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md. */
+bool g_opt_owning_cloneable_capture = false;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
