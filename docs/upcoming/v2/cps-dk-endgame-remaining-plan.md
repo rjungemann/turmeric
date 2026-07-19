@@ -560,19 +560,51 @@ The 156 break down as:
   `expected.stderr`.
 
 Plus the leak axis: the 104-byte per-perform-cont DK-node leak
-(`docs/reported/cps-perform-cont-frame-leak-on-tail-resume.md`) fails a
+(`docs/archive/cps-perform-cont-frame-leak-on-tail-resume.md`) fails a
 leak-checked flag-on suite.
 
-**Conclusion.** The effect-lowering goal (fiber-live == 0) is DONE. But the
-*last* endgame step -- flip the flag on by default and delete the fiber effect
-runtime -- is NOT completable today. The real Stage-G gate is "the **entire**
-suite passes flag-on," and that additionally requires: (1) fix the 2 DK-trampoline
-crashes; (2) fix the ~14 generic/dictionary `__cps` ABI type mismatches; (3) fix
-the 104-byte tail-resume leak; (4) settle the experiment-warning-vs-`expected.stderr`
-interaction; (5) regen the 138 snapshots in the graduation commit. (2) is the
-bulk of the work and is a general CPS-codegen correctness effort, not an effect
-one. Sec 3 below should be read WITH this addendum -- fiber-live == 0 is
-necessary but not sufficient.
+### 3a.1 Update (2026-07-19) -- all real blockers fixed; only snapshot regen remains
+
+Every REAL failure class above is now closed; a re-measure forcing the flag on
+gives:
+
+```
+summary: 2063 passed, 140 failed   (flag forced on; was 2047/156)
+```
+
+and **all 140 remaining failures are `(codegen mismatch)` -- ZERO build failures,
+ZERO crashes, ZERO diagnostic/behavior mismatches.** What landed:
+
+- **14 build failures -> fixed** by one root cause: a generic template must
+  sig-REJECT a tyvar-carrying carrier param/return (`type_has_unresolved_tyvar` in
+  `fn_carrier_param_ok`/`fn_carrier_ret_ok`) so it stays a mono_template and callers
+  thread the concrete monomorph clone instead of a generic `<fn>__cps(int64_t,...)`.
+- **2 DK-trampoline crashes -> fixed**: `tur_fiber_block_resume` saves/restores
+  `g_dk_driver` + the DK meta-stack depth across its `swapcontext`, so a DK handle
+  that yields mid-flight inside a coroutine fiber cannot leak its stack-bound driver
+  to the resumer (fiber-effect 10/99, p19-8 20/30/99).
+- **1 diagnostic mismatch (`errors/result-question-outside-fn`) -> fixed**, plus a
+  sibling found on re-measure (`errors/effect-unhandled`): the top-level-statement
+  -> synthesized-main fold was wrapping a fn-body-only form (`?`, `return`) or a
+  top-level unhandled `perform` inside main, suppressing its compile-time
+  diagnostic. The fold now aborts for those, keeping the top-level rejection.
+- **104-byte tail-resume leak -> fixed**: both straight-line LH_PERFORM_CONT frames
+  reap via `__dk_reap_node` at the entry boundary instead of a tail-resume-skipped
+  `dk_free_node`. ASan-clean on all five reported fixtures.
+
+**Conclusion.** The effect-lowering goal (fiber-live == 0) is DONE, and the flag-on
+path is now a **behaviorally complete** drop-in: the entire suite builds, runs, and
+diagnoses identically flag-on. The only remaining work before flipping the default
+and deleting the fiber effect runtime is MECHANICAL / policy: (1) regenerate the
+~140 flag-off snapshots in the graduation commit; (2) a proper `EXPERIMENTS[]`
+graduation (delete the row, make the feature always-on) per CLAUDE.md rather than a
+raw default flip -- which also settles any experiment-lifecycle-warning interaction;
+(3) one remaining leak is a SEPARATE, pre-existing owning-value teardown gap on the
+CPS path (a 16-byte `ctor_Full` ADT value in `cps-backend-effect-under-match`, NOT
+the perform-cont frame) -- tracked in `docs/reported/`, the Phase-3 E3/E4 owning-
+value drop. Sec 3 should be read WITH this addendum: fiber-live == 0 was necessary
+but not sufficient; the sufficient bar (whole-suite flag-on correctness) is now met
+except for snapshot regen + the separate owning-value leak.
 
 ## 4. Status of the reports this plan supersedes
 

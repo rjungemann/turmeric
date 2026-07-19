@@ -1,5 +1,13 @@
 # Straight-line perform-continuation frame leaks when the handler tail-resumes
 
+**STATUS: RESOLVED (2026-07-19, commit reaping the straight-line perform-cont
+frame via `__dk_reap_node`).** Both LH_PERFORM_CONT emit sites in `emit_perform`
+now hand the `dk_frame` node to `__dk_reap_node` inlined into `dk_perform` and drop
+the post-`dk_perform` `dk_free_node`, so the frame is reclaimed at the outermost
+entry boundary on BOTH the normal-return and tail-resume-yield paths. ASan-clean
+on all five fixtures below; outputs unchanged; suite 2203/0 flag-off byte-identical.
+The fix direction proposed at the bottom of this report is exactly what landed.
+
 **Severity:** low (experimental `--enable=cps-tramp-resume` path only; correctness
 is fine -- one 104-byte DK node leaks per suspended perform-cont frame whose
 handler tail-resumes). Pre-existing and widespread; NOT introduced by the B8 work

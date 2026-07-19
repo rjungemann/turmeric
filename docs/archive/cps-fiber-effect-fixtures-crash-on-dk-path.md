@@ -1,5 +1,14 @@
 # fiber-effect / p19-8-fiber-effect-chain crash when their own body CPS-lowers
 
+**STATUS: RESOLVED (2026-07-19).** `tur_fiber_block_resume` now saves and restores
+`g_dk_driver` + the DK meta-stack depth across its `swapcontext` (emitted only
+under the trampoline path), so a DK handle that yields mid-flight inside a
+coroutine fiber can no longer leave the driver global pointing into the fiber's
+(later freed) stack. fiber-effect -> 10/99, p19-8-fiber-effect-chain -> 20/30/99,
+both flag-on and flag-off; suite 2203/0 flag-off byte-identical. The "Fix
+direction" below (preserve the driver lifetime across the fiber boundary) is what
+landed -- the runtime save/restore, not the emit-side entry wrapper.
+
 **Severity:** high (blocks CPS/DK flag graduation -- the fixtures that fiber-runtime
 deletion would force permanently onto the DK path crash on it). Experimental
 `--enable=cps-tramp-resume` path only; flag-off both fixtures pass.
