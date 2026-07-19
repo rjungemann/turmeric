@@ -73,7 +73,7 @@ shapes.
   `tests/fixtures/async-await-cps-two` (`(+ (await A) (await B))`) and
   `async-await-cps-repark` (`(let [x (await A)] (let [y (await B)] (+ x y)))`),
   both CPS-emitted. The bound: a `cps->cps` tail call (recursive/unbounded
-  suspensions) is rejected (`docs/reported/cps-async-recursive-await-eviction.md`).
+  suspensions) is rejected (`docs/archive/cps-async-recursive-await-eviction.md`).
 
 - **Refcounted env with clone/drop callbacks.**
   `tur_cloneable_cont_alloc(fn, cap, clone, drop)` (used at
@@ -566,7 +566,7 @@ fixture needs both tracks:
 - **Recursive / unbounded suspension continuations** (a `cps->cps` tail call in a
   continuation body) -- stays evicted on both tracks; closing it needs a
   trampolined heap continuation to avoid an O(N) resume stack, a separate plan.
-  Tracked for `await` in `docs/reported/cps-async-recursive-await-eviction.md`.
+  Tracked for `await` in `docs/archive/cps-async-recursive-await-eviction.md`.
 - **General user `defer` in a colored function** -- a broader defer-semantics
   question; the auto-drop handling here is gated to the elaborator-injected
   owning auto-drop shape only.

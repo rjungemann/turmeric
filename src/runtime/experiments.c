@@ -103,15 +103,31 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * CPS-IR builder (cps_ir.c) via g_opt_cps_async.  F3 is complete + archived
      * (docs/archive/compiled-async-heap-continuations-plan.md): await-as-shift,
      * deferred pending drive, and bounded multi-await all landed; all three
-     * admissibility gaps resolved.  Stays gated on the ONE remaining residual --
-     * a recursive await must run stackless ON the heap path rather than evict --
-     * tracked by the successor plan below.  Graduate when it lands. */
+     * admissibility gaps resolved.  A recursive await evicting to the direct
+     * emitter is by-design, NOT a residual (F4 declined; see
+     * docs/archive/compiled-stackless-recursive-await-plan.md).
+     *
+     * Graduation was ATTEMPTED 2026-07-19 (cps-async-graduation-plan) and its
+     * superset confirmation came back RED, so the flag STAYS gated on the
+     * concrete gap it surfaced: with async forced heap-only, an `await` whose
+     * readiness depends on the ucontext scheduler (a manually-fiber-spawned
+     * future -- fixture `taskgroup-async`) or an `await` nested in an effect
+     * handler (fixture `async-effect-spawn`) is NOT a functional superset -- the
+     * first drops all output because heap `await` never drives the fiber
+     * scheduler, the second is a build-time internal error because the colored
+     * function evicts to the direct emitter which can no longer emit effects
+     * (fiber effect runtime deleted).  Graduate once the heap `await` path drives
+     * the fiber scheduler (or the fixtures no longer depend on it) and async
+     * composes inside a colored effect body.  See the graduation plan's 2026-07-19
+     * progress note and docs/reported/cps-async-heap-fiber-interop-gap.md. */
     { "cps-async",
       "heap-continuation `async`/`await`: `await` lowers to a dk_shift capturing "
       "the async continuation, resumed via the reactor instead of a ucontext fiber",
-      "docs/upcoming/compiled-stackless-recursive-await-plan.md",
+      "docs/upcoming/cps-async-graduation-plan.md",
       "0.28.2",                  /* introduced */
-      "0.30.0",                  /* expires_at (two minor releases; hard contract) */
+      "0.31.0",                  /* expires_at -- bumped past 0.30.0: the 2026-07-19
+                                  * graduation attempt hit the fiber-interop
+                                  * superset gap above; hard contract */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_cps_async },
     /* cps-tramp-resume GRADUATED 2026-07-19 -- the CPS/DK trampolined tail-resume
