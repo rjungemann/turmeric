@@ -1254,38 +1254,6 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
  * ignoring the captured sub-continuation (Turmeric shift never resumes it). */
 static intptr_t __dk_abort_body(intptr_t env, DK *subk) { (void)subk; return env; }
 
-/* Phase 19: Algebraic effect handler chain */
-typedef struct { bool consumed; void *origin_fiber; } TurContK;
-
-/* Phase 19D: Effect-capture continuation context */
-typedef struct TurEffectCaptureCtx TurEffectCaptureCtx;
-struct TurEffectCaptureCtx {
-    bool has_pending_effect;
-    const char *eff_name;
-    int64_t eff_args[8];  /* v1: max 8 args */
-    int eff_n_args;
-    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);
-    void *body_env;  /* heap-allocated env for body captures */
-    void *table;     /* FH3: tur_handler_table_t* for value-based dispatch (else NULL) */
-    bool shallow_consumed;  /* F2: a shallow handler that has run its case once; a
-                             * subsequent same-effect perform bubbles to the enclosing
-                             * handler instead of re-matching here (handle-shallow). */
-};
-
-typedef struct EffectHandlerCase EffectHandlerCase;
-struct EffectHandlerCase {
-    const char *effect_name;
-    int64_t (*handler_fn)(int64_t *args, int n_args, int64_t k, void *env);
-    void *env;
-};
-
-typedef struct EffectHandlerFrame EffectHandlerFrame;
-struct EffectHandlerFrame {
-    struct EffectHandlerFrame *parent;
-    int n_cases;
-    EffectHandlerCase cases[8];
-};
-
 /* Phase T21: FiberBlock */
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -1301,7 +1269,6 @@ struct FiberBlock {
     int parked; /* Phase T21: scheduler park/unpark */
     int64_t result;
     int64_t arg;
-    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */
     bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */
     void (*entry_fn)(void);
     void *fiber_local; /* Phase T21: fiber-local storage */
@@ -1309,7 +1276,6 @@ struct FiberBlock {
     bool cancelled; /* Set when parent TaskGroup is cancelled */
     jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */
     bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
-    void *eff_ctx;  /* Phase 19D: NULL for regular fibers, TurEffectCaptureCtx* for effect-capture fibers */
 };
 
 static __thread FiberBlock *tur_current_fiber = NULL;
@@ -1439,8 +1405,6 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
     abort();
 }
 
-static __thread EffectHandlerFrame *global_effect_handler_chain = NULL;
-
 static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     if (!stack_size) stack_size = 1024 * 1024;
     FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));
@@ -1449,7 +1413,6 @@ static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {
     if (!f->stack) { free(f); abort(); }
     f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;
     f->migration_safe = true;
-    f->effect_handler_chain = (void *)global_effect_handler_chain;
     getcontext(&f->ctx);
     f->ctx.uc_stack.ss_sp = f->stack;
     f->ctx.uc_stack.ss_size = stack_size;
@@ -1483,19 +1446,6 @@ static void tur_fiber_block_yield(int64_t value) {
     if (!f) { fprintf(stderr, "fiber-yield: not in fiber\n"); abort(); }
     f->result = value;
     swapcontext(&f->ctx, &f->caller_ctx);
-}
-
-/* Phase 19D: Effect-capture continuation helpers */
-static int64_t tur_effect_cont_resume(int64_t k_as_int64, int64_t v) {
-    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;
-    TurEffectCaptureCtx *ctx = (TurEffectCaptureCtx *)fiber->eff_ctx;
-    if (!ctx) { fprintf(stderr, "continuation error: not a capturable continuation\n"); abort(); }
-    return ctx->dispatch(ctx, k_as_int64, v);
-}
-
-static bool tur_effect_cont_valid(int64_t k_as_int64) {
-    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;
-    return !fiber->done;
 }
 
 typedef struct FiberLocalEntry FiberLocalEntry;
@@ -2434,81 +2384,6 @@ static int tur_select_blocking(TurSelectClause *clauses, int n, int has_default)
     pthread_mutex_destroy(&wakeup_mutex);
     pthread_cond_destroy(&wakeup_cond);
     return winner;
-}
-
-static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {
-    EffectHandlerFrame *frame =
-        (tur_current_fiber && tur_current_fiber->effect_handler_chain)
-        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain
-        : global_effect_handler_chain;
-    while (frame) {
-        for (int __i = 0; __i < frame->n_cases; __i++) {
-            if (strcmp(frame->cases[__i].effect_name, name) == 0) {
-                if (frame->cases[__i].handler_fn == NULL) {
-                    /* Phase 19D: intercept case - yield fiber to parent dispatch loop */
-                    FiberBlock *__cur = tur_current_fiber;
-                    if (!__cur || !__cur->eff_ctx) { fprintf(stderr, "Unhandled effect: %s\n", name); abort(); }
-                    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)__cur->eff_ctx;
-                    __cap->eff_name = name;
-                    int __cn = n_args < 8 ? n_args : 8;
-                    for (int __ai = 0; __ai < __cn; __ai++) __cap->eff_args[__ai] = args[__ai];
-                    __cap->eff_n_args = n_args;
-                    __cap->has_pending_effect = true;
-                    tur_fiber_block_yield(0);
-                    __cap->has_pending_effect = false;
-                    return __cur->arg;
-                }
-                TurContK __fresh_k = {false, tur_current_fiber};
-                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);
-            }
-        }
-        frame = frame->parent;
-    }
-    fprintf(stderr, "Unhandled effect: %s\n", name);
-    abort();
-    return 0;
-}
-
-struct __tur_msdyn_env { void *ctx; int64_t k_int; };
-static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val);
-static int64_t __tur_msdyn_cont(void *__env, int64_t __v) {
-    struct __tur_msdyn_env *__e = (struct __tur_msdyn_env *)__env;
-    return tur_handler_dispatch(__e->ctx, __e->k_int, __v);
-}
-static void *__tur_msdyn_clone(const void *__env) {
-    const struct __tur_msdyn_env *__o = (const struct __tur_msdyn_env *)__env;
-    struct __tur_msdyn_env *__c = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));
-    if (__c) *__c = *__o;
-    return __c;
-}
-static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {
-    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;
-    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;
-    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);
-    if (__fiber->done) { return __fiber->result; }
-    if (!__dcap->has_pending_effect) return __r;
-    tur_handler_table_t *__tbl = (tur_handler_table_t *)__dcap->table;
-    for (int __i = 0; __tbl && __i < __tbl->n_entries; __i++) {
-        if (strcmp(__dcap->eff_name, __tbl->entries[__i].eff_name) == 0) {
-            tur_handler_entry_t *__en = &__tbl->entries[__i];
-            return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_int, __en->env);
-        }
-    }
-    FiberBlock *__outer_f = tur_current_fiber;
-    if (__outer_f && __outer_f->eff_ctx) {
-        TurEffectCaptureCtx *__oc = (TurEffectCaptureCtx *)__outer_f->eff_ctx;
-        __oc->eff_name = __dcap->eff_name;
-        int __bn = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;
-        for (int __bi = 0; __bi < __bn; __bi++) __oc->eff_args[__bi] = __dcap->eff_args[__bi];
-        __oc->eff_n_args = __dcap->eff_n_args;
-        __oc->has_pending_effect = true;
-        tur_fiber_block_yield(0);
-        __oc->has_pending_effect = false;
-        return tur_handler_dispatch(__ctx_void, __k_int, __outer_f->arg);
-    }
-    fprintf(stderr, "dispatch: unhandled effect: %s\n", __dcap->eff_name);
-    abort();
-    return 0;
 }
 
 /* rc<T> + weak<T> reference counting - Phase 9 */
