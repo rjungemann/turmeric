@@ -5914,8 +5914,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         const char *acty = emit_binding_repr_c_name(
                             ctx, emit_arg->type, emit_arg);
                         size_t aL = acty ? strlen(acty) : 0;
-                        if (acty && aL >= 1 && acty[aL - 1] == '*' &&
-                            strcmp(acty, "void *") != 0) {
+                        /* the arg genuinely emits a pointer value: a concrete
+                         * `tur_adt_X *`, OR an existential pack whose emitted form
+                         * is a `(tur_exists_t)(..)` void* (tur_exists_t is void*).
+                         * Both are `pointer -> int64 param` and must reinterpret. */
+                        bool arg_is_conc_ptr = acty && aL >= 1 &&
+                            acty[aL - 1] == '*' && strcmp(acty, "void *") != 0;
+                        bool arg_is_exists = strncmp(raw, "(tur_exists_t)", 14) == 0;
+                        if (arg_is_conc_ptr || arg_is_exists) {
                             Buf _rb; buf_init(&_rb);
                             buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", raw);
                             buf_putc(&_rb, '\0');
