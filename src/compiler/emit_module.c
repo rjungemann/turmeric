@@ -7504,7 +7504,26 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
     buf_puts(out, "    tur_current_fiber = f;\n");
     buf_puts(out, "    f->arg = arg;\n");
-    buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) and the DK
+     * meta-stack depth are STACK-DISCIPLINED -- they name a setjmp buffer / frame
+     * on the CURRENT C stack.  A resumed fiber runs on its own stack and may
+     * install its own DK handle (setting g_dk_driver to a buffer ON THE FIBER
+     * STACK), then YIELD out mid-handle without restoring it (the yield is a
+     * swapcontext, not a return, so the fiber wrapper's `g_dk_driver = __dksave`
+     * never runs).  Left unrestored, the resumer's next dk_perform longjmps into
+     * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
+     * stack frame".  Save the resumer's driver + meta depth across the swapcontext
+     * and restore them when control returns, so the fiber's driver never leaks
+     * out.  Emitted only under the trampoline path (g_opt_cps_tramp_resume) that
+     * declares g_dk_driver / g_dk_meta_n; flag-off those globals do not exist and a
+     * fiber program stays byte-identical. */
+    if (g_opt_cps_tramp_resume) {
+        buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+        buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
+    } else {
+        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    }
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
