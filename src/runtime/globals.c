@@ -220,6 +220,14 @@ bool g_dump_cps_mono = false;
  * docs/archive/compiled-async-heap-continuations-plan.md. */
 bool g_opt_cps_async = false;
 
+/* E7 (v2 cps-dk-sole-effect-lowering-plan): enables the trampolined tail-resume
+ * lowering -- a perform-continuation ending in a tail call is admitted as a
+ * DKK_RESUME_FRAME and its handler tail-resume unwinds to the entry driver
+ * (meta-stack) instead of resuming inline, keeping deep effectful tail-recursion
+ * flat. Flipped by the `cps-tramp-resume` experiment; read by the CPS-IR
+ * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
+bool g_opt_cps_tramp_resume = true;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).

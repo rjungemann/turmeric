@@ -1,5 +1,10 @@
 # cps-async: recursive `await` evicts to the direct emitter -- and that is correct
 
+**STATUS: RESOLVED / BY-DESIGN (archived 2026-07-18).** This was never a defect
+-- the eviction is a deliberate, correct engineering choice. Recorded as a
+permanent design note; folded into the endgame plan's carve-out reasoning.
+Archived from `docs/reported/`.
+
 **Severity:** low (not a defect -- a deliberate, better-for-the-common-case
 eviction; filed to record the investigation so it is not "re-fixed" into a
 regression).

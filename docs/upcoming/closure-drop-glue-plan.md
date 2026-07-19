@@ -1,0 +1,265 @@
+# Closure env drop glue -- freeing captured fat-closure environments
+
+**Status:** S1.2 (borrowed HOF-arg free) LANDED; the rest of S1 (owning-capture
+walk-glue + capture-clone) and S2 remain. Prepared from
+`docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
+`cps-runtime-finish-plan.md` (Progress-log PD).
+
+## Landed: S1.2 -- borrowed HOF-arg closure free
+
+A capturing closure passed INLINE to a `^borrow` fn-param now has its heap env
+reclaimed at scope exit. `free-lift-bind` / `unsafe-closure-capture` (the
+`(free-run (fn [inner] (* inner scale)) ...)` shape) dropped from a 32 B leak to
+16 B -- the closure env is freed; the residual 16 B is a SEPARATE free-monad
+`Suspend` ADT leak (not a closure), so those fixtures keep `requires.no-leak-check`
+for that reason now. Suite 2179/0. Mechanism (no ownership hazard -- these
+captures are scalar):
+1. `free-run`'s interp param is annotated `^borrow` (it invokes but does not
+   retain the closure -- a natural transformation is reused, so the CALLER owns
+   and frees it, not the callee).
+2. `binding_escapes_impl` (emit_core.c) treats a closure passed to a `FA_BORROW`
+   param as NON-escaping (same only-greenlights-a-free posture as the box-accessor
+   whitelist).
+3. `hoist_borrowed_closure_args` (elab_call.c, applied in the `elab_call_fn`
+   wrapper) hoists an inline capturing-closure `^borrow` arg into a fresh
+   let-binding, so the existing `let_binding_env_freeable` scope-exit `free`
+   reclaims it -- the inline env otherwise has no name to target.
+
+Also fixed a pre-existing latent bug this surfaced: `elab_unsafe` allocated its
+`HandleExpr` via `arena_alloc` and never initialized `shallow`, so effect_check
+read an uninitialized bool (UBSan `load of value 190`); the arena layout shift
+from the hoist made the garbage non-zero. Now `handle->shallow = false`.
+
+Remaining S1: the OWNING-capture case still needs capture-time clone + the
+`drop_glue_env_N` walk-glue (Implementation findings below); the `^borrow` free
+here is hazard-free only because these payload captures are scalar.
+
+**One-line:** give a captured ("fat") closure's heap env struct a real lifecycle
+-- freed when the closure dies, dropped-through when stored, walk-glued when its
+captures are themselves owning -- so escaping and HOF-passed closures stop
+leaking and the two remaining B2 fixtures (`currying-effect-partial`,
+`hkt-stdlib-parser-instances`) CPS-emit instead of evicting on `EX_CLOSURE`.
+
+## What this unblocks
+
+- **The escaping-fat-closure-env leak** (`docs/reported/escaping-fat-closure-env-leak.md`):
+  one `malloc`'d `struct __env_N` leaked per capturing-closure construction that
+  escapes (returned / stored / passed `^fat`). Currently carries
+  `requires.no-leak-check` on `cps-backend-fn-param`, `free-lift-bind`,
+  `unsafe-closure-capture`.
+- **B2 residuals (2)** in the CPS backend: `currying-effect-partial` (a
+  partial-application closure `add10 = (log-add 10)` called in a `Log` handle
+  body) and `hkt-stdlib-parser-instances` (closures stored in `Parser` values).
+  Both evict on `EX_CLOSURE` today because the closure cannot be admitted without
+  a free.
+- **The httpd middleware family** (`httpd-async-mw-attr` / `-mw-compose`) and any
+  code that stores middleware/handler closures in a chain.
+
+## Current state
+
+A capturing closure lowers to (`emit_expr.c` ~5785):
+
+```c
+struct __env_N { int64_t __fn; <captures...> };
+struct __env_N *tmp = malloc(sizeof(struct __env_N));
+tmp->__fn = <thunk>; tmp->cap0 = ...; ...
+```
+
+The fat value carries `tmp` (a one-word env pointer, or a 2-word `tur_poly_fn_t`
+for the rank-2 poly protocol). The ONLY free that exists today is
+`let_binding_env_freeable` (`emit_expr.c:1267`): a let-bound closure is freed at
+scope exit iff it is an **`EX_CLOSURE` literal**, returns a **scalar**, and
+**provably does not escape** (`closure_binding_escapes`, conservative -- only ever
+greenlights a free). Everything outside that narrow gate leaks:
+
+- a **partial-application** closure (`(log-add 10)` -- init is a CALL, not an
+  `EX_CLOSURE` literal),
+- a closure passed as a **HOF argument** (`(free-run (fn ...) ...)` -- the arg is
+  conservatively flagged escaping),
+- a **stored / returned** closure (parser combinators, httpd middleware -- it
+  genuinely escapes).
+
+The CPS backend inherits this: it can only admit a capturing closure it can
+free, so the un-freeable shapes evict on `EX_CLOSURE`.
+
+## Two sub-problems (different fixes)
+
+The residuals split cleanly by whether the closure ESCAPES its constructor:
+
+**S1. NON-escaping closures that just aren't freed yet.** `currying-effect-partial`
+(`add10` called once, locally), the `free-run` HOF args (`free-run` calls the
+closure and discards it). These have a single owner and a clear scope-exit death
+point; they leak only because the current gate is too narrow (`EX_CLOSURE`-literal
++ scalar-return + a conservative escape check that flags any call argument). Fix
+is a scoped free, no ownership tracking.
+
+**S2. ESCAPING closures.** `hkt-stdlib-parser-instances` (the closure is stored in
+a `Parser` value that is returned / threaded), httpd middleware (stored in a
+chain). Ownership transfers to the holder; the holder must drop it, and a closure
+stored in two places must not double-free. Fix needs the closure to participate in
+the drop / uniqueness system.
+
+## Design
+
+### The env drop-glue function (shared by S1 + S2)
+
+Emit, per env type that needs it, a `drop_glue_env_N(void *p)`:
+
+```c
+static void drop_glue_env_N(void *p) {
+    struct __env_N *e = (struct __env_N *)p;
+    /* walk-glue: drop each OWNING capture in reverse order, mirroring the
+     * ADT/struct drop-glue (emit_module.c emit_adt_byval_drop_glue). */
+    <drop e->capK for each owning capture>   /* rc_strong_decrement / drop_glue_* / free */
+    free(e);
+}
+```
+
+- A **scalar-only** env (captures are all Copy scalars) needs no walk -- the glue
+  is a bare `free(e)`; the current `let_binding_env_freeable` already emits that
+  inline. The glue function matters when captures are themselves owning (an `rc`,
+  a `ref`, a NESTED closure -- an env-in-env), exactly the case that leaks worst
+  today.
+- Reuse the existing owning-value drop machinery keyed off each capture's type
+  (`needs_drop_glue`, `rc_strong_decrement`, `drop_glue_<adt>`), so a closure that
+  captures an `rc<Foo>` decrements it, and a closure that captures another closure
+  recurses into `drop_glue_env_M`.
+
+### S1 -- scoped free for non-escaping closures (bounded, land first)
+
+1. **Widen `let_binding_env_freeable`**: admit a partial-application closure (init
+   is an `EX_CALL` whose `returns_closure_fn_binding` is set -- a curried under-
+   saturation producing a closure) and drop the scalar-result restriction where
+   the closure result cannot alias the env (needs the walk-glue so a non-scalar
+   capture is dropped, not just the env freed).
+2. **A HOF-arg free**: a closure passed as a call argument whose callee does NOT
+   retain it (`free-run` calls-and-discards) can be freed after the call returns.
+   This needs a callee "does not retain fn-param" property -- start conservative:
+   a `^fat`/`(fn ...)` param that the callee only CALLS (never stores/returns) is
+   non-retaining. `free-run`'s inline-C calls the interp once and returns an int
+   -- non-retaining. Emit the env free after the call.
+3. **CPS interaction**: the CPS backend already has the boundary-reap mechanism
+   (`__dk_reap_ptr`, P3.c/P3.d). A non-escaping closure admitted on the CPS
+   delegation path registers its env (and, via the glue, its owning captures) for
+   reap at the entry boundary -- the analogue of `cps_closure_env_freeable`
+   (which today handles only the scalar-capture let case). Wire the glue so the
+   reap drops captures too.
+
+S1 alone clears `currying-effect-partial`, `free-lift-bind`, `unsafe-closure-capture`
+(dropping their `requires.no-leak-check`) without any ownership-tracking.
+
+### S2 -- drop glue for escaping closures (the real feature)
+
+An escaping closure is an owning heap value whose owner is the value it is stored
+in (a struct field, an ADT payload, a return value). Two sound models:
+
+- **Model U (uniqueness / move) -- preferred for STORED closures.** Plug the
+  closure into the existing affine/move system (`is_moved`, `is_linear_consumed`,
+  `is_affine`, `CK_MOVE`, the alias-state UT1 machinery). Storing a closure in a
+  struct MOVES it (the source binding is consumed); the holding struct's drop
+  glue (`needs_drop_glue`) calls `drop_glue_env_N` on the field. No refcount, no
+  per-closure overhead; a double-store is a move-check error (as it already is for
+  other affine values). This is how `hkt-stdlib-parser-instances` (closure stored
+  in a `Parser`) and httpd middleware (closure stored in a chain node) should
+  work -- the `Parser` / chain-node drop glue owns the closure.
+- **Model R (refcount) -- fallback for genuinely SHARED closures.** Add a
+  refcount word to the env (`struct __env_N { int64_t __rc; int64_t __fn; ... }`);
+  a clone/dup increments, a drop decrements and runs `drop_glue_env_N` at zero.
+  Uniform and sharing-safe, but adds a word + rc ops to every fat closure and an
+  ABI change to the fat-closure protocol (the `^fat` layout, the HKT thunk
+  recovery, `tur_poly_fn_t`). Reserve for closures the uniqueness model rejects
+  (a closure legitimately shared by two owners).
+
+Recommendation: land **Model U** for the stored-closure cases (covers the corpus
+residuals) and only reach for **Model R** if a shared-closure fixture appears --
+the ABI cost of R is high and the corpus does not yet need it.
+
+## Phasing
+
+- **Phase 1 (S1) -- NOT bounded; must land as one atomic ownership unit (see
+  Implementation findings).** Order forced by the double-free hazard:
+  (1a) capture-time retain/clone for OWNING captures (a bare capture aliases
+  today, so an env-drop would double-free), (1b) `drop_glue_env_N` walk-glue on
+  top, (1c) the non-retaining-callee (`^once`) annotation + a post-call free hook
+  in EX_CALL emission for inline HOF args. 1a+1b are atomic (1a alone leaks MORE;
+  1b alone double-frees). Clears the two PD leak fixtures (scalar-capture, so 1c +
+  the emit hook, not the walk-glue, is what they need). NOT a "start here quick
+  win" -- it is the ownership feature. `currying-effect-partial` is RE-CLASSIFIED
+  out of S1 (it is a partial-app of a colored fn -- a B1-style colored closure,
+  not a value closure).
+- **Phase 2 (S2 / Model U):** closures participate in the move system; struct/ADT
+  drop glue drops closure-typed fields via `drop_glue_env_N`. Clears
+  `hkt-stdlib-parser-instances` and the httpd middleware family.
+- **Phase 3 (S2 / Model R, only if needed):** refcounted env for genuinely shared
+  closures. ABI change; deferred until a fixture demands it.
+
+## Implementation findings (verified before starting S1)
+
+A tractability pass on S1 established that it is NOT a quick bounded slice -- every
+sub-path has either a soundness hazard or needs new analysis/machinery. Three
+facts, each verified against the emitter:
+
+1. **Capturing an owning value does NOT clone it.** The env-fill emission
+   (`emit_expr.c` ~5793) is a bare `fat_tmp->field = <value>;` per capture -- no
+   `rc` increment, no closure retain. So the walk-glue (dropping owning captures
+   in `drop_glue_env_N`) is UNSOUND on its own: dropping a captured `rc` that the
+   original owner still drops is a double-free. **The walk-glue REQUIRES
+   capture-time retain/clone first** (the "retain when duplicated" half of the
+   fix). Scalar (Copy) captures are safe (no ownership) -- so a scalar-only env
+   drop is a bare `free`, hazard-free; an owning-capture env drop is blocked on
+   capture-cloning.
+
+2. **No post-call free hook exists for inline HOF-arg closures.** `free-lift-bind`
+   / `unsafe-closure-capture` pass the closure INLINE to `free-run` (not a let
+   binding), so `let_binding_env_freeable`'s scope-exit free (the only closure
+   free that exists) does not reach it. Freeing it needs (a) a new "free this
+   malloc'd env after the enclosing call/statement" mechanism in the EX_CALL
+   emission, AND (b) proof the callee does NOT retain the closure -- `free-run` is
+   inline-C whose non-retention is not analyzable; it needs a `^once`/non-retaining
+   fn-param annotation or a whitelist. Even though these closures capture only a
+   scalar (hazard-free to free), the emit hook + non-retention property are real
+   prerequisites.
+
+3. **`currying-effect-partial` is a partial-application of a COLORED fn.** `add10 =
+   (log-add 10)` where `log-add` performs `Log`; the "closure" performs when
+   called, so it is not a value closure at all -- it belongs with the B1-style
+   colored-call handling, not S1 value-closure drop. It should be re-classified
+   out of S1.
+
+Net revised S1 order: (a) capture-time retain/clone for owning captures, then (b)
+`drop_glue_env_N` walk-glue on top of it, then (c) the non-retaining-callee
+annotation + post-call free for HOF args. Only step (a) unblocks a hazard-free
+`drop_glue_env_N`; steps done out of order double-free.
+
+## Risks / open questions
+
+- **Double-free** is the cardinal risk. The escape analysis
+  (`closure_binding_escapes`) is conservative (only greenlights a free), which is
+  the right posture -- extend it carefully; a false "does not escape" frees a live
+  env. Model U's move-check is the structural guard for S2.
+- **Non-retaining callee property (S1.2):** deciding a callee does not retain its
+  fn-param. Start with the syntactic "only calls it" rule (covers `free-run`);
+  a general effect/escape signature on fn-params is a larger analysis -- keep it
+  out of Phase 1.
+- **Walk-glue ordering / cycles:** a closure that captures itself (letrec self-
+  capture, already handled specially at construction -- `emit_expr.c` "Edge 1")
+  must not recurse infinitely in the glue; mirror the ADT walk-glue's
+  cycle-awareness or exclude self-captures from the drop walk.
+- **Fat-closure ABI (Model R only):** adding an `__rc` word changes the `^fat`
+  layout, HKT thunk recovery, and `tur_poly_fn_t`. Audited in
+  `docs/archive/fat-closure-abi-audit-plan.md` -- coordinate there if R is ever
+  needed.
+- **`tur_poly_fn_t` (2-word) vs one-word env:** the drop must free the right
+  object for both the plain env-pointer closures and the rank-2 poly-fat
+  closures; confirm which allocation each frees.
+
+## Test targets & exit gate
+
+- `currying-effect-partial`, `hkt-stdlib-parser-instances` flip from
+  `BODY-UNSUPPORTED` (`EX_CLOSURE`) to CPS-emitted (direct == cps == turi).
+- `free-lift-bind`, `unsafe-closure-capture`, `cps-backend-fn-param` become
+  ASan-clean and DROP their `requires.no-leak-check` markers.
+- The minimal no-effects repro in `escaping-fat-closure-env-leak.md`
+  (`make-scaler`) is ASan-clean.
+- httpd middleware fixtures stay green and leak-clean.
+- Full `bash tests/run.sh` green; the report moves to `docs/archive/` when closed.

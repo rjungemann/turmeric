@@ -3793,6 +3793,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * the use site (the dict initializer rebuilds the same name fresh). Pin
          * it via c_export_name, the documented "emit this C name as-is" bypass. */
         method_binding->c_export_name = method_sym->name;
+        method_binding->is_instance_method = true;   /* B6: internal export, CPS-eligible */
         method_fd->binding = method_binding;
         method_fd->params = method_params;
         method_fd->n_params = n_method_params;

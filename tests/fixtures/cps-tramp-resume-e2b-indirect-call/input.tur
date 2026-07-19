@@ -1,0 +1,28 @@
+;; E2b (cps-dk-sole-effect-lowering): a fat-closure (is_poly_fn) fn-value PARAM
+;; called INDIRECTLY (not in a lifted continuation) inside a colored function is
+;; admitted onto the CPS/DK backend under --enable=cps-tramp-resume.
+;;
+;; `f` performs effect E (via `g` under a handle) so it is colored, and also calls
+;; its fat-closure param `fnv` indirectly in the main body.  The indirect call
+;; delegates to the direct emitter via CT_LETRAW (its behaviour is identical
+;; whether the surrounding code is CPS- or direct-emitted).  fn_sig_ok now admits
+;; the is_poly_fn param (guarded by fatparam_only_called: `fnv` is only called,
+;; never threaded as an argument), and emit_params spells it `tur_poly_fn_t`
+;; matching the direct emitter.
+;;
+;; direct-vs-CPS equal: fnv=dbl, dbl(10)=20; handle resumes 50; 20 + 50 = 70.
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn dbl [n : int] : int
+  (* n 2))
+
+(defn f [fnv : (fn [int] int)] : int
+  (let [base (fnv 10)]
+    (+ base (handle (g) (E [] k) (resume k 50)))))
+
+(defn main [] : int
+  (println (f dbl))
+  0)

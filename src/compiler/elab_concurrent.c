@@ -62,6 +62,33 @@ Expr *elab_async(Elab *e, const Form *call) {
     Expr *fn_expr = elab_form(e, call->as.list.items[1]);
     e->in_async_body = saved_in_async_body;
     if (!fn_expr) return NULL;
+
+    /* Normalize `(async EXPR)` where EXPR is a BARE VALUE expression (not a
+     * fn-value) -- e.g. `(async (with-handler ...))` -- into `(async (fn []
+     * EXPR))`.  Semantically `(async EXPR)` already means "run EXPR in a fiber",
+     * i.e. a thunk; making that thunk an explicit lambda routes the body through
+     * the normal lifted-fn pipeline (a colored fn whose interior effect handle
+     * CPS-lowers) instead of the inline fiber thunk the direct emitter's path (b)
+     * synthesizes -- so `async-with-handler` DK-lowers exactly like the explicit
+     * `(async (fn [] (handle ...)))` in `effects-async`.  A fn-VALUED arg (an
+     * explicit lambda or a named fn passed by value) is already the thunk and is
+     * left untouched -- wrapping it would spawn a fn that RETURNS the fn instead
+     * of running it.  The bare-expr thunk path already forbids capturing outer
+     * locals (emit_expr.c path (b) "must not capture" limitation), so the
+     * synthesized lambda is capture-free and introduces no new Send obligation. */
+    if (fn_expr->type.kind != TY_FN) {
+        Span sp = call->as.list.items[1]->span;
+        Form **fnitems = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        fnitems[0] = form_sym(e->arena, sp, e->sym_fn);
+        fnitems[1] = form_vec(e->arena, sp, NULL, 0);      /* [] -- no params */
+        fnitems[2] = (Form *)call->as.list.items[1];        /* the original body */
+        Form *thunk = form_list(e->arena, sp, fnitems, 3);
+        e->in_async_body = true;
+        Expr *wrapped = elab_form(e, thunk);
+        e->in_async_body = saved_in_async_body;
+        if (!wrapped) return NULL;
+        fn_expr = wrapped;
+    }
     
     /* AW-012 / AW-011B-1: Send-check for async closures.
      * Values captured in async blocks must be Send (can be moved to fiber context).

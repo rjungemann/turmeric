@@ -1,0 +1,5 @@
+The interp closure's env is now freed (closure-drop-glue S1: free-run's interp is
+^borrow, so the inline capturing closure is hoisted to a let and reclaimed at
+scope exit). What still leaks (16 B) is the free-monad `Suspend` node from
+`(free-lift ...)` -- a separate ADT/owning-value drop issue, NOT a closure. Drop
+this marker once free-monad programs carry drop glue.

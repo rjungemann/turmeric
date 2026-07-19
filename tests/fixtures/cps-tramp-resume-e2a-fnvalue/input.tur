@@ -1,0 +1,17 @@
+;; E2a: an EFFECTFUL fn-value (a captureless lambda that performs Write) is passed
+;; to a higher-order function `call-writer` and called through its param `f`.  Under
+;; --enable=cps-tramp-resume the call THREADS the DK continuation (via the direct->
+;; cps registry) so the perform reaches `run`'s DK handler -- the first effectful
+;; fn-value to run on the DK instead of the fiber effect runtime.  The handler lives
+;; in the helper `run` (not `main`), so `main` does not sig_perm-taint the effect.
+(defeffect Write [s :cstr] :nil)
+
+(defn call-writer [f :(fn [cstr] #fx{Write} nil)] #fx{Write} : nil
+  (f "threaded"))
+
+(defn run [] : nil
+  (handle
+    (call-writer (fn [s] (perform (Write s))))
+    (Write [s] k) (do (println s) (resume k nil))))
+
+(defn main [] : int (do (run) 0))

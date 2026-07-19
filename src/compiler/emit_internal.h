@@ -496,6 +496,10 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
+/* B3 part 2: per-effect integer tag (memoized by symbol) used by the DK backend
+ * (dk_perform / dk_handler tags).  Defined in emit_cps_ir.c; called from
+ * emit_effects.c to stamp a first-class handler entry's DK case tag. */
+int effect_tag(const struct Symbol *eff);
 /* Phase 5 dead-instance elimination: is this HKT typeclass instance live (any
  * method base directly referenced)?  Used to skip dead instances' dict + bases
  * in lockstep.  Defined in emit_module.c. */
@@ -698,11 +702,9 @@ char *ensure_typed_poly_to_fat(EmitCtx *ctx, Type result_type,
  * EX_DISCONTINUE).  Expression-position emission only; emit_program runtime
  * fragments remain in emit_module.c. */
 char *emit_effects_defect(EmitCtx *ctx, Buf *body, const Expr *e);
-char *emit_effects_perform(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e);
 /* FH2-FH5: first-class handler values */
 char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e);
-char *emit_effects_with_handler(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_compose_handlers(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e);
 char *emit_effects_discontinue(EmitCtx *ctx, Buf *body, const Expr *e);

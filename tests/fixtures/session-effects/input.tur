@@ -14,6 +14,18 @@
 ;; sending 99
 ;; received 99
 ;; 99
+;;
+;; NOTE -- permanent fiber client (NOT a CPS/DK migration target).  This program
+;; performs AND handles a real algebraic effect (SessionLog) entirely on the
+;; fiber effect runtime, and stays there BY DESIGN: `main` is anchored by
+;; inline-C (raw pthread spawn/join + inline-C session channel ops), so its body
+;; is SIG-INLINE-C and can never thread a DK continuation; the session parameter
+;; is TY_SESSION (SIG-REJECT).  The pthread + inline-C session/channel runtime is
+;; a SEPARATE concurrency subsystem from the delimited-continuation DK effect
+;; machine.  Do not attempt to CPS-admit it -- even admitting the session param
+;; only reclassifies `exchange` SIG-REJECT -> SIG-TAINT off `main`'s permanent
+;; handling.  Analysis + decision: docs/archive/
+;; cps-session-effects-permanently-fiber-bound.md.  Correct on the fiber today.
 
 (defeffect SessionLog [msg :cstr] :nil)
 

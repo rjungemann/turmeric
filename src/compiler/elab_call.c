@@ -762,6 +762,57 @@ static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32
     return out;
 }
 
+/* closure-drop-glue S1: hoist an INLINE capturing closure passed to a `^borrow`
+ * (FA_BORROW) fn-param into a fresh let-binding, so the direct emitter's
+ * scoped-env free (let_binding_env_freeable + the FA_BORROW non-escape relaxation
+ * in binding_escapes_impl) reclaims its heap env at scope exit -- a borrowed
+ * closure is invoked but not retained by the callee, so it dies at this call.
+ * Without a let binding the inline env has no name for the scope-exit free to
+ * target and leaks.  Returns the (possibly let-wrapped) expression; a no-op when
+ * `call` is not an EX_CALL to a fn with a FA_BORROW inline-closure arg. */
+static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
+    if (!call || call->kind != EX_CALL) return call;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.arg_flags) return call;
+    Expr **args = call->as.call_.args;
+    uint32_t n_args = call->as.call_.n_args;
+    uint32_t n_hoist = 0;
+    for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
+        Expr *a = args[i];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (a && a->kind == EX_CLOSURE && a->as.closure_.closure
+            && a->as.closure_.closure->n_captures > 0
+            && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+            n_hoist++;
+    }
+    if (n_hoist == 0) return call;
+    LetBinding *lbs = (LetBinding *)arena_alloc(e->arena, n_hoist * sizeof(LetBinding));
+    uint32_t h = 0;
+    for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
+        Expr *a = args[i];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (!(a && a->kind == EX_CLOSURE && a->as.closure_.closure
+              && a->as.closure_.closure->n_captures > 0
+              && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)))
+            continue;
+        char nm[48];
+        snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);
+        const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+        Binding *cb = binding_new(e, sym, a->type, false, false, span);
+        lbs[h].binding = cb;
+        lbs[h].init = a;                 /* the (ascribe-peeled) EX_CLOSURE literal */
+        h++;
+        Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
+        v->as.var.binding = cb;
+        args[i] = v;                     /* the call now references the binding */
+    }
+    Expr *let = expr_new(e->arena, EX_LET, call->type, span);
+    let->as.let_.bindings = lbs;
+    let->as.let_.n = n_hoist;
+    let->as.let_.body = call;
+    return let;
+}
+
 /* Phase P3: HAMT lowering - lower map function calls when first arg is persistent */
 static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) {
     uint32_t n_args = call->as.list.len - 1;
@@ -3147,6 +3198,7 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     pap_closure->n_captures = (uint8_t)n_pap_captures;
     pap_closure->env_name = pap_env_sym;
     pap_closure->is_shift_receiver = false;   /* arena mem is not zeroed */
+    pap_closure->is_effect_payload = false;
 
     /* Wire closure into FnDef (required for emit_fn_def to emit the env struct) */
     pap_fd->closure = pap_closure;
@@ -3418,7 +3470,7 @@ static Expr *try_eta_expand_generic_fn_arg(Elab *e, const Form *arg_form,
 }
 
 /* Phase 2: Elaborate a function call (f a b c) */
-static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
+static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
     /* defstruct-as-defadt (exg5-exists-cycle): read-and-clear the make-struct
@@ -5597,6 +5649,14 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
     return out;
 }
 
+/* Phase 2 wrapper: elaborate the call, then apply the closure-drop-glue S1
+ * borrowed-closure hoist to the result (a no-op unless the call passes an inline
+ * capturing closure to a `^borrow` fn-param). */
+static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
+    Expr *r = elab_call_fn_inner(e, call, fn_binding);
+    return r ? hoist_borrowed_closure_args(e, r, call->span) : r;
+}
+
 /* forall-dict-pass-multi-constraint-hkt-plan (Task 3.1 residual guard): a
  * class-method call on a constrained type variable (an int-representative
  * dispatch tagged with a `dict_arg` whose class is one of the clone's
@@ -5903,6 +5963,7 @@ static bool convert_mapper_to_dict_closure(Elab *e, Expr *pw, FnDef *M,
     snprintf(en, sizeof(en), "__env_%u", e->next_id++);
     clo->env_name = symtab_intern(e->st, strslice(en, (uint32_t)strlen(en)));
     clo->is_shift_receiver = false;   /* arena mem is not zeroed */
+    clo->is_effect_payload = false;
     M->closure = clo;
     for (uint8_t k = 0; k < n_disp; k++) {
         M->dict_env_classes[k] = (TypeClass *)disp_classes[k];

@@ -1,0 +1,28 @@
+;; cps-tramp-resume owning-field borrow in a handler case: a colored fn whose
+;; handler CASE borrows a captured by-value struct's OWNING field through an
+;; owning-value op (`rc/strong-count (.r o)`) must CPS-emit on the DK backend
+;; under --enable=cps-tramp-resume, not evict BODY-STRUCT-OR-TAINT to the fiber.
+;;
+;; The capture is a BORROW (rc/strong-count reads, does not consume), so it is
+;; leak-clean: o.r starts at strong count 1, is read (not dropped) inside the
+;; case, and is dropped exactly once by f's scope-exit auto-drop.
+;;
+;; g performs E once; the case resumes with o.r's strong count (1); f adds
+;; o.tag (9): 1 + 9 = 10.  Regression guard for
+;; docs/reported/cps-owning-field-borrow-in-handler-case-not-admitted.md
+;; (expr_is_pure_borrow_of now peels a field-read chain in the rc/weak arms).
+(defstruct Own [r : rc<int> tag : int])
+
+(defeffect E [] :int)
+
+(defn g [] : int
+  (perform (E)))
+
+(defn f [] : int
+  (let [o (make-struct Own :r (rc/of 7) :tag 9)]
+    (let [v (handle (g) (E [] k) (resume k (rc/strong-count (.r o))))]
+      (+ v (.tag o)))))
+
+(defn main [] : int
+  (println (f))
+  0)

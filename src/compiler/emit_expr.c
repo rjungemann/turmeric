@@ -6743,10 +6743,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(ftmp);
             return atom_nil();
         }
-        case EX_PERFORM:          return emit_effects_perform(ctx, body, e);
+        case EX_PERFORM:
+        case EX_WITH_HANDLER:
+            /* v2 invariant (fiber effect runtime deleted, Stage G): a `perform` and a
+             * handler-VALUE `with-handler` lower on the DK backend (emit_cps_ir),
+             * never the direct/fiber emitter -- their fiber emitters
+             * (emit_effects_perform / emit_effects_with_handler) emitted now-deleted
+             * runtime symbols and are removed.  Corpus-verified unreachable.  Reaching
+             * here is a compiler bug; ICE rather than emit an undefined reference.
+             * (EX_HANDLE keeps its emitter: a non-effect `handle` shape -- e.g. the
+             * contract/MonadError lowering -- still has a live direct path.) */
+            fprintf(stderr, "tur: internal error: effect form (EX kind %d) reached the "
+                    "direct/fiber emitter (fiber effect runtime deleted)\n", (int)e->kind);
+            abort();
         case EX_HANDLE:          return emit_effects_handle(ctx, body, e);
         case EX_HANDLER_LIT:     return emit_effects_handler_lit(ctx, body, e);
-        case EX_WITH_HANDLER:    return emit_effects_with_handler(ctx, body, e);
         case EX_COMPOSE_HANDLERS: return emit_effects_compose_handlers(ctx, body, e);
         case EX_RESUME:          return emit_effects_resume(ctx, body, e);
         case EX_DISCONTINUE:     return emit_effects_discontinue(ctx, body, e);

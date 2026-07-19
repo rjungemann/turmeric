@@ -6383,7 +6383,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * per-module header emission dedupe to one tur_poly_fn_t. Single-file mode
      * emits it bare (byte-identical). */
     if (shared) buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n#define TUR_POLY_FN_T_DEFINED\n");
-    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+    buf_puts(out, "struct DK;\n");  /* E2: forward-declare so fn_cps's DK* is the real type, not typedef-scoped */
+    buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;\n");  /* E2: fn_cps DK-threading slot (NULL for pure fn-values) */
     if (shared) buf_puts(out, "#endif\n");
     /* ET3: handler runtime type.
      * tur_handler_t is a handler value: an env pointer plus a dispatch function.
@@ -6410,8 +6411,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * double-free shared envs -- it is the application site (with-handler) that
      * frees, and only the outermost owner frees.  See
      * docs/first-class-handlers-semantics.md (FH1.2 invariant). */
-    buf_puts(out, "/* FH1: first-class handler dispatch-table entry */\n");
-    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; } tur_handler_entry_t;\n");
+    buf_puts(out, "/* FH1: first-class handler dispatch-table entry.\n");
+    buf_puts(out, " * B3: `dk_tag`/`dk_fn` carry the DK-ABI variant of the case (emitted at the\n");
+    buf_puts(out, " * handler-literal site when it is created inside colored code), so a dynamic\n");
+    buf_puts(out, " * `(with-handler <value> body)` can install a DK handler group from the table\n");
+    buf_puts(out, " * (dk_hgroup_from_table) instead of running the body on the fiber.  The fiber\n");
+    buf_puts(out, " * path leaves them 0 (calloc-zeroed) and never reads them. */\n");
+    buf_puts(out, "struct DK;\n");
+    buf_puts(out, "typedef struct { const char *eff_name; int64_t (*fn)(int64_t *, int, int64_t, void *); void *env; uint8_t cont_kind; int dk_tag; intptr_t (*dk_fn)(intptr_t, intptr_t, struct DK *); } tur_handler_entry_t;\n");
     buf_puts(out, "/* FH1: first-class handler value -- effect-keyed dispatch table */\n");
     buf_puts(out, "typedef struct { tur_handler_entry_t *entries; int n_entries; } tur_handler_table_t;\n");
     buf_puts(out, "static tur_handler_table_t *tur_handler_table_new(int n) {\n");
@@ -7217,7 +7224,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
         cps_uses_serial || cps_ir_emittable) {
-        emit_cps_runtime_prelude(out);
+        emit_cps_runtime_prelude_ex(out, g_opt_cps_tramp_resume);
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
      * direct emitter lowers a base (reset ...) whose body reaches a shift through
@@ -7264,44 +7271,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         emit_cps_callcc_prelude(out);
     }
 
-    /* Phase 19: Effect handler chain */
-    buf_puts(out, "/* Phase 19: Algebraic effect handler chain */\n");
-    /* Phase P19-5: TurContK — a lightweight per-invocation continuation token.
-     * Each tur_effect_perform call allocates one on the stack and passes its
-     * address as `k` to the handler function.  `consumed` is set by (resume k v)
-     * so that (cont? k) can verify freshness at runtime. */
-    buf_puts(out, "typedef struct { bool consumed; void *origin_fiber; } TurContK;\n\n");
-    /* Phase 19D: Effect-capture continuation context */
-    buf_puts(out, "/* Phase 19D: Effect-capture continuation context */\n");
-    buf_puts(out, "typedef struct TurEffectCaptureCtx TurEffectCaptureCtx;\n");
-    buf_puts(out, "struct TurEffectCaptureCtx {\n");
-    buf_puts(out, "    bool has_pending_effect;\n");
-    buf_puts(out, "    const char *eff_name;\n");
-    buf_puts(out, "    int64_t eff_args[8];  /* v1: max 8 args */\n");
-    buf_puts(out, "    int eff_n_args;\n");
-    buf_puts(out, "    int64_t (*dispatch)(void *ctx, int64_t k, int64_t v);\n");
-    buf_puts(out, "    void *body_env;  /* heap-allocated env for body captures */\n");
-    buf_puts(out, "    void *table;     /* FH3: tur_handler_table_t* for value-based dispatch (else NULL) */\n");
-    buf_puts(out, "    bool shallow_consumed;  /* F2: a shallow handler that has run its case once; a\n");
-    buf_puts(out, "                             * subsequent same-effect perform bubbles to the enclosing\n");
-    buf_puts(out, "                             * handler instead of re-matching here (handle-shallow). */\n");
-    buf_puts(out, "};\n\n");
-    buf_puts(out, "typedef struct EffectHandlerCase EffectHandlerCase;\n");
-    buf_puts(out, "struct EffectHandlerCase {\n");
-    buf_puts(out, "    const char *effect_name;\n");
-    buf_puts(out, "    int64_t (*handler_fn)(int64_t *args, int n_args, int64_t k, void *env);\n");
-    buf_puts(out, "    void *env;\n");
-    buf_puts(out, "};\n\n");
-    buf_puts(out, "typedef struct EffectHandlerFrame EffectHandlerFrame;\n");
-    buf_puts(out, "struct EffectHandlerFrame {\n");
-    buf_puts(out, "    struct EffectHandlerFrame *parent;\n");
-    buf_puts(out, "    int n_cases;\n");
-    buf_puts(out, "    EffectHandlerCase cases[8];\n");
-    buf_puts(out, "};\n\n");
+    /* Phase 19 fiber effect runtime (TurContK / TurEffectCaptureCtx /
+     * EffectHandlerCase / EffectHandlerFrame) DELETED 2026-07-19: the CPS/DK
+     * backend is the sole effect lowering (cps-tramp-resume graduated), so no
+     * emitted program performs/handles an effect on the fiber.  Corpus-verified
+     * zero call sites.  See docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md
+     * Stage G.  FiberBlock (concurrency) and tur_handler_table_t (DK handler
+     * values) stay. */
         /* Phase T21-A/B / P19-8: FiberBlock — cooperative fiber runtime via ucontext_t.
      * tur_current_fiber is thread-local; set/restored by tur_fiber_block_resume.
-     * tur_effect_perform checks tur_current_fiber->effect_handler_chain for fiber-local
-     * effect handler chains (Phase T21-B / P19-8). */
+     * The per-fiber effect handler fields are gone (fiber effect runtime deleted). */
     buf_puts(out, "/* Phase T21: FiberBlock */\n");
     buf_puts(out, "#ifdef __clang__\n");
     buf_puts(out, "#pragma clang diagnostic push\n");
@@ -7317,7 +7296,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int parked; /* Phase T21: scheduler park/unpark */\n");
     buf_puts(out, "    int64_t result;\n");
     buf_puts(out, "    int64_t arg;\n");
-    buf_puts(out, "    void *effect_handler_chain; /* Phase P19-8: per-fiber effect handler chain */\n");
     buf_puts(out, "    bool migration_safe; /* SCH-004: true if effect handlers are safe for cross-thread migration */\n");
     buf_puts(out, "    void (*entry_fn)(void);\n");
     buf_puts(out, "    void *fiber_local; /* Phase T21: fiber-local storage */\n");
@@ -7327,7 +7305,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase TG-004-1 PR: Per-fiber panic handling for auto-cancel propagation */
     buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
-    buf_puts(out, "    void *eff_ctx;  /* Phase 19D: NULL for regular fibers, TurEffectCaptureCtx* for effect-capture fibers */\n");
     buf_puts(out, "};\n\n");
     emit_rt_global(out, shared, "__thread FiberBlock *tur_current_fiber = NULL;\n", "__thread FiberBlock *tur_current_fiber");
     /* Phase R2: tur_panic_with body — placed here so FiberBlock and
@@ -7463,8 +7440,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
-    /* Declare global_effect_handler_chain before tur_fiber_block_new uses it */
-    emit_rt_global(out, shared, "__thread EffectHandlerFrame *global_effect_handler_chain = NULL;\n\n", "__thread EffectHandlerFrame *global_effect_handler_chain");
     buf_puts(out, "static FiberBlock *tur_fiber_block_new(void (*fn)(void), size_t stack_size) {\n");
     buf_puts(out, "    if (!stack_size) stack_size = 1024 * 1024;\n");
     buf_puts(out, "    FiberBlock *f = (FiberBlock *)calloc(1, sizeof(FiberBlock));\n");
@@ -7474,8 +7449,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->stack_size = stack_size; f->entry_fn = fn; f->done = 0;\n");
     /* SCH-004: Initialize migration_safe flag - fibers are migration-safe by default */
     buf_puts(out, "    f->migration_safe = true;\n");
-    /* SCH-004: Copy global effect handler chain to fiber for migration safety */
-    buf_puts(out, "    f->effect_handler_chain = (void *)global_effect_handler_chain;\n");
     buf_puts(out, "    getcontext(&f->ctx);\n");
     buf_puts(out, "    f->ctx.uc_stack.ss_sp = f->stack;\n");
     buf_puts(out, "    f->ctx.uc_stack.ss_size = stack_size;\n");
@@ -7497,7 +7470,26 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
     buf_puts(out, "    tur_current_fiber = f;\n");
     buf_puts(out, "    f->arg = arg;\n");
-    buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) and the DK
+     * meta-stack depth are STACK-DISCIPLINED -- they name a setjmp buffer / frame
+     * on the CURRENT C stack.  A resumed fiber runs on its own stack and may
+     * install its own DK handle (setting g_dk_driver to a buffer ON THE FIBER
+     * STACK), then YIELD out mid-handle without restoring it (the yield is a
+     * swapcontext, not a return, so the fiber wrapper's `g_dk_driver = __dksave`
+     * never runs).  Left unrestored, the resumer's next dk_perform longjmps into
+     * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
+     * stack frame".  Save the resumer's driver + meta depth across the swapcontext
+     * and restore them when control returns, so the fiber's driver never leaks
+     * out.  Emitted only under the trampoline path (g_opt_cps_tramp_resume) that
+     * declares g_dk_driver / g_dk_meta_n; flag-off those globals do not exist and a
+     * fiber program stays byte-identical. */
+    if (g_opt_cps_tramp_resume) {
+        buf_puts(out, "    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+        buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
+    } else {
+        buf_puts(out, "    swapcontext(&f->caller_ctx, &f->ctx);\n");
+    }
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
@@ -7507,18 +7499,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->result = value;\n");
     buf_puts(out, "    swapcontext(&f->ctx, &f->caller_ctx);\n");
     buf_puts(out, "}\n\n");
-    /* Phase 19D: Effect-capture continuation helpers */
-    buf_puts(out, "/* Phase 19D: Effect-capture continuation helpers */\n");
-    buf_puts(out, "static int64_t tur_effect_cont_resume(int64_t k_as_int64, int64_t v) {\n");
-    buf_puts(out, "    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;\n");
-    buf_puts(out, "    TurEffectCaptureCtx *ctx = (TurEffectCaptureCtx *)fiber->eff_ctx;\n");
-    buf_puts(out, "    if (!ctx) { fprintf(stderr, \"continuation error: not a capturable continuation\\n\"); abort(); }\n");
-    buf_puts(out, "    return ctx->dispatch(ctx, k_as_int64, v);\n");
-    buf_puts(out, "}\n\n");
-    buf_puts(out, "static bool tur_effect_cont_valid(int64_t k_as_int64) {\n");
-    buf_puts(out, "    FiberBlock *fiber = (FiberBlock *)(intptr_t)k_as_int64;\n");
-    buf_puts(out, "    return !fiber->done;\n");
-    buf_puts(out, "}\n\n");
+    /* Phase 19D effect-capture continuation helpers (tur_effect_cont_resume /
+     * tur_effect_cont_valid) DELETED 2026-07-19 with the fiber effect runtime. */
     /* Phase T21: Fiber-local storage */
     buf_puts(out, "typedef struct FiberLocalEntry FiberLocalEntry;\n");
     buf_puts(out, "struct FiberLocalEntry {\n");
@@ -8496,136 +8478,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return winner;\n");
     buf_puts(out, "}\n\n");
 
-    /* global_effect_handler_chain is declared earlier, before tur_fiber_block_new */
-    buf_puts(out, "static int64_t tur_effect_perform(const char *name, int64_t *args, int n_args) {\n");
-        /* T21-B: use fiber-local handler chain when inside a fiber */
-    buf_puts(out, "    EffectHandlerFrame *frame =\n");
-    buf_puts(out, "        (tur_current_fiber && tur_current_fiber->effect_handler_chain)\n");
-    buf_puts(out, "        ? (EffectHandlerFrame *)tur_current_fiber->effect_handler_chain\n");
-    buf_puts(out, "        : global_effect_handler_chain;\n");
-    buf_puts(out, "    while (frame) {\n");
-    buf_puts(out, "        for (int __i = 0; __i < frame->n_cases; __i++) {\n");
-    buf_puts(out, "            if (strcmp(frame->cases[__i].effect_name, name) == 0) {\n");
-    /* Phase 19D: intercept case - handler_fn == NULL means fiber-yield to parent dispatch loop */
-    buf_puts(out, "                if (frame->cases[__i].handler_fn == NULL) {\n");
-    buf_puts(out, "                    /* Phase 19D: intercept case - yield fiber to parent dispatch loop */\n");
-    buf_puts(out, "                    FiberBlock *__cur = tur_current_fiber;\n");
-    buf_puts(out, "                    if (!__cur || !__cur->eff_ctx) { fprintf(stderr, \"Unhandled effect: %s\\n\", name); abort(); }\n");
-    buf_puts(out, "                    TurEffectCaptureCtx *__cap = (TurEffectCaptureCtx *)__cur->eff_ctx;\n");
-    buf_puts(out, "                    __cap->eff_name = name;\n");
-    buf_puts(out, "                    int __cn = n_args < 8 ? n_args : 8;\n");
-    buf_puts(out, "                    for (int __ai = 0; __ai < __cn; __ai++) __cap->eff_args[__ai] = args[__ai];\n");
-    buf_puts(out, "                    __cap->eff_n_args = n_args;\n");
-    buf_puts(out, "                    __cap->has_pending_effect = true;\n");
-    buf_puts(out, "                    tur_fiber_block_yield(0);\n");
-    buf_puts(out, "                    __cap->has_pending_effect = false;\n");
-    buf_puts(out, "                    return __cur->arg;\n");
-    buf_puts(out, "                }\n");
-    /* Phase P19-5: allocate a fresh TurContK on the stack per invocation */
-    buf_puts(out, "                TurContK __fresh_k = {false, tur_current_fiber};\n");
-    buf_puts(out, "                return frame->cases[__i].handler_fn(args, n_args, (int64_t)(intptr_t)&__fresh_k, frame->cases[__i].env);\n");
-    buf_puts(out, "            }\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "        frame = frame->parent;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"Unhandled effect: %s\\n\", name);\n");
-    buf_puts(out, "    abort();\n");
-    buf_puts(out, "    return 0;\n");
-    buf_puts(out, "}\n\n");
-
-    /* FH3/FH5: generic dispatch loop for first-class handler values.
-     * Identical in shape to the per-handle __dispatch_<id> emitted by
-     * emit_effects_handle, but it scans a runtime tur_handler_table_t instead
-     * of compile-time inline cases.  with-handler installs this as the
-     * TurEffectCaptureCtx.dispatch fn and points ctx.table at the handler
-     * value's table.  Multishot entries (cont_kind == CK_MULTISHOT) wrap the
-     * fiber continuation in a cloneable cont, mirroring the inline path. */
-    /* True-multishot snapshot fields mirror the per-handle path: capture the
-     * fiber's suspended stack at the perform point and restore it per resume so
-     * each resume re-runs an independent copy.  See
-     * docs/reported/turi-effect-multishot-degenerate-resume.md.  The extra
-     * fields + restore are gated on multishot use so non-multishot programs keep
-     * the original (smaller) struct and codegen unchanged. */
-    bool msdyn_multishot = shared || expr_has_multishot_handler(program);
-    if (msdyn_multishot)
-        buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; "
-                      "FiberBlock *fiber; char *stack_image; size_t image_size; "
-                      "ucontext_t saved_ctx; };\n");
-    else
-        buf_puts(out, "struct __tur_msdyn_env { void *ctx; int64_t k_int; };\n");
-    buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val);\n");
-    buf_puts(out, "static int64_t __tur_msdyn_cont(void *__env, int64_t __v) {\n");
-    buf_puts(out, "    struct __tur_msdyn_env *__e = (struct __tur_msdyn_env *)__env;\n");
-    if (msdyn_multishot) {
-        buf_puts(out, "    if (__e->fiber && __e->stack_image) {\n");
-        buf_puts(out, "        memcpy(__e->fiber->stack, __e->stack_image, __e->image_size);\n");
-        buf_puts(out, "        __e->fiber->ctx = __e->saved_ctx;\n");
-        buf_puts(out, "        __e->fiber->done = 0;\n");
-        buf_puts(out, "    }\n");
-    }
-    buf_puts(out, "    return tur_handler_dispatch(__e->ctx, __e->k_int, __v);\n");
-    buf_puts(out, "}\n");
-    buf_puts(out, "static void *__tur_msdyn_clone(const void *__env) {\n");
-    buf_puts(out, "    const struct __tur_msdyn_env *__o = (const struct __tur_msdyn_env *)__env;\n");
-    buf_puts(out, "    struct __tur_msdyn_env *__c = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
-    buf_puts(out, "    if (__c) *__c = *__o;\n");
-    buf_puts(out, "    return __c;\n");
-    buf_puts(out, "}\n");
-    buf_puts(out, "static int64_t tur_handler_dispatch(void *__ctx_void, int64_t __k_int, int64_t __resume_val) {\n");
-    buf_puts(out, "    TurEffectCaptureCtx *__dcap = (TurEffectCaptureCtx *)__ctx_void;\n");
-    buf_puts(out, "    FiberBlock *__fiber = (FiberBlock *)(intptr_t)__k_int;\n");
-    buf_puts(out, "    int64_t __r = tur_fiber_block_resume(__fiber, __resume_val);\n");
-    buf_puts(out, "    if (__fiber->done) { return __fiber->result; }\n");
-    buf_puts(out, "    if (!__dcap->has_pending_effect) return __r;\n");
-    buf_puts(out, "    tur_handler_table_t *__tbl = (tur_handler_table_t *)__dcap->table;\n");
-    buf_puts(out, "    for (int __i = 0; __tbl && __i < __tbl->n_entries; __i++) {\n");
-    buf_puts(out, "        if (strcmp(__dcap->eff_name, __tbl->entries[__i].eff_name) == 0) {\n");
-    buf_puts(out, "            tur_handler_entry_t *__en = &__tbl->entries[__i];\n");
-    /* The multishot branch references the cloneable-continuation runtime, which
-     * is only emitted when the program uses multishot/cloneable continuations.
-     * Gate it on the same predicate; otherwise multishot dispatch is unreachable
-     * (a multishot handler literal makes the predicate true via
-     * expr_has_multishot_handler). */
-    if (shared || cps_expr_contains_cloneable_shift(program) || expr_has_multishot_handler(program)) {
-    buf_printf(out, "            if (__en->cont_kind == %d) { /* CK_MULTISHOT */\n", (int)CK_MULTISHOT);
-    buf_puts(out, "                struct __tur_msdyn_env *__ms = (struct __tur_msdyn_env *)malloc(sizeof(struct __tur_msdyn_env));\n");
-    buf_puts(out, "                if (!__ms) abort();\n");
-    buf_puts(out, "                __ms->ctx = __ctx_void; __ms->k_int = __k_int;\n");
-    /* Snapshot the fiber stack for true multishot.  Gated on msdyn_multishot
-     * (NOT cloneable-shift) so a cloneable-shift-only program -- which emits
-     * this branch as dead code -- keeps the original struct/codegen. */
-    if (msdyn_multishot) {
-    buf_puts(out, "                __ms->fiber = __fiber;\n");
-    buf_puts(out, "                __ms->image_size = __fiber->stack_size;\n");
-    buf_puts(out, "                __ms->stack_image = (char *)malloc(__fiber->stack_size);\n");
-    buf_puts(out, "                if (!__ms->stack_image) abort();\n");
-    buf_puts(out, "                memcpy(__ms->stack_image, __fiber->stack, __fiber->stack_size);\n");
-    buf_puts(out, "                __ms->saved_ctx = __fiber->ctx;\n");
-    }
-    buf_puts(out, "                int64_t __k_ms = (int64_t)(intptr_t)tur_cloneable_cont_alloc(__tur_msdyn_cont, __ms, __tur_msdyn_clone, free);\n");
-    buf_puts(out, "                return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_ms, __en->env);\n");
-    buf_puts(out, "            }\n");
-    }
-    buf_puts(out, "            return __en->fn(__dcap->eff_args, __dcap->eff_n_args, __k_int, __en->env);\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "    }\n");
-    /* Bubble unhandled effect to the outer fiber, mirroring the per-handle path. */
-    buf_puts(out, "    FiberBlock *__outer_f = tur_current_fiber;\n");
-    buf_puts(out, "    if (__outer_f && __outer_f->eff_ctx) {\n");
-    buf_puts(out, "        TurEffectCaptureCtx *__oc = (TurEffectCaptureCtx *)__outer_f->eff_ctx;\n");
-    buf_puts(out, "        __oc->eff_name = __dcap->eff_name;\n");
-    buf_puts(out, "        int __bn = __dcap->eff_n_args < 8 ? __dcap->eff_n_args : 8;\n");
-    buf_puts(out, "        for (int __bi = 0; __bi < __bn; __bi++) __oc->eff_args[__bi] = __dcap->eff_args[__bi];\n");
-    buf_puts(out, "        __oc->eff_n_args = __dcap->eff_n_args;\n");
-    buf_puts(out, "        __oc->has_pending_effect = true;\n");
-    buf_puts(out, "        tur_fiber_block_yield(0);\n");
-    buf_puts(out, "        __oc->has_pending_effect = false;\n");
-    buf_puts(out, "        return tur_handler_dispatch(__ctx_void, __k_int, __outer_f->arg);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"dispatch: unhandled effect: %s\\n\", __dcap->eff_name);\n");
-    buf_puts(out, "    abort();\n");
-    buf_puts(out, "    return 0;\n");
-    buf_puts(out, "}\n\n");
+    /* tur_effect_perform + the first-class-handler-value fiber dispatch
+     * (__tur_msdyn_env / __tur_msdyn_cont / __tur_msdyn_clone / tur_handler_dispatch)
+     * DELETED 2026-07-19 with the fiber effect runtime (Stage G).  The CPS/DK
+     * backend is the sole effect lowering; no emitted program performs or dispatches
+     * an effect on the fiber (corpus-verified zero call sites).  tur_handler_table_t
+     * / tur_handler_entry_t and tur_cloneable_cont_* stay -- the DK handler-value
+     * path (dk_hgroup_from_table) and the DK __Shift bridge use them. */
 
     /* Phase 9: Emit rc.h inline for rc<T> + weak<T> support */
     /* Phase 10: GC color enum and runtime (needed by rc_cb_alloc) */
@@ -10853,7 +10712,8 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         buf_puts(out, "/* rank-2 polymorphic closure carrier (typeclass-method params) */\n");
         buf_puts(out, "#ifndef TUR_POLY_FN_T_DEFINED\n");
         buf_puts(out, "#define TUR_POLY_FN_T_DEFINED\n");
-        buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;\n");
+        buf_puts(out, "struct DK;\n");  /* E2: forward-declare so fn_cps's DK* is the real type, not typedef-scoped */
+        buf_puts(out, "typedef struct { void *env; int64_t (*fn)(void *, int64_t); int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;\n");  /* E2: fn_cps DK-threading slot (NULL for pure fn-values) */
         buf_puts(out, "#endif\n\n");
     }
 

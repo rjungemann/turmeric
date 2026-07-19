@@ -633,6 +633,20 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                     if (box_accessor && arg &&
                         arg->kind == EX_VAR && arg->as.var.binding == b)
                         continue;
+                    /* closure-drop-glue S1: a `^borrow` fn-param (FA_BORROW) is
+                     * borrowed, not retained -- the callee invokes but does not
+                     * store/return it.  So `b` passed to a borrowed param does NOT
+                     * escape and its env may be freed at scope exit.  Same soundness
+                     * posture as the box-accessor whitelist (only greenlights a
+                     * free); relies on the callee honouring its ^borrow contract. */
+                    if (arg && arg->kind == EX_VAR && arg->as.var.binding == b) {
+                        const Binding *fb = cur->as.call_.fn_binding;
+                        if (fb && fb->type.kind == TY_FN
+                            && i < fb->type.as.fn.arity
+                            && fb->type.as.fn.arg_flags
+                            && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+                            continue;
+                    }
                     ESC_PUSH(arg);
                 }
                 ESC_PUSH(cur->as.call_.dict_arg);

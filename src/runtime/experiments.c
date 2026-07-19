@@ -114,6 +114,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.30.0",                  /* expires_at (two minor releases; hard contract) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_cps_async },
+    /* cps-tramp-resume GRADUATED 2026-07-19 -- the CPS/DK trampolined tail-resume
+     * path is now the DEFAULT and SOLE lowering for effectful colored code
+     * (g_opt_cps_tramp_resume defaults true).  The full corpus DK-lowers every
+     * effect (zero tur_effect_perform call sites), so the row is retired and the
+     * name moved to GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).
+     * See docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -132,6 +138,7 @@ static const char *const GRADUATED[] = {
      * name gets.  cps-backend graduated 2026-07-11 and its shim was retired once
      * no config referenced it. */
     "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
+    "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
     NULL,
 };
 

@@ -1,0 +1,31 @@
+;; BODY-STRUCT-OR-TAINT (compound) fix: a ROW-VARIABLE fn (`twice [x] #fx{e}`) with
+;; a PURE body (`(+ x x)`) is recognized as effect-free via its INFERRED effect row
+;; (empty), even though its DECLARED `#fx{e}` row-variable reads as non-empty.
+;;
+;; `run` handles Write around a body that calls `greet` (performs Write, colored)
+;; non-tail and then the row-variable `twice` in the reified continuation.  Before
+;; the fix, callee_effect_free used only the declared row, so `twice`'s call read as
+;; effectful, letraw_effect_free rejected it, and term_core_ok rejected the
+;; subsequent KK_PROMPT deliver -> `run`/`greet` evicted (BODY-STRUCT-OR-TAINT).
+;; Now callee_effect_free falls back to the inferred row (the sound runtime-effect
+;; summary), so the pure row-variable call is admitted and `run` emits run__cps.
+;; An EFFECTFUL callee (non-empty inferred row) still evicts.
+;;
+;; Handler prints "hi" and resumes 0; the continuation yields (twice 5) = 10.
+;; Output: hi then 10.
+(defeffect Write [msg :cstr] :nil)
+
+(defn greet [name : cstr] #fx{Write} : nil
+  (perform (Write name)))
+
+(defn twice [x : int] #fx{e} : int
+  (+ x x))
+
+(defn run [] : int
+  (handle
+    (do (greet "hi") (twice 5))
+    (Write [msg] k) (do (println msg) (resume k 0))))
+
+(defn main [] : int
+  (println (run))
+  0)

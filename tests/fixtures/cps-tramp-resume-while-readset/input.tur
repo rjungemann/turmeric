@@ -1,0 +1,16 @@
+;; cps-while-native soundness companion: `set! total` reads `prev`, which a prior
+;; `set!` wrote earlier THIS iteration.  Native lowering resolves reads to the
+;; loop-ENTRY version, so this shape falls outside the sound subset -- the guard
+;; (loop_guard read-after-set) must EVICT it to the fiber, keeping it correct.
+;; Sum of i in 0..4 = 0+1+2+3+4 = 10.
+(defeffect Ask [] :int)
+(defn run [] : int
+  (let [^mut i     0
+        ^mut total 0
+        ^mut prev  0]
+    (while (< i 5)
+      (set! prev (handle (perform (Ask)) (Ask [] k) (resume k i)))
+      (set! total (+ total prev))
+      (set! i (+ i 1)))
+    total))
+(println (run))

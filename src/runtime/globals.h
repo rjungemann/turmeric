@@ -214,6 +214,8 @@ extern bool g_dump_cps_mono;
  * Read by the coloring pass (`src/passes/cps.c`) and the CPS-IR builder
  * (`src/passes/cps_ir.c`).  Gated by the `cps-async` experiment. */
 extern bool g_opt_cps_async;
+/* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
+extern bool g_opt_cps_tramp_resume;
 
 
 /* ---------------------------------------------------------------------------

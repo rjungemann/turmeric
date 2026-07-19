@@ -31,6 +31,15 @@ struct EffectConstructor {
      * by-value aggregate effect value carries its real monomorphized def. */
     const struct Type *result_full_type;
     const struct Type **param_full_types;
+    /* cps-dk-multishot-user-effects (Phase A): index of a RESUMABLE fn PAYLOAD
+     * param -- a `(fn [effect-cont] R)` whose first arg is a continuation, so the
+     * effect is resumed THROUGH the payload (`(E [f] k) (f k)`).  Detected at
+     * defeffect from the param type FORM (the `effect-cont` cont flavor collapses
+     * to its TY_INT carrier in the stored Type, so the form is the reliable
+     * signal).  -1 when the effect has no such param.  Read by the perform reflavor
+     * and the handler-case CK_MULTISHOT upgrade so both halves share the DK-backed
+     * cloneable-cont substrate. */
+    int resumable_payload_param;
 };
 
 /* Effect represents a user-defined effect type.
