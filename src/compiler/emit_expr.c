@@ -5924,6 +5924,33 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             buf_free(&_rb);
                         }
                     }
+                    /* gcc14-int-conversion (carrier-representation-tracking,
+                     * forward at a spec-dispatch call): the mirror of the reverse
+                     * cast -- the RECORDED callee param is a CONCRETE pointer but
+                     * the arg EMITS as the int64 carrier (e.g. a `cstr` element
+                     * carried on int64 passed into `__inst_Eq_eq_qu_cstr(const char
+                     * *)` / `__inst_Show_show_cstr`).  `int64 arg -> pointer param`
+                     * is a hard error under GCC >= 14.  Cast the int64 arg to the
+                     * recorded concrete pointer type.  Gated on the arg emitting as
+                     * int64 (repr c-name) so an arg already the pointer is
+                     * untouched; the RcControlBlock carrier slot is excluded. */
+                    else if (rec_c) {
+                        size_t rL = strlen(rec_c);
+                        bool rec_is_conc_ptr = rL >= 2 && rec_c[rL - 1] == '*' &&
+                            strcmp(rec_c, "void *") != 0 &&
+                            strncmp(rec_c, "RcControlBlock", 14) != 0;
+                        const char *acty = emit_binding_repr_c_name(
+                            ctx, emit_arg->type, emit_arg);
+                        if (rec_is_conc_ptr && acty &&
+                            strcmp(acty, "int64_t") == 0) {
+                            Buf _fb; buf_init(&_fb);
+                            buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
+                            buf_putc(&_fb, '\0');
+                            free(raw);
+                            raw = strdup(_fb.data);
+                            buf_free(&_fb);
+                        }
+                    }
                 }
                 arg_strs[i] = raw;
             }

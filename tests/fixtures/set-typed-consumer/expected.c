@@ -7247,7 +7247,7 @@ static tur_adt_Set__int * set_new__spec__tur_adt_Set__int__() {
 }
 
 static bool __inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * x, tur_adt_Set__int * y) {
-        __auto_type __ps_188 = (set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(x, y));
+        __auto_type __ps_188 = (set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(x), (tur_adt_Set__int *)(intptr_t)(y)));
         if (tur_panicking) return (bool){0};
         return __ps_188;
 }

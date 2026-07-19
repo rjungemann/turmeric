@@ -7365,7 +7365,7 @@ static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map_
             __t206[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
             __t206[1] = (int64_t)(intptr_t)__fn_755;
             void *__t207 = __t206;
-            __auto_type __ps_208 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool(x, y, (int64_t)(intptr_t)(__t207)));
+            __auto_type __ps_208 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t207)));
             if (tur_panicking) return (bool){0};
             __t203 = __ps_208;
         }
