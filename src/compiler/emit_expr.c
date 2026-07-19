@@ -1559,6 +1559,19 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
+            } else if (bind_is_ptr_repr && iv &&
+                       strncmp(iv, "(int64_t)", 9) == 0) {
+                /* gcc14-int-conversion (carrier-representation-tracking, Class B):
+                 * the binder's declared C type is a concrete pointer, but the init
+                 * VALUE is emitted as the int64 carrier -- e.g.
+                 * `(:: (.tail xs) (Cons (Option int)))` emits `(int64_t)(...)->tail`
+                 * while `t0` is declared `tur_adt_Cons__Option__int *`.  `init_cn`
+                 * (the init's TYPE c-name) is the pointer here, so the branch above
+                 * under-fires; key on the emitted value being the carrier (its
+                 * `(int64_t)` prefix) and reinterpret it to the binder's pointer.
+                 * Value-preserving (int64 -> intptr_t -> pointer), and only fires
+                 * for a pointer binder fed an explicitly int64-cast value. */
+                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
             }
@@ -1784,6 +1797,19 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
+            } else if (bind_is_ptr_repr && iv &&
+                       strncmp(iv, "(int64_t)", 9) == 0) {
+                /* gcc14-int-conversion (carrier-representation-tracking, Class B):
+                 * the binder's declared C type is a concrete pointer, but the init
+                 * VALUE is emitted as the int64 carrier -- e.g.
+                 * `(:: (.tail xs) (Cons (Option int)))` emits `(int64_t)(...)->tail`
+                 * while `t0` is declared `tur_adt_Cons__Option__int *`.  `init_cn`
+                 * (the init's TYPE c-name) is the pointer here, so the branch above
+                 * under-fires; key on the emitted value being the carrier (its
+                 * `(int64_t)` prefix) and reinterpret it to the binder's pointer.
+                 * Value-preserving (int64 -> intptr_t -> pointer), and only fires
+                 * for a pointer binder fed an explicitly int64-cast value. */
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
