@@ -1300,11 +1300,24 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
     size_t tL = strlen(tcty);
     bool temp_is_i64 = strcmp(tcty, "int64_t") == 0;
     bool temp_is_ptr = tL >= 1 && tcty[tL - 1] == '*' && strcmp(tcty, "void *") != 0;
-    if (!temp_is_i64 && !temp_is_ptr) return v;
+    /* gcc14-int-conversion (carrier-representation-tracking): a `void *` temp
+     * assigned an int64 carrier value (a closure carrier declared int64) is
+     * `pointer from integer` under GCC >= 14; bridge it too.  A `void *` temp
+     * assigned a POINTER value stays untouched (val_is_ptr, no branch fires). */
+    bool temp_is_voidptr = strcmp(tcty, "void *") == 0;
+    if (!temp_is_i64 && !temp_is_ptr && !temp_is_voidptr) return v;
     /* the value's own representation C type */
     const Expr *p = tail;
     while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
     const char *vcty = p ? emit_binding_repr_c_name(ctx, p->type, p) : NULL;
+    /* A bare local's RECORDED emitted C type is ground truth -- the source-type
+     * c-name collides under the carrier duality (a closure carrier declared int64
+     * whose fn type c-names to a pointer, which would hide the int64->void*
+     * straddle). */
+    if (emit_str_is_bare_ident(v)) {
+        const char *lvty = emit_localvar_lookup_ctype(v);
+        if (lvty) vcty = lvty;
+    }
     if (!vcty) return v;
     size_t vL = strlen(vcty);
     bool val_is_i64 = strcmp(vcty, "int64_t") == 0;
@@ -1313,7 +1326,7 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
         Buf b; buf_init(&b);
         buf_printf(&b, "(int64_t)(intptr_t)(%s)", v);
         buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
-    } else if (temp_is_ptr && val_is_i64) {
+    } else if ((temp_is_ptr || temp_is_voidptr) && val_is_i64) {
         Buf b; buf_init(&b);
         buf_printf(&b, "(%s)(intptr_t)(%s)", tcty, v);
         buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
@@ -1452,6 +1465,12 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * -Wint-conversion.  A bare ^fat alias is :ptr<void> and is handled
              * cleanly by the fallback below. */
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+            /* gcc14-int-conversion (carrier-representation-tracking): this boxed/
+             * fat closure binder is the int64 carrier; record it so a downstream
+             * straddle site (a `void *` letrec-result temp assigned this closure
+             * carrier) resolves the real int64 representation instead of the fn
+             * type's colliding pointer c-name. */
+            emit_localvar_record_ctype(bn, "int64_t");
         } else if (b->type.kind == TY_FN
                    && (b->type.as.fn.result_kind == TY_FN
                        || b->type.as.fn.result_kind == TY_UNKNOWN)) {
@@ -1464,6 +1483,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the handle; carry it as the int64_t handle instead, mirroring the
              * is_fat/boxed branch above. */
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+            emit_localvar_record_ctype(bn, "int64_t");
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
             const char *ret_c = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
@@ -1610,6 +1630,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
             }
+            /* gcc14-int-conversion (carrier-representation-tracking): record the
+             * binder's ACTUAL declared C type so a downstream straddle site (a
+             * control-result assignment reading this var) resolves the real
+             * representation, not the colliding source-type c-name -- e.g. a
+             * self-capturing closure carrier declared `int64_t self` whose fn type
+             * c-names to a pointer, feeding a `void *` letrec-result temp. */
+            emit_localvar_record_ctype(bn, bind_c);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
