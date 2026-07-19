@@ -7282,8 +7282,7 @@ int main(int argc, char **argv) {
 }
 
 static void thread_hysleep(int64_t ms) {
-        typedef struct { long tv_sec; long tv_nsec; } timespec;
-  timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
+        struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
   nanosleep(&ts, NULL);
   
 }
