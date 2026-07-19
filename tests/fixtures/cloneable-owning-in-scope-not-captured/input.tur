@@ -1,0 +1,30 @@
+;; E4 (cps-backend-multishot-continuations-owning-capture-plan): an owning value
+;; (an `rc`) in scope at a cloneable-shift, but NOT captured by the multi-shot
+;; continuation, must not require a Clone instance.
+;;
+;; Before the E4 fix, check_cloneable_capture walked EVERY binding in scope at a
+;; cloneable-shift and rejected any non-Clone type with TUR-E0014 -- so merely
+;; having an `rc` in scope (rc has no Clone instance) broke every cloneable-shift
+;; in the function, even when the reified continuation never touches it.  The
+;; check now runs once per reset on the full delimited body and flags only the
+;; bindings that are FREE in that body (the ones the continuation actually
+;; captures).  `r` here is borrowed for its count and released BEFORE the reset,
+;; so nothing owning rides the continuation; only the scalar `base` does.
+;;
+;; The continuation is resumed twice (clone + original), proving the multi-shot
+;; path, and the program is LeakSanitizer-clean.
+
+(defn k-identity [k] : int k)
+
+(defn run [] : int
+  (let [r (rc/of 99)]
+    (let [base (rc/strong-count r)]   ; borrow: read the count (a scalar) out
+      (rc/drop r)                      ; owning `r` fully released before the reset
+      (let [k (cloneable-reset (+ (cloneable-shift k-identity 0) base))]
+        (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+          (let [b (tur_cloneable_cont_resume k 20)]
+            (+ a b)))))))              ; (10 + 1) + (20 + 1) = 32
+
+(defn main [] : int
+  (println (run))
+  0)

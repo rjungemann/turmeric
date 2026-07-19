@@ -2,7 +2,8 @@
 #include "elab_internal.h"
 
 /* ---- file-local helper forward declarations ---- */
-static void check_cloneable_capture(Elab *e, Span span);
+static void check_cloneable_capture_precise(Elab *e, Span span,
+                                            const Expr *reset_body);
 static void check_serializable_capture(Elab *e, Span span);
 static bool is_effect_handled(Elab *e, const Symbol *name);
 static void push_handled_effect(Elab *e, const Symbol *name);
@@ -175,6 +176,8 @@ Expr *elab_reset(Elab *e, const Form *call) {
     e->cloneable_reset_depth--;
     if (!body) return NULL;
     if (reified) {
+        /* CPS-CL10 / E4: a resuming shift bound here -- verify the captures. */
+        check_cloneable_capture_precise(e, call->span, body);
         Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
         out->as.cloneable_reset_.body = body;
         record_reset_node(e, out);
@@ -302,20 +305,36 @@ Expr *elab_shift0(Elab *e, const Form *call) {
 
 /* Phase B2: Cloneable continuations */
 
-/* CPS-CL10 (elab-time): Walk all local bindings visible at a cloneable-shift
- * site and emit TUR-E0014 for any that lack a Clone instance.  This is a
- * conservative check — it covers every binding in scope, not just those that
- * are actually live at the shift; liveness-precise checking would require the
- * CPS pass.  Running early (in elab) gives diagnostics before codegen. */
-static void check_cloneable_capture(Elab *e, Span span) {
+/* CPS-CL10 / E4 (elab-time): emit TUR-E0014 for a binding CAPTURED into a
+ * cloneable-shift's multi-shot continuation that lacks a Clone instance.
+ *
+ * This runs once per reset, on the full reset body (the delimited context the
+ * continuation reifies), so it knows exactly which fn-local bindings the
+ * continuation actually references -- the free variables of that body.  The
+ * old per-shift check ran before the body existed and had to over-approximate
+ * to EVERY in-scope binding; that spuriously rejected an owning value (an `rc`,
+ * a non-Clone struct, ...) merely being *in scope* at a cloneable-shift, even
+ * when the continuation never touches it (E4).  An owning value that is not
+ * free in the continuation is provably not captured, so it needs no Clone; one
+ * that IS free (genuinely captured owning) stays rejected -- the native
+ * multi-shot env cannot own a reference without the E3 env clone/drop teardown,
+ * which is unbuilt.  fn-local bindings only (walk stops at
+ * fn_entry_outer_scope): an ENCLOSING-fn binding is not captured into the
+ * continuation env (CF7.3) and a top-level def is global, so neither is a
+ * capture candidate. */
+static void check_cloneable_capture_precise(Elab *e, Span span,
+                                            const Expr *reset_body) {
     const Symbol *clone_sym = intern_cstr(e->st, "Clone");
     TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_sym);
     if (!clone_tc) return; /* No Clone typeclass in scope; nothing to check */
+    if (!reset_body) return;
 
-    /* CF7.3: stop at the outer-function boundary so bindings from enclosing
-     * functions (which are NOT captured in the continuation env) are not
-     * falsely flagged as needing Clone.  For top-level defns fn_entry_outer_scope
-     * is &e->global, giving the same behavior as before. */
+    /* The free variables of the reifiable continuation context.  A binding not
+     * in this set is not referenced by the continuation and so is never cloned
+     * on resume -- it does not need Clone regardless of its type. */
+    uint32_t n_fv = 0;
+    Binding **fvs = collect_free_vars(reset_body, NULL, 0, NULL, 0, &n_fv);
+
     Scope *stop = e->fn_entry_outer_scope ? e->fn_entry_outer_scope : &e->global;
     for (Scope *s = e->scope; s != NULL && s != stop; s = s->parent) {
         for (uint32_t i = 0; i < s->n; i++) {
@@ -325,6 +344,11 @@ static void check_cloneable_capture(Elab *e, Span span) {
             /* Primitive/function/continuation types are always safe to capture */
             if (t.kind == TY_NIL || t.kind == TY_FN ||
                 t.kind == TY_CLONEABLE_CONT) continue;
+            /* Only a binding the continuation actually references is captured. */
+            bool captured = false;
+            for (uint32_t j = 0; j < n_fv; j++)
+                if (fvs[j] == b) { captured = true; break; }
+            if (!captured) continue;
             TypeClassInstance *inst =
                 typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &t, 1);
             if (!inst) {
@@ -335,6 +359,7 @@ static void check_cloneable_capture(Elab *e, Span span) {
             }
         }
     }
+    if (fvs) free(fvs);
 }
 
 /* (cloneable-reset body) - Establish a continuation boundary with cloneable captures.
@@ -351,6 +376,8 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
     Expr *body = elab_form(e, call->as.list.items[1]);
     e->cloneable_reset_depth--;
     if (!body) return NULL;
+    /* CPS-CL10 / E4: verify captures of the reified continuation body. */
+    check_cloneable_capture_precise(e, call->span, body);
     Expr *out = expr_new(e->arena, EX_CLONEABLE_RESET, body->type, call->span);
     out->as.cloneable_reset_.body = body;
     record_reset_node(e, out);
@@ -989,8 +1016,10 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * delimiter, so a plain `reset` becomes EX_CLONEABLE_RESET. */
     if (e->cloneable_reset_depth >= 0 && e->cloneable_reset_depth < 64)
         e->reified_shift_at_depth[e->cloneable_reset_depth] = true;
-    /* CPS-CL10: verify all local captures implement Clone at elaboration time */
-    check_cloneable_capture(e, call->span);
+    /* CPS-CL10 / E4: the Clone-capture check now runs once per enclosing reset
+     * (check_cloneable_capture_precise), on the full reset body, so it can tell
+     * a genuinely-captured owning value from one merely in scope.  See the
+     * enclosing reset elaborators (elab_reset / elab_cloneable_reset). */
     return out;
 }
 

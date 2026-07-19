@@ -525,6 +525,27 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
                         ls[lsp++] = cur->as.exists_dispatch_.args[i-1];
                     break;
+                /* Delimited control: descend so a `let` nested under a
+                 * shift/reset body is registered as locally defined (matches the
+                 * main traversal below). */
+                case EX_RESET:
+                    if (cur->as.reset_.body) ls[lsp++] = cur->as.reset_.body;
+                    break;
+                case EX_SHIFT:
+                    if (cur->as.shift_.k_fn) ls[lsp++] = cur->as.shift_.k_fn;
+                    if (cur->as.shift_.body) ls[lsp++] = cur->as.shift_.body;
+                    break;
+                case EX_SHIFT0:
+                    if (cur->as.shift0_.k_fn) ls[lsp++] = cur->as.shift0_.k_fn;
+                    if (cur->as.shift0_.body) ls[lsp++] = cur->as.shift0_.body;
+                    break;
+                case EX_CLONEABLE_RESET:
+                    if (cur->as.cloneable_reset_.body) ls[lsp++] = cur->as.cloneable_reset_.body;
+                    break;
+                case EX_CLONEABLE_SHIFT:
+                    if (cur->as.cloneable_shift_.k_fn) ls[lsp++] = cur->as.cloneable_shift_.k_fn;
+                    if (cur->as.cloneable_shift_.body) ls[lsp++] = cur->as.cloneable_shift_.body;
+                    break;
                 default: break;
             }
         }
@@ -1002,6 +1023,30 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_EXISTS_DISPATCH:
                 for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
                     stack[sp++] = cur->as.exists_dispatch_.args[i-1];
+                break;
+            /* Delimited control (reset/shift/shift0, cloneable variants): descend
+             * into the delimited body and receiver so a local referenced only
+             * inside a shift/reset body surfaces as a free variable of the
+             * enclosing scope.  Without this the constructs hit `default` and
+             * their subtrees were invisible -- e.g. a value captured as a
+             * cloneable-shift body was never seen by the E4 Clone-capture check. */
+            case EX_RESET:
+                if (cur->as.reset_.body) stack[sp++] = cur->as.reset_.body;
+                break;
+            case EX_SHIFT:
+                if (cur->as.shift_.k_fn) stack[sp++] = cur->as.shift_.k_fn;
+                if (cur->as.shift_.body) stack[sp++] = cur->as.shift_.body;
+                break;
+            case EX_SHIFT0:
+                if (cur->as.shift0_.k_fn) stack[sp++] = cur->as.shift0_.k_fn;
+                if (cur->as.shift0_.body) stack[sp++] = cur->as.shift0_.body;
+                break;
+            case EX_CLONEABLE_RESET:
+                if (cur->as.cloneable_reset_.body) stack[sp++] = cur->as.cloneable_reset_.body;
+                break;
+            case EX_CLONEABLE_SHIFT:
+                if (cur->as.cloneable_shift_.k_fn) stack[sp++] = cur->as.cloneable_shift_.k_fn;
+                if (cur->as.cloneable_shift_.body) stack[sp++] = cur->as.cloneable_shift_.body;
                 break;
             default:
                 break;

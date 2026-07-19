@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E3 (consuming/abortive crossings teardown) largely obsoleted and NOT built; E4 (reset/shift resumed >once capturing an owning value) open. Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E3 (consuming/abortive crossings teardown) largely obsoleted and NOT built; E4a (owning value in scope at a cloneable-shift but NOT captured no longer trips TUR-E0014) LANDED 2026-07-19 -- the reachable E-borrow slice; the genuinely-owning multi-shot capture still rides unbuilt E3. Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped, cloneable-owning-in-scope-not-captured added. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -19,8 +19,15 @@ description: Two orthogonal CPS-backend coverage features, split out and detaile
 > `expr_is_pure_borrow_of` present. **E3 is NOT built** (obsoleted; its standalone
 > plan was folded into Track B's E3 section here and deleted 2026-07-19 -- the
 > consuming-aggregate residual is the TUR-E0107 hard error, wired via
-> `is_field_consumed_in_handler` + `elab_forms.c`). **E4 remains open.** This
-> plan stays **OPEN on E4 only**; everything else is done.
+> `is_field_consumed_in_handler` + `elab_forms.c`). **E4a LANDED 2026-07-19** --
+> the reachable E-borrow slice of E4: an owning value in scope at a cloneable-
+> shift but not captured no longer trips TUR-E0014 (per-reset free-var-precise
+> capture check + `collect_free_vars` descent through delimited-control nodes;
+> fixture `cloneable-owning-in-scope-not-captured`). The genuinely-owning multi-
+> shot capture (the `rc` handle riding the multi-shot env, cloned/dropped per
+> resume) still rides **unbuilt E3**, as does the owning-autodrop-crossing-a-
+> cloneable-reset case (TUR-E0710). This plan stays **OPEN on the E3-gated tail
+> of E4**; everything reachable without E3 is done.
 
 ## Why this document exists / what it supersedes
 
@@ -488,10 +495,55 @@ and CPS paths.
 A reset/shift whose continuation is *resumed more than once* (multi-shot resume,
 distinct from Track A's multi-*suspension*) and whose body captures an owning
 value. Today a second resume in the CT-IR subset is a hard error (TUR-E0201);
-multi-shot resume rides the cloneable / DK-copy path. E4 admits an owning
-capture on that path via E3's env clone/drop (the `dk_copy_node` clone fires the
-env clone per resume). Fixture: a generator/step shift resumed twice capturing
-an `rc`. Land after E3.
+multi-shot resume rides the cloneable / DK-copy path. A genuinely-owning capture
+on that path (the `rc` handle itself riding the multi-shot env, incref'd per
+`dk_copy_node` clone and decref'd per `dk_free`) still needs E3's env
+clone/drop, which is unbuilt -- so a real "generator/step shift resumed twice
+capturing an `rc`" fixture rides E3.
+
+#### E4a -- owning value in scope at a cloneable-shift, NOT captured. LANDED (2026-07-19).
+
+The reachable, E-borrow-shaped slice: the multi-shot capture gate was
+*conservatively over-rejecting*. `check_cloneable_capture` ran per-`cloneable-
+shift`, before the reified continuation body existed, so it had to over-
+approximate to EVERY binding in scope and emit TUR-E0014 ("does not implement
+Clone") for any non-Clone type -- meaning merely having an `rc` (or any owning /
+non-Clone value) *in scope* at a cloneable-shift broke every cloneable-shift in
+the function, even when the reified continuation never touched it. That is the
+same false-positive family E-borrow retired on the handler path (a value not
+actually captured owning needs no clone glue).
+
+The check now runs **once per enclosing reset**, on the full delimited body (the
+context the continuation reifies), and flags only the fn-local bindings that are
+**free in that body** -- i.e. the ones the continuation actually captures. An
+owning value not free in the continuation is provably not captured and needs no
+Clone; one that IS free (genuinely-captured owning) stays rejected (it rides
+unbuilt E3, or the native grammar's marshaled-int frame env cannot own it). This
+required teaching `collect_free_vars` (`elab_core.c`) to descend through the
+delimited-control nodes (`EX_RESET` / `EX_SHIFT` / `EX_SHIFT0` /
+`EX_CLONEABLE_RESET` / `EX_CLONEABLE_SHIFT`), which it previously skipped
+(`default: break`) -- so a value referenced only inside a shift/reset body now
+surfaces as a free variable of the enclosing scope (also a latent gap for any
+other `collect_free_vars` caller over such bodies). Wiring: the per-shift
+`check_cloneable_capture(e, span)` call is replaced by
+`check_cloneable_capture_precise(e, span, reset_body)`, invoked from
+`elab_cloneable_reset` and the reified branch of `elab_reset`
+(`src/compiler/elab_effects.c`). Fixture
+`cloneable-owning-in-scope-not-captured`: an `rc` borrowed for its count and
+released *before* a `cloneable-reset`, whose continuation is resumed twice
+(clone + original) -- CPS-emits, output 32, LeakSanitizer-clean. The negative
+fixtures (`cloneable-non-clone-capture`, `backtrack-clone-non-clone-capture`,
+which capture the value AS the shift body -- genuinely free -- ) still emit
+TUR-E0014 unchanged. Full suite 2203 passed, 0 failed.
+
+**Still residual (out of E4a scope, both pre-existing):**
+- *Genuinely-owning multi-shot capture* -- the `rc` handle riding the multi-shot
+  env, cloned/dropped per resume -- rides unbuilt **E3**.
+- *Owning value whose scope-exit auto-drop CROSSES a `cloneable-reset`* (an `rc`
+  live across the reset and dropped after it) still evicts with TUR-E0710: the
+  autodrop-crossing lowering (owning-autodrop-lowering P2) covers the single-shot
+  `handle` crossing, not the multi-shot cloneable-reset crossing. That is the
+  E3-adjacent teardown axis, not the Clone-capture check.
 
 ---
 
