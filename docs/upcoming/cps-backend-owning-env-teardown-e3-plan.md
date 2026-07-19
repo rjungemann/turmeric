@@ -158,6 +158,57 @@ Either also retires the pre-existing DK-node leak (already archived as
   continuation -- the region-end teardown must still run. The arena option makes
   this uniform. (Same obligation O1-b P2's "fire on abandon" carries.)
 
+## E3b auto-defer lowering -- design sketch (2026-07-19)
+
+Scoped after landing the explicit-drop channel. The remaining ergonomic gap is
+narrow and tractable -- it is NOT the full "arbitrary `defer` in a CPS body"
+feature. The target is exactly one shape: the **auto-inserted scope-exit drop**
+of an owning local captured `^borrow` across a cloneable-reset,
+`(defer (rc/drop r))` / `(defer (drop! r))`, appended to the body `do` by the
+elaborator (`elab_forms.c:1163` / `:1050` / `:1353`).
+
+Why it is small (from the EX_DEFER map):
+
+- A **plain** `(rc/drop r)` already lowers fine on the CPS path -- `safe_to_delegate`
+  admits `EX_RC_DROP` (`cps_ir.c:1714`) so it delegates to a `CT_LETRAW` the
+  direct emitter drops. The SAME drop wrapped in `EX_DEFER` evicts *only* because
+  `safe_to_delegate`'s `EX_DEFER` arm (`cps_ir.c:1760`) gates on
+  `g_whole_body_delegate`. The explicit-drop channel already proves the unwrapped
+  `CT_LETRAW`-in-the-continuation shape is admissible and leak-clean.
+- The elaborator's auto-drop defer is already recognized structurally:
+  `autodrop_defer_owning` (`cps_ir.c:2112-2131`) matches `(defer (rc/drop X))` /
+  `(defer (drop! X))` and returns the discharged root local. It already backs the
+  BEFORE-control hoist (`cps_emit_hoisted_drops`, spliced at `cps_ir.c:3401`).
+
+**Approach: unwrap the auto-drop defer into a straight-line drop after the
+cloneable-reset**, under the experiment gate, for exactly this shape:
+
+- In `cps_bind`/`cps_tail`, when the tail/bound form is a `(defer D)` whose body
+  is an `autodrop_defer_owning` root that is captured `^borrow` into an enclosing
+  gated cloneable-reset, lower `D` as its inner drop (the same `CT_LETRAW` an
+  explicit `(rc/drop r)` produces) threaded into the continuation body -- i.e.
+  treat the auto-defer identically to the explicit drop that already works.
+- Equivalently at emit level, the agent found a clean region-completion seam in
+  `emit_cloneable` at `emit_cps_ir.c:6389-6391`: after `xn = dk_run(dv,0);
+  dk_free(dv);` and before `emit_term(body)`, `xn` is a live local and `dv` is
+  freed -- a straight-line `ce_line` drop there is exactly the defer semantics
+  (region completes -> drop -> deliver). Prefer the CT-IR unwrap (reuses the
+  proven explicit-drop path); the emit seam is the fallback if CT-IR unwrap is
+  awkward.
+
+Soundness is identical to the landed explicit-drop channel: the frame only
+BORROWS the rc (never drops it), the body between reset and scope exit is
+straight-line, and the drop runs once after a normally-completing reset. General
+`defer` (multiple defers, user `(defer ...)`, LIFO ordering, abortive-exit
+firing, non-cloneable regions) stays out of scope -- that is the genuinely large
+"CPS defer runtime" feature and is not needed for E3's owning-capture goal.
+
+Not applicable to `emit_reset` (plain CT_RESET): its continuation is lifted
+behind the DK chain (`emit_cps_ir.c:5860/5881`) with no inline post-completion
+seam, so a defer there must thread at the CT-IR level (as the existing
+`cps_ir.c:3409-3462` do-with-control-op defer path already does). The cloneable
+path is the one E3 needs.
+
 ## What rides E3 (the consumers to re-admit once it lands)
 
 - **E4 proper -- genuinely-owning multi-shot capture.** The `rc` handle (or
@@ -170,21 +221,24 @@ Either also retires the pre-existing DK-node leak (already archived as
   aggregate capture (`is_field_consumed_in_handler`) becomes *admitted* with a
   real env drop instead of the current hard error.
 - **The TUR-E0710 owning-autodrop-crossing-a-cloneable-reset case.** An `rc` the
-  enclosing fn OWNS, captured across a `cloneable-reset` and dropped after it,
-  currently evicts. **Root cause pinned (2026-07-19):** the scope-exit drop is
-  emitted as an `EX_DEFER`, and `EX_DEFER` is `unsupported_form` in a CPS-colored
-  function (`term_core_ok` -> CT_UNSUPPORTED "unsupported form: EX_DEFER" ->
-  whole-fn eviction -> the direct emitter rejects the cloneable-shift, TUR-E0710).
-  So this case is NOT unblocked by a local `owning_dropped_before_control` /
-  `letraw_ok` relaxation (verified: granting CT_CLONEABLE the drop-before-control
-  pass lets `letraw_ok` through, but the `EX_DEFER` still evicts). It needs
-  **CPS `defer` lowering**: run the deferred scope-exit drop at delimited-region
-  completion (bind the `dk_run` result, run the drop, then deliver -- the non-tail
-  region / per-region arena of E3b). That is why it is E3b, not a widening of the
-  landed borrow channel. (The landed borrow channel sidesteps it by keeping the
-  OWNER -- the fn carrying the defer-drop -- out of the CPS-colored function: the
-  borrow fixture's `run` borrows `r`, and `main`, which owns and defers-drops it,
-  is direct-emitted.)
+  enclosing fn OWNS, captured across a `cloneable-reset` and dropped after it.
+  This splits into two tiers (both pinned 2026-07-19):
+  - **Explicit drop -- LANDED.** With an explicit `(rc/drop r)` on the
+    straight-line path after the reset, the drop lowers as a plain `CT_LETRAW`;
+    granting `CT_CLONEABLE` the "no longer has to precede the control op" pass in
+    `owning_dropped_before_control` admits it. Sound because the E3a admission
+    only lets the frame BORROW the rc (never dropped inside the multi-shot
+    continuation) -- the owner drops it once, after a reset that completes
+    normally. Fixture `cloneable-owning-explicit-drop-crossing` (leak-clean).
+  - **Auto-inserted drop -- E3b, still open.** Without an explicit drop the
+    compiler auto-inserts the scope-exit drop as an `EX_DEFER`, which is
+    `unsupported_form` on the CPS path (`term_core_ok` -> CT_UNSUPPORTED
+    "unsupported form: EX_DEFER" -> whole-fn eviction -> TUR-E0710). So the
+    ergonomic case needs **CPS `defer` lowering**: run the deferred scope-exit
+    drop at delimited-region completion (bind the `dk_run` result, run the drop,
+    then deliver -- the non-tail region / per-region arena of E3b). This does NOT
+    silently leak today: an owning capture without an explicit drop simply does
+    not compile (the EX_DEFER evicts).
 - **O1-b P2 / P3** ([cps-backend-ref-scope-exit-drop-plan.md](cps-backend-ref-scope-exit-drop-plan.md)):
   P2 (abortive-unwind ref drop) rides E3b's region teardown; P3
   (resumable-crossing ref) is the `ref`-flavored instance of the owning capture

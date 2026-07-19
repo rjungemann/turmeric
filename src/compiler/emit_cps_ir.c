@@ -1880,6 +1880,23 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
                  * back.  A missed capture surfaces as an undeclared C name (compile
                  * error), never a silent leak/double-free. */
                 return true;
+            case CT_CLONEABLE:
+                /* E3a (owning-cloneable-capture): an owning `rc` the fn owns,
+                 * captured ^borrow across a cloneable-reset and dropped AFTER it,
+                 * gets the same "no longer has to precede the control op" pass.
+                 * Soundness: the E3a admission only lets the frame BORROW the rc
+                 * (build_marshal_reset + FA_BORROW), so it is never dropped inside
+                 * the multi-shot continuation -- only once by its owner on the
+                 * straight-line path after the reset, which completes normally
+                 * (the cloneable receiver captures the continuation; it does not
+                 * abort past the drop).  Forgetting the drop cannot silently leak:
+                 * the auto-inserted scope-exit drop is an EX_DEFER, still
+                 * unsupported on the CPS path (it evicts), so an owning capture
+                 * without an explicit end-of-scope drop does not compile here.
+                 * Gated on the experiment; off-gate a cloneable owning capture
+                 * never reaches this walk (it evicts at the grammar). */
+                if (g_opt_owning_cloneable_capture) return true;
+                return false;
             default: return false;   /* shift (abortive) / unexpected: conservative */
         }
     }
