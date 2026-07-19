@@ -4982,7 +4982,16 @@ static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
             arg_is_byval_agg = acty && strcmp(acty, "int64_t") != 0 &&
                                !(aL >= 1 && acty[aL - 1] == '*');
         }
-        if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
+        /* gcc14-int-conversion (carrier-to-typed-param): a fat-fn arg (a `void *`
+         * fat-closure carrier) passed into a callee slot the signature declares
+         * as the int64 fn-carrier (`int64_t cmp_fn`, e.g. `option-eq?`'s
+         * comparator) is a void*->int64 -Wint-conversion -- a hard error under
+         * GCC >= 14.  Bridge it to the carrier; the fat carrier's bits are
+         * preserved.  A fat-fn into a genuine fn-value slot (`void *` /
+         * tur_poly_fn_t param) is left bare below. */
+        if (atom_is_fat_fn(&args[i]) && param_is_i64)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
         else if (param_is_voidp && arg_is_ptr)
             buf_puts(&b, a);                 /* object ptr -> void*: already valid */
@@ -5253,10 +5262,17 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * fell back to direct-style; call it synchronously and deliver
                  * the ordinary result value to the continuation. */
                 char *tmp = fresh_tmp(ce->ctx);
+                /* Cast each arg to the callee's DECLARED param C type, exactly as
+                 * the cps->cps branch does -- a pointer/fat-fn arg into an int64
+                 * carrier param (or vice versa) is a -Wint-conversion hard error
+                 * under GCC >= 14 (gcc14-int-conversion, carrier-to-typed-param). */
+                char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
+                                                    t->as.tailcall.n, t->as.tailcall.fn);
                 /* __auto_type keeps the callee's real return type (int, cstr,
                  * ...); the slot cast at delivery narrows it to the word. */
-                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv);
+                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
                 emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                free(argv_t);
                 free(tmp);
             }
             free(fn); free(argv);
