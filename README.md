@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.28.2` -- CPS backend temporaries are now `__`-prefixed so generated code can no longer collide with user-code identifiers.
+**Latest release:** `v0.29.0` -- the fiber effect runtime is deleted; the CPS/DK delimited-continuation backend is now the sole lowering path for effects and handlers.
 
 ## What
 

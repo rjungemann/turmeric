@@ -4,6 +4,54 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.29.0] -- 2026-07-18
+
+### Removed
+
+- **The fiber-based effect runtime is deleted**: the legacy fiber effect
+  handler runtime -- the second effect-lowering substrate that ran
+  alongside the CPS/DK backend -- has been fully removed (Stage G). The
+  delimited-continuation (DK) backend is now the sole lowering path for
+  effects and handlers, and the dead `tur_effect_cont_resume` /
+  `emit_effects_*` machinery is gone (#685).
+
+### Changed
+
+- **The CPS/DK backend is the sole effect-lowering path**: effectful
+  handles (top-level, macro-expanded, and inside `defmodule`), first-class
+  and dynamic handler values, effect-polymorphic higher-order functions,
+  nested handles, escaping continuations, and self-handling async closures
+  now all lower onto the DK backend instead of evicting to a fiber.
+- **`cps-tramp-resume` graduated to always-on**: trampolined tail-resume
+  is no longer experimental, giving flat (heap-bounded) effectful
+  tail-recursion at scale (e.g. 1e6 iterations) with no flag required.
+
+### Added
+
+- **Windows bringup**: the compiler and runtime now build and run on
+  Windows (#682).
+- **`stdlib/logic.tur` is pure Turmeric**: the miniKanren logic engine was
+  reimplemented with no inline C (#679).
+- **`stdlib/re.tur` is a pure-Turmeric regex engine** (#676).
+- **Cooperative session-channel runtime** under the interpreter (#677).
+- **Shallow effect handlers (F2) and async/await on heap continuations
+  (F3)** (#674).
+- **Unbounded function arity**: the hard positional-parameter cap is
+  removed; wide functions store args out-of-line, with a `TUR-W0041` lint
+  nudge past 16 params (#669).
+
+### Fixed
+
+- **Numerous effect-runtime memory leaks closed**: DK continuation-chain
+  nodes, straight-line and heap-join perform-continuation frames, shift
+  receiver closure environments, and multi-shot resume snapshots are now
+  freed; the compiler/codegen path is leak-clean under ASan/LSan
+  (#681, #664, and follow-ups).
+- **`Eq [Bound]` no longer misdispatches to bare-tyvar instances**; adds a
+  `str-build` leaf (#673).
+- **Owning `rc` capture into a multi-shot handler-case environment** is
+  handled correctly (#680).
+
 ## [0.28.2] -- 2026-07-12
 
 ### Fixed
