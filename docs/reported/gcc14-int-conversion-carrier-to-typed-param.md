@@ -46,6 +46,35 @@ Gathered by compiling every previously-flagged fixture under
   `opaque-tyvar-through-wrapper-fn`, and the `logic-*` suite
   (`logic-conjoined/-disjoined/-fresh/-occurs-check/-query/-reify/-unify-basic/-unify-fail`).
 
+## Progress (2026-07-19): 33 of 46 int-conversion fixtures fixed
+
+Multiple paths landed (all committed, full suite green 2202/0):
+- **Regular calls** -- heap-container arg -> concrete pointer param.
+- **cps->cps calls** -- `atoms_csv_call_typed` casts each arg to the `__cps`
+  callee's declared param C type.
+- **Parametric-opaque ascription** (the big coordinated fix) -- `(:: <ptr> :Goal)`
+  where `(Goal A)` lowers to the int64 carrier now reinterprets the pointer to
+  int64, so value/binder/return agree. Cleared the whole `logic-*` suite (8),
+  `opaque-fn-carrier-dispatch`, and the two `hkt-stdlib-*-instances` at once, zero
+  churn.
+- **Inline-C returning void\* from an opaque-carrier (int64) function** -- stdlib
+  `future.tur` + `opaque-tyvar-through-wrapper-fn` (return the carrier as int64).
+- **Existential-pack ctor arg** (`ctor_Box`) -- cast the `tur_exists_t` (void*)
+  pack to int64.
+
+**Remaining (13), each a distinct edge case (a naive cast over-fires -- verified):**
+`constrained-loop-vec-push-byvalue-result-element`, `data-literal-nested`,
+`fat-closure-ascription`, `gde-generic-dict-eq-map` (dict method arg),
+`generic-relay-aggregate-result`, `httpd-mw-fold-many`,
+`letrec-self-in-nested-closure`, `list-count/homog/length-*-aggregate-element`
+(by-value aggregate ELEMENT init: int64 -> `tur_adt_Cons__Option__int *`),
+`map-typed-consumer` (heap-ptr arg -> int64 param; a blanket reverse cast
+regressed 11 fixtures + 453-line churn, so needs a precise per-arg-C-type guard),
+`mutex-linear` (extern-c `free`: int64 -> void*), `option-basic` (`option_hyeq_qu`
+arg 3: void* -> int64). These are the residual carrier-crossing sites; each needs
+a targeted, individually-verified cast (the front no longer has a single big
+lever left -- the opaque reconciliation was it).
+
 ## Root cause (pinned 2026-07-19)
 
 The two ctor sub-fronts and the CPS-fn-value front of the umbrella are now fixed
