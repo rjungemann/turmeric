@@ -114,26 +114,12 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.30.0",                  /* expires_at (two minor releases; hard contract) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_cps_async },
-    /* cps-tramp-resume (E7 of the v2 sole-effect-lowering plan): trampolined
-     * tail-resume.  A perform-continuation ending in a tail call is admitted as a
-     * DKK_RESUME_FRAME, and a tail-resume handler unwinds to the entry driver (a
-     * heap meta-stack of pending deliveries) instead of resuming inline via
-     * dk_invoke.  This keeps deep effectful tail-recursion flat (proven by the
-     * kill-probe: 160 B/elt inline -> constant trampolined at 1e6).  It is the
-     * Stage-0 prerequisite for deleting the fiber effect runtime, which is today
-     * the only substrate keeping such recursion off the C stack.  Read by the
-     * CPS-IR classifier (emit_cps_ir.c) and gates the trampoline runtime emission
-     * (emit_module.c).  Graduate when the deep-effectful-loop cluster is migrated
-     * off fiber and the stackless sign-off fixture is green by default. */
-    { "cps-tramp-resume",
-      "trampolined tail-resume: a tail-recursive effectful perform-continuation is "
-      "admitted as a DKK_RESUME_FRAME and its handler unwinds to the entry driver "
-      "(meta-stack), keeping deep effectful tail-recursion flat instead of O(N) C stack",
-      "docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md",
-      "0.28.2",                  /* introduced */
-      "0.31.0",                  /* expires_at (three minor releases; the migration is staged) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_cps_tramp_resume },
+    /* cps-tramp-resume GRADUATED 2026-07-19 -- the CPS/DK trampolined tail-resume
+     * path is now the DEFAULT and SOLE lowering for effectful colored code
+     * (g_opt_cps_tramp_resume defaults true).  The full corpus DK-lowers every
+     * effect (zero tur_effect_perform call sites), so the row is retired and the
+     * name moved to GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).
+     * See docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -152,6 +138,7 @@ static const char *const GRADUATED[] = {
      * name gets.  cps-backend graduated 2026-07-11 and its shim was retired once
      * no config referenced it. */
     "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
+    "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
     NULL,
 };
 
