@@ -205,6 +205,34 @@ does not by itself admit new shapes does not need the gate.
   continuation body) -- a separate trampolined-heap-continuation plan; tracked
   for `await` in `docs/reported/cps-async-recursive-await-eviction.md`.
 
+## Implementation status (2026-07-19)
+
+Landed on `claude/cps-backend-multishot-continuations-yidyhq`:
+
+- **Runtime substrate** -- `DKEnvClone`/`DKEnvDrop` hooks + `dk_frame_owning` on
+  the standalone DK machine (`cps_prompt.c`), sanitizer-proved by two new
+  `cps_prompt_unit.c` tests (per-copy clone, per-free drop, net-zero across a
+  multi-shot resume; base drop fires exactly once).
+- **Emitted-runtime mirror** -- the same hooks in the DK prelude compiled into
+  programs (`emit_dk_runtime.c`); NULL-default, byte-identical behavior, 139
+  fixture snapshots regenerated.
+- **Experiment gate** -- `owning-cloneable-capture` (`g_opt_owning_cloneable_capture`,
+  `EXPERIMENTS[]` row, `--enable=` accepted), default off and inert.
+
+**Codegen is blocked** on a pre-existing type defect:
+[docs/reported/rc-param-generalizes-to-tyvar.md](../reported/rc-param-generalizes-to-tyvar.md).
+An owning `rc` reaches a cloneable continuation frame only through a user
+function with an `rc<T>` parameter, and such a parameter generalizes to a bare
+tyvar -- so rc builtins hard-error on it and `build_cloneable` sees `TY_TYVAR`,
+not `TY_RC`. The elab admission (relax TUR-E0014 under the gate) and the
+`build_cloneable` owning-env relaxation (operand-gated + `^borrow`-gated, the
+sound borrow subset) were prototyped and reverted pending that fix. Once a
+`rc<T>` parameter resolves to `TY_RC`, re-apply them and wire `dk_frame_owning`
++ the per-frame rc clone/drop glue at the `emit_cloneable` Shape-2 frame push
+(`emit_cps_ir.c` ~6349-6363). Note (from the capture-channel map): serial can't
+carry owning values, and the shift-receiver env is single-shot -- the only
+multi-shot owning channel is this non-serial `CloneFrame` env.
+
 ## Depends on / reuses
 
 - `tur_cloneable_cont_alloc(fn, cap, clone, drop)` (`emit_cps_ir.c:3401`, `:3599`).
