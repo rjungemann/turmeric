@@ -95,7 +95,70 @@ The type system deliberately erases this producer/consumer-representation
 distinction (that is what the carrier ABI is *for*), so it cannot be recovered
 by inspecting the monomorphized type at the boundary.
 
+## Why call-site AST inspection cannot work (three-way disproof, 2026-07-19)
+
+An attempt to gate the pointer cast on the callee's *declared* param type -- to
+tell `map_hyhamt` (int64 param) apart from `size_hyof` (pointer param) -- was
+carried out with a live `TUR_DBG_C2P` probe over `map-typed-consumer`. The
+result: **every reachable AST/type view gives the SAME `tur_adt_Map__int__int *`
+for both callees**, even though their emitted C signatures differ
+(`map_hyhamt(int64_t)` vs `size_hyof(tur_adt_Map__int__int *)`):
+
+| view consulted at the call site | `map_hyhamt` (generic) | `size_hyof` (concrete) |
+| --- | --- | --- |
+| `fn_binding->type.as.fn.arg_full_types[i]` (monomorphized) | `tur_adt_Map__int__int *` | `tur_adt_Map__int__int *` |
+| callee FnDef `param_types[i]` (via `flatten_program_items` lookup) | `tur_adt_Map__int__int *` | `tur_adt_Map__int__int *` |
+| callee FnDef-expr `type.as.fn.arg_full_types[i]` | `tur_adt_Map__int__int *` | `tur_adt_Map__int__int *` |
+
+The int64 carrier param of `map-hamt` is produced ONLY transiently inside
+`emit_fns.c`'s signature loop: because `map-hamt [K V]` is a **generic inline-C**
+defn, its single emission c-names the param from the *unbound-tyvar* `(Map K V)`
+-> `int64_t`. That string is written to the output and then discarded -- it is
+not stored back on any FnDef/Type the call site can read. So no predicate over
+the AST can recover it. This is the concrete proof that the residual is a
+representation-tracking gap, not a missing cast.
+
 ## Fix direction (a dedicated change, not a cast)
+
+**Ground-truth approach (recommended).** Record each function's ACTUAL emitted
+param C-type strings in a side table keyed by the emitted C name, then consult it
+at the cast sites:
+
+1. A dedicated forward-declaration pass already exists and runs before any
+   function body: `emit_fn_forward_decls` (`emit_module.c:5003`). It emits every
+   `static <ret> <cname>(<param C types>);` prototype up front, so by the time
+   call sites (inside bodies) are emitted the table is fully populated. Ordering
+   is therefore already satisfied -- no new pass is needed.
+2. Factor the per-param C-type computation (the ~15 interacting carrier
+   special-cases duplicated between `emit_fns.c`'s signature loop ~3127-3240 and
+   the `emit_fn_forward_decls` param loop) into ONE shared function that both
+   EMITS and RECORDS `cname -> [param C-type strings]` on `EmitCtx`. This shared
+   function is the bulk of the work and the main regression surface -- the two
+   copies must stay bit-identical or the forward decl and the definition diverge.
+3. At each cast site -- the regular-call arg loop (`emit_expr.c` ~5664/5711), the
+   CPS typed-call CSV (`atoms_csv_call_typed`/`cps_call_param_ctype`,
+   `emit_cps_ir.c`), and the binder-init straddle (`emit_expr.c` ~1557) -- look up
+   the callee's recorded param C type by name and bridge int64<->pointer ONLY when
+   the recorded type and the arg's emitted type sit on opposite sides of the
+   duality. A generic callee's recorded `int64_t` param then never receives a
+   pointer cast; a concrete callee's recorded `tur_adt_X *` param always does.
+
+This replaces the fragile type-heuristic casts with the emitted signature itself,
+so it cannot be fooled by the generic/concrete monomorphization collision. It is
+nonetheless an invasive cross-cutting change (shared param-C-type function + side
+table + three consult sites) with real regression risk against the ~15 carrier
+special-cases and the green 2202-test suite -- a dedicated effort, verified per
+case against the full suite, NOT an isolated cast.
+
+### Alternative (superseded) fix direction
+
+> Superseded by the three-way disproof above: point 1's premise -- that the
+> callee's DECLARED param type is reachable WITH tyvars at the call site -- is
+> false. The FnDef's `param_types[i]` and its expr `arg_full_types[i]` are both
+> monomorphized to the concrete pointer, so `type_uses_carrier_abi` on them
+> returns the same answer for the generic and concrete callee. The
+> emitted-signature side table is required. Kept here for the Class-B binder
+> reasoning, which still holds.
 
 Thread the callee's / producer's **actual emitted C parameter/return
 representation** to the boundary, rather than re-deriving it from the
