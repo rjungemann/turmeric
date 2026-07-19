@@ -219,19 +219,41 @@ Landed on `claude/cps-backend-multishot-continuations-yidyhq`:
 - **Experiment gate** -- `owning-cloneable-capture` (`g_opt_owning_cloneable_capture`,
   `EXPERIMENTS[]` row, `--enable=` accepted), default off and inert.
 
-**Codegen is blocked** on a pre-existing type defect:
-[docs/reported/rc-param-generalizes-to-tyvar.md](../reported/rc-param-generalizes-to-tyvar.md).
-An owning `rc` reaches a cloneable continuation frame only through a user
-function with an `rc<T>` parameter, and such a parameter generalizes to a bare
-tyvar -- so rc builtins hard-error on it and `build_cloneable` sees `TY_TYVAR`,
-not `TY_RC`. The elab admission (relax TUR-E0014 under the gate) and the
-`build_cloneable` owning-env relaxation (operand-gated + `^borrow`-gated, the
-sound borrow subset) were prototyped and reverted pending that fix. Once a
-`rc<T>` parameter resolves to `TY_RC`, re-apply them and wire `dk_frame_owning`
-+ the per-frame rc clone/drop glue at the `emit_cloneable` Shape-2 frame push
-(`emit_cps_ir.c` ~6349-6363). Note (from the capture-channel map): serial can't
-carry owning values, and the shift-receiver env is single-shot -- the only
-multi-shot owning channel is this non-serial `CloneFrame` env.
+**Codegen -- first channel landed (borrow-capture).** An owning `rc` **borrowed**
+across a genuinely multi-shot cloneable continuation now compiles, native-lowers,
+and runs leak-clean under the gate. Fixture: `cloneable-owning-borrow-capture`
+(a `^borrow rc` captured into `(read-combine [] r)`, resumed twice via clone +
+original -> `32`, LeakSanitizer-clean). It took relaxing three gates, all under
+`g_opt_owning_cloneable_capture`:
+
+1. **TUR-E0014** (`check_cloneable_capture_precise`, elab_effects.c) -- admit an
+   owning `rc` capture (no Clone instance) instead of rejecting; emits W0060.
+2. **The 2-arg-frame scalar-env gate** (`build_marshal_reset`, cps_ir.c ~1176) --
+   admit an owning `rc` env operand when the callee takes it `^borrow`
+   (`FN_ARG_FLAG(..., FA_BORROW)`, gated on the operand type since an rc param's
+   kind is reliable only on the operand). TUR-E0710 otherwise.
+3. **The `n_live_captures` Shape-2 gate** (cps_ir.c ~1384) -- a blunt "any live
+   local" reject; dropped under the gate because the frame loop having succeeded
+   means every continuation-referenced local is a validated carried frame operand.
+
+Why no new clone/drop glue was needed for this channel: `^borrow` guarantees the
+frame never drops the rc, so the existing shallow-shared frame env is
+read-only-correct across resumes and the owner (the caller) drops it exactly
+once. The `dk_frame_owning` substrate is reserved for the *consuming* case.
+
+**Remaining scope.** The harder shape is an owning value the **enclosing fn owns**
+and must drop after the cloneable-reset: its scope-exit drop crosses the reset
+and currently evicts (TUR-E0710 via the drop-insertion / `letraw_ok` guard) --
+this is the E3b owning-autodrop-crossing case, and it is where `dk_frame_owning`
++ per-frame rc incref/decref glue (the consuming teardown) and the base-drop
+accounting come in. Also unbuilt: carrier-handle / owning-aggregate clone glue
+(A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
+map: serial can't carry owning values and the shift-receiver env is single-shot,
+so the non-serial `CloneFrame` env is the only multi-shot owning channel.
+
+The `rc<int>` annotation footgun found during this work (angle brackets become a
+tyvar; use bare `rc`) is filed separately:
+[docs/reported/rc-angle-bracket-annotation-becomes-tyvar.md](../reported/rc-angle-bracket-annotation-becomes-tyvar.md).
 
 ## Depends on / reuses
 

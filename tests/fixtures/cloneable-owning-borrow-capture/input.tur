@@ -1,0 +1,29 @@
+;; E3a (owning-cloneable-capture): an owning `rc` captured into a genuinely
+;; multi-shot cloneable continuation, admitted under the experiment gate.
+;;
+;; `run` BORROWS r (a ^borrow param owned by main), so it never drops it -- no
+;; owning drop crosses the cloneable-reset.  The continuation `(read-combine [] r)`
+;; captures r into its frame env and reads its strong count (a ^borrow: never
+;; dropped in the frame), so the shallow-shared env is read-only-correct across
+;; resumes.  The continuation is resumed twice (a clone + the original), proving
+;; the multi-shot path; main drops r exactly once.  LeakSanitizer-clean.
+;;
+;; Off the gate this is rejected (rc has no Clone instance: TUR-E0014).
+
+(defn k-identity [k] : int k)
+
+(defn read-combine [v : int ^borrow r : rc] : int
+  (+ v (rc/strong-count r)))
+
+(defn run [^borrow r : rc] : int
+  (let [k (cloneable-reset (read-combine (cloneable-shift k-identity 0) r))]
+    (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+      (let [b (tur_cloneable_cont_resume k 20)]
+        (+ a b)))))              ; (10 + 1) + (20 + 1) = 32
+
+(defn main [] : int
+  (let [r (rc/of 99)]
+    (let [res (run r)]
+      (rc/drop r)                ; main owns r; released exactly once
+      (println res)
+      0)))

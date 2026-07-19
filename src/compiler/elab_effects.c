@@ -1,5 +1,19 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
+#include "experiments.h"   /* E3a: experiment_warn_if_used at the owning-capture admission */
+
+/* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
+ * value captured into a genuinely multi-shot cloneable continuation that lacks
+ * a Clone instance is admitted -- rather than rejected with TUR-E0014 -- when
+ * the `owning-cloneable-capture` experiment is on AND the owning kind is one the
+ * cloneable codegen can emit env clone/drop teardown for.  Today that is `rc`
+ * only (the sole owning kind with scalar clone glue, rc_strong_increment); a
+ * carrier handle / owning aggregate still evicts (their clone glue is unbuilt).
+ * Widen this predicate as each kind's glue lands. */
+static bool owning_multishot_admissible(const Type *t) {
+    if (!g_opt_owning_cloneable_capture || !t) return false;
+    return t->kind == TY_RC;
+}
 
 /* ---- file-local helper forward declarations ---- */
 static void check_cloneable_capture_precise(Elab *e, Span span,
@@ -353,6 +367,14 @@ static void check_cloneable_capture_precise(Elab *e, Span span,
             TypeClassInstance *inst =
                 typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &t, 1);
             if (!inst) {
+                /* E3a: under the experiment gate an owning kind we can emit
+                 * multi-shot env teardown for (rc today) is ADMITTED instead of
+                 * rejected -- the cloneable codegen gives its captured frame env
+                 * clone glue so each resume owns its own +1. */
+                if (owning_multishot_admissible(&t)) {
+                    experiment_warn_if_used("owning-cloneable-capture");
+                    continue;
+                }
                 diag_emit_with_code(DIAG_ERROR, span,
                                     TUR_E0014_NOT_CLONE,
                                     "captured binding '%s' does not implement Clone "

@@ -1035,6 +1035,19 @@ static bool clone_let_ty_ok(TypeKind k) {
  * wrapper casting to the real kind at the call boundary. */
 static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
 
+/* E3a (owning-cloneable-capture): may an OWNING value ride a cloneable 2-arg
+ * call frame's captured-env slot?  Off-gate, no -- the env must be a Copy scalar
+ * (cps_scalar_kind_ok), so an owning env evicts to TUR-E0710.  On-gate, an `rc`
+ * env is admitted WHEN the callee takes it ^borrow (a type-system guarantee the
+ * callee never drops it): the emitter then gives that frame dk_frame_owning
+ * clone/drop glue so each multi-shot resume increfs its own copy, balanced by
+ * the dk_free decref -- the borrow teardown scheme, never a double-drop.  rc
+ * only for now; widen as carrier/aggregate clone glue lands.  See
+ * docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md. */
+static bool cloneable_owning_env_ok(TypeKind k) {
+    return g_opt_owning_cloneable_capture && k == TY_RC;
+}
+
 /* Pure existence check: does `program` declare a Serializable instance for the
  * nominal (TY_ADT) type `t`?  Lets build_serial admit a SER-env frame; the
  * emitter (emit_cps_ir.c) resolves the instance's serialize/deserialize method
@@ -1180,8 +1193,19 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                 if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
                     return NULL;
             } else {
-                if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0]) ||
-                    !cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[1])) return NULL;
+                /* The hole param takes the resumed value -- always a scalar.  The
+                 * non-hole (env) param may be a scalar, OR -- under the E3a gate --
+                 * an owning `rc` the callee takes ^borrow (checked on the operand
+                 * below; ^borrow guarantees the frame never drops it). */
+                if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
+                    return NULL;
+                TypeKind envk = fb->type.as.fn.arg_kinds[h0 ? 1 : 0];
+                const Expr *env_op = ascribe_peel(h0 ? a1 : a0);
+                bool owning_borrow_env =
+                    env_op && cloneable_owning_env_ok(env_op->type.kind)
+                    && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
+                if (!cps_scalar_kind_ok(envk) && !owning_borrow_env)
+                    return NULL;
             }
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
             if (!other) return NULL;
@@ -1194,7 +1218,15 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     return NULL;
                 if (!env_atom && !safe_to_delegate(b, other)) return NULL;
             } else {
-                if (!cps_scalar_kind_ok(other->type.kind)) return NULL;
+                /* E3a: an owning `rc` env is admitted only when the callee takes it
+                 * ^borrow -- then it is never dropped inside the frame, so the
+                 * per-resume env clone is balanced solely by the dk_free env_drop
+                 * (borrow teardown), never a double-drop. */
+                bool owning_borrow_env =
+                    cloneable_owning_env_ok(other->type.kind)
+                    && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
+                if (!cps_scalar_kind_ok(other->type.kind) && !owning_borrow_env)
+                    return NULL;
                 if (!env_atom && (ctx_reaches_shift(other, shift_kind)
                               || !safe_to_delegate(b, other))) return NULL;
             }
@@ -1355,10 +1387,20 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
      * a captured local, so a conservatively-marked live capture on a Shape 1 shift
      * is emit-time dead and safe to admit.  The gate is cloneable-only: serial's
      * prelude is presence-gated so it needs no such check. */
-    if (!serial && nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0)
+    /* Live-capture Shape-2 gate: native Shape 2 carries captured locals only via
+     * frame operands, so a live capture that is NOT a frame operand would be
+     * lost -- hence a conservative reject.  But reaching here means the frame
+     * loop parsed the ENTIRE continuation into validated frames, so every local
+     * the continuation references IS a carried frame operand (a scalar, or -- under
+     * the E3a gate -- a ^borrow rc whose shallow-shared env is read-only-correct
+     * across resumes); the remaining counted locals are receiver-body captures
+     * (single-shot: the receiver runs once) or bound after the reset (dead at the
+     * shift).  Under the owning-cloneable-capture experiment, trust the frame
+     * validation and drop the blunt count gate. */
+    if (!serial && nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0
+        && !g_opt_owning_cloneable_capture)
         return NULL;
-    const Binding *recv = marshal_named_receiver(b, cur, serial);
-    const Expr *recv_expr = NULL;
+    const Binding *recv = marshal_named_receiver(b, cur, serial);    const Expr *recv_expr = NULL;
     if (!recv) {
         /* U7: a CLOSURE receiver (capturing or not).  Shape 1 calls it directly at
          * the reset site; Shape 2 threads it through the dk_shift body env -- the
