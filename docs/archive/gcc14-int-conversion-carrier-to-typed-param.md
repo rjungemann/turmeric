@@ -1,5 +1,17 @@
 # GCC >= 14: int64 carrier args reach typed-pointer parameters uncast (int-conversion)
 
+> **RESOLVED / SPLIT (2026-07-19).** The tractable portion of this front is
+> done: **36 of 46** flagged fixtures were fixed and committed across the
+> regular-call, cps->cps, parametric-opaque-ascription, inline-C-void*-return,
+> and existential-pack-ctor paths (full suite green 2202/0 at each landing).
+> The ~10 irreducible residual fixtures are NOT point-fixable -- they are the
+> carrier-vs-concrete-pointer representation-tracking core, proven this session
+> via the `map_hyhamt`/`size_hyof` coexistence (a c-name-based cast that fixes
+> one callee regresses its concrete-pointer sibling in the same fixture). That
+> design work is carved into its own open report:
+> **`docs/reported/gcc14-int-conversion-carrier-representation-tracking.md`**.
+> This coarse report is archived; the focused report tracks the remainder.
+
 **Severity:** medium -- latent today (masked by `-Wno-error=int-conversion` in
 `src/main.c`), a hard `cc` error under GCC >= 14. The broadest of the fronts
 split out of `codegen-gcc14-permerrors.md`.
