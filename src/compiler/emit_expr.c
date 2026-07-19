@@ -4297,6 +4297,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* gcc14-int-conversion (docs/reported/codegen-gcc14-permerrors.md):
+                     * a CONCRETE (non-carrier) rc<T>/weak<T> field lowers to
+                     * `RcControlBlock *`, but its argument is frequently the int64
+                     * carrier -- an `rc<T>` function parameter's C type is int64_t,
+                     * so `ctor_Own(ir, ...)` hands an int64 into the
+                     * `RcControlBlock *` field slot.  That is a -Wint-conversion,
+                     * promoted to a hard error under GCC >= 14.  Cast through
+                     * (RcControlBlock *)(intptr_t): value-preserving in both
+                     * directions -- an int64 carrier becomes the pointer it already
+                     * encodes, and an already-typed `RcControlBlock *` arg
+                     * round-trips to itself.  Skipped for a carrier field (handled
+                     * by the pointer->int64 block just above). */
+                    if (!suffix && !field_inline && arg && !field_is_carrier &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        (e->as.call_.ctor->fields[i].kind == TY_RC ||
+                         e->as.call_.ctor->fields[i].kind == TY_WEAK)) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(RcControlBlock *)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                     /* A FLOAT argument flowing into a ctor field that is ERASED
                      * to the int64 CARRIER -- a tyvar field of a carrier-helper
                      * base ctor (`ctor_Result(bool,int64_t,int64_t)`'s `ok_val`,
