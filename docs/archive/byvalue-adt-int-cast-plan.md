@@ -6,7 +6,17 @@
 > (it was miscompiling) so there is a clean explicit spelling, point the
 > `TUR-E0295` diagnostic at it, and NOT mint new `box`/`unbox` verbs (they
 > collide with `stdlib/safe.tur`'s existing `box`/`unbox` int-cell functions).
-> **Last Updated:** 2026-07-13
+> **Re-verified 2026-07-19:** state holds at HEAD. `TUR_E0295_BYVALUE_CARRIER_CAST`
+> is registered (`diag.h`/`diag.c`) with an `explain` entry; the
+> `ascribe_type_is_byvalue_aggregate` / `ascribe_type_is_word_carrier` helpers
+> and the `elab_ascribe` rejection both live at `src/compiler/elab_types.c:2503+`,
+> and `(:: v :any)` routes through the coerce path there. All three fixtures
+> present: `tests/fixtures/errors/byvalue-adt-cast-to-int`,
+> `.../int-cast-to-byvalue-adt`, and `tests/fixtures/box-unbox-byvalue-aggregate`.
+> Only Phases 3 (cosmetic `logic.tur` follow-up) and 4 (deferred B2 auto-box)
+> remain, both explicitly optional/out-of-initial-scope -- nothing tracked as
+> in-scope work is open. Ready to archive.
+> **Last Updated:** 2026-07-19
 > **Type:** compiler / type-erasure soundness + ergonomics
 > **Scope:** Make `(:: v :int)` / `(:: v :ptr<void>)` (and the reverse) *sound*
 > when `v` is a non-recursive by-value ADT/struct: today it silently miscompiles.

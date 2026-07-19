@@ -109,7 +109,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
     { "cps-async",
       "heap-continuation `async`/`await`: `await` lowers to a dk_shift capturing "
       "the async continuation, resumed via the reactor instead of a ucontext fiber",
-      "docs/upcoming/v1/compiled-stackless-recursive-await-plan.md",
+      "docs/upcoming/compiled-stackless-recursive-await-plan.md",
       "0.28.2",                  /* introduced */
       "0.30.0",                  /* expires_at (two minor releases; hard contract) */
       XF_LIFECYCLE_PROTOTYPE,
@@ -119,7 +119,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * (g_opt_cps_tramp_resume defaults true).  The full corpus DK-lowers every
      * effect (zero tur_effect_perform call sites), so the row is retired and the
      * name moved to GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).
-     * See docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md. */
+     * See docs/archive/cps-dk-sole-effect-lowering-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

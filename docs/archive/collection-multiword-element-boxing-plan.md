@@ -2,10 +2,26 @@
 title: Multi-word by-value struct/ADT elements in Vec/Set/Map (element boxing)
 category: Codegen / runtime / typed collections -- frontier
 description: The element buffer of every heap collection is int64[] (Vec) or a single void* slot (HAMT), and that is a locked decision for interpreter parity and float/cstr reinterpret. So a multi-word by-value struct/ADT element (a :copy struct wider than one word, or a payload-carrying ADT) cannot be stored. This plan boxes such elements -- heap copy + refcount, pointer in the slot -- reusing the existing boxed-key (WKC2) machinery, rather than the ruled-out typed element buffer. It depends on the v1 element-dispatch fix.
-status: in progress (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); full box lifecycle done (keys, Map values, Vec elements on free, vec-set! overwrite, vec-drop-last!) -- LSan-clean; only the inherent consume-and-drop vec-pop! carrier-ABI limitation remains (documented)
+status: DONE (v2 frontier) -- Vec elements + Map values + Map keys/Set landed and working on BOTH the compiled and interpreter paths (incl. structural Eq/Show); full box lifecycle done (keys, Map values, Vec elements on free, vec-set! overwrite, vec-drop-last!) -- LSan-clean; only the inherent consume-and-drop vec-pop! carrier-ABI limitation remains (documented, out of scope). Re-verified 2026-07-19.
 ---
 
 # Multi-word by-value elements need boxing, not a typed buffer
+
+## Progress (2026-07-19)
+
+Re-verified at HEAD: every deliverable in this plan has landed. All six
+fixtures exist and are named as described -- `vec-multiword-struct-element`,
+`vec-multiword-struct-eq`, `vec-multiword-struct-mutate`,
+`map-multiword-struct-key`, `map-multiword-struct-value`, and
+`set-multiword-struct-element`. The stdlib lifecycle plumbing is in place:
+`tur-wide-byval?` (`stdlib/map.tur:485`, threaded into `map-assoc` via the
+`owned` flag), `tur-vec-elem-wide?` / `vec-free-o` / `vec-set-o!` /
+`vec-drop-last-o!` (`stdlib/vec.tur`), all documented in `stdlib/docstrings.tur`.
+The three interpreter parity gaps recorded in the 2026-07-12 note are all
+resolved. The only residual is the inherent, documented consume-and-drop
+`(:: (vec-pop! v) T)` carrier-ABI leak (`docs/archive/vec-set-pop-element-box-leak.md`),
+which is out of scope for this plan. Nothing tracked here remains open --
+ready to archive.
 
 ## Progress (2026-07-12)
 

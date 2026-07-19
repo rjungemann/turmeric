@@ -3,6 +3,15 @@
 > **Status:** Accepted-and-deferred. The leak is accepted as a bounded,
 > process-lifetime leak *now* (markers kept); the reified-chain fix below is the
 > planned resolution, to land with the next middleware-API revision.
+> **Re-verified 2026-07-19:** still deferred, unchanged. No `MwChain` /
+> `mw-chain-dispatch` / `mw-chain-free` exists in `stdlib/httpd.tur` -- the
+> closure-onion representation (`compose-middleware` / `httpd-mw-fold`) is intact,
+> and every listed middleware fixture (`httpd-mw-*`, `httpd-async-mw-*`,
+> `httpd-h5-tls`, `httpd-h7-middleware`, `httpd-mw-fold-many`, spices-gated
+> `httpd-mw-compress`) still carries `requires.no-leak-check` with the "intentional
+> bounded leak" rationale. The reified-chain phases (1-5 below) remain entirely
+> unstarted, awaiting the next middleware-API revision to amortize the fixture
+> churn. This plan stays OPEN.
 > **Type:** Stdlib redesign (`stdlib/httpd.tur`); no compiler change.
 > **Related:**
 > - `docs/leak-detection-followups-plan.md` -- parent plan; this is its last

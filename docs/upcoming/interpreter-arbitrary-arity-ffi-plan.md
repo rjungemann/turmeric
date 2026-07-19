@@ -1,6 +1,12 @@
 # Arbitrary-arity spice calls in the interpreter (retiring the shape-dispatch ceiling)
 
-**Status:** Proposed (not started). Removes the last arity ceiling in the
+**Status:** Proposed (not started). _Verified 2026-07-19: still unstarted._
+`src/turi/ffi_thunk.c:175` still dispatches through the generated
+`tur_ffi_thunk_call` switch; `tools/gen_ffi_dispatch.py` still carries the
+`--max-arity <= 16` clamp (:420); and no per-export `<mangled>__ffi` shim is
+emitted in `src/compiler/emit_module.c`. None of Phases 1-4 have landed.
+
+Removes the last arity ceiling in the
 arbitrary-fn-arity story: the interpreter/REPL path that calls a `dlopen`ed
 spice export. Ordinary and generic functions are already unbounded on the
 compiled path and in the type system (see

@@ -1,7 +1,7 @@
 # Pure-Turmeric regex engine (`stdlib/re.tur`) -- Plan
 
 > **Status:** DONE (2026-07-13).
-> **Last Updated:** 2026-07-13
+> **Last Updated:** 2026-07-19
 > **Type:** stdlib / interpreter parity / WASM
 > **Scope:** Replace `stdlib/re.tur`'s POSIX-`regcomp` inline-C with a
 > pure-Turmeric matcher so regexes work under `tur --interpret` AND in the
@@ -67,6 +67,14 @@
 > REPL gets it with no WASM rebuild.
 >
 > The Thompson-NFA upgrade and Phase 3 captures remain as documented follow-ups.
+>
+> **Verified 2026-07-19:** `stdlib/re.tur` still has zero `` ```c `` blocks; the
+> Phase 0 natives (`str-concat`/`cstr-len`/`cstr-nth`/`cstr-sub`) are registered
+> in `src/turi/interpreter_natives.c`; `tests/fixtures/reader-macros-rx-literal/`
+> carries no `requires.tur-only` marker and the `re-pure-match-find-replace`
+> interpreter fixture is present. Core port complete; only the two named
+> follow-ups (Thompson-NFA, captures) remain and are out of this plan's tracked
+> scope. Ready to archive.
 >
 > ---
 

@@ -1,10 +1,15 @@
 # B7 -- escaping / multishot continuation via `set!` (DK lowering plan)
 
 **Fixture:** `tests/fixtures/effect-capture-k` (expected `0` then `10`).
-**Status:** LANDED (commit 5098a0a). `effect-capture-k` DK-lowers to perform=0,
+**Status:** COMPLETE (commit 5098a0a). `effect-capture-k` DK-lowers to perform=0,
 output 0/10, ASan-clean, suite 2203/0. The by-reference heap-cell capture +
 copy-on-store described below is implemented and gated on g_opt_cps_tramp_resume;
 the fold_stmt_is_risky escaping-mutable exclusion is lifted.
+
+> **CONFIRMED DONE (2026-07-19).** Fixture still present; the
+> `cps-tramp-resume` experiment has since GRADUATED (2026-07-19, always-on) and
+> the fiber effect runtime has been deleted (Stage G) with this fixture riding
+> the DK path. Nothing here remains open -- ready to archive.
 
 ## The program
 

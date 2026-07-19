@@ -1,10 +1,30 @@
 ---
 title: "v2 -- CPS/DK as the sole effect lowering; delete the fiber effect runtime"
-status: open -- THE defining track. Nothing else ships until this lands or is proven impossible.
-severity: existential. If the fiber effect runtime cannot be deleted, this project is dead.
+status: COMPLETE (2026-07-19) -- the fiber effect runtime is deleted; CPS/DK is the sole effect lowering.
+severity: existential. (Resolved GO -- the deletion was achieved, not proven impossible.)
+resolved: 2026-07-19
 ---
 
 # v2 -- Make CPS/DK the sole lowering for effectful colored code, then delete the fiber effect runtime
+
+> **RESOLVED -- GOAL ACHIEVED (2026-07-19).** The singular, non-negotiable goal
+> below -- *no effect ever performed or handled on the fiber runtime; the fiber
+> effect machinery DELETED* -- is DONE. The `cps-tramp-resume` experiment (E7's
+> trampolined tail-resume, the load-bearing enabler surfaced by the Sec 9
+> kill-probe) GRADUATED to always-on (`src/runtime/experiments.c` GRADUATED[]).
+> The measured remaining surface (the 24-fixture B1-B8 work-list in the tactical
+> companion `cps-dk-endgame-remaining-plan.md`) was driven to zero, and Stage G
+> physically deleted `tur_effect_perform`, `EffectHandlerFrame`/`Case`,
+> `global_effect_handler_chain`, `tur_handler_dispatch` (+ msdyn),
+> `tur_effect_cont_*`, and `TurEffectCaptureCtx` from `emit_module.c` (commits
+> 7b40fc4e / d46f74bef). A full-corpus sweep of emitted C confirms zero call
+> sites of any fiber effect symbol. `FiberBlock`/scheduler/reactor (concurrency),
+> `tur_handler_table_t`, and `tur_cloneable_cont_*` (the DK handler-value +
+> `__Shift` bridge) STAY, as designed. The two-runtime split is closed; the CPS/DK
+> delimited-control substrate is the sole effect lowering. This plan is fully
+> discharged and ready to archive. Residual owning-value teardown leaks are
+> pre-existing and tracked separately in `docs/reported/`; they are not this
+> plan's blockers.
 
 > **UPDATE 2026-07-18 -- measured remaining surface.** The concrete, current
 > work-list lives in **`cps-dk-endgame-remaining-plan.md`** (tactical companion).
@@ -593,6 +613,38 @@ assumption. Probe it FIRST, in isolation, before committing to Stages A-D:
   turns a bounded effect-runtime deletion into an unbounded ABI rewrite.
 
 ## 10. Progress log
+
+### Session 7 -- CLOSED: flag graduated, Stage G deletion done (2026-07-19)
+
+The plan is complete. After Sessions 1-6 drove Stages 0-E, the tactical companion
+`cps-dk-endgame-remaining-plan.md` closed the measured 24-fixture B1-B8 surface
+(buckets B1-B7 fixed; B8 -- the mislabeled "permanent" session/fiber bucket --
+DK-lowered after all). Then:
+
+- **Flag graduation.** `cps-tramp-resume` moved from `EXPERIMENTS[]` to
+  `GRADUATED[]` (`src/runtime/experiments.c`); `g_opt_cps_tramp_resume` defaults
+  true. The 24 `--enable=cps-tramp-resume` fixture flag files were removed. A
+  lingering `--enable` is now a TUR-W0063 no-op. (commit 786946a1)
+- **Whole-suite flag-on correctness** was reached first (endgame Sec 3a.1): the
+  generic-template tyvar-carrier sig-reject fix cleared 14 build failures, the
+  `g_dk_driver` save/restore across `tur_fiber_block_resume` fixed the 2
+  DK-trampoline crashes (`fiber-effect`, `p19-8`), the synthesized-main fold stopped
+  swallowing top-level `?`/`return`/unhandled-perform diagnostics, and the 104-byte
+  tail-resume DK-node leak was reaped at the entry boundary.
+- **Stage G -- physical deletion (DONE).** `emit_module.c` no longer emits
+  `tur_effect_perform`, `EffectHandlerFrame`/`Case`, `global_effect_handler_chain`,
+  `tur_handler_dispatch` (+ `__tur_msdyn_*`), `tur_effect_cont_*`, or
+  `TurEffectCaptureCtx`, plus the two `FiberBlock` effect fields. A full-corpus
+  sweep returns zero call sites of every fiber effect symbol. The dead
+  `emit_effects_perform` / `emit_effects_with_handler` fiber emit branches were
+  removed as a follow-up tidy. (commits 7b40fc4e, cf3f44e9, d46f74bef)
+
+`FiberBlock`/scheduler/reactor (concurrency), `tur_handler_table_t`, and
+`tur_cloneable_cont_*` STAY -- they back the surviving concurrency axis and the DK
+handler-value + `__Shift` bridge, exactly as the Sec 2b "STAYS" list specified.
+Suite 2203/0. The two-runtime split is closed; **CPS/DK is the sole effect
+lowering.** Remaining owning-value teardown leaks are pre-existing and tracked in
+`docs/reported/`, out of scope for this plan.
 
 ### Session 6 -- E2 row-poly fn-value cluster onto the DK (Stage E, real fixture movement)
 

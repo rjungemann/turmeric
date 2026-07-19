@@ -15,7 +15,15 @@
 > send/recv, offer/choose branch selection, timed receive, and 2-/3-role
 > multi-party protocols under `tests/run-turi.sh`.  No session inline-C template
 > remains carved under the interpreter.
-> **Last Updated:** 2026-07-13
+>
+> **Verified 2026-07-19:** all four slices confirmed present in
+> `src/turi/eval.c` -- `TuriChan` (:7102), `session_send_on`/`session_recv_on`,
+> `eval_session_intercept`, and the `TuriRouter`/`TuriRole` multi-party runtime.
+> `tests/fixtures/session-close/` carries no `requires.tur-only` marker, and the
+> `session-*-turi` interpreter variants (send/recv/calc-rpc/offer/timeout/mp-*)
+> are all present. Slices A + A.5 + B + C + D complete; nothing outstanding.
+> Ready to archive.
+> **Last Updated:** 2026-07-19
 > **Type:** Interpreter / runtime
 > **Scope:** Give the tree-walking interpreter a cooperative-fiber session-channel
 > runtime so `make-session` / `close` / `send` / `recv` / `offer` / `choose` /

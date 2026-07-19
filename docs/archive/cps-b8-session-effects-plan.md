@@ -1,13 +1,19 @@
 # B8 -- session-effects / session-mp-effects DK lowering plan
 
-**STATUS: DONE (2026-07-18).** All four B8 fixtures emit `tur_effect_perform` = 0
-under `--enable=cps-tramp-resume`; both session fixtures run correctly on both
-paths, ASan shows only the 104-byte DK-node baseline leak that
-cps-backend-option-effect/struct-effect already ship with, suite 2203/0.
-Slices: 1 (inline-C expr delegation, 61242b1), 2 (session void* carrier param,
-9f19f35), 3 (nil inline-C side effect + capturing spawn-closure delegation,
-2ed823e; TY_ROLE carrier, 686abfc).  A full sweep of 1792 fixtures finds ZERO
-fiber-live `tur_effect_perform` call sites.
+**STATUS: COMPLETE (DONE 2026-07-18; confirmed 2026-07-19).** All four B8 fixtures
+emit `tur_effect_perform` = 0 under `--enable=cps-tramp-resume`; both session
+fixtures run correctly on both paths, ASan shows only the 104-byte DK-node
+baseline leak that cps-backend-option-effect/struct-effect already ship with,
+suite 2203/0. Slices: 1 (inline-C expr delegation, 61242b1), 2 (session void*
+carrier param, 9f19f35), 3 (nil inline-C side effect + capturing spawn-closure
+delegation, 2ed823e; TY_ROLE carrier, 686abfc).  A full sweep of 1792 fixtures
+finds ZERO fiber-live `tur_effect_perform` call sites.
+
+> **CONFIRMED DONE (2026-07-19).** `session-effects`, `session-mp-effects`,
+> `fiber-effect`, `p19-8-fiber-effect-chain` all still present and DK-lower. The
+> `cps-tramp-resume` experiment has GRADUATED (always-on) and the fiber effect
+> runtime has been deleted (Stage G). The "permanent carve-out" this plan
+> superseded never materialized. Nothing remains open -- ready to archive.
 
 ---
 

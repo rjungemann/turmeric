@@ -7,6 +7,18 @@ description: The U3 (cloneable, multi-shot) and U4 (serial, marshalable) native 
 
 # Unify the cloneable / serial native spine walk
 
+## Status (2026-07-19): COMPLETE -- verified in the tree; ready to archive
+
+Re-verified against the source as of 2026-07-19: `build_marshal_reset(b, e, x,
+rest, serial)` is the single spine walk in `src/passes/cps_ir.c`, with
+`build_cloneable` / `build_serial` as one-line `serial=false` / `serial=true`
+wrappers pointing at it; `ctx_reaches_shift(e, shift_kind)` and
+`marshal_named_receiver(b, shift, serial)` are the unified reach test / receiver
+finder. `emit_cps.c` is deleted. All four serial oracle fixtures exist
+(`cps-oracle-serial-native-doprelude`, `-callframe-2arg`, `-shape1`,
+`-closure-recv`). No tracked item remains open -- the build unification, the
+emit-side shape additions, and the closure-receiver parity slice all landed.
+
 ## Status (2026-07-12, v0.28.2): LANDED -- build walk unified
 
 The build-side unification (staging steps 1-4 below) is done:

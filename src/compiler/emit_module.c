@@ -7275,7 +7275,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * EffectHandlerCase / EffectHandlerFrame) DELETED 2026-07-19: the CPS/DK
      * backend is the sole effect lowering (cps-tramp-resume graduated), so no
      * emitted program performs/handles an effect on the fiber.  Corpus-verified
-     * zero call sites.  See docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md
+     * zero call sites.  See docs/archive/cps-dk-sole-effect-lowering-plan.md
      * Stage G.  FiberBlock (concurrency) and tur_handler_table_t (DK handler
      * values) stay. */
         /* Phase T21-A/B / P19-8: FiberBlock — cooperative fiber runtime via ucontext_t.

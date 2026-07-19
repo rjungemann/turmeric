@@ -1,11 +1,45 @@
 ---
 title: stackless recursive await on heap continuations (F4)
 category: Planning
-status: active -- follow-up to F3 (compiled-async-heap-continuations-plan.md, archived); the sole remaining cps-async residual
+status: superseded / declined (2026-07-19) -- the premise ("recursive await must be stackless ON the heap path, and eviction is the wrong end-state") was investigated and rejected as works-as-intended; see the 2026-07-19 progress note. The RA2 substrate trampoline shipped and graduated (cps-tramp-resume) for effects, but recursive await stays evicted to the direct emitter by design. Follow-up to F3 (compiled-async-heap-continuations-plan.md, archived).
 description: Remove the last cps-async residual -- a recursive `await` currently EVICTS to the direct emitter instead of running on the heap-continuation representation, because the heap inline-resume recurses through dk_invoke in O(N) C stack. Make recursive await stackless ON the heap path so the representation is a strict superset (no shape falls back for stack reasons). The identical limitation affects recursive effects (perform/resume); the trampoline option closes both.
 ---
 
 # stackless recursive await on heap continuations (F4)
+
+## Progress (2026-07-19) -- premise declined; plan superseded
+
+This plan's goal was rejected after investigation and is no longer the intended
+end-state. Two things settled it:
+
+1. **The residual is works-as-intended, not a bug.** The root-cause report this
+   plan cites (`docs/reported/cps-async-recursive-await-eviction.md`) was
+   re-investigated and archived 2026-07-18 to `docs/archive/` marked **RESOLVED /
+   BY-DESIGN**: recursive `await` evicting to the direct emitter is the *correct*
+   default. Because `(async fn)` is synchronous on the compiled path, a recursive
+   await is *always* a ready future -- exactly the case the heap `dk_shift` path
+   handles worst (O(N) C stack via a non-tail `dk_invoke`), while the direct
+   emitter's inline readiness check + `goto __tur_tailcall` loop is O(1). The
+   `term_core_ok` `CT_AWAIT` arm still DELIBERATELY rejects a cps->cps tail-call
+   await continuation (with a comment pointing at the archived report), so
+   recursive await stays on the direct path -- and that is the shipping decision,
+   not a gap.
+
+2. **RA2 (the recommended mechanism) shipped and graduated -- for effects, not
+   this.** The trampolined DK tail-resume is live: `emit_dk_runtime.c` emits the
+   "E7: trampolined tail-resume" prelude, and the gating experiment
+   **`cps-tramp-resume` GRADUATED 2026-07-19** (now the default+sole effect
+   lowering; `experiments.c`). So the substrate half of RA2 exists and made the
+   *effect* path stackless. It did **not** re-admit recursive await onto the heap
+   path: even with a trampolined `dk_invoke`, the dominant ready-future recursion
+   still favors the direct TCO path (per the archived report), so RA.2 (reverse
+   the `await_cont_reset_ok` rejection) and RA.3 (an `async-rec` heap-path probe)
+   were not done, and `cps-async` remains an ungraduated experiment.
+
+Net: the RA2 trampoline landed as part of the effect endgame, the F4-specific
+re-admission of recursive await did not, and the stated goal is now considered
+the wrong end-state. This plan is superseded -- keep it only as the record of why
+recursive await is not colored onto the heap path. Nothing here is a v1 gate.
 
 ## Context
 

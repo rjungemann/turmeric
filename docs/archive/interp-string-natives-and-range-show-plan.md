@@ -11,7 +11,15 @@
 > because loading `str.tur`'s `Eq [str]` instance into `range-bound`'s graph
 > trips a pre-existing `Eq [Bound]` dispatch bug -- see
 > `docs/archive/eq-bound-misdispatch-extra-instance.md`.
-> **Last Updated:** 2026-07-13
+>
+> **Verified 2026-07-19:** still landed and stable. The Phase 0 natives
+> (`str-concat`, `cstr-len`, `cstr-nth`, plus `cstr-sub`) are registered in
+> `src/turi/interpreter_natives.c` (`turi_env_register_native` at :2969-2972);
+> `stdlib/range-bound.tur`'s `range-fmt`/`bound-fmt` (:211, :275) are pure
+> Turmeric with zero `` ```c `` blocks; and `tests/fixtures/range-show/` carries
+> no `requires.tur-only` marker. All three phases are complete -- nothing
+> outstanding. Ready to archive.
+> **Last Updated:** 2026-07-19
 > **Type:** Interpreter / stdlib
 > **Scope:** Un-carve `tests/fixtures/range-show` (`requires.tur-only`) by giving
 > the tree-walking interpreter a small, layout-exact set of string-building

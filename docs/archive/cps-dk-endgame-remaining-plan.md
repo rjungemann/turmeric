@@ -1,9 +1,22 @@
 ---
 title: "v2 -- CPS/DK endgame: the remaining fiber-live surface (measured)"
-status: open -- tactical companion to cps-dk-sole-effect-lowering-plan.md
-severity: existential (this is the concrete work-list for deleting the fiber effect runtime)
+status: COMPLETE (2026-07-19) -- every bucket B1-B8 closed; flag graduated; fiber effect runtime deleted (Stage G)
+severity: existential (this was the concrete work-list for deleting the fiber effect runtime)
 measured: 2026-07-18
+resolved: 2026-07-19
 ---
+
+> **COMPLETE (2026-07-19).** Every fixable bucket (B1-B7) and the mislabeled
+> "permanent" bucket (B8) is DONE. The `cps-tramp-resume` experiment has
+> GRADUATED to always-on (`src/runtime/experiments.c` GRADUATED[], commit
+> 786946a1), and the fiber effect runtime C has been physically DELETED from
+> `emit_module.c` (Stage G, commits 7b40fc4e/d46f74bef -- see updates 3a.2-3a.4
+> below). A full-corpus sweep returns zero `tur_effect_perform`,
+> `tur_effect_cont_resume`, `global_effect_handler_chain`, `EffectHandlerFrame`,
+> and `tur_handler_dispatch` call sites. The CPS/DK backend is the sole effect
+> lowering. The only residuals are pre-existing owning-value teardown leaks
+> tracked separately in `docs/reported/` -- not fiber-liveness blockers. This
+> work-list is fully discharged and ready to archive.
 
 # CPS/DK endgame -- the remaining fiber-live surface
 

@@ -1,11 +1,26 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E3 (consuming/abortive crossings teardown) and E4 open. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E3 (consuming/abortive crossings teardown) largely obsoleted and NOT built; E4 (reset/shift resumed >once capturing an owning value) open. Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
 # CPS backend -- multi-shot continuations and owning-value env capture
+
+> **Progress note (2026-07-19).** State re-verified against the tree. Track A
+> (A1-A3) and Track B E1/E-borrow/E2 are all landed and confirmed: fixtures
+> `cps-backend-two-perform`, `-handle-cont-perform`, `-reset-body-perform`,
+> `-owning-capture-handler-case`, `-owning-struct-capture-multishot` all present;
+> the E-borrow/E2 fixtures carry NO `requires.no-leak-check` (leak-clean). The
+> `DKK_RESUME_FRAME` / `dk_frame_resume` runtime capability (A1's design
+> correction) is in `cps_prompt.{c,h}` and the emitted DK prelude
+> (`emit_dk_runtime.c`); `cap_owning_ok` admits carrier ADT + owning by-value
+> aggregate (`emit_cps_ir.c:954`); `owning_cap_borrow_only` /
+> `expr_is_pure_borrow_of` present. **E3 is NOT built** (obsoleted; its standalone
+> plan was folded into Track B's E3 section here and deleted 2026-07-19 -- the
+> consuming-aggregate residual is the TUR-E0107 hard error, wired via
+> `is_field_consumed_in_handler` + `elab_forms.c`). **E4 remains open.** This
+> plan stays **OPEN on E4 only**; everything else is done.
 
 ## Why this document exists / what it supersedes
 
@@ -338,8 +353,20 @@ captured `defstruct` holding an `rc` field into a handler case, `requires.no-lea
 
 ### E3 -- refcounted env with clone/drop (Option B), leak-clean -- THE substrate
 
-> **Detailed plan (and its obsolescence):**
-> [cps-backend-owning-env-teardown-e3-plan.md](cps-backend-owning-env-teardown-e3-plan.md).
+> **Design of record (consolidated 2026-07-19).** E3 previously had a standalone
+> plan (`cps-backend-owning-env-teardown-e3-plan.md`); it carried no landed work
+> and its verdict was "do not build," so it was folded into this section and
+> deleted. This subsection is now the single home for the E3 design -- both the
+> Option B sketch below and the E3a/E3b phasing further down.
+>
+> **Verdict: shelved-obsolete -- do not build the general teardown.** Verified
+> against the tree 2026-07-19: no `dk_frame_owning`, no per-frame `env_clone` /
+> `env_drop` hook, no `dk_free_deep` (the only `__dk_env_clone` / `__dk_env_drop`
+> in `emit_dk_runtime.c` are the spine-only `dk_copy_range` / `dk_free` pair that
+> predate E3). It stays unbuilt on purpose: leak-cleanliness for every reachable
+> owning capture is already achieved by cheaper means, and the one residual is a
+> clean compile-time error, not a miscompile.
+>
 > **E3 is LARGELY OBSOLETED.** Empirically (verified under LeakSanitizer), the
 > teardown is NOT needed for leak-cleanliness: a borrow-only capture rides a bare
 > alias (E-borrow) dropped once by P2; a *consuming rc* capture is leak-clean via
@@ -386,6 +413,46 @@ Extend `__dk_env_clone` / `__dk_env_drop` (which today only `dk_copy_range` /
 env. Drop `requires.no-leak-check` from the E1/E2 fixtures once E3 lands -- they
 then run under normal leak detection. **This is the graduation-quality landing**
 and the substrate O1-b P2/P3 also depend on (see below).
+
+#### Phasing, if it is ever built (folded from the standalone E3 plan)
+
+The mechanism today, and why a naive `free(env)` is unsound: on a multi-shot
+resume `dk_copy_node` **shallow-copies the env pointer** (`c->env = n->env`), so
+every reified sub shares one env with the leaked original chain, and `dk_free`
+runs only on those reified sub copies -- never on the original chain. So the env
+is *shared* (a naive free double-frees) and the original chain is *never freed*
+(any owning ref it holds -- the "base" +1 -- leaks without a teardown). A build
+would therefore split into two phases:
+
+- **E3a -- per-frame env clone/drop hooks (admits consuming captures; still leaks
+  the base).** Give a DK frame an optional `env_clone` / `env_drop` pair (default
+  NULL = today's leaked, share-on-copy behavior), fired in `dk_copy_node` (deep-copy
+  the env + clone each owning field, so each reified sub gets its own +1) and
+  `dk_free` (drop each owning field, then free the env). Emit an
+  `<hname>_env_clone` / `<hname>_env_drop` per continuation whose caps hold an
+  owning field (reusing E-borrow's `owning[]` + O2's clone/drop glue) and pass them
+  to a new `dk_frame_owning(...)` constructor at the `emit_cont_env` site. This
+  makes a **consuming** multi-shot capture memory-safe (copies no longer alias), but
+  the base env's +1 still leaks (the original chain is never freed) -- so an E3a-era
+  fixture carries `requires.no-leak-check`, exactly like E1's original incref path.
+- **E3b -- delimited-region teardown (leak-clean; retires the DK-node leak).** Free
+  the original delimited chain (and, via `env_drop`, its base env refs) at region
+  completion. The hard part is that the region is emitted tail-recursively, so it
+  needs either a **non-tail region** (bind the `dk_run` result, then `dk_free_deep`
+  the original chain, then deliver to `cur_k`) or a **per-region arena** freed at
+  region end. Either also retires the pre-existing DK-node leak
+  (`docs/reported/cps-delimited-dk-node-leak.md`) as a bonus.
+
+Correctness obligations for a build: **fire the base `env_drop` exactly once**
+(base populate = +1, each sub copy = +1 clone and -1 `dk_free`, region teardown =
+-1 base; net zero, freed once), and **fire the teardown on abortive control too**
+(an abortive `shift` discards the continuation -- the region-end teardown must
+still run; the arena option makes this uniform). These are the same obligations
+O1-b P2's "fire on abandon" carries.
+
+None of the above is scheduled -- it is retained as the design for the day a real
+consuming-aggregate / abortive-crossing case must be **admitted** rather than
+rejected by TUR-E0107.
 
 ### Resolve the consuming-case `EX_DEFER` interaction (owned by E3)
 

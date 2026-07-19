@@ -1,8 +1,30 @@
 ---
 title: "CPS backend -- native emission + leak-free reap of Tier-C effect-result / resume-value crossings"
-status: landed
+status: landed -- verified complete 2026-07-19 (see progress note below)
 description: A colored function whose effect RESULT (or resume value / handler-case result) is a Tier-C by-value aggregate (a heap-boxed struct crossing the one-word DK slot) was SIG-REJECTed by fn_sig_ok and evicted to the direct/fiber effect runtime, where its boxes leak. Two gaps -- the signature gate never admitted the boxed-aggregate case it documents, and the DK-path Tier-C boxes (resume value, handler-case return, deliver) are read consume=false for multi-shot safety and only freed at the single-shot entry unwrap. This plan makes the shape native and makes ALL Tier-C boxes single-owned by the per-run reap list.
 ---
+
+## Progress (2026-07-19)
+
+**COMPLETE -- all five steps landed; verified against the tree.**
+
+- Step 1 (return-gate widening): `fn_sig_ok` admits the return when
+  `sig_slot_ok(rt) || slot_box_ty(rt)` -- `emit_cps_ir.c` carries the
+  `slot_box_ty(rt)` widen at the return crossing (params stay on `slot_ty`, as
+  specified). `slot_box_ty` / `sig_slot_ok` are in place.
+- Steps 2-3 (register-at-creation): `slot_store_reap` is wired at every crossing
+  the plan names -- `emit_deliver_ty` (KK_RET / KK_PROMPT), `emit_resume` (resume
+  value), `emit_await` (future), and the perform-arg / `__eargs` sites.
+- Step 4 (single-ownership reap): every load stays `consume=false`; the per-run
+  `__dk_reap_run` is the sole owner. No `consume=true` double-free remains.
+- Step 5: `cps-backend-tierc-effect` no longer carries any `requires.*` marker
+  (only `input.tur` + `expected.stdout`), confirming it emits natively and passes
+  the leak-checked suite. Sibling `cps-backend-tierc-return` / `-shift` / `-arg`
+  fixtures are present.
+
+Nothing tracked here remains open. The non-goals (owning-field aggregates,
+markerless cloneable/serial/callcc leaks) were always out of scope and are tracked
+elsewhere. Ready to archive.
 
 ## Symptom
 

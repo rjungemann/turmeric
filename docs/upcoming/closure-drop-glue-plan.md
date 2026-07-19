@@ -5,6 +5,18 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-19).** Verified against the tree: S1.2 is the only
+> landed slice. `hoist_borrowed_closure_args` (`elab_call.c:773`), the
+> `binding_escapes_impl` FA_BORROW relaxation (`emit_core.c:573`), and the
+> `let_binding_env_freeable` scope-exit free (`emit_expr.c:1267`) are all
+> present. The **`drop_glue_env_N` walk-glue does NOT exist** (no such symbol
+> anywhere in `src/`), and there is no capture-time retain/clone -- so S1 (a/b/c)
+> and both S2 models are entirely unbuilt. The `requires.no-leak-check` markers
+> still sit on `free-lift-bind`, `unsafe-closure-capture`, `cps-backend-fn-param`,
+> and `hkt-stdlib-parser-instances`; `currying-effect-partial` (re-classified out
+> of S1) carries no marker. This plan remains **OPEN** -- the ownership feature
+> (capture-clone + walk-glue) has not started.
+
 ## Landed: S1.2 -- borrowed HOF-arg closure free
 
 A capturing closure passed INLINE to a `^borrow` fn-param now has its heap env

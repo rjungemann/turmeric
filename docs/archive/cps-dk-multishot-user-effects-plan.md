@@ -1,9 +1,16 @@
 # DK-native multishot continuations for user resumable-payload effects
 
-**Status:** Phases A + B + C LANDED -- the WHOLE B1 family CPS-emits
+**Status:** COMPLETE -- Phases A + B + C LANDED. The WHOLE B1 family CPS-emits
 (`effect-cont-kv-sugar`, `multishot-effect-cont-kv-sugar`,
 `effect-fn-payload-capturing`, `cross-function-resume-via-effect`). Prepared from
 investigations P-inv .. P-inv3 in `cps-runtime-finish-plan.md`.
+
+> **CONFIRMED DONE (2026-07-19).** All four target fixtures still present. The
+> `resumable_payload` / `reflavor_effect_payload` / `multishot-effect-cont`
+> machinery is live in `src/` (elab_effects.c, elab_fns.c, emit_cps_ir.c,
+> effect.c/.h, cps_ir.c). The `cps-tramp-resume` experiment has since GRADUATED
+> (always-on) and the fiber effect runtime is deleted (Stage G), so this whole
+> family now DK-lowers by default. No phase remains open -- ready to archive.
 
 ## Phase C result (landed) -- raw-`int` continuation payloads
 

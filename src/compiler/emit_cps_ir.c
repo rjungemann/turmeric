@@ -2567,7 +2567,7 @@ static bool fn_sig_ok(const FnDef *fd) {
      * by-value aggregate PARAM is NOT widened here -- the CPS param ABI would emit
      * it by value while the direct emitter's forward decl passes it by pointer;
      * such a param keeps the function on the fallback (see the param loop below).
-     * See docs/upcoming/v1/cps-tier-c-effect-result-native-plan.md. */
+     * See docs/archive/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
     if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
         && !fn_carrier_ret_ok(fd, rt)) return false;
@@ -3470,7 +3470,7 @@ static bool letraw_effect_free(const CTerm *t) {
  * A codegen-NEUTRAL coloring pass that answers: for an effectful fn-value (an
  * address-taken named fn or an effectful lifted lambda) currently EVICTED to the
  * fiber, could it instead thread the DK continuation?  Per the plan's coloring
- * invariant (docs/upcoming/v2/cps-dk-sole-effect-lowering-plan.md, "the invariant
+ * invariant (docs/archive/cps-dk-sole-effect-lowering-plan.md, "the invariant
  * that makes E2 a COLORING problem"): a fn-value is DK-threadable ONLY IF *every*
  * one of its value-uses is a DK-threadable site.  If ANY use is un-threadable (an
  * inline-C fn-ptr cast, a fiber HOF, a non-threading argument position, a stored
@@ -5495,7 +5495,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * (plain free -- tur_cloneable_cont_alloc malloc'd it).  Together
                  * these are tur_cloneable_cont_drop deferred to the boundary, so
                  * the per-receiver cont no longer leaks
-                 * (docs/upcoming/cps-runtime-finish-plan.md, P3.c). */
+                 * (docs/archive/cps-runtime-finish-plan.md, P3.c). */
                 buf_printf(&tmp, "DK *%s_kenv = dk_copy_range(subk, NULL);\n", kn);
                 indent_buf(&tmp, 4);
                 buf_printf(&tmp, "int64_t %s = (int64_t)(intptr_t)tur_cloneable_cont_alloc("
@@ -7111,7 +7111,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
          * be doing so for a PERMANENT signature reason (SIG-*) -- exported symbol,
          * program entry, ABI-incompatible signature, permanent taint, or an opaque
          * inline-C body the CPS backend can never own.  The fixable BODY-* eviction
-         * surface has been driven to zero (docs/upcoming/cps-runtime-finish-plan.md),
+         * surface has been driven to zero (docs/archive/cps-runtime-finish-plan.md),
          * so a BODY-* fallback now means a regression reintroduced a root the CPS
          * backend must own.  Categorize every colored fallback; a BODY-* one is a
          * HARD ERROR naming the residual, caught at build time instead of silently

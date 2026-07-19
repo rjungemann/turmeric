@@ -7,6 +7,20 @@ description: A `ref<T>` (also `weak`/`lref`) local gets a `(defer (drop! r))` in
 
 # CPS backend -- ref<T> scope-exit auto-drop (O1-b)
 
+> **Progress note (2026-07-19).** Verified against the tree. **P1 is landed.**
+> The hoist (`plan_autodrop` + the widened `autodrop_defer_owning` recognizer in
+> `src/passes/cps_ir.c`) and the soundness gate (`ref_dropped_before_control` /
+> `is_ref_drop_of` in `emit_cps_ir.c:1890-1922`, consulted by `letraw_ok`) are
+> both present. Fixture `tests/fixtures/cps-backend-ref-noncrossing-drop` exists
+> (`input.tur` + `expected.stdout`, no `requires.no-leak-check`). **P2 (abortive
+> crossing) and P3 (resumable crossing) remain open**, both gated on the E3
+> DK-teardown / env-capture clone-drop substrate, which is not built (see Track B's
+> E3 section of the env-capture plan,
+> `cps-backend-multishot-continuations-owning-capture-plan.md`) -- so a crossing
+> ref continues to fall back correctly. This plan stays
+> **OPEN on P2/P3 only**, per the original caveat: they wait for a real
+> crossing-ref case plus the teardown.
+
 ## Why this document exists
 
 O1-b in

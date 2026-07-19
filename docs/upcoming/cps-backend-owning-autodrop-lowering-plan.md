@@ -7,6 +7,18 @@ description: A colored (CPS-emitted) function that carries an elaborator-injecte
 
 # CPS backend -- lower the non-ref owning-value scope-exit auto-drop
 
+> **Progress note (2026-07-19).** Verified against the tree. **P1 + P2 are
+> landed.** The generalized recognizer `autodrop_defer_owning` (+
+> `autodrop_root_local`) is in `src/passes/cps_ir.c:2052-2093`; the P2 soundness
+> gate `expr_has_unsafe_control` (`:2180`) is present and recurses through
+> handle/perform/reset arms as described. Fixtures
+> `cps-backend-owning-autodrop-noncrossing` (P1) and
+> `-owning-autodrop-crossing-singleshot` (P2), plus the E2 capstone
+> `cps-backend-owning-struct-capture-multishot`, all exist and are leak-clean.
+> **P3 (abortive / multi-shot crossing) remains open** and is gated on E3's
+> DK-teardown, which is itself not built (see the E3 plan) -- so those crossings
+> continue to fall back correctly. This plan stays **OPEN on P3 only.**
+
 ## Why this document exists (and why it was missed)
 
 The env-capture / Track B plans repeatedly hand-waved this as *"the `EX_DEFER`
@@ -98,7 +110,9 @@ by-value local's owning field `(.f o)`), and `C` a control op in `X`'s scope.
    discards the continuation (drop lost -> leak); a multi-shot resume runs it per
    resume (double free). The drop must fire once per continuation *lifetime* via
    a teardown. **P3 here -- rides E3**
-   ([cps-backend-owning-env-teardown-e3-plan.md](cps-backend-owning-env-teardown-e3-plan.md))
+   (the DK-teardown design lives in Track B's E3 section of
+   [cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md);
+   the standalone E3 plan was folded there and deleted)
    and O1-b P2/P3.
 
 The key correction to the earlier plans: **E2 is case 2, not case 3.** E2's
@@ -188,8 +202,10 @@ field-read arg, and `drop!` on the direct side (O1-a). The delegated constructor
   same mechanism. Ideally `autodrop_defer_ref` becomes `autodrop_defer_owning`
   and O1-b P1's `ref` case folds into P1 here (one recognizer, one hoist). O1-b
   P2/P3 and P3 here share E3.
-- **E3** ([e3 plan](cps-backend-owning-env-teardown-e3-plan.md)): only P3 (abortive
-  / multi-shot crossing) depends on it. P1/P2 are independent and land first.
+- **E3** (Track B's E3 section of
+  [cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md);
+  folded from the deleted standalone plan): only P3 (abortive / multi-shot
+  crossing) depends on it. P1/P2 are independent and land first.
 - **byvalue-struct-local-owning-field-leak** (archived, RESOLVED on direct):
   its injection is the source of the struct-field defers; this plan lowers them
   under CPS. Add a back-reference so the CPS side is no longer "not tracked."

@@ -1,7 +1,7 @@
 ---
 title: "CPS/DK runtime -- the finish plan (N6.5 endgame: delete the fallback, retire fibers for colored code)"
 category: Planning
-status: open -- the finishing sequence. Control-flow gaps are closed; what remains is a measured BODY-* coverage grind + leak discipline, then the fallback deletion. Readiness gate = TUR_TRACE_EVICT shows only SIG-* across the corpus.
+status: finished (2026-07-19) -- the N6.5 endgame reached its finish line. BODY-* = 0 corpus-wide (Slice PY), the colored non-SIG-* fallback is a build-time hard error (Slice PZ), cps-tramp-resume GRADUATED making CPS/DK the sole effect lowering, and the now-dead fiber effect runtime C was deleted (Stage G). The only residuals are the permanent SIG-* carve-out (by design, keeps the direct emitter for uncolored + signature-rejected code) and the separately-tracked cps-async experiment. Ready to archive; see the 2026-07-19 progress note at the top of the log.
 description: One consolidating plan to drive the CPS/DK backend from its current half-finished state to done. The endgame is N6.5 -- make the CPS/DK backend the SOLE lowering for colored (may-capture / effectful) functions, delete the direct/fiber whole-function fallback, and hard-error residual forms. This plan states, with evidence, what is already finished, the exact remaining eviction surface, the ordered slices to empty it, the leak discipline needed for an ASan-clean finish, and the deletion + verification steps. It supersedes the scattered N6 follow-up docs as the single execution track.
 ---
 
@@ -374,6 +374,55 @@ defer/while/inline-C residuals, and the dominant Phase-2 `BODY-STRUCT-OR-TAINT`
 surface. The EVICT gate now reads `SIG-*` plus these 4 named residuals.
 
 ## Progress log
+
+### 2026-07-19 -- FINISH LINE REACHED (Stage G): the endgame is complete
+
+The N6.5 finish line is met. Beyond Slices PY (BODY-* = 0) and PZ (the hard-error
+gate) already logged below, two further landings after those entries closed the
+last of Phase 4:
+
+- **`cps-tramp-resume` GRADUATED (2026-07-19).** The CPS/DK trampolined
+  tail-resume is now the DEFAULT and SOLE lowering for effectful colored code
+  (`g_opt_cps_tramp_resume` defaults on; row moved to `GRADUATED[]` in
+  `experiments.c`). The whole corpus DK-lowers every effect -- **zero
+  `tur_effect_perform` call sites** remain.
+- **Stage G: the dead fiber effect runtime C is DELETED.** With zero fiber-effect
+  call sites, the fiber effect runtime that had been emitted unconditionally into
+  every program was dead code, and it was removed from `emit_module.c`:
+  `tur_effect_perform`, `tur_effect_cont_resume` / `tur_effect_cont_valid`, the
+  first-class-handler-value fiber dispatch (`__tur_msdyn_*` / `tur_handler_dispatch`),
+  the `TurContK` / `EffectHandler*` structs, `global_effect_handler_chain`, and the
+  two `FiberBlock` effect fields. STAYS: `FiberBlock` + scheduler/reactor/futures
+  (concurrency, unrelated to effects), `tur_handler_table_t` (the DK handler-value
+  path reads it), and `tur_cloneable_cont_*` (the DK `__Shift` bridge). Emitted C
+  now has zero references to any deleted symbol; ~139 snapshots regenerated as the
+  preamble shrank. Suite 2203/0.
+
+This resolves the Phase-4 steps-2-3 question the "Net Phase 4 outcome" note below
+left as "not applicable as stated." The refinement that unblocked deletion: the
+fiber effect runtime was NOT permanently needed after all -- once
+`cps-tramp-resume` graduated, even `SIG-*` colored effectful code no longer routes
+its effects through the fiber path, so the effect-runtime C had zero call sites and
+was deletable. The fiber `FiberBlock`/scheduler stays (concurrency, not effects),
+which is a different subsystem than the "fiber effect runtime" the plan targeted.
+
+**Remaining after the finish line (neither a v1 blocker nor tracked here):**
+
+- The **permanent `SIG-*` carve-out** -- uncolored functions and colored functions
+  whose C signature the CPS backend cannot spell stay on the direct emitter by
+  design. This is not eviction; it is the intended routing and was never part of
+  the finish line.
+- **`cps-async`** -- the one still-gated experiment touching this backend (heap
+  `async`/`await`). Its recursive-await residual was investigated and declined as
+  works-at-intended (see `compiled-stackless-recursive-await-plan.md`); the
+  experiment is tracked independently and does not hold this plan open.
+- A **pre-existing owning handler-value table leak** (unrelated to Stage G),
+  noted in the Stage G commit and its own report -- a general memory-model gap,
+  not a CPS-specific defect.
+
+Net: the CPS/DK backend is the sole lowering for colored non-`SIG-*` functions,
+the BODY-* fallback is a hard error, and the fiber effect runtime is gone. This
+plan is complete and ready to archive.
 
 ### Slice PZ (LANDED) -- Phase 4 step 1: the N6.5 gate is now ENFORCED
 

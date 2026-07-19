@@ -1162,7 +1162,7 @@ static const DiagExplanation diag_explanations_[] = {
       "\n"
       "`(:: v :any)` (or just passing v where an `any` is expected) heap-boxes it\n"
       "as a one-word handle; `(cast h T)` reads it back as T.  See\n"
-      "docs/upcoming/byvalue-adt-int-cast-plan.md.\n",
+      "docs/archive/byvalue-adt-int-cast-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"
