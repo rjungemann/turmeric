@@ -1570,6 +1570,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
                                         strcmp(lvty, "void *") != 0;
             }
+            /* gcc14-int-conversion (carrier-representation-tracking): the init
+             * VALUE is a `void *` union-default read (`((union { int64_t s; void *
+             * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
+             * relabel) while the binder is the int64 carrier -- e.g.
+             * `(let [c (:: (:: 0 :ptr<void>) (SChan ...))] ...)`.  `int64_t c =
+             * <void *>` is `integer from pointer` -- a hard error under GCC >= 14.
+             * Detect the exact void*-member union read (unique to this emit; it
+             * cannot match an int64 value) and reinterpret it to the carrier. */
+            if (!init_val_recorded_ptr && strcmp(bind_c, "int64_t") == 0 && iv) {
+                size_t ivL = strlen(iv);
+                if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+                    strstr(iv, "void * d;") != NULL)
+                    init_val_recorded_ptr = true;
+            }
             /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
              * parameter whose fields sum to > 16 bytes arrives via the
              * by-pointer ABI (`const T *`), but the let binding is declared
@@ -1833,6 +1847,20 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 size_t lL = lvty ? strlen(lvty) : 0;
                 init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
                                         strcmp(lvty, "void *") != 0;
+            }
+            /* gcc14-int-conversion (carrier-representation-tracking): the init
+             * VALUE is a `void *` union-default read (`((union { int64_t s; void *
+             * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
+             * relabel) while the binder is the int64 carrier -- e.g.
+             * `(let [c (:: (:: 0 :ptr<void>) (SChan ...))] ...)`.  `int64_t c =
+             * <void *>` is `integer from pointer` -- a hard error under GCC >= 14.
+             * Detect the exact void*-member union read (unique to this emit; it
+             * cannot match an int64 value) and reinterpret it to the carrier. */
+            if (!init_val_recorded_ptr && strcmp(bind_c, "int64_t") == 0 && iv) {
+                size_t ivL = strlen(iv);
+                if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+                    strstr(iv, "void * d;") != NULL)
+                    init_val_recorded_ptr = true;
             }
             /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
              * parameter whose fields sum to > 16 bytes arrives via the
