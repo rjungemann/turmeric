@@ -226,7 +226,7 @@ bool g_opt_cps_async = false;
  * (meta-stack) instead of resuming inline, keeping deep effectful tail-recursion
  * flat. Flipped by the `cps-tramp-resume` experiment; read by the CPS-IR
  * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
-bool g_opt_cps_tramp_resume = false;
+bool g_opt_cps_tramp_resume = true;
 
 
 /* ---------------------------------------------------------------------------

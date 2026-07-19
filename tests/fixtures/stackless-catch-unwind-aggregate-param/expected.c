@@ -930,6 +930,13 @@ struct DK {
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
     DKResumeFrame rfn; DK *next;
+    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
+    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
+                        * distinguishes this handle's cases from an enclosing
+                        * handle's handlers once a re-install flattens the chain */
+    bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until
+                        * the program `resume`s it; set at the user resume site so
+                        * `cont?` can read `!k->consumed` (matches the fiber path). */
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -962,6 +969,23 @@ static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
 static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
     return dk_handler_impl(tag, fn, env, true, next);
 }
+/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
+ * driver instead of resuming inline, keeping deep effectful recursion flat. */
+static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;
+}
+/* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at
+ * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's
+ * continuation frame) with a fresh, shared group id.  dk_case_enclosing and
+ * dk_perform's re-install then skip only same-group handlers, so an enclosing
+ * handle's handlers that become ADJACENT after a chain-flattening re-install are
+ * no longer mistaken for this handle's siblings (they carry a different id). */
+static int g_dk_hgroup_ctr = 0;
+static DK *dk_hgroup(DK *head) {
+    int g = ++g_dk_hgroup_ctr;
+    for (DK *p = head; p && p->kind == DKK_HANDLER; p = p->next) p->hgroup = g;
+    return head;
+}
 /* B3: install a DK handler group from a runtime first-class handler table -- the
  * DK-side analogue of running a with-handler body under a dynamic handler value.
  * Each entry contributes a dk_handler(dk_tag, dk_fn, env, ...) node, chained
@@ -987,6 +1011,8 @@ static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
+    c->tail_resume = n->tail_resume;
+    c->hgroup = n->hgroup;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -1013,7 +1039,7 @@ static DK *dk_case_enclosing(const DK *H) {
     if (!H) return dk_done();
     const DK *ge = H;
     if (H->shallow) ge = H->next;
-    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
+    else while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;
     return dk_copy_enclosing_handlers(ge);
 }
 static DK *dk_copy_range(const DK *from, const DK *stop) {
@@ -1037,6 +1063,19 @@ static void dk_free(DK *k) { while (k) { DK *n = k->next; free(k); k = n; } }
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
 __attribute__((unused)) static void dk_free_node(DK *k) { free(k); }
+/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
+typedef intptr_t (*__tur_cps_fn)();
+static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
+static int __tur_cps_reg_n = 0;
+__attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {
+    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;
+        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }
+}
+__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
+    for (int i = 0; i < __tur_cps_reg_n; i++)
+        if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;
+    return (__tur_cps_fn)0;
+}
 /* Structural-chain reaping (docs/archive/cps-delimited-dk-node-leak.md).
  * reset/handle install a prompt/handler chain as the current continuation and
  * thread it through the delimited body in TAIL position, so the install site
@@ -1103,6 +1142,59 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
     DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
 }
+/* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *
+ * A tail-resume handler does not resume inline (which nests ~160 B of C stack
+ * per resumed perform -> O(N)); instead dk_perform yields the resumed chain to
+ * the entry driver, which re-enters it from the top. Pending handle-continuation
+ * deliveries (what dk_run_impl(H->next,r) would run) ride a heap meta-stack in
+ * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is
+ * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at
+ * N=1e6 by docs/upcoming/v2/probes/e7-fidelity-probe.c. */
+static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
+static DK      *g_dk_resume_chain = NULL;
+static intptr_t g_dk_resume_val = 0;
+static DK     **g_dk_meta = NULL;
+static size_t   g_dk_meta_n = 0, g_dk_meta_cap = 0;
+static void __dk_meta_push(DK *d) {
+    if (g_dk_meta_n == g_dk_meta_cap) {
+        g_dk_meta_cap = g_dk_meta_cap ? g_dk_meta_cap * 2 : 16;
+        g_dk_meta = (DK **)realloc(g_dk_meta, g_dk_meta_cap * sizeof(DK *));
+    }
+    g_dk_meta[g_dk_meta_n++] = d;
+}
+static bool __dk_delivery_noop(const DK *d) {   /* only HANDLER/DONE -> identity */
+    for (const DK *p = d; p; p = p->next)
+        if (p->kind != DKK_HANDLER && p->kind != DKK_DONE) return false;
+    return true;
+}
+/* tail-resume: yield the resumed chain to the driver (never returns).  With no
+ * active driver (dk_perform did NOT take its tail-resume yield branch, so no
+ * delivery was queued), fall back to the inline dk_invoke resume -- byte-identical
+ * to the non-trampolined path, keeping the two sides consistent. */
+static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
+    if (!g_dk_driver) return dk_invoke(sub, v);
+    g_dk_resume_chain = sub; g_dk_resume_val = v;
+    longjmp(*g_dk_driver, 1);
+    return 0; /* unreachable */
+}
+/* Run the meta-stack trampoline to completion after a tail-resume longjmp landed
+ * in the entry wrapper. Owns its own jmp_buf so further yields land here. */
+static intptr_t __dk_drive_after(void) {
+    jmp_buf jb; g_dk_driver = &jb;
+    intptr_t r;
+    for (;;) {
+        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        if (setjmp(jb) == 0) {
+            r = dk_run_impl(ch, rv, false);
+            dk_free(ch);
+            if (g_dk_meta_n == 0) return r;
+            g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
+            g_dk_resume_val = r;
+        } else {
+            dk_free(ch);   /* yielded again mid-run: loop, flat */
+        }
+    }
+}
 /* Effect re-opening: the handler node whose case is currently running, set just
  * before dk_perform calls the case.  A re-opening case reads it (into a local, at
  * entry, before any interior perform can overwrite it) to recover its enclosing
@@ -1129,7 +1221,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
          * resumed sub-continuation.  A single-case handle copies just H (identical
          * to the old dk_handler(tag,...) re-install). */
         const DK *ge = H;
-        while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
+        while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;
         /* Terminate the re-installed group with the ENCLOSING handler markers, not
          * dk_done(): a deep handler leaves the outer handlers in place, so an
          * effect the group does NOT handle, performed in the resumed continuation,
@@ -1141,6 +1233,15 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));
     }
     sub = dk_append(sub, tail);
+    /* E7: a tail-resume handler under an active driver yields the resumed chain
+     * rather than resuming inline; queue its H->next delivery (unless a no-op) so
+     * it runs after the resumed chain settles, in nesting order. */
+    if (H->tail_resume && g_dk_driver) {
+        DK *__deliv = dk_copy_range(H->next, NULL);
+        if (__dk_delivery_noop(__deliv)) dk_free(__deliv); else __dk_meta_push(__deliv);
+        g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
+        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
+    }
     g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
@@ -1367,7 +1468,9 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     FiberBlock *_prev = tur_current_fiber;
     tur_current_fiber = f;
     f->arg = arg;
+    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
     swapcontext(&f->caller_ctx, &f->ctx);
+    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
     return f->result;
 }
@@ -4219,7 +4322,11 @@ static int64_t hamt_slnew__cps(DK *__kont) {
 __attribute__((unused)) static void * hamt_slnew() {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slnew__cps(__root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slnew__cps(__root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4234,7 +4341,10 @@ static int64_t hamt_slfree__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void hamt_slfree(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_slfree__cps(m, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_slfree__cps(m, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4249,7 +4359,11 @@ static int64_t hamt_slretain__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_slretain(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slretain__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slretain__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4265,7 +4379,11 @@ static int64_t hamt_slset__cps(void * m, int64_t hash, void * key, void * val, D
 __attribute__((unused)) static void * hamt_slset(void * m, int64_t hash, void * key, void * val) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slset__cps(m, hash, key, val, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slset__cps(m, hash, key, val, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4281,7 +4399,11 @@ static int64_t hamt_sldel__cps(void * m, int64_t hash, void * key, DK *__kont) {
 __attribute__((unused)) static void * hamt_sldel(void * m, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sldel__cps(m, hash, key, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sldel__cps(m, hash, key, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4297,7 +4419,11 @@ static int64_t hamt_slget__cps(void * m, int64_t hash, void * key, DK *__kont) {
 __attribute__((unused)) static void * hamt_slget(void * m, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slget__cps(m, hash, key, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slget__cps(m, hash, key, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4313,7 +4439,11 @@ static int64_t hamt_slhas_qu__cps(void * m, int64_t hash, void * key, DK *__kont
 __attribute__((unused)) static bool hamt_slhas_qu(void * m, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhas_qu__cps(m, hash, key, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_qu__cps(m, hash, key, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4329,7 +4459,11 @@ static int64_t hamt_slcount__cps(void * m, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_slcount(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slcount__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slcount__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4345,7 +4479,11 @@ static int64_t hamt_slmerge__cps(void * a, void * b, DK *__kont) {
 __attribute__((unused)) static void * hamt_slmerge(void * a, void * b) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slmerge__cps(a, b, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slmerge__cps(a, b, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4361,7 +4499,11 @@ static int64_t hamt_slhash_hystr__cps(const char * str, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_slhash_hystr(const char * str) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhash_hystr__cps(str, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhash_hystr__cps(str, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4377,7 +4519,11 @@ static int64_t hamt_slhash_hyptr__cps(void * ptr, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_slhash_hyptr(void * ptr) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhash_hyptr__cps(ptr, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhash_hyptr__cps(ptr, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4392,7 +4538,10 @@ static int64_t hamt_sliter_hyinit__cps(void * iter, void * m, DK *__kont) {
 __attribute__((unused)) static void hamt_sliter_hyinit(void * iter, void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sliter_hyinit__cps(iter, m, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hyinit__cps(iter, m, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4406,7 +4555,10 @@ static int64_t hamt_sliter_hyfree__cps(void * iter, DK *__kont) {
 __attribute__((unused)) static void hamt_sliter_hyfree(void * iter) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sliter_hyfree__cps(iter, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hyfree__cps(iter, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4421,7 +4573,11 @@ static int64_t hamt_sliter_hynext__cps(void * iter, void * hash_out, void * key_
 __attribute__((unused)) static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hynext__cps(iter, hash_out, key_out, val_out, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hynext__cps(iter, hash_out, key_out, val_out, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4437,7 +4593,11 @@ static int64_t hamt_sliter_hyalloc__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_sliter_hyalloc(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hyalloc__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hyalloc__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4452,7 +4612,10 @@ static int64_t hamt_sliter_hydestroy_ex__cps(void * box, DK *__kont) {
 __attribute__((unused)) static void hamt_sliter_hydestroy_ex(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sliter_hydestroy_ex__cps(box, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hydestroy_ex__cps(box, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4467,7 +4630,11 @@ static int64_t hamt_sliter_hyadvance_ex__cps(void * box, DK *__kont) {
 __attribute__((unused)) static bool hamt_sliter_hyadvance_ex(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hyadvance_ex__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hyadvance_ex__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4483,7 +4650,11 @@ static int64_t hamt_sliter_hycur_hyhash__cps(void * box, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_sliter_hycur_hyhash(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hycur_hyhash__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hyhash__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4499,7 +4670,11 @@ static int64_t hamt_sliter_hycur_hykey__cps(void * box, DK *__kont) {
 __attribute__((unused)) static void * hamt_sliter_hycur_hykey(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hycur_hykey__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hykey__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4515,7 +4690,11 @@ static int64_t hamt_sliter_hycur_hyval__cps(void * box, DK *__kont) {
 __attribute__((unused)) static void * hamt_sliter_hycur_hyval(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hycur_hyval__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hyval__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4531,7 +4710,11 @@ static int64_t hamt_slkeyeq__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_slkeyeq(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slkeyeq__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slkeyeq__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4547,7 +4730,11 @@ static int64_t hamt_slget_hydynamic__cps(void * m, int64_t hash, void * key, voi
 __attribute__((unused)) static void * hamt_slget_hydynamic(void * m, int64_t hash, void * key, void * keyeq) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slget_hydynamic__cps(m, hash, key, keyeq, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slget_hydynamic__cps(m, hash, key, keyeq, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4563,7 +4750,11 @@ static int64_t hamt_slhas_hydynamic_qu__cps(void * m, int64_t hash, void * key, 
 __attribute__((unused)) static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, void * key, void * keyeq) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhas_hydynamic_qu__cps(m, hash, key, keyeq, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_hydynamic_qu__cps(m, hash, key, keyeq, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4579,7 +4770,11 @@ static int64_t hamt_slmap__cps(void * m, void * fn, void * ctx, DK *__kont) {
 __attribute__((unused)) static void * hamt_slmap(void * m, void * fn, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slmap__cps(m, fn, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slmap__cps(m, fn, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4595,7 +4790,11 @@ static int64_t hamt_slfilter__cps(void * m, void * fn, void * ctx, DK *__kont) {
 __attribute__((unused)) static void * hamt_slfilter(void * m, void * fn, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slfilter__cps(m, fn, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slfilter__cps(m, fn, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4611,7 +4810,11 @@ static int64_t hamt_slreduce__cps(void * m, void * fn, void * init, void * ctx, 
 __attribute__((unused)) static void * hamt_slreduce(void * m, void * fn, void * init, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slreduce__cps(m, fn, init, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slreduce__cps(m, fn, init, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4627,7 +4830,11 @@ static int64_t hamt_slmerge_hywith__cps(void * a, void * b, void * fn, void * ct
 __attribute__((unused)) static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slmerge_hywith__cps(a, b, fn, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slmerge_hywith__cps(a, b, fn, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4643,7 +4850,11 @@ static int64_t hamt_slshow__cps(void * m, DK *__kont) {
 __attribute__((unused)) static const char * hamt_slshow(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slshow__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slshow__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     const char * __ret = (const char *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4658,7 +4869,10 @@ static int64_t hamt_sldump__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void hamt_sldump(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sldump__cps(m, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sldump__cps(m, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4673,7 +4887,11 @@ static int64_t hamt_sltransient__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_sltransient(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sltransient__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sltransient__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4688,7 +4906,10 @@ static int64_t hamt_sltransient_hyset_ex__cps(void * t, int64_t hash, void * key
 __attribute__((unused)) static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sltransient_hyset_ex__cps(t, hash, key, val, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sltransient_hyset_ex__cps(t, hash, key, val, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4702,7 +4923,10 @@ static int64_t hamt_sltransient_hydel_ex__cps(void * t, int64_t hash, void * key
 __attribute__((unused)) static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sltransient_hydel_ex__cps(t, hash, key, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sltransient_hydel_ex__cps(t, hash, key, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4717,7 +4941,11 @@ static int64_t hamt_slpersistent_ex__cps(void * t, DK *__kont) {
 __attribute__((unused)) static void * hamt_slpersistent_ex(void * t) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slpersistent_ex__cps(t, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slpersistent_ex__cps(t, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4936,7 +5164,11 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
 __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -5268,7 +5500,11 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
 __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -5344,7 +5580,11 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
 __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = _un_uncons_hyfmap__cps(cell, f, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -5664,7 +5904,11 @@ static int64_t set_hyeq_hyloop__cps(void * iter, void * s2_hamt, void * keyeq, D
 __attribute__((unused)) static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = set_hyeq_hyloop__cps(iter, s2_hamt, keyeq, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = set_hyeq_hyloop__cps(iter, s2_hamt, keyeq, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();

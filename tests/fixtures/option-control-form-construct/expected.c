@@ -930,6 +930,13 @@ struct DK {
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
     DKResumeFrame rfn; DK *next;
+    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
+    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
+                        * distinguishes this handle's cases from an enclosing
+                        * handle's handlers once a re-install flattens the chain */
+    bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until
+                        * the program `resume`s it; set at the user resume site so
+                        * `cont?` can read `!k->consumed` (matches the fiber path). */
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -962,6 +969,23 @@ static DK *dk_handler(int tag, DKHandler fn, intptr_t env, DK *next) {
 static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
     return dk_handler_impl(tag, fn, env, true, next);
 }
+/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
+ * driver instead of resuming inline, keeping deep effectful recursion flat. */
+static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;
+}
+/* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at
+ * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's
+ * continuation frame) with a fresh, shared group id.  dk_case_enclosing and
+ * dk_perform's re-install then skip only same-group handlers, so an enclosing
+ * handle's handlers that become ADJACENT after a chain-flattening re-install are
+ * no longer mistaken for this handle's siblings (they carry a different id). */
+static int g_dk_hgroup_ctr = 0;
+static DK *dk_hgroup(DK *head) {
+    int g = ++g_dk_hgroup_ctr;
+    for (DK *p = head; p && p->kind == DKK_HANDLER; p = p->next) p->hgroup = g;
+    return head;
+}
 /* B3: install a DK handler group from a runtime first-class handler table -- the
  * DK-side analogue of running a with-handler body under a dynamic handler value.
  * Each entry contributes a dk_handler(dk_tag, dk_fn, env, ...) node, chained
@@ -987,6 +1011,8 @@ static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
+    c->tail_resume = n->tail_resume;
+    c->hgroup = n->hgroup;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -1013,7 +1039,7 @@ static DK *dk_case_enclosing(const DK *H) {
     if (!H) return dk_done();
     const DK *ge = H;
     if (H->shallow) ge = H->next;
-    else while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
+    else while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;
     return dk_copy_enclosing_handlers(ge);
 }
 static DK *dk_copy_range(const DK *from, const DK *stop) {
@@ -1037,6 +1063,19 @@ static void dk_free(DK *k) { while (k) { DK *n = k->next; free(k); k = n; } }
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
 __attribute__((unused)) static void dk_free_node(DK *k) { free(k); }
+/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
+typedef intptr_t (*__tur_cps_fn)();
+static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
+static int __tur_cps_reg_n = 0;
+__attribute__((unused)) static void __tur_cps_register(intptr_t direct, __tur_cps_fn cps) {
+    if (__tur_cps_reg_n < 256) { __tur_cps_reg[__tur_cps_reg_n].direct = direct;
+        __tur_cps_reg[__tur_cps_reg_n].cps = cps; __tur_cps_reg_n++; }
+}
+__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
+    for (int i = 0; i < __tur_cps_reg_n; i++)
+        if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;
+    return (__tur_cps_fn)0;
+}
 /* Structural-chain reaping (docs/archive/cps-delimited-dk-node-leak.md).
  * reset/handle install a prompt/handler chain as the current continuation and
  * thread it through the delimited body in TAIL position, so the install site
@@ -1103,6 +1142,59 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
     DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
 }
+/* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *
+ * A tail-resume handler does not resume inline (which nests ~160 B of C stack
+ * per resumed perform -> O(N)); instead dk_perform yields the resumed chain to
+ * the entry driver, which re-enters it from the top. Pending handle-continuation
+ * deliveries (what dk_run_impl(H->next,r) would run) ride a heap meta-stack in
+ * nesting (LIFO) order; a delivery of only HANDLER/DONE nodes is a no-op and is
+ * elided, so the meta-stack stays O(nesting), not O(N). Validated end-to-end at
+ * N=1e6 by docs/upcoming/v2/probes/e7-fidelity-probe.c. */
+static jmp_buf *g_dk_driver = NULL;      /* current entry-driver landing (NULL => inline) */
+static DK      *g_dk_resume_chain = NULL;
+static intptr_t g_dk_resume_val = 0;
+static DK     **g_dk_meta = NULL;
+static size_t   g_dk_meta_n = 0, g_dk_meta_cap = 0;
+static void __dk_meta_push(DK *d) {
+    if (g_dk_meta_n == g_dk_meta_cap) {
+        g_dk_meta_cap = g_dk_meta_cap ? g_dk_meta_cap * 2 : 16;
+        g_dk_meta = (DK **)realloc(g_dk_meta, g_dk_meta_cap * sizeof(DK *));
+    }
+    g_dk_meta[g_dk_meta_n++] = d;
+}
+static bool __dk_delivery_noop(const DK *d) {   /* only HANDLER/DONE -> identity */
+    for (const DK *p = d; p; p = p->next)
+        if (p->kind != DKK_HANDLER && p->kind != DKK_DONE) return false;
+    return true;
+}
+/* tail-resume: yield the resumed chain to the driver (never returns).  With no
+ * active driver (dk_perform did NOT take its tail-resume yield branch, so no
+ * delivery was queued), fall back to the inline dk_invoke resume -- byte-identical
+ * to the non-trampolined path, keeping the two sides consistent. */
+static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
+    if (!g_dk_driver) return dk_invoke(sub, v);
+    g_dk_resume_chain = sub; g_dk_resume_val = v;
+    longjmp(*g_dk_driver, 1);
+    return 0; /* unreachable */
+}
+/* Run the meta-stack trampoline to completion after a tail-resume longjmp landed
+ * in the entry wrapper. Owns its own jmp_buf so further yields land here. */
+static intptr_t __dk_drive_after(void) {
+    jmp_buf jb; g_dk_driver = &jb;
+    intptr_t r;
+    for (;;) {
+        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        if (setjmp(jb) == 0) {
+            r = dk_run_impl(ch, rv, false);
+            dk_free(ch);
+            if (g_dk_meta_n == 0) return r;
+            g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
+            g_dk_resume_val = r;
+        } else {
+            dk_free(ch);   /* yielded again mid-run: loop, flat */
+        }
+    }
+}
 /* Effect re-opening: the handler node whose case is currently running, set just
  * before dk_perform calls the case.  A re-opening case reads it (into a local, at
  * entry, before any interior perform can overwrite it) to recover its enclosing
@@ -1129,7 +1221,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
          * resumed sub-continuation.  A single-case handle copies just H (identical
          * to the old dk_handler(tag,...) re-install). */
         const DK *ge = H;
-        while (ge && ge->kind == DKK_HANDLER) ge = ge->next;
+        while (ge && ge->kind == DKK_HANDLER && ge->hgroup == H->hgroup) ge = ge->next;
         /* Terminate the re-installed group with the ENCLOSING handler markers, not
          * dk_done(): a deep handler leaves the outer handlers in place, so an
          * effect the group does NOT handle, performed in the resumed continuation,
@@ -1141,6 +1233,15 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));
     }
     sub = dk_append(sub, tail);
+    /* E7: a tail-resume handler under an active driver yields the resumed chain
+     * rather than resuming inline; queue its H->next delivery (unless a no-op) so
+     * it runs after the resumed chain settles, in nesting order. */
+    if (H->tail_resume && g_dk_driver) {
+        DK *__deliv = dk_copy_range(H->next, NULL);
+        if (__dk_delivery_noop(__deliv)) dk_free(__deliv); else __dk_meta_push(__deliv);
+        g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
+        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
+    }
     g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
     intptr_t r = H->handler(H->handler_env, arg, sub);
     dk_free(sub);
@@ -1367,7 +1468,9 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     FiberBlock *_prev = tur_current_fiber;
     tur_current_fiber = f;
     f->arg = arg;
+    jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;
     swapcontext(&f->caller_ctx, &f->ctx);
+    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;
     tur_current_fiber = _prev;
     return f->result;
 }
@@ -3489,7 +3592,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float32(float);
 static int64_t __inst_MapKey_mk_hybox_float(double);
 static int64_t __inst_MapKey_mk_hycmp_float(double);
 static int64_t __inst_MapKey_mk_hyowned_qu_float(double);
-static bool __fn_760(int64_t, int64_t);
+static bool __fn_761(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Map(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Vec(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Option(int64_t, int64_t);
@@ -3500,7 +3603,7 @@ static bool __inst_Eq_eq_qu_Pair(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Tuple2(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Cons(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Set(int64_t, int64_t);
-static bool __fn_1135(int64_t, int64_t);
+static bool __fn_1136(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_MutableMap(int64_t, int64_t);
 static bool __inst_Eq_eq_qu_Sym(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
@@ -3907,7 +4010,7 @@ static int64_t __inst_MapKey_mk_hyowned_qu_float(double x) {
         return INT64_C(0);
 }
 
-static bool __fn_760(int64_t a, int64_t b) {
+static bool __fn_761(int64_t a, int64_t b) {
         __auto_type __ps_2 = (__inst_Eq_eq_qu_int(a, b));
         if (tur_panicking) return (bool){0};
         return __ps_2;
@@ -3922,7 +4025,7 @@ static bool __inst_Eq_eq_qu_Map(int64_t x, int64_t y) {
         if (__t3) {
             int64_t *__t6 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t6[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t6[1] = (int64_t)(intptr_t)__fn_760;
+            __t6[1] = (int64_t)(intptr_t)__fn_761;
             void *__t7 = __t6;
             __auto_type __ps_8 = (map_hyeq_hydriver(x, y, (int64_t)(intptr_t)(__t7)));
             if (tur_panicking) return (bool){0};
@@ -4023,19 +4126,19 @@ static bool __inst_Eq_eq_qu_Tuple2(int64_t x, int64_t y) {
 static bool __inst_Eq_eq_qu_Cons(int64_t x, int64_t y) {
         bool __t27;
         {
-            int64_t t1_999 = x;
-            (void)t1_999;
-            int64_t t2_1000 = y;
-            (void)t2_1000;
+            int64_t t1_1000 = x;
+            (void)t1_1000;
+            int64_t t2_1001 = y;
+            (void)t2_1001;
             bool __t28;
-            if ((t1_999) == (INT64_C(0))) {
-                __t28 = (t2_1000) == (INT64_C(0));
+            if ((t1_1000) == (INT64_C(0))) {
+                __t28 = (t2_1001) == (INT64_C(0));
             } else {
                 bool __t29;
-                if ((t2_1000) == (INT64_C(0))) {
+                if ((t2_1001) == (INT64_C(0))) {
                     __t29 = false;
                 } else {
-                    __auto_type __ps_30 = (cons_hyeq_hygo(t1_999, t2_1000));
+                    __auto_type __ps_30 = (cons_hyeq_hygo(t1_1000, t2_1001));
                     if (tur_panicking) return (bool){0};
                     __t29 = __ps_30;
                 }
@@ -4052,7 +4155,7 @@ static bool __inst_Eq_eq_qu_Set(int64_t x, int64_t y) {
         return __ps_31;
 }
 
-static bool __fn_1135(int64_t a, int64_t b) {
+static bool __fn_1136(int64_t a, int64_t b) {
         __auto_type __ps_32 = (__inst_Eq_eq_qu_int(a, b));
         if (tur_panicking) return (bool){0};
         return __ps_32;
@@ -4069,7 +4172,7 @@ static bool __inst_Eq_eq_qu_MutableMap(int64_t x, int64_t y) {
             if (tur_panicking) return (bool){0};
             int64_t *__t37 = (int64_t *)malloc(2 * sizeof(int64_t));
             __t37[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
-            __t37[1] = (int64_t)(intptr_t)__fn_1135;
+            __t37[1] = (int64_t)(intptr_t)__fn_1136;
             void *__t38 = __t37;
             __auto_type __ps_39 = (mutmap_hyeq_hyloop(x, y, INT64_C(0), __ps_36, (int64_t)(intptr_t)(__t38)));
             if (tur_panicking) return (bool){0};
@@ -4193,42 +4296,42 @@ static int64_t with_hycontract_hyhandler(int64_t h, int64_t body) {
 }
 
 static int64_t hamt_slnew__cps(DK *__kont);
-static int64_t hamt_slfree__cps(void * m_453, DK *__kont);
-static int64_t hamt_slretain__cps(void * m_454, DK *__kont);
-static int64_t hamt_slset__cps(void * m_455, int64_t hash_456, void * key_457, void * val_458, DK *__kont);
-static int64_t hamt_sldel__cps(void * m_459, int64_t hash_460, void * key_461, DK *__kont);
-static int64_t hamt_slget__cps(void * m_462, int64_t hash_463, void * key_464, DK *__kont);
-static int64_t hamt_slhas_qu__cps(void * m_465, int64_t hash_466, void * key_467, DK *__kont);
-static int64_t hamt_slcount__cps(void * m_468, DK *__kont);
-static int64_t hamt_slmerge__cps(void * a_469, void * b_470, DK *__kont);
-static int64_t hamt_slhash_hystr__cps(const char * str_471, DK *__kont);
-static int64_t hamt_slhash_hyptr__cps(void * ptr_472, DK *__kont);
-static int64_t hamt_sliter_hyinit__cps(void * iter_473, void * m_474, DK *__kont);
-static int64_t hamt_sliter_hyfree__cps(void * iter_475, DK *__kont);
-static int64_t hamt_sliter_hynext__cps(void * iter_476, void * hash_hyout_477, void * key_hyout_478, void * val_hyout_479, DK *__kont);
-static int64_t hamt_sliter_hyalloc__cps(void * m_504, DK *__kont);
-static int64_t hamt_sliter_hydestroy_ex__cps(void * box_505, DK *__kont);
-static int64_t hamt_sliter_hyadvance_ex__cps(void * box_506, DK *__kont);
-static int64_t hamt_sliter_hycur_hyhash__cps(void * box_507, DK *__kont);
-static int64_t hamt_sliter_hycur_hykey__cps(void * box_508, DK *__kont);
-static int64_t hamt_sliter_hycur_hyval__cps(void * box_509, DK *__kont);
-static int64_t hamt_slkeyeq__cps(void * m_510, DK *__kont);
-static int64_t hamt_slget_hydynamic__cps(void * m_511, int64_t hash_512, void * key_513, void * keyeq_514, DK *__kont);
-static int64_t hamt_slhas_hydynamic_qu__cps(void * m_515, int64_t hash_516, void * key_517, void * keyeq_518, DK *__kont);
-static int64_t hamt_slmap__cps(void * m_537, void * fn_538, void * ctx_539, DK *__kont);
-static int64_t hamt_slfilter__cps(void * m_540, void * fn_541, void * ctx_542, DK *__kont);
-static int64_t hamt_slreduce__cps(void * m_543, void * fn_544, void * init_545, void * ctx_546, DK *__kont);
-static int64_t hamt_slmerge_hywith__cps(void * a_547, void * b_548, void * fn_549, void * ctx_550, DK *__kont);
-static int64_t hamt_slshow__cps(void * m_553, DK *__kont);
-static int64_t hamt_sldump__cps(void * m_559, DK *__kont);
-static int64_t hamt_sltransient__cps(void * m_573, DK *__kont);
-static int64_t hamt_sltransient_hyset_ex__cps(void * t_574, int64_t hash_575, void * key_576, void * val_577, DK *__kont);
-static int64_t hamt_sltransient_hydel_ex__cps(void * t_578, int64_t hash_579, void * key_580, DK *__kont);
-static int64_t hamt_slpersistent_ex__cps(void * t_581, DK *__kont);
-static int64_t map_hyeq_hyloop__cps(void * iter_743, void * m2_hyhamt_744, void * keyeq_745, int64_t val_cmp, DK *__kont);
-static int64_t list_hyeq_qu__cps(int64_t l1_989, int64_t l2_990, int64_t cmp_fn, DK *__kont);
-static int64_t _un_uncons_hyfmap__cps(int64_t cell_1001, void * f_1002, DK *__kont);
-static int64_t set_hyeq_hyloop__cps(void * iter_1078, void * s2_hyhamt_1079, void * keyeq_1080, DK *__kont);
+static int64_t hamt_slfree__cps(void * m_454, DK *__kont);
+static int64_t hamt_slretain__cps(void * m_455, DK *__kont);
+static int64_t hamt_slset__cps(void * m_456, int64_t hash_457, void * key_458, void * val_459, DK *__kont);
+static int64_t hamt_sldel__cps(void * m_460, int64_t hash_461, void * key_462, DK *__kont);
+static int64_t hamt_slget__cps(void * m_463, int64_t hash_464, void * key_465, DK *__kont);
+static int64_t hamt_slhas_qu__cps(void * m_466, int64_t hash_467, void * key_468, DK *__kont);
+static int64_t hamt_slcount__cps(void * m_469, DK *__kont);
+static int64_t hamt_slmerge__cps(void * a_470, void * b_471, DK *__kont);
+static int64_t hamt_slhash_hystr__cps(const char * str_472, DK *__kont);
+static int64_t hamt_slhash_hyptr__cps(void * ptr_473, DK *__kont);
+static int64_t hamt_sliter_hyinit__cps(void * iter_474, void * m_475, DK *__kont);
+static int64_t hamt_sliter_hyfree__cps(void * iter_476, DK *__kont);
+static int64_t hamt_sliter_hynext__cps(void * iter_477, void * hash_hyout_478, void * key_hyout_479, void * val_hyout_480, DK *__kont);
+static int64_t hamt_sliter_hyalloc__cps(void * m_505, DK *__kont);
+static int64_t hamt_sliter_hydestroy_ex__cps(void * box_506, DK *__kont);
+static int64_t hamt_sliter_hyadvance_ex__cps(void * box_507, DK *__kont);
+static int64_t hamt_sliter_hycur_hyhash__cps(void * box_508, DK *__kont);
+static int64_t hamt_sliter_hycur_hykey__cps(void * box_509, DK *__kont);
+static int64_t hamt_sliter_hycur_hyval__cps(void * box_510, DK *__kont);
+static int64_t hamt_slkeyeq__cps(void * m_511, DK *__kont);
+static int64_t hamt_slget_hydynamic__cps(void * m_512, int64_t hash_513, void * key_514, void * keyeq_515, DK *__kont);
+static int64_t hamt_slhas_hydynamic_qu__cps(void * m_516, int64_t hash_517, void * key_518, void * keyeq_519, DK *__kont);
+static int64_t hamt_slmap__cps(void * m_538, void * fn_539, void * ctx_540, DK *__kont);
+static int64_t hamt_slfilter__cps(void * m_541, void * fn_542, void * ctx_543, DK *__kont);
+static int64_t hamt_slreduce__cps(void * m_544, void * fn_545, void * init_546, void * ctx_547, DK *__kont);
+static int64_t hamt_slmerge_hywith__cps(void * a_548, void * b_549, void * fn_550, void * ctx_551, DK *__kont);
+static int64_t hamt_slshow__cps(void * m_554, DK *__kont);
+static int64_t hamt_sldump__cps(void * m_560, DK *__kont);
+static int64_t hamt_sltransient__cps(void * m_574, DK *__kont);
+static int64_t hamt_sltransient_hyset_ex__cps(void * t_575, int64_t hash_576, void * key_577, void * val_578, DK *__kont);
+static int64_t hamt_sltransient_hydel_ex__cps(void * t_579, int64_t hash_580, void * key_581, DK *__kont);
+static int64_t hamt_slpersistent_ex__cps(void * t_582, DK *__kont);
+static int64_t map_hyeq_hyloop__cps(void * iter_744, void * m2_hyhamt_745, void * keyeq_746, int64_t val_cmp, DK *__kont);
+static int64_t list_hyeq_qu__cps(int64_t l1_990, int64_t l2_991, int64_t cmp_fn, DK *__kont);
+static int64_t _un_uncons_hyfmap__cps(int64_t cell_1002, void * f_1003, DK *__kont);
+static int64_t set_hyeq_hyloop__cps(void * iter_1079, void * s2_hyhamt_1080, void * keyeq_1081, DK *__kont);
 static int64_t hamt_slnew__cps(DK *__kont) {
     void * __t0;
     __auto_type __ps_40 = (tur_hamt_new());
@@ -4239,7 +4342,11 @@ static int64_t hamt_slnew__cps(DK *__kont) {
 __attribute__((unused)) static void * hamt_slnew() {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slnew__cps(__root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slnew__cps(__root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4254,7 +4361,10 @@ static int64_t hamt_slfree__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void hamt_slfree(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_slfree__cps(m, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_slfree__cps(m, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4269,7 +4379,11 @@ static int64_t hamt_slretain__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_slretain(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slretain__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slretain__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4285,7 +4399,11 @@ static int64_t hamt_slset__cps(void * m, int64_t hash, void * key, void * val, D
 __attribute__((unused)) static void * hamt_slset(void * m, int64_t hash, void * key, void * val) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slset__cps(m, hash, key, val, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slset__cps(m, hash, key, val, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4301,7 +4419,11 @@ static int64_t hamt_sldel__cps(void * m, int64_t hash, void * key, DK *__kont) {
 __attribute__((unused)) static void * hamt_sldel(void * m, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sldel__cps(m, hash, key, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sldel__cps(m, hash, key, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4317,7 +4439,11 @@ static int64_t hamt_slget__cps(void * m, int64_t hash, void * key, DK *__kont) {
 __attribute__((unused)) static void * hamt_slget(void * m, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slget__cps(m, hash, key, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slget__cps(m, hash, key, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4333,7 +4459,11 @@ static int64_t hamt_slhas_qu__cps(void * m, int64_t hash, void * key, DK *__kont
 __attribute__((unused)) static bool hamt_slhas_qu(void * m, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhas_qu__cps(m, hash, key, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_qu__cps(m, hash, key, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4349,7 +4479,11 @@ static int64_t hamt_slcount__cps(void * m, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_slcount(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slcount__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slcount__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4365,7 +4499,11 @@ static int64_t hamt_slmerge__cps(void * a, void * b, DK *__kont) {
 __attribute__((unused)) static void * hamt_slmerge(void * a, void * b) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slmerge__cps(a, b, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slmerge__cps(a, b, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4381,7 +4519,11 @@ static int64_t hamt_slhash_hystr__cps(const char * str, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_slhash_hystr(const char * str) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhash_hystr__cps(str, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhash_hystr__cps(str, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4397,7 +4539,11 @@ static int64_t hamt_slhash_hyptr__cps(void * ptr, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_slhash_hyptr(void * ptr) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhash_hyptr__cps(ptr, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhash_hyptr__cps(ptr, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4412,7 +4558,10 @@ static int64_t hamt_sliter_hyinit__cps(void * iter, void * m, DK *__kont) {
 __attribute__((unused)) static void hamt_sliter_hyinit(void * iter, void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sliter_hyinit__cps(iter, m, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hyinit__cps(iter, m, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4426,7 +4575,10 @@ static int64_t hamt_sliter_hyfree__cps(void * iter, DK *__kont) {
 __attribute__((unused)) static void hamt_sliter_hyfree(void * iter) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sliter_hyfree__cps(iter, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hyfree__cps(iter, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4441,7 +4593,11 @@ static int64_t hamt_sliter_hynext__cps(void * iter, void * hash_out, void * key_
 __attribute__((unused)) static bool hamt_sliter_hynext(void * iter, void * hash_out, void * key_out, void * val_out) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hynext__cps(iter, hash_out, key_out, val_out, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hynext__cps(iter, hash_out, key_out, val_out, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4457,7 +4613,11 @@ static int64_t hamt_sliter_hyalloc__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_sliter_hyalloc(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hyalloc__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hyalloc__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4472,7 +4632,10 @@ static int64_t hamt_sliter_hydestroy_ex__cps(void * box, DK *__kont) {
 __attribute__((unused)) static void hamt_sliter_hydestroy_ex(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sliter_hydestroy_ex__cps(box, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sliter_hydestroy_ex__cps(box, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4487,7 +4650,11 @@ static int64_t hamt_sliter_hyadvance_ex__cps(void * box, DK *__kont) {
 __attribute__((unused)) static bool hamt_sliter_hyadvance_ex(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hyadvance_ex__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hyadvance_ex__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4503,7 +4670,11 @@ static int64_t hamt_sliter_hycur_hyhash__cps(void * box, DK *__kont) {
 __attribute__((unused)) static int64_t hamt_sliter_hycur_hyhash(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hycur_hyhash__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hyhash__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4519,7 +4690,11 @@ static int64_t hamt_sliter_hycur_hykey__cps(void * box, DK *__kont) {
 __attribute__((unused)) static void * hamt_sliter_hycur_hykey(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hycur_hykey__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hykey__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4535,7 +4710,11 @@ static int64_t hamt_sliter_hycur_hyval__cps(void * box, DK *__kont) {
 __attribute__((unused)) static void * hamt_sliter_hycur_hyval(void * box) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sliter_hycur_hyval__cps(box, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sliter_hycur_hyval__cps(box, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4551,7 +4730,11 @@ static int64_t hamt_slkeyeq__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_slkeyeq(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slkeyeq__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slkeyeq__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4567,7 +4750,11 @@ static int64_t hamt_slget_hydynamic__cps(void * m, int64_t hash, void * key, voi
 __attribute__((unused)) static void * hamt_slget_hydynamic(void * m, int64_t hash, void * key, void * keyeq) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slget_hydynamic__cps(m, hash, key, keyeq, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slget_hydynamic__cps(m, hash, key, keyeq, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4583,7 +4770,11 @@ static int64_t hamt_slhas_hydynamic_qu__cps(void * m, int64_t hash, void * key, 
 __attribute__((unused)) static bool hamt_slhas_hydynamic_qu(void * m, int64_t hash, void * key, void * keyeq) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slhas_hydynamic_qu__cps(m, hash, key, keyeq, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slhas_hydynamic_qu__cps(m, hash, key, keyeq, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4599,7 +4790,11 @@ static int64_t hamt_slmap__cps(void * m, void * fn, void * ctx, DK *__kont) {
 __attribute__((unused)) static void * hamt_slmap(void * m, void * fn, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slmap__cps(m, fn, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slmap__cps(m, fn, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4615,7 +4810,11 @@ static int64_t hamt_slfilter__cps(void * m, void * fn, void * ctx, DK *__kont) {
 __attribute__((unused)) static void * hamt_slfilter(void * m, void * fn, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slfilter__cps(m, fn, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slfilter__cps(m, fn, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4631,7 +4830,11 @@ static int64_t hamt_slreduce__cps(void * m, void * fn, void * init, void * ctx, 
 __attribute__((unused)) static void * hamt_slreduce(void * m, void * fn, void * init, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slreduce__cps(m, fn, init, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slreduce__cps(m, fn, init, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4647,7 +4850,11 @@ static int64_t hamt_slmerge_hywith__cps(void * a, void * b, void * fn, void * ct
 __attribute__((unused)) static void * hamt_slmerge_hywith(void * a, void * b, void * fn, void * ctx) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slmerge_hywith__cps(a, b, fn, ctx, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slmerge_hywith__cps(a, b, fn, ctx, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4663,7 +4870,11 @@ static int64_t hamt_slshow__cps(void * m, DK *__kont) {
 __attribute__((unused)) static const char * hamt_slshow(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slshow__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slshow__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     const char * __ret = (const char *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4678,7 +4889,10 @@ static int64_t hamt_sldump__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void hamt_sldump(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sldump__cps(m, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sldump__cps(m, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4693,7 +4907,11 @@ static int64_t hamt_sltransient__cps(void * m, DK *__kont) {
 __attribute__((unused)) static void * hamt_sltransient(void * m) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_sltransient__cps(m, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_sltransient__cps(m, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4708,7 +4926,10 @@ static int64_t hamt_sltransient_hyset_ex__cps(void * t, int64_t hash, void * key
 __attribute__((unused)) static void hamt_sltransient_hyset_ex(void * t, int64_t hash, void * key, void * val) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sltransient_hyset_ex__cps(t, hash, key, val, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sltransient_hyset_ex__cps(t, hash, key, val, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4722,7 +4943,10 @@ static int64_t hamt_sltransient_hydel_ex__cps(void * t, int64_t hash, void * key
 __attribute__((unused)) static void hamt_sltransient_hydel_ex(void * t, int64_t hash, void * key) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    (void)hamt_sltransient_hydel_ex__cps(t, hash, key, __root);
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { (void)hamt_sltransient_hydel_ex__cps(t, hash, key, __root); }
+    else { (void)__dk_drive_after(); }
+    g_dk_driver = __dksave;
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return;
@@ -4737,7 +4961,11 @@ static int64_t hamt_slpersistent_ex__cps(void * t, DK *__kont) {
 __attribute__((unused)) static void * hamt_slpersistent_ex(void * t) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = hamt_slpersistent_ex__cps(t, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = hamt_slpersistent_ex__cps(t, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     void * __ret = (void *)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4866,15 +5094,15 @@ static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
     int64_t val_cmp = __cap->f0;
     void * iter = __cap->f1;
     void * m2_hamt = __cap->f2;
-    int64_t h_747 = __cap->f3;
-    void * k_748 = __cap->f4;
+    int64_t h_748 = __cap->f3;
+    void * k_749 = __cap->f4;
     void * keyeq = __cap->f5;
     bool __t1 = (bool)(__t1__slot);
     bool __t2;
     if (__t1) {
         __auto_type __ps_66 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        __auto_type __ps_67 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_747, (void *)(intptr_t)(k_748), (void *)(intptr_t)(keyeq)));
+        __auto_type __ps_67 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_748, (void *)(intptr_t)(k_749), (void *)(intptr_t)(keyeq)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __auto_type __ps_68 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_66, __ps_67));
         /* panic-return-signal: ret ctype unknown; no propagation here */
@@ -4889,37 +5117,37 @@ static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
     }
 }
 typedef struct { int64_t f0; void * f1; void * f2; int64_t f3; void * f4; } map_hyeq_hyloop_j2_env;
-static intptr_t map_hyeq_hyloop_j2(intptr_t env, intptr_t k_748__slot, DK *__kont) {
+static intptr_t map_hyeq_hyloop_j2(intptr_t env, intptr_t k_749__slot, DK *__kont) {
     map_hyeq_hyloop_j2_env *__cap = (map_hyeq_hyloop_j2_env *)(intptr_t)env;
     int64_t val_cmp = __cap->f0;
     void * iter = __cap->f1;
     void * m2_hamt = __cap->f2;
-    int64_t h_747 = __cap->f3;
+    int64_t h_748 = __cap->f3;
     void * keyeq = __cap->f4;
-    void * k_748 = (void *)(k_748__slot);
+    void * k_749 = (void *)(k_749__slot);
     map_hyeq_hyloop_j3_env *__ce_map_hyeq_hyloop_j3 = (map_hyeq_hyloop_j3_env *)malloc(sizeof(map_hyeq_hyloop_j3_env));
     __ce_map_hyeq_hyloop_j3->f0 = val_cmp;
     __ce_map_hyeq_hyloop_j3->f1 = iter;
     __ce_map_hyeq_hyloop_j3->f2 = m2_hamt;
-    __ce_map_hyeq_hyloop_j3->f3 = h_747;
-    __ce_map_hyeq_hyloop_j3->f4 = k_748;
+    __ce_map_hyeq_hyloop_j3->f3 = h_748;
+    __ce_map_hyeq_hyloop_j3->f4 = k_749;
     __ce_map_hyeq_hyloop_j3->f5 = keyeq;
     __dk_reap_ptr((intptr_t)__ce_map_hyeq_hyloop_j3);
-    return hamt_slhas_hydynamic_qu__cps(m2_hamt, h_747, k_748, keyeq, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j3, (intptr_t)__ce_map_hyeq_hyloop_j3, __kont))); /* cps->cps heap join */
+    return hamt_slhas_hydynamic_qu__cps(m2_hamt, h_748, k_749, keyeq, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j3, (intptr_t)__ce_map_hyeq_hyloop_j3, __kont))); /* cps->cps heap join */
 }
 typedef struct { int64_t f0; void * f1; void * f2; void * f3; } map_hyeq_hyloop_j1_env;
-static intptr_t map_hyeq_hyloop_j1(intptr_t env, intptr_t h_747__slot, DK *__kont) {
+static intptr_t map_hyeq_hyloop_j1(intptr_t env, intptr_t h_748__slot, DK *__kont) {
     map_hyeq_hyloop_j1_env *__cap = (map_hyeq_hyloop_j1_env *)(intptr_t)env;
     int64_t val_cmp = __cap->f0;
     void * iter = __cap->f1;
     void * m2_hamt = __cap->f2;
     void * keyeq = __cap->f3;
-    int64_t h_747 = (int64_t)(h_747__slot);
+    int64_t h_748 = (int64_t)(h_748__slot);
     map_hyeq_hyloop_j2_env *__ce_map_hyeq_hyloop_j2 = (map_hyeq_hyloop_j2_env *)malloc(sizeof(map_hyeq_hyloop_j2_env));
     __ce_map_hyeq_hyloop_j2->f0 = val_cmp;
     __ce_map_hyeq_hyloop_j2->f1 = iter;
     __ce_map_hyeq_hyloop_j2->f2 = m2_hamt;
-    __ce_map_hyeq_hyloop_j2->f3 = h_747;
+    __ce_map_hyeq_hyloop_j2->f3 = h_748;
     __ce_map_hyeq_hyloop_j2->f4 = keyeq;
     __dk_reap_ptr((intptr_t)__ce_map_hyeq_hyloop_j2);
     return hamt_sliter_hycur_hykey__cps(iter, __dk_reap_node(dk_frame_resume(map_hyeq_hyloop_j2, (intptr_t)__ce_map_hyeq_hyloop_j2, __kont))); /* cps->cps heap join */
@@ -4956,7 +5184,11 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
 __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -4969,23 +5201,23 @@ static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
             if (tur_panicking) return (bool){0};
             __auto_type __ps_71 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_70)));
             if (tur_panicking) return (bool){0};
-            void * iter_752 = __ps_71;
-            (void)iter_752;
+            void * iter_753 = __ps_71;
+            (void)iter_753;
             __auto_type __ps_72 = (map_hyhamt(m1));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_73 = (hamt_slkeyeq((void *)(intptr_t)(__ps_72)));
             if (tur_panicking) return (bool){0};
-            void * keyeq_753 = __ps_73;
-            (void)keyeq_753;
+            void * keyeq_754 = __ps_73;
+            (void)keyeq_754;
             __auto_type __ps_74 = (map_hyhamt(m2));
             if (tur_panicking) return (bool){0};
-            __auto_type __ps_75 = (map_hyeq_hyloop((void *)(intptr_t)(iter_752), (void *)(intptr_t)(__ps_74), (void *)(intptr_t)(keyeq_753), (int64_t)(intptr_t)(val_cmp)));
+            __auto_type __ps_75 = (map_hyeq_hyloop((void *)(intptr_t)(iter_753), (void *)(intptr_t)(__ps_74), (void *)(intptr_t)(keyeq_754), (int64_t)(intptr_t)(val_cmp)));
             if (tur_panicking) return (bool){0};
-            bool result_754 = __ps_75;
-            (void)result_754;
-            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_752));
+            bool result_755 = __ps_75;
+            (void)result_755;
+            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_753));
             bool __t76;
-            __t76 = result_754;
+            __t76 = result_755;
             __t69 = __t76;
         }
         return __t69;
@@ -5300,7 +5532,11 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
 __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t cmp_fn) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -5313,19 +5549,19 @@ static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
         if (__ps_96) {
             bool __t97;
             {
-                int64_t t1_994 = (int64_t)((tur_adt_Cons *)(intptr_t)(c1))->tail;
-                (void)t1_994;
-                int64_t t2_995 = (int64_t)((tur_adt_Cons *)(intptr_t)(c2))->tail;
-                (void)t2_995;
+                int64_t t1_995 = (int64_t)((tur_adt_Cons *)(intptr_t)(c1))->tail;
+                (void)t1_995;
+                int64_t t2_996 = (int64_t)((tur_adt_Cons *)(intptr_t)(c2))->tail;
+                (void)t2_996;
                 bool __t98;
-                if ((t1_994) == (INT64_C(0))) {
-                    __t98 = (t2_995) == (INT64_C(0));
+                if ((t1_995) == (INT64_C(0))) {
+                    __t98 = (t2_996) == (INT64_C(0));
                 } else {
                     bool __t99;
-                    if ((t2_995) == (INT64_C(0))) {
+                    if ((t2_996) == (INT64_C(0))) {
                         __t99 = false;
                     } else {
-                        __auto_type __ps_100 = (cons_hyeq_hygo(t1_994, t2_995));
+                        __auto_type __ps_100 = (cons_hyeq_hygo(t1_995, t2_996));
                         if (tur_panicking) return (bool){0};
                         __t99 = __ps_100;
                     }
@@ -5345,9 +5581,9 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
-    int64_t out_1003;
-    out_1003 = tcons(__t1, __t2); /* cps->direct */
-    return dk_run(__kont, (intptr_t)(out_1003));
+    int64_t out_1004;
+    out_1004 = tcons(__t1, __t2); /* cps->direct */
+    return dk_run(__kont, (intptr_t)(out_1004));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     bool __t0;
@@ -5376,7 +5612,11 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
 __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = _un_uncons_hyfmap__cps(cell, f, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -5415,9 +5655,9 @@ static int64_t list_hyconcat(int64_t l1, int64_t l2) {
                 if (tur_panicking) return (int64_t){0};
                 __auto_type __ps_111 = (tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__ps_108, __ps_110));
                 if (tur_panicking) return (int64_t){0};
-                int64_t out_1010 = (int64_t)(intptr_t)(__ps_111);
-                (void)out_1010;
-                __t107 = out_1010;
+                int64_t out_1011 = (int64_t)(intptr_t)(__ps_111);
+                (void)out_1011;
+                __t107 = out_1011;
             }
             __t105 = __t107;
         }
@@ -5638,32 +5878,32 @@ static intptr_t set_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
     }
 }
 typedef struct { void * f0; void * f1; void * f2; int64_t f3; } set_hyeq_hyloop_j2_env;
-static intptr_t set_hyeq_hyloop_j2(intptr_t env, intptr_t k_1082__slot, DK *__kont) {
+static intptr_t set_hyeq_hyloop_j2(intptr_t env, intptr_t k_1083__slot, DK *__kont) {
     set_hyeq_hyloop_j2_env *__cap = (set_hyeq_hyloop_j2_env *)(intptr_t)env;
     void * iter = __cap->f0;
     void * s2_hamt = __cap->f1;
     void * keyeq = __cap->f2;
-    int64_t h_1081 = __cap->f3;
-    void * k_1082 = (void *)(k_1082__slot);
+    int64_t h_1082 = __cap->f3;
+    void * k_1083 = (void *)(k_1083__slot);
     set_hyeq_hyloop_j3_env *__ce_set_hyeq_hyloop_j3 = (set_hyeq_hyloop_j3_env *)malloc(sizeof(set_hyeq_hyloop_j3_env));
     __ce_set_hyeq_hyloop_j3->f0 = iter;
     __ce_set_hyeq_hyloop_j3->f1 = s2_hamt;
     __ce_set_hyeq_hyloop_j3->f2 = keyeq;
     __dk_reap_ptr((intptr_t)__ce_set_hyeq_hyloop_j3);
-    return hamt_slhas_hydynamic_qu__cps(s2_hamt, h_1081, k_1082, keyeq, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j3, (intptr_t)__ce_set_hyeq_hyloop_j3, __kont))); /* cps->cps heap join */
+    return hamt_slhas_hydynamic_qu__cps(s2_hamt, h_1082, k_1083, keyeq, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j3, (intptr_t)__ce_set_hyeq_hyloop_j3, __kont))); /* cps->cps heap join */
 }
 typedef struct { void * f0; void * f1; void * f2; } set_hyeq_hyloop_j1_env;
-static intptr_t set_hyeq_hyloop_j1(intptr_t env, intptr_t h_1081__slot, DK *__kont) {
+static intptr_t set_hyeq_hyloop_j1(intptr_t env, intptr_t h_1082__slot, DK *__kont) {
     set_hyeq_hyloop_j1_env *__cap = (set_hyeq_hyloop_j1_env *)(intptr_t)env;
     void * iter = __cap->f0;
     void * s2_hamt = __cap->f1;
     void * keyeq = __cap->f2;
-    int64_t h_1081 = (int64_t)(h_1081__slot);
+    int64_t h_1082 = (int64_t)(h_1082__slot);
     set_hyeq_hyloop_j2_env *__ce_set_hyeq_hyloop_j2 = (set_hyeq_hyloop_j2_env *)malloc(sizeof(set_hyeq_hyloop_j2_env));
     __ce_set_hyeq_hyloop_j2->f0 = iter;
     __ce_set_hyeq_hyloop_j2->f1 = s2_hamt;
     __ce_set_hyeq_hyloop_j2->f2 = keyeq;
-    __ce_set_hyeq_hyloop_j2->f3 = h_1081;
+    __ce_set_hyeq_hyloop_j2->f3 = h_1082;
     __dk_reap_ptr((intptr_t)__ce_set_hyeq_hyloop_j2);
     return hamt_sliter_hycur_hykey__cps(iter, __dk_reap_node(dk_frame_resume(set_hyeq_hyloop_j2, (intptr_t)__ce_set_hyeq_hyloop_j2, __kont))); /* cps->cps heap join */
 }
@@ -5696,7 +5936,11 @@ static int64_t set_hyeq_hyloop__cps(void * iter, void * s2_hamt, void * keyeq, D
 __attribute__((unused)) static bool set_hyeq_hyloop(void * iter, void * s2_hamt, void * keyeq) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
-    int64_t __r = set_hyeq_hyloop__cps(iter, s2_hamt, keyeq, __root);
+    int64_t __r;
+    jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (setjmp(__dkjb) == 0) { __r = set_hyeq_hyloop__cps(iter, s2_hamt, keyeq, __root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     if (!tur_async_suspended) dk_free(__root);
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
@@ -5709,23 +5953,23 @@ static bool set_hyeq_hydriver(int64_t s1, int64_t s2) {
             if (tur_panicking) return (bool){0};
             __auto_type __ps_118 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_117)));
             if (tur_panicking) return (bool){0};
-            void * iter_1085 = __ps_118;
-            (void)iter_1085;
+            void * iter_1086 = __ps_118;
+            (void)iter_1086;
             __auto_type __ps_119 = (set_hyhamt(s1));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_120 = (hamt_slkeyeq((void *)(intptr_t)(__ps_119)));
             if (tur_panicking) return (bool){0};
-            void * keyeq_1086 = __ps_120;
-            (void)keyeq_1086;
+            void * keyeq_1087 = __ps_120;
+            (void)keyeq_1087;
             __auto_type __ps_121 = (set_hyhamt(s2));
             if (tur_panicking) return (bool){0};
-            __auto_type __ps_122 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1085), (void *)(intptr_t)(__ps_121), (void *)(intptr_t)(keyeq_1086)));
+            __auto_type __ps_122 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1086), (void *)(intptr_t)(__ps_121), (void *)(intptr_t)(keyeq_1087)));
             if (tur_panicking) return (bool){0};
-            bool result_1087 = __ps_122;
-            (void)result_1087;
-            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1085));
+            bool result_1088 = __ps_122;
+            (void)result_1088;
+            hamt_sliter_hydestroy_ex((void *)(intptr_t)(iter_1086));
             bool __t123;
-            __t123 = result_1087;
+            __t123 = result_1088;
             __t116 = __t123;
         }
         return __t116;
@@ -6361,23 +6605,23 @@ static void json_slfree(int64_t node) {
   
 }
 
-static int64_t SCHEMA_unSTR_1175;
-static int64_t SCHEMA_unINT_1176;
-static int64_t SCHEMA_unFLOAT_1177;
-static int64_t SCHEMA_unBOOL_1178;
-static int64_t SCHEMA_unNIL_1179;
-static int64_t SCHEMA_unLITERAL_1180;
-static int64_t SCHEMA_unOBJECT_1181;
-static int64_t SCHEMA_unARRAY_1182;
-static int64_t SCHEMA_unOPTIONAL_1183;
-static int64_t SCHEMA_unUNION_1184;
-static int64_t SCHEMA_unTRANSFORM_1185;
-static int64_t SCHEMA_unREC_1186;
-static int64_t SCHEMA_unALWAYS_1187;
-static int64_t SCHEMA_unNEVER_1188;
-static int64_t SCHEMA_unAP_1189;
-static int64_t SCHEMA_unFIELD_1190;
-static int64_t SCHEMA_unAP_unFAT_1191;
+static int64_t SCHEMA_unSTR_1176;
+static int64_t SCHEMA_unINT_1177;
+static int64_t SCHEMA_unFLOAT_1178;
+static int64_t SCHEMA_unBOOL_1179;
+static int64_t SCHEMA_unNIL_1180;
+static int64_t SCHEMA_unLITERAL_1181;
+static int64_t SCHEMA_unOBJECT_1182;
+static int64_t SCHEMA_unARRAY_1183;
+static int64_t SCHEMA_unOPTIONAL_1184;
+static int64_t SCHEMA_unUNION_1185;
+static int64_t SCHEMA_unTRANSFORM_1186;
+static int64_t SCHEMA_unREC_1187;
+static int64_t SCHEMA_unALWAYS_1188;
+static int64_t SCHEMA_unNEVER_1189;
+static int64_t SCHEMA_unAP_1190;
+static int64_t SCHEMA_unFIELD_1191;
+static int64_t SCHEMA_unAP_unFAT_1192;
 static int64_t schema_slstr() {
         int64_t *s = malloc(4 * sizeof(int64_t));
   s[0] = 0; s[1] = 0; s[2] = 0; s[3] = 0;
@@ -6552,18 +6796,18 @@ static int64_t schema_slfmap(int64_t inner, int64_t f) {
 static int64_t schema_slalt(int64_t a, int64_t b) {
         tur_adt_Vec__int * __t143;
         {
-            int64_t _un_unvw_1214 = a;
-            (void)_un_unvw_1214;
+            int64_t _un_unvw_1215 = a;
+            (void)_un_unvw_1215;
             tur_adt_Vec__int * __t144;
             {
-                __auto_type __ps_145 = (vec_empty_like____spec__tur_adt_Vec__int___int64_t(_un_unvw_1214));
+                __auto_type __ps_145 = (vec_empty_like____spec__tur_adt_Vec__int___int64_t(_un_unvw_1215));
                 if (tur_panicking) return (int64_t){0};
-                tur_adt_Vec__int * _un_unv_1215 = __ps_145;
-                (void)_un_unv_1215;
-                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1215))), _un_unvw_1214);
-                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1215))), b);
+                tur_adt_Vec__int * _un_unv_1216 = __ps_145;
+                (void)_un_unv_1216;
+                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1216))), _un_unvw_1215);
+                vec_hypush_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(_un_unv_1216))), b);
                 tur_adt_Vec__int * __t146;
-                __t146 = _un_unv_1215;
+                __t146 = _un_unv_1216;
                 __t144 = __t146;
             }
             __t143 = __t144;
@@ -6931,17 +7175,17 @@ static int64_t schema_hydecode_ex(int64_t schema, int64_t node) {
         {
             __auto_type __ps_149 = (schema_hydecode(schema, node));
             if (tur_panicking) return (int64_t){0};
-            int64_t r_1264 = __ps_149;
-            (void)r_1264;
+            int64_t r_1265 = __ps_149;
+            (void)r_1265;
             int64_t __t150;
-            __auto_type __ps_151 = (schema_hydecode_hyok_qu(r_1264));
+            __auto_type __ps_151 = (schema_hydecode_hyok_qu(r_1265));
             if (tur_panicking) return (int64_t){0};
             if (__ps_151) {
-                __auto_type __ps_152 = (schema_hydecode_hyvalue(r_1264));
+                __auto_type __ps_152 = (schema_hydecode_hyvalue(r_1265));
                 if (tur_panicking) return (int64_t){0};
                 __t150 = __ps_152;
             } else {
-                __auto_type __ps_153 = (schema_hydecode_hyerrors(r_1264));
+                __auto_type __ps_153 = (schema_hydecode_hyerrors(r_1265));
                 if (tur_panicking) return (int64_t){0};
                 __auto_type __ps_154 = (schema_hydecode_hyabort(__ps_153));
                 if (tur_panicking) return (int64_t){0};
@@ -6989,11 +7233,11 @@ static tur_adt_Option__int opt_hyif(bool b) {
 static tur_adt_Option__int opt_hylet(bool b) {
         tur_adt_Option__int __t159;
         {
-            int64_t x_1287 = INT64_C(5);
-            (void)x_1287;
+            int64_t x_1288 = INT64_C(5);
+            (void)x_1288;
             tur_adt_Option__int __t160;
             if (b) {
-                __auto_type __ps_161 = (some__spec__tur_adt_Option__int_int64_t(x_1287));
+                __auto_type __ps_161 = (some__spec__tur_adt_Option__int_int64_t(x_1288));
                 if (tur_panicking) return (tur_adt_Option__int){0};
                 __t160 = __ps_161;
             } else {
@@ -7010,11 +7254,11 @@ static tur_adt_Option__int opt_hydo(bool b) {
         tur_adt_Option__int __t163;
         tur_adt_Option__int __t164;
         {
-            int64_t y_1289 = INT64_C(9);
-            (void)y_1289;
+            int64_t y_1290 = INT64_C(9);
+            (void)y_1290;
             tur_adt_Option__int __t165;
             if (b) {
-                __auto_type __ps_166 = (some__spec__tur_adt_Option__int_int64_t(y_1289));
+                __auto_type __ps_166 = (some__spec__tur_adt_Option__int_int64_t(y_1290));
                 if (tur_panicking) return (tur_adt_Option__int){0};
                 __t165 = __ps_166;
             } else {
@@ -7055,11 +7299,11 @@ static int64_t opt_hyconsume(bool b) {
                 if (tur_panicking) return (int64_t){0};
                 __t172 = __ps_174;
             }
-            tur_adt_Option__int o_1292 = __t172;
-            (void)o_1292;
+            tur_adt_Option__int o_1293 = __t172;
+            (void)o_1293;
             int64_t __t175;
-            if ((bool)(o_1292).is_some) {
-                __t175 = (int64_t)(o_1292).value;
+            if ((bool)(o_1293).is_some) {
+                __t175 = (int64_t)(o_1293).value;
             } else {
                 __t175 = INT64_C(0);
             }
@@ -7094,20 +7338,75 @@ static int64_t res_hyok(const tur_adt_Result__int__cstr * r) {
         return __t180;
 }
 
+int main(int argc, char **argv) {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
+        /* *args*: build cons list from argv[1..argc-1] */
+        g_tur_args = 0;
+        for (int _ai = argc - 1; _ai >= 1; _ai--) {
+            typedef struct { int64_t value; int64_t next; } __tur_args_cell;
+            __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
+            _c->value = (int64_t)(intptr_t)argv[_ai];
+            _c->next = g_tur_args;
+            g_tur_args = (int64_t)(intptr_t)_c;
+        }
+        __auto_type __ps_181 = (opt_hyif(true));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)((int64_t)(__ps_181).value));
+        __auto_type __ps_182 = (opt_hyif(false));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        puts(((bool)(__ps_182).is_some) ? "true" : "false");
+        __auto_type __ps_183 = (opt_hylet(true));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)((int64_t)(__ps_183).value));
+        __auto_type __ps_184 = (opt_hydo(true));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)((int64_t)(__ps_184).value));
+        __auto_type __ps_185 = (res_hyif(true));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        tur_adt_Result__int__cstr __t186 = __ps_185;
+        __auto_type __ps_187 = (res_hyok(&__t186));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_187));
+        __auto_type __ps_188 = (res_hyif(false));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        tur_adt_Result__int__cstr __t189 = __ps_188;
+        __auto_type __ps_190 = (res_hyok(&__t189));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_190));
+        __auto_type __ps_191 = (opt_hyconsume(true));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_191));
+        __auto_type __ps_192 = (opt_hyconsume(false));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_192));
+        __auto_type __ps_193 = (opt_hypred(true));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        puts((__ps_193) ? "true" : "false");
+        __auto_type __ps_194 = (opt_hypred(false));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        puts((__ps_194) ? "true" : "false");
+        int64_t __t195;
+        __t195 = INT64_C(0);
+        return (int)__t195;
+}
+
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
         return (bool)(o).is_some;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        __auto_type __ps_195 = (ctor_Cons__int(h, t));
+        __auto_type __ps_196 = (ctor_Cons__int(h, t));
         if (tur_panicking) return (tur_adt_Cons__int *){0};
-        return __ps_195;
+        return __ps_196;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        __auto_type __ps_196 = (vec_new__spec__tur_adt_Vec__int__());
+        __auto_type __ps_197 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return (tur_adt_Vec__int *){0};
-        return __ps_196;
+        return __ps_197;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
@@ -7120,27 +7419,27 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 }
 
 static tur_adt_Option__int some__spec__tur_adt_Option__int_int64_t(int64_t x) {
-        __auto_type __ps_197 = (ctor_Option__int(true, x));
-        if (tur_panicking) return (tur_adt_Option__int){0};
-        return __ps_197;
-}
-
-static tur_adt_Option__int none__spec__tur_adt_Option__int() {
-        __auto_type __ps_198 = (ctor_Option__int(false, (int64_t){0}));
+        __auto_type __ps_198 = (ctor_Option__int(true, x));
         if (tur_panicking) return (tur_adt_Option__int){0};
         return __ps_198;
 }
 
-static tur_adt_Result__int__cstr ok__spec__tur_adt_Result__int__cstr_int64_t(int64_t x) {
-        __auto_type __ps_199 = (ctor_Result__int__cstr(true, x, (const char *){0}));
-        if (tur_panicking) return (tur_adt_Result__int__cstr){0};
+static tur_adt_Option__int none__spec__tur_adt_Option__int() {
+        __auto_type __ps_199 = (ctor_Option__int(false, (int64_t){0}));
+        if (tur_panicking) return (tur_adt_Option__int){0};
         return __ps_199;
 }
 
-static tur_adt_Result__int__cstr err__spec__tur_adt_Result__int__cstr_const_char__(const char * e) {
-        __auto_type __ps_200 = (ctor_Result__int__cstr(false, (int64_t){0}, e));
+static tur_adt_Result__int__cstr ok__spec__tur_adt_Result__int__cstr_int64_t(int64_t x) {
+        __auto_type __ps_200 = (ctor_Result__int__cstr(true, x, (const char *){0}));
         if (tur_panicking) return (tur_adt_Result__int__cstr){0};
         return __ps_200;
+}
+
+static tur_adt_Result__int__cstr err__spec__tur_adt_Result__int__cstr_const_char__(const char * e) {
+        __auto_type __ps_201 = (ctor_Result__int__cstr(false, (int64_t){0}, e));
+        if (tur_panicking) return (tur_adt_Result__int__cstr){0};
+        return __ps_201;
 }
 
 static bool some___spec__bool_tur_adt_Option__int(tur_adt_Option__int o) {
@@ -7148,72 +7447,24 @@ static bool some___spec__bool_tur_adt_Option__int(tur_adt_Option__int o) {
 }
 
 
-int main(int argc, char **argv) {
-#ifdef _WIN32
-    _setmode(_fileno(stdout), _O_BINARY);
-    _setmode(_fileno(stderr), _O_BINARY);
-#endif
-    /* *args*: build cons list from argv[1..argc-1] */
-    g_tur_args = 0;
-    for (int _ai = argc - 1; _ai >= 1; _ai--) {
-        typedef struct { int64_t value; int64_t next; } __tur_args_cell;
-        __tur_args_cell *_c = (__tur_args_cell *)malloc(sizeof(__tur_args_cell));
-        _c->value = (int64_t)(intptr_t)argv[_ai];
-        _c->next = g_tur_args;
-        g_tur_args = (int64_t)(intptr_t)_c;
-    }
-    SCHEMA_unSTR_1175 = INT64_C(0);
-    SCHEMA_unINT_1176 = INT64_C(1);
-    SCHEMA_unFLOAT_1177 = INT64_C(2);
-    SCHEMA_unBOOL_1178 = INT64_C(3);
-    SCHEMA_unNIL_1179 = INT64_C(4);
-    SCHEMA_unLITERAL_1180 = INT64_C(5);
-    SCHEMA_unOBJECT_1181 = INT64_C(6);
-    SCHEMA_unARRAY_1182 = INT64_C(7);
-    SCHEMA_unOPTIONAL_1183 = INT64_C(8);
-    SCHEMA_unUNION_1184 = INT64_C(9);
-    SCHEMA_unTRANSFORM_1185 = INT64_C(10);
-    SCHEMA_unREC_1186 = INT64_C(11);
-    SCHEMA_unALWAYS_1187 = INT64_C(12);
-    SCHEMA_unNEVER_1188 = INT64_C(13);
-    SCHEMA_unAP_1189 = INT64_C(14);
-    SCHEMA_unFIELD_1190 = INT64_C(15);
-    SCHEMA_unAP_unFAT_1191 = INT64_C(16);
-    __auto_type __ps_181 = (opt_hyif(true));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)((int64_t)(__ps_181).value));
-    __auto_type __ps_182 = (opt_hyif(false));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    puts(((bool)(__ps_182).is_some) ? "true" : "false");
-    __auto_type __ps_183 = (opt_hylet(true));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)((int64_t)(__ps_183).value));
-    __auto_type __ps_184 = (opt_hydo(true));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)((int64_t)(__ps_184).value));
-    __auto_type __ps_185 = (res_hyif(true));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    tur_adt_Result__int__cstr __t186 = __ps_185;
-    __auto_type __ps_187 = (res_hyok(&__t186));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)(__ps_187));
-    __auto_type __ps_188 = (res_hyif(false));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    tur_adt_Result__int__cstr __t189 = __ps_188;
-    __auto_type __ps_190 = (res_hyok(&__t189));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)(__ps_190));
-    __auto_type __ps_191 = (opt_hyconsume(true));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)(__ps_191));
-    __auto_type __ps_192 = (opt_hyconsume(false));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    printf("%lld\n", (long long)(__ps_192));
-    __auto_type __ps_193 = (opt_hypred(true));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    puts((__ps_193) ? "true" : "false");
-    __auto_type __ps_194 = (opt_hypred(false));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    puts((__ps_194) ? "true" : "false");
-    return 0;
+static void __tur_module_def_init(void) __attribute__((constructor));
+static void __tur_module_def_init(void) {
+    SCHEMA_unSTR_1176 = INT64_C(0);
+    SCHEMA_unINT_1177 = INT64_C(1);
+    SCHEMA_unFLOAT_1178 = INT64_C(2);
+    SCHEMA_unBOOL_1179 = INT64_C(3);
+    SCHEMA_unNIL_1180 = INT64_C(4);
+    SCHEMA_unLITERAL_1181 = INT64_C(5);
+    SCHEMA_unOBJECT_1182 = INT64_C(6);
+    SCHEMA_unARRAY_1183 = INT64_C(7);
+    SCHEMA_unOPTIONAL_1184 = INT64_C(8);
+    SCHEMA_unUNION_1185 = INT64_C(9);
+    SCHEMA_unTRANSFORM_1186 = INT64_C(10);
+    SCHEMA_unREC_1187 = INT64_C(11);
+    SCHEMA_unALWAYS_1188 = INT64_C(12);
+    SCHEMA_unNEVER_1189 = INT64_C(13);
+    SCHEMA_unAP_1190 = INT64_C(14);
+    SCHEMA_unFIELD_1191 = INT64_C(15);
+    SCHEMA_unAP_unFAT_1192 = INT64_C(16);
 }
+
