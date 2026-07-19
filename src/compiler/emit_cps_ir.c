@@ -212,6 +212,31 @@ static bool erased_adt_carrier(const Type *t) {
     return false;
 }
 
+/* True when `t` mentions an UNRESOLVED type variable anywhere -- a bare tyvar, or
+ * an ADT application with a tyvar/unknown argument (recursively).  A carrier param
+ * / return of such a type belongs to a GENERIC TEMPLATE: its `type_c_name` erases
+ * to the uniform `int64_t` carrier, so admitting it into fn_sig_ok would emit a
+ * colored generic `<fn>__cps(int64_t, ...)` whose concrete monomorphic callers
+ * pass real struct args (`tur_adt_Option__int`) -- a `conflicting types` C error.
+ * The template must sig-REJECT (stay a mono_template, per the g_ents.mono_template
+ * design) so callers thread the concrete monomorph clone (`<fn>__spec__..._cps`)
+ * or, for a fully-erased call, cps->direct to the generic int64 carrier.  This is
+ * strictly a TEMPLATE-signature gate; the erased VALUE-crossing path
+ * (erased_adt_carrier via slot_ok_t) is unaffected. */
+static bool type_has_unresolved_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN) return true;
+    if (t->kind == TY_APP) {
+        Type tt = *(Type *)t;
+        AdtDef *def = NULL; Type args[16]; uint8_t n_args = 0;
+        if (type_extract_adt_app(&tt, &def, args, &n_args)) {
+            for (uint8_t i = 0; i < n_args; i++)
+                if (type_has_unresolved_tyvar(&args[i])) return true;
+        }
+    }
+    return false;
+}
+
 /* B4 (cps-tramp-resume): a BOXED TAGGED-SUM ADT (a `defdata` with >=2 ctors and
  * a field-bearing ctor, e.g. `Box`) is malloc'd and carried as an int64 POINTER
  * word -- its `type_c_name` is "int64_t" -- even though `def->is_heap` is false
@@ -2501,6 +2526,7 @@ static bool fatparam_only_called(const FnDef *fd, const Binding *p) {
  * admitting the RETURN move-out is safe. */
 static bool fn_carrier_ret_ok(const FnDef *fd, const Type *rt) {
     return g_opt_cps_tramp_resume && fn_single_concrete_sig(fd)
+        && !type_has_unresolved_tyvar(rt)
         && carrier_handle_ok(rt);
 }
 
@@ -2521,6 +2547,10 @@ static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
      * it `void*` (matching the direct emitter), so the __cps ABI is consistent. */
     if (type_is_session(k)) return true;
     if (k != TY_ADT && k != TY_APP) return false;
+    /* A tyvar-carrying carrier (`(Option a)`) belongs to a generic template and
+     * must sig-REJECT so it stays a mono_template -- admitting it emits a generic
+     * `<fn>__cps(int64_t, ...)` that concrete callers hit with real struct args. */
+    if (type_has_unresolved_tyvar(&p->type)) return false;
     return strcmp(type_c_name(p->type), "int64_t") == 0;
 }
 
