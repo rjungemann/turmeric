@@ -1,5 +1,15 @@
 # GCC >= 14: hand-written inline-C double-spells anonymous structs (incompatible-pointer-types)
 
+> **Status:** RESOLVED 2026-07-19. All three inline-C sub-patterns fixed: RHS
+> struct-pointer-cast double-spell -> `(void *)` (any cast, incl. `malloc`);
+> var-to-var assignment between separately-declared identical anon structs ->
+> per-block `typedef`; and the `timespec` shadow typedefs (future/taskgroup/
+> scheduler) dropped for the system `struct timespec`. A full-tree
+> `-Werror=incompatible-pointer-types` sweep now reports **0** failing fixtures;
+> full suite green (2202 passed, 0 failed). Commits: `348a25e`, `8513e55`.
+>
+
+
 **Severity:** medium -- latent today (masked by
 `-Wno-error=incompatible-pointer-types` in `src/main.c`), a hard `cc` error under
 GCC >= 14. The mechanical front split out of `codegen-gcc14-permerrors.md`.

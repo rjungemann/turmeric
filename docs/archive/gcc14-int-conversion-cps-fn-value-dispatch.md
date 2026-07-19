@@ -1,5 +1,14 @@
 # GCC >= 14: CPS threaded-fn-value dispatch passes uncast args to the int64 fn-ptr (int-conversion)
 
+> **Status:** RESOLVED 2026-07-19. Added `atoms_csv_call_cps` (a carrier variant
+> that casts every pointer-like arg -- fn/ptr<void>/cstr/rc/weak/ref/cont/forall
+> -- through `(int64_t)(intptr_t)`) and used it at both E2a `__tur_cps_lookup`
+> dispatch sites (the via_registry tailcall and the heap-join tailcall). All
+> ~11 affected fixtures now compile clean under `-Werror=int-conversion`; zero
+> snapshot churn (run-only fixtures); full suite green. Commit: `33f5cb1`.
+>
+
+
 **Severity:** medium -- latent today (masked by the `-Wno-error=int-conversion`
 workaround in `src/main.c`), a hard `cc` error the moment CI's compiler crosses
 GCC 14. One of the fronts split out of `codegen-gcc14-permerrors.md`.
