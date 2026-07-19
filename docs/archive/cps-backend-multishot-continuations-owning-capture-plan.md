@@ -1,11 +1,21 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E3 (consuming/abortive crossings teardown) largely obsoleted and NOT built; E4a (owning value in scope at a cloneable-shift but NOT captured no longer trips TUR-E0014) LANDED 2026-07-19 -- the reachable E-borrow slice; the genuinely-owning multi-shot capture still rides unbuilt E3. Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped, cloneable-owning-in-scope-not-captured added. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: ARCHIVED 2026-07-19 -- everything reachable landed. Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E4a (an owning / non-Clone value in scope at a cloneable-shift -- and the sibling non-Serializable value at a serial-shift -- no longer trips TUR-E0014 / TUR-E0018 when not actually captured) LANDED 2026-07-19, the reachable E-borrow slice. The one remaining tail -- a GENUINELY-OWNING multi-shot capture (rc handle riding the env, cloned/dropped per resume), the TUR-E0107 consuming-aggregate admission, and the TUR-E0710 owning-autodrop-crossing-a-cloneable-reset case -- all ride the refcounted-env teardown (E3), which is SPLIT OUT into its own plan [cps-backend-owning-env-teardown-e3-plan.md](../upcoming/cps-backend-owning-env-teardown-e3-plan.md) (shelved-by-default; not a leak fix). Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped, cloneable-owning-in-scope-not-captured + serial-nonserial-in-scope-not-captured added. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
 # CPS backend -- multi-shot continuations and owning-value env capture
+
+> **ARCHIVED 2026-07-19.** Everything reachable without the refcounted-env
+> teardown has landed (Tracks A + B E1/E2/E-borrow + E4a). The remaining
+> E3-gated tail -- the genuinely-owning multi-shot capture, the TUR-E0107
+> consuming-aggregate admission, and the TUR-E0710 owning-autodrop-crossing-a-
+> cloneable-reset case -- is carried forward by the split-out standalone plan
+> **[cps-backend-owning-env-teardown-e3-plan.md](../upcoming/cps-backend-owning-env-teardown-e3-plan.md)**
+> (shelved-by-default: there is no owning-payload leak to fix; E3 only widens the
+> admitted-shape surface). This document is retained as the record of the landed
+> work and the reachability reasoning that led to shelving E3.
 
 > **Progress note (2026-07-19).** State re-verified against the tree. Track A
 > (A1-A3) and Track B E1/E-borrow/E2 are all landed and confirmed: fixtures
@@ -26,13 +36,15 @@ description: Two orthogonal CPS-backend coverage features, split out and detaile
 > fixture `cloneable-owning-in-scope-not-captured`). The genuinely-owning multi-
 > shot capture (the `rc` handle riding the multi-shot env, cloned/dropped per
 > resume) still rides **unbuilt E3**, as does the owning-autodrop-crossing-a-
-> cloneable-reset case (TUR-E0710). This plan stays **OPEN on the E3-gated tail
-> of E4**; everything reachable without E3 is done.
+> cloneable-reset case (TUR-E0710). Everything reachable without E3 is done; the
+> E3-gated tail moved to
+> [cps-backend-owning-env-teardown-e3-plan.md](../upcoming/cps-backend-owning-env-teardown-e3-plan.md)
+> when this plan was archived.
 
 ## Why this document exists / what it supersedes
 
 This plan replaces
-[cps-backend-env-capture-owning-values-plan.md](../archive/cps-backend-env-capture-owning-values-plan.md)
+[cps-backend-env-capture-owning-values-plan.md](cps-backend-env-capture-owning-values-plan.md)
 (archived), whose **E1 landed**: a borrow-style `rc` capture into a multi-shot
 handler case now CPS-emits via Option A clone-on-read-out
 (`cap_owning_ok`, `CapSet.owning[]`, `rc_strong_increment` in `emit_lifted`;
@@ -62,7 +74,7 @@ both.
 **Nothing here is a correctness gap today.** Every shape both tracks reject is
 handled correctly by the general whole-function fallback. This is coverage, and
 it is what N6.5 (the general fallback deletion,
-[cps-backend-n6-fallback-removal-followups-plan.md](../archive/cps-backend-n6-fallback-removal-followups-plan.md))
+[cps-backend-n6-fallback-removal-followups-plan.md](cps-backend-n6-fallback-removal-followups-plan.md))
 needs covered before it can delete the fallback without hard-erroring these
 shapes.
 
@@ -304,7 +316,7 @@ ref teardown), not a prerequisite for leak-cleanliness of what already emits.
 ### E2 -- aggregate + carrier-ADT owning captures. LANDED.
 
 E2 is unblocked and landed, once the auto-drop lowering
-([cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md),
+([cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md),
 P2) made these shapes reach CPS. `cap_owning_ok` now admits a carrier ADT
 (`carrier_handle_ok`) and an owning-carrying by-value aggregate
 (`owning_byvalue_aggregate`); `owning_cap_borrow_only` + `expr_is_pure_borrow_of`
@@ -336,7 +348,7 @@ For an rc that consume is `(rc/drop r)`. But:
 So every owning aggregate / carrier / ref capture into a multi-shot case is
 blocked upstream by the scope-exit-auto-drop (`EX_DEFER`) hole. **E2 rides the
 non-ref auto-drop lowering, NOT E3** -- see
-[cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md).
+[cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md).
 That plan's **P2** lowers the injected `(defer (rc/drop (.f o)))` /
 `(defer (drop! (.f o)))` into the SINGLE-SHOT post-handle continuation (exactly
 how E1's explicit `(rc/drop r)` after a `handle` already works), which is sound
@@ -580,7 +592,7 @@ fixture needs both tracks:
    enclosing-handler fix across delimiter forms.
 3. **E1 + E-borrow** -- LANDED. Leak-clean rc captures via bare aliasing.
 4. **Owning-autodrop P1 + P2** -- LANDED
-   ([cps-backend-owning-autodrop-lowering-plan.md](cps-backend-owning-autodrop-lowering-plan.md)).
+   ([cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md)).
    The actual E2 unblock: lower the non-ref owning scope-exit auto-drop.
 5. **E2** -- LANDED (via P2). Owning-aggregate borrow captures; the capstone
    `cps-backend-owning-struct-capture-multishot` runs under normal leak
@@ -596,11 +608,11 @@ fixture needs both tracks:
 
 - **Supersedes** `cps-backend-env-capture-owning-values-plan.md` (archived). E1
   landed there; E2-E4 continue here as Track B.
-- **O1-b** ([cps-backend-ref-scope-exit-drop-plan.md](cps-backend-ref-scope-exit-drop-plan.md)):
+- **O1-b** ([cps-backend-ref-scope-exit-drop-plan.md](../upcoming/cps-backend-ref-scope-exit-drop-plan.md)):
   P2 (abortive-unwind ref drop) rides E3's DK teardown; P3 (resumable-crossing
   ref) is the `ref`-flavored instance of Track B's owning capture. Its state
   line points at the env-capture plan -- redirect it here.
-- **N6.5** ([cps-backend-n6-fallback-removal-followups-plan.md](../archive/cps-backend-n6-fallback-removal-followups-plan.md)):
+- **N6.5** ([cps-backend-n6-fallback-removal-followups-plan.md](cps-backend-n6-fallback-removal-followups-plan.md)):
   Track A shrinks the nested-control-in-continuation fallback surface; Track B
   shrinks the owning-capture fallback surface. Both are residual-fallback line
   items; list them when N6.5 audits residuals, with the bounded-only /

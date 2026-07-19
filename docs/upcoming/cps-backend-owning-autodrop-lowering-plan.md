@@ -39,7 +39,7 @@ the non-`ref` `EX_DEFER` lowering. **This document is that plan.**
 correctly by the whole-function fallback (the direct emitter fires the defer
 through the `tur_frame` LIFO stack). This is coverage -- and it is the concrete
 unblock for Track B E2 in
-[cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md).
+[cps-backend-multishot-continuations-owning-capture-plan.md](../archive/cps-backend-multishot-continuations-owning-capture-plan.md).
 
 ## The mechanism today (verified)
 
@@ -111,7 +111,7 @@ by-value local's owning field `(.f o)`), and `C` a control op in `X`'s scope.
    resume (double free). The drop must fire once per continuation *lifetime* via
    a teardown. **P3 here -- rides E3**
    (the DK-teardown design lives in Track B's E3 section of
-   [cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md);
+   [cps-backend-multishot-continuations-owning-capture-plan.md](../archive/cps-backend-multishot-continuations-owning-capture-plan.md);
    the standalone E3 plan was folded there and deleted)
    and O1-b P2/P3.
 
@@ -203,7 +203,7 @@ field-read arg, and `drop!` on the direct side (O1-a). The delegated constructor
   and O1-b P1's `ref` case folds into P1 here (one recognizer, one hoist). O1-b
   P2/P3 and P3 here share E3.
 - **E3** (Track B's E3 section of
-  [cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md);
+  [cps-backend-multishot-continuations-owning-capture-plan.md](../archive/cps-backend-multishot-continuations-owning-capture-plan.md);
   folded from the deleted standalone plan): only P3 (abortive / multi-shot
   crossing) depends on it. P1/P2 are independent and land first.
 - **byvalue-struct-local-owning-field-leak** (archived, RESOLVED on direct):
