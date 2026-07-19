@@ -5157,7 +5157,15 @@ static void emit_term(CE *ce, const CTerm *t) {
             const char *mclone_lc = find_mono_clone_for_call(
                 ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n);
             char *fn = mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn);
-            char *argv = atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n);
+            /* Cast each arg to the (direct) callee's declared param C type --
+             * gcc14-int-conversion, carrier-to-typed-param: a cps->direct call to
+             * e.g. `option_hyeq_qu(int64_t,int64_t,int64_t)` with a void* closure
+             * arg 3 must carrier-cast it.  Skipped for a mono-clone (its args are
+             * already the clone's concrete param types). */
+            char *argv = mclone_lc
+                ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
+                : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
+                                       t->as.letcall.fn);
             char *bn = cvar_cname(ce, t->as.letcall.x);
             /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
              * no value: emit the call as a bare statement and bind the unit
