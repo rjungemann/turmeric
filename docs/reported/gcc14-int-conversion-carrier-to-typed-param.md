@@ -46,7 +46,48 @@ Gathered by compiling every previously-flagged fixture under
   `opaque-tyvar-through-wrapper-fn`, and the `logic-*` suite
   (`logic-conjoined/-disjoined/-fresh/-occurs-check/-query/-reify/-unify-basic/-unify-fail`).
 
-## Root cause / fix direction
+## Root cause (pinned 2026-07-19)
+
+The two ctor sub-fronts and the CPS-fn-value front of the umbrella are now fixed
+and archived; this front is what remains, and it is the intricate one. A concrete
+probe (`sum_hyvec` in `letrec-self-recursive-closure`):
+
+```c
+static int64_t sum_hyvec(tur_adt_Vec__int * rs);        // emitted signature: concrete pointer param
+...
+__ps_164 = (sum_hyvec((int64_t)(intptr_t)(rs_1290)));   // caller casts the arg to int64
+```
+
+`rs_1290` is already a `tur_adt_Vec__int *`; the caller casts it **to int64** and
+passes it into a `tur_adt_Vec__int *` parameter -> the int64->pointer mismatch is
+the `-Wint-conversion`. The cast originates in the ACB carrier bridge
+(`src/compiler/emit_expr.c` ~4779, `expr_emits_byvalue_carrier_abi` +
+`emit_carrier_bridge_escaping`) and the sibling `pk == TY_INT || TY_STRUCT`
+int64-cast branch (~4632). Both decide the target representation from the callee's
+**generic** `fn_binding->type.as.fn.arg_kinds[param_idx]` -- which is `TY_TYVAR`
+(the carrier view) -- and so bridge the argument TO the int64 carrier. But the
+callee was emitted with the **concrete monomorph** signature
+`sum_hyvec(tur_adt_Vec__int *)`, not an int64 carrier param. The metadata
+(arg_kinds = carrier) and the emitted C signature (concrete pointer) disagree, and
+`matched_spec` is NULL at the call, so the carrier bridge fires when it should not.
+
+The uniform tell across all ~20 fixtures is the note
+`expected 'tur_adt_X *' (or 'void *') but argument is of type 'long int'`.
+
+## Fix direction (updated)
+
+The principled fix reconciles the two views: either (a) resolve `matched_spec` /
+the concrete param C type at these call sites and cast the argument to the
+callee's DECLARED param C type (`arg_full_types[param_idx]` -> `type_c_name`,
+e.g. `(tur_adt_Vec__int *)(intptr_t)rs`) instead of the int64 carrier; or (b)
+emit the monomorph callee with an int64 carrier param so the caller's carrier
+bridge is correct. Option (a) is the local change but must thread the concrete
+param type through the ACB bridge and the `pk==TY_INT/STRUCT` branch WITHOUT
+disturbing the ~15 existing carrier special-cases (each tied to a prior report),
+so it needs careful per-case verification against the full suite -- this is the
+one gcc14 front that is a genuine dedicated effort, not an isolated cast.
+
+## Original fix direction
 
 The general fix is a single principled rule at the call-argument and ctor-argument
 emit sites (`src/compiler/emit_expr.c`): when the argument's emitted C type is the
