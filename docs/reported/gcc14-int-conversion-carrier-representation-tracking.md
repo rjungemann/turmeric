@@ -1,5 +1,17 @@
 # GCC >= 14 int-conversion residual: carrier vs concrete-pointer representation tracking
 
+> **ALL FLAGGED FIXTURES RESOLVED (2026-07-19).** Every one of the 46 flagged
+> carrier-to-typed-param int-conversion fixtures now compiles clean under
+> `-Werror=int-conversion`. The representation-tracking machinery this report
+> called for is fully implemented (the `emit_sig_*` param side table + the
+> `emit_localvar_*` local-var side table + a set of consumer-side bridges at the
+> let/letrec binder init, the TCO tail-backedge, the fn-body return chain, the
+> control-result assignment, and the spec-dispatch call arg). Full suite: 2202
+> passed, 0 failed. What remains before the `-Wno-error=int-conversion` flag can
+> DROP is a tree-wide sweep confirmation (see "Dropping the flag" at the end) --
+> van-laarhoven-lens-wide-compose revealed that untriaged int-conversion sites
+> existed beyond the original 46, so the flag stays until a full sweep is clean.
+
 **Severity:** medium -- latent today (masked by `-Wno-error=int-conversion` in
 `src/main.c`), a hard `cc` error under GCC >= 14. This is the irreducible design
 core carved out of `gcc14-int-conversion-carrier-to-typed-param.md` after the 36
@@ -80,45 +92,60 @@ Landed fix:
 Full suite **2202 passed, 0 failed, no churn**. **Session-2 total: 4 fixtures
 (list-count-phantom, fat-closure, httpd, letrec-self); front now 43/46.**
 
-## Remaining: 3 fixtures, each a DISTINCT hard emit site
+## LANDED (2026-07-19, session 2 final): the last 3 fixtures
 
-Each was located but sits on a spec/dispatch/shared-bridge emit path a
-value-preserving local cast cannot reach without deeper plumbing (verified this
-session by tracing each -- none is the recorded-temp straddle the landed table
-handles):
+All three "remaining" fixtures were resolved -- each with the consumer-side
+representation-tracking approach, extended to its specific emit path:
 
-- `constrained-loop-vec-push-byvalue-result-element` (3) -- **spec-clone body
-  return.** `err_val__spec__const_char___int64_t` / `ok_val__spec__...` return a
-  concrete pointer (`const char *`, `tur_adt_Vec__Option__int *`) but their body
-  is `return (int64_t)((tur_adt_Result *)..)->err_val;` (int64). Traced: this
-  return is emitted by neither `emit_stmt`'s EX_RETURN nor `emit_fns`'s tail
-  return (instrumented both -- no hit), so the spec-clone body goes through a
-  separate ABI-specialization body emitter. Fix belongs there: bridge an int64
-  tail into the clone's concrete-pointer C return type.
-- `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch call
-  passing a `tur_adt_Map__cstr__int *` arg into the spec's int64 param (Class A
-  reverse). Traced: this call is emitted by neither of `emit_expr`'s two
-  `emit_call_name` paths (only the `_int` Eq instances hit them), so the
-  Map-spec instance call is assembled by a third dispatch emitter; the emit_sig
-  ground-truth reverse cast must be applied there.
-- `generic-relay-aggregate-result` (1) -- a union-default read
-  `((union { int64_t s; void * d; }){.s = INT64_C(0)}).d` yields `void *` into an
-  int64 binder. Located at the `CK_CARRIER -> CK_CONCRETE` bridge
-  (`emit_core.c:3731`): the `.d`-vs-`.s` member choice (and the `void *` concrete
-  sink) must follow the CONSUMER type. A shared bridge used everywhere -- needs a
-  consumer-type signal, not a local cast, to avoid broad regression.
-- `constrained-loop-vec-push-byvalue-result-element` (3) -- a `const char *`
-  return-type straddle plus a `vec_hypush_ex` arg straddle; the value is a
-  by-value aggregate element, a different producer than the recorded temps.
+- `constrained-loop-vec-push-byvalue-result-element` (3->0) -- **spec-clone body
+  return.** `err_val__spec__..._const_char_` / `ok_val__spec__...` return a
+  concrete pointer but their body is a field read emitted as the int64 carrier
+  (`return (int64_t)((tur_adt_Result *)..)->err_val;`). The return is emitted by
+  the fn-body return-branch chain's plain-return fallback (emit_fns.c ~3982, keyed
+  on `ret_ctype`); bridge there when the fn's C return type is a concrete pointer
+  and the return value is an explicitly int64-cast expression.
+- `generic-relay-aggregate-result` (1->0) -- a `void *` union-default read
+  (`((union { int64_t s; void * d; }){.s = ..}).d`, from a `(:: <int> :ptr<void>)`
+  carrier relabel) bound to an int64 binder. Detect the exact void*-member union
+  read at the let/letrec binder init (value ends in `}).d` and declares
+  `void * d;` -- unique to this emit, cannot match an int64 value) and reinterpret
+  through the existing int64-binder bridge.
+- `gde-generic-dict-eq-map` (1->0) -- a `__inst_Eq_..._int64_t(a, b)`
+  spec-dispatch call with a `tur_adt_Map__cstr__int *` arg `b` into the int64
+  param. Root cause: the `emit_sig` param table was populated only from the
+  forward-decl pass over top-level items, so ABI specializations had NO recorded
+  signature and the call-site reverse cast could not tell the param was the
+  carrier. Fix: record each ABI spec's emitted param C types into `emit_sig` at
+  the spec forward-decl emitter (keyed by clone name == call-site fn_name), then
+  consult it at the dict/spec-dispatch call arg loop to reverse-cast a
+  concrete-pointer arg into a recorded-int64 param. (This also corrected a latent
+  2-error int-conversion in `van-laarhoven-lens-wide-compose`; snapshot
+  regenerated.)
 
-The forward field-read straddle CANNOT be fixed at the ascription site: KB-021
+**The carrier-to-typed-param int-conversion front is COMPLETE: all 46 flagged
+fixtures compile clean under `-Werror=int-conversion`, full suite 2202/0.**
+
+The forward field-read straddle could NOT be fixed at the ascription site: KB-021
 requires an ascription NOT to change a carrier-ABI aggregate's representation,
 because a sibling consumer (`vec-push!`, `ok`, ...) reads the same value as the
-int64 carrier -- the correct representation depends on the CONSUMER. The landed
-fixes are all consumer-side (binding init, tail-backedge). The 4 remaining need
-the same consumer-side treatment extended to their specific producer/consumer
-sites (closure-env binding, spec-dispatch regular-call arg, union-default reader,
-by-value-element return/arg).
+int64 carrier -- the correct representation depends on the CONSUMER. Accordingly
+every landed fix is consumer-side (binder init, tail-backedge, fn return, control
+result, spec-dispatch call arg), keyed on a ground-truth side table
+(`emit_sig_*` param types / `emit_localvar_*` local types) rather than the
+colliding monomorphized source type.
+
+## Dropping the `-Wno-error=int-conversion` flag
+
+The flag in `src/main.c` (4 sites) covers three warnings; `int-conversion` is one.
+The sibling `incompatible-pointer-types` front is already resolved
+(`docs/archive/gcc14-incompatible-pointer-inline-c-anon-struct.md`). Before
+dropping `-Wno-error=int-conversion`, run a **full tree-wide sweep** (every fixture
+through `emit-c | cc -Werror=int-conversion`) -- the van-laarhoven discovery proves
+untriaged sites can exist beyond the flagged set. Fix any the sweep surfaces, then
+drop the single `int-conversion` token (leaving `incompatible-pointer-types` /
+`implicit-function-declaration` until their own fronts clear). Keep the
+`emit_sig`/`emit_localvar` side tables and consumer-side bridges -- they are the
+mechanism that keeps the tree clean.
 
 ## Why the tractable fixes stopped here
 
