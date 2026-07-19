@@ -1252,6 +1252,58 @@ static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
     return v;
 }
 
+/* The C type `emit_control_result_temp_decl` declares the result temp with --
+ * mirrors that function's three branches exactly so a caller can cast the
+ * assigned value to match the temp's declared representation. */
+static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
+                                              const Expr *tail) {
+    Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail);
+    if (bv.kind != TY_UNKNOWN)
+        return emit_type_c_name(ctx, bv);
+    if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
+        fn_body_tail_is_carrier_producer(tail) &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
+        return "int64_t";
+    return emit_type_c_name(ctx, type);
+}
+
+/* gcc14-int-conversion (carrier-to-typed-param): reconcile a control-form result
+ * assignment `tmp = <value>` whose temp C type and value representation straddle
+ * the int64<->pointer boundary.  The temp is declared by
+ * emit_control_result_temp_decl (int64 carrier or a concrete `tur_adt_X *`); the
+ * value flows from the body's tail, which may emit the other representation (a
+ * carrier producer into a concrete-pointer temp, or a pointer value into an int64
+ * temp).  `tmp = <ptr>`/`tmp = <int64>` mismatched is -Wint-conversion, a hard
+ * error under GCC >= 14.  Bridge through intptr_t (value-preserving); leave a
+ * matching pair, a `void *` temp, or a by-value aggregate untouched. */
+static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
+                                            const Expr *tail) {
+    const char *tcty = control_result_temp_ctype(ctx, ltype, tail);
+    if (!tcty) return v;
+    size_t tL = strlen(tcty);
+    bool temp_is_i64 = strcmp(tcty, "int64_t") == 0;
+    bool temp_is_ptr = tL >= 1 && tcty[tL - 1] == '*' && strcmp(tcty, "void *") != 0;
+    if (!temp_is_i64 && !temp_is_ptr) return v;
+    /* the value's own representation C type */
+    const Expr *p = tail;
+    while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
+    const char *vcty = p ? emit_binding_repr_c_name(ctx, p->type, p) : NULL;
+    if (!vcty) return v;
+    size_t vL = strlen(vcty);
+    bool val_is_i64 = strcmp(vcty, "int64_t") == 0;
+    bool val_is_ptr = vL >= 1 && vcty[vL - 1] == '*';
+    if (temp_is_i64 && val_is_ptr) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "(int64_t)(intptr_t)(%s)", v);
+        buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
+    } else if (temp_is_ptr && val_is_i64) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "(%s)(intptr_t)(%s)", tcty, v);
+        buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
+    }
+    return v;
+}
+
 /* Fat-closure-env scoped free (docs/reported/fat-closure-env-leak.md): decide
  * whether let-binding `idx` of `e` holds a freshly-constructed fat closure whose
  * heap env can be `free`d when the let scope exits.  Sound iff:
@@ -1534,6 +1586,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
             bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
                                                       e->as.let_.body);
+            bv = bridge_control_result_int_ptr(ctx, bv, e->type, e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -1553,6 +1606,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *bv = emit_value(ctx, body, e->as.let_.body);
         bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
                                                   e->as.let_.body);
+        bv = bridge_control_result_int_ptr(ctx, bv, e->type, e->as.let_.body);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", tmp, bv);
         free(bv);
@@ -1746,6 +1800,7 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
             bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
                                                       e->as.let_.body);
+            bv = bridge_control_result_int_ptr(ctx, bv, e->type, e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
