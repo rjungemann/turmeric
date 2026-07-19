@@ -1,5 +1,17 @@
 # Language/codegen gaps surfaced by the pure-Turmeric `logic.tur` port
 
+> **Archived 2026-07-19** after re-verifying the resolution against the current
+> tree: the GAP 1 repro prints `15` (was SIGSEGV), the GAP 2 repro prints `6`
+> (was a `TUR-E0001` match-arm mismatch), and the GAP 3 Part A repro raises
+> `TUR-E0295`. All five regression fixtures (`opaque-fn-carrier-dispatch`,
+> `forward-ref-adt-return`, `errors/byvalue-adt-cast-to-int`,
+> `errors/int-cast-to-byvalue-adt`, `box-unbox-byvalue-aggregate`) and all eight
+> `logic-*` fixtures pass, and `stdlib/logic.tur` carries no `:int`-carrier goal
+> erasure (`apply-goal` is `(Goal int)`; `fresh`/`fresh-impl` take `^fat`). The
+> two remaining checklist boxes (optional `UState` readability reshape under GAP
+> 3; a snapshot/docstring regen) are explicitly non-correctness items and are
+> left as-is.
+>
 > **Status:** ALL RESOLVED 2026-07-13. GAP 1 **fixed** (compiler); GAP 2 **fixed**
 > (compiler); GAP 3 **fixed** (compiler, Parts A + B); GAP 4 **withdrawn** (not a
 > gap -- it was a missing `^fat` annotation, now applied). The `logic.tur`
