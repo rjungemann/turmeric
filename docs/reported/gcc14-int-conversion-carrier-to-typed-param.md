@@ -92,7 +92,31 @@ int64->void* is a new error). So the `__cps` callees do NOT have uniform int64
 params -- the cast must consult each callee's ACTUAL param C type, exactly like
 the regular-call path now does. That change was reverted; the CPS path remains.
 
-Remaining paths, by callee family:
+**Update 2: two call-arg paths landed; remaining ~30 span more emit sites than
+just call args.** The **cps->cps** path is now also fixed (commit: `atoms_csv_call_typed`
+casts each arg to the callee's declared `__cps` param C type -- int64/void*/concrete
+-- computed exactly as `emit_params` does; fixes `list-basic`, `hamt-lisp-*`). Two
+call-arg paths (regular + cps->cps) are done, 6 fixtures, suite green.
+
+The remaining ~30 are NOT all call-arg sites. A large sub-cluster -- the entire
+`logic-*` suite (8) -- is **return-statement and let-assignment** int-conversion,
+not call args:
+
+```
+error: returning 'void *' from a function with return type 'int64_t' ...
+error: assignment to 'int64_t' ... from 'void *' ...
+```
+
+So the fix must also reconcile the carrier vs concrete representation at
+return-value delivery and let-binding emission, not only at call args. This is
+why the front is a dedicated effort: it is the same carrier-representation
+ambiguity (pointer vs int64 vs by-value aggregate) surfacing at EVERY
+representation-crossing site, each a distinct emitter.
+
+Remaining paths, by site/family:
+- **Return / let-assignment** (`logic-*` suite, 8): void* value delivered where
+  the C slot / return type is int64 -- return + `LETVAL`/`LETPRIM` emission.
+- **cps->direct calls** (`option-basic` `option_hyeq_qu`, some `logic-*`).
 - **cps->cps / cps->direct `__cps` calls** (`emit_cps_ir.c`, `atoms_csv_call`):
   `list-basic`, `option-basic`, `hamt-lisp-*`, the `logic-*` suite,
   `gde-generic-dict-eq-map`. Needs a param-type-aware CSV (thread each callee's
