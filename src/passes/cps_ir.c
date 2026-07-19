@@ -1037,15 +1037,20 @@ static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR;
 
 /* E3a (owning-cloneable-capture): may an OWNING value ride a cloneable 2-arg
  * call frame's captured-env slot?  Off-gate, no -- the env must be a Copy scalar
- * (cps_scalar_kind_ok), so an owning env evicts to TUR-E0710.  On-gate, an `rc`
- * env is admitted WHEN the callee takes it ^borrow (a type-system guarantee the
- * callee never drops it): the emitter then gives that frame dk_frame_owning
- * clone/drop glue so each multi-shot resume increfs its own copy, balanced by
- * the dk_free decref -- the borrow teardown scheme, never a double-drop.  rc
- * only for now; widen as carrier/aggregate clone glue lands.  See
+ * (cps_scalar_kind_ok), so an owning env evicts to TUR-E0710.  On-gate, a
+ * ONE-WORD owning HANDLE is admitted WHEN the callee takes it ^borrow (a
+ * type-system guarantee the callee never drops it): an `rc<T>` or a `:heap`
+ * ADT / struct carrier handle.  Both ride the frame env by a bare pointer copy;
+ * ^borrow means the frame never drops it, so the shallow-shared env is
+ * read-only-correct across resumes and the owner drops it once (borrow teardown,
+ * never a double-drop).  A multi-word owning aggregate does not fit the one-word
+ * env and is excluded here.  See
  * docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md. */
-static bool cloneable_owning_env_ok(TypeKind k) {
-    return g_opt_owning_cloneable_capture && k == TY_RC;
+static bool cloneable_owning_env_ok(const Type *t) {
+    if (!g_opt_owning_cloneable_capture || !t) return false;
+    return t->kind == TY_RC
+        || type_is_heap_adt(*(Type *)t)
+        || type_is_heap_struct(*(Type *)t);
 }
 
 /* Pure existence check: does `program` declare a Serializable instance for the
@@ -1202,7 +1207,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                 TypeKind envk = fb->type.as.fn.arg_kinds[h0 ? 1 : 0];
                 const Expr *env_op = ascribe_peel(h0 ? a1 : a0);
                 bool owning_borrow_env =
-                    env_op && cloneable_owning_env_ok(env_op->type.kind)
+                    env_op && cloneable_owning_env_ok(env_op ? &env_op->type : NULL)
                     && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
                 if (!cps_scalar_kind_ok(envk) && !owning_borrow_env)
                     return NULL;
@@ -1223,7 +1228,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                  * per-resume env clone is balanced solely by the dk_free env_drop
                  * (borrow teardown), never a double-drop. */
                 bool owning_borrow_env =
-                    cloneable_owning_env_ok(other->type.kind)
+                    cloneable_owning_env_ok(&other->type)
                     && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
                 if (!cps_scalar_kind_ok(other->type.kind) && !owning_borrow_env)
                     return NULL;

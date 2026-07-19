@@ -317,8 +317,15 @@ once. The `dk_frame_owning` substrate is reserved for the *consuming* case.
 **Remaining scope.** An owning value the **enclosing fn owns** and drops after the
 cloneable-reset now works both ways: with an explicit `(rc/drop r)` and -- via the
 P5b trailing-defer extension -- with the auto-inserted scope-exit drop (no
-hand-written drop). See "What rides E3" below. Still unbuilt: carrier-handle /
-owning-aggregate clone glue
+hand-written drop). The owning KIND is also widened beyond `rc` to any ONE-WORD
+handle: a `:heap` ADT / struct carrier handle rides the frame env identically
+(fixture `cloneable-owning-carrier-handle-capture`), because the borrow channel
+is kind-agnostic (bare pointer copy, never dropped in the frame). Still unbuilt:
+multi-word owning-AGGREGATE capture (does not fit the one-word env -- needs a
+boxed / widened env), and the CONSUMING case (the frame itself drops the handle,
+where the `dk_frame_owning` clone-per-copy substrate finally comes in). The
+carrier / aggregate CLONE glue the original plan called for is only needed for
+the consuming case; the borrow + owner-drop channels need none.
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.

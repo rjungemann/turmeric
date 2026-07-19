@@ -3,16 +3,23 @@
 #include "experiments.h"   /* E3a: experiment_warn_if_used at the owning-capture admission */
 
 /* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
- * value captured into a genuinely multi-shot cloneable continuation that lacks
- * a Clone instance is admitted -- rather than rejected with TUR-E0014 -- when
- * the `owning-cloneable-capture` experiment is on AND the owning kind is one the
- * cloneable codegen can emit env clone/drop teardown for.  Today that is `rc`
- * only (the sole owning kind with scalar clone glue, rc_strong_increment); a
- * carrier handle / owning aggregate still evicts (their clone glue is unbuilt).
- * Widen this predicate as each kind's glue lands. */
+ * value captured ^borrow into a genuinely multi-shot cloneable continuation that
+ * lacks a Clone instance is admitted -- rather than rejected with TUR-E0014 --
+ * when the `owning-cloneable-capture` experiment is on AND the owning kind is a
+ * ONE-WORD handle the cloneable frame env can carry:
+ *   - `rc<T>`   (TY_RC): a reference-counted handle;
+ *   - a `:heap` ADT / struct carrier handle (a one-word typed pointer).
+ * Both ride the frame env by a bare pointer copy; for a ^borrow capture the
+ * frame never drops the handle, so the shallow-shared env is read-only-correct
+ * across resumes and the owner drops it once (see the borrow teardown in
+ * build_marshal_reset).  An owning BY-VALUE aggregate (multi-word) does not fit
+ * the one-word env and is not admitted here -- it needs a boxed / widened env
+ * (a later slice). */
 static bool owning_multishot_admissible(const Type *t) {
     if (!g_opt_owning_cloneable_capture || !t) return false;
-    return t->kind == TY_RC;
+    return t->kind == TY_RC
+        || type_is_heap_adt(*(Type *)t)
+        || type_is_heap_struct(*(Type *)t);
 }
 
 /* ---- file-local helper forward declarations ---- */
