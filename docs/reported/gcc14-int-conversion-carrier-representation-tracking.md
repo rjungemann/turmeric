@@ -134,15 +134,53 @@ result, spec-dispatch call arg), keyed on a ground-truth side table
 (`emit_sig_*` param types / `emit_localvar_*` local types) rather than the
 colliding monomorphized source type.
 
+## Tree-wide sweep (2026-07-19): 16 untriaged fixtures remain
+
+A full sweep (`emit-c | cc -Werror=int-conversion` over every fixture) after the
+46 flagged were clean surfaced **16 more** fixtures with int-conversion errors --
+so the front is complete for the FLAGGED set but NOT tree-wide, and the flag
+cannot drop yet. All 16 are the same representation-duality classes (a local cast
+keyed on the ground-truth side tables, not the source type):
+
+| fixture | errs | class |
+| --- | --- | --- |
+| `schan-worker-pool` | 6 | mixed |
+| `show-collections-content-hamt` | 4 | forward spec-dispatch (`__inst_Show_show_cstr`: int64 arg -> cstr param) |
+| `w3-letrec-open-capture` | 3 | `vec_hypush_ex` arg 2 (pointer -> int64 param) |
+| `taskgroup-linear` | 2 | -- |
+| `taskgroup-with-macro-real` | 2 | -- |
+| `van-laarhoven-lens-wide-generic` | 2 | -- |
+| `vec-eq-ascribed-multi` | 2 | forward spec-dispatch (`__inst_Eq_eq_qu_cstr`) |
+| `vec-eq-cstr-content` | 2 | forward spec-dispatch (`__inst_Eq_eq_qu_cstr`: int64 arg -> cstr param) |
+| `vec-get-exists-element` | 2 | `vec_hypush_ex` arg 2 (pointer -> int64 param) |
+| `reactor-fibers-park-chan` | 1 | -- |
+| `session-effects` | 1 | -- |
+| `session-mp-effects` | 1 | -- |
+| `show-collections-content` | 1 | forward spec-dispatch (`__inst_Show_show_cstr`) |
+| `van-laarhoven-lens-compose` | 1 | binder-init reverse straddle (`int64_t = tur_adt_Line *`) |
+| `van-laarhoven-lens-wide-compose` | 1 | residual `int64_t = tur_adt_Line *` (a second straddle in this fixture) |
+| `vec-captureless-fat-closure-readback` | 1 | -- |
+
+Sub-classes and where each is fixed:
+- **forward spec-dispatch** (int64 arg -> concrete-pointer param, e.g. a `cstr`
+  element into `__inst_Eq_eq_qu_cstr` / `__inst_Show_show_cstr`): the mirror of
+  the landed gde reverse cast -- consult `emit_sig` for a recorded CONCRETE-pointer
+  param and cast the int64 arg to it. (The existing forward block keys on a
+  heap-ptr arg TYPE, which a `cstr`-element carrier arg is not.)
+- **`vec_hypush_ex` arg 2** (pointer -> int64 param): an inline-C carrier base --
+  not an ABI spec, so not in `emit_sig`. Either record inline-C base signatures
+  too, or apply the reverse cast from the callee `FnDef` param C type.
+- **binder-init reverse straddle** (`int64_t = tur_adt_Line *`): the same
+  `emit_localvar` recorded-pointer-temp path already landed -- extend recording to
+  the producer whose temp feeds these binders.
+
 ## Dropping the `-Wno-error=int-conversion` flag
 
 The flag in `src/main.c` (4 sites) covers three warnings; `int-conversion` is one.
 The sibling `incompatible-pointer-types` front is already resolved
-(`docs/archive/gcc14-incompatible-pointer-inline-c-anon-struct.md`). Before
-dropping `-Wno-error=int-conversion`, run a **full tree-wide sweep** (every fixture
-through `emit-c | cc -Werror=int-conversion`) -- the van-laarhoven discovery proves
-untriaged sites can exist beyond the flagged set. Fix any the sweep surfaces, then
-drop the single `int-conversion` token (leaving `incompatible-pointer-types` /
+(`docs/archive/gcc14-incompatible-pointer-inline-c-anon-struct.md`). Drop the
+single `int-conversion` token only after the 16 above are clean AND a re-run
+sweep is empty (leaving `incompatible-pointer-types` /
 `implicit-function-declaration` until their own fronts clear). Keep the
 `emit_sig`/`emit_localvar` side tables and consumer-side bridges -- they are the
 mechanism that keeps the tree clean.
