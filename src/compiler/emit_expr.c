@@ -4343,6 +4343,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             buf_free(&c);
                         }
                     }
+                    /* gcc14-int-conversion: an existential pack argument is
+                     * `tur_exists_t` == `void *`, but a ctor stores it in the int64
+                     * carrier field slot (`ctor_Box(int64_t)`).  Passing the void*
+                     * pack into the int64 param is "integer from pointer" (a hard
+                     * error under GCC >= 14).  Cast to int64 -- fires regardless of
+                     * `suffix`/`field_is_carrier` (an existential field's full_type
+                     * is TY_EXISTS, not a tyvar, so the pointer->int64 block above
+                     * does not cover it). */
+                    if (!field_inline && arg &&
+                        emit_resolve_type(ctx, arg->type).kind == TY_EXISTS) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                     /* A FLOAT argument flowing into a ctor field that is ERASED
                      * to the int64 CARRIER -- a tyvar field of a carrier-helper
                      * base ctor (`ctor_Result(bool,int64_t,int64_t)`'s `ok_val`,
