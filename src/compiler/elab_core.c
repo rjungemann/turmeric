@@ -546,6 +546,13 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     if (cur->as.cloneable_shift_.k_fn) ls[lsp++] = cur->as.cloneable_shift_.k_fn;
                     if (cur->as.cloneable_shift_.body) ls[lsp++] = cur->as.cloneable_shift_.body;
                     break;
+                case EX_SERIAL_RESET:
+                    if (cur->as.serial_reset_.body) ls[lsp++] = cur->as.serial_reset_.body;
+                    break;
+                case EX_SERIAL_SHIFT:
+                    if (cur->as.serial_shift_.k_fn) ls[lsp++] = cur->as.serial_shift_.k_fn;
+                    if (cur->as.serial_shift_.body) ls[lsp++] = cur->as.serial_shift_.body;
+                    break;
                 default: break;
             }
         }
@@ -1047,6 +1054,13 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_CLONEABLE_SHIFT:
                 if (cur->as.cloneable_shift_.k_fn) stack[sp++] = cur->as.cloneable_shift_.k_fn;
                 if (cur->as.cloneable_shift_.body) stack[sp++] = cur->as.cloneable_shift_.body;
+                break;
+            case EX_SERIAL_RESET:
+                if (cur->as.serial_reset_.body) stack[sp++] = cur->as.serial_reset_.body;
+                break;
+            case EX_SERIAL_SHIFT:
+                if (cur->as.serial_shift_.k_fn) stack[sp++] = cur->as.serial_shift_.k_fn;
+                if (cur->as.serial_shift_.body) stack[sp++] = cur->as.serial_shift_.body;
                 break;
             default:
                 break;

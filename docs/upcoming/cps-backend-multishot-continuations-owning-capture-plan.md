@@ -534,7 +534,19 @@ released *before* a `cloneable-reset`, whose continuation is resumed twice
 (clone + original) -- CPS-emits, output 32, LeakSanitizer-clean. The negative
 fixtures (`cloneable-non-clone-capture`, `backtrack-clone-non-clone-capture`,
 which capture the value AS the shift body -- genuinely free -- ) still emit
-TUR-E0014 unchanged. Full suite 2203 passed, 0 failed.
+TUR-E0014 unchanged. Full suite 2204 passed, 0 failed.
+
+The **serial (Serializable) continuation path had the identical false positive**
+and got the same treatment: `check_serializable_capture` walked every in-scope
+binding (up to `&e->global`) and emitted TUR-E0018 for any non-Serializable
+type, so a non-Serializable value merely in scope at a `serial-shift` broke it.
+It is now `check_serializable_capture_precise(e, span, reset_body)`, run once per
+`serial-reset` with the same free-variable gate (its original scope reach to
+`&e->global` is kept -- only the free-var gate is new). `collect_free_vars` also
+learned the `EX_SERIAL_RESET` / `EX_SERIAL_SHIFT` nodes. Fixture
+`serial-nonserial-in-scope-not-captured` (output 42); the negative fixture
+`serial-non-serializable-capture` (value captured AS the shift body) still emits
+TUR-E0018.
 
 **Still residual (out of E4a scope, both pre-existing):**
 - *Genuinely-owning multi-shot capture* -- the `rc` handle riding the multi-shot

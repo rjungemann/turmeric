@@ -4,7 +4,8 @@
 /* ---- file-local helper forward declarations ---- */
 static void check_cloneable_capture_precise(Elab *e, Span span,
                                             const Expr *reset_body);
-static void check_serializable_capture(Elab *e, Span span);
+static void check_serializable_capture_precise(Elab *e, Span span,
+                                               const Expr *reset_body);
 static bool is_effect_handled(Elab *e, const Symbol *name);
 static void push_handled_effect(Elab *e, const Symbol *name);
 static bool elab_effect_is_referred(const Elab *e, const Effect *eff);
@@ -1099,12 +1100,26 @@ Expr *elab_call_cc_star(Elab *e, const Form *call) {
 
 /* Phase 21: Serializable continuations */
 
-/* Check that all local bindings visible at a serial-shift site implement
- * the Serializable typeclass.  Mirrors check_cloneable_capture() for Clone. */
-static void check_serializable_capture(Elab *e, Span span) {
+/* E4a (mirrors check_cloneable_capture_precise): emit TUR-E0018 for a binding
+ * CAPTURED into a serial-shift's continuation that lacks a Serializable
+ * instance.  Runs once per serial-reset, on the full reset body, and flags only
+ * the bindings that are FREE in that body -- the ones the continuation actually
+ * captures.  The old per-shift check ran before the body existed and had to
+ * over-approximate to EVERY in-scope binding, so a non-Serializable value merely
+ * being in scope at a serial-shift (never captured) was spuriously rejected.
+ * The scope walk keeps its original reach (to &e->global -- serial captures may
+ * include enclosing-fn bindings); only the free-variable gate is new. */
+static void check_serializable_capture_precise(Elab *e, Span span,
+                                               const Expr *reset_body) {
     const Symbol *ser_sym = intern_cstr(e->st, "Serializable");
     TypeClass *ser_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, ser_sym);
     if (!ser_tc) return; /* Serializable not yet in scope; defer to a later pass */
+    if (!reset_body) return;
+
+    /* Free variables of the reifiable continuation context -- a binding not in
+     * this set is never captured, so it needs no Serializable instance. */
+    uint32_t n_fv = 0;
+    Binding **fvs = collect_free_vars(reset_body, NULL, 0, NULL, 0, &n_fv);
 
     for (Scope *s = e->scope; s != NULL && s != &e->global; s = s->parent) {
         for (uint32_t i = 0; i < s->n; i++) {
@@ -1114,6 +1129,11 @@ static void check_serializable_capture(Elab *e, Span span) {
             /* Primitive types that are always serializable */
             if (t.kind == TY_NIL || t.kind == TY_FN ||
                 t.kind == TY_CLONEABLE_CONT || t.kind == TY_CONT) continue;
+            /* Only a binding the continuation actually references is captured. */
+            bool captured = false;
+            for (uint32_t j = 0; j < n_fv; j++)
+                if (fvs[j] == b) { captured = true; break; }
+            if (!captured) continue;
             TypeClassInstance *inst =
                 typeclass_env_lookup_instance(&e->typeclass_env, ser_tc, &t, 1);
             if (!inst) {
@@ -1127,6 +1147,7 @@ static void check_serializable_capture(Elab *e, Span span) {
             }
         }
     }
+    if (fvs) free(fvs);
 }
 
 /* (serial-reset body) - Establish a serializable continuation boundary.
@@ -1141,6 +1162,8 @@ Expr *elab_serial_reset(Elab *e, const Form *call) {
     Expr *body = elab_form(e, call->as.list.items[1]);
     e->serial_reset_depth--;
     if (!body) return NULL;
+    /* E4a: verify captures of the reified serial continuation body. */
+    check_serializable_capture_precise(e, call->span, body);
     Expr *out = expr_new(e->arena, EX_SERIAL_RESET, body->type, call->span);
     out->as.serial_reset_.body = body;
     return out;
@@ -1188,8 +1211,10 @@ Expr *elab_serial_shift(Elab *e, const Form *call) {
     out->as.serial_shift_.k_fn = k_expr;
     out->as.serial_shift_.body = body;
 
-    /* Check that all captured bindings implement Serializable. */
-    check_serializable_capture(e, call->span);
+    /* E4a: the Serializable-capture check now runs once per enclosing serial-
+     * reset (check_serializable_capture_precise), on the full reset body, so a
+     * value merely in scope but not captured is no longer flagged.  See
+     * elab_serial_reset. */
     return out;
 }
 
