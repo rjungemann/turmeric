@@ -6,6 +6,48 @@ core carved out of `gcc14-int-conversion-carrier-to-typed-param.md` after the 36
 tractable fixtures on that front were fixed. What remains needs a
 representation-tracking change, NOT another per-site cast.
 
+## LANDED progress (2026-07-19): ground-truth side table + 3 more fixtures
+
+The **ground-truth side table** the fix direction below calls for is now
+implemented and in-tree (commits on `claude/tractable-report-execution-1yvqp9`):
+
+- `emit_module.c`: `EmitSigEntry` table keyed by emitted C name, populated from
+  the `emit_fn_forward_decls` pass by capturing each param's ACTUAL emitted type
+  substring (whatever branch wrote it -- no refactor of the ~15 special-cases).
+  `emit_sig_reset` / `emit_sig_record_param_ctype` / `emit_sig_lookup_param_ctype`
+  (declared in `emit_internal.h`).
+- `emit_expr.c`: the regular-call heap-ptr->concrete-pointer cast consults the
+  RECORDED callee param type; a generic carrier-ABI callee (recorded `int64_t`)
+  no longer gets a spurious pointer re-cast. **Fixes `map-typed-consumer` (3->0)
+  and cleans the `set_hycount` over-fire in `set-typed-consumer`** -- exactly the
+  coexistence the disproof below said no type-heuristic could crack.
+- `emit_cps_ir.c`: the cps->direct tail-call now casts its args through the typed
+  CSV (like cps->cps), and a fat-fn arg into an int64 fn-carrier param is bridged.
+  **Fixes `option-basic` (1->0)**; reduces `gde-generic-dict-eq-map` (6->1).
+
+All three fixes verified against the full suite: **2202 passed, 0 failed** each.
+
+**Remaining: 9 fixtures**, in two deeper sub-layers the table alone does not
+reach (their representation gap is at the field-read / binder-decl / spec-dispatch
+sites, not the call-arg site):
+
+- `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch call
+  passes a `tur_adt_Map__cstr__int *` arg into the spec's int64 param.
+- Class B binder-init straddle (8): `list-homog/length/count-*-aggregate-element`,
+  `generic-relay-aggregate-result`, `fat-closure-ascription`,
+  `letrec-self-in-nested-closure`, `httpd-mw-fold-many`,
+  `constrained-loop-vec-push-byvalue-result-element`. Root-caused this session to
+  the FIELD-READ layer: e.g. `(:: (.tail xs) (Cons (Option int)))` emits
+  `tur_adt_Cons__Option__int * t0 = (int64_t)(...)->tail;` -- the `.tail` field
+  read emits the int64 carrier while the binder's declared C type is the concrete
+  pointer. The types agree (`(Cons (Option int))` on both sides); only the emitted
+  representations differ, so it is the same duality one layer down. It cannot be
+  fixed at the ascription site: KB-021 (emit_expr.c:7589) requires an ascription
+  NOT to change a carrier-ABI aggregate's representation, because a sibling
+  consumer (`vec-push!`, `ok`, ...) reads the same value as the int64 carrier --
+  the correct representation depends on the CONSUMER, which the ascription cannot
+  see. The field-read emit must record/emit the binder-consumed representation.
+
 ## Why the tractable fixes stopped here
 
 Turmeric's carrier ABI gives a heap value TWO C representations that coexist in
