@@ -29,6 +29,8 @@ struct DK {
     intptr_t  handler_env; /* DKK_HANDLER */
     bool      shallow;   /* DKK_HANDLER: true = do NOT reinstall on resume (shift0-like) */
     DKResumeFrame rfn;   /* DKK_RESUME_FRAME */
+    DKEnvClone env_clone; /* E3a: owning-env clone glue (NULL = shallow env copy) */
+    DKEnvDrop  env_drop;  /* E3a: owning-env drop glue  (NULL = no env teardown) */
     DK       *next;
 };
 
@@ -44,6 +46,14 @@ DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }
 DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_FRAME, next);
     k->fn = fn; k->env = env;
+    return k;
+}
+
+DK *dk_frame_owning(DKFrame fn, intptr_t env,
+                    DKEnvClone env_clone, DKEnvDrop env_drop, DK *next) {
+    DK *k = dk_new(DKK_FRAME, next);
+    k->fn = fn; k->env = env;
+    k->env_clone = env_clone; k->env_drop = env_drop;
     return k;
 }
 
@@ -85,14 +95,20 @@ DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
     return dk_handler_impl(tag, fn, env, true, next);
 }
 
-/* Shallow-copy one node (next set to NULL). */
+/* Copy one node (next set to NULL).  E3a: a frame carrying env_clone gets an
+ * OWNED copy of its env (rc incref / aggregate deep-copy) instead of a shared
+ * shallow pointer alias, so each multi-shot resume owns its own +1; a NULL
+ * env_clone keeps the shallow copy, byte-identical to the pre-E3a path. The
+ * clone/drop glue pointers ride along so the copy frees its env symmetrically. */
 static DK *dk_copy_node(const DK *n) {
     DK *c = dk_new(n->kind, NULL);
-    c->fn = n->fn; c->env = n->env; c->tag = n->tag;
+    c->fn = n->fn; c->tag = n->tag;
+    c->env = n->env_clone ? n->env_clone(n->env) : n->env;
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env;
     c->shallow = n->shallow;
     c->rfn = n->rfn;
+    c->env_clone = n->env_clone; c->env_drop = n->env_drop;
     return c;
 }
 
@@ -154,10 +170,18 @@ static DK *dk_append(DK *a, DK *b) {
 }
 
 void dk_free(DK *k) {
-    while (k) { DK *n = k->next; free(k); k = n; }
+    while (k) {
+        DK *n = k->next;
+        if (k->env_drop) k->env_drop(k->env);   /* E3a: drop the owning env first */
+        free(k);
+        k = n;
+    }
 }
 
-void dk_free_node(DK *k) { free(k); }
+void dk_free_node(DK *k) {
+    if (k && k->env_drop) k->env_drop(k->env);   /* E3a: symmetric single-node drop */
+    free(k);
+}
 
 bool dk_has_prompt(const DK *k) {
     for (const DK *p = k; p; p = p->next)

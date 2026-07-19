@@ -52,9 +52,37 @@ typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);
  * to find the correct enclosing handler and delivers exactly once. */
 typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);
 
+/* ---- E3a: owning-env teardown hooks (cps-backend-owning-env-teardown) ------
+ * A frame whose captured env holds an OWNING value (an rc handle, or an
+ * aggregate with owning fields) carries a clone/drop pair so a multi-shot
+ * resume gets its own correctly-refcounted copy instead of a shared shallow
+ * alias.  Both default NULL, in which case dk_copy_node keeps today's shallow
+ * env-pointer copy and dk_free never touches the env -- byte-identical to the
+ * pre-E3a behavior for every Copy-only / borrow-only frame.
+ *
+ *   env_clone -- run on each dk_copy_node that copies an owning frame (capture
+ *     via dk_copy_range, and every dk_invoke replay via dk_copy): return an
+ *     owned copy of `env` (rc: incref + return the same handle; aggregate:
+ *     deep-copy + clone each owning field).  Its result becomes the copy's env.
+ *   env_drop  -- run on each dk_free of an owning frame: drop each owning field
+ *     (rc: decref; aggregate: drop fields + free the struct).  Runs BEFORE the
+ *     node itself is freed.
+ *
+ * Accounting (the E3a obligation): base populate = +1; each copy = +1 clone and
+ * -1 drop at its dk_free; net zero once every copy AND the base chain are freed.
+ * In the standalone machine the base chain is freed by its owner, so accounting
+ * balances to zero; the emitted E3a path leaks only the base +1 until E3b's
+ * region teardown frees the original delimited chain. */
+typedef intptr_t (*DKEnvClone)(intptr_t env);
+typedef void     (*DKEnvDrop)(intptr_t env);
+
 /* ---- chain constructors (each returns a fresh heap node) -------------- */
 DK *dk_done(void);
 DK *dk_frame(DKFrame fn, intptr_t env, DK *next);
+/* E3a: a plain frame whose env is owning -- carries the clone/drop pair fired by
+ * dk_copy_node / dk_free.  Passing NULL for both is exactly dk_frame. */
+DK *dk_frame_owning(DKFrame fn, intptr_t env,
+                    DKEnvClone env_clone, DKEnvDrop env_drop, DK *next);
 DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next);
 DK *dk_prompt(int tag, DK *next);
 DK *dk_shift(int tag, DKBody body, intptr_t body_env, DK *next);
