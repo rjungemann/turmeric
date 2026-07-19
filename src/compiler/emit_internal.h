@@ -477,6 +477,17 @@ void emit_sig_reset(void);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
+/* gcc14-int-conversion (carrier-representation-tracking): a side table recording
+ * the ACTUAL emitted C type of each LOCAL variable / temp, keyed by its (globally
+ * unique via fresh_tmp) C name.  A binder init `int64_t z = __t169;` reading a
+ * control-result temp `__t169` declared `tur_adt_X *` straddles the
+ * int64<->pointer duality, but the init EXPRESSION's TYPE c-names to the carrier
+ * (so a type-based check under-fires) while keying on the type broadly over-fires
+ * (139-fixture churn).  Consulting the temp's REAL emitted C type bridges only the
+ * genuine straddle.  emit_localvar_reset() clears it per program. */
+void emit_localvar_reset(void);
+void emit_localvar_record_ctype(const char *cname, const char *ctype);
+const char *emit_localvar_lookup_ctype(const char *cname);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

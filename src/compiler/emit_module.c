@@ -5057,6 +5057,54 @@ const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
     return NULL;
 }
 
+/* gcc14-int-conversion (carrier-representation-tracking): the local-variable /
+ * temp emitted-C-type side table.  See emit_internal.h.  File-scope, cleared per
+ * program by emit_localvar_reset().  Small linear map -- programs have thousands
+ * of temps, but a lookup only happens at a straddle-suspect binder init. */
+typedef struct EmitLocalVarEntry { char *cname; char *ctype; } EmitLocalVarEntry;
+static EmitLocalVarEntry *g_lv_tab;
+static uint32_t           g_lv_tab_n;
+static uint32_t           g_lv_tab_cap;
+
+void emit_localvar_reset(void) {
+    for (uint32_t i = 0; i < g_lv_tab_n; i++) {
+        free(g_lv_tab[i].cname);
+        free(g_lv_tab[i].ctype);
+    }
+    free(g_lv_tab);
+    g_lv_tab = NULL;
+    g_lv_tab_n = 0;
+    g_lv_tab_cap = 0;
+}
+
+void emit_localvar_record_ctype(const char *cname, const char *ctype) {
+    if (!cname || !ctype) return;
+    for (uint32_t i = 0; i < g_lv_tab_n; i++)
+        if (strcmp(g_lv_tab[i].cname, cname) == 0) {
+            free(g_lv_tab[i].ctype);
+            g_lv_tab[i].ctype = strdup(ctype);
+            return;
+        }
+    if (g_lv_tab_n == g_lv_tab_cap) {
+        uint32_t nc = g_lv_tab_cap ? g_lv_tab_cap * 2 : 256;
+        EmitLocalVarEntry *nt =
+            (EmitLocalVarEntry *)realloc(g_lv_tab, nc * sizeof(EmitLocalVarEntry));
+        if (!nt) return;
+        g_lv_tab = nt;
+        g_lv_tab_cap = nc;
+    }
+    g_lv_tab[g_lv_tab_n].cname = strdup(cname);
+    g_lv_tab[g_lv_tab_n].ctype = strdup(ctype);
+    g_lv_tab_n++;
+}
+
+const char *emit_localvar_lookup_ctype(const char *cname) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_lv_tab_n; i++)
+        if (strcmp(g_lv_tab[i].cname, cname) == 0) return g_lv_tab[i].ctype;
+    return NULL;
+}
+
 /* Emit C forward declarations for every EX_FN_DEF in items.  Used by both
  * emit_program (single-file) and emit_implementation (separate compilation)
  * so that mutually-recursive static functions resolve at C-compile time. */
@@ -5064,6 +5112,7 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
     /* gcc14-int-conversion: start each program's ground-truth sig table fresh. */
     emit_sig_reset();
+    emit_localvar_reset();
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind != EX_FN_DEF) continue;

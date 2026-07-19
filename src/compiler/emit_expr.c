@@ -1205,6 +1205,16 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
  *
  * `tail_expr` drives the carrier-producer decision (the control form whose
  * tail leaves are the producers); `type` is the temp's static type. */
+/* gcc14-int-conversion (carrier-representation-tracking): true when `s` is a bare
+ * C identifier (a temp / local name), so it can key the local-var type table.  A
+ * cast/expression value (`(int64_t)(...)`, `x->f`, `f(...)`) is not looked up. */
+static bool emit_str_is_bare_ident(const char *s) {
+    if (!s || !(s[0] == '_' || isalpha((unsigned char)s[0]))) return false;
+    for (const char *p = s + 1; *p; p++)
+        if (!(*p == '_' || isalnum((unsigned char)*p))) return false;
+    return true;
+}
+
 static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
                                           const Expr *tail_expr, const char *name) {
     /* generic-instance-result-byvalue-struct-okarm: when the control form's tail
@@ -1221,6 +1231,11 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail_expr);
     if (bv.kind != TY_UNKNOWN) {
         emit_temp_decl(ctx, body, bv, name, NULL);
+        /* gcc14-int-conversion (carrier-representation-tracking): record the
+         * temp's ACTUAL emitted C type so a later `int64_t z = <this temp>;`
+         * binder init can detect the int64<->pointer straddle by the temp's real
+         * representation rather than the (colliding) source type c-name. */
+        emit_localvar_record_ctype(name, emit_type_c_name(ctx, bv));
         return;
     }
     if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
@@ -1228,9 +1243,11 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_expr)) {
         indent_buf(body, ctx->indent);
         buf_printf(body, "int64_t %s;\n", name);
+        emit_localvar_record_ctype(name, "int64_t");
         return;
     }
     emit_temp_decl(ctx, body, type, name, NULL);
+    emit_localvar_record_ctype(name, emit_type_c_name(ctx, type));
 }
 
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
@@ -1516,6 +1533,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *init_cn = emit_type_c_name(ctx, init_ty_r);
             bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+            /* gcc14-int-conversion (carrier-representation-tracking, reverse
+             * straddle): the init VALUE is a bare temp whose RECORDED emitted C
+             * type is a concrete pointer, while the binder is the int64 carrier
+             * (`int64_t z = __t169;` where `__t169` was declared
+             * `tur_adt_Cons__Option__int *`).  The init's TYPE c-names to the
+             * carrier (init_is_ptr_repr is false), so a type-based check
+             * under-fires; keying on the type broadly over-fires (139-fixture
+             * churn).  The local-var side table records the temp's ACTUAL emitted
+             * representation, so the bridge fires only for a genuine pointer temp
+             * flowing into an int64 binder. Value-preserving. */
+            bool init_val_recorded_ptr = false;
+            if (strcmp(bind_c, "int64_t") == 0 && emit_str_is_bare_ident(iv)) {
+                const char *lvty = emit_localvar_lookup_ctype(iv);
+                size_t lL = lvty ? strlen(lvty) : 0;
+                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                        strcmp(lvty, "void *") != 0;
+            }
             /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
              * parameter whose fields sum to > 16 bytes arrives via the
              * by-pointer ABI (`const T *`), but the let binding is declared
@@ -1555,7 +1589,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
                 iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+                 init_is_ptr_repr || init_val_recorded_ptr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
@@ -1755,6 +1790,23 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *init_cn = emit_type_c_name(ctx, init_ty_r);
             bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+            /* gcc14-int-conversion (carrier-representation-tracking, reverse
+             * straddle): the init VALUE is a bare temp whose RECORDED emitted C
+             * type is a concrete pointer, while the binder is the int64 carrier
+             * (`int64_t z = __t169;` where `__t169` was declared
+             * `tur_adt_Cons__Option__int *`).  The init's TYPE c-names to the
+             * carrier (init_is_ptr_repr is false), so a type-based check
+             * under-fires; keying on the type broadly over-fires (139-fixture
+             * churn).  The local-var side table records the temp's ACTUAL emitted
+             * representation, so the bridge fires only for a genuine pointer temp
+             * flowing into an int64 binder. Value-preserving. */
+            bool init_val_recorded_ptr = false;
+            if (strcmp(bind_c, "int64_t") == 0 && emit_str_is_bare_ident(iv)) {
+                const char *lvty = emit_localvar_lookup_ctype(iv);
+                size_t lL = lvty ? strlen(lvty) : 0;
+                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                        strcmp(lvty, "void *") != 0;
+            }
             /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
              * parameter whose fields sum to > 16 bytes arrives via the
              * by-pointer ABI (`const T *`), but the let binding is declared
@@ -1794,7 +1846,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
                 iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+                 init_is_ptr_repr || init_val_recorded_ptr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
