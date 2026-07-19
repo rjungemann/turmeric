@@ -987,7 +987,15 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
         buf_printf(hbuf, "};\n\n");
     }
 
-    /* Emit the case function (mirrors emit_effects_handle Step 4). */
+    /* Emit the case function (mirrors emit_effects_handle Step 4).  Buffer it into
+     * `fiberfn` rather than hbuf directly: the fiber `__effect_handler_N` (whose
+     * body direct-emits the case's `resume` as `tur_effect_cont_resume`) is DEAD
+     * when a DK case fn is also emitted (dk_hgroup_from_table installs via `dk_fn`
+     * and never reads `.fn`; with the flag always-on every perform DK-lowers).  It
+     * is appended to hbuf only when the DK case is NOT emittable, so a DK-lowered
+     * handler value no longer drags the fiber `tur_effect_cont_resume` runtime into
+     * the emitted C.  Buffering (not reordering) keeps tmp_n allocation identical. */
+    Buf fiberfn; buf_init(&fiberfn);
     {
         Buf fn; buf_init(&fn);
         Buf pend; buf_init(&pend);
@@ -1049,14 +1057,14 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
         }
         ctx->tmp_n = hc.tmp_n;
-        if (pend.len > 0) buf_write(hbuf, pend.data, pend.len);
+        if (pend.len > 0) buf_write(&fiberfn, pend.data, pend.len);
         buf_free(&pend);
-        buf_printf(hbuf, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+        buf_printf(&fiberfn, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
                          " int64_t __k, void *__env);\n", hfn_name);
-        buf_printf(hbuf, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
+        buf_printf(&fiberfn, "static int64_t %s(int64_t *__effect_args, int __n_effect_args,"
                          " int64_t __k, void *__env) {\n", hfn_name);
-        buf_write(hbuf, fn.data, fn.len);
-        buf_puts(hbuf, "}\n\n");
+        buf_write(&fiberfn, fn.data, fn.len);
+        buf_puts(&fiberfn, "}\n\n");
         buf_free(&fn);
     }
 
@@ -1067,6 +1075,10 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
     bool dk_emitted = g_opt_cps_tramp_resume
         && emit_dk_handler_case_fn(ctx, hbuf, dkfn_name, c, env_type, env_var,
                                    has_caps, caps, n_caps);
+    /* Fiber case fn is DEAD once the DK case is emitted -- append it only as the
+     * non-DK fallback, so `tur_effect_cont_resume` leaves the DK-lowered output. */
+    if (!dk_emitted && fiberfn.len > 0) buf_write(hbuf, fiberfn.data, fiberfn.len);
+    buf_free(&fiberfn);
 
     /* Inline: heap-alloc the capture env, build a one-entry owning table. */
     char env_inl[64];
@@ -1090,7 +1102,9 @@ char *emit_effects_handler_lit(EmitCtx *ctx, Buf *body, const Expr *e) {
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s->entries[0].eff_name = \"%s\";\n", tbl, c->effect_name->name);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "%s->entries[0].fn = %s;\n", tbl, hfn_name);
+    /* fn is the fiber case entry; when the DK case is present it is dead (and no
+     * longer emitted), so store NULL -- the DK install path reads only dk_fn. */
+    buf_printf(body, "%s->entries[0].fn = %s;\n", tbl, dk_emitted ? "NULL" : hfn_name);
     indent_buf(body, ctx->indent);
     buf_printf(body, "%s->entries[0].env = %s;\n", tbl, has_caps ? env_inl : "NULL");
     indent_buf(body, ctx->indent);

@@ -7177,30 +7177,12 @@ static intptr_t main_rf1(intptr_t env, intptr_t __t5__slot, DK *__kont) {
     int64_t __t5 = (int64_t)(__t5__slot);
     return dk_perform(2, (intptr_t)(0), __dk_reap_node(dk_frame(main_pf2, 0, __kont)));
 }
-static int64_t __effect_handler_153(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_153(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_1281 = __k;
-    int64_t __t154 = tur_effect_cont_resume((int64_t)(intptr_t)k_1281, (int64_t)INT64_C(41));
-    return (int64_t)__t154;
-}
-
 static intptr_t __dk_hcase_153(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
 static intptr_t __dk_hcase_153(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
     (void)__dkenv; (void)__dkarg; (void)__dksubk;
     int64_t k_1281 = (int64_t)(intptr_t)__dksubk;
     ((struct DK *)(intptr_t)k_1281)->consumed = 1;
     return dk_tail_resume((struct DK *)(intptr_t)k_1281, (intptr_t)((int64_t)INT64_C(41)));
-}
-
-static int64_t __effect_handler_156(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_156(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    const char * s_1282 = (const char *)__effect_args[0];
-    int64_t k_1283 = __k;
-    puts(s_1282);
-    int64_t __t157;
-    int64_t __t158 = tur_effect_cont_resume((int64_t)(intptr_t)k_1283, (int64_t)0);
-    __t157 = __t158;
-    return (int64_t)__t157;
 }
 
 static intptr_t __dk_hcase_156(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
@@ -7218,14 +7200,14 @@ static int64_t main__cps(DK *__kont) {
     tur_handler_table_t * __t1;
     tur_handler_table_t *__t155 = tur_handler_table_new(1);
     __t155->entries[0].eff_name = "Ask";
-    __t155->entries[0].fn = __effect_handler_153;
+    __t155->entries[0].fn = NULL;
     __t155->entries[0].env = NULL;
     __t155->entries[0].cont_kind = 0;
     __t155->entries[0].dk_tag = 2;
     __t155->entries[0].dk_fn = __dk_hcase_153;
     tur_handler_table_t *__t159 = tur_handler_table_new(1);
     __t159->entries[0].eff_name = "Tell";
-    __t159->entries[0].fn = __effect_handler_156;
+    __t159->entries[0].fn = NULL;
     __t159->entries[0].env = NULL;
     __t159->entries[0].cont_kind = 0;
     __t159->entries[0].dk_tag = 3;

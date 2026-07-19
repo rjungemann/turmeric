@@ -7172,13 +7172,6 @@ static intptr_t main_pf1(intptr_t env, intptr_t __t4__slot) {
     __t2 = 0;
     return (intptr_t)(INT64_C(0));
 }
-static int64_t __effect_handler_153(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env);
-static int64_t __effect_handler_153(int64_t *__effect_args, int __n_effect_args, int64_t __k, void *__env) {
-    int64_t k_1281 = __k;
-    int64_t __t154 = tur_effect_cont_resume((int64_t)(intptr_t)k_1281, (int64_t)INT64_C(41));
-    return (int64_t)__t154;
-}
-
 static intptr_t __dk_hcase_153(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
 static intptr_t __dk_hcase_153(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
     (void)__dkenv; (void)__dkarg; (void)__dksubk;
@@ -7192,7 +7185,7 @@ static int64_t main__cps(DK *__kont) {
     tur_handler_table_t * __t1;
     tur_handler_table_t *__t155 = tur_handler_table_new(1);
     __t155->entries[0].eff_name = "Ask";
-    __t155->entries[0].fn = __effect_handler_153;
+    __t155->entries[0].fn = NULL;
     __t155->entries[0].env = NULL;
     __t155->entries[0].cont_kind = 0;
     __t155->entries[0].dk_tag = 2;
