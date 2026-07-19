@@ -55,38 +55,58 @@ value is a control-result / call-hoist temp:
 - `emit_fns.c`: the same consult at the TCO tail-backedge arg temp
   (`emit_tail_backedge`) -- a recorded pointer temp into an int64 param slot.
 
-**Fixed this session: `list-count-phantom-opaque-aggregate-element` (4->0),
-`fat-closure-ascription` (1->0), `httpd-mw-fold-many` (1->0).** Full suite
-**2202 passed, 0 failed, no snapshot churn** at each landing -- the table is
-precise (it keys on the temp's REAL recorded representation, so it never adds the
-value-preserving cast where an earlier stage already reconciled, avoiding the
+**Fixed (session 2, first pass): `list-count-phantom-opaque-aggregate-element`
+(4->0), `fat-closure-ascription` (1->0), `httpd-mw-fold-many` (1->0).** Full
+suite **2202 passed, 0 failed, no snapshot churn** at each landing -- the table
+is precise (it keys on the temp's REAL recorded representation, so it never adds
+the value-preserving cast where an earlier stage already reconciled, avoiding the
 139-fixture over-fire the type-based attempt caused).
 
-## Remaining: 4 fixtures, each a DISTINCT emit site
+## LANDED (2026-07-19, session 2 cont.): letrec-self via closure-carrier recording
 
-The table covers a straddle whose value is a temp it records. The 4 residual
-straddles read a value the table does not (yet) record, or are not binder inits
-at all:
+`letrec-self-in-nested-closure` (1->0): a self-capturing closure whose letrec is
+lowered to a plain `let` emits `int64_t self_1286 = (int64_t)(intptr_t)(env)`
+(the boxed/fat closure carrier) via the `is_fat || boxed` and
+closure-returning branches of `emit_let_value`'s binding loop (NOT the generic
+`else`), then the let-result temp `void *__t168 = self_1286;` straddles.
+Landed fix:
 
-- `letrec-self-in-nested-closure` (1) -- `void *__t168 = self_1286;` where
-  `self_1286` is a closure carrier declared `int64_t`. Two gaps: (a) the value
-  `self_1286` is emitted by the SPECIALIZED self-capturing-closure env path (the
-  "capture self's env box" logic), NOT the generic letrec binding loop, so it is
-  not recorded; (b) it is a `void *` result temp, which
-  `bridge_control_result_int_ptr` deliberately skips. Fix: record the closure-env
-  binding's C type, and extend the control-result bridge to a `void *` temp fed a
-  recorded-int64 value. (Verified: a value-side `emit_localvar_lookup` refinement
-  + `void *`-temp bridge is the right shape, but only fires once the self-closure
-  env binding is recorded -- that recording is the missing hook.)
-- `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch
-  REGULAR call passing a `tur_adt_Map__cstr__int *` arg into the spec's int64
-  param (Class A reverse: pointer arg -> int64 param). Needs the emit_sig
-  ground-truth param type consulted for spec-dispatch callees at the regular-call
-  arg site (not a binder init).
+- `emit_expr.c`: record the boxed/fat and closure-returning int64-carrier let
+  binders in `emit_localvar_*`.
+- `bridge_control_result_int_ptr`: bridge a `void *` result temp fed an int64
+  value (previously void\* temps were skipped), and consult the local-var table
+  for a bare-identifier value whose recorded type is ground truth.
+
+Full suite **2202 passed, 0 failed, no churn**. **Session-2 total: 4 fixtures
+(list-count-phantom, fat-closure, httpd, letrec-self); front now 43/46.**
+
+## Remaining: 3 fixtures, each a DISTINCT hard emit site
+
+Each was located but sits on a spec/dispatch/shared-bridge emit path a
+value-preserving local cast cannot reach without deeper plumbing (verified this
+session by tracing each -- none is the recorded-temp straddle the landed table
+handles):
+
+- `constrained-loop-vec-push-byvalue-result-element` (3) -- **spec-clone body
+  return.** `err_val__spec__const_char___int64_t` / `ok_val__spec__...` return a
+  concrete pointer (`const char *`, `tur_adt_Vec__Option__int *`) but their body
+  is `return (int64_t)((tur_adt_Result *)..)->err_val;` (int64). Traced: this
+  return is emitted by neither `emit_stmt`'s EX_RETURN nor `emit_fns`'s tail
+  return (instrumented both -- no hit), so the spec-clone body goes through a
+  separate ABI-specialization body emitter. Fix belongs there: bridge an int64
+  tail into the clone's concrete-pointer C return type.
+- `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch call
+  passing a `tur_adt_Map__cstr__int *` arg into the spec's int64 param (Class A
+  reverse). Traced: this call is emitted by neither of `emit_expr`'s two
+  `emit_call_name` paths (only the `_int` Eq instances hit them), so the
+  Map-spec instance call is assembled by a third dispatch emitter; the emit_sig
+  ground-truth reverse cast must be applied there.
 - `generic-relay-aggregate-result` (1) -- a union-default read
   `((union { int64_t s; void * d; }){.s = INT64_C(0)}).d` yields `void *` into an
-  int64 binder: the `.d`-vs-`.s` member choice must follow the CONSUMER type. A
-  distinct emit site (the union-default reader), not the straddle bridge.
+  int64 binder. Located at the `CK_CARRIER -> CK_CONCRETE` bridge
+  (`emit_core.c:3731`): the `.d`-vs-`.s` member choice (and the `void *` concrete
+  sink) must follow the CONSUMER type. A shared bridge used everywhere -- needs a
+  consumer-type signal, not a local cast, to avoid broad regression.
 - `constrained-loop-vec-push-byvalue-result-element` (3) -- a `const char *`
   return-type straddle plus a `vec_hypush_ex` arg straddle; the value is a
   by-value aggregate element, a different producer than the recorded temps.
