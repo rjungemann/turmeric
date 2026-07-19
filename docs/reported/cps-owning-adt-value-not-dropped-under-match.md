@@ -52,16 +52,41 @@ be dropped? If ADT values are owned (drop-on-scope-exit), this is a real bug in
 value/leak-semantics and only `^linear`/`^unique` ones are freed, then only the
 handler-value leak (which has no ownership annotation path) is a genuine defect.
 
-## Fix direction
+## Resolution (2026-07-19): this is the documented memory model, not a defect
 
-Language-level, not CPS-level: insert the scope-exit drop for an owning value
-(boxed sum ADT with a heap box, heap struct, handler value) that is consumed by a
-`match` or dies at a `let`/function scope boundary, in the **direct emitter's**
-drop-glue pass (which the CPS/DK path already piggybacks on for the cases it does
-handle). Respect linearity (a `^linear` value is single-use; a shared/`^borrow`
-value must not be freed) and multi-shot resume (a value read-only-shared across
-resumes must not double-free). For handler values specifically, give `TY_HANDLER`
-drop glue (`tur_handler_table_free`) and drive it from the same scope-exit pass.
-This is the Phase-3 owning-value teardown work
-(`cps-backend-multishot-continuations-owning-capture-plan.md` E3/E4, OPEN); it is
-independent of the fiber-effect-runtime deletion, which is complete.
+A wider probe settles it. **A bare (non-`rc<T>`) heap-boxed sum ADT is never
+auto-freed on ANY path -- this is Turmeric's documented memory model, not a bug in
+`match` teardown, and not CPS-specific.** Evidence:
+
+- The core, long-shipping `adt-recursive` fixture -- a plain
+  `(defdata List (Nil) (Cons :int :List))` built and matched with no effects, no
+  CPS -- leaks **24 bytes** (its `Cons` boxes) under ASan, and PASSES the suite.
+- `docs/guides/gc-guide.md` states the model directly: *"Only values whose type is
+  `rc<T>` participate in RC or GC. Everything else is stack-allocated,
+  arena-allocated, or manually freed."* A boxed sum ADT with a heap payload that is
+  not wrapped in `rc<T>` is a **non-`rc` heap value**: the compiler emits the
+  `ctor_*` `malloc` but no automatic drop. Managed lifetime is opt-in via `rc<T>`
+  (RC + last-use-elision drop) or the substructural (`^linear`/`^unique`) path.
+- The suite stays green because the compiled-program **runtime** is intentionally
+  NOT leak-checked -- only the compiler/codegen path (`tur build`/`emit-c`) runs
+  under LeakSanitizer (CLAUDE.md leak policy; gc-guide "The interpreter is
+  different" section). The run phase of a fixture leaking a bare ADT box is
+  invisible to `bash tests/run.sh`.
+
+So both leaks here -- the `Full` box and the handler-value `tur_handler_table` --
+are the SAME accepted "non-`rc` heap value is not auto-freed" behavior, in the same
+category as the known/accepted `interp-collections-never-freed` leak. They are
+**working as designed for unmanaged ADTs**; the Stage-G endgame neither caused nor
+worsened them (it only changed which emitter produces the identical `malloc`).
+
+### If one ever wants these freed
+
+It is a language-level memory-model change (make `defdata` boxes RC-managed by
+default, or insert an ownership-tracked scope-exit drop for consumed non-linear
+boxes), touching the **direct emitter's** drop pass and every boxed-ADT program's
+codegen -- a broad, opt-in-today decision for the language owner, NOT a targeted CPS
+fix. For the handler value specifically, the narrow version is: give `TY_HANDLER`
+drop glue (`tur_handler_table_free`) driven from the scope-exit pass, matching how
+`rc<T>` values already drop. Until such a decision, this report is best read as a
+**known limitation** documenting the boundary, not an open defect blocking anything
+(the fiber-effect-runtime deletion is complete and leak-neutral).
