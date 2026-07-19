@@ -6165,10 +6165,22 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
             bodyfn, cont_setup, thunk_name, kty, cont_arg);
         free(thunk_name);
     } else {
+        /* Named-fn receiver: cast the receiver fn ptr (threaded through `env`)
+         * to its ACTUAL param signature, not a blanket `int64_t (*)(int64_t)`.
+         * A serial receiver's continuation param `k` is `ptr<void>` -- its real C
+         * signature is `int64_t rt(void *)` -- so a uniform int64_t cast invokes
+         * it through an incompatible function-pointer type.  That is UB a
+         * `-fsanitize=function` / CFI build trips on, even though it works on every
+         * supported ABI (`void *` and `int64_t` are passed identically in an
+         * integer register).  Key the callee pointer type AND its argument cast on
+         * the same `serial` bit the closure branch uses two cases up for the
+         * continuation-arg cast; the non-serial (cloneable) case keeps int64_t, so
+         * its emitted C is byte-identical to before. */
+        const char *kty = t->as.cloneable.serial ? "void *" : "int64_t";
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, cont_arg);
+            "    return (intptr_t)((int64_t (*)(%s))(intptr_t)env)((%s)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, kty, kty, cont_arg);
     }
 }
 
