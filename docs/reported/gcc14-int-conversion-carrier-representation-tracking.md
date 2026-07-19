@@ -161,18 +161,47 @@ keyed on the ground-truth side tables, not the source type):
 | `van-laarhoven-lens-wide-compose` | 1 | residual `int64_t = tur_adt_Line *` (a second straddle in this fixture) |
 | `vec-captureless-fat-closure-readback` | 1 | -- |
 
-Sub-classes and where each is fixed:
-- **forward spec-dispatch** (int64 arg -> concrete-pointer param, e.g. a `cstr`
-  element into `__inst_Eq_eq_qu_cstr` / `__inst_Show_show_cstr`): the mirror of
-  the landed gde reverse cast -- consult `emit_sig` for a recorded CONCRETE-pointer
-  param and cast the int64 arg to it. (The existing forward block keys on a
-  heap-ptr arg TYPE, which a `cstr`-element carrier arg is not.)
-- **`vec_hypush_ex` arg 2** (pointer -> int64 param): an inline-C carrier base --
-  not an ABI spec, so not in `emit_sig`. Either record inline-C base signatures
-  too, or apply the reverse cast from the callee `FnDef` param C type.
-- **binder-init reverse straddle** (`int64_t = tur_adt_Line *`): the same
-  `emit_localvar` recorded-pointer-temp path already landed -- extend recording to
-  the producer whose temp feeds these binders.
+### Progress on the 16 (2026-07-19)
+
+**Fixed (3):** `vec-eq-cstr-content` (2->0), `vec-eq-ascribed-multi` (2->0),
+`show-collections-content` (1->0) -- via the landed **forward spec-dispatch cast**
+(emit_sig-recorded concrete-pointer param + int64 arg -> cast to the pointer),
+the mirror of the gde reverse cast. `show-collections-content-hamt` 4->3.
+
+**Remaining (13), by sub-class:**
+- **Forward spec-dispatch not yet reached** -- `show-collections-content-hamt`
+  (3, a `__inst_Show_show_cstr` call site the forward cast does not reach),
+  `vec-captureless-fat-closure-readback` (`vec_empty_like__spec` arg 1, int64 ->
+  pointer param).
+- **Regular / inline-C base call-arg straddle** -- `reactor-fibers-park-chan`
+  (`chan_hysend` arg 1, pointer -> int64), `vec-get-exists-element` +
+  `w3-letrec-open-capture` (`vec_hypush_ex` arg 2, pointer -> int64),
+  `session-effects` + `session-mp-effects` (`spawn` arg 1, int64 -> pointer). These
+  callees are inline-C carrier bases, NOT ABI specs, so they are absent from
+  `emit_sig`; record inline-C base signatures too, or reverse-cast from the callee
+  `FnDef` param C type.
+- **Return straddle** -- `van-laarhoven-lens-wide-generic` (returns `tur_adt_Point
+  *` but tail is an int64 `__auto_type` temp, not `(int64_t)`-prefixed, so the
+  landed return bridge's prefix key misses it), `taskgroup-linear` +
+  `taskgroup-with-macro-real` (**inline-C body** `return fiber;` where `fiber` is a
+  `void *` local and the fn returns int64 -- a SOURCE-level cast in the inline-C is
+  the fix, not a codegen bridge).
+- **Binder-init reverse straddle** -- `van-laarhoven-lens-compose` (`int64_t =
+  tur_adt_Line *`, an unrecorded producer temp), `schan-worker-pool` (6; includes
+  `int64_t = void *`, which `bridge_control_result_int_ptr` / the binder path skip
+  for `void *`).
+- `van-laarhoven-lens-wide-compose` (1) -- a second `int64_t = tur_adt_Line *`
+  straddle beyond the one already cleared.
+- `vec-captureless-fat-closure-readback`, `reactor-fibers-park-chan` also touch
+  the fat-closure/chan carrier readback.
+
+The `__auto_type` cases are the hard core: the call-hoist temp deliberately takes
+the call's emitted type because the emitter cannot compute it (int64 vs pointer)
+from the source type -- so a prefix/repr-name key is unreliable there (it also
+caused the only churn this session: 2 harmless redundant casts in
+map/set-typed-consumer, snapshots regenerated). A principled finish records each
+inline-C/spec base's emitted return + param C types in `emit_sig` and threads them
+to the call/return sites, replacing the prefix heuristics.
 
 ## Dropping the `-Wno-error=int-conversion` flag
 
