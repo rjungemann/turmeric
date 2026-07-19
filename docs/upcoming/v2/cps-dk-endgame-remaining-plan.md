@@ -645,6 +645,36 @@ all unreferenced and can be deleted (churning the 140 `expected.c` snapshots, a
 manageable regen -- not a >500 coordinated window). `tur_handler_table_t` STAYS
 (the DK handler-value path in emit_cps_ir.c / emit_dk_runtime.c uses it).
 
+### 3a.3 Update (2026-07-19) -- the bounded slice LANDED; fiber effect runtime fully dead
+
+Done. The fix was smaller than a re-lowering: `emit_effects_handler_lit` was
+emitting BOTH a fiber case fn (`__effect_handler_N`, whose direct-emitted `resume`
+lowers to `tur_effect_cont_resume`) AND a DK case fn (`__dk_hcase_N`) into every
+handler VALUE, storing both in the table (`entries[].fn` + `entries[].dk_fn`).
+`dk_hgroup_from_table` installs via `dk_fn` and never reads `.fn`, so the fiber
+case fn was pure dead weight. Now it is buffered and appended only when the DK
+case is NOT emittable (the genuine non-DK fallback), with `entries[].fn = NULL`
+otherwise. Buffering (not reordering) keeps `tmp_n` identical, so only the dead
+`__effect_handler_N` blocks disappear (2 handler-value snapshots regenerated).
+
+**Corpus sweep now: ZERO `tur_effect_perform` call sites AND ZERO
+`tur_effect_cont_resume` call sites** (and zero `__handle_body_N` fiber handle
+thunks). The fiber effect runtime C is **fully unreferenced** -- only its own
+(unconditionally-emitted) definitions remain. Suite 2203/0.
+
+**What's left is purely the physical removal of the now-dead runtime C** from
+`emit_module.c` (Stage G step 3): the `tur_effect_perform` / `tur_handler_dispatch`
++ `__tur_msdyn_*` / `tur_effect_cont_resume`+`_valid` / `EffectHandlerFrame`+`Case`
+/ `TurEffectCaptureCtx` / `global_effect_handler_chain` blocks (emit_module.c
+~7283-7337, ~7473-7485, ~7538-7548, ~8525-8660) plus the two `FiberBlock` effect
+fields (`effect_handler_chain`, `eff_ctx`) and their init in `tur_fiber_block_new`.
+This is a mechanical dead-code deletion (no behaviour change) but a delicate one:
+the blocks are INTERLEAVED with the surviving `FiberBlock`/concurrency runtime and
+the msdyn path references `tur_cloneable_cont_alloc` (which STAYS, DK-shared), and
+it churns all 140 `expected.c` snapshots. Best done as its own focused pass with a
+suite + ASan verify. `emit_effects.c`'s `emit_effects_handler_lit`/`with_handler`/
+`compose_handlers` STAY -- they now emit DK handler tables/cases, not fiber code.
+
 ## 4. Status of the reports this plan supersedes
 
 Resolved and archived 2026-07-18 (verified by the Sec 0 measure): the
