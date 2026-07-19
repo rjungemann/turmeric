@@ -14,12 +14,28 @@
  * across resumes and the owner drops it once (see the borrow teardown in
  * build_marshal_reset).  An owning BY-VALUE aggregate (multi-word) does not fit
  * the one-word env and is not admitted here -- it needs a boxed / widened env
- * (a later slice). */
+ * captured by a pointer to the owner's by-value local (see the cloneable emit),
+ * so it too is admitted -- it fits the one-word env by ADDRESS. */
+static bool owning_byvalue_agg(const Type *t) {
+    if (!t) return false;
+    const AdtDef *def = NULL;
+    if (t->kind == TY_ADT) {
+        def = t->as.adt_.def;
+        if (!def || !adt_is_byvalue_product(def)) return false;
+    } else if (t->kind == TY_APP) {
+        def = type_adt_app_def((Type *)t);
+        if (!def || !adt_app_is_byvalue_product(*(Type *)t)) return false;
+    } else {
+        return false;
+    }
+    return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
+}
 static bool owning_multishot_admissible(const Type *t) {
     if (!g_opt_owning_cloneable_capture || !t) return false;
     return t->kind == TY_RC
         || type_is_heap_adt(*(Type *)t)
-        || type_is_heap_struct(*(Type *)t);
+        || type_is_heap_struct(*(Type *)t)
+        || owning_byvalue_agg(t);
 }
 
 /* ---- file-local helper forward declarations ---- */

@@ -1046,11 +1046,31 @@ static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR;
  * never a double-drop).  A multi-word owning aggregate does not fit the one-word
  * env and is excluded here.  See
  * docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md. */
+/* An owning by-value AGGREGATE (a one-ctor by-value ADT product with an
+ * rc/ref field -- needs_drop_glue).  Multi-word, so it cannot ride the one-word
+ * frame env by value; the cloneable emit carries a POINTER to the owner's
+ * by-value local instead (the reset runs synchronously in the owner's frame, so
+ * the address outlives the resumes, and a ^borrow frame never drops it). */
+static bool cloneable_owning_agg(const Type *t) {
+    if (!t) return false;
+    const AdtDef *def = NULL;
+    if (t->kind == TY_ADT) {
+        def = t->as.adt_.def;
+        if (!def || !adt_is_byvalue_product(def)) return false;
+    } else if (t->kind == TY_APP) {
+        def = type_adt_app_def((Type *)t);
+        if (!def || !adt_app_is_byvalue_product(*(Type *)t)) return false;
+    } else {
+        return false;
+    }
+    return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
+}
 static bool cloneable_owning_env_ok(const Type *t) {
     if (!g_opt_owning_cloneable_capture || !t) return false;
     return t->kind == TY_RC
         || type_is_heap_adt(*(Type *)t)
-        || type_is_heap_struct(*(Type *)t);
+        || type_is_heap_struct(*(Type *)t)
+        || cloneable_owning_agg(t);
 }
 
 /* Pure existence check: does `program` declare a Serializable instance for the
@@ -1232,6 +1252,10 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
                 if (!cps_scalar_kind_ok(other->type.kind) && !owning_borrow_env)
                     return NULL;
+                /* A multi-word owning AGGREGATE env is captured by ADDRESS (`&o`),
+                 * so its operand must be an atomic lvalue (a bare local) -- a
+                 * computed/non-atomic aggregate has no stable address to take. */
+                if (cloneable_owning_agg(&other->type) && !env_atom) return NULL;
                 if (!env_atom && (ctx_reaches_shift(other, shift_kind)
                               || !safe_to_delegate(b, other))) return NULL;
             }

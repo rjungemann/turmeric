@@ -6343,9 +6343,32 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
                     const char *a0 = fr->hole_left ? "value" : "env";
                     const char *a1 = fr->hole_left ? "env" : "value";
+                    /* E3a widening: an owning by-value AGGREGATE env rides the
+                     * one-word slot by ADDRESS (the push emits `&o`).  Its arg cast
+                     * is not a scalar cast: deref the pointer for a by-value param
+                     * (<=16B), or pass the pointer for a pass-by-ptr param (>16B).
+                     * The hole arg stays a scalar cast (the resumed value). */
+                    char c0[192], c1[192];
+                    if (fr->operand.type
+                        && owning_byvalue_aggregate(fr->operand.type)) {
+                        const char *cn = emit_type_c_name(ce->ctx, *fr->operand.type);
+                        bool pbp = type_struct_pass_by_ptr(*fr->operand.type);
+                        const char *ec = pbp ? "(const %s *)" : "*(%s *)";
+                        /* env arg is a0 when the hole is on the right, else a1. */
+                        if (fr->hole_left) {
+                            snprintf(c0, sizeof c0, "%s", cc_cast_for_kind(k0));
+                            snprintf(c1, sizeof c1, ec, cn);
+                        } else {
+                            snprintf(c0, sizeof c0, ec, cn);
+                            snprintf(c1, sizeof c1, "%s", cc_cast_for_kind(k1));
+                        }
+                    } else {
+                        snprintf(c0, sizeof c0, "%s", cc_cast_for_kind(k0));
+                        snprintf(c1, sizeof c1, "%s", cc_cast_for_kind(k1));
+                    }
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
-                        ctxfn, cfn, cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
+                        ctxfn, cfn, c0, a0, c1, a1);
                 } else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
@@ -6380,6 +6403,18 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             char *opv = (fr->call_fn && !two_arg) ? strdup("0")
                       : fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
                       : atom_str(ce, &fr->operand);
+            /* E3a widening: an owning by-value AGGREGATE operand is captured by
+             * ADDRESS -- carry `&(o)` (o is the owner's stable by-value local; the
+             * reset runs synchronously in its frame, so the pointer outlives every
+             * resume, and a ^borrow frame never drops it).  Only the atomic
+             * (bare-lvalue) operand path is admitted for an aggregate, so `opv` is
+             * a plain lvalue name here and `&(...)` is well-formed. */
+            if (fr->operand.type && owning_byvalue_aggregate(fr->operand.type)
+                && !fr->env_expr) {
+                char *addr = malloc(strlen(opv) + 8);
+                snprintf(addr, strlen(opv) + 8, "&(%s)", opv);
+                free(opv); opv = addr;
+            }
             ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
