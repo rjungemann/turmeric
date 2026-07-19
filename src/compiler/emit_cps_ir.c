@@ -936,6 +936,21 @@ static bool owning_byvalue_aggregate(const Type *t) {
     return d && d->needs_drop_glue;
 }
 
+/* E3a (owning-cloneable-capture): does this 2-arg cloneable call frame CONSUME
+ * its captured rc env (drop it once per call), rather than ^borrow it?  A
+ * consuming rc frame gets dk_frame_owning env_clone glue (rc incref per resume
+ * copy) so each multi-shot resume drops its own +1.  Detected by: a 2-arg call
+ * whose captured (non-hole) operand is an rc AND whose callee param is NOT
+ * ^borrow.  rc only -- the sole owning kind with scalar incref glue. */
+static bool cloneable_frame_consumes_rc(const CloneFrame *fr) {
+    if (!fr || !fr->call_fn || fr->ignore_value) return false;
+    if (fr->call_fn->type.kind != TY_FN || fr->call_fn->type.as.fn.arity != 2)
+        return false;
+    if (!fr->operand.type || fr->operand.type->kind != TY_RC) return false;
+    int env_idx = fr->hole_left ? 1 : 0;
+    return !FN_ARG_FLAG(fr->call_fn->type.as.fn, env_idx, FA_BORROW);
+}
+
 /* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
  * (a handler CASE body).  The env-capture landing is BORROW-ONLY-first (E-borrow):
  * for the reachable borrow-only shape the capture rides by a bare shallow alias
@@ -6369,6 +6384,16 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
                         ctxfn, cfn, c0, a0, c1, a1);
+                    /* E3a: a CONSUMING rc frame drops its rc arg once per call, so
+                     * a multi-shot resume needs its own +1.  Emit the env_clone glue
+                     * (rc incref) that dk_copy_node runs on each resume copy; the
+                     * frame's own drop balances it (no env_drop -- the base +1 is
+                     * released once by the owner's scope-exit drop). */
+                    if (cloneable_frame_consumes_rc(fr))
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "rc_strong_increment((RcControlBlock *)(intptr_t)e); return e; }\n",
+                            ctxfn);
                 } else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
@@ -6415,7 +6440,15 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 snprintf(addr, strlen(opv) + 8, "&(%s)", opv);
                 free(opv); opv = addr;
             }
-            ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+            /* E3a: a CONSUMING rc frame rides dk_frame_owning with the env_clone
+             * glue emitted above (incref per resume copy) and NO env_drop (the
+             * frame's own drop balances each copy; the base +1 is the owner's).
+             * A borrow / scalar / aggregate frame stays a plain dk_frame. */
+            if (cloneable_frame_consumes_rc(fr))
+                ce_line(ce, "%s = dk_frame_owning(%s, (intptr_t)(%s), %s_envclone, 0, %s);",
+                        dv, ctxfn, opv, ctxfn, dv);
+            else
+                ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);

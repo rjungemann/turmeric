@@ -336,10 +336,22 @@ capture can carry:
   returns would dangle the address.
 
 Because the borrow + owner-drop channels never drop the value inside the frame,
-NONE of them need the carrier/aggregate CLONE glue the original plan called for
--- that is needed only for the still-unbuilt **CONSUMING** case (the frame itself
-drops the captured value), where the `dk_frame_owning` clone-per-copy substrate
-finally comes in.
+NONE of them need per-frame clone glue.
+
+- **CONSUMING case (rc) -- LANDED.** A frame that DROPS its captured rc once per
+  call (a non-^borrow rc param) is the shape the `dk_frame_owning` substrate was
+  built for. It rides `dk_frame_owning` with an emitted per-frame `env_clone`
+  (`rc_strong_increment`) and NO `env_drop`: each `dk_copy_node` resume copy
+  increfs its own +1, which the frame's own drop balances; the owner's base +1 is
+  released once by its P5b-threaded scope-exit drop. Accounting nets to freed
+  exactly once (fixture `cloneable-owning-consuming-capture`, LSan-clean).
+  build_marshal_reset admits it at both the param and operand env checks (rc only
+  -- the sole owning kind with scalar incref glue). A consuming CARRIER handle /
+  AGGREGATE would need their deep-copy clone glue in `env_clone` (a later slice).
+
+With borrow, owner-drop, and the rc consuming case all landed, E3's owning-capture
+goal is functionally met for `rc` across every channel. Remaining: consuming
+carrier/aggregate clone glue, and GRADUATION (retire the experiment gate).
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.

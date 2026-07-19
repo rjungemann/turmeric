@@ -1226,10 +1226,17 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     return NULL;
                 TypeKind envk = fb->type.as.fn.arg_kinds[h0 ? 1 : 0];
                 const Expr *env_op = ascribe_peel(h0 ? a1 : a0);
+                bool env_borrow = FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
+                /* Borrow: any admissible owning kind + ^borrow.  Consume: rc only,
+                 * non-^borrow (the frame drops it; env_clone glue balances each
+                 * resume copy). */
                 bool owning_borrow_env =
-                    env_op && cloneable_owning_env_ok(env_op ? &env_op->type : NULL)
-                    && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
-                if (!cps_scalar_kind_ok(envk) && !owning_borrow_env)
+                    env_op && cloneable_owning_env_ok(&env_op->type) && env_borrow;
+                bool owning_consume_env =
+                    g_opt_owning_cloneable_capture && env_op
+                    && env_op->type.kind == TY_RC && !env_borrow;
+                if (!cps_scalar_kind_ok(envk)
+                    && !owning_borrow_env && !owning_consume_env)
                     return NULL;
             }
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
@@ -1243,14 +1250,26 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     return NULL;
                 if (!env_atom && !safe_to_delegate(b, other)) return NULL;
             } else {
-                /* E3a: an owning `rc` env is admitted only when the callee takes it
-                 * ^borrow -- then it is never dropped inside the frame, so the
-                 * per-resume env clone is balanced solely by the dk_free env_drop
-                 * (borrow teardown), never a double-drop. */
+                /* E3a: an owning env frame is admitted in two modes:
+                 *  - BORROW (any admissible owning kind + ^borrow callee param):
+                 *    the frame never drops it, so the shallow-shared / by-address
+                 *    env is read-only-correct across resumes and the owner drops it
+                 *    once (no per-frame glue).
+                 *  - CONSUME (rc only, non-^borrow callee): the frame DROPS its rc
+                 *    argument once per call.  A multi-shot resume would over-drop a
+                 *    shared handle, so the frame gets dk_frame_owning env_clone glue
+                 *    (rc incref per dk_copy_node copy) -- each resume increfs its own
+                 *    +1 that its drop balances; the owner's base +1 is released once
+                 *    by its (P5b-threaded) scope-exit drop.  rc only: it is the sole
+                 *    owning kind with scalar clone glue (rc_strong_increment). */
+                bool env_borrow = FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
                 bool owning_borrow_env =
-                    cloneable_owning_env_ok(&other->type)
-                    && FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
-                if (!cps_scalar_kind_ok(other->type.kind) && !owning_borrow_env)
+                    cloneable_owning_env_ok(&other->type) && env_borrow;
+                bool owning_consume_env =
+                    g_opt_owning_cloneable_capture
+                    && other->type.kind == TY_RC && !env_borrow;
+                if (!cps_scalar_kind_ok(other->type.kind)
+                    && !owning_borrow_env && !owning_consume_env)
                     return NULL;
                 /* A multi-word owning AGGREGATE env is captured by ADDRESS (`&o`),
                  * so its operand must be an atomic lvalue (a bare local) -- a
