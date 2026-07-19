@@ -169,11 +169,22 @@ Either also retires the pre-existing DK-node leak (already archived as
 - **The TUR-E0107 consuming-aggregate admission.** The consuming multi-field
   aggregate capture (`is_field_consumed_in_handler`) becomes *admitted* with a
   real env drop instead of the current hard error.
-- **The TUR-E0710 owning-autodrop-crossing-a-cloneable-reset case.** An `rc` live
-  across a `cloneable-reset` and dropped after it currently evicts (TUR-E0710):
-  the owning-autodrop-lowering (P2) covers only the single-shot `handle`
-  crossing, not the multi-shot cloneable-reset crossing. The multi-shot crossing
-  drop is exactly an env-owned reference dropped at region teardown -- E3b.
+- **The TUR-E0710 owning-autodrop-crossing-a-cloneable-reset case.** An `rc` the
+  enclosing fn OWNS, captured across a `cloneable-reset` and dropped after it,
+  currently evicts. **Root cause pinned (2026-07-19):** the scope-exit drop is
+  emitted as an `EX_DEFER`, and `EX_DEFER` is `unsupported_form` in a CPS-colored
+  function (`term_core_ok` -> CT_UNSUPPORTED "unsupported form: EX_DEFER" ->
+  whole-fn eviction -> the direct emitter rejects the cloneable-shift, TUR-E0710).
+  So this case is NOT unblocked by a local `owning_dropped_before_control` /
+  `letraw_ok` relaxation (verified: granting CT_CLONEABLE the drop-before-control
+  pass lets `letraw_ok` through, but the `EX_DEFER` still evicts). It needs
+  **CPS `defer` lowering**: run the deferred scope-exit drop at delimited-region
+  completion (bind the `dk_run` result, run the drop, then deliver -- the non-tail
+  region / per-region arena of E3b). That is why it is E3b, not a widening of the
+  landed borrow channel. (The landed borrow channel sidesteps it by keeping the
+  OWNER -- the fn carrying the defer-drop -- out of the CPS-colored function: the
+  borrow fixture's `run` borrows `r`, and `main`, which owns and defers-drops it,
+  is direct-emitted.)
 - **O1-b P2 / P3** ([cps-backend-ref-scope-exit-drop-plan.md](cps-backend-ref-scope-exit-drop-plan.md)):
   P2 (abortive-unwind ref drop) rides E3b's region teardown; P3
   (resumable-crossing ref) is the `ref`-flavored instance of the owning capture
@@ -242,11 +253,11 @@ read-only-correct across resumes and the owner (the caller) drops it exactly
 once. The `dk_frame_owning` substrate is reserved for the *consuming* case.
 
 **Remaining scope.** The harder shape is an owning value the **enclosing fn owns**
-and must drop after the cloneable-reset: its scope-exit drop crosses the reset
-and currently evicts (TUR-E0710 via the drop-insertion / `letraw_ok` guard) --
-this is the E3b owning-autodrop-crossing case, and it is where `dk_frame_owning`
-+ per-frame rc incref/decref glue (the consuming teardown) and the base-drop
-accounting come in. Also unbuilt: carrier-handle / owning-aggregate clone glue
+and must drop after the cloneable-reset: its scope-exit drop is an `EX_DEFER`,
+which is unsupported in a CPS-colored fn, so the whole fn evicts (TUR-E0710). See
+"What rides E3" below for the pinned root cause -- it needs CPS `defer` lowering
+(run the drop at region completion), the E3b delimited-region teardown, not a
+local guard relaxation. Also unbuilt: carrier-handle / owning-aggregate clone glue
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.
