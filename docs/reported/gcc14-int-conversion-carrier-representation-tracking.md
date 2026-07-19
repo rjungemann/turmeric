@@ -37,55 +37,68 @@ this session: **5 fixtures fixed** (map-typed-consumer, set-typed-consumer,
 option-basic, list-homog, list-length) + `gde` 6->1, on top of the ground-truth
 side table now in tree for reuse.
 
-**Remaining: 7 fixtures**, all needing the init/arg VALUE's emitted C
-representation (not derivable from its type, which collides under the duality):
+## LANDED (2026-07-19, session 2): the local-var type table + 3 more fixtures
 
-- `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch call
-  passes a `tur_adt_Map__cstr__int *` arg into the spec's int64 param (regular
-  call, reverse direction: pointer arg -> int64 param).
-- **Reverse binder-init straddle** (int64 binder <- pointer VALUE):
-  `list-count-phantom-opaque-aggregate-element` (`int64_t zs = __t169;` where
-  `__t169` is a Cons pointer), `fat-closure-ascription` (`int64_t __t160 =
-  __ps_159;`), `letrec-self-in-nested-closure`,
-  `constrained-loop-vec-push-byvalue-result-element`. The forward fix keyed on the
-  value's `(int64_t)` prefix; the reverse has NO distinctive prefix -- the init is
-  a bare temp whose declared C type is a pointer -- so it needs the temp's tracked
-  emitted C type, not a string signal.
-- `generic-relay-aggregate-result` (1) -- a distinct narrow site: a union-default
-  read `((union { int64_t s; void * d; }){.s = 0}).d` yields `void *` into an
-  int64 binder; the `.d`-vs-`.s` member choice must follow the consumer.
-- `httpd-mw-fold-many` (1) -- one reverse straddle plus an unrelated
-  `httpd_tls_ops`/`HttpdConn`-undeclared emit gap (separate concern).
+The `emit_localvar_*` side table the "principled fix" below called for is now
+implemented and in-tree, and it fixed the reverse straddle for the cases whose
+value is a control-result / call-hoist temp:
+
+- `emit_module.c`: `emit_localvar_reset/record/lookup(cname -> emitted C type)`,
+  mirroring `emit_sig_*`, reset per program.
+- `emit_expr.c`: record each control-result temp's ACTUAL emitted C type in
+  `emit_control_result_temp_decl` (all three branches), and each `__auto_type`
+  call-hoist temp's representation type (concrete pointers only) at the
+  `emit_value` hoist site. Consult the table at the int64-binder init branch of
+  `emit_let_value` / `emit_letrec_value` (via `emit_str_is_bare_ident` +
+  `emit_localvar_lookup_ctype`): a bare temp recorded as a concrete pointer
+  flowing into an int64 binder is reinterpreted through `intptr_t`.
+- `emit_fns.c`: the same consult at the TCO tail-backedge arg temp
+  (`emit_tail_backedge`) -- a recorded pointer temp into an int64 param slot.
+
+**Fixed this session: `list-count-phantom-opaque-aggregate-element` (4->0),
+`fat-closure-ascription` (1->0), `httpd-mw-fold-many` (1->0).** Full suite
+**2202 passed, 0 failed, no snapshot churn** at each landing -- the table is
+precise (it keys on the temp's REAL recorded representation, so it never adds the
+value-preserving cast where an earlier stage already reconciled, avoiding the
+139-fixture over-fire the type-based attempt caused).
+
+## Remaining: 4 fixtures, each a DISTINCT emit site
+
+The table covers a straddle whose value is a temp it records. The 4 residual
+straddles read a value the table does not (yet) record, or are not binder inits
+at all:
+
+- `letrec-self-in-nested-closure` (1) -- `void *__t168 = self_1286;` where
+  `self_1286` is a closure carrier declared `int64_t`. Two gaps: (a) the value
+  `self_1286` is emitted by the SPECIALIZED self-capturing-closure env path (the
+  "capture self's env box" logic), NOT the generic letrec binding loop, so it is
+  not recorded; (b) it is a `void *` result temp, which
+  `bridge_control_result_int_ptr` deliberately skips. Fix: record the closure-env
+  binding's C type, and extend the control-result bridge to a `void *` temp fed a
+  recorded-int64 value. (Verified: a value-side `emit_localvar_lookup` refinement
+  + `void *`-temp bridge is the right shape, but only fires once the self-closure
+  env binding is recorded -- that recording is the missing hook.)
+- `gde-generic-dict-eq-map` (1) -- a `__inst_Eq_..._int64_t` spec-dispatch
+  REGULAR call passing a `tur_adt_Map__cstr__int *` arg into the spec's int64
+  param (Class A reverse: pointer arg -> int64 param). Needs the emit_sig
+  ground-truth param type consulted for spec-dispatch callees at the regular-call
+  arg site (not a binder init).
+- `generic-relay-aggregate-result` (1) -- a union-default read
+  `((union { int64_t s; void * d; }){.s = INT64_C(0)}).d` yields `void *` into an
+  int64 binder: the `.d`-vs-`.s` member choice must follow the CONSUMER type. A
+  distinct emit site (the union-default reader), not the straddle bridge.
+- `constrained-loop-vec-push-byvalue-result-element` (3) -- a `const char *`
+  return-type straddle plus a `vec_hypush_ex` arg straddle; the value is a
+  by-value aggregate element, a different producer than the recorded temps.
 
 The forward field-read straddle CANNOT be fixed at the ascription site: KB-021
-(emit_expr.c:7589) requires an ascription NOT to change a carrier-ABI aggregate's
-representation, because a sibling consumer (`vec-push!`, `ok`, ...) reads the same
-value as the int64 carrier -- the correct representation depends on the CONSUMER.
-The landed fix is therefore at the consumer (binding init); the reverse cases need
-the same consumer-side treatment but with a tracked value representation rather
-than a string prefix.
-
-### Verified: the reverse straddle needs a tracked local-var-type table
-
-A session attempt to fix the reverse straddle by recovering the init's inner
-representation type -- `init_inner_is_concrete_ptr`: peek through the ascription,
-and if the inner producer's resolved type is a heap struct/ADT c-naming to a
-pointer, treat the init as pointer-repr so the int64-binder branch bridges it --
-DID fix `list-count-phantom` (4->0) but regressed **139 fixtures to codegen
-mismatch**. The inner-is-heap-pointer signal is far too broad: a great many
-bindings have an init whose inner producer is a heap pointer yet is legitimately
-consumed on the carrier, so the added `(int64_t)(intptr_t)` cast fired almost
-everywhere. Reverted.
-
-The lesson: the reverse straddle cannot be keyed on the init EXPRESSION's type
-(too broad) nor a string prefix (the value is a bare temp, `int64_t zs =
-__t169;`). It needs the ACTUAL emitted C type of the init temp -- i.e. a
-local-variable-type side table analogous to the landed `emit_sig_*` signature
-table, recording `<cvar> -> <emitted C type>` as each local is declared, then
-consulted at a binder init to bridge only when the temp's real C type and the
-binder's declared C type sit on opposite sides of the duality. That is the
-principled remaining fix for the reverse straddle (and likely the `generic-relay`
-union-default and `gde` spec-dispatch sites too).
+requires an ascription NOT to change a carrier-ABI aggregate's representation,
+because a sibling consumer (`vec-push!`, `ok`, ...) reads the same value as the
+int64 carrier -- the correct representation depends on the CONSUMER. The landed
+fixes are all consumer-side (binding init, tail-backedge). The 4 remaining need
+the same consumer-side treatment extended to their specific producer/consumer
+sites (closure-env binding, spec-dispatch regular-call arg, union-default reader,
+by-value-element return/arg).
 
 ## Why the tractable fixes stopped here
 
