@@ -7189,7 +7189,7 @@ int main(int argc, char **argv) {
             }
             tur_adt_Set__int * c_1288 = __t176;
             (void)c_1288;
-            __auto_type __ps_182 = (size_hyof((int64_t)(intptr_t)(a_1283)));
+            __auto_type __ps_182 = (size_hyof((tur_adt_Set__int *)(intptr_t)((int64_t)(intptr_t)(a_1283))));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%lld\n", (long long)(__ps_182));
             __auto_type __ps_183 = (__inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(a_1283, b_1286));
@@ -7253,13 +7253,13 @@ static bool __inst_Eq_eq_qu_Set__spec__bool_tur_adt_Set__int___tur_adt_Set__int_
 }
 
 static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * s1, tur_adt_Set__int * s2) {
-        __auto_type __ps_190 = (set_hycount((int64_t)(intptr_t)(s1)));
+        __auto_type __ps_190 = (set_hycount((tur_adt_Set__int *)(intptr_t)((int64_t)(intptr_t)(s1))));
         if (tur_panicking) return (bool){0};
-        __auto_type __ps_191 = (set_hycount((int64_t)(intptr_t)(s2)));
+        __auto_type __ps_191 = (set_hycount((tur_adt_Set__int *)(intptr_t)((int64_t)(intptr_t)(s2))));
         if (tur_panicking) return (bool){0};
         bool __t189 = (__ps_190) == (__ps_191);
         if (__t189) {
-            __auto_type __ps_192 = (set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(s1, s2));
+            __auto_type __ps_192 = (set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1), (tur_adt_Set__int *)(intptr_t)(s2)));
             if (tur_panicking) return (bool){0};
             __t189 = __ps_192;
         }
@@ -7269,19 +7269,19 @@ static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_ad
 static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int * s1, tur_adt_Set__int * s2) {
         bool __t193;
         {
-            __auto_type __ps_194 = (set_hamt__spec__int64_t_tur_adt_Set__int__(s1));
+            __auto_type __ps_194 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1)));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_195 = (hamt_sliter_hyalloc((void *)(intptr_t)(__ps_194)));
             if (tur_panicking) return (bool){0};
             void * iter_1080 = __ps_195;
             (void)iter_1080;
-            __auto_type __ps_196 = (set_hamt__spec__int64_t_tur_adt_Set__int__(s1));
+            __auto_type __ps_196 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s1)));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_197 = (hamt_slkeyeq((void *)(intptr_t)(__ps_196)));
             if (tur_panicking) return (bool){0};
             void * keyeq_1081 = __ps_197;
             (void)keyeq_1081;
-            __auto_type __ps_198 = (set_hamt__spec__int64_t_tur_adt_Set__int__(s2));
+            __auto_type __ps_198 = (set_hamt__spec__int64_t_tur_adt_Set__int__((tur_adt_Set__int *)(intptr_t)(s2)));
             if (tur_panicking) return (bool){0};
             __auto_type __ps_199 = (set_hyeq_hyloop((void *)(intptr_t)(iter_1080), (void *)(intptr_t)(__ps_198), (void *)(intptr_t)(keyeq_1081)));
             if (tur_panicking) return (bool){0};

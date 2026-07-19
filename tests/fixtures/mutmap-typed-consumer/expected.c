@@ -7176,7 +7176,7 @@ static int64_t sum_hyvals(tur_adt_MutableMap__int__int * m, int64_t i, int64_t c
 static int64_t total(tur_adt_MutableMap__int__int * m) {
         __auto_type __ps_163 = (mutmap_hycap((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(m)))));
         if (tur_panicking) return (int64_t){0};
-        __auto_type __ps_164 = (sum_hyvals((int64_t)(intptr_t)(m), INT64_C(0), __ps_163, INT64_C(0)));
+        __auto_type __ps_164 = (sum_hyvals((tur_adt_MutableMap__int__int *)(intptr_t)((int64_t)(intptr_t)(m)), INT64_C(0), __ps_163, INT64_C(0)));
         if (tur_panicking) return (int64_t){0};
         return __ps_164;
 }
@@ -7203,7 +7203,7 @@ int main(int argc, char **argv) {
             mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286))), INT64_C(1), INT64_C(1), INT64_C(100));
             mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286))), INT64_C(2), INT64_C(2), INT64_C(200));
             mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286))), INT64_C(3), INT64_C(3), INT64_C(300));
-            __auto_type __ps_166 = (total((int64_t)(intptr_t)(a_1286)));
+            __auto_type __ps_166 = (total((tur_adt_MutableMap__int__int *)(intptr_t)((int64_t)(intptr_t)(a_1286))));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%lld\n", (long long)(__ps_166));
             __auto_type __ps_167 = (mutmap_hylen((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286)))));

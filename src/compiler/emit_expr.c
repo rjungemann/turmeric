@@ -5604,6 +5604,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     raw = strdup(_hb.data);
                     buf_free(&_hb);
                 }
+                /* gcc14-int-conversion (carrier-to-typed-param): cast the arg to
+                 * the callee's concrete heap-pointer param type.  The existing gate
+                 * skipped a carrier-ABI arg, but a HEAP-pointer arg (a `(Vec int)`
+                 * value carried on the int64 carrier, then bridged to int64 by an
+                 * upstream block) reports as carrier-ABI yet is passed into a
+                 * concrete `tur_adt_Vec__int *` param -- `sum_hyvec((int64_t)...)`
+                 * is a -Wint-conversion (hard error under GCC >= 14).  Also fire for
+                 * such a heap-struct/heap-adt arg: `(<paramtype>)(intptr_t)(raw)` is
+                 * value-preserving whether raw is currently int64 or the pointer. */
                 if (emit_arg &&
                     callee_param_is_typed_heap_ptr &&
                     !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
@@ -5615,6 +5624,44 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(_hb.data);
                     buf_free(&_hb);
+                }
+                /* gcc14-int-conversion (carrier-to-typed-param): a heap-container
+                 * argument (`(Vec int)` value, carried on the int64 carrier and
+                 * bridged to int64 upstream) passed into a callee whose DECLARED
+                 * parameter is a CONCRETE pointer C type (`sum_hyvec(tur_adt_Vec__int
+                 * *)`) is a -Wint-conversion -- a hard error under GCC >= 14.  The
+                 * `callee_param_is_typed_heap_ptr` correction above misses it because
+                 * a `(Vec ...)` container is not classified as a heap-struct/heap-adt
+                 * param.  Key directly on the param's C type being a concrete pointer
+                 * (not the int64 carrier, void*, or an RcControlBlock/tyvar-carrier
+                 * slot) and cast the arg to it -- value-preserving whether raw is
+                 * currently int64 or already the pointer. */
+                else if (emit_arg &&
+                         fn_binding->type.kind == TY_FN &&
+                         i < fn_binding->type.as.fn.arity &&
+                         fn_binding->type.as.fn.arg_full_types &&
+                         fn_binding->type.as.fn.arg_full_types[i]) {
+                    Type raw_at = emit_resolve_type(ctx, emit_arg->type);
+                    bool arg_is_heap_ptr = type_is_heap_struct(raw_at) ||
+                                           type_is_heap_adt(raw_at) ||
+                                           raw_at.kind == TY_APP;
+                    Type pf = *fn_binding->type.as.fn.arg_full_types[i];
+                    if (arg_is_heap_ptr && pf.kind != TY_TYVAR &&
+                        pf.kind != TY_FORALL && pf.kind != TY_EXISTS) {
+                        const char *pty = emit_type_c_name(ctx, pf);
+                        size_t L = pty ? strlen(pty) : 0;
+                        if (L >= 2 && pty[L - 1] == '*' &&
+                            strcmp(pty, "void *") != 0 &&
+                            strncmp(pty, "int64_t", 7) != 0 &&
+                            strncmp(pty, "RcControlBlock", 14) != 0) {
+                            Buf _hb; buf_init(&_hb);
+                            buf_printf(&_hb, "(%s)(intptr_t)(%s)", pty, raw);
+                            buf_putc(&_hb, '\0');
+                            free(raw);
+                            raw = strdup(_hb.data);
+                            buf_free(&_hb);
+                        }
+                    }
                 }
                 arg_strs[i] = raw;
             }
