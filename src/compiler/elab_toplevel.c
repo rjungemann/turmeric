@@ -1355,6 +1355,15 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                 || hs == e.sym_extern_c || hs == e.sym_defmodule) continue;
             /* macro call / do progn / quote form: ambiguous -> abort the fold */
             if (hs == e.sym_do) { ambiguous = true; break; }
+            /* fn-body-only forms (`?`, `return`) are illegal at top level and are
+             * rejected during elaboration by an `fn_body_depth == 0` check.  Folding
+             * one into the synthesized main body would put it INSIDE a function,
+             * suppressing that rejection and surfacing a misleading downstream error
+             * (e.g. top-level `(? 42)` -> "requires a Result value" instead of "only
+             * allowed inside a function body").  Abort the fold so the form stays
+             * top-level and keeps its correct diagnostic -- such a program is a
+             * compile error either way, so the historical path is exactly right. */
+            if (hs == e.sym_question || hs == e.sym_return) { ambiguous = true; break; }
             int macro_idx = -1;
             for (uint32_t m = 0; m < n_macro; m++)
                 if (macro_names[m] == hs) { macro_idx = (int)m; break; }
