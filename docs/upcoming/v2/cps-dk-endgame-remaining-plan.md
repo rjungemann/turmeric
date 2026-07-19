@@ -512,6 +512,68 @@ the fiber **effect** runtime is deleted when:
   `tur_handler_dispatch`, and the `emit_effects.c` direct perform/handle/resume
   emitters are removed; the suite stays green flag-off (now the only path).
 
+## 3a. Flag-on suite measurement (2026-07-19) -- graduation is NOT yet reachable
+
+The fiber-live sweep (Sec 0) is at zero: B1-B8 are all closed, every
+`tur_effect_perform("` call site under `--enable=cps-tramp-resume` is gone. By
+the Sec 3 criteria as originally written, that reads as "ready to graduate."
+
+**It is not.** Sec 3 only tested the *effect* surface. Graduating the flag and
+deleting the fiber runtime forces **every** fixture onto the DK path -- including
+pure, non-effect generic code that currently never CPS-lowers at all (it stays
+direct because the classifier only colors effectful fns). Forcing the default on
+(`g_opt_cps_tramp_resume = true`) and running the full suite measures that:
+
+```
+summary: 2047 passed, 156 failed   (flag forced on; vs 2203/0 flag-off)
+```
+
+The 156 break down as:
+
+- **138 codegen mismatch** -- snapshot churn (all snapshots are flag-off).
+  Reconcilable by regen; not correctness. NOT a blocker on its own.
+- **14 build failed** -- REAL codegen bugs. The `__cps` ABI param-type inference
+  is wrong when a *generic / dictionary-passing* value function is CPS-lowered:
+  `option_hyeq_qu__cps` is declared `(int64_t o1, int64_t o2, ...)` but its
+  caller passes `tur_adt_Option__int`; `map_hyeq_hyloop__cps` takes `int64_t
+  keyeq` but is handed a `void*`; `uncons-hyfmap` cps->direct emits an unmangled
+  `tcons`. Fixtures: `option-basic`, `eqmap-struct-content`,
+  `eqmap-struct-float-fields`, `gde-generic-dict-eq-map`, `map-typed-consumer`,
+  `map-multiword-struct-key`, `set-cstr-content`, `set-typed-consumer`,
+  `set-multiword-struct-element`, `show-collections`, `show-collections-content-hamt`,
+  `poly-fat-float-closure-eqmap`, `cps-backend-generic-cross-fn`,
+  `m5-lambda-aft-tyvar-prior-accepts-concrete`. These are NOT effect fixtures --
+  they are the polymorphic eq/map/set/show + fat-closure surface. This is a
+  general CPS-classifier/`__cps`-signature correctness gap, orthogonal to effect
+  lowering.
+- **2 stdout mismatch -- genuine DK-trampoline RUNTIME crashes**, and these are
+  the sharpest blocker because they are the fiber-effect fixtures themselves:
+  - `fiber-effect` -> **segfault** (exit 139) when its own body CPS-lowers.
+  - `p19-8-fiber-effect-chain` -> **`*** longjmp causes uninitialized stack
+    frame ***: terminated`** (exit 134) -- glibc fortification catching an E7
+    tail-resume `longjmp` into a frame that already returned.
+  Deleting the fiber runtime would force exactly these onto the DK path
+  permanently, and they crash. This must be fixed before graduation is even
+  correctness-safe, independent of the leak and snapshot work.
+- **1 diagnostic mismatch** -- `errors/result-question-outside-fn`; the
+  experiment lifecycle warning (TUR-W0060/W0061) very likely perturbs
+  `expected.stderr`.
+
+Plus the leak axis: the 104-byte per-perform-cont DK-node leak
+(`docs/reported/cps-perform-cont-frame-leak-on-tail-resume.md`) fails a
+leak-checked flag-on suite.
+
+**Conclusion.** The effect-lowering goal (fiber-live == 0) is DONE. But the
+*last* endgame step -- flip the flag on by default and delete the fiber effect
+runtime -- is NOT completable today. The real Stage-G gate is "the **entire**
+suite passes flag-on," and that additionally requires: (1) fix the 2 DK-trampoline
+crashes; (2) fix the ~14 generic/dictionary `__cps` ABI type mismatches; (3) fix
+the 104-byte tail-resume leak; (4) settle the experiment-warning-vs-`expected.stderr`
+interaction; (5) regen the 138 snapshots in the graduation commit. (2) is the
+bulk of the work and is a general CPS-codegen correctness effort, not an effect
+one. Sec 3 below should be read WITH this addendum -- fiber-live == 0 is
+necessary but not sufficient.
+
 ## 4. Status of the reports this plan supersedes
 
 Resolved and archived 2026-07-18 (verified by the Sec 0 measure): the
