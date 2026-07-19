@@ -4320,6 +4320,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* gcc14-int-conversion: a fn-typed ctor field is stored in the
+                     * int64 carrier slot -- BOTH in a carrier ctor and in a
+                     * monomorph one (`ctor_Endo__int`'s param is int64_t) -- so a
+                     * fn-pointer argument must be cast to int64, else it "makes
+                     * integer from pointer" (a hard error under GCC >= 14).  Not
+                     * gated on `suffix` (the monomorph path is exactly where this
+                     * bites), and gated on the arg being an actual fn/ptr value so
+                     * an already-int64 carrier arg is left untouched.  A tyvar
+                     * carrier fn field is handled by the pointer->int64 block above
+                     * (field_is_carrier), so restrict to concrete TY_FN fields. */
+                    if (suffix && !field_inline && arg && !field_is_carrier &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].kind == TY_FN) {
+                        Type rat = emit_resolve_type(ctx, arg->type);
+                        if (rat.kind == TY_FN || rat.kind == TY_PTR_VOID) {
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                            buf_putc(&c, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(c.data);
+                            buf_free(&c);
+                        }
+                    }
                     /* A FLOAT argument flowing into a ctor field that is ERASED
                      * to the int64 CARRIER -- a tyvar field of a carrier-helper
                      * base ctor (`ctor_Result(bool,int64_t,int64_t)`'s `ok_val`,
