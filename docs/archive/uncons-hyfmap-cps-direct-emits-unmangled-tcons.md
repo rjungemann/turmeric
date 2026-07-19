@@ -1,5 +1,25 @@
 # `_un_uncons_hyfmap` cps->direct body emits the UNMANGLED `tcons` (undefined; survives only via -O2 DCE)
 
+> **Status:** RESOLVED 2026-07-19. `emit_term`'s `CT_LETCALL` (cps->direct) arm in
+> `src/compiler/emit_cps_ir.c` now resolves the callee through
+> `find_mono_clone_for_call` -- exactly as the sibling `CT_TAILCALL` cps->direct
+> arm already did -- so the generated helper emits the DEFINED monomorph
+> `tcons__spec__tur_adt_Cons__int___int64_t_int64_t(...)` instead of the unmangled
+> generic `tcons`. `find_mono_clone_for_call` returns NULL for any callee with no
+> registered ABI specialization, so the change is a no-op for every non-templated
+> cps->direct call; the diff is exactly one line in each of the 139 codegen
+> snapshots (regenerated in the same commit) and nothing else moves.
+>
+> Because the clone returns a boxed-ADT pointer (`tur_adt_Cons__int *`) while the
+> cps->direct word slot is `int64_t`, the resolved-clone assignment is carried
+> through `(int64_t)(intptr_t)` -- otherwise swapping the unmangled generic (whose
+> implicit-int declaration masked the mismatch) for the real pointer-returning
+> clone would merely trade the `-Wimplicit-function-declaration` warning for a
+> `-Wint-conversion` one. With the cast the helper is fully `-Wall` clean:
+> `printf '(defn main [] : int 0)\n' | tur emit-c | cc -c -Wall -` no longer warns
+> about `tcons`, and the trivial program builds/links/runs. Full suite green
+> (2202 passed, 0 failed).
+
 **Severity:** low (latent; masked by dead-code elimination -- the helper is an
 unused `static`, so `-O2` drops it before the undefined symbol reaches the
 linker).  Present in EVERY emitted program (flag-off baseline), including a

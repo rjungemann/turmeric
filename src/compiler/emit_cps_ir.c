@@ -5024,8 +5024,18 @@ static void emit_term(CE *ce, const CTerm *t) {
         }
         case CT_LETCALL: {
             /* cps->direct: an uncolored callee runs to completion and returns an
-             * ordinary value; no continuation is threaded in. */
-            char *fn = callee_name(t->as.letcall.fn);
+             * ordinary value; no continuation is threaded in.  Resolve a
+             * monomorph-clone name the same way the CT_TAILCALL cps->direct arm
+             * does: a generic constructor/callee (e.g. the `tcons` built inside a
+             * generated `_un_uncons_hyfmap` hylo helper) is emitted as the DEFINED
+             * `<name>__spec__...` clone, not the unmangled generic symbol -- which
+             * would otherwise be an undefined reference surviving only by -O2 DCE
+             * of the dead helper.  find_mono_clone_for_call returns NULL for an
+             * ordinary callee with no registered ABI specialization, so this is a
+             * no-op for every non-templated call. */
+            const char *mclone_lc = find_mono_clone_for_call(
+                ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n);
+            char *fn = mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn);
             char *argv = atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n);
             char *bn = cvar_cname(ce, t->as.letcall.x);
             /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
@@ -5036,6 +5046,16 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (t->as.letcall.x.ty == TY_NIL) {
                 ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
                 ce_line(ce, "%s = 0;", bn);
+            } else if (mclone_lc) {
+                /* A resolved mono-clone returns its real type -- for a constructor
+                 * clone (`tcons__spec__...`) that is a boxed-ADT pointer -- while
+                 * the cps->direct word slot is int64_t.  Carry it through
+                 * (int64_t)(intptr_t), the same pointer<->word carrier cast the
+                 * rest of the CPS emitter uses at delivery.  Without it the
+                 * pointer-returning clone would -Wint-conversion into the int64
+                 * slot; the unmangled generic name only dodged that via its
+                 * (now-eliminated) implicit-int declaration. */
+                ce_line(ce, "%s = (int64_t)(intptr_t)%s(%s); /* cps->direct */", bn, fn, argv);
             } else {
                 ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }

@@ -5442,7 +5442,7 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_999;
-    out_999 = tcons(__t1, __t2); /* cps->direct */
+    out_999 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
     return dk_run(__kont, (intptr_t)(out_999));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
