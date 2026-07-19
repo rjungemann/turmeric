@@ -7475,7 +7475,7 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             __auto_type __ps_210 = (ctor_Line((int64_t)(intptr_t)(__ps_208), (int64_t)(intptr_t)(__ps_209)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t ln_1364 = __ps_210;
+            int64_t ln_1364 = (int64_t)(intptr_t)(__ps_210);
             (void)ln_1364;
             __auto_type __ps_211 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1369 }, ln_1364));
             /* panic-return-signal: ret ctype unknown; no propagation here */

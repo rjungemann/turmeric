@@ -2631,6 +2631,11 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
     indent_buf(body, ctx->indent);
     buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* A constructor call (`ctor_X(...)`) always returns the concrete heap pointer
+     * `tur_adt_X *`, even though its `(X ..)` type c-names to the int64 carrier
+     * under emit_binding_repr_c_name.  Capture that before freeing v so the temp
+     * is recorded with its ACTUAL pointer representation. */
+    bool v_is_ctor = strncmp(v, "ctor_", 5) == 0 || strncmp(v, "(ctor_", 6) == 0;
     free(v);
     emit_panic_signal_return(ctx, body);
     /* gcc14-int-conversion (carrier-representation-tracking): record this call
@@ -2643,8 +2648,31 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     {
         const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
         size_t rL = rcty ? strlen(rcty) : 0;
-        if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0)
+        bool recorded = false;
+        if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0) {
             emit_localvar_record_ctype(tmp, rcty);
+            recorded = true;
+        }
+        /* Ctor result: a parametric heap-ADT ctor (`ctor_Line`) returns the
+         * concrete `tur_adt_Line *` even though its `(Line ..)` type c-names to the
+         * int64 carrier (both type_c_name and emit_type_c_name collapse it).
+         * Reconstruct the concrete pointer from the ctor's own name so
+         * `int64_t z = <ctor temp>` at the binder init bridges. */
+        if (!recorded && v_is_ctor && e->kind == EX_CALL &&
+            e->as.call_.fn_binding && e->as.call_.fn_binding->name &&
+            e->as.call_.fn_binding->name->name &&
+            (type_is_heap_adt(emit_resolve_type(ctx, e->type)) ||
+             type_is_heap_struct(emit_resolve_type(ctx, e->type)))) {
+            char *mn = mangle_field_name(e->as.call_.fn_binding->name->name);
+            if (mn) {
+                Buf _cb; buf_init(&_cb);
+                buf_printf(&_cb, "tur_adt_%s *", mn);
+                buf_putc(&_cb, '\0');
+                emit_localvar_record_ctype(tmp, _cb.data);
+                buf_free(&_cb);
+                free(mn);
+            }
+        }
     }
     return strdup(tmp);
 }
