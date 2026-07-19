@@ -283,12 +283,19 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
  * continuing the loop).  That is what lets a nested control op inside a lifted
  * continuation thread the correct enclosing handler and deliver exactly once. */
 "typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);\n"
+/* E3a (cps-backend-owning-env-teardown): owning-env clone/drop glue.  A frame
+ * whose captured env holds an owning value carries this pair so a multi-shot
+ * resume gets its own refcounted copy instead of a shared shallow alias; both
+ * default NULL, in which case dk_copy_node keeps the shallow env-pointer copy
+ * and dk_free never touches the env -- byte-identical to the pre-E3a path. */
+"typedef intptr_t (*DKEnvClone)(intptr_t env);\n"
+"typedef void (*DKEnvDrop)(intptr_t env);\n"
 "typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER, DKK_RESUME_FRAME } DKKind;\n"
 "struct DK {\n"
 "    DKKind kind; DKFrame fn; intptr_t env; int tag;\n"
 "    DKBody body; intptr_t body_env;\n"
 "    DKHandler handler; intptr_t handler_env; bool shallow;\n"
-"    DKResumeFrame rfn; DK *next;\n");
+"    DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;\n");
     if (tramp) buf_puts(out,
 "    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
 "    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
@@ -305,6 +312,14 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }\n"
 "static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env; return k;\n"
+"}\n"
+"/* E3a: a plain frame whose env is owning -- carries the clone/drop pair fired\n"
+" * by dk_copy_node / dk_free.  NULL for both is exactly dk_frame. */\n"
+"__attribute__((unused))\n"
+"static DK *dk_frame_owning(DKFrame fn, intptr_t env,\n"
+"                           DKEnvClone env_clone, DKEnvDrop env_drop, DK *next) {\n"
+"    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env;\n"
+"    k->env_clone = env_clone; k->env_drop = env_drop; return k;\n"
 "}\n"
 "static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;\n"
@@ -373,7 +388,12 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "static DK *dk_copy_node(const DK *n);\n");
     buf_puts(out,
 "static DK *dk_copy_node(const DK *n) {\n"
-"    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;\n"
+"    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->tag = n->tag;\n"
+/* E3a: an owning frame gets an OWNED copy of its env (rc incref / aggregate
+ * deep-copy) instead of a shared shallow alias; NULL env_clone keeps the shallow
+ * copy.  The clone/drop glue rides along so the copy frees its env symmetrically. */
+"    c->env = n->env_clone ? n->env_clone(n->env) : n->env;\n"
+"    c->env_clone = n->env_clone; c->env_drop = n->env_drop;\n"
 "    c->body = n->body; c->body_env = n->body_env;\n"
 "    c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;\n");
     if (tramp) buf_puts(out,
@@ -433,13 +453,14 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    p->next = b;\n"
 "    return a;\n"
 "}\n"
-"static void dk_free(DK *k) { while (k) { DK *n = k->next; free(k); k = n; } }\n");
+/* E3a: drop each frame's owning env (if any) before freeing the node. */
+"static void dk_free(DK *k) { while (k) { DK *n = k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }\n");
     buf_puts(out,
 "/* Free a single spliced node without following ->next -- used to reclaim the\n"
 " * one-off shift/perform node whose ->next points into an enclosing continuation\n"
 " * (dk_free would walk into that continuation and risk a double free).  See\n"
 " * docs/archive/cps-delimited-dk-node-leak.md. */\n"
-"__attribute__((unused)) static void dk_free_node(DK *k) { free(k); }\n");
+"__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }\n");
     if (tramp) buf_puts(out,
 "/* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */\n"
 "typedef intptr_t (*__tur_cps_fn)();\n"

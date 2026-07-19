@@ -924,12 +924,14 @@ typedef intptr_t (*DKFrame)(intptr_t env, intptr_t value);
 typedef intptr_t (*DKBody)(intptr_t env, DK *subk);
 typedef intptr_t (*DKHandler)(intptr_t env, intptr_t arg, DK *subk);
 typedef intptr_t (*DKResumeFrame)(intptr_t env, intptr_t value, DK *rest);
+typedef intptr_t (*DKEnvClone)(intptr_t env);
+typedef void (*DKEnvDrop)(intptr_t env);
 typedef enum { DKK_DONE, DKK_FRAME, DKK_PROMPT, DKK_SHIFT, DKK_SHIFT0, DKK_HANDLER, DKK_RESUME_FRAME } DKKind;
 struct DK {
     DKKind kind; DKFrame fn; intptr_t env; int tag;
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
-    DKResumeFrame rfn; DK *next;
+    DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
     int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
                         * distinguishes this handle's cases from an enclosing
@@ -944,6 +946,14 @@ static DK *dk_new(DKKind kind, DK *next) {
 static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }
 static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env; return k;
+}
+/* E3a: a plain frame whose env is owning -- carries the clone/drop pair fired
+ * by dk_copy_node / dk_free.  NULL for both is exactly dk_frame. */
+__attribute__((unused))
+static DK *dk_frame_owning(DKFrame fn, intptr_t env,
+                           DKEnvClone env_clone, DKEnvDrop env_drop, DK *next) {
+    DK *k = dk_new(DKK_FRAME, next); k->fn = fn; k->env = env;
+    k->env_clone = env_clone; k->env_drop = env_drop; return k;
 }
 static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;
@@ -1008,7 +1018,9 @@ static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {
 }
 static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {
-    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->env = n->env; c->tag = n->tag;
+    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->tag = n->tag;
+    c->env = n->env_clone ? n->env_clone(n->env) : n->env;
+    c->env_clone = n->env_clone; c->env_drop = n->env_drop;
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
     c->tail_resume = n->tail_resume;
@@ -1057,12 +1069,12 @@ static DK *dk_append(DK *a, DK *b) {
     p->next = b;
     return a;
 }
-static void dk_free(DK *k) { while (k) { DK *n = k->next; free(k); k = n; } }
+static void dk_free(DK *k) { while (k) { DK *n = k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
-__attribute__((unused)) static void dk_free_node(DK *k) { free(k); }
+__attribute__((unused)) static void dk_free_node(DK *k) { if (k && k->env_drop) k->env_drop(k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
 static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
