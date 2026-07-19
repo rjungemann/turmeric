@@ -116,6 +116,19 @@ representation-crossing site, each a distinct emitter.
 Remaining paths, by site/family:
 - **Return / let-assignment** (`logic-*` suite, 8): void* value delivered where
   the C slot / return type is int64 -- return + `LETVAL`/`LETPRIM` emission.
+  **Attempted (3 approaches) and found NOT point-fixable:** the mismatch is a
+  three-way carrier-representation inconsistency at once -- a closure/Goal binder
+  is DECLARED `void *` (`void * __t272;`), the closure VALUE emits as `void *`
+  (`emit_value` EX_FN returns the fat-env pointer), and the FUNCTION RETURNS the
+  int64 carrier. Fixing any one site introduces the reverse error at another
+  (casting the value to int64 makes `void* = int64` at the binder; casting the
+  return conflicts with the existing `emit_fat_return_value` / `tail_bv` carrier
+  machinery and broke 2 previously-OK TY_FN returns). The correct fix reconciles
+  all three -- declare the closure/opaque-handle binder as the int64 carrier (not
+  `void *`) so value, binder, and return agree -- inside the fat-closure/opaque
+  carrier lowering, a dedicated change, not a per-site cast. This is the same
+  opaque-handle carrier ambiguity behind `opaque-fn-carrier-dispatch` and
+  `opaque-tyvar-through-wrapper-fn`.
 - **cps->direct calls** (`option-basic` `option_hyeq_qu`, some `logic-*`).
 - **cps->cps / cps->direct `__cps` calls** (`emit_cps_ir.c`, `atoms_csv_call`):
   `list-basic`, `option-basic`, `hamt-lisp-*`, the `logic-*` suite,
