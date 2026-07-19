@@ -675,6 +675,33 @@ it churns all 140 `expected.c` snapshots. Best done as its own focused pass with
 suite + ASan verify. `emit_effects.c`'s `emit_effects_handler_lit`/`with_handler`/
 `compose_handlers` STAY -- they now emit DK handler tables/cases, not fiber code.
 
+### 3a.4 Update (2026-07-19) -- Stage G DONE: fiber effect runtime C deleted
+
+Landed. The blocks above are gone from `emit_module.c`: `TurContK`,
+`TurEffectCaptureCtx`, `EffectHandlerCase`/`Frame`, `global_effect_handler_chain`,
+`tur_effect_perform`, `__tur_msdyn_*` + `tur_handler_dispatch`, `tur_effect_cont_*`,
+and the two `FiberBlock` effect fields + their init in `tur_fiber_block_new`.
+`FiberBlock`/scheduler/reactor (concurrency), `tur_handler_table_t`/`entry_t` (DK
+handler-value path), `tur_cloneable_cont_*` (DK `__Shift` bridge), and
+`migration_safe` STAY.
+
+**Done criterion met (Sec 7):** a full-corpus sweep of emitted C returns
+`grep -c 'tur_effect_perform|global_effect_handler_chain|EffectHandlerFrame|
+tur_handler_dispatch|tur_effect_cont_resume|TurEffectCaptureCtx' == 0` for EVERY
+fixture. Suite 2203/0; effect fixtures run correctly and are ASan-clean apart from
+a pre-existing owning handler-VALUE table leak (`tur_handler_table_new` in a
+`defstruct`-field handler is never freed -- the owning-value teardown gap, tracked
+in `docs/reported/cps-owning-adt-value-not-dropped-under-match.md`, NOT introduced
+by this deletion). The obsolete `fiber-cross-resume` fixture (inline-C that
+manufactured a `TurContK` to test the deleted cross-fiber guard) was removed.
+
+**Remaining (optional tidy, not blocking):** `emit_effects.c` still carries the
+now-unreachable fiber emit branches (`emit_effects_perform`, `emit_effects_handle`,
+and the fiber arms of `emit_effects_resume`/`with_handler`) as dead code -- they
+compile (string literals) and are never reached (corpus-verified), so they are a
+hygiene cleanup, not a correctness item. The CPS/DK backend is now the **sole
+effect lowering**; the fiber effect runtime is gone.
+
 ## 4. Status of the reports this plan supersedes
 
 Resolved and archived 2026-07-18 (verified by the Sec 0 measure): the

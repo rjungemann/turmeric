@@ -33,6 +33,23 @@ the B8 session-effects work hit for the `^linear` session channel
 scope-exit drop, which the CPS delegation path does not apply"); the perform-cont
 frame leak (now resolved) was a different, DK-node-lifetime bug.
 
+## Second instance (2026-07-19): owning handler VALUE table not freed
+
+`defstruct-field-handler` (and `-multi`, `fh-multi-effect-type`) allocate a
+first-class handler value via `tur_handler_table_new(1)` (+ its `entries` array),
+store it in a `defstruct` field, install it via `with-handler`, and never free it:
+
+```
+Direct leak of 16 byte(s):   tur_handler_table_new  (the table)
+Indirect leak of 40 byte(s): tur_handler_table_new  (its entries array)
+```
+
+Same owning-value teardown gap: a heap-allocated handler value that dies at scope
+exit is not dropped on the CPS path. Surfaced (not caused) by the Stage-G fiber
+effect runtime deletion, which made these fixtures DK-lower end to end. The DK
+handler install (`dk_hgroup_from_table`) reads the table but does not own/free it;
+the value needs the owning-carrier scope-exit drop like any other.
+
 ## Fix direction
 
 Apply the direct emitter's owning-value scope-exit drop on the CPS delegation path:
