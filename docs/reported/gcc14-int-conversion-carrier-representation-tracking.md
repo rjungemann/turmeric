@@ -65,6 +65,28 @@ The landed fix is therefore at the consumer (binding init); the reverse cases ne
 the same consumer-side treatment but with a tracked value representation rather
 than a string prefix.
 
+### Verified: the reverse straddle needs a tracked local-var-type table
+
+A session attempt to fix the reverse straddle by recovering the init's inner
+representation type -- `init_inner_is_concrete_ptr`: peek through the ascription,
+and if the inner producer's resolved type is a heap struct/ADT c-naming to a
+pointer, treat the init as pointer-repr so the int64-binder branch bridges it --
+DID fix `list-count-phantom` (4->0) but regressed **139 fixtures to codegen
+mismatch**. The inner-is-heap-pointer signal is far too broad: a great many
+bindings have an init whose inner producer is a heap pointer yet is legitimately
+consumed on the carrier, so the added `(int64_t)(intptr_t)` cast fired almost
+everywhere. Reverted.
+
+The lesson: the reverse straddle cannot be keyed on the init EXPRESSION's type
+(too broad) nor a string prefix (the value is a bare temp, `int64_t zs =
+__t169;`). It needs the ACTUAL emitted C type of the init temp -- i.e. a
+local-variable-type side table analogous to the landed `emit_sig_*` signature
+table, recording `<cvar> -> <emitted C type>` as each local is declared, then
+consulted at a binder init to bridge only when the temp's real C type and the
+binder's declared C type sit on opposite sides of the duality. That is the
+principled remaining fix for the reverse straddle (and likely the `generic-relay`
+union-default and `gde` spec-dispatch sites too).
+
 ## Why the tractable fixes stopped here
 
 Turmeric's carrier ABI gives a heap value TWO C representations that coexist in
