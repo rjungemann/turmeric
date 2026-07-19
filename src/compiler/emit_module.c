@@ -4977,22 +4977,31 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         /* B4 slice 2: a wide by-value ADT closure param crosses as an int64 box
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
          * already concrete, so type_is_wide_byval_adt reads them directly. */
+        const char *pc;
         if (spec->fn->closure && !spec->fn->params[i]->is_poly_fn &&
             spec->fn->param_types[i].kind != TY_FN &&
             type_is_wide_byval_adt(spec->arg_types[i])) {
-            buf_puts(out, "int64_t");
+            pc = "int64_t";
         } else if (spec->fn->params[i]->is_poly_fn) {
-            buf_puts(out, "tur_poly_fn_t");
+            pc = "tur_poly_fn_t";
         } else if (spec->fn->param_types[i].kind == TY_FN
                    && spec->fn->param_types[i].as.fn.cfnptr) {
             /* typed-c-abi-function-pointers: cfnptr -> concrete typedef. */
             const char *td = register_fn_ptr_typedef(&spec->fn->param_types[i]);
-            buf_puts(out, td ? td : "int64_t");
+            pc = td ? td : "int64_t";
         } else if (spec->fn->param_types[i].kind == TY_FN) {
-            buf_puts(out, "int64_t");
+            pc = "int64_t";
         } else {
-            buf_puts(out, type_c_name(spec->arg_types[i]));
+            pc = type_c_name(spec->arg_types[i]);
         }
+        buf_puts(out, pc);
+        /* gcc14-int-conversion (carrier-representation-tracking): record this ABI
+         * spec's ACTUAL emitted param C type keyed by its clone name (== the
+         * call-site fn_name), so a reverse int64<-pointer straddle at a
+         * spec-dispatch call (`__inst_Eq_..._int64_t(a, b)` with a pointer `b`
+         * into the int64 param) can consult ground truth.  Specs are not top-level
+         * items, so the forward-decl pass over `items` never records them. */
+        emit_sig_record_param_ctype(spec->clone_name, i, spec->n_args, pc);
     }
     buf_puts(out, ");\n");
 }

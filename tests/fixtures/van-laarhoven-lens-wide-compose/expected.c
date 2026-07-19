@@ -4274,7 +4274,7 @@ static int64_t point_hyx_un_undict_un1328(int64_t __dict_1329, int64_t g, int64_
 struct __env_1334 { int64_t __fn; int64_t __hkt_dict; int64_t g; };
 static int64_t __fn_1332(void * __env_p_1335, tur_adt_Point * p) {
         struct __env_1334 *__env___env_1334 = (struct __env_1334 *)__env_p_1335;
-        __auto_type __ps_52 = (point_hyx_un_undict_un1328(__env___env_1334->__hkt_dict, (int64_t)(intptr_t)(__env___env_1334->g), p));
+        __auto_type __ps_52 = (point_hyx_un_undict_un1328(__env___env_1334->__hkt_dict, (int64_t)(intptr_t)(__env___env_1334->g), (int64_t)(intptr_t)(p)));
         if (tur_panicking) return (int64_t){0};
         return __ps_52;
 }

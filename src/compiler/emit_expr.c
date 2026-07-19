@@ -5897,6 +5897,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                 }
+                /* gcc14-int-conversion (carrier-representation-tracking, reverse
+                 * at a spec-dispatch call): the RECORDED callee param is the int64
+                 * carrier but the arg EMITS as a concrete pointer -- e.g.
+                 * `__inst_Eq_..._int64_t(a, b)` where `b` is a
+                 * `tur_adt_Map__cstr__int *` spec param passed into the int64 slot.
+                 * `pointer -> int64 param` is a hard error under GCC >= 14.  Uses
+                 * the emit_sig ground truth keyed by fn_name (now populated for ABI
+                 * specs too), so it fires even when arg_full_types is absent.  Gated
+                 * on the arg genuinely emitting a concrete pointer and not already
+                 * bridged, so an already-int64 carrier arg is untouched. */
+                if (emit_arg && fn_name && raw &&
+                    strncmp(raw, "(int64_t)", 9) != 0) {
+                    const char *rec_c = emit_sig_lookup_param_ctype(fn_name, i);
+                    if (rec_c && strcmp(rec_c, "int64_t") == 0) {
+                        const char *acty = emit_binding_repr_c_name(
+                            ctx, emit_arg->type, emit_arg);
+                        size_t aL = acty ? strlen(acty) : 0;
+                        if (acty && aL >= 1 && acty[aL - 1] == '*' &&
+                            strcmp(acty, "void *") != 0) {
+                            Buf _rb; buf_init(&_rb);
+                            buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", raw);
+                            buf_putc(&_rb, '\0');
+                            free(raw);
+                            raw = strdup(_rb.data);
+                            buf_free(&_rb);
+                        }
+                    }
+                }
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
