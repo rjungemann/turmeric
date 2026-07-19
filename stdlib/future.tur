@@ -649,7 +649,7 @@
       pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
       out->is_set = true; out->is_ok = true; out->value = val_a; out->exn = 0;
-      return (void *)out;
+      return (int64_t)(intptr_t)out;
   }
   /* fa rejected, try fb */
   pthread_mutex_lock(&b->lock);
