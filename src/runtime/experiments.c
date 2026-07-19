@@ -95,25 +95,27 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * lowers to dk_handler_shallow on the CPS path and to the shallow_consumed
      * bubble-up on the fiber path, with compiled == interp on all shapes.  A
      * lingering --enable=cps-effects is an accept-and-warn no-op via GRADUATED[]. */
-    /* cps-async: the heap-continuation representation for `async`/`await`.  When
-     * enabled, a function containing `await` is CPS-colored and each `await`
-     * lowers to a `dk_shift` against the entry prompt (capturing the rest of the
-     * async body as a heap continuation) instead of the fiber
-     * `tur_await_future`/swapcontext.  Read by the coloring pass (cps.c) and the
-     * CPS-IR builder (cps_ir.c) via g_opt_cps_async.  F3 is complete + archived
-     * (docs/archive/compiled-async-heap-continuations-plan.md): await-as-shift,
-     * deferred pending drive, and bounded multi-await all landed; all three
-     * admissibility gaps resolved.  Stays gated on the ONE remaining residual --
-     * a recursive await must run stackless ON the heap path rather than evict --
-     * tracked by the successor plan below.  Graduate when it lands. */
-    { "cps-async",
-      "heap-continuation `async`/`await`: `await` lowers to a dk_shift capturing "
-      "the async continuation, resumed via the reactor instead of a ucontext fiber",
-      "docs/upcoming/compiled-stackless-recursive-await-plan.md",
-      "0.28.2",                  /* introduced */
-      "0.30.0",                  /* expires_at (two minor releases; hard contract) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_cps_async },
+    /* cps-async GRADUATED 2026-07-19 -- the heap-continuation representation for
+     * `async`/`await` is now the unconditional CPS-path lowering: a function
+     * containing `await` is always CPS-colored, and each `await` lowers to a
+     * `dk_shift` against the entry prompt (capturing the rest of the async body as
+     * a heap continuation) instead of the fiber `tur_await_future`/swapcontext.
+     * F3 closed every admissibility gap (await-as-shift, deferred pending drive,
+     * bounded multi-await; docs/archive/compiled-async-heap-continuations-plan.md);
+     * a recursive await evicting to the direct emitter is by-design (F4 declined;
+     * docs/archive/compiled-stackless-recursive-await-plan.md).  The 2026-07-19
+     * graduation attempt surfaced two fiber-interop gaps, both now closed so the
+     * heap path is a strict superset of the fiber path:
+     *   1. A pending future backed by a runnable scheduler fiber (manual spawn /
+     *      TaskGroup) is now driven by __tur_await_body (it drains the scheduler
+     *      run-queue before parking), so `taskgroup-async` resolves.
+     *   2. An `await` nested in a handler-case body now delegates to the fiber
+     *      path (build_letraw, guarded by b->in_handler_case in cps_ir.c) instead
+     *      of building a CT_AWAIT the handler-case admission cannot host, so
+     *      `async-effect-spawn` colors natively instead of evicting.
+     * The gate did its job; the row is retired and the name moved to GRADUATED[]
+     * below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/cps-async-graduation-plan.md. */
     /* cps-tramp-resume GRADUATED 2026-07-19 -- the CPS/DK trampolined tail-resume
      * path is now the DEFAULT and SOLE lowering for effectful colored code
      * (g_opt_cps_tramp_resume defaults true).  The full corpus DK-lowers every
@@ -139,6 +141,7 @@ static const char *const GRADUATED[] = {
      * no config referenced it. */
     "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
     "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
+    "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
     NULL,
 };
 

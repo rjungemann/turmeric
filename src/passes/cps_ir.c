@@ -6,7 +6,7 @@
 
 #include "cps.h"
 #include "builtins.h"
-#include "globals.h"   /* F3: g_opt_cps_async */
+#include "globals.h"   /* g_opt_cps_tramp_resume */
 
 /* =========================================================================
  * CPS2 (cps-transform-plan): ANF/CPS translation for colored functions.
@@ -59,6 +59,13 @@ typedef struct CpsB {
     const Expr    *rs_nodes[64];
     CVar           rs_cvars[64];
     uint32_t       rs_n;
+    /* cps-async: handler-case-body nesting depth.  Bumped around building a
+     * `(handle ...)`/`(with-handler ...)` case body (build_handle_core), so the
+     * per-node lowering of an `await` nested in a handler case delegates to the
+     * fiber path (build_letraw -> CT_LETRAW, which handle_case_ok admits) rather
+     * than heap-lowering to a CT_AWAIT the handler-case admission cannot host.
+     * An `await` in a plain async body (depth 0) still heap-lowers via build_await. */
+    uint32_t       in_handler_case;
 } CpsB;
 
 /* cps-while-native: index of `bd` among the active loop-carried vars, or -1. */
@@ -1500,10 +1507,11 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_ASYNC:
             return true;
         case EX_AWAIT:
-            /* F3 (cps-async): a shifted await threads a continuation, so it is a
-             * control op (not delegatable) under the flag; otherwise it stays the
-             * self-contained delegated runtime call. */
-            return !g_opt_cps_async;
+            /* cps-async (graduated 2026-07-19): a shifted await threads a
+             * continuation, so in the whole-body probe it is always a control op
+             * (not wholly delegatable).  A handler-case await still delegates, but
+             * per-node (build_letraw guarded by b->in_handler_case), not here. */
+            return false;
         /* D4 (cps-backend-direct-lowering-removal): the cloneable-reset (U3) and
          * serial-reset (U4) delimited-control carve-out is deleted.  These regions
          * are now lowered natively by the CT-IR backend (build_cloneable /
@@ -1882,8 +1890,12 @@ static CTerm *build_handle_core(CpsB *b, HandleExpr *h, Expr *body_expr,
          * needs the DK-backed cloneable-cont wrap + boxed-payload reap at emit. */
         cs[ci].resumable_payload = c->resumable_payload;
         /* The case clause delivers its value by return (KK_PROMPT), which
-         * dk_perform routes to the handler's outer continuation. */
+         * dk_perform routes to the handler's outer continuation.  cps-async: mark
+         * the case-body descent so a nested `await` delegates to the fiber path
+         * (CT_LETRAW) instead of a CT_AWAIT the handler-case admission cannot host. */
+        b->in_handler_case++;
         cs[ci].case_body = cps_tail(b, c->body, kont_prompt(c->body ? c->body->type.kind : TY_INT));
+        b->in_handler_case--;
     }
     t->as.handle.cases = cs;
     t->as.handle.body = cont;
@@ -3518,11 +3530,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             /* U5: delegate the self-contained async region (async spawn / await)
              * so a colored function containing it stays CPS-emitted rather than
              * wholly evicting.  F3 (cps-async): a tail `await` lowers instead to a
-             * dk_shift (build_await) capturing the continuation as a heap kont. */
+             * dk_shift (build_await) capturing the continuation as a heap kont --
+             * EXCEPT inside a handler case body, where it delegates to the fiber
+             * path (CT_LETRAW) that handle_case_ok admits (b->in_handler_case). */
             CVar x = fresh_cvar(b, &e->type);
             CTerm *ac = new_term(b, CT_APPCONT);
             ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
-            if (e->kind == EX_AWAIT && g_opt_cps_async) {
+            if (e->kind == EX_AWAIT && !b->in_handler_case) {
                 Pending p = {0};
                 CTerm *core = build_await(b, e, x, ac, &p);
                 return fold_pending(b, &p, core);
@@ -3833,8 +3847,10 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
         }
         case EX_ASYNC: case EX_AWAIT:
             /* U5: delegate the self-contained async region (see cps_tail).  F3
-             * (cps-async): a tail `await` lowers to a dk_shift (build_await). */
-            if (e->kind == EX_AWAIT && g_opt_cps_async) {
+             * (cps-async): a tail `await` lowers to a dk_shift (build_await),
+             * except inside a handler case body -- there it delegates to the fiber
+             * path (CT_LETRAW) that handle_case_ok admits (b->in_handler_case). */
+            if (e->kind == EX_AWAIT && !b->in_handler_case) {
                 Pending p = {0};
                 CTerm *core = build_await(b, e, x, rest, &p);
                 return fold_pending(b, &p, core);
@@ -3946,6 +3962,7 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     b.n_pap = 0;
     b.n_loop = 0;   /* cps-while-native: not inside a loop body */
     b.rs_n = 0;     /* cps-while-native: read-after-set version map empty */
+    b.in_handler_case = 0;  /* cps-async: not inside a handler-case body */
     /* Phase-1 keystone (control-free colour-only shape): a colored function whose
      * whole body is delegatable (no control op, no colored call -- colored only by
      * a capturing closure it builds) emits as a single CT_LETRAW, so the direct

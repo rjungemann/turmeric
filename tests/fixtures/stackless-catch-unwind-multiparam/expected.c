@@ -2170,6 +2170,25 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
         }
         return dk_invoke(subk, f->value);
     }
+    /* cps-async graduation: a pending future backed by a RUNNABLE scheduler
+     * fiber (e.g. a fiber spawned via tur_scheduler_spawn, or a TaskGroup
+     * child) completes only when the scheduler runs it.  Mirror
+     * tur_await_future's non-fiber branch: drain runnable fibers until the
+     * future resolves, then resume the captured continuation inline.  Bounded
+     * by run_queue_len, so a future that can only complete asynchronously
+     * (the deferred reactor / async-boundary park below) does not spin. */
+    if (tur_scheduler) {
+        while (!tur_future_done(f) && tur_scheduler->run_queue_len > 0) {
+            tur_scheduler_run_one(tur_scheduler);
+        }
+        if (tur_future_done(f)) {
+            if (f->status == FUTURE_REJECTED) {
+                fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
+                abort();
+            }
+            return dk_invoke(subk, f->value);
+        }
+    }
     /* pending: park a private copy of the captured continuation on on_complete */
     TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));
     if (!rec) { fprintf(stderr, "await: oom\n"); abort(); }

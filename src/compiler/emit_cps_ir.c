@@ -1724,7 +1724,9 @@ static bool perform_cont_reset_ok(const CTerm *t) {
  * enclosing k itself, its `next` is dk_done()).  The one thing that is NOT bounded
  * is a TAIL CALL: a cps->cps tail call threads __kont and can recurse, and a
  * ready-future inline resume then recurses through dk_invoke in O(N) C stack
- * (gap 1 -- worse than the direct TCO path).  ALL tail calls are rejected here,
+ * (worse than the direct TCO path -- a recursive await is by design left to the
+ * direct emitter; see docs/archive/cps-async-recursive-await-eviction.md).  ALL
+ * tail calls are rejected here,
  * not just cps->cps ones: whether a callee is CPS-emitted (binding_in_s) is not
  * yet settled while this predicate runs during S-classification (a self-recursive
  * callee reads back as `false` mid-fixpoint), so keying the reject on that flag is
@@ -2136,13 +2138,16 @@ static bool term_core_ok(const CTerm *t) {
              * statically-bounded number of suspensions and no cps->cps tail call).
              *
              * A continuation with a cps->cps tail call (a recursive await) is
-             * DELIBERATELY not admitted -- await_cont_reset_ok rejects it, so it
+             * not admitted BY DESIGN -- await_cont_reset_ok rejects it, so it
              * evicts to the direct emitter.  Lifting it would resume via dk_invoke,
              * and a READY-future inline resume recurses through dk_invoke (not a
              * tail call) in O(N) C stack -- SIGSEGV at ~100k under a 256KB stack,
              * strictly worse than the direct TCO path (which the async-rec probe
-             * runs 1,000,000 deep).  See
-             * docs/reported/cps-async-recursive-await-eviction.md. */
+             * runs 1,000,000 deep).  Since (async fn) is synchronous on the
+             * compiled path, a recursive await is always a ready future, so the
+             * direct emitter's O(1) inline-readiness lowering is the correct one.
+             * This is the settled decision, not an open gap.  See
+             * docs/archive/cps-async-recursive-await-eviction.md. */
             if (!atom_ok(&t->as.await.fut)) return false;
             if (!perform_body_ok(t->as.await.body) && !await_cont_reset_ok(t->as.await.body))
                 return false;
@@ -7149,15 +7154,19 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
                 int eff = (se && (se->eff_lo || se->eff_hi)) ? 1 : 0;
                 fprintf(stderr, "[EVICT] %-22s eff=%d %s %s\n", cat, eff, nm, why);
             }
-            /* The N6.5 gate governs the SHIPPING backend.  An experimental
-             * `--enable` feature that EXPANDS the colored surface (e.g.
-             * `cps-async`, which CPS-lowers `async`/`await` instead of running it
-             * on the fiber runtime) may still carry in-flight BODY residuals its
-             * own admission has not closed -- those are the feature's remaining
-             * work, gated behind its flag, not a regression in the graduated path.
-             * Exempt such flags from the hard error; they keep the fallback until
-             * the feature graduates.  The default (shipping) config stays strict. */
-            bool experimental_surface = g_opt_cps_async || g_opt_cps_tramp_resume;
+            /* The N6.5 gate governs the SHIPPING backend.  The now-graduated CPS
+             * surface -- `cps-async` (CPS-lowers `async`/`await`) and
+             * `cps-tramp-resume` (trampolined effect tail-resume) -- deliberately
+             * routes some bodies to the direct emitter by design: e.g. a recursive
+             * `await` is a ready future the direct emitter handles in O(1) via its
+             * inline readiness check + `goto __tur_tailcall` loop, so it evicts
+             * rather than recurse through dk_invoke on the heap path.  (An `await`
+             * inside a handler case instead delegates a fiber region without
+             * evicting the whole function -- see b->in_handler_case in cps_ir.c.)
+             * Exempt this surface from the hard error.  g_opt_cps_tramp_resume
+             * defaults on, so this is unconditionally true in the shipping build;
+             * the guard is retained for the diagnostic path. */
+            bool experimental_surface = g_opt_cps_tramp_resume;
             if (!sig_perm_route && !experimental_surface)
                 diag_emit(DIAG_ERROR, fd->binding->span,
                           "cps-backend: colored function '%s' fell back to the direct "

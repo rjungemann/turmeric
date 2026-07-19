@@ -206,14 +206,6 @@ extern bool g_dump_cps_mono;
 /* g_opt_cps_effects RETIRED 2026-07-12 -- the `cps-effects` experiment graduated
  * and `handle-shallow` is now unconditionally accepted (see experiments.c). */
 
-/* F3 (docs/archive/compiled-async-heap-continuations-plan.md): enable the
- * in-flight heap-continuation representation for `async`/`await`.  When set, a
- * function containing `await` is CPS-colored and a tail-position `await` lowers
- * to a `dk_shift` against the entry prompt (capturing the rest of the async body
- * as a heap continuation) instead of the fiber `tur_await_future`/swapcontext.
- * Read by the coloring pass (`src/passes/cps.c`) and the CPS-IR builder
- * (`src/passes/cps_ir.c`).  Gated by the `cps-async` experiment. */
-extern bool g_opt_cps_async;
 /* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
 extern bool g_opt_cps_tramp_resume;
 
