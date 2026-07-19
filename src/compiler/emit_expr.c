@@ -2578,6 +2578,19 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
     free(v);
     emit_panic_signal_return(ctx, body);
+    /* gcc14-int-conversion (carrier-representation-tracking): record this call
+     * temp's representation C type when it is a concrete pointer, so a later
+     * `int64_t z = __ps_N;` straddle site (binder init, tail-backedge arg) can
+     * detect the reverse int64<-pointer straddle.  The __auto_type temp takes the
+     * call's real emitted type, which the source-type c-name can collide with the
+     * carrier; only a concrete pointer is recorded, and a mis-recorded carrier
+     * value would only add a value-preserving no-op cast, never a wrong one. */
+    {
+        const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
+        size_t rL = rcty ? strlen(rcty) : 0;
+        if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0)
+            emit_localvar_record_ctype(tmp, rcty);
+    }
     return strdup(tmp);
 }
 
