@@ -3979,6 +3979,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 buf_printf(file, "return %s;\n", bridged);
                 free(bridged);
             }
+        } else if (ret_ctype && !is_main &&
+                   ret_ctype[strlen(ret_ctype) - 1] == '*' &&
+                   strcmp(ret_ctype, "void *") != 0 &&
+                   ret_val && strncmp(ret_val, "(int64_t)", 9) == 0) {
+            /* gcc14-int-conversion (carrier-representation-tracking): a spec
+             * clone whose C return type is a concrete pointer (e.g. an element
+             * accessor `err-val [A B] : B` monomorphized to `const char *` /
+             * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier
+             * (the field read `(int64_t)((tur_adt_Result *)..)->err_val`).
+             * `return <int64>` into a pointer return type is `pointer from
+             * integer` -- a hard error under GCC >= 14.  Reinterpret to the
+             * return type -- value-preserving, fires only for an explicitly
+             * int64-cast return value. */
+            buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }
