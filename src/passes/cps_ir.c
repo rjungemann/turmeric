@@ -1073,6 +1073,25 @@ static bool cloneable_owning_env_ok(const Type *t) {
         || cloneable_owning_agg(t);
 }
 
+/* An owning kind whose CONSUMING capture (a non-^borrow frame that drops it once
+ * per call) the cloneable emit can give per-copy clone glue for:
+ *   - `rc<T>`: env_clone = rc_strong_increment (incref -- cheap shared clone);
+ *   - a FLAT `:heap` ADT / struct carrier (no owning fields, `!needs_drop_glue`):
+ *     env_clone = malloc + shallow header copy (a genuine deep copy, so each
+ *     resume frees its OWN allocation -- a shared handle would double-free).
+ * A heap handle WITH owning fields needs a recursive deep clone (a later slice);
+ * excluded here so a shallow copy never shares an owning field. */
+static bool cloneable_consume_env_ok(const Type *t) {
+    if (!g_opt_owning_cloneable_capture || !t) return false;
+    if (t->kind == TY_RC) return true;
+    if (type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)) {
+        const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
+                        : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+        return d && !d->needs_drop_glue;   /* flat only */
+    }
+    return false;
+}
+
 /* Pure existence check: does `program` declare a Serializable instance for the
  * nominal (TY_ADT) type `t`?  Lets build_serial admit a SER-env frame; the
  * emitter (emit_cps_ir.c) resolves the instance's serialize/deserialize method
@@ -1233,8 +1252,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                 bool owning_borrow_env =
                     env_op && cloneable_owning_env_ok(&env_op->type) && env_borrow;
                 bool owning_consume_env =
-                    g_opt_owning_cloneable_capture && env_op
-                    && env_op->type.kind == TY_RC && !env_borrow;
+                    env_op && !env_borrow && cloneable_consume_env_ok(&env_op->type);
                 if (!cps_scalar_kind_ok(envk)
                     && !owning_borrow_env && !owning_consume_env)
                     return NULL;
@@ -1266,8 +1284,7 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                 bool owning_borrow_env =
                     cloneable_owning_env_ok(&other->type) && env_borrow;
                 bool owning_consume_env =
-                    g_opt_owning_cloneable_capture
-                    && other->type.kind == TY_RC && !env_borrow;
+                    !env_borrow && cloneable_consume_env_ok(&other->type);
                 if (!cps_scalar_kind_ok(other->type.kind)
                     && !owning_borrow_env && !owning_consume_env)
                     return NULL;

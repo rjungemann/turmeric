@@ -936,19 +936,35 @@ static bool owning_byvalue_aggregate(const Type *t) {
     return d && d->needs_drop_glue;
 }
 
-/* E3a (owning-cloneable-capture): does this 2-arg cloneable call frame CONSUME
- * its captured rc env (drop it once per call), rather than ^borrow it?  A
- * consuming rc frame gets dk_frame_owning env_clone glue (rc incref per resume
- * copy) so each multi-shot resume drops its own +1.  Detected by: a 2-arg call
- * whose captured (non-hole) operand is an rc AND whose callee param is NOT
- * ^borrow.  rc only -- the sole owning kind with scalar incref glue. */
-static bool cloneable_frame_consumes_rc(const CloneFrame *fr) {
+/* E3a (owning-cloneable-capture): is this a 2-arg cloneable call frame that
+ * CONSUMES its captured owning env (drops it once per call), rather than
+ * ^borrow it?  A consuming frame gets dk_frame_owning env_clone glue so each
+ * multi-shot resume owns its own copy to drop.  Detected by: a 2-arg call whose
+ * callee param is NOT ^borrow and whose captured operand is a consumable owning
+ * kind.  Two kinds, distinguished by the emitted glue:
+ *   - rc: cloneable_frame_consumes_rc -- env_clone = rc_strong_increment;
+ *   - a FLAT heap carrier: cloneable_frame_consumes_carrier -- env_clone =
+ *     malloc + shallow header copy (a real deep copy so each resume frees its own
+ *     allocation; flat = no owning fields, so a shallow copy shares nothing). */
+static bool cloneable_frame_consume_base(const CloneFrame *fr) {
     if (!fr || !fr->call_fn || fr->ignore_value) return false;
     if (fr->call_fn->type.kind != TY_FN || fr->call_fn->type.as.fn.arity != 2)
         return false;
-    if (!fr->operand.type || fr->operand.type->kind != TY_RC) return false;
+    if (!fr->operand.type) return false;
     int env_idx = fr->hole_left ? 1 : 0;
     return !FN_ARG_FLAG(fr->call_fn->type.as.fn, env_idx, FA_BORROW);
+}
+static bool cloneable_frame_consumes_rc(const CloneFrame *fr) {
+    return cloneable_frame_consume_base(fr) && fr->operand.type->kind == TY_RC;
+}
+static bool cloneable_frame_consumes_carrier(const CloneFrame *fr) {
+    if (!cloneable_frame_consume_base(fr)) return false;
+    const Type *t = fr->operand.type;
+    if (!(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
+        return false;
+    const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
+                    : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+    return d && !d->needs_drop_glue;   /* flat: shallow copy is a sound deep copy */
 }
 
 /* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
@@ -6394,6 +6410,25 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                             "static intptr_t %s_envclone(intptr_t e) { "
                             "rc_strong_increment((RcControlBlock *)(intptr_t)e); return e; }\n",
                             ctxfn);
+                    else if (cloneable_frame_consumes_carrier(fr)) {
+                        /* A flat heap carrier: deep-copy the pointed-to header
+                         * (malloc a fresh header + shallow field copy) so each
+                         * resume frees its OWN allocation.  Flat means no owning
+                         * fields, so the shallow copy shares nothing.  The handle's
+                         * C type is `<hdr> *`; strip the trailing ` *` to get the
+                         * bare header struct name for sizeof + the copy. */
+                        char hdr[192];
+                        snprintf(hdr, sizeof hdr, "%s",
+                                 emit_type_c_name(ce->ctx, *fr->operand.type));
+                        size_t L = strlen(hdr);
+                        while (L > 0 && (hdr[L-1] == '*' || hdr[L-1] == ' '))
+                            hdr[--L] = 0;
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "%s *__c = (%s *)malloc(sizeof(%s)); "
+                            "*__c = *(%s *)(intptr_t)e; return (intptr_t)__c; }\n",
+                            ctxfn, hdr, hdr, hdr, hdr);
+                    }
                 } else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
@@ -6444,7 +6479,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
              * glue emitted above (incref per resume copy) and NO env_drop (the
              * frame's own drop balances each copy; the base +1 is the owner's).
              * A borrow / scalar / aggregate frame stays a plain dk_frame. */
-            if (cloneable_frame_consumes_rc(fr))
+            if (cloneable_frame_consumes_rc(fr) || cloneable_frame_consumes_carrier(fr))
                 ce_line(ce, "%s = dk_frame_owning(%s, (intptr_t)(%s), %s_envclone, 0, %s);",
                         dv, ctxfn, opv, ctxfn, dv);
             else

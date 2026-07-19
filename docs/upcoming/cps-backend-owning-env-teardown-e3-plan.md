@@ -345,13 +345,21 @@ NONE of them need per-frame clone glue.
   increfs its own +1, which the frame's own drop balances; the owner's base +1 is
   released once by its P5b-threaded scope-exit drop. Accounting nets to freed
   exactly once (fixture `cloneable-owning-consuming-capture`, LSan-clean).
-  build_marshal_reset admits it at both the param and operand env checks (rc only
-  -- the sole owning kind with scalar incref glue). A consuming CARRIER handle /
-  AGGREGATE would need their deep-copy clone glue in `env_clone` (a later slice).
+  build_marshal_reset admits it at both the param and operand env checks.
+- **CONSUMING carrier handle -- LANDED.** A frame that consumes a FLAT `:heap`
+  carrier handle (no owning fields) rides `dk_frame_owning` with a DEEP-COPY
+  `env_clone`: `malloc` a fresh header + shallow field copy, so each resume frees
+  its OWN allocation (a heap handle is not refcounted -- a shared free would
+  double-free). The bare header type is `emit_type_c_name` minus the trailing
+  ` *`, so `sizeof`/copy cover the whole header, not just the first word (fixture
+  `cloneable-owning-consuming-carrier`, two fields, LSan-clean). Restricted to
+  flat handles: one WITH owning fields needs a recursive deep clone.
 
-With borrow, owner-drop, and the rc consuming case all landed, E3's owning-capture
-goal is functionally met for `rc` across every channel. Remaining: consuming
-carrier/aggregate clone glue, and GRADUATION (retire the experiment gate).
+With borrow, owner-drop, and the consuming rc + flat-carrier cases landed, E3's
+owning-capture goal is functionally met across every channel for `rc`, `:heap`
+carriers, and by-value aggregates. Remaining: the consuming case for a
+NON-flat heap handle / by-value aggregate (both need a recursive deep clone that
+clones owning fields), and GRADUATION (retire the experiment gate).
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.
