@@ -606,6 +606,45 @@ value drop. Sec 3 should be read WITH this addendum: fiber-live == 0 was necessa
 but not sufficient; the sufficient bar (whole-suite flag-on correctness) is now met
 except for snapshot regen + the separate owning-value leak.
 
+### 3a.2 Update (2026-07-19) -- graduated; physical runtime deletion has a measured 3-fixture blocker
+
+The `cps-tramp-resume` experiment is **graduated**: `g_opt_cps_tramp_resume`
+defaults true, the `EXPERIMENTS[]` row is retired to `GRADUATED[]`, and the 24
+`--enable=cps-tramp-resume` fixture flags files are removed. The DK path is the
+default+sole *perform/handle* lowering: a full-corpus sweep finds **zero
+`tur_effect_perform("` call sites and zero `__handle_body_N` fiber handle thunks**.
+
+**But the fiber effect runtime C cannot yet be physically deleted (Stage G steps
+2-3).** An invariant probe -- ICE at the `emit_value` dispatch for every effect
+form -- failed on **53 fixtures**, disproving that the whole fiber effect path is
+dead. Narrowing to actual fiber-runtime *calls* in emitted user code, the residue
+is precise:
+
+- `tur_effect_perform` : **0** fixtures (dead -- deletable).
+- `__handle_body_N` (fiber handle) : **0** fixtures (dead -- deletable).
+- **`tur_effect_cont_resume` : 3 fixtures** -- `defstruct-field-handler`,
+  `defstruct-field-handler-multi`, `fh-multi-effect-type`.
+
+The 3 residual fixtures store a `(handler E V R)` VALUE in a `defstruct` field,
+read it back, and apply it via `(with-handler (.h row) body)`. The `perform`
+inside `body` DK-lowers (`dk_perform`), but the dynamically-obtained handler's
+`(resume k ..)` and the `with-handler` application still route through the fiber
+`tur_effect_cont_resume` / `TurEffectCaptureCtx` path -- a DK-perform + fiber-resume
+SPLIT. So `tur_effect_perform == 0` was necessary but **not sufficient**: the
+resume-side (effect-capture-continuation) surface is a distinct axis the metric
+never measured.
+
+**The remaining deletion work is therefore one bounded slice:** DK-lower the
+`with-handler`-of-a-dynamically-obtained-handler-value resume (the struct-field /
+first-class handler value applied via `with-handler`), so `tur_effect_cont_resume`
+drops to 0 across those 3 fixtures. Once it does, the fiber effect runtime C
+(`tur_effect_perform`, `EffectHandlerFrame`/`Case`, `global_effect_handler_chain`,
+`tur_handler_dispatch` + msdyn, `tur_effect_cont_*`, and the two `FiberBlock`
+effect fields) plus the `emit_effects.c` direct perform/handle/resume emitters are
+all unreferenced and can be deleted (churning the 140 `expected.c` snapshots, a
+manageable regen -- not a >500 coordinated window). `tur_handler_table_t` STAYS
+(the DK handler-value path in emit_cps_ir.c / emit_dk_runtime.c uses it).
+
 ## 4. Status of the reports this plan supersedes
 
 Resolved and archived 2026-07-18 (verified by the Sec 0 measure): the
