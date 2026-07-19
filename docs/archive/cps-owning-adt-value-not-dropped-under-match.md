@@ -1,5 +1,19 @@
 # Matched boxed ADT / handler value not dropped (general owning-value teardown gap)
 
+> **Archived 2026-07-19** as a known limitation (the report's own Resolution
+> section, below, already settled this as documented memory-model behavior rather
+> than a defect). Re-verified against the current tree under
+> `cc -fsanitize=address,undefined`: the non-effect `Box` probe leaks 16 bytes,
+> the effect-free `adt-recursive` Cons list leaks 24 bytes (and PASSES the suite,
+> whose run phase is not leak-checked), and the `cps-backend-effect-under-match`
+> fixture leaks its `Full` box (`ctor_Full <- route__cps`) identically on the
+> shipping flag-off path -- confirming a bare non-`rc` heap ADT box is never
+> auto-freed on any path, exactly as `docs/guides/gc-guide.md` documents. Making
+> these free is a language-level memory-model decision for the owner, not a
+> targeted fix. See also the sibling `cps-match-scrutinee-not-dropped` report,
+> which describes the same 16-byte scrutinee box on the experimental flag-on path
+> and is subsumed by this determination.
+
 **Severity:** low (small, one-shot leaks near program end; the suite's run phase is
 not leak-checked for these fixtures, so they pass). **NOT CPS-specific** -- see the
 correction below. The original title said "on the CPS path"; that framing was

@@ -1,5 +1,20 @@
 # CPS `CT_MATCH` does not drop its heap-ADT scrutinee (flag-on leak)
 
+> **Archived 2026-07-19 -- SUBSUMED by `cps-owning-adt-value-not-dropped-under-match`.**
+> This report's premise -- "Flag-off is leak-clean: the direct emitter's ownership
+> pass drops the scrutinee" -- does NOT hold. Verified on the exact fixture
+> (`cps-backend-effect-under-match`) under `cc -fsanitize=address,undefined`: the
+> shipping **flag-off** build leaks the identical 16-byte scrutinee box
+> (`ctor_Full <- route__cps <- run__cps`), and the flag-on build leaks the same 16
+> bytes (plus the universal DK-node baseline). So the direct emitter does not drop
+> a matched non-`rc` boxed ADT either -- the scrutinee non-drop is Turmeric's
+> documented "non-`rc` heap value is never auto-freed" memory model
+> (`docs/guides/gc-guide.md`), not a CPS-specific defect. Teaching `emit_match`
+> (CPS) to drop the scrutinee would DIVERGE from the shipping direct emitter and
+> from the memory model, so the requested fix is intentionally not implemented.
+> If bare boxed ADTs ever become RC-managed, that language-level change lands in
+> the direct emitter's drop pass and both paths inherit it together.
+
 **Severity:** low (experimental `--enable=cps-tramp-resume` path only; shipping
 flag-off path unaffected).
 
