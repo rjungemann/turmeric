@@ -1390,10 +1390,6 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
              * top-level and keeps its correct diagnostic -- such a program is a
              * compile error either way, so the historical path is exactly right. */
             if (hs == e.sym_question || hs == e.sym_return) { ambiguous = true; break; }
-            /* a top-level unhandled perform must keep its compile-time TUR-E0008
-             * (elab_effects.c) rather than be folded into main and deferred to a
-             * runtime abort (errors/effect-unhandled) -- abort the fold for it. */
-            if (form_has_toplevel_unhandled_perform(&e, f)) { ambiguous = true; break; }
             int macro_idx = -1;
             for (uint32_t m = 0; m < n_macro; m++)
                 if (macro_names[m] == hs) { macro_idx = (int)m; break; }
@@ -1419,6 +1415,15 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
              * if its handle subtree is a shape the DK backend miscompiles (nested
              * handle / escaping-mut set!), leaving it on the historical fiber path. */
             if (fold_stmt_is_risky(&e, f)) { ambiguous = true; break; }
+            /* a top-level unhandled perform in a PLAIN-call statement must keep its
+             * compile-time TUR-E0008 (elab_effects.c) rather than be folded into
+             * main and deferred to a runtime abort (errors/effect-unhandled).  Only
+             * applied here, in the plain-call branch: a MACRO-call statement (handled
+             * above) may install a handler via its template expansion (e.g.
+             * with-fail-println wraps its body in a handle), which this pre-expansion
+             * lexical scan cannot see, so scanning it would wrongly abort a fold that
+             * DK-lowers fine after expansion (effect-with-fail / effect-with-write). */
+            if (form_has_toplevel_unhandled_perform(&e, f)) { ambiguous = true; break; }
             any_stmt = true;
         }
         free(macro_names);
