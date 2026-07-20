@@ -1208,7 +1208,7 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
 /* gcc14-int-conversion (carrier-representation-tracking): true when `s` is a bare
  * C identifier (a temp / local name), so it can key the local-var type table.  A
  * cast/expression value (`(int64_t)(...)`, `x->f`, `f(...)`) is not looked up. */
-static bool emit_str_is_bare_ident(const char *s) {
+bool emit_str_is_bare_ident(const char *s) {
     if (!s || !(s[0] == '_' || isalpha((unsigned char)s[0]))) return false;
     for (const char *p = s + 1; *p; p++)
         if (!(*p == '_' || isalnum((unsigned char)*p))) return false;
@@ -2673,6 +2673,15 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(mn);
             }
         }
+        /* Also record a genuinely int64-carrier call temp, so a
+         * pointer-returning function whose tail is such a bare temp
+         * (`return __ps_224;` with the fn returning `tur_adt_Point *`) can detect
+         * the forward int64->pointer return straddle.  A ctor temp was already
+         * reclassified to its concrete pointer above, so this does not mislabel
+         * one; the binder-init / tail-backedge bridges key on a POINTER entry, so
+         * an int64 entry never triggers them. */
+        if (!recorded && rcty && strcmp(rcty, "int64_t") == 0 && !v_is_ctor)
+            emit_localvar_record_ctype(tmp, "int64_t");
     }
     return strdup(tmp);
 }

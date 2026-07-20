@@ -488,6 +488,7 @@ const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+bool emit_str_is_bare_ident(const char *s);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

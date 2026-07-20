@@ -3982,16 +3982,20 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         } else if (ret_ctype && !is_main &&
                    ret_ctype[strlen(ret_ctype) - 1] == '*' &&
                    strcmp(ret_ctype, "void *") != 0 &&
-                   ret_val && strncmp(ret_val, "(int64_t)", 9) == 0) {
+                   ret_val &&
+                   (strncmp(ret_val, "(int64_t)", 9) == 0 ||
+                    (emit_str_is_bare_ident(ret_val) &&
+                     emit_localvar_lookup_ctype(ret_val) &&
+                     strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) {
             /* gcc14-int-conversion (carrier-representation-tracking): a spec
              * clone whose C return type is a concrete pointer (e.g. an element
              * accessor `err-val [A B] : B` monomorphized to `const char *` /
-             * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier
-             * (the field read `(int64_t)((tur_adt_Result *)..)->err_val`).
-             * `return <int64>` into a pointer return type is `pointer from
-             * integer` -- a hard error under GCC >= 14.  Reinterpret to the
-             * return type -- value-preserving, fires only for an explicitly
-             * int64-cast return value. */
+             * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier --
+             * either an explicit `(int64_t)..` field read, or a bare call temp
+             * RECORDED as int64 (`return __ps_224;` where run_id__spec returns
+             * int64 but the fn returns `tur_adt_Point *`).  `return <int64>` into
+             * a pointer return type is `pointer from integer` -- a hard error
+             * under GCC >= 14.  Reinterpret to the return type (value-preserving). */
             buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
