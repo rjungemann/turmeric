@@ -1,0 +1,296 @@
+;;; tur/typeclass-show-string -- the ShowString typeclass: render a value as an
+;;; OWNED `String`, not a borrowed/ambiguous `cstr`.
+;;;
+;;; `Show`'s `(show x) : cstr` cannot tell a caller whether the returned pointer
+;;; is a borrow (a literal / a String's interior payload -- must NOT be freed) or
+;;; a fresh `malloc` (owned -- leaks if not freed).  A generic `(show x)` caller
+;;; therefore has no uniformly-safe ownership policy: freeing corrupts the
+;;; borrow instances, not freeing leaks the allocating ones.  See
+;;; docs/upcoming/v2/show-owned-result-plan.md.
+;;;
+;;; `ShowString` fixes that by returning `String`: every result is uniformly
+;;; OWNED (refcount 1), so callers `string/release` unconditionally -- no leak,
+;;; no UB, no per-call ownership guessing.  This is stage 1 of the migration:
+;;; `show-string` lives ALONGSIDE `show` so the owned surface exists without
+;;; breaking any existing `show` call site.
+;;;
+;;; NOT auto-loaded (like `Show` itself): pull it in with
+;;; `(load "stdlib/typeclass-show-string.tur")`.  Because it returns `String`,
+;;; it must sit ABOVE stdlib/string.tur in the load graph, so it cannot be
+;;; hooked into stdlib/typeclass.tur (which stdlib/string.tur loads before
+;;; `String` is defined).
+;;;
+;;; Every instance here lives in ShowString's own module, so the orphan rule
+;;; (TUR-E0013) is satisfied for the primitive / collection / StringSlice
+;;; instances without touching their defining modules.
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+;; string-slice.tur transitively loads string.tur (String, StringBuilder,
+;; string/*), typeclass-show.tur (Show + the Vec/Set/Map show machinery), and
+;; map.tur (Vec/Set/Map), and adds StringSlice.  Loading it gives this module
+;; everything it needs; dedup makes the explicit typeclass-show load a no-op.
+(load "stdlib/string-slice.tur")
+
+(load "stdlib/typeclass-show.tur")
+;;; ShowString -- typeclass for rendering a value as an owned String.
+;;;
+;;; The owned counterpart of Show: `(show-string x)` returns a fresh `String`
+;;; (refcount 1) the caller owns and `string/release`s, rather than an
+;;; ownership-ambiguous `cstr`.
+;;;
+;;; Parameters:
+;;;   a -- the type to render
+;;;
+;;; Returns:
+;;;   A fresh owned String (refcount 1).
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+(defclass ShowString [a] (show-string [x] : String))
+;; ---------------------------------------------------------------------------
+;; Primitive instances.
+;;
+;; int has a direct owned constructor (int->string).  The other numeric
+;; instances build over the existing Show formatter with string/adopt-cstr,
+;; which COPIES the malloc'd cstr into an owned String and FREES the original --
+;; converting each allocating Show instance's fresh buffer into a leak-free
+;; owned String.  This is sound precisely because every numeric Show body here
+;; unconditionally mallocs (never returns a literal), so adopting (freeing) it
+;; is always correct.
+;; ---------------------------------------------------------------------------
+;;; ShowString [int] -- owned decimal String (direct, no cstr intermediate).
+
+(definstance ShowString [int]
+  (show-string [x] : String (int->string x)))
+;;; ShowString [int8] -- owned decimal String.
+
+(definstance ShowString [int8]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [int16] -- owned decimal String.
+
+(definstance ShowString [int16]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [int32] -- owned decimal String.
+
+(definstance ShowString [int32]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [uint8] -- owned decimal String.
+
+(definstance ShowString [uint8]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [uint16] -- owned decimal String.
+
+(definstance ShowString [uint16]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [uint32] -- owned decimal String.
+
+(definstance ShowString [uint32]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [uint64] -- owned decimal String.
+
+(definstance ShowString [uint64]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [float] -- owned String rendering of a double.
+
+(definstance ShowString [float]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;;; ShowString [float32] -- owned String rendering of a float32.
+
+(definstance ShowString [float32]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;; ---------------------------------------------------------------------------
+;; Borrow instances.  Show returns a literal / a borrowed interior pointer here
+;; (never a fresh malloc), so we COPY with string/from-cstr (which never frees
+;; its source) rather than adopt.  String itself is O(1) retain -- no byte copy.
+;; ---------------------------------------------------------------------------
+;;; ShowString [cstr] -- copy the borrowed cstr into a fresh owned String.
+
+(definstance ShowString [cstr]
+  (show-string [x] : String (string/from-cstr x)))
+;;; ShowString [bool] -- owned "true"/"false" String (copy of the literal).
+
+(definstance ShowString [bool]
+  (show-string [x] : String (string/from-cstr (show x))))
+;;; ShowString [String] -- O(1) retain (refcount++), a second owning handle.
+
+(definstance ShowString [String]
+  (show-string [x] : String (string/retain x)))
+;;; ShowString [StringSlice] -- the slice content as a fresh owned String.
+;;;
+;;; slice/to-cstr always mallocs its result, so adopting it is leak-free.
+
+(definstance ShowString [StringSlice]
+  (show-string [x] : String (string/adopt-cstr (show x))))
+;; ---------------------------------------------------------------------------
+;; Collection instances (Vec / Set / Map).
+;;
+;; Built directly with a StringBuilder over each element's ShowString, releasing
+;; every intermediate element String as it is pushed.  This is fully leak-clean
+;; (unlike an adopt-over-show wrapper, which would still leak the collection
+;; Show driver's intermediate show-concat buffers).  The `s : (Set A)` /
+;; `m : (Map K V)` witness parameters pin the element types so monomorphization
+;; grounds the element ShowString dispatch, exactly as the Show collection loops
+;; do (see stdlib/typeclass-show.tur for the phantom-type rationale).
+;; ---------------------------------------------------------------------------
+;;; vec-show-string-loop -- push "e0 e1 ..." element reprs into the builder.
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(defn vec-show-string-loop [^ShowString A]
+  [v : (Vec A) i : int len : int b : StringBuilder]
+  : StringBuilder
+  (if (= i len)
+    b
+    (do
+      (when (> i 0) (builder/push-cstr! b " "))
+      (let [es (show-string (:: (vec-get v i) A))]
+        (do
+          (builder/push-string! b es)
+          (string/release es)))
+      (vec-show-string-loop v (+ i 1) len b))))
+;;; ShowString [Vec] -- render a Vec[A] as an owned "[a b c]" String.
+;;;
+;;; Example:
+;;;   (show-string (vec-of 1 2 3))  ; => String "[1 2 3]"
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(definstance ShowString [Vec]
+  [(ShowString A)]
+  (show-string [x]
+    (let [xx (:: x (Vec A))
+          b  (builder/new)]
+      (do
+        (builder/push-cstr! b "[")
+        (vec-show-string-loop xx 0 (vec-len xx) b)
+        (builder/push-cstr! b "]")
+        (builder/finish b)))))
+;;; set-show-string-loop -- push the space-separated element reprs into b.
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(defn set-show-string-loop [^ShowString A]
+  [s : (Set A) iter : ptr<void> first : bool b : StringBuilder]
+  : StringBuilder
+  (if (hamt/iter-advance! iter)
+    (do
+      (when (not first) (builder/push-cstr! b " "))
+      (let [es (show-string (:: (hamt/iter-cur-key iter) A))]
+        (do
+          (builder/push-string! b es)
+          (string/release es)))
+      (set-show-string-loop s iter false b))
+    b))
+;;; ShowString [Set] -- render a Set[A] as an owned "#set{a b c}" String.
+;;;
+;;; Example:
+;;;   (show-string (set-of 1 2 3))  ; => String "#set{1 2 3}"
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(definstance ShowString [Set]
+  [(ShowString A)]
+  (show-string [x]
+    (let [ss   (:: x (Set A))
+          b    (builder/new)
+          iter (hamt/iter-alloc (set-hamt ss))]
+      (do
+        (builder/push-cstr! b "#set{")
+        (set-show-string-loop ss iter true b)
+        (hamt/iter-destroy! iter)
+        (builder/push-cstr! b "}")
+        (builder/finish b)))))
+;;; map-show-string-loop -- push the space-separated "k v" reprs into b.
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(defn map-show-string-loop [^ShowString K ^ShowString V]
+  [m : (Map K V) iter : ptr<void> first : bool b : StringBuilder]
+  : StringBuilder
+  (if (hamt/iter-advance! iter)
+    (do
+      (when (not first) (builder/push-cstr! b " "))
+      (let [ks (show-string (:: (hamt/iter-cur-key iter) K))
+            vs (show-string (:: (map-iter-cur-val-as iter) V))]
+        (do
+          (builder/push-string! b ks)
+          (string/release ks)
+          (builder/push-cstr! b " ")
+          (builder/push-string! b vs)
+          (string/release vs)))
+      (map-show-string-loop m iter false b))
+    b))
+;;; ShowString [Map] -- render a Map[K V] as an owned "#map{k1 v1 k2 v2}" String.
+;;;
+;;; Example:
+;;;   (show-string (hamt-of 1 10 2 20))  ; => String "#map{1 10 2 20}"
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(definstance ShowString [Map]
+  [(ShowString K) (ShowString V)]
+  (show-string [x]
+    (let [mm   (:: x (Map K V))
+          b    (builder/new)
+          iter (hamt/iter-alloc (map-hamt mm))]
+      (do
+        (builder/push-cstr! b "#map{")
+        (map-show-string-loop mm iter true b)
+        (hamt/iter-destroy! iter)
+        (builder/push-cstr! b "}")
+        (builder/finish b)))))
+;; ---------------------------------------------------------------------------
+;; Convenience wrappers: show + print + release, so call sites that only want
+;; to render-and-print stay one-liners despite the owned result.
+;; ---------------------------------------------------------------------------
+;;; show-string-fputs -- internal: write a cstr to stdout with no newline.
+;;;
+;;; The compiled builtins expose `println` (with newline) but no bare `print`,
+;;; so print-show routes its unterminated write through this fixed-arity
+;;; inline-C helper.  Compiled-path only; an --interpret caller of print-show
+;;; needs a matching native (show-line, which uses println, works in both).
+
+(defn show-string-fputs [s : cstr] #fx{FS} : void
+  ```c
+  fputs((const char *)s, stdout);
+  ```)
+;;; print-show -- render x via ShowString and print it (no trailing newline).
+;;;
+;;; Shows x to an owned String, prints its bytes, and releases the String.
+;;;
+;;; Parameters:
+;;;   x -- a value whose type has a ShowString instance
+;;;
+;;; Returns:
+;;;   Nothing (void).
+;;;
+;;; Example:
+;;;   (print-show 42)  ; prints: 42
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(defn print-show [^ShowString a] [x : a] : void
+  (let [s (show-string x)]
+    (do
+      (show-string-fputs (string/to-cstr s))
+      (string/release s))))
+;;; show-line -- render x via ShowString and print it with a trailing newline.
+;;;
+;;; Shows x to an owned String, prints its bytes plus a newline, and releases
+;;; the String.
+;;;
+;;; Parameters:
+;;;   x -- a value whose type has a ShowString instance
+;;;
+;;; Returns:
+;;;   Nothing (void).
+;;;
+;;; Example:
+;;;   (show-line 42)  ; prints: 42\n
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 1)
+
+(defn show-line [^ShowString a] [x : a] : void
+  (let [s (show-string x)]
+    (do
+      (println (string/to-cstr s))
+      (string/release s))))
