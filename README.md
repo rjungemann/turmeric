@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.29.0` -- the fiber effect runtime is deleted; the CPS/DK delimited-continuation backend is now the sole lowering path for effects and handlers.
+**Latest release:** `v0.29.1` -- the compiler builds clean under gcc14 (int64<->pointer carrier tracking across codegen), and the CPS owning-env teardown and async paths graduate to always-on.
 
 ## What
 

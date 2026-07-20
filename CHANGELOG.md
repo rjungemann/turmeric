@@ -4,6 +4,33 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.29.1] -- 2026-07-19
+
+### Fixed
+
+- **gcc14 clean build**: a tree-wide representation-tracking sweep now casts
+  int64<->pointer carriers correctly throughout codegen (spec-dispatch,
+  cps->direct tail calls, ctor field args, inline-C anon-structs, control-form
+  result assignments), so the compiler builds clean under gcc14 -- the
+  `-Wno-error=int-conversion` and `-Wno-error=incompatible-pointer-types`
+  escape hatches have been dropped.
+- **effectful-fnvalue miscompile**: fixed a miscompilation of a polymorphic
+  function value passed through the CPS ABI.
+- **cps->direct dispatch**: cps->direct LETCALL now resolves to the defined
+  monomorph clone, fixing an unmangled tcons reference.
+
+### Changed
+
+- **CPS owning-env teardown graduated (E3a/E3b)**: capturing an owning value
+  into a multi-shot cloneable continuation is now always-on, including deep-copy
+  clone of captured heap handles and auto-deferred scope-exit drops across a
+  cloneable reset.
+- **cps-async graduated**: the remaining fiber-interop gaps are closed and async
+  CPS is now always-on.
+- **Relaxed cloneable-shift requirements (E4a)**: an owning or non-Serializable
+  value merely in scope at a cloneable shift no longer requires `Clone` /
+  `Serializable`.
+
 ## [0.29.0] -- 2026-07-18
 
 ### Removed
