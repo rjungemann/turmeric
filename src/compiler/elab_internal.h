@@ -1256,6 +1256,14 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
 Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     Span span, const Symbol *rec_name, const Symbol **type_params,
     Kind *type_param_kinds, uint8_t n_type_params);
+/* rc-angle-bracket-annotation-becomes-tyvar: resolve a typed reference-family
+ * keyword annotation (`rc<T>`, `weak<T>`, `ref<T>`, `lref<T>`) to its real
+ * TY_RC/TY_WEAK/TY_REF/TY_LREF Type.  Returns NULL when the name is not one of
+ * these angle-bracket forms, so callers fall through to their existing
+ * handling (bare `rc`, tyvar, alias, ...). */
+Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+    Span span, const Symbol *rec_name, const Symbol **type_params,
+    Kind *type_param_kinds, uint8_t n_type_params);
 /* Resolve a type-annotation form (F_KEYWORD `:int`, spaced F_TYPE_ANN
  * wrapping any form, or a list constructor like `(-> a b)`) into a Type*.
  * Unwraps F_TYPE_ANN and delegates to type_expr_from_form for the inner

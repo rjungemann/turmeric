@@ -1,5 +1,33 @@
 # `rc<int>` (angle-bracket) type annotation silently becomes a tyvar
 
+**Status: RESOLVED (2026-07-20).** Fixed via the report's option (b) -- the
+reference-family angle-bracket forms are now *parsed as the parameterised types
+they look like* in defn/fn param and return annotations, instead of being
+rejected or left to accidental unification. Option (a) (blanket-reject
+`Ctor<...>`) was rejected: `rc<int>`, `ref<int>`, `lref<int>`, `weak<int>`, and
+`ptr<T>` are used pervasively as param/return/field annotations across the
+fixtures, so rejecting the spelling would have broken working code.
+
+Resolution summary:
+
+- New `rc_family_type_from_keyword_name` (`src/compiler/elab_types.c`), a sibling
+  of `ptr_type_from_keyword_name`, resolves `rc<T>` / `weak<T>` / `ref<T>` /
+  `lref<T>` to the real `TY_RC` / `TY_WEAK` / `TY_REF` / `TY_LREF` carrier
+  (with `type_rc_adt` for an aggregate inner, mirroring the struct-field path).
+- Wired into every annotation position that previously fell through to a tyvar:
+  the fused `:rc<T>` keyword ladder in both `elab_defn` and `elab_fn` (param +
+  return), and the spaced `: rc<T>` / nested path via `fn_type_from_form_impl`.
+  `:ref<T>` / `:lref<T>` params inherit the linear-by-default discipline the
+  bare-keyword forms apply.
+- Regression fixture: `tests/fixtures/rc-typed-param-annotation/`.
+- Full suite green (2213 passed, 0 failed); `rc/strong-count` on a
+  `rc<int>`-typed param now reports the real count (verified end-to-end: 2 after
+  a clone).
+
+Original report follows.
+
+---
+
 **Severity: medium** -- it is a silent footgun: the annotation looks like it
 names `rc<int>` but resolves to an unrelated fresh type variable, so rc builtins
 fail with a confusing `got tyvar` and the value only behaves as an rc by

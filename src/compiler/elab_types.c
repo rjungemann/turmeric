@@ -445,6 +445,70 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
     return t;
 }
 
+/* rc-angle-bracket-annotation-becomes-tyvar: resolve a typed reference-family
+ * keyword annotation -- `rc<T>`, `weak<T>`, `ref<T>`, `lref<T>` -- to its real
+ * TY_RC/TY_WEAK/TY_REF/TY_LREF Type carrying the inner pointee kind.  This
+ * mirrors `ptr<T>` (ptr_type_from_keyword_name) and the struct-field parser
+ * (parse_struct_field_type), both of which already accept the angle-bracket
+ * spelling.  The defn/fn param and return ladders were the one place that did
+ * NOT: a `rc<int>` annotation there fell through to a fresh type variable named
+ * "rc<int>".  Under expected-type pressure that tyvar unifies with a real rc
+ * value (so `(sink r)` / a struct field of type rc "work"), but any post-hoc
+ * `rc/...` builtin sees the bare tyvar and errors with a confusing "got tyvar"
+ * -- a silent footgun.  Returns NULL when `name` is not one of these
+ * angle-bracket forms, so the caller falls through to its existing resolution
+ * (bare `rc`, tyvar, alias, ...). */
+Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+                                       Span span, const Symbol *rec_name,
+                                       const Symbol **type_params,
+                                       Kind *type_param_kinds, uint8_t n_type_params) {
+    /* shortest typed form is "rc<x>" == 5 chars; must end in '>' */
+    if (len < 5 || name[len - 1] != '>') return NULL;
+    TypeKind family = TY_UNKNOWN;
+    uint32_t prefix_len = 0;
+    if (len > 3 && memcmp(name, "rc<", 3) == 0)        { family = TY_RC;   prefix_len = 3; }
+    else if (len > 4 && memcmp(name, "ref<", 4) == 0)  { family = TY_REF;  prefix_len = 4; }
+    else if (len > 5 && memcmp(name, "lref<", 5) == 0) { family = TY_LREF; prefix_len = 5; }
+    else if (len > 5 && memcmp(name, "weak<", 5) == 0) { family = TY_WEAK; prefix_len = 5; }
+    if (family == TY_UNKNOWN) return NULL;
+
+    const char *inner = name + prefix_len;
+    uint32_t inner_len = len - prefix_len - 1;   /* between "rc<" and the final '>' */
+    if (inner_len == 0) {
+        diag_emit(DIAG_ERROR, span, "empty inner type in '%.*s<...>'",
+                  (int)(prefix_len - 1), name);
+        return NULL;
+    }
+    /* Resolve the inner spelling through the same synthetic-F_SYM path as
+     * ptr<T>: primitive / type-param / struct / ADT / nested resolution. */
+    const Symbol *inner_sym = symtab_intern(e->st, strslice(inner, inner_len));
+    Form inner_form;
+    memset(&inner_form, 0, sizeof(inner_form));
+    inner_form.tag = F_SYM;
+    inner_form.span = span;
+    inner_form.as.sym = inner_sym;
+    Type *pointee = type_expr_from_form(e, &inner_form, rec_name,
+                                        type_params, type_param_kinds, n_type_params);
+    if (!pointee) return NULL;
+
+    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+    /* rc<ADT>/rc<Struct-lowered-to-ADT> carries the def so field access through
+     * the rc receiver auto-derefs -- parity with a defstruct rc<Struct> field
+     * (elab_structs.c adt_rc_inner_full_type). */
+    if (family == TY_RC && pointee->kind == TY_ADT && pointee->as.adt_.def) {
+        *t = type_rc_adt(pointee->as.adt_.def);
+        return t;
+    }
+    switch (family) {
+        case TY_RC:   *t = type_rc(pointee->kind);   break;
+        case TY_WEAK: *t = type_weak(pointee->kind); break;
+        case TY_REF:  *t = type_ref(pointee->kind);  break;
+        case TY_LREF: *t = type_lref(pointee->kind); break;
+        default: return NULL;
+    }
+    return t;
+}
+
 /* fn-type-bare-identifier-plan Phase 4: a type slot inside a (fn ...) type
  * expression that carries a leading colon -- the fused `:int` keyword form or
  * the spaced-but-still-redundant `: int` F_TYPE_ANN wrapper -- is rejected.

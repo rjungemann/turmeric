@@ -79,6 +79,19 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 return t;
             }
         }
+        /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+         * annotation reached through the spaced `: rc<T>` (F_TYPE_ANN) path or a
+         * nested type position.  Resolve it here too, so it does not fall through
+         * to type_expr_from_form and become a fresh tyvar named "rc<int>".  The
+         * fused `:rc<T>` keyword path in the defn/fn ladders handles the keyword
+         * form directly. */
+        if (sym) {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, NULL,
+                                                        type_params, type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
+        }
         Type *t = type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         return t;
     }
@@ -1690,6 +1703,33 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     continue;
                 }
             }
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `:rc<T>` / `:weak<T>` / `:ref<T>` / `:lref<T>` parameter.  Resolve
+             * it to the real carrier instead of a fresh tyvar named "rc<int>".
+             * :ref / :lref carry the same linear-by-default discipline the bare
+             * keyword forms apply below. */
+            {
+                Type *rt = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                            p->span, NULL,
+                                                            fn_type_params,
+                                                            fn_type_param_kinds,
+                                                            n_fn_type_params);
+                if (rt) {
+                    param_kinds[n_params - 1] = rt->kind;
+                    params[n_params - 1]->type = *rt;
+                    if (rt->kind == TY_REF) {
+                        if (!params[n_params - 1]->is_linear
+                                && !params[n_params - 1]->is_affine
+                                && !params[n_params - 1]->is_relevant) {
+                            params[n_params - 1]->is_linear = true;
+                            params[n_params - 1]->type.substruct = SK_LINEAR;
+                        }
+                    } else if (rt->kind == TY_LREF) {
+                        params[n_params - 1]->is_linear = true;
+                    }
+                    continue;
+                }
+            }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the
@@ -2016,6 +2056,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_app_type = ptr_ret;  /* threads result_full_type for codegen */
                 body_start++;
                 goto done_return_annotation;
+            }
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `: rc<T>` / `: weak<T>` / `: ref<T>` / `: lref<T>` return type. */
+            {
+                Type *rc_ret = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                                ret_f->span, NULL,
+                                                                fn_type_params,
+                                                                fn_type_param_kinds,
+                                                                n_fn_type_params);
+                if (rc_ret) {
+                    return_kind = rc_ret->kind;
+                    return_app_type = rc_ret;  /* threads result_full_type for codegen */
+                    body_start++;
+                    goto done_return_annotation;
+                }
             }
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
@@ -3989,9 +4044,19 @@ Expr *elab_fn(Elab *e, const Form *call) {
                                                        fn_type_params,
                                                        fn_type_param_kinds,
                                                        n_fn_type_params);
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `: rc<T>` / `: weak<T>` / `: ref<T>` / `: lref<T>` return type. */
+            Type *rc_ret = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                            ret_f->span, NULL,
+                                                            fn_type_params,
+                                                            fn_type_param_kinds,
+                                                            n_fn_type_params);
             if (ptr_ret) {
                 return_kind = TY_PTR_VOID;
                 return_full_type = ptr_ret;
+            } else if (rc_ret) {
+                return_kind = rc_ret->kind;
+                return_full_type = rc_ret;
             } else if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
                 return_kind = TY_TYVAR;
                 return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));
