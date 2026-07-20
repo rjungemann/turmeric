@@ -3312,6 +3312,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char *fn_ptr_val = emit_value(ctx, body, gf);
                 const char *ret_c = type_c_name(e->type);
 
+                /* capturing-closure-in-struct-field-segv: a BOXED fn-field (the
+                 * fat representation, so a stored capturing closure works) is
+                 * invoked through the fat `{thunk, env}` protocol -- read slot 0
+                 * as the thunk and call it with the handle as env -- NOT the thin
+                 * function-pointer cast below, which would execute the env block
+                 * as code.  Emit the TUR_APPLY<N>_T macro (arg types come from the
+                 * field's declared signature; the handle is both fn and env). */
+                if (gf->type.kind == TY_FN && gf->type.as.fn.boxed
+                    && e->as.call_.n_args <= 4) {
+                    uint32_t n = e->as.call_.n_args;
+                    Buf out; buf_init(&out);
+                    buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
+                    for (uint32_t i = 0; i < n; i++) {
+                        Type at = (gf->type.as.fn.arg_full_types &&
+                                   gf->type.as.fn.arg_full_types[i])
+                                      ? *gf->type.as.fn.arg_full_types[i]
+                                      : emit_type_from_kind(gf->type.as.fn.arg_kinds[i]);
+                        buf_printf(&out, ", %s", emit_type_c_name(ctx, at));
+                    }
+                    buf_printf(&out, ", %s", fn_ptr_val);
+                    for (uint32_t i = 0; i < n; i++) {
+                        char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                        buf_printf(&out, ", %s", av);
+                        free(av);
+                    }
+                    buf_puts(&out, ")");
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(fn_ptr_val);
+                    return result;
+                }
+
                 /* Phase E: detect concrete typed fn-ptr field.
                  * structdef-retirement: the former StructDef path stored a typed
                  * `fn` field as a directly-callable concrete function pointer.

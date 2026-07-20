@@ -1252,6 +1252,25 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                       "defdata: could not resolve constructor field type");
             return false;
         }
+        /* capturing-closure-in-struct-field-segv: a concrete `(fn ...)` field
+         * uses the FAT closure representation (a `{thunk, env}` handle in the
+         * int64 slot), so a CAPTURING closure stored in it dispatches correctly
+         * -- not the thin fn-pointer path, which called a fat env block as code
+         * (SIGSEGV).  Marking the field type `boxed` steers every `(.f v)` read to
+         * the fat dispatch (TUR_APPLY*); the make-struct store shims a bare/thin
+         * fn into a fat handle (elab_call.c constructor arg loop).  Storage stays
+         * the int64 carrier -- only the dispatch/representation changes. */
+        /* Bound to arity 1..4: the store shim (elab_call.c) shims arity >=1 and
+         * the field-call fat dispatch (emit_expr.c TUR_APPLY<N>_T) covers N<=4, so
+         * boxing outside that range would make the store and read disagree.  A
+         * nullary or >4-arg fn field stays on the pre-existing thin path. */
+        if (t && t->kind == TY_FN && !t->as.fn.boxed &&
+            t->as.fn.arity >= 1 && t->as.fn.arity <= 4) {
+            Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *bt = *t;
+            bt->as.fn.boxed = true;
+            t = bt;
+        }
         TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
         struct_field_storage_from_type(t, &fkind, &finner);
         if (fkind == TY_UNKNOWN) { fkind = TY_INT; finner = TY_UNKNOWN; }

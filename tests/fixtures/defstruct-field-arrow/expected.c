@@ -7083,16 +7083,20 @@ int main(int argc, char **argv) {
         }
         int64_t __t153;
         {
-            __auto_type __ps_154 = (ctor_Cell((int64_t)(intptr_t)(__fn_1282)));
+            int64_t *__t154 = (int64_t *)malloc(2 * sizeof(int64_t));
+            __t154[0] = (int64_t)(intptr_t)__tur_fatshim1;
+            __t154[1] = (int64_t)(intptr_t)__fn_1282;
+            void *__t155 = __t154;
+            __auto_type __ps_156 = (ctor_Cell((int64_t)(intptr_t)(__t155)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Cell c_1284 = __ps_154;
+            tur_adt_Cell c_1284 = __ps_156;
             (void)c_1284;
-            __auto_type __ps_155 = (((int64_t (*)(int64_t))(intptr_t)((int64_t)(c_1284).f))(INT64_C(41)));
+            __auto_type __ps_157 = (TUR_APPLY1_T(int64_t, int64_t, (int64_t)(c_1284).f, INT64_C(41)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_155));
-            int64_t __t156;
-            __t156 = INT64_C(0);
-            __t153 = __t156;
+            printf("%lld\n", (long long)(__ps_157));
+            int64_t __t158;
+            __t158 = INT64_C(0);
+            __t153 = __t158;
         }
         return (int)__t153;
 }
@@ -7102,15 +7106,15 @@ static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        __auto_type __ps_157 = (ctor_Cons__int(h, t));
+        __auto_type __ps_159 = (ctor_Cons__int(h, t));
         if (tur_panicking) return (tur_adt_Cons__int *){0};
-        return __ps_157;
+        return __ps_159;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        __auto_type __ps_158 = (vec_new__spec__tur_adt_Vec__int__());
+        __auto_type __ps_160 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return (tur_adt_Vec__int *){0};
-        return __ps_158;
+        return __ps_160;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

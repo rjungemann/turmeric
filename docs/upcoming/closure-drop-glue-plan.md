@@ -5,6 +5,23 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Update (2026-07-20e) -- the S2 blocker is FIXED; S2 is now unblocked.** Parts
+> 1+2 of `docs/archive/capturing-closure-in-struct-field-segv.md` landed: a
+> concrete `(fn ...)` struct/ADT field now uses the fat representation uniformly
+> (field type `boxed`; make-struct shims thin fns to fat; field-calls dispatch via
+> `TUR_APPLY*`). A capturing closure stored in a struct field now RUNS (no SEGV).
+> Suite 2218/0; fixture `capturing-closure-struct-field`. fn-field values are
+> intentionally uniformly HEAP-allocated (malloc'd fat handles) so the S2 drop
+> glue below can free them uniformly -- so a stored fn/closure currently leaks its
+> heap handle (shim box or capturing env) until that drop glue lands. That is the
+> remaining S2 work, now buildable on a working store-and-call path:
+>   - **S2 Model U:** storing a closure/fn into a struct field MOVES it (source
+>     consumed; a second store is a move-check error, preventing the aliasing
+>     double-free); the holding struct's drop glue frees the heap fat handle
+>     (`free(field)` for the shim box or `drop_glue_env_N` for a capturing env).
+>   Without the move check, a closure stored into two structs would double-free,
+>   so drop glue must land WITH move semantics, not before.
+>
 > **Blocker note (2026-07-20d) -- S2 is blocked on a struct fn-field dispatch
 > bug, NOT a leak.** Scoping S2 (Model U: a stored closure freed by the holding
 > struct's drop glue) surfaced that the store-and-call path does not even work:

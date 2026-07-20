@@ -1,5 +1,46 @@
 # Capturing closure stored in a struct fn-field is called as a thin fn pointer (SEGV)
 
+**Status: RESOLVED (2026-07-20)** -- parts 1+2 of the implementation plan landed;
+the SEGV is gone. Concrete `(fn ...)` struct/ADT fields now use the fat
+representation uniformly, exactly like the parametric TY_TYVAR fields that
+already worked:
+
+- **Boxed field type (read side)** -- `resolve_ctor_field` (`elab_structs.c`)
+  marks a concrete fn-field's `full_type` `boxed`, so a `(.f v ...)` field-call
+  dispatches through the fat protocol. The joined field-call emitter
+  (`emit_expr.c`, the `EX_GET_FIELD` callee path) now emits `TUR_APPLY<N>_T`
+  for a boxed field instead of the thin `((R(*)(A))v)(a)` cast; a plain-value
+  call of an extracted field already fat-dispatched via `type.as.fn.boxed`.
+- **Shim thin-fn stores (store side)** -- the make-struct constructor arg loop
+  (`elab_call.c`) shims a bare/thin fn into a fat `{thunk, env}` handle
+  (`EX_FN_TO_FAT`) for a boxed concrete fn-field, extending the existing
+  TY_TYVAR shim. A capturing closure is already fat, so it is stored and called
+  correctly.
+
+Verified: a capturing closure, a top-level fn, and a non-capturing lambda all
+work in the same field, via both `(.f v args)` and extract-then-call. Full suite
+2218/0 (one snapshot regenerated: `defstruct-field-arrow`). Regression fixture
+`tests/fixtures/capturing-closure-struct-field/`.
+
+**Part 3 (static shims) was deliberately NOT done -- it was the wrong design.**
+Making a bare fn's `{shim, fn}` box a file-scope `static` (to dodge a per-store
+malloc) both (a) broke widely -- `EX_FN_TO_FAT` is shared by many call sites and
+a function-pointer-to-integer static initializer is not a portable constant
+expression -- and (b) would BLOCK the eventual S2 drop glue: for the holding
+struct's drop glue to free fn-field values uniformly they must ALL be heap, and
+a static box is indistinguishable from a heap env at drop time. So fn-field
+values are intentionally kept uniformly **heap-allocated** (malloc'd fat
+handles). The consequence is a per-store shim-box / closure-env **leak** until
+S2 drop glue lands -- documented in
+[docs/upcoming/closure-drop-glue-plan.md](../upcoming/closure-drop-glue-plan.md).
+This unblocks S2: the store-and-call path now works, and S2 Model U (storing a
+closure moves it; the struct's drop glue frees the heap fat handle) is the
+remaining piece.
+
+Original report follows.
+
+---
+
 **Severity: high** -- a miscompile/SEGV (not a leak) on a natural program:
 store a capturing lambda in a `defstruct` function-typed field, read it back, and
 call it. General codegen, no effects/CPS needed. Discovered while scoping S2

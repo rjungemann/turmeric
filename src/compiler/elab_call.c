@@ -2534,7 +2534,15 @@ Expr *elab_call(Elab *e, Form *call) {
                  * left untouched.  Mirrors the ^fat auto-shim arity bound (<=5). */
                 for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
                     const Type *ft = ctor->fields[fi].full_type;
-                    if (!ft || ft->kind != TY_TYVAR) continue;
+                    /* A parametric (TY_TYVAR) field, or -- capturing-closure-in-
+                     * struct-field-segv -- a concrete boxed `(fn ...)` field, both
+                     * carry the fat representation, so a bare/thin fn argument must
+                     * be shimmed into a fat `{thunk, env}` handle (EX_FN_TO_FAT).
+                     * A capturing-closure value (TY_PTR_VOID) and an already-boxed
+                     * TY_FN are left untouched -- already fat. */
+                    bool fat_field = ft && (ft->kind == TY_TYVAR ||
+                                            (ft->kind == TY_FN && ft->as.fn.boxed));
+                    if (!fat_field) continue;
                     Expr *fa = call_expr->as.call_.args[fi];
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
                         continue;
