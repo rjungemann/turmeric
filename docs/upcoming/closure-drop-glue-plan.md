@@ -5,6 +5,21 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-20).** A second, adjacent leak landed:
+> `binding_escapes_impl` (`emit_core.c`) fell to its conservative
+> `default: escape` for `EX_DEFER` and the rc/weak/ref-family nodes (`EX_RC_OF`,
+> `EX_WEAK`, ...). An owning let-binding lowers its auto-drop to a
+> `(defer (drop r))` and its init is `(rc/of ...)`, so BOTH tripped the default
+> and flagged every sibling closure as escaping -- a non-escaping closure's env
+> leaked (16 B) in any `let` that also bound an `rc`/`ref`, even for a
+> scalar-capture closure. Fixed by modeling `EX_DEFER` via its capture set and
+> walking the rc/weak/ref operands (strictly more precise; never greenlights a
+> free of a referenced env). Suite 2215/0; fixture
+> `closure-env-free-with-owning-sibling`; write-up in
+> `docs/archive/history/fat-closure-env-free-owning-sibling.md`. This is NOT one
+> of the S1/S2 slices below (those are the ESCAPING / inline-HOF-arg cases); it
+> is an orthogonal false-escape bug in the same env-free machinery.
+>
 > **Progress note (2026-07-19).** Verified against the tree: S1.2 is the only
 > landed slice. `hoist_borrowed_closure_args` (`elab_call.c:773`), the
 > `binding_escapes_impl` FA_BORROW relaxation (`emit_core.c:573`), and the

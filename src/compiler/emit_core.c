@@ -504,8 +504,11 @@ bool expr_contains_return_or_throw(const Expr *e) {
  * than risking a use-after-free.  A reference to `b` inside a nested closure is
  * detected via that closure's precomputed capture set (EX_CLOSURE/EX_FN_DEF),
  * so the "callee position is fine" relaxation never leaks into a nested body.
- * EX_DEFER is treated as an escape because a deferred body runs at the same
- * scope-exit point as the free, making the ordering unsafe to reason about. */
+ * EX_DEFER runs at the same scope-exit point as the free, but can only reach
+ * `b` through its capture set, so it is an escape only when it actually captures
+ * `b` (mirroring EX_CLOSURE); a defer that does not reference the closure -- e.g.
+ * an owning sibling binding's injected auto-drop `(defer (drop r))` -- does not
+ * block the free. */
 /* catch-unwind-return-bridge-residuals (Part A): true for a scalar `err-val`
  * result type -- an integer/float/bool value the extraction copies out by value.
  * For a caught box, err-val hands back box->err_val, which IS the panic-payload
@@ -669,6 +672,26 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                         if (c->captures[i] == b) { escapes = true; goto esc_done; }
                 }
                 break;
+            /* A defer body runs at scope exit -- the same point as the env free --
+             * but it can only reference `b` through its precomputed capture set
+             * (the body is lifted into a thunk that reaches enclosing locals via
+             * `captures`, exactly like EX_CLOSURE/EX_FN_DEF).  So consult that set:
+             * `b` captured -> the defer uses the closure at scope exit -> escape;
+             * `b` NOT captured -> the defer cannot touch the closure, and freeing
+             * its env is safe regardless of the shared scope-exit ordering.
+             *
+             * fat-closure-env-leak-with-owning-sibling: an owning let-binding
+             * (rc/ref) injects its auto-drop as a `(defer (drop r))` into the let
+             * body.  The prior blanket `default: escape` for EX_DEFER therefore
+             * flagged EVERY sibling closure as escaping whenever an owning binding
+             * was present, so the closure env leaked (16 B/construction) in any let
+             * that also bound an rc/ref -- even when the closure captured only
+             * scalars.  Consulting the capture set fixes that without ever
+             * greenlighting a free of an env the defer actually uses. */
+            case EX_DEFER:
+                for (uint8_t i = 0; i < cur->as.defer_.n_captures; i++)
+                    if (cur->as.defer_.captures[i] == b) { escapes = true; goto esc_done; }
+                break;
             /* Inline-C may name `b` through its capture array (__TUR_CAP_N__) in
              * addition to its evaluated sub-expressions. */
             case EX_INLINE_C: {
@@ -730,6 +753,25 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                 break;
             case EX_REF:        ESC_PUSH(cur->as.ref_.expr);        break;
             case EX_DEREF:      ESC_PUSH(cur->as.deref_.expr);      break;
+            /* fat-closure-env-leak-with-owning-sibling: the rc/weak/ref-family
+             * operations are single-operand nodes; walk the operand so `b` is
+             * detected iff it actually flows into one (e.g. `(rc/of b)` stores the
+             * closure into an rc -> escape).  Previously these fell to the
+             * conservative `default: escape`, so a sibling OWNING binding whose
+             * init is `(rc/of ...)` / `(weak ...)` / etc. was read as an escape of
+             * EVERY sibling closure -- the exact reason a let that bound both an rc
+             * and a capturing closure leaked the closure env. */
+            case EX_RC_OF:       ESC_PUSH(cur->as.rc_of_.expr);       break;
+            case EX_RC_CLONE:    ESC_PUSH(cur->as.rc_clone_.expr);    break;
+            case EX_RC_DROP:     ESC_PUSH(cur->as.rc_drop_.expr);     break;
+            case EX_RC_PTR:      ESC_PUSH(cur->as.rc_ptr_.expr);      break;
+            case EX_RC_COUNT:    ESC_PUSH(cur->as.rc_count_.expr);    break;
+            case EX_RC_FROM_REF: ESC_PUSH(cur->as.rc_from_ref_.expr); break;
+            case EX_REF_FROM_RC: ESC_PUSH(cur->as.ref_from_rc_.expr); break;
+            case EX_WEAK:         ESC_PUSH(cur->as.weak_.expr);         break;
+            case EX_WEAK_UPGRADE: ESC_PUSH(cur->as.weak_upgrade_.expr); break;
+            case EX_WEAK_PRED:    ESC_PUSH(cur->as.weak_pred_.expr);    break;
+            case EX_REF_PRED:     ESC_PUSH(cur->as.ref_pred_.expr);     break;
             case EX_BORROW_IMMUT: ESC_PUSH(cur->as.borrow_immut_.expr); break;
             case EX_BORROW_MUT:   ESC_PUSH(cur->as.borrow_mut_.expr);   break;
             case EX_SET_DEREF:

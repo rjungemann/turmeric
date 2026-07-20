@@ -4,6 +4,16 @@
 miscompile). General codegen -- **not** CPS/effect-specific (reproduces with no
 effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
 
+> **Related fix landed (2026-07-20), report STILL OPEN.** A *different* env leak
+> in the same machinery was fixed: a NON-escaping closure's env was leaked when
+> the enclosing `let` also bound an owning `rc`/`ref` (an unrelated
+> `default: escape` false-positive on `EX_DEFER` / `EX_RC_OF` in
+> `binding_escapes_impl`). See
+> `docs/archive/history/fat-closure-env-free-owning-sibling.md`. That does NOT
+> touch this report's ESCAPING case (`make-scaler` returned then consumed): the
+> env still escapes its constructor with no owner to free it, so this remains
+> open and the `requires.no-leak-check` markers stay.
+
 ## Summary
 
 Constructing a closure that captures locals allocates a heap "fat" env struct
