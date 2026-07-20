@@ -45,6 +45,10 @@
 
 (extern-c tur_string_from_bytes [src :cstr n :int] :ptr)
 
+(extern-c tur_string_adopt_cstr [s :cstr] :ptr)
+
+(extern-c tur_string_from_int [v :int] :ptr)
+
 (extern-c tur_string_cstr [s :ptr] :cstr)
 
 (extern-c tur_string_retain [s :ptr] :ptr)
@@ -128,6 +132,49 @@
 
 (defn string/to-cstr [s : String] : cstr
   (tur_string_cstr (:: s ptr<void>)))
+;;; string/adopt-cstr -- take ownership of a freshly-allocated cstr as a String.
+;;;
+;;; Copies the bytes of `s` into a fresh owned String and FREES `s`.  This is the
+;;; owned-adoption bridge for the many stdlib functions that return a malloc'd
+;;; cstr ("caller frees the result") -- wrap such a call in string/adopt-cstr and
+;;; the result is a real owned String, leak-free:
+;;;
+;;;   (string/adopt-cstr (path/join base seg))   ; owned path String
+;;;   (string/adopt-cstr (digest/sha256-hex ...)) ; owned digest String
+;;;
+;;; WARNING: `s` MUST be a heap buffer the caller owns. Never pass a string
+;;; literal or a borrowed cstr (an accessor's return, a struct field) -- freeing
+;;; that is undefined behavior. When in doubt, use string/from-cstr (which copies
+;;; without freeing).
+;;;
+;;; Parameters:
+;;;   s -- a freshly heap-allocated NUL-terminated cstr; consumed (freed)
+;;;
+;;; Returns:
+;;;   A new owned String holding a copy of s's bytes.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 1)
+
+(defn string/adopt-cstr [s : cstr] : String
+  (:: (tur_string_adopt_cstr s) String))
+;;; int->string -- format a signed integer as a fresh owned decimal String.
+;;;
+;;; The owned counterpart of int->str (which returns a caller-frees cstr); builds
+;;; the String directly with no cstr intermediate.
+;;;
+;;; Parameters:
+;;;   v -- the integer to render
+;;;
+;;; Returns:
+;;;   A new owned String, e.g. (int->string -7) => String "-7".
+;;;
+;;; Example:
+;;;   (string/to-cstr (int->string 42))  ; => "42"
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 1)
+
+(defn int->string [v : int] : String
+  (:: (tur_string_from_int v) String))
 ;;; string/retain -- increment the refcount, returning a second owning handle.
 ;;;
 ;;; Since: v2

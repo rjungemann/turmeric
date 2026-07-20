@@ -3,6 +3,7 @@
 #include "tur_string.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +33,18 @@ void *tur_string_from_bytes(const char *src, int64_t n) {
 
 void *tur_string_from_cstr(const char *s) {
     return tur_string_from_bytes(s, s ? (int64_t)strlen(s) : 0);
+}
+
+void *tur_string_adopt_cstr(const char *s) {
+    void *r = tur_string_from_bytes(s, s ? (int64_t)strlen(s) : 0);
+    free((void *)s);
+    return r;
+}
+
+void *tur_string_from_int(int64_t v) {
+    char buf[24]; /* -9223372036854775808 + NUL fits in 21 */
+    int n = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    return tur_string_from_bytes(buf, n < 0 ? 0 : (int64_t)n);
 }
 
 const char *tur_string_cstr(void *s) {

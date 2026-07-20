@@ -1,6 +1,53 @@
 # `String` Adoption Audit -- stdlib
 
-> **Status:** Proposed (audit complete 2026-07-20)
+> **Status:** Batch 1 landed 2026-07-20 (foundational bridge + path cluster);
+> remaining batches proposed.
+
+## Progress
+
+**Batch 1 (landed).**
+
+- **Foundational owned bridge (item 1).** `stdlib/string.tur` gains
+  `string/adopt-cstr` -- takes ownership of a freshly heap-allocated `cstr`
+  (copies into a `String`, frees the original), the generic bridge that turns any
+  "caller frees the result" `cstr` function into an owned `String` at the call
+  site with no leak. Plus `int->string`, the owned counterpart of `int->str`
+  (built directly via the `tur_string_from_int` runtime helper, no cstr
+  intermediate; full compiled/`--interpret` parity). Backed by
+  `src/runtime/tur_string.c` + `src/turi/string_native.c`. Fixture:
+  `tests/fixtures/string-int`.
+- **Path cluster (item 7).** New opt-in module `stdlib/path-string.tur` with
+  owned siblings `path/{join,basename,dirname,extension,stem,normalize}-string`,
+  each a one-line `string/adopt-cstr` wrapper over the `path/*` cstr form. Kept
+  in a separate module so the lean `tur/path` (no map/typeclass dependency) stays
+  lean. Compiled-path only (like `tur/path` itself, whose inline-C has no
+  interpreter native). Fixture: `tests/fixtures/path-string`.
+
+**Blocked / deferred.**
+
+- **httpd stored fields (items 2, 3 -- CorsOpts / CookieOpts).** `CookieOpts` and
+  `CorsOpts` are by-value `:copy` structs with **no destructor**. Making their
+  fields `String` would allocate a `String` per construction that is never freed
+  (a `:copy` struct passed by value has no free hook), trading a dangling-borrow
+  hazard for a guaranteed leak. Migrating these correctly needs struct-lifecycle
+  work (an owning `:heap` variant with an explicit free, or a serialize-then-copy
+  discipline) -- out of scope for an additive batch. Left as-is with this note.
+- **digest cluster (item 4).** Blocked on a **pre-existing** digest bug: the
+  `digest/*-hex` inline-C declares `static` *nested* functions, which a standard
+  C compiler rejects, so `digest/sha256-hex` / `md5-hex` do not compile in this
+  environment (no fixture covered them). See
+  `docs/reported/digest-hex-nested-static-fn.md`. Once fixed, the
+  `digest/*-string` siblings are a trivial two-function `adopt-cstr` module.
+
+**Remaining batches (proposed).** The rest of the fresh-alloc clusters --
+`json/encode`, `csv/emit*`, `re/*`, `term/*`, `range*` -- follow the exact
+`path-string` recipe (opt-in `*-string` sibling module, one `string/adopt-cstr`
+wrapper per function). They are mechanical; batch them per module as capacity
+allows, in the priority order below.
+
+---
+
+> **Original audit:** complete 2026-07-20.
 >
 > **Prerequisite:** the owned `String` type has landed --
 > [docs/upcoming/v2/owned-string-type-plan.md](./owned-string-type-plan.md),

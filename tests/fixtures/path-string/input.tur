@@ -1,0 +1,22 @@
+;; string-adoption-stdlib-plan batch 1: owned String siblings for tur/path.
+;; Each path/*-string adopts the malloc'd cstr from path/* into an owned String
+;; (via string/adopt-cstr), so the result is safe to store / key a map with.
+(load "stdlib/path-string.tur")
+
+(defn demo [] : int
+  (do
+    (println (string/to-cstr (path/join-string "/usr" "local")))
+    (println (string/to-cstr (path/join-string "/usr/" "local")))  ; no double slash
+    (println (string/to-cstr (path/basename-string "/a/b/c.txt")))
+    (println (string/to-cstr (path/dirname-string "/a/b/c.txt")))
+    (println (string/to-cstr (path/extension-string "/a/b/c.txt")))
+    (println (string/to-cstr (path/stem-string "/a/b/c.txt")))
+    (println (string/to-cstr (path/normalize-string "/a/./b/../c")))
+    ;; owned result survives as a Map key
+    (let [m (map-assoc (:: (map-new) (Map String int)) (path/join-string "/x" "y") 1)]
+      (do
+        (println (map-get m (path/join-string "/x" "y")))
+        (map-free m)))
+    0))
+
+(demo)

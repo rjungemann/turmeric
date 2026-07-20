@@ -32,6 +32,14 @@ static TuriValue n_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     return turi_cstr(tur_string_cstr(S1));
 }
+static TuriValue n_adopt_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_string_adopt_cstr(n >= 1 ? arg_cstr(a[0]) : ""));
+}
+static TuriValue n_from_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_string_from_int(n >= 1 ? a[0].as_int : 0));
+}
 static TuriValue n_retain(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     return turi_int((int64_t)(intptr_t)tur_string_retain(S1));
@@ -139,6 +147,8 @@ void turi_register_string_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_string_from_cstr", n_from_cstr, NULL);
     turi_env_register_native(env, "tur_string_from_bytes", n_from_bytes, NULL);
     turi_env_register_native(env, "tur_string_cstr", n_cstr, NULL);
+    turi_env_register_native(env, "tur_string_adopt_cstr", n_adopt_cstr, NULL);
+    turi_env_register_native(env, "tur_string_from_int", n_from_int, NULL);
     turi_env_register_native(env, "tur_string_retain", n_retain, NULL);
     turi_env_register_native(env, "tur_string_release", n_release, NULL);
     turi_env_register_native(env, "tur_string_len", n_len, NULL);

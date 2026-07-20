@@ -33,6 +33,18 @@ void *tur_string_from_bytes(const char *src, int64_t n);
 /* Copy a NUL-terminated C string into a fresh refcount-1 String. */
 void *tur_string_from_cstr(const char *s);
 
+/* Take OWNERSHIP of a freshly heap-allocated cstr `s`: copy its bytes into a
+ * fresh String and free(s).  This is the owned-adoption bridge for the many
+ * stdlib functions that return a malloc'd `cstr` ("caller frees the result") --
+ * it turns such a borrowed-typed owned buffer into a real `String` with no
+ * leak and no second ownership question.  `s` MUST be a heap buffer the caller
+ * owns; never pass a literal or a borrow. */
+void *tur_string_adopt_cstr(const char *s);
+
+/* Format a signed 64-bit integer as a fresh decimal String (owned counterpart
+ * of int->str; builds the String directly, no cstr intermediate). */
+void *tur_string_from_int(int64_t v);
+
 /* Borrow the NUL-terminated payload (no copy, no ownership transfer). */
 const char *tur_string_cstr(void *s);
 
