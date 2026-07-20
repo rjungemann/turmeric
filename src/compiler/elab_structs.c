@@ -1270,6 +1270,12 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
             *bt = *t;
             bt->as.fn.boxed = true;
             t = bt;
+            /* closure-drop-glue S2 (Model U): the boxed fn-field owns a heap fat
+             * handle (a shim box for a bare fn, or a capturing env), so the struct
+             * needs drop glue to free it -- which also makes the struct move-only,
+             * the precondition that keeps a single owner and avoids a copy
+             * double-freeing the shared handle. */
+            def->needs_drop_glue = true;
         }
         TypeKind fkind = TY_UNKNOWN, finner = TY_UNKNOWN;
         struct_field_storage_from_type(t, &fkind, &finner);

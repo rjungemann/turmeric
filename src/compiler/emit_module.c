@@ -5439,6 +5439,17 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                        "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
                        mp, imn, mp);
             free(imn);
+        } else if (k == TY_FN && ctor->fields[fi].full_type &&
+                   ctor->fields[fi].full_type->kind == TY_FN &&
+                   ctor->fields[fi].full_type->as.fn.boxed) {
+            /* closure-drop-glue S2 (Model U): a boxed fn-field owns a heap fat
+             * handle (a `{shim, fn}` box for a bare fn, or a capturing closure
+             * env).  The struct is move-only (needs_drop_glue), so the handle has
+             * a single owner -- free it.  (A capturing env with OWNING captures
+             * leaks those captures for now; a scalar-capture env and a bare-fn
+             * shim box are freed whole.  An UNboxed nullary/>4-arg fn field is a
+             * plain fn pointer -- not heap -- and is NOT matched here.) */
+            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
         }
         free(mp);
     }

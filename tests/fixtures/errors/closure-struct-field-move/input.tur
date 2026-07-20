@@ -1,0 +1,14 @@
+;; closure-drop-glue S2 (Model U): storing a CAPTURING closure into an owning
+;; boxed fn-field MOVES it -- the holding struct's drop glue frees that heap env,
+;; so the closure has exactly one owner.  Storing the same closure variable into
+;; a second struct would make two structs' drop glue free the same env (a
+;; double-free, confirmed with valgrind before this check existed); it is now a
+;; compile-time use-after-move error instead.
+(defstruct Adder [f : (fn [int] #fx{} int) tag : int])
+
+(defn main [] : int
+  (let [k  100
+        g  (fn [x : int] : int (+ x k))     ;; a capturing closure
+        wa (rc/of (make-struct Adder g 1))  ;; g moved into wa
+        wb (rc/of (make-struct Adder g 2))] ;; ERROR: g used after move
+    0))

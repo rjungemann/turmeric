@@ -2556,6 +2556,26 @@ Expr *elab_call(Elab *e, Form *call) {
                     call_expr->as.call_.args[fi] = shim;
                 }
 
+                /* closure-drop-glue S2 (Model U): storing a CAPTURING closure
+                 * VARIABLE into an owning (boxed) fn-field MOVES it -- the
+                 * struct's drop glue frees that heap env, so a second use (another
+                 * store, or a call) must be a use-after-consume error rather than
+                 * a silent double-free (confirmed with valgrind).  A thin fn is
+                 * re-shimmed to a FRESH box per store, and an inline closure has no
+                 * source binding, so both are already uniquely owned and NOT
+                 * consumed here -- only a variable holding a live capturing-closure
+                 * handle (TY_PTR_VOID, or an already-boxed TY_FN) is moved. */
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    const Type *ft = ctor->fields[fi].full_type;
+                    if (!ft || ft->kind != TY_FN || !ft->as.fn.boxed) continue;
+                    Expr *fa = call_expr->as.call_.args[fi];
+                    while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    if (fa && fa->kind == EX_VAR && fa->as.var.binding &&
+                        (fa->type.kind == TY_PTR_VOID ||
+                         (fa->type.kind == TY_FN && fa->type.as.fn.boxed)))
+                        binding_mark_moved(fa->as.var.binding, fa->span);
+                }
+
                 /* TS4P1 / nested-carrier-match: Build TY_APP result type for
                  * per-use-site ADT monomorphisation.  Ground EVERY type param by
                  * unifying each field's declared full_type against the argument's

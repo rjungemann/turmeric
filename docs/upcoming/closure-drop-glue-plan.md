@@ -5,6 +5,30 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-20f) -- S2 Model U drop glue + move landed for
+> fn-fields (rc-wrapped path verified sound).** A boxed fn-field is now an owning
+> field: `resolve_ctor_field` sets `needs_drop_glue`, so the holding struct's
+> by-value drop glue `free`s the field's heap fat handle (a capturing env, or the
+> `{shim, fn}` box for a bare fn). Storing a CAPTURING closure variable into such
+> a field MOVES it (`binding_mark_moved` in the constructor arg loop), so aliasing
+> -- the same closure in two structs, which valgrind confirmed double-frees the
+> shared env -- is now a compile-time `use-after-move` error. A thin fn re-shims
+> to a FRESH box per store and an inline closure has no source, so neither is
+> consumed. Verified valgrind-clean (0 errors, exactly-once free) for rc-wrapped
+> closure structs, thin-fn structs, and rc-cloned structs; the struct-copy path is
+> compile-rejected by rc uniqueness. Suite 2219/0 (one snapshot regenerated:
+> defstruct-field-arrow). Fixtures `capturing-closure-struct-field` (store+call)
+> and `errors/closure-struct-field-move` (aliasing rejected).
+>
+> **Remaining S2 gap (NOT closure-specific):** a LOCAL by-value fn-field struct
+> does not invoke its drop glue at scope exit -- the same local-owning-value drop
+> machinery that is deferred for `:heap` structs generally (see
+> `docs/archive/drop-glue-shallow-nested-owning-aggregate.md`, verified only via
+> rc-wrapping for the same reason). So a closure stored in a plain LOCAL struct
+> still leaks its handle (no double-free -- just the pre-existing local-drop gap).
+> When local-struct drop invocation lands, this S2 drop glue frees those too with
+> no further work.
+>
 > **Update (2026-07-20e) -- the S2 blocker is FIXED; S2 is now unblocked.** Parts
 > 1+2 of `docs/archive/capturing-closure-in-struct-field-segv.md` landed: a
 > concrete `(fn ...)` struct/ADT field now uses the fat representation uniformly

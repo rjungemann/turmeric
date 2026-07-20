@@ -3276,6 +3276,18 @@ typedef struct tur_adt_Cell {
 } tur_adt_Cell;
 typedef tur_adt_Cell Cell;
 
+static void drop_glue_tur_adt_Cell(void *ptr) {
+    if (!ptr) return;
+    tur_adt_Cell *s = (tur_adt_Cell *)ptr;
+    if (s->f) free((void *)(intptr_t)s->f);
+    free(ptr);
+}
+
+static void walk_glue_tur_adt_Cell(void *ptr, RcWalkChildFn cb, void *ctx) {
+    if (!ptr || !cb) return;
+    tur_adt_Cell *s = (tur_adt_Cell *)ptr;
+}
+
 static tur_adt_Cell ctor_Cell(int64_t _0) {
     tur_adt_Cell __r;
     __r.f = _0;
