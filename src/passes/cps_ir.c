@@ -1045,7 +1045,7 @@ static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR;
  * read-only-correct across resumes and the owner drops it once (borrow teardown,
  * never a double-drop).  A multi-word owning aggregate does not fit the one-word
  * env and is excluded here.  See
- * docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md. */
+ * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
 /* An owning by-value AGGREGATE (a one-ctor by-value ADT product with an
  * rc/ref field -- needs_drop_glue).  Multi-word, so it cannot ride the one-word
  * frame env by value; the cloneable emit carries a POINTER to the owner's

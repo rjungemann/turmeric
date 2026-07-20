@@ -1,7 +1,7 @@
 ---
 title: CPS backend -- multi-shot continuations and owning-value env capture (Tracks A + B)
 category: Planning
-status: ARCHIVED 2026-07-19 -- everything reachable landed. Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E4a (an owning / non-Clone value in scope at a cloneable-shift -- and the sibling non-Serializable value at a serial-shift -- no longer trips TUR-E0014 / TUR-E0018 when not actually captured) LANDED 2026-07-19, the reachable E-borrow slice. The one remaining tail -- a GENUINELY-OWNING multi-shot capture (rc handle riding the env, cloned/dropped per resume), the TUR-E0107 consuming-aggregate admission, and the TUR-E0710 owning-autodrop-crossing-a-cloneable-reset case -- all ride the refcounted-env teardown (E3), which is SPLIT OUT into its own plan [cps-backend-owning-env-teardown-e3-plan.md](../upcoming/cps-backend-owning-env-teardown-e3-plan.md) (shelved-by-default; not a leak fix). Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped, cloneable-owning-in-scope-not-captured + serial-nonserial-in-scope-not-captured added. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
+status: ARCHIVED 2026-07-19 -- everything reachable landed. Track A COMPLETE (A1-A3). Track B: E1 + E-borrow (leak-clean rc captures) + E2 (aggregate/carrier captures, via the P2 auto-drop lowering) all landed; E4a (an owning / non-Clone value in scope at a cloneable-shift -- and the sibling non-Serializable value at a serial-shift -- no longer trips TUR-E0014 / TUR-E0018 when not actually captured) LANDED 2026-07-19, the reachable E-borrow slice. The one remaining tail -- a GENUINELY-OWNING multi-shot capture (rc handle riding the env, cloned/dropped per resume), the TUR-E0107 consuming-aggregate admission, and the TUR-E0710 owning-autodrop-crossing-a-cloneable-reset case -- all ride the refcounted-env teardown (E3), which is SPLIT OUT into its own plan [cps-backend-owning-env-teardown-e3-plan.md](../archive/cps-backend-owning-env-teardown-e3-plan.md) (shelved-by-default; not a leak fix). Verified 2026-07-19: all A1-A3 + E2 fixtures present, E-borrow/E2 no-leak markers dropped, DKK_RESUME_FRAME/dk_frame_resume shipped, cloneable-owning-in-scope-not-captured + serial-nonserial-in-scope-not-captured added. Supersedes cps-backend-env-capture-owning-values-plan.md (E1 landed).
 description: Two orthogonal CPS-backend coverage features, split out and detailed after landing E1 of the env-capture story. Track A -- a lifted continuation body may contain a NESTED control op (perform/handle/shift), not only straight-line code; this is what a two-perform body ("resumed twice") needs, and it has a proven template in F3's async/await gap-2 (lift the continuation as LH_RESET_CONT so a nested suspension threads the enclosing k). Track B -- finish the env-capture story so an owning value captured into a genuinely multi-shot continuation is cloned/dropped correctly and leak-clean (E2 aggregates, E3 the Option B refcounted-env teardown, E4 reset/shift), and resolve the consuming-case EX_DEFER interaction. Neither is a correctness gap today (the whole-function fallback is sound); both are missed coverage that N6.5 (fallback deletion) needs covered.
 ---
 
@@ -12,7 +12,7 @@ description: Two orthogonal CPS-backend coverage features, split out and detaile
 > E3-gated tail -- the genuinely-owning multi-shot capture, the TUR-E0107
 > consuming-aggregate admission, and the TUR-E0710 owning-autodrop-crossing-a-
 > cloneable-reset case -- is carried forward by the split-out standalone plan
-> **[cps-backend-owning-env-teardown-e3-plan.md](../upcoming/cps-backend-owning-env-teardown-e3-plan.md)**
+> **[cps-backend-owning-env-teardown-e3-plan.md](../archive/cps-backend-owning-env-teardown-e3-plan.md)**
 > (shelved-by-default: there is no owning-payload leak to fix; E3 only widens the
 > admitted-shape surface). This document is retained as the record of the landed
 > work and the reachability reasoning that led to shelving E3.
@@ -38,7 +38,7 @@ description: Two orthogonal CPS-backend coverage features, split out and detaile
 > resume) still rides **unbuilt E3**, as does the owning-autodrop-crossing-a-
 > cloneable-reset case (TUR-E0710). Everything reachable without E3 is done; the
 > E3-gated tail moved to
-> [cps-backend-owning-env-teardown-e3-plan.md](../upcoming/cps-backend-owning-env-teardown-e3-plan.md)
+> [cps-backend-owning-env-teardown-e3-plan.md](../archive/cps-backend-owning-env-teardown-e3-plan.md)
 > when this plan was archived.
 
 ## Why this document exists / what it supersedes

@@ -1,6 +1,5 @@
 /* elab_effects.c -- delimited continuations and algebraic effects. */
 #include "elab_internal.h"
-#include "experiments.h"   /* E3a: experiment_warn_if_used at the owning-capture admission */
 
 /* E3a (owning-cloneable-capture, cps-backend-owning-env-teardown): an owning
  * value captured ^borrow into a genuinely multi-shot cloneable continuation that
@@ -390,14 +389,12 @@ static void check_cloneable_capture_precise(Elab *e, Span span,
             TypeClassInstance *inst =
                 typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &t, 1);
             if (!inst) {
-                /* E3a: under the experiment gate an owning kind we can emit
-                 * multi-shot env teardown for (rc today) is ADMITTED instead of
-                 * rejected -- the cloneable codegen gives its captured frame env
-                 * clone glue so each resume owns its own +1. */
-                if (owning_multishot_admissible(&t)) {
-                    experiment_warn_if_used("owning-cloneable-capture");
+                /* E3a (graduated): an owning kind we can emit multi-shot env
+                 * teardown for is ADMITTED instead of rejected -- the cloneable
+                 * codegen gives its captured frame env clone glue so each resume
+                 * owns its own +1. */
+                if (owning_multishot_admissible(&t))
                     continue;
-                }
                 diag_emit_with_code(DIAG_ERROR, span,
                                     TUR_E0014_NOT_CLONE,
                                     "captured binding '%s' does not implement Clone "

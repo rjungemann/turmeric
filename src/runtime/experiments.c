@@ -122,26 +122,16 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * effect (zero tur_effect_perform call sites), so the row is retired and the
      * name moved to GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).
      * See docs/archive/cps-dk-sole-effect-lowering-plan.md. */
-    /* owning-cloneable-capture (E3a of cps-backend-owning-env-teardown): admit an
-     * OWNING value (rc handle, carrier ADT / heap-struct handle, owning by-value
-     * aggregate) captured into a genuinely multi-shot cloneable/serializable
-     * continuation.  Off by default it stays a hard error (TUR-E0014 not Clone /
-     * TUR-E0018 not Serializable); enabled, the capture is admitted and each
-     * captured frame's env gets clone (incref/deep-copy per dk_copy_node resume) +
-     * drop (decref/free per dk_free) glue via dk_frame_owning, so multi-shot
-     * resumes each own their own refcounted copy.  A surface-semantics widening,
-     * so gated; read by elab_effects.c (the capture checks) and emit_cps_ir.c
-     * (emit_cloneable).  Graduate once every capture channel is covered and the
-     * leak-clean fixtures drop requires.no-leak-check. */
-    { "owning-cloneable-capture",
-      "admit an owning value (rc / carrier handle / owning aggregate) captured "
-      "into a multi-shot cloneable/serializable continuation, with per-frame env "
-      "clone/drop teardown so each resume owns its own refcounted copy",
-      "docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md",
-      "0.29.0",                  /* introduced */
-      "0.31.0",                  /* expires_at (two minor releases; hard contract) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_owning_cloneable_capture },
+    /* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
+     * (rc handle, :heap carrier handle, by-value aggregate) captured into a
+     * multi-shot cloneable continuation, with the per-frame env clone/drop
+     * teardown, is now unconditional (g_opt_owning_cloneable_capture defaults
+     * true; the admission predicates in elab_effects.c / cps_ir.c / emit_cps_ir.c
+     * read it always-on).  Every capture channel and owning shape that is
+     * leak-clean in the base language is covered; the remaining rejections are
+     * bounded by the base drop's shallowness, not this gate.  The name moves to
+     * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
+     * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -162,6 +152,7 @@ static const char *const GRADUATED[] = {
     "cps-effects",   /* graduated 2026-07-12; handle-shallow is now always-on */
     "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
     "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
+    "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
     NULL,
 };
 
