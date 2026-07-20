@@ -28,6 +28,9 @@
     derive-show
     derive-show-body__
     derive-show-rest__
+    derive-show-string
+    derive-show-string-body__
+    derive-show-string-rest__
     derive-debug
     derive-debug-body__
     derive-debug-rest__
@@ -162,6 +165,71 @@
       Show
       (vec TypeName)
       (list show (vec __p) :cstr (list derive-show-body__ TypeName ~@fields))))
+  ;; derive-show-string -- the owned-String counterpart of derive-show
+  ;; (show-owned-result-plan stage 2).  Emits a `ShowString` instance whose
+  ;; `show-string` builds the same "Type { f = v, ... }" rendering as
+  ;; derive-show, but through a StringBuilder over each field's `show-string`
+  ;; (releasing every intermediate element String), so the result is a single
+  ;; owned String (refcount 1) with no per-field concat leak.
+  ;;
+  ;; Kept as a SEPARATE macro rather than folding the ShowString instance into
+  ;; derive-show: derive-show is auto-loaded (tur/macros) and used with a
+  ;; minimal local `Show` in programs that never load stdlib/string.tur, so an
+  ;; unconditional ShowString instance would reference String/StringBuilder/
+  ;; show-string symbols those programs cannot resolve.  Authors opt in by
+  ;; loading stdlib/typeclass-show-string.tur (where ShowString lives) and
+  ;; calling derive-show-string alongside derive-show.  Stage 4 unifies the two
+  ;; once Show itself is retyped to return String.
+  (defmacro derive-show-string-rest__ [& fields]
+    (if (empty? fields)
+      (list do
+        (list builder/push-cstr! __b " }")
+        (list builder/finish __b))
+      (let [field         (first fields)
+            rest-fields   (rest fields)
+            is-vec        (vec? field)
+            label         (if is-vec (symbol-name (first field)) (symbol-name field))
+            accessor-sym  (if is-vec (second field) field)
+            accessor-form (if is-vec
+                            (list accessor-sym __p)
+                            (list (dot-sym accessor-sym) __p))
+            prefix        (str-append ", " label " = ")]
+        (list do
+          (list builder/push-cstr! __b prefix)
+          (list let (vec __e (list show-string accessor-form))
+            (list do
+              (list builder/push-string! __b __e)
+              (list string/release __e)))
+          (list derive-show-string-rest__ ~@rest-fields)))))
+  (defmacro derive-show-string-body__ [TypeName & fields]
+    (let [type-str (symbol-name TypeName)]
+      (if (empty? fields)
+        (list let (vec __b (list builder/new))
+          (list do
+            (list builder/push-cstr! __b (str-append type-str " { }"))
+            (list builder/finish __b)))
+        (let [field         (first fields)
+              rest-fields   (rest fields)
+              is-vec        (vec? field)
+              label         (if is-vec (symbol-name (first field)) (symbol-name field))
+              accessor-sym  (if is-vec (second field) field)
+              accessor-form (if is-vec
+                              (list accessor-sym __p)
+                              (list (dot-sym accessor-sym) __p))
+              first-prefix  (str-append type-str " { " label " = ")]
+          (list let (vec __b (list builder/new))
+            (list do
+              (list builder/push-cstr! __b first-prefix)
+              (list let (vec __e (list show-string accessor-form))
+                (list do
+                  (list builder/push-string! __b __e)
+                  (list string/release __e)))
+              (list derive-show-string-rest__ ~@rest-fields)))))))
+  (defmacro derive-show-string [TypeName & fields]
+    (list definstance
+      ShowString
+      (vec TypeName)
+      (list show-string (vec __p) (list derive-show-string-body__ TypeName ~@fields))))
   (defmacro derive-debug-rest__ [& fields]
     (if (empty? fields)
       ")"

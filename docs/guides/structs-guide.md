@@ -539,6 +539,31 @@ To alias a field name or access through a non-standard reader, use the
 ;; => "MyStruct { name = ..., display-name = ..., count = ... }"
 ```
 
+### Deriving `ShowString` (owned result)
+
+`derive-show` produces a borrowed `cstr` whose ownership the caller cannot
+recover (see `docs/upcoming/v2/show-owned-result-plan.md`). `derive-show-string`
+is its owned-`String` counterpart: it emits a `ShowString` instance whose
+`show-string` renders the same `"Type { f = v, ... }"` text but returns a fresh
+owned `String` (refcount 1) the caller `string/release`s. It builds through a
+`StringBuilder` over each field's `show-string`, releasing every intermediate,
+so the result carries no per-field concat leak.
+
+Because `ShowString` lives in `stdlib/typeclass-show-string.tur` (it returns the
+stdlib `String`), load that module before deriving. Field descriptors -- bare
+symbols and the `[label .accessor]` alias form -- match `derive-show`.
+
+```turmeric
+(load "stdlib/typeclass-show-string.tur")
+
+(defstruct Point :copy [x : int y : int])
+(derive-show-string Point x y)
+
+(let [p (make-struct Point 3 4)
+      s (show-string p)]        ; => owned String "Point { x = 3, y = 4 }"
+  (do (println (string/to-cstr s)) (string/release s)))
+```
+
 ### REPL auto-show
 
 The native REPL and web REPL automatically call `show` on the result of each
