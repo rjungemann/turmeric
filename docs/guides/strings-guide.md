@@ -114,6 +114,35 @@ Typeclasses: `Eq`, `Ord` (lexicographic), `Show` (the bytes), `Hash` (content),
 override, so `String` behaves identically under `--interpret` / the REPL and
 when compiled.
 
+## `#s"..."` -- owned-String literal syntax (opt-in)
+
+Bare `"..."` stays a `cstr` (borrowed) -- the default literal typing is
+deliberately unchanged. When you want an owned `String` literal, opt into the
+`#s"..."` reader macro shipped in `stdlib/string-reader.tur`:
+
+```turmeric
+#use-reader-macros "stdlib/string-reader.tur"   ;; enable #s"..."  (read-time)
+(load "stdlib/string.tur")                        ;; the String code (eval-time)
+
+... #s"hello" ...   ;; => (string/from-cstr "hello"), an owned String
+```
+
+**It is two lines, and that is fundamental, not an oversight.** A reader macro is
+registered while the file is being *read*; `(load ...)` runs later, at *eval*
+time -- after `#s"..."` has already been tokenized. So a plain
+`(load "stdlib/string.tur")` can never enable `#s` for the file that loads it;
+the read-time `#use-reader-macros` directive is what registers the syntax. The
+two directives are separate phases:
+
+- `#use-reader-macros "stdlib/string-reader.tur"` -- read-time; turns on the
+  `#s"..."` syntax. (Like `(load)`, it accepts the stable `stdlib/...` path,
+  falling back to `TUR_STDLIB_DIR`.)
+- `(load "stdlib/string.tur")` -- eval-time; provides `string/from-cstr` and the
+  rest of the String API that `#s"..."` expands into.
+
+`#s"..."` works identically compiled and under `--interpret`, and an owned-String
+literal is safe as a `Map`/`Set` key. See `tests/fixtures/string-reader-macro`.
+
 ## Lifetimes -- the rules
 
 - A freshly constructed `String` (`from-cstr`, `concat`, `substring`, `to-*`,
