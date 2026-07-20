@@ -5,6 +5,22 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Blocker note (2026-07-20d) -- S2 is blocked on a struct fn-field dispatch
+> bug, NOT a leak.** Scoping S2 (Model U: a stored closure freed by the holding
+> struct's drop glue) surfaced that the store-and-call path does not even work:
+> storing a CAPTURING closure in a `defstruct` fn-field and calling it via
+> `(.f box)` **SEGVs** -- the fat env pointer lands in the field but the read+call
+> emits a THIN function-pointer call (`((R(*)(A))env)(args)`), executing the env
+> as code (`emit_expr.c:1153/1470` fat-vs-thin keys on `type.as.fn.boxed` /
+> `is_fat`, both false for a field read). A thin top-level fn in the same field
+> works; only fat closures crash. Filed as
+> `docs/reported/capturing-closure-in-struct-field-segv.md`. S2 CANNOT proceed
+> until the field uses the fat representation uniformly (mark the field `boxed`;
+> auto-shim thin fns to fat on store -- the "closure-representation-unification
+> Phase 0" this plan already names). Freeing a stored closure is moot while it
+> mis-dispatches. So the next S2 step is that unification bug, then move + drop
+> glue on top.
+>
 > **Progress note (2026-07-20c) -- S1c fresh-closure-returning CALL args
 > (headline `make-scaler` CLOSED).** The other half of S1c landed: a call to a
 > fresh-closure-returning fn, passed to a non-retaining fn-param, is now hoisted +
