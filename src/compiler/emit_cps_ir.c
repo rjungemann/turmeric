@@ -957,14 +957,28 @@ static bool cloneable_frame_consume_base(const CloneFrame *fr) {
 static bool cloneable_frame_consumes_rc(const CloneFrame *fr) {
     return cloneable_frame_consume_base(fr) && fr->operand.type->kind == TY_RC;
 }
+/* The heap ADT of a carrier operand, or NULL. */
+static const AdtDef *cloneable_carrier_def(const Type *t) {
+    if (!t || !(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
+        return NULL;
+    return (t->kind == TY_ADT) ? t->as.adt_.def
+         : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+}
 static bool cloneable_frame_consumes_carrier(const CloneFrame *fr) {
     if (!cloneable_frame_consume_base(fr)) return false;
-    const Type *t = fr->operand.type;
-    if (!(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
-        return false;
-    const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
-                    : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
-    return d && !d->needs_drop_glue;   /* flat: shallow copy is a sound deep copy */
+    const AdtDef *d = cloneable_carrier_def(fr->operand.type);
+    if (!d || d->n_ctors == 0) return false;
+    /* Cloneable by shallow copy + per-owning-field incref: every field is a plain
+     * value or an increfable rc/weak handle.  A ref/lref or nested aggregate /
+     * heap handle needs a recursive deep clone -- not supported here. */
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        TypeKind k = c->fields[i].kind;
+        if (k == TY_REF || k == TY_LREF
+            || k == TY_ADT || k == TY_STRUCT || k == TY_APP)
+            return false;
+    }
+    return true;
 }
 
 /* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
@@ -6411,23 +6425,40 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                             "rc_strong_increment((RcControlBlock *)(intptr_t)e); return e; }\n",
                             ctxfn);
                     else if (cloneable_frame_consumes_carrier(fr)) {
-                        /* A flat heap carrier: deep-copy the pointed-to header
-                         * (malloc a fresh header + shallow field copy) so each
-                         * resume frees its OWN allocation.  Flat means no owning
-                         * fields, so the shallow copy shares nothing.  The handle's
-                         * C type is `<hdr> *`; strip the trailing ` *` to get the
-                         * bare header struct name for sizeof + the copy. */
+                        /* A heap carrier: deep-copy the pointed-to header (malloc a
+                         * fresh header + shallow field copy) so each resume frees
+                         * its OWN allocation, then INCREF each owning (rc/weak)
+                         * field so the copy owns its own +1 (its drop_glue decref
+                         * on free balances it) -- the shallow copy shares the owning
+                         * field's control block with the original, exactly as the
+                         * owner's own drop expects.  A flat handle (no owning fields)
+                         * gets an empty incref list.  The handle's C type is
+                         * `<hdr> *`; strip the trailing ` *` for the header name. */
                         char hdr[192];
                         snprintf(hdr, sizeof hdr, "%s",
                                  emit_type_c_name(ce->ctx, *fr->operand.type));
                         size_t L = strlen(hdr);
                         while (L > 0 && (hdr[L-1] == '*' || hdr[L-1] == ' '))
                             hdr[--L] = 0;
+                        Buf incs; buf_init(&incs);
+                        const AdtDef *d = cloneable_carrier_def(fr->operand.type);
+                        const CtorDef *c = d ? d->ctors[0] : NULL;
+                        for (uint32_t fi = 0; c && fi < c->n_fields; fi++) {
+                            TypeKind fk = c->fields[fi].kind;
+                            if (fk != TY_RC && fk != TY_WEAK) continue;
+                            char *mp = adt_field_member_path(d, c, fi);
+                            buf_printf(&incs, "if (__c->%s) %s(__c->%s); ",
+                                       mp, fk == TY_RC ? "rc_strong_increment"
+                                                       : "rc_weak_increment", mp);
+                            free(mp);
+                        }
+                        buf_putc(&incs, '\0');
                         buf_printf(ce->helpers,
                             "static intptr_t %s_envclone(intptr_t e) { "
                             "%s *__c = (%s *)malloc(sizeof(%s)); "
-                            "*__c = *(%s *)(intptr_t)e; return (intptr_t)__c; }\n",
-                            ctxfn, hdr, hdr, hdr, hdr);
+                            "*__c = *(%s *)(intptr_t)e; %sreturn (intptr_t)__c; }\n",
+                            ctxfn, hdr, hdr, hdr, hdr, incs.data ? incs.data : "");
+                        buf_free(&incs);
                     }
                 } else
                     /* 1-arg hole call: apply f to the resumed value. */

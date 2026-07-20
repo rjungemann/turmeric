@@ -352,14 +352,23 @@ NONE of them need per-frame clone glue.
   its OWN allocation (a heap handle is not refcounted -- a shared free would
   double-free). The bare header type is `emit_type_c_name` minus the trailing
   ` *`, so `sizeof`/copy cover the whole header, not just the first word (fixture
-  `cloneable-owning-consuming-carrier`, two fields, LSan-clean). Restricted to
-  flat handles: one WITH owning fields needs a recursive deep clone.
+  `cloneable-owning-consuming-carrier`, two fields, LSan-clean).
+- **CONSUMING carrier handle with owning fields (recursive clone) -- LANDED.** A
+  heap handle whose fields are plain values and increfable owning handles (rc /
+  weak) is consume-cloneable: the `env_clone` deep-copies the header AND increfs
+  each owning field -- the mirror of `drop_glue`'s decref, so the copy owns its
+  own +1 that its free (drop_glue) balances. The incref loop walks the ctor
+  fields (`adt_field_member_path`); a flat handle gets an empty loop. Restricted
+  to rc/weak owning fields: a ref/lref or nested aggregate / heap-handle field
+  needs a genuinely recursive VALUE clone (not an incref) and is rejected, never
+  miscompiled (fixture `cloneable-owning-consuming-recursive`, an rc-fielded
+  `:heap` struct, LSan-clean).
 
-With borrow, owner-drop, and the consuming rc + flat-carrier cases landed, E3's
-owning-capture goal is functionally met across every channel for `rc`, `:heap`
-carriers, and by-value aggregates. Remaining: the consuming case for a
-NON-flat heap handle / by-value aggregate (both need a recursive deep clone that
-clones owning fields), and GRADUATION (retire the experiment gate).
+With borrow, owner-drop, and the consuming rc / carrier / rc-fielded-carrier
+cases landed, E3's owning-capture goal is functionally met across every channel.
+Remaining: a consuming BY-VALUE aggregate (needs a boxed clone per resume) and a
+carrier with ref/lref or nested-owning fields (needs a recursive value clone),
+plus GRADUATION (retire the experiment gate at the 0.31.0 `expires_at`).
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.
