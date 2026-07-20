@@ -26,7 +26,7 @@
 (defn __bimap_pair [container fn-left fn-right] : int
   ```c
   struct { int64_t fst; int64_t snd; } *p =
-      (struct { int64_t fst; int64_t snd; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   struct { int64_t fst; int64_t snd; } *r = malloc(sizeof(*r));
   r->fst = ((int64_t(*)(int64_t))(intptr_t)fn_left)(p->fst);
   r->snd = ((int64_t(*)(int64_t))(intptr_t)fn_right)(p->snd);

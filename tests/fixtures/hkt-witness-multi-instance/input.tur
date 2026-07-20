@@ -18,21 +18,21 @@
 (defn __opt_some? [o] : bool
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return p != 0 && p->is_some;
   ```)
 
 (defn __opt_unwrap [o] : int
   ```c
   struct { bool is_some; int64_t value; } *p =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)o;
+      (void *)(intptr_t)o;
   return (int64_t)(p->value);
   ```)
 
 (defn __fmap_option [container fn] : int
   ```c
   struct { bool is_some; int64_t value; } *c =
-      (struct { bool is_some; int64_t value; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   if (!c || !c->is_some) return container;
   struct { bool is_some; int64_t value; } *r = malloc(sizeof(*r));
   r->is_some = true;
@@ -52,14 +52,14 @@
 (defn __vec_get0 [v] : int
   ```c
   struct { int64_t len; int64_t item; } *p =
-      (struct { int64_t len; int64_t item; } *)(intptr_t)v;
+      (void *)(intptr_t)v;
   return p->item;
   ```)
 
 (defn __fmap_vec [container fn] : int
   ```c
   struct { int64_t len; int64_t item; } *c =
-      (struct { int64_t len; int64_t item; } *)(intptr_t)container;
+      (void *)(intptr_t)container;
   struct { int64_t len; int64_t item; } *r = malloc(sizeof(*r));
   r->len = c->len;
   r->item = ((int64_t(*)(int64_t))(intptr_t)fn)(c->item);

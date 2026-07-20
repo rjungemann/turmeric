@@ -649,7 +649,7 @@
       pthread_mutex_init(&out->lock, NULL); pthread_cond_init(&out->ready, NULL);
   out->refcount = 1;
       out->is_set = true; out->is_ok = true; out->value = val_a; out->exn = 0;
-      return (void *)out;
+      return (int64_t)(intptr_t)out;
   }
   /* fa rejected, try fb */
   pthread_mutex_lock(&b->lock);
@@ -899,10 +899,9 @@
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   typedef struct { FutureCell *fc; int ms; } TimeoutArg;
-  typedef struct { long tv_sec; long tv_nsec; } timespec;
   TimeoutArg *a = (TimeoutArg *)raw;
   if (a->ms > 0) {
-      timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
+      struct timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
       nanosleep(&ts, NULL);
   }
   pthread_mutex_lock(&a->fc->lock);
@@ -916,10 +915,9 @@
   ```c
   typedef struct { pthread_mutex_t lock; pthread_cond_t ready; int64_t value; int64_t exn; bool is_set; bool is_ok; int64_t refcount; } FutureCell;
   typedef struct { FutureCell *out; FutureCell *src; int ms; } TA;
-  typedef struct { long tv_sec; long tv_nsec; } timespec;
   TA *a = (TA *)raw;
   if (a->ms > 0) {
-      timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
+      struct timespec ts; ts.tv_sec = a->ms / 1000; ts.tv_nsec = (a->ms % 1000) * 1000000L;
       nanosleep(&ts, NULL);
   }
   pthread_mutex_lock(&a->out->lock);

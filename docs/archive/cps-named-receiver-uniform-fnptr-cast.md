@@ -1,5 +1,27 @@
 # CPS marshal-reset named receiver is called through a uniform `int64_t(*)(int64_t)` fn-ptr cast (UB)
 
+> **Status:** RESOLVED 2026-07-19. `emit_cl_shift_bodyfn`'s named-receiver branch
+> (`src/compiler/emit_cps_ir.c`) now keys the callee function-pointer type AND its
+> argument cast on the same `t->as.cloneable.serial` bit the closure branch uses
+> two cases up: a serial receiver emits `((int64_t (*)(void *))...)((void *)...)`
+> (matching its real `int64_t rt(void *)` signature) and a cloneable receiver keeps
+> `int64_t (*)(int64_t)` (byte-identical to before -- zero fixture-snapshot churn).
+> Those two families -- serial `ptr<void>` `k` and cloneable int64_t-carried `k`,
+> both returning the int64_t carrier -- are the only named-receiver shapes the type
+> contract emits today, so keying on `serial` removes the mismatch for every
+> currently-emittable receiver; the fuller `R (*)(A...)` reconstruction the report
+> proposes would only matter for a hypothetical future receiver with a new param or
+> return type and is deliberately left unbuilt.
+>
+> **Verification.** The minimal repro's emitted call now casts through
+> `int64_t (*)(void *)` (matching `rt5`'s forward-declared `int64_t rt5(void *)`)
+> and still prints `15` compiled and interpreted; all 26 serial/cloneable/cont
+> fixtures pass. NOTE: this container has no working `-fsanitize=function` runtime
+> (gcc lacks the check; clang's ubsan runtime is not installed), so the UBSan
+> *trip* itself was not re-run -- verification is the exact signature match in the
+> emitted C plus behavioral parity, which is sufficient because the fix makes the
+> cast type identical to the callee's own forward declaration.
+
 **Summary:** The native cloneable/serial (`build_marshal_reset` /
 `emit_cloneable`) shift-body emitter invokes a *named* continuation receiver by
 casting its function pointer to a fixed `int64_t (*)(int64_t)` signature,

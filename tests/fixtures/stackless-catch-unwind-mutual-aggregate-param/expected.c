@@ -5004,7 +5004,7 @@ static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __t2 = __ps_70;
         if (__t2) {
-            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __kont); /* cps->cps */
+            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, (int64_t)(intptr_t)val_cmp, __kont); /* cps->cps */
         } else {
             return dk_run(__kont, (intptr_t)(false));
         }
@@ -5406,7 +5406,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
                 __auto_type __ps_94 = (list_hytail(l2));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __t5 = __ps_94;
-                return list_hyeq_qu__cps(__t4, __t5, cmp_fn, __kont); /* cps->cps */
+                return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
             } else {
                 return dk_run(__kont, (intptr_t)(false));
             }
@@ -5466,7 +5466,7 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_999;
-    out_999 = tcons(__t1, __t2); /* cps->direct */
+    out_999 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
     return dk_run(__kont, (intptr_t)(out_999));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {

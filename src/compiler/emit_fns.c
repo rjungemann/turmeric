@@ -175,8 +175,32 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         char *av = emit_value(ctx, body, call->as.call_.args[i]);
         char *t = fresh_tmp(ctx);
         Type pty = tco_param_type(ctx, fn_e, fd, i);
+        const char *pcty = emit_type_c_name(ctx, pty);
+        /* gcc14-int-conversion (carrier-representation-tracking, reverse straddle
+         * at the tail-backedge): the param slot is the int64 carrier but the arg
+         * value is a bare temp recorded as a concrete pointer (a heap-producer
+         * call result, e.g. `int64_t __t160 = __ps_159;` where __ps_159 is a
+         * `tur_adt_Cons__int *`).  Reinterpret the pointer to the int64 carrier --
+         * value-preserving, and only fires for a genuine recorded pointer temp
+         * into an int64 param slot. */
+        bool av_is_bare = av && (av[0] == '_' || isalpha((unsigned char)av[0]));
+        if (av_is_bare)
+            for (const char *p = av + 1; *p && av_is_bare; p++)
+                if (!(*p == '_' || isalnum((unsigned char)*p))) av_is_bare = false;
+        if (pcty && strcmp(pcty, "int64_t") == 0 && av_is_bare) {
+            const char *lvty = emit_localvar_lookup_ctype(av);
+            size_t lL = lvty ? strlen(lvty) : 0;
+            if (lvty && lL >= 1 && lvty[lL - 1] == '*' && strcmp(lvty, "void *") != 0) {
+                Buf b; buf_init(&b);
+                buf_printf(&b, "(int64_t)(intptr_t)(%s)", av);
+                buf_putc(&b, '\0');
+                free(av);
+                av = strdup(b.data);
+                buf_free(&b);
+            }
+        }
         indent_buf(body, ctx->indent);
-        buf_printf(body, "%s %s = %s;\n", emit_type_c_name(ctx, pty), t, av);
+        buf_printf(body, "%s %s = %s;\n", pcty, t, av);
         tmps[i] = t;
         free(av);
     }
@@ -3955,6 +3979,24 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 buf_printf(file, "return %s;\n", bridged);
                 free(bridged);
             }
+        } else if (ret_ctype && !is_main &&
+                   ret_ctype[strlen(ret_ctype) - 1] == '*' &&
+                   strcmp(ret_ctype, "void *") != 0 &&
+                   ret_val &&
+                   (strncmp(ret_val, "(int64_t)", 9) == 0 ||
+                    (emit_str_is_bare_ident(ret_val) &&
+                     emit_localvar_lookup_ctype(ret_val) &&
+                     strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) {
+            /* gcc14-int-conversion (carrier-representation-tracking): a spec
+             * clone whose C return type is a concrete pointer (e.g. an element
+             * accessor `err-val [A B] : B` monomorphized to `const char *` /
+             * `tur_adt_Vec__X *`) but whose body VALUE is the int64 carrier --
+             * either an explicit `(int64_t)..` field read, or a bare call temp
+             * RECORDED as int64 (`return __ps_224;` where run_id__spec returns
+             * int64 but the fn returns `tur_adt_Point *`).  `return <int64>` into
+             * a pointer return type is `pointer from integer` -- a hard error
+             * under GCC >= 14.  Reinterpret to the return type (value-preserving). */
+            buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

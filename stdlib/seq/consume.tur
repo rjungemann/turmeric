@@ -20,7 +20,7 @@
 (defn seq-make-some [v : int] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
-    (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
+    (void *)malloc(sizeof(*opt));
   opt->is_some = true; opt->value = v;
   return (int64_t)(intptr_t)opt;
   ```)
@@ -28,7 +28,7 @@
 (defn seq-make-none [] : int
   ```c
   struct { bool is_some; int64_t value; } *opt =
-    (struct { bool is_some; int64_t value; } *)malloc(sizeof(*opt));
+    (void *)malloc(sizeof(*opt));
   opt->is_some = false; opt->value = 0;
   return (int64_t)(intptr_t)opt;
   ```)
@@ -41,7 +41,7 @@
 (defn seq-out-vec-new [] : int
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *v =
-    (struct { int64_t *data; size_t len; size_t cap; } *)malloc(sizeof(*v));
+    (void *)malloc(sizeof(*v));
   v->data = NULL; v->len = 0; v->cap = 0;
   return (int64_t)(intptr_t)v;
   ```)
@@ -50,7 +50,7 @@
 (defn seq-out-vec-push! [v : int val : int] : void
   ```c
   struct { int64_t *data; size_t len; size_t cap; } *vec =
-    (struct { int64_t *data; size_t len; size_t cap; } *)(intptr_t)v;
+    (void *)(intptr_t)v;
   if (vec->len == vec->cap) {
     vec->cap = vec->cap ? vec->cap * 2 : 8;
     vec->data = (int64_t *)realloc(vec->data,
@@ -63,7 +63,7 @@
 (defn seq-make-cons [val : int nxt : int] : int
   ```c
   struct { int64_t value; int64_t next; } *cell =
-    (struct { int64_t value; int64_t next; } *)malloc(sizeof(*cell));
+    (void *)malloc(sizeof(*cell));
   cell->value = val; cell->next = nxt;
   return (int64_t)(intptr_t)cell;
   ```)

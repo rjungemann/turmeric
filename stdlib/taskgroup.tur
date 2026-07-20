@@ -592,7 +592,6 @@
 (defn spawn-timeout-thread-fn [raw : ptr<void>] : ptr<void>
   ```c
   typedef struct { void *tg; int ms; } TimeoutArg;
-  typedef struct { long tv_sec; long tv_nsec; } timespec;
   typedef struct {
       pthread_mutex_t lock;
       pthread_cond_t done_cond;
@@ -602,7 +601,7 @@
       bool done;
   } TaskGroupBlock;
   TimeoutArg *a = (TimeoutArg *)raw;
-  timespec ts = { .tv_sec = a->ms / 1000, .tv_nsec = (a->ms % 1000) * 1000000L };
+  struct timespec ts = { .tv_sec = a->ms / 1000, .tv_nsec = (a->ms % 1000) * 1000000L };
   nanosleep(&ts, NULL);
   TaskGroupBlock *g = (TaskGroupBlock *)a->tg;
   pthread_mutex_lock(&g->lock);

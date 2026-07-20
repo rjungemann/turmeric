@@ -4982,7 +4982,7 @@ static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __t2 = __ps_68;
         if (__t2) {
-            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __kont); /* cps->cps */
+            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, (int64_t)(intptr_t)val_cmp, __kont); /* cps->cps */
         } else {
             return dk_run(__kont, (intptr_t)(false));
         }
@@ -5378,7 +5378,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
                 __auto_type __ps_91 = (list_hytail(l2));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __t5 = __ps_91;
-                return list_hyeq_qu__cps(__t4, __t5, cmp_fn, __kont); /* cps->cps */
+                return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
             } else {
                 return dk_run(__kont, (intptr_t)(false));
             }
@@ -5438,7 +5438,7 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_999;
-    out_999 = tcons(__t1, __t2); /* cps->direct */
+    out_999 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
     return dk_run(__kont, (intptr_t)(out_999));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
@@ -7176,7 +7176,7 @@ static int64_t sum_hyvals(tur_adt_MutableMap__int__int * m, int64_t i, int64_t c
 static int64_t total(tur_adt_MutableMap__int__int * m) {
         __auto_type __ps_163 = (mutmap_hycap((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(m)))));
         if (tur_panicking) return (int64_t){0};
-        __auto_type __ps_164 = (sum_hyvals((int64_t)(intptr_t)(m), INT64_C(0), __ps_163, INT64_C(0)));
+        __auto_type __ps_164 = (sum_hyvals((tur_adt_MutableMap__int__int *)(intptr_t)((int64_t)(intptr_t)(m)), INT64_C(0), __ps_163, INT64_C(0)));
         if (tur_panicking) return (int64_t){0};
         return __ps_164;
 }
@@ -7203,7 +7203,7 @@ int main(int argc, char **argv) {
             mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286))), INT64_C(1), INT64_C(1), INT64_C(100));
             mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286))), INT64_C(2), INT64_C(2), INT64_C(200));
             mutmap_hyset_ex((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286))), INT64_C(3), INT64_C(3), INT64_C(300));
-            __auto_type __ps_166 = (total((int64_t)(intptr_t)(a_1286)));
+            __auto_type __ps_166 = (total((tur_adt_MutableMap__int__int *)(intptr_t)((int64_t)(intptr_t)(a_1286))));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%lld\n", (long long)(__ps_166));
             __auto_type __ps_167 = (mutmap_hylen((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(a_1286)))));

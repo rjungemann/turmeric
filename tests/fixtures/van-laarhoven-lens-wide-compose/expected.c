@@ -4274,7 +4274,7 @@ static int64_t point_hyx_un_undict_un1328(int64_t __dict_1329, int64_t g, int64_
 struct __env_1334 { int64_t __fn; int64_t __hkt_dict; int64_t g; };
 static int64_t __fn_1332(void * __env_p_1335, tur_adt_Point * p) {
         struct __env_1334 *__env___env_1334 = (struct __env_1334 *)__env_p_1335;
-        __auto_type __ps_52 = (point_hyx_un_undict_un1328(__env___env_1334->__hkt_dict, (int64_t)(intptr_t)(__env___env_1334->g), p));
+        __auto_type __ps_52 = (point_hyx_un_undict_un1328(__env___env_1334->__hkt_dict, (int64_t)(intptr_t)(__env___env_1334->g), (int64_t)(intptr_t)(p)));
         if (tur_panicking) return (int64_t){0};
         return __ps_52;
 }
@@ -5310,7 +5310,7 @@ static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __t2 = __ps_110;
         if (__t2) {
-            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __kont); /* cps->cps */
+            return map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, (int64_t)(intptr_t)val_cmp, __kont); /* cps->cps */
         } else {
             return dk_run(__kont, (intptr_t)(false));
         }
@@ -5706,7 +5706,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
                 __auto_type __ps_133 = (list_hytail(l2));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __t5 = __ps_133;
-                return list_hyeq_qu__cps(__t4, __t5, cmp_fn, __kont); /* cps->cps */
+                return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
             } else {
                 return dk_run(__kont, (intptr_t)(false));
             }
@@ -5766,7 +5766,7 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t __t1 = __cap->f0;
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_1011;
-    out_1011 = tcons(__t1, __t2); /* cps->direct */
+    out_1011 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
     return dk_run(__kont, (intptr_t)(out_1011));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
@@ -7475,7 +7475,7 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             __auto_type __ps_210 = (ctor_Line((int64_t)(intptr_t)(__ps_208), (int64_t)(intptr_t)(__ps_209)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t ln_1364 = __ps_210;
+            int64_t ln_1364 = (int64_t)(intptr_t)(__ps_210);
             (void)ln_1364;
             __auto_type __ps_211 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1369 }, ln_1364));
             /* panic-return-signal: ret ctype unknown; no propagation here */

@@ -21,21 +21,21 @@
 (defn __res_ok? [r] : bool
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+      (void *)(intptr_t)r;
   return p != NULL && p->is_ok;
   ```)
 
 (defn __res_unwrap [r] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+      (void *)(intptr_t)r;
   return p->ok_val;
   ```)
 
 (defn __res_err_val [r] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *p =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)r;
+      (void *)(intptr_t)r;
   return p->err_val;
   ```)
 
@@ -47,7 +47,7 @@
 (defn __bind_result [ma fn] : int
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res =
-      (struct { bool is_ok; int64_t ok_val; int64_t err_val; } *)(intptr_t)ma;
+      (void *)(intptr_t)ma;
   if (!res || !res->is_ok) return ma;
   /* fn is a closure env struct; first field is the function pointer */
   return TUR_APPLY1(fn, res->ok_val);

@@ -104,5 +104,5 @@
 (defn mutex-free [m : Mutex] : nil
   ```c
   pthread_mutex_destroy((pthread_mutex_t *)m);
-  free(m);
+  free((void*)(intptr_t)m);
   ```)

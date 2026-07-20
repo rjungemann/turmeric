@@ -5,5 +5,5 @@
 (defn main [] : int
   (let [result (serial-reset 42)]
     (do
-      (printf "result: %lld\n" result)
+      (printf "result: %ld\n" result)
       0)))

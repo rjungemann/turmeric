@@ -4879,6 +4879,151 @@ static char *atoms_csv_call(CE *ce, const CAtom *args, uint32_t n) {
     return s;
 }
 
+/* gcc14-int-conversion: the E2a threaded-fn-value dispatch calls through a
+ * synthesized `int64_t (*)(int64_t..., DK *)` pointer, so EVERY argument slot is
+ * the int64 carrier.  Unlike the ordinary call CSV (which passes each arg in its
+ * natural C type to a real callee), here a pointer-like arg -- a cstr literal, a
+ * `ptr<void>`, an rc/weak/ref handle, a fn value, a continuation -- must be cast
+ * to `(int64_t)(intptr_t)`, else it "makes integer from pointer" at the call, a
+ * hard error under GCC >= 14.  int/bool pass through as int64 already; float args
+ * do not occur on this carrier path. */
+static bool atom_ty_is_ptr_carrier(TypeKind k) {
+    return k == TY_FN || k == TY_PTR_VOID || k == TY_CSTR || k == TY_RC ||
+           k == TY_WEAK || k == TY_REF || k == TY_REF_IMMUT || k == TY_REF_MUT ||
+           k == TY_CONT || k == TY_CLONEABLE_CONT || k == TY_FORALL;
+}
+static char *atoms_csv_call_cps(CE *ce, const CAtom *args, uint32_t n) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        if (!atom_is_fat_fn(&args[i]) && atom_ty_is_ptr_carrier(args[i].ty))
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
+/* gcc14-int-conversion (carrier-to-typed-param, CPS path): the C type the callee
+ * declares for parameter `i`, matching emit_params (the `__cps`/direct signature
+ * emitter) EXACTLY so the argument cast agrees with the declared param.  A `__cps`
+ * callee's params are NOT uniformly int64 -- some are `void *`, some concrete
+ * `tur_adt_X *` -- so a blanket int64 cast is wrong (it makes int64->void* at a
+ * void* param).  Returns NULL for a param whose C type is an aggregate/poly-fn
+ * struct (not intptr_t-castable) or when the callee's param types are unknown. */
+/* effectful-fnvalue-param-miscompile (E2): true when the callee declares
+ * parameter `i` as a rank-2 poly fn -- its C type is the multi-word
+ * `tur_poly_fn_t` aggregate, taken BY VALUE.  A `tur_poly_fn_t` argument must
+ * pass bare (not `(int64_t)(intptr_t)arg`, which is "aggregate used where an
+ * integer was expected"). */
+static bool cps_call_param_is_poly_fn(CE *ce, const Binding *fn, uint32_t i) {
+    (void)ce;
+    if (!fn || fn->type.kind != TY_FN || i >= fn->type.as.fn.arity) return false;
+    SEnt *fe = ent_of_binding(fn);
+    const FnDef *fd = fe ? fe->fd : NULL;
+    return fd && i < fd->n_params && fd->params[i]->is_poly_fn;
+}
+
+static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
+    if (!fn || fn->type.kind != TY_FN || i >= fn->type.as.fn.arity) return NULL;
+    SEnt *fe = ent_of_binding(fn);
+    const FnDef *fd = fe ? fe->fd : NULL;
+    if (fd && i < fd->n_params) {
+        if (fd->params[i]->is_poly_fn) return NULL;           /* tur_poly_fn_t */
+        if (fd->params[i]->type.kind == TY_FN) return "int64_t";
+        return binder_ctype_full(ce->ctx, fd->params[i]->type.kind,
+                                 &fd->params[i]->type);
+    }
+    if (fn->type.as.fn.arg_full_types && fn->type.as.fn.arg_full_types[i]) {
+        const Type *pt = fn->type.as.fn.arg_full_types[i];
+        if (pt->kind == TY_FN) return "int64_t";
+        return binder_ctype_full(ce->ctx, pt->kind, pt);
+    }
+    return NULL;
+}
+
+/* CSV of call args, each cast to its DECLARED param C type (via intptr_t) for a
+ * cps->cps call whose `__cps` callee has known param types.  Only casts a param
+ * whose C type is the int64 carrier or a pointer (`... *`); an aggregate/poly-fn
+ * param is left to the plain-atom emission (never intptr_t-cast).  Falls back to
+ * the plain atom for a param we cannot type. */
+static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
+                                  const Binding *fn) {
+    Buf b; buf_init(&b);
+    for (uint32_t i = 0; i < n; i++) {
+        if (i) buf_puts(&b, ", ");
+        char *a = atom_str(ce, &args[i]);
+        const char *pty = cps_call_param_ctype(ce, fn, i);
+        size_t L = pty ? strlen(pty) : 0;
+        bool param_is_ptr = pty && L >= 1 && pty[L - 1] == '*';
+        bool param_is_i64 = pty && strcmp(pty, "int64_t") == 0;
+        bool param_is_voidp = pty && strcmp(pty, "void *") == 0;
+        bool arg_is_ptr = atom_ty_is_ptr_carrier(args[i].ty);
+        /* An arg whose C representation is provably a plain integer (not a pointer
+         * carried on the int64 slot): a plain int/bool literal or scalar.  Such an
+         * arg into an int64 param needs no cast; a heap/pointer arg (TY_APP/ADT,
+         * cstr, ...) into an int64 param does. */
+        bool arg_is_plain_int = (args[i].ty == TY_INT || args[i].ty == TY_BOOL ||
+            args[i].ty == TY_INT8 || args[i].ty == TY_INT16 ||
+            args[i].ty == TY_INT32 || args[i].ty == TY_INT64 ||
+            args[i].ty == TY_UINT8 || args[i].ty == TY_UINT16 ||
+            args[i].ty == TY_UINT32 || args[i].ty == TY_UINT64 ||
+            args[i].ty == TY_NIL);
+        /* Cast each arg to the callee's declared param C type -- EXCEPT the two
+         * provably-valid no-cast cases, so matching args stay bare (minimal
+         * snapshot churn): (1) a pointer-like arg into a `void *` param (any object
+         * pointer implicitly converts to void*), and (2) an int64-ish arg into an
+         * int64 param handled by falling through.  Everything else that is a
+         * mismatch -- a heap/pointer arg into an int64 slot, an int64-carried arg
+         * into a `void *` / concrete pointer param -- is bridged through intptr_t
+         * (value-preserving). */
+        /* A by-value aggregate arg (a `tur_adt_Option__int` struct value) is NOT a
+         * scalar -- `(int64_t)(intptr_t)(agg)` is "aggregate used where integer
+         * expected".  Its concrete->carrier crossing is a spill+address bridge, not
+         * this cast, so leave it to the existing atom emission.  An arg is such an
+         * aggregate iff its own C type is neither `int64_t` nor a pointer; a TY_FN
+         * value is a scalar (int64/fn-ptr carrier) and stays castable. */
+        bool arg_is_byval_agg = false;
+        if (args[i].ty != TY_FN && args[i].type) {
+            const char *acty = binder_ctype_full(ce->ctx, args[i].ty, args[i].type);
+            size_t aL = acty ? strlen(acty) : 0;
+            arg_is_byval_agg = acty && strcmp(acty, "int64_t") != 0 &&
+                               !(aL >= 1 && acty[aL - 1] == '*');
+        }
+        /* gcc14-int-conversion (carrier-to-typed-param): a fat-fn arg (a `void *`
+         * fat-closure carrier) passed into a callee slot the signature declares
+         * as the int64 fn-carrier (`int64_t cmp_fn`, e.g. `option-eq?`'s
+         * comparator) is a void*->int64 -Wint-conversion -- a hard error under
+         * GCC >= 14.  Bridge it to the carrier; the fat carrier's bits are
+         * preserved.  A fat-fn into a genuine fn-value slot (`void *` /
+         * tur_poly_fn_t param) is left bare below. */
+        if (atom_is_fat_fn(&args[i]) && param_is_i64)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else if (cps_call_param_is_poly_fn(ce, fn, i))
+            buf_puts(&b, a);                 /* E2: tur_poly_fn_t param -- pass the fat struct by value */
+        else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
+            buf_puts(&b, a);
+        else if (param_is_voidp && arg_is_ptr)
+            buf_puts(&b, a);                 /* object ptr -> void*: already valid */
+        else if (param_is_ptr)
+            buf_printf(&b, "(%s)(intptr_t)%s", pty, a);
+        else if ((param_is_i64 || !pty) && !arg_is_plain_int)
+            buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else
+            buf_puts(&b, a);
+        free(a);
+    }
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
 static void emit_term(CE *ce, const CTerm *t);
 static void emit_binder_decls(CE *ce, const CTerm *t);
 static void emit_reset(CE *ce, const CTerm *t);
@@ -5024,9 +5169,27 @@ static void emit_term(CE *ce, const CTerm *t) {
         }
         case CT_LETCALL: {
             /* cps->direct: an uncolored callee runs to completion and returns an
-             * ordinary value; no continuation is threaded in. */
-            char *fn = callee_name(t->as.letcall.fn);
-            char *argv = atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n);
+             * ordinary value; no continuation is threaded in.  Resolve a
+             * monomorph-clone name the same way the CT_TAILCALL cps->direct arm
+             * does: a generic constructor/callee (e.g. the `tcons` built inside a
+             * generated `_un_uncons_hyfmap` hylo helper) is emitted as the DEFINED
+             * `<name>__spec__...` clone, not the unmangled generic symbol -- which
+             * would otherwise be an undefined reference surviving only by -O2 DCE
+             * of the dead helper.  find_mono_clone_for_call returns NULL for an
+             * ordinary callee with no registered ABI specialization, so this is a
+             * no-op for every non-templated call. */
+            const char *mclone_lc = find_mono_clone_for_call(
+                ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n);
+            char *fn = mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn);
+            /* Cast each arg to the (direct) callee's declared param C type --
+             * gcc14-int-conversion, carrier-to-typed-param: a cps->direct call to
+             * e.g. `option_hyeq_qu(int64_t,int64_t,int64_t)` with a void* closure
+             * arg 3 must carrier-cast it.  Skipped for a mono-clone (its args are
+             * already the clone's concrete param types). */
+            char *argv = mclone_lc
+                ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
+                : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
+                                       t->as.letcall.fn);
             char *bn = cvar_cname(ce, t->as.letcall.x);
             /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
              * no value: emit the call as a bare statement and bind the unit
@@ -5036,6 +5199,16 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (t->as.letcall.x.ty == TY_NIL) {
                 ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
                 ce_line(ce, "%s = 0;", bn);
+            } else if (mclone_lc) {
+                /* A resolved mono-clone returns its real type -- for a constructor
+                 * clone (`tcons__spec__...`) that is a boxed-ADT pointer -- while
+                 * the cps->direct word slot is int64_t.  Carry it through
+                 * (int64_t)(intptr_t), the same pointer<->word carrier cast the
+                 * rest of the CPS emitter uses at delivery.  Without it the
+                 * pointer-returning clone would -Wint-conversion into the int64
+                 * slot; the unmangled generic name only dodged that via its
+                 * (now-eliminated) implicit-int declaration. */
+                ce_line(ce, "%s = (int64_t)(intptr_t)%s(%s); /* cps->direct */", bn, fn, argv);
             } else {
                 ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
@@ -5052,7 +5225,9 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * fn_atom -- use its atom expression as the lookup key. */
                 char *pf = t->as.tailcall.fn ? callee_name(t->as.tailcall.fn)
                                              : atom_str(ce, &t->as.tailcall.fn_atom);
-                char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
+                /* E2a carrier ABI: every arg slot is int64_t, so pointer-like args
+                 * must be carrier-cast (gcc14-int-conversion). */
+                char *argv = atoms_csv_call_cps(ce, t->as.tailcall.args, t->as.tailcall.n);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
                 /* cast to the __cps ABI: int64_t (*)(int64_t x n, DK *) */
@@ -5087,19 +5262,32 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * would need a heap join, which excludes the caller. */
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? ce->cur_k : "__kont";
+                /* Cast each arg to the callee's DECLARED param C type (int64, a
+                 * void pointer, or a concrete pointer) -- gcc14-int-conversion,
+                 * carrier-to-typed-param. */
+                char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
+                                                    t->as.tailcall.n, t->as.tailcall.fn);
                 if (t->as.tailcall.n)
-                    ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv, thread);
+                    ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv_t, thread);
                 else
                     ce_line(ce, "return %s__cps(%s); /* cps->cps */", fn, thread);
+                free(argv_t);
             } else {
                 /* cps->direct: the callee is uncolored or a colored function that
                  * fell back to direct-style; call it synchronously and deliver
                  * the ordinary result value to the continuation. */
                 char *tmp = fresh_tmp(ce->ctx);
+                /* Cast each arg to the callee's DECLARED param C type, exactly as
+                 * the cps->cps branch does -- a pointer/fat-fn arg into an int64
+                 * carrier param (or vice versa) is a -Wint-conversion hard error
+                 * under GCC >= 14 (gcc14-int-conversion, carrier-to-typed-param). */
+                char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
+                                                    t->as.tailcall.n, t->as.tailcall.fn);
                 /* __auto_type keeps the callee's real return type (int, cstr,
                  * ...); the slot cast at delivery narrows it to the word. */
-                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv);
+                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
                 emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                free(argv_t);
                 free(tmp);
             }
             free(fn); free(argv);
@@ -5232,6 +5420,23 @@ static char *letraw_binder_name(CE *ce, const CTerm *t) {
     return cvar_cname(ce, t->as.letraw.x);
 }
 
+/* effectful-fnvalue-param-miscompile (E2): true when a CT_LETRAW value is an
+ * EX_POLY_WRAP that emits a `tur_poly_fn_t` fat-closure struct literal (the
+ * closure path or the wrapper-thunk path in emit_expr's EX_POLY_WRAP).  The
+ * poly-wrap NODE is typed `ptr<void>` (the legacy thin carrier), so the CT-IR
+ * binder derived from its type is `void *` -- but the emitted VALUE is the
+ * multi-word `tur_poly_fn_t`, so `void *b = (tur_poly_fn_t){...}` is a hard C
+ * error.  Declare the binder `tur_poly_fn_t` and pass it by value so the fat
+ * closure (incl. its fn_cps channel) reaches the callee's `tur_poly_fn_t`
+ * parameter intact. */
+static bool letraw_emits_poly_fn(const CTerm *t) {
+    if (!t || t->kind != CT_LETRAW) return false;
+    const Expr *e = t->as.letraw.e;
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_POLY_WRAP) return false;
+    return e->as.poly_wrap_.is_closure || e->as.poly_wrap_.wrapper_binding != NULL;
+}
+
 static void emit_letraw(CE *ce, const CTerm *t) {
     /* B7: a `(set! m k)` that stores a continuation into a by-reference mutable is
      * emitted natively as a copy-on-store into the shared cell.  dk_perform frees
@@ -5345,7 +5550,12 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             char *bn = t->as.letraw.x.bind
                 ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
                 : strdup(t->as.letraw.x.name);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
+            /* E2: a poly-wrap value is the fat `tur_poly_fn_t`, not the void*
+             * carrier its ptr<void> node type would spell. */
+            if (letraw_emits_poly_fn(t))
+                ce_line(ce, "tur_poly_fn_t %s;", bn);
+            else
+                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.letraw.body);
             break;
@@ -5753,14 +5963,23 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         for (uint32_t i = 0; i < call->as.tailcall.n && coff < 400; i++)
             coff += snprintf(cast + coff, sizeof cast - (size_t)coff, "int64_t, ");
         snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
+        /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
+        char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
         if (call->as.tailcall.n)
             ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value heap join */",
-                    cast, fn, argv, frame);
+                    cast, fn, argv_cps, frame);
         else
             ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value heap join */",
                     cast, fn, frame);
+        free(argv_cps);
     } else if (call->as.tailcall.n)
-        ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv, frame);
+    {
+        /* Param-type-aware carrier casts (gcc14-int-conversion). */
+        char *argv_t = atoms_csv_call_typed(ce, call->as.tailcall.args,
+                                            call->as.tailcall.n, call->as.tailcall.fn);
+        ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv_t, frame);
+        free(argv_t);
+    }
     else
         ce_line(ce, "return %s__cps(%s); /* cps->cps heap join */", fn, frame);
     free(fn); free(argv);
@@ -6165,10 +6384,22 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
             bodyfn, cont_setup, thunk_name, kty, cont_arg);
         free(thunk_name);
     } else {
+        /* Named-fn receiver: cast the receiver fn ptr (threaded through `env`)
+         * to its ACTUAL param signature, not a blanket `int64_t (*)(int64_t)`.
+         * A serial receiver's continuation param `k` is `ptr<void>` -- its real C
+         * signature is `int64_t rt(void *)` -- so a uniform int64_t cast invokes
+         * it through an incompatible function-pointer type.  That is UB a
+         * `-fsanitize=function` / CFI build trips on, even though it works on every
+         * supported ABI (`void *` and `int64_t` are passed identically in an
+         * integer register).  Key the callee pointer type AND its argument cast on
+         * the same `serial` bit the closure branch uses two cases up for the
+         * continuation-arg cast; the non-serial (cloneable) case keeps int64_t, so
+         * its emitted C is byte-identical to before. */
+        const char *kty = t->as.cloneable.serial ? "void *" : "int64_t";
         buf_printf(ce->helpers,
             "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)((int64_t (*)(int64_t))(intptr_t)env)((int64_t)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, cont_arg);
+            "    return (intptr_t)((int64_t (*)(%s))(intptr_t)env)((%s)(intptr_t)%s);\n}\n",
+            bodyfn, cont_setup, kty, kty, cont_arg);
     }
 }
 

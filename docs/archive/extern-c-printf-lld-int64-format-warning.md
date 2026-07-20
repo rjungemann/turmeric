@@ -1,5 +1,25 @@
 # `extern-c printf` with `%lld` on an `:int` arg warns `-Wformat` on LP64
 
+> **Status:** RESOLVED 2026-07-19 (fixture-local path). All six serial fixtures
+> (`serial-reset-basic`, `cps-oracle-serial-passthrough`,
+> `cps-oracle-serial-roundtrip`, `serial-composite-instances`,
+> `serial-primitive-roundtrip`, `serial-return-dispatch-tyvar`) now use `%ld`
+> to match `int64_t`==`long` on LP64, so `tur emit-c | cc -Wall -Wformat`
+> compiles them warning-clean. Two of them (`cps-oracle-serial-roundtrip`,
+> `serial-primitive-roundtrip`) also carried a latent second defect in the
+> never-hit `int FAIL` branch: the format string had two `%ld` conversions but
+> the `extern-c printf [^cstr fmt ^int v]` shim is a fixed one-int signature, so
+> only one value could ever be passed. Rewritten to print the actual received
+> value (`got %ld`), a single conversion matching the single argument. Output
+> is unchanged (all six `expected.stdout` still match).
+>
+> The **root-cause** fix -- promoting a known `int64_t` variadic argument to
+> `long long` in the `extern-c` lowering so arbitrary user `%lld` `printf` code
+> is warning-clean regardless of platform `long` width -- is NOT done here; it
+> touches the extern-c ABI path (with LLP64/Windows care) and remains its own
+> future slice. This report is archived for the fixture-noise resolution the
+> pragmatic path called for.
+
 **Summary:** A fixture (or any user code) that declares `(extern-c printf [^cstr
 fmt ^int v] :int)` and calls it with a `%lld` conversion emits a
 `-Wformat=` warning on LP64 platforms (Linux x86-64 / AArch64), because Turmeric

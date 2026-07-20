@@ -13,7 +13,7 @@
   (eq? (:: (deserialize (serialize x)) A) x))
 
 (defn main [] : int
-  (printf "int-ok=%lld\n"  (if (round-ok 42)   1 0))   ; 1
-  (printf "int2-ok=%lld\n" (if (round-ok -7)   1 0))   ; 1
-  (printf "bool-ok=%lld\n" (if (round-ok true) 1 0))   ; 1
+  (printf "int-ok=%ld\n"  (if (round-ok 42)   1 0))   ; 1
+  (printf "int2-ok=%ld\n" (if (round-ok -7)   1 0))   ; 1
+  (printf "bool-ok=%ld\n" (if (round-ok true) 1 0))   ; 1
   0)

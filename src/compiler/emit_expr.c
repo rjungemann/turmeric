@@ -1205,6 +1205,16 @@ void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const 
  *
  * `tail_expr` drives the carrier-producer decision (the control form whose
  * tail leaves are the producers); `type` is the temp's static type. */
+/* gcc14-int-conversion (carrier-representation-tracking): true when `s` is a bare
+ * C identifier (a temp / local name), so it can key the local-var type table.  A
+ * cast/expression value (`(int64_t)(...)`, `x->f`, `f(...)`) is not looked up. */
+bool emit_str_is_bare_ident(const char *s) {
+    if (!s || !(s[0] == '_' || isalpha((unsigned char)s[0]))) return false;
+    for (const char *p = s + 1; *p; p++)
+        if (!(*p == '_' || isalnum((unsigned char)*p))) return false;
+    return true;
+}
+
 static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
                                           const Expr *tail_expr, const char *name) {
     /* generic-instance-result-byvalue-struct-okarm: when the control form's tail
@@ -1221,6 +1231,11 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail_expr);
     if (bv.kind != TY_UNKNOWN) {
         emit_temp_decl(ctx, body, bv, name, NULL);
+        /* gcc14-int-conversion (carrier-representation-tracking): record the
+         * temp's ACTUAL emitted C type so a later `int64_t z = <this temp>;`
+         * binder init can detect the int64<->pointer straddle by the temp's real
+         * representation rather than the (colliding) source type c-name. */
+        emit_localvar_record_ctype(name, emit_type_c_name(ctx, bv));
         return;
     }
     if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
@@ -1228,9 +1243,11 @@ static void emit_control_result_temp_decl(EmitCtx *ctx, Buf *body, Type type,
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail_expr)) {
         indent_buf(body, ctx->indent);
         buf_printf(body, "int64_t %s;\n", name);
+        emit_localvar_record_ctype(name, "int64_t");
         return;
     }
     emit_temp_decl(ctx, body, type, name, NULL);
+    emit_localvar_record_ctype(name, emit_type_c_name(ctx, type));
 }
 
 /* CONV-S1 seam 4 (assignment-straddle): bridge the value `v` of a control-form
@@ -1249,6 +1266,71 @@ static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
     if (bv.kind != TY_UNKNOWN &&
         !fn_body_tail_emits_byvalue_carrier_abi(ctx, last))
         return emit_carrier_bridge(ctx, body, v, CK_CARRIER, CK_CONCRETE, bv);
+    return v;
+}
+
+/* The C type `emit_control_result_temp_decl` declares the result temp with --
+ * mirrors that function's three branches exactly so a caller can cast the
+ * assigned value to match the temp's declared representation. */
+static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
+                                              const Expr *tail) {
+    Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail);
+    if (bv.kind != TY_UNKNOWN)
+        return emit_type_c_name(ctx, bv);
+    if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
+        fn_body_tail_is_carrier_producer(tail) &&
+        !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
+        return "int64_t";
+    return emit_type_c_name(ctx, type);
+}
+
+/* gcc14-int-conversion (carrier-to-typed-param): reconcile a control-form result
+ * assignment `tmp = <value>` whose temp C type and value representation straddle
+ * the int64<->pointer boundary.  The temp is declared by
+ * emit_control_result_temp_decl (int64 carrier or a concrete `tur_adt_X *`); the
+ * value flows from the body's tail, which may emit the other representation (a
+ * carrier producer into a concrete-pointer temp, or a pointer value into an int64
+ * temp).  `tmp = <ptr>`/`tmp = <int64>` mismatched is -Wint-conversion, a hard
+ * error under GCC >= 14.  Bridge through intptr_t (value-preserving); leave a
+ * matching pair, a `void *` temp, or a by-value aggregate untouched. */
+static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
+                                            const Expr *tail) {
+    const char *tcty = control_result_temp_ctype(ctx, ltype, tail);
+    if (!tcty) return v;
+    size_t tL = strlen(tcty);
+    bool temp_is_i64 = strcmp(tcty, "int64_t") == 0;
+    bool temp_is_ptr = tL >= 1 && tcty[tL - 1] == '*' && strcmp(tcty, "void *") != 0;
+    /* gcc14-int-conversion (carrier-representation-tracking): a `void *` temp
+     * assigned an int64 carrier value (a closure carrier declared int64) is
+     * `pointer from integer` under GCC >= 14; bridge it too.  A `void *` temp
+     * assigned a POINTER value stays untouched (val_is_ptr, no branch fires). */
+    bool temp_is_voidptr = strcmp(tcty, "void *") == 0;
+    if (!temp_is_i64 && !temp_is_ptr && !temp_is_voidptr) return v;
+    /* the value's own representation C type */
+    const Expr *p = tail;
+    while (p && p->kind == EX_ASCRIBE) p = p->as.ascribe_.inner;
+    const char *vcty = p ? emit_binding_repr_c_name(ctx, p->type, p) : NULL;
+    /* A bare local's RECORDED emitted C type is ground truth -- the source-type
+     * c-name collides under the carrier duality (a closure carrier declared int64
+     * whose fn type c-names to a pointer, which would hide the int64->void*
+     * straddle). */
+    if (emit_str_is_bare_ident(v)) {
+        const char *lvty = emit_localvar_lookup_ctype(v);
+        if (lvty) vcty = lvty;
+    }
+    if (!vcty) return v;
+    size_t vL = strlen(vcty);
+    bool val_is_i64 = strcmp(vcty, "int64_t") == 0;
+    bool val_is_ptr = vL >= 1 && vcty[vL - 1] == '*';
+    if (temp_is_i64 && val_is_ptr) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "(int64_t)(intptr_t)(%s)", v);
+        buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
+    } else if ((temp_is_ptr || temp_is_voidptr) && val_is_i64) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "(%s)(intptr_t)(%s)", tcty, v);
+        buf_putc(&b, '\0'); free(v); v = strdup(b.data); buf_free(&b);
+    }
     return v;
 }
 
@@ -1383,6 +1465,12 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * -Wint-conversion.  A bare ^fat alias is :ptr<void> and is handled
              * cleanly by the fallback below. */
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+            /* gcc14-int-conversion (carrier-representation-tracking): this boxed/
+             * fat closure binder is the int64 carrier; record it so a downstream
+             * straddle site (a `void *` letrec-result temp assigned this closure
+             * carrier) resolves the real int64 representation instead of the fn
+             * type's colliding pointer c-name. */
+            emit_localvar_record_ctype(bn, "int64_t");
         } else if (b->type.kind == TY_FN
                    && (b->type.as.fn.result_kind == TY_FN
                        || b->type.as.fn.result_kind == TY_UNKNOWN)) {
@@ -1395,6 +1483,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the handle; carry it as the int64_t handle instead, mirroring the
              * is_fat/boxed branch above. */
             buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+            emit_localvar_record_ctype(bn, "int64_t");
         } else if (b->type.kind == TY_FN) {
             /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
             const char *ret_c = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
@@ -1464,6 +1553,37 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *init_cn = emit_type_c_name(ctx, init_ty_r);
             bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+            /* gcc14-int-conversion (carrier-representation-tracking, reverse
+             * straddle): the init VALUE is a bare temp whose RECORDED emitted C
+             * type is a concrete pointer, while the binder is the int64 carrier
+             * (`int64_t z = __t169;` where `__t169` was declared
+             * `tur_adt_Cons__Option__int *`).  The init's TYPE c-names to the
+             * carrier (init_is_ptr_repr is false), so a type-based check
+             * under-fires; keying on the type broadly over-fires (139-fixture
+             * churn).  The local-var side table records the temp's ACTUAL emitted
+             * representation, so the bridge fires only for a genuine pointer temp
+             * flowing into an int64 binder. Value-preserving. */
+            bool init_val_recorded_ptr = false;
+            if (strcmp(bind_c, "int64_t") == 0 && emit_str_is_bare_ident(iv)) {
+                const char *lvty = emit_localvar_lookup_ctype(iv);
+                size_t lL = lvty ? strlen(lvty) : 0;
+                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                        strcmp(lvty, "void *") != 0;
+            }
+            /* gcc14-int-conversion (carrier-representation-tracking): the init
+             * VALUE is a `void *` union-default read (`((union { int64_t s; void *
+             * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
+             * relabel) while the binder is the int64 carrier -- e.g.
+             * `(let [c (:: (:: 0 :ptr<void>) (SChan ...))] ...)`.  `int64_t c =
+             * <void *>` is `integer from pointer` -- a hard error under GCC >= 14.
+             * Detect the exact void*-member union read (unique to this emit; it
+             * cannot match an int64 value) and reinterpret it to the carrier. */
+            if (!init_val_recorded_ptr && strcmp(bind_c, "int64_t") == 0 && iv) {
+                size_t ivL = strlen(iv);
+                if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+                    strstr(iv, "void * d;") != NULL)
+                    init_val_recorded_ptr = true;
+            }
             /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
              * parameter whose fields sum to > 16 bytes arrives via the
              * by-pointer ABI (`const T *`), but the let binding is declared
@@ -1503,13 +1623,34 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
                 iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+                 init_is_ptr_repr || init_val_recorded_ptr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
+            } else if (bind_is_ptr_repr && iv &&
+                       strncmp(iv, "(int64_t)", 9) == 0) {
+                /* gcc14-int-conversion (carrier-representation-tracking, Class B):
+                 * the binder's declared C type is a concrete pointer, but the init
+                 * VALUE is emitted as the int64 carrier -- e.g.
+                 * `(:: (.tail xs) (Cons (Option int)))` emits `(int64_t)(...)->tail`
+                 * while `t0` is declared `tur_adt_Cons__Option__int *`.  `init_cn`
+                 * (the init's TYPE c-name) is the pointer here, so the branch above
+                 * under-fires; key on the emitted value being the carrier (its
+                 * `(int64_t)` prefix) and reinterpret it to the binder's pointer.
+                 * Value-preserving (int64 -> intptr_t -> pointer), and only fires
+                 * for a pointer binder fed an explicitly int64-cast value. */
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
             }
+            /* gcc14-int-conversion (carrier-representation-tracking): record the
+             * binder's ACTUAL declared C type so a downstream straddle site (a
+             * control-result assignment reading this var) resolves the real
+             * representation, not the colliding source-type c-name -- e.g. a
+             * self-capturing closure carrier declared `int64_t self` whose fn type
+             * c-names to a pointer, feeding a `void *` letrec-result temp. */
+            emit_localvar_record_ctype(bn, bind_c);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
@@ -1534,6 +1675,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
             bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
                                                       e->as.let_.body);
+            bv = bridge_control_result_int_ptr(ctx, bv, e->type, e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -1553,6 +1695,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *bv = emit_value(ctx, body, e->as.let_.body);
         bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
                                                   e->as.let_.body);
+        bv = bridge_control_result_int_ptr(ctx, bv, e->type, e->as.let_.body);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", tmp, bv);
         free(bv);
@@ -1688,6 +1831,37 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             const char *init_cn = emit_type_c_name(ctx, init_ty_r);
             bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+            /* gcc14-int-conversion (carrier-representation-tracking, reverse
+             * straddle): the init VALUE is a bare temp whose RECORDED emitted C
+             * type is a concrete pointer, while the binder is the int64 carrier
+             * (`int64_t z = __t169;` where `__t169` was declared
+             * `tur_adt_Cons__Option__int *`).  The init's TYPE c-names to the
+             * carrier (init_is_ptr_repr is false), so a type-based check
+             * under-fires; keying on the type broadly over-fires (139-fixture
+             * churn).  The local-var side table records the temp's ACTUAL emitted
+             * representation, so the bridge fires only for a genuine pointer temp
+             * flowing into an int64 binder. Value-preserving. */
+            bool init_val_recorded_ptr = false;
+            if (strcmp(bind_c, "int64_t") == 0 && emit_str_is_bare_ident(iv)) {
+                const char *lvty = emit_localvar_lookup_ctype(iv);
+                size_t lL = lvty ? strlen(lvty) : 0;
+                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                        strcmp(lvty, "void *") != 0;
+            }
+            /* gcc14-int-conversion (carrier-representation-tracking): the init
+             * VALUE is a `void *` union-default read (`((union { int64_t s; void *
+             * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
+             * relabel) while the binder is the int64 carrier -- e.g.
+             * `(let [c (:: (:: 0 :ptr<void>) (SChan ...))] ...)`.  `int64_t c =
+             * <void *>` is `integer from pointer` -- a hard error under GCC >= 14.
+             * Detect the exact void*-member union read (unique to this emit; it
+             * cannot match an int64 value) and reinterpret it to the carrier. */
+            if (!init_val_recorded_ptr && strcmp(bind_c, "int64_t") == 0 && iv) {
+                size_t ivL = strlen(iv);
+                if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+                    strstr(iv, "void * d;") != NULL)
+                    init_val_recorded_ptr = true;
+            }
             /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
              * parameter whose fields sum to > 16 bytes arrives via the
              * by-pointer ABI (`const T *`), but the let binding is declared
@@ -1727,9 +1901,23 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
                 iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID || init_is_ptr_repr)) {
+                (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+                 init_is_ptr_repr || init_val_recorded_ptr)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
             } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
+            } else if (bind_is_ptr_repr && iv &&
+                       strncmp(iv, "(int64_t)", 9) == 0) {
+                /* gcc14-int-conversion (carrier-representation-tracking, Class B):
+                 * the binder's declared C type is a concrete pointer, but the init
+                 * VALUE is emitted as the int64 carrier -- e.g.
+                 * `(:: (.tail xs) (Cons (Option int)))` emits `(int64_t)(...)->tail`
+                 * while `t0` is declared `tur_adt_Cons__Option__int *`.  `init_cn`
+                 * (the init's TYPE c-name) is the pointer here, so the branch above
+                 * under-fires; key on the emitted value being the carrier (its
+                 * `(int64_t)` prefix) and reinterpret it to the binder's pointer.
+                 * Value-preserving (int64 -> intptr_t -> pointer), and only fires
+                 * for a pointer binder fed an explicitly int64-cast value. */
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else {
                 buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
@@ -1746,6 +1934,7 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             char *bv = emit_value(ctx, body, e->as.let_.body);
             bv = bridge_control_value_to_byvalue_temp(ctx, body, bv,
                                                       e->as.let_.body);
+            bv = bridge_control_result_int_ptr(ctx, bv, e->type, e->as.let_.body);
             indent_buf(body, ctx->indent);
             buf_printf(body, "%s = %s;\n", tmp, bv);
             free(bv);
@@ -2442,8 +2631,58 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
     indent_buf(body, ctx->indent);
     buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* A constructor call (`ctor_X(...)`) always returns the concrete heap pointer
+     * `tur_adt_X *`, even though its `(X ..)` type c-names to the int64 carrier
+     * under emit_binding_repr_c_name.  Capture that before freeing v so the temp
+     * is recorded with its ACTUAL pointer representation. */
+    bool v_is_ctor = strncmp(v, "ctor_", 5) == 0 || strncmp(v, "(ctor_", 6) == 0;
     free(v);
     emit_panic_signal_return(ctx, body);
+    /* gcc14-int-conversion (carrier-representation-tracking): record this call
+     * temp's representation C type when it is a concrete pointer, so a later
+     * `int64_t z = __ps_N;` straddle site (binder init, tail-backedge arg) can
+     * detect the reverse int64<-pointer straddle.  The __auto_type temp takes the
+     * call's real emitted type, which the source-type c-name can collide with the
+     * carrier; only a concrete pointer is recorded, and a mis-recorded carrier
+     * value would only add a value-preserving no-op cast, never a wrong one. */
+    {
+        const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
+        size_t rL = rcty ? strlen(rcty) : 0;
+        bool recorded = false;
+        if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0) {
+            emit_localvar_record_ctype(tmp, rcty);
+            recorded = true;
+        }
+        /* Ctor result: a parametric heap-ADT ctor (`ctor_Line`) returns the
+         * concrete `tur_adt_Line *` even though its `(Line ..)` type c-names to the
+         * int64 carrier (both type_c_name and emit_type_c_name collapse it).
+         * Reconstruct the concrete pointer from the ctor's own name so
+         * `int64_t z = <ctor temp>` at the binder init bridges. */
+        if (!recorded && v_is_ctor && e->kind == EX_CALL &&
+            e->as.call_.fn_binding && e->as.call_.fn_binding->name &&
+            e->as.call_.fn_binding->name->name &&
+            (type_is_heap_adt(emit_resolve_type(ctx, e->type)) ||
+             type_is_heap_struct(emit_resolve_type(ctx, e->type)))) {
+            char *mn = mangle_field_name(e->as.call_.fn_binding->name->name);
+            if (mn) {
+                Buf _cb; buf_init(&_cb);
+                buf_printf(&_cb, "tur_adt_%s *", mn);
+                buf_putc(&_cb, '\0');
+                emit_localvar_record_ctype(tmp, _cb.data);
+                buf_free(&_cb);
+                free(mn);
+            }
+        }
+        /* Also record a genuinely int64-carrier call temp, so a
+         * pointer-returning function whose tail is such a bare temp
+         * (`return __ps_224;` with the fn returning `tur_adt_Point *`) can detect
+         * the forward int64->pointer return straddle.  A ctor temp was already
+         * reclassified to its concrete pointer above, so this does not mislabel
+         * one; the binder-init / tail-backedge bridges key on a POINTER entry, so
+         * an int64 entry never triggers them. */
+        if (!recorded && rcty && strcmp(rcty, "int64_t") == 0 && !v_is_ctor)
+            emit_localvar_record_ctype(tmp, "int64_t");
+    }
     return strdup(tmp);
 }
 
@@ -4297,6 +4536,69 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         arg_strs[i] = strdup(c.data);
                         buf_free(&c);
                     }
+                    /* gcc14-int-conversion (docs/reported/codegen-gcc14-permerrors.md):
+                     * a CONCRETE (non-carrier) rc<T>/weak<T> field lowers to
+                     * `RcControlBlock *`, but its argument is frequently the int64
+                     * carrier -- an `rc<T>` function parameter's C type is int64_t,
+                     * so `ctor_Own(ir, ...)` hands an int64 into the
+                     * `RcControlBlock *` field slot.  That is a -Wint-conversion,
+                     * promoted to a hard error under GCC >= 14.  Cast through
+                     * (RcControlBlock *)(intptr_t): value-preserving in both
+                     * directions -- an int64 carrier becomes the pointer it already
+                     * encodes, and an already-typed `RcControlBlock *` arg
+                     * round-trips to itself.  Skipped for a carrier field (handled
+                     * by the pointer->int64 block just above). */
+                    if (!suffix && !field_inline && arg && !field_is_carrier &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        (e->as.call_.ctor->fields[i].kind == TY_RC ||
+                         e->as.call_.ctor->fields[i].kind == TY_WEAK)) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(RcControlBlock *)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
+                    /* gcc14-int-conversion: a fn-typed ctor field is stored in the
+                     * int64 carrier slot -- BOTH in a carrier ctor and in a
+                     * monomorph one (`ctor_Endo__int`'s param is int64_t) -- so a
+                     * fn-pointer argument must be cast to int64, else it "makes
+                     * integer from pointer" (a hard error under GCC >= 14).  Not
+                     * gated on `suffix` (the monomorph path is exactly where this
+                     * bites), and gated on the arg being an actual fn/ptr value so
+                     * an already-int64 carrier arg is left untouched.  A tyvar
+                     * carrier fn field is handled by the pointer->int64 block above
+                     * (field_is_carrier), so restrict to concrete TY_FN fields. */
+                    if (suffix && !field_inline && arg && !field_is_carrier &&
+                        e->as.call_.ctor && i < e->as.call_.ctor->n_fields &&
+                        e->as.call_.ctor->fields[i].kind == TY_FN) {
+                        Type rat = emit_resolve_type(ctx, arg->type);
+                        if (rat.kind == TY_FN || rat.kind == TY_PTR_VOID) {
+                            Buf c; buf_init(&c);
+                            buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                            buf_putc(&c, '\0');
+                            free(arg_strs[i]);
+                            arg_strs[i] = strdup(c.data);
+                            buf_free(&c);
+                        }
+                    }
+                    /* gcc14-int-conversion: an existential pack argument is
+                     * `tur_exists_t` == `void *`, but a ctor stores it in the int64
+                     * carrier field slot (`ctor_Box(int64_t)`).  Passing the void*
+                     * pack into the int64 param is "integer from pointer" (a hard
+                     * error under GCC >= 14).  Cast to int64 -- fires regardless of
+                     * `suffix`/`field_is_carrier` (an existential field's full_type
+                     * is TY_EXISTS, not a tyvar, so the pointer->int64 block above
+                     * does not cover it). */
+                    if (!field_inline && arg &&
+                        emit_resolve_type(ctx, arg->type).kind == TY_EXISTS) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                        buf_putc(&c, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(c.data);
+                        buf_free(&c);
+                    }
                     /* A FLOAT argument flowing into a ctor field that is ERASED
                      * to the int64 CARRIER -- a tyvar field of a carrier-helper
                      * base ctor (`ctor_Result(bool,int64_t,int64_t)`'s `ok_val`,
@@ -5558,6 +5860,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     raw = strdup(_hb.data);
                     buf_free(&_hb);
                 }
+                /* gcc14-int-conversion (carrier-to-typed-param): cast the arg to
+                 * the callee's concrete heap-pointer param type.  The existing gate
+                 * skipped a carrier-ABI arg, but a HEAP-pointer arg (a `(Vec int)`
+                 * value carried on the int64 carrier, then bridged to int64 by an
+                 * upstream block) reports as carrier-ABI yet is passed into a
+                 * concrete `tur_adt_Vec__int *` param -- `sum_hyvec((int64_t)...)`
+                 * is a -Wint-conversion (hard error under GCC >= 14).  Also fire for
+                 * such a heap-struct/heap-adt arg: `(<paramtype>)(intptr_t)(raw)` is
+                 * value-preserving whether raw is currently int64 or the pointer. */
                 if (emit_arg &&
                     callee_param_is_typed_heap_ptr &&
                     !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
@@ -5569,6 +5880,120 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     free(raw);
                     raw = strdup(_hb.data);
                     buf_free(&_hb);
+                }
+                /* gcc14-int-conversion (carrier-to-typed-param): a heap-container
+                 * argument (`(Vec int)` value, carried on the int64 carrier and
+                 * bridged to int64 upstream) passed into a callee whose DECLARED
+                 * parameter is a CONCRETE pointer C type (`sum_hyvec(tur_adt_Vec__int
+                 * *)`) is a -Wint-conversion -- a hard error under GCC >= 14.  The
+                 * `callee_param_is_typed_heap_ptr` correction above misses it because
+                 * a `(Vec ...)` container is not classified as a heap-struct/heap-adt
+                 * param.  Key directly on the param's C type being a concrete pointer
+                 * (not the int64 carrier, void*, or an RcControlBlock/tyvar-carrier
+                 * slot) and cast the arg to it -- value-preserving whether raw is
+                 * currently int64 or already the pointer. */
+                else if (emit_arg &&
+                         fn_binding->type.kind == TY_FN &&
+                         i < fn_binding->type.as.fn.arity &&
+                         fn_binding->type.as.fn.arg_full_types &&
+                         fn_binding->type.as.fn.arg_full_types[i]) {
+                    Type raw_at = emit_resolve_type(ctx, emit_arg->type);
+                    bool arg_is_heap_ptr = type_is_heap_struct(raw_at) ||
+                                           type_is_heap_adt(raw_at) ||
+                                           raw_at.kind == TY_APP;
+                    Type pf = *fn_binding->type.as.fn.arg_full_types[i];
+                    /* gcc14-int-conversion (carrier-representation-tracking):
+                     * consult the callee's ACTUAL emitted param C-type (recorded
+                     * from the forward-decl pass, ground truth).  When it is the
+                     * int64 carrier (a generic carrier-ABI callee such as
+                     * `map-hamt [K V]` whose `(Map K V)` param emits int64_t), the
+                     * arg was correctly bridged to int64 upstream and must NOT be
+                     * re-cast to a concrete pointer -- the monomorphized `pf`
+                     * c-names to `tur_adt_X *` and would fool the cast below.  Only
+                     * fire when the recorded param is genuinely a concrete pointer
+                     * (a concrete callee such as `size-of (m : (Map int int))`). */
+                    const char *rec_pty = emit_sig_lookup_param_ctype(fn_name, i);
+                    bool callee_real_param_is_carrier =
+                        rec_pty && !(strlen(rec_pty) >= 1 &&
+                                     rec_pty[strlen(rec_pty) - 1] == '*');
+                    if (arg_is_heap_ptr && !callee_real_param_is_carrier &&
+                        pf.kind != TY_TYVAR &&
+                        pf.kind != TY_FORALL && pf.kind != TY_EXISTS) {
+                        const char *pty = emit_type_c_name(ctx, pf);
+                        size_t L = pty ? strlen(pty) : 0;
+                        if (L >= 2 && pty[L - 1] == '*' &&
+                            strcmp(pty, "void *") != 0 &&
+                            strncmp(pty, "int64_t", 7) != 0 &&
+                            strncmp(pty, "RcControlBlock", 14) != 0) {
+                            Buf _hb; buf_init(&_hb);
+                            buf_printf(&_hb, "(%s)(intptr_t)(%s)", pty, raw);
+                            buf_putc(&_hb, '\0');
+                            free(raw);
+                            raw = strdup(_hb.data);
+                            buf_free(&_hb);
+                        }
+                    }
+                }
+                /* gcc14-int-conversion (carrier-representation-tracking, reverse
+                 * at a spec-dispatch call): the RECORDED callee param is the int64
+                 * carrier but the arg EMITS as a concrete pointer -- e.g.
+                 * `__inst_Eq_..._int64_t(a, b)` where `b` is a
+                 * `tur_adt_Map__cstr__int *` spec param passed into the int64 slot.
+                 * `pointer -> int64 param` is a hard error under GCC >= 14.  Uses
+                 * the emit_sig ground truth keyed by fn_name (now populated for ABI
+                 * specs too), so it fires even when arg_full_types is absent.  Gated
+                 * on the arg genuinely emitting a concrete pointer and not already
+                 * bridged, so an already-int64 carrier arg is untouched. */
+                if (emit_arg && fn_name && raw &&
+                    strncmp(raw, "(int64_t)", 9) != 0) {
+                    const char *rec_c = emit_sig_lookup_param_ctype(fn_name, i);
+                    if (rec_c && strcmp(rec_c, "int64_t") == 0) {
+                        const char *acty = emit_binding_repr_c_name(
+                            ctx, emit_arg->type, emit_arg);
+                        size_t aL = acty ? strlen(acty) : 0;
+                        /* the arg genuinely emits a pointer value: a concrete
+                         * `tur_adt_X *`, OR an existential pack whose emitted form
+                         * is a `(tur_exists_t)(..)` void* (tur_exists_t is void*).
+                         * Both are `pointer -> int64 param` and must reinterpret. */
+                        bool arg_is_conc_ptr = acty && aL >= 1 &&
+                            acty[aL - 1] == '*' && strcmp(acty, "void *") != 0;
+                        bool arg_is_exists = strncmp(raw, "(tur_exists_t)", 14) == 0;
+                        if (arg_is_conc_ptr || arg_is_exists) {
+                            Buf _rb; buf_init(&_rb);
+                            buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", raw);
+                            buf_putc(&_rb, '\0');
+                            free(raw);
+                            raw = strdup(_rb.data);
+                            buf_free(&_rb);
+                        }
+                    }
+                    /* gcc14-int-conversion (carrier-representation-tracking,
+                     * forward at a spec-dispatch call): the mirror of the reverse
+                     * cast -- the RECORDED callee param is a CONCRETE pointer but
+                     * the arg EMITS as the int64 carrier (e.g. a `cstr` element
+                     * carried on int64 passed into `__inst_Eq_eq_qu_cstr(const char
+                     * *)` / `__inst_Show_show_cstr`).  `int64 arg -> pointer param`
+                     * is a hard error under GCC >= 14.  Cast the int64 arg to the
+                     * recorded concrete pointer type.  Gated on the arg emitting as
+                     * int64 (repr c-name) so an arg already the pointer is
+                     * untouched; the RcControlBlock carrier slot is excluded. */
+                    else if (rec_c) {
+                        size_t rL = strlen(rec_c);
+                        bool rec_is_conc_ptr = rL >= 2 && rec_c[rL - 1] == '*' &&
+                            strcmp(rec_c, "void *") != 0 &&
+                            strncmp(rec_c, "RcControlBlock", 14) != 0;
+                        const char *acty = emit_binding_repr_c_name(
+                            ctx, emit_arg->type, emit_arg);
+                        if (rec_is_conc_ptr && acty &&
+                            strcmp(acty, "int64_t") == 0) {
+                            Buf _fb; buf_init(&_fb);
+                            buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
+                            buf_putc(&_fb, '\0');
+                            free(raw);
+                            raw = strdup(_fb.data);
+                            buf_free(&_fb);
+                        }
+                    }
                 }
                 arg_strs[i] = raw;
             }
@@ -7552,6 +7977,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         return emit_carrier_bridge(ctx, body, inner_val,
                                                    CK_CONCRETE, CK_CARRIER, adt_r);
                     }
+                }
+            }
+            /* gcc14-int-conversion (carrier-to-typed-param): a PARAMETRIC opaque
+             * `(Goal A)` (kind * -> *, `defopaque Goal [A] :ptr<void>`) lowers to
+             * the uniform int64 HKT carrier in every applied position -- the
+             * function C return type of `: (Goal int)` is `int64_t`, and a binder
+             * of that type is `int64_t`.  But ascribing a POINTER value into the
+             * bare `:Goal` -- `(:: (fn ...) :Goal)` yields a fat-closure `void *`,
+             * `(:: someHandle :Goal)` a `:ptr<void>` -- relabels to a pointer,
+             * which then mismatches the int64 carrier at the return/binding
+             * (-Wint-conversion, a hard error under GCC >= 14).  Reinterpret the
+             * pointer as the int64 carrier so value, binder, and return agree.
+             * Only for a PARAMETRIC opaque (n_type_params > 0): a non-parametric
+             * opaque keeps its declared pointer carrier and is left untouched. */
+            if (e->type.kind == TY_ADT && e->type.as.adt_.def &&
+                e->type.as.adt_.def->is_opaque &&
+                e->type.as.adt_.def->n_type_params > 0) {
+                const char *icty = emit_type_c_name(ctx, e->as.ascribe_.inner->type);
+                size_t iL = icty ? strlen(icty) : 0;
+                if (icty && iL >= 1 && icty[iL - 1] == '*') {
+                    Buf cb; buf_init(&cb);
+                    buf_printf(&cb, "(int64_t)(intptr_t)(%s)", inner_val);
+                    buf_putc(&cb, '\0');
+                    free(inner_val);
+                    inner_val = strdup(cb.data);
+                    buf_free(&cb);
                 }
             }
             return inner_val;

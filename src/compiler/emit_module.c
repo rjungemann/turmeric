@@ -4977,24 +4977,141 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         /* B4 slice 2: a wide by-value ADT closure param crosses as an int64 box
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
          * already concrete, so type_is_wide_byval_adt reads them directly. */
+        const char *pc;
         if (spec->fn->closure && !spec->fn->params[i]->is_poly_fn &&
             spec->fn->param_types[i].kind != TY_FN &&
             type_is_wide_byval_adt(spec->arg_types[i])) {
-            buf_puts(out, "int64_t");
+            pc = "int64_t";
         } else if (spec->fn->params[i]->is_poly_fn) {
-            buf_puts(out, "tur_poly_fn_t");
+            pc = "tur_poly_fn_t";
         } else if (spec->fn->param_types[i].kind == TY_FN
                    && spec->fn->param_types[i].as.fn.cfnptr) {
             /* typed-c-abi-function-pointers: cfnptr -> concrete typedef. */
             const char *td = register_fn_ptr_typedef(&spec->fn->param_types[i]);
-            buf_puts(out, td ? td : "int64_t");
+            pc = td ? td : "int64_t";
         } else if (spec->fn->param_types[i].kind == TY_FN) {
-            buf_puts(out, "int64_t");
+            pc = "int64_t";
         } else {
-            buf_puts(out, type_c_name(spec->arg_types[i]));
+            pc = type_c_name(spec->arg_types[i]);
         }
+        buf_puts(out, pc);
+        /* gcc14-int-conversion (carrier-representation-tracking): record this ABI
+         * spec's ACTUAL emitted param C type keyed by its clone name (== the
+         * call-site fn_name), so a reverse int64<-pointer straddle at a
+         * spec-dispatch call (`__inst_Eq_..._int64_t(a, b)` with a pointer `b`
+         * into the int64 param) can consult ground truth.  Specs are not top-level
+         * items, so the forward-decl pass over `items` never records them. */
+        emit_sig_record_param_ctype(spec->clone_name, i, spec->n_args, pc);
     }
     buf_puts(out, ");\n");
+}
+
+/* gcc14-int-conversion (carrier-representation-tracking): ground-truth side
+ * table of emitted param C-types, keyed by emitted C name.  See emit_internal.h.
+ * File-scope (like g_prog / g_cps_path); emit_sig_reset() clears it per program. */
+typedef struct EmitSigEntry {
+    char     *cname;
+    uint32_t  n_params;
+    char    **param_ctypes;   /* n_params strings (each strdup'd, may be NULL) */
+} EmitSigEntry;
+static EmitSigEntry *g_sig_tab;
+static uint32_t      g_sig_tab_n;
+static uint32_t      g_sig_tab_cap;
+
+void emit_sig_reset(void) {
+    for (uint32_t i = 0; i < g_sig_tab_n; i++) {
+        for (uint32_t j = 0; j < g_sig_tab[i].n_params; j++)
+            free(g_sig_tab[i].param_ctypes[j]);
+        free(g_sig_tab[i].param_ctypes);
+        free(g_sig_tab[i].cname);
+    }
+    free(g_sig_tab);
+    g_sig_tab = NULL;
+    g_sig_tab_n = 0;
+    g_sig_tab_cap = 0;
+}
+
+static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) {
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0) return &g_sig_tab[i];
+    if (g_sig_tab_n == g_sig_tab_cap) {
+        uint32_t nc = g_sig_tab_cap ? g_sig_tab_cap * 2 : 64;
+        EmitSigEntry *nt = (EmitSigEntry *)realloc(g_sig_tab, nc * sizeof(EmitSigEntry));
+        if (!nt) return NULL;
+        g_sig_tab = nt;
+        g_sig_tab_cap = nc;
+    }
+    EmitSigEntry *e = &g_sig_tab[g_sig_tab_n++];
+    e->cname = strdup(cname);
+    e->n_params = n_params;
+    e->param_ctypes = n_params
+        ? (char **)calloc(n_params, sizeof(char *)) : NULL;
+    return e;
+}
+
+void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
+                                 const char *ctype) {
+    if (!cname || idx >= n_params) return;
+    EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
+    if (!e || e->n_params != n_params || !e->param_ctypes) return;
+    free(e->param_ctypes[idx]);
+    e->param_ctypes[idx] = ctype ? strdup(ctype) : NULL;
+}
+
+const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0)
+            return (idx < g_sig_tab[i].n_params) ? g_sig_tab[i].param_ctypes[idx] : NULL;
+    return NULL;
+}
+
+/* gcc14-int-conversion (carrier-representation-tracking): the local-variable /
+ * temp emitted-C-type side table.  See emit_internal.h.  File-scope, cleared per
+ * program by emit_localvar_reset().  Small linear map -- programs have thousands
+ * of temps, but a lookup only happens at a straddle-suspect binder init. */
+typedef struct EmitLocalVarEntry { char *cname; char *ctype; } EmitLocalVarEntry;
+static EmitLocalVarEntry *g_lv_tab;
+static uint32_t           g_lv_tab_n;
+static uint32_t           g_lv_tab_cap;
+
+void emit_localvar_reset(void) {
+    for (uint32_t i = 0; i < g_lv_tab_n; i++) {
+        free(g_lv_tab[i].cname);
+        free(g_lv_tab[i].ctype);
+    }
+    free(g_lv_tab);
+    g_lv_tab = NULL;
+    g_lv_tab_n = 0;
+    g_lv_tab_cap = 0;
+}
+
+void emit_localvar_record_ctype(const char *cname, const char *ctype) {
+    if (!cname || !ctype) return;
+    for (uint32_t i = 0; i < g_lv_tab_n; i++)
+        if (strcmp(g_lv_tab[i].cname, cname) == 0) {
+            free(g_lv_tab[i].ctype);
+            g_lv_tab[i].ctype = strdup(ctype);
+            return;
+        }
+    if (g_lv_tab_n == g_lv_tab_cap) {
+        uint32_t nc = g_lv_tab_cap ? g_lv_tab_cap * 2 : 256;
+        EmitLocalVarEntry *nt =
+            (EmitLocalVarEntry *)realloc(g_lv_tab, nc * sizeof(EmitLocalVarEntry));
+        if (!nt) return;
+        g_lv_tab = nt;
+        g_lv_tab_cap = nc;
+    }
+    g_lv_tab[g_lv_tab_n].cname = strdup(cname);
+    g_lv_tab[g_lv_tab_n].ctype = strdup(ctype);
+    g_lv_tab_n++;
+}
+
+const char *emit_localvar_lookup_ctype(const char *cname) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_lv_tab_n; i++)
+        if (strcmp(g_lv_tab[i].cname, cname) == 0) return g_lv_tab[i].ctype;
+    return NULL;
 }
 
 /* Emit C forward declarations for every EX_FN_DEF in items.  Used by both
@@ -5002,6 +5119,9 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
  * so that mutually-recursive static functions resolve at C-compile time. */
 static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
+    /* gcc14-int-conversion: start each program's ground-truth sig table fresh. */
+    emit_sig_reset();
+    emit_localvar_reset();
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind != EX_FN_DEF) continue;
@@ -5133,6 +5253,11 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
         buf_printf(out, " %s(", fn_name);
         for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
+            /* gcc14-int-conversion: capture the ACTUAL emitted param C-type string
+             * (whatever branch below writes) so call sites can bridge against
+             * ground truth.  The forward decl emits only the type here (no param
+             * name), so out->data[_sig_start..len) is exactly the type. */
+            size_t _sig_start = out->len;
             /* B4 slice 2: a wide by-value ADT closure param crosses as an int64
              * box pointer -- mirror emit_fns.c's needs_box_load signature. */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
@@ -5172,6 +5297,17 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     buf_printf(out, "const %s *", type_c_name(_fwd_pty));
                 } else {
                     buf_puts(out, type_c_name(_fwd_pty));
+                }
+            }
+            /* Record the just-emitted param type substring (ground truth). */
+            if (out->len > _sig_start) {
+                size_t _len = out->len - _sig_start;
+                char *_ty = (char *)malloc(_len + 1);
+                if (_ty) {
+                    memcpy(_ty, out->data + _sig_start, _len);
+                    _ty[_len] = '\0';
+                    emit_sig_record_param_ctype(fn_name, j, fd->n_params, _ty);
+                    free(_ty);
                 }
             }
         }
