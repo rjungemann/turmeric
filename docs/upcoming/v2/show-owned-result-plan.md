@@ -108,10 +108,19 @@ with the full typeclass set). With `(defclass Show [a] (show [x] : String))`:
    idiomatic `(println (show x))` became `(show-line x)` (show + print + release)
    or an explicit `(let [s (show x)] ... (string/release s))`; snapshots
    regenerated.  Full suite green.
-5. **Drop the `cstr` version** and the shim once no consumer depends on it.
-   *(Largely absorbed into stage 4 -- no cstr `show` shim was kept; the only
-   remaining cstr `show` is the local-class `derive-show` path, intentionally
-   retained for the minimal-`Show` fixtures.)*
+5. **Drop the `cstr` version (DONE).** No cstr `show` shim was ever kept, so
+   there was nothing to remove on the compiled side.  Stage 5's real remaining
+   work was the interpreter: the tree-walking `--interpret` path fell back to
+   cstr-returning `__inst_Show_show_*` natives for the inline-C `Show` bodies,
+   which a `String`-expecting caller then misread.  Those fallbacks now build a
+   real owned `String` (src/turi/interpreter_natives.c: `native_show_int_str`
+   etc., boxing a `tur_string_from_*` handle), so compiled and `--interpret`
+   agree.  The standalone cstr `show-int`/`show-float` helpers (a different
+   surface) are unchanged.  Fixtures whose `Show`/`Debug` bodies rely on inline-C
+   helpers the tree-walker cannot execute (`bound-show-fmt`, the `Debug`
+   instances) or on cstr Set/Map element recovery are marked `requires.compiled`.
+   The only remaining cstr `show` is the local-class `derive-show` path,
+   intentionally retained for the minimal-`Show` fixtures.
 
 Carry red fixtures across stages as usual; snapshot churn (every program that
 shows something regenerates) is expected at stage 4 -- coordinate that regen the

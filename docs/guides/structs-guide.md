@@ -448,24 +448,36 @@ definstance Eq [Pair]
 
 ### `Show`
 
+The stdlib `Show` renders to an OWNED `String` (`(show x) : String`): the caller
+`string/release`s the result. Build a struct instance directly with a
+`StringBuilder` over each field's own `show`, releasing every intermediate. Most
+of the time you do not write this by hand -- `derive-show-string` (below)
+generates exactly this.
+
 ```turmeric
+(load "stdlib/typeclass.tur")
+
 (defstruct Point :copy [x : int y : int])
 
 (definstance Show [Point]
-  (show [__p] : cstr
-    ```c
-    int nx = snprintf(NULL, 0, "%lld", (long long)__p.x);
-    int ny = snprintf(NULL, 0, "%lld", (long long)__p.y);
-    size_t len = 13 + (size_t)nx + 6 + (size_t)ny + 3 + 1;
-    char *buf = (char *)malloc(len);
-    snprintf(buf, len, "Point { x = %lld, y = %lld }",
-             (long long)__p.x, (long long)__p.y);
-    return (const char *)(intptr_t)buf;
-    ```))
+  (show [__p]
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b "Point { x = ")
+        (let [sx (show (.x __p))] (do (builder/push-string! b sx) (string/release sx)))
+        (builder/push-cstr! b ", y = ")
+        (let [sy (show (.y __p))] (do (builder/push-string! b sy) (string/release sy)))
+        (builder/push-cstr! b " }")
+        (builder/finish b)))))
 
 (let [p (make-struct Point 3 4)]
-  (println (.show p)))   ; Point { x = 3, y = 4 }
+  (show-line p))   ; Point { x = 3, y = 4 }  (show + println + release)
 ```
+
+`show-line` (and `print-show`) wrap show + print + release so a
+render-and-print call site stays a one-liner despite the owned result. To keep
+the `String`, hold it and release when done:
+`(let [s (show p)] (do ... (string/to-cstr s) ... (string/release s)))`.
 
 ```sweet-exp
 defstruct Point :copy [x :int y :int]
@@ -539,30 +551,30 @@ To alias a field name or access through a non-standard reader, use the
 ;; => "MyStruct { name = ..., display-name = ..., count = ... }"
 ```
 
-### Deriving `ShowString` (owned result)
+### `derive-show` vs `derive-show-string`
 
-`derive-show` produces a borrowed `cstr` whose ownership the caller cannot
-recover (see `docs/upcoming/v2/show-owned-result-plan.md`). `derive-show-string`
-is its owned-`String` counterpart: it emits a `ShowString` instance whose
-`show-string` renders the same `"Type { f = v, ... }"` text but returns a fresh
-owned `String` (refcount 1) the caller `string/release`s. It builds through a
-`StringBuilder` over each field's `show-string`, releasing every intermediate,
-so the result carries no per-field concat leak.
-
-Because `ShowString` lives in `stdlib/typeclass-show-string.tur` (it returns the
-stdlib `String`), load that module before deriving. Field descriptors -- bare
-symbols and the `[label .accessor]` alias form -- match `derive-show`.
+The stdlib `Show` returns an owned `String`, so **`derive-show-string` is the
+deriver to use with it** -- it generates the `Show [T]` instance shown above
+(a `StringBuilder` over each field's `show`, releasing every intermediate, one
+owned `String` result, no per-field concat leak). It needs `String` /
+`StringBuilder` in scope, i.e. a program that loaded `stdlib/typeclass.tur` (or
+`stdlib/string.tur`). Field descriptors -- bare symbols and the
+`[label .accessor]` alias form -- are the same as `derive-show`.
 
 ```turmeric
-(load "stdlib/typeclass-show-string.tur")
+(load "stdlib/typeclass.tur")
 
 (defstruct Point :copy [x : int y : int])
 (derive-show-string Point x y)
 
-(let [p (make-struct Point 3 4)
-      s (show-string p)]        ; => owned String "Point { x = 3, y = 4 }"
-  (do (println (string/to-cstr s)) (string/release s)))
+(let [p (make-struct Point 3 4)]
+  (show-line p))              ; Point { x = 3, y = 4 }
 ```
+
+The sibling `derive-show` instead emits a `cstr`-bodied `Show` instance joined
+with `str-concat`. It is for programs that define their own **minimal local
+`Show` class** (`(defclass Show [a] (show [x] : cstr))`) and never load the
+String stack -- not for the owned stdlib `Show`.
 
 ### REPL auto-show
 
