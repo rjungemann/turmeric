@@ -14,8 +14,12 @@ status: core implemented (v2); adoption audits still open
 > `src/turi/string_native.c`, and fixtures under `tests/fixtures/string-*`
 > (`string-basic`, `string-map-key`, `string-builder`, `string-ord-hash`). The
 > `cstr`/`str`/`String` tiering is written up in
-> `docs/guides/strings-guide.md`. The three **adoption audits** in the
-> "Follow-up" section below (stdlib / spices / guides) remain open.
+> `docs/guides/strings-guide.md`. Two of the three **adoption audits** in the
+> "Follow-up" section below are now written up:
+> [string-adoption-stdlib-plan.md](./string-adoption-stdlib-plan.md) and
+> [string-adoption-docs-plan.md](./string-adoption-docs-plan.md) (each with a
+> per-site keep/migrate classification and an ordered migration list). The
+> **spices** audit stays deferred until `../turmeric-spices/` is checked out.
 
 ## Why cstr is not enough
 
