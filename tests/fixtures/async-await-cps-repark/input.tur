@@ -6,7 +6,7 @@
 ;; Fulfilling future-a resumes into the second await (future-b, pending) -> the
 ;; continuation RE-PARKS, threading the outer future onto the new park.  Only when
 ;; future-b completes does the body run to x + y = 42 and fulfill f.
-;; Built with --enable=cps-async.
+;; cps-async graduated 2026-07-19 -- this is the unconditional CPS-path lowering.
 (defn future-a [] : ptr<void>
   ```c
   static TurFuture *g = NULL; if (!g) g = tur_future_new(); return (void *)g;
