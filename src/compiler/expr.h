@@ -300,6 +300,17 @@ struct Binding {
      * carrier, not a function pointer).  Only user-named globals are valid
      * source_binding targets. */
     bool                is_lifted_lambda;
+    /* closure-drop-glue S1c (non-retaining fn-param inference): for a function
+     * binding, bit i is set when parameter i is a fn-typed / ^fat parameter that
+     * the body only CALLS -- never stores, returns, captures, or passes to a
+     * retaining position (i.e. `!closure_binding_escapes(body, param_i)`).  A
+     * capturing-closure argument to such a param does NOT escape the callee, so
+     * its heap env may be freed at the call scope's exit, exactly like a
+     * `^borrow` fn-param (FA_BORROW).  Inferred once when the defn is elaborated;
+     * read at the call site (hoist) and by the emit-side escape analysis.  Params
+     * beyond bit 31 are left unset (conservative -- no free).  0 for non-fns and
+     * fns with no non-retaining fn-param. */
+    uint32_t            nonretain_param_mask;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint

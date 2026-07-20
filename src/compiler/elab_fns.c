@@ -1,6 +1,13 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
 
+/* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
+ * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
+ * per-param non-retention when a defn is elaborated.  Forward-declared to avoid
+ * pulling the whole emit-internal surface into the elaborator. */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
+bool expr_subtree_has_inline_c(const Expr *e);
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -3449,6 +3456,27 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->no_unwind = no_unwind;
     /* #[used]: retain with external C linkage under separate compilation */
     b->retain_c_linkage = retain_c_linkage;
+    /* closure-drop-glue S1c (non-retaining fn-param inference): a fn-typed / ^fat
+     * parameter that the body only CALLS -- never lets escape as a value -- does
+     * not retain a capturing-closure argument, so that argument's heap env may be
+     * freed at the call scope's exit (like a ^borrow param).  Infer the mask now,
+     * from the just-elaborated body; the conservative escape analysis only ever
+     * clears the bit (a false "escapes" merely preserves the status-quo leak). */
+    b->nonretain_param_mask = 0;
+    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
+     * (a param is a C-visible formal, not an AST capture), so a body containing
+     * any inline-C is never treated as non-retaining -- otherwise its stored
+     * closure arg would be freed while the C-side copy is still live (UAF). */
+    if (body && !expr_subtree_has_inline_c(body)) {
+        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+            Binding *_pb = params[_pi];
+            if (!_pb) continue;
+            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
+                               _pb->type.kind == TY_FN;
+            if (_is_fnparam && !closure_binding_escapes(body, _pb))
+                b->nonretain_param_mask |= (1u << _pi);
+        }
+    }
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);

@@ -782,7 +782,8 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
         if (a && a->kind == EX_CLOSURE && a->as.closure_.closure
             && a->as.closure_.closure->n_captures > 0
-            && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+            && (FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)
+                || (i < 32 && (fb->nonretain_param_mask & (1u << i)))))
             n_hoist++;
     }
     if (n_hoist == 0) return call;
@@ -793,7 +794,8 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
         while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
         if (!(a && a->kind == EX_CLOSURE && a->as.closure_.closure
               && a->as.closure_.closure->n_captures > 0
-              && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)))
+              && (FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)
+                  || (i < 32 && (fb->nonretain_param_mask & (1u << i))))))
             continue;
         char nm[48];
         snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);

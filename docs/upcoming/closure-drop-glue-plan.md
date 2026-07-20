@@ -5,6 +5,27 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-20b) -- S1c inferred non-retention (INLINE args).**
+> The non-retaining-callee half of S1c landed for INLINE capturing-closure
+> arguments. A new `Binding.nonretain_param_mask` records, per fn-typed / `^fat`
+> parameter, whether the callee body only CALLS it (inferred at defn elaboration
+> via `!closure_binding_escapes(body, param)`). A body containing ANY inline-C is
+> excluded (`expr_subtree_has_inline_c`, conservative default-true) -- C text can
+> store a param invisibly to the AST, the exact unsoundness that first regressed
+> `schema-transform-closure` + the httpd middleware set (they store `^fat` params
+> via inline-C). The emit-side escape analysis and `hoist_borrowed_closure_args`
+> both consult the mask, so an inline capturing closure passed to a non-retaining
+> `^fat`/fn param is now hoisted + freed at scope exit (like the landed `^borrow`
+> S1.2 path), no annotation needed. Suite 2216/0; fixture
+> `closure-env-free-nonretain-fatparam`; guards verified ASan-clean (freed) and
+> leak-safe (struct/inline-C/return retention conservatively NOT freed, no UAF).
+> **Still open:** the report's headline `make-scaler` repro passes the closure as
+> a CALL result `(use-it (make-scaler ...))`, not an inline `EX_CLOSURE`; hoisting
+> a fresh-closure-returning CALL arg (make-scaler's binding already carries
+> `returns_closure_fn_binding`) + letting `let_binding_env_freeable` accept a
+> `ptr<void>`-typed fresh-env call init is the next slice. S2 (stored/escaping
+> closures) unchanged.
+>
 > **Progress note (2026-07-20).** A second, adjacent leak landed:
 > `binding_escapes_impl` (`emit_core.c`) fell to its conservative
 > `default: escape` for `EX_DEFER` and the rc/weak/ref-family nodes (`EX_RC_OF`,

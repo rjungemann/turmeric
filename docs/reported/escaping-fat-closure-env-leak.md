@@ -4,15 +4,23 @@
 miscompile). General codegen -- **not** CPS/effect-specific (reproduces with no
 effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
 
-> **Related fix landed (2026-07-20), report STILL OPEN.** A *different* env leak
-> in the same machinery was fixed: a NON-escaping closure's env was leaked when
-> the enclosing `let` also bound an owning `rc`/`ref` (an unrelated
-> `default: escape` false-positive on `EX_DEFER` / `EX_RC_OF` in
-> `binding_escapes_impl`). See
-> `docs/archive/history/fat-closure-env-free-owning-sibling.md`. That does NOT
-> touch this report's ESCAPING case (`make-scaler` returned then consumed): the
-> env still escapes its constructor with no owner to free it, so this remains
-> open and the `requires.no-leak-check` markers stay.
+> **Progress (2026-07-20), report STILL OPEN.** Two adjacent slices landed:
+>
+> 1. A *different* env leak in the same machinery: a NON-escaping closure's env
+>    leaked when the enclosing `let` also bound an owning `rc`/`ref` (an unrelated
+>    `default: escape` false-positive on `EX_DEFER` / `EX_RC_OF` in
+>    `binding_escapes_impl`). See
+>    `docs/archive/history/fat-closure-env-free-owning-sibling.md`.
+> 2. **S1c inferred non-retention (INLINE args):** a capturing closure passed
+>    inline to a `^fat`/fn param the callee only CALLS is now freed at scope exit
+>    (`Binding.nonretain_param_mask`, inline-C-gated for soundness). See the
+>    closure-drop-glue-plan progress note (2026-07-20b).
+>
+> Neither closes THIS report's exact repro: `make-scaler`'s closure is passed as
+> a CALL result `(use-it (make-scaler 2.0))`, not an inline `EX_CLOSURE`, so it is
+> not yet hoisted/freed. The remaining work (hoist a fresh-closure-returning CALL
+> arg; S2 for stored/escaping closures) keeps this report open and the
+> `requires.no-leak-check` markers in place.
 
 ## Summary
 
