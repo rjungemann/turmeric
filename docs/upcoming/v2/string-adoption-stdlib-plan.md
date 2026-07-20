@@ -1,9 +1,40 @@
 # `String` Adoption Audit -- stdlib
 
-> **Status:** Batch 1 landed 2026-07-20 (foundational bridge + path cluster);
-> remaining batches proposed.
+> **Status:** Batches 1-2 landed 2026-07-20 (foundational bridge, path + digest
+> clusters, and the httpd server-lifetime capture fix); remaining formatter
+> batches proposed.
 
 ## Progress
+
+**Batch 2 (landed) -- previously-blocked items.**
+
+- **digest cluster (item 4) -- UNBLOCKED + done.** The blocking bug (digest/*-hex
+  inline-C used `static` *nested* C functions, rejected by a standard/clang
+  compiler) is fixed: the SHA-256 / MD5 per-block transforms are hoisted to
+  file-scope `defn`s (`digest/sha256-transform!`, `digest/md5-transform!`) and
+  called from the four digest bodies via `__TUR_CNAME_...__`. Verified against
+  FIPS/RFC vectors (fixture `tests/fixtures/digest-hex`). The owned siblings
+  `digest/{sha256,md5}-string` now ship in `stdlib/digest-string.tur` (fixture
+  `tests/fixtures/digest-string`). Report archived:
+  `docs/archive/digest-hex-nested-static-fn.md`.
+- **httpd CorsOpts capture (items 2/3) -- the genuine hazard fixed.** On analysis,
+  the strongest real hazard was not the struct field type but `mw-cors-with`
+  capturing borrowed origin/methods/headers strings into a **server-lifetime**
+  closure -- dangling if a caller passes a computed/freed buffer. `mw-cors-with`
+  (the single choke point for `mw-cors`, `mw-cors-opts` too) now owns heap copies
+  of those strings via `httpd-cors-own-str` (a NULL-preserving, process-lifetime
+  copy -- the correct lifetime for server-lifetime middleware state). Behavior
+  preserved; the 3 CORS fixtures stay green.
+- **httpd CookieOpts / CorsOpts *field types* -- deliberately NOT migrated.**
+  These are by-value `:copy` structs with no destructor. Migrating the fields to
+  `String` would allocate per construction with no free hook (a guaranteed leak)
+  or require a fragile single-consumption free-on-serialize contract
+  (double-free risk). The structs are single-consumption: `httpd-set-cookie!`
+  and the CORS emit helpers copy the bytes into their own buffer *at use*, so the
+  borrow is valid across the construct-then-use expression. The residual capture
+  hazard -- the only place the value outlived its source -- was the middleware
+  closure, now fixed above. A field-type migration is therefore net-negative and
+  is intentionally left undone.
 
 **Batch 1 (landed).**
 
@@ -23,21 +54,9 @@
   lean. Compiled-path only (like `tur/path` itself, whose inline-C has no
   interpreter native). Fixture: `tests/fixtures/path-string`.
 
-**Blocked / deferred.**
-
-- **httpd stored fields (items 2, 3 -- CorsOpts / CookieOpts).** `CookieOpts` and
-  `CorsOpts` are by-value `:copy` structs with **no destructor**. Making their
-  fields `String` would allocate a `String` per construction that is never freed
-  (a `:copy` struct passed by value has no free hook), trading a dangling-borrow
-  hazard for a guaranteed leak. Migrating these correctly needs struct-lifecycle
-  work (an owning `:heap` variant with an explicit free, or a serialize-then-copy
-  discipline) -- out of scope for an additive batch. Left as-is with this note.
-- **digest cluster (item 4).** Blocked on a **pre-existing** digest bug: the
-  `digest/*-hex` inline-C declares `static` *nested* functions, which a standard
-  C compiler rejects, so `digest/sha256-hex` / `md5-hex` do not compile in this
-  environment (no fixture covered them). See
-  `docs/reported/digest-hex-nested-static-fn.md`. Once fixed, the
-  `digest/*-string` siblings are a trivial two-function `adopt-cstr` module.
+(Batch 1 originally deferred the digest cluster and the httpd items; both are
+now resolved in Batch 2 above -- digest unblocked and shipped, the httpd
+capture hazard fixed, and the by-value field migration consciously declined.)
 
 **Remaining batches (proposed).** The rest of the fresh-alloc clusters --
 `json/encode`, `csv/emit*`, `re/*`, `term/*`, `range*` -- follow the exact
