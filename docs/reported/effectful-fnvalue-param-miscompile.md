@@ -103,3 +103,41 @@ miscompile, strictly worse than the current build error. Not point-fixable.
 - Structural: E1 carrier-ABI `__cps` emission for non-scalar signatures lets
   `apply-cb` CPS-emit under the carrier ABI, and E2's `__fn_cps` slot threads the
   DK through the effectful callback -- both remove this direct-path crossing.
+
+## Progress (2026-07-20): defect 1 fixed in code; defects 2+3 scoped precisely
+
+**Defect 1 (the compile miscompile) is FIXED and in-tree** (full suite 2202/0):
+a poly-wrap value emits a `tur_poly_fn_t` fat struct but its EX_POLY_WRAP node is
+typed `ptr<void>`, so the CT-IR binder was `void *` and the cps->cps call
+int64-cast the aggregate. `emit_cps_ir.c` now declares a poly-wrap CT_LETRAW
+binder `tur_poly_fn_t` (`letraw_emits_poly_fn`) and passes a `tur_poly_fn_t`
+param bare (`cps_call_param_is_poly_fn`). The repro **now compiles** (previously
+two hard C errors) and aborts cleanly with `unhandled effect` -- proving the
+callback still runs on the DIRECT `f.fn` path.
+
+**Defects 2+3 (the runtime effect-threading) are the E2 CPS feature**, and the
+in-tree investigation pins exactly what they need:
+
+- The poly-fn-param call `(f x)` inside `apply-cb` is lowered as a delegated
+  indirect call (CT_LETRAW), emitted by the DIRECT emitter as
+  `f.fn(f.env, x)` (emit_expr.c:3633), then its result is delivered to the DK via
+  `dk_run(__kont, r)`. The direct emitter has no `__kont` in scope
+  (`emit_letraw` at emit_cps_ir.c:5372 delegates via `emit_value` without passing
+  any CPS-continuation state on `ctx`), so it cannot thread the effect.
+- To make it work, an EFFECTFUL poly-fn-param tail call must become a
+  continuation-threading dispatch `return f.fn_cps(f.env, x, __kont)` -- which
+  needs three coordinated pieces:
+  1. **A `ctx`-carried CPS-kont channel** (or a dedicated CT-IR node) so the
+     poly-fn call site knows it is in a DK context and can emit the `fn_cps`
+     dispatch instead of `f.fn`, and skip the `dk_run` re-wrap.
+  2. **`tur_poly_fn_t.fn_cps` populated** at the poly-wrap literal
+     (emit_expr.c:7701 / :7649) with a `__poly_N__cps` variant.
+  3. **A `__poly_N__cps` thunk emitted** -- the poly-wrap thunk `__poly_1285`
+     (which calls `cb`) needs a cps twin calling `cb__cps(x, __kont)`; today the
+     thunk is not a CPS candidate (the perm-fiber-taint gate at emit_cps_ir.c:4165
+     evicts it -- the gate whose comment already says "Cleared once E2 gives
+     fn-values a DK-threading (__fn_cps) entry").
+
+So defect 1 is a clean ABI fix (landed); defects 2+3 are the coordinated E2
+DK-threading feature across the CT-IR translation, the poly-wrap emitter, and the
+CPS-candidate machinery.
