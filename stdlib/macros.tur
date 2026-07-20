@@ -131,7 +131,7 @@
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (first field) (symbol-name field))
+            label         (if is-vec (symbol-name (first field)) (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -149,7 +149,7 @@
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (first field) (symbol-name field))
+              label         (if is-vec (symbol-name (first field)) (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)
@@ -236,7 +236,7 @@
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (first field) (symbol-name field))
+            label         (if is-vec (symbol-name (first field)) (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -254,7 +254,7 @@
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (first field) (symbol-name field))
+              label         (if is-vec (symbol-name (first field)) (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)
@@ -276,7 +276,7 @@
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (first field) (symbol-name field))
+            label         (if is-vec (symbol-name (first field)) (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -294,7 +294,7 @@
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (first field) (symbol-name field))
+              label         (if is-vec (symbol-name (first field)) (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)

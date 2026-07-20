@@ -1,5 +1,17 @@
 # Generic `^Show a` / `^ShowString a` dispatch mis-grounds opaque-over-ptr args to the int carrier
 
+**Status:** RESOLVED (2026-07-20). Fixed in `src/compiler/emit_module.c`:
+`body_has_dispatch_on_app_tyvar` (the `instance_changes` gate in
+`emit_abi_register_call`) now fires for a class var bound to a bare nominal
+`TY_ADT` -- including an opaque newtype like `String` -- not only a parametric
+`TY_APP`. An opaque-over-int64 type collapses to the carrier (so `abi_changes`
+stays false), but its instance differs from the baked `int` representative, so a
+per-nominal-type ABI spec must be minted; without it the base clone dispatched
+through `__inst_Show_show_int`. Regression fixture:
+`tests/fixtures/generic-show-dispatch-opaque/`. The stage-1 `show-line` /
+`print-show` wrappers now dispatch correctly for `String` / `StringSlice`
+arguments. Kept for the paper trail.
+
 **Severity:** medium (silent miscompile: prints a pointer as a decimal integer)
 
 ## Summary

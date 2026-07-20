@@ -1,5 +1,16 @@
 # `derive-show` / `derive-debug` / `derive-display` reject the `[label .accessor]` alias form
 
+**Status:** RESOLVED (2026-07-20). Fixed in `stdlib/macros.tur`: every derive
+`*-rest__` / `*-body__` macro now binds the vec-field label as
+`(symbol-name (first field))` instead of `(first field)`, so the compile-time
+`str-append` receives a string. `derive-show` with the alias form now compiles
+and renders correctly (regression fixture `tests/fixtures/derive-show-alias/`;
+the structs-guide example compiles). NOTE: `derive-debug` / `derive-display`
+still fail on `cstr`/`bool`/... fields for a SEPARATE reason (no `Debug`/`Display`
+instances for those primitives + a wrong dispatch fallback) -- tracked in
+`docs/reported/derive-debug-display-missing-primitive-instances.md`. Kept for the
+paper trail.
+
 **Severity:** low (documented feature errors at compile time; simple fix)
 
 ## Summary

@@ -1781,7 +1781,20 @@ static bool body_has_dispatch_on_app_tyvar(
             for (uint8_t i = 0; i < n_bindings; i++) {
                 if (bindings[i].name &&
                     strcmp(bindings[i].name, recv->type.as.tyvar_.name) == 0 &&
-                    bindings[i].type.kind == TY_APP) {
+                    /* generic-show-dispatch-opaque-carrier: a class var bound to a
+                     * concrete TY_APP (`Map[cstr int]`) OR a bare nominal TY_ADT --
+                     * including an opaque newtype like `String`
+                     * (`defopaque String :ptr<void>`) -- collapses to the int64
+                     * carrier (abi_changes stays false), yet its instance differs
+                     * from the baked int representative.  Without minting a spec
+                     * here the base clone dispatches `(show x)` through
+                     * `__inst_Show_show_int` and renders e.g. a String's payload
+                     * pointer as a decimal.  TY_ADT covers the non-parametric
+                     * nominal case the TY_APP check misses; a class var bound to a
+                     * genuine primitive (int/bool/float/cstr) is never TY_ADT, so
+                     * this does not over-mint for those. */
+                    (bindings[i].type.kind == TY_APP ||
+                     bindings[i].type.kind == TY_ADT)) {
                     return true;
                 }
             }
