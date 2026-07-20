@@ -10,8 +10,8 @@
 ;;
 ;; Exercises three capture shapes: a direct closure literal, a let-bound closure,
 ;; and a recursive capturing async (the archived a-rec repro shape).  Runs on the
-;; default (fiber) path here; the cps-async variant is covered by
-;; async-capturing-closure-cps.
+;; unconditional CPS/DK async lowering (cps-async graduated 2026-07-19; the fiber
+;; path was deleted in the CPS endgame's Stage G).
 
 (defn add-cap [x : int] : int
   (await (async (fn [] : int (+ x 1)))))

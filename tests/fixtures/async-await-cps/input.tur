@@ -3,7 +3,7 @@
 ;; DK continuation and resumes it via __tur_await_body.  compute's future is ready
 ;; by the time it is awaited (async is synchronous today), so the shift body
 ;; resumes inline -- same result as the fiber path (43), but via the DK substrate.
-;; Built with --enable=cps-async.
+;; cps-async graduated 2026-07-19 -- this is the unconditional CPS-path lowering.
 (defn compute [] : int
   ```c
   return (int64_t)42;

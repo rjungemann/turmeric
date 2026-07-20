@@ -2,8 +2,8 @@
 ;; lowers to a heap-continuation dk_shift; the first await's continuation (which
 ;; itself contains the second await) is lifted as a RESET-continuation frame
 ;; threading the enclosing k, the second as a straight-line value frame.  Both
-;; futures are ready, so both resume inline: 10 + 32 = 42.  Built with
-;; --enable=cps-async.
+;; futures are ready, so both resume inline: 10 + 32 = 42.  cps-async graduated
+;; 2026-07-19 -- this is the unconditional CPS-path lowering.
 (defn future-a [] : ptr<void>
   ```c
   TurFuture *f = tur_future_new(); tur_future_fulfill(f, (int64_t)10); return (void *)f;

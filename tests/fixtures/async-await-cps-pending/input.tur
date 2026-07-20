@@ -11,7 +11,7 @@
 ;; future -- which drives the parked `1 + await` to 42 and fulfills the outer.
 ;;
 ;; Proves the deferred suspend/resume path (not the F3.1 already-resolved inline
-;; path).  Built with --enable=cps-async.
+;; path).  cps-async graduated 2026-07-19 -- the unconditional CPS-path lowering.
 
 (defn the-future [] : ptr<void>
   ```c
