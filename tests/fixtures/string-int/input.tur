@@ -1,0 +1,22 @@
+;; string-adoption-stdlib-plan batch 1: int->string, the owned counterpart of
+;; int->str (which returns a caller-frees cstr).
+(load "stdlib/string.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+(defn demo [] : int
+  (do
+    (println (string/to-cstr (int->string 42)))
+    (println (string/to-cstr (int->string -7)))
+    (println (string/to-cstr (int->string 0)))
+    (println (string/len (int->string 12345)))
+    ;; owned: content-equal to a from-cstr of the same text, and usable via Eq
+    (println (yn (eq? (int->string 100) (string/from-cstr "100"))))
+    ;; and as a Map key (owned key, safe)
+    (let [m (map-assoc (:: (map-new) (Map String int)) (int->string 7) 700)]
+      (do
+        (println (map-get m (int->string 7)))
+        (map-free m)))
+    0))
+
+(demo)

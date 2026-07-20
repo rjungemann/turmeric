@@ -3158,16 +3158,39 @@ static int try_consume_use_directive(Reader *r,
         return 1;
     }
 
+    const char *rel = path_form->as.s.p;
     char abs_path[4096];
-    if (path_form->as.s.p[0] != '/' && r->file && r->file->base_dir) {
+    if (rel[0] != '/' && r->file && r->file->base_dir) {
         /* The reading file's path has no usable dirname (e.g. the synthetic
          * "<eval>" blob under --interpret); resolve the relative path against
          * the script's base_dir instead. */
-        snprintf(abs_path, sizeof(abs_path), "%s/%s",
-                 r->file->base_dir, path_form->as.s.p);
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", r->file->base_dir, rel);
     } else {
-        rm_resolve_relative(r->file->path, path_form->as.s.p,
-                            abs_path, sizeof(abs_path));
+        rm_resolve_relative(r->file->path, rel, abs_path, sizeof(abs_path));
+    }
+
+    /* Stdlib-path fallback (mirrors (load)'s "stdlib/<rest>" retry, see
+     * elab_toplevel.c): a "stdlib/..." path that does not resolve against the
+     * reading file's directory is retried against TUR_STDLIB_DIR (default
+     * "stdlib" relative to cwd).  This lets a stdlib-shipped reader-macro file
+     * be referenced by a stable path from anywhere -- e.g.
+     * `#use-reader-macros "stdlib/string-reader.tur"` -- exactly like
+     * `(load "stdlib/...")`, instead of only resolving next to the caller. */
+    if (rel[0] != '/' && strncmp(rel, "stdlib/", 7) == 0) {
+        FILE *probe = fopen(abs_path, "rb");
+        if (probe) {
+            fclose(probe);
+        } else {
+            const char *sdir = getenv("TUR_STDLIB_DIR");
+            if (!sdir || !*sdir) sdir = "stdlib";
+            char alt[4096];
+            snprintf(alt, sizeof(alt), "%s/%s", sdir, rel + 7);
+            FILE *ap = fopen(alt, "rb");
+            if (ap) {
+                fclose(ap);
+                snprintf(abs_path, sizeof(abs_path), "%s", alt);
+            }
+        }
     }
 
     if (reader_macros_load_file(r->arena, r->st, abs_path, reg) != 0) {

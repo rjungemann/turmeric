@@ -1,0 +1,25 @@
+;; owned-string-type-plan literal ergonomics: the opt-in #s"..." reader macro.
+;; #use-reader-macros enables the syntax at read time; (load) brings in the code.
+#use-reader-macros "stdlib/string-reader.tur"
+(load "stdlib/string.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+(defn demo [] : int
+  (let [g #s"hello"
+        h #s"hello"]
+    (do
+      ;; #s"..." is an owned String
+      (println (string/to-cstr g))
+      (println (string/len g))
+      ;; content-equal to string/from-cstr of the same text
+      (println (yn (string/eq? g (string/from-cstr "hello"))))
+      ;; two #s literals are equal by content
+      (println (yn (eq? g h)))
+      ;; bare "..." stays a cstr (borrowed) -- shown by using it where cstr is wanted
+      (println "plain-cstr-still-works")
+      ;; owned literal as a Map key
+      (let [m (map-assoc (:: (map-new) (Map String int)) #s"key" 7)]
+        (do (println (map-get m #s"key")) (map-free m)))
+      0)))
+(demo)

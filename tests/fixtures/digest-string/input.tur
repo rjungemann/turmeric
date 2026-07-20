@@ -1,0 +1,23 @@
+;; string-adoption-stdlib-plan batch 2: owned String siblings for tur/digest.
+;; Also exercises the digest-hex-nested-static-fn fix (the hex digests now
+;; compile portably). Digests of the empty buffer are well-known constants.
+(load "stdlib/digest-string.tur")
+
+(defn demo [] : int
+  (let [sha (digest/sha256-string 0 0)
+        md5 (digest/md5-string 0 0)]
+    (do
+      (println (string/to-cstr sha))
+      (println (string/len sha))
+      (println (string/to-cstr md5))
+      (println (string/len md5))
+      ;; owned digest survives as a Map key (content ID use case)
+      (let [m (map-assoc (:: (map-new) (Map String int)) (digest/sha256-string 0 0) 1)]
+        (do
+          (println (map-get m sha))   ; content-equal key -> 1
+          (map-free m)))
+      (string/release sha)
+      (string/release md5)
+      0)))
+
+(demo)
