@@ -1,0 +1,31 @@
+;; owned-string-type-plan: StringBuilder accumulates bytes in linear time and
+;; freezes into an immutable String via builder/finish.
+(load "stdlib/string.tur")
+
+;; Append "ab" n times without quadratic re-concatenation.
+(defn push-n [b : StringBuilder i : int n : int] : void
+  (if (< i n)
+    (do (builder/push-cstr! b "ab") (push-n b (+ i 1) n))
+    nil))
+
+(defn build-ab [n : int] : String
+  (let [b (builder/new)]
+    (do
+      (push-n b 0 n)
+      (builder/push-byte! b 33)   ;; '!'
+      (builder/finish b))))
+
+(defn demo [] : int
+  (let [s (build-ab 5)]
+    (do
+      (println (string/to-cstr s))
+      (println (string/len s))
+      (string/release s)
+      ;; empty builder -> empty String
+      (let [e (builder/finish (builder/new))]
+        (do
+          (println (string/len e))
+          (string/release e)))
+      0)))
+
+(demo)

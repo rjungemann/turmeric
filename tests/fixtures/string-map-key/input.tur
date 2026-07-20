@@ -1,0 +1,37 @@
+;; owned-string-type-plan: a String Map key is owned by the map, so it stays
+;; valid after the SOURCE String is released -- the dangling-cstr-key case that
+;; motivates the type.  Lookup uses an independently-constructed equal String.
+(load "stdlib/string.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+;; Build "alpha" from pieces so its bytes are a fresh heap buffer, never a
+;; literal the map could be borrowing.
+(defn make-key [] : String
+  (let [b (builder/new)]
+    (do
+      (builder/push-cstr! b "al")
+      (builder/push-cstr! b "pha")
+      (builder/finish b))))
+
+(defn demo [] : int
+  (let [k1 (make-key)
+        m  (map-assoc (:: (map-new) (Map String int)) k1 42)]
+    (do
+      ;; release the source key; the map holds its OWN copy of the bytes
+      (string/release k1)
+      (let [probe (make-key)]         ;; independent, content-equal key
+        (do
+          (println (map-get m probe))
+          (println (yn (map-has? m probe)))
+          (println (map-count m))
+          ;; a different key is absent
+          (let [other (string/from-cstr "beta")]
+            (do
+              (println (yn (map-has? m other)))
+              (string/release other)))
+          (string/release probe)
+          (map-free m)               ;; frees the owned key box exactly once
+          0)))))
+
+(demo)

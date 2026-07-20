@@ -91,6 +91,10 @@ set(TURI_EVAL_SOURCES
     # Vec/Set/Map/HAMT interpreter native overrides, relocated from main.c so
     # they land in libturi for all interpreter consumers (turi-interp-collections).
     turi/collections_native.c
+    # string_native.c -- interpreter native overrides for the owned String type
+    # (owned-string-type-plan), all delegating to src/runtime/tur_string.c so
+    # --interpret matches the compiled path.
+    turi/string_native.c
     # preload.c -- shared stdlib preload sequence (macros + typed collections),
     # relocated from main.c so the native --interpret path and the WASM REPL
     # load the same list (web-repl-missing-stdlib-preload).
@@ -211,6 +215,7 @@ set(TUR_CORE_SOURCES
     runtime/runtime.c
     runtime/serial.c
     runtime/stm.c
+    runtime/tur_string.c
     # async/ -- async I/O, fibers, scheduler
     async/atomic_queue.c
     async/fiber.c

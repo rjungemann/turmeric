@@ -4,6 +4,7 @@
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 #include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
+#include "string_native.h"        /* owned String type native overrides */
 #include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 
@@ -210,6 +211,10 @@ TuriEnv *turi_env_new(void) {
      * before install_default_natives so an embedder-seeded default of the same
      * name still wins.  See docs/upcoming/turi-interp-collections-libturi-plan.md. */
     turi_register_collection_natives(env);
+    /* Owned String type (owned-string-type-plan): register the tur_string_*
+     * primitives so stdlib/string.tur's pure-Turmeric ops + typeclass instances
+     * resolve under --interpret exactly as in compiled code. */
+    turi_register_string_natives(env);
     /* Register the remaining stdlib inline-C native overrides (option/result/
      * str/math/safe/contract/comonad/typeclass, seq, json/schema, the
      * concurrency + OS-handle modules, and sym) so every interpreter env
