@@ -121,6 +121,31 @@
 (definstance ShowString [StringSlice]
   (show-string [x] : String (string/adopt-cstr (show x))))
 ;; ---------------------------------------------------------------------------
+;; Mixed borrow/malloc instance: the result<T,E> carrier.
+;;
+;; Show[ptr<void>] returns a borrowed literal ("err") in the null case but a
+;; fresh malloc otherwise, so neither adopt-over-show (would free the literal)
+;; nor from-cstr-over-show (would leak the malloc) is uniformly correct.  Build
+;; the owned String directly from a stack buffer instead -- one copy, leak-free,
+;; matching Show[ptr<void>]'s "err" / "ok(N)" / "err(N)" rendering exactly.
+;; ---------------------------------------------------------------------------
+;;; ShowString [ptr<void>] -- render a result<T,E> carrier as an owned String.
+
+(definstance ShowString [ptr<void>]
+  (show-string [x]
+    : String
+    ```c
+    struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
+    if (res == NULL) { return (void*)tur_string_from_cstr("err"); }
+    char buf[48];
+    if (res->is_ok) {
+        snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
+    } else {
+        snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
+    }
+    return (void*)tur_string_from_cstr(buf);
+    ```))
+;; ---------------------------------------------------------------------------
 ;; Collection instances (Vec / Set / Map).
 ;;
 ;; Built directly with a StringBuilder over each element's ShowString, releasing

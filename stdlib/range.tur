@@ -31,6 +31,11 @@
 ;; programs that actually use ranges. (range-gadt-typeclass-migration-plan B2.)
 
 (load "stdlib/typeclass.tur")
+;; ShowString (the owned-String show surface) lives above stdlib/string.tur in
+;; the load graph, so it is loaded here (not via typeclass.tur) to let the
+;; ShowString [Bound] instance below sit in Bound's own module per the orphan
+;; rule -- mirroring how Show [Bound] relies on the typeclass.tur load above.
+(load "stdlib/typeclass-show-string.tur")
 ;; -------------------------------------------------------------------
 ;; Bound GADT and accessors
 ;; -------------------------------------------------------------------
@@ -159,6 +164,27 @@
       (bound-show-fmt 2 v)
       (Unbounded)
       "unbounded")))
+;;; ShowString [Bound] -- the owned-String counterpart of Show [Bound].
+;;;
+;;; Mixed borrow/malloc, like Show[Bound]: the Inclusive/Exclusive arms malloc
+;;; via bound-show-fmt (adopt-cstr takes ownership, leak-free), while Unbounded
+;;; is a borrowed literal (from-cstr copies it -- never freed).
+;;;
+;;; Example:
+;;;   (show-string (Inclusive 3))  ; => owned String "[3"
+;;;   (show-string (Unbounded))    ; => owned String "unbounded"
+;;;
+;;; Since: v2 (show-owned-result-plan, stage 3)
+
+(definstance ShowString [Bound]
+  (show-string [x]
+    (match x
+      (Inclusive v)
+      (string/adopt-cstr (bound-show-fmt 1 v))
+      (Exclusive v)
+      (string/adopt-cstr (bound-show-fmt 2 v))
+      (Unbounded)
+      (string/from-cstr "unbounded"))))
 ;;; bound-lt? -- strict total order on Bound endpoints, backing Ord [Bound].
 ;;;
 ;;; Orders endpoints by position on the number line: Unbounded is the least
