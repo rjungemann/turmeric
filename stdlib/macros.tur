@@ -26,11 +26,11 @@
     with-resource
     must-use
     derive-show
-    derive-show-body__
-    derive-show-rest__
-    derive-show-string
     derive-show-string-body__
     derive-show-string-rest__
+    derive-show-cstr
+    derive-show-body__
+    derive-show-rest__
     derive-debug
     derive-debug-body__
     derive-debug-rest__
@@ -160,22 +160,26 @@
             (list str-concat
               (list .show accessor-form)
               (list derive-show-rest__ ~@rest-fields)))))))
-  (defmacro derive-show [TypeName & fields]
+  ;; derive-show-cstr -- derive a `cstr`-bodied `Show` instance (joined with
+  ;; str-concat over each field's `.show`).  For programs that define their OWN
+  ;; minimal local `Show` class -- `(defclass Show [a] (show [x] : cstr))` -- and
+  ;; never load the String stack.  The stdlib `Show` returns an owned `String`
+  ;; (since show-owned-result-plan stage 4), so use plain `derive-show` (below)
+  ;; with it; using derive-show-cstr against the stdlib Show is a type error
+  ;; (str-concat expects cstr, the field `.show` yields String).
+  (defmacro derive-show-cstr [TypeName & fields]
     (list definstance
       Show
       (vec TypeName)
       (list show (vec __p) :cstr (list derive-show-body__ TypeName ~@fields))))
-  ;; derive-show-string -- derive the owned-String `Show` instance for a struct.
-  ;; Emits a `Show` instance whose `show` builds the "Type { f = v, ... }"
+  ;; derive-show -- derive the owned-String `Show` instance for a struct.
+  ;; Emits the stdlib `Show` instance whose `show` builds the "Type { f = v, ... }"
   ;; rendering through a StringBuilder over each field's `show` (releasing every
   ;; intermediate element String), so the result is a single owned String
-  ;; (refcount 1) with no per-field concat leak.
-  ;;
-  ;; Since stage 4 the stdlib `Show` returns String, so this is the deriver to
-  ;; use with it (it needs String/StringBuilder in scope, i.e. a program that
-  ;; loaded stdlib/typeclass.tur or stdlib/string.tur).  The sibling `derive-show`
-  ;; still emits a `cstr`-bodied `Show` instance for programs that define their
-  ;; own minimal local `Show` class and never load the String stack.
+  ;; (refcount 1) with no per-field concat leak.  This is the deriver to use with
+  ;; the stdlib `Show` (owned String since stage 4); it needs String/StringBuilder
+  ;; in scope (a program that loaded stdlib/typeclass.tur or stdlib/string.tur).
+  ;; The sibling `derive-show-cstr` covers the minimal local-`Show`-class case.
   (defmacro derive-show-string-rest__ [& fields]
     (if (empty? fields)
       (list do
@@ -221,7 +225,7 @@
                   (list builder/push-string! __b __e)
                   (list string/release __e)))
               (list derive-show-string-rest__ ~@rest-fields)))))))
-  (defmacro derive-show-string [TypeName & fields]
+  (defmacro derive-show [TypeName & fields]
     (list definstance
       Show
       (vec TypeName)

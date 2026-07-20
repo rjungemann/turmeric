@@ -29,7 +29,7 @@
   ```)
 
 (defstruct Named [title : cstr internal-label : cstr count : int])
-(derive-show Named title [display-name .internal-label] count)
+(derive-show-cstr Named title [display-name .internal-label] count)
 
 (defn main [] : int
   (let [n (make-struct Named "T" "L" 3)]

@@ -451,7 +451,7 @@ definstance Eq [Pair]
 The stdlib `Show` renders to an OWNED `String` (`(show x) : String`): the caller
 `string/release`s the result. Build a struct instance directly with a
 `StringBuilder` over each field's own `show`, releasing every intermediate. Most
-of the time you do not write this by hand -- `derive-show-string` (below)
+of the time you do not write this by hand -- `derive-show` (below)
 generates exactly this.
 
 ```turmeric
@@ -551,30 +551,32 @@ To alias a field name or access through a non-standard reader, use the
 ;; => "MyStruct { name = ..., display-name = ..., count = ... }"
 ```
 
-### `derive-show` vs `derive-show-string`
+### `derive-show` (owned) and `derive-show-cstr` (local class)
 
-The stdlib `Show` returns an owned `String`, so **`derive-show-string` is the
-deriver to use with it** -- it generates the `Show [T]` instance shown above
-(a `StringBuilder` over each field's `show`, releasing every intermediate, one
-owned `String` result, no per-field concat leak). It needs `String` /
-`StringBuilder` in scope, i.e. a program that loaded `stdlib/typeclass.tur` (or
-`stdlib/string.tur`). Field descriptors -- bare symbols and the
-`[label .accessor]` alias form -- are the same as `derive-show`.
+**`derive-show` is the deriver for the stdlib `Show`.** Since the stdlib `Show`
+returns an owned `String`, `derive-show` generates the `Show [T]` instance shown
+above -- a `StringBuilder` over each field's `show`, releasing every
+intermediate, one owned `String` result, no per-field concat leak. It needs
+`String` / `StringBuilder` in scope, i.e. a program that loaded
+`stdlib/typeclass.tur` (or `stdlib/string.tur`). Field descriptors -- bare
+symbols and the `[label .accessor]` alias form -- are the same for both derivers.
 
 ```turmeric
 (load "stdlib/typeclass.tur")
 
 (defstruct Point :copy [x : int y : int])
-(derive-show-string Point x y)
+(derive-show Point x y)
 
 (let [p (make-struct Point 3 4)]
   (show-line p))              ; Point { x = 3, y = 4 }
 ```
 
-The sibling `derive-show` instead emits a `cstr`-bodied `Show` instance joined
+The sibling **`derive-show-cstr`** emits a `cstr`-bodied `Show` instance joined
 with `str-concat`. It is for programs that define their own **minimal local
 `Show` class** (`(defclass Show [a] (show [x] : cstr))`) and never load the
-String stack -- not for the owned stdlib `Show`.
+String stack. Using `derive-show-cstr` against the owned stdlib `Show` (or
+`derive-show` against a local `cstr` `Show`) is a type error -- match the deriver
+to the `Show` class in scope.
 
 ### REPL auto-show
 

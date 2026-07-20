@@ -99,8 +99,8 @@ with the full typeclass set). With `(defclass Show [a] (show [x] : String))`:
 4. **Flip the default (DONE):** `Show` is now `(defclass Show [a] (show [x] :
    String))`.  The owned instance bodies (previously the parallel `ShowString`
    class) were folded into `Show`; `ShowString`/`show-string` were dropped as
-   redundant (`show` IS the owned method now).  `derive-show-string` emits the
-   owned `Show` instance for a struct; `derive-show` stays the `cstr` deriver for
+   redundant (`show` IS the owned method now).  `derive-show` emits the
+   owned `Show` instance for a struct; `derive-show-cstr` is the `cstr` deriver for
    programs with a local `Show` class.  The load-graph restructure landed:
    `stdlib/string.tur` defines the type + ops first, `stdlib/typeclass.tur` loads
    `stdlib/typeclass-show.tur` last (breaking the reentrant cycle), and Display
@@ -119,8 +119,9 @@ with the full typeclass set). With `(defclass Show [a] (show [x] : String))`:
    surface) are unchanged.  Fixtures whose `Show`/`Debug` bodies rely on inline-C
    helpers the tree-walker cannot execute (`bound-show-fmt`, the `Debug`
    instances) or on cstr Set/Map element recovery are marked `requires.compiled`.
-   The only remaining cstr `show` is the local-class `derive-show` path,
-   intentionally retained for the minimal-`Show` fixtures.
+   The only remaining cstr `show` is the local-class `derive-show-cstr` path,
+   intentionally retained for the minimal-`Show` fixtures (`derive-show` itself
+   is the owned-String deriver, matching the stdlib `Show`).
 
 Carry red fixtures across stages as usual; snapshot churn (every program that
 shows something regenerates) is expected at stage 4 -- coordinate that regen the
@@ -163,7 +164,7 @@ Because a *partial* load-graph restructure leaves core stdlib uncompilable
 (not merely red fixtures), this is a single coordinated refactor, not an
 incremental slice -- and it should be undertaken deliberately, not folded into
 an unrelated change. Stages 1-3 already ship a leak-free owned surface
-(`show-string`, `show-line`, `print-show`, `derive-show-string`) on demand, so
+(`show-line`, `print-show`, `derive-show`) on demand, so
 there is no correctness gap forcing the flip; stage 4 is purely about making
 owned the *default*.
 
