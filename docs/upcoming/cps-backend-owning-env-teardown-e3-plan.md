@@ -374,13 +374,28 @@ NONE of them need per-frame clone glue.
   field restriction as the recursive carrier (fixture
   `cloneable-owning-consuming-aggregate`, LSan-clean).
 
-With borrow, owner-drop, and the consuming rc / flat-carrier / rc-fielded-carrier
-/ by-value-aggregate cases all landed, E3's owning-capture goal is met across
-every channel and owning shape whose deep clone reduces to a shallow copy + field
-incref. The ONE residual shape -- a value with a ref/lref or NESTED owning field,
-consumed -- needs a genuinely recursive VALUE clone (deep-copy the ref'd value /
-nested handle, not an incref); it is cleanly rejected (E0710), never miscompiled,
-and is the last niche. Then GRADUATION (retire the experiment gate at the 0.31.0
+- **CONSUMING heap handle with a `ref<scalar>` field (recursive clone) -- LANDED.**
+  A ref field is an owning box (`drop_glue` `free`s it), so a multi-shot resume
+  freeing a shared box double-frees.  The `env_clone` deep-copies the box -- malloc
+  a fresh box + scalar copy, then store it back (the field is `void *`, so cast to
+  the inner pointer type to deref and to `void *` to store).  This is exactly as
+  deep as `drop_glue`'s `free` -- the clone MIRRORS the drop.  Fixture
+  `cloneable-owning-consuming-ref-field`, LSan-clean.
+
+**Where the recursion stops -- and why it is the right boundary.** A clone must
+mirror `drop_glue` exactly, and `drop_glue` is SHALLOW: for a `ref`/`lref` field
+it just `free`s the box (no recursion into the pointed-to value), and it has NO
+case for a nested `TY_ADT`/`TY_STRUCT` field at all.  So the cleanly-synthesizable
+clone goes exactly one level for a `ref<scalar>` (fresh box) and no deeper:
+- a `ref<OWNING>` field -- the base drop frees the box but leaks the inner owning,
+  so a matching clone would only reproduce that base leak, not a clean deep copy;
+- a nested aggregate / heap-handle field -- the base drop does not drop its owning
+  fields at all (leaks), so again a matching clone cannot be leak-clean.
+Both stay cleanly rejected (E0710), never miscompiled.  Making them leak-clean
+would require first deepening the base language's `drop_glue` to recurse -- a
+separate base-language change, out of scope for E3.  With this, E3's
+owning-capture goal is complete for every shape that is leak-clean in the base
+language.  Remaining: GRADUATION (retire the experiment gate at the 0.31.0
 `expires_at`).
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,

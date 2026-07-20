@@ -1081,20 +1081,41 @@ static bool cloneable_owning_env_ok(const Type *t) {
  *     resume frees its OWN allocation -- a shared handle would double-free).
  * A heap handle WITH owning fields needs a recursive deep clone (a later slice);
  * excluded here so a shallow copy never shares an owning field. */
-/* A one-ctor ADT whose deep clone we can synthesize as a shallow copy plus a
- * per-owning-field incref: every field is either a plain value (safe to
- * shallow-copy) or an increfable owning handle (rc / weak) -- NOT a ref/lref (an
- * owning pointer a shallow copy would share -> double-free) nor a nested
- * aggregate / heap handle (needs its own recursive clone).  A value with no
- * owning fields trivially qualifies; the incref loop is then empty. */
+/* Is a field kind a plain (non-owning, shallow-copyable) scalar? */
+static bool clone_field_is_scalar(TypeKind k) {
+    return !(k == TY_RC || k == TY_WEAK || k == TY_REF || k == TY_LREF
+             || k == TY_ADT || k == TY_STRUCT || k == TY_APP);
+}
+/* A one-ctor ADT whose deep clone we can synthesize as a shallow copy + a
+ * per-owning-field INCREF: every field is a plain value or an increfable owning
+ * handle (rc / weak).  Used for a by-value AGGREGATE (its ref field would need a
+ * boxed per-copy clone the by-value pass cannot provide) -- rc/weak only. */
 static bool adt_fields_incref_cloneable(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!(c->fields[i].kind == TY_RC || c->fields[i].kind == TY_WEAK
+              || clone_field_is_scalar(c->fields[i].kind)))
+            return false;
+    return true;
+}
+/* A one-ctor HEAP ADT whose deep clone we can synthesize: rc/weak fields (incref)
+ * PLUS `ref<scalar>` / `lref<scalar>` fields, which the env_clone deep-copies as a
+ * fresh box (malloc + scalar copy) -- exactly mirroring drop_glue's `free` of the
+ * box (a heap header is malloc'd, so its owning fields' boxes are separately
+ * malloc'd and freed).  A ref to an OWNING inner, or a nested aggregate / heap
+ * field, is rejected: the base drop_glue is shallow there (frees the box / does
+ * not recurse), so a matching clone would only reproduce that base leak, not a
+ * clean deep copy. */
+static bool adt_fields_heap_cloneable(const AdtDef *d) {
     if (!d || d->n_ctors == 0) return false;
     const CtorDef *c = d->ctors[0];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         TypeKind k = c->fields[i].kind;
-        if (k == TY_REF || k == TY_LREF
-            || k == TY_ADT || k == TY_STRUCT || k == TY_APP)
-            return false;
+        if (k == TY_RC || k == TY_WEAK || clone_field_is_scalar(k)) continue;
+        if ((k == TY_REF || k == TY_LREF)
+            && clone_field_is_scalar(c->fields[i].inner_kind)) continue;
+        return false;
     }
     return true;
 }
@@ -1107,7 +1128,7 @@ static const AdtDef *adt_def_of(const Type *t) {
 static bool heap_consume_cloneable(const Type *t) {
     if (!(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
         return false;
-    return adt_fields_incref_cloneable(adt_def_of(t));
+    return adt_fields_heap_cloneable(adt_def_of(t));
 }
 /* A multi-word owning by-value AGGREGATE consume-cloneable by increfing its
  * owning fields (the frame passes it BY VALUE -> the callee drops its own copy,

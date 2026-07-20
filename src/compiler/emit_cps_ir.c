@@ -964,23 +964,38 @@ static const AdtDef *cloneable_carrier_def(const Type *t) {
     return (t->kind == TY_ADT) ? t->as.adt_.def
          : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
 }
-/* Cloneable by shallow copy + per-owning-field incref: every field is a plain
- * value or an increfable rc/weak handle.  A ref/lref or nested aggregate / heap
- * handle needs a recursive deep clone -- not supported here. */
+static bool clone_field_is_scalar(TypeKind k) {
+    return !(k == TY_RC || k == TY_WEAK || k == TY_REF || k == TY_LREF
+             || k == TY_ADT || k == TY_STRUCT || k == TY_APP);
+}
+/* Aggregate clone fields: rc/weak (incref) or plain scalar only -- a by-value
+ * aggregate's ref field cannot be per-copy boxed through the by-value call. */
 static bool adt_incref_cloneable_fields(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!(c->fields[i].kind == TY_RC || c->fields[i].kind == TY_WEAK
+              || clone_field_is_scalar(c->fields[i].kind)))
+            return false;
+    return true;
+}
+/* Heap-handle clone fields: rc/weak (incref), plain scalar, OR `ref<scalar>` /
+ * `lref<scalar>` (deep-copied as a fresh box, mirroring drop_glue's `free`). */
+static bool adt_heap_cloneable_fields(const AdtDef *d) {
     if (!d || d->n_ctors == 0) return false;
     const CtorDef *c = d->ctors[0];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         TypeKind k = c->fields[i].kind;
-        if (k == TY_REF || k == TY_LREF
-            || k == TY_ADT || k == TY_STRUCT || k == TY_APP)
-            return false;
+        if (k == TY_RC || k == TY_WEAK || clone_field_is_scalar(k)) continue;
+        if ((k == TY_REF || k == TY_LREF)
+            && clone_field_is_scalar(c->fields[i].inner_kind)) continue;
+        return false;
     }
     return true;
 }
 static bool cloneable_frame_consumes_carrier(const CloneFrame *fr) {
     if (!cloneable_frame_consume_base(fr)) return false;
-    return adt_incref_cloneable_fields(cloneable_carrier_def(fr->operand.type));
+    return adt_heap_cloneable_fields(cloneable_carrier_def(fr->operand.type));
 }
 /* A consuming multi-word owning by-value AGGREGATE frame: the aggregate rides the
  * env by ADDRESS (`&o`), the frame passes it BY VALUE so the callee drops its own
@@ -6459,11 +6474,26 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         const CtorDef *c = d ? d->ctors[0] : NULL;
                         for (uint32_t fi = 0; c && fi < c->n_fields; fi++) {
                             TypeKind fk = c->fields[fi].kind;
-                            if (fk != TY_RC && fk != TY_WEAK) continue;
                             char *mp = adt_field_member_path(d, c, fi);
-                            buf_printf(&incs, "if (__c->%s) %s(__c->%s); ",
-                                       mp, fk == TY_RC ? "rc_strong_increment"
-                                                       : "rc_weak_increment", mp);
+                            if (fk == TY_RC || fk == TY_WEAK) {
+                                buf_printf(&incs, "if (__c->%s) %s(__c->%s); ",
+                                           mp, fk == TY_RC ? "rc_strong_increment"
+                                                           : "rc_weak_increment", mp);
+                            } else if (fk == TY_REF || fk == TY_LREF) {
+                                /* deep-copy the ref<scalar> box: a fresh malloc +
+                                 * scalar copy, so each resume frees its own box
+                                 * (mirrors drop_glue's `free(s->f)`). */
+                                Type it; memset(&it, 0, sizeof it);
+                                it.kind = c->fields[fi].inner_kind;
+                                const char *innerc = type_c_name(it);
+                                /* the field is stored `void *`; cast to the inner
+                                 * pointer type to deref, and store the fresh box
+                                 * back as `void *`. */
+                                buf_printf(&incs,
+                                    "if (__c->%s) { %s *__rb = (%s *)malloc(sizeof(%s)); "
+                                    "*__rb = *(%s *)(__c->%s); __c->%s = (void *)__rb; } ",
+                                    mp, innerc, innerc, innerc, innerc, mp, mp);
+                            }
                             free(mp);
                         }
                         buf_putc(&incs, '\0');
