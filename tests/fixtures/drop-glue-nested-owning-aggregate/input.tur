@@ -1,0 +1,33 @@
+;; drop-glue-shallow-nested-owning-aggregate: by-value drop glue must tear down
+;; a nested owning aggregate field (a by-value struct that itself owns an rc),
+;; not just a directly-rc field.  Before the fix, `Outer`/`Sib` got no (or
+;; partial) drop glue -- the boxed `Own` sub-aggregate and its rc leaked when the
+;; rc-wrapping control block hit zero.  The harness compiles without ASan so it
+;; cannot see the leak, but a WRONG drop glue (double-free of the shared box, or
+;; freeing an unowned pointer) crashes here under plain cc; a correct one reads
+;; the values back and exits cleanly.  Consequence #1 (only owner is nested) is
+;; `Outer`; consequence #2 (direct rc sibling + nested aggregate) is `Sib`.
+(defstruct Own [r : rc<int> tag : int])
+
+;; Consequence #1: Outer's ONLY owning content is the nested Own.
+(defstruct Outer [inner : Own tag : int])
+
+;; Consequence #2: a direct rc field AND a nested-aggregate sibling.
+(defstruct Sib [direct : rc<int> nested : Own tag : int])
+
+;; Transitivity: three levels deep (Own -> Mid -> Deep).
+(defstruct Mid [o : Own tag : int])
+(defstruct Deep [m : Mid tag : int])
+
+(defn main [] : int
+  (let [o1 (make-struct Own :r (rc/of 10) :tag 1)
+        w1 (rc/of (make-struct Outer :inner o1 :tag 9))
+        o2 (make-struct Own :r (rc/of 20) :tag 2)
+        w2 (rc/of (make-struct Sib :direct (rc/of 30) :nested o2 :tag 8))
+        o3 (make-struct Own :r (rc/of 40) :tag 3)
+        m3 (make-struct Mid :o o3 :tag 7)
+        w3 (rc/of (make-struct Deep :m m3 :tag 5))]
+    (println (.tag w1))     ;; 9
+    (println (.tag w2))     ;; 8
+    (println (.tag w3))     ;; 5
+    0))

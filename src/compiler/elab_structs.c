@@ -1262,6 +1262,25 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
         if (fkind == TY_RC || fkind == TY_REF || fkind == TY_WEAK) {
             def->needs_drop_glue = true;
         }
+        /* drop-glue-shallow-nested-owning-aggregate: a nominal by-value
+         * aggregate field whose inner def itself `needs_drop_glue` is stored
+         * behind the int64 carrier (adt_field_is_inline_byval excludes a
+         * drop-glue inner).  Flag the owner and remember the inner def so the
+         * by-value drop/walk glue releases the boxed sub-aggregate.  Restricted
+         * to a non-parametric nominal ADT: its drop glue is the plain
+         * `drop_glue_tur_adt_<name>`, whereas a parametric applied monomorph
+         * (`(Pair rc<int> int)`) uses a mangled monomorph name -- threading that
+         * through is separate work.  A :heap inner is a typed pointer whose
+         * teardown is separate deferred work. */
+        if (t->kind == TY_ADT) {
+            const AdtDef *iad = t->as.adt_.def;
+            if (iad && iad->needs_drop_glue && !iad->is_heap &&
+                iad->n_type_params == 0 && adt_is_byvalue_product(iad) &&
+                (fkind == TY_INT || fkind == TY_ADT)) {
+                ctor->fields[fi].drop_inner_def = iad;
+                def->needs_drop_glue = true;
+            }
+        }
         return true;
     }
 
@@ -1343,8 +1362,8 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
             /* structdef-retirement DS-D: no Type is ever TY_STRUCT, so the
              * former struct branch (reading the removed `.as.struct_` member) is
              * dead -- the guard above only admits TY_ADT here. */
+            AdtDef *ad = tb->type.as.adt_.def;
             {
-                AdtDef *ad = tb->type.as.adt_.def;
                 /* by-value ADT product (inlined, slice 4), a :heap record ADT
                  * (typed-pointer carrier, seam 3 -- the ADT analogue of a :heap
                  * struct field), or a forward-declared stub (n_ctors == 0) whose
@@ -1360,6 +1379,19 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
                 Type *ft = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *ft = tb->type;
                 ctor->fields[fi].full_type = ft;
+            }
+            /* drop-glue-shallow-nested-owning-aggregate: a nested by-value
+             * aggregate field whose inner def itself `needs_drop_glue` is stored
+             * behind the int64 carrier (record_full is false above, so full_type
+             * stays NULL and the read path is unchanged).  Flag the owner as
+             * needing drop glue and stash the inner def so the by-value drop/walk
+             * glue tears the boxed sub-aggregate down (a `drop_glue_<Inner>` /
+             * `walk_glue_<Inner>` call) instead of leaking it.  A :heap inner is
+             * excluded -- its typed-pointer teardown is separate deferred work. */
+            if (ad && ad->needs_drop_glue && !ad->is_heap &&
+                adt_is_byvalue_product(ad)) {
+                ctor->fields[fi].drop_inner_def = ad;
+                def->needs_drop_glue = true;
             }
         } else {
             diag_emit(DIAG_ERROR, ft_form->span,

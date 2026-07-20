@@ -5399,6 +5399,21 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     if (!def->needs_drop_glue || def->n_ctors == 0) return;
     const CtorDef *ctor = def->ctors[0];
 
+    /* drop-glue-shallow-nested-owning-aggregate: forward-declare the drop/walk
+     * glue of any nested owning aggregate field.  A boxed sub-aggregate is an
+     * opaque int64 in this type's layout, so its glue may be emitted AFTER ours
+     * (emission order is not guaranteed inner-first for a carrier field).  A
+     * redundant forward decl of an already-defined static is valid C. */
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (ctor->fields[fi].drop_inner_def) {
+            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            buf_printf(out, "static void drop_glue_tur_adt_%s(void *);\n", imn);
+            buf_printf(out, "static void walk_glue_tur_adt_%s(void *, RcWalkChildFn, void *);\n",
+                       imn);
+            free(imn);
+        }
+    }
+
     buf_printf(out, "static void drop_glue_%s(void *ptr) {\n", adt_c_name);
     buf_printf(out, "    if (!ptr) return;\n");
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
@@ -5413,6 +5428,17 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
             buf_printf(out, "    if (s->%s) rc_weak_decrement(s->%s);\n", mp, mp);
         } else if (k == TY_REF || k == TY_LREF) {
             buf_printf(out, "    if (s->%s) free(s->%s);\n", mp, mp);
+        } else if (ctor->fields[fi].drop_inner_def) {
+            /* drop-glue-shallow-nested-owning-aggregate: the field is an int64
+             * carrier holding a malloc'd box of a nested owning by-value
+             * aggregate.  Its own drop glue releases the box's owners and frees
+             * the box (it is a plain heap allocation, uniquely owned by this
+             * value under the same move discipline a direct rc field relies on). */
+            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            buf_printf(out,
+                       "    if (s->%s) drop_glue_tur_adt_%s((void *)(intptr_t)s->%s);\n",
+                       mp, imn, mp);
+            free(imn);
         }
         free(mp);
     }
@@ -5425,11 +5451,19 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     buf_printf(out, "    if (!ptr || !cb) return;\n");
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        char *mp = adt_field_member_path(def, ctor, fi);
         if (ctor->fields[fi].kind == TY_RC) {
-            char *mp = adt_field_member_path(def, ctor, fi);
             buf_printf(out, "    if (s->%s) cb(s->%s, ctx);\n", mp, mp);
-            free(mp);
+        } else if (ctor->fields[fi].drop_inner_def) {
+            /* Recurse into the boxed sub-aggregate so its own rc children are
+             * enumerated for the cycle collector. */
+            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+            buf_printf(out,
+                       "    if (s->%s) walk_glue_tur_adt_%s((void *)(intptr_t)s->%s, cb, ctx);\n",
+                       mp, imn, mp);
+            free(imn);
         }
+        free(mp);
     }
     buf_printf(out, "}\n\n");
 }

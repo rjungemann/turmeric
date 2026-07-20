@@ -1,5 +1,50 @@
 # By-value drop glue is shallow -- a nested owning aggregate field is never torn down
 
+**Status: RESOLVED (2026-07-20)** for the core defect -- non-parametric by-value
+nested owning aggregates. Both fix directions (1) and (2) landed:
+
+- **Transitive `needs_drop_glue`** (`src/compiler/elab_structs.c`): a field whose
+  inner def is a non-`:heap`, non-parametric by-value product that itself
+  `needs_drop_glue` now flips the owner's flag and records the inner def on a new
+  `CtorField.drop_inner_def` slot. (`full_type` stays NULL for such a carrier
+  field -- recording a carrier-ADT `full_type` would misclassify field *reads* --
+  so a dedicated slot carries the inner def for the drop path only.)
+- **Nested-aggregate drop/walk case** (`src/compiler/emit_module.c`,
+  `emit_adt_byval_drop_glue`): a `drop_inner_def` field emits
+  `drop_glue_tur_adt_<Inner>((void*)s->field)` (releases the boxed sub-aggregate's
+  owners *and* frees the box -- a plain heap allocation uniquely owned under the
+  same move discipline a direct rc field relies on) and, in walk glue,
+  `walk_glue_tur_adt_<Inner>(...)`. Order-independent via forward decls.
+
+Verified end-to-end under ASan/LSan+UBSan: the rc-wrapped byval repro (whose drop
+glue actually *runs* -- see note below), a 3-level transitive nest, and the
+direct-rc + nested-sibling case (consequence #2) all drop to **0 leaked, no
+double-free**. Regression fixture:
+`tests/fixtures/drop-glue-nested-owning-aggregate/`. Full suite 2214/0, no
+snapshot churn.
+
+**Scope limits deliberately left (separate, narrower concerns):**
+
+- A `:heap` inner is excluded (its typed-pointer teardown is the deferred
+  by-value/`:heap` local-drop work). Note the original repro's `H5` is `:heap`,
+  so its *own* drop glue is never invoked regardless -- the verifiable target is a
+  **byval** aggregate wrapped in `rc/of`, where the rc control block's `drop_fn`
+  is the byval drop glue and so actually runs.
+- A parametric applied monomorph inner (`(Pair rc<int> int)`) is excluded --
+  its drop glue is a mangled monomorph name, not the base `tur_adt_<name>`;
+  threading that is separate work.
+- A forward-referenced inner (nested type defined *after* the owner) is not seen
+  transitively (single-pass), matching the existing `record_full` forward-stub
+  caveat.
+- Fix direction (4) -- loosening the owning-cloneable-capture admission
+  predicate in `cps_ir.c` / `emit_cps_ir.c` now that the base drop is complete --
+  is an E3 follow-on left to that machinery; the predicate still conservatively
+  rejects (no regression).
+
+Original report follows.
+
+---
+
 **Severity:** medium (bounded per-value leak; not a crash or miscompile).
 General codegen -- **not** CPS/effect-specific (reproduces with no effects at
 all). Surfaced while building the E3 owning-cloneable-capture work: it is the
