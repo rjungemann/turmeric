@@ -193,8 +193,78 @@ sub-view), `slice/len` / `slice/empty?` / `slice/byte-at` / `slice/compare` /
   the collection frees it on `map-free` / `set-free`. Releasing your own handle
   afterward is independent and safe.
 
+## Memory management & common pitfalls
+
+The one question that resolves most string bugs: **who owns these bytes, and who
+frees them?** Each type answers it differently.
+
+| Value | Who owns the bytes | Your obligation |
+|---|---|---|
+| `"literal"` (`cstr`) | static / the compiler | none -- never free it |
+| a `cstr` returned by a stdlib fn ("caller frees the result": `str-concat`, `int->str`, `cstr-sub`, `path/*`, `digest/*-hex`, `json/encode`, `slice/to-cstr`, ...) | **you** (fresh heap buffer) | free it, or hand it to `string/adopt-cstr` |
+| a `cstr` from an accessor (`httpd-req-*`, `json/get-string`, `sym->str`, `string/to-cstr`) | the underlying structure | **borrow only** -- don't free, don't outlive the owner |
+| `String` | refcount | balance each `from-*`/`concat`/`retain` with a `string/release` (or hand it to a container) |
+| `StringSlice` | refcount + retained parent | balance each `string/slice`/`slice/sub`/`slice/retain` with a `slice/release` |
+
+### Copy vs consume vs borrow -- the three cstr->String bridges
+
+- `string/from-cstr c` -- **copies** `c` into a new String; does **not** free `c`.
+  Safe for any cstr (literal, borrow, or heap).
+- `string/adopt-cstr c` -- **consumes** `c`: copies its bytes AND `free`s `c`.
+  Use it *only* on a freshly heap-allocated cstr you own (typically the result of
+  a "caller frees" fn): `(string/adopt-cstr (path/join a b))`.
+- `string/to-cstr s` / `slice/to-cstr sl` -- go the other way. `string/to-cstr`
+  **borrows** (O(1), valid only while `s` is retained). `slice/to-cstr`
+  **copies** into a fresh heap cstr (you free it) -- a slice is not
+  NUL-terminated at its end, so it can't lend a borrow.
+
+### The pitfalls
+
+- **`adopt-cstr` on a literal or a borrow -> undefined behavior.** It frees its
+  argument. `(string/adopt-cstr "hi")` frees static memory;
+  `(string/adopt-cstr (httpd-req-path c))` frees a pointer the connection still
+  owns. When unsure, use `string/from-cstr` (copy, no free).
+- **Use-after-release of a `to-cstr` borrow.** `(let [c (string/to-cstr s)] ...
+  (string/release s) ... c ...)` reads freed memory. Finish with the borrow
+  before releasing the String, or copy it.
+- **Leaking a "caller frees" cstr.** `(println (str-concat a b))` leaks the
+  joined buffer every call. Adopt it (`(string/adopt-cstr (str-concat a b))` ->
+  owned String) or free it. (This is the latent hazard the stdlib adoption audit
+  tracks: `docs/upcoming/v2/string-adoption-stdlib-plan.md`.)
+- **A computed `cstr` as a Map/Set key dangles.** `MapKey[cstr]` borrows the
+  pointer (`mk-owned? = 0`); if the key was computed or is later freed, the map
+  holds a dangling pointer. Use a `String` key -- `MapKey[String]` copies the
+  bytes into a box the map owns (`mk-owned? = 1`). See "Why String keys don't
+  dangle" above.
+- **Double-release / forgotten release.** Releasing a String or slice twice frees
+  it twice; never releasing it leaks. One `release` per owning handle
+  (`from-*`/`concat`/`slice`/`retain`), no more, no fewer.
+- **A `StringSlice` keeps its whole parent alive.** A 3-byte slice of a 10 MB
+  String pins all 10 MB until the slice is released. For a small long-lived
+  substring of a large transient String, `slice/to-string` (copy out) and release
+  the slice + parent.
+- **StringBuilder is single-use.** `builder/finish` frees the builder; don't
+  touch it afterward.
+
+### The short rules
+
+- Every `string/from-cstr`, `string/concat`, `string/substring`, `string/to-*`,
+  `string/trim`, `builder/finish`, `slice/to-string` returns an **owned** String
+  (rc 1) -- release it or give it away.
+- Every `string/slice`, `string/slice-cstr`, `slice/sub`, `slice/retain` returns
+  an owned slice -- release it.
+- Anything named `*-cstr` that *returns* a cstr gives you a **fresh** buffer to
+  free/adopt; anything named `to-cstr` that borrows is valid only for its
+  source's lifetime.
+- Prefer `String` (copy on store) over a stored/keyed `cstr`. Prefer
+  `string/from-cstr` (copy) over `string/adopt-cstr` (consume) unless you
+  specifically own a fresh heap cstr.
+
 ## See also
 
 - `stdlib/string.tur` -- the module.
+- `stdlib/string-slice.tur` -- `StringSlice`, the zero-copy view.
 - `src/runtime/tur_string.c` -- the refcounted payload + operations.
 - `docs/upcoming/v2/owned-string-type-plan.md` -- the design plan.
+- `docs/upcoming/v2/string-adoption-stdlib-plan.md` -- the borrowed-`cstr`
+  migration audit.
