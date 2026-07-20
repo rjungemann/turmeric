@@ -13,7 +13,7 @@
 (load "stdlib/typeclass.tur")
 
 (defn main [] : int
-  (println (show (set-of "x" "y")))
-  (println (show (map-assoc (:: (map-new) (Map cstr cstr)) "k" "v")))
-  (println (show (map-assoc (:: (map-new) (Map cstr int)) "n" 7)))
+  (show-line (set-of "x" "y"))
+  (show-line (map-assoc (:: (map-new) (Map cstr cstr)) "k" "v"))
+  (show-line (map-assoc (:: (map-new) (Map cstr int)) "n" 7))
   0)

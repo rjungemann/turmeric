@@ -1,0 +1,36 @@
+;; Regression: the [label .accessor] alias field form for derive-show.  The
+;; alias label (a symbol) must be stringified before the compile-time str-append
+;; that builds the render prefix; previously it errored "str-append expects
+;; string arguments".  Covers a renamed field (display-name via .internal-label)
+;; alongside bare fields.
+(defclass Show [a]
+  (show [x] : cstr))
+
+(definstance Show [int]
+  (show [x] : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return (const char *)(intptr_t)buf;
+    ```))
+
+(definstance Show [cstr] (show [x] : cstr x))
+
+(defn str-concat [a : cstr b : cstr] : cstr
+  ```c
+  const char *sa = (const char*)(intptr_t)a;
+  const char *sb = (const char*)(intptr_t)b;
+  size_t la = strlen(sa), lb = strlen(sb);
+  char *out = (char *)malloc(la + lb + 1);
+  memcpy(out, sa, la);
+  memcpy(out + la, sb, lb);
+  out[la + lb] = '\0';
+  return (const char *)(intptr_t)out;
+  ```)
+
+(defstruct Named [title : cstr internal-label : cstr count : int])
+(derive-show-cstr Named title [display-name .internal-label] count)
+
+(defn main [] : int
+  (let [n (make-struct Named "T" "L" 3)]
+    (do (println (show n)) 0)))

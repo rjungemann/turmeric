@@ -2147,6 +2147,26 @@ Expr *elab_call(Elab *e, Form *call) {
             return NULL;
         }
 
+        /* Re-attribute a macro-emitted top-level `definstance` to the macro
+         * CALL SITE rather than the macro-definition file.  The orphan-instance
+         * check (TUR-E0013) and inst->origin_file_id key off the definstance
+         * form's own span.file_id; a macro that constructs the instance (e.g.
+         * derive-show / derive-show-string in stdlib/macros.tur) would otherwise
+         * carry the macros.tur file id, so the user's own struct type -- whose
+         * origin is the call-site file -- is not credited and a legitimate
+         * `derive-show-string MyStruct ...` trips the orphan check.  Re-spanning
+         * only the outermost definstance form makes ownership follow the call
+         * site (where the user wrote the derive); inner subforms keep their
+         * macro-body spans so diagnostics inside the expansion still point at
+         * the macro.  Restricted to definstance so no other macro's diagnostics
+         * move.  The expansion output is freshly arena-allocated, so mutating
+         * its span is safe. */
+        if (expanded->tag == F_LIST && expanded->as.list.len > 0 &&
+            expanded->as.list.items[0]->tag == F_SYM &&
+            strcmp(expanded->as.list.items[0]->as.sym->name, "definstance") == 0) {
+            expanded->span = call->span;
+        }
+
         /* Phase M4: Keep the expansion-module context active while elaborating
          * the expanded form so private helper macros from the same module are
          * visible when the expansion calls them (e.g. triple → helper-double).

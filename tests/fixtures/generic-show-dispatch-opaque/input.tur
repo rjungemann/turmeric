@@ -1,0 +1,25 @@
+;; Regression: a generic function constrained by a typeclass, whose only tie to
+;; the type variable is a value parameter, must dispatch on the ARGUMENT's
+;; nominal type -- not collapse an opaque-over-int64 carrier type (String,
+;; StringSlice) onto the int carrier instance.  Previously (my-show (int->string
+;; 0)) printed the String payload pointer as a decimal via Show[int]; the ABI
+;; specializer now mints a per-nominal-type spec that dispatches correctly.
+;;
+;; Since stage 4 Show returns an owned String, so my-show relays that String and
+;; the caller releases it (emit).
+(load "stdlib/string-slice.tur")
+
+(defn my-show [^Show a] [x : a] : String (show x))
+
+(defn emit [s : String] : void
+  (do (println (string/to-cstr s)) (string/release s)))
+
+(defn main [] : int
+  (do
+    (emit (my-show 42))                              ; int
+    (emit (my-show 7.1))                             ; float (distinct C ABI)
+    (emit (my-show true))                            ; bool
+    (emit (my-show "hi"))                            ; cstr
+    (emit (my-show (int->string 99)))                ; String  (opaque/int64 carrier)
+    (emit (my-show (string/slice-cstr "12345" 1 3))) ; StringSlice (opaque/int64 carrier)
+    0))

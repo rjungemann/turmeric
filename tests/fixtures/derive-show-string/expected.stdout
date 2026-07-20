@@ -1,0 +1,3 @@
+Inner { n = 7 }
+Outer { a = 1, inner = Inner { n = 9 }, label = hi }
+Named { title = T, display-name = L, count = 3 }

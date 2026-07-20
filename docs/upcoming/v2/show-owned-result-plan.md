@@ -96,15 +96,77 @@ with the full typeclass set). With `(defclass Show [a] (show [x] : String))`:
    `(show x)` (+ leak / manual free) to `show-string` + `string/release` (or the
    wrapper). Prefer the highest-churn / longest-running consumers first
    (collection rendering, logging, any per-request show).
-4. **Flip the default:** once call sites are migrated, retype
-   `(defclass Show [a] (show [x] : String))`, make the old `cstr`-returning
-   entry a thin `(string/to-cstr (show-string x))`-style shim for any stragglers,
-   and regenerate fixture snapshots.
-5. **Drop the `cstr` version** and the shim once no consumer depends on it.
+4. **Flip the default (DONE):** `Show` is now `(defclass Show [a] (show [x] :
+   String))`.  The owned instance bodies (previously the parallel `ShowString`
+   class) were folded into `Show`; `ShowString`/`show-string` were dropped as
+   redundant (`show` IS the owned method now).  `derive-show` emits the
+   owned `Show` instance for a struct; `derive-show-cstr` is the `cstr` deriver for
+   programs with a local `Show` class.  The load-graph restructure landed:
+   `stdlib/string.tur` defines the type + ops first, `stdlib/typeclass.tur` loads
+   `stdlib/typeclass-show.tur` last (breaking the reentrant cycle), and Display
+   instances are self-contained (no `show` call).  Call sites migrated: the
+   idiomatic `(println (show x))` became `(show-line x)` (show + print + release)
+   or an explicit `(let [s (show x)] ... (string/release s))`; snapshots
+   regenerated.  Full suite green.
+5. **Drop the `cstr` version (DONE).** No cstr `show` shim was ever kept, so
+   there was nothing to remove on the compiled side.  Stage 5's real remaining
+   work was the interpreter: the tree-walking `--interpret` path fell back to
+   cstr-returning `__inst_Show_show_*` natives for the inline-C `Show` bodies,
+   which a `String`-expecting caller then misread.  Those fallbacks now build a
+   real owned `String` (src/turi/interpreter_natives.c: `native_show_int_str`
+   etc., boxing a `tur_string_from_*` handle), so compiled and `--interpret`
+   agree.  The standalone cstr `show-int`/`show-float` helpers (a different
+   surface) are unchanged.  Fixtures whose `Show`/`Debug` bodies rely on inline-C
+   helpers the tree-walker cannot execute (`bound-show-fmt`, the `Debug`
+   instances) or on cstr Set/Map element recovery are marked `requires.compiled`.
+   The only remaining cstr `show` is the local-class `derive-show-cstr` path,
+   intentionally retained for the minimal-`Show` fixtures (`derive-show` itself
+   is the owned-String deriver, matching the stdlib `Show`).
 
 Carry red fixtures across stages as usual; snapshot churn (every program that
 shows something regenerates) is expected at stage 4 -- coordinate that regen the
 way the fixture-snapshot rules describe (do not split it across PRs).
+
+### Stage 4 prerequisite (discovered during stages 1-3): a load-graph restructure
+
+Stage 4 is **not** just "retype + fix call sites." `Show`'s class and its
+`Show[Vec]`/`Show[Set]`/`Show[Map]` instances live in `stdlib/typeclass-show.tur`,
+which is loaded **before** `String` is defined:
+
+- `stdlib/string.tur` loads `typeclass.tur` (line 22) and `typeclass-show.tur`
+  (line 24) -- pulling in the `Show` class -- and only *then* defines
+  `(defopaque String ...)` (line 35). `typeclass-show.tur` is also loaded by
+  `typeclass.tur`, `string-slice.tur`, and the interpreter preload
+  (`src/turi/collections_native.c`, `src/turi/preload.c`).
+
+So `Show` currently sits **below** `String` in the load graph, exactly the
+constraint that forced the parallel `ShowString` class *above* `stdlib/string.tur`
+in stage 1. For `(show [x] : String)` to even type-check, the `Show` class and
+every instance body that builds a `String` must move **above** `stdlib/string.tur`.
+Concretely stage 4 must:
+
+- Split `String`'s definition out from its typeclass instances so `string.tur`
+  no longer depends on `Show` (define the `defopaque` + runtime ops first, wire
+  `Show[String]`/`Eq`/`Ord`/... in a file loaded afterwards).
+- Relocate the `Show` class + primitive/collection instances (the owned bodies
+  already written in `typeclass-show-string.tur`) above `string.tur`, and update
+  every loader (`typeclass.tur`, `string-slice.tur`, `range.tur`, the REPL
+  preload) for the new order.
+- Fold `ShowString`/`show-string` into `Show`/`show` (they become the same
+  method); retarget `show-line`/`print-show` to `^Show a`.
+- Retype the 12 `Display` instances that delegate to `(show x)` (or make them
+  self-contained), and add the leaky `show-cstr` shim.
+- Migrate the ~26 fixtures that use the **stdlib** `Show` (46 more define a
+  *local* `Show` class and are unaffected), plus regenerate every codegen
+  snapshot that loads `typeclass.tur`.
+
+Because a *partial* load-graph restructure leaves core stdlib uncompilable
+(not merely red fixtures), this is a single coordinated refactor, not an
+incremental slice -- and it should be undertaken deliberately, not folded into
+an unrelated change. Stages 1-3 already ship a leak-free owned surface
+(`show-line`, `print-show`, `derive-show`) on demand, so
+there is no correctness gap forcing the flip; stage 4 is purely about making
+owned the *default*.
 
 ## Interpreter / REPL
 

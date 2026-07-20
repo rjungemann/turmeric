@@ -1,0 +1,26 @@
+;; show-owned-result-plan: derive-show emits the owned-String Show instance for
+;; a struct, building the "Type { f = v, ... }" rendering through a StringBuilder
+;; over each field's show so the result is a single owned String (refcount 1)
+;; with no per-field concat leak.  Covers a bare-field struct, a nested struct
+;; whose field dispatches recursively through Show, and the [label .accessor]
+;; alias form.
+(load "stdlib/string-slice.tur")
+
+(defstruct Inner :copy [n : int])
+(derive-show Inner n)
+
+(defstruct Outer :copy [a : int inner : Inner label : cstr])
+(derive-show Outer a inner label)
+
+(defstruct Named [title : cstr internal-label : cstr count : int])
+(derive-show Named title [display-name .internal-label] count)
+
+(defn emit [s : String] : void
+  (do (println (string/to-cstr s)) (string/release s)))
+
+(defn main [] : int
+  (do
+    (emit (show (make-struct Inner 7)))
+    (emit (show (make-struct Outer 1 (make-struct Inner 9) "hi")))
+    (emit (show (make-struct Named "T" "L" 3)))
+    0))

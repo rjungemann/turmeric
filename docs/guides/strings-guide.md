@@ -16,8 +16,9 @@ how long they stay valid.
 
 `cstr` is a bare `const char*`: no stored length, no ownership. It is the type
 of every `"..."` literal and the right type at an FFI boundary. `Eq[cstr]` is a
-content `strcmp` and `Show[cstr]` is identity, so at the scalar level a `cstr`
-already behaves like a value -- but it **borrows**. The moment you store a
+content `strcmp` (and `Show[cstr]` copies the bytes into a fresh owned
+`String`), so at the scalar level a `cstr` already behaves like a value -- but
+it **borrows**. The moment you store a
 `cstr` somewhere that outlives its buffer, or use a *computed* `cstr` as a
 Map/Set key, you have a latent dangling pointer.
 

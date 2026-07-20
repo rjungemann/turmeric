@@ -29,6 +29,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include "../runtime/tur_string.h"
 #if defined(_WIN32)
 /* Windows has no fork/exec.  The CRT's _spawnvp/_cwait are the direct
  * equivalents (spawn-and-return-a-handle, then reap it), so process/spawn and
@@ -3946,8 +3947,8 @@ static TuriValue native_show_int(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     return turi_cstr(buf);
 }
 
-/* Show [float].show / Show [bool].show / Show [cstr].show */
-static TuriValue native_show_float(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+/* show-float: standalone show function for floats (used in show-float fixture) */
+static TuriValue native_show_float_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     double v = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : 0.0;
     char *buf = (char *)malloc(64);
@@ -3955,38 +3956,68 @@ static TuriValue native_show_float(TuriEnv *env, TuriValue *a, uint32_t n, void 
     snprintf(buf, 64, "%g", v);
     return turi_cstr(buf);
 }
-static TuriValue native_show_bool(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+
+/* ---- Show instance-method fallbacks: return an OWNED String -----------------
+ * show-owned-result-plan stage 4/5: the stdlib `Show` renders to an owned
+ * `String`, and its numeric/float instance bodies are inline-C the tree-walker
+ * cannot execute.  These fallbacks build a real String (via tur_string_from_*)
+ * and box the handle as turi_int -- the same representation string_native.c
+ * uses -- so `(show x)` under `--interpret` returns a releasable String, not a
+ * bare cstr (which string/to-cstr / string/release would then misread). */
+static TuriValue show_str_of_cstr(const char *s) {
+    return turi_int((int64_t)(intptr_t)tur_string_from_cstr(s));
+}
+static TuriValue native_show_int_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_string_from_int((n > 0) ? a[0].as_int : 0));
+}
+static TuriValue native_show_uint_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    char buf[24];
+    snprintf(buf, sizeof buf, "%llu",
+             (unsigned long long)((n > 0) ? (uint64_t)a[0].as_int : 0));
+    return show_str_of_cstr(buf);
+}
+static TuriValue native_show_float_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double v = (n > 0 && a[0].tag == TURI_FLOAT) ? a[0].as_float : 0.0;
+    char buf[32];
+    snprintf(buf, sizeof buf, "%g", v);
+    return show_str_of_cstr(buf);
+}
+static TuriValue native_show_bool_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     bool v = (n > 0 && a[0].tag == TURI_BOOL) ? a[0].as_bool : false;
-    return turi_cstr(v ? "true" : "false");
+    return show_str_of_cstr(v ? "true" : "false");
 }
-static TuriValue native_show_cstr(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+static TuriValue native_show_cstr_str(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    return (n > 0 && a[0].tag == TURI_CSTR) ? a[0] : turi_nil();
-}
-
-/* show-float: standalone show function for floats (used in show-float fixture) */
-static TuriValue native_show_float_fn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    return native_show_float(env, a, n, ud);
+    return show_str_of_cstr((n > 0 && a[0].tag == TURI_CSTR) ? json_arg_cstr(a[0]) : "");
 }
 
 void wk_register_typeclass_natives(TuriEnv *env) {
-    /* Show typeclass instances */
-    turi_env_register_native(env, "__inst_Show_show_int",   native_show_int,   NULL);
-    turi_env_register_native(env, "__inst_Show_show_float", native_show_float, NULL);
+    /* Show typeclass instances -- return owned String (stage 4/5).  Signed
+     * fixed-width types carry as int64 in the interpreter, so they share the
+     * int fallback; unsigned share the %llu fallback. */
+    turi_env_register_native(env, "__inst_Show_show_int",     native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_int8",    native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_int16",   native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_int32",   native_show_int_str,   NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint8",   native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint16",  native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint32",  native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_uint64",  native_show_uint_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_float",   native_show_float_str, NULL);
+    turi_env_register_native(env, "__inst_Show_show_float32", native_show_float_str, NULL);
     /* NOTE: do NOT register the carrier-fallback `__inst_Show_show_T` here.
-     * The `_T` suffix is the ABSTRACT/carrier mangling, not float-specific
-     * (TY_FLOAT now mangles to the concrete `_float` suffix above).  Any
-     * user-defined `Show` instance over a carrier-typed receiver -- an
-     * opaque handle, an `rc<T>`, etc. -- emits its method as
-     * `__inst_Show_show_T`, so pre-binding that name to native_show_float
-     * silently HIJACKS the user's instance and returns "0" for every
-     * non-float receiver (turi-carrier-fallback-instance-method-silent-
-     * miscompile / exg5-rc-in-exists).  Leaving it unbound lets the user's
-     * own instance method resolve. */
-    turi_env_register_native(env, "__inst_Show_show_bool",  native_show_bool,  NULL);
-    turi_env_register_native(env, "__inst_Show_show_cstr",  native_show_cstr,  NULL);
-    /* Standalone show helpers used in some fixtures */
+     * The `_T` suffix is the ABSTRACT/carrier mangling; pre-binding it would
+     * silently HIJACK any user Show instance over a carrier-typed receiver
+     * (opaque handle, rc<T>, ...) and mis-render it.  Leaving it unbound lets
+     * the user's own instance method resolve. */
+    turi_env_register_native(env, "__inst_Show_show_bool",  native_show_bool_str,  NULL);
+    turi_env_register_native(env, "__inst_Show_show_cstr",  native_show_cstr_str,  NULL);
+    /* Standalone cstr show helpers (NOT the Show class): used by fixtures that
+     * call bare show-int/show-float and expect a cstr. */
     turi_env_register_native(env, "show-float", native_show_float_fn, NULL);
     turi_env_register_native(env, "show-int",   native_show_int,      NULL);
 }

@@ -20,20 +20,25 @@
 
 (definstance Show [Point]
   (show [p]
-    (show-concat "("
-      (show-concat (show (.x p))
-        (show-concat "," (show-concat (show (.y p)) ")"))))))
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b "(")
+        (let [sx (show (.x p))] (do (builder/push-string! b sx) (string/release sx)))
+        (builder/push-cstr! b ",")
+        (let [sy (show (.y p))] (do (builder/push-string! b sy) (string/release sy)))
+        (builder/push-cstr! b ")")
+        (builder/finish b)))))
 
 (defn main [] : int
   (let [v (vec-of (Point 1 2) (Point 3 4) (Point 5 6))]
     ;; overwrite element 0 -- old (Point 1 2) box is freed
     (vec-set! v 0 (Point 9 9))
-    (println (show (.x (:: (vec-get v 0) Point))))   ;; 9
+    (show-line (.x (:: (vec-get v 0) Point)))   ;; 9
     ;; drop the last element -- (Point 5 6) box is freed
     (vec-drop-last! v)
-    (println (show (vec-len v)))                     ;; 2
+    (show-line (vec-len v))                     ;; 2
     ;; whole-vec read-back after mutation
-    (println (show v))                               ;; [(9,9) (3,4)]
+    (show-line v)                               ;; [(9,9) (3,4)]
     ;; free the vec: the two remaining element boxes are released
     (vec-free v)
     0))

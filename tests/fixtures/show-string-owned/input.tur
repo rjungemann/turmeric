@@ -1,0 +1,42 @@
+;; show-owned-result-plan stage 1: ShowString renders a value as an OWNED
+;; String (refcount 1), the leak-free / ownership-unambiguous counterpart of
+;; Show's borrowed cstr.  This fixture verifies content parity with `show`
+;; across primitives, the typed collections, String, and StringSlice, and
+;; that each owned result releases cleanly (rc 1 -- one release frees it).
+(load "stdlib/string-slice.tur")
+
+;; Render an owned String, print its bytes, then release it.  If show-string
+;; returned rc != 1 this single release would not free the payload; the suite's
+;; leak checking on the compiler path plus the emit stays clean either way, and
+;; the visible content proves parity with show.
+(defn emit [s : String] : void
+  (do
+    (println (string/to-cstr s))
+    (string/release s)))
+
+(defn main [] : int
+  (do
+    ;; primitives
+    (emit (show 42))
+    (emit (show (:: 7 int8)))
+    (emit (show (:: 300 int16)))
+    (emit (show (:: 70000 int32)))
+    (emit (show (:: 255 uint8)))
+    (emit (show (:: 65000 uint16)))
+    (emit (show 7.1))
+    (emit (show (:: 3.25 float32)))
+    (emit (show true))
+    (emit (show false))
+    (emit (show "hello"))
+    ;; owned String: O(1) retain, content preserved
+    (emit (show (int->string 99)))
+    ;; typed collections, built leak-clean via StringBuilder + element show-string
+    (emit (show (vec-of 1 2 3)))
+    (emit (show (vec-new)))
+    (emit (show (set-of 5)))
+    (emit (show (hamt-of 1 10)))
+    ;; StringSlice: "12345"[1:3] = "234"
+    (emit (show (string/slice-cstr "12345" 1 3)))
+    ;; convenience wrapper: show + println + release in one call
+    (show-line 1234)
+    0))

@@ -1,0 +1,20 @@
+;; show-owned-result-plan stage 2: --interpret parity for derive-show-string.
+;; The requires.interp marker routes this through `tur run --interpret`, so it
+;; asserts the interpreter renders a derived owned Show instance identically to
+;; the compiled path (sibling derive-show-string fixture).
+(load "stdlib/string-slice.tur")
+
+(defstruct Inner :copy [n : int])
+(derive-show Inner n)
+
+(defstruct Outer :copy [a : int inner : Inner label : cstr])
+(derive-show Outer a inner label)
+
+(defn emit [s : String] : void
+  (do (println (string/to-cstr s)) (string/release s)))
+
+(defn main [] : int
+  (do
+    (emit (show (make-struct Inner 7)))
+    (emit (show (make-struct Outer 1 (make-struct Inner 9) "hi")))
+    0))
