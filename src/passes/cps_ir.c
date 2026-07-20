@@ -1081,31 +1081,44 @@ static bool cloneable_owning_env_ok(const Type *t) {
  *     resume frees its OWN allocation -- a shared handle would double-free).
  * A heap handle WITH owning fields needs a recursive deep clone (a later slice);
  * excluded here so a shallow copy never shares an owning field. */
-/* A heap carrier handle whose deep clone we can synthesize: a shallow header
- * copy plus a per-owning-field incref.  Sound iff every field is either a plain
- * value (safe to shallow-copy) or an increfable owning handle (rc / weak) -- NOT
- * a ref/lref (an owning pointer a shallow copy would share -> double-free) nor a
- * nested aggregate / heap handle (needs its own recursive clone).  A FLAT handle
- * (no owning fields) trivially qualifies; the incref loop is then empty. */
-static bool heap_consume_cloneable(const Type *t) {
-    if (!(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
-        return false;
-    const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
-                    : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+/* A one-ctor ADT whose deep clone we can synthesize as a shallow copy plus a
+ * per-owning-field incref: every field is either a plain value (safe to
+ * shallow-copy) or an increfable owning handle (rc / weak) -- NOT a ref/lref (an
+ * owning pointer a shallow copy would share -> double-free) nor a nested
+ * aggregate / heap handle (needs its own recursive clone).  A value with no
+ * owning fields trivially qualifies; the incref loop is then empty. */
+static bool adt_fields_incref_cloneable(const AdtDef *d) {
     if (!d || d->n_ctors == 0) return false;
     const CtorDef *c = d->ctors[0];
     for (uint32_t i = 0; i < c->n_fields; i++) {
         TypeKind k = c->fields[i].kind;
         if (k == TY_REF || k == TY_LREF
             || k == TY_ADT || k == TY_STRUCT || k == TY_APP)
-            return false;   /* needs a recursive deep clone, not an incref */
+            return false;
     }
     return true;
+}
+static const AdtDef *adt_def_of(const Type *t) {
+    return (t->kind == TY_ADT) ? t->as.adt_.def
+         : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+}
+/* A one-word `:heap` carrier handle consume-cloneable by malloc + shallow copy +
+ * per-field incref. */
+static bool heap_consume_cloneable(const Type *t) {
+    if (!(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
+        return false;
+    return adt_fields_incref_cloneable(adt_def_of(t));
+}
+/* A multi-word owning by-value AGGREGATE consume-cloneable by increfing its
+ * owning fields (the frame passes it BY VALUE -> the callee drops its own copy,
+ * balanced by the incref; no fresh allocation -- the env stays `&o`). */
+static bool agg_consume_cloneable(const Type *t) {
+    return cloneable_owning_agg(t) && adt_fields_incref_cloneable(adt_def_of(t));
 }
 static bool cloneable_consume_env_ok(const Type *t) {
     if (!g_opt_owning_cloneable_capture || !t) return false;
     if (t->kind == TY_RC) return true;
-    return heap_consume_cloneable(t);
+    return heap_consume_cloneable(t) || agg_consume_cloneable(t);
 }
 
 /* Pure existence check: does `program` declare a Serializable instance for the

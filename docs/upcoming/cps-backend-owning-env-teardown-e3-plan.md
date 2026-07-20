@@ -364,11 +364,24 @@ NONE of them need per-frame clone glue.
   miscompiled (fixture `cloneable-owning-consuming-recursive`, an rc-fielded
   `:heap` struct, LSan-clean).
 
-With borrow, owner-drop, and the consuming rc / carrier / rc-fielded-carrier
-cases landed, E3's owning-capture goal is functionally met across every channel.
-Remaining: a consuming BY-VALUE aggregate (needs a boxed clone per resume) and a
-carrier with ref/lref or nested-owning fields (needs a recursive value clone),
-plus GRADUATION (retire the experiment gate at the 0.31.0 `expires_at`).
+- **CONSUMING by-value aggregate -- LANDED.** A multi-word owning by-value
+  aggregate consumed by a non-^borrow callee. It already rides the env by ADDRESS
+  (`&o`) and is passed BY VALUE to the callee, which drops its OWN copy each call.
+  So the `env_clone` increfs the aggregate's owning (rc/weak) fields via `&o` per
+  resume -- balancing the callee-copy's drop -- and returns the SAME `&o` (no
+  allocation: the C by-value copy the call makes IS the per-resume copy; the
+  owner's `o.r` is freed once by its P5b-threaded scope-exit drop). Same rc/weak
+  field restriction as the recursive carrier (fixture
+  `cloneable-owning-consuming-aggregate`, LSan-clean).
+
+With borrow, owner-drop, and the consuming rc / flat-carrier / rc-fielded-carrier
+/ by-value-aggregate cases all landed, E3's owning-capture goal is met across
+every channel and owning shape whose deep clone reduces to a shallow copy + field
+incref. The ONE residual shape -- a value with a ref/lref or NESTED owning field,
+consumed -- needs a genuinely recursive VALUE clone (deep-copy the ref'd value /
+nested handle, not an incref); it is cleanly rejected (E0710), never miscompiled,
+and is the last niche. Then GRADUATION (retire the experiment gate at the 0.31.0
+`expires_at`).
 (A.2/A.3 of the capture-channel map -- those kinds still evict). Note from that
 map: serial can't carry owning values and the shift-receiver env is single-shot,
 so the non-serial `CloneFrame` env is the only multi-shot owning channel.
