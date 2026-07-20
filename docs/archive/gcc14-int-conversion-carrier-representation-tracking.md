@@ -1,16 +1,18 @@
 # GCC >= 14 int-conversion residual: carrier vs concrete-pointer representation tracking
 
-> **ALL FLAGGED FIXTURES RESOLVED (2026-07-19).** Every one of the 46 flagged
-> carrier-to-typed-param int-conversion fixtures now compiles clean under
-> `-Werror=int-conversion`. The representation-tracking machinery this report
-> called for is fully implemented (the `emit_sig_*` param side table + the
-> `emit_localvar_*` local-var side table + a set of consumer-side bridges at the
-> let/letrec binder init, the TCO tail-backedge, the fn-body return chain, the
-> control-result assignment, and the spec-dispatch call arg). Full suite: 2202
-> passed, 0 failed. What remains before the `-Wno-error=int-conversion` flag can
-> DROP is a tree-wide sweep confirmation (see "Dropping the flag" at the end) --
-> van-laarhoven-lens-wide-compose revealed that untriaged int-conversion sites
-> existed beyond the original 46, so the flag stays until a full sweep is clean.
+> **RESOLVED / FLAG DROPPED (2026-07-20).** Every flagged carrier-to-typed-param
+> int-conversion fixture compiles clean under `-Werror=int-conversion`, AND the
+> `-Wno-error=int-conversion` + `-Wno-error=incompatible-pointer-types` downgrades
+> have been REMOVED from `src/main.c` (both the shared-lib and executable link
+> paths). The representation-tracking machinery this report called for is fully
+> implemented (the `emit_sig_*` param side table + the `emit_localvar_*` local-var
+> side table + consumer-side bridges at the let/letrec binder init, the TCO
+> tail-backedge, the fn-body return chain, the control-result assignment, and the
+> spec-dispatch call arg). The tree-wide confirmation the banner previously
+> awaited is done: the **full suite runs with both warnings promoted to hard
+> errors via `tur build`, 2202 passed, 0 failed** -- so every fixture's emitted C
+> is clean, not just the originally-flagged 46. This report and the whole
+> `codegen-gcc14-permerrors` umbrella are archived.
 
 **Severity:** medium -- latent today (masked by `-Wno-error=int-conversion` in
 `src/main.c`), a hard `cc` error under GCC >= 14. This is the irreducible design
