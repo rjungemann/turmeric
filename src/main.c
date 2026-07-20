@@ -2132,18 +2132,17 @@ static int cmd_build(const char *input, const char *out_path,
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
     /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
-     * warnings to hard errors.  The generated C trips both -- that is a real
-     * codegen defect (see docs/reported/codegen-gcc14-permerrors.md), NOT a
-     * Windows problem: it would break any Linux box on GCC >= 14 too.  MSYS2
-     * ships GCC 16, so it surfaces there first, while CI's older GCC still only
-     * warns.  Downgrade them back to warnings so the latent defect does not
-     * block builds today, and so a CI toolchain bump does not detonate.
+     * warnings to hard errors.  The generated C used to trip both -- a real
+     * codegen defect tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * its split fronts.  Both fronts are now resolved (the carrier<->concrete
+     * representation straddles are bridged at emit time), so the two -Wno-error
+     * downgrades have been removed and the generated C compiles clean under
+     * -Werror on GCC >= 14.  -Wno-error=implicit-function-declaration is a
+     * SEPARATE, still-open concern and stays.
      *
      * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
-     * accidentally drop them. */
-    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
-                   " -Wno-error=int-conversion"
-                   " -Wno-error=implicit-function-declaration");
+     * accidentally drop it. */
+    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -4223,7 +4222,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
     const char *cc = getenv("CC");
     if (!cc || !*cc) cc = "cc";
 
-    /* See the note on -fno-strict-aliasing and -Wno-error=int-conversion above. */
+    /* See the note on -fno-strict-aliasing and the GCC-14 warning policy above. */
     const char *cc_flags = getenv("TUR_CC_FLAGS");
     if (!cc_flags || !*cc_flags) cc_flags = "-O2 -std=c99 -Wall -fno-strict-aliasing";
 
@@ -4310,18 +4309,17 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
     /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
-     * warnings to hard errors.  The generated C trips both -- that is a real
-     * codegen defect (see docs/reported/codegen-gcc14-permerrors.md), NOT a
-     * Windows problem: it would break any Linux box on GCC >= 14 too.  MSYS2
-     * ships GCC 16, so it surfaces there first, while CI's older GCC still only
-     * warns.  Downgrade them back to warnings so the latent defect does not
-     * block builds today, and so a CI toolchain bump does not detonate.
+     * warnings to hard errors.  The generated C used to trip both -- a real
+     * codegen defect tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * its split fronts.  Both fronts are now resolved (the carrier<->concrete
+     * representation straddles are bridged at emit time), so the two -Wno-error
+     * downgrades have been removed and the generated C compiles clean under
+     * -Werror on GCC >= 14.  -Wno-error=implicit-function-declaration is a
+     * SEPARATE, still-open concern and stays.
      *
      * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
-     * accidentally drop them. */
-    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types"
-                   " -Wno-error=int-conversion"
-                   " -Wno-error=implicit-function-declaration");
+     * accidentally drop it. */
+    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
