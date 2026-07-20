@@ -416,6 +416,159 @@
     snprintf(buf, 32, "int(%lld)", (long long)x);
     return (const char *)buf;
     ```))
+;; ---------------------------------------------------------------------------
+;; Display / Debug for the remaining primitive types.  Show already carries
+;; cstr / bool / the numeric set (stdlib/typeclass-show.tur); Display is the
+;; plain user-facing form, so it delegates to `show`.  Debug is the diagnostic
+;; form and keeps the `type(value)` tagging the existing Debug [int] / [ptr<void>]
+;; instances use (cstr and bool follow the conventional quoted / bare spellings).
+;;
+;; Without these, `derive-debug` / `derive-display` over a struct with a cstr,
+;; bool, or sized-numeric field emit a `.debug` / `.display` call whose element
+;; type has no instance, and dispatch silently falls back to the enclosing
+;; instance -- a miscompile.  See
+;; docs/archive/history/derive-debug-display-missing-primitive-instances.md.
+;;; Display [cstr] -- the string itself (delegates to Show [cstr]).
+
+(definstance Display [cstr] (display [x] : cstr (show x)))
+;;; Debug [cstr] -- the string in double quotes.
+
+(definstance Debug [cstr]
+  (debug [x]
+    : cstr
+    ```c
+    const char *s = (const char *)x;
+    size_t n = strlen(s);
+    char *buf = (char *)malloc(n + 3);
+    buf[0] = '"';
+    memcpy(buf + 1, s, n);
+    buf[n + 1] = '"';
+    buf[n + 2] = '\0';
+    return (const char *)buf;
+    ```))
+;;; Display [bool] -- "true" / "false" (delegates to Show [bool]).
+
+(definstance Display [bool] (display [x] : cstr (show x)))
+;;; Debug [bool] -- "true" / "false".
+
+(definstance Debug [bool] (debug [x] : cstr (if x "true" "false")))
+;;; Display [int8] -- decimal (delegates to Show [int8]).
+
+(definstance Display [int8] (display [x] : cstr (show x)))
+;;; Debug [int8] -- "int8(v)".
+
+(definstance Debug [int8]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "int8(%d)", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Display [int16] -- decimal (delegates to Show [int16]).
+
+(definstance Display [int16] (display [x] : cstr (show x)))
+;;; Debug [int16] -- "int16(v)".
+
+(definstance Debug [int16]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "int16(%d)", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Display [int32] -- decimal (delegates to Show [int32]).
+
+(definstance Display [int32] (display [x] : cstr (show x)))
+;;; Debug [int32] -- "int32(v)".
+
+(definstance Debug [int32]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "int32(%d)", (int)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint8] -- decimal (delegates to Show [uint8]).
+
+(definstance Display [uint8] (display [x] : cstr (show x)))
+;;; Debug [uint8] -- "uint8(v)".
+
+(definstance Debug [uint8]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "uint8(%u)", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint16] -- decimal (delegates to Show [uint16]).
+
+(definstance Display [uint16] (display [x] : cstr (show x)))
+;;; Debug [uint16] -- "uint16(v)".
+
+(definstance Debug [uint16]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(16);
+    snprintf(buf, 16, "uint16(%u)", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint32] -- decimal (delegates to Show [uint32]).
+
+(definstance Display [uint32] (display [x] : cstr (show x)))
+;;; Debug [uint32] -- "uint32(v)".
+
+(definstance Debug [uint32]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(24);
+    snprintf(buf, 24, "uint32(%u)", (unsigned)x);
+    return (const char *)buf;
+    ```))
+;;; Display [uint64] -- decimal (delegates to Show [uint64]).
+
+(definstance Display [uint64] (display [x] : cstr (show x)))
+;;; Debug [uint64] -- "uint64(v)".
+
+(definstance Debug [uint64]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "uint64(%llu)", (unsigned long long)x);
+    return (const char *)buf;
+    ```))
+;;; Display [float] -- "%g" (delegates to Show [float]).
+
+(definstance Display [float] (display [x] : cstr (show x)))
+;;; Debug [float] -- "float(v)".
+
+(definstance Debug [float]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(40);
+    snprintf(buf, 40, "float(%g)", (double)x);
+    return (const char *)buf;
+    ```))
+;;; Display [float32] -- "%g" (delegates to Show [float32]).
+
+(definstance Display [float32] (display [x] : cstr (show x)))
+;;; Debug [float32] -- "float32(v)".
+
+(definstance Debug [float32]
+  (debug [x]
+    : cstr
+    ```c
+    char *buf = (char *)malloc(40);
+    snprintf(buf, 40, "float32(%g)", (double)x);
+    return (const char *)buf;
+    ```))
 ;;; Display [ptr<void>] -- Display instance for result<T,E> represented as ptr<void>.
 ;; Phase R1: Display, Debug, Error instances for result<T, E>
 ;; In v1, result is represented as ptr<void>

@@ -1,0 +1,6 @@
+Rec { title = hi, flag = true, count = 3, ratio = 7.5 }
+(Rec (title "hi") (flag true) (count int(3)) (ratio float(7.5)))
+Rec { title = hi, flag = true, count = 3, ratio = 7.5 }
+int8(7)
+uint8(250)
+false

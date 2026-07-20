@@ -1,5 +1,15 @@
 # `derive-debug` / `derive-display` miscompile on non-int/ptr fields (missing `Debug`/`Display` primitive instances)
 
+**Status:** RESOLVED (2026-07-20). Defect 1 (missing instances) fixed in
+`stdlib/typeclass.tur`: `Display` and `Debug` now cover `cstr`, `bool`, and the
+sized-numeric set (`Display` delegates to the matching `Show` body; `Debug` keeps
+the `type(value)` tag with `cstr` quoted / `bool` bare). `derive-debug` /
+`derive-display` over cstr/bool/float fields now compile and render. Regression
+fixture: `tests/fixtures/derive-debug-display/`. Defect 2 (the dispatch
+fallback) is deeper and remains open, narrowed into
+`docs/reported/method-dispatch-missing-instance-falls-back-to-carrier-representative.md`.
+Kept for the paper trail.
+
 **Severity:** medium (silent miscompile / segfault; derive-debug/display are
 effectively unusable for structs with `cstr`/`bool`/... fields)
 
