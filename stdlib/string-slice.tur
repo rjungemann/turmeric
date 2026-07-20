@@ -180,10 +180,11 @@
   (lte? [x y] (<= (slice/compare x y) 0))
   (gt?  [x y] (> (slice/compare x y) 0))
   (gte? [x y] (>= (slice/compare x y) 0)))
-;;; Show [StringSlice] -- the slice content as a fresh cstr (like Show[int]).
+;;; Show [StringSlice] -- the slice content as a fresh owned String.
+;;; slice/to-cstr always mallocs, so adopting it is leak-free.
 
 (definstance Show [StringSlice]
-  (show [x] : cstr (slice/to-cstr x)))
+  (show [x] : String (string/adopt-cstr (slice/to-cstr x))))
 ;;; Hash [StringSlice] -- content hash over the byte range.
 
 (definstance Hash [StringSlice]

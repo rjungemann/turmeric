@@ -28,10 +28,10 @@
 (defn main [] : int
   (do
     ;; Bound: Show vs ShowString parity
-    (emit (show-string (Inclusive 3)))     ; [3
-    (emit (show-string (Exclusive 5)))     ; (5
-    (emit (show-string (Unbounded)))       ; unbounded
+    (emit (show (Inclusive 3)))     ; [3
+    (emit (show (Exclusive 5)))     ; (5
+    (emit (show (Unbounded)))       ; unbounded
     ;; ptr<void> result carrier: Show vs ShowString parity
-    (let [a (mk-ok 42)] (emit (show-string (:: a ptr<void>))))   ; ok(42)
-    (let [b (mk-err 7)] (emit (show-string (:: b ptr<void>))))   ; err(7)
+    (let [a (mk-ok 42)] (emit (show (:: a ptr<void>))))   ; ok(42)
+    (let [b (mk-err 7)] (emit (show (:: b ptr<void>))))   ; err(7)
     0))

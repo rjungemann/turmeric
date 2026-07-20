@@ -3,7 +3,7 @@
 ;; Show's borrowed cstr.  This fixture verifies content parity with `show`
 ;; across primitives, the typed collections, String, and StringSlice, and
 ;; that each owned result releases cleanly (rc 1 -- one release frees it).
-(load "stdlib/typeclass-show-string.tur")
+(load "stdlib/string-slice.tur")
 
 ;; Render an owned String, print its bytes, then release it.  If show-string
 ;; returned rc != 1 this single release would not free the payload; the suite's
@@ -17,26 +17,26 @@
 (defn main [] : int
   (do
     ;; primitives
-    (emit (show-string 42))
-    (emit (show-string (:: 7 int8)))
-    (emit (show-string (:: 300 int16)))
-    (emit (show-string (:: 70000 int32)))
-    (emit (show-string (:: 255 uint8)))
-    (emit (show-string (:: 65000 uint16)))
-    (emit (show-string 7.1))
-    (emit (show-string (:: 3.25 float32)))
-    (emit (show-string true))
-    (emit (show-string false))
-    (emit (show-string "hello"))
+    (emit (show 42))
+    (emit (show (:: 7 int8)))
+    (emit (show (:: 300 int16)))
+    (emit (show (:: 70000 int32)))
+    (emit (show (:: 255 uint8)))
+    (emit (show (:: 65000 uint16)))
+    (emit (show 7.1))
+    (emit (show (:: 3.25 float32)))
+    (emit (show true))
+    (emit (show false))
+    (emit (show "hello"))
     ;; owned String: O(1) retain, content preserved
-    (emit (show-string (int->string 99)))
+    (emit (show (int->string 99)))
     ;; typed collections, built leak-clean via StringBuilder + element show-string
-    (emit (show-string (vec-of 1 2 3)))
-    (emit (show-string (vec-new)))
-    (emit (show-string (set-of 5)))
-    (emit (show-string (hamt-of 1 10)))
+    (emit (show (vec-of 1 2 3)))
+    (emit (show (vec-new)))
+    (emit (show (set-of 5)))
+    (emit (show (hamt-of 1 10)))
     ;; StringSlice: "12345"[1:3] = "234"
-    (emit (show-string (string/slice-cstr "12345" 1 3)))
+    (emit (show (string/slice-cstr "12345" 1 3)))
     ;; convenience wrapper: show + println + release in one call
     (show-line 1234)
     0))

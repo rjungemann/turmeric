@@ -2,7 +2,7 @@
 ;; The requires.interp marker routes this through `tur run --interpret`, so it
 ;; asserts the interpreter renders a derived ShowString instance identically to
 ;; the compiled path (sibling derive-show-string fixture).
-(load "stdlib/typeclass-show-string.tur")
+(load "stdlib/string-slice.tur")
 
 (defstruct Inner :copy [n : int])
 (derive-show-string Inner n)
@@ -15,6 +15,6 @@
 
 (defn main [] : int
   (do
-    (emit (show-string (make-struct Inner 7)))
-    (emit (show-string (make-struct Outer 1 (make-struct Inner 9) "hi")))
+    (emit (show (make-struct Inner 7)))
+    (emit (show (make-struct Outer 1 (make-struct Inner 9) "hi")))
     0))

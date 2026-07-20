@@ -165,21 +165,17 @@
       Show
       (vec TypeName)
       (list show (vec __p) :cstr (list derive-show-body__ TypeName ~@fields))))
-  ;; derive-show-string -- the owned-String counterpart of derive-show
-  ;; (show-owned-result-plan stage 2).  Emits a `ShowString` instance whose
-  ;; `show-string` builds the same "Type { f = v, ... }" rendering as
-  ;; derive-show, but through a StringBuilder over each field's `show-string`
-  ;; (releasing every intermediate element String), so the result is a single
-  ;; owned String (refcount 1) with no per-field concat leak.
+  ;; derive-show-string -- derive the owned-String `Show` instance for a struct.
+  ;; Emits a `Show` instance whose `show` builds the "Type { f = v, ... }"
+  ;; rendering through a StringBuilder over each field's `show` (releasing every
+  ;; intermediate element String), so the result is a single owned String
+  ;; (refcount 1) with no per-field concat leak.
   ;;
-  ;; Kept as a SEPARATE macro rather than folding the ShowString instance into
-  ;; derive-show: derive-show is auto-loaded (tur/macros) and used with a
-  ;; minimal local `Show` in programs that never load stdlib/string.tur, so an
-  ;; unconditional ShowString instance would reference String/StringBuilder/
-  ;; show-string symbols those programs cannot resolve.  Authors opt in by
-  ;; loading stdlib/typeclass-show-string.tur (where ShowString lives) and
-  ;; calling derive-show-string alongside derive-show.  Stage 4 unifies the two
-  ;; once Show itself is retyped to return String.
+  ;; Since stage 4 the stdlib `Show` returns String, so this is the deriver to
+  ;; use with it (it needs String/StringBuilder in scope, i.e. a program that
+  ;; loaded stdlib/typeclass.tur or stdlib/string.tur).  The sibling `derive-show`
+  ;; still emits a `cstr`-bodied `Show` instance for programs that define their
+  ;; own minimal local `Show` class and never load the String stack.
   (defmacro derive-show-string-rest__ [& fields]
     (if (empty? fields)
       (list do
@@ -196,7 +192,7 @@
             prefix        (str-append ", " label " = ")]
         (list do
           (list builder/push-cstr! __b prefix)
-          (list let (vec __e (list show-string accessor-form))
+          (list let (vec __e (list show accessor-form))
             (list do
               (list builder/push-string! __b __e)
               (list string/release __e)))
@@ -220,16 +216,16 @@
           (list let (vec __b (list builder/new))
             (list do
               (list builder/push-cstr! __b first-prefix)
-              (list let (vec __e (list show-string accessor-form))
+              (list let (vec __e (list show accessor-form))
                 (list do
                   (list builder/push-string! __b __e)
                   (list string/release __e)))
               (list derive-show-string-rest__ ~@rest-fields)))))))
   (defmacro derive-show-string [TypeName & fields]
     (list definstance
-      ShowString
+      Show
       (vec TypeName)
-      (list show-string (vec __p) (list derive-show-string-body__ TypeName ~@fields))))
+      (list show (vec __p) (list derive-show-string-body__ TypeName ~@fields))))
   (defmacro derive-debug-rest__ [& fields]
     (if (empty? fields)
       ")"

@@ -96,11 +96,22 @@ with the full typeclass set). With `(defclass Show [a] (show [x] : String))`:
    `(show x)` (+ leak / manual free) to `show-string` + `string/release` (or the
    wrapper). Prefer the highest-churn / longest-running consumers first
    (collection rendering, logging, any per-request show).
-4. **Flip the default:** once call sites are migrated, retype
-   `(defclass Show [a] (show [x] : String))`, make the old `cstr`-returning
-   entry a thin `(string/to-cstr (show-string x))`-style shim for any stragglers,
-   and regenerate fixture snapshots.
+4. **Flip the default (DONE):** `Show` is now `(defclass Show [a] (show [x] :
+   String))`.  The owned instance bodies (previously the parallel `ShowString`
+   class) were folded into `Show`; `ShowString`/`show-string` were dropped as
+   redundant (`show` IS the owned method now).  `derive-show-string` emits the
+   owned `Show` instance for a struct; `derive-show` stays the `cstr` deriver for
+   programs with a local `Show` class.  The load-graph restructure landed:
+   `stdlib/string.tur` defines the type + ops first, `stdlib/typeclass.tur` loads
+   `stdlib/typeclass-show.tur` last (breaking the reentrant cycle), and Display
+   instances are self-contained (no `show` call).  Call sites migrated: the
+   idiomatic `(println (show x))` became `(show-line x)` (show + print + release)
+   or an explicit `(let [s (show x)] ... (string/release s))`; snapshots
+   regenerated.  Full suite green.
 5. **Drop the `cstr` version** and the shim once no consumer depends on it.
+   *(Largely absorbed into stage 4 -- no cstr `show` shim was kept; the only
+   remaining cstr `show` is the local-class `derive-show` path, intentionally
+   retained for the minimal-`Show` fixtures.)*
 
 Carry red fixtures across stages as usual; snapshot churn (every program that
 shows something regenerates) is expected at stage 4 -- coordinate that regen the

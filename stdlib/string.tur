@@ -14,20 +14,13 @@
 ;;;
 ;;; Since: v2 (owned-string-type-plan)
 ;; ---------------------------------------------------------------------------
-;; Typeclasses this module instantiates String against.  Auto-loaded by the CLI
-;; prelude; declared here too so an isolated `(load "stdlib/string.tur")` from a
-;; libturi embedder is self-sufficient (dedup makes the redundant load a no-op).
-(load "stdlib/typeclass-eq.tur")
-
-(load "stdlib/typeclass.tur")
-
-(load "stdlib/typeclass-show.tur")
-
-(load "stdlib/typeclass-hash.tur")
-
-(load "stdlib/typeclass-clone.tur")
-
-(load "stdlib/map.tur")
+;; NOTE (show-owned-result-plan stage 4): the typeclass loads that instantiate
+;; String against Eq/Ord/Show/Hash/Clone/MapKey moved BELOW the String type +
+;; ops (see the load block just above the instance section at the bottom of the
+;; file).  Show now returns an owned String, so stdlib/typeclass-show.tur loads
+;; THIS file -- the loads must therefore run only after `String` and its ops are
+;; defined, or the reentrant (load "stdlib/string.tur") from typeclass-show.tur
+;; would see an undefined String in `(defclass Show [a] (show [x] : String))`.
 ;; ---- Opaque handle newtypes ------------------------------------------------
 ;; String lowers to :ptr<void> in the C ABI (a pointer to the refcounted
 ;; payload); the newtype keeps it nominally distinct so the checker rejects
@@ -321,6 +314,20 @@
 
 (defn builder/finish [b : StringBuilder] : String
   (:: (tur_sb_finish (:: b ptr<void>)) String))
+;; ---- Typeclass loads (deferred to here so String + its ops exist first) ----
+;; typeclass.tur transitively loads stdlib/typeclass-show.tur, whose owned
+;; `Show` loads this file back -- reentrant, but harmless now that String and
+;; every string/* op above are defined.  Show[String] itself lives in
+;; typeclass-show.tur (Show's own module).
+(load "stdlib/typeclass-eq.tur")
+
+(load "stdlib/typeclass.tur")
+
+(load "stdlib/typeclass-hash.tur")
+
+(load "stdlib/typeclass-clone.tur")
+
+(load "stdlib/map.tur")
 ;; ---- Typeclass instances ---------------------------------------------------
 ;;; Eq [String] -- content equality.
 
@@ -333,10 +340,8 @@
   (lte? [x y] (<= (string/compare x y) 0))
   (gt?  [x y] (> (string/compare x y) 0))
   (gte? [x y] (>= (string/compare x y) 0)))
-;;; Show [String] -- the string content (a borrowed view of the bytes).
-
-(definstance Show [String]
-  (show [x] : cstr (string/to-cstr x)))
+;; Show [String] -- lives in stdlib/typeclass-show.tur (Show's own module),
+;; O(1) retain; moved there in stage 4 when Show's result became owned String.
 ;;; Hash [String] -- content hash over the byte range.
 
 (definstance Hash [String]

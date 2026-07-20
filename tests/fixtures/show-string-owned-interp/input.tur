@@ -4,7 +4,7 @@
 ;; to the compiled path (see the sibling show-string-owned fixture).  Limited to
 ;; the types whose Show has a registered interpreter native (int/float/bool/
 ;; cstr/String and the pure-Turmeric collection instances).
-(load "stdlib/typeclass-show-string.tur")
+(load "stdlib/string-slice.tur")
 
 (defn emit [s : String] : void
   (do
@@ -13,12 +13,12 @@
 
 (defn main [] : int
   (do
-    (emit (show-string 42))
-    (emit (show-string 7.1))
-    (emit (show-string true))
-    (emit (show-string "hello"))
-    (emit (show-string (int->string 99)))
-    (emit (show-string (vec-of 1 2 3)))
-    (emit (show-string (set-of 5)))
-    (emit (show-string (hamt-of 1 10)))
+    (emit (show 42))
+    (emit (show 7.1))
+    (emit (show true))
+    (emit (show "hello"))
+    (emit (show (int->string 99)))
+    (emit (show (vec-of 1 2 3)))
+    (emit (show (set-of 5)))
+    (emit (show (hamt-of 1 10)))
     0))

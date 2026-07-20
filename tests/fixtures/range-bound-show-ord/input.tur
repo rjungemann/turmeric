@@ -12,12 +12,12 @@
 
 (defn main [] : int
   ; Show [Bound]: lone-endpoint rendering.
-  (println (show (Inclusive 3)))   ; [3
-  (println (show (Exclusive 7)))   ; (7
-  (println (show (Unbounded)))     ; unbounded
+  (show-line (Inclusive 3))   ; [3
+  (show-line (Exclusive 7))   ; (7
+  (show-line (Unbounded))     ; unbounded
 
   ; Show [int] from the explicitly-loaded full typeclass.tur coexists.
-  (println (show 42))              ; 42
+  (show-line 42)              ; 42
 
   ; Ord [Bound]: Unbounded is least; value ascending; Inclusive < Exclusive at
   ; equal value.
