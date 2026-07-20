@@ -8,6 +8,22 @@
 bool closure_binding_escapes(const Expr *e, const Binding *b);
 bool expr_subtree_has_inline_c(const Expr *e);
 
+/* closure-drop-glue S1c: a scalar Copy type kind -- safe to hold in / bare-free
+ * around a closure env (no owning teardown, no aliasing of the env).  Excludes
+ * rc/ref/weak (owning), structs/ADTs/tyvars (aggregate/opaque), and fn/cont. */
+static bool fn_result_kind_is_scalar_copy(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR: case TY_NIL:
+        case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -3478,6 +3494,29 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+    /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a
+     * bare capturing EX_CLOSURE constructs a FRESH, uniquely-owned heap env on
+     * every call and returns it.  When such a call result is consumed by a
+     * non-retaining fn-param, the caller can free that env at scope exit (the
+     * make-scaler headline shape).  Restricted to scalar (Copy) captures and a
+     * scalar closure result so a bare `free(env)` is fully safe: no owning
+     * capture to double-free/leak, and the result cannot alias the env. */
+    b->returns_fresh_closure = false;
+    {
+        const Expr *_fc = body;
+        while (_fc && _fc->kind == EX_ASCRIBE) _fc = _fc->as.ascribe_.inner;
+        if (_fc && _fc->kind == EX_CLOSURE && _fc->as.closure_.closure &&
+            _fc->as.closure_.closure->n_captures > 0 &&
+            _fc->as.closure_.closure->fn) {
+            struct Closure *_c = _fc->as.closure_.closure;
+            bool _ok = fn_result_kind_is_scalar_copy(_c->fn->return_type.kind);
+            for (uint8_t _ci = 0; _ok && _ci < _c->n_captures; _ci++)
+                if (!_c->captures[_ci] ||
+                    !fn_result_kind_is_scalar_copy(_c->captures[_ci]->type.kind))
+                    _ok = false;
+            b->returns_fresh_closure = _ok;
+        }
+    }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* let-bound-sf-loses-outer-arg-type: record whether the return *value* is

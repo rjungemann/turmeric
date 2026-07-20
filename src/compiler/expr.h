@@ -311,6 +311,14 @@ struct Binding {
      * beyond bit 31 are left unset (conservative -- no free).  0 for non-fns and
      * fns with no non-retaining fn-param. */
     uint32_t            nonretain_param_mask;
+    /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
+     * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
+     * captures and a scalar result -- so every call mallocs a FRESH, uniquely
+     * owned env whose bare `free` is fully safe.  A call `(F ...)` to such an F,
+     * consumed by a non-retaining fn-param, has its env freed at the call scope's
+     * exit (the make-scaler shape).  False for non-fns and any fn that returns a
+     * shared/owning-capture/param closure. */
+    bool                returns_fresh_closure;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint

@@ -1,0 +1,23 @@
+;; closure-drop-glue S1c (fresh-closure-returning CALL arg): the escaping-fat-
+;; closure headline shape.  `make-adder` returns a FRESH capturing closure (a
+;; malloc'd env) on every call; passed directly to `call-with` -- whose ^fat
+;; param it only CALLS (inferred non-retaining) -- that env is now freed at the
+;; call scope's exit instead of leaking one env per construction.  Freshness +
+;; scalar-only captures/result (so a bare `free` is safe) is inferred as
+;; `returns_fresh_closure` when make-adder is elaborated.
+;;
+;; The harness compiles without ASan, so it drives the freed path for
+;; correctness -- a wrong free (freeing an env the callee still uses, or one that
+;; is not actually fresh/owned) is a use-after-free that corrupts output under
+;; plain cc.  Verified ASan/LSan+UBSan-clean (0 leaked) out of band.
+(defn make-adder [k : int] : ptr<void>
+  (fn [x : int] : int (+ x k)))
+
+(defn call-with [^fat h : (fn [int] #fx{} int) n : int] : int
+  (h n))                                 ;; h only called -> non-retaining
+
+(defn main [] : int
+  (println (call-with (make-adder 100) 5))    ;; 105
+  (println (call-with (make-adder 40) 2))     ;; 42
+  (println (call-with (make-adder 0) 7))      ;; 7
+  0)

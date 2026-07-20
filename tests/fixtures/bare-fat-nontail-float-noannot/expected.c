@@ -7117,14 +7117,21 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        __auto_type __ps_158 = (make_hyscale(2.0));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        __auto_type __ps_159 = (run_hywith_un_unbf_unfloat((void *)(intptr_t)(__ps_158), 3.5));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%g\n", (double)(__ps_159));
-        int64_t __t160;
-        __t160 = INT64_C(0);
-        return (int)__t160;
+        double __t158;
+        {
+            __auto_type __ps_159 = (make_hyscale(2.0));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            void * _un_unborrowc_un1297_1298 = __ps_159;
+            (void)_un_unborrowc_un1297_1298;
+            __auto_type __ps_160 = (run_hywith_un_unbf_unfloat((void *)(intptr_t)(_un_unborrowc_un1297_1298), 3.5));
+            /* panic-return-signal: ret ctype unknown; no propagation here */
+            __t158 = __ps_160;
+            free((void *)(intptr_t)_un_unborrowc_un1297_1298);
+        }
+        printf("%g\n", (double)(__t158));
+        int64_t __t161;
+        __t161 = INT64_C(0);
+        return (int)__t161;
 }
 
 static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
@@ -7132,15 +7139,15 @@ static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        __auto_type __ps_161 = (ctor_Cons__int(h, t));
+        __auto_type __ps_162 = (ctor_Cons__int(h, t));
         if (tur_panicking) return (tur_adt_Cons__int *){0};
-        return __ps_161;
+        return __ps_162;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        __auto_type __ps_162 = (vec_new__spec__tur_adt_Vec__int__());
+        __auto_type __ps_163 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return (tur_adt_Vec__int *){0};
-        return __ps_162;
+        return __ps_163;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

@@ -5,6 +5,25 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-20c) -- S1c fresh-closure-returning CALL args
+> (headline `make-scaler` CLOSED).** The other half of S1c landed: a call to a
+> fresh-closure-returning fn, passed to a non-retaining fn-param, is now hoisted +
+> freed. New `Binding.returns_fresh_closure`, inferred when a fn is elaborated:
+> its body is a bare capturing `EX_CLOSURE` with ONLY scalar (Copy) captures and a
+> scalar result -- so every call mallocs a fresh, uniquely-owned env whose bare
+> `free` is fully safe (no owning capture to double-free, result cannot alias the
+> env). `hoist_borrowed_closure_args` (via a shared `arg_is_freeable_closure_source`
+> predicate) and `let_binding_env_freeable` both accept such a call arg/init. The
+> report's minimal repro `(use-it (make-scaler 2.0))` is now ASan/LSan-clean.
+> Suite 2217/0 (3 snapshots regenerated -- kebab-case-capture + two bare-fat --
+> where the same hoist now frees a previously-leaked env, all ASan-verified).
+> Fixture `closure-env-free-fresh-returning-call`. Guards: a struct-storing
+> callee and a fn returning an rc-capturing closure are BOTH correctly left
+> unfreed (leak-safe, no UAF). **Still open:** S2 stored/escaping closures
+> (httpd middleware, parser combinators; `cps-backend-fn-param`, `free-lift-bind`,
+> `unsafe-closure-capture` keep `requires.no-leak-check` -- different shapes, not
+> the fresh-consumed-once pattern).
+>
 > **Progress note (2026-07-20b) -- S1c inferred non-retention (INLINE args).**
 > The non-retaining-callee half of S1c landed for INLINE capturing-closure
 > arguments. A new `Binding.nonretain_param_mask` records, per fn-typed / `^fat`

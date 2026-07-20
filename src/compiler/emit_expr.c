@@ -1350,14 +1350,27 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!init || !b) return false;
-    if (init->kind != EX_CLOSURE) return false;
-    /* Scalar-result gate: a closure returning a reference/struct/pointer could
-     * hand back a value derived from its env; restrict to scalar returns whose
-     * result is copied out by value. */
-    if (b->type.kind != TY_FN) return false;
-    switch (b->type.as.fn.result_kind) {
-        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: break;
-        default: return false;
+    const Expr *pinit = init;
+    while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
+    /* closure-drop-glue S1c: a call to a fresh-closure-returning fn (the
+     * make-scaler shape) yields a freshly-malloc'd, uniquely-owned env.  The
+     * scalar-capture / scalar-result safety was already checked when
+     * `returns_fresh_closure` was inferred, so accept it here without the
+     * TY_FN/scalar-result gate (the binding's own type is the env's ptr<void>
+     * carrier, not a fn type). */
+    bool fresh_call = pinit && pinit->kind == EX_CALL
+                      && pinit->as.call_.fn_binding
+                      && pinit->as.call_.fn_binding->returns_fresh_closure;
+    if (init->kind != EX_CLOSURE && !fresh_call) return false;
+    if (init->kind == EX_CLOSURE) {
+        /* Scalar-result gate: a closure returning a reference/struct/pointer could
+         * hand back a value derived from its env; restrict to scalar returns whose
+         * result is copied out by value. */
+        if (b->type.kind != TY_FN) return false;
+        switch (b->type.as.fn.result_kind) {
+            case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: break;
+            default: return false;
+        }
     }
     if (closure_binding_escapes(e->as.let_.body, b)) return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {
