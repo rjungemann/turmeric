@@ -85,6 +85,59 @@ closures correctly and (b) attach `drop_glue_env_N` to the holding struct's drop
 glue to free the env. Until then, `hkt-stdlib-parser-instances` / httpd middleware
 (closures stored in `Parser` / chain nodes) stay on the carrier/eviction path.
 
+## Implementation plan (verified against the tree, 2026-07-20)
+
+The fix is a coordinated representation change, NOT a local patch. All the
+machinery already exists -- a **TY_TYVAR (parametric) fn-field already does the
+right thing** and is the template.
+
+**The existing template (elab_call.c:2535-2549).** A thin fn stored into a
+parametric ADT field (`ft->kind == TY_TYVAR`) is already auto-shimmed to a fat
+box via `EX_FN_TO_FAT` + `boxed=true`, and its match-arm extraction is marked
+`is_fat`, so both store and read agree on the fat `{thunk, env}` protocol. The
+comment there even names this exact SEGV. The gap: a **concrete** `(fn ...)` field
+(`H.unary`, `Adder.f`) is left on the THIN representation instead.
+
+**Three coordinated parts:**
+
+1. **Boxed field type (read side).** Mark a concrete fn-typed field's `full_type`
+   `boxed = true` (`elab_structs.c` `resolve_ctor_field`, and preserve it through
+   `struct_field_instantiate_type`'s `TY_FN` arm at `elab_structs.c:416`). A `(.f
+   v)` read then yields a `boxed` TY_FN, so the call site takes the fat path
+   (`TUR_APPLY*_T`) instead of the thin `((R(*)(A))v)(a)` cast -- the dispatch
+   already keys on `type.as.fn.boxed` (`emit_expr.c:1153/1470/3977/4142`).
+
+2. **Shim thin-fn stores (store side).** Extend the `EX_FN_TO_FAT` auto-shim loop
+   (elab_call.c:2535) to fire for a boxed concrete fn-field, not only
+   `TY_TYVAR` -- so a bare fn (`inc`) stored into the field becomes a fat handle.
+   A capturing closure is already fat (TY_PTR_VOID env). Without this, a thin fn
+   in a now-fat-dispatched field crashes symmetrically.
+
+   Parts 1+2 are ATOMIC: either alone breaks the ~19 concrete-fn-field fixtures
+   (`conv-defstruct-typed-fn-field-lowering`, `dot-parametric-fn-field-call`,
+   the `instance-closure-return-*` set, `poly-to-fat-*`, ...). Their `expected.c`
+   snapshots all change (thin cast -> `TUR_APPLY*`); regenerate in the same PR.
+
+3. **Static fat box for bare fns (avoid a NEW leak).** The `EX_FN_TO_FAT` emitter
+   (`emit_expr.c:7732`) `malloc`s the 2-slot `{shim, orig_fn}` box. Applied to
+   parts 1+2, EVERY thin-fn-field store now heap-allocates a box the struct never
+   frees -- trading the SEGV for a per-store leak across those 19 fixtures (the
+   harness compiles without ASan, so it stays green but leaks). For a
+   compile-time-known bare fn the box is constant, so emit a file-scope
+   `static const int64_t __fatbox_<fn>[2] = {(int64_t)__tur_fatshim<N>,
+   (int64_t)<fn>}` and store its address -- no malloc, no leak. (A capturing
+   closure's heap env is the separate S2 drop-glue concern.)
+
+**Then, and only then, S2** can attach `drop_glue_env_N` to the holding struct's
+drop glue to free a stored *capturing* closure's env (Model U: storing moves the
+closure so exactly one owner frees).
+
+**Why it was not landed in the same pass as the report:** parts 1+2 are a
+representation flip for a working, widely-used path (19 fixtures, snapshot churn)
+whose store/read/coercion must stay consistent, and part 3 (static shims) is
+required to avoid a regression -- a deliberate multi-part change, not a slice to
+rush alongside the S1 leak work.
+
 ## Note
 
 This is orthogonal to the fat-closure ENV LEAK work already landed (S1: freeing a
