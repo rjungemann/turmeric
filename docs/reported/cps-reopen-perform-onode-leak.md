@@ -71,3 +71,35 @@ Discovered while landing the `effect-reopen` DK slice
 (`docs/archive/history/cps-perform-cont-heap-join-eviction.md`); the leak is
 pre-existing in the re-opening machinery (commit `ffd878897`) and independent of
 that slice -- it just first RUNS the re-opening DK path end-to-end.
+
+## Verified NOT the yielded `sub` (2026-07-20)
+
+The obvious fix -- `__dk_reap_keep(sub)` at the yield point (emit_dk_runtime.c,
+the `if (H->tail_resume && g_dk_driver)` branch) -- was tried and **fails on both
+counts** under valgrind on the 4-perform repro:
+
+- **Double free.** `free(): double free detected in tcache 2` / valgrind
+  `Invalid free()`. So the yield-point `sub` handed to the handler IS freed
+  elsewhere on at least one path (the driver's `dk_free(ch)` in
+  `__dk_drive_after` reaches it when the case tail-resumes `k == sub` directly),
+  and reaping it as well double-frees. The direct-resume and re-open paths share
+  this one `sub` allocation but dispose of it differently, and the yield point
+  cannot tell which path the case will take.
+- **Leak unchanged.** `definitely lost: 728 bytes` / `indirectly lost: 2,184`
+  were byte-for-byte identical with and without the reap. So the leaked nodes are
+  **not** the yield-point `sub` at all -- they are the re-install copies
+  (`dk_copy_range(H, ge)` + `dk_copy_enclosing_handlers(ge)` appended as `tail`,
+  and/or the `__deliv = dk_copy_range(H->next, NULL)` pushed to the meta-stack)
+  that the re-opening case captures by-intptr in a frame env, invisible to the
+  driver's `->next` free walk.
+
+**Revised fix direction.** The owner must be given to the re-install `tail` /
+`__deliv` copies specifically, coordinated with the driver's `dk_free(ch)` so the
+directly-resumed `sub` is freed exactly once. A blanket reap of `sub` is wrong.
+The likely shape: register only the copies that are provably captured by-intptr
+(never reachable via the resumed chain's `->next`), or switch the whole tramp
+path to reap-owned chains and drop the driver's `dk_free(ch)`. Either needs
+per-node ownership reasoning across the longjmp boundary and must be checked with
+`valgrind --leak-check=full` on the repro (target: 0 lost) AND on
+`cps-tramp-resume-deep` / `effect-reopen` (no `Invalid free`). Still low-severity
+(memory-only, `--enable=cps-tramp-resume`-gated), so it does not block anything.
