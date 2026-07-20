@@ -56,3 +56,36 @@ S1 a scoped free for NON-escaping closures (partial-app + non-retaining HOF arg,
 no ownership tracking), and S2 move-based drop glue for ESCAPING (stored)
 closures. S1 clears this leak for the non-escaping fixtures; S2 covers stored
 closures (parser combinators, httpd middleware).
+
+## Verified: why the same-scope free does not reach it (2026-07-20)
+
+Reproduced under valgrind (16 bytes, 1 block; alloc trace `malloc <- main`).
+Emitted flow for `(use-it (make-scaler 2.0))`:
+
+```c
+__auto_type __ps_157 = (make_hyscaler(2.0));                    /* returns the malloc'd env */
+__auto_type __ps_158 = (use_hyit((int64_t)(intptr_t)(__ps_157))); /* consumes it, never frees */
+```
+
+Two reasons the existing conservative `let_binding_env_freeable`
+(emit_expr.c:1349) cannot cover this:
+
+1. **The env escapes its constructor.** `make-scaler`'s `(fn [x] (* x k))` is a
+   direct `EX_CLOSURE`, but it is RETURNED, so `closure_binding_escapes` correctly
+   forbids freeing it inside `make-scaler`. The owner is now `main` (holding it as
+   `__ps_157`), which received it as a CALL RESULT, not a same-scope `EX_CLOSURE`
+   literal -- so no local emit site knows it is a fresh, uniquely-owned env.
+
+2. **`^fat` is a dispatch marker, not a linearity guarantee.** `use-it`'s
+   `^fat h` selects the fat-call `{thunk,env}` protocol (elab_fns.c:1876,
+   `is_fat`); it does NOT prove `h` is used exactly once and unaliased. A blanket
+   "free the `^fat` param's env at scope exit" would double-free whenever the
+   closure is shared (the same failure mode proven for `cps-reopen`: an
+   ownership-blind free crashes).
+
+So the fix genuinely needs the closure to carry cross-function ownership -- an
+RC/drop or uniqueness bit that travels with the fat-closure value from
+constructor through holder to consumer -- so exactly one owner frees the env.
+That is the drop-glue subsystem the report already names; a same-scope or
+per-site free cannot be made sound here. Confirmed low-severity (bounded, one
+env per escaping construction; `cps-backend-fn-param` keeps `requires.no-leak-check`).
