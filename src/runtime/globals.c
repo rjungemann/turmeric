@@ -223,6 +223,16 @@ bool g_dump_cps_mono = false;
  * classifier (emit_cps_ir.c) and gates the trampoline runtime emission. */
 bool g_opt_cps_tramp_resume = true;
 
+/* owning-cloneable-capture GRADUATED 2026-07-20 -- admitting an owning value
+ * captured into a multi-shot cloneable continuation (with the per-frame env
+ * clone/drop teardown) is now unconditional; the `owning-cloneable-capture`
+ * experiment row is retired (moved to GRADUATED[] in experiments.c) and a
+ * lingering --enable is a TUR-W0063 no-op.  The bit stays defined and true so
+ * the admission predicates that read it stay always-on (mirrors g_gadt_enabled /
+ * g_opt_cps_tramp_resume).  See
+ * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+bool g_opt_owning_cloneable_capture = true;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).

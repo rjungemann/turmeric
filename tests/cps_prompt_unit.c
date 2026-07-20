@@ -29,6 +29,39 @@ static void check(int cond, const char *name, const char *msg) {
 static intptr_t add1(intptr_t env, intptr_t v) { (void)env; return v + 1; }
 static intptr_t mul2(intptr_t env, intptr_t v) { (void)env; return v * 2; }
 
+/* ---- E3a: owning-env clone/drop hooks (cps-backend-owning-env-teardown) ----
+ * Model an `rc` handle as a heap cell with a strong count: env_clone increfs
+ * and returns the SAME handle (rc is shared); env_drop decrefs and frees at 0.
+ * Because the cell is heap-allocated and freed exactly at strong==0, the ASan/
+ * LSan build enforces the accounting for free: a leaked +1 shows as a leak, a
+ * double-free / use-after-free as an ASan abort. The globals let the test also
+ * assert the clone/drop call counts and that the cell is freed exactly once. */
+typedef struct { int strong; intptr_t payload; } RcCell;
+static int g_rc_clone, g_rc_drop, g_rc_freed;
+static void rc_reset(void) { g_rc_clone = g_rc_drop = g_rc_freed = 0; }
+static RcCell *rc_new(intptr_t payload) {
+    RcCell *c = (RcCell *)calloc(1, sizeof(RcCell));
+    c->strong = 1;                 /* base populate = +1 */
+    c->payload = payload;
+    return c;
+}
+static intptr_t rc_clone(intptr_t env) {
+    RcCell *c = (RcCell *)(intptr_t)env;
+    g_rc_clone++; c->strong++;
+    return env;                     /* rc: shared handle, incref, same pointer */
+}
+static void rc_drop(intptr_t env) {
+    RcCell *c = (RcCell *)(intptr_t)env;
+    g_rc_drop++;
+    if (--c->strong == 0) { g_rc_freed++; free(c); }
+}
+/* An owning frame: read the (still-alive) payload and add it to the value. Every
+ * copy that runs this must see strong>0 -- a premature drop would be a UAF. */
+static intptr_t rc_add_payload(intptr_t env, intptr_t v) {
+    RcCell *c = (RcCell *)(intptr_t)env;
+    return v + c->payload;
+}
+
 /* ---- shift bodies ---- */
 
 /* reset { 1 + shift(k => 2 + k(k(3))) }  -- k = (1 + []).  k(3)=4, k(4)=5 => 7 */
@@ -362,6 +395,45 @@ int main(void) {
               "two-await re-park did not thread the outer future to 10 + 32 = 42");
         free(outer);
         dk_free(body);
+    }
+
+    /* ---- E3a: owning-env drop fires once on a straight-line run (no copy) ----
+     * A single owning frame, no shift/capture: dk_run transforms the value and
+     * dk_free(chain) drops the base env exactly once.  env_clone must NOT fire
+     * (nothing copies the chain); env_drop fires once, freeing the rc cell. */
+    {
+        rc_reset();
+        RcCell *cell = rc_new(5);
+        DK *chain = dk_frame_owning(rc_add_payload, (intptr_t)cell,
+                       rc_clone, rc_drop, dk_done());
+        intptr_t r = dk_run(chain, 100);          /* 100 + 5 */
+        dk_free(chain);                            /* drop base -> free */
+        check(r == 105 && g_rc_clone == 0 && g_rc_drop == 1 && g_rc_freed == 1,
+              "cps-e3a-owning-straightline-drop-once",
+              "owning env not dropped exactly once on a no-copy run");
+    }
+
+    /* ---- E3a: owning-env clone/drop across a MULTI-SHOT resume (net zero) ----
+     * reset { shift(k => k(10) + k(20)) } with an owning rc frame `[] + 5` in the
+     * captured continuation.  k is resumed twice; each resume dk_copy's the sub,
+     * so the owning frame is cloned per copy (incref) and dropped per free
+     * (decref).  Value: (10+5) + (20+5) = 40.  Accounting: base populate +1;
+     * capture copy +1; each of the 2 resumes +1 clone / -1 drop; sub free -1;
+     * base free -1.  net zero -> the cell is freed exactly once (LSan enforces no
+     * leak; ASan enforces no double-free / UAF from the payload reads). */
+    {
+        rc_reset();
+        RcCell *cell = rc_new(5);
+        DK *chain = dk_shift(TAG, body_k10_plus_k20, 0,
+                       dk_frame_owning(rc_add_payload, (intptr_t)cell,
+                         rc_clone, rc_drop,
+                         dk_prompt(TAG, dk_done())));
+        intptr_t r = dk_run(chain, 0);
+        dk_free(chain);                            /* fire the base drop */
+        check(r == 40 && g_rc_freed == 1 && g_rc_drop == g_rc_clone + 1
+                  && g_rc_clone >= 1,
+              "cps-e3a-owning-multishot-net-zero",
+              "owning env not correctly cloned/dropped across a multi-shot resume");
     }
 
     printf("cps_prompt summary: %d passed, %d failed\n", g_pass, g_fail);

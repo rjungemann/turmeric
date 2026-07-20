@@ -208,6 +208,12 @@ extern bool g_dump_cps_mono;
 
 /* E7: trampolined tail-resume (cps-tramp-resume experiment). See globals.c. */
 extern bool g_opt_cps_tramp_resume;
+/* E3a: admit an OWNING value captured into a genuinely multi-shot (cloneable /
+ * serializable) continuation, giving each captured frame's env clone/drop glue
+ * so resumes are memory-safe (cps-backend-owning-env-teardown-e3-plan.md). Read
+ * by the cloneable/serial capture checks (elab_effects.c) and the cloneable
+ * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
+extern bool g_opt_owning_cloneable_capture;
 
 
 /* ---------------------------------------------------------------------------

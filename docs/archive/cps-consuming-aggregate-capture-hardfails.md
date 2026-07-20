@@ -112,7 +112,7 @@ Two layers:
 Admitting the consuming aggregate capture on the CPS path needs the env to own
 the aggregate (clone all owning fields on `dk_copy_node`, drop them once on
 region teardown) -- the Option B env teardown that
-`docs/upcoming/cps-backend-owning-env-teardown-e3-plan.md` describes. Given the
+`docs/archive/cps-backend-owning-env-teardown-e3-plan.md` describes. Given the
 shape is rare and the direct-path hard-fail is now resolved, this substrate is
 not currently worth building.
 

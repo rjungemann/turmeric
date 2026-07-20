@@ -1035,6 +1035,113 @@ static bool clone_let_ty_ok(TypeKind k) {
  * wrapper casting to the real kind at the call boundary. */
 static bool cps_scalar_kind_ok(TypeKind k) { return k == TY_INT || k == TY_CSTR; }
 
+/* E3a (owning-cloneable-capture): may an OWNING value ride a cloneable 2-arg
+ * call frame's captured-env slot?  Off-gate, no -- the env must be a Copy scalar
+ * (cps_scalar_kind_ok), so an owning env evicts to TUR-E0710.  On-gate, a
+ * ONE-WORD owning HANDLE is admitted WHEN the callee takes it ^borrow (a
+ * type-system guarantee the callee never drops it): an `rc<T>` or a `:heap`
+ * ADT / struct carrier handle.  Both ride the frame env by a bare pointer copy;
+ * ^borrow means the frame never drops it, so the shallow-shared env is
+ * read-only-correct across resumes and the owner drops it once (borrow teardown,
+ * never a double-drop).  A multi-word owning aggregate does not fit the one-word
+ * env and is excluded here.  See
+ * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+/* An owning by-value AGGREGATE (a one-ctor by-value ADT product with an
+ * rc/ref field -- needs_drop_glue).  Multi-word, so it cannot ride the one-word
+ * frame env by value; the cloneable emit carries a POINTER to the owner's
+ * by-value local instead (the reset runs synchronously in the owner's frame, so
+ * the address outlives the resumes, and a ^borrow frame never drops it). */
+static bool cloneable_owning_agg(const Type *t) {
+    if (!t) return false;
+    const AdtDef *def = NULL;
+    if (t->kind == TY_ADT) {
+        def = t->as.adt_.def;
+        if (!def || !adt_is_byvalue_product(def)) return false;
+    } else if (t->kind == TY_APP) {
+        def = type_adt_app_def((Type *)t);
+        if (!def || !adt_app_is_byvalue_product(*(Type *)t)) return false;
+    } else {
+        return false;
+    }
+    return def->needs_drop_glue && !def->is_heap && def->n_ctors == 1;
+}
+static bool cloneable_owning_env_ok(const Type *t) {
+    if (!g_opt_owning_cloneable_capture || !t) return false;
+    return t->kind == TY_RC
+        || type_is_heap_adt(*(Type *)t)
+        || type_is_heap_struct(*(Type *)t)
+        || cloneable_owning_agg(t);
+}
+
+/* An owning kind whose CONSUMING capture (a non-^borrow frame that drops it once
+ * per call) the cloneable emit can give per-copy clone glue for:
+ *   - `rc<T>`: env_clone = rc_strong_increment (incref -- cheap shared clone);
+ *   - a FLAT `:heap` ADT / struct carrier (no owning fields, `!needs_drop_glue`):
+ *     env_clone = malloc + shallow header copy (a genuine deep copy, so each
+ *     resume frees its OWN allocation -- a shared handle would double-free).
+ * A heap handle WITH owning fields needs a recursive deep clone (a later slice);
+ * excluded here so a shallow copy never shares an owning field. */
+/* Is a field kind a plain (non-owning, shallow-copyable) scalar? */
+static bool clone_field_is_scalar(TypeKind k) {
+    return !(k == TY_RC || k == TY_WEAK || k == TY_REF || k == TY_LREF
+             || k == TY_ADT || k == TY_STRUCT || k == TY_APP);
+}
+/* A one-ctor ADT whose deep clone we can synthesize as a shallow copy + a
+ * per-owning-field INCREF: every field is a plain value or an increfable owning
+ * handle (rc / weak).  Used for a by-value AGGREGATE (its ref field would need a
+ * boxed per-copy clone the by-value pass cannot provide) -- rc/weak only. */
+static bool adt_fields_incref_cloneable(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!(c->fields[i].kind == TY_RC || c->fields[i].kind == TY_WEAK
+              || clone_field_is_scalar(c->fields[i].kind)))
+            return false;
+    return true;
+}
+/* A one-ctor HEAP ADT whose deep clone we can synthesize: rc/weak fields (incref)
+ * PLUS `ref<scalar>` / `lref<scalar>` fields, which the env_clone deep-copies as a
+ * fresh box (malloc + scalar copy) -- exactly mirroring drop_glue's `free` of the
+ * box (a heap header is malloc'd, so its owning fields' boxes are separately
+ * malloc'd and freed).  A ref to an OWNING inner, or a nested aggregate / heap
+ * field, is rejected: the base drop_glue is shallow there (frees the box / does
+ * not recurse), so a matching clone would only reproduce that base leak, not a
+ * clean deep copy. */
+static bool adt_fields_heap_cloneable(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        TypeKind k = c->fields[i].kind;
+        if (k == TY_RC || k == TY_WEAK || clone_field_is_scalar(k)) continue;
+        if ((k == TY_REF || k == TY_LREF)
+            && clone_field_is_scalar(c->fields[i].inner_kind)) continue;
+        return false;
+    }
+    return true;
+}
+static const AdtDef *adt_def_of(const Type *t) {
+    return (t->kind == TY_ADT) ? t->as.adt_.def
+         : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+}
+/* A one-word `:heap` carrier handle consume-cloneable by malloc + shallow copy +
+ * per-field incref. */
+static bool heap_consume_cloneable(const Type *t) {
+    if (!(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
+        return false;
+    return adt_fields_heap_cloneable(adt_def_of(t));
+}
+/* A multi-word owning by-value AGGREGATE consume-cloneable by increfing its
+ * owning fields (the frame passes it BY VALUE -> the callee drops its own copy,
+ * balanced by the incref; no fresh allocation -- the env stays `&o`). */
+static bool agg_consume_cloneable(const Type *t) {
+    return cloneable_owning_agg(t) && adt_fields_incref_cloneable(adt_def_of(t));
+}
+static bool cloneable_consume_env_ok(const Type *t) {
+    if (!g_opt_owning_cloneable_capture || !t) return false;
+    if (t->kind == TY_RC) return true;
+    return heap_consume_cloneable(t) || agg_consume_cloneable(t);
+}
+
 /* Pure existence check: does `program` declare a Serializable instance for the
  * nominal (TY_ADT) type `t`?  Lets build_serial admit a SER-env frame; the
  * emitter (emit_cps_ir.c) resolves the instance's serialize/deserialize method
@@ -1180,8 +1287,25 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                 if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
                     return NULL;
             } else {
-                if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[0]) ||
-                    !cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[1])) return NULL;
+                /* The hole param takes the resumed value -- always a scalar.  The
+                 * non-hole (env) param may be a scalar, OR -- under the E3a gate --
+                 * an owning `rc` the callee takes ^borrow (checked on the operand
+                 * below; ^borrow guarantees the frame never drops it). */
+                if (!cps_scalar_kind_ok(fb->type.as.fn.arg_kinds[h0 ? 0 : 1]))
+                    return NULL;
+                TypeKind envk = fb->type.as.fn.arg_kinds[h0 ? 1 : 0];
+                const Expr *env_op = ascribe_peel(h0 ? a1 : a0);
+                bool env_borrow = FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
+                /* Borrow: any admissible owning kind + ^borrow.  Consume: rc only,
+                 * non-^borrow (the frame drops it; env_clone glue balances each
+                 * resume copy). */
+                bool owning_borrow_env =
+                    env_op && cloneable_owning_env_ok(&env_op->type) && env_borrow;
+                bool owning_consume_env =
+                    env_op && !env_borrow && cloneable_consume_env_ok(&env_op->type);
+                if (!cps_scalar_kind_ok(envk)
+                    && !owning_borrow_env && !owning_consume_env)
+                    return NULL;
             }
             const Expr *other = h0 ? a1 : a0;        /* the captured env operand */
             if (!other) return NULL;
@@ -1194,7 +1318,30 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
                     return NULL;
                 if (!env_atom && !safe_to_delegate(b, other)) return NULL;
             } else {
-                if (!cps_scalar_kind_ok(other->type.kind)) return NULL;
+                /* E3a: an owning env frame is admitted in two modes:
+                 *  - BORROW (any admissible owning kind + ^borrow callee param):
+                 *    the frame never drops it, so the shallow-shared / by-address
+                 *    env is read-only-correct across resumes and the owner drops it
+                 *    once (no per-frame glue).
+                 *  - CONSUME (rc only, non-^borrow callee): the frame DROPS its rc
+                 *    argument once per call.  A multi-shot resume would over-drop a
+                 *    shared handle, so the frame gets dk_frame_owning env_clone glue
+                 *    (rc incref per dk_copy_node copy) -- each resume increfs its own
+                 *    +1 that its drop balances; the owner's base +1 is released once
+                 *    by its (P5b-threaded) scope-exit drop.  rc only: it is the sole
+                 *    owning kind with scalar clone glue (rc_strong_increment). */
+                bool env_borrow = FN_ARG_FLAG(fb->type.as.fn, (h0 ? 1 : 0), FA_BORROW);
+                bool owning_borrow_env =
+                    cloneable_owning_env_ok(&other->type) && env_borrow;
+                bool owning_consume_env =
+                    !env_borrow && cloneable_consume_env_ok(&other->type);
+                if (!cps_scalar_kind_ok(other->type.kind)
+                    && !owning_borrow_env && !owning_consume_env)
+                    return NULL;
+                /* A multi-word owning AGGREGATE env is captured by ADDRESS (`&o`),
+                 * so its operand must be an atomic lvalue (a bare local) -- a
+                 * computed/non-atomic aggregate has no stable address to take. */
+                if (cloneable_owning_agg(&other->type) && !env_atom) return NULL;
                 if (!env_atom && (ctx_reaches_shift(other, shift_kind)
                               || !safe_to_delegate(b, other))) return NULL;
             }
@@ -1355,10 +1502,20 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
      * a captured local, so a conservatively-marked live capture on a Shape 1 shift
      * is emit-time dead and safe to admit.  The gate is cloneable-only: serial's
      * prelude is presence-gated so it needs no such check. */
-    if (!serial && nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0)
+    /* Live-capture Shape-2 gate: native Shape 2 carries captured locals only via
+     * frame operands, so a live capture that is NOT a frame operand would be
+     * lost -- hence a conservative reject.  But reaching here means the frame
+     * loop parsed the ENTIRE continuation into validated frames, so every local
+     * the continuation references IS a carried frame operand (a scalar, or -- under
+     * the E3a gate -- a ^borrow rc whose shallow-shared env is read-only-correct
+     * across resumes); the remaining counted locals are receiver-body captures
+     * (single-shot: the receiver runs once) or bound after the reset (dead at the
+     * shift).  Under the owning-cloneable-capture experiment, trust the frame
+     * validation and drop the blunt count gate. */
+    if (!serial && nf != 0 && cur->as.cloneable_shift_.n_live_captures != 0
+        && !g_opt_owning_cloneable_capture)
         return NULL;
-    const Binding *recv = marshal_named_receiver(b, cur, serial);
-    const Expr *recv_expr = NULL;
+    const Binding *recv = marshal_named_receiver(b, cur, serial);    const Expr *recv_expr = NULL;
     if (!recv) {
         /* U7: a CLOSURE receiver (capturing or not).  Shape 1 calls it directly at
          * the reset site; Shape 2 threads it through the dk_shift body env -- the
@@ -3395,17 +3552,34 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * (Ask)))` prints cleanup then returns the resumed value). */
             {
                 Expr **items = e->as.do_.items;
-                bool has_defer = false, defer_ok = true, tail_is_defer = false;
+                bool has_defer = false, defer_ok = true;
+                int tail_idx = -1;   /* last NON-defer item -- the do's value */
                 for (uint32_t i = 0; i < n; i++) {
                     const Expr *it = ascribe_peel(items[i]);
                     if (it && it->kind == EX_DEFER) {
                         has_defer = true;
                         if (!safe_to_delegate(b, it->as.defer_.body)) defer_ok = false;
-                        if (i == n - 1) tail_is_defer = true;
+                    } else {
+                        tail_idx = (int)i;
                     }
                 }
-                if (has_defer && defer_ok && !tail_is_defer) {
-                    CVar x = fresh_cvar(b, &items[n - 1]->type);
+                /* E3b (owning-cloneable-capture): the elaborator APPENDS an
+                 * auto-inserted scope-exit drop `(defer (rc/drop r))` AFTER the
+                 * real body, so the value item is not the last item -- trailing
+                 * defer(s) follow it.  The original P5b threading bailed on a
+                 * defer tail (`tail_idx != n-1`); under the experiment gate, allow
+                 * it, using the last non-defer item as the value and threading the
+                 * trailing defer into the continuation (fires after the value is
+                 * produced -- through the reset -- before delivery), exactly the
+                 * straight-line drop the explicit-drop channel already emits.  This
+                 * is what lets an owning `rc` the CPS-colored fn OWNS ride a
+                 * cloneable capture without a hand-written drop.  Off-gate a defer
+                 * tail still bails (behavior + snapshots unchanged). */
+                bool tail_is_defer = (tail_idx != (int)n - 1);
+                bool allow_tail_defer = g_opt_owning_cloneable_capture;
+                if (has_defer && defer_ok && tail_idx >= 0
+                    && (!tail_is_defer || allow_tail_defer)) {
+                    CVar x = fresh_cvar(b, &items[tail_idx]->type);
                     CTerm *deliver = new_term(b, CT_APPCONT);
                     deliver->as.appcont.kont = kont;
                     deliver->as.appcont.v = atom_cvar(x);
@@ -3418,10 +3592,10 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                         CVar d = fresh_cvar(b, &it->as.defer_.body->type);
                         chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
                     }
-                    /* Bind the tail value (threading any perform continuation). */
-                    chain = cps_bind(b, items[n - 1], x, chain);
-                    /* Prepend the non-defer, non-tail statements in program order. */
-                    for (int i = (int)n - 2; i >= 0; i--) {
+                    /* Bind the value item (threading any perform continuation). */
+                    chain = cps_bind(b, items[tail_idx], x, chain);
+                    /* Prepend the non-defer statements before the value, in order. */
+                    for (int i = tail_idx - 1; i >= 0; i--) {
                         const Expr *it = ascribe_peel(items[i]);
                         if (it && it->kind == EX_DEFER) continue;
                         CVar discard = fresh_cvar(b, &items[i]->type);

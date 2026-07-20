@@ -95,7 +95,7 @@ shift) inside `r`'s scope.
    continuation env; its drop must fire once per continuation *lifetime*, not
    once per resume. This is exactly the O3 owning-capture hazard -- one shallow
    env copy, N body drops. It rides the per-capture clone/drop discipline in
-   [cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md).
+   [cps-backend-multishot-continuations-owning-capture-plan.md](../archive/cps-backend-multishot-continuations-owning-capture-plan.md).
    **Is O3-shaped (P3).**
 
 The owning-pointers follow-ups already observed that a real `ref`-in-colored
@@ -191,7 +191,7 @@ Land **P1** as the standalone O1-b win: it is self-contained, needs no runtime,
 and closes the one slice the follow-ups called out as "could translate." **P2**
 and **P3** are explicitly gated on the DK-teardown / env-capture substrate and
 should be co-scheduled with
-[cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md)
+[cps-backend-multishot-continuations-owning-capture-plan.md](../archive/cps-backend-multishot-continuations-owning-capture-plan.md)
 (P2 with its E3 DK teardown, P3 with its E1-E4 owning-capture clone/drop) rather
 than reinvented here. If P1's measured payoff is as small as the follow-ups
 predicted, P1 is still worth landing to shrink the fallback surface N6.5 must
@@ -223,7 +223,7 @@ account for; P2/P3 wait for a real crossing-ref case, per the original caveat.
 - `CT_LETRAW` straight-line drop delegation (O1-a; `src/passes/cps_ir.c`) as the
   emit shape for the hoisted drop.
 - DK teardown + owning-capture clone/drop (P2/P3):
-  [cps-backend-multishot-continuations-owning-capture-plan.md](cps-backend-multishot-continuations-owning-capture-plan.md).
+  [cps-backend-multishot-continuations-owning-capture-plan.md](../archive/cps-backend-multishot-continuations-owning-capture-plan.md).
 
 ## Out of scope
 

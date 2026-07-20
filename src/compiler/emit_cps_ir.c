@@ -936,6 +936,80 @@ static bool owning_byvalue_aggregate(const Type *t) {
     return d && d->needs_drop_glue;
 }
 
+/* E3a (owning-cloneable-capture): is this a 2-arg cloneable call frame that
+ * CONSUMES its captured owning env (drops it once per call), rather than
+ * ^borrow it?  A consuming frame gets dk_frame_owning env_clone glue so each
+ * multi-shot resume owns its own copy to drop.  Detected by: a 2-arg call whose
+ * callee param is NOT ^borrow and whose captured operand is a consumable owning
+ * kind.  Two kinds, distinguished by the emitted glue:
+ *   - rc: cloneable_frame_consumes_rc -- env_clone = rc_strong_increment;
+ *   - a FLAT heap carrier: cloneable_frame_consumes_carrier -- env_clone =
+ *     malloc + shallow header copy (a real deep copy so each resume frees its own
+ *     allocation; flat = no owning fields, so a shallow copy shares nothing). */
+static bool cloneable_frame_consume_base(const CloneFrame *fr) {
+    if (!fr || !fr->call_fn || fr->ignore_value) return false;
+    if (fr->call_fn->type.kind != TY_FN || fr->call_fn->type.as.fn.arity != 2)
+        return false;
+    if (!fr->operand.type) return false;
+    int env_idx = fr->hole_left ? 1 : 0;
+    return !FN_ARG_FLAG(fr->call_fn->type.as.fn, env_idx, FA_BORROW);
+}
+static bool cloneable_frame_consumes_rc(const CloneFrame *fr) {
+    return cloneable_frame_consume_base(fr) && fr->operand.type->kind == TY_RC;
+}
+/* The heap ADT of a carrier operand, or NULL. */
+static const AdtDef *cloneable_carrier_def(const Type *t) {
+    if (!t || !(type_is_heap_adt(*(Type *)t) || type_is_heap_struct(*(Type *)t)))
+        return NULL;
+    return (t->kind == TY_ADT) ? t->as.adt_.def
+         : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+}
+static bool clone_field_is_scalar(TypeKind k) {
+    return !(k == TY_RC || k == TY_WEAK || k == TY_REF || k == TY_LREF
+             || k == TY_ADT || k == TY_STRUCT || k == TY_APP);
+}
+/* Aggregate clone fields: rc/weak (incref) or plain scalar only -- a by-value
+ * aggregate's ref field cannot be per-copy boxed through the by-value call. */
+static bool adt_incref_cloneable_fields(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++)
+        if (!(c->fields[i].kind == TY_RC || c->fields[i].kind == TY_WEAK
+              || clone_field_is_scalar(c->fields[i].kind)))
+            return false;
+    return true;
+}
+/* Heap-handle clone fields: rc/weak (incref), plain scalar, OR `ref<scalar>` /
+ * `lref<scalar>` (deep-copied as a fresh box, mirroring drop_glue's `free`). */
+static bool adt_heap_cloneable_fields(const AdtDef *d) {
+    if (!d || d->n_ctors == 0) return false;
+    const CtorDef *c = d->ctors[0];
+    for (uint32_t i = 0; i < c->n_fields; i++) {
+        TypeKind k = c->fields[i].kind;
+        if (k == TY_RC || k == TY_WEAK || clone_field_is_scalar(k)) continue;
+        if ((k == TY_REF || k == TY_LREF)
+            && clone_field_is_scalar(c->fields[i].inner_kind)) continue;
+        return false;
+    }
+    return true;
+}
+static bool cloneable_frame_consumes_carrier(const CloneFrame *fr) {
+    if (!cloneable_frame_consume_base(fr)) return false;
+    return adt_heap_cloneable_fields(cloneable_carrier_def(fr->operand.type));
+}
+/* A consuming multi-word owning by-value AGGREGATE frame: the aggregate rides the
+ * env by ADDRESS (`&o`), the frame passes it BY VALUE so the callee drops its own
+ * copy; the env_clone increfs the aggregate's owning fields (via `&o`) per resume
+ * to balance that -- no fresh allocation (the env stays `&o`). */
+static bool cloneable_frame_consumes_aggregate(const CloneFrame *fr) {
+    if (!cloneable_frame_consume_base(fr)) return false;
+    const Type *t = fr->operand.type;
+    if (!owning_byvalue_aggregate(t)) return false;
+    const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
+                    : (t->kind == TY_APP) ? type_adt_app_def((Type *)t) : NULL;
+    return adt_incref_cloneable_fields(d);
+}
+
 /* An OWNING capture that may ride the env of a genuinely MULTI-SHOT continuation
  * (a handler CASE body).  The env-capture landing is BORROW-ONLY-first (E-borrow):
  * for the reachable borrow-only shape the capture rides by a bare shallow alias
@@ -1880,6 +1954,23 @@ static bool owning_dropped_before_control(const CTerm *t, uint32_t bid) {
                  * back.  A missed capture surfaces as an undeclared C name (compile
                  * error), never a silent leak/double-free. */
                 return true;
+            case CT_CLONEABLE:
+                /* E3a (owning-cloneable-capture): an owning `rc` the fn owns,
+                 * captured ^borrow across a cloneable-reset and dropped AFTER it,
+                 * gets the same "no longer has to precede the control op" pass.
+                 * Soundness: the E3a admission only lets the frame BORROW the rc
+                 * (build_marshal_reset + FA_BORROW), so it is never dropped inside
+                 * the multi-shot continuation -- only once by its owner on the
+                 * straight-line path after the reset, which completes normally
+                 * (the cloneable receiver captures the continuation; it does not
+                 * abort past the drop).  Forgetting the drop cannot silently leak:
+                 * the auto-inserted scope-exit drop is an EX_DEFER, still
+                 * unsupported on the CPS path (it evicts), so an owning capture
+                 * without an explicit end-of-scope drop does not compile here.
+                 * Gated on the experiment; off-gate a cloneable owning capture
+                 * never reaches this walk (it evicts at the grammar). */
+                if (g_opt_owning_cloneable_capture) return true;
+                return false;
             default: return false;   /* shift (abortive) / unexpected: conservative */
         }
     }
@@ -6326,9 +6417,123 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
                     const char *a0 = fr->hole_left ? "value" : "env";
                     const char *a1 = fr->hole_left ? "env" : "value";
+                    /* E3a widening: an owning by-value AGGREGATE env rides the
+                     * one-word slot by ADDRESS (the push emits `&o`).  Its arg cast
+                     * is not a scalar cast: deref the pointer for a by-value param
+                     * (<=16B), or pass the pointer for a pass-by-ptr param (>16B).
+                     * The hole arg stays a scalar cast (the resumed value). */
+                    char c0[192], c1[192];
+                    if (fr->operand.type
+                        && owning_byvalue_aggregate(fr->operand.type)) {
+                        const char *cn = emit_type_c_name(ce->ctx, *fr->operand.type);
+                        bool pbp = type_struct_pass_by_ptr(*fr->operand.type);
+                        const char *ec = pbp ? "(const %s *)" : "*(%s *)";
+                        /* env arg is a0 when the hole is on the right, else a1. */
+                        if (fr->hole_left) {
+                            snprintf(c0, sizeof c0, "%s", cc_cast_for_kind(k0));
+                            snprintf(c1, sizeof c1, ec, cn);
+                        } else {
+                            snprintf(c0, sizeof c0, ec, cn);
+                            snprintf(c1, sizeof c1, "%s", cc_cast_for_kind(k1));
+                        }
+                    } else {
+                        snprintf(c0, sizeof c0, "%s", cc_cast_for_kind(k0));
+                        snprintf(c1, sizeof c1, "%s", cc_cast_for_kind(k1));
+                    }
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
-                        ctxfn, cfn, cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
+                        ctxfn, cfn, c0, a0, c1, a1);
+                    /* E3a: a CONSUMING rc frame drops its rc arg once per call, so
+                     * a multi-shot resume needs its own +1.  Emit the env_clone glue
+                     * (rc incref) that dk_copy_node runs on each resume copy; the
+                     * frame's own drop balances it (no env_drop -- the base +1 is
+                     * released once by the owner's scope-exit drop). */
+                    if (cloneable_frame_consumes_rc(fr))
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "rc_strong_increment((RcControlBlock *)(intptr_t)e); return e; }\n",
+                            ctxfn);
+                    else if (cloneable_frame_consumes_carrier(fr)) {
+                        /* A heap carrier: deep-copy the pointed-to header (malloc a
+                         * fresh header + shallow field copy) so each resume frees
+                         * its OWN allocation, then INCREF each owning (rc/weak)
+                         * field so the copy owns its own +1 (its drop_glue decref
+                         * on free balances it) -- the shallow copy shares the owning
+                         * field's control block with the original, exactly as the
+                         * owner's own drop expects.  A flat handle (no owning fields)
+                         * gets an empty incref list.  The handle's C type is
+                         * `<hdr> *`; strip the trailing ` *` for the header name. */
+                        char hdr[192];
+                        snprintf(hdr, sizeof hdr, "%s",
+                                 emit_type_c_name(ce->ctx, *fr->operand.type));
+                        size_t L = strlen(hdr);
+                        while (L > 0 && (hdr[L-1] == '*' || hdr[L-1] == ' '))
+                            hdr[--L] = 0;
+                        Buf incs; buf_init(&incs);
+                        const AdtDef *d = cloneable_carrier_def(fr->operand.type);
+                        const CtorDef *c = d ? d->ctors[0] : NULL;
+                        for (uint32_t fi = 0; c && fi < c->n_fields; fi++) {
+                            TypeKind fk = c->fields[fi].kind;
+                            char *mp = adt_field_member_path(d, c, fi);
+                            if (fk == TY_RC || fk == TY_WEAK) {
+                                buf_printf(&incs, "if (__c->%s) %s(__c->%s); ",
+                                           mp, fk == TY_RC ? "rc_strong_increment"
+                                                           : "rc_weak_increment", mp);
+                            } else if (fk == TY_REF || fk == TY_LREF) {
+                                /* deep-copy the ref<scalar> box: a fresh malloc +
+                                 * scalar copy, so each resume frees its own box
+                                 * (mirrors drop_glue's `free(s->f)`). */
+                                Type it; memset(&it, 0, sizeof it);
+                                it.kind = c->fields[fi].inner_kind;
+                                const char *innerc = type_c_name(it);
+                                /* the field is stored `void *`; cast to the inner
+                                 * pointer type to deref, and store the fresh box
+                                 * back as `void *`. */
+                                buf_printf(&incs,
+                                    "if (__c->%s) { %s *__rb = (%s *)malloc(sizeof(%s)); "
+                                    "*__rb = *(%s *)(__c->%s); __c->%s = (void *)__rb; } ",
+                                    mp, innerc, innerc, innerc, innerc, mp, mp);
+                            }
+                            free(mp);
+                        }
+                        buf_putc(&incs, '\0');
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { "
+                            "%s *__c = (%s *)malloc(sizeof(%s)); "
+                            "*__c = *(%s *)(intptr_t)e; %sreturn (intptr_t)__c; }\n",
+                            ctxfn, hdr, hdr, hdr, hdr, incs.data ? incs.data : "");
+                        buf_free(&incs);
+                    }
+                    else if (cloneable_frame_consumes_aggregate(fr)) {
+                        /* The aggregate rides the env by ADDRESS (`&o`) and is
+                         * passed BY VALUE to the callee, which drops its own copy.
+                         * Incref each owning (rc/weak) field via `&o` so the copy's
+                         * drop is balanced -- return the SAME `&o` (no allocation;
+                         * `o` is the owner's stable local, freed once by its own
+                         * scope-exit drop). */
+                        const char *cn = emit_type_c_name(ce->ctx, *fr->operand.type);
+                        Buf incs; buf_init(&incs);
+                        const Type *t = fr->operand.type;
+                        const AdtDef *d = (t->kind == TY_ADT) ? t->as.adt_.def
+                                        : (t->kind == TY_APP) ? type_adt_app_def((Type *)t)
+                                        : NULL;
+                        const CtorDef *c = d ? d->ctors[0] : NULL;
+                        for (uint32_t fi = 0; c && fi < c->n_fields; fi++) {
+                            TypeKind fk = c->fields[fi].kind;
+                            if (fk != TY_RC && fk != TY_WEAK) continue;
+                            char *mp = adt_field_member_path(d, c, fi);
+                            buf_printf(&incs,
+                                "if (((%s *)(intptr_t)e)->%s) %s(((%s *)(intptr_t)e)->%s); ",
+                                cn, mp, fk == TY_RC ? "rc_strong_increment"
+                                                    : "rc_weak_increment", cn, mp);
+                            free(mp);
+                        }
+                        buf_putc(&incs, '\0');
+                        buf_printf(ce->helpers,
+                            "static intptr_t %s_envclone(intptr_t e) { %sreturn e; }\n",
+                            ctxfn, incs.data ? incs.data : "");
+                        buf_free(&incs);
+                    }
                 } else
                     /* 1-arg hole call: apply f to the resumed value. */
                     buf_printf(ce->helpers,
@@ -6363,7 +6568,28 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
             char *opv = (fr->call_fn && !two_arg) ? strdup("0")
                       : fr->env_expr ? emit_cloneable_direct(ce, fr->env_expr)
                       : atom_str(ce, &fr->operand);
-            ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
+            /* E3a widening: an owning by-value AGGREGATE operand is captured by
+             * ADDRESS -- carry `&(o)` (o is the owner's stable by-value local; the
+             * reset runs synchronously in its frame, so the pointer outlives every
+             * resume, and a ^borrow frame never drops it).  Only the atomic
+             * (bare-lvalue) operand path is admitted for an aggregate, so `opv` is
+             * a plain lvalue name here and `&(...)` is well-formed. */
+            if (fr->operand.type && owning_byvalue_aggregate(fr->operand.type)
+                && !fr->env_expr) {
+                char *addr = malloc(strlen(opv) + 8);
+                snprintf(addr, strlen(opv) + 8, "&(%s)", opv);
+                free(opv); opv = addr;
+            }
+            /* E3a: a CONSUMING rc frame rides dk_frame_owning with the env_clone
+             * glue emitted above (incref per resume copy) and NO env_drop (the
+             * frame's own drop balances each copy; the base +1 is the owner's).
+             * A borrow / scalar / aggregate frame stays a plain dk_frame. */
+            if (cloneable_frame_consumes_rc(fr) || cloneable_frame_consumes_carrier(fr)
+                || cloneable_frame_consumes_aggregate(fr))
+                ce_line(ce, "%s = dk_frame_owning(%s, (intptr_t)(%s), %s_envclone, 0, %s);",
+                        dv, ctxfn, opv, ctxfn, dv);
+            else
+                ce_line(ce, "%s = dk_frame(%s, (intptr_t)(%s), %s);", dv, ctxfn, opv, dv);
             free(opv);
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);

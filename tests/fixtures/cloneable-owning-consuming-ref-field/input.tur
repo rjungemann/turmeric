@@ -1,0 +1,30 @@
+;; E3a (owning-cloneable-capture): the recursive-clone case for a `:heap` handle
+;; with a `ref<scalar>` field, consumed.  A ref field is an OWNING box (drop_glue
+;; `free`s it); a multi-shot resume that frees a shared box double-frees, so the
+;; env_clone deep-copies the box (malloc a fresh box + scalar copy) -- exactly as
+;; deep as drop_glue's `free` (the base drop is shallow: it frees the box but does
+;; not recurse, so a matching clone is a fresh box, not a deeper structure).  Each
+;; resume frees its own box; the owner's original is freed once by its P5b-threaded
+;; scope-exit drop.  LeakSanitizer-clean.
+;;
+;; (A ref to an OWNING inner, or a nested aggregate field, is rejected: the base
+;; drop_glue is shallow there, so a clean deep clone is not expressible without
+;; also deepening the base drop.)
+
+(defstruct H4 :heap [p : ref<int> tag : int])
+
+(defn k-identity [k] : int k)
+
+(defn consume-h4 [v : int h : H4] : int
+  (+ v (.tag h)))
+
+(defn run [] : int
+  (let [h (make-struct H4 :p (ref 9) :tag 5)]
+    (let [k (cloneable-reset (consume-h4 (cloneable-shift k-identity 0) h))]
+      (let [a (tur_cloneable_cont_resume (tur_cloneable_cont_clone k) 10)]
+        (let [b (tur_cloneable_cont_resume k 20)]
+          (+ a b))))))          ; (10 + 5) + (20 + 5) = 40
+
+(defn main [] : int
+  (println (run))
+  0)
