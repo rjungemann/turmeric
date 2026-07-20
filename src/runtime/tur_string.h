@@ -87,6 +87,35 @@ void    tur_sb_push_byte(void *b, int64_t c);
 int64_t tur_sb_len(void *b);
 void   *tur_sb_finish(void *b);         /* -> String; frees the builder */
 
+/* ---- StringSlice: a zero-copy, bounds-checked view into a String ------ */
+
+/* A StringSlice is `{ rc; parent String; offset; len }`.  It holds a RETAINED
+ * reference to the parent String, so the borrowed byte range stays valid AND
+ * immutable for the slice's lifetime -- genuinely safe zero-copy ranged access,
+ * unlike a raw pointer+len view over a `cstr` whose backing buffer can vanish.
+ * Sub-slicing is O(1) (a new view retaining the same parent); materialize to an
+ * owned String / cstr only at the boundary where you need one. */
+
+/* View [off, off+len) of String `s` (offset/len clamped to s's bounds).
+ * Retains `s`. */
+void *tur_string_slice(void *s, int64_t off, int64_t len);
+
+/* Convenience: slice a raw cstr safely by first copying it into an owned String
+ * the returned slice solely owns (freed when the slice's refcount hits zero). */
+void *tur_string_slice_cstr(const char *s, int64_t off, int64_t len);
+
+void   *tur_slice_retain(void *sl);
+void    tur_slice_release(void *sl);      /* releases the parent String at rc 0 */
+int64_t tur_slice_len(void *sl);
+int     tur_slice_empty(void *sl);
+int64_t tur_slice_byte_at(void *sl, int64_t i);   /* 0..255, or -1 out of range */
+void   *tur_slice_sub(void *sl, int64_t off, int64_t len); /* sub-view, clamped */
+void   *tur_slice_to_string(void *sl);    /* fresh owned String copy of the range */
+const char *tur_slice_to_cstr(void *sl);  /* fresh malloc'd NUL-terminated copy */
+int     tur_slice_eq(void *a, void *b);
+int64_t tur_slice_cmp(void *a, void *b);  /* lexicographic: -1 / 0 / 1 */
+int64_t tur_slice_hash(void *sl);         /* content hash over the range */
+
 /* ---- owned-map-key bridge (MapKey[String], mk-owned? = 1) ------------- */
 
 /* Copy the String's bytes into a tur_hamt_box_key box the map will own and

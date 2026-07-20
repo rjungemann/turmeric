@@ -143,6 +143,43 @@ two directives are separate phases:
 `#s"..."` works identically compiled and under `--interpret`, and an owned-String
 literal is safe as a `Map`/`Set` key. See `tests/fixtures/string-reader-macro`.
 
+## Zero-copy slicing -- `StringSlice` (opt-in)
+
+`string/substring` copies. When you want ranged access *without* copying -- walk
+a range, compare sub-ranges, split, tokenize -- use `StringSlice`
+(`stdlib/string-slice.tur`): a bounds-checked, refcounted **view** `{ parent
+String; offset; len }`.
+
+It is safe in a way a raw pointer+len view over a `cstr` is not: a `StringSlice`
+**retains its parent String**, and `String` is immutable, so the viewed bytes
+can neither be freed nor mutated underneath the slice.
+
+```turmeric
+(load "stdlib/string-slice.tur")
+
+(let [s (string/from-cstr "hello world")
+      w (string/slice s 6 5)]        ;; "world" -- no copy
+  (string/release s)                 ;; parent kept alive by the slice
+  (slice/byte-at w 0)                ;; 119 ('w'); bounds-checked, -1 out of range
+  (slice/sub w 0 3)                  ;; "wor" -- O(1), views the same parent
+  (slice/to-string w))              ;; materialize an owned String only when needed
+```
+
+Surface: `string/slice` / `string/slice-cstr` (construct), `slice/sub` (O(1)
+sub-view), `slice/len` / `slice/empty?` / `slice/byte-at` / `slice/compare` /
+`slice/eq?` / `slice/hash` (query), `slice/to-string` / `slice/to-cstr`
+(materialize), `slice/retain` / `slice/release` (share/drop). Typeclasses `Eq`,
+`Ord`, `Show`, `Hash`. Compiled and `--interpret` behave identically.
+
+- **cstr with an owned copy:** `string/slice-cstr` copies the `cstr` into a
+  String the slice solely owns, giving safe ranged access to `cstr` data without
+  tracking the original's lifetime.
+- A slice is not NUL-terminated at its end, so there is deliberately no
+  *borrowed* cstr view; `slice/to-cstr` always returns a fresh (owned) cstr.
+- This supersedes the inert `str` view for the safe/owned case. `str`
+  (`stdlib/str.tur`) remains for zero-ownership interop over a caller-managed
+  buffer.
+
 ## Lifetimes -- the rules
 
 - A freshly constructed `String` (`from-cstr`, `concat`, `substring`, `to-*`,

@@ -14,7 +14,13 @@ status: core implemented (v2); adoption audits still open
 > `src/turi/string_native.c`, and fixtures under `tests/fixtures/string-*`
 > (`string-basic`, `string-map-key`, `string-builder`, `string-ord-hash`). The
 > `cstr`/`str`/`String` tiering is written up in
-> `docs/guides/strings-guide.md`. Two of the three **adoption audits** in the
+> `docs/guides/strings-guide.md`. The deferred borrowed-view tier has also
+> landed as an owned, safe slice: `StringSlice` (`stdlib/string-slice.tur`,
+> runtime in `tur_string.c`, fixture `tests/fixtures/string-slice`) -- a
+> zero-copy, bounds-checked view that retains its immutable parent String, so it
+> supersedes the inert `str` for the safe/owned case, plus the `#s"..."`
+> owned-literal reader macro (`stdlib/string-reader.tur`). Two of the three
+> **adoption audits** in the
 > "Follow-up" section below are now written up:
 > [string-adoption-stdlib-plan.md](./string-adoption-stdlib-plan.md) and
 > [string-adoption-docs-plan.md](./string-adoption-docs-plan.md) (each with a

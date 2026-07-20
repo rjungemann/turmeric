@@ -142,6 +142,66 @@ static TuriValue n_sb_finish(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     return turi_int((int64_t)(intptr_t)tur_sb_finish(S1));
 }
+static TuriValue n_slice(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    int64_t off = n >= 2 ? a[1].as_int : 0;
+    int64_t len = n >= 3 ? a[2].as_int : 0;
+    return turi_int((int64_t)(intptr_t)tur_string_slice(S1, off, len));
+}
+static TuriValue n_slice_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    const char *s = n >= 1 ? arg_cstr(a[0]) : "";
+    int64_t off = n >= 2 ? a[1].as_int : 0;
+    int64_t len = n >= 3 ? a[2].as_int : 0;
+    return turi_int((int64_t)(intptr_t)tur_string_slice_cstr(s, off, len));
+}
+static TuriValue n_slice_retain(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_slice_retain(S1));
+}
+static TuriValue n_slice_release(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    tur_slice_release(S1);
+    return turi_nil();
+}
+static TuriValue n_slice_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int(tur_slice_len(S1));
+}
+static TuriValue n_slice_empty(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_bool(tur_slice_empty(S1) != 0);
+}
+static TuriValue n_slice_byte_at(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int(tur_slice_byte_at(S1, n >= 2 ? a[1].as_int : 0));
+}
+static TuriValue n_slice_sub(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    int64_t off = n >= 2 ? a[1].as_int : 0;
+    int64_t len = n >= 3 ? a[2].as_int : 0;
+    return turi_int((int64_t)(intptr_t)tur_slice_sub(S1, off, len));
+}
+static TuriValue n_slice_to_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int((int64_t)(intptr_t)tur_slice_to_string(S1));
+}
+static TuriValue n_slice_to_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_cstr(tur_slice_to_cstr(S1));
+}
+static TuriValue n_slice_eq(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_bool(tur_slice_eq(S1, S2) != 0);
+}
+static TuriValue n_slice_cmp(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int(tur_slice_cmp(S1, S2));
+}
+static TuriValue n_slice_hash(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
+    (void)e; (void)ud;
+    return turi_int(tur_slice_hash(S1));
+}
 
 void turi_register_string_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_string_from_cstr", n_from_cstr, NULL);
@@ -173,4 +233,17 @@ void turi_register_string_natives(TuriEnv *env) {
     turi_env_register_native(env, "tur_sb_push_byte", n_sb_push_byte, NULL);
     turi_env_register_native(env, "tur_sb_len", n_sb_len, NULL);
     turi_env_register_native(env, "tur_sb_finish", n_sb_finish, NULL);
+    turi_env_register_native(env, "tur_string_slice", n_slice, NULL);
+    turi_env_register_native(env, "tur_string_slice_cstr", n_slice_cstr, NULL);
+    turi_env_register_native(env, "tur_slice_retain", n_slice_retain, NULL);
+    turi_env_register_native(env, "tur_slice_release", n_slice_release, NULL);
+    turi_env_register_native(env, "tur_slice_len", n_slice_len, NULL);
+    turi_env_register_native(env, "tur_slice_empty", n_slice_empty, NULL);
+    turi_env_register_native(env, "tur_slice_byte_at", n_slice_byte_at, NULL);
+    turi_env_register_native(env, "tur_slice_sub", n_slice_sub, NULL);
+    turi_env_register_native(env, "tur_slice_to_string", n_slice_to_string, NULL);
+    turi_env_register_native(env, "tur_slice_to_cstr", n_slice_to_cstr, NULL);
+    turi_env_register_native(env, "tur_slice_eq", n_slice_eq, NULL);
+    turi_env_register_native(env, "tur_slice_cmp", n_slice_cmp, NULL);
+    turi_env_register_native(env, "tur_slice_hash", n_slice_hash, NULL);
 }

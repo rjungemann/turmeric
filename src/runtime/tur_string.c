@@ -269,6 +269,134 @@ void *tur_sb_finish(void *bp) {
     return s;
 }
 
+/* ---- StringSlice ------------------------------------------------------ */
+
+typedef struct {
+    int64_t rc;
+    void   *parent; /* retained String */
+    int64_t off;
+    int64_t len;
+} tur_strslice;
+
+/* Bytes of a slice's range (borrowed; NOT NUL-terminated at off+len). */
+static const char *slice_ptr(tur_strslice *s) {
+    return tur_string_cstr(s->parent) + s->off;
+}
+
+void *tur_string_slice(void *s, int64_t off, int64_t len) {
+    int64_t n = tur_string_len(s);
+    if (off < 0) off = 0;
+    if (off > n) off = n;
+    if (len < 0) len = 0;
+    if (off + len > n) len = n - off;
+    tur_strslice *sl = (tur_strslice *)malloc(sizeof(*sl));
+    sl->rc = 1;
+    sl->parent = tur_string_retain(s);
+    sl->off = off;
+    sl->len = len;
+    return sl;
+}
+
+void *tur_string_slice_cstr(const char *s, int64_t off, int64_t len) {
+    void *str = tur_string_from_cstr(s);   /* rc 1 */
+    void *sl = tur_string_slice(str, off, len); /* retains str -> rc 2 */
+    tur_string_release(str);               /* -> rc 1, solely owned by the slice */
+    return sl;
+}
+
+void *tur_slice_retain(void *sl) {
+    if (sl) ((tur_strslice *)sl)->rc++;
+    return sl;
+}
+
+void tur_slice_release(void *sl) {
+    if (!sl) return;
+    tur_strslice *s = (tur_strslice *)sl;
+    if (--s->rc == 0) {
+        tur_string_release(s->parent);
+        free(s);
+    }
+}
+
+int64_t tur_slice_len(void *sl) {
+    return sl ? ((tur_strslice *)sl)->len : 0;
+}
+
+int tur_slice_empty(void *sl) { return tur_slice_len(sl) == 0 ? 1 : 0; }
+
+int64_t tur_slice_byte_at(void *sl, int64_t i) {
+    if (!sl) return -1;
+    tur_strslice *s = (tur_strslice *)sl;
+    if (i < 0 || i >= s->len) return -1;
+    return (int64_t)(unsigned char)slice_ptr(s)[i];
+}
+
+void *tur_slice_sub(void *sl, int64_t off, int64_t len) {
+    if (!sl) return tur_string_slice(NULL, 0, 0);
+    tur_strslice *s = (tur_strslice *)sl;
+    if (off < 0) off = 0;
+    if (off > s->len) off = s->len;
+    if (len < 0) len = 0;
+    if (off + len > s->len) len = s->len - off;
+    tur_strslice *r = (tur_strslice *)malloc(sizeof(*r));
+    r->rc = 1;
+    r->parent = tur_string_retain(s->parent);
+    r->off = s->off + off;
+    r->len = len;
+    return r;
+}
+
+void *tur_slice_to_string(void *sl) {
+    if (!sl) return tur_string_from_bytes(NULL, 0);
+    tur_strslice *s = (tur_strslice *)sl;
+    return tur_string_from_bytes(slice_ptr(s), s->len);
+}
+
+const char *tur_slice_to_cstr(void *sl) {
+    tur_strslice *s = (tur_strslice *)sl;
+    int64_t n = s ? s->len : 0;
+    char *out = (char *)malloc((size_t)n + 1);
+    if (n) memcpy(out, slice_ptr(s), (size_t)n);
+    out[n] = '\0';
+    return out;
+}
+
+int tur_slice_eq(void *a, void *b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    tur_strslice *x = (tur_strslice *)a, *y = (tur_strslice *)b;
+    if (x->len != y->len) return 0;
+    return memcmp(slice_ptr(x), slice_ptr(y), (size_t)x->len) == 0 ? 1 : 0;
+}
+
+int64_t tur_slice_cmp(void *a, void *b) {
+    if (a == b) return 0;
+    tur_strslice *x = (tur_strslice *)a, *y = (tur_strslice *)b;
+    int64_t la = x ? x->len : 0, lb = y ? y->len : 0;
+    int64_t n = la < lb ? la : lb;
+    if (n) {
+        int c = memcmp(slice_ptr(x), slice_ptr(y), (size_t)n);
+        if (c < 0) return -1;
+        if (c > 0) return 1;
+    }
+    if (la < lb) return -1;
+    if (la > lb) return 1;
+    return 0;
+}
+
+int64_t tur_slice_hash(void *sl) {
+    tur_strslice *s = (tur_strslice *)sl;
+    uint64_t hash = 1469598103934665603ULL;
+    if (s) {
+        const unsigned char *p = (const unsigned char *)slice_ptr(s);
+        for (int64_t i = 0; i < s->len; i++) {
+            hash ^= p[i];
+            hash *= 1099511628211ULL;
+        }
+    }
+    return (int64_t)hash;
+}
+
 /* ---- owned-map-key bridge --------------------------------------------- */
 
 /* Forward-declare only the two hamt entry points we need, so this TU stays
