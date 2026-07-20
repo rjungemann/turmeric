@@ -1,5 +1,14 @@
 # digest/*-hex inline-C uses `static` nested functions -- won't compile
 
+**Status:** RESOLVED 2026-07-20. The per-block SHA-256 / MD5 compression
+functions are hoisted to file-scope Turmeric defns (`digest/sha256-transform!`,
+`digest/md5-transform!`) and called from the four digest bodies via
+`__TUR_CNAME_...__`, so the emitted C carries no nested functions and compiles on
+a standard/clang toolchain. Verified against the FIPS/RFC test vectors
+(SHA-256/MD5 of `""` and `"abc"`). Regression fixtures: `tests/fixtures/digest-hex`
+and `tests/fixtures/digest-string`. This unblocked the `digest/*-string` owned
+siblings (`stdlib/digest-string.tur`).
+
 **Severity:** medium (the `digest/sha256-hex` / `digest/md5-hex` hex-string API
 is uncompilable on a standard/GNU C compiler; no fixture covers it, so it went
 unnoticed).
