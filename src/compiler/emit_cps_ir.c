@@ -4916,6 +4916,19 @@ static char *atoms_csv_call_cps(CE *ce, const CAtom *args, uint32_t n) {
  * `tur_adt_X *` -- so a blanket int64 cast is wrong (it makes int64->void* at a
  * void* param).  Returns NULL for a param whose C type is an aggregate/poly-fn
  * struct (not intptr_t-castable) or when the callee's param types are unknown. */
+/* effectful-fnvalue-param-miscompile (E2): true when the callee declares
+ * parameter `i` as a rank-2 poly fn -- its C type is the multi-word
+ * `tur_poly_fn_t` aggregate, taken BY VALUE.  A `tur_poly_fn_t` argument must
+ * pass bare (not `(int64_t)(intptr_t)arg`, which is "aggregate used where an
+ * integer was expected"). */
+static bool cps_call_param_is_poly_fn(CE *ce, const Binding *fn, uint32_t i) {
+    (void)ce;
+    if (!fn || fn->type.kind != TY_FN || i >= fn->type.as.fn.arity) return false;
+    SEnt *fe = ent_of_binding(fn);
+    const FnDef *fd = fe ? fe->fd : NULL;
+    return fd && i < fd->n_params && fd->params[i]->is_poly_fn;
+}
+
 static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
     if (!fn || fn->type.kind != TY_FN || i >= fn->type.as.fn.arity) return NULL;
     SEnt *fe = ent_of_binding(fn);
@@ -4991,6 +5004,8 @@ static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
          * tur_poly_fn_t param) is left bare below. */
         if (atom_is_fat_fn(&args[i]) && param_is_i64)
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
+        else if (cps_call_param_is_poly_fn(ce, fn, i))
+            buf_puts(&b, a);                 /* E2: tur_poly_fn_t param -- pass the fat struct by value */
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
         else if (param_is_voidp && arg_is_ptr)
@@ -5405,6 +5420,23 @@ static char *letraw_binder_name(CE *ce, const CTerm *t) {
     return cvar_cname(ce, t->as.letraw.x);
 }
 
+/* effectful-fnvalue-param-miscompile (E2): true when a CT_LETRAW value is an
+ * EX_POLY_WRAP that emits a `tur_poly_fn_t` fat-closure struct literal (the
+ * closure path or the wrapper-thunk path in emit_expr's EX_POLY_WRAP).  The
+ * poly-wrap NODE is typed `ptr<void>` (the legacy thin carrier), so the CT-IR
+ * binder derived from its type is `void *` -- but the emitted VALUE is the
+ * multi-word `tur_poly_fn_t`, so `void *b = (tur_poly_fn_t){...}` is a hard C
+ * error.  Declare the binder `tur_poly_fn_t` and pass it by value so the fat
+ * closure (incl. its fn_cps channel) reaches the callee's `tur_poly_fn_t`
+ * parameter intact. */
+static bool letraw_emits_poly_fn(const CTerm *t) {
+    if (!t || t->kind != CT_LETRAW) return false;
+    const Expr *e = t->as.letraw.e;
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    if (!e || e->kind != EX_POLY_WRAP) return false;
+    return e->as.poly_wrap_.is_closure || e->as.poly_wrap_.wrapper_binding != NULL;
+}
+
 static void emit_letraw(CE *ce, const CTerm *t) {
     /* B7: a `(set! m k)` that stores a continuation into a by-reference mutable is
      * emitted natively as a copy-on-store into the shared cell.  dk_perform frees
@@ -5518,7 +5550,12 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
             char *bn = t->as.letraw.x.bind
                 ? name_for_binding(ce->ctx, t->as.letraw.x.bind)
                 : strdup(t->as.letraw.x.name);
-            ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
+            /* E2: a poly-wrap value is the fat `tur_poly_fn_t`, not the void*
+             * carrier its ptr<void> node type would spell. */
+            if (letraw_emits_poly_fn(t))
+                ce_line(ce, "tur_poly_fn_t %s;", bn);
+            else
+                ce_line(ce, "%s %s;", binder_ctype_full(ce->ctx, t->as.letraw.x.ty, t->as.letraw.x.type), bn);
             free(bn);
             emit_binder_decls(ce, t->as.letraw.body);
             break;
