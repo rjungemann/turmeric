@@ -160,13 +160,32 @@
             (list str-concat
               (list .show accessor-form)
               (list derive-show-rest__ ~@rest-fields)))))))
-  ;; derive-show-cstr -- derive a `cstr`-bodied `Show` instance (joined with
-  ;; str-concat over each field's `.show`).  For programs that define their OWN
-  ;; minimal local `Show` class -- `(defclass Show [a] (show [x] : cstr))` -- and
-  ;; never load the String stack.  The stdlib `Show` returns an owned `String`
-  ;; (since show-owned-result-plan stage 4), so use plain `derive-show` (below)
-  ;; with it; using derive-show-cstr against the stdlib Show is a type error
-  ;; (str-concat expects cstr, the field `.show` yields String).
+  ;; derive-show-cstr -- derive a `cstr`-bodied `Show` instance for a struct,
+  ;; joining `"Type { f = v, ... }"` with str-concat over each field's `.show`.
+  ;; For programs that define their OWN minimal local `Show` class -- rendering
+  ;; to cstr -- and never load the String stack.  The emitted body needs three
+  ;; things in scope at the call site:
+  ;;
+  ;;   1. a `Show` class `(defclass Show [a] (show [x] : cstr))`;
+  ;;   2. a `str-concat` of type `(cstr cstr) -> cstr`;
+  ;;   3. a cstr `Show` instance for EACH field's type.
+  ;;
+  ;; `stdlib/str-build.tur` is the intended source of (2): a dependency-free leaf
+  ;; providing `str-concat` and `int->str`, both with interpreter natives, so a
+  ;; local-`Show` program built on it runs on BOTH the compiled and `--interpret`
+  ;; paths without any inline-C.  A missing str-concat (1) or field instance (3)
+  ;; surfaces as a compile error attributed to this macro, not the call site.
+  ;;
+  ;;   (load "stdlib/str-build.tur")
+  ;;   (defclass Show [a] (show [x] : cstr))
+  ;;   (definstance Show [int] (show [x] : cstr (int->str x)))
+  ;;   (defstruct Point :copy [x : int y : int])
+  ;;   (derive-show-cstr Point x y)         ; => Show[Point] "Point { x = .., y = .. }"
+  ;;
+  ;; The stdlib `Show` returns an owned `String` (since show-owned-result-plan
+  ;; stage 4), so use plain `derive-show` with it -- `derive-show-cstr` against
+  ;; the stdlib Show is a type error (str-concat expects cstr, the field `.show`
+  ;; yields String).
   (defmacro derive-show-cstr [TypeName & fields]
     (list definstance
       Show

@@ -573,10 +573,34 @@ symbols and the `[label .accessor]` alias form -- are the same for both derivers
 
 The sibling **`derive-show-cstr`** emits a `cstr`-bodied `Show` instance joined
 with `str-concat`. It is for programs that define their own **minimal local
-`Show` class** (`(defclass Show [a] (show [x] : cstr))`) and never load the
-String stack. Using `derive-show-cstr` against the owned stdlib `Show` (or
-`derive-show` against a local `cstr` `Show`) is a type error -- match the deriver
-to the `Show` class in scope.
+`Show` class** and never load the String stack. The emitted body needs three
+things in scope at the call site:
+
+1. a `Show` class `(defclass Show [a] (show [x] : cstr))`;
+2. a `str-concat : (cstr cstr) -> cstr`;
+3. a `Show` instance for each field's type.
+
+`stdlib/str-build.tur` is the intended source of `str-concat` (and `int->str`):
+a dependency-free leaf that pulls in no typeclass instances and carries
+interpreter natives, so a program built on it runs on both the compiled and
+`--interpret` paths with **no inline-C**.
+
+```turmeric
+(load "stdlib/str-build.tur")            ; str-concat + int->str (both paths)
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int] (show [x] : cstr (int->str x)))
+
+(defstruct Point :copy [x : int y : int])
+(derive-show-cstr Point x y)
+
+(let [p (make-struct Point 3 4)]
+  (println (.show p)))                   ; Point { x = 3, y = 4 }
+```
+
+A missing `str-concat` or field `Show` instance is a compile error attributed to
+the macro, not the call site. Using `derive-show-cstr` against the owned stdlib
+`Show` (or `derive-show` against a local `cstr` `Show`) is a type error -- match
+the deriver to the `Show` class in scope.
 
 ### REPL auto-show
 
