@@ -1,0 +1,12 @@
+;; cps-shift-reset-capability-folding item 1: a `serial-cont` shift receiver
+;; needs a serial-capable delimiter.  The literal `cloneable-reset` keyword pins
+;; the multi-shot cloneable flavor, so a plain `shift` on a `serial-cont`
+;; receiver bound to it is rejected with TUR-E0019 pointing at the actual fix
+;; (use a plain `reset` or `serial-reset`) -- NOT the misleading downstream
+;; TUR-E0706 "context not capturable".
+
+(defn sk [k : serial-cont] : int (k 5))
+
+(defn main [] : int
+  (println (cloneable-reset (+ 10 (shift sk 0))))
+  0)

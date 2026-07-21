@@ -49,8 +49,22 @@ What is left is purely surface consolidation -- no runtime semantics gap.
     lower the `EX_SERIAL_*` / `EX_CLONEABLE_*` nodes the folded surface emits.
   - Fixture `tests/fixtures/shift-reset-capability-folding` pins the new routing
     (cloneable vs serial by receiver annotation, incl. the `if`-context serial
-    shape); the full suite passes (2241/0) on both the compiled and interpreter
-    paths, and all pre-existing cloneable/serial fixtures are unchanged.
+    shape); the full suite passes on both the compiled and interpreter paths,
+    and all pre-existing cloneable/serial fixtures are unchanged.
+  - Mismatch diagnostic: the folded surface makes the reset-side flavor matter,
+    so a `serial-cont` plain-`shift` bound to the literal `cloneable-reset`
+    keyword (a migration slip) is now rejected at elaboration with a tailored
+    `TUR-E0019` pointing at the actual fix ("use a plain `reset` or
+    `serial-reset`"), instead of the misleading downstream `TUR-E0706` "context
+    not capturable".  Detection is a per-depth `pinned_cloneable_at_depth[d]`
+    flag set by `elab_cloneable_reset` and cleared by the plain `elab_reset`, so
+    nearest-delimiter binding is honoured and sibling delimiters don't leak the
+    pin.  Error fixture `errors/serial-cont-shift-under-cloneable-reset` pins it.
+    (The rarer reverse -- a cloneable receiver under `serial-reset` -- still
+    reaches the pre-existing `TUR-E0016`; left as-is, less reachable and costlier
+    to disentangle from the cross-function path.  Nested serial-reset inside
+    cloneable-reset keeps its pre-existing `TUR-E0706`, identical to the
+    all-keyword form, so the sugar-equivalence holds.)
 - Item 2 (lighter single-shot runtime): unpursued; still an optional
   optimization, not a semantics gap. The plan gates it behind profiling.
 

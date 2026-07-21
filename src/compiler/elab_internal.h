@@ -622,6 +622,14 @@ typedef struct Elab {
      * reified_shift_at_depth[d] by elab_cont_shift_core's serial route, read by
      * the enclosing `reset` on exit to pick the delimiter flavor. */
     bool             reified_serial_at_depth[64];
+    /* Capability-folding item 1: true at depth d when the delimiter that
+     * established depth d is the literal `cloneable-reset` KEYWORD (which pins the
+     * cloneable flavor), false when it is a plain `reset` (flavor-flexible).  Set
+     * by elab_cloneable_reset / cleared by elab_reset at entry, read by
+     * elab_cont_shift_core's serial route so a `serial-cont` shift under a pinned
+     * cloneable-reset gets a clear diagnostic instead of the misleading downstream
+     * TUR-E0706 "context not capturable". */
+    bool             pinned_cloneable_at_depth[64];
     /* cps-backend-n6 cross-function resume: set true the first time a resuming
      * shift with no lexical reset is lowered onto the synthetic __Shift effect
      * (elab_cont_shift_core).  Read by the gated post-elaboration pass
