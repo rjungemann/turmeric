@@ -36,6 +36,44 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21b) -- S2 exit-gate marker cleanup: six
+> `requires.no-leak-check` markers DROPPED (now verified leak-clean under LSan;
+> suite 2249/0).** The landed S1/S2 drop machinery has made the escaping /
+> HOF-passed value-closure fixtures ASan-clean, so their leak-check opt-outs are
+> stale and removed. Each was rebuilt exactly as `tests/run.sh` does
+> (`-O2 -L<tur>/src`, ASan/LSan-instrumented output binary) and confirmed to emit
+> ZERO LeakSanitizer output:
+>
+> - **S1/S2 exit-gate fixtures** (`free-lift-bind`, `unsafe-closure-capture`,
+>   `cps-backend-fn-param`): the plan's "become ASan-clean and DROP their
+>   `requires.no-leak-check` markers" gate item -- now satisfied. (The residual
+>   free-monad `Suspend` ADT 16 B leak that kept `free-lift-bind` marked is also
+>   gone.)
+> - **S2 stored-closure fixture** `hkt-stdlib-parser-instances`: the closure
+>   stored in a `Parser` value is now reclaimed -- the "flip ... and become
+>   leak-clean" gate item for it is met.
+> - **Fat-closure-dispatch regressions** `ascribe-fat-closure-call` /
+>   `fat-closure-ascription`: their `make-adder` escaping-env leak, which the
+>   marker only ever papered over, is now reclaimed.
+>
+> Also re-verified: the `make-scaler` minimal repro from
+> `escaping-fat-closure-env-leak.md` is ASan-clean, and `currying-effect-partial`
+> is green. Full `bash tests/run.sh` = 2249 passed, 0 failed with the six markers
+> removed (i.e. those fixtures now run WITH leak detection on).
+>
+> **Still open (markers RETAINED, correctly):** the **httpd middleware family**
+> still leaks -- `httpd-async-mw-compose` (64 B / 5 allocs) and the `httpd-mw-*`
+> set (16-64 B each). Root cause confirmed: `httpd.tur` (~line 949) tears down the
+> stored handler with a bare `free((void *)handler)`, which reclaims only the
+> OUTER env word of a `compose-middleware` chain -- it neither recurses into the
+> chained `_n` next-closure envs nor drops the env's OWNING captures (the strdup'd
+> `const char *` CORS/header strings). Freeing those needs the `drop_glue_env_N`
+> walk-glue AND a way to dispatch it from opaque hand-written C (a drop-glue
+> pointer in the fat handle, or Model U with the async server as a
+> generated-drop holder) -- both still unbuilt (finding #1: captures are stored
+> without a retain/clone, so a naive walk-glue would double-free). So those
+> markers stay until the walk-glue + capture-clone unit lands.
+>
 > **Progress note (2026-07-21) -- local fn-field struct drop LANDED (direct
 > path); the "Remaining S2 gap" below is closed for uncolored functions.** A
 > by-value struct local that owns a BOXED fn-field now frees that heap fat handle
