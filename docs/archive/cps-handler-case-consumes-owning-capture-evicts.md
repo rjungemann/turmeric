@@ -7,7 +7,7 @@ sound). Surfaced while landing E1 of
 
 **Status: RESOLVED for the bare-`rc` case (this note's repro).** After the owning
 auto-drop lowering landed (O1-b P1/P2,
-[cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md)),
+[cps-backend-owning-autodrop-lowering-plan.md](../archive/cps-backend-owning-autodrop-lowering-plan.md)),
 `f`'s scope-exit `(defer (rc/drop r))` no longer stays an un-lowered `EX_DEFER`
 -- it lowers into the CPS path, so `f` is CPS-emittable and no longer evicts. The
 consuming case then rides E1's clone-on-read-out: the case increments the
