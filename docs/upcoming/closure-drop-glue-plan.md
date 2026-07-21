@@ -47,6 +47,48 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21h) -- httpd harvest (7 fixtures leak-clean flag-on)
+> + the cors cluster's remaining blocker pinned to a NEW mechanism.** With the
+> handler teardown routed through `TUR_CLOSURE_DROP` (2026-07-21, prior commit), a
+> profile of the whole `httpd-mw-*` family showed the teardown+walk already
+> reclaims every fixture whose only leak was the env chain. Flipped to
+> `--enable=closure-drop-glue` + markers dropped (suite 2254/0): `httpd-mw-log`,
+> `httpd-mw-basic-auth`, `-basic-auth-attr`, `-basic-auth-noncapture`,
+> `-body-size`, `-json`, `-static`.
+>
+> Still leaking flag-on, with the cause now pinned per fixture:
+> - **Owned-cstr CORS cluster** (`httpd-mw-cors` 48B, `-cors-opts`, `-compose`,
+>   `-compose-of`, `-cookie`, `-form`): the env chain is freed; what remains is the
+>   `httpd-cors-own-str` strdup'd strings, captured as `cstr`. The type system sees
+>   `cstr` (borrowed), so no walk can know they are owned.
+> - **Larger/non-closure** (`-fold-many` 4504B/211 allocs, `-rate-limit`
+>   24640B/2 allocs): buffer/state leaks, not closure envs -- out of scope for the
+>   closure walk.
+> - `-compress`: a `requires.spices` skip (missing zlib dep), unrelated.
+>
+> **KEY FINDING for the cors cluster (do not attempt a quick walk-extension).**
+> The strings should become owned `String` (an `(defopaque String :ptr<void>)`,
+> refcounted, with `string/retain`/`string/release` and an O(1) `string/to-cstr`
+> borrow view -- so the emit helpers keep taking `cstr`). BUT: there is NO `Drop`
+> typeclass and NO droppable-opaque machinery -- a `String` LOCAL is not even
+> auto-released at scope exit today (release is manual), and codegen has no
+> principled way to know "this opaque capture is owned, release it with X." So the
+> cors slice is really **two pieces**: (1) a compiler mechanism -- a `Drop`
+> typeclass (`(drop [x] : void)`) that a `defopaque` implements and that the
+> closure drop-glue dispatches through for a capture whose type has a `Drop`
+> instance (for `String`, `(drop [x] (string/release x))`), with retain-at-capture
+> since `String` is refcounted (reuse the rc retain/release path); then (2) the
+> httpd stdlib refactor (own-str returns `String`, mw-cors captures `String`, pass
+> `string/to-cstr` views to the emit helpers). Piece (1) is a real typeclass+codegen
+> feature -- do NOT special-case the name "String" in the compiler (the codebase
+> has zero such precedent and it is the wrong shape).
+>
+> **The reactor/CPS async blocker is unchanged and separate:** `reactor.c`
+> `owns_cb` free + CPS `__dk_reap_ptr` bare-free a headered handle and are
+> PRECOMPILED libturi C that cannot use the codegen `TUR_CLOSURE_DROP` macro ->
+> they need a runtime-API change (thread a drop fn through callback registration)
+> before the async httpd family (`httpd-async-*`) is safe flag-on.
+>
 > **Progress note (2026-07-21g) -- Model R type-honesty (a): the `^fat`
 > nested-closure walk LANDED (move-gated, sound). The middleware
 > `(fn [next] (fn [conn] ...))` shape now frees its whole chain.** Three parts,
