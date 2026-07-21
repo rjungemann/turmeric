@@ -98,6 +98,51 @@ emit path, bridge the value into the `int64_t` C return slot with
 A compiled-path `String` fixture (inline-C + `requires.compiled`) should land with
 the fix so the front stays covered.
 
+## Progress (2026-07-21): primary codegen straddle FIXED; report stays OPEN for the secondary load/import blocker
+
+The **primary defect** in this report's title -- compiled `String`-returning
+functions failing to build under a default-error `-Wint-conversion` -- is now
+**fixed in code**. The exact repro at the top of this report **compiles clean
+under clang** (`clang -std=c99 -Wall -c`, 0 `-Wint-conversion`) and **runs**
+(exits 5). Full suite green (2246 passed, 0 failed).
+
+Three coordinated straddle bridges landed:
+
+1. **stdlib inline-C returns** (`stdlib/typeclass-show.tur`): every
+   `return (void*)tur_string_from_cstr(...)` now returns
+   `(int64_t)(intptr_t)tur_string_from_cstr(...)`, bridging the `void *` runtime
+   builder result into the `int64_t` carrier slot the `Show [..] : String`
+   instances lower to. Also `stdlib/taskgroup.tur` (`return fiber;` ->
+   `return (int64_t)(intptr_t)fiber;`, `arg->tg = group;` ->
+   `arg->tg = (void*)(intptr_t)group;`).
+
+2. **Panic-check temp return** (`src/compiler/emit_expr.c` +
+   `src/compiler/emit_fns.c`): the `__auto_type __ps_N = (tur_string_from_cstr(s));
+   ... return __ps_N;` case (a `void *`-returning `extern-c ... :ptr` ascribed to
+   an opaque carrier like `String`). `emit_value` now records the `void *` temp's
+   real C type, and the fn-return emitter adds a reverse-straddle branch: when the
+   function returns the int64 carrier and the body value is a bare temp recorded
+   as a pointer, it emits `return (int64_t)(intptr_t)<temp>;`.
+
+3. **Witness-arg straddle** (`src/compiler/emit_expr.c`): a tyvar param a matched
+   spec grounds to `void *` (e.g. `vec_empty_like`'s phantom witness) fed the int64
+   carrier now bridges `(void *)(intptr_t)<arg>`.
+
+Broad clang sweep across the fixture tree: fixtures emitting a straddle dropped
+from ~94 (per the macOS-CI report) to **22**. The remaining 22 are a **distinct
+long tail** of carrier-representation straddles at OTHER emit positions (int64 <->
+*concrete* parametric-struct pointer in arg/assign/return/init, and void*<->int64
+binder inits) -- tracked with the macOS-CI report
+(`docs/reported/macos-clang-int-conversion-hard-error.md`), not this one. Because
+that tail persists, the `-Wno-error=int-conversion` mitigation in `src/main.c`
+**stays** for now (removing it while 22 straddles remain would re-red a
+`-Werror`/clang front).
+
+This report **stays OPEN** for its **secondary blocker** (the
+`(load "stdlib/string.tur")`-in-an-imported-module reentrancy at
+`typeclass-show.tur:174`), which has a separate root cause in load/import
+elaboration ordering and is untouched by the codegen bridge above.
+
 ## Secondary blocker: `(load "stdlib/string.tur")` in an *imported* module
 
 Independent of the codegen straddle, stdlib `String` cannot be pulled into a
