@@ -465,6 +465,13 @@ typedef struct Elab {
     struct Binding   *cur_hkt_dict_binding;
     uint32_t unsafe_depth;
     uint32_t macro_expand_depth;
+    /* ambiguous-dispatch-error-quality: span of the OUTERMOST macro call site
+     * currently being expanded (recorded when macro_expand_depth goes 0->1).
+     * A diagnostic raised deep inside a macro expansion (e.g. a `.method` call a
+     * derive macro emits) can attribute itself to where the USER wrote the macro
+     * call, instead of the macro-body span in stdlib/macros.tur.  Only valid when
+     * macro_expand_depth > 0. */
+    Span     macro_call_site_span;
     /* Phase U5: Unsafe linting configuration */
     uint32_t unsafe_max_lines;      /* max lines in unsafe block before warning (0 = disabled) */
     bool     unsafe_warn_nested;     /* warn on nested unsafe blocks */

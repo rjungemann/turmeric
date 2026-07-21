@@ -2152,6 +2152,11 @@ Expr *elab_call(Elab *e, Form *call) {
             diag_emit(DIAG_ERROR, call->span, "maximum macro expansion depth exceeded");
             return NULL;
         }
+        /* ambiguous-dispatch-error-quality: record the OUTERMOST macro call site
+         * so a diagnostic raised inside the expansion (e.g. a derive-emitted
+         * `.method` call with no matching instance) can point the user at where
+         * they wrote the macro call rather than at stdlib/macros.tur. */
+        if (e->macro_expand_depth == 0) e->macro_call_site_span = call->span;
         e->macro_expand_depth++;
         /* Expand the macro with arguments */
         /* Extract arguments (rest of list) */

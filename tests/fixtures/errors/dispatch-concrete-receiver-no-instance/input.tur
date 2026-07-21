@@ -1,0 +1,11 @@
+;; ambiguous-dispatch-error-quality: a `.method` call whose receiver is a
+;; CONCRETE type with no instance of the method's class must report a clean
+;; "no instance of <Class> for <type>" (TUR-E0015) at the user's call site --
+;; NOT the misleading TUR-E0020 "ambiguous dispatch / Show[?] / annotate"
+;; wording (which is reserved for a genuinely erased-tyvar receiver).
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int] (show [x] : cstr "int"))
+(defstruct Foo [a : int])
+(definstance Show [Foo] (show [x] : cstr "foo"))
+;; bool has no Show[bool] instance in scope
+(defn main [] : int (do (println (.show true)) 0))

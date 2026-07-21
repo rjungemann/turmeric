@@ -5715,16 +5715,19 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
-        /* Build a comma-separated list of matching instance names for the message. */
+        /* Build a comma-separated list of matching instance names for the message,
+         * and capture the typeclass name for the concrete-receiver diagnosis. */
         char inst_list[512];
         int pos = 0;
         int listed = 0;
+        const char *class_name = NULL;
         for (TypeClassInstance *ci = e->typeclass_env.instances;
              ci != NULL && pos < (int)sizeof(inst_list) - 2; ci = ci->next) {
             for (uint8_t mi = 0; mi < ci->typeclass->n_methods; mi++) {
                 const TypeClassMethod *cm = &ci->typeclass->methods[mi];
                 if (cm->name->len != method_name_len ||
                     memcmp(cm->name->name, method_name, method_name_len) != 0) continue;
+                if (!class_name) class_name = ci->typeclass->name->name;
                 if (listed > 0 && pos < (int)sizeof(inst_list) - 3) {
                     inst_list[pos++] = ','; inst_list[pos++] = ' ';
                 }
@@ -5743,6 +5746,59 @@ found_method:;
             }
         }
         inst_list[pos] = '\0';
+        /* ambiguous-dispatch-error-quality: when the receiver's static type is a
+         * CONCRETE type (not an unresolved/erased tyvar), the true cause is simply
+         * "no instance of <Class> for <that type>", NOT an ambiguity between the
+         * program's other instances.  The carrier-erased fallback search matched
+         * every same-named instance because the receiver lowered to the int64
+         * carrier, but that is a representation artifact -- the receiver type IS
+         * known.  Diagnose the real cause at the receiver's own span, and drop the
+         * misleading Show[?] phantom / annotate / @TypeName hint (which apply only
+         * to a genuinely erased-tyvar receiver).  Reserve the ambiguous wording for
+         * the true abstract-tyvar case (obj_is_abstract_tyvar), which is what the
+         * D1 @TypeName annotation is actually for. */
+        /* ambiguous-dispatch-error-quality: fire the clean "no instance" diagnosis
+         * only for a receiver whose static type is a genuinely DISTINCT concrete
+         * type -- a positive whitelist, NOT merely "not a tyvar".  The bare int64
+         * carrier (TY_INT/TY_INT64) is deliberately EXCLUDED: a value typed `:int`
+         * is indistinguishable from an erased carrier (e.g. `mk : int` that really
+         * holds an option), so >1 name-matching instance there is a genuine
+         * ambiguity and must keep TUR_E0020 (errors/hkt-dispatch-ambiguous). A
+         * null-def ADT is an abstract-tyvar stand-in and is likewise excluded. */
+        TypeKind rrk = obj->type.kind;
+        bool concrete_distinct_receiver =
+            rrk == TY_BOOL   || rrk == TY_CSTR   || rrk == TY_FLOAT ||
+            rrk == TY_FLOAT32|| rrk == TY_NIL    || rrk == TY_SYM   ||
+            rrk == TY_INT8   || rrk == TY_INT16  || rrk == TY_INT32 ||
+            rrk == TY_UINT8  || rrk == TY_UINT16 || rrk == TY_UINT32||
+            rrk == TY_UINT64 ||
+            (rrk == TY_ADT && obj->type.as.adt_.def != NULL);
+        if (!obj_is_abstract_tyvar && concrete_distinct_receiver) {
+            /* Attribute a macro-emitted `.method` call (e.g. derive-show's
+             * `(.show (.field __p))`) to the USER's derive call site rather than
+             * the macro body in stdlib/macros.tur; a direct user call keeps its
+             * own receiver span.  Scoped to THIS diagnostic, so no other
+             * expansion-internal diagnostics move (cf. the orphan-check re-span,
+             * which only moves the outer definstance). */
+            Span err_span = call->as.list.items[1]->span;
+            bool from_macro = e->macro_expand_depth > 0;
+            if (from_macro) err_span = e->macro_call_site_span;
+            diag_emit_with_code(DIAG_ERROR, err_span,
+                                TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                                "no instance of typeclass '%s' for type '%s' "
+                                "(method '.%.*s'). Add (definstance %s [%s] ...) "
+                                "or dispatch on a type that has one.",
+                                class_name ? class_name : "?",
+                                type_name(obj->type),
+                                (int)method_name_len, method_name,
+                                class_name ? class_name : "?",
+                                type_name(obj->type));
+            if (from_macro)
+                diag_emit(DIAG_NOTE, call->as.list.items[1]->span,
+                          "the '.%.*s' call is emitted by this macro expansion",
+                          (int)method_name_len, method_name);
+            return NULL;
+        }
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
                             "ambiguous method dispatch: '.%.*s' matches %d instances "
                             "(%s) -- receiver type is erased (int64_t). "
