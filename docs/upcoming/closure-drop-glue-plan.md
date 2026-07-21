@@ -47,6 +47,45 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21g) -- Model R type-honesty (a): the `^fat`
+> nested-closure walk LANDED (move-gated, sound). The middleware
+> `(fn [next] (fn [conn] ...))` shape now frees its whole chain.** Three parts,
+> all flag-gated:
+>
+> - **Identify (type-honesty).** A `^fat` capture is the erased int64 carrier in
+>   the env FIELD, but the capture BINDING keeps `is_fat` (it propagates through
+>   the `(let [_n next])` re-bind, elab_forms.c:878). So `cap->is_fat` distinguishes
+>   an owned fat closure handle from a scalar int -- no new type needed, the signal
+>   already survives. (The generalized fix -- carrying `^fat` as an owning-closure
+>   TYPE rather than a flag-on-int -- is still worthwhile but not required for this.)
+> - **Move (soundness).** Capturing a `^fat` handle now MARKS the source consumed
+>   (`binding_mark_moved`, elab_fns.c), mirroring Model U's store-into-fn-field
+>   move.  A SECOND capture of the same handle -- which would double-free -- is a
+>   compile-time use-after-move (TUR-E0005), so the env is the handle's sole owner.
+> - **Walk.** `drop_glue_<env>` releases each `is_fat` capture via TUR_CLOSURE_DROP
+>   (uniform across representations thanks to 2026-07-21f), excluding the letrec
+>   self-capture.  Releasing the outer handle frees the whole chain.
+>
+> Fixtures: `closure-drop-glue-fat-capture` (a `wrap`/`base` chain freed through
+> the outer handle -- leak-clean, no double-free) and
+> `errors/closure-drop-glue-fat-alias` (double capture -> TUR-E0005). Suite 2254/0;
+> flag-off byte-identical.
+>
+> **What this still does NOT do (remaining for an httpd marker to drop):**
+> 1. **Rewire httpd/reactor/CPS teardown.** httpd's `free(handler)` (and the
+>    reactor `owns_cb` free, and `__dk_reap_ptr`) still bare-free a now-headered
+>    handle -- so httpd cannot be built flag-on yet without corruption. Rewiring
+>    them to `TUR_CLOSURE_DROP` requires the macro to be emitted unconditionally
+>    (flag-off it expands to the identical `free`), which churns every codegen
+>    snapshot -- a mechanical same-PR regen, deferred out of THIS slice to keep it
+>    churn-free.
+> 2. **The CORS strings.** mw-cors captures strdup'd strings as `cstr` (not
+>    walked); they need owned `String` captures. Orthogonal to the closure walk.
+> 3. **Cross-function double-ownership caveat.** The move closes same-function
+>    aliasing; a caller that independently frees a handle it also passed in would
+>    still double-free. Not a current pattern (flag-off such handles just leak), but
+>    a general fix wants the move to thread across the call boundary.
+>
 > **Progress note (2026-07-21f) -- Model R: uniform header across every fat
 > representation (`__tur_fatshim` / poly-to-fat boxes), + the type-honesty wall
 > pinned for the nested-closure walk.** Two findings:

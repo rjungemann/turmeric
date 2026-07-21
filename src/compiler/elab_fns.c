@@ -4644,6 +4644,24 @@ Expr *elab_fn(Elab *e, const Form *call) {
         closure->is_shift_receiver = false;   /* arena mem is not zeroed */
         closure->is_effect_payload = false;
 
+        /* closure-drop-glue (Model R) type-honesty (a): capturing an OWNED `^fat`
+         * closure handle into this env MOVES it -- the env's drop-glue now releases
+         * that handle (TUR_CLOSURE_DROP), so it must have a single owner.  Marking
+         * the source consumed makes a SECOND capture (or any later use) a
+         * use-after-consume error instead of a silent double-free, exactly as
+         * Model U does when a closure is stored into a struct fn-field
+         * (elab_call.c).  Gated on the experiment so the base language is
+         * unchanged; the letrec self-capture (env storing its own pointer) is not a
+         * transfer and is skipped. */
+        if (g_opt_closure_drop_glue) {
+            for (uint32_t ci = 0; ci < n_captures; ci++) {
+                Binding *cap = arena_captures[ci];
+                if (cap && cap->is_fat && !cap->is_global &&
+                    !(cap->closure_fn_binding && cap->closure_fn_binding == fd->binding))
+                    (void)binding_mark_moved(cap, call->span);
+            }
+        }
+
         /* Store closure reference in FnDef for codegen */
         fd->closure = closure;
         

@@ -6432,6 +6432,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                                 cf, cf);
                             free(cf);
+                        } else if (cap && cap->is_fat &&
+                                   !(cap->closure_fn_binding && closure->fn &&
+                                     closure->fn->binding &&
+                                     cap->closure_fn_binding == closure->fn->binding)) {
+                            /* Type-honesty (a): release an OWNED `^fat` closure
+                             * handle capture (see emit_fns.c twin site). Kept in
+                             * lockstep so the move/walk pairing holds either site. */
+                            char *cf = raw_name_for_binding(cap);
+                            buf_printf(ctx->file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                            free(cf);
                         }
                     }
                     buf_puts(ctx->file,

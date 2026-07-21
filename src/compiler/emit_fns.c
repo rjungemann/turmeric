@@ -2909,6 +2909,23 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                             "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
                             cf, cf);
                         free(cf);
+                    } else if (cap && cap->is_fat &&
+                               !(cap->closure_fn_binding &&
+                                 fd->binding &&
+                                 cap->closure_fn_binding == fd->binding)) {
+                        /* Type-honesty (a): a `^fat` capture carries is_fat even
+                         * though its env field is the erased int64 carrier, so it
+                         * is provably an OWNED fat closure handle -- release it via
+                         * TUR_CLOSURE_DROP (uniform across representations).  Sound
+                         * because the capture is MOVED into this env (elab marks the
+                         * source consumed, so no other owner drops it -- an aliasing
+                         * second capture is a use-after-consume error, not a
+                         * double-free).  The letrec self-capture (the env storing
+                         * its OWN pointer) is excluded -- dropping it would recurse
+                         * into itself. */
+                        char *cf = raw_name_for_binding(cap);
+                        buf_printf(file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                        free(cf);
                     }
                 }
                 buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
