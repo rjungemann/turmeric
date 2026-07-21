@@ -122,6 +122,17 @@ Individual values inside an arena are never freed one at a time.
 returned from inline C is *not* on the RC path. If your inline-C code
 `malloc`s, your inline-C code frees.
 
+This includes **boxed sum-type payloads.** A `defdata` constructor with a
+heap payload (`(Cons 1 rest)`, `(Full 7)`) emits a `ctor_*` `malloc`, but a
+bare non-`rc<T>` box is never auto-freed on *any* path -- matching it and
+consuming the payload does not drop the box. This is the memory model, not a
+`match`-teardown bug: e.g. a plain `(defdata List (Nil) (Cons :int :List))`
+built and matched leaks its `Cons` boxes by design. Opt a boxed value into
+managed lifetime by wrapping it in `rc<T>`, or use the substructural
+(`^linear`/`^unique`) path. The compiled program's *runtime* is not
+leak-checked (only the `emit-c`/`build` codegen path is), so these leaks pass
+the suite silently.
+
 **Boxes without walkers.** `RCK_OPAQUE` blocks are RC-managed (they get
 freed when the count hits zero) but the cycle collector cannot see through
 them. Wrap C handles in `defopaque` and give them a proper drop, not a

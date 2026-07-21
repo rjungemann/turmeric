@@ -236,8 +236,19 @@ documentation.
   inline block). They are scoped to that function.
 - Do not rely on identifier names that look like Turmeric-mangled names
   (e.g. `tur__0`) -- these are unstable implementation details.
-- `static` helpers defined inside an inline block work, but be aware of ODR
-  if the same function name is used in multiple inline blocks across files.
+- `static` helpers *at file scope* (in an `extern-c` block, or a whole-file
+  C shim) are fine, but be aware of ODR if the same function name is used in
+  multiple inline blocks across files.
+- **Do not define a helper *function* inside a `defn`'s inline-C body.** That
+  body is spliced *inside* the emitted C function, so a function definition
+  there becomes a C **nested function** -- a non-standard GNU extension (ISO C
+  forbids nested functions), and a `static` storage class on one is rejected
+  outright (`error: invalid storage class for function ...`) by clang and
+  standard toolchains. Local `typedef`s and `struct` definitions are fine; a
+  *function* is not. Hoist the helper into its own sibling `defn` (which emits
+  a real file-scope function) and call it from the inline body via
+  `__TUR_CNAME_<name>__` (see below). This is how `stdlib/digest.tur` factors
+  its SHA-256 / MD5 block transforms out of the per-digest bodies.
 
 **Calling a sibling `defn` from inline C -- `__TUR_CNAME_<name>__`:**
 
@@ -797,6 +808,7 @@ shared `.tur` file.
 | Storing a `ref<T>` across an `extern-c` call | Borrow checker does not track C call boundaries | Use copy or `rc<T>` for data that outlives a single call |
 | Varadic `extern-c` with wrong arg types | UB at runtime | Check generated C with `emit-c`; cast explicitly in callers |
 | `static` name collision in multiple inline blocks | ODR violation / linker error | Prefix static helper names with a module-specific prefix |
+| Defining a helper *function* inside a `defn`'s inline-C body | `error: invalid storage class for function` / non-portable nested-function extension | Hoist it to a sibling `defn` (file-scope function), call via `__TUR_CNAME_<name>__` |
 | Using `cons`/`head`/`tail` in compiled code | `error: unknown function or operator 'cons'` (they are interpreter-only natives) | Define inline-C stubs, use a stdlib list helper, or pass `0` for an empty list (see Interpreter-only natives) |
 
 ---
