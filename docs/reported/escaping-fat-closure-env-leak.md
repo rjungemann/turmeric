@@ -14,8 +14,32 @@
 
 **Severity:** low (bounded per-closure-construction leak; not a crash or
 miscompile). General codegen -- **not** CPS/effect-specific (reproduces with no
-effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
+effects at all).
 
+> **Status (2026-07-21), report NARROWED to the httpd/reactor residual; STILL
+> OPEN.** The headline leak and the stored-in-a-generated-holder case are RESOLVED;
+> the only remaining surface is server-lifetime closures behind an opaque-C holder,
+> which is deferred to Model R. Concretely:
+>
+> - **Resolved:** the minimal `make-scaler` repro (value closure, S1c) and the
+>   STORED-in-a-Turmeric-holder case (`hkt-stdlib-parser-instances` /
+>   `-backtrack-instances` -- closures in a `Parser` value, freed by the holder's
+>   generated drop glue, S2/Model U). All eight leak-check opt-outs this leak was
+>   gating are dropped and verified LSan-clean (suite 2249/0):
+>   `cps-backend-fn-param`, `free-lift-bind`, `unsafe-closure-capture`,
+>   `hkt-stdlib-parser-instances`, `hkt-stdlib-backtrack-instances`,
+>   `ascribe-fat-closure-call`, `fat-closure-ascription`, `captureless-autobox`.
+> - **Remaining (this report stays OPEN for it):** the httpd/reactor middleware
+>   family (`httpd-async-mw-compose`, `httpd-mw-*`). Its handler is stored in an
+>   opaque hand-written-C server struct and arrives type-erased (`:int`) through
+>   `compose-middleware`, so neither a static `drop_glue_env_N` selection nor
+>   Model U's generated-holder drop can reach it. The captured CORS strings are
+>   already a documented process-lifetime pattern (`stdlib/httpd.tur:1762`,
+>   "mirroring reactor callbacks"). Eliminating it needs **Model R** (a runtime
+>   drop-glue pointer on the fat env), scoped and DEFERRED in
+>   `docs/upcoming/closure-drop-glue-plan.md` (see the 2026-07-21c note + Model R
+>   sketch). These fixtures keep `requires.no-leak-check` until Model R lands.
+>
 > **Progress (2026-07-20), report STILL OPEN.** Two adjacent slices landed:
 >
 > 1. A *different* env leak in the same machinery: a NON-escaping closure's env

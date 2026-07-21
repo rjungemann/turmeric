@@ -31,10 +31,73 @@
 > "nothing blocks the track" posture in CLAUDE.md **for this work only** --
 > by explicit owner instruction (2026-07-21).
 
-**Status:** ACTIVE, BLOCKING. S1.2 (borrowed HOF-arg free) LANDED; the rest of S1 (owning-capture
-walk-glue + capture-clone) and S2 remain. Prepared from
+**Status:** S1 and S2/Model U LANDED to their achievable extent -- every
+value-closure, HOF-arg, and stored-in-a-GENERATED-holder (struct/ADT/`Parser`)
+escaping closure is now freed, and all eight leak-check opt-outs the feature was
+gating are dropped (suite 2249/0; see the 2026-07-21b/c notes). The ONE residual
+is the **httpd/reactor server-closure family** (`httpd-async-mw-compose`,
+`httpd-mw-*`, ...), which stays on `requires.no-leak-check`: its handler is stored
+in an OPAQUE hand-written-C holder and reaches it type-erased through
+`compose-middleware`'s `:int` return, so no static `drop_glue_env_N` can be
+selected and Model U's generated-holder drop cannot reach it. Eliminating it
+needs **Model R** (a runtime drop-glue pointer carried on the fat env), which this
+plan deliberately DEFERS (high ABI cost; the captured strings are already a
+documented process-lifetime pattern, `stdlib/httpd.tur:1762`). The Model R sketch
+below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
+
+> **Progress note (2026-07-21c) -- S1 + S2/Model U closeout; Model R scoped &
+> deferred.** After the 2026-07-21b marker sweep, a full audit of every remaining
+> `requires.no-leak-check` fixture (rebuilt suite-faithfully, LSan on) established
+> that NO tractable closure-env leak remains -- the only closure-family opt-outs
+> left are the httpd/reactor server closures, and their sound elimination is
+> blocked on the Model R ABI, not on any missing S1/S2 analysis. Concretely:
+>
+> - **Type erasure is the wall.** `compose-middleware-of` returns `:int`
+>   (`stdlib/httpd.tur`), so at `(httpd-new-async 0 composed)` the compiler sees a
+>   bare `:int` handler with no env type -- it cannot emit or select the right
+>   `drop_glue_env_N`. Model U (the holder's *generated* drop glue frees the
+>   field) requires the holder to be a Turmeric struct/ADT whose field type names
+>   the closure; httpd's holder is an opaque C `struct { int64_t handler; ... }`.
+> - **Sound-without-clone, for these captures.** The httpd chain's captures are
+>   either scalar (`donech`) or uniquely-owned-fresh (the `httpd-cors-own-str`
+>   strdup'd strings; the `_n` next-closure handle, moved in) -- none alias an
+>   outer owner that also drops them, so a walk-glue free of them would NOT
+>   double-free. The blocker is purely *dispatch* (how opaque C names the glue),
+>   not the finding-#1 capture-clone hazard. That hazard remains real for the
+>   general case (capturing a live `rc`), so a general owning-capture walk-glue
+>   still needs capture-clone first -- but the httpd family does not.
+> - **Decision:** do not force the Model R env-layout ABI change speculatively
+>   (it perturbs every closure's env struct + `TUR_APPLY` dispatch assumptions +
+>   HKT poly-thunk recovery + `tur_poly_fn_t` + WASM glue, and churns every
+>   closure snapshot) to reclaim a documented process-lifetime allocation. Keep
+>   the httpd/reactor markers; land Model R only when that family is explicitly
+>   prioritized, using the sketch below.
+>
+> **Model R -- ready-to-execute sketch (contained variant).** Because httpd
+> handlers are monomorphic one-word envs (not poly/HKT), the change can be scoped
+> to the plain `struct __env_N` path and leave `tur_poly_fn_t` untouched:
+>
+> 1. **Env header:** emit `struct __env_N { int64_t __fn; void (*__drop)(void *);
+>    <captures> }`. `__fn` stays at offset 0 so every `fat[0]` dispatch
+>    (`TUR_APPLY*`, httpd/reactor C) is unchanged; captures shift by one word but
+>    are always field-accessed, so lifted thunks are unaffected. Audit for any raw
+>    `fat[1]`/offset-1 capture read (there should be none).
+> 2. **Glue:** emit `drop_glue_env_N(void *p)` per env type -- free owning `cstr`
+>    captures, recurse `((struct{int64_t __fn; void(*d)(void*);}*)cap)->d(cap)`
+>    into nested fat-closure captures, then `free(p)`. Fill `tmp->__drop =
+>    drop_glue_env_N` at construction (or `NULL` for a scalar-only env -> bare
+>    free).
+> 3. **Teardown:** replace `httpd.tur`'s bare `free((void *)handler)` (~line 949)
+>    and the reactor callback frees with
+>    `{ void(*d)(void*) = ((...__drop layout...)handler)->__drop; if (d) d((void*)handler); else free((void*)handler); }`.
+> 4. **Capture-clone (only if generalized):** for the general owning-capture case
+>    (an env capturing a live `rc`/`ref`/nested closure the caller still owns),
+>    add capture-time retain/clone at the env fill BEFORE enabling walk-glue on
+>    that capture kind, per finding #1. NOT needed for the httpd family.
+> 5. **Regen** every closure snapshot in the same PR (env struct + `__drop` fill).
+
 
 > **Progress note (2026-07-21b) -- S2 exit-gate marker cleanup: six
 > `requires.no-leak-check` markers DROPPED (now verified leak-clean under LSan;
