@@ -47,6 +47,40 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21f) -- Model R: uniform header across every fat
+> representation (`__tur_fatshim` / poly-to-fat boxes), + the type-honesty wall
+> pinned for the nested-closure walk.** Two findings:
+>
+> - **Landed: multi-representation headers.** The prepend-header now also wraps the
+>   `__tur_fatshim` box (bare-fn-to-fat, `{shim, orig_fn}`) and the poly-to-fat box
+>   (`{shim, fn, env}`), flag-on. Both own nothing walkable, so their header is
+>   NULL and `tur_closure_drop` frees the base. This makes `TUR_CLOSURE_DROP`
+>   release ANY fat handle uniformly regardless of representation -- the
+>   prerequisite for a walk that recurses a captured handle without statically
+>   knowing which representation it is (the documented "give the `__tur_fatshim`
+>   box its own header so a bare-fn handler is safe" item). Fixture
+>   `closure-drop-glue-fatshim` (a bare fn shimmed to `^fat` then TUR_CLOSURE_DROP'd)
+>   is leak-clean, no corruption. Suite 2252/0; flag-off byte-identical.
+>
+> - **Pinned: the nested-closure walk is blocked on TYPE-HONESTY, not just move
+>   analysis.** Auto-deriving the walk needs to identify which captures are owned
+>   closure handles. But the middleware `_n` capture comes from a `^fat next : int`
+>   parameter -- erased to `TY_INT`, indistinguishable from a scalar. No type
+>   predicate can pick it out, and `TY_PTR_VOID` is ambiguous (any pointer). So the
+>   walk cannot fire on the httpd shape until `^fat` is carried as an owning-closure
+>   TYPE (un-erased) rather than an `int` carrier -- a type-system change. A
+>   type-HONEST `boxed TY_FN` capture COULD be walked (move-gated), but such
+>   captures are rare in the corpus.
+>
+> - **Flag-on free-site boundary (audited).** Header-on programs are sound only
+>   where every fat-handle free routes through `TUR_CLOSURE_DROP`. Still doing a
+>   bare free of a (now-headered) handle, and therefore needing header-aware
+>   rewiring before flag-on is safe for those programs: the CPS boundary reap
+>   (`__dk_reap_ptr`, `emit_cps_ir.c`), the reactor `owns_cb` free
+>   (`src/async/reactor.c`), and httpd's `free(handler)` (`stdlib/httpd.tur:949`).
+>   The flag stays opt-in for simple programs (no CPS-reap / reactor / httpd
+>   teardown of headered handles) until these are rewired.
+>
 > **Progress note (2026-07-21e) -- Model R walk slice: rc-capture retain/release
 > (the unconditionally-sound half of the owning-capture walk).** The env drop-glue
 > now WALKS refcounted owning captures, so an rc-capturing closure participates in

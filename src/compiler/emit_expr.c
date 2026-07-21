@@ -8040,8 +8040,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
-                       fat_tmp);
+            if (g_opt_closure_drop_glue) {
+                /* closure-drop-glue (Model R): give the bare-fn-to-fat box the same
+                 * env[-1] drop-glue header as a capturing env, so TUR_CLOSURE_DROP
+                 * releases ANY fat handle uniformly (a captured handle may be either
+                 * representation).  A `{shim, orig_fn}` box owns nothing, so its
+                 * header is NULL -> tur_closure_drop frees the base allocation. */
+                char *base_tmp = fresh_tmp(ctx);
+                buf_printf(body, "void *%s = malloc(sizeof(void *) + 2 * sizeof(int64_t));\n",
+                           base_tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))%s = 0;\n", base_tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n",
+                           fat_tmp, base_tmp);
+                free(base_tmp);
+            } else {
+                buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
+                           fat_tmp);
+            }
             indent_buf(body, ctx->indent);
             if (typed_shim) {
                 buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", fat_tmp, typed_shim);
@@ -8074,7 +8091,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", pf, pv);
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
+            if (g_opt_closure_drop_glue) {
+                /* closure-drop-glue (Model R): header the poly-to-fat box too so
+                 * TUR_CLOSURE_DROP is uniform across every fat representation.
+                 * Header NULL -> tur_closure_drop frees the base (freeing the box
+                 * only, as today; the boxed inner env, if any, is not walked here). */
+                char *pbase = fresh_tmp(ctx);
+                buf_printf(body, "void *%s = malloc(sizeof(void *) + 3 * sizeof(int64_t));\n",
+                           pbase);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))%s = 0;\n", pbase);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n",
+                           box, pbase);
+                free(pbase);
+            } else {
+                buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
+            }
             /* poly-to-fat-typed-shim-plan + multiarg fix: pick the slot-0 shim
              * arity from the sink's declared ^fat fn signature.  When that
              * signature is concrete and non-int64, ensure_typed_poly_to_fat
