@@ -2881,6 +2881,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             buf_puts(file, "};\n");
             free(thunk_typedef);
+
+            /* closure-drop-glue (Model R): emit the env's drop-glue beside its
+             * struct def (this pre-pass is the authoritative early emission site;
+             * the EX_CLOSURE path shares the env_struct_names guard, so the glue is
+             * emitted exactly once).  Foundation increment: the glue frees the base
+             * allocation (the header word precedes the env pointer).  It does NOT
+             * yet WALK owning captures -- recursing an owned nested-closure capture
+             * (a `!is_poly_fn` TY_FN handle) is sound only once move/uniqueness
+             * analysis proves the env is that capture's sole owner (finding #1: a
+             * capture aliased by another owner would double-free).  That move-aware
+             * walk, plus type-honest owned captures for the httpd string case, is
+             * the next increment. */
+            if (g_opt_closure_drop_glue) {
+                buf_printf(file, "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+            }
         }
     }
 

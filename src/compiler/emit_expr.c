@@ -1757,7 +1757,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * the let body (their last use) has been emitted. */
     for (uint32_t i = 0; i < n_env_free; i++) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "free((void *)(intptr_t)%s);\n", env_free_names[i]);
+        /* closure-drop-glue (Model R): a headered env must be released through
+         * its drop-glue header (which also walks owning captures), not a bare
+         * `free` of the past-header pointer.  Flag-off, TUR_CLOSURE_DROP is a
+         * plain free, so the emitted text is unchanged. */
+        if (g_opt_closure_drop_glue) {
+            buf_printf(body, "TUR_CLOSURE_DROP(%s);\n", env_free_names[i]);
+        } else {
+            buf_printf(body, "free((void *)(intptr_t)%s);\n", env_free_names[i]);
+        }
         free(env_free_names[i]);
     }
     free(env_free_names);
@@ -6399,6 +6407,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 buf_puts(ctx->file, "};\n");
                 free(thunk_typedef);
+
+                /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
+                 * can be released generically (opaque-C teardown or scope-exit)
+                 * through its env[-1] header.  Foundation increment frees the base
+                 * allocation only; the move-aware owning-capture walk is the next
+                 * increment (see emit_fns.c's twin site for the rationale).  This
+                 * arm is a fallback -- the emit_fns.c pre-pass normally wins the
+                 * shared env_struct_names guard. */
+                if (g_opt_closure_drop_glue) {
+                    buf_printf(ctx->file,
+                        "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                    buf_puts(ctx->file,
+                        "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+                }
             }
             
             /* Phase HKT §5: heap-allocate the fat closure struct so that the
@@ -6424,8 +6446,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 : raw_name_for_binding(closure->fn->binding);
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",
-                       env_name->name, fat_tmp, env_name->name, env_name->name);
+            if (g_opt_closure_drop_glue) {
+                /* closure-drop-glue (Model R): allocate an 8-byte drop-glue
+                 * header BEFORE the env and hand back a pointer PAST it, so every
+                 * existing use (dispatch via fat[0], capture access by field, the
+                 * fat handle that escapes) is byte-identical to the headerless
+                 * layout -- only env[-1] is new.  env[-1] holds drop_glue_env_N;
+                 * TUR_CLOSURE_DROP(handle) recovers it to release the env. */
+                char *base_tmp = fresh_tmp(ctx);
+                buf_printf(body,
+                    "void *%s = malloc(sizeof(void *) + sizeof(struct %s));\n",
+                    base_tmp, env_name->name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "*(void (**)(void *))%s = drop_glue_%s;\n",
+                    base_tmp, env_name->name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "struct %s *%s = (struct %s *)((char *)%s + sizeof(void *));\n",
+                    env_name->name, fat_tmp, env_name->name, base_tmp);
+                free(base_tmp);
+            } else {
+                buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",
+                           env_name->name, fat_tmp, env_name->name, env_name->name);
+            }
             indent_buf(body, ctx->indent);
             if (thunk_typedef) {
                 buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, thunk_typedef, thunk_sym);

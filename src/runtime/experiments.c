@@ -132,6 +132,13 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * bounded by the base drop's shallowness, not this gate.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
      * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
+    { "closure-drop-glue",
+      "Model R: runtime drop-glue header on escaping fat-closure envs",
+      "docs/upcoming/closure-drop-glue-plan.md",
+      "0.30.1",                 /* introduced */
+      "0.34.0",                 /* expires_at (soft deadline; review at that cut) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_closure_drop_glue },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

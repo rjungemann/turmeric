@@ -4,6 +4,7 @@
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
+#include "experiments.h" /* experiment_warn_if_used (closure-drop-glue) */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
 
@@ -5821,6 +5822,28 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "    TUR_APPLY3_T(int64_t, int64_t, int64_t, int64_t, f, a, b, c)\n");
     buf_puts(out, "#define TUR_APPLY4(f, a, b, c, d) \\\n");
     buf_puts(out, "    TUR_APPLY4_T(int64_t, int64_t, int64_t, int64_t, int64_t, f, a, b, c, d)\n");
+    /* closure-drop-glue (Model R): TUR_CLOSURE_DROP releases a fat-closure handle
+     * that opaque C (httpd/reactor teardown) or a scope-exit free owns.  Flag-off,
+     * it is a plain `free` of the env pointer (the base language's behavior -- an
+     * escaping env still leaks unless the caller frees it).  Flag-on, each fat env
+     * is allocated with an 8-byte drop-glue header at env[-1]; the handle is
+     * released through that header's `drop_glue_env_N`, which walks owning captures
+     * and frees the base allocation.  NULL is a safe no-op either way. */
+    if (g_opt_closure_drop_glue) {
+        experiment_warn_if_used("closure-drop-glue");
+        buf_puts(out, "static void tur_closure_drop(void *__h) __attribute__((unused));\n");
+        buf_puts(out, "static void tur_closure_drop(void *__h) {\n");
+        buf_puts(out, "    if (!__h) return;\n");
+        buf_puts(out, "    void (**__hdr)(void *) = ((void (**)(void *))__h) - 1;\n");
+        buf_puts(out, "    void (*__d)(void *) = *__hdr;\n");
+        buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
+        buf_puts(out, "}\n");
+        buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+    }
+    /* Flag-off: TUR_CLOSURE_DROP is intentionally NOT emitted -- no flag-off code
+     * path references it (scope-exit env frees stay a plain `free`, and no stdlib
+     * teardown is rewired yet), so omitting it keeps the default preamble -- and
+     * therefore every codegen snapshot -- byte-identical. */
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to

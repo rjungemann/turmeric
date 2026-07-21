@@ -47,6 +47,49 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21d) -- Model R ABI FOUNDATION landed behind
+> `--enable=closure-drop-glue` (experiment, off by default).** The runtime
+> drop-glue header + generic-release plumbing is in; the move-aware owning-capture
+> WALK and the httpd type-honesty layer are the remaining increments. What landed:
+>
+> - **Experiment** `closure-drop-glue` (`src/runtime/experiments.c`,
+>   `g_opt_closure_drop_glue`, prototype, introduced 0.30.1 / expires 0.34.0).
+>   Off by default -> the base language is byte-for-byte unchanged (verified: a
+>   sample snapshot re-emits identically; full suite 2250/0 with the flag off).
+> - **Prepend-header ABI (contained variant).** Flag-on, every heap
+>   `struct __env_N` is allocated as `malloc(sizeof(void*) + sizeof(env))` with the
+>   fat pointer handed back PAST an 8-byte header; `env[-1]` holds the env's
+>   `drop_glue_<env>` pointer. `fat[0]` dispatch, capture-by-field access, and the
+>   escaping handle are all byte-identical to the headerless layout -- chosen over
+>   inserting a slot at `[1]` precisely because `[1]` is the fn slot in the
+>   `__tur_fatshim` / `tur_poly_fn_t` representations, so an inserted slot would
+>   collide (emit_module.c:678, :5910). Box internals stay untouched; only `[-1]`
+>   is new. (`src/compiler/emit_expr.c`, `src/compiler/emit_fns.c`.)
+> - **Generic release.** `TUR_CLOSURE_DROP(h)` (preamble, emitted only under the
+>   flag) recovers `h[-1]` and calls it; `drop_glue_<env>` frees the base
+>   allocation. The scope-exit env free (`let_binding_env_freeable`) routes through
+>   it flag-on. Fixture `closure-drop-glue-model-r` (a `flags` file enables the
+>   experiment) proves construction+dispatch+generic-drop is leak-clean and
+>   corruption-free.
+>
+> **Remaining increments (both needed before any httpd/reactor marker can drop):**
+>
+> 1. **Move-aware owning-capture WALK.** `drop_glue_<env>` currently frees only the
+>    base -- it does NOT recurse owning captures, because doing so blind is the
+>    finding-#1 double-free (a captured closure/rc the caller still owns would be
+>    freed twice). The walk must gate on move/uniqueness (`is_moved` /
+>    `is_unique_consumed` / a fresh capture-clone) so it recurses ONLY when the env
+>    is the capture's sole owner. This is what actually reclaims a middleware
+>    chain's inner `_n` env.
+> 2. **httpd type-honesty + teardown wiring.** The httpd handler reaches an opaque-C
+>    holder as a type-erased `:int` and its CORS strings are secretly-owned `cstr`;
+>    neither is walkable until `_n` is a recognizable owned-closure capture and the
+>    strings are owned `String`. Then rewire httpd's `free(handler)` (~line 949)
+>    and the reactor callback frees to `TUR_CLOSURE_DROP`, and give the
+>    `__tur_fatshim` (rep-2) box its own header so a bare-fn handler is safe. Until
+>    every env free site on those paths is header-aware, the flag stays opt-in for
+>    simple programs (no reactor/httpd/CPS-env-reap).
+>
 > **Progress note (2026-07-21c) -- S1 + S2/Model U closeout; Model R scoped &
 > deferred.** After the 2026-07-21b marker sweep, a full audit of every remaining
 > `requires.no-leak-check` fixture (rebuilt suite-faithfully, LSan on) established
