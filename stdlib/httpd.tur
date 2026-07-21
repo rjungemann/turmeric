@@ -1770,7 +1770,7 @@
 (defn httpd-cors-own-str [s : cstr] : cstr
   ```c
   const char *cs = (const char *)(intptr_t)s;
-  return (int64_t)(intptr_t)(cs ? strdup(cs) : (char *)0);
+  return (const char *)(cs ? strdup(cs) : (char *)0);
   ```)
 
 (defn mw-cors-with [allow-origin : cstr

@@ -2131,30 +2131,22 @@ static int cmd_build(const char *input, const char *out_path,
      * libm lives in libSystem so -lm is a no-op there too. Linking it
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
-    /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
-     * warnings to hard errors.  The generated C used to trip both -- a real
-     * codegen defect tracked under docs/archive/codegen-gcc14-permerrors.md and
-     * its split fronts.  Both fronts are now resolved (the carrier<->concrete
-     * representation straddles are bridged at emit time) for the fronts that
-     * had compiled-path fixture coverage.  One front was NOT covered and is
-     * still open: a String-returning `defn` (String lowers to void*) emits an
-     * int64_t C return slot -- every handle in this ABI is an int64_t -- but
-     * the String-wrapper emit path returns the raw void* (from `tur_string_*`)
-     * instead of bridging it with `(int64_t)(intptr_t)`, so clang/GCC flag
-     * -Wint-conversion (and -Wincompatible-pointer-types for the pointer-arg
-     * mirror).  No String fixture exercises the compiled path -- every String
-     * fixture runs in the interpreter -- so this went untested until the spice
-     * String adoption (all spices are AOT-compiled) hit it.  The straddle is
-     * width-safe on LP64 (void* and int64_t are both 8 bytes; runtime behavior
-     * is correct), so downgrade these two to warnings until the codegen bridge
-     * lands.  See docs/reported/compiled-string-return-int-conversion.md.
-     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open
-     * concern and stays.
+    /* GCC 14 / Apple clang 15+ promoted -Wincompatible-pointer-types and
+     * -Wint-conversion from warnings to hard errors.  The generated C used to
+     * trip both -- carrier<->concrete representation straddles (void*<->int64_t)
+     * -- tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * docs/archive/macos-clang-int-conversion-hard-error.md.  Every straddle is
+     * now bridged at emit time (String returns, cloneable-frame call args,
+     * cps->direct spawn/void* params, closure-env void* fields, and __ps_N
+     * binder-init crossings), and the whole fixture tree emits 0
+     * -Wint-conversion / -Wincompatible-pointer-types hard errors, so the two
+     * downgrades are removed -- a NEW straddle now fails the build (as intended)
+     * instead of hiding behind the macOS CI red.
      *
-     * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
-     * accidentally drop it. */
-    buf_puts(&cmd, " -Wno-error=int-conversion");
-    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types");
+     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open concern
+     * (e.g. an emitted inline-C call to `tur_hamt_hash_xxh64` with no in-scope
+     * prototype) and stays.  Appended after the user's TUR_CC_FLAGS on purpose,
+     * so an override cannot accidentally drop it. */
     buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
@@ -4321,30 +4313,22 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * libm lives in libSystem so -lm is a no-op there too. Linking it
      * unconditionally means libm is usable from a pure spice without forcing
      * a fake cmake-dep just to pull it in. */
-    /* GCC 14 promoted -Wincompatible-pointer-types and -Wint-conversion from
-     * warnings to hard errors.  The generated C used to trip both -- a real
-     * codegen defect tracked under docs/archive/codegen-gcc14-permerrors.md and
-     * its split fronts.  Both fronts are now resolved (the carrier<->concrete
-     * representation straddles are bridged at emit time) for the fronts that
-     * had compiled-path fixture coverage.  One front was NOT covered and is
-     * still open: a String-returning `defn` (String lowers to void*) emits an
-     * int64_t C return slot -- every handle in this ABI is an int64_t -- but
-     * the String-wrapper emit path returns the raw void* (from `tur_string_*`)
-     * instead of bridging it with `(int64_t)(intptr_t)`, so clang/GCC flag
-     * -Wint-conversion (and -Wincompatible-pointer-types for the pointer-arg
-     * mirror).  No String fixture exercises the compiled path -- every String
-     * fixture runs in the interpreter -- so this went untested until the spice
-     * String adoption (all spices are AOT-compiled) hit it.  The straddle is
-     * width-safe on LP64 (void* and int64_t are both 8 bytes; runtime behavior
-     * is correct), so downgrade these two to warnings until the codegen bridge
-     * lands.  See docs/reported/compiled-string-return-int-conversion.md.
-     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open
-     * concern and stays.
+    /* GCC 14 / Apple clang 15+ promoted -Wincompatible-pointer-types and
+     * -Wint-conversion from warnings to hard errors.  The generated C used to
+     * trip both -- carrier<->concrete representation straddles (void*<->int64_t)
+     * -- tracked under docs/archive/codegen-gcc14-permerrors.md and
+     * docs/archive/macos-clang-int-conversion-hard-error.md.  Every straddle is
+     * now bridged at emit time (String returns, cloneable-frame call args,
+     * cps->direct spawn/void* params, closure-env void* fields, and __ps_N
+     * binder-init crossings), and the whole fixture tree emits 0
+     * -Wint-conversion / -Wincompatible-pointer-types hard errors, so the two
+     * downgrades are removed -- a NEW straddle now fails the build (as intended)
+     * instead of hiding behind the macOS CI red.
      *
-     * Appended after the user's TUR_CC_FLAGS on purpose, so an override cannot
-     * accidentally drop it. */
-    buf_puts(&cmd, " -Wno-error=int-conversion");
-    buf_puts(&cmd, " -Wno-error=incompatible-pointer-types");
+     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open concern
+     * (e.g. an emitted inline-C call to `tur_hamt_hash_xxh64` with no in-scope
+     * prototype) and stays.  Appended after the user's TUR_CC_FLAGS on purpose,
+     * so an override cannot accidentally drop it. */
     buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32

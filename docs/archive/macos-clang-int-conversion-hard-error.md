@@ -208,3 +208,58 @@ clone/builtin signatures into the cps->direct arg emitter) than the three landed
 above, which is why they are left for a dedicated follow-up. The
 `-Wno-error=int-conversion` / `-Wno-error=incompatible-pointer-types` stopgap in
 `src/main.c` stays until this remainder is drained.
+
+## Resolution (2026-07-21): tail fully drained + stopgap removed -- RESOLVED
+
+The remaining tail is drained; the whole fixture tree now emits **0**
+`-Wint-conversion` and **0** `-Wincompatible-pointer-types` hard errors under
+Apple clang (`tur emit-c <fixture> | clang -std=c99 -Wall -c` over all ~1442
+fixtures). Each of the 8 straddle fixtures compiles clean AND runs correct
+against `expected.stdout`. The stopgap in `src/main.c` is **removed** (both
+`cc`-invocation sites); only `-Wno-error=implicit-function-declaration` stays
+(the separate, still-open `tur_hamt_hash_xxh64`-prototype concern). Full suite
+(`bash tests/run.sh`, 12-min timeout): **2244 passed, 5 failed**, and all 5 are
+the pre-existing macOS-toolchain issues this report already documented -- `pipe2`
+static-vs-nonstatic in `hrt-stdlib-cont`, `OSByteOrder.h` "function definition
+not allowed here" in the three `image-*` fixtures, and the
+`vec-push-byvalue-aggregate-escapes-frame` stdout mismatch (none are
+int-conversion, none are caused by this change).
+
+Landed, each keyed to the shape it fixes:
+
+- **Group A -- cloneable-frame call arg -> concrete-pointer param**
+  (`src/compiler/emit_cps_ir.c`, new `cc_cast_for_param`). The resumed
+  cloneable-frame arg was cast with `cc_cast_for_kind`, which maps every nominal
+  ADT/opaque kind to the generic `(int64_t)` carrier -- straddling a callee whose
+  actual emitted param is a concrete pointer (`read_hyh(tur_adt_H *)`).
+  `cc_cast_for_param` prefers the callee's real param C type (from the FN type's
+  `arg_full_types`) when it is a pointer, keeping the kind-based cast otherwise.
+  Clears `cloneable-owning-carrier-handle-capture`,
+  `cloneable-owning-consuming-carrier`, `-consuming-recursive`,
+  `-consuming-ref-field`.
+- **Group D -- cps->direct call: int64 carrier -> `void *` param**
+  (`atoms_csv_call_typed`). The `param_is_voidp && arg_is_ptr` bare-pass fired on
+  the SEMANTIC "value is pointer-like" flag even when the arg's C expression was
+  an `int64_t` carrier (`spawn(__t4)` with `__t4` declared `int64_t`). Now the
+  bare pass requires the arg's ACTUAL C type to be a pointer; an int64 carrier
+  into a `void *` param bridges `(void *)(intptr_t)`. Clears `session-effects`,
+  `session-mp-effects`.
+- **Group B -- closure-env `void *` field -> int64 param**
+  (`src/compiler/emit_expr.c`, spec-dispatch reverse-straddle bridge). The bridge
+  that reinterprets a concrete-pointer arg into an int64 param excluded `void *`;
+  a captured env field `void * chp` passed into `chan_hysend(int64_t, ...)` slipped
+  through bare. Now a `void *` arg into an int64 param bridges too. Clears
+  `reactor-fibers-park-chan`.
+- **Group C -- `__ps_N` binder-init straddles, both directions**
+  (`src/compiler/emit_expr.c`, let binder-init). The recorded-ctype consumers
+  excluded `void *` (concrete-pointer-only) so a `void *` `__ps_N` temp into an
+  `int64_t` binder and an `int64_t` temp into a `void *` binder both straddled.
+  Added `init_val_recorded_voidp` / `init_val_recorded_i64` flags feeding the
+  existing bridges. Clears `schan-worker-pool`.
+- **stdlib source inline-C (the straddle the stopgap was masking)**
+  (`stdlib/httpd.tur:1773`). `httpd-cors-own-str` returns `: cstr` but its
+  inline-C body returned `(int64_t)(intptr_t)(cs ? strdup(cs) : ...)` -- the
+  `digest-hex` shape: inline-C is emitted verbatim, so the cast was wrong at the
+  source. Changed to `(const char *)(...)`. This surfaced only once the stopgap
+  was removed (30 `httpd-*` fixtures `(load "stdlib/httpd.tur")`); it is exactly
+  the "the stopgap hides real straddles" case this report warned about.

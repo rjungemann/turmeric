@@ -1601,11 +1601,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * representation, so the bridge fires only for a genuine pointer temp
              * flowing into an int64 binder. Value-preserving. */
             bool init_val_recorded_ptr = false;
-            if (strcmp(bind_c, "int64_t") == 0 && emit_str_is_bare_ident(iv)) {
+            /* Whether the init value's RECORDED emitted C type is exactly `void *`
+             * (an `__auto_type __ps_N` temp holding a `void *`-returning call) or
+             * the `int64_t` carrier.  The concrete-pointer flag above excludes
+             * `void *` (its consumers gate on `!= "void *"`), so these two carry the
+             * void*<->int64 straddle directions the concrete-pointer bridge does
+             * not: a `void *` temp flowing into an `int64_t` binder, and an
+             * `int64_t` temp flowing into a pointer binder. */
+            bool init_val_recorded_voidp = false;
+            bool init_val_recorded_i64 = false;
+            if (emit_str_is_bare_ident(iv)) {
                 const char *lvty = emit_localvar_lookup_ctype(iv);
                 size_t lL = lvty ? strlen(lvty) : 0;
-                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
-                                        strcmp(lvty, "void *") != 0;
+                if (strcmp(bind_c, "int64_t") == 0)
+                    init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                            strcmp(lvty, "void *") != 0;
+                init_val_recorded_voidp = lvty && strcmp(lvty, "void *") == 0;
+                init_val_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
             }
             /* gcc14-int-conversion (carrier-representation-tracking): the init
              * VALUE is a `void *` union-default read (`((union { int64_t s; void *
@@ -1661,9 +1673,12 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
-                 init_is_ptr_repr || init_val_recorded_ptr)) {
+                 init_is_ptr_repr || init_val_recorded_ptr ||
+                 init_val_recorded_voidp)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
-            } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+            } else if (bind_is_ptr_repr &&
+                       ((init_cn && strcmp(init_cn, "int64_t") == 0) ||
+                        init_val_recorded_i64)) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else if (bind_is_ptr_repr && iv &&
                        strncmp(iv, "(int64_t)", 9) == 0) {
@@ -1893,11 +1908,23 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * representation, so the bridge fires only for a genuine pointer temp
              * flowing into an int64 binder. Value-preserving. */
             bool init_val_recorded_ptr = false;
-            if (strcmp(bind_c, "int64_t") == 0 && emit_str_is_bare_ident(iv)) {
+            /* Whether the init value's RECORDED emitted C type is exactly `void *`
+             * (an `__auto_type __ps_N` temp holding a `void *`-returning call) or
+             * the `int64_t` carrier.  The concrete-pointer flag above excludes
+             * `void *` (its consumers gate on `!= "void *"`), so these two carry the
+             * void*<->int64 straddle directions the concrete-pointer bridge does
+             * not: a `void *` temp flowing into an `int64_t` binder, and an
+             * `int64_t` temp flowing into a pointer binder. */
+            bool init_val_recorded_voidp = false;
+            bool init_val_recorded_i64 = false;
+            if (emit_str_is_bare_ident(iv)) {
                 const char *lvty = emit_localvar_lookup_ctype(iv);
                 size_t lL = lvty ? strlen(lvty) : 0;
-                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
-                                        strcmp(lvty, "void *") != 0;
+                if (strcmp(bind_c, "int64_t") == 0)
+                    init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                            strcmp(lvty, "void *") != 0;
+                init_val_recorded_voidp = lvty && strcmp(lvty, "void *") == 0;
+                init_val_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
             }
             /* gcc14-int-conversion (carrier-representation-tracking): the init
              * VALUE is a `void *` union-default read (`((union { int64_t s; void *
@@ -1953,9 +1980,12 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 iv = bridged;  /* emit_carrier_bridge freed the old iv */
             } else if (strcmp(bind_c, "int64_t") == 0 &&
                 (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
-                 init_is_ptr_repr || init_val_recorded_ptr)) {
+                 init_is_ptr_repr || init_val_recorded_ptr ||
+                 init_val_recorded_voidp)) {
                 buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
-            } else if (bind_is_ptr_repr && init_cn && strcmp(init_cn, "int64_t") == 0) {
+            } else if (bind_is_ptr_repr &&
+                       ((init_cn && strcmp(init_cn, "int64_t") == 0) ||
+                        init_val_recorded_i64)) {
                 buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
             } else if (bind_is_ptr_repr && iv &&
                        strncmp(iv, "(int64_t)", 9) == 0) {
@@ -6133,13 +6163,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             ctx, emit_arg->type, emit_arg);
                         size_t aL = acty ? strlen(acty) : 0;
                         /* the arg genuinely emits a pointer value: a concrete
-                         * `tur_adt_X *`, OR an existential pack whose emitted form
-                         * is a `(tur_exists_t)(..)` void* (tur_exists_t is void*).
-                         * Both are `pointer -> int64 param` and must reinterpret. */
+                         * `tur_adt_X *`, a bare `void *` (a captured env field such
+                         * as a channel handle `void * chp`, or a `void *`-returning
+                         * value), OR an existential pack whose emitted form is a
+                         * `(tur_exists_t)(..)` void* (tur_exists_t is void*).  All
+                         * are `pointer -> int64 param` and must reinterpret; passing
+                         * a `void *` env field bare into an `int64_t` param (e.g.
+                         * `chan_hysend(env->chp, ...)`) is a -Wint-conversion hard
+                         * error under macOS clang / GCC >= 14. */
                         bool arg_is_conc_ptr = acty && aL >= 1 &&
                             acty[aL - 1] == '*' && strcmp(acty, "void *") != 0;
+                        bool arg_is_voidp = acty && strcmp(acty, "void *") == 0;
                         bool arg_is_exists = strncmp(raw, "(tur_exists_t)", 14) == 0;
-                        if (arg_is_conc_ptr || arg_is_exists) {
+                        if (arg_is_conc_ptr || arg_is_voidp || arg_is_exists) {
                             Buf _rb; buf_init(&_rb);
                             buf_printf(&_rb, "(int64_t)(intptr_t)(%s)", raw);
                             buf_putc(&_rb, '\0');

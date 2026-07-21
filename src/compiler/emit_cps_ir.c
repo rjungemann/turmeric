@@ -5055,6 +5055,20 @@ static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
             arg_is_byval_agg = acty && strcmp(acty, "int64_t") != 0 &&
                                !(aL >= 1 && acty[aL - 1] == '*');
         }
+        /* Whether the arg's ACTUAL C expression type is a pointer.  arg_is_ptr
+         * above is a SEMANTIC "this Turmeric value is heap/pointer-like" check;
+         * it stays true for a value carried on the int64 slot (a fn carrier, a
+         * boxed handle spilled to `int64_t __t4`).  For a `void *` param the bare
+         * "object ptr -> void*" pass is only valid when the C expression is really
+         * a pointer -- passing an `int64_t`-typed carrier bare into a `void *`
+         * param is a -Wint-conversion straddle (macOS clang hard error).  When the
+         * arg's C type is knowable and is NOT a pointer, force the bridge below. */
+        const char *arg_cty = args[i].type
+            ? binder_ctype_full(ce->ctx, args[i].ty, args[i].type) : NULL;
+        size_t arg_cty_L = arg_cty ? strlen(arg_cty) : 0;
+        bool arg_c_ptr_known = arg_cty != NULL;
+        bool arg_is_c_ptr = arg_cty && arg_cty_L >= 1 &&
+                            arg_cty[arg_cty_L - 1] == '*';
         /* gcc14-int-conversion (carrier-to-typed-param): a fat-fn arg (a `void *`
          * fat-closure carrier) passed into a callee slot the signature declares
          * as the int64 fn-carrier (`int64_t cmp_fn`, e.g. `option-eq?`'s
@@ -5068,8 +5082,10 @@ static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
             buf_puts(&b, a);                 /* E2: tur_poly_fn_t param -- pass the fat struct by value */
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
-        else if (param_is_voidp && arg_is_ptr)
-            buf_puts(&b, a);                 /* object ptr -> void*: already valid */
+        else if (param_is_voidp && arg_is_ptr && (!arg_c_ptr_known || arg_is_c_ptr))
+            buf_puts(&b, a);                 /* real object ptr -> void*: already valid */
+        else if (param_is_voidp)
+            buf_printf(&b, "(void *)(intptr_t)%s", a);  /* int64 carrier -> void*: bridge */
         else if (param_is_ptr)
             buf_printf(&b, "(%s)(intptr_t)%s", pty, a);
         else if ((param_is_i64 || !pty) && !arg_is_plain_int)
@@ -6380,6 +6396,37 @@ static const char *cc_cast_for_kind(TypeKind k) {
     }
 }
 
+/* gcc14-int-conversion (cloneable-frame call arg -> concrete-pointer param): a
+ * resumed cloneable-frame arg rides the `intptr_t` slot and is cast to the
+ * callee's param C type before the call.  cc_cast_for_kind maps every nominal
+ * ADT/opaque kind to the generic `(int64_t)` carrier cast, but the callee's
+ * ACTUAL emitted param can be a concrete pointer (`tur_adt_H *`) -- and
+ * `(int64_t)` into a pointer param is a -Wint-conversion straddle (a hard error
+ * under macOS clang / GCC >= 14).  When the callee's full param type resolves to
+ * a pointer C type, cast to THAT (an int->ptr cast from the intptr_t slot is
+ * value-preserving); otherwise keep the kind-based carrier cast (which already
+ * handles the cstr, void-pointer and rc cases correctly).  Writes the cast
+ * (e.g. "(tur_adt_H *)") into `out`. */
+static void cc_cast_for_param(CE *ce, const Binding *cfn, uint32_t i,
+                              char *out, size_t outsz) {
+    TypeKind k = (cfn && cfn->type.kind == TY_FN && i < cfn->type.as.fn.arity)
+        ? cfn->type.as.fn.arg_kinds[i] : TY_INT;
+    const char *kc = cc_cast_for_kind(k);
+    /* Only the default int64 carrier cast can straddle a concrete-pointer param;
+     * the explicit pointer casts (cstr, void-pointer, rc) are already correct. */
+    if (strcmp(kc, "(int64_t)") == 0 && cfn && cfn->type.kind == TY_FN &&
+        i < cfn->type.as.fn.arity && cfn->type.as.fn.arg_full_types) {
+        const Type *ft = cfn->type.as.fn.arg_full_types[i];
+        const char *ct = ft ? binder_ctype_full(ce->ctx, ft->kind, ft) : NULL;
+        size_t L = ct ? strlen(ct) : 0;
+        if (ct && L >= 1 && ct[L - 1] == '*') {
+            snprintf(out, outsz, "(%s)", ct);
+            return;
+        }
+    }
+    snprintf(out, outsz, "%s", kc);
+}
+
 static const char *cloneable_frame_expr(const char *op, bool hole_left) {
     if (strcmp(op, "+") == 0) return "env + value";
     if (strcmp(op, "*") == 0) return "env * value";
@@ -6714,19 +6761,22 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ce->fn_cn, id, i, cfn, ecast);
                 side = "$E";
             } else if (two_arg) {
-                TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
-                TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
                 const char *a0 = fr->hole_left ? "value" : "env";
                 const char *a1 = fr->hole_left ? "env" : "value";
+                char sc0[192], sc1[192];
+                cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
+                cc_cast_for_param(ce, fr->call_fn, 1, sc1, sizeof sc1);
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
                     ce->fn_cn, id, i, cfn,
-                    cc_cast_for_kind(k0), a0, cc_cast_for_kind(k1), a1);
+                    sc0, a0, sc1, a1);
                 side = fr->hole_left ? "$2L" : "$2R";
             } else {
+                char sc0[192];
+                cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                 buf_printf(ce->helpers,
                     "static intptr_t %s_skcall%d_%u(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
-                    ce->fn_cn, id, i, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
+                    ce->fn_cn, id, i, cfn, sc0);
                 side = "$L";
             }
             if (ekc == 2) {
@@ -6812,15 +6862,15 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 else if (two_arg) {
                     /* 2-arg call: apply f to (value, env) in source order (env =
                      * the captured non-hole arg), casting each to its param kind. */
-                    TypeKind k0 = fr->call_fn->type.as.fn.arg_kinds[0];
-                    TypeKind k1 = fr->call_fn->type.as.fn.arg_kinds[1];
                     const char *a0 = fr->hole_left ? "value" : "env";
                     const char *a1 = fr->hole_left ? "env" : "value";
                     /* E3a widening: an owning by-value AGGREGATE env rides the
                      * one-word slot by ADDRESS (the push emits `&o`).  Its arg cast
                      * is not a scalar cast: deref the pointer for a by-value param
                      * (<=16B), or pass the pointer for a pass-by-ptr param (>16B).
-                     * The hole arg stays a scalar cast (the resumed value). */
+                     * The hole arg stays a scalar cast (the resumed value).  The
+                     * scalar side uses cc_cast_for_param so a concrete-pointer param
+                     * (`tur_adt_H *`) is bridged, not straddled by an int64 cast. */
                     char c0[192], c1[192];
                     if (fr->operand.type
                         && owning_byvalue_aggregate(fr->operand.type)) {
@@ -6829,15 +6879,15 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                         const char *ec = pbp ? "(const %s *)" : "*(%s *)";
                         /* env arg is a0 when the hole is on the right, else a1. */
                         if (fr->hole_left) {
-                            snprintf(c0, sizeof c0, "%s", cc_cast_for_kind(k0));
+                            cc_cast_for_param(ce, fr->call_fn, 0, c0, sizeof c0);
                             snprintf(c1, sizeof c1, ec, cn);
                         } else {
                             snprintf(c0, sizeof c0, ec, cn);
-                            snprintf(c1, sizeof c1, "%s", cc_cast_for_kind(k1));
+                            cc_cast_for_param(ce, fr->call_fn, 1, c1, sizeof c1);
                         }
                     } else {
-                        snprintf(c0, sizeof c0, "%s", cc_cast_for_kind(k0));
-                        snprintf(c1, sizeof c1, "%s", cc_cast_for_kind(k1));
+                        cc_cast_for_param(ce, fr->call_fn, 0, c0, sizeof c0);
+                        cc_cast_for_param(ce, fr->call_fn, 1, c1, sizeof c1);
                     }
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { return (intptr_t)%s(%s%s, %s%s); }\n",
@@ -6933,11 +6983,14 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                             ctxfn, incs.data ? incs.data : "");
                         buf_free(&incs);
                     }
-                } else
+                } else {
                     /* 1-arg hole call: apply f to the resumed value. */
+                    char sc0[192];
+                    cc_cast_for_param(ce, fr->call_fn, 0, sc0, sizeof sc0);
                     buf_printf(ce->helpers,
                         "static intptr_t %s(intptr_t env, intptr_t value) { (void)env; return (intptr_t)%s(%svalue); }\n",
-                        ctxfn, cfn, cc_cast_for_kind(fr->call_fn->type.as.fn.arg_kinds[0]));
+                        ctxfn, cfn, sc0);
+                }
                 free(cfn);
             } else {
                 buf_printf(ce->helpers,
