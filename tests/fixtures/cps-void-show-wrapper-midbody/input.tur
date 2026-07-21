@@ -1,0 +1,26 @@
+;; generic-void-show-wrapper Edge 2: a `:void`-returning generic `^Show a` wrapper
+;; (show-line, stdlib/typeclass-show.tur) called mid-`do` with a LATER typeclass
+;; dispatch (`eq?`) that forces the body into CPS lowering.  The CPS->direct
+;; converter used to bind the void call's result into an `__auto_type` temp
+;; (`__auto_type t = show_hyline(...)`), which is a "variable declared void" /
+;; "void value not ignored" hard cc error.  The CT_TAILCALL cps->direct arm now
+;; detects a nil/void-returning callee (via its FnDef return type) and emits the
+;; call as a bare statement, delivering the unit placeholder to the continuation --
+;; mirroring the CT_LETCALL nil arm and emit_value's TY_NIL/TY_NEVER skip in the
+;; direct emitter.
+;;
+;; `show-line` on an int renders via Show[int] (deterministic); the value is shown
+;; and printed by the wrapper, then the trailing eq? dispatches force the CPS
+;; boundary that used to miscompile.
+(load "stdlib/typeclass.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+(defn demo [] : int
+  (do
+    (show-line 42)             ;; :void wrapper, mid-do
+    (println (yn (eq? 1 1)))   ;; typeclass dispatch after -> CPS boundary
+    (println (yn (eq? 1 2)))
+    0))
+
+(defn main [] : int (demo))
