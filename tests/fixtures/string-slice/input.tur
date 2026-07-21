@@ -25,7 +25,7 @@
       (string/release s)
       (puts-owned (slice/to-cstr w))   ;; still "world"
       ;; typeclasses: Show / Eq / Ord over slices
-      (let [__sw (show w)] (do (println (string/to-cstr __sw)) (string/release __sw)))
+      (show-line w)
       (let [w2 (string/slice (string/from-cstr "world") 0 5)]
         (do
           (println (yn (eq? w w2)))        ;; content-equal

@@ -1,0 +1,31 @@
+;; rc-field-read-into-var-double-free: binding an owning `rc<T>` field of a
+;; by-value struct local into a NEW variable (`(let [saved (.r o)] ...)`) used to
+;; copy the RcControlBlock* WITHOUT incrementing the strong count, yet both owners
+;; were decremented at scope exit -- `o`'s per-field byvalue auto-drop AND `saved`'s
+;; rc-binding auto-drop hit the SAME control block, so two decrements landed
+;; against one +1 count => double free / use-after-free.
+;;
+;; The fix (elab_let) clones-on-read: an rc-managed binding whose init borrows an
+;; rc field is wrapped in EX_RC_CLONE, so the read increments the strong count and
+;; the new binding is a genuine second owner whose +1 balances its own decrement.
+;;
+;; Observable check without a sanitizer (mirrors owning-field-explicit-drop-...):
+;; `shared` starts at strong count 1; `o.r` is a clone of it (count 2); reading it
+;; into `saved` clones again (count 3).  At the inner scope exit `saved`'s auto-drop
+;; (-> 2) and `o.r`'s field auto-drop (-> 1) each fire once, leaving the block alive
+;; at count 1.  WITHOUT the read-clone the two auto-drops would drive the shared
+;; block to 0 and FREE it, so `(rc/strong-count shared)` would read freed memory --
+;; a garbage count.  With the clone it is exactly 1.
+(defstruct Own [r : rc<int> tag : int])
+
+(defn f [] : int
+  (let [shared (rc/of 7)]
+    (do
+      (let [o     (make-struct Own (rc/clone shared) 9)
+            saved (.r o)]
+        (rc/strong-count saved))   ; 3 with the read-clone (shared + o.r + saved)
+      (rc/strong-count shared))))  ; 1 iff both scope-exit drops balanced; garbage if freed
+
+(defn main [] : int
+  (println (f))
+  0)

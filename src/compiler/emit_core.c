@@ -102,13 +102,13 @@ static bool emit_find_abi_binding(const EmitAbiSpecialization *spec,
     return false;
 }
 
-#ifndef NDEBUG
 /* R3 (carrier-crossing-recovery-routing-plan): does this type's structural spine
  * still carry an unresolved parametric param (a TY_TYVAR)?  A recovered concrete
  * type that answers `true` is the exact signature of a carrier<->concrete crossing
  * whose monomorphization was not fully recovered -- the silent-miscompile defect
- * the routing chokepoints exist to prevent.  Debug-only (the only caller, the R3
- * gate, is compiled out under NDEBUG). */
+ * the routing chokepoints exist to prevent.  Consulted by the R3 debug gate AND by
+ * emit_reresolve_disp_type's Edge-1 bail (both Debug and Release), so it is not
+ * Debug-only. */
 static bool type_spine_has_tyvar(const Type *t, int depth) {
     if (!t || depth > 8) return false;
     if (t->kind == TY_TYVAR) return true;
@@ -117,7 +117,6 @@ static bool type_spine_has_tyvar(const Type *t, int depth) {
                type_spine_has_tyvar(t->as.app.arg, depth + 1);
     return false;
 }
-#endif
 
 /* R3 chokepoint gate: assert that a type recovered by a carrier<->concrete
  * recovery chokepoint is concrete *enough* before it flows into code emission.
@@ -1814,6 +1813,29 @@ bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
         }
     }
     if (resolved.kind == TY_TYVAR) return false; /* still unbound: keep base/repr */
+    /* Edge 1 (generic-show-wrapper-cps-monomorphization-plan): a dispatch type with
+     * a CONCRETE HEAD but an unresolved element -- e.g. `(show x)` inside a
+     * `show-line` clone specialized on `(Vec ?)` from `(show-line (vec-new))`,
+     * where the empty container never let the element type be inferred -- is a
+     * TY_APP whose spine carries a tyvar.  Instance SELECTION keys on the head
+     * (Show[Vec], matched head-wise by emit_inst_head_matches), and the element is
+     * used only inside the instance body for per-element dispatch, which an empty
+     * container never runs.  So let the caller's authoritative head-match resolve
+     * it rather than tripping the R3 assertion (Debug) / silently selecting a
+     * carrier `__inst_*` (Release).  This is safe: a TY_APP dispatch type has no
+     * carrier-rep suffix fallback (emit_inst_suffix_component(TY_APP) == NULL), so
+     * emit_reresolve_method_call either matches by head or yields NULL (keep
+     * baked).  Matches the direct `(show (vec-new))` path, which renders `[]`.
+     * If the HEAD itself is unresolved there is nothing to select -- keep
+     * base/repr, as for a bare tyvar. */
+    if (type_spine_has_tyvar(&resolved, 0)) {
+        const Type *head = &resolved;
+        while (head->kind == TY_APP && head->as.app.fn) head = head->as.app.fn;
+        if (head->kind == TY_TYVAR || head->kind == TY_UNKNOWN) return false;
+        *out_resolved = resolved;
+        *out_dict = dict;
+        return true;
+    }
     /* R3 gate: a successful re-resolution must yield a concrete dispatch type.
      * A TY_APP whose spine still carries a tyvar would silently select the
      * carrier-representative `__inst_*` -- the routing hole this asserts away. */
@@ -1838,7 +1860,7 @@ FnDef *emit_reresolve_method_fndef(EmitCtx *ctx, const Expr *call) {
                                            dict->as.dict_.method_name);
 }
 
-static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
+char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     Type resolved;
     const Expr *dict = NULL;
     if (!emit_reresolve_disp_type(ctx, call, &resolved, &dict)) return NULL;

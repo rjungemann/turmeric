@@ -32,6 +32,28 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
     return def;
 }
 
+/* rc-field-read-into-var-double-free: peel type ascriptions and return the
+ * EX_GET_FIELD when `init` reads an owning `rc<T>` FIELD directly (e.g.
+ * `(.r o)` / `(:: (.r o) rc<int>)`), or NULL otherwise.
+ *
+ * Reading an `rc` field is a shared-ownership borrow: the source struct still
+ * owns that field (a by-value local releases it via its scope-exit field
+ * auto-drop, an `rc/of`-wrapped struct via its control-block drop glue, a
+ * borrowed parameter via its caller).  Binding the raw word into a new
+ * rc-managed local therefore aliases the control block WITHOUT incrementing the
+ * strong count, yet that new binding gets its own scope-exit decrement -- two
+ * decrements against one +1 count => double free.  The caller wraps such an init
+ * in EX_RC_CLONE so the read clones (increments) the count, making the new
+ * binding a genuine second owner that balances its own decrement. */
+static Expr *elab_rc_field_read_init(Expr *init) {
+    Expr *cur = init;
+    while (cur && cur->kind == EX_ASCRIBE)
+        cur = cur->as.ascribe_.inner;
+    if (cur && cur->kind == EX_GET_FIELD && cur->type.kind == TY_RC)
+        return cur;
+    return NULL;
+}
+
 /* local-struct-drop: does field `fi` own a BOXED fn-field?  Such a field holds a
  * heap fat-closure handle (`{shim, fn}` box, or a capturing env) that the struct
  * drop glue frees via `free((void *)f)`.  A by-value local carrying one is freed
@@ -1128,6 +1150,46 @@ Expr *elab_let(Elab *e, const Form *call) {
     }
 
     if (has_rc_bindings && body && body->kind == EX_DO) {
+        /* rc-field-read-into-var-double-free: BEFORE injecting the scope-exit
+         * auto-drops below (which mutate `body` to add `(defer (rc/drop x))` and
+         * would then read as consumption), clone-on-read every rc binding whose
+         * init borrows an `rc` field (`saved (.r o)`).  Reading an rc field is a
+         * shared-ownership borrow: the source struct still releases that field (a
+         * by-value local via its field auto-drop, an rc/of struct via its
+         * control-block drop glue, a borrowed parameter via its caller), so the
+         * raw word copy aliases the control block WITHOUT a strong-count bump --
+         * yet the new binding is disposed exactly once (its scope-exit auto-drop,
+         * an explicit `(rc/drop saved)`, or a move into a consumer), double-freeing
+         * the block.  Wrapping the init in EX_RC_CLONE makes the read increment the
+         * count, so the binding is a genuine second owner whose +1 balances that
+         * one disposal.  This is orthogonal to the auto-drop's moved/consumed
+         * filter: a consumed or moved binding is still disposed once and still
+         * needs the clone.  The ONE exception is when the source field is itself
+         * explicitly moved out (`(rc/drop (.f o))` / `(drop! (.f o))`), which
+         * suppresses the source-side release -- cloning then would over-count, so
+         * skip it. */
+        for (uint32_t k = 0; k < n_binds; k++) {
+            Type bt = binds[k].binding->type;
+            bool is_rc_managed = bt.kind == TY_RC ||
+                (bt.kind == TY_EXISTS && bt.as.forall_.n_constraints > 0
+                 && !bt.as.forall_.is_linear);
+            if (!is_rc_managed) continue;
+            Expr *fld = elab_rc_field_read_init(binds[k].init);
+            if (!fld) continue;
+            /* Skip when the source field is explicitly moved out: the source no
+             * longer releases it, so the raw copy is already the sole owner. */
+            const Expr *recv = fld->as.get_field_.struct_expr;
+            if (recv && recv->kind == EX_VAR && recv->as.var.binding &&
+                is_field_consumed(body, recv->as.var.binding,
+                                  fld->as.get_field_.field_idx))
+                continue;
+            Expr *clone = expr_new(e->arena, EX_RC_CLONE, binds[k].init->type,
+                                   binds[k].init->span);
+            clone->as.rc_clone_.expr = binds[k].init;
+            clone->as.rc_clone_.elide = false;
+            binds[k].init = clone;
+        }
+
         /* Count rc bindings that need auto-drop (excluding consumed/moved ones) */
         uint32_t n_rc_drops = 0;
         for (uint32_t k = 0; k < n_binds; k++) {
