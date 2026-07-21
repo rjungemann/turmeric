@@ -1,0 +1,21 @@
+;; cps-shift-reset-capability-folding item 1: a single `shift`/`reset` surface
+;; now routes by the RECEIVER's `cont` capability annotation.  A `serial-cont`
+;; receiver makes plain `shift`/`reset` produce a serial (marshalable)
+;; continuation -- lowered exactly like `serial-shift`/`serial-reset` -- while a
+;; plain `cont` (cloneable) receiver keeps the multi-shot cloneable lowering.
+;; The `cloneable-*`/`serial-*` keywords are now sugar over this unified path.
+
+(defn ck [k : cont] : int (+ (k 1) (k 2)))   ; cloneable, multi-shot
+(defn sk [k : serial-cont] : int (k 5))      ; serial, single resume
+
+(defn main [] : int
+  ;; cloneable receiver -> plain reset/shift lower cloneable: (10+1)+(10+2) = 23
+  (println (reset (+ 10 (shift ck 0))))
+  ;; serial receiver -> plain reset/shift lower serial: 10+5              = 15
+  (println (reset (+ 10 (shift sk 0))))
+  ;; serial through a runtime branch point (if at the reset body): the shift
+  ;; path marshals its captured continuation; the pure path yields its arm.
+  (println (reset (if (< 0 1) (+ 10 (shift sk 0)) 42)))  ; shift path (10+5) = 15
+  (println (reset (if (< 1 0) (+ 10 (shift sk 0)) 42)))  ; pure ELSE          = 42
+  (println (reset (if (< 1 0) 8 (- 100 (shift sk 0)))))  ; shift in ELSE (100-5) = 95
+  0)

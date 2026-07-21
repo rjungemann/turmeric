@@ -615,6 +615,13 @@ typedef struct Elab {
      * set by elab_cloneable_shift's reified path at depth d and read by the
      * enclosing reset on exit. */
     bool             reified_shift_at_depth[64];
+    /* Capability-folding (cps-shift-reset-capability-folding-plan item 1):
+     * a plain `reset` promotes to the SERIAL reified delimiter (EX_SERIAL_RESET)
+     * instead of the cloneable one (EX_CLONEABLE_RESET) when the resuming shift
+     * that bound at depth d had a `serial-cont` receiver.  Set alongside
+     * reified_shift_at_depth[d] by elab_cont_shift_core's serial route, read by
+     * the enclosing `reset` on exit to pick the delimiter flavor. */
+    bool             reified_serial_at_depth[64];
     /* cps-backend-n6 cross-function resume: set true the first time a resuming
      * shift with no lexical reset is lowered onto the synthetic __Shift effect
      * (elab_cont_shift_core).  Read by the gated post-elaboration pass

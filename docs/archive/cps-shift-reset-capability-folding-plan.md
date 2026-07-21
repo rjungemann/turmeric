@@ -1,8 +1,8 @@
 ---
 title: "shift/reset -- fold cloneable-*/serial- into the unified surface via a capability annotation"
 category: Planning
-status: open (verified 2026-07-19) -- broken out of the now-archived cps-backend-n6-resuming-shift-plan.md, whose other items all landed. This is the remaining surface-consolidation tail. As of 2026-07-19 neither remaining item has landed: `cloneable-shift`/`serial-shift`/`cloneable-reset`/`serial-reset` are still distinct `EX_CLONEABLE_SHIFT` / `EX_SERIAL_SHIFT` / ... keywords across the passes (cps.c, effect_lower.c, cps_ir.c), with no `shift`/`reset` capability-annotation routing folding them; item 2 (lighter single-shot runtime) remains an unpursued optimization. This is a pure source-surface cleanup and does not gate v1.
-description: The resuming-shift plan landed its core (k-reset/k-shift on the DK substrate, (k v) sugar, single-shot ^linear, typed Cont, the surface unification routing abortive/resumable/single-shot/typed/cross-function by receiver convention, and -- as of the native-handle-in-reset work -- cross-function RESUME natively on DK). Two consolidation items remain and are captured here so they are not lost when the parent plan is archived: (1) folding cloneable-*/serial- keywords into shift/reset via a capability annotation, and (2) an optional lighter single-shot runtime.
+status: item 1 LANDED (2026-07-21) -- `shift`/`reset` now route by the receiver's `cont` capability annotation: a `serial-cont` receiver makes plain `shift`/`reset` produce a serial (marshalable) continuation (EX_SERIAL_SHIFT / EX_SERIAL_RESET), a plain `cont`/`cloneable-cont` receiver keeps the multi-shot cloneable lowering, and an ignore-k receiver keeps the abortive route. The `cloneable-*`/`serial-*` keywords remain as sugar producing the same unified nodes. Item 2 (lighter single-shot runtime) is an optional optimization the plan itself gates behind profiling; left unpursued (not a semantics gap). This was a pure source-surface cleanup and did not gate v1.
+description: The resuming-shift plan landed its core (k-reset/k-shift on the DK substrate, (k v) sugar, single-shot ^linear, typed Cont, the surface unification routing abortive/resumable/single-shot/typed/cross-function by receiver convention, and -- as of the native-handle-in-reset work -- cross-function RESUME natively on DK). Two consolidation items remained: (1) folding cloneable-*/serial- keywords into shift/reset via a capability annotation -- LANDED 2026-07-21; and (2) an optional lighter single-shot runtime -- left unpursued (optimization, not a gate).
 ---
 
 # shift/reset capability-folding (surface consolidation tail)
@@ -27,20 +27,32 @@ core all landed:
 
 What is left is purely surface consolidation -- no runtime semantics gap.
 
-### Progress (2026-07-19)
-
-Still OPEN. Verified against the tree: both remaining items are untouched.
+### Progress (2026-07-21) -- item 1 LANDED
 
 - Item 1 (fold `cloneable-*`/`serial-*` into `shift`/`reset` via a capability
-  annotation): the four keywords remain distinct AST nodes
-  (`EX_CLONEABLE_SHIFT` / `EX_SERIAL_SHIFT` and the matching reset forms) walked
-  separately in `src/passes/cps.c`, `effect_lower.c`, and lowered by
-  `build_marshal_reset` in `cps_ir.c`. There is no `shift`/`reset` surface that
-  routes by a receiver `cont` capability; `serial-cont` / `cloneable-cont` exist
-  only as `CONT_SERIAL` type spellings (`types.h`), not as a folding of the
-  shift/reset keyword set.
+  annotation): **DONE.** `elab_shift`/`elab_reset` now preserve the
+  continuation's flavor from the receiver's `cont` capability annotation:
+  - `elab_cont_shift_core` (`src/compiler/elab_effects.c`) reads the receiver's
+    `cont` param flavor via `receiver_cont_param_type`. A `serial-cont`
+    (`CONT_SERIAL`) receiver emits `EX_SERIAL_SHIFT` and marks the enclosing
+    depth's `reified_serial_at_depth[d]`; any other cont flavor keeps the
+    cloneable `EX_CLONEABLE_SHIFT` path unchanged.
+  - `elab_reset` promotes a plain `reset` to `EX_SERIAL_RESET` (running the
+    Serializable-capture check) when the shift that bound at depth d was serial,
+    to `EX_CLONEABLE_RESET` when it was a cloneable resuming shift, and stays
+    `EX_RESET` otherwise -- so ONE `reset` keyword now spans abortive, cloneable,
+    and serial delimiters.
+  - The four `cloneable-*`/`serial-*` keywords are unchanged in behaviour and
+    now read as sugar: each produces the very same unified AST node the
+    capability-routed `shift`/`reset` surface produces. The downstream passes
+    (`cps.c`, `effect_lower.c`, `cps_ir.c`) needed no change -- they already
+    lower the `EX_SERIAL_*` / `EX_CLONEABLE_*` nodes the folded surface emits.
+  - Fixture `tests/fixtures/shift-reset-capability-folding` pins the new routing
+    (cloneable vs serial by receiver annotation, incl. the `if`-context serial
+    shape); the full suite passes (2241/0) on both the compiled and interpreter
+    paths, and all pre-existing cloneable/serial fixtures are unchanged.
 - Item 2 (lighter single-shot runtime): unpursued; still an optional
-  optimization, not a semantics gap.
+  optimization, not a semantics gap. The plan gates it behind profiling.
 
 Note: the *build-side* duplication this item's sibling plan
 (`cps-backend-unification-marshal-reset-unification-plan.md`) targeted IS
@@ -71,9 +83,11 @@ continuation regardless of the receiver's declared flavor, so folding `serial`
 needs `shift` to **preserve the continuation's flavor** from the receiver's
 `cont` capability annotation. That is the substantive part of this item.
 
-Exit: `cloneable-*`/`serial-*` keywords removed (or reduced to sugar) with
-`shift`/`reset` routing by the receiver's capability annotation; existing
-cloneable/serial fixtures pass unchanged.
+Exit (MET 2026-07-21): `cloneable-*`/`serial-*` keywords reduced to sugar over a
+`shift`/`reset` surface that routes by the receiver's capability annotation;
+existing cloneable/serial fixtures pass unchanged. The substantive "shift
+preserves the receiver's `cont` flavor" nuance below is implemented: a
+`serial-cont` receiver yields a serial continuation from plain `shift`/`reset`.
 
 ## Remaining item 2 -- optional lighter single-shot runtime
 
