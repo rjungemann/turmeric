@@ -207,11 +207,25 @@ Expr *elab_reset(Elab *e, const Form *call) {
      * (which need EX_RESET -- proven by the reset-alias experiment) stays EX_RESET. */
     int d = ++e->cloneable_reset_depth;
     bool track = d >= 0 && d < 64;
-    if (track) e->reified_shift_at_depth[d] = false;
+    if (track) { e->reified_shift_at_depth[d] = false;
+                 e->reified_serial_at_depth[d] = false;
+                 /* A plain `reset` is flavor-flexible -- not pinned cloneable. */
+                 e->pinned_cloneable_at_depth[d] = false; }
     Expr *body = elab_form(e, call->as.list.items[1]);
     bool reified = track && e->reified_shift_at_depth[d];
+    bool serial  = track && e->reified_serial_at_depth[d];
     e->cloneable_reset_depth--;
     if (!body) return NULL;
+    if (reified && serial) {
+        /* Capability-folding item 1: a resuming shift with a `serial-cont`
+         * receiver bound here, so this plain `reset` IS the serial delimiter --
+         * lower it exactly like `serial-reset` (EX_SERIAL_RESET), including the
+         * Serializable-capture check on the reified continuation body. */
+        check_serializable_capture_precise(e, call->span, body);
+        Expr *out = expr_new(e->arena, EX_SERIAL_RESET, body->type, call->span);
+        out->as.serial_reset_.body = body;
+        return out;
+    }
     if (reified) {
         /* CPS-CL10 / E4: a resuming shift bound here -- verify the captures. */
         check_cloneable_capture_precise(e, call->span, body);
@@ -415,7 +429,10 @@ Expr *elab_cloneable_reset(Elab *e, const Form *call) {
         return NULL;
     }
     /* CPS-CL7: track nesting depth so cloneable-shift can detect missing reset */
-    e->cloneable_reset_depth++;
+    int d = ++e->cloneable_reset_depth;
+    /* Capability-folding item 1: this depth is pinned cloneable by the keyword, so
+     * a `serial-cont` plain-`shift` bound here is rejected with a clear message. */
+    if (d >= 0 && d < 64) e->pinned_cloneable_at_depth[d] = true;
     Expr *body = elab_form(e, call->as.list.items[1]);
     e->cloneable_reset_depth--;
     if (!body) return NULL;
@@ -1051,6 +1068,49 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
 
     Expr *body = elab_form(e, call->as.list.items[2]);
     if (!body) return NULL;
+
+    /* Capability-folding item 1: preserve the continuation's flavor from the
+     * receiver's `cont` capability annotation.  A `serial-cont` receiver
+     * (CONT_SERIAL) yields a serial continuation -- lower this shift exactly like
+     * `serial-shift` (EX_SERIAL_SHIFT) and mark the enclosing plain `reset` to
+     * promote to EX_SERIAL_RESET.  Any other cont flavor (plain `cont` /
+     * `cloneable-cont`, CONT_CLONEABLE) keeps the multi-shot cloneable lowering.
+     * NOT applied to the literal `cloneable-shift` keyword (which pins the
+     * cloneable flavor regardless of the receiver's annotation). */
+    bool shift_kw = call->as.list.items[0]->tag == F_SYM
+                    && call->as.list.items[0]->as.sym == e->sym_shift;
+    const Type *kpt = receiver_cont_param_type(k_expr);
+    bool serial_route = shift_kw && kpt && kpt->kind == TY_CONT
+                        && (ContFlavor)kpt->as.cont.flavor == CONT_SERIAL;
+    if (serial_route) {
+        /* Capability-folding item 1: the nearest enclosing delimiter is the
+         * literal `cloneable-reset` keyword, which pins the cloneable flavor and
+         * cannot host a serial continuation.  Reject here with the actual fix
+         * ("use a plain `reset` or `serial-reset`") instead of letting the
+         * flavor-mismatched EX_SERIAL_SHIFT reach the downstream serial-context
+         * lowering, which fails with the misleading TUR-E0706 "context not
+         * capturable" (it points at the context shape, not the real cause). */
+        int cd = e->cloneable_reset_depth;
+        if (cd >= 0 && cd < 64 && e->pinned_cloneable_at_depth[cd]) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0019_SERIAL_SHIFT_OUTSIDE_RESET,
+                "a `serial-cont` shift receiver needs a serial-capable delimiter, "
+                "but the nearest enclosing reset is a `cloneable-reset` (which pins "
+                "the multi-shot cloneable flavor)\n"
+                "  = help: use a plain `reset` (it adopts the receiver's flavor) or "
+                "`serial-reset` to delimit a serial continuation");
+            return NULL;
+        }
+        Expr *out = expr_new(e->arena, EX_SERIAL_SHIFT, body->type, call->span);
+        out->as.serial_shift_.k_fn = k_expr;
+        out->as.serial_shift_.body = body;
+        if (e->cloneable_reset_depth >= 0 && e->cloneable_reset_depth < 64) {
+            e->reified_shift_at_depth[e->cloneable_reset_depth] = true;
+            e->reified_serial_at_depth[e->cloneable_reset_depth] = true;
+        }
+        return out;
+    }
+
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
