@@ -6410,14 +6410,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
                 /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
                  * can be released generically (opaque-C teardown or scope-exit)
-                 * through its env[-1] header.  Foundation increment frees the base
-                 * allocation only; the move-aware owning-capture walk is the next
-                 * increment (see emit_fns.c's twin site for the rationale).  This
-                 * arm is a fallback -- the emit_fns.c pre-pass normally wins the
-                 * shared env_struct_names guard. */
+                 * through its env[-1] header.  Releases each refcounted owning
+                 * capture (rc decrement, balancing the env-fill retain) then frees
+                 * the base.  MUST stay in lockstep with the emit_fns.c twin site
+                 * (that pre-pass normally wins the shared env_struct_names guard;
+                 * this arm is the fallback) so the rc retain/release always pairs.
+                 * Non-refcounted owning captures await move analysis -- see the
+                 * emit_fns.c site for the rationale. */
                 if (g_opt_closure_drop_glue) {
                     buf_printf(ctx->file,
                         "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                    buf_printf(ctx->file,
+                        "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+                        env_name->name, env_name->name);
+                    for (int32_t i = (int32_t)closure->n_captures - 1; i >= 0; i--) {
+                        Binding *cap = closure->captures[i];
+                        if (cap && cap->is_global) continue;
+                        if (cap && cap->type.kind == TY_RC) {
+                            char *cf = raw_name_for_binding(cap);
+                            buf_printf(ctx->file,
+                                "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                                cf, cf);
+                            free(cf);
+                        }
+                    }
                     buf_puts(ctx->file,
                         "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
                 }
@@ -6532,6 +6548,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     buf_printf(body, "%s->%s = %s%s;\n",
                                fat_tmp, field, captured_is_pbp ? "*" : "", cn);
+                }
+                /* closure-drop-glue (Model R) walk slice: an rc-typed capture is a
+                 * SHARED owning reference.  Flag-on, RETAIN it at capture (a strong
+                 * increment) so the closure holds its own count -- balancing the
+                 * decrement the env's drop-glue performs when the closure dies.
+                 * This is finding-#1's "retain when duplicated", done for the
+                 * refcounted capture kind where it is unconditionally sound: rc
+                 * counting handles aliasing, so no move/uniqueness analysis is
+                 * needed and an ESCAPING rc-capturing closure no longer dangles
+                 * (flag-off it borrows and the source's auto-drop frees the rc out
+                 * from under the escaped closure).  Owning captures that are NOT
+                 * refcounted (a raw nested-closure handle, a ref) still need move
+                 * analysis and are left to the next slice. */
+                if (g_opt_closure_drop_glue && captured->type.kind == TY_RC) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "if (%s->%s) rc_strong_increment(%s->%s);\n",
+                               fat_tmp, field, fat_tmp, field);
                 }
                 free(field);
                 free(cn);

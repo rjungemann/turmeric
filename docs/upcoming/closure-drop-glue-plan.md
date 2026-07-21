@@ -47,6 +47,36 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21e) -- Model R walk slice: rc-capture retain/release
+> (the unconditionally-sound half of the owning-capture walk).** The env drop-glue
+> now WALKS refcounted owning captures, so an rc-capturing closure participates in
+> the rc lifecycle regardless of escape:
+>
+> - **Retain at capture** (`emit_expr.c` env-fill): flag-on, storing an rc-typed
+>   capture emits `rc_strong_increment(env->field)` -- the closure holds its own
+>   strong count.
+> - **Release in drop-glue** (`emit_fns.c` + the `emit_expr.c` fallback, kept in
+>   lockstep): `drop_glue_<env>` emits `rc_strong_decrement` + `rc_free_queue_drain`
+>   per rc capture (reverse order) before freeing the base.
+> - **Soundness:** this is finding-#1's "retain when duplicated" for the capture
+>   kind where it needs NO move/uniqueness analysis -- rc counting is aliasing-safe,
+>   so retain+release always balances. An ESCAPING rc-capturing closure that
+>   flag-off dangles (the constructor's auto-drop frees the rc out from under it)
+>   is now correct flag-on: the retain keeps the rc alive for the closure's life
+>   and the drop-glue releases it exactly once.
+> - **Verified:** fixture `closure-drop-glue-rc-capture` (`make-counter` returns an
+>   rc-capturing closure; `strong-count` reads 1 while held; released on
+>   TUR_CLOSURE_DROP) is leak-clean, no UAF, no double-free flag-on. Generated C
+>   shows the paired increment/decrement. Full suite 2251/0 (flag off -> a snapshot
+>   re-emits byte-identically; the two new fixtures run flag-on).
+>
+> **Still to do in the walk:** the NON-refcounted owning captures -- a raw
+> nested-closure handle (the middleware `_n`), a `ref` -- still are NOT walked,
+> because recursing one blind is the finding-#1 double-free without move/uniqueness
+> analysis. That analysis (or refcounting the env, Model R proper) plus the httpd
+> type-honesty layer (owned `String` CORS captures) is what remains before an
+> httpd/reactor marker can drop.
+>
 > **Progress note (2026-07-21d) -- Model R ABI FOUNDATION landed behind
 > `--enable=closure-drop-glue` (experiment, off by default).** The runtime
 > drop-glue header + generic-release plumbing is in; the move-aware owning-capture

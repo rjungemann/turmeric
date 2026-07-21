@@ -2885,16 +2885,32 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             /* closure-drop-glue (Model R): emit the env's drop-glue beside its
              * struct def (this pre-pass is the authoritative early emission site;
              * the EX_CLOSURE path shares the env_struct_names guard, so the glue is
-             * emitted exactly once).  Foundation increment: the glue frees the base
-             * allocation (the header word precedes the env pointer).  It does NOT
-             * yet WALK owning captures -- recursing an owned nested-closure capture
-             * (a `!is_poly_fn` TY_FN handle) is sound only once move/uniqueness
-             * analysis proves the env is that capture's sole owner (finding #1: a
-             * capture aliased by another owner would double-free).  That move-aware
-             * walk, plus type-honest owned captures for the httpd string case, is
-             * the next increment. */
+             * emitted exactly once).  The glue RELEASES each refcounted owning
+             * capture (rc strong decrement, balancing the env-fill's retain) and
+             * frees the base allocation (the header word precedes the env pointer).
+             *
+             * The rc walk is sound regardless of aliasing -- rc counting is the
+             * sharing-safe owning mechanism.  Owning captures that are NOT
+             * refcounted -- a raw nested-closure handle (`!is_poly_fn` TY_FN), a
+             * `ref` -- are NOT walked here: recursing one blind is finding #1's
+             * double-free (a capture another owner also drops), which needs
+             * move/uniqueness analysis.  The httpd `_n`/string case additionally
+             * needs type-honest owned captures.  Both are the next slice. */
             if (g_opt_closure_drop_glue) {
                 buf_printf(file, "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                buf_printf(file, "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+                           env_name->name, env_name->name);
+                for (int32_t i = (int32_t)fd->closure->n_captures - 1; i >= 0; i--) {
+                    Binding *cap = fd->closure->captures[i];
+                    if (cap && cap->is_global) continue;
+                    if (cap && cap->type.kind == TY_RC) {
+                        char *cf = raw_name_for_binding(cap);
+                        buf_printf(file,
+                            "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                            cf, cf);
+                        free(cf);
+                    }
+                }
                 buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
             }
         }
