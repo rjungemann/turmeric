@@ -106,6 +106,47 @@ emit path, bridge the value into the `int64_t` C return slot with
 A compiled-path `String` fixture (inline-C + `requires.compiled`) should land with
 the fix so the front stays covered.
 
+## RESOLVED (2026-07-21): secondary load/import blocker fixed; report closed
+
+The secondary blocker below is now **fixed in code**, closing this report (the
+primary codegen straddle was already fixed -- see the progress note that
+follows). Root cause: the entry unit (`elaborate_program`) runs a Pass-1
+forward-declaration over all top-level `defn`s before elaborating any body, but
+the *imported*-module path (`import_module` in `src/compiler/elab_module.c`)
+elaborated its (post-load-expansion) top-level forms **linearly with no such
+pass**. So the bare top-level defns a `(load "stdlib/string.tur")` splices into
+an imported module -- including `stdlib/typeclass-show.tur`'s self-recursive
+`vec-show-loop` (defined at :163, self-call at :174), pulled in by the
+reentrant `string.tur -> typeclass.tur -> typeclass-show.tur -> (load
+string.tur)` chain -- had no forward declaration, and the self-call reported
+`unknown function or operator 'vec-show-loop'`.
+
+Fix: the Pass-1 per-`defn` forward-declaration logic in `elaborate_program`
+was extracted into a shared `elab_pre_declare_toplevel_defn(Elab *, Arena *,
+Form *)` (in `src/compiler/elab_toplevel.c`, declared in
+`src/compiler/elab_internal.h`). `import_module` now runs it over every spliced
+top-level form before its `elab_form` loop, exactly as the entry unit does.
+Defns nested inside a `(defmodule ...)` are unaffected (their head is
+`defmodule`, not `defn`) -- they are still forward-declared by `elab_module`'s
+own Pass 1.
+
+A stdlib `String` may now appear in the signatures of an imported module: a
+module can `(load "stdlib/string.tur")` and export `defn`s returning `String`,
+and downstream importers use them without any `(load)` of their own. This
+retires the need for the `session/ownstr` workaround described below (an
+ABI-identical spice-local `String` shim) -- spices can use the stdlib `String`
+directly.
+
+Coverage: `tests/fixtures/string-load-in-imported-module/` -- an entry
+`(import greetlib/greeter ...)` where `greetlib/greeter` does
+`(load "stdlib/string.tur")` and exports `String`-returning defns; the entry
+also `(show (vec-of 1 2 3))` to exercise the reentrant-loaded `vec-show-loop`.
+Runs the compiled path by default (suite default). Passes.
+
+The `-Wno-error=int-conversion` mitigation in `src/main.c` is **untouched** by
+this fix: it belongs to the distinct carrier-representation long tail tracked in
+`docs/reported/macos-clang-int-conversion-hard-error.md`, not to this report.
+
 ## Progress (2026-07-21): primary codegen straddle FIXED; report stays OPEN for the secondary load/import blocker
 
 The **primary defect** in this report's title -- compiled `String`-returning

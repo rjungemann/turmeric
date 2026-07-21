@@ -409,7 +409,7 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
      * resolves to "unknown function or operator".  The defmodule form itself is
      * elaborated with its own inner Pass 1 (elab_defmodule), so this only
      * matters for the bare top-level defns that live alongside it.  See
-     * docs/reported/compiled-string-return-int-conversion.md (secondary
+     * docs/archive/compiled-string-return-int-conversion.md (secondary
      * blocker). */
     elab_forward_declare_defns(e, forms, 0, nforms);
 

@@ -1117,6 +1117,258 @@ static bool macro_form_stmt_safe(const Elab *e, const Form *dm,
     return true;
 }
 
+/* Pass-1 forward declaration of a single top-level (defn ...) form.
+ *
+ * Registers the defn's name into ep->global (with the best-effort forward-decl
+ * type) so a self-recursive or mutually-recursive call in the body resolves
+ * even before Pass-2 elaborates the body.  Extracted from elaborate_program so
+ * import_module can run the same pre-pass over the bare top-level defns a
+ * (load ...) splices into an imported module -- without it those spliced defns
+ * (e.g. stdlib/typeclass-show.tur's `vec-show-loop`, which the reentrant
+ * string<->typeclass load chain pulls into an imported module) elaborate
+ * linearly with no forward decl and a self-call reports "unknown function".
+ * See docs/archive/compiled-string-return-int-conversion.md (secondary
+ * blocker). */
+void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
+        if (f->tag == F_LIST && f->as.list.len > 0) {
+            Form *head = f->as.list.items[0];
+            if (head->tag == F_SYM) {
+                if (head->as.sym == ep->sym_defn) {
+                    /* Parse defn declaration without body */
+                    if (f->as.list.len >= 3) {
+                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
+                         * attribute symbols (either order) before the name. */
+                        uint32_t name_idx = 1;
+                        while ((uint32_t)f->as.list.len > name_idx &&
+                               f->as.list.items[name_idx]->tag == F_SYM &&
+                               (f->as.list.items[name_idx]->as.sym == ep->sym_no_unwind_attr ||
+                                f->as.list.items[name_idx]->as.sym == ep->sym_used_attr)) {
+                            name_idx++;
+                        }
+                        /* Phase M6: skip optional (export-as "c_name") attribute */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_LIST &&
+                            f->as.list.items[name_idx]->as.list.len == 2 &&
+                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
+                            name_idx += 1; /* skip (export-as "c_name") */
+                        }
+                        /* F4: skip optional ^deprecated [message] attribute */
+                        if ((uint32_t)f->as.list.len > name_idx &&
+                            f->as.list.items[name_idx]->tag == F_SYM &&
+                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_deprecated) {
+                            name_idx += 1;
+                            if ((uint32_t)f->as.list.len > name_idx &&
+                                f->as.list.items[name_idx]->tag == F_STR) {
+                                name_idx += 1;
+                            }
+                        }
+                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
+                        Form *name_f = f->as.list.items[name_idx];
+                        if (name_f->tag == F_SYM) {
+                            /* Parse return type annotation if present */
+                            TypeKind return_kind = TY_INT; /* default */
+                            /* defdata-parametric-forward-decl-inference: full
+                             * TY_APP result type for a compound parametric-ADT
+                             * return (e.g. (PRes Expr)), stamped onto the
+                             * forward decl so a sibling caller declared earlier
+                             * sees the concrete type args. */
+                            Type *fwd_result_full = NULL;
+                            uint32_t params_idx_local = name_idx + 1; /* params usually here */
+                            /* poly-defn-recursive-return-type-inference: a defn with
+                             * explicit type parameters spells as
+                             *   (defn name [TypeVars] [params] :ret body)        -- 2-vec
+                             *   (defn name [TypeVars] [Constraints] [params] :ret body) -- 3-vec
+                             * so the params vector is at name_idx+2 (or +3), not +1.
+                             * Without this skip, ret_idx points at the params vec, the
+                             * keyword/sym/type-ann probe below misses, and the forward
+                             * decl falls back to TY_INT -- breaking recursive self-calls
+                             * inside a poly-defn body (e.g. `: bool` typed as int).
+                             * Mirrors the F_VEC detection in elab_fns.c elab_defn. */
+                            if (f->as.list.len > params_idx_local + 1 &&
+                                f->as.list.items[params_idx_local]->tag == F_VEC &&
+                                f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
+                                /* type-param vec present; bump past it */
+                                params_idx_local++;
+                                /* optional constraint vec between TypeVars and params */
+                                if (f->as.list.len > params_idx_local + 1 &&
+                                    f->as.list.items[params_idx_local]->tag == F_VEC &&
+                                    f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
+                                    params_idx_local++;
+                                }
+                            }
+                            uint32_t ret_idx = params_idx_local + 1; /* :ret follows params */
+                            /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
+                            if (f->as.list.len > ret_idx && f->as.list.items[ret_idx]->tag == F_MAP) {
+                                ret_idx++;
+                            }
+                            if (f->as.list.len > ret_idx) {
+                                Form *ret_f = f->as.list.items[ret_idx];
+                                /* Accept spaced `: T` (F_TYPE_ANN of a single
+                                 * symbol/keyword) by treating the inner as a
+                                 * keyword.  Compound `: (-> a b)` still routes
+                                 * through the F_TYPE_ANN branch below. */
+                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1) {
+                                    Form *inner = ret_f->as.list.items[0];
+                                    if (inner->tag == F_SYM || inner->tag == F_KEYWORD) {
+                                        ret_f = inner;
+                                    } else if (inner->tag == F_NIL) {
+                                        /* `: nil` -- the bare `nil` literal in a type
+                                         * position is parsed as F_NIL by the reader;
+                                         * it means the nil/void return type. */
+                                        return_kind = TY_NIL;
+                                        ret_f = NULL;
+                                    }
+                                }
+                                if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
+                                    const Symbol *kw = ret_f->as.sym;
+                                    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
+                                        return_kind = TY_INT;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
+                                        return_kind = TY_BOOL;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
+                                        return_kind = TY_NIL;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
+                                        /* SS3a: :nil return type must forward-declare as void,
+                                         * not TY_INT, so recursive nil-returning functions
+                                         * correctly infer TY_NIL for their body type. */
+                                        return_kind = TY_NIL;
+                                    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
+                                        return_kind = TY_CSTR;
+                                    } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
+                                        return_kind = TY_PTR_VOID;
+                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
+                                        return_kind = TY_PTR_VOID;
+                                    } else {
+                                        /* bare-adt-forward-decl-inference: a non-parametric
+                                         * user type name -- `: T` for a `defdata` /
+                                         * `defstruct` / `defopaque` T (RF0 has already
+                                         * registered the stub) -- must forward-declare with
+                                         * that ADT's real result type, not the TY_INT
+                                         * default.  Without this, a sibling caller declared
+                                         * *earlier* in the module (mutual / forward
+                                         * recursion) types the call as `int`, and a `match`
+                                         * arm returning the ADT then reports a spurious
+                                         * "arm types incompatible -- expected int, got adt".
+                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
+                                        for (uint32_t ai = 0; ai < ep->n_adt_defs; ai++) {
+                                            if (strcmp(ep->adt_defs[ai]->name, kw->name) == 0) {
+                                                Type adt_ty = type_adt(ep->adt_defs[ai]);
+                                                Type *tt = (Type *)arena_alloc(
+                                                    arena, sizeof(Type));
+                                                *tt = adt_ty;
+                                                return_kind = adt_ty.kind;
+                                                fwd_result_full = tt;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
+                                    /* Compound return type: peek at the head symbol to
+                                     * recognize Session[P] returns for pass-1 forward decls. */
+                                    Form *head_f = ret_f->as.list.items[0];
+                                    /* The compound annotation payload is either a bare
+                                     * symbol (`Session`) or an application list
+                                     * (`(PRes Expr)`); recover the type-constructor
+                                     * symbol from whichever shape it is. */
+                                    const Symbol *tycon_sym = NULL;
+                                    if (head_f->tag == F_SYM) {
+                                        tycon_sym = head_f->as.sym;
+                                    } else if (head_f->tag == F_LIST &&
+                                               head_f->as.list.len > 0 &&
+                                               head_f->as.list.items[0]->tag == F_SYM) {
+                                        tycon_sym = head_f->as.list.items[0]->as.sym;
+                                    }
+                                    if (tycon_sym &&
+                                            strcmp(tycon_sym->name, "Session") == 0) {
+                                        return_kind = TY_SESSION;
+                                    } else if (tycon_sym) {
+                                        /* defdata-parametric-forward-decl-inference:
+                                         * a compound `(F A B)` return whose head is a
+                                         * registered ADT/struct stub (RF0 has run) --
+                                         * e.g. (PRes Expr), (Option Foo), (Vec T).
+                                         * Build the full TY_APP so a sibling caller
+                                         * declared earlier in the module resolves the
+                                         * scrutinee's concrete type args (otherwise the
+                                         * pattern binding falls back to the placeholder
+                                         * carrier and downstream constructor arms
+                                         * mismatch). Gated on a registered ADT head so
+                                         * fn_type_from_form only walks pre-registered
+                                         * names and cannot emit a spurious diagnostic. */
+                                        bool head_is_adt = false;
+                                        for (uint32_t ai = 0; ai < ep->n_adt_defs; ai++) {
+                                            if (strcmp(ep->adt_defs[ai]->name,
+                                                       tycon_sym->name) == 0) {
+                                                head_is_adt = true;
+                                                break;
+                                            }
+                                        }
+                                        if (head_is_adt) {
+                                            /* Collect the defn's own type params (poly
+                                             * defn) so a return like (PRes A) keeps A as
+                                             * a named tyvar rather than an unknown name. */
+                                            const Symbol *tp_syms[MAX_FN_ARITY];
+                                            Kind tp_kinds[MAX_FN_ARITY];
+                                            uint8_t n_tp = 0;
+                                            if (params_idx_local > name_idx + 1 &&
+                                                (uint32_t)f->as.list.len > name_idx + 1 &&
+                                                f->as.list.items[name_idx + 1]->tag == F_VEC) {
+                                                Form *tpv = f->as.list.items[name_idx + 1];
+                                                for (uint32_t ti = 0;
+                                                     ti < tpv->as.list.len && n_tp < MAX_FN_ARITY;
+                                                     ti++) {
+                                                    Form *tf = tpv->as.list.items[ti];
+                                                    if (tf->tag == F_SYM) {
+                                                        tp_syms[n_tp] = tf->as.sym;
+                                                        tp_kinds[n_tp] = KIND_STAR;
+                                                        n_tp++;
+                                                    }
+                                                }
+                                            }
+                                            (void)tp_kinds;
+                                            Type *ann = fwd_shallow_result_app(
+                                                ep, head_f, tp_syms, n_tp);
+                                            if (ann && ann->kind == TY_APP) {
+                                                return_kind = TY_APP;
+                                                fwd_result_full = ann;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            /* Count actual arity + scalar arg kinds from the
+                             * params vector.  fwd_decl_scan_params skips
+                             * `^`-prefixed markers (^fat/^mut/...) so the
+                             * forward-declared arity is not over-stated (see
+                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
+                            TypeKind *arg_kinds = NULL;
+                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
+                                ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
+                                : 0;
+                            Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
+                            /* defdata-parametric-forward-decl-inference: carry the
+                             * full compound result type on the forward decl. */
+                            if (fwd_result_full) {
+                                fn_type.as.fn.result_full_type = fwd_result_full;
+                            }
+                            /* MF3: if the name is already in global scope (e.g. an
+                             * auto-loaded stdlib defn), do NOT pre-register a
+                             * duplicate forward decl. Pass 2's elab_defn will then
+                             * see the original binding (with is_from_stdlib set
+                             * correctly) and either reuse it as a forward decl or
+                             * emit the shadow diagnostic. */
+                            if (!scope_lookup(&ep->global, name_f->as.sym)) {
+                                Binding *b = binding_new(ep, name_f->as.sym, fn_type, false, true, f->span);
+                                scope_add(&ep->global, b);
+                            }
+                        }
+                    }
+                    next_form:;
+                }
+            }
+        }
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -1492,244 +1744,7 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
-        Form *f = forms[i];
-        if (f->tag == F_LIST && f->as.list.len > 0) {
-            Form *head = f->as.list.items[0];
-            if (head->tag == F_SYM) {
-                if (head->as.sym == e.sym_defn) {
-                    /* Parse defn declaration without body */
-                    if (f->as.list.len >= 3) {
-                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
-                         * attribute symbols (either order) before the name. */
-                        uint32_t name_idx = 1;
-                        while ((uint32_t)f->as.list.len > name_idx &&
-                               f->as.list.items[name_idx]->tag == F_SYM &&
-                               (f->as.list.items[name_idx]->as.sym == e.sym_no_unwind_attr ||
-                                f->as.list.items[name_idx]->as.sym == e.sym_used_attr)) {
-                            name_idx++;
-                        }
-                        /* Phase M6: skip optional (export-as "c_name") attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_LIST &&
-                            f->as.list.items[name_idx]->as.list.len == 2 &&
-                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == e.sym_export_as_attr) {
-                            name_idx += 1; /* skip (export-as "c_name") */
-                        }
-                        /* F4: skip optional ^deprecated [message] attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == e.sym_caret_deprecated) {
-                            name_idx += 1;
-                            if ((uint32_t)f->as.list.len > name_idx &&
-                                f->as.list.items[name_idx]->tag == F_STR) {
-                                name_idx += 1;
-                            }
-                        }
-                        if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
-                        Form *name_f = f->as.list.items[name_idx];
-                        if (name_f->tag == F_SYM) {
-                            /* Parse return type annotation if present */
-                            TypeKind return_kind = TY_INT; /* default */
-                            /* defdata-parametric-forward-decl-inference: full
-                             * TY_APP result type for a compound parametric-ADT
-                             * return (e.g. (PRes Expr)), stamped onto the
-                             * forward decl so a sibling caller declared earlier
-                             * sees the concrete type args. */
-                            Type *fwd_result_full = NULL;
-                            uint32_t params_idx_local = name_idx + 1; /* params usually here */
-                            /* poly-defn-recursive-return-type-inference: a defn with
-                             * explicit type parameters spells as
-                             *   (defn name [TypeVars] [params] :ret body)        -- 2-vec
-                             *   (defn name [TypeVars] [Constraints] [params] :ret body) -- 3-vec
-                             * so the params vector is at name_idx+2 (or +3), not +1.
-                             * Without this skip, ret_idx points at the params vec, the
-                             * keyword/sym/type-ann probe below misses, and the forward
-                             * decl falls back to TY_INT -- breaking recursive self-calls
-                             * inside a poly-defn body (e.g. `: bool` typed as int).
-                             * Mirrors the F_VEC detection in elab_fns.c elab_defn. */
-                            if (f->as.list.len > params_idx_local + 1 &&
-                                f->as.list.items[params_idx_local]->tag == F_VEC &&
-                                f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
-                                /* type-param vec present; bump past it */
-                                params_idx_local++;
-                                /* optional constraint vec between TypeVars and params */
-                                if (f->as.list.len > params_idx_local + 1 &&
-                                    f->as.list.items[params_idx_local]->tag == F_VEC &&
-                                    f->as.list.items[params_idx_local + 1]->tag == F_VEC) {
-                                    params_idx_local++;
-                                }
-                            }
-                            uint32_t ret_idx = params_idx_local + 1; /* :ret follows params */
-                            /* Skip optional #{Unsafe} / effect-row annotation (F_MAP) */
-                            if (f->as.list.len > ret_idx && f->as.list.items[ret_idx]->tag == F_MAP) {
-                                ret_idx++;
-                            }
-                            if (f->as.list.len > ret_idx) {
-                                Form *ret_f = f->as.list.items[ret_idx];
-                                /* Accept spaced `: T` (F_TYPE_ANN of a single
-                                 * symbol/keyword) by treating the inner as a
-                                 * keyword.  Compound `: (-> a b)` still routes
-                                 * through the F_TYPE_ANN branch below. */
-                                if (ret_f->tag == F_TYPE_ANN && ret_f->as.list.len == 1) {
-                                    Form *inner = ret_f->as.list.items[0];
-                                    if (inner->tag == F_SYM || inner->tag == F_KEYWORD) {
-                                        ret_f = inner;
-                                    } else if (inner->tag == F_NIL) {
-                                        /* `: nil` -- the bare `nil` literal in a type
-                                         * position is parsed as F_NIL by the reader;
-                                         * it means the nil/void return type. */
-                                        return_kind = TY_NIL;
-                                        ret_f = NULL;
-                                    }
-                                }
-                                if (ret_f && (ret_f->tag == F_KEYWORD || ret_f->tag == F_SYM)) {
-                                    const Symbol *kw = ret_f->as.sym;
-                                    if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
-                                        return_kind = TY_INT;
-                                    } else if (kw->len == 4 && memcmp(kw->name, "bool", 4) == 0) {
-                                        return_kind = TY_BOOL;
-                                    } else if (kw->len == 4 && memcmp(kw->name, "void", 4) == 0) {
-                                        return_kind = TY_NIL;
-                                    } else if (kw->len == 3 && memcmp(kw->name, "nil", 3) == 0) {
-                                        /* SS3a: :nil return type must forward-declare as void,
-                                         * not TY_INT, so recursive nil-returning functions
-                                         * correctly infer TY_NIL for their body type. */
-                                        return_kind = TY_NIL;
-                                    } else if (kw->len == 4 && memcmp(kw->name, "cstr", 4) == 0) {
-                                        return_kind = TY_CSTR;
-                                    } else if (kw->len == 9 && memcmp(kw->name, "ptr<void>", 9) == 0) {
-                                        return_kind = TY_PTR_VOID;
-                                    } else if (kw->len == 3 && memcmp(kw->name, "ptr", 3) == 0) {
-                                        return_kind = TY_PTR_VOID;
-                                    } else {
-                                        /* bare-adt-forward-decl-inference: a non-parametric
-                                         * user type name -- `: T` for a `defdata` /
-                                         * `defstruct` / `defopaque` T (RF0 has already
-                                         * registered the stub) -- must forward-declare with
-                                         * that ADT's real result type, not the TY_INT
-                                         * default.  Without this, a sibling caller declared
-                                         * *earlier* in the module (mutual / forward
-                                         * recursion) types the call as `int`, and a `match`
-                                         * arm returning the ADT then reports a spurious
-                                         * "arm types incompatible -- expected int, got adt".
-                                         * (docs/reported/logic-port-language-gaps.md GAP 2.) */
-                                        for (uint32_t ai = 0; ai < e.n_adt_defs; ai++) {
-                                            if (strcmp(e.adt_defs[ai]->name, kw->name) == 0) {
-                                                Type adt_ty = type_adt(e.adt_defs[ai]);
-                                                Type *tt = (Type *)arena_alloc(
-                                                    arena, sizeof(Type));
-                                                *tt = adt_ty;
-                                                return_kind = adt_ty.kind;
-                                                fwd_result_full = tt;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                } else if (ret_f && ret_f->tag == F_TYPE_ANN && ret_f->as.list.len > 0) {
-                                    /* Compound return type: peek at the head symbol to
-                                     * recognize Session[P] returns for pass-1 forward decls. */
-                                    Form *head_f = ret_f->as.list.items[0];
-                                    /* The compound annotation payload is either a bare
-                                     * symbol (`Session`) or an application list
-                                     * (`(PRes Expr)`); recover the type-constructor
-                                     * symbol from whichever shape it is. */
-                                    const Symbol *tycon_sym = NULL;
-                                    if (head_f->tag == F_SYM) {
-                                        tycon_sym = head_f->as.sym;
-                                    } else if (head_f->tag == F_LIST &&
-                                               head_f->as.list.len > 0 &&
-                                               head_f->as.list.items[0]->tag == F_SYM) {
-                                        tycon_sym = head_f->as.list.items[0]->as.sym;
-                                    }
-                                    if (tycon_sym &&
-                                            strcmp(tycon_sym->name, "Session") == 0) {
-                                        return_kind = TY_SESSION;
-                                    } else if (tycon_sym) {
-                                        /* defdata-parametric-forward-decl-inference:
-                                         * a compound `(F A B)` return whose head is a
-                                         * registered ADT/struct stub (RF0 has run) --
-                                         * e.g. (PRes Expr), (Option Foo), (Vec T).
-                                         * Build the full TY_APP so a sibling caller
-                                         * declared earlier in the module resolves the
-                                         * scrutinee's concrete type args (otherwise the
-                                         * pattern binding falls back to the placeholder
-                                         * carrier and downstream constructor arms
-                                         * mismatch). Gated on a registered ADT head so
-                                         * fn_type_from_form only walks pre-registered
-                                         * names and cannot emit a spurious diagnostic. */
-                                        bool head_is_adt = false;
-                                        for (uint32_t ai = 0; ai < e.n_adt_defs; ai++) {
-                                            if (strcmp(e.adt_defs[ai]->name,
-                                                       tycon_sym->name) == 0) {
-                                                head_is_adt = true;
-                                                break;
-                                            }
-                                        }
-                                        if (head_is_adt) {
-                                            /* Collect the defn's own type params (poly
-                                             * defn) so a return like (PRes A) keeps A as
-                                             * a named tyvar rather than an unknown name. */
-                                            const Symbol *tp_syms[MAX_FN_ARITY];
-                                            Kind tp_kinds[MAX_FN_ARITY];
-                                            uint8_t n_tp = 0;
-                                            if (params_idx_local > name_idx + 1 &&
-                                                (uint32_t)f->as.list.len > name_idx + 1 &&
-                                                f->as.list.items[name_idx + 1]->tag == F_VEC) {
-                                                Form *tpv = f->as.list.items[name_idx + 1];
-                                                for (uint32_t ti = 0;
-                                                     ti < tpv->as.list.len && n_tp < MAX_FN_ARITY;
-                                                     ti++) {
-                                                    Form *tf = tpv->as.list.items[ti];
-                                                    if (tf->tag == F_SYM) {
-                                                        tp_syms[n_tp] = tf->as.sym;
-                                                        tp_kinds[n_tp] = KIND_STAR;
-                                                        n_tp++;
-                                                    }
-                                                }
-                                            }
-                                            (void)tp_kinds;
-                                            Type *ann = fwd_shallow_result_app(
-                                                &e, head_f, tp_syms, n_tp);
-                                            if (ann && ann->kind == TY_APP) {
-                                                return_kind = TY_APP;
-                                                fwd_result_full = ann;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            /* Count actual arity + scalar arg kinds from the
-                             * params vector.  fwd_decl_scan_params skips
-                             * `^`-prefixed markers (^fat/^mut/...) so the
-                             * forward-declared arity is not over-stated (see
-                             * docs/reported/pap-defmodule-fat-fn-too-many-args.md). */
-                            TypeKind *arg_kinds = NULL;
-                            uint32_t param_arity = (name_idx + 1 < (uint32_t)f->as.list.len)
-                                ? fwd_decl_scan_params(arena, f->as.list.items[name_idx + 1], &arg_kinds)
-                                : 0;
-                            Type fn_type = type_fn(arg_kinds, param_arity, return_kind);
-                            /* defdata-parametric-forward-decl-inference: carry the
-                             * full compound result type on the forward decl. */
-                            if (fwd_result_full) {
-                                fn_type.as.fn.result_full_type = fwd_result_full;
-                            }
-                            /* MF3: if the name is already in global scope (e.g. an
-                             * auto-loaded stdlib defn), do NOT pre-register a
-                             * duplicate forward decl. Pass 2's elab_defn will then
-                             * see the original binding (with is_from_stdlib set
-                             * correctly) and either reuse it as a forward decl or
-                             * emit the shadow diagnostic. */
-                            if (!scope_lookup(&e.global, name_f->as.sym)) {
-                                Binding *b = binding_new(&e, name_f->as.sym, fn_type, false, true, f->span);
-                                scope_add(&e.global, b);
-                            }
-                        }
-                    }
-                    next_form:;
-                }
-            }
-        }
+        elab_pre_declare_toplevel_defn(&e, arena, forms[i]);
     }
 
     /* Phase M0+: Validate defmodule position per source file.

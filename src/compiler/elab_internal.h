@@ -925,6 +925,11 @@ void elab_force_load_module(Elab *e, const char *module_name);
 int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
                              Form *const *forms, uint32_t nforms,
                              Form ***out_forms, uint32_t *out_n);
+/* Pass-1 forward declaration of a single top-level (defn ...) form into
+ * e->global.  Shared by elaborate_program (entry unit) and import_module
+ * (imported/loaded modules) so bare top-level defns spliced by (load ...) can
+ * self/mutually recurse.  A non-defn form is a no-op. */
+void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_check_not_moved(Binding *b, Span use_span, const char *use_desc);
