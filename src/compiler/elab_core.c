@@ -2051,6 +2051,24 @@ MacroDef *elab_lookup_macro(Elab *e, const Symbol *name) {
         if (m->is_referred) return m;
         if (m->defining_module_name == NULL) return m;
         if (m->defining_module_name == e->current_module_name) return m;
+        /* The `tur/` namespace is implicitly imported everywhere (see the
+         * stdlib/macros.tur header: "Macros here are globally visible without
+         * an explicit import because the tur/ namespace is implicitly
+         * imported").  The end-of-stdlib M7 promotion sweep (elab_toplevel.c)
+         * eventually rewrites every `tur/`-module macro's defining_module_name
+         * to NULL, but that sweep fires only once, at the stdlib/user boundary.
+         * On the interpreter's incremental re-elaboration a stdlib file that
+         * uses a tur/macros macro (e.g. typeclass-show.tur's `when`) can sit
+         * *inside* the accumulated stdlib prefix while a later turn's user form
+         * is the new tail -- so the boundary, and thus the promotion, lands
+         * after the using file, and the macro is invisible during its
+         * elaboration (it then falls back to a runtime-dispatch call, spamming
+         * TUR-W0040).  Honour the implicit tur/ import directly at lookup time
+         * so visibility no longer depends on the sweep having already run.
+         * See docs/archive/tur-macros-invisible-across-stdlib-reelab.md. */
+        if (m->defining_module_name->len >= 4 &&
+            memcmp(m->defining_module_name->name, "tur/", 4) == 0)
+            return m;
         for (uint32_t k = 0; k < e->n_macro_expansion_stack; k++) {
             if (m->defining_module_name == e->macro_expansion_stack[k]) return m;
         }

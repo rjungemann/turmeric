@@ -250,7 +250,7 @@ void turi_eval_register_builtins(TuriEnv *env) {
  * Phase S7: Async fiber thunk
  * ---------------------------------------------------------------------- */
 
-_Thread_local TuriFiber *g_pending_async_fiber;
+TUR_THREAD_LOCAL TuriFiber *g_pending_async_fiber;
 
 /* Forward declarations needed by the thunk. */
 static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e);
@@ -8480,8 +8480,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase R2: catch-unwind — catch interpreter panics at a boundary --- */
     case EX_CATCH_UNWIND: {
-        /* Evaluate the thunk expression to get a closure value. */
-        TuriValue thunk_val = eval_expr(env, frame, e->as.catch_unwind_.thunk);
+        /* Evaluate the thunk expression to get a closure value.  volatile: it is
+         * live across the setjmp below, so mark it to avoid the compiler warning
+         * about a value potentially clobbered by longjmp. */
+        volatile TuriValue thunk_val = eval_expr(env, frame, e->as.catch_unwind_.thunk);
         if (turi_is_error(thunk_val) || env_signaled(env)) return thunk_val;
         if (thunk_val.tag != TURI_CLOSURE)
             return turi_error("eval: catch-unwind: thunk must be a closure");
@@ -8540,7 +8542,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Phase TI5: catch-panic-of — type-filtered panic catch ------------- */
     case EX_CATCH_PANIC_OF: {
-        TuriValue thunk_val = eval_expr(env, frame, e->as.catch_panic_of_.thunk);
+        /* volatile: live across the setjmp below (see catch-unwind above). */
+        volatile TuriValue thunk_val = eval_expr(env, frame, e->as.catch_panic_of_.thunk);
         if (turi_is_error(thunk_val) || env_signaled(env)) return thunk_val;
         if (thunk_val.tag != TURI_CLOSURE)
             return turi_error("eval: catch-panic-of: thunk must be a closure");
