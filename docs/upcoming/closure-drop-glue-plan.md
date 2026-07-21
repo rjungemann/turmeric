@@ -5,6 +5,29 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21b) -- S1c non-retention extended to COLORED
+> callees; `cps-backend-fn-param` closure-env leak CLOSED.** The
+> non-retaining-fn-param inference (`Binding.nonretain_param_mask`, S1c) was
+> silently disabled for every colored function: its inline-C guard
+> `expr_subtree_has_inline_c` reached a conservative `default: return true` on the
+> effect / delimited-continuation nodes (`EX_HANDLE`/`EX_PERFORM`/`EX_RESUME`/
+> `EX_DISCONTINUE`), so a body containing a handle/perform -- not real inline-C --
+> read as "may hide a C-formal store" and cleared the bit. Those nodes are
+> AST-visible and fully walked by `binding_escapes_impl`, so they cannot hide such
+> a store; `expr_subtree_has_inline_c` now models them (walks every sub-expression,
+> keeps `default: true` for still-unmodeled kinds). A capturing closure passed to a
+> `^fat` param of an EFFECTFUL callee that only CALLS it is now hoisted + freed at
+> the call site -- the report's headline `make-scaler` consumed by an effectful
+> `run-with` (`cps-backend-fn-param`), verified ASan/LSan-clean. Soundness rests on
+> the four retention paths: inline-C store (still excluded), value store/return and
+> nested-closure capture (both caught by the escape walk), and delimited-cont
+> capture -- the last is structurally unreachable because a `^fat` value live
+> across a `perform` does not compile (the continuation thunk has no binding for
+> it). Suite 2250/0. New fixture `closure-env-free-colored-nonretain-fatparam`;
+> `cps-backend-fn-param` drops `requires.no-leak-check`. `free-lift-bind` /
+> `unsafe-closure-capture` keep theirs (free-monad `Suspend` ADT residual, not a
+> closure); `hkt-stdlib-parser-instances` keeps its S2 stored-closure marker.
+>
 > **Progress note (2026-07-21) -- local fn-field struct drop LANDED (direct
 > path); the "Remaining S2 gap" below is closed for uncolored functions.** A
 > by-value struct local that owns a BOXED fn-field now frees that heap fat handle

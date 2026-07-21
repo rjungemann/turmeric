@@ -1,0 +1,51 @@
+;; closure-drop-glue S1c (COLORED non-retaining fn-param): a capturing closure
+;; passed to a ^fat / fn-typed parameter of an EFFECTFUL (colored) callee that
+;; only CALLS the param -- never stores/returns/captures it -- has its heap env
+;; freed at the call scope's exit, exactly like the uncolored case.
+;;
+;; The novelty is the callee body containing a `handle`/`perform`: the
+;; non-retaining inference reads whether the fn-param escapes via the closure
+;; escape analysis, but the guard that excludes bodies which could hide a store
+;; behind opaque inline-C (`expr_subtree_has_inline_c`) used to fire on the
+;; effect nodes themselves (handle/perform/resume fell to its conservative
+;; default-true), so EVERY colored callee was treated as retaining and its
+;; borrowed closure arg's env leaked (docs/reported/escaping-fat-closure-env-leak.md,
+;; the `cps-backend-fn-param` shape: `make-scaler` consumed by an effectful
+;; `run-with`).  The effect nodes are AST-visible and fully walked by the escape
+;; analysis, so they cannot hide a C-formal store; modeling them in
+;; `expr_subtree_has_inline_c` lets the colored callee earn the non-retaining bit.
+;;
+;; Correctness drives the freed path (a wrong free would be a use-after-free
+;; corrupting output / crashing under plain cc); verified ASan/LSan-clean
+;; (0 leaked) out of band.  A retaining colored callee (one that stores the
+;; param) stays leak-safe because a direct `perform` in the body is treated as
+;; an escape and the inline-C stdlib fixtures cover the C-store case.
+
+(defeffect Ask [] : int)
+
+(defn ask-one [] : int
+  (perform (Ask)))
+
+;; Colored: handles Ask internally, so effect-free from the outside.  `h` is
+;; ^fat and only CALLED -> non-retaining; its env is freed at the call site.
+(defn with-answer [^fat h : (fn [int] #fx{} int)] : int
+  (let [a (handle (ask-one) (Ask [] k) (resume k 5))]
+    (h a)))
+
+;; Colored and calls its param AFTER the handle completes.
+(defn scaled-answer [^fat op : (fn [int] #fx{} int) delta : int] : int
+  (let [a (handle (ask-one) (Ask [] k) (resume k 100))]
+    (+ (op a) delta)))
+
+(defn make-adder [base : int] : ptr<void>
+  (fn [x : int] : int (+ x base)))
+
+(defn main [] : int
+  (let [base  7
+        scale 3]
+    ;; capturing closure passed INLINE to a colored non-retaining callee
+    (println (with-answer (fn [x : int] : int (+ x base))))       ;; 5+7   = 12
+    (println (scaled-answer (fn [x : int] : int (* x scale)) 1))  ;; 100*3 + 1 = 301
+    ;; fresh-closure-returning CALL result consumed by a colored callee
+    (println (with-answer (make-adder 20)))                       ;; 5+20  = 25
+    0))

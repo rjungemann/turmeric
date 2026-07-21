@@ -22,13 +22,36 @@ effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
 >    passed to a non-retaining `^fat` param, so it is hoisted and freed at scope
 >    exit. See the closure-drop-glue-plan progress note (2026-07-20c).
 >
+> **Progress (2026-07-21) -- S1c non-retention now reaches COLORED callees;
+> `cps-backend-fn-param` DROPS its `requires.no-leak-check`.** The in-tree
+> fixture this report names -- `make-scaler` consumed by an effectful `run-with`
+> (`(run-with (make-scaler 2.0) 1.6)`) -- leaked its 16 B env because the
+> non-retaining-fn-param inference (`Binding.nonretain_param_mask`) was suppressed
+> for EVERY colored callee: its inline-C guard (`expr_subtree_has_inline_c`) fell
+> to a conservative `default: return true` on the effect nodes themselves
+> (`EX_HANDLE`/`EX_PERFORM`/`EX_RESUME`/`EX_DISCONTINUE`), so a handle/perform in
+> the body -- not a real inline-C block -- looked like "may hide a C-formal store"
+> and cleared the bit. Those nodes are AST-visible and fully walked by
+> `binding_escapes_impl`, so they cannot hide such a store; modeling them in
+> `expr_subtree_has_inline_c` (walk every sub-expression, keep `default: true`
+> for still-unmodeled kinds) lets the colored callee earn the bit and the borrowed
+> closure arg's env is hoisted + freed at the call site (verified ASan/LSan-clean).
+> Soundness: a `^fat` param is retained only via (1) an inline-C store (still
+> excluded), (2) a value store/return (caught by the escape walk), (3) a nested
+> closure capture (caught), or (4) a delimited-continuation capture -- and (4) is
+> structurally unreachable because a `^fat` value live across a `perform` does not
+> compile (the continuation thunk has no binding for it). Suite 2250/0. New
+> fixture `closure-env-free-colored-nonretain-fatparam`; `cps-backend-fn-param`
+> loses its marker.
+>
 > The MINIMAL REPRO above is fixed. This report stays OPEN for the remaining
 > **S2** surface it also names -- closures that are STORED (returned into a
 > struct/ADT and threaded onward: parser combinators, httpd middleware) rather
 > than consumed once. Those need the move/uniqueness ownership model, not the
-> consumed-once free. `cps-backend-fn-param`, `free-lift-bind`,
-> `unsafe-closure-capture` keep `requires.no-leak-check` (different shapes;
-> `free-lift-bind`'s residual is a non-closure free-monad ADT leak).
+> consumed-once free. `free-lift-bind`, `unsafe-closure-capture` keep
+> `requires.no-leak-check` (their residual 16 B is a non-closure free-monad
+> `Suspend` ADT leak, NOT a closure env); `hkt-stdlib-parser-instances` keeps its
+> marker for the genuine S2 stored-closure leak (`bind_hyparser`).
 
 ## Summary
 
@@ -70,8 +93,9 @@ separately here because the allocation site and fix differ.
 2. This needs the closure to participate in the RC/drop / uniqueness analysis so
    a shared closure is not double-freed. Until closures carry drop glue, the
    conservative interim is the current leak.
-3. Interim: `cps-backend-fn-param`, `free-lift-bind`, `unsafe-closure-capture`
-   keep `requires.no-leak-check`.
+3. Interim: `free-lift-bind`, `unsafe-closure-capture`, `hkt-stdlib-parser-instances`
+   keep `requires.no-leak-check`. (`cps-backend-fn-param` no longer does -- its
+   closure-env leak is closed; see the 2026-07-21 progress note.)
 
 ## Scoped fix
 

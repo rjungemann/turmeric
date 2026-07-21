@@ -536,6 +536,36 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_ASCRIBE: return expr_subtree_has_inline_c(e->as.ascribe_.inner);
         case EX_CAST:    return expr_subtree_has_inline_c(e->as.cast_.expr);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        /* Effect / delimited-continuation nodes are AST-visible and fully walked
+         * by binding_escapes_impl, so they cannot hide a C-formal store of a
+         * fn-param the way an opaque inline-C block can.  Model them here (walk
+         * every sub-expression) rather than falling to the conservative
+         * `default: return true` -- otherwise EVERY colored function (any body
+         * containing a handle/perform/resume) is treated as "has inline-C" and
+         * its fn-params never earn the non-retaining bit, leaking a borrowed
+         * closure arg's env at the call site (docs/reported/
+         * escaping-fat-closure-env-leak.md, the cps-backend-fn-param shape).
+         * Completeness matters: an inline-C anywhere below still returns true. */
+        case EX_PERFORM: {
+            const PerformExpr *p = e->as.perform_.perform;
+            if (p) for (uint8_t i = 0; i < p->n_args; i++)
+                if (expr_subtree_has_inline_c(p->args[i])) return true;
+            return false;
+        }
+        case EX_HANDLE: {
+            const HandleExpr *h = e->as.handle_.handle;
+            if (!h) return false;
+            if (expr_subtree_has_inline_c(h->body)) return true;
+            for (uint8_t i = 0; i < h->n_cases; i++)
+                if (expr_subtree_has_inline_c(h->cases[i].body)) return true;
+            return false;
+        }
+        case EX_RESUME:
+            return expr_subtree_has_inline_c(e->as.resume_.resume->k)
+                || expr_subtree_has_inline_c(e->as.resume_.resume->value);
+        case EX_DISCONTINUE:
+            return expr_subtree_has_inline_c(e->as.discontinue_.discontinue->k)
+                || expr_subtree_has_inline_c(e->as.discontinue_.discontinue->exception);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;
