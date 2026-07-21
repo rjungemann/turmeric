@@ -660,6 +660,7 @@ static const char *const g_stdlib_autoload_files[] = {
     "typeclass-eq.tur",
     "typeclass-functor.tur",
     "typeclass-clone.tur",
+    "typeclass-drop.tur",
     "typeclass-hash.tur",
     "typeclass-applicative.tur",
     "typeclass-alternative.tur",
