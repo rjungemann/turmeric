@@ -5246,15 +5246,44 @@ static void emit_term(CE *ce, const CTerm *t) {
             }
             /* G3b: a colored-generic mono-template callee -- resolve this call
              * site to the monomorph clone so we thread `<clone>__cps` (the DK
-             * monomorph), not the unresolved generic name. */
-            const char *mclone = NULL;
+             * monomorph), not the unresolved generic name.
+             *
+             * RC1 (generic-show-wrapper-cps-monomorphization-plan): an UNCOLORED
+             * generic callee -- e.g. the `^Show a` wrapper `show-line`/`print-show`
+             * -- is not a colored mono_template, so the base gate leaves the clone
+             * unresolved and the call falls to the generic BASE clone, whose body
+             * bakes the int carrier representative (`__inst_Show_show_int`) and
+             * misrenders every non-int element type. Its per-element DIRECT clone IS
+             * registered as an ABI spec; resolve it and route the call through the
+             * cps->direct path. The clone is direct-only (no `<clone>__cps` variant
+             * is emitted for an uncolored callee), so it must NOT take the cps->cps
+             * branch (which would be an undefined reference).
+             *
+             * For a NOMINAL element type (String/Vec/Set/Map) the resolved direct
+             * clone's body dispatches correctly (verified). A carrier-SCALAR element
+             * (cstr/bool/...) resolves to a clone whose body is itself a colored CPS
+             * body that STILL bakes the carrier rep -- that is RC2, a distinct
+             * clone-body defect, still OPEN. This routing is therefore only
+             * user-visible once the Edge 2a void-temp fix lands (which makes the
+             * void wrapper call compile); that fix is intentionally held until RC2
+             * is fixed too, so the two land together and no carrier-scalar call
+             * silently misrenders. */
+            const char *clone = NULL;
+            bool clone_is_cps = false;   /* true only when <clone>__cps is emitted */
             SEnt *fe = ent_of_binding(t->as.tailcall.fn);
-            if (fe && fe->mono_template)
-                mclone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
-                                                  t->as.tailcall.args, t->as.tailcall.n);
-            char *fn = mclone ? strdup(mclone) : callee_name(t->as.tailcall.fn);
+            bool callee_colored = binding_in_s(t->as.tailcall.fn);
+            if (fe && fe->mono_template) {
+                clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
+                                                 t->as.tailcall.args, t->as.tailcall.n);
+                clone_is_cps = (clone != NULL);  /* colored mono-template -> <clone>__cps */
+            } else if (fe && !callee_colored) {
+                clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
+                                                 t->as.tailcall.args, t->as.tailcall.n);
+                /* uncolored generic clone is direct-only: clone_is_cps stays false */
+            }
+            char *fn = clone ? strdup(clone) : callee_name(t->as.tailcall.fn);
             char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
-            if (binding_in_s(t->as.tailcall.fn) || mclone) {
+            if (callee_colored || clone_is_cps) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
                  * the function's own k (KK_RET) or, inside a reset's delimited

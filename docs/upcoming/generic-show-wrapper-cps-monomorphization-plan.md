@@ -185,57 +185,82 @@ RC2 the carrier-scalar garbage) -- else Phase 1 alone is a silent miscompile.
   resolve to a concrete per-element clone emits a **hard compile diagnostic**
   (see Phase 3), never the silent carrier-rep call -- i.e. keep the failure loud.
 
-### Phase 2 -- RC1: route nominal-type wrapper calls to the direct clone [core]
+### Phase 2 -- RC1: route nominal-type wrapper calls to the direct clone [core] -- LANDED
 
-(The failure is already pinned -- see "Pinned failure points". This phase fixes
-RC1: `String`/`Vec`/... in a helper. Task 2.1's old "instrument to pin" job is
-DONE; the instrumentation approach is preserved below as the verification method.)
+**Status: DONE (2026-07-21), staged.** The `CT_TAILCALL` arm
+(`emit_cps_ir.c`) now resolves the per-element DIRECT clone for an UNCOLORED
+generic callee (the gate `if (fe && fe->mono_template)` skipped it) and routes it
+through the cps->direct path (the clone is direct-only; `clone_is_cps` stays false
+so it never hits the cps->cps `<clone>__cps` undefined reference). Implementation
+matched the pin exactly:
 
-- **2.1 (admit the wrapper through the gate)** In the `CT_TAILCALL` arm
-  (`emit_cps_ir.c:5250-5255`), the `if (fe && fe->mono_template)` guard is what
-  skips the (working) `find_mono_clone_for_call` for `show-line`. Either (a) set
-  `mono_template` on the wrapper's `SEnt` where the direct/`main` path already
-  specializes it, or (b) add a wrapper-aware condition that runs the lookup even
-  when `mono_template` is 0. Confirm with the instrumentation (`TUR_DBG_WRAP`-style
-  probe used in the pin) that `find_mono_clone_for_call` now returns the clone.
-- **2.2 (route to the DIRECT clone, not cps->cps)** Critical coupling (RC1b): when
-  a clone resolves but its `<clone>__cps` variant is NOT emitted (true for these
-  wrapper specs -- `show_line__spec__void_int64_t__cps` is an undefined reference),
-  the arm must take the cps->direct path calling the DIRECT clone `<clone>`, not
-  the cps->cps `return <clone>__cps(...)` branch (`emit_cps_ir.c:5257,5271`).
-  Options: (a) gate the cps->cps branch on "the callee has an emitted `__cps`
-  variant" and fall to cps->direct otherwise; or (b) emit the `__cps` variant for
-  wrapper spec clones. Prefer (a) -- smaller, and the direct clone body is already
-  correct for nominal types. Combine with the Edge 2a void bare-call so a
-  `:void` direct clone call emits `<clone>(...)` + deliver `0`.
-- **2.3 (verify)** `show-line`/`print-show` on `String`/`Vec`/`Set`/`Map` in a
-  helper now render correctly and link. Non-void `show` in a helper (already
-  correct) must be unaffected.
+- **2.1 (admit the wrapper) -- done.** Added an `else if (fe && !callee_colored)`
+  branch that runs `find_mono_clone_for_call` even when `mono_template` is 0. The
+  lookup already returns the correct clone (proven in the pin); no new
+  discriminator was needed.
+- **2.2 (route to the DIRECT clone) -- done.** The cps->cps-vs-direct condition is
+  now `callee_colored || clone_is_cps` (was `binding_in_s || mclone`), so an
+  uncolored generic clone falls to cps->direct calling `<clone>` (which is
+  emitted), never `<clone>__cps` (which is not). Chose option (a) from the plan.
+- **2.3 (verify) -- done.** `show-line`/`print-show` on `String`/`Vec` in a helper
+  now render correctly (`HelloWorld`, `[1 2 3]`) WITH the Edge 2a void fix applied;
+  full suite green (2243/0). Non-void `show` in a helper unaffected.
 
-### Phase 2b -- RC2: fix the carrier-scalar clone-body dispatch [core]
+**Coupling note:** RC1 is user-visible only once the Edge 2a void-temp fix (Phase
+1) lands -- otherwise the void wrapper call does not compile. Phase 1 is held
+until RC2 lands (see below), so this pass committed RC1's routing alone (safe: the
+branch keeps the loud void compile error, no carrier-scalar silent miscompile) and
+the void fix + RC2 will land together next.
 
-(Independent of Phase 2; fixes `cstr`/`bool`/sized-int, which garble even in
-`main` because the clone BODY bakes `__inst_Show_show_int`.)
+### Phase 2b -- RC2: fix the carrier-scalar clone-body dispatch [core] -- OPEN, root cause refined
 
-- **2b.1** Trace how the wrapper clone body's inner `(show x)` is ABI-specialized
-  when the element is a carrier-scalar (`cstr`). Identify where it resolves to the
-  int carrier representative instead of the element's instance -- the
-  representative-selection is the same class as
-  `method-dispatch-missing-instance-falls-back-to-carrier-representative.md`, here
-  reached inside a clone body via `emit_reresolve_method_call`.
-- **2b.2** Steer the inner dispatch by the spec's `bindings[]` (the tyvar->`cstr`
-  binding for this clone) so the body calls `__inst_Show_show_cstr`. Ensure `int`
-  itself still resolves to `__inst_Show_show_int` (do not break the one case that
-  currently works).
+**Status: OPEN; root cause refined and found DEEPER than first written.** RC2 is
+NOT the direct-emitter `emit_reresolve_method_call` path (that correctly resolves
+`String`/`Vec`). Pinned mechanism (instrumented 2026-07-21):
+
+- For a carrier-scalar element (`cstr`), the wrapper's per-element clone
+  (`show_line__spec__void_const_char`) is emitted COLORED -- it has a `__cps` body.
+  The String/Vec clones are UNCOLORED (plain direct bodies), which is why their
+  `(show x)` goes through the direct emitter and re-resolves correctly.
+- Inside the cstr clone's CPS body, `(show x)` is a `CT_TAILCALL` whose callee is
+  the elaboration-baked carrier rep `__inst_Show_show_int`. The CPS emitter's
+  `callee_name` returns that baked name verbatim -- it does NOT run the per-spec
+  method re-resolution the direct emitter does. So the body dispatches to
+  `Show[int]` and prints the pointer. (Garbles in `main` too -- independent of the
+  gate/routing; a routing change cannot fix it, the clone BODY is wrong.)
+- The active ABI spec DOES carry the correct binding (`bindings[0] = {name:"a",
+  type: TY_CSTR}`), but the CPS IR (`CTerm`) has DROPPED the dispatch `dict_arg`,
+  so the callee name `__inst_Show_show_int` alone cannot be soundly re-targeted:
+  it is indistinguishable from a genuine `(show 42)` int dispatch that happens to
+  live in a spec with a non-int binding. A string-surgery re-target (`_int` ->
+  `_cstr`) would MISCOMPILE such a genuine int dispatch.
+
+Therefore RC2 needs one of (design required, pick in 2b.1):
+
+- **2b.1 (design)** Thread the dispatch info (dict / class-var identity) that
+  `emit_reresolve_method_call` uses INTO the CPS IR (`CT_TAILCALL`/`CT_LETCALL`),
+  so the CPS emitter can call the same per-spec re-resolution and pick
+  `__inst_Show_show_cstr`. OR: re-resolve carrier-erased typeclass-method calls to
+  their per-spec instance BEFORE CPS lowering (so the CTerm already names the
+  right instance). OR: stop emitting these uncolored wrappers' scalar clones as
+  colored (if the coloring is spurious), so they take the correct direct-emitter
+  path like the nominal clones. Investigate why the cstr clone is colored while
+  the String clone is not -- that asymmetry may itself be the cheapest lever.
+- **2b.2** Once the CPS `(show x)` can re-resolve, steer it by the spec's
+  `bindings[]` (`a` -> `cstr`) to `__inst_Show_show_cstr`; keep `int` on
+  `__inst_Show_show_int`. Cover `bool`/sized ints too.
 - **2b.3 (clone-name collision, lower priority)** Two DISTINCT carrier-mangled
-  element types in ONE program share the `void_int64_t` clone symbol (e.g. `String`
+  element types in ONE program share a `void_int64_t` clone symbol (e.g. `String`
   + an opaque `:int` newtype). Encode the element/instance in the wrapper clone
-  mangling (reuse `spec->bindings[]`) so they get distinct symbols. Only bites
-  multi-element-type programs; verify with a fixture that uses `show-line` at two
-  carrier-mangled types.
-- **2b.4** Apply the same body-dispatch fix to `print-show` and any other
-  `^Show a` wrapper, and to the `CT_LETCALL` arm (`emit_cps_ir.c:5170`) for a
-  value-returning `^Class a` wrapper if one exists.
+  mangling (reuse `spec->bindings[]`) so they get distinct symbols. Verify with a
+  fixture using `show-line` at two carrier-mangled types.
+- **2b.4** Apply to `print-show` and the `CT_LETCALL` arm for any value-returning
+  `^Class a` wrapper.
+
+**Landing constraint:** the Edge 2a void fix (Phase 1) + RC2 land together with
+RC1. Until then `show-line`/`print-show` in a CPS-lowered helper stays a loud
+compile error for ALL element types (the safe state), rather than compiling and
+silently misrendering carrier scalars.
 
 ### Phase 3 -- Guardrail against silent carrier-rep fallback
 
@@ -311,3 +336,22 @@ DONE; the instrumentation approach is preserved below as the verification method
   `main` too, independent of the gate). The earlier "three candidates" guess was
   wrong: clone-name collision and `find_mono_clone_for_call` returning NULL are
   NOT the cause. Phases 2 / 2b rewritten around RC1 / RC2.
+- 2026-07-21 -- **Phase 2 (RC1) LANDED, staged.** `CT_TAILCALL` arm resolves the
+  uncolored generic's DIRECT clone and routes cps->direct (option (a)). With the
+  Edge 2a void fix temporarily applied, `show-line`/`print-show` on `String`/`Vec`
+  in a helper render correctly; full suite green (2243/0). Committed RC1 routing
+  ALONE (void fix held), so the branch keeps the safe loud void compile error and
+  introduces no carrier-scalar silent miscompile. RC1 is therefore staged
+  infrastructure until the void fix + RC2 land together.
+- 2026-07-21 -- **RC2 root cause REFINED (deeper than first written).** Instrumented
+  `emit_reresolve_method_call` (direct emitter) and the CPS `CT_TAILCALL`/`CT_LETCALL`
+  arms. Findings (instrumentation removed afterward, nothing of it landed): the
+  cstr wrapper clone is emitted COLORED, so its `(show x)` runs through the CPS
+  emitter's `callee_name` (baked `__inst_Show_show_int`), NOT the direct emitter's
+  per-spec `emit_reresolve_method_call` that correctly handles String/Vec. The CPS
+  IR has dropped the `dict_arg`, so the baked callee name cannot be soundly
+  re-targeted (indistinguishable from a genuine int dispatch). RC2 thus needs
+  dispatch-info threaded through the CPS IR, or method re-resolution before CPS
+  lowering, or removing the spurious coloring of the scalar clone -- see Phase 2b.1.
+  The active spec DOES carry `bindings[0] = {a: TY_CSTR}`, so once the CPS side can
+  re-resolve, steering to `__inst_Show_show_cstr` is straightforward.
