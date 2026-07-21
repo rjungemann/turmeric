@@ -6205,11 +6205,31 @@ static void emit_reset(CE *ce, const CTerm *t) {
 /* The C body expression of a single arithmetic context frame `(<op> <operand>
  * [])` -- `env` is the captured operand, `value` the resumed value.  Mirrors
  * emit_cps.c's frame_c_expr byte-for-byte (the proven generator). */
-/* The C cast applied to an intptr-carried frame env/value handed to a call
- * target, keyed by the target's param kind.  A cstr rides the carrier like an
- * int (CC4 value-typed cont<cstr>); mirrors emit_cps.c's c_cast_for_kind. */
+/* The C cast a cloneable/serial continuation thunk applies when forwarding its
+ * intptr-carried `env`/`value` slot into a top-level callee's parameter, keyed
+ * by the target's param kind.  Mirrors emit_cps.c's c_cast_for_kind.  A callee
+ * param that lowers to a POINTER type (rc/weak -> RcControlBlock *, ref/lref/
+ * ptr -> void *, cstr -> const char *) must be cast to that pointer type, not
+ * to (int64_t): passing an int where a pointer is expected is a
+ * -Wint-conversion (benign on LP64, but not -Werror-clean).  A (void *) cast
+ * covers every object-pointer param -- void * converts to any object pointer
+ * implicitly in C -- so a typed `ptr<T>` param (`T *`) is satisfied too.
+ * Everything else keeps the int64_t carrier cast (a cstr rides the carrier like
+ * an int in the CC4 value-typed cont<cstr> path).  See
+ * docs/archive/cloneable-cont-thunk-borrow-rc-int-conversion.md. */
 static const char *cc_cast_for_kind(TypeKind k) {
-    return (k == TY_CSTR) ? "(const char *)" : "(int64_t)";
+    switch (k) {
+        case TY_CSTR:           return "(const char *)";
+        case TY_RC:
+        case TY_WEAK:           return "(RcControlBlock *)";
+        case TY_REF:
+        case TY_LREF:
+        case TY_REF_MUT:
+        case TY_PTR_VOID:       return "(void *)";
+        case TY_REF_IMMUT:      return "(const void *)";
+        case TY_CLONEABLE_CONT: return "(tur_cloneable_cont *)";
+        default:                return "(int64_t)";
+    }
 }
 
 static const char *cloneable_frame_expr(const char *op, bool hole_left) {
