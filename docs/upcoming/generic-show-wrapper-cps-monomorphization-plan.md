@@ -1,19 +1,22 @@
 # Generic `^Show a` / `^Class a` wrapper monomorphization in the CPS backend
 
-**Status:** EDGE 2 DONE (2026-07-21); EDGE 1 (Phase 4) still OPEN. Prepared from
-the (now-archived) report `docs/archive/generic-void-show-wrapper-rough-edges.md`,
-which recorded two coupled rough edges in the generic `^Show a` wrappers
-(`show-line`, `print-show`, `stdlib/typeclass-show.tur`).
+**Status:** DONE (2026-07-21) -- both edges fixed; only optional Phase 3
+(guardrail) and Phase 5 cleanups (5.4 remove stage-4 workarounds) remain.
+Prepared from the (now-archived) report
+`docs/archive/generic-void-show-wrapper-rough-edges.md`, which recorded two
+coupled rough edges in the generic `^Show a` wrappers (`show-line`, `print-show`,
+`stdlib/typeclass-show.tur`).
 
-Edge 2 is fully fixed and landed: the void-temp compile fix (Phase 1) + RC1
-(nominal-type direct-clone routing) + RC2 (colored-clone CPS-body method
-re-resolution) + 2b.3 (scalar-spec tie-break) all shipped together, so
-`show-line`/`print-show` render correctly for every element type in a
-CPS-lowered helper with no silent miscompile. Remaining: **Phase 4 (Edge 1)** --
-the unresolved-element ICE (`(show-line (vec-new))`). This plan sequenced the Edge
-2 work so the compile-error fix and the dispatch fixes landed together, never
-separately (an earlier isolated void-temp fix was reverted, commit `71b5cef`,
-precisely to avoid the loud-error -> silent-miscompile conversion).
+Edge 2 (Phases 1/2/2b): the void-temp compile fix + RC1 (nominal-type
+direct-clone routing) + RC2 (colored-clone CPS-body method re-resolution) + 2b.3
+(scalar-spec tie-break) shipped together, so `show-line`/`print-show` render
+correctly for every element type in a CPS-lowered helper with no silent
+miscompile. Edge 1 (Phase 4): a wrapper applied to an element-less container
+(`(show-line (vec-new))`) no longer ICEs -- the concrete-head/tyvar-element
+dispatch type resolves by head instead of tripping the R3 assertion. This plan
+sequenced the Edge 2 work so the compile-error fix and the dispatch fixes landed
+together, never separately (an earlier isolated void-temp fix was reverted, commit
+`71b5cef`, precisely to avoid the loud-error -> silent-miscompile conversion).
 
 ## Background
 
@@ -296,20 +299,35 @@ dispatch issue and is out of scope here.)
   a wrapper resolving to the int carrier rep for a non-int concrete element is a
   routing hole.
 
-### Phase 4 -- Edge 1: unresolved-element ICE through the wrapper
+### Phase 4 -- Edge 1: unresolved-element ICE through the wrapper -- LANDED
 
-- **4.1** Trace how the DIRECT `(show (vec-new))` path defaults the unresolved
-  element tyvar to the int carrier (it renders `[]`). Identify the defaulting
-  site.
-- **4.2** Apply the same default (or a clean diagnostic) when the container flows
-  through one `^Class a` generic hop, so `emit_reresolve_disp_type`
-  (`emit_core.c:1619`) receives a concrete-enough type instead of tripping the
-  deep-side `emit_abi_assert_routed_concrete` invariant (`emit_core.c:1820`).
-  This lives in the ABI carrier-crossing recovery machinery -- treat as
-  higher-risk; land behind its own review and after Phases 1-3.
-- **4.3** If a clean default is not reachable cheaply, at minimum convert the ICE
-  into a proper user diagnostic ("cannot infer element type of empty collection
-  passed to `show-line`; ascribe it, e.g. `(:: (vec-new) (Vec int))`").
+**Status: DONE (2026-07-21).** Root cause was simpler than feared and no
+carrier-default substitution was needed:
+
+- **4.1/4.2 -- done.** The direct `(show (vec-new))` path renders `[]` because in
+  `main` there is no active ABI spec, so `emit_reresolve_disp_type` returns early
+  and the elaboration-baked `__inst_Show_show_Vec` (a concrete-head receiver) is
+  kept. Through the wrapper, the inner `(show x)` re-resolves inside the Vec clone
+  spec, and `emit_reresolve_disp_type` resolves the dispatch type to `(Vec ?)` --
+  a TY_APP with a CONCRETE HEAD but a tyvar element -- which tripped the
+  deep-side `emit_abi_assert_routed_concrete` (Debug ICE) / would silently pick a
+  carrier `__inst_*` (Release). Fix (`emit_core.c`): when the resolved dispatch
+  type's spine carries a tyvar but its HEAD is concrete, return it as-is and let
+  the caller's authoritative head-match (`emit_concrete_inst_method_name` ->
+  `emit_inst_head_matches`, which matches `Show[Vec]` to `(Vec ?)` by head) resolve
+  the instance, instead of asserting.  This is sound: a TY_APP dispatch type has
+  NO carrier-rep suffix fallback (`emit_inst_suffix_component(TY_APP) == NULL`), so
+  the re-resolution either matches by head or yields NULL (keep baked) -- it can
+  never silently select the int rep.  If the HEAD itself is a tyvar/unknown there
+  is nothing to select, so it keeps base/repr like the existing bare-tyvar bail.
+  `type_spine_has_tyvar` was moved out of `#ifndef NDEBUG` so the bail runs in
+  Release too (where the assertion is compiled out).
+- **4.3 -- not needed.** The empty container renders correctly (`[]`, `#map{}`),
+  matching the direct path, so no ascribe-hint diagnostic is required.
+
+Verified: `(show-line (vec-new))` renders `[]`, `(show-line (hamt-of ...))` renders
+`#map{}`; the Edge 2 cases are unaffected; full suite green. Fixture
+`tests/fixtures/show-wrapper-empty-container/`.
 
 ### Phase 5 -- Fixtures, suite, docs
 
@@ -389,3 +407,12 @@ dispatch issue and is out of scope here.)
   `show-wrapper-helper-dispatch` added. Only Phase 4 (Edge 1 ICE) remains. Noted a
   pre-existing, orthogonal String-local-drop leak (reproduces in the direct `main`
   path too), out of scope for this dispatch work.
+- 2026-07-21 -- **EDGE 1 (Phase 4) LANDED.** `(show-line (vec-new))` no longer
+  ICEs. In `emit_reresolve_disp_type`, a dispatch type with a concrete HEAD but a
+  tyvar element (`(Vec ?)` from an empty container) is now returned as-is so the
+  caller's authoritative head-match resolves `Show[Vec]`, instead of tripping the
+  R3 assertion; a TY_APP has no carrier-rep suffix fallback so this cannot silently
+  misdispatch (matches by head or keeps baked). `type_spine_has_tyvar` moved out of
+  `#ifndef NDEBUG` so the bail also runs in Release. Renders `[]` / `#map{}` like
+  the direct path; Edge 2 unaffected; full suite green. Fixture
+  `show-wrapper-empty-container`. Both edges of the original report are now fixed.
