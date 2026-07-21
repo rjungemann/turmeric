@@ -542,6 +542,13 @@ struct FnDef *emit_reresolve_method_fndef(struct EmitCtx *ctx, const struct Expr
  * parametric container.  Defined in emit_core.c. */
 bool emit_reresolve_disp_type(EmitCtx *ctx, const Expr *call,
                               Type *out_resolved, const Expr **out_dict);
+/* RC2 (generic-show-wrapper-cps-monomorphization-plan): re-resolve a carrier-erased
+ * typeclass-method call to the concrete per-ABI-spec instance method symbol, or NULL
+ * when the call is not a genuine tyvar dispatch inside a spec (self-gating: safe on
+ * an ordinary int dispatch).  Shared by the direct emitter and the CPS emitter so a
+ * `(show x)` inside a COLORED wrapper clone body dispatches to `__inst_Show_show_<T>`
+ * rather than the baked int carrier representative.  Defined in emit_core.c. */
+char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call);
 /* R2 (carrier-crossing-recovery-routing-plan): shared first-stage dispatch-tyvar
  * identification -- writes the TY_TYVAR a typeclass-method call dispatches on
  * (ascribed receiver, bare receiver, or result type) into *out, or returns false

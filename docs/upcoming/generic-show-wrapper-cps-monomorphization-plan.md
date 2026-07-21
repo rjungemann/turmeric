@@ -1,12 +1,19 @@
 # Generic `^Show a` / `^Class a` wrapper monomorphization in the CPS backend
 
-**Status:** NOT STARTED. Prepared from the (now-archived) report
-`docs/archive/generic-void-show-wrapper-rough-edges.md`, which recorded two
-coupled rough edges in the generic `^Show a` wrappers (`show-line`, `print-show`,
-`stdlib/typeclass-show.tur`). One attempted point-fix (the Edge 2 void-temp fix)
-was landed and then reverted (commit `71b5cef`) because, in isolation, it converts
-a loud compile error into a SILENT MISCOMPILE. This plan sequences the work so the
-compile-error fix and the dispatch fix land together, never separately.
+**Status:** EDGE 2 DONE (2026-07-21); EDGE 1 (Phase 4) still OPEN. Prepared from
+the (now-archived) report `docs/archive/generic-void-show-wrapper-rough-edges.md`,
+which recorded two coupled rough edges in the generic `^Show a` wrappers
+(`show-line`, `print-show`, `stdlib/typeclass-show.tur`).
+
+Edge 2 is fully fixed and landed: the void-temp compile fix (Phase 1) + RC1
+(nominal-type direct-clone routing) + RC2 (colored-clone CPS-body method
+re-resolution) + 2b.3 (scalar-spec tie-break) all shipped together, so
+`show-line`/`print-show` render correctly for every element type in a
+CPS-lowered helper with no silent miscompile. Remaining: **Phase 4 (Edge 1)** --
+the unresolved-element ICE (`(show-line (vec-new))`). This plan sequenced the Edge
+2 work so the compile-error fix and the dispatch fixes landed together, never
+separately (an earlier isolated void-temp fix was reverted, commit `71b5cef`,
+precisely to avoid the loud-error -> silent-miscompile conversion).
 
 ## Background
 
@@ -172,18 +179,17 @@ RC2 the carrier-scalar garbage) -- else Phase 1 alone is a silent miscompile.
 - **0.3** Confirm the direct (`main`) path and non-void `show` path render every
   type correctly (the "known-good" reference emit).
 
-### Phase 1 -- Re-land the void-temp compile fix (Edge 2a), GATED
+### Phase 1 -- Re-land the void-temp compile fix (Edge 2a) -- LANDED
 
-- **1.1** Reinstate the reverted `CT_TAILCALL` `cps->direct` void handling
-  (`emit_cps_ir.c`): when the callee's `FnDef` return type
-  (`fd_for_binding` + `fn_ret_type`) is `TY_NIL`/`TY_NEVER`, emit a bare call and
-  `emit_deliver(..., "0")` instead of `__auto_type t = fn(...)`. (Verbatim the
-  reverted commit `31fa6fa` diff.)
-- **1.2** Do NOT ship this as a standalone commit. Keep it on the same branch as
-  Phase 2 and only merge once Phase 2 makes the wrapper dispatch correct. If an
-  intermediate landing is unavoidable, guard 1.1 so a wrapper call that cannot
-  resolve to a concrete per-element clone emits a **hard compile diagnostic**
-  (see Phase 3), never the silent carrier-rep call -- i.e. keep the failure loud.
+- **1.1 -- done.** The `CT_TAILCALL` `cps->direct` void handling is back
+  (`emit_cps_ir.c`): a `TY_NIL`/`TY_NEVER` callee (via `fd_for_binding` +
+  `fn_ret_type`) emits a bare call + `emit_deliver(..., "0")`.
+- **1.2 -- satisfied.** Landed TOGETHER with RC1 + RC2 + 2b.3 in one pass, so it
+  never shipped alone: with all four in place every element type
+  (int/bool/cstr/String/Vec/Set/Map) renders correctly in a helper -- there is no
+  silent carrier-rep miscompile to guard against. (The interim RC1-only commit
+  `4760417` deliberately did NOT include this void fix, keeping the branch's loud
+  compile error until the dispatch was correct.)
 
 ### Phase 2 -- RC1: route nominal-type wrapper calls to the direct clone [core] -- LANDED
 
@@ -235,32 +241,47 @@ NOT the direct-emitter `emit_reresolve_method_call` path (that correctly resolve
   live in a spec with a non-int binding. A string-surgery re-target (`_int` ->
   `_cstr`) would MISCOMPILE such a genuine int dispatch.
 
-Therefore RC2 needs one of (design required, pick in 2b.1):
+**RC2 fix -- LANDED (2026-07-21), approach "thread the source Expr through the
+CPS IR".** Chosen because it is the soundest of the three candidates (the
+coloring-asymmetry lever was not needed):
 
-- **2b.1 (design)** Thread the dispatch info (dict / class-var identity) that
-  `emit_reresolve_method_call` uses INTO the CPS IR (`CT_TAILCALL`/`CT_LETCALL`),
-  so the CPS emitter can call the same per-spec re-resolution and pick
-  `__inst_Show_show_cstr`. OR: re-resolve carrier-erased typeclass-method calls to
-  their per-spec instance BEFORE CPS lowering (so the CTerm already names the
-  right instance). OR: stop emitting these uncolored wrappers' scalar clones as
-  colored (if the coloring is spurious), so they take the correct direct-emitter
-  path like the nominal clones. Investigate why the cstr clone is colored while
-  the String clone is not -- that asymmetry may itself be the cheapest lever.
-- **2b.2** Once the CPS `(show x)` can re-resolve, steer it by the spec's
-  `bindings[]` (`a` -> `cstr`) to `__inst_Show_show_cstr`; keep `int` on
-  `__inst_Show_show_int`. Cover `bool`/sized ints too.
-- **2b.3 (clone-name collision, lower priority)** Two DISTINCT carrier-mangled
-  element types in ONE program share a `void_int64_t` clone symbol (e.g. `String`
-  + an opaque `:int` newtype). Encode the element/instance in the wrapper clone
-  mangling (reuse `spec->bindings[]`) so they get distinct symbols. Verify with a
-  fixture using `show-line` at two carrier-mangled types.
-- **2b.4** Apply to `print-show` and the `CT_LETCALL` arm for any value-returning
-  `^Class a` wrapper.
+- **2b.1 -- done.** Added `const Expr *call_expr` to the `CT_TAILCALL`/`CT_LETCALL`
+  CTerm structs (`src/passes/cps_ir.h`) and populate it with the source `EX_CALL`
+  at the call-lowering sites (`src/passes/cps_ir.c`). Exported
+  `emit_reresolve_method_call` (`emit_core.c`/`emit_internal.h`). The CPS emitter's
+  `CT_TAILCALL`/`CT_LETCALL` arms now call it on `call_expr`; when it returns a
+  concrete instance name, that name is used and the call is FORCED onto the
+  cps->direct path (the re-resolved instance method is uncolored). It self-gates
+  (`emit_reresolve_disp_type` returns NULL unless the call is a genuine tyvar
+  dispatch inside an active spec), so an ordinary `(show 42)` int dispatch is
+  untouched -- this is why it is sound where a string-surgery re-target was not.
+- **2b.2 -- done (falls out of 2b.1).** `emit_reresolve_method_call` already steers
+  by the spec's `bindings[]` via `emit_reresolve_disp_type` -> the concrete element
+  type -> `emit_inst_suffix_component` / `emit_concrete_inst_method_name`, so
+  `cstr` -> `__inst_Show_show_cstr`, `bool` -> `__inst_Show_show_bool`, `int` stays
+  `__inst_Show_show_int`. Re-resolved calls pass args RAW (not cast to the original
+  carrier-rep param), since the spec-clone arg already has the concrete C repr.
+- **2b.3 -- done, and it bites more than "lower priority".** The collision is not
+  just two carrier-mangled types sharing a symbol; whenever SEVERAL scalar-element
+  wrapper specs coexist (`int`+`bool`+`cstr`), `find_mono_clone_for_call` SKIPS the
+  scalar arg in discrimination, so they all match (n_hit > 1) and the call falls to
+  the carrier-rep BASE clone -- `(show-line true)` printed `1`. Fixed with an
+  additive tie-breaker: when the primary (scalar-skipping) pass is ambiguous, a
+  second pass compares scalar args too by concrete C type and uses the unique
+  match. Additive -- it only runs on ambiguity and disqualifies a spec whose arg
+  has no concrete atom type, so a genuinely carrier-erased scalar arg still yields
+  NULL (no regression to non-wrapper generics).
+- **2b.4 -- covered.** The fix is in the shared `CT_TAILCALL`/`CT_LETCALL` arms and
+  `find_mono_clone_for_call`, so it applies to `print-show` and any `^Show a`
+  wrapper automatically.
 
-**Landing constraint:** the Edge 2a void fix (Phase 1) + RC2 land together with
-RC1. Until then `show-line`/`print-show` in a CPS-lowered helper stays a loud
-compile error for ALL element types (the safe state), rather than compiling and
-silently misrendering carrier scalars.
+**Verified:** `show-line`/`print-show` on int/bool/cstr/String/Vec/Set/Map in a
+helper AND in `main` all render correctly; the original report Edge 2 repro
+renders correctly; full suite green (2243/0). Regression fixture
+`tests/fixtures/show-wrapper-helper-dispatch/`. (A pre-existing, orthogonal
+String-local drop leak -- the `string/from-cstr`/`concat` temporaries in a `let`
+are not released -- reproduces identically in the direct `main` path; it is NOT a
+dispatch issue and is out of scope here.)
 
 ### Phase 3 -- Guardrail against silent carrier-rep fallback
 
@@ -355,3 +376,16 @@ silently misrendering carrier scalars.
   lowering, or removing the spurious coloring of the scalar clone -- see Phase 2b.1.
   The active spec DOES carry `bindings[0] = {a: TY_CSTR}`, so once the CPS side can
   re-resolve, steering to `__inst_Show_show_cstr` is straightforward.
+- 2026-07-21 -- **EDGE 2 COMPLETE. Phase 1 (void) + RC2 + 2b.3 LANDED with RC1.**
+  Implemented RC2 via the "thread the source Expr through the CPS IR" approach:
+  added `CTerm.call_expr` (`cps_ir.h`), populate at lowering (`cps_ir.c`), exported
+  `emit_reresolve_method_call`, and call it from the CPS `CT_TAILCALL`/`CT_LETCALL`
+  arms (forcing cps->direct + raw args for a re-resolved instance callee). Re-added
+  the Edge 2a void bare-call. Discovered 2b.3 bites harder than expected -- multiple
+  scalar-element specs make `find_mono_clone_for_call` non-unique (skips scalar
+  args) so `(show-line true)` fell to the base clone and printed `1`; fixed with an
+  additive scalar-comparing tie-break pass. All element types now render correctly
+  in helper and `main`; full suite green (2243/0); fixture
+  `show-wrapper-helper-dispatch` added. Only Phase 4 (Edge 1 ICE) remains. Noted a
+  pre-existing, orthogonal String-local-drop leak (reproduces in the direct `main`
+  path too), out of scope for this dispatch work.

@@ -1838,7 +1838,7 @@ FnDef *emit_reresolve_method_fndef(EmitCtx *ctx, const Expr *call) {
                                            dict->as.dict_.method_name);
 }
 
-static char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
+char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
     Type resolved;
     const Expr *dict = NULL;
     if (!emit_reresolve_disp_type(ctx, call, &resolved, &dict)) return NULL;

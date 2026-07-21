@@ -4539,7 +4539,36 @@ static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
         }
         if (ok) { hit = spec->clone_name; n_hit++; }
     }
-    return (n_hit == 1) ? hit : NULL;
+    if (n_hit == 1) return hit;
+    /* RC2/2b.3 (generic-show-wrapper-cps-monomorphization-plan): the pass above
+     * SKIPS scalar args (they usually ride the int64 carrier and don't
+     * discriminate).  But a `^Show a` wrapper monomorphized per SCALAR element
+     * (`show_line__spec__void_bool` vs `..._const_char` vs `..._int64_t`) is
+     * distinguished ONLY by its scalar arg, so when several such specs coexist the
+     * skip makes them all match (n_hit > 1) and the call falls to the carrier-rep
+     * base clone -- misrendering (e.g. `(show-line true)` prints `1`).  Break the
+     * tie with a STRICTER pass that compares scalar args too, by concrete C type.
+     * Additive: only runs when the primary pass was ambiguous, and it disqualifies
+     * a spec whose arg has no concrete atom type, so a genuinely carrier-erased
+     * scalar arg (atom typed as the int64 carrier) still yields no unique match
+     * (returns NULL exactly as before -- no regression to non-wrapper generics). */
+    if (n_hit > 1) {
+        const char *hit2 = NULL; int n_hit2 = 0;
+        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+            if (spec->binding != fn || !spec->clone_name || spec->n_args != n) continue;
+            bool ok = true;
+            for (uint32_t j = 0; j < n && ok; j++) {
+                if (!args[j].type) { ok = false; break; }  /* can't discriminate */
+                const char *ac = emit_type_c_name(ctx, *(Type *)args[j].type);
+                const char *sc = emit_type_c_name(ctx, spec->arg_types[j]);
+                if (!ac || !sc || strcmp(ac, sc) != 0) ok = false;
+            }
+            if (ok) { hit2 = spec->clone_name; n_hit2++; }
+        }
+        if (n_hit2 == 1) return hit2;
+    }
+    return NULL;
 }
 
 /* True when `fn` names a COLORED top-level function (g_ents holds exactly the
@@ -5178,15 +5207,26 @@ static void emit_term(CE *ce, const CTerm *t) {
              * of the dead helper.  find_mono_clone_for_call returns NULL for an
              * ordinary callee with no registered ABI specialization, so this is a
              * no-op for every non-templated call. */
-            const char *mclone_lc = find_mono_clone_for_call(
+            /* RC2 (generic-show-wrapper-cps-monomorphization-plan): re-resolve a
+             * carrier-erased typeclass-method dispatch to the concrete per-spec
+             * instance (same as the CT_TAILCALL arm); self-gating, so no-op for an
+             * ordinary call. */
+            char *rr_lc = t->as.letcall.call_expr
+                ? emit_reresolve_method_call(ce->ctx, t->as.letcall.call_expr) : NULL;
+            const char *mclone_lc = rr_lc ? NULL : find_mono_clone_for_call(
                 ce->ctx, t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n);
-            char *fn = mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn);
+            char *fn = rr_lc ? rr_lc
+                     : (mclone_lc ? strdup(mclone_lc) : callee_name(t->as.letcall.fn));
             /* Cast each arg to the (direct) callee's declared param C type --
              * gcc14-int-conversion, carrier-to-typed-param: a cps->direct call to
              * e.g. `option_hyeq_qu(int64_t,int64_t,int64_t)` with a void* closure
              * arg 3 must carrier-cast it.  Skipped for a mono-clone (its args are
              * already the clone's concrete param types). */
-            char *argv = mclone_lc
+            /* rr_lc/mclone_lc callees take the concrete element type by its own C
+             * repr (the spec-clone param already has that repr), so pass raw --
+             * casting to the ORIGINAL carrier-rep callee's int64 param would
+             * mismatch the re-resolved `const char *` / concrete param. */
+            char *argv = (rr_lc || mclone_lc)
                 ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
                                        t->as.letcall.fn);
@@ -5260,30 +5300,38 @@ static void emit_term(CE *ce, const CTerm *t) {
              * branch (which would be an undefined reference).
              *
              * For a NOMINAL element type (String/Vec/Set/Map) the resolved direct
-             * clone's body dispatches correctly (verified). A carrier-SCALAR element
-             * (cstr/bool/...) resolves to a clone whose body is itself a colored CPS
-             * body that STILL bakes the carrier rep -- that is RC2, a distinct
-             * clone-body defect, still OPEN. This routing is therefore only
-             * user-visible once the Edge 2a void-temp fix lands (which makes the
-             * void wrapper call compile); that fix is intentionally held until RC2
-             * is fixed too, so the two land together and no carrier-scalar call
-             * silently misrenders. */
+             * clone's body dispatches correctly. A carrier-SCALAR element
+             * (cstr/bool/...) resolves to a clone whose body is itself COLORED, so
+             * its inner `(show x)` is emitted here (not by the direct emitter) with
+             * the baked carrier rep -- RC2 below re-resolves that. */
+            /* RC2 (generic-show-wrapper-cps-monomorphization-plan): a carrier-erased
+             * typeclass-method dispatch (`(show x)` baked to `__inst_Show_show_int`)
+             * inside a COLORED ABI-spec clone body reaches the CPS emitter, which
+             * would otherwise call the int carrier rep verbatim.  Run the same
+             * per-spec re-resolution the direct emitter uses (emit_reresolve_method_call)
+             * so the body dispatches to `__inst_Show_show_<T>` for the spec's concrete
+             * element T.  It self-gates: NULL unless the call is a genuine tyvar
+             * dispatch inside an active spec, so an ordinary int dispatch is
+             * untouched.  The re-resolved instance method is a DIRECT (uncolored)
+             * callee, so force the cps->direct path. */
+            char *rr = t->as.tailcall.call_expr
+                ? emit_reresolve_method_call(ce->ctx, t->as.tailcall.call_expr) : NULL;
             const char *clone = NULL;
             bool clone_is_cps = false;   /* true only when <clone>__cps is emitted */
             SEnt *fe = ent_of_binding(t->as.tailcall.fn);
             bool callee_colored = binding_in_s(t->as.tailcall.fn);
-            if (fe && fe->mono_template) {
+            if (!rr && fe && fe->mono_template) {
                 clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
                                                  t->as.tailcall.args, t->as.tailcall.n);
                 clone_is_cps = (clone != NULL);  /* colored mono-template -> <clone>__cps */
-            } else if (fe && !callee_colored) {
+            } else if (!rr && fe && !callee_colored) {
                 clone = find_mono_clone_for_call(ce->ctx, t->as.tailcall.fn,
                                                  t->as.tailcall.args, t->as.tailcall.n);
                 /* uncolored generic clone is direct-only: clone_is_cps stays false */
             }
-            char *fn = clone ? strdup(clone) : callee_name(t->as.tailcall.fn);
+            char *fn = rr ? rr : (clone ? strdup(clone) : callee_name(t->as.tailcall.fn));
             char *argv = atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n);
-            if (callee_colored || clone_is_cps) {
+            if (!rr && (callee_colored || clone_is_cps)) {
                 /* cps->cps: both colored and emitted -- thread the continuation
                  * straight through, no trampoline.  The threaded continuation is
                  * the function's own k (KK_RET) or, inside a reset's delimited
@@ -5309,13 +5357,36 @@ static void emit_term(CE *ce, const CTerm *t) {
                 /* Cast each arg to the callee's DECLARED param C type, exactly as
                  * the cps->cps branch does -- a pointer/fat-fn arg into an int64
                  * carrier param (or vice versa) is a -Wint-conversion hard error
-                 * under GCC >= 14 (gcc14-int-conversion, carrier-to-typed-param). */
-                char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
-                                                    t->as.tailcall.n, t->as.tailcall.fn);
-                /* __auto_type keeps the callee's real return type (int, cstr,
-                 * ...); the slot cast at delivery narrows it to the word. */
-                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
-                emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                 * under GCC >= 14 (gcc14-int-conversion, carrier-to-typed-param).
+                 * A re-resolved (rr) instance-method callee takes the concrete
+                 * element by its own C repr (the spec-clone arg already has it), so
+                 * pass raw -- casting to the original int carrier-rep param would
+                 * mismatch. */
+                char *argv_t = rr
+                    ? atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n)
+                    : atoms_csv_call_typed(ce, t->as.tailcall.args,
+                                           t->as.tailcall.n, t->as.tailcall.fn);
+                /* Edge 2a (generic-show-wrapper-cps-monomorphization-plan): a
+                 * `:nil`/`:void`-returning callee (a `^Show a` wrapper like
+                 * `show-line`/`print-show`, `tur_contract_check`, ...) emits as C
+                 * `void`, so it yields no value: `__auto_type t = void_fn(...)` is a
+                 * "variable declared void" hard error.  Emit a bare call and deliver
+                 * the unit placeholder `0` -- mirrors the CT_LETCALL nil arm and
+                 * emit_value's TY_NIL/TY_NEVER skip in the direct emitter.  Lands
+                 * together with RC1 (direct-clone routing) + RC2 (colored-clone
+                 * dispatch re-resolution) so no wrapper call silently misrenders. */
+                const FnDef *cfd = g_prog
+                    ? fd_for_binding(g_prog, t->as.tailcall.fn) : NULL;
+                const Type *crt = cfd ? fn_ret_type(cfd) : NULL;
+                if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
+                    ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
+                    emit_deliver(ce, &t->as.tailcall.kont, "0");
+                } else {
+                    /* __auto_type keeps the callee's real return type (int, cstr,
+                     * ...); the slot cast at delivery narrows it to the word. */
+                    ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                }
                 free(argv_t);
                 free(tmp);
             }

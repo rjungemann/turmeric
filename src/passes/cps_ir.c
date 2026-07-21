@@ -3431,6 +3431,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 CTerm *t = new_term(b, CT_TAILCALL);
                 t->as.tailcall.fn = fn; t->as.tailcall.args = args;
                 t->as.tailcall.n = n; t->as.tailcall.kont = kont;
+                t->as.tailcall.call_expr = e;   /* RC2: retain for method re-resolution */
                 return fold_pending(b, &p, t);
             } else {
                 CVar x = fresh_cvar(b, &e->type);
@@ -3439,6 +3440,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 CTerm *t = new_term(b, CT_LETCALL);
                 t->as.letcall.x = x; t->as.letcall.fn = fn;
                 t->as.letcall.args = args; t->as.letcall.n = n; t->as.letcall.body = ac;
+                t->as.letcall.call_expr = e;   /* RC2: retain for method re-resolution */
                 return fold_pending(b, &p, t);
             }
         }
@@ -3879,6 +3881,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 CTerm *call = new_term(b, CT_TAILCALL);
                 call->as.tailcall.fn = fn; call->as.tailcall.args = args;
                 call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.call_expr = e;   /* RC2: retain for method re-resolution */
                 CTerm *t = new_term(b, CT_LETCONT);
                 t->as.letcont.j = j; t->as.letcont.param = x;
                 t->as.letcont.jbody = rest; t->as.letcont.body = call;
@@ -3887,6 +3890,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 CTerm *t = new_term(b, CT_LETCALL);
                 t->as.letcall.x = x; t->as.letcall.fn = fn;
                 t->as.letcall.args = args; t->as.letcall.n = n; t->as.letcall.body = rest;
+                t->as.letcall.call_expr = e;   /* RC2: retain for method re-resolution */
                 return fold_pending(b, &p, t);
             }
         }

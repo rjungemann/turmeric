@@ -209,12 +209,22 @@ struct CTerm {
         struct { CKont kont; CAtom v; }                                   appcont;
         struct { CVar x; CAtom v; CTerm *body; }                          letval;
         struct { CVar x; const char *op; const BuiltinSpec *spec; CAtom *args; uint32_t n; CTerm *body; } letprim;
-        struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body; } letcall;
+        struct { CVar x; const Binding *fn; CAtom *args; uint32_t n; CTerm *body;
+                 /* RC2 (generic-show-wrapper-cps-monomorphization-plan): the source
+                  * EX_CALL, retained so the CPS emitter can run the same per-ABI-spec
+                  * typeclass re-resolution (emit_reresolve_method_call) the direct
+                  * emitter uses -- the CTerm otherwise drops the dispatch dict_arg,
+                  * leaving a carrier-erased `(show x)` baked to the int rep. NULL for
+                  * synthetic calls with no source Expr. */
+                 const Expr *call_expr; } letcall;
         /* fn_atom is the callee key when fn == NULL (E2c: a via_registry call
          * whose callee is a struct-field fn-value load `(.f obj)`, not a named
          * binding).  The emitter uses fn_atom's atom_str as the `__tur_cps_lookup`
          * key in that case. */
-        struct { const Binding *fn; CAtom fn_atom; CAtom *args; uint32_t n; CKont kont; bool via_registry; } tailcall;
+        struct { const Binding *fn; CAtom fn_atom; CAtom *args; uint32_t n; CKont kont; bool via_registry;
+                 /* RC2: source EX_CALL retained for per-ABI-spec typeclass
+                  * re-resolution in the CPS emitter (see letcall.call_expr). */
+                 const Expr *call_expr; } tailcall;
         struct { CVar j; CVar param; CTerm *jbody; CTerm *body; }         letcont;
         struct { CAtom cond; CTerm *then_; CTerm *else_; }                if_;
         struct { CVar x; CTerm *delim; CTerm *body; }                     reset;
