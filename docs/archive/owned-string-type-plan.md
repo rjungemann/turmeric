@@ -2,7 +2,7 @@
 title: An owned String type (v2)
 category: stdlib / runtime -- strings
 description: cstr is a borrowed raw char* with no length or ownership; as a Map/Set key it is inserted borrowed (mk-owned? = 0), so a computed or later-freed string dangles. stdlib/str.tur is an inert borrowed view (ptr<void>, Eq only). This plan adds an owned, immutable, refcounted String with the full typeclass set (Eq/Show/Hash/Ord/MapKey/Clone) that owns its bytes and is safe as a collection key/element. It does not replace cstr; it is the type you reach for when a string outlives its source. Depends on the v1 element-dispatch fix for container participation.
-status: core implemented (v2); adoption audits still open
+status: ARCHIVED (core complete) -- the owned String type + StringSlice + #s"..." reader all landed and tested; the three adoption follow-ups are now their own tracked plans (stdlib: batches 1-2 landed; docs: audit done, edits pending; spices: string-adoption-spices-plan.md)
 ---
 
 # An owned `String`
@@ -22,10 +22,12 @@ status: core implemented (v2); adoption audits still open
 > owned-literal reader macro (`stdlib/string-reader.tur`). Two of the three
 > **adoption audits** in the
 > "Follow-up" section below are now written up:
-> [string-adoption-stdlib-plan.md](./string-adoption-stdlib-plan.md) and
-> [string-adoption-docs-plan.md](./string-adoption-docs-plan.md) (each with a
+> [string-adoption-stdlib-plan.md](../upcoming/v2/string-adoption-stdlib-plan.md) and
+> [string-adoption-docs-plan.md](../upcoming/v2/string-adoption-docs-plan.md) (each with a
 > per-site keep/migrate classification and an ordered migration list). The
-> **spices** audit stays deferred until `../turmeric-spices/` is checked out.
+> **spices** audit is now also written up (spices are checked out at
+> `../turmeric-spices/`):
+> [string-adoption-spices-plan.md](../upcoming/v2/string-adoption-spices-plan.md).
 
 ## Why cstr is not enough
 

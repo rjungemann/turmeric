@@ -73,7 +73,7 @@ Both are generic-wrapper monomorphization/lowering gaps, not `Show`-specific:
 
 ## Notes
 
-Filed while landing stage 4 of docs/upcoming/v2/show-owned-result-plan.md.  The
+Filed while landing stage 4 of docs/archive/show-owned-result-plan.md.  The
 stage-4 fixtures use the two workarounds above (type ascription for the empty
 collection in show-collections; the explicit release form in string-basic /
 string-slice), so the wrappers are otherwise in wide use and work for every

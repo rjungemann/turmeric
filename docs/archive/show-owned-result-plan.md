@@ -1,11 +1,19 @@
 # `Show` should return an owned `String`, not a borrowed `cstr`
 
-> **Status:** Proposed (v2, 2026-07-20)
+> **Status:** ARCHIVED -- COMPLETE (v2). All five stages landed: `Show` now
+> returns an owned `String` (`stdlib/typeclass-show.tur:26`
+> `(defclass Show [a] (show [x] : String))`), the parallel `ShowString`/`show-string`
+> surface was folded into `Show` and dropped, `derive-show` emits the owned
+> instance (`derive-show-cstr` retained for local-`Show` fixtures),
+> `show-line`/`print-show` wrappers ship, and the interpreter path builds real
+> owned `String`s (`native_show_int_str` in `src/turi/interpreter_natives.c`).
+>
+> **Original status:** Proposed (v2, 2026-07-20)
 >
 > **Depends on:** the owned `String` type (landed) --
 > [owned-string-type-plan.md](./owned-string-type-plan.md),
-> [stdlib/string.tur](../../../stdlib/string.tur),
-> [docs/guides/strings-guide.md](../../guides/strings-guide.md).
+> [stdlib/string.tur](../../stdlib/string.tur),
+> [docs/guides/strings-guide.md](../guides/strings-guide.md).
 >
 > **Kind:** breaking typeclass-signature change; staged so each step is landable.
 
@@ -189,7 +197,7 @@ rest of the String work does.
 
 ## Related
 
-- `docs/upcoming/v2/owned-string-type-plan.md` -- the owned `String` this builds on.
+- `docs/archive/owned-string-type-plan.md` -- the owned `String` this builds on.
 - `docs/upcoming/v2/string-adoption-stdlib-plan.md` -- the same borrowed-`cstr`
   ownership defect, audited across the rest of stdlib; `Show` is the biggest
   single instance of it and is broken out here because retyping a core typeclass

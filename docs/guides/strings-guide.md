@@ -266,6 +266,6 @@ frees them?** Each type answers it differently.
 - `stdlib/string.tur` -- the module.
 - `stdlib/string-slice.tur` -- `StringSlice`, the zero-copy view.
 - `src/runtime/tur_string.c` -- the refcounted payload + operations.
-- `docs/upcoming/v2/owned-string-type-plan.md` -- the design plan.
+- `docs/archive/owned-string-type-plan.md` -- the design plan.
 - `docs/upcoming/v2/string-adoption-stdlib-plan.md` -- the borrowed-`cstr`
   migration audit.

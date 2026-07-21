@@ -3,7 +3,7 @@
 > **Status:** Proposed (audit complete 2026-07-20)
 >
 > **Prerequisite:** the owned `String` type has landed --
-> [docs/upcoming/v2/owned-string-type-plan.md](./owned-string-type-plan.md),
+> [docs/archive/owned-string-type-plan.md](../../archive/owned-string-type-plan.md),
 > [stdlib/string.tur](../../../stdlib/string.tur),
 > [docs/guides/strings-guide.md](../../guides/strings-guide.md).
 >
