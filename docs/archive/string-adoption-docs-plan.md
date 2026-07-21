@@ -1,15 +1,17 @@
 # `String` Adoption Audit -- docs / guides
 
-> **Status:** Proposed (audit complete 2026-07-20)
+> **Status:** Executed 2026-07-21 -- all 7 ordered edits landed. See the
+> **Execution status** section below.
 >
 > **Prerequisite:** the owned `String` type has landed --
-> [docs/archive/owned-string-type-plan.md](../../archive/owned-string-type-plan.md),
-> [stdlib/string.tur](../../../stdlib/string.tur),
-> [docs/guides/strings-guide.md](../../guides/strings-guide.md).
+> [owned-string-type-plan.md](./owned-string-type-plan.md),
+> [stdlib/string.tur](../../stdlib/string.tur),
+> [strings-guide.md](../guides/strings-guide.md).
 >
-> **Companion audits:** [string-adoption-stdlib-plan.md](./string-adoption-stdlib-plan.md)
-> (stdlib code). A spices audit is deferred until `../turmeric-spices/` is in the
-> tree.
+> **Companion audits:** [string-adoption-stdlib-plan.md](../upcoming/v2/string-adoption-stdlib-plan.md)
+> (stdlib code; batches 1-2 landed, formatter batches remain) and
+> [string-adoption-spices-plan.md](./string-adoption-spices-plan.md) (spices;
+> executed).
 
 ## What this is
 
@@ -131,4 +133,26 @@ Literal / FFI / borrow / parameter uses stay `cstr`:
    **structs-guide.md** cross-links.
 
 Every item in 2-7 also adds the missing cross-link to
-[strings-guide.md](../../guides/strings-guide.md).
+[strings-guide.md](../guides/strings-guide.md).
+
+## Execution status (2026-07-21)
+
+All 7 ordered edits landed and are verified in-tree:
+
+1. **README.md** -- `strings-guide.md` now appears in the guides index and in
+   the "Language Basics" topic line.
+2. **web-continuations-tutorial.md** -- `html-escape` returns owned `String`;
+   `GuestEntry` stores `name`/`message` as `String` (the `Serializable`
+   instance borrows via `string/to-cstr` on the wire and re-owns via
+   `string/from-cstr` on decode). Cross-linked.
+3. **web-stack-guide.md** -- `greet` returns `String`; the "caller must free"
+   note reframed as the footgun owned `String` removes. Cross-linked.
+4. **performance-guide.md** -- the string-building section points
+   `builder/finish -> String` as the owned result. Cross-linked.
+5. **schema-guide.md**, **effects-vs-monads.md** -- decoded/boundary struct
+   fields note owned `String`. Cross-linked.
+6. **tur-logic-guide.md** -- `reify-term` string-assembly noted. Cross-linked.
+7. Low-priority cross-links landed in **data-literals-guide.md**,
+   **hamt-guide.md**, **structs-guide.md**, **serializable-continuations-guide.md**,
+   and **cloudflare-deployment-guide.md** (12 guides reference `strings-guide.md`
+   in total).

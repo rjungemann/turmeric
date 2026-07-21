@@ -3616,6 +3616,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         phase_f_concrete = false;
                 }
 
+                /* gcc14-int-conversion (re-dispatched method to a concrete-pointer
+                 * param): when this call re-resolves to a concrete instance clone
+                 * (`show` -> `__inst_Show_show_cstr`, param `const char *`), the
+                 * generic carrier arg cast below would emit `(int64_t)(intptr_t)arg`
+                 * into a pointer param -- a straddle (macOS clang hard error).  The
+                 * re-resolved FnDef carries the CONCRETE `param_types[i]`; bridge to
+                 * it when it is a pointer.  NULL for an ordinary generic call, so the
+                 * int64-carrier cast is unchanged there. */
+                FnDef *ba_reresolved = emit_reresolve_method_fndef(ctx, e);
                 char **arg_strs = n ? (char **)malloc(n * sizeof(char *)) : NULL;
                 if (n && !arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
                 for (uint32_t i = 0; i < n; i++) {
@@ -3635,8 +3644,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             bool needs_cast = (e->as.call_.args[i]->type.kind == TY_FN ||
                                                e->as.call_.args[i]->type.kind == TY_PTR_VOID);
                             if (needs_cast) {
+                                const char *tgt = "int64_t";
+                                if (ba_reresolved && i < ba_reresolved->n_params &&
+                                    ba_reresolved->param_types) {
+                                    const char *pc = emit_type_c_name(ctx,
+                                        emit_resolve_type(ctx, ba_reresolved->param_types[i]));
+                                    size_t pL = pc ? strlen(pc) : 0;
+                                    if (pc && pL >= 1 && pc[pL - 1] == '*')
+                                        tgt = pc;
+                                }
                                 Buf cast; buf_init(&cast);
-                                buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
+                                buf_printf(&cast, "(%s)(intptr_t)(%s)", tgt, raw);
                                 buf_putc(&cast, '\0');
                                 free(raw);
                                 raw = strdup(cast.data);
@@ -4669,8 +4687,38 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         e->as.call_.ctor->fields[i].kind == TY_FN) {
                         Type rat = emit_resolve_type(ctx, arg->type);
                         if (rat.kind == TY_FN || rat.kind == TY_PTR_VOID) {
+                            /* The monomorph ctor's fn-field PARAM C type is
+                             * adt_field_c_type(def, fld, args): a BOXED fn field
+                             * lowers to `void *` (`ctor_Lens__Person__cstr(void *,
+                             * void *)`), a carrier fn field to `int64_t`
+                             * (`ctor_Endo__int(int64_t)`).  Casting a fn pointer to
+                             * `(int64_t)(intptr_t)` and passing it into a `void *`
+                             * param is a -Wint-conversion straddle (macOS clang hard
+                             * error).  Bridge to the field's ACTUAL C type when that
+                             * is a pointer; else keep the int64 carrier cast. */
+                            Type fty = adt_field_type_for_app(
+                                &rty, &e->as.call_.ctor->fields[i]);
+                            /* rty is not always a clean concrete `(Lens Point int)`
+                             * app at this seam (the ctor suffix may come from the
+                             * active spec, not rty), so a UNKNOWN resolution falls
+                             * back to the ABI spec's concrete result family -- the
+                             * same receiver the EX_DEFAULT_OF block uses above. */
+                            if (fty.kind == TY_UNKNOWN &&
+                                ctx->current_abi_specialization &&
+                                e->as.call_.ctor->adt) {
+                                Type sr = emit_resolve_type(ctx,
+                                    ctx->current_abi_specialization->result_type);
+                                if (type_adt_app_def(&sr) == e->as.call_.ctor->adt)
+                                    fty = adt_field_type_for_app(
+                                        &sr, &e->as.call_.ctor->fields[i]);
+                            }
+                            const char *fcty = (fty.kind != TY_UNKNOWN)
+                                ? type_c_name(fty) : NULL;
+                            size_t fL = fcty ? strlen(fcty) : 0;
+                            const char *tgt = (fcty && fL >= 1 && fcty[fL - 1] == '*')
+                                ? fcty : "int64_t";
                             Buf c; buf_init(&c);
-                            buf_printf(&c, "(int64_t)(intptr_t)(%s)", arg_strs[i]);
+                            buf_printf(&c, "(%s)(intptr_t)(%s)", tgt, arg_strs[i]);
                             buf_putc(&c, '\0');
                             free(arg_strs[i]);
                             arg_strs[i] = strdup(c.data);
@@ -5073,6 +5121,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (FN_ARG_FLAG(fn_binding->type.as.fn, param_idx, FA_FAT))
                         cast_to_void_ptr = false;
                 }
+                /* gcc14-int-conversion (re-dispatched method to a concrete-pointer
+                 * param): the cast decision above keys on the GENERIC `fn_binding`'s
+                 * param kind, which for a re-dispatched method (`show` -> the
+                 * concrete `__inst_Show_show_cstr`) is the int64 carrier (TY_STRUCT
+                 * / tyvar) -- so the default `else` emits `(int64_t)(intptr_t)arg`
+                 * into what is actually a `const char *` / `tur_adt_X *` param, a
+                 * macOS-clang hard error.  The re-resolved FnDef carries the
+                 * CONCRETE `param_types[i]`; when that is a (non-void) pointer,
+                 * bridge to it instead of the int64 carrier.  Only overrides the
+                 * bare-int64 fallback, so every already-correct cast is unchanged. */
+                const char *reresolve_ptr_cty = NULL;
+                if (reresolved_callee && i < reresolved_callee->n_params &&
+                    reresolved_callee->param_types) {
+                    const char *pc = emit_type_c_name(ctx,
+                        emit_resolve_type(ctx, reresolved_callee->param_types[i]));
+                    size_t pL = pc ? strlen(pc) : 0;
+                    if (pc && pL >= 1 && pc[pL - 1] == '*' && strcmp(pc, "void *") != 0)
+                        reresolve_ptr_cty = pc;
+                }
                 if (needs_fn_cast) {
                     Buf cast; buf_init(&cast);
                     if (fn_cast_typedef) {
@@ -5086,6 +5153,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(&cast, "(%s)(intptr_t)(%s)", scalar_carrier_cty, raw);
                     } else if (cast_to_void_ptr) {
                         buf_printf(&cast, "(void *)(intptr_t)(%s)", raw);
+                    } else if (reresolve_ptr_cty) {
+                        buf_printf(&cast, "(%s)(intptr_t)(%s)", reresolve_ptr_cty, raw);
                     } else {
                         buf_printf(&cast, "(int64_t)(intptr_t)(%s)", raw);
                     }

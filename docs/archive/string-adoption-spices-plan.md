@@ -7,11 +7,11 @@
 > when verifying each body.
 >
 > **Prerequisite:** the owned `String` type has landed --
-> [docs/archive/owned-string-type-plan.md](../../archive/owned-string-type-plan.md),
-> [stdlib/string.tur](../../../stdlib/string.tur),
-> [docs/guides/strings-guide.md](../../guides/strings-guide.md).
+> [owned-string-type-plan.md](./owned-string-type-plan.md),
+> [stdlib/string.tur](../../stdlib/string.tur),
+> [strings-guide.md](../guides/strings-guide.md).
 >
-> **Companion audits:** [string-adoption-stdlib-plan.md](./string-adoption-stdlib-plan.md)
+> **Companion audits:** [string-adoption-stdlib-plan.md](../upcoming/v2/string-adoption-stdlib-plan.md)
 > (stdlib code) and [string-adoption-docs-plan.md](./string-adoption-docs-plan.md)
 > (guides/tutorials). This is the third of the three adoption audits the owned-`String`
 > plan spun off; it was deferred until `../turmeric-spices/` was checked out, which it
@@ -175,7 +175,7 @@ double-free); the tourist-session suite is 10/10 green.
 The audit's premise -- "the owned `String` type has landed" -- held for the
 *interpreted* stdlib path but not for *compiled* spice consumption. Every spice
 is AOT-compiled, which surfaced two gaps, both filed under
-[docs/reported/compiled-string-return-int-conversion.md](../../reported/compiled-string-return-int-conversion.md):
+[docs/reported/compiled-string-return-int-conversion.md](../reported/compiled-string-return-int-conversion.md):
 
 1. **Compiled `String` did not build under a modern clang.** A `String`-returning
    `defn` (String lowers to `void*`) emits an `int64_t` C return slot but returns
@@ -243,5 +243,5 @@ is AOT-compiled, which surfaced two gaps, both filed under
   `tourist-session` `SessionConfig` finding is the spice mirror of its
   `httpd` `CorsOpts` / `mw-cors-with` capture finding, and takes the same
   `httpd-cors-own-str`-style resolution.
-- `docs/upcoming/v2/string-adoption-docs-plan.md` -- the guides/tutorials audit.
+- `docs/archive/string-adoption-docs-plan.md` -- the guides/tutorials audit (executed/archived).
 - `../turmeric-spices/spices/tourist-session/` -- the Priority-1 spice.

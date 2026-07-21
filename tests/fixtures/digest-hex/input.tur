@@ -7,13 +7,13 @@
 ;; hash the NUL-terminated bytes of a cstr literal
 (defn sha-of [s : cstr] : cstr
   ```c
-  return (int64_t)(intptr_t)__TUR_CNAME_digest/sha256-hex__(
+  return (const char *)(intptr_t)__TUR_CNAME_digest/sha256-hex__(
     (int64_t)(intptr_t)s, (int64_t)strlen((const char *)(intptr_t)s));
   ```)
 
 (defn md5-of [s : cstr] : cstr
   ```c
-  return (int64_t)(intptr_t)__TUR_CNAME_digest/md5-hex__(
+  return (const char *)(intptr_t)__TUR_CNAME_digest/md5-hex__(
     (int64_t)(intptr_t)s, (int64_t)strlen((const char *)(intptr_t)s));
   ```)
 

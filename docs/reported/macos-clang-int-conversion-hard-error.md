@@ -134,3 +134,77 @@ carrier bridge (arg-coercion / binder-init / return position); they share the
 String-return shape fixed above. The `-Wno-error=int-conversion` /
 `-Wno-error=incompatible-pointer-types` stopgap in `src/main.c` therefore stays
 until this tail is drained.
+
+## Progress (2026-07-21, cont.): tail 22 -> 14 across three well-scoped fixes
+
+Drained 8 more of the tail. Root-caused the whole remainder to a single
+principle -- **the emit bridge must cast to the TARGET slot's actual C type, not
+a hardcoded `int64_t` (or `void *`) carrier word.** Full suite re-run
+(`bash tests/run.sh`, 12-min timeout): **2244 passed, 5 failed**, and all 5
+failures reproduce identically on a stashed baseline build (they are pre-existing
+macOS-only issues -- `pipe2` static-vs-nonstatic collision in `hrt-stdlib-cont`,
+`OSByteOrder.h` "function definition not allowed here" in the three `image-*`
+fixtures, and the report's already-noted `vec-push-byvalue-aggregate-escapes-frame`
+stdout mismatch). Zero regressions from these changes.
+
+Fixed (each cleared fixture verified compile-clean under Apple clang AND
+run-correct against `expected.stdout`):
+
+- **Shape A -- cps->direct mono-clone return into a concrete-pointer binder**
+  (`src/compiler/emit_cps_ir.c`, CT_LETCALL `mclone_lc` arm, ~line 5251). Was
+  unconditionally `%s = (int64_t)(intptr_t)%s(...)`; the binder's declared C type
+  (line 5644 uses `binder_ctype_full`) can be a concrete `tur_adt_Map__String__int
+  *`, so the int64 cast straddled the pointer assignment. Now bridges to the
+  binder's own C type when that is `int64_t` or a pointer (aggregate binders fall
+  back to a raw assign). Clears `string-int`, `path-string`, `string-slice`,
+  `string-map-key`, `string-reader-macro`.
+- **Shape B -- monomorph ctor fn-field arg** (`src/compiler/emit_expr.c`, the
+  `suffix && ... fields[i].kind == TY_FN` arm, ~line 4667). Was always
+  `(int64_t)(intptr_t)(arg)`, but the monomorph ctor's fn-field PARAM type is
+  `adt_field_c_type(def, fld, args)` -- `void *` for a BOXED fn field
+  (`ctor_Lens__Person__cstr(void *, void *)`) and only `int64_t` for a carrier fn
+  field (`ctor_Endo__int(int64_t)`). Now resolves the field's actual C type
+  (`adt_field_type_for_app` against `rty`, falling back to the active ABI spec's
+  result family when `rty` is not a clean concrete app) and bridges to it when it
+  is a pointer; else keeps the int64 carrier cast. Clears
+  `dot-parametric-fn-field-call`, `make-struct-parametric-fn-field-infer`,
+  `stdlib-lens-record-field`.
+- **`digest-hex` -- fixture-source inline-C** (`tests/fixtures/digest-hex/input.tur`).
+  NOT an emit bug: the `: cstr` (-> `const char *`) function bodies hand-wrote
+  `return (int64_t)(intptr_t)__TUR_CNAME_digest/...`. Inline-C is emitted verbatim,
+  so the cast was wrong at the source. Changed to `return (const char *)(intptr_t)
+  ...`. Runs correct (matches the FIPS/RFC SHA-256/MD5 vectors).
+
+**Remaining 14 (report stays OPEN), all one deeper sub-problem:** the
+`cps->direct` call ARG path (`atoms_csv_call_typed` / the nil-call arm in
+`emit_cps_ir.c`, and closure-env capture field types) casts the arg to the
+callee's param type as reported by `cps_call_param_ctype` / `binder_ctype_full`,
+but that reports the **generic int64 carrier** even when the callee is actually
+emitted as a concrete-pointer spec-clone, or is a runtime builtin whose signature
+is not in the binding table. Remaining fixtures + their shape:
+
+- `show-wrapper-helper-dispatch` (3), `show-collections-content-hamt` (3):
+  cps->direct call to a resolved `<name>__spec__...` clone whose emitted param is
+  a concrete pointer (`tur_adt_Vec__int *`) / `const char *`, but the call site
+  casts the arg to the generic `int64_t` carrier. Fix needs
+  `cps_call_param_ctype` to report the CLONE's concrete param C type when the call
+  resolves to a mono/spec clone.
+- `session-effects` (1): `spawn(__t4)` -- `spawn` is a runtime builtin with a
+  `void *` param; its signature is not in the binding table, so
+  `cps_call_param_ctype` returns NULL and the plain-int arg is passed bare into a
+  `void *` param. Fix needs a known-signature table for such builtins (or a
+  declared param type).
+- `reactor-fibers-park-chan` (1): a closure ENV field (`void * chp`, a channel
+  capture) passed to `chan_hysend(int64_t, ...)`. The env-capture field C type
+  (`binder_ctype_full` on the captured var) is `void *` while the callee param is
+  the int64 carrier -- a capture-slot vs callee-param mismatch inside the emitted
+  `__fn_*` closure body.
+- `schan-worker-pool` (6): mixed binder-init straddles in BOTH directions
+  (`int64_t` binder initialized from a `void *` expression and vice-versa) around
+  the scheduler/channel worker plumbing.
+
+These are a genuinely harder, higher-regression-risk change (threading resolved
+clone/builtin signatures into the cps->direct arg emitter) than the three landed
+above, which is why they are left for a dedicated follow-up. The
+`-Wno-error=int-conversion` / `-Wno-error=incompatible-pointer-types` stopgap in
+`src/main.c` stays until this remainder is drained.

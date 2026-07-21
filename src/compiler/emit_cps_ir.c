@@ -4571,6 +4571,25 @@ static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
     return NULL;
 }
 
+/* gcc14-int-conversion (cps->direct arg to a resolved spec-clone param): a
+ * cps->direct call whose callee resolved to a monomorph/spec clone
+ * (`show_line__spec__void_tur_adt_Vec__int__`) is emitted by NAME, but
+ * cps_call_param_ctype reads the GENERIC binding's carrier param types (int64),
+ * so a concrete-pointer clone param (`tur_adt_Vec__int *`, `const char *`) gets a
+ * `(int64_t)(intptr_t)` arg cast -- a -Wint-conversion straddle on macOS clang.
+ * Recover the clone's ACTUAL param C types from the ABI-spec table keyed on the
+ * emitted clone name.  Returns NULL when no spec owns that name (an ordinary
+ * callee -- cps_call_param_ctype's generic answer is then correct). */
+static const EmitAbiSpecialization *find_spec_by_clone_name(EmitCtx *ctx,
+                                                            const char *name) {
+    if (!ctx || !name) return NULL;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *s = &ctx->abi_specializations[i];
+        if (s->clone_name && strcmp(s->clone_name, name) == 0) return s;
+    }
+    return NULL;
+}
+
 /* True when `fn` names a COLORED top-level function (g_ents holds exactly the
  * colored fns).  Used by the island analysis: a call to a colored callee couples
  * this body to that callee's effect machine, so it disqualifies an island. */
@@ -4982,12 +5001,24 @@ static const char *cps_call_param_ctype(CE *ce, const Binding *fn, uint32_t i) {
  * param is left to the plain-atom emission (never intptr_t-cast).  Falls back to
  * the plain atom for a param we cannot type. */
 static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
-                                  const Binding *fn) {
+                                  const Binding *fn,
+                                  const EmitAbiSpecialization *spec) {
     Buf b; buf_init(&b);
     for (uint32_t i = 0; i < n; i++) {
         if (i) buf_puts(&b, ", ");
         char *a = atom_str(ce, &args[i]);
         const char *pty = cps_call_param_ctype(ce, fn, i);
+        /* When the callee resolved to a monomorph/spec clone, cps_call_param_ctype
+         * still reports the GENERIC binding's carrier param (int64/void*); prefer
+         * the clone's CONCRETE param type from the spec when it is a pointer, so a
+         * concrete-pointer param (`tur_adt_Vec__int *`, `const char *`) gets the
+         * matching `(T *)(intptr_t)` bridge instead of an int64 straddle. */
+        if (spec && i < spec->n_args) {
+            const char *sty = emit_type_c_name(ce->ctx, spec->arg_types[i]);
+            size_t sL = sty ? strlen(sty) : 0;
+            if (sty && sL >= 1 && sty[sL - 1] == '*')
+                pty = sty;
+        }
         size_t L = pty ? strlen(pty) : 0;
         bool param_is_ptr = pty && L >= 1 && pty[L - 1] == '*';
         bool param_is_i64 = pty && strcmp(pty, "int64_t") == 0;
@@ -5226,10 +5257,12 @@ static void emit_term(CE *ce, const CTerm *t) {
              * repr (the spec-clone param already has that repr), so pass raw --
              * casting to the ORIGINAL carrier-rep callee's int64 param would
              * mismatch the re-resolved `const char *` / concrete param. */
+            const EmitAbiSpecialization *lc_spec =
+                find_spec_by_clone_name(ce->ctx, fn);
             char *argv = (rr_lc || mclone_lc)
                 ? atoms_csv_call(ce, t->as.letcall.args, t->as.letcall.n)
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
-                                       t->as.letcall.fn);
+                                       t->as.letcall.fn, lc_spec);
             char *bn = cvar_cname(ce, t->as.letcall.x);
             /* A `:nil`/`:void`-returning callee (e.g. `tur_contract_check`) yields
              * no value: emit the call as a bare statement and bind the unit
@@ -5242,13 +5275,25 @@ static void emit_term(CE *ce, const CTerm *t) {
             } else if (mclone_lc) {
                 /* A resolved mono-clone returns its real type -- for a constructor
                  * clone (`tcons__spec__...`) that is a boxed-ADT pointer -- while
-                 * the cps->direct word slot is int64_t.  Carry it through
-                 * (int64_t)(intptr_t), the same pointer<->word carrier cast the
-                 * rest of the CPS emitter uses at delivery.  Without it the
-                 * pointer-returning clone would -Wint-conversion into the int64
-                 * slot; the unmangled generic name only dodged that via its
-                 * (now-eliminated) implicit-int declaration. */
-                ce_line(ce, "%s = (int64_t)(intptr_t)%s(%s); /* cps->direct */", bn, fn, argv);
+                 * the binder slot's C type may be int64_t OR a concrete pointer
+                 * (`tur_adt_Map__String__int *`, when the letcall's own Type is a
+                 * nominal parametric-struct).  Bridge to the BINDER's declared C
+                 * type, not a hardcoded int64_t: casting a pointer-returning clone
+                 * to int64_t and assigning into a pointer binder is a
+                 * -Wint-conversion straddle (macOS clang treats it as a hard error).
+                 * (int64_t)(intptr_t) / (P *)(intptr_t) both round-trip the word,
+                 * so this is value-preserving in either direction. An aggregate
+                 * binder (neither pointer nor int64) cannot ride an intptr_t cast --
+                 * fall back to a raw assignment there. */
+                const char *bct = binder_ctype_full(ce->ctx, t->as.letcall.x.ty,
+                                                    t->as.letcall.x.type);
+                size_t bL = bct ? strlen(bct) : 0;
+                bool bct_bridgeable = bct && (strcmp(bct, "int64_t") == 0 ||
+                                              (bL >= 1 && bct[bL - 1] == '*'));
+                if (bct_bridgeable)
+                    ce_line(ce, "%s = (%s)(intptr_t)%s(%s); /* cps->direct */", bn, bct, fn, argv);
+                else
+                    ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             } else {
                 ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
@@ -5343,7 +5388,8 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * void pointer, or a concrete pointer) -- gcc14-int-conversion,
                  * carrier-to-typed-param. */
                 char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
-                                                    t->as.tailcall.n, t->as.tailcall.fn);
+                                                    t->as.tailcall.n, t->as.tailcall.fn,
+                                                    find_spec_by_clone_name(ce->ctx, fn));
                 if (t->as.tailcall.n)
                     ce_line(ce, "return %s__cps(%s, %s); /* cps->cps */", fn, argv_t, thread);
                 else
@@ -5365,7 +5411,8 @@ static void emit_term(CE *ce, const CTerm *t) {
                 char *argv_t = rr
                     ? atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n)
                     : atoms_csv_call_typed(ce, t->as.tailcall.args,
-                                           t->as.tailcall.n, t->as.tailcall.fn);
+                                           t->as.tailcall.n, t->as.tailcall.fn,
+                                           find_spec_by_clone_name(ce->ctx, fn));
                 /* Edge 2a (generic-show-wrapper-cps-monomorphization-plan): a
                  * `:nil`/`:void`-returning callee (a `^Show a` wrapper like
                  * `show-line`/`print-show`, `tur_contract_check`, ...) emits as C
@@ -6076,7 +6123,8 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     {
         /* Param-type-aware carrier casts (gcc14-int-conversion). */
         char *argv_t = atoms_csv_call_typed(ce, call->as.tailcall.args,
-                                            call->as.tailcall.n, call->as.tailcall.fn);
+                                            call->as.tailcall.n, call->as.tailcall.fn,
+                                            find_spec_by_clone_name(ce->ctx, fn));
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv_t, frame);
         free(argv_t);
     }

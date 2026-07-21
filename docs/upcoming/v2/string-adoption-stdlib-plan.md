@@ -73,9 +73,10 @@ allows, in the priority order below.
 > [stdlib/string.tur](../../../stdlib/string.tur),
 > [docs/guides/strings-guide.md](../../guides/strings-guide.md).
 >
-> **Companion audits:** [string-adoption-docs-plan.md](./string-adoption-docs-plan.md)
-> (guides/tutorials). A spices audit is deferred until `../turmeric-spices/` is
-> in the tree.
+> **Companion audits:** [string-adoption-docs-plan.md](../../archive/string-adoption-docs-plan.md)
+> (guides/tutorials; executed + archived) and
+> [string-adoption-spices-plan.md](../../archive/string-adoption-spices-plan.md)
+> (spices; executed + archived).
 
 ## What this is
 

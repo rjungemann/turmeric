@@ -1,5 +1,17 @@
 # Escaping fat closure's captured-env struct is never freed
 
+> # ⛔ ACTIVE / BLOCKING -- this report is the exit gate for real work in progress.
+>
+> The fix is NOT deferred and NOT waiting on anything else. It is
+> [docs/upcoming/closure-drop-glue-plan.md](../upcoming/closure-drop-glue-plan.md),
+> which is an ACTIVE/BLOCKING build directive. **All other track work is
+> blocked until the walk-glue lands and the leak-suppressed fixtures below go
+> valgrind-clean.** Do not close this report by editing prose; close it by
+> deleting `requires.no-leak-check` from `free-lift-bind`,
+> `unsafe-closure-capture`, `hkt-stdlib-parser-instances`, and
+> `cps-backend-fn-param` because they are actually clean. Owner instruction,
+> 2026-07-21.
+
 **Severity:** low (bounded per-closure-construction leak; not a crash or
 miscompile). General codegen -- **not** CPS/effect-specific (reproduces with no
 effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
@@ -58,8 +70,9 @@ tmp->cap = ...;` and the fat closure value carries `tmp`. No corresponding
 `free` is emitted when the closure's lifetime ends, so an escaping (or even a
 locally-dropped) fat closure leaks its env. This is the closure analogue of the
 by-value owning-field leak in `docs/reported/byvalue-struct-local-owning-field-leak.md`
--- part of the deferred owning-pointer / drop-glue lifecycle work, but tracked
-separately here because the allocation site and fix differ.
+-- part of the owning-pointer / drop-glue lifecycle work (now ACTIVE, see the
+directive above), but tracked separately here because the allocation site and
+fix differ.
 
 ## Fix directions
 
@@ -68,10 +81,12 @@ separately here because the allocation site and fix differ.
    retain/copy when it is duplicated (an escaping closure that outlives its
    constructor transfers ownership to the callee/holder).
 2. This needs the closure to participate in the RC/drop / uniqueness analysis so
-   a shared closure is not double-freed. Until closures carry drop glue, the
-   conservative interim is the current leak.
-3. Interim: `cps-backend-fn-param`, `free-lift-bind`, `unsafe-closure-capture`
-   keep `requires.no-leak-check`.
+   a shared closure is not double-freed. This is the active build, not a
+   someday-item -- see the blocking directive above.
+3. `cps-backend-fn-param`, `free-lift-bind`, `unsafe-closure-capture`,
+   `hkt-stdlib-parser-instances` currently carry `requires.no-leak-check`. These
+   markers are the checklist to DELETE as the fix lands -- not a stable state to
+   leave in place.
 
 ## Scoped fix
 

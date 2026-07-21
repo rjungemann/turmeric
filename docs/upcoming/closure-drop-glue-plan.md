@@ -1,6 +1,37 @@
 # Closure env drop glue -- freeing captured fat-closure environments
 
-**Status:** S1.2 (borrowed HOF-arg free) LANDED; the rest of S1 (owning-capture
+> # ⛔ ACTIVE / BLOCKING -- BUILD THIS NOW. DO NOT DEFER. DO NOT REWORD.
+>
+> This is not deferred, not "until later," not "the next slice," not a
+> "quick win to bank," and not optional. It is the current front of the
+> track and **all other work is blocked until the walk-glue lands and the
+> leak-suppressed fixtures below are valgrind-clean.**
+>
+> **If you open this file, your job is to write CODE, not prose.** Editing,
+> re-summarizing, re-scoping, or appending another "progress note" to this
+> plan is **explicitly NOT progress** and does not count as picking it up.
+> The plan has been analyzed to death; the load-bearing core
+> (`drop_glue_env_N` + capture-time clone) is still at ZERO lines in `src/`.
+> Verify that yourself: `grep -rn drop_glue_env src/` -> no hits.
+>
+> **Definition of done (the only thing that counts):**
+> 1. Capture-time retain/clone for owning captures **and** the
+>    `drop_glue_env_N` walk-glue land together as one atomic unit (see
+>    "Implementation findings" -- either alone is unsound).
+> 2. `free-lift-bind` and `unsafe-closure-capture` are valgrind/LSan-clean
+>    and their `requires.no-leak-check` markers are DELETED.
+> 3. Then `hkt-stdlib-parser-instances` and `cps-backend-fn-param` (the
+>    escaping/colored cases) via S2 Model U + CPS admission, markers deleted.
+>
+> "It's too much work" / "it can't be safely chunked" is a description of
+> THIS task, not a reason to hand it back. The hazard (double-free) is real
+> and is exactly why 1a+1b are atomic -- build them atomic, prove it under
+> valgrind, do not split them to dodge the hazard. Do not return until a
+> real fixture flipped clean. This directive overrides the general
+> "nothing blocks the track" posture in CLAUDE.md **for this work only** --
+> by explicit owner instruction (2026-07-21).
+
+**Status:** ACTIVE, BLOCKING. S1.2 (borrowed HOF-arg free) LANDED; the rest of S1 (owning-capture
 walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
@@ -288,7 +319,7 @@ static void drop_glue_env_N(void *p) {
   captures an `rc<Foo>` decrements it, and a closure that captures another closure
   recurses into `drop_glue_env_M`.
 
-### S1 -- scoped free for non-escaping closures (bounded, land first)
+### S1 -- scoped free for non-escaping closures
 
 1. **Widen `let_binding_env_freeable`**: admit a partial-application closure (init
    is an `EX_CALL` whose `returns_closure_fn_binding` is set -- a curried under-
@@ -339,8 +370,13 @@ the ABI cost of R is high and the corpus does not yet need it.
 
 ## Phasing
 
-- **Phase 1 (S1) -- NOT bounded; must land as one atomic ownership unit (see
-  Implementation findings).** Order forced by the double-free hazard:
+Phasing describes ORDER of implementation, not permission to stop between
+phases. Phase 1 is the immediate deliverable; Phase 2 follows in the same
+push. There is no "land Phase 1 and hand back" -- the exit gate is the
+suppressed fixtures going clean, which spans Phases 1 and 2.
+
+- **Phase 1 (S1) -- one atomic ownership unit (see Implementation
+  findings).** Order forced by the double-free hazard:
   (1a) capture-time retain/clone for OWNING captures (a bare capture aliases
   today, so an env-drop would double-free), (1b) `drop_glue_env_N` walk-glue on
   top, (1c) the non-retaining-callee (`^once`) annotation + a post-call free hook
@@ -353,8 +389,12 @@ the ABI cost of R is high and the corpus does not yet need it.
 - **Phase 2 (S2 / Model U):** closures participate in the move system; struct/ADT
   drop glue drops closure-typed fields via `drop_glue_env_N`. Clears
   `hkt-stdlib-parser-instances` and the httpd middleware family.
-- **Phase 3 (S2 / Model R, only if needed):** refcounted env for genuinely shared
-  closures. ABI change; deferred until a fixture demands it.
+- **Phase 3 (S2 / Model R):** refcounted env for genuinely shared closures.
+  This is a fallback ALTERNATIVE to Model U, not deferred work on the critical
+  path -- Model U is the chosen path and covers the entire current corpus. Model
+  R is only built if a fixture appears that Model U's move-check genuinely cannot
+  express (a closure legitimately shared by two owners); its ABI cost is why it
+  is the fallback, not the default. It is NOT a reason to leave Phases 1-2 open.
 
 ## Implementation findings (verified before starting S1)
 
