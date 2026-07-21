@@ -3271,33 +3271,35 @@ static int64_t ctor_Schema(int64_t _0) {
     return (int64_t)(intptr_t)__r;
 }
 
-typedef struct tur_adt_Cell {
+typedef struct tur_adt_Adder {
     int64_t f;
-} tur_adt_Cell;
-typedef tur_adt_Cell Cell;
+    int64_t base;
+} tur_adt_Adder;
+typedef tur_adt_Adder Adder;
 
-static void drop_glue_tur_adt_Cell(void *ptr) {
+static void drop_glue_tur_adt_Adder(void *ptr) {
     if (!ptr) return;
-    tur_adt_Cell *s = (tur_adt_Cell *)ptr;
+    tur_adt_Adder *s = (tur_adt_Adder *)ptr;
     if (s->f) free((void *)(intptr_t)s->f);
     free(ptr);
 }
 
-static void drop_fnfields_tur_adt_Cell(void *ptr) __attribute__((unused));
-static void drop_fnfields_tur_adt_Cell(void *ptr) {
+static void drop_fnfields_tur_adt_Adder(void *ptr) __attribute__((unused));
+static void drop_fnfields_tur_adt_Adder(void *ptr) {
     if (!ptr) return;
-    tur_adt_Cell *s = (tur_adt_Cell *)ptr;
+    tur_adt_Adder *s = (tur_adt_Adder *)ptr;
     if (s->f) free((void *)(intptr_t)s->f);
 }
 
-static void walk_glue_tur_adt_Cell(void *ptr, RcWalkChildFn cb, void *ctx) {
+static void walk_glue_tur_adt_Adder(void *ptr, RcWalkChildFn cb, void *ctx) {
     if (!ptr || !cb) return;
-    tur_adt_Cell *s = (tur_adt_Cell *)ptr;
+    tur_adt_Adder *s = (tur_adt_Adder *)ptr;
 }
 
-static tur_adt_Cell ctor_Cell(int64_t _0) {
-    tur_adt_Cell __r;
+static tur_adt_Adder ctor_Adder(int64_t _0, int64_t _1) {
+    tur_adt_Adder __r;
     __r.f = _0;
+    __r.base = _1;
     return __r;
 }
 
@@ -3407,8 +3409,8 @@ static int64_t ctor_Option__Zipper__struct(bool _0, int64_t _1) {
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
 }
-typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
+typedef bool (*tur_thunk_bool_int64_t_int64_t_t)(void *, int64_t, int64_t);
 
 extern void * tur_hamt_new();
 extern void tur_hamt_free(void *);
@@ -3508,7 +3510,7 @@ static int64_t __inst_Hash_hash_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hybox_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hycmp_Sym(const struct __tur_sym *);
 static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym *);
-static int64_t __fn_1282(int64_t);
+static int64_t __fn_1283(void *, int64_t);
 static void * array_hyget(void *, int64_t);
 static int64_t array_hyset(void *, int64_t, int64_t);
 static void * array_hyslice(void *, int64_t, int64_t);
@@ -4087,8 +4089,10 @@ static int64_t __inst_MapKey_mk_hyowned_qu_Sym(const struct __tur_sym * x) {
         return INT64_C(0);
 }
 
-static int64_t __fn_1282(int64_t x) {
-        return (x) + (INT64_C(1));
+struct __env_1285 { tur_thunk_int64_t_int64_t_t __fn; int64_t n; };
+static int64_t __fn_1283(void * __env_p_1286, int64_t x) {
+        struct __env_1285 *__env___env_1285 = (struct __env_1285 *)__env_p_1286;
+        return (x) + (__env___env_1285->n);
 }
 
 static void * array_hyget(void * arr, int64_t idx) {
@@ -7102,21 +7106,29 @@ int main(int argc, char **argv) {
         }
         int64_t __t153;
         {
-            int64_t *__t154 = (int64_t *)malloc(2 * sizeof(int64_t));
-            __t154[0] = (int64_t)(intptr_t)__tur_fatshim1;
-            __t154[1] = (int64_t)(intptr_t)__fn_1282;
+            int64_t n_1281 = INT64_C(100);
+            (void)n_1281;
+            struct __env_1285 *__t154 = (struct __env_1285 *)malloc(sizeof(struct __env_1285));
+            __t154->__fn = (tur_thunk_int64_t_int64_t_t)__fn_1283;
+            __t154->n = n_1281;
             void *__t155 = __t154;
-            __auto_type __ps_156 = (ctor_Cell((int64_t)(intptr_t)(__t155)));
+            __auto_type __ps_156 = (ctor_Adder((int64_t)(intptr_t)(__t155), INT64_C(3)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            tur_adt_Cell c_1284 = __ps_156;
-            (void)c_1284;
-            __auto_type __ps_157 = (TUR_APPLY1_T(int64_t, int64_t, (int64_t)(c_1284).f, INT64_C(41)));
-            /* panic-return-signal: ret ctype unknown; no propagation here */
-            printf("%lld\n", (long long)(__ps_157));
-            int64_t __t158;
-            __t158 = INT64_C(0);
-            __t153 = __t158;
-            drop_fnfields_tur_adt_Cell((void *)&c_1284);
+            tur_adt_Adder a_1288 = __ps_156;
+            (void)a_1288;
+            int64_t __t157;
+            {
+                int64_t _un_uncall_unhead_un1289_1290 = (int64_t)(intptr_t)((int64_t)(a_1288).f);
+                (void)_un_uncall_unhead_un1289_1290;
+                __auto_type __ps_158 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(_un_uncall_unhead_un1289_1290)))((void *)(intptr_t)(_un_uncall_unhead_un1289_1290), INT64_C(10)));
+                /* panic-return-signal: ret ctype unknown; no propagation here */
+                __t157 = __ps_158;
+            }
+            printf("%lld\n", (long long)(__t157));
+            int64_t __t159;
+            __t159 = INT64_C(0);
+            __t153 = __t159;
+            drop_fnfields_tur_adt_Adder((void *)&a_1288);
         }
         return (int)__t153;
 }
@@ -7126,15 +7138,15 @@ static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-        __auto_type __ps_159 = (ctor_Cons__int(h, t));
+        __auto_type __ps_160 = (ctor_Cons__int(h, t));
         if (tur_panicking) return (tur_adt_Cons__int *){0};
-        return __ps_159;
+        return __ps_160;
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        __auto_type __ps_160 = (vec_new__spec__tur_adt_Vec__int__());
+        __auto_type __ps_161 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return (tur_adt_Vec__int *){0};
-        return __ps_160;
+        return __ps_161;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {

@@ -486,6 +486,63 @@ bool expr_contains_return_or_throw(const Expr *e) {
     }
 }
 
+/* closure-drop-glue S1c: does `e`'s subtree contain any inline-C block?  A
+ * `^fat`/fn-typed parameter referenced inside an inline-C body can be STORED by
+ * the C text (e.g. `s[2] = (int64_t)f;` in schema/transform), which the
+ * AST-level closure escape analysis cannot see -- a param is a C-visible formal,
+ * not an AST capture.  So a body containing ANY inline-C must NOT be treated as
+ * non-retaining.  Conservative by construction: an unmodeled node kind returns
+ * true (assume it might hide inline-C), so the non-retention inference only ever
+ * DISqualifies a fn -- it never wrongly greenlights a free.  Only the common,
+ * fully-understood control/leaf kinds return false. */
+bool expr_subtree_has_inline_c(const Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_INLINE_C:
+            return true;
+        /* leaves: no inline-C */
+        case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DICT:
+        case EX_FN_DEF:   /* a nested fn-def's own body is analyzed on its own */
+            return false;
+        case EX_CALL:
+            if (expr_subtree_has_inline_c(e->as.call_.fn_expr)) return true;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.call_.args[i])) return true;
+            return expr_subtree_has_inline_c(e->as.call_.dict_arg);
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (expr_subtree_has_inline_c(e->as.let_.bindings[i].init)) return true;
+            return expr_subtree_has_inline_c(e->as.let_.body);
+        case EX_IF:
+            return expr_subtree_has_inline_c(e->as.if_.cond)
+                || expr_subtree_has_inline_c(e->as.if_.then_)
+                || expr_subtree_has_inline_c(e->as.if_.else_or_null);
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                if (expr_subtree_has_inline_c(e->as.do_.items[i])) return true;
+            return false;
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (expr_subtree_has_inline_c(e->as.builtin.args[i])) return true;
+            return false;
+        case EX_MATCH:
+            if (expr_subtree_has_inline_c(e->as.match_.scrutinee)) return true;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (expr_subtree_has_inline_c(e->as.match_.arms[i].guard)) return true;
+                if (expr_subtree_has_inline_c(e->as.match_.arms[i].body)) return true;
+            }
+            return false;
+        case EX_ASCRIBE: return expr_subtree_has_inline_c(e->as.ascribe_.inner);
+        case EX_CAST:    return expr_subtree_has_inline_c(e->as.cast_.expr);
+        case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        default:
+            /* Unmodeled kind -- conservatively assume it may hide inline-C. */
+            return true;
+    }
+}
+
 /* Fat-closure-env scoped-free escape analysis
  * (docs/reported/fat-closure-env-leak.md).
  *
@@ -504,8 +561,11 @@ bool expr_contains_return_or_throw(const Expr *e) {
  * than risking a use-after-free.  A reference to `b` inside a nested closure is
  * detected via that closure's precomputed capture set (EX_CLOSURE/EX_FN_DEF),
  * so the "callee position is fine" relaxation never leaks into a nested body.
- * EX_DEFER is treated as an escape because a deferred body runs at the same
- * scope-exit point as the free, making the ordering unsafe to reason about. */
+ * EX_DEFER runs at the same scope-exit point as the free, but can only reach
+ * `b` through its capture set, so it is an escape only when it actually captures
+ * `b` (mirroring EX_CLOSURE); a defer that does not reference the closure -- e.g.
+ * an owning sibling binding's injected auto-drop `(defer (drop r))` -- does not
+ * block the free. */
 /* catch-unwind-return-bridge-residuals (Part A): true for a scalar `err-val`
  * result type -- an integer/float/bool value the extraction copies out by value.
  * For a caught box, err-val hands back box->err_val, which IS the panic-payload
@@ -638,13 +698,24 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                      * store/return it.  So `b` passed to a borrowed param does NOT
                      * escape and its env may be freed at scope exit.  Same soundness
                      * posture as the box-accessor whitelist (only greenlights a
-                     * free); relies on the callee honouring its ^borrow contract. */
+                     * free); relies on the callee honouring its ^borrow contract.
+                     *
+                     * closure-drop-glue S1c: the same relaxation applies to an
+                     * INFERRED non-retaining fn-param (nonretain_param_mask bit i)
+                     * -- a fn-typed / ^fat param the callee body only CALLS.  This
+                     * covers the common `^fat h` consuming-callee shape that carries
+                     * no `^borrow` annotation.  Soundness rides the same escape
+                     * analysis that set the bit: if the callee let the closure
+                     * escape, the bit is clear and the arg is walked as an escape. */
                     if (arg && arg->kind == EX_VAR && arg->as.var.binding == b) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && i < fb->type.as.fn.arity
                             && fb->type.as.fn.arg_flags
                             && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+                            continue;
+                        if (fb && i < 32 &&
+                            (fb->nonretain_param_mask & (1u << i)))
                             continue;
                     }
                     ESC_PUSH(arg);
@@ -668,6 +739,26 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                     for (uint32_t i = 0; i < c->n_captures; i++)
                         if (c->captures[i] == b) { escapes = true; goto esc_done; }
                 }
+                break;
+            /* A defer body runs at scope exit -- the same point as the env free --
+             * but it can only reference `b` through its precomputed capture set
+             * (the body is lifted into a thunk that reaches enclosing locals via
+             * `captures`, exactly like EX_CLOSURE/EX_FN_DEF).  So consult that set:
+             * `b` captured -> the defer uses the closure at scope exit -> escape;
+             * `b` NOT captured -> the defer cannot touch the closure, and freeing
+             * its env is safe regardless of the shared scope-exit ordering.
+             *
+             * fat-closure-env-leak-with-owning-sibling: an owning let-binding
+             * (rc/ref) injects its auto-drop as a `(defer (drop r))` into the let
+             * body.  The prior blanket `default: escape` for EX_DEFER therefore
+             * flagged EVERY sibling closure as escaping whenever an owning binding
+             * was present, so the closure env leaked (16 B/construction) in any let
+             * that also bound an rc/ref -- even when the closure captured only
+             * scalars.  Consulting the capture set fixes that without ever
+             * greenlighting a free of an env the defer actually uses. */
+            case EX_DEFER:
+                for (uint8_t i = 0; i < cur->as.defer_.n_captures; i++)
+                    if (cur->as.defer_.captures[i] == b) { escapes = true; goto esc_done; }
                 break;
             /* Inline-C may name `b` through its capture array (__TUR_CAP_N__) in
              * addition to its evaluated sub-expressions. */
@@ -730,6 +821,25 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                 break;
             case EX_REF:        ESC_PUSH(cur->as.ref_.expr);        break;
             case EX_DEREF:      ESC_PUSH(cur->as.deref_.expr);      break;
+            /* fat-closure-env-leak-with-owning-sibling: the rc/weak/ref-family
+             * operations are single-operand nodes; walk the operand so `b` is
+             * detected iff it actually flows into one (e.g. `(rc/of b)` stores the
+             * closure into an rc -> escape).  Previously these fell to the
+             * conservative `default: escape`, so a sibling OWNING binding whose
+             * init is `(rc/of ...)` / `(weak ...)` / etc. was read as an escape of
+             * EVERY sibling closure -- the exact reason a let that bound both an rc
+             * and a capturing closure leaked the closure env. */
+            case EX_RC_OF:       ESC_PUSH(cur->as.rc_of_.expr);       break;
+            case EX_RC_CLONE:    ESC_PUSH(cur->as.rc_clone_.expr);    break;
+            case EX_RC_DROP:     ESC_PUSH(cur->as.rc_drop_.expr);     break;
+            case EX_RC_PTR:      ESC_PUSH(cur->as.rc_ptr_.expr);      break;
+            case EX_RC_COUNT:    ESC_PUSH(cur->as.rc_count_.expr);    break;
+            case EX_RC_FROM_REF: ESC_PUSH(cur->as.rc_from_ref_.expr); break;
+            case EX_REF_FROM_RC: ESC_PUSH(cur->as.ref_from_rc_.expr); break;
+            case EX_WEAK:         ESC_PUSH(cur->as.weak_.expr);         break;
+            case EX_WEAK_UPGRADE: ESC_PUSH(cur->as.weak_upgrade_.expr); break;
+            case EX_WEAK_PRED:    ESC_PUSH(cur->as.weak_pred_.expr);    break;
+            case EX_REF_PRED:     ESC_PUSH(cur->as.ref_pred_.expr);     break;
             case EX_BORROW_IMMUT: ESC_PUSH(cur->as.borrow_immut_.expr); break;
             case EX_BORROW_MUT:   ESC_PUSH(cur->as.borrow_mut_.expr);   break;
             case EX_SET_DEREF:

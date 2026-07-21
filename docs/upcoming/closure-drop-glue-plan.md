@@ -5,6 +5,157 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21) -- local fn-field struct drop LANDED (direct
+> path); the "Remaining S2 gap" below is closed for uncolored functions.** A
+> by-value struct local that owns a BOXED fn-field now frees that heap fat handle
+> at scope exit. Mechanism:
+>
+> - `elab_forms.c` flags the local (`Binding.drops_fn_fields`) when it passes the
+>   SAME moved / consumed / escape guards that admit the existing rc/ref
+>   `byvalue-struct-field-leak` auto-drop (`elab_field_is_boxed_fnfield` +
+>   `is_binding_consumed` / `is_field_consumed` / `binding_moved_during_init`), so
+>   a struct that escapes (returned / moved / consumed) is never flagged.
+> - The DIRECT emitter (`emit_let_value`) frees the box via a new
+>   `drop_fnfields_<T>(&local)` glue (`emit_module.c`) -- fn-fields ONLY (rc/ref
+>   are still discharged by the injected `(defer (drop! (.f o)))`), and NO
+>   `free(&local)` (the struct is stack-resident).
+>
+> Crucially this is **not** a `(defer (drop! (.fn o)))`: an fn-field-drop defer
+> reads a fat-fn field that the CPS/DK backend's continuation-capture admission
+> rejects, evicting a COLORED fn to the retired direct/fiber path (hard build
+> failure -- reproduced on `cps-backend-closure-local` with the defer approach).
+> Emitting the free directly in the direct emitter leaves colored functions
+> untouched: CPS lowering never runs `emit_let_value`, so a fn-field box in a
+> colored fn leaks exactly as it did before local drops existed (no regression,
+> no eviction). Uncolored functions release it.
+>
+> Verified valgrind-clean (definitely-lost 0, exactly-once free, no double-free)
+> for: pure-fn-field local (call + drop), mixed rc+fn-field local (rc via defer +
+> fn via emit), capturing-closure env box, and the escape case (a returned struct
+> is NOT dropped by the producing fn). Suite 2220/0 (one snapshot regenerated:
+> `defstruct-field-arrow`, whose local `Cell` fn-field box now frees). Fixture
+> `local-struct-fnfield-drop`.
+>
+> **Still open:** (1) a fn-field box in a COLORED function still leaks (needs the
+> CPS backend to admit an fn-field auto-drop, or a scalar-box-pointer capture
+> form). (2) A boxed fn-field holding a capturing env with OWNING captures leaks
+> those captures (only the env box is freed) -- the S1 walk-glue work. (3)
+> Pre-existing, orthogonal: reading an rc field into a var (`(let [s (.r o)] ...)`)
+> double-frees the control block -- the field read aliases without an incref while
+> both `o`'s field-drop and `s`'s rc-drop decrement it. Filed separately.
+>
+> **Progress note (2026-07-20f) -- S2 Model U drop glue + move landed for
+> fn-fields (rc-wrapped path verified sound).** A boxed fn-field is now an owning
+> field: `resolve_ctor_field` sets `needs_drop_glue`, so the holding struct's
+> by-value drop glue `free`s the field's heap fat handle (a capturing env, or the
+> `{shim, fn}` box for a bare fn). Storing a CAPTURING closure variable into such
+> a field MOVES it (`binding_mark_moved` in the constructor arg loop), so aliasing
+> -- the same closure in two structs, which valgrind confirmed double-frees the
+> shared env -- is now a compile-time `use-after-move` error. A thin fn re-shims
+> to a FRESH box per store and an inline closure has no source, so neither is
+> consumed. Verified valgrind-clean (0 errors, exactly-once free) for rc-wrapped
+> closure structs, thin-fn structs, and rc-cloned structs; the struct-copy path is
+> compile-rejected by rc uniqueness. Suite 2219/0 (one snapshot regenerated:
+> defstruct-field-arrow). Fixtures `capturing-closure-struct-field` (store+call)
+> and `errors/closure-struct-field-move` (aliasing rejected).
+>
+> **Remaining S2 gap (NOT closure-specific):** a LOCAL by-value fn-field struct
+> does not invoke its drop glue at scope exit -- the same local-owning-value drop
+> machinery that is deferred for `:heap` structs generally (see
+> `docs/archive/drop-glue-shallow-nested-owning-aggregate.md`, verified only via
+> rc-wrapping for the same reason). So a closure stored in a plain LOCAL struct
+> still leaks its handle (no double-free -- just the pre-existing local-drop gap).
+> When local-struct drop invocation lands, this S2 drop glue frees those too with
+> no further work.
+>
+> **Update (2026-07-20e) -- the S2 blocker is FIXED; S2 is now unblocked.** Parts
+> 1+2 of `docs/archive/capturing-closure-in-struct-field-segv.md` landed: a
+> concrete `(fn ...)` struct/ADT field now uses the fat representation uniformly
+> (field type `boxed`; make-struct shims thin fns to fat; field-calls dispatch via
+> `TUR_APPLY*`). A capturing closure stored in a struct field now RUNS (no SEGV).
+> Suite 2218/0; fixture `capturing-closure-struct-field`. fn-field values are
+> intentionally uniformly HEAP-allocated (malloc'd fat handles) so the S2 drop
+> glue below can free them uniformly -- so a stored fn/closure currently leaks its
+> heap handle (shim box or capturing env) until that drop glue lands. That is the
+> remaining S2 work, now buildable on a working store-and-call path:
+>   - **S2 Model U:** storing a closure/fn into a struct field MOVES it (source
+>     consumed; a second store is a move-check error, preventing the aliasing
+>     double-free); the holding struct's drop glue frees the heap fat handle
+>     (`free(field)` for the shim box or `drop_glue_env_N` for a capturing env).
+>   Without the move check, a closure stored into two structs would double-free,
+>   so drop glue must land WITH move semantics, not before.
+>
+> **Blocker note (2026-07-20d) -- S2 is blocked on a struct fn-field dispatch
+> bug, NOT a leak.** Scoping S2 (Model U: a stored closure freed by the holding
+> struct's drop glue) surfaced that the store-and-call path does not even work:
+> storing a CAPTURING closure in a `defstruct` fn-field and calling it via
+> `(.f box)` **SEGVs** -- the fat env pointer lands in the field but the read+call
+> emits a THIN function-pointer call (`((R(*)(A))env)(args)`), executing the env
+> as code (`emit_expr.c:1153/1470` fat-vs-thin keys on `type.as.fn.boxed` /
+> `is_fat`, both false for a field read). A thin top-level fn in the same field
+> works; only fat closures crash. Filed as
+> `docs/reported/capturing-closure-in-struct-field-segv.md`. S2 CANNOT proceed
+> until the field uses the fat representation uniformly (mark the field `boxed`;
+> auto-shim thin fns to fat on store -- the "closure-representation-unification
+> Phase 0" this plan already names). Freeing a stored closure is moot while it
+> mis-dispatches. So the next S2 step is that unification bug, then move + drop
+> glue on top.
+>
+> **Progress note (2026-07-20c) -- S1c fresh-closure-returning CALL args
+> (headline `make-scaler` CLOSED).** The other half of S1c landed: a call to a
+> fresh-closure-returning fn, passed to a non-retaining fn-param, is now hoisted +
+> freed. New `Binding.returns_fresh_closure`, inferred when a fn is elaborated:
+> its body is a bare capturing `EX_CLOSURE` with ONLY scalar (Copy) captures and a
+> scalar result -- so every call mallocs a fresh, uniquely-owned env whose bare
+> `free` is fully safe (no owning capture to double-free, result cannot alias the
+> env). `hoist_borrowed_closure_args` (via a shared `arg_is_freeable_closure_source`
+> predicate) and `let_binding_env_freeable` both accept such a call arg/init. The
+> report's minimal repro `(use-it (make-scaler 2.0))` is now ASan/LSan-clean.
+> Suite 2217/0 (3 snapshots regenerated -- kebab-case-capture + two bare-fat --
+> where the same hoist now frees a previously-leaked env, all ASan-verified).
+> Fixture `closure-env-free-fresh-returning-call`. Guards: a struct-storing
+> callee and a fn returning an rc-capturing closure are BOTH correctly left
+> unfreed (leak-safe, no UAF). **Still open:** S2 stored/escaping closures
+> (httpd middleware, parser combinators; `cps-backend-fn-param`, `free-lift-bind`,
+> `unsafe-closure-capture` keep `requires.no-leak-check` -- different shapes, not
+> the fresh-consumed-once pattern).
+>
+> **Progress note (2026-07-20b) -- S1c inferred non-retention (INLINE args).**
+> The non-retaining-callee half of S1c landed for INLINE capturing-closure
+> arguments. A new `Binding.nonretain_param_mask` records, per fn-typed / `^fat`
+> parameter, whether the callee body only CALLS it (inferred at defn elaboration
+> via `!closure_binding_escapes(body, param)`). A body containing ANY inline-C is
+> excluded (`expr_subtree_has_inline_c`, conservative default-true) -- C text can
+> store a param invisibly to the AST, the exact unsoundness that first regressed
+> `schema-transform-closure` + the httpd middleware set (they store `^fat` params
+> via inline-C). The emit-side escape analysis and `hoist_borrowed_closure_args`
+> both consult the mask, so an inline capturing closure passed to a non-retaining
+> `^fat`/fn param is now hoisted + freed at scope exit (like the landed `^borrow`
+> S1.2 path), no annotation needed. Suite 2216/0; fixture
+> `closure-env-free-nonretain-fatparam`; guards verified ASan-clean (freed) and
+> leak-safe (struct/inline-C/return retention conservatively NOT freed, no UAF).
+> **Still open:** the report's headline `make-scaler` repro passes the closure as
+> a CALL result `(use-it (make-scaler ...))`, not an inline `EX_CLOSURE`; hoisting
+> a fresh-closure-returning CALL arg (make-scaler's binding already carries
+> `returns_closure_fn_binding`) + letting `let_binding_env_freeable` accept a
+> `ptr<void>`-typed fresh-env call init is the next slice. S2 (stored/escaping
+> closures) unchanged.
+>
+> **Progress note (2026-07-20).** A second, adjacent leak landed:
+> `binding_escapes_impl` (`emit_core.c`) fell to its conservative
+> `default: escape` for `EX_DEFER` and the rc/weak/ref-family nodes (`EX_RC_OF`,
+> `EX_WEAK`, ...). An owning let-binding lowers its auto-drop to a
+> `(defer (drop r))` and its init is `(rc/of ...)`, so BOTH tripped the default
+> and flagged every sibling closure as escaping -- a non-escaping closure's env
+> leaked (16 B) in any `let` that also bound an `rc`/`ref`, even for a
+> scalar-capture closure. Fixed by modeling `EX_DEFER` via its capture set and
+> walking the rc/weak/ref operands (strictly more precise; never greenlights a
+> free of a referenced env). Suite 2215/0; fixture
+> `closure-env-free-with-owning-sibling`; write-up in
+> `docs/archive/history/fat-closure-env-free-owning-sibling.md`. This is NOT one
+> of the S1/S2 slices below (those are the ESCAPING / inline-HOF-arg cases); it
+> is an orthogonal false-escape bug in the same env-free machinery.
+>
 > **Progress note (2026-07-19).** Verified against the tree: S1.2 is the only
 > landed slice. `hoist_borrowed_closure_args` (`elab_call.c:773`), the
 > `binding_escapes_impl` FA_BORROW relaxation (`emit_core.c:573`), and the

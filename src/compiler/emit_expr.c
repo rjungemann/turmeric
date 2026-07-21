@@ -1350,14 +1350,27 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!init || !b) return false;
-    if (init->kind != EX_CLOSURE) return false;
-    /* Scalar-result gate: a closure returning a reference/struct/pointer could
-     * hand back a value derived from its env; restrict to scalar returns whose
-     * result is copied out by value. */
-    if (b->type.kind != TY_FN) return false;
-    switch (b->type.as.fn.result_kind) {
-        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: break;
-        default: return false;
+    const Expr *pinit = init;
+    while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
+    /* closure-drop-glue S1c: a call to a fresh-closure-returning fn (the
+     * make-scaler shape) yields a freshly-malloc'd, uniquely-owned env.  The
+     * scalar-capture / scalar-result safety was already checked when
+     * `returns_fresh_closure` was inferred, so accept it here without the
+     * TY_FN/scalar-result gate (the binding's own type is the env's ptr<void>
+     * carrier, not a fn type). */
+    bool fresh_call = pinit && pinit->kind == EX_CALL
+                      && pinit->as.call_.fn_binding
+                      && pinit->as.call_.fn_binding->returns_fresh_closure;
+    if (init->kind != EX_CLOSURE && !fresh_call) return false;
+    if (init->kind == EX_CLOSURE) {
+        /* Scalar-result gate: a closure returning a reference/struct/pointer could
+         * hand back a value derived from its env; restrict to scalar returns whose
+         * result is copied out by value. */
+        if (b->type.kind != TY_FN) return false;
+        switch (b->type.as.fn.result_kind) {
+            case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: break;
+            default: return false;
+        }
     }
     if (closure_binding_escapes(e->as.let_.body, b)) return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {
@@ -1424,6 +1437,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
     char **box_free_names = NULL;
     uint32_t n_box_free = 0;
+    /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
+     * by-value struct locals the elaborator flagged `drops_fn_fields` -- their
+     * boxed fn-field handles are freed via `drop_fnfields_<T>(&name)` at scope
+     * exit (rc/ref fields are handled by the elaborator's injected defers). */
+    char **fnfld_names = NULL;
+    char **fnfld_types = NULL;
+    uint32_t n_fnfld = 0;
     if (!body_has_return_or_throw) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
@@ -1436,6 +1456,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                   (n_box_free + 1) * sizeof(char *));
                 box_free_names[n_box_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            } else {
+                const Binding *sb = e->as.let_.bindings[i].binding;
+                if (!sb || !sb->drops_fn_fields || sb->type.kind != TY_ADT ||
+                    !sb->type.as.adt_.def)
+                    continue;
+                char *mn = mangle_field_name(sb->type.as.adt_.def->name);
+                size_t tl = strlen(mn) + 16;
+                char *tn = (char *)malloc(tl);
+                snprintf(tn, tl, "tur_adt_%s", mn);
+                free(mn);
+                fnfld_names = (char **)realloc(fnfld_names,
+                                               (n_fnfld + 1) * sizeof(char *));
+                fnfld_types = (char **)realloc(fnfld_types,
+                                               (n_fnfld + 1) * sizeof(char *));
+                fnfld_names[n_fnfld] = name_for_binding(ctx, sb);
+                fnfld_types[n_fnfld] = tn;
+                n_fnfld++;
             }
         }
     }
@@ -1721,6 +1758,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* local-struct-drop (fn-field): free the boxed fn-field handles of flagged
+     * non-escaping by-value struct locals now that the body (their last use) has
+     * been emitted.  Fields only -- the struct is stack-resident, so
+     * drop_fnfields_<T> must not free `&name`. */
+    for (uint32_t i = 0; i < n_fnfld; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "drop_fnfields_%s((void *)&%s);\n",
+                   fnfld_types[i], fnfld_names[i]);
+        free(fnfld_names[i]);
+        free(fnfld_types[i]);
+    }
+    free(fnfld_names);
+    free(fnfld_types);
 
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);
@@ -3298,6 +3349,39 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 Expr *gf = e->as.call_.fn_expr;
                 char *fn_ptr_val = emit_value(ctx, body, gf);
                 const char *ret_c = type_c_name(e->type);
+
+                /* capturing-closure-in-struct-field-segv: a BOXED fn-field (the
+                 * fat representation, so a stored capturing closure works) is
+                 * invoked through the fat `{thunk, env}` protocol -- read slot 0
+                 * as the thunk and call it with the handle as env -- NOT the thin
+                 * function-pointer cast below, which would execute the env block
+                 * as code.  Emit the TUR_APPLY<N>_T macro (arg types come from the
+                 * field's declared signature; the handle is both fn and env). */
+                if (gf->type.kind == TY_FN && gf->type.as.fn.boxed
+                    && e->as.call_.n_args <= 4) {
+                    uint32_t n = e->as.call_.n_args;
+                    Buf out; buf_init(&out);
+                    buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
+                    for (uint32_t i = 0; i < n; i++) {
+                        Type at = (gf->type.as.fn.arg_full_types &&
+                                   gf->type.as.fn.arg_full_types[i])
+                                      ? *gf->type.as.fn.arg_full_types[i]
+                                      : emit_type_from_kind(gf->type.as.fn.arg_kinds[i]);
+                        buf_printf(&out, ", %s", emit_type_c_name(ctx, at));
+                    }
+                    buf_printf(&out, ", %s", fn_ptr_val);
+                    for (uint32_t i = 0; i < n; i++) {
+                        char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                        buf_printf(&out, ", %s", av);
+                        free(av);
+                    }
+                    buf_puts(&out, ")");
+                    buf_putc(&out, '\0');
+                    char *result = strdup(out.data);
+                    buf_free(&out);
+                    free(fn_ptr_val);
+                    return result;
+                }
 
                 /* Phase E: detect concrete typed fn-ptr field.
                  * structdef-retirement: the former StructDef path stored a typed

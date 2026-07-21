@@ -7108,6 +7108,7 @@ int main(int argc, char **argv) {
             __auto_type __ps_161 = ((*( tur_thunk_int64_t_int64_t_t *)(_un_unoar1288_1289))(_un_unoar1288_1289, INT64_C(5)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             __t159 = __ps_161;
+            free((void *)(intptr_t)_un_unoar1288_1289);
         }
         printf("%lld\n", (long long)(__t159));
         int64_t __t162;

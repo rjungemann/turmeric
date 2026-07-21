@@ -4,6 +4,32 @@
 miscompile). General codegen -- **not** CPS/effect-specific (reproduces with no
 effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
 
+> **Progress (2026-07-20), report STILL OPEN.** Two adjacent slices landed:
+>
+> 1. A *different* env leak in the same machinery: a NON-escaping closure's env
+>    leaked when the enclosing `let` also bound an owning `rc`/`ref` (an unrelated
+>    `default: escape` false-positive on `EX_DEFER` / `EX_RC_OF` in
+>    `binding_escapes_impl`). See
+>    `docs/archive/history/fat-closure-env-free-owning-sibling.md`.
+> 2. **S1c inferred non-retention (INLINE args):** a capturing closure passed
+>    inline to a `^fat`/fn param the callee only CALLS is now freed at scope exit
+>    (`Binding.nonretain_param_mask`, inline-C-gated for soundness). See the
+>    closure-drop-glue-plan progress note (2026-07-20b).
+>
+> 3. **S1c fresh-closure-returning CALL arg:** this report's exact repro
+>    `(use-it (make-scaler 2.0))` is now ASan/LSan-clean. `make-scaler`'s call
+>    result is a fresh, uniquely-owned, scalar-capture env (`returns_fresh_closure`)
+>    passed to a non-retaining `^fat` param, so it is hoisted and freed at scope
+>    exit. See the closure-drop-glue-plan progress note (2026-07-20c).
+>
+> The MINIMAL REPRO above is fixed. This report stays OPEN for the remaining
+> **S2** surface it also names -- closures that are STORED (returned into a
+> struct/ADT and threaded onward: parser combinators, httpd middleware) rather
+> than consumed once. Those need the move/uniqueness ownership model, not the
+> consumed-once free. `cps-backend-fn-param`, `free-lift-bind`,
+> `unsafe-closure-capture` keep `requires.no-leak-check` (different shapes;
+> `free-lift-bind`'s residual is a non-closure free-monad ADT leak).
+
 ## Summary
 
 Constructing a closure that captures locals allocates a heap "fat" env struct

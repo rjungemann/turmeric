@@ -1,0 +1,18 @@
+; local-struct-drop (fn-field): a by-value struct local carrying a BOXED
+; fn-field owns a heap fat-closure handle ({shim, fn} box, or a capturing env).
+; A plain local struct never ran its drop glue, so that box leaked at scope
+; exit.  The elaborator now flags such a non-escaping local (Binding.drops_fn_
+; fields, gated by the same moved/consumed/escape checks that admit an rc/ref
+; field auto-drop) and the direct emitter frees the box via drop_fnfields_<T>.
+;
+; `a` does not escape `main` -- its fn-field is read and CALLED (a borrow), never
+; returned/moved/stored -- so the box is released once at scope exit.  Verified
+; leak-clean under valgrind (definitely-lost: 0).
+
+(defstruct Adder [f : (fn [int] int) base : int])
+
+(defn main [] : int
+  (let [n 100
+        a (make-struct Adder (fn [x : int] : int (+ x n)) 3)]
+    (println ((.f a) 10))   ; 110 -- captured n=100, arg 10
+    0))

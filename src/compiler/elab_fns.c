@@ -1,6 +1,29 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
 
+/* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
+ * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
+ * per-param non-retention when a defn is elaborated.  Forward-declared to avoid
+ * pulling the whole emit-internal surface into the elaborator. */
+bool closure_binding_escapes(const Expr *e, const Binding *b);
+bool expr_subtree_has_inline_c(const Expr *e);
+
+/* closure-drop-glue S1c: a scalar Copy type kind -- safe to hold in / bare-free
+ * around a closure env (no owning teardown, no aliasing of the env).  Excludes
+ * rc/ref/weak (owning), structs/ADTs/tyvars (aggregate/opaque), and fn/cont. */
+static bool fn_result_kind_is_scalar_copy(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_CSTR: case TY_NIL:
+        case TY_PTR_VOID:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -78,6 +101,19 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 if (cont_name_is_multishot(sym->name)) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
+        }
+        /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+         * annotation reached through the spaced `: rc<T>` (F_TYPE_ANN) path or a
+         * nested type position.  Resolve it here too, so it does not fall through
+         * to type_expr_from_form and become a fresh tyvar named "rc<int>".  The
+         * fused `:rc<T>` keyword path in the defn/fn ladders handles the keyword
+         * form directly. */
+        if (sym) {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, NULL,
+                                                        type_params, type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
         }
         Type *t = type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         return t;
@@ -1690,6 +1726,33 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     continue;
                 }
             }
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `:rc<T>` / `:weak<T>` / `:ref<T>` / `:lref<T>` parameter.  Resolve
+             * it to the real carrier instead of a fresh tyvar named "rc<int>".
+             * :ref / :lref carry the same linear-by-default discipline the bare
+             * keyword forms apply below. */
+            {
+                Type *rt = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                            p->span, NULL,
+                                                            fn_type_params,
+                                                            fn_type_param_kinds,
+                                                            n_fn_type_params);
+                if (rt) {
+                    param_kinds[n_params - 1] = rt->kind;
+                    params[n_params - 1]->type = *rt;
+                    if (rt->kind == TY_REF) {
+                        if (!params[n_params - 1]->is_linear
+                                && !params[n_params - 1]->is_affine
+                                && !params[n_params - 1]->is_relevant) {
+                            params[n_params - 1]->is_linear = true;
+                            params[n_params - 1]->type.substruct = SK_LINEAR;
+                        }
+                    } else if (rt->kind == TY_LREF) {
+                        params[n_params - 1]->is_linear = true;
+                    }
+                    continue;
+                }
+            }
             /* Phase N: use typekind_from_symbol to resolve all known type names
              * (including fixed-width numeric types) before falling through to the
              * type-variable path.  The fast-path checks below are kept for the
@@ -2016,6 +2079,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_app_type = ptr_ret;  /* threads result_full_type for codegen */
                 body_start++;
                 goto done_return_annotation;
+            }
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `: rc<T>` / `: weak<T>` / `: ref<T>` / `: lref<T>` return type. */
+            {
+                Type *rc_ret = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                                ret_f->span, NULL,
+                                                                fn_type_params,
+                                                                fn_type_param_kinds,
+                                                                n_fn_type_params);
+                if (rc_ret) {
+                    return_kind = rc_ret->kind;
+                    return_app_type = rc_ret;  /* threads result_full_type for codegen */
+                    body_start++;
+                    goto done_return_annotation;
+                }
             }
             if (kw->len == 3 && memcmp(kw->name, "int", 3) == 0) {
                 return_kind = TY_INT;
@@ -3394,7 +3472,51 @@ Expr *elab_defn(Elab *e, const Form *call) {
     b->no_unwind = no_unwind;
     /* #[used]: retain with external C linkage under separate compilation */
     b->retain_c_linkage = retain_c_linkage;
+    /* closure-drop-glue S1c (non-retaining fn-param inference): a fn-typed / ^fat
+     * parameter that the body only CALLS -- never lets escape as a value -- does
+     * not retain a capturing-closure argument, so that argument's heap env may be
+     * freed at the call scope's exit (like a ^borrow param).  Infer the mask now,
+     * from the just-elaborated body; the conservative escape analysis only ever
+     * clears the bit (a false "escapes" merely preserves the status-quo leak). */
+    b->nonretain_param_mask = 0;
+    /* An inline-C body can STORE a fn-param invisibly to the AST escape analysis
+     * (a param is a C-visible formal, not an AST capture), so a body containing
+     * any inline-C is never treated as non-retaining -- otherwise its stored
+     * closure arg would be freed while the C-side copy is still live (UAF). */
+    if (body && !expr_subtree_has_inline_c(body)) {
+        for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
+            Binding *_pb = params[_pi];
+            if (!_pb) continue;
+            bool _is_fnparam = _pb->is_fat || _pb->is_poly_fn ||
+                               _pb->type.kind == TY_FN;
+            if (_is_fnparam && !closure_binding_escapes(body, _pb))
+                b->nonretain_param_mask |= (1u << _pi);
+        }
+    }
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+    /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a
+     * bare capturing EX_CLOSURE constructs a FRESH, uniquely-owned heap env on
+     * every call and returns it.  When such a call result is consumed by a
+     * non-retaining fn-param, the caller can free that env at scope exit (the
+     * make-scaler headline shape).  Restricted to scalar (Copy) captures and a
+     * scalar closure result so a bare `free(env)` is fully safe: no owning
+     * capture to double-free/leak, and the result cannot alias the env. */
+    b->returns_fresh_closure = false;
+    {
+        const Expr *_fc = body;
+        while (_fc && _fc->kind == EX_ASCRIBE) _fc = _fc->as.ascribe_.inner;
+        if (_fc && _fc->kind == EX_CLOSURE && _fc->as.closure_.closure &&
+            _fc->as.closure_.closure->n_captures > 0 &&
+            _fc->as.closure_.closure->fn) {
+            struct Closure *_c = _fc->as.closure_.closure;
+            bool _ok = fn_result_kind_is_scalar_copy(_c->fn->return_type.kind);
+            for (uint8_t _ci = 0; _ok && _ci < _c->n_captures; _ci++)
+                if (!_c->captures[_ci] ||
+                    !fn_result_kind_is_scalar_copy(_c->captures[_ci]->type.kind))
+                    _ok = false;
+            b->returns_fresh_closure = _ok;
+        }
+    }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* let-bound-sf-loses-outer-arg-type: record whether the return *value* is
@@ -3989,9 +4111,19 @@ Expr *elab_fn(Elab *e, const Form *call) {
                                                        fn_type_params,
                                                        fn_type_param_kinds,
                                                        n_fn_type_params);
+            /* rc-angle-bracket-annotation-becomes-tyvar: a typed reference-family
+             * `: rc<T>` / `: weak<T>` / `: ref<T>` / `: lref<T>` return type. */
+            Type *rc_ret = rc_family_type_from_keyword_name(e, kw->name, kw->len,
+                                                            ret_f->span, NULL,
+                                                            fn_type_params,
+                                                            fn_type_param_kinds,
+                                                            n_fn_type_params);
             if (ptr_ret) {
                 return_kind = TY_PTR_VOID;
                 return_full_type = ptr_ret;
+            } else if (rc_ret) {
+                return_kind = rc_ret->kind;
+                return_full_type = rc_ret;
             } else if (fn_type_param_index(fn_type_params, n_fn_type_params, kw, &type_param_idx)) {
                 return_kind = TY_TYVAR;
                 return_full_type = (Type *)arena_alloc(e->arena, sizeof(Type));

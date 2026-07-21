@@ -106,6 +106,19 @@ struct Binding {
     bool          returns_boxed_closure;
     /* Phase 5: Move semantics - whether this ref binding has been moved */
     bool          is_moved;
+    /* local-struct-drop (fn-field): set by the elaborator's byvalue-struct-field
+     * drop pass when this let-bound by-value struct local (a) passes the same
+     * moved/consumed/escape guards that admit an rc/ref field auto-drop and (b)
+     * owns >=1 BOXED fn-field.  Unlike rc/ref fields (freed via an injected
+     * `(defer (drop! (.f o)))`), the fn-field box is freed at scope exit by the
+     * DIRECT emitter (emit_let_value -> `drop_fnfields_<T>(&o)`), NOT a defer:
+     * a `(defer (drop! (.fn o)))` reads a fat-fn field that the CPS/DK backend's
+     * continuation-capture admission rejects, evicting a colored fn to the
+     * retired direct/fiber path.  Emitting the free directly keeps colored
+     * functions untouched (CPS lowering never runs emit_let_value; the box leaks
+     * there exactly as it did before local fn-field drops existed) while
+     * uncolored functions release it. */
+    bool          drops_fn_fields;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */
@@ -300,6 +313,25 @@ struct Binding {
      * carrier, not a function pointer).  Only user-named globals are valid
      * source_binding targets. */
     bool                is_lifted_lambda;
+    /* closure-drop-glue S1c (non-retaining fn-param inference): for a function
+     * binding, bit i is set when parameter i is a fn-typed / ^fat parameter that
+     * the body only CALLS -- never stores, returns, captures, or passes to a
+     * retaining position (i.e. `!closure_binding_escapes(body, param_i)`).  A
+     * capturing-closure argument to such a param does NOT escape the callee, so
+     * its heap env may be freed at the call scope's exit, exactly like a
+     * `^borrow` fn-param (FA_BORROW).  Inferred once when the defn is elaborated;
+     * read at the call site (hoist) and by the emit-side escape analysis.  Params
+     * beyond bit 31 are left unset (conservative -- no free).  0 for non-fns and
+     * fns with no non-retaining fn-param. */
+    uint32_t            nonretain_param_mask;
+    /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
+     * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
+     * captures and a scalar result -- so every call mallocs a FRESH, uniquely
+     * owned env whose bare `free` is fully safe.  A call `(F ...)` to such an F,
+     * consumed by a non-retaining fn-param, has its env freed at the call scope's
+     * exit (the make-scaler shape).  False for non-fns and any fn that returns a
+     * shared/owning-capture/param closure. */
+    bool                returns_fresh_closure;
     /* Existential `open` dispatch: when this binding names the `v` of
      * `(open e [a v] ...)` and `e` is a constraint-carrying existential, this
      * points at the packed scrutinee's TY_EXISTS type (carrying the constraint

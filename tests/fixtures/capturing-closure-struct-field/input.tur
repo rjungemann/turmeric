@@ -1,0 +1,27 @@
+;; capturing-closure-in-struct-field-segv: storing a CAPTURING closure in a
+;; defstruct fn-typed field and calling it (via `(.f v args)` or by extracting
+;; the field then calling) used to SEGV -- the fat env pointer landed in the
+;; field but the read+call cast it to a THIN fn pointer and executed the env
+;; block as code.  Concrete `(fn ...)` fields now use the fat representation
+;; uniformly (like parametric TY_TYVAR fields already did): the make-struct store
+;; shims a bare/thin fn into a fat `{thunk, env}` handle, and every field-call
+;; dispatches via the fat protocol (TUR_APPLY).  So a capturing closure, a
+;; top-level fn, and a non-capturing lambda all work in the same field.
+(defstruct Adder [f : (fn [int] #fx{} int)])
+
+(defn twice [a : Adder x : int] : int
+  (+ (.f a x) (.f a x)))              ;; joined field-call, fat dispatch
+
+(defn top-level [x : int] : int (* x 10))
+
+(defn main [] : int
+  (let [base   100
+        cap    (make-struct Adder (fn [x : int] : int (+ x base)))  ;; capturing
+        thin   (make-struct Adder top-level)                        ;; thin top-level fn
+        lam    (make-struct Adder (fn [x : int] : int (- x 1)))     ;; non-capturing lambda
+        r      (.f cap 5)]           ;; extract-then-call also fat-dispatches
+    (println r)                      ;; 105
+    (println (twice cap 3))          ;; (103)+(103) = 206
+    (println (.f thin 4))            ;; 40
+    (println (.f lam 9))             ;; 8
+    0))

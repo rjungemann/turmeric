@@ -770,6 +770,29 @@ static Expr *elab_call_hamt_fn(Elab *e, Span span, const Symbol *fn_name, uint32
  * Without a let binding the inline env has no name for the scope-exit free to
  * target and leaks.  Returns the (possibly let-wrapped) expression; a no-op when
  * `call` is not an EX_CALL to a fn with a FA_BORROW inline-closure arg. */
+/* closure-drop-glue S1: is argument `a` (ascribe-peeled) to parameter `i` of
+ * `fb` a fresh, uniquely-owned closure env whose heap allocation can be freed at
+ * the call scope's exit?  True when the parameter does not retain it (a `^borrow`
+ * param, or an inferred non-retaining fn-param) AND the argument is either an
+ * inline capturing EX_CLOSURE literal (S1.2) or a call to a fresh-closure-
+ * returning fn (S1c -- the make-scaler shape).  Both produce a fresh env the
+ * caller uniquely owns; the non-retention guarantees the callee will not keep it
+ * past the call. */
+static bool arg_is_freeable_closure_source(const Binding *fb, uint32_t i,
+                                           const Expr *a) {
+    if (!a) return false;
+    bool nonretain = FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)
+                     || (i < 32 && (fb->nonretain_param_mask & (1u << i)));
+    if (!nonretain) return false;
+    if (a->kind == EX_CLOSURE && a->as.closure_.closure
+        && a->as.closure_.closure->n_captures > 0)
+        return true;
+    if (a->kind == EX_CALL && a->as.call_.fn_binding
+        && a->as.call_.fn_binding->returns_fresh_closure)
+        return true;
+    return false;
+}
+
 static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     if (!call || call->kind != EX_CALL) return call;
     const Binding *fb = call->as.call_.fn_binding;
@@ -780,9 +803,7 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr *a = args[i];
         while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-        if (a && a->kind == EX_CLOSURE && a->as.closure_.closure
-            && a->as.closure_.closure->n_captures > 0
-            && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+        if (arg_is_freeable_closure_source(fb, i, a))
             n_hoist++;
     }
     if (n_hoist == 0) return call;
@@ -791,16 +812,15 @@ static Expr *hoist_borrowed_closure_args(Elab *e, Expr *call, Span span) {
     for (uint32_t i = 0; i < n_args && i < fb->type.as.fn.arity; i++) {
         Expr *a = args[i];
         while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
-        if (!(a && a->kind == EX_CLOSURE && a->as.closure_.closure
-              && a->as.closure_.closure->n_captures > 0
-              && FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW)))
+        if (!arg_is_freeable_closure_source(fb, i, a))
             continue;
         char nm[48];
         snprintf(nm, sizeof nm, "__borrowc_%u", e->next_id++);
         const Symbol *sym = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
         Binding *cb = binding_new(e, sym, a->type, false, false, span);
         lbs[h].binding = cb;
-        lbs[h].init = a;                 /* the (ascribe-peeled) EX_CLOSURE literal */
+        lbs[h].init = a;                 /* ascribe-peeled EX_CLOSURE literal or a
+                                          * fresh-closure-returning call */
         h++;
         Expr *v = expr_new(e->arena, EX_VAR, a->type, span);
         v->as.var.binding = cb;
@@ -2534,7 +2554,15 @@ Expr *elab_call(Elab *e, Form *call) {
                  * left untouched.  Mirrors the ^fat auto-shim arity bound (<=5). */
                 for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
                     const Type *ft = ctor->fields[fi].full_type;
-                    if (!ft || ft->kind != TY_TYVAR) continue;
+                    /* A parametric (TY_TYVAR) field, or -- capturing-closure-in-
+                     * struct-field-segv -- a concrete boxed `(fn ...)` field, both
+                     * carry the fat representation, so a bare/thin fn argument must
+                     * be shimmed into a fat `{thunk, env}` handle (EX_FN_TO_FAT).
+                     * A capturing-closure value (TY_PTR_VOID) and an already-boxed
+                     * TY_FN are left untouched -- already fat. */
+                    bool fat_field = ft && (ft->kind == TY_TYVAR ||
+                                            (ft->kind == TY_FN && ft->as.fn.boxed));
+                    if (!fat_field) continue;
                     Expr *fa = call_expr->as.call_.args[fi];
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
                         continue;
@@ -2546,6 +2574,26 @@ Expr *elab_call(Elab *e, Form *call) {
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
                     shim->as.fn_to_fat_.inner = fa;
                     call_expr->as.call_.args[fi] = shim;
+                }
+
+                /* closure-drop-glue S2 (Model U): storing a CAPTURING closure
+                 * VARIABLE into an owning (boxed) fn-field MOVES it -- the
+                 * struct's drop glue frees that heap env, so a second use (another
+                 * store, or a call) must be a use-after-consume error rather than
+                 * a silent double-free (confirmed with valgrind).  A thin fn is
+                 * re-shimmed to a FRESH box per store, and an inline closure has no
+                 * source binding, so both are already uniquely owned and NOT
+                 * consumed here -- only a variable holding a live capturing-closure
+                 * handle (TY_PTR_VOID, or an already-boxed TY_FN) is moved. */
+                for (uint32_t fi = 0; fi < ctor->n_fields && fi < n_call_args; fi++) {
+                    const Type *ft = ctor->fields[fi].full_type;
+                    if (!ft || ft->kind != TY_FN || !ft->as.fn.boxed) continue;
+                    Expr *fa = call_expr->as.call_.args[fi];
+                    while (fa && fa->kind == EX_ASCRIBE) fa = fa->as.ascribe_.inner;
+                    if (fa && fa->kind == EX_VAR && fa->as.var.binding &&
+                        (fa->type.kind == TY_PTR_VOID ||
+                         (fa->type.kind == TY_FN && fa->type.as.fn.boxed)))
+                        binding_mark_moved(fa->as.var.binding, fa->span);
                 }
 
                 /* TS4P1 / nested-carrier-match: Build TY_APP result type for

@@ -1,0 +1,20 @@
+;; rc-angle-bracket-annotation-becomes-tyvar: a `rc<int>` annotation in param
+;; and return position must resolve to a real TY_RC carrier -- not a fresh type
+;; variable named "rc<int>".  Before the fix, `rc/strong-count` on a
+;; `rc<int>`-typed param failed with "requires rc<T> ... got tyvar"; the
+;; annotation only behaved as an rc by accidental unification under
+;; expected-type pressure.  Here the count is read directly off a typed param
+;; (count-of) fed by a typed return value (make-rc), exercising both previously
+;; broken positions.
+(defn make-rc [x : int] : rc<int>
+  (rc/of x))
+
+(defn count-of [r : rc<int>] : int
+  (rc/strong-count r))
+
+(defn main [] : int
+  (let [a (make-rc 10)          ;; typed return -> owner #1
+        b (rc/clone a)          ;; strong count now 2
+        n (count-of b)]         ;; typed param consumes b; reads count 2
+    (println n)                 ;; 2
+    0))                         ;; a dropped at scope end

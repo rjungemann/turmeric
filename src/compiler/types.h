@@ -213,6 +213,17 @@ typedef struct CtorField {
      * tracking: effect_check merges this row when a `(.run v)` call invokes the
      * stored fn.  NULL for non-fn fields or fn fields with no effect annotation. */
     struct EffectRow *effect_row;
+    /* drop-glue-shallow-nested-owning-aggregate: non-NULL when this field is a
+     * nested owning aggregate stored behind the int64 carrier -- a by-value
+     * struct/ADT product that itself `needs_drop_glue` (transitively owns an
+     * rc/ref/weak).  Such a field's `full_type` is deliberately left NULL (a
+     * carrier-ADT full_type would misclassify field READS), so this dedicated
+     * slot carries the inner def for the drop path: it (a) transitively flips
+     * the owner's `needs_drop_glue`, and (b) tells the by-value drop/walk glue
+     * to release the boxed sub-aggregate via `drop_glue_<Inner>` /
+     * `walk_glue_<Inner>` instead of leaking it.  NULL for a directly-owning
+     * (rc/ref/weak) field or a non-owning inline aggregate. */
+    const struct AdtDef *drop_inner_def;
 } CtorField;
 
 /* Phase SZ6: Type-level size index term.
