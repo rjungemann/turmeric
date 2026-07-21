@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.0` -- a new owned, immutable, refcounted `String` type (with `#s"..."` literals and zero-copy `StringSlice` views), and the `Show` typeclass migrated to return an owned `String`.
+**Latest release:** `v0.30.1` -- codegen and CPS fixes: generic show-wrapper monomorphization, an rc-field double-free, and an O(N) effect-loop leak, plus a new strings guide.
 
 ## What
 

@@ -4,6 +4,32 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.1] -- 2026-07-21
+
+### Fixed
+
+- **Generic `show`-wrapper monomorphization + `rc`-field double-free**: fixed a
+  monomorphization bug in the generic show-wrapper and a double-free of
+  refcounted struct fields (#697).
+- **CPS effect-loop leak**: plugged an O(N) DK-node leak on tail-resumed effect
+  re-opening (#696).
+- **`Real-Random`/`Seeded-Random` codegen**: fixed nested static-fn C emit for
+  the random instances (#693).
+
+### Changed
+
+- **CPS `shift`/`reset`**: serial and cloneable continuations are now folded
+  into `shift`/`reset` by receiver-continuation capability (#695).
+
+### Added
+
+- **Trowel landing page**: a new web landing page for the Trowel toolchain.
+
+### Docs
+
+- **Strings guide**: added `docs/guides/strings-guide.md`, cross-referencing
+  `cstr` vs owned `String` ownership (#698).
+
 ## [0.30.0] -- 2026-07-20
 
 ### Added
