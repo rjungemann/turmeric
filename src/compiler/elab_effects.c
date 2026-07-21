@@ -937,6 +937,35 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
      * is lexically scoped).  A plain `reset` counts too (item B): it promotes
      * itself to a reified delimiter when a resuming shift binds to it. */
     if (e->cloneable_reset_depth == 0) {
+        /* Capability-folding symmetric twin (cps-cloneable-shift-under-serial-
+         * reset-misleading-e0016): a RESUMING cloneable (`cont`) shift with no
+         * enclosing plain/cloneable reset but lexically inside a `serial-reset`
+         * is NOT a cross-function resume -- there IS an enclosing delimiter, just
+         * a serial one whose marshal substrate cannot host an in-memory
+         * multi-shot continuation.  Reject with the real flavor-mismatch cause
+         * (mirror of the serial-cont-under-cloneable-reset TUR-E0019 above)
+         * instead of falling into the cross-function __Shift desugar, which post-
+         * elaboration finds no plain EX_RESET and emits the MISLEADING TUR-E0016
+         * "no enclosing reset / cross-function resume".  Sound because a plain
+         * `reset` and `cloneable-reset` BOTH bump cloneable_reset_depth, so
+         * reaching this branch means none intervenes: serial_reset_depth > 0 here
+         * => the NEAREST delimiter is the serial-reset (a nested
+         * `reset`-in-`serial-reset` bumps cloneable_reset_depth and never reaches
+         * here, so it keeps working).  Abortive (ignore-k) shifts return via the
+         * abort route above and never reach this branch.  The genuine
+         * cross-function case (no enclosing delimiter anywhere) has
+         * serial_reset_depth == 0 and keeps its TUR-E0016 path. */
+        if (e->serial_reset_depth > 0) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a `cont` (cloneable) shift receiver needs a cloneable-capable "
+                "delimiter, but the nearest enclosing reset is a `serial-reset` "
+                "(whose marshal substrate cannot host an in-memory multi-shot "
+                "continuation)\n"
+                "  = help: use a plain `reset` (it adopts the receiver's flavor) "
+                "or `cloneable-reset` to delimit a cloneable continuation");
+            return NULL;
+        }
         /* For the `shift` surface, tailor the message: the common cause
          * now is a resuming shift whose reset is in a CALLER (cross-function
          * resume, unsupported -- only cross-function ABORT works).  Keep the exact
