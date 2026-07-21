@@ -940,13 +940,19 @@
       if (hb->listen_src_id >= 0) tur_reactor_remove(hb->reactor, hb->listen_src_id);
       tur_reactor_free(hb->reactor);
   }
+  /* accept_clos is a hand-rolled synthetic { __fn, hb } box (no codegen
+   * drop-glue header), so it is freed with a plain free -- NOT TUR_CLOSURE_DROP,
+   * which would read a header 8 bytes before this un-headered allocation. */
   if (hb->accept_clos) free(hb->accept_clos);
   /* Free the user handler box. It is passed ^fat (always a heap fat-closure
    * box) and nothing else frees it, so this is the sole free -- no double free.
    * For a bare handler this reclaims the whole thing; for a compose-middleware
-   * onion it frees only the outermost layer (the inner captured `next` boxes
-   * still leak, pending closure drop glue -- see the plan). */
-  if (hb->handler) free((void *)(intptr_t)hb->handler);
+   * onion, TUR_CLOSURE_DROP releases the outermost layer AND (under
+   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * env's drop-glue header, so the whole onion is freed.  Flag-off,
+   * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
+   * before). */
+  if (hb->handler) TUR_CLOSURE_DROP(hb->handler);
   if (hb->listen_fd >= 0) close(hb->listen_fd);
   if (hb->fdq) {
       /* Close any pending fds we never got to. */

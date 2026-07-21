@@ -5829,6 +5829,13 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * is allocated with an 8-byte drop-glue header at env[-1]; the handle is
      * released through that header's `drop_glue_env_N`, which walks owning captures
      * and frees the base allocation.  NULL is a safe no-op either way. */
+    /* TUR_CLOSURE_DROP is emitted UNCONDITIONALLY so stdlib teardown written in
+     * Turmeric (httpd.tur's `free(handler)`) can reference it in every build.
+     * Flag-off it expands to the SAME plain `free` those sites used before, so
+     * their behavior is byte-for-byte unchanged; only the preamble gains the
+     * macro line (a mechanical codegen-snapshot regen).  Flag-on it routes through
+     * the env[-1] drop-glue header so a headered escaping handle is released
+     * (and its owning captures walked) instead of interior-freed. */
     if (g_opt_closure_drop_glue) {
         experiment_warn_if_used("closure-drop-glue");
         buf_puts(out, "static void tur_closure_drop(void *__h) __attribute__((unused));\n");
@@ -5839,11 +5846,9 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
         buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
         buf_puts(out, "}\n");
         buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+    } else {
+        buf_puts(out, "#define TUR_CLOSURE_DROP(h) free((void *)(intptr_t)(h))\n");
     }
-    /* Flag-off: TUR_CLOSURE_DROP is intentionally NOT emitted -- no flag-off code
-     * path references it (scope-exit env frees stay a plain `free`, and no stdlib
-     * teardown is rewired yet), so omitting it keeps the default preamble -- and
-     * therefore every codegen snapshot -- byte-identical. */
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
