@@ -472,6 +472,15 @@ defn render-name-form [action : cstr] : cstr
       "</form></body></html>")
 ```
 
+> **Owned-return note.** Every `render-*` helper in this tutorial builds fresh
+> bytes with `str` and hands them back as `cstr`, so each caller inherits a
+> "caller frees the result" obligation. Returning an owned `String` instead
+> (`str` builds the buffer; wrap it with `string/adopt-cstr`, or accumulate with
+> a `StringBuilder`) removes that footgun -- the caller releases the `String`
+> once and borrows its bytes for output with `string/to-cstr`. The tutorial keeps
+> `cstr` returns for continuity with the request handlers below; see
+> [strings-guide.md](strings-guide.md) for when to prefer the owned form.
+
 ### Parsing Form Fields
 
 URL-encoded POST bodies have the form `name=Alice&message=Hello+World`. Extract a single named field:
@@ -566,6 +575,15 @@ defn percent-decode [s : cstr] : cstr
 ```
 
 > **Note**: A complete `percent-decode` implementation is provided in `src/security.tur`. For ASCII-only names and messages you can skip percent-decoding during early development, but include it before exposing the server to real users.
+
+> **Owned-return note.** `parse-form-field` returns `(Option cstr)` and
+> `percent-decode` returns a freshly-decoded `cstr` -- both are *computed* strings
+> extracted from the request body that then get stored in a `GuestEntry` and
+> outlive the request. The safe long-lived form is an owned `(Option String)` /
+> `String` (decode into a builder, or `string/from-cstr` the extracted slice), so
+> the stored value owns its bytes rather than pointing into a freed body buffer.
+> That is exactly why the `GuestEntry` `Serializable` instance above copies each
+> field in with `string/from-cstr`. See [strings-guide.md](strings-guide.md).
 
 ---
 
@@ -1383,6 +1401,14 @@ Load the secret from an environment variable at startup:
 def SERVER-SECRET
   cstr->bytes(or(getenv("GUESTBOOK_SECRET") "dev-insecure-secret"))
 ```
+
+> **Owned-return note.** `sign-token` builds a fresh `"token.signature"` string
+> with `str` and returns it as `cstr` (a "caller frees" buffer), and
+> `verify-token`'s `(Some token)` hands back a slice of the split `signed` input.
+> When a signed token is stored or lives past the call, prefer owned returns --
+> `String` for `sign-token` (adopt the `str` buffer) and `(Option String)` for
+> `verify-token` (`string/from-cstr` the extracted token) -- so the value owns its
+> bytes. See [strings-guide.md](strings-guide.md).
 
 Replace `store-continuation` and `load-continuation` with signed variants that call `sign-token` / `verify-token` before returning or looking up a token.
 

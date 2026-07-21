@@ -181,6 +181,14 @@ defalias serial-continuation<T>
      schema-id : cstr]  ; Stable hash of frame chain shape
 ```
 
+> **`schema-id` should be an owned `String`.** The comment calls it a *stable
+> hash of the frame chain shape* -- a **computed** value, stored in the struct and
+> serialized alongside the continuation. A `cstr` field here borrows a pointer
+> that dangles once the buffer that produced the hash is freed; only a hash that
+> is always a static literal could stay `cstr`. Since it is computed, use
+> `schema-id : String` so the continuation owns its own copy. See
+> [strings-guide.md](strings-guide.md).
+
 ## Examples
 
 ### Persistent Workflow
