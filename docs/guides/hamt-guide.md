@@ -45,6 +45,12 @@ def m2 hamt/retain(m)
 
 The HAMT itself does **not** free keys or values -- the caller owns those lifetimes. Each operation that returns a new `Hamt*` has `ref_count = 1`; the old map is unchanged and must be freed independently.
 
+> This is the low-level trie, where keys are pre-hashed and the caller manages
+> every lifetime. At the typed `Map`/`Set` layer built on top, an owned
+> `String` key gets the collection to copy and own the key bytes -- so a
+> *computed* key never dangles. See [strings-guide.md](strings-guide.md) for the
+> owned-key story.
+
 ## Core Operations
 
 All mutations return a **new** HAMT; the original is untouched.

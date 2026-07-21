@@ -291,6 +291,14 @@ concrete struct at the resolved call site). It **panics** on any schema
 violation, like `schema-decode!`; for graceful handling, validate with
 `schema-decode` first and branch on `schema-decode-ok?`.
 
+> **`name : cstr` vs `name : String`.** `json/get-string` *borrows* a pointer
+> into the decoded JSON node, so a `cstr` field holds that borrow and dangles the
+> moment the node is freed -- yet the `User` is meant to outlive the node. For a
+> field decoded from boundary data, prefer an owned `String`
+> (`[name : String age : int]`, filled with `(string/from-cstr (json/get-string
+> ...))`), which copies the bytes into a value the struct owns. See
+> [strings-guide.md](strings-guide.md).
+
 Ascribing `decode!` to a type with no `HasSchema` instance is a **compile-time**
 error (`no instance 'HasSchema T'`).
 

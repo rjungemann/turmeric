@@ -201,6 +201,12 @@ Keyword construction is checked strictly: every field must be supplied
 (`TUR-E0293`) is an error, and positional and keyword forms cannot be mixed in
 one call (`TUR-E0299`). Use one form or the other.
 
+> **`name : cstr` here is fine** -- it holds a string *literal*, whose bytes are
+> static. But a struct field that must own a *computed* or *stored* string (form
+> input, a decoded value, anything that outlives its source) should be `String`,
+> not `cstr`, so the struct owns its bytes instead of borrowing a pointer that
+> can dangle. See [strings-guide.md](strings-guide.md).
+
 ### Functional update with `with`
 
 `with` returns a **new** struct value with some fields overridden and the rest

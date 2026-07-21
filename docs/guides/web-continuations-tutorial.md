@@ -472,6 +472,15 @@ defn render-name-form [action : cstr] : cstr
       "</form></body></html>")
 ```
 
+> **Owned-return note.** Every `render-*` helper in this tutorial builds fresh
+> bytes with `str` and hands them back as `cstr`, so each caller inherits a
+> "caller frees the result" obligation. Returning an owned `String` instead
+> (`str` builds the buffer; wrap it with `string/adopt-cstr`, or accumulate with
+> a `StringBuilder`) removes that footgun -- the caller releases the `String`
+> once and borrows its bytes for output with `string/to-cstr`. The tutorial keeps
+> `cstr` returns for continuity with the request handlers below; see
+> [strings-guide.md](strings-guide.md) for when to prefer the owned form.
+
 ### Parsing Form Fields
 
 URL-encoded POST bodies have the form `name=Alice&message=Hello+World`. Extract a single named field:
@@ -566,6 +575,15 @@ defn percent-decode [s : cstr] : cstr
 ```
 
 > **Note**: A complete `percent-decode` implementation is provided in `src/security.tur`. For ASCII-only names and messages you can skip percent-decoding during early development, but include it before exposing the server to real users.
+
+> **Owned-return note.** `parse-form-field` returns `(Option cstr)` and
+> `percent-decode` returns a freshly-decoded `cstr` -- both are *computed* strings
+> extracted from the request body that then get stored in a `GuestEntry` and
+> outlive the request. The safe long-lived form is an owned `(Option String)` /
+> `String` (decode into a builder, or `string/from-cstr` the extracted slice), so
+> the stored value owns its bytes rather than pointing into a freed body buffer.
+> That is exactly why the `GuestEntry` `Serializable` instance above copies each
+> field in with `string/from-cstr`. See [strings-guide.md](strings-guide.md).
 
 ---
 
@@ -1040,13 +1058,19 @@ defn render-preview [name    : cstr,
 
 ### The `GuestEntry` Struct
 
+`name` and `message` are parsed out of the request's form body, then stored in a
+`Vec`, serialized, and read back long after that request is gone. A field that
+must *own* a computed/stored string like this is exactly the `String` case -- a
+`cstr` field would hold a pointer into the request buffer and dangle once the
+request completes. See [strings-guide.md](strings-guide.md).
+
 ```turmeric
 ;;; GuestEntry -- a single guestbook post.
 ;;;
 ;;; Since: Guestbook example
 (defstruct GuestEntry
-  [name      : cstr
-   message   : cstr
+  [name      : String
+   message   : String
    posted-at : int64])  ; Unix timestamp (seconds since epoch)
 ```
 ```sweet-exp
@@ -1054,21 +1078,26 @@ defn render-preview [name    : cstr,
 ;;;
 ;;; Since: Guestbook example
 defstruct GuestEntry
-  [name      : cstr
-   message   : cstr
+  [name      : String
+   message   : String
    posted-at : int64]  ; Unix timestamp (seconds since epoch)
 ```
 
 ### The `Serializable` Instance
 
-Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
+Entries are serialized as a `Vec cstr` (name, message, timestamp-string). On the
+wire we borrow each `String`'s bytes with `string/to-cstr`; on the way back in we
+`string/from-cstr` each part, so the entry owns its own copy and never points
+into the transient decoded `Vec`:
 
 ```turmeric
 ;;; Serializable instance for GuestEntry.
 ;;; Serializes as a Vec of three cstr values.
 (definstance Serializable GuestEntry
   (serialize [e]
-    (serialize (Vec.of [e.name e.message (int64->cstr e.posted-at)])))
+    (serialize (Vec.of [(string/to-cstr e.name)
+                        (string/to-cstr e.message)
+                        (int64->cstr e.posted-at)])))
   (deserialize [b]
     (match (deserialize b : (Result (Vec cstr) cstr))
       (Err msg) -> (Err msg)
@@ -1076,8 +1105,8 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
         (if (< (Vec.len parts) 3)
           (Err "GuestEntry: not enough fields")
           (Ok (GuestEntry
-                :name      (Vec.get parts 0)
-                :message   (Vec.get parts 1)
+                :name      (string/from-cstr (Vec.get parts 0))
+                :message   (string/from-cstr (Vec.get parts 1))
                 :posted-at (cstr->int64 (Vec.get parts 2))))))))
 ```
 ```sweet-exp
@@ -1085,7 +1114,7 @@ Entries are serialized as a `Vec cstr` (name, message, timestamp-string):
 ;;; Serializes as a Vec of three cstr values.
 definstance Serializable GuestEntry
   serialize [e]
-    serialize(Vec.of([e.name e.message int64->cstr(e.posted-at)]))
+    serialize(Vec.of([string/to-cstr(e.name) string/to-cstr(e.message) int64->cstr(e.posted-at)]))
   deserialize [b]
     match deserialize(b : (Result (Vec cstr) cstr))
       Err(msg)
@@ -1095,7 +1124,7 @@ definstance Serializable GuestEntry
       ->
       if {Vec.len(parts) < 3}
         Err("GuestEntry: not enough fields")
-        Ok(GuestEntry(:name Vec.get(parts 0) :message Vec.get(parts 1) :posted-at cstr->int64(Vec.get(parts 2))))
+        Ok(GuestEntry(:name string/from-cstr(Vec.get(parts 0)) :message string/from-cstr(Vec.get(parts 1)) :posted-at cstr->int64(Vec.get(parts 2))))
 ```
 
 ### The Store API
@@ -1373,6 +1402,14 @@ def SERVER-SECRET
   cstr->bytes(or(getenv("GUESTBOOK_SECRET") "dev-insecure-secret"))
 ```
 
+> **Owned-return note.** `sign-token` builds a fresh `"token.signature"` string
+> with `str` and returns it as `cstr` (a "caller frees" buffer), and
+> `verify-token`'s `(Some token)` hands back a slice of the split `signed` input.
+> When a signed token is stored or lives past the call, prefer owned returns --
+> `String` for `sign-token` (adopt the `str` buffer) and `(Option String)` for
+> `verify-token` (`string/from-cstr` the extracted token) -- so the value owns its
+> bytes. See [strings-guide.md](strings-guide.md).
+
 Replace `store-continuation` and `load-continuation` with signed variants that call `sign-token` / `verify-token` before returning or looking up a token.
 
 ### Token Expiry
@@ -1412,7 +1449,12 @@ defn continuation-expired? [sc : StoredCont] : bool
 
 ### Input Sanitization
 
-Escape `<`, `>`, `&`, and `"` before inserting user input into HTML:
+Escape `<`, `>`, `&`, and `"` before inserting user input into HTML. The escaped
+text is a *computed* string that outlives the raw input, so return it as an owned
+`String`, not a `cstr` -- that removes the "caller must free" burden and closes
+the intermediate-buffer leak the naive `cstr` version carries. See
+[strings-guide.md](strings-guide.md) for the full `cstr` vs `str` vs `String`
+story.
 
 ```turmeric
 ;;; html-escape -- escape HTML special characters in a string.
@@ -1421,17 +1463,25 @@ Escape `<`, `>`, `&`, and `"` before inserting user input into HTML:
 ;;;   s -- raw user input
 ;;;
 ;;; Returns:
-;;;   HTML-safe cstr.
+;;;   HTML-safe owned String (release it, or hand it to a container).
 ;;;
 ;;; Example:
-;;;   (html-escape "<script>") ; => "&lt;script&gt;"
+;;;   (string/to-cstr (html-escape "<script>")) ; => "&lt;script&gt;"
 ;;;
 ;;; Since: Guestbook example
-(defn html-escape [s : cstr] : cstr
-  (def s1 (cstr-replace-all s "&"  "&amp;"))
-  (def s2 (cstr-replace-all s1 "<"  "&lt;"))
-  (def s3 (cstr-replace-all s2 ">"  "&gt;"))
-  (cstr-replace-all s3 "\"" "&quot;"))
+(defn html-escape [s : cstr] : String
+  ;; Each cstr-replace-all hands back a fresh "caller frees" buffer. Free the
+  ;; intermediates and adopt the final buffer into an owned String, so the
+  ;; caller receives a String and never has to free a cstr.
+  (let [s1 (cstr-replace-all s  "&"  "&amp;")
+        s2 (cstr-replace-all s1 "<"  "&lt;")
+        s3 (cstr-replace-all s2 ">"  "&gt;")
+        s4 (cstr-replace-all s3 "\"" "&quot;")]
+    (do
+      (free s1)
+      (free s2)
+      (free s3)
+      (string/adopt-cstr s4))))
 ```
 ```sweet-exp
 ;;; html-escape -- escape HTML special characters in a string.
@@ -1440,20 +1490,28 @@ Escape `<`, `>`, `&`, and `"` before inserting user input into HTML:
 ;;;   s -- raw user input
 ;;;
 ;;; Returns:
-;;;   HTML-safe cstr.
+;;;   HTML-safe owned String (release it, or hand it to a container).
 ;;;
 ;;; Example:
-;;;   html-escape("<script>") ; => "&lt;script&gt;"
+;;;   string/to-cstr(html-escape("<script>")) ; => "&lt;script&gt;"
 ;;;
 ;;; Since: Guestbook example
-defn html-escape [s : cstr] : cstr
-  def s1 cstr-replace-all(s "&"  "&amp;")
-  def s2 cstr-replace-all(s1 "<"  "&lt;")
-  def s3 cstr-replace-all(s2 ">"  "&gt;")
-  cstr-replace-all(s3 "\"" "&quot;")
+defn html-escape [s : cstr] : String
+  ;; Each cstr-replace-all hands back a fresh "caller frees" buffer. Free the
+  ;; intermediates and adopt the final buffer into an owned String, so the
+  ;; caller receives a String and never has to free a cstr.
+  let [s1 cstr-replace-all(s  "&"  "&amp;")
+       s2 cstr-replace-all(s1 "<"  "&lt;")
+       s3 cstr-replace-all(s2 ">"  "&gt;")
+       s4 cstr-replace-all(s3 "\"" "&quot;")]
+    do
+      free(s1)
+      free(s2)
+      free(s3)
+      string/adopt-cstr(s4)
 ```
 
-Call `html-escape` on every user-supplied string before embedding it in a template. The preview page and thank-you page in Step 8 already do this.
+Call `html-escape` on every user-supplied string before embedding it in a template. The preview page and thank-you page in Step 8 already do this -- they borrow the payload with `string/to-cstr` for the template and `string/release` the `String` once the page is built.
 
 ### Single-Threaded Note
 

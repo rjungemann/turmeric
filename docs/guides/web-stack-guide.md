@@ -198,25 +198,29 @@ with-header(resp-ok("text/plain" "Not found") "x-reason" "missing")
 (import template/render :refer [render])
 (import template/env    :refer [env-new env-set env-free])
 
-(defn greet [name : cstr] : cstr
+(defn greet [name : cstr] : String
   (let [e (env-new)]
     (env-set e "name" name)
     (let [out (render "Hello, <%= name %>!" e)]
       (env-free e)
-      out)))
+      (string/adopt-cstr out))))  ;; owned result -- adopt render's heap buffer
 ```
 ```sweet-exp
 import template/render :refer [render]
 import template/env :refer [env-new env-set env-free]
-defn greet [name :cstr] :cstr
+defn greet [name :cstr] :String
   let [e (env-new)]
     env-set(e "name" name)
     let [out (render "Hello, <%= name %>!" e)]
       env-free(e)
-      out
+      string/adopt-cstr(out)  ;; owned result -- adopt render's heap buffer
 ```
 
-The returned string is heap-allocated; the caller must free it.
+`render` returns a heap-allocated `cstr` that the caller must free -- exactly the
+manual-free footgun the owned `String` type removes. Returning `String` (adopt
+`render`'s buffer with `string/adopt-cstr`) hands the caller an owned value it
+releases once with `string/release`, with no raw `free` to forget. See
+[strings-guide.md](strings-guide.md) for `cstr` vs `str` vs `String`.
 
 ### Template syntax
 
@@ -564,6 +568,12 @@ defn main [] :int
     server-stop(s)
     0
 ```
+
+`render-view` returns `render`'s heap buffer past `env-free`, so the caller owns
+those bytes. As with `greet` above, you can make that ownership explicit by
+returning an owned `String` (`(string/adopt-cstr (render name env))`) and having
+the handler borrow it back with `string/to-cstr` for `html`. See
+[strings-guide.md](strings-guide.md).
 
 ---
 
