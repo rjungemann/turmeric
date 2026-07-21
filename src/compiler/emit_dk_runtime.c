@@ -537,7 +537,26 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "    (void)root; return v;\n"
 "}\n"
 "static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false); }\n"
-"static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }\n"
+"static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }\n");
+    if (tramp) buf_puts(out,
+"/* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke\n"
+" * consults it to know whether running the invoked chain might tail-resume out. */\n"
+"static jmp_buf *g_dk_driver;\n"
+"static intptr_t dk_invoke(DK *sub, intptr_t w) {\n"
+"    DK *c = dk_copy_range(sub, NULL);\n"
+"    /* Under an active driver the invoked chain may tail-resume: dk_tail_resume\n"
+"     * longjmps to the driver, unwinding this frame BEFORE `dk_free(c)` runs, which\n"
+"     * would strand `c` once per such invoke -> O(N)\n"
+"     * (docs/archive/cps-reopen-perform-onode-leak.md).  Give `c` a boundary owner\n"
+"     * via the reap list so it is freed exactly once at the outermost entry whether\n"
+"     * dk_run_impl returns or longjmps.  No double free: the driver frees only the\n"
+"     * fresh sub a tail-resume yields (a copy taken from within `c`), never `c`\n"
+"     * itself.  With no driver a longjmp is impossible -- free eagerly as before. */\n"
+"    if (g_dk_driver) { __dk_reap_keep(c); return dk_run_impl(c, w, false); }\n"
+"    intptr_t r = dk_run_impl(c, w, false);\n"
+"    dk_free(c); return r;\n"
+"}\n");
+    else buf_puts(out,
 "static intptr_t dk_invoke(DK *sub, intptr_t w) {\n"
 "    DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
@@ -653,7 +672,25 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
 "    }\n");
     buf_puts(out,
-"    g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n"
+"    g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n");
+    if (tramp) buf_puts(out,
+"    /* A non-tail deep case that RE-OPENS an outer effect ends its body in that\n"
+"     * interior perform; if the outer effect is tail-resumed, dk_tail_resume\n"
+"     * longjmps to the entry driver and this dk_perform frame is unwound -- so the\n"
+"     * `dk_free(sub)` below never runs and `sub` leaks once per re-opened perform\n"
+"     * (O(N), docs/archive/cps-reopen-perform-onode-leak.md).  Give `sub` an owner\n"
+"     * that survives the longjmp: register it for a boundary dk_free at the\n"
+"     * outermost entry (__dk_reap_run), mirroring how every other per-perform node\n"
+"     * on this path is owned.  This is safe against double-free -- only a TAIL case\n"
+"     * hands its `sub` to the driver (the E7 branch above, which the driver frees),\n"
+"     * and a case body only ever reaps COPIES of `subk`, never `subk`/`sub` itself\n"
+"     * -- so reaping is `sub`'s sole disposal on both the return and longjmp paths.\n"
+"     * We reap BEFORE the handler call so a longjmp cannot skip the registration. */\n"
+"    __dk_reap_keep(sub);\n"
+"    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
+"    return dk_run_impl(H->next, r, false);\n"
+"}\n");
+    else buf_puts(out,
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
 "    dk_free(sub);\n"
 "    return dk_run_impl(H->next, r, false);\n"
