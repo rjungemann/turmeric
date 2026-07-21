@@ -58,11 +58,38 @@
 now resolved in Batch 2 above -- digest unblocked and shipped, the httpd
 capture hazard fixed, and the by-value field migration consciously declined.)
 
-**Remaining batches (proposed).** The rest of the fresh-alloc clusters --
-`json/encode`, `csv/emit*`, `re/*`, `term/*`, `range*` -- follow the exact
-`path-string` recipe (opt-in `*-string` sibling module, one `string/adopt-cstr`
-wrapper per function). They are mechanical; batch them per module as capacity
-allows, in the priority order below.
+**Remaining work splits into two buckets.**
+
+**Bucket A -- mechanical (no separate plan; execute per the `path-string`
+recipe).** These clusters always return a freshly-malloc'd `cstr`, so each gets
+an opt-in `*-string` sibling module with one `string/adopt-cstr` wrapper per
+function, identical to `stdlib/path-string.tur`. Batch them per module as
+capacity allows, in the priority order below. Checklist:
+
+- [ ] `stdlib/json-string.tur` -- `json/encode` (`json.tur:502`).
+- [ ] `stdlib/csv-string.tur` -- `csv/emit`, `csv/emit-row`,
+      `csv/emit-with-delim`, `csv/emit-row-with-delim` (`csv.tur:271/326/348/404`).
+      For the accumulating emitters, build via `StringBuilder` rather than
+      folding `str-concat-string` (see the Bucket B plan, Part 1).
+- [ ] `stdlib/term-string.tur` -- `term/{bold,dim,red,green,yellow,blue,cyan}`
+      (`term.tur:138..264`); each path is a fresh `strdup`/malloc.
+- [ ] `stdlib/re-string.tur` -- `re/replace`, `re/replace-all`,
+      `re/union-patterns` (`re.tur:461/484/539`); internal `re/wrap-paren`,
+      `re/union-acc` accumulate, so route them through `StringBuilder`.
+- [ ] `stdlib/range-string.tur` -- `range-fmt`, `range->str`, `bound-fmt`,
+      `bound-show-fmt` (`range-bound.tur:211/240/275`, `range.tur:133`); these
+      always malloc. **`bound->str` is the exception** -- it mixes a fresh
+      alloc with a static literal, so it is Bucket B, not here.
+- [ ] `stdlib/schema.tur` -- `schema-error-message-string`
+      (`schema.tur:696`); always mallocs (`sprintf`), so a plain `adopt` wrapper.
+
+**Bucket B -- non-mechanical (own plan).** The sites where the `adopt`-wrapper
+recipe breaks -- the foundational builders (`str-concat`/`cstr-sub`, whose
+wrap-vs-`StringBuilder` choice steers every accumulating formatter above) and
+the sentinel-mixed accessors (`httpd-req-cookie`, `httpd-req-form`,
+`bound->str`, which return a static literal on their miss path and so cannot be
+blindly adopted). These carry real design decisions and are planned separately:
+[string-owned-builders-and-optional-accessors-plan.md](string-owned-builders-and-optional-accessors-plan.md).
 
 ---
 
