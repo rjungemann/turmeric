@@ -316,7 +316,7 @@ ref teardown), not a prerequisite for leak-cleanliness of what already emits.
 ### E2 -- aggregate + carrier-ADT owning captures. LANDED.
 
 E2 is unblocked and landed, once the auto-drop lowering
-([cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md),
+([cps-backend-owning-autodrop-lowering-plan.md](../archive/cps-backend-owning-autodrop-lowering-plan.md),
 P2) made these shapes reach CPS. `cap_owning_ok` now admits a carrier ADT
 (`carrier_handle_ok`) and an owning-carrying by-value aggregate
 (`owning_byvalue_aggregate`); `owning_cap_borrow_only` + `expr_is_pure_borrow_of`
@@ -348,7 +348,7 @@ For an rc that consume is `(rc/drop r)`. But:
 So every owning aggregate / carrier / ref capture into a multi-shot case is
 blocked upstream by the scope-exit-auto-drop (`EX_DEFER`) hole. **E2 rides the
 non-ref auto-drop lowering, NOT E3** -- see
-[cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md).
+[cps-backend-owning-autodrop-lowering-plan.md](../archive/cps-backend-owning-autodrop-lowering-plan.md).
 That plan's **P2** lowers the injected `(defer (rc/drop (.f o)))` /
 `(defer (drop! (.f o)))` into the SINGLE-SHOT post-handle continuation (exactly
 how E1's explicit `(rc/drop r)` after a `handle` already works), which is sound
@@ -592,7 +592,7 @@ fixture needs both tracks:
    enclosing-handler fix across delimiter forms.
 3. **E1 + E-borrow** -- LANDED. Leak-clean rc captures via bare aliasing.
 4. **Owning-autodrop P1 + P2** -- LANDED
-   ([cps-backend-owning-autodrop-lowering-plan.md](../upcoming/cps-backend-owning-autodrop-lowering-plan.md)).
+   ([cps-backend-owning-autodrop-lowering-plan.md](../archive/cps-backend-owning-autodrop-lowering-plan.md)).
    The actual E2 unblock: lower the non-ref owning scope-exit auto-drop.
 5. **E2** -- LANDED (via P2). Owning-aggregate borrow captures; the capstone
    `cps-backend-owning-struct-capture-multishot` runs under normal leak

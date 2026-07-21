@@ -1,29 +1,39 @@
 ---
 title: CPS backend -- lower the NON-ref owning-value scope-exit auto-drop (unblocks E2)
 category: Planning
-status: P1 + P2 landed (non-crossing hoist, and single-shot crossing lowered in place -- P2 unblocked Track B E2); P3 (abortive/multi-shot crossing, rides E3) open. The missing generalization of O1-b.
+status: LANDED / RESOLVED 2026-07-21 -- P1 + P2 + P3 all landed. P1 (non-crossing hoist) and P2 (single-shot crossing lowered in place -- unblocked Track B E2) landed earlier; P3 (multi-shot crossing) landed with E3's graduation 2026-07-20 (the `owning-cloneable-capture` experiment retired, `g_opt_owning_cloneable_capture` defaults true), which threaded the auto scope-exit drop `(defer (rc/drop r))` across a cloneable-reset (E3b auto-defer) and fires the region-end teardown on abortive control. Fixture `cloneable-owning-autodrop-crossing` (output 32, leak-clean) covers the P3 case. The missing generalization of O1-b, now complete for every reachable shape.
 description: A colored (CPS-emitted) function that carries an elaborator-injected scope-exit auto-drop for an owning value EVICTS to the whole-function fallback, because `EX_DEFER` has no CT-IR lowering. O1-b P1 lowered exactly ONE shape of this -- `(defer (drop! r))` on a bare `ref<T>` var. Every other owning auto-drop is untouched and still evicts: a bare `rc` relying on auto-drop (`(defer (rc/drop r))`), and -- the case that blocks Track B E2 -- a by-value struct/record local with owning fields, whose fix (byvalue-struct-local-owning-field-leak, RESOLVED on the direct path) injects `(defer (rc/drop (.f o)))` / `(defer (drop! (.f o)))` per owning field. This plan generalizes O1-b's auto-drop recognizer + hoist to those shapes. Crucially it corrects an earlier misconception: E2's BORROW captures need this lowering landing in a SINGLE-SHOT continuation, which is sound WITHOUT the E3 teardown -- only genuinely-consuming / abortive crossings ride E3. Sound on the fallback today; missed coverage, not a correctness gap.
 ---
 
 # CPS backend -- lower the non-ref owning-value scope-exit auto-drop
 
-> **Progress note (2026-07-19).** Verified against the tree. **P1 + P2 are
-> landed.** The generalized recognizer `autodrop_defer_owning` (+
-> `autodrop_root_local`) is in `src/passes/cps_ir.c:2052-2093`; the P2 soundness
-> gate `expr_has_unsafe_control` (`:2180`) is present and recurses through
-> handle/perform/reset arms as described. Fixtures
-> `cps-backend-owning-autodrop-noncrossing` (P1) and
-> `-owning-autodrop-crossing-singleshot` (P2), plus the E2 capstone
-> `cps-backend-owning-struct-capture-multishot`, all exist and are leak-clean.
-> **P3 (abortive / multi-shot crossing) remains open** and is gated on E3's
-> DK-teardown, which is itself not built (see the E3 plan) -- so those crossings
-> continue to fall back correctly. This plan stays **OPEN on P3 only.**
+> **Progress note (2026-07-21) -- FULLY LANDED, archiving.** Re-verified against
+> the tree. **P1 + P2 + P3 are all landed.** The generalized recognizer
+> `autodrop_defer_owning` (+ `autodrop_root_local`) is in
+> `src/passes/cps_ir.c:2221-2262`; the P2 soundness gate
+> `expr_has_unsafe_control` (`:2349`) is present and recurses through
+> handle/perform/reset arms as described. **P3 landed with E3's graduation
+> (2026-07-20):** the earlier note said P3 was gated on an unbuilt E3
+> DK-teardown, but E3 has since GRADUATED
+> ([cps-backend-owning-env-teardown-e3-plan.md](../archive/cps-backend-owning-env-teardown-e3-plan.md),
+> now in the archive) -- the `owning-cloneable-capture` experiment retired and
+> `g_opt_owning_cloneable_capture` defaults true. E3b's auto-defer lowering
+> threads the elaborator's `(defer (rc/drop r))` across a cloneable-reset (fires
+> once after the region completes, and the region-end teardown fires on abortive
+> control too), so the P3 owning-autodrop-crossing-a-cloneable-reset case is now
+> lowered rather than evicted. Fixtures verified leak-clean under the harness
+> (leak detection ON): `cps-backend-owning-autodrop-noncrossing` (P1),
+> `cps-backend-owning-autodrop-crossing-singleshot` (P2), the E2 capstone
+> `cps-backend-owning-struct-capture-multishot` (P2), and
+> `cloneable-owning-autodrop-crossing` (P3, output 32) -- plus the full
+> `cloneable-owning-*` family (19 fixtures, 0 failed). This plan is
+> **RESOLVED**; nothing reachable remains open.
 
 ## Why this document exists (and why it was missed)
 
 The env-capture / Track B plans repeatedly hand-waved this as *"the `EX_DEFER`
 lowering (O1-b / a sibling item)"* -- but that sibling **did not exist**. O1-b
-([cps-backend-ref-scope-exit-drop-plan.md](cps-backend-ref-scope-exit-drop-plan.md))
+([cps-backend-ref-scope-exit-drop-plan.md](../upcoming/cps-backend-ref-scope-exit-drop-plan.md))
 is deliberately `ref<T>`-only. And the very change that RESOLVED the direct-path
 by-value-struct leak
 ([docs/archive/byvalue-struct-local-owning-field-leak.md](../archive/byvalue-struct-local-owning-field-leak.md))
@@ -188,9 +198,21 @@ field-read arg, and `drop!` on the direct side (O1-a). The delegated constructor
   owning-field read `(.r o)`, and an abortive-shift crossing all still fall back.
   Full suite 2168 passed, 0 failed.
 
-- **P3 -- crossing into an abortive / multi-shot continuation.** Rides E3's
-  DK-teardown (fire the drop once per continuation lifetime, and on abortive
-  abandon). Same substrate O1-b P2/P3 land on. Until E3, these stay fallback.
+- **P3 -- crossing into an abortive / multi-shot continuation. LANDED (with E3
+  graduation, 2026-07-20).** Rode E3's DK-teardown (fire the drop once per
+  continuation lifetime, and on abortive abandon). E3 graduated -- the
+  `owning-cloneable-capture` experiment retired, `g_opt_owning_cloneable_capture`
+  defaults true -- and E3b's auto-defer lowering threads the elaborator's
+  `(defer (rc/drop r))` / `(defer (drop! r))` across a cloneable-reset via the
+  `cps_tail` `do`-lowering's P5b trailing-defer extension, lowering it to the
+  same straight-line `CT_LETRAW` drop the explicit channel emits (no full "CPS
+  defer runtime" needed). The region-end teardown fires on abortive control too.
+  Fixture `cloneable-owning-autodrop-crossing` (an owning `rc` captured `^borrow`
+  across a two-resume cloneable-reset, auto-dropped at exit; output 32,
+  leak-clean, no hand-written drop). Same substrate O1-b P2/P3 land on. The one
+  residual bounded by the base language (a consuming `ref<owning>` /
+  nested-aggregate field) is a clean hard error, not a miscompile, and requires
+  deepening the base SHALLOW drop-glue -- out of scope here.
 
 ## Interaction with other plans
 
