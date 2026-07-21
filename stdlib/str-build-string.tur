@@ -1,0 +1,77 @@
+;;; tur/str-build-string -- owned String siblings for the cstr builders.
+;;;
+;;; `str-concat` (stdlib/str-build) and `cstr-sub` (stdlib/cstr) both return a
+;;; freshly-malloc'd `cstr` the caller must free -- a borrowed-typed owned buffer,
+;;; the exact hazard the owned `String` type fixes.  This opt-in module layers an
+;;; owned-String surface on top: each `*-string` wraps the corresponding cstr
+;;; builder in `string/adopt-cstr`, so the malloc'd buffer is adopted into an
+;;; owned String with no leak and no free obligation.
+;;;
+;;; It is a SEPARATE module so the dependency-free leaf `stdlib/str-build` and the
+;;; lean `stdlib/cstr` stay lean (no map/typeclass in their load graph): only
+;;; programs that want owned-String builders pull in `stdlib/string`.
+;;;
+;;; WRAP vs BUILD -- pick per call site:
+;;;
+;;;   * SINGLE join / substring (the common case) -- use these `*-string`
+;;;     wrappers.  Minimal, obviously correct, one allocation.
+;;;
+;;;   * MULTI-join accumulation (a formatter that concatenates more than twice --
+;;;     csv rows, json objects, `re/union`, `re/replace-all`) -- do NOT fold these
+;;;     wrappers.  Nesting `adopt(str-concat(...))` inherits str-concat's O(n^2)
+;;;     allocation profile: every intermediate join mallocs a throwaway cstr that
+;;;     is copied again by the next join.  Build into a `StringBuilder`
+;;;     (`builder/new` -> `builder/push-*!` -> `builder/finish`) instead -- linear
+;;;     time, a single allocation of the final buffer.  See
+;;;     docs/guides/strings-guide.md ("Owned builders: wrap vs build").
+;;;
+;;; Since: v2 (string-owned-builders-and-optional-accessors-plan, Part 1)
+(load "stdlib/str-build.tur")
+
+(load "stdlib/cstr.tur")
+
+(load "stdlib/string.tur")
+;;; str-concat-string -- concatenate two cstrs into a fresh owned String.
+;;;
+;;; The owned sibling of `str-concat`: adopts the malloc'd join into a String, so
+;;; the result is safe to return, store, or key a map with -- no free obligation.
+;;;
+;;; For a SINGLE join this is the right tool.  To concatenate more than twice,
+;;; build into a `StringBuilder` and `builder/finish` once (see the module note)
+;;; rather than nesting this wrapper.
+;;;
+;;; Parameters:
+;;;   a -- first cstr (NUL-terminated)
+;;;   b -- second cstr (NUL-terminated)
+;;;
+;;; Returns:
+;;;   A fresh owned String holding a followed by b.
+;;;
+;;; Example:
+;;;   (string/to-cstr (str-concat-string "Hello, " "world"))  ; => "Hello, world"
+;;;
+;;; Since: v2
+
+(defn str-concat-string [a : cstr b : cstr] : String
+  (string/adopt-cstr (str-concat a b)))
+;;; cstr-sub-string -- substring [start, end) of a cstr, as a fresh owned String.
+;;;
+;;; The owned sibling of `cstr-sub`: adopts the malloc'd substring into a String.
+;;; Out-of-range indices are clamped exactly as in `cstr-sub`, so the result is
+;;; always a valid (possibly empty) owned String.
+;;;
+;;; Parameters:
+;;;   s     -- NUL-terminated cstr
+;;;   start -- zero-based start byte index (clamped into [0, len])
+;;;   end   -- exclusive end byte index (clamped into [start, len])
+;;;
+;;; Returns:
+;;;   A fresh owned String holding the bytes of s in [start, end).
+;;;
+;;; Example:
+;;;   (string/to-cstr (cstr-sub-string "hello" 1 4))  ; => "ell"
+;;;
+;;; Since: v2
+
+(defn cstr-sub-string [s : cstr start : int end : int] : String
+  (string/adopt-cstr (cstr-sub s start end)))
