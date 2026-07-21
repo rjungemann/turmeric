@@ -4,9 +4,11 @@
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
-first-class `tur link` step, splits `tur build`'s single compile+link `cc` call
-into cacheable `-c` compiles plus a link, and finishes the remaining Section 3
-work.
+first-class `tur compile` + `tur link` pair, splits `tur build`'s single
+compile+link `cc` call into cacheable `-c` compiles plus a link, and finishes
+the remaining Section 3 work. The end state is that `tur build` is roughly
+`tur compile && tur link` -- the mental model every user already has from
+`cc`/`make`.
 
 **Not experiment-gated.** This is a build-system change (a new subcommand + how
 `tur build` drives `cc`), which CLAUDE.md's experimental-flags rule explicitly
@@ -50,12 +52,20 @@ The fixture build path just does not pass `-lturi`; it autolinks bare sources.
 
 ## 2. Goal
 
-- Add a `tur link` subcommand that links precompiled objects (+ link flags) into
-  an executable / shared library, so the pipeline can be
-  `emit-c` -> `cc -c` (cacheable) -> `tur link`.
-- Split `tur build`'s internal `cc` call into per-source `-c` compiles + a link,
-  so ccache caches the object compiles (runtime objects hit across every fixture
-  and every run) **and** the generated-program object hits on unchanged input.
+- Add a `tur compile` subcommand that lowers a `.tur` source to an object file
+  (`.tur` -> `.o`, the `emit-c` + `cc -c` steps fused) plus a `.link` sidecar,
+  and a `tur link` subcommand that links precompiled objects (+ link flags) into
+  an executable / shared library. The documented pipeline becomes
+  `tur compile` (cacheable) -> `tur link`, entirely in `tur`'s vocabulary --
+  no dropping to raw `cc -c` for the middle step.
+- Define `tur build` as `tur compile` + `tur link` composed: it runs the compile
+  path per source, then the shared link helper. Splitting its internal `cc` call
+  into per-source `-c` compiles + a link lets ccache cache the object compiles
+  (runtime objects hit across every fixture and every run) **and** the
+  generated-program object hits on unchanged input.
+- Keep `emit-c` as-is. It stays the "show me the C" tool and backs the snapshot
+  fixtures; `tur compile` is the additive fused `.tur` -> `.o` step, not a
+  rename of `emit-c`.
 - Ensure `tur link` and the split `tur build` produce **byte-identical binaries**
   to today and compose correctly with every existing knob (`-o`, `--build-dir`
   obj/bin/lib layout, `--shared`, `TUR_CC_FLAGS`, `-lturi`, spice aux sources,
@@ -63,6 +73,34 @@ The fixture build path just does not pass `-lturi`; it autolinks bare sources.
 - Finish the residual Section 3 items (see section 6).
 
 ## 3. Design
+
+The pipeline is `tur compile -> tur link`, and `tur build` is those two composed.
+
+### 3a-0. `tur compile`
+
+New canonical subcommand that lowers one `.tur` source to an object file --
+the `emit-c` + `cc -c` steps fused, so the workflow never has to drop to raw
+`cc`.
+
+```
+tur compile [options] <in.tur> -o <out.o>
+  <in.tur>          a Turmeric source file
+  -o <out.o>        output object (default: <name>.o beside the input / in obj/)
+  --cc-flags "..."  extra compile flags (also honors TUR_CC_FLAGS)
+  --build-dir <dir> route intermediates through <dir>/{obj,bin,lib}/ (as build)
+```
+
+Semantics: run the frontend to lower `<in.tur>` to C (the same lowering `emit-c`
+uses -- unchanged, snapshot fixtures still go through `emit-c`), then invoke
+`cc <cc_flags> -c <name>.c -o <out.o>`. This is the **cacheable** call: ccache
+hits on unchanged input (deterministic obj paths + `CCACHE_NOHASHDIR=1`, already
+set at `run.sh:88`).
+
+Because the frontend runs here, `tur compile` already holds the resolved
+`__tur_autolink__` / link flags, so it is the natural owner of the **`.link`
+sidecar** (3a-A): it writes `<name>.link` next to the `.o`. The `.o` + `.link`
+pair is then the complete, link-agnostic unit `tur link` consumes. `emit-c` is
+untouched; `tur compile` = `emit-c` lowering + `cc -c` + `.link` emission.
 
 ### 3a. `tur link`
 
@@ -89,25 +127,33 @@ current monolithic build into a shared `link_objects(...)` helper that both
 `__tur_autolink__` link flags are discovered by scanning the *generated C*
 (`main.c:1802`). In a split pipeline the linker step must still learn them
 without recompiling. Two options, pick in Phase 1:
-- **(A) Sidecar file.** `tur emit-c` writes the resolved autolink/link flags to
-  `<name>.link` next to the `.c`; `tur link` reads it. Explicit, cache-friendly.
+- **(A) Sidecar file.** `tur compile` writes the resolved autolink/link flags to
+  `<name>.link` next to the `.o` (it ran the frontend, so it already has them);
+  `tur link` reads it. Explicit, cache-friendly.
 - **(B) Re-scan.** `tur link` re-scans the emitted `.c` (or the `.o`'s embedded
   comment is lost, so this needs the `.c`) for `__tur_autolink__`. Simpler, but
   couples link back to the source. **(A) is preferred** -- it keeps `tur link`
   input-agnostic and lets the `.o` + `.link` pair be the complete unit.
 
-### 3b. `tur build` = compile(-c) + link
+### 3b. `tur build` = `tur compile` + `tur link`
 
-`tur build` gains an internal split (default-on once proven; guarded by
-`--no-split-build` escape hatch during rollout):
+`tur build` is defined as the two subcommands composed -- it drives the same
+`tur compile` path per source, then the shared `link_objects(...)` helper. There
+is no ad-hoc inlined split logic; `tur build` is `compile + link`. This is
+default-on once proven, guarded by a `--no-split-build` escape hatch during
+rollout that short-circuits back to the monolithic `cc` call unchanged.
 
-1. `emit-c` -> `<build-dir>/obj/<name>.c` (+ `.link` sidecar per 3a-A).
-2. For the generated `.c` and each autolinked runtime `.c`:
-   `cc <cc_flags> -c <src> -o <build-dir>/obj/<hash>.o`. These are the cacheable
-   calls -- ccache hits on unchanged runtime sources across every fixture and
-   across runs (deterministic obj paths + `CCACHE_NOHASHDIR=1`, already set at
-   `run.sh:88`).
-3. `link_objects(objs, link_flags, out)` -> the executable.
+1. Compile path (the `tur compile` internals): `emit-c` lowering ->
+   `<build-dir>/obj/<name>.c` (+ `.link` sidecar per 3a-A), then
+   `cc <cc_flags> -c <src> -o <build-dir>/obj/<hash>.o` for the generated `.c`
+   and each autolinked runtime `.c`. These are the cacheable calls -- ccache
+   hits on unchanged runtime sources across every fixture and across runs
+   (deterministic obj paths + `CCACHE_NOHASHDIR=1`, already set at `run.sh:88`).
+2. `link_objects(objs, link_flags, out)` (the `tur link` internals) -> the
+   executable.
+
+Because both halves are the real subcommand code paths, `tur build`,
+`tur compile`, and `tur link` cannot drift from each other.
 
 The `<build-dir>/{obj,bin,lib}/` layout already documented in CLAUDE.md is the
 natural home for the `.o`s; single-file `/tmp/tur-build/` builds get an
@@ -148,9 +194,12 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
    change. Land + full suite green.
 2. **Prebuilt runtime (3c).** `tur build --runtime=lib` links `libturi.a`;
    measure suite wall-clock delta. Make default once green.
-3. **`tur link` subcommand (3a)** + `emit-c` `.link` sidecar. Register the
-   command; document `emit-c -> cc -c -> tur link`.
-4. **Split `tur build` (3b)** behind `--no-split-build`; wire ccache; measure
+3. **`tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link` sidecar
+   (written by `tur compile`). Register both commands in `builtins[]` /
+   `CANONICAL_COMMANDS[]` and the `main()` dispatch; document the
+   `tur compile -> tur link` pipeline. `emit-c` is left untouched.
+4. **Redefine `tur build` as `compile + link` (3b)** behind `--no-split-build`;
+   wire ccache; measure
    cold vs warm suite wall-clock (expect the big drop here). Flip default.
 5. **CI: install + cache ccache**, now that calls are cacheable (was a no-op
    before -- do NOT do this before step 4). Cache the ccache dir across runs in
@@ -180,8 +229,8 @@ plan's build changes) and is not covered here.
 ## 7. Risks / non-goals
 
 - **Risk: link-flag drift between compile and link.** The `.link` sidecar (3a-A)
-  is the mitigation -- one source of truth for link flags, emitted alongside the
-  `.c`.
+  is the mitigation -- one source of truth for link flags, emitted by
+  `tur compile` alongside the `.o`.
 - **Risk: obj cache staleness.** Key object filenames on a content hash of the
   source + `cc_flags` so a flag change re-compiles; let ccache handle the rest.
 - **Risk: parallel object compiles inside one `tur build`.** Keep step-2 compiles

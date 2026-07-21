@@ -1,6 +1,10 @@
 # `String` Adoption Audit -- spices
 
-> **Status:** Proposed (audit complete 2026-07-20). No migrations landed yet.
+> **Status:** Executed 2026-07-21. All ordered items landed in
+> `../turmeric-spices/` (tourist-session, regex, frame, json). See the
+> **Execution status** section below for what shipped, the two toolchain
+> blockers surfaced (and their resolutions), and the audit corrections found
+> when verifying each body.
 >
 > **Prerequisite:** the owned `String` type has landed --
 > [docs/archive/owned-string-type-plan.md](../../archive/owned-string-type-plan.md),
@@ -159,6 +163,77 @@ Identical to the stdlib audit's recipe:
 - **Computed Map/Set key:** type the key `String` and rely on `MapKey[String]`
   (`mk-owned? = 1`) so the collection owns and frees the key bytes -- exactly the
   dangling-`cstr`-key hazard the whole `String` effort removes.
+
+## Execution status (2026-07-21)
+
+All ordered items landed in `../turmeric-spices/`. Each owned-`String` return is
+verified compiling **and** running under AddressSanitizer (no use-after-free /
+double-free); the tourist-session suite is 10/10 green.
+
+### Two toolchain blockers surfaced (the audit assumed a working foundation)
+
+The audit's premise -- "the owned `String` type has landed" -- held for the
+*interpreted* stdlib path but not for *compiled* spice consumption. Every spice
+is AOT-compiled, which surfaced two gaps, both filed under
+[docs/reported/compiled-string-return-int-conversion.md](../../reported/compiled-string-return-int-conversion.md):
+
+1. **Compiled `String` did not build under a modern clang.** A `String`-returning
+   `defn` (String lowers to `void*`) emits an `int64_t` C return slot but returns
+   the raw `void*` from the `tur_string_*` runtime without the `(int64_t)(intptr_t)`
+   bridge -- `-Wint-conversion`, a hard error. No `String` fixture exercised the
+   compiled path (all run in the interpreter), so it went untested. **Resolution:**
+   restored the `-Wno-error=int-conversion` / `-Wno-error=incompatible-pointer-types`
+   downgrades in `src/main.c` (the straddle is width-safe on LP64), documented as
+   the still-open front; the proper codegen-bridge fix is tracked in the report.
+2. **stdlib `String` cannot be pulled into a shared spice module's signatures.**
+   `(load "stdlib/string.tur")` in a module that another module imports trips a
+   reentrant typeclass-show load-ordering bug (`vec-show-loop` unresolved).
+   **Resolution / pattern for spices:** each spice ships a tiny self-contained
+   `<spice>/ownstr` module -- an ABI-identical `(defopaque String :ptr<void>)` with
+   `adopt-cstr` / `to-cstr` / `release` / `str-len` extern wrappers over the same
+   `tur_string_*` runtime and the `tur_string.c` autolink marker. No `(load)`, so
+   no reentrancy; links cleanly. The bytes are the real refcounted runtime payload;
+   only the nominal type is spice-local. When blocker 2 is fixed these collapse
+   onto stdlib `String`.
+
+### Per-item outcome
+
+1. **`tourist-session` capture fix -- already resolved in-code; hardened.** The
+   audit read `SessionConfig`'s server-lifetime signing-key as a dangling capture,
+   but `session/state.tur:__cfg-new` already `strdup`s every string field into
+   process-lifetime storage before serving -- the server never borrows a caller
+   buffer, so the "dangles across all later requests" hazard did not exist. The
+   one real gap vs. the `httpd-cors-own-str` precedent (NULL-preservation) is now
+   closed: the `strdup`s are NULL-preserving.
+2. **`tourist-session` owned returns -- landed.** `session-id-new -> String`,
+   `cookie-sign -> String`, `cookie-unsign -> (Result String cstr)`. The
+   session-state struct owns the id as a `String` (released in `sess-free`);
+   store keys / cookie-build / hmac stay `cstr` borrows via `to-cstr` (they copy
+   internally -- keep-cstr at those seams). The audit's "store-key path takes a
+   `String` key (`MapKey[String]`)" did **not** apply: the stores are hand-rolled
+   (linked list / files / redis), not `Map`s, so there is no `MapKey` to own the
+   key; a `cstr` borrow into the backend's own copy is correct. Consumers updated:
+   `session/csrf` (mint token), `tourist-session-valkey` store round-trip test.
+3. **`regex` captures -- landed, plus a real bug fixed.** Added
+   `capture-at-string` / `capture-named-string` (owned `String`). Verifying the
+   bodies found a **mixed-ownership footgun**: `capture-at` / `capture-named`
+   returned a *static* `""` for non-participating groups but a *malloc'd* copy
+   otherwise, so a caller freeing the result per the documented "malloc'd copy"
+   contract crashed on empty groups. Fixed: the empty case now malloc's too, so
+   the `cstr` return is uniformly owned.
+4. **`frame` / `json` formatters -- landed, with an audit correction.**
+   `frame->string` (owned sibling of `frame->str`) landed. But the audit
+   misclassified `frame/type.tur`'s `type-name` and `type-arrow-fmt` as
+   "fresh-built display strings" -- their bodies return **static string
+   literals** (a `switch` over `return "int32"`), so they are keep-cstr
+   name-lookups; converting them would force a needless copy of a literal. Left
+   as `cstr`. For `json`, rather than wrap the internal `__json-obj-build`
+   (which would be dead code -- the `Encode` method returns `cstr` by contract),
+   added a public polymorphic `encode-string [^Encode A] [x : A] : String` -- the
+   owned-return entry point for any Encodable value. (Aside: a polymorphic wrapper
+   over a typeclass method must be defined *after* at least one `definstance`, or
+   method resolution fails with "no typeclass method found".)
+5. **Codegen / driver-borrow spices -- left as `cstr`** per the audit.
 
 ## Related
 
