@@ -27,6 +27,7 @@ export default defineConfig({
             main: resolve(__dirname, 'index.html'),
             try: resolve(__dirname, 'try/index.html'),
             tour: resolve(__dirname, 'tour/index.html'),
+            trowel: resolve(__dirname, 'trowel/index.html'),
           },
         },
       },

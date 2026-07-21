@@ -70,11 +70,12 @@ class SiteNav extends HTMLElement {
   connectedCallback() {
     const active = this.getAttribute('active') ?? '';
     const links = [
-      ['/tour',              'Tour'],
-      ['/try',               'Try It'],
-      ['/docs/html/guides/', 'Guides'],
-      ['/docs/html/api/',    'API Docs'],
+      ['/tour',                            'Tour'],
+      ['/try',                             'Try It'],
+      ['/docs/html/guides/',               'Guides'],
+      ['/docs/html/api/',                  'API Docs'],
       ['https://spices.turmeric-lang.com', 'Spices'],
+      ['/trowel',                          'Trowel'],
     ];
 
     const linkHTML = links.map(([href, label]) =>
@@ -146,6 +147,7 @@ class SiteFooter extends HTMLElement {
           <div class="footer-col">
             <div class="footer-col-title">Language</div>
             <a href="/tour">Tour</a>
+            <a href="/trowel">Trowel</a>
             <a href="/try">Try It</a>
           </div>
           <div class="footer-col">
@@ -180,6 +182,7 @@ class SiteSidebar extends HTMLElement {
       <h3>Language</h3>
       <ul>
         <li><a href="/tour">Tour</a></li>
+        <li><a href="/trowel">Trowel</a></li>
         <li><a href="/try">Try It</a></li>
       </ul>
       <h3>Ecosystem</h3>
