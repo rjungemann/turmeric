@@ -32,11 +32,11 @@ concrete-receiver path.
 
 **Note on Related (the silent segfault sibling,
 `method-dispatch-missing-instance-falls-back-to-carrier-representative.md`):**
-still OPEN. That path (an instance-less receiver sharing the int64 carrier with
-a fallback representative) resolves through a *different* site
-(`elab_method_call`'s carrier-representative search) that never reaches this
-`TUR_E0020` fallback, so this diagnostic fix does not touch it. Its structural
-"ground dispatch on the concrete static type" fix remains its own item.
+also RESOLVED (2026-07-21), in the same consolidated fix. The concrete-receiver
+"no instance" branch was extended to fire at `fallback_count == 1` (not just
+`> 1`), so a concrete distinct receiver that would otherwise bind the single
+carrier-compatible representative silently now errors cleanly instead. See that
+report's resolution note.
 
 **Severity:** low-medium (confusing but *caught* compile error; the silent
 sibling -- a segfault -- is tracked separately, see Related)

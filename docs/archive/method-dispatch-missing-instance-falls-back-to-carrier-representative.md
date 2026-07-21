@@ -1,5 +1,50 @@
 # Dot-method dispatch on a receiver with no instance silently falls back to a carrier representative
 
+**Status: RESOLVED (2026-07-21).** Fixed in `src/compiler/elab_typeclasses.c`
+alongside its caught-but-confusing sibling
+(`ambiguous-dispatch-error-quality-missing-instance.md`); full suite 2247 passed,
+0 failed.
+
+The dispatch fallback loop recorded a type-mismatched instance as a fallback and
+set `best_method` to the FIRST such fallback; when the receiver had no exact
+match and exactly one carrier-compatible instance existed (`fallback_count == 1`),
+that single representative was bound **silently** -- the wrong-instance dispatch
+this report describes (a SIGSEGV when its layout differs, a silent wrong result
+when it happens to match, as the `Widget`/`Show[int]` case shows).
+
+The fix grounds the diagnosis on the receiver's concrete static type. Before the
+`TUR_E0020` ambiguity check, when the receiver is a genuinely DISTINCT concrete
+type -- a positive whitelist: `bool`/`cstr`/`float`/`float32`/`nil`/`sym`, the
+sized ints, or a `TY_ADT` with a real def (structs, **opaque newtypes**, user
+ADTs) -- and NO instance matches it exactly, dispatch now emits a clean
+`TUR-E0015` *"no instance of typeclass '<Class>' for type '<type>'. Add
+(definstance <Class> [<type>] ...) ..."* regardless of `fallback_count`, instead
+of binding a representative. This is exactly the discriminator the "Root cause &
+why it is not a trivial fix" section below proposes:
+
+- **Concrete receiver, genuinely no instance** -> `TUR-E0015`. Verified for both
+  the struct case (repro above: `.debug` on `Inner` -> "no instance of Debug for
+  Inner" at the user's `derive-debug` line) and the carrier-collision case
+  (`(:: 5 Widget)` with only `Show[int]` in scope -> "no instance of Show for
+  Widget", previously silent).
+- **Carrier-typed tyvar receiver in a polymorphic body** -> representative is
+  still correct: excluded by `obj_is_abstract_tyvar` and by the whitelist (a bare
+  `:int` carrier and null-def ADTs are excluded), so `vec-get`-style erased
+  element dispatch and constrained-generic base clones re-specialize downstream
+  exactly as before.
+- **Recursive self-type** (a `Debug[Tree]` body calling `.debug` on a `Tree`
+  subfield) -> an EXACT match sets `exact_match_found` and never reaches the new
+  branch, so it still resolves to self.
+
+Regression fixtures:
+`tests/fixtures/errors/dispatch-opaque-receiver-no-instance/` (this report, the
+silent single-representative case) and
+`tests/fixtures/errors/dispatch-concrete-receiver-no-instance/` (the sibling
+report). The `generic-show-dispatch-opaque` and `derive-debug-display` fixtures
+(legitimate carrier/exact-match dispatch) still pass.
+
+---
+
 **Severity:** medium (silent wrong-instance dispatch when the receiver shares the
 int64 carrier; a confusing generated-C type error otherwise)
 
