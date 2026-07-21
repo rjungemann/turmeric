@@ -47,6 +47,40 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21i) -- #1a Drop typeclass LANDED; #1b codegen
+> integration spec (turn-key).** The `Drop` typeclass + `Drop[String]` instance
+> are in and verified (`(drop s)` -> `__inst_Drop_drop_String` -> `string/release`,
+> leak-clean; no snapshot churn -- Drop instances emit only when referenced). What
+> remains for the cors cluster is wiring the closure drop-glue to dispatch a
+> capture's Drop instance. Exact recipe:
+>
+> - **Resolve at ELABORATION** (typeclass method resolution is an elab-time thing;
+>   emit has no `TypeClassEnv`). In `elab_fns.c` capture finalization (~4642, beside
+>   the `^fat` move-marking), for each capture:
+>   `Sym drop = intern_cstr(st,"Drop"); TypeClass *dtc =
+>   typeclass_env_lookup_typeclass(&e->typeclass_env, drop);
+>   TypeClassInstance *di = typeclass_env_lookup_instance(&e->typeclass_env, dtc,
+>   &cap->type, 1);` -- likewise `Clone` -> `ci`.
+> - **Store on `Closure`** (add two parallel `TypeClassInstance **` arrays,
+>   `capture_drop_insts` / `capture_clone_insts`, NULL per capture with no Drop).
+>   Init to NULL at ALL THREE Closure construction sites (arena is NON-zeroing):
+>   `elab_fns.c:4636`, `elab_call.c:3268`, `elab_call.c:6029`.
+> - **Emit** (emit_fns.c drop-glue + emit_expr.c fallback, in lockstep; and the
+>   env-fill in emit_expr.c): for a capture with `capture_drop_insts[i] != NULL`,
+>   the symbol is `raw_name_for_binding(inst->method_impls[0]->binding)`.
+>   - If `capture_clone_insts[i] != NULL` (Drop+Clone, e.g. String -- refcounted):
+>     RETAIN at fill `clone_sym(field)`, RELEASE in drop-glue `drop_sym(field)`.
+>     Sound without move analysis (refcount balances) -- exactly the rc-capture
+>     pattern, generalized through the typeclass methods.
+>   - If Clone is absent (move-only Drop): move-mark the capture at elab (like
+>     `^fat`) and RELEASE in drop-glue, no retain.
+> - **httpd refactor** (separate, after the wiring): `httpd-cors-own-str` returns
+>   `String` (`string/adopt-cstr` of the strdup, or `string/from-cstr`);
+>   `mw-cors-with` captures `String`; pass `string/to-cstr` views to
+>   `httpd-mw-cors-emit-preflight`/`-decorate` (they keep taking `cstr`). Then flip
+>   `httpd-mw-cors` (+ `-cors-opts`, `-cookie`, `-form`, `-compose`) to flag-on and
+>   drop markers as each goes leak-clean.
+>
 > **Progress note (2026-07-21h) -- httpd harvest (7 fixtures leak-clean flag-on)
 > + the cors cluster's remaining blocker pinned to a NEW mechanism.** With the
 > handler teardown routed through `TUR_CLOSURE_DROP` (2026-07-21, prior commit), a
