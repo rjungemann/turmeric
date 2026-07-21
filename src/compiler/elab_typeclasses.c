@@ -5702,6 +5702,61 @@ found_method:;
         return NULL;
     }
 
+    /* ambiguous-dispatch-error-quality + method-dispatch-missing-instance:
+     * when the receiver's static type is a genuinely DISTINCT concrete type and
+     * NO instance matches it exactly, the true cause is "no instance of <Class>
+     * for <that type>" -- regardless of how many carrier-compatible fallbacks
+     * exist.  A positive whitelist (bool / cstr / float / sized ints / a TY_ADT
+     * with a real def -- structs, opaque newtypes, user ADTs), NOT merely "not a
+     * tyvar".  Two bugs collapse here:
+     *   - fallback_count > 1: the misleading TUR-E0020 "ambiguous / Show[?] /
+     *     annotate" wording (this report).
+     *   - fallback_count == 1: a SILENT bind to the single carrier-compatible
+     *     representative -- a wrong-instance dispatch that SIGSEGVs when the
+     *     representative's layout differs (method-dispatch-missing-instance-
+     *     falls-back-to-carrier-representative.md).
+     * The bare int64 carrier (:int) is EXCLUDED (a `:int` receiver is
+     * indistinguishable from an erased value -- errors/hkt-dispatch-ambiguous),
+     * as are abstract tyvars / carrier-erased element reads (obj_is_abstract_-
+     * tyvar) and null-def ADTs (abstract-tyvar stand-ins).  EXACT matches set
+     * exact_match_found and never reach here, so the recursive self-type case
+     * (a Debug[Tree] body calling .debug on a Tree subfield) still resolves to
+     * self. */
+    {
+        TypeKind rrk = obj->type.kind;
+        bool concrete_distinct_receiver = !obj_is_abstract_tyvar && (
+            rrk == TY_BOOL   || rrk == TY_CSTR   || rrk == TY_FLOAT  ||
+            rrk == TY_FLOAT32|| rrk == TY_NIL    || rrk == TY_SYM    ||
+            rrk == TY_INT8   || rrk == TY_INT16  || rrk == TY_INT32  ||
+            rrk == TY_UINT8  || rrk == TY_UINT16 || rrk == TY_UINT32 ||
+            rrk == TY_UINT64 ||
+            (rrk == TY_ADT && obj->type.as.adt_.def != NULL));
+        if (!exact_match_found && fallback_count >= 1 &&
+            concrete_distinct_receiver) {
+            const char *cn = best_inst ? best_inst->typeclass->name->name : "?";
+            /* Attribute a macro-emitted `.method` call (e.g. derive-show's
+             * `(.show (.field __p))`) to the USER's derive call site rather than
+             * the macro body in stdlib/macros.tur; a direct user call keeps its
+             * own receiver span.  Scoped to THIS diagnostic. */
+            Span err_span = call->as.list.items[1]->span;
+            bool from_macro = e->macro_expand_depth > 0;
+            if (from_macro) err_span = e->macro_call_site_span;
+            diag_emit_with_code(DIAG_ERROR, err_span,
+                                TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                                "no instance of typeclass '%s' for type '%s' "
+                                "(method '.%.*s'). Add (definstance %s [%s] ...) "
+                                "or dispatch on a type that has one.",
+                                cn, type_name(obj->type),
+                                (int)method_name_len, method_name,
+                                cn, type_name(obj->type));
+            if (from_macro)
+                diag_emit(DIAG_NOTE, call->as.list.items[1]->span,
+                          "the '.%.*s' call is emitted by this macro expansion",
+                          (int)method_name_len, method_name);
+            return NULL;
+        }
+    }
+
     /* Phase D0: Ambiguous dispatch diagnostic.
      * If we reached here via the fallback path (no exact type match) and
      * more than one instance matched by name, emit TUR_E0020 so the user
@@ -5715,16 +5770,19 @@ found_method:;
             best_inst = user_fallback_inst;
             goto resolved_user_fallback;
         }
-        /* Build a comma-separated list of matching instance names for the message. */
+        /* Build a comma-separated list of matching instance names for the message,
+         * and capture the typeclass name for the concrete-receiver diagnosis. */
         char inst_list[512];
         int pos = 0;
         int listed = 0;
+        const char *class_name = NULL;
         for (TypeClassInstance *ci = e->typeclass_env.instances;
              ci != NULL && pos < (int)sizeof(inst_list) - 2; ci = ci->next) {
             for (uint8_t mi = 0; mi < ci->typeclass->n_methods; mi++) {
                 const TypeClassMethod *cm = &ci->typeclass->methods[mi];
                 if (cm->name->len != method_name_len ||
                     memcmp(cm->name->name, method_name, method_name_len) != 0) continue;
+                if (!class_name) class_name = ci->typeclass->name->name;
                 if (listed > 0 && pos < (int)sizeof(inst_list) - 3) {
                     inst_list[pos++] = ','; inst_list[pos++] = ' ';
                 }
@@ -5743,6 +5801,7 @@ found_method:;
             }
         }
         inst_list[pos] = '\0';
+        (void)class_name;
         diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0020_AMBIGUOUS_DISPATCH,
                             "ambiguous method dispatch: '.%.*s' matches %d instances "
                             "(%s) -- receiver type is erased (int64_t). "

@@ -1,5 +1,43 @@
 # "Ambiguous method dispatch" error misleads when the real cause is a missing instance (and points at macros.tur for derive-emitted calls)
 
+**Status: RESOLVED (2026-07-21).** Both parts fixed in
+`src/compiler/elab_typeclasses.c` (+ a macro-call-site span in
+`elab_call.c`/`elab_internal.h`); full suite 2246 passed, 0 failed.
+
+- **Real cause diagnosed.** At the `TUR_E0020` fallback site, when the receiver's
+  static type is a *genuinely distinct concrete type* -- a positive whitelist:
+  `bool`, `cstr`, `float`/`float32`, `nil`, `sym`, the sized ints, or a
+  `TY_ADT` with a real def (structs / opaque newtypes / user ADTs) -- the
+  diagnostic is now the clean `TUR-E0015`: *"no instance of typeclass '<Class>'
+  for type '<type>' (method '.<m>'). Add (definstance <Class> [<type>] ...) or
+  dispatch on a type that has one."* The misleading `Show[?]` phantom and the
+  annotate/@TypeName hint are dropped. The **bare int64 carrier** (`:int`) is
+  deliberately EXCLUDED and keeps `TUR-E0020`, because a `:int` receiver is
+  indistinguishable from an erased value (`errors/hkt-dispatch-ambiguous`'s
+  `mk : int` really holds an option) -- there the ambiguity is genuine. Abstract
+  tyvars / carrier-erased element reads (`obj_is_abstract_tyvar`) also keep
+  `TUR-E0020`.
+- **Macro-emitted calls attributed to the call site.** A new
+  `Elab.macro_call_site_span` records the OUTERMOST macro call site (set when
+  `macro_expand_depth` goes 0->1). This diagnostic now primaries at the user's
+  `(derive-show-cstr HasBool ...)` line with a `note:` at the emitting macro
+  body, instead of primarying at `stdlib/macros.tur`. Scoped to this diagnostic,
+  so no other expansion-internal diagnostics move (unlike a blanket re-span).
+
+Verified against both repros below (A via derive -> user line + note; C direct
+`.show true` -> user line 5:41), the genuine-ambiguous fixtures still emit
+`TUR-E0020`, and a new regression fixture
+`tests/fixtures/errors/dispatch-concrete-receiver-no-instance/` guards the
+concrete-receiver path.
+
+**Note on Related (the silent segfault sibling,
+`method-dispatch-missing-instance-falls-back-to-carrier-representative.md`):**
+also RESOLVED (2026-07-21), in the same consolidated fix. The concrete-receiver
+"no instance" branch was extended to fire at `fallback_count == 1` (not just
+`> 1`), so a concrete distinct receiver that would otherwise bind the single
+carrier-compatible representative silently now errors cleanly instead. See that
+report's resolution note.
+
 **Severity:** low-medium (confusing but *caught* compile error; the silent
 sibling -- a segfault -- is tracked separately, see Related)
 

@@ -2703,6 +2703,17 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0) {
             emit_localvar_record_ctype(tmp, rcty);
             recorded = true;
+        } else if (rcty && strcmp(rcty, "void *") == 0) {
+            /* clang int-conversion (reverse straddle): a `void *`-returning call
+             * (an `extern-c ... :ptr` ascribed to an opaque carrier like String)
+             * whose __auto_type panic temp keeps the `void *` type.  Record it so
+             * a later `int64_t z = __ps_N;` / `return __ps_N;` straddle site (the
+             * carrier binder / int64-carrier return) can bridge through intptr_t.
+             * The existing concrete-pointer consumers all skip a `void *` entry
+             * (they gate on `!= "void *"`), so this only enables the new
+             * void*->int64 carrier bridges and is otherwise inert. */
+            emit_localvar_record_ctype(tmp, rcty);
+            recorded = true;
         }
         /* Ctor result: a parametric heap-ADT ctor (`ctor_Line`) returns the
          * concrete `tur_adt_Line *` even though its `(Line ..)` type c-names to the
@@ -5021,6 +5032,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * int)` closure (`void *`) -- the cast is still needed. */
                         needs_fn_cast = true;
                         cast_to_void_ptr = false;
+                    } else if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS)
+                               && matched_spec
+                               && emit_type_c_name(ctx, matched_spec->arg_types[i])
+                               && strcmp(emit_type_c_name(ctx,
+                                            matched_spec->arg_types[i]),
+                                         "void *") == 0) {
+                        /* clang int-conversion (witness-arg straddle): a tyvar
+                         * param that the matched spec grounded to `void *` -- e.g. a
+                         * `void`-witness monomorph whose param is `void *witness`
+                         * (vec_empty_like's phantom witness) -- fed the int64
+                         * carrier.  `void *` <- int64 is `integer to pointer
+                         * conversion`, a hard error under clang's default
+                         * -Wint-conversion.  Bridge int64 -> void* through intptr_t
+                         * (value-preserving; the witness is a phantom the callee
+                         * never dereferences). */
+                        needs_fn_cast = true;
+                        cast_to_void_ptr = true;
                     } else if (pk == TY_CSTR && scalar_carrier_cty) {
                         /* unascribed-carrier-helper-read-collapses-element-tyvar:
                          * keep the carrier-int64 -> const char* reinterpret set

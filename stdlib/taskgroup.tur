@@ -474,7 +474,7 @@
   ((FiberBlock *)fiber)->task_group = (void *)g;
   ((FiberBlock *)fiber)->cancelled = g->cancelled;
 
-  return fiber;
+  return (int64_t)(intptr_t)fiber;
   ```)
 ;;; task-group-join -- wait for a specific spawned fiber to complete.
 ;;;
@@ -633,7 +633,7 @@
   typedef struct { void *tg; int ms; } TimeoutArg;
   TimeoutArg *arg = (TimeoutArg *)malloc(sizeof(TimeoutArg));
   if (!arg) { free(t); fprintf(stderr, "spawn-timeout: arg oom\n"); abort(); }
-  arg->tg = group;
+  arg->tg = (void*)(intptr_t)group;
   arg->ms = (int)ms;
 
   pthread_create(t, NULL, (void *(*)(void *))spawn_hytimeout_hythread_hyfn, arg);

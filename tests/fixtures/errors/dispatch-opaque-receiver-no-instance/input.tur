@@ -1,0 +1,11 @@
+;; method-dispatch-missing-instance: a `.method` call whose receiver is an
+;; opaque newtype that shares the int64 carrier with the ONLY in-scope instance
+;; (here Show[int]) must NOT silently bind that single carrier-compatible
+;; representative -- that is a wrong-instance dispatch that segfaults when the
+;; representative's layout differs.  It must report TUR-E0015 "no instance".
+(defclass Show [a] (show [x] : cstr))
+(definstance Show [int] (show [x] : cstr "int-inst"))
+(defopaque Widget :int)          ;; no Show[Widget] in scope
+(defn main [] : int
+  (let [w (:: 5 Widget)]
+    (do (println (.show w)) 0)))

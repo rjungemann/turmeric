@@ -1,0 +1,10 @@
+;; cps-cloneable-shift-under-serial-reset-misleading-e0016: a RESUMING cloneable
+;; (`cont`) shift lexically inside a `serial-reset` must report the flavor
+;; mismatch (the serial-reset's marshal substrate cannot host an in-memory
+;; multi-shot continuation) -- NOT the misleading "no enclosing reset /
+;; cross-function resume" wording (there IS an enclosing delimiter, just the
+;; wrong flavor).  Symmetric twin of the serial-cont-under-cloneable-reset case.
+(defn ck [k : cont] : int (+ (k 1) (k 2)))
+(defn main [] : int
+  (println (serial-reset (+ 10 (shift ck 0))))
+  0)

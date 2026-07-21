@@ -1,5 +1,33 @@
 # `tur eval '<expr>'` prints `#<fn main>` and never evaluates
 
+**Status: RESOLVED (2026-07-21).** Root cause was the top-level statement ->
+synthesized-`main` fold in `src/compiler/elab_toplevel.c` (`elaborate_program`),
+which graduated to default-on with the `cps-tramp-resume` experiment on
+2026-07-19 -- exactly the v0.30.0 regression this report suspected. The fold is a
+**compile-only** CPS/DK-backend transform: it rewrites a bare top-level statement
+into `(defn main [] : int (do <stmt> 0))` so a top-level effect handler reaches
+the CPS classifier. Under the tree-walking interpreter there is no CPS/DK backend,
+and the fold made `turi_eval` return the synthesized `main` closure (`#<fn main>`)
+instead of the expression's value; at the entry points that don't separately call
+`main` (`tur eval '<expr>'`, the non-interactive REPL) the statements never ran
+at all. The interactive product REPL was unaffected because it predates the
+graduation.
+
+**Fix:** gate the fold on `!g_interpret_mode` (one condition added at the fold's
+`if`), so the interpreter leaves top-level forms in place and evaluates each
+directly in `turi_eval_impl`'s loop -- side effects run and the last expression's
+value is returned. Verified: `tur eval '(+ 2 3)'` -> `5`,
+`tur eval '(println (+ 2 3))'` -> `5`, piped `tur repl` -> `=> 5` (+ side
+effects), bare atom / `(do ...)` / string / `(def ..)` all correct, and
+`tur interpret <file>` parity preserved (bare-statement file still runs; explicit
+`main` still invoked). `tests/run-flags.sh` eval tests (`eval-basic`,
+`eval-nil-silent`, `eval-error`, `eval-file`) -- red before, now green (78/0);
+full suite 2246 passed, 0 failed. The compiled-path fold is unchanged
+(`g_interpret_mode` is false there), so CPS/DK top-level-handle lowering keeps its
+byte-identical codegen.
+
+---
+
 **Severity:** medium -- the documented one-shot eval path is non-functional;
 non-interactive `tur repl` shows the same symptom. Interactive/product REPL
 (Trowel, which bundles v0.29.1) appears to work, so this may be a v0.30.0

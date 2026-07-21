@@ -5018,55 +5018,55 @@ static int64_t __inst_Show_show_bool(bool x) {
 
 static int64_t __inst_Show_show_int8(int8_t x) {
         char buf[8]; snprintf(buf, 8, "%d", (int)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_int16(int16_t x) {
         char buf[8]; snprintf(buf, 8, "%d", (int)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_int32(int32_t x) {
         char buf[16]; snprintf(buf, 16, "%d", x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_uint8(uint8_t x) {
         char buf[8]; snprintf(buf, 8, "%u", (unsigned)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_uint16(uint16_t x) {
         char buf[8]; snprintf(buf, 8, "%u", (unsigned)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_uint32(uint32_t x) {
         char buf[16]; snprintf(buf, 16, "%u", x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_uint64(uint64_t x) {
         char buf[24]; snprintf(buf, 24, "%llu", (unsigned long long)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_float(double x) {
         char buf[32]; snprintf(buf, 32, "%g", (double)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
 static int64_t __inst_Show_show_float32(float x) {
         char buf[32]; snprintf(buf, 32, "%g", (double)x);
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
@@ -5078,14 +5078,14 @@ static int64_t __inst_Show_show_String(int64_t x) {
 
 static int64_t __inst_Show_show_ptr_void(void * x) {
         struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)x;
-    if (res == NULL) { return (void*)tur_string_from_cstr("err"); }
+    if (res == NULL) { return (int64_t)(intptr_t)tur_string_from_cstr("err"); }
     char buf[48];
     if (res->is_ok) {
         snprintf(buf, 48, "ok(%lld)", (long long)res->ok_val);
     } else {
         snprintf(buf, 48, "err(%lld)", (long long)res->err_val);
     }
-    return (void*)tur_string_from_cstr(buf);
+    return (int64_t)(intptr_t)tur_string_from_cstr(buf);
     
 }
 
@@ -8254,7 +8254,7 @@ static int64_t replace(int64_t old, int64_t new) {
 static int64_t string_slfrom_hycstr(const char * s) {
         __auto_type __ps_195 = (tur_string_from_cstr(s));
         if (tur_panicking) return (int64_t){0};
-        return __ps_195;
+        return (int64_t)(intptr_t)__ps_195;
 }
 
 static int64_t string_slto_hycstr__cps(int64_t s, DK *__kont) {
@@ -8280,19 +8280,19 @@ __attribute__((unused)) static const char * string_slto_hycstr(int64_t s) {
 static int64_t string_sladopt_hycstr(const char * s) {
         __auto_type __ps_197 = (tur_string_adopt_cstr(s));
         if (tur_panicking) return (int64_t){0};
-        return __ps_197;
+        return (int64_t)(intptr_t)__ps_197;
 }
 
 static int64_t int_hy_gtstring(int64_t v) {
         __auto_type __ps_198 = (tur_string_from_int(v));
         if (tur_panicking) return (int64_t){0};
-        return __ps_198;
+        return (int64_t)(intptr_t)__ps_198;
 }
 
 static int64_t string_slretain(int64_t s) {
         __auto_type __ps_199 = (tur_string_retain((void *)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
-        return __ps_199;
+        return (int64_t)(intptr_t)__ps_199;
 }
 
 static int64_t string_slrelease__cps(int64_t s, DK *__kont) {
@@ -8495,37 +8495,37 @@ __attribute__((unused)) static bool string_slcontains_qu(int64_t s, int64_t need
 static int64_t string_slconcat(int64_t a, int64_t b) {
         __auto_type __ps_209 = (tur_string_concat((void *)(intptr_t)(a), (void *)(intptr_t)(b)));
         if (tur_panicking) return (int64_t){0};
-        return __ps_209;
+        return (int64_t)(intptr_t)__ps_209;
 }
 
 static int64_t string_slsubstring(int64_t s, int64_t start, int64_t len) {
         __auto_type __ps_210 = (tur_string_substring((void *)(intptr_t)(s), start, len));
         if (tur_panicking) return (int64_t){0};
-        return __ps_210;
+        return (int64_t)(intptr_t)__ps_210;
 }
 
 static int64_t string_slto_hyupper(int64_t s) {
         __auto_type __ps_211 = (tur_string_to_upper((void *)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
-        return __ps_211;
+        return (int64_t)(intptr_t)__ps_211;
 }
 
 static int64_t string_slto_hylower(int64_t s) {
         __auto_type __ps_212 = (tur_string_to_lower((void *)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
-        return __ps_212;
+        return (int64_t)(intptr_t)__ps_212;
 }
 
 static int64_t string_sltrim(int64_t s) {
         __auto_type __ps_213 = (tur_string_trim((void *)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
-        return __ps_213;
+        return (int64_t)(intptr_t)__ps_213;
 }
 
 static int64_t builder_slnew() {
         __auto_type __ps_214 = (tur_sb_new());
         if (tur_panicking) return (int64_t){0};
-        return __ps_214;
+        return (int64_t)(intptr_t)__ps_214;
 }
 
 static int64_t builder_slpush_hycstr_ex__cps(int64_t b, const char * s, DK *__kont) {
@@ -8602,7 +8602,7 @@ __attribute__((unused)) static int64_t builder_sllen(int64_t b) {
 static int64_t builder_slfinish(int64_t b) {
         __auto_type __ps_216 = (tur_sb_finish((void *)(intptr_t)(b)));
         if (tur_panicking) return (int64_t){0};
-        return __ps_216;
+        return (int64_t)(intptr_t)__ps_216;
 }
 
 static int64_t string_slautolink_hyhint() {

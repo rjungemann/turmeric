@@ -3997,6 +3997,22 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * a pointer return type is `pointer from integer` -- a hard error
              * under GCC >= 14.  Reinterpret to the return type (value-preserving). */
             buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
+        } else if (ret_is_int64_carrier && ret_val &&
+                   emit_str_is_bare_ident(ret_val) &&
+                   emit_localvar_lookup_ctype(ret_val) &&
+                   emit_localvar_lookup_ctype(ret_val)[
+                       strlen(emit_localvar_lookup_ctype(ret_val)) - 1] == '*') {
+            /* clang int-conversion (reverse straddle): the function returns the
+             * int64 carrier but the body value is a bare temp whose real emitted C
+             * type is a pointer -- a `void *`-returning `extern-c ... :ptr` ascribed
+             * to an opaque carrier (e.g. `(:: (tur_string_from_cstr s) String)`
+             * whose __auto_type panic temp is `void *`).  `return <void*>;` from an
+             * `int64_t` function is `pointer to integer conversion` -- a hard error
+             * under clang's default `-Wint-conversion` (and GCC >= 14 -Werror).
+             * Bridge through intptr_t (value-preserving; a no-op for a genuine
+             * int64 temp, which this branch never sees -- the recorded type is a
+             * pointer). */
+            buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

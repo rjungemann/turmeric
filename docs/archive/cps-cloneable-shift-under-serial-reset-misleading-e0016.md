@@ -2,10 +2,54 @@
 title: "cloneable (resuming) shift under a serial-reset reports a misleading TUR-E0016 instead of a flavor-mismatch error"
 category: Reported
 severity: low (misleading diagnostic on an exotic mixed-surface slip; rejection is correct, only the message misdirects -- no miscompile)
-status: open (found 2026-07-21, while landing cps-shift-reset-capability-folding item 1)
+status: RESOLVED (2026-07-21) -- fix directions item 1 landed; symmetric twin of the E0019 fix
 ---
 
 # cloneable shift under `serial-reset` -> misleading TUR-E0016
+
+## Resolution (2026-07-21)
+
+Fixed in `src/compiler/elab_effects.c` via the report's **Fix directions item 1**;
+full suite green (no regressions). At the resuming-shift gate
+`if (e->cloneable_reset_depth == 0)` (the branch that would fall into the
+cross-function `__Shift` desugar), a new guard checks
+`if (e->serial_reset_depth > 0)` FIRST and emits the real flavor-mismatch cause
+-- the exact mirror of the serial-cont-under-cloneable-reset `TUR-E0019`:
+
+> a `cont` (cloneable) shift receiver needs a cloneable-capable delimiter, but
+> the nearest enclosing reset is a `serial-reset` (whose marshal substrate cannot
+> host an in-memory multi-shot continuation)
+> = help: use a plain `reset` (it adopts the receiver's flavor) or
+> `cloneable-reset` to delimit a cloneable continuation
+
+**Why the coarse `serial_reset_depth > 0` check is sound** (it honours
+nearest-delimiter binding without the full stack unification of item 2): a plain
+`reset` AND a `cloneable-reset` BOTH bump `cloneable_reset_depth`
+(`elab_effects.c:208`, `:432`), so reaching the `cloneable_reset_depth == 0`
+branch means no plain/cloneable delimiter intervenes -- hence
+`serial_reset_depth > 0` there implies the NEAREST enclosing delimiter is the
+serial-reset. The nested `reset`-in-`serial-reset` case bumps
+`cloneable_reset_depth` at the inner `reset` and never reaches the guard (verified:
+it now hits the pre-existing heterogeneous-nesting `TUR-E0710`, unchanged by this
+fix), and the abortive (ignore-k) shift returns via the abort route above the
+gate and never reaches it either.
+
+Verified against the minimal repro and every boundary case named below:
+- resuming `shift` under `serial-reset` -> new flavor-mismatch message (was the
+  misleading cross-function E0016);
+- inline receiver `(shift (fn [k : cont] ...) 0)` under `serial-reset` -> same
+  new message;
+- the identical shift under a plain `reset` still runs (`=> 23`);
+- a genuine cross-function resume (no enclosing delimiter anywhere,
+  `serial_reset_depth == 0`) keeps the legacy cross-function `TUR-E0016`;
+- `errors/cloneable-shift-outside-reset` (the literal-keyword no-reset case)
+  keeps its wording.
+
+Regression fixture: `tests/fixtures/errors/cloneable-shift-under-serial-reset/`.
+The **Related** heterogeneous-nesting `TUR-E0706`/`TUR-E0710` note below stays as
+recorded (pre-existing, out of scope, not worth its own fix ahead of v1).
+
+---
 
 ## Summary
 

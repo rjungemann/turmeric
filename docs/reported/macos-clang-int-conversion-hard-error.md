@@ -93,3 +93,44 @@ Verify by re-running `Test (macos-latest)` (or locally:
 Discovered while triaging CI on the `cps-reopen-perform-onode-leak` PR; the
 leak fix is unrelated and its own CI legs (ubuntu fixture suite, codegen
 snapshots) are green.
+
+## Progress (2026-07-21): Track 1 sites fixed + emit-side String/witness bridges; ~94 -> 22
+
+Landed the well-scoped Track-1 site fixes plus three emit-side bridges. A broad
+clang sweep (`tur emit-c <fixture> | clang -std=c99 -Wall -c`) over the fixture
+tree shows fixtures-with-straddles dropped from ~94 to **22**. Full gcc suite
+green (2246 passed, 0 failed).
+
+Fixed:
+
+- **`stdlib/typeclass-show.tur`** (all 11 `Show [..] : String` inline-C returns):
+  `return (void*)tur_string_from_cstr(...)` ->
+  `return (int64_t)(intptr_t)tur_string_from_cstr(...)`. Clears the bulk named
+  here (`string-basic`, `derive-show-string-interp`, `show-string-owned-interp`,
+  etc.).
+- **`stdlib/taskgroup.tur:477/636`**: `return fiber;` ->
+  `return (int64_t)(intptr_t)fiber;`; `arg->tg = group;` ->
+  `arg->tg = (void*)(intptr_t)group;`. Clears `taskgroup-*`.
+- **Emit-side panic-temp return** (`emit_expr.c` record + `emit_fns.c` reverse
+  return-bridge): a `void *`-returning extern ascribed to an opaque carrier
+  (`String`) returned through the int64 slot now bridges. See
+  `docs/reported/compiled-string-return-int-conversion.md` progress note.
+- **Emit-side `vec_empty_like` witness arg** (`emit_expr.c`): int64 carrier passed
+  to a `void *witness` param now bridges `(void *)(intptr_t)`. Clears
+  `vec-captureless-fat-closure-readback`, `vec-multiword-struct-*`.
+
+**Remaining 22 (report stays OPEN):** a distinct long tail of
+carrier-representation straddles at OTHER positions -- int64 <-> a *concrete*
+parametric-struct pointer (`tur_adt_Vec__int *`, `tur_adt_Map__String__int *`,
+...) in arg / assignment / return / init position, plus void*<->int64 binder
+inits. Sample fixtures: `string-int`, `schan-worker-pool` (6),
+`show-wrapper-helper-dispatch` (3), `make-struct-parametric-fn-field-infer` (3),
+`digest-hex` (2), `dot-parametric-fn-field-call` (2),
+`show-collections-content-hamt` (3), `cloneable-owning-*`, `session-effects`,
+`stdlib-lens-record-field`, `path-string`, `string-slice`, `string-map-key`,
+`string-reader-macro`, `reactor-fibers-park-chan`. Each is a separate emit-site
+carrier bridge (arg-coercion / binder-init / return position); they share the
+`gcc14-int-conversion (carrier-representation-tracking)` machinery but are not the
+String-return shape fixed above. The `-Wno-error=int-conversion` /
+`-Wno-error=incompatible-pointer-types` stopgap in `src/main.c` therefore stays
+until this tail is drained.

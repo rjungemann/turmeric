@@ -1328,7 +1328,20 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
      * main()` path (never subject to the CPS classifier) stays the flag-off
      * behaviour; the fold only fires under the experiment, keeping flag-off
      * codegen byte-identical. */
-    if (g_opt_cps_tramp_resume && !separate_compilation && stdlib_prefix <= nforms) {
+    /* Interpreter parity (tur-eval-prints-fn-main): the tree-walking interpreter
+     * never reaches the CPS/DK backend this fold exists to feed, and folding a
+     * bare top-level expression into `(defn main [] : int (do <expr> 0))` makes
+     * turi_eval return the synthesized `main` closure (`#<fn main>`) instead of
+     * the expression's value -- and, at the non-`main`-calling entry points
+     * (`tur eval '<expr>'`, the non-interactive REPL), the statements never run
+     * at all.  Under the interpreter every top-level form is evaluated directly
+     * in turi_eval_impl's loop, so leaving statements top-level both runs their
+     * side effects and surfaces the last expression's value.  The fold graduated
+     * to default-on with `cps-tramp-resume` (2026-07-19), which is what regressed
+     * the interpreter eval/REPL value display; suppress it under g_interpret_mode
+     * to restore correct value semantics while keeping the compiled-path fold. */
+    if (g_opt_cps_tramp_resume && !g_interpret_mode
+        && !separate_compilation && stdlib_prefix <= nforms) {
         /* Collect every defmacro name (user + stdlib) so a macro-headed
          * top-level statement can be detected.  Also record each macro's
          * defmacro form so a statement-producing macro (template head is a
