@@ -536,6 +536,38 @@ bool expr_subtree_has_inline_c(const Expr *e) {
         case EX_ASCRIBE: return expr_subtree_has_inline_c(e->as.ascribe_.inner);
         case EX_CAST:    return expr_subtree_has_inline_c(e->as.cast_.expr);
         case EX_RETURN:  return expr_subtree_has_inline_c(e->as.return_.value);
+        /* Effect / continuation / imperative nodes: walk every sub-expression
+         * rather than hitting the conservative default:true.  Modeling these
+         * lets a COLORED function body (one that uses handle/perform/resume) be
+         * recognized as inline-C-free, so its fn-params are eligible for the
+         * non-retaining-callee inference (nonretain_param_mask) -- without
+         * modeling, any effectful body was treated as possibly-storing a param
+         * in C, needlessly disabling the closure-arg free (the make-scaler env
+         * leak on the CPS/colored path, cps-backend-fn-param).  Each case walks
+         * ALL of the node's Expr children so a real inline-C block anywhere
+         * inside is still found; anything NOT modeled keeps default:true. */
+        case EX_PERFORM:
+            for (uint8_t i = 0; i < e->as.perform_.perform->n_args; i++)
+                if (expr_subtree_has_inline_c(e->as.perform_.perform->args[i])) return true;
+            return false;
+        case EX_HANDLE:
+            if (expr_subtree_has_inline_c(e->as.handle_.handle->body)) return true;
+            for (uint8_t i = 0; i < e->as.handle_.handle->n_cases; i++)
+                if (expr_subtree_has_inline_c(e->as.handle_.handle->cases[i].body)) return true;
+            return false;
+        case EX_RESUME:
+            return expr_subtree_has_inline_c(e->as.resume_.resume->k)
+                || expr_subtree_has_inline_c(e->as.resume_.resume->value);
+        case EX_DISCONTINUE:
+            return expr_subtree_has_inline_c(e->as.discontinue_.discontinue->k)
+                || expr_subtree_has_inline_c(e->as.discontinue_.discontinue->exception);
+        case EX_AWAIT:
+            return expr_subtree_has_inline_c(e->as.await_.fut_expr);
+        case EX_WHILE:
+            return expr_subtree_has_inline_c(e->as.while_.cond)
+                || expr_subtree_has_inline_c(e->as.while_.body);
+        case EX_SET:
+            return expr_subtree_has_inline_c(e->as.set_.value);
         default:
             /* Unmodeled kind -- conservatively assume it may hide inline-C. */
             return true;

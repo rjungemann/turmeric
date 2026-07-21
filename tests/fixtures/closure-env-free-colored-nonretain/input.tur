@@ -1,0 +1,31 @@
+;; closure-drop-glue: a fresh-returning capturing closure passed to a
+;; NON-retaining fn-param of a COLORED (effect-handling) callee is now freed at
+;; the caller's scope exit.
+;;
+;; `run-with` handles E, so it is colored / CPS-lowered.  Its `^fat h` param is
+;; only CALLED (never stored/returned), so the non-retaining-callee inference
+;; (nonretain_param_mask) should mark it borrowable and let the caller reclaim
+;; the make-scaler env after the call.  Before the fix, expr_subtree_has_inline_c
+;; hit its conservative default:true for the `handle`/`resume` nodes in the body,
+;; so EVERY effectful body was treated as possibly-storing a param in inline-C --
+;; disabling the inference and leaking the fresh closure env (the make-scaler
+;; leak on the colored path).  Now the effect nodes are modeled precisely, so the
+;; inference fires and main hoists+frees the env.  Verified valgrind-clean
+;; (definitely-lost: 0).
+
+(defeffect E [] :float)
+
+(defn g [] : float
+  (perform (E)))
+
+(defn run-with [^fat h : (fn [float] #fx{} float) x : float] : float
+  (let [n (handle (g) (E [] k) (resume k 1.0))]
+    (h {x + n})))
+
+(defn make-scaler [k : float] : (fn [float] float)
+  (fn [x : float] : float (* x k)))
+
+(defn main [] : int
+  ;; resume delivers 1.0, so h(x + 1.0) = (1.6 + 1.0) * 2.0 = 5.2
+  (println (run-with (make-scaler 2.0) 1.6))
+  0)
