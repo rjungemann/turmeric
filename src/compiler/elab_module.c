@@ -304,6 +304,20 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
     /* Phase M4: capture the DefModule so we can check its export list for macros. */
     const DefModule *loaded_defmod = NULL;
 
+    /* Pass 1: forward-declare every bare top-level (defn ...) in this imported
+     * module's (post-load-expansion) form list, exactly as elaborate_program
+     * does for the entry unit.  Bare top-level defns spliced here by a
+     * `(load "stdlib/...")` -- e.g. the reentrant string<->typeclass chain that
+     * pulls stdlib/typeclass-show.tur's self-recursive `vec-show-loop` into an
+     * imported module -- would otherwise elaborate linearly below with no
+     * forward decl, so a self/mutual call in the body reports "unknown function
+     * or operator".  Defns nested inside a (defmodule ...) are skipped here
+     * (their head is defmodule, not defn) and forward-declared by elab_module's
+     * own Pass 1.  See docs/archive/compiled-string-return-int-conversion.md. */
+    for (uint32_t i = 0; i < nforms; i++) {
+        elab_pre_declare_toplevel_defn(e, e->arena, forms[i]);
+    }
+
     for (uint32_t i = 0; i < nforms; i++) {
         Expr *ex = elab_form(e, forms[i]);
         if (!ex) {

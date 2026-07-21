@@ -1,0 +1,19 @@
+;; Entry: import a module that (load "stdlib/string.tur")s and returns owned
+;; Strings, then exercise both the imported String API and `show` on a Vec
+;; (which is what pulls the reentrant-loaded `vec-show-loop` into play).
+;; Expected:
+;;   hello
+;;   WORLD
+;;   [1 2 3]
+(defmodule prog
+  (import greetlib/greeter :refer [greet shout])
+  (defn emit [s : String] : void
+    (do
+      (println (string/to-cstr s))
+      (string/release s)))
+  (defn main [] : int
+    (do
+      (emit (greet "hello"))
+      (emit (shout "world"))
+      (emit (show (vec-of 1 2 3)))
+      0)))
