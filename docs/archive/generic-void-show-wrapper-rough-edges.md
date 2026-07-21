@@ -3,11 +3,14 @@
 **Severity:** low (both are narrow; each has an easy call-site workaround, used in
 the stage-4 fixtures)
 
-**Status: both edges OPEN (2026-07-21).** Edge 1 unchanged. Edge 2's void-temp
-COMPILE error is fixed in code, but that fix alone UNMASKS a coupled silent
-misdispatch (a generic `^Show a` wrapper in a CPS-lowered helper renders garbage
-for non-int types) -- so Edge 2 is not resolved; the two must be fixed together.
-See "Edge 2" below.
+**Status: ARCHIVED (2026-07-21) -- superseded by a plan; both edges still OPEN.**
+The work is now tracked in
+`docs/upcoming/generic-show-wrapper-cps-monomorphization-plan.md`, which sequences
+the coupled Edge 2 fix (void-temp compile fix + wrapper monomorph/dict dispatch,
+which must land together) and Edge 1 (unresolved-element ICE). This file is
+retained as the original defect record + repros; the plan is the live tracking
+artifact. The Edge 2a void-temp fix was landed then reverted (commit `71b5cef`)
+to avoid shipping the 2a-without-2b silent miscompile.
 
 `show-line` and `print-show` (stdlib/typeclass-show.tur) are generic `^Show a`
 wrappers that `(show x)` an owned String, print it, release it, and return
