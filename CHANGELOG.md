@@ -4,6 +4,24 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.2] -- 2026-07-21
+
+### Fixed
+
+- **`void*`/`int64_t` carrier straddles for `String` returns**: compiled
+  `String`-returning functions (and taskgroup handles) emitted C that straddled
+  `void*` and `int64_t`, which clang's default `-Wint-conversion` and GCC 14+
+  `-Werror` reject as a hard error -- blocking AOT-compiled use of the owned
+  `String` type and reddening the macOS CI leg. The `Show [..] : String`
+  inline-C bodies, the `emit_expr`/`emit_fns` return paths, and the
+  phantom-witness carrier now bridge through `(int64_t)(intptr_t)` /
+  `(void*)(intptr_t)` (#699). This also fixes interactive `show` of results in
+  `tur repl`: expressions such as `(+ 40 2)` previously displayed a corrupted
+  value (e.g. `#<fn main>`) instead of `42`.
+- **Additional macOS codegen fixes**: further carrier-straddle and CPS-IR emit
+  fixes surfaced by the macOS toolchain (`emit_expr.c`, `emit_cps_ir.c`,
+  `main.c`).
+
 ## [0.30.1] -- 2026-07-21
 
 ### Fixed

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.1` -- codegen and CPS fixes: generic show-wrapper monomorphization, an rc-field double-free, and an O(N) effect-loop leak, plus a new strings guide.
+**Latest release:** `v0.30.2` -- fixes `void*`/`int64_t` carrier straddles for `String` returns (#699), unblocking AOT-compiled `String` use and correcting interactive `show` of results in `tur repl`, plus additional macOS codegen fixes.
 
 ## What
 
