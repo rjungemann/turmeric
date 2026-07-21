@@ -71,60 +71,92 @@ by comparing each call arg's **C type name** against `spec->arg_types[j]` --
 != TY_STRUCT) continue;`, line 4535) and only returns a clone when EXACTLY ONE
 spec matches (`n_hit == 1`, line 4542).
 
-For `(show-line c)` the element (`String`/`Vec`/...) rides the `int64_t` carrier
-at the call site (the atom is `(int64_t)(intptr_t)c`), so:
+### Pinned failure points (instrumented 2026-07-21)
 
-- The per-element clones all present as arg C type `int64_t`. The discriminating
-  loop cannot tell `Show[String]` from `Show[Vec]` -- they collide on the carrier.
-  The clone mangling itself reflects this: the emitted clone is
-  `show_line__spec__void_int64_t` (return `void`, arg `int64_t`), a name that does
-  not encode the element type.
-- The `CT_TAILCALL` arm only calls `find_mono_clone_for_call` at all when the
-  callee's `SEnt` has `mono_template` set (`src/compiler/emit_cps_ir.c:5250-5255`);
-  otherwise `fn = callee_name(...)` = the generic base clone directly.
+The `CT_TAILCALL` arm was instrumented on the repros (`show-line` on
+`String`/`Vec`/`cstr`, in a helper vs `main`; the void-temp fix temporarily
+re-applied so they compile). Findings, with evidence:
 
-The discriminator that DOES distinguish the clones already exists on the spec but
-is unused here: `EmitAbiSpecialization` carries `bindings[]` (the tyvar->concrete
-type binding, `emit_internal.h:117`) and `typeclass_inst`
-(`struct TypeClassInstance *`, set for typeclass-instance-method specs by
-`emit_abi_intern_spec`, `emit_internal.h:163`). The call site carries the resolved
-instance via its `dict_arg` (`EX_DICT`). So the fix is to discriminate the
-wrapper's clones by the **instance / tyvar binding**, not the carrier arg C type.
+| case | ctx | `fe->mono_template` | forced `find_mono_clone_for_call` | clone-body dispatch | `<clone>__cps` emitted | render |
+| --- | --- | --- | --- | --- | --- | --- |
+| String | helper | **0** | returns `show_line__spec__void_int64_t` (correct) | `__inst_Show_show_String` (correct) | **no** | garbage |
+| Vec | helper | **0** | returns `show_line__spec__void_tur_adt_Vec__int__` (correct) | `__inst_Show_show_Vec__spec__...` (correct) | **no** | garbage |
+| cstr | helper | 1 | returns `show_line__spec__void_const_char` | **`__inst_Show_show_int` (WRONG)** | yes | garbage |
+| cstr | main | (clone used) | -- | **`__inst_Show_show_int` (WRONG)** | -- | garbage |
+| String | main | (never reaches arm; direct-inlined) | -- | inlined `__inst_Show_show_String` | -- | correct |
 
-**Task 1 of Phase 2 pins the EXACT failure point** among these candidates (they
-are not mutually exclusive): (a) `fe->mono_template` false so the lookup never
-runs; (b) `find_mono_clone_for_call` returns NULL because the carrier args are
-non-discriminating and >1 spec ties; (c) the clone NAME collides across element
-types (`show_line__spec__void_int64_t` for both `String` and `Vec`) so a program
-using the wrapper at two element types would emit one clone and mis-call the
-other. A quick instrumentation of the arm on the repro settles it before code
-changes.
+This pins **two distinct root causes** (the earlier "three candidates" guess was
+wrong -- clone-name collision and `find_mono_clone_for_call` returning NULL are
+NOT the cause):
+
+- **RC1 -- nominal element types (`String`, `Vec`, ...): the `mono_template`
+  gate.** `ent_of_binding(fn)->mono_template` is **0** for the wrapper, so the
+  arm's `if (fe && fe->mono_template)` guard (`emit_cps_ir.c:5252`) skips
+  `find_mono_clone_for_call` entirely and falls to
+  `fn = callee_name(...)` = the generic base clone `show_hyline`, whose body bakes
+  the int carrier rep `__inst_Show_show_int`. The correct per-element clone EXISTS,
+  the lookup RETURNS it when the gate is bypassed, and the clone's BODY dispatches
+  correctly (String -> `__inst_Show_show_String`, Vec ->
+  `__inst_Show_show_Vec__spec__...`). So RC1 is *purely* the gate.
+  - **Coupled catch (RC1b):** naively removing the gate is not a fix. With the
+    gate bypassed the arm takes its `mclone` -> cps->cps branch, emitting
+    `return <clone>__cps(...)` -- but the `__cps` variant of the wrapper spec clone
+    is **not emitted** (`show_line__spec__void_int64_t__cps` is an undefined
+    reference; link error confirmed). The correct routing is the DIRECT clone
+    (`<clone>`, which IS emitted) via a cps->direct call, not cps->cps.
+
+- **RC2 -- carrier-scalar element types (`cstr`, and by inference `bool`/sized
+  ints): the mono-clone BODY dispatches to the int rep.** For `cstr` the gate is
+  fine (`mono_template=1`) and the correct-named clone `show_line__spec__void_const_char`
+  is selected, but the clone's own body calls `__inst_Show_show_int((int64_t)x)`
+  instead of `__inst_Show_show_cstr` -- the internal `show` dispatch fell to the
+  int carrier representative among the primitives that share the int64 carrier.
+  This garbles in `main` too (independent of the CPS gate). It is a mono-clone-body
+  ABI-specialization bug, NOT a call-site resolution bug, and is the same
+  carrier-representative dispatch class as
+  `docs/reported/method-dispatch-missing-instance-falls-back-to-carrier-representative.md`
+  -- surfacing here inside a wrapper clone body.
+
+The discriminator that distinguishes the per-element clones already exists on the
+spec: `EmitAbiSpecialization.bindings[]` (the tyvar->concrete-type binding,
+`emit_internal.h:117`) and `typeclass_inst` (`emit_internal.h:163`, NULL for an
+ordinary `^Show a` defn like `show-line`). The call site also carries the resolved
+instance via `dict_arg` (`EX_DICT`). RC2's fix must key the clone body's inner
+`show` dispatch on that binding/instance rather than the carrier rep.
 
 ## Strategy
 
-Two viable approaches; Phase 2 Task 1 chooses between them on the basis of what
-Task 1 pins, but the default recommendation is **A** (least new machinery, matches
-the existing spec model):
+The pin above resolves what was uncertain, so the strategy is now concrete and
+split by root cause:
 
-- **A. Instance/binding-keyed clone selection.** Give the `CT_TAILCALL`
-  `cps->direct` (and `CT_LETCALL`) arms a dict/binding-aware clone lookup: match
-  the call's `dict_arg` instance (and/or the spec's `bindings[]` tyvar binding)
-  against `spec->typeclass_inst` / `spec->bindings[]`, so `Show[String]` and
-  `Show[Vec]` resolve to distinct clones even though both args are the `int64_t`
-  carrier. Requires the per-element clone NAME to encode the element/instance
-  (fix the `void_int64_t` collision) so two element types in one program get
-  distinct symbols.
+- **RC1 (nominal types -- `String`/`Vec`/...): make the wrapper participate in
+  mono-clone dispatch, routed to the DIRECT clone.** The clone and its correct
+  body already exist; the fix is to (i) admit the wrapper through the
+  `mono_template` gate (or add a wrapper-aware branch that runs
+  `find_mono_clone_for_call` regardless), and (ii) when a clone resolves for a
+  callee that has no emitted `__cps` variant, route to the direct clone via the
+  cps->direct path (bare/`__auto_type` call, or the void bare-call from Edge 2a)
+  rather than the cps->cps `<clone>__cps` branch. No new discriminator machinery
+  is needed for RC1 -- `find_mono_clone_for_call` already returns the right clone;
+  the clone-name-collision worry only bites when two DISTINCT carrier-mangled
+  element types (e.g. `String` and an opaque `:int` newtype, both `void_int64_t`)
+  appear in ONE program (Task 2.5 covers it, lower priority).
 
-- **B. Runtime dict threading.** Thread the `Show` dict as a runtime argument
-  through the wrapper's `cps` entry (like the M4/M6 per-method ABI work) so the
-  wrapper dispatches `show` through the passed dict rather than a baked instance.
-  Heavier, but removes the monomorph-per-type explosion. Prefer only if Task 1
-  shows the clone model cannot be made unambiguous cheaply.
+- **RC2 (carrier-scalar types -- `cstr`/`bool`/sized ints): fix the clone BODY's
+  inner `show` dispatch.** The clone is selected correctly; its body must dispatch
+  `(show x)` to the element's instance (`__inst_Show_show_cstr`) rather than the
+  int carrier representative. This is the harder half -- it lives in the
+  ABI-specialization of the clone body (the same carrier-representative dispatch
+  machinery as the method-dispatch report) and may need the spec's `bindings[]`
+  to steer the inner method dispatch. Prior art:
+  `docs/upcoming/v2/` M4/M6/M7 typeclass-ABI plans (per-instantiation dict
+  singletons, HKT carrier carve-out); `emit_abi_intern_spec`'s `typeclass_inst`
+  tagging; and `emit_reresolve_method_call` / `emit_reresolve_disp_type`, which
+  already re-dispatch a carrier-erased method per ABI spec elsewhere.
 
-Relevant prior art to mirror / not duplicate:
-`docs/upcoming/v2/` M4/M6/M7 typeclass-ABI plans (per-instantiation dict
-singletons, HKT carrier carve-out), and `emit_abi_intern_spec`'s existing
-`typeclass_inst` tagging.
+RC1 and RC2 are independent and can land in either order, but the void-temp fix
+(Phase 1) must not ship until BOTH are done (RC1 unmasks nominal-type garbage;
+RC2 the carrier-scalar garbage) -- else Phase 1 alone is a silent miscompile.
 
 ## Phases
 
@@ -153,29 +185,57 @@ singletons, HKT carrier carve-out), and `emit_abi_intern_spec`'s existing
   resolve to a concrete per-element clone emits a **hard compile diagnostic**
   (see Phase 3), never the silent carrier-rep call -- i.e. keep the failure loud.
 
-### Phase 2 -- Correct wrapper clone selection (Edge 2b) [core]
+### Phase 2 -- RC1: route nominal-type wrapper calls to the direct clone [core]
 
-- **2.1 (pin the failure)** Instrument the `CT_TAILCALL` arm on repro A: log
-  `fe != NULL`, `fe->mono_template`, the `find_mono_clone_for_call` candidate
-  count and returned name, and the emitted clone names for `show-line`. Decide
-  approach A vs B from the result. Record findings in the progress log.
-- **2.2 (clone naming)** If clones collide on `void_int64_t`, extend the clone
-  mangling for a typeclass-wrapper spec to encode the element type / instance
-  (reuse `spec->bindings[]` / `spec->typeclass_inst`), so `Show[String]` and
-  `Show[Vec]` clones get distinct symbols. Verify a single program using
-  `show-line` at two element types emits two clones.
-- **2.3 (selection)** Add an instance/binding-aware branch to
-  `find_mono_clone_for_call` (or a sibling used by the wrapper arm): when the
-  callee is a `^Class a` wrapper and args are carrier-erased, discriminate by the
-  call's `dict_arg` instance against `spec->typeclass_inst` (and/or the tyvar
-  binding), instead of the arg C type. Preserve the existing arg-C-type path for
-  non-wrapper generics (no behavior change there).
-- **2.4 (gate)** Ensure the `mono_template` gate at `emit_cps_ir.c:5250` admits
-  the wrapper so the lookup actually runs; if the wrapper is not registered as a
-  mono_template, register it (mirror how `main`/direct path specializes it).
-- **2.5** Apply the same selection fix to the `CT_LETCALL` arm
-  (`emit_cps_ir.c:5170`) if a non-tail wrapper call exhibits the same collision
-  (value-returning `^Class a` wrappers, e.g. a future `render-line`-style).
+(The failure is already pinned -- see "Pinned failure points". This phase fixes
+RC1: `String`/`Vec`/... in a helper. Task 2.1's old "instrument to pin" job is
+DONE; the instrumentation approach is preserved below as the verification method.)
+
+- **2.1 (admit the wrapper through the gate)** In the `CT_TAILCALL` arm
+  (`emit_cps_ir.c:5250-5255`), the `if (fe && fe->mono_template)` guard is what
+  skips the (working) `find_mono_clone_for_call` for `show-line`. Either (a) set
+  `mono_template` on the wrapper's `SEnt` where the direct/`main` path already
+  specializes it, or (b) add a wrapper-aware condition that runs the lookup even
+  when `mono_template` is 0. Confirm with the instrumentation (`TUR_DBG_WRAP`-style
+  probe used in the pin) that `find_mono_clone_for_call` now returns the clone.
+- **2.2 (route to the DIRECT clone, not cps->cps)** Critical coupling (RC1b): when
+  a clone resolves but its `<clone>__cps` variant is NOT emitted (true for these
+  wrapper specs -- `show_line__spec__void_int64_t__cps` is an undefined reference),
+  the arm must take the cps->direct path calling the DIRECT clone `<clone>`, not
+  the cps->cps `return <clone>__cps(...)` branch (`emit_cps_ir.c:5257,5271`).
+  Options: (a) gate the cps->cps branch on "the callee has an emitted `__cps`
+  variant" and fall to cps->direct otherwise; or (b) emit the `__cps` variant for
+  wrapper spec clones. Prefer (a) -- smaller, and the direct clone body is already
+  correct for nominal types. Combine with the Edge 2a void bare-call so a
+  `:void` direct clone call emits `<clone>(...)` + deliver `0`.
+- **2.3 (verify)** `show-line`/`print-show` on `String`/`Vec`/`Set`/`Map` in a
+  helper now render correctly and link. Non-void `show` in a helper (already
+  correct) must be unaffected.
+
+### Phase 2b -- RC2: fix the carrier-scalar clone-body dispatch [core]
+
+(Independent of Phase 2; fixes `cstr`/`bool`/sized-int, which garble even in
+`main` because the clone BODY bakes `__inst_Show_show_int`.)
+
+- **2b.1** Trace how the wrapper clone body's inner `(show x)` is ABI-specialized
+  when the element is a carrier-scalar (`cstr`). Identify where it resolves to the
+  int carrier representative instead of the element's instance -- the
+  representative-selection is the same class as
+  `method-dispatch-missing-instance-falls-back-to-carrier-representative.md`, here
+  reached inside a clone body via `emit_reresolve_method_call`.
+- **2b.2** Steer the inner dispatch by the spec's `bindings[]` (the tyvar->`cstr`
+  binding for this clone) so the body calls `__inst_Show_show_cstr`. Ensure `int`
+  itself still resolves to `__inst_Show_show_int` (do not break the one case that
+  currently works).
+- **2b.3 (clone-name collision, lower priority)** Two DISTINCT carrier-mangled
+  element types in ONE program share the `void_int64_t` clone symbol (e.g. `String`
+  + an opaque `:int` newtype). Encode the element/instance in the wrapper clone
+  mangling (reuse `spec->bindings[]`) so they get distinct symbols. Only bites
+  multi-element-type programs; verify with a fixture that uses `show-line` at two
+  carrier-mangled types.
+- **2b.4** Apply the same body-dispatch fix to `print-show` and any other
+  `^Show a` wrapper, and to the `CT_LETCALL` arm (`emit_cps_ir.c:5170`) for a
+  value-returning `^Class a` wrapper if one exists.
 
 ### Phase 3 -- Guardrail against silent carrier-rep fallback
 
@@ -211,7 +271,7 @@ singletons, HKT carrier carve-out), and `emit_abi_intern_spec`'s existing
   `show-wrapper-helper-<type>` for `String`/`Vec`/`Set`/`Map`/`cstr`, each
   asserting the correct render from a helper `defn` (the shape that used to
   garble); plus a `show-wrapper-two-element-types` fixture exercising the
-  clone-naming fix (2.2); plus the Edge 1 fixture (correct render or clean
+  clone-naming fix (2b.3); plus the Edge 1 fixture (correct render or clean
   diagnostic).
 - **5.2** ASan/valgrind pass on the wrapper-in-helper fixtures (owned-String
   render + release; no leak, no double free).
@@ -237,4 +297,17 @@ singletons, HKT carrier carve-out), and `emit_abi_intern_spec`'s existing
 
 - 2026-07-21 -- Plan created from the archived report. Edge 2a fix authored then
   reverted (commit `71b5cef`) to avoid shipping the 2a-without-2b silent
-  miscompile. No plan phase started yet.
+  miscompile.
+- 2026-07-21 -- **Failure point PINNED** (Phase 0 baseline + old Phase 2.1
+  instrumentation, done). Temporarily re-applied the Edge 2a void fix and
+  instrumented the `CT_TAILCALL` arm (`TUR_DBG_WRAP` probe: callee, `fe`,
+  `mono_template`, a forced `find_mono_clone_for_call`, and the matching specs;
+  plus a `TUR_DBG_NOGATE` probe bypassing the gate). All instrumentation removed
+  afterward (`emit_cps_ir.c` back to HEAD; nothing landed). Results are in
+  "Pinned failure points": TWO root causes -- **RC1** = the `mono_template=0` gate
+  skips a working clone lookup for nominal types (`String`/`Vec`), coupled with a
+  missing `<clone>__cps` variant (route to the DIRECT clone); **RC2** = the
+  carrier-scalar (`cstr`) clone BODY bakes `__inst_Show_show_int` (garbles in
+  `main` too, independent of the gate). The earlier "three candidates" guess was
+  wrong: clone-name collision and `find_mono_clone_for_call` returning NULL are
+  NOT the cause. Phases 2 / 2b rewritten around RC1 / RC2.
