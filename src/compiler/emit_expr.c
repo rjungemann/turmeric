@@ -1437,6 +1437,13 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * non-escaping caught Result boxes to tur_result_box_free at scope exit. */
     char **box_free_names = NULL;
     uint32_t n_box_free = 0;
+    /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
+     * by-value struct locals the elaborator flagged `drops_fn_fields` -- their
+     * boxed fn-field handles are freed via `drop_fnfields_<T>(&name)` at scope
+     * exit (rc/ref fields are handled by the elaborator's injected defers). */
+    char **fnfld_names = NULL;
+    char **fnfld_types = NULL;
+    uint32_t n_fnfld = 0;
     if (!body_has_return_or_throw) {
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
             if (let_binding_env_freeable(e, i)) {
@@ -1449,6 +1456,23 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                   (n_box_free + 1) * sizeof(char *));
                 box_free_names[n_box_free++] =
                     name_for_binding(ctx, e->as.let_.bindings[i].binding);
+            } else {
+                const Binding *sb = e->as.let_.bindings[i].binding;
+                if (!sb || !sb->drops_fn_fields || sb->type.kind != TY_ADT ||
+                    !sb->type.as.adt_.def)
+                    continue;
+                char *mn = mangle_field_name(sb->type.as.adt_.def->name);
+                size_t tl = strlen(mn) + 16;
+                char *tn = (char *)malloc(tl);
+                snprintf(tn, tl, "tur_adt_%s", mn);
+                free(mn);
+                fnfld_names = (char **)realloc(fnfld_names,
+                                               (n_fnfld + 1) * sizeof(char *));
+                fnfld_types = (char **)realloc(fnfld_types,
+                                               (n_fnfld + 1) * sizeof(char *));
+                fnfld_names[n_fnfld] = name_for_binding(ctx, sb);
+                fnfld_types[n_fnfld] = tn;
+                n_fnfld++;
             }
         }
     }
@@ -1734,6 +1758,20 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         free(box_free_names[i]);
     }
     free(box_free_names);
+
+    /* local-struct-drop (fn-field): free the boxed fn-field handles of flagged
+     * non-escaping by-value struct locals now that the body (their last use) has
+     * been emitted.  Fields only -- the struct is stack-resident, so
+     * drop_fnfields_<T> must not free `&name`. */
+    for (uint32_t i = 0; i < n_fnfld; i++) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "drop_fnfields_%s((void *)&%s);\n",
+                   fnfld_types[i], fnfld_names[i]);
+        free(fnfld_names[i]);
+        free(fnfld_types[i]);
+    }
+    free(fnfld_names);
+    free(fnfld_types);
 
     ctx->indent -= 4;
     indent_buf(body, ctx->indent);

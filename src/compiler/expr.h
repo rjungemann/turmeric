@@ -106,6 +106,19 @@ struct Binding {
     bool          returns_boxed_closure;
     /* Phase 5: Move semantics - whether this ref binding has been moved */
     bool          is_moved;
+    /* local-struct-drop (fn-field): set by the elaborator's byvalue-struct-field
+     * drop pass when this let-bound by-value struct local (a) passes the same
+     * moved/consumed/escape guards that admit an rc/ref field auto-drop and (b)
+     * owns >=1 BOXED fn-field.  Unlike rc/ref fields (freed via an injected
+     * `(defer (drop! (.f o)))`), the fn-field box is freed at scope exit by the
+     * DIRECT emitter (emit_let_value -> `drop_fnfields_<T>(&o)`), NOT a defer:
+     * a `(defer (drop! (.fn o)))` reads a fat-fn field that the CPS/DK backend's
+     * continuation-capture admission rejects, evicting a colored fn to the
+     * retired direct/fiber path.  Emitting the free directly keeps colored
+     * functions untouched (CPS lowering never runs emit_let_value; the box leaks
+     * there exactly as it did before local fn-field drops existed) while
+     * uncolored functions release it. */
+    bool          drops_fn_fields;
     /* Phase 11: span of first move for note chaining diagnostics */
     Span          moved_at;
     /* Phase R5: #[no-unwind] attribute on defn */

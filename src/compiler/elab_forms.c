@@ -32,6 +32,19 @@ static const AdtDef *elab_byval_drop_adt(Type t) {
     return def;
 }
 
+/* local-struct-drop: does field `fi` own a BOXED fn-field?  Such a field holds a
+ * heap fat-closure handle (`{shim, fn}` box, or a capturing env) that the struct
+ * drop glue frees via `free((void *)f)`.  A by-value local carrying one is freed
+ * at scope exit by the direct emitter (Binding.drops_fn_fields), NOT an injected
+ * defer -- a `(drop! (.fn o))` defer reads a fat-fn field the CPS backend's
+ * continuation-capture admission rejects, evicting a colored fn.  An UNboxed
+ * fn-field is a bare fn pointer (not heap) and is skipped. */
+static bool elab_field_is_boxed_fnfield(const CtorDef *ctor, uint32_t fi) {
+    return ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+           ctor->fields[fi].full_type->kind == TY_FN &&
+           ctor->fields[fi].full_type->as.fn.boxed;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_internal_defines -- rewrite a body window that may contain
@@ -1261,6 +1274,27 @@ Expr *elab_let(Elab *e, const Form *call) {
         body = expr_new(e->arena, EX_DO, body->type, call->span);
         body->as.do_.items = items;
         body->as.do_.n = 1;
+    }
+
+    /* local-struct-drop (fn-field): flag every eligible by-value local that owns
+     * a boxed fn-field so the DIRECT emitter frees that box at scope exit.  Same
+     * moved/consumed/escape guards as the rc/ref auto-drop injection below, so a
+     * struct that escapes (returned / moved / consumed) is never flagged (no
+     * double-free).  Deliberately NOT injected as a defer -- see
+     * Binding.drops_fn_fields -- so a colored fn stays CPS-admissible. */
+    for (uint32_t k = 0; k < n_binds; k++) {
+        const AdtDef *ad = elab_byval_drop_adt(binds[k].binding->type);
+        if (!ad) continue;
+        if (binding_moved_during_init[k] || binds[k].binding->is_moved ||
+            is_binding_consumed(body, binds[k].binding))
+            continue;
+        const CtorDef *ctor = ad->ctors[0];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            if (!elab_field_is_boxed_fnfield(ctor, fi)) continue;
+            if (is_field_consumed(body, binds[k].binding, fi)) continue;
+            binds[k].binding->drops_fn_fields = true;
+            break;
+        }
     }
 
     if (has_byval_drop_bindings && body && body->kind == EX_DO) {

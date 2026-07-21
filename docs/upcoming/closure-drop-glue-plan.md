@@ -5,6 +5,45 @@ walk-glue + capture-clone) and S2 remain. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-21) -- local fn-field struct drop LANDED (direct
+> path); the "Remaining S2 gap" below is closed for uncolored functions.** A
+> by-value struct local that owns a BOXED fn-field now frees that heap fat handle
+> at scope exit. Mechanism:
+>
+> - `elab_forms.c` flags the local (`Binding.drops_fn_fields`) when it passes the
+>   SAME moved / consumed / escape guards that admit the existing rc/ref
+>   `byvalue-struct-field-leak` auto-drop (`elab_field_is_boxed_fnfield` +
+>   `is_binding_consumed` / `is_field_consumed` / `binding_moved_during_init`), so
+>   a struct that escapes (returned / moved / consumed) is never flagged.
+> - The DIRECT emitter (`emit_let_value`) frees the box via a new
+>   `drop_fnfields_<T>(&local)` glue (`emit_module.c`) -- fn-fields ONLY (rc/ref
+>   are still discharged by the injected `(defer (drop! (.f o)))`), and NO
+>   `free(&local)` (the struct is stack-resident).
+>
+> Crucially this is **not** a `(defer (drop! (.fn o)))`: an fn-field-drop defer
+> reads a fat-fn field that the CPS/DK backend's continuation-capture admission
+> rejects, evicting a COLORED fn to the retired direct/fiber path (hard build
+> failure -- reproduced on `cps-backend-closure-local` with the defer approach).
+> Emitting the free directly in the direct emitter leaves colored functions
+> untouched: CPS lowering never runs `emit_let_value`, so a fn-field box in a
+> colored fn leaks exactly as it did before local drops existed (no regression,
+> no eviction). Uncolored functions release it.
+>
+> Verified valgrind-clean (definitely-lost 0, exactly-once free, no double-free)
+> for: pure-fn-field local (call + drop), mixed rc+fn-field local (rc via defer +
+> fn via emit), capturing-closure env box, and the escape case (a returned struct
+> is NOT dropped by the producing fn). Suite 2220/0 (one snapshot regenerated:
+> `defstruct-field-arrow`, whose local `Cell` fn-field box now frees). Fixture
+> `local-struct-fnfield-drop`.
+>
+> **Still open:** (1) a fn-field box in a COLORED function still leaks (needs the
+> CPS backend to admit an fn-field auto-drop, or a scalar-box-pointer capture
+> form). (2) A boxed fn-field holding a capturing env with OWNING captures leaks
+> those captures (only the env box is freed) -- the S1 walk-glue work. (3)
+> Pre-existing, orthogonal: reading an rc field into a var (`(let [s (.r o)] ...)`)
+> double-frees the control block -- the field read aliases without an incref while
+> both `o`'s field-drop and `s`'s rc-drop decrement it. Filed separately.
+>
 > **Progress note (2026-07-20f) -- S2 Model U drop glue + move landed for
 > fn-fields (rc-wrapped path verified sound).** A boxed fn-field is now an owning
 > field: `resolve_ctor_field` sets `needs_drop_glue`, so the holding struct's

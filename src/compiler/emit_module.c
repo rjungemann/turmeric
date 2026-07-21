@@ -5456,6 +5456,40 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
     buf_printf(out, "    free(ptr);\n");
     buf_printf(out, "}\n\n");
 
+    /* local-struct-drop (fn-field): free ONLY the boxed fn-field handles of a
+     * STACK-resident by-value local (no rc/ref decrement -- those are discharged
+     * by the elaborator's injected `(defer (drop! (.f o)))` -- and no `free(ptr)`,
+     * since `ptr` is a stack address).  Called from emit_let_value for a binding
+     * the elaborator flagged `drops_fn_fields`.  Emitted ONLY when the value has a
+     * boxed fn-field (marked unused -- a given local of this type may not be
+     * flagged in every scope). */
+    bool has_boxed_fnfield = false;
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        if (ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+            ctor->fields[fi].full_type->kind == TY_FN &&
+            ctor->fields[fi].full_type->as.fn.boxed) {
+            has_boxed_fnfield = true;
+            break;
+        }
+    }
+    if (has_boxed_fnfield) {
+        buf_printf(out, "static void drop_fnfields_%s(void *ptr) __attribute__((unused));\n",
+                   adt_c_name);
+        buf_printf(out, "static void drop_fnfields_%s(void *ptr) {\n", adt_c_name);
+        buf_printf(out, "    if (!ptr) return;\n");
+        buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+        for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
+            if (!(ctor->fields[fi].kind == TY_FN && ctor->fields[fi].full_type &&
+                  ctor->fields[fi].full_type->kind == TY_FN &&
+                  ctor->fields[fi].full_type->as.fn.boxed))
+                continue;
+            char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
+            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
+            free(mp);
+        }
+        buf_printf(out, "}\n\n");
+    }
+
     /* Walk glue -- enumerate strong (rc) children for the cycle walker. */
     buf_printf(out, "static void walk_glue_%s(void *ptr, RcWalkChildFn cb, void *ctx) {\n",
                adt_c_name);
