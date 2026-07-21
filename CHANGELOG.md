@@ -4,6 +4,33 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.0] -- 2026-07-20
+
+### Added
+
+- **Owned String type**: a new owned, immutable, refcounted `String` type
+  (owned-string-type-plan), with an opt-in `#s"..."` owned-String literal and
+  a stdlib reader-macro path.
+- **StringSlice**: zero-copy, bounds-checked, safe ranged views into a `String`.
+- **`ShowString` typeclass**: an owned-String show surface, plus a
+  `derive-show-string` derive macro, `ptr<void>`/`Bound` instances, and
+  `Debug`/`Display` instances for `cstr`, `bool`, and the numeric types.
+
+### Changed
+
+- **`Show` returns an owned String**: the `Show` typeclass now returns an owned
+  `String` rather than a `cstr`. `derive-show` is now the owned-String deriver;
+  the old `cstr` path moves to `derive-show-cstr`. Interpreter Show is at parity.
+- **stdlib String adoption**: stdlib migrates onto the owned `String` (owned
+  bridge + path cluster, digest, and httpd CORS capture).
+
+### Fixed
+
+- **`rc<int>` angle-bracket annotation**: no longer silently becomes a type
+  variable (#692).
+- **Generic typeclass dispatch on opaque carriers**: fixed, along with derive
+  alias labels.
+
 ## [0.29.1] -- 2026-07-19
 
 ### Fixed

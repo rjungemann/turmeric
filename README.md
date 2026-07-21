@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.29.1` -- the compiler builds clean under gcc14 (int64<->pointer carrier tracking across codegen), and the CPS owning-env teardown and async paths graduate to always-on.
+**Latest release:** `v0.30.0` -- a new owned, immutable, refcounted `String` type (with `#s"..."` literals and zero-copy `StringSlice` views), and the `Show` typeclass migrated to return an owned `String`.
 
 ## What
 
