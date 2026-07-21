@@ -5283,29 +5283,10 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * under GCC >= 14 (gcc14-int-conversion, carrier-to-typed-param). */
                 char *argv_t = atoms_csv_call_typed(ce, t->as.tailcall.args,
                                                     t->as.tailcall.n, t->as.tailcall.fn);
-                /* A `:nil`/`:void`-returning callee (a generic `^Show a` wrapper
-                 * like `show-line`, `tur_contract_check`, ...) emits as C `void`,
-                 * so it yields no value to bind: `__auto_type t = void_fn(...)` is a
-                 * "variable declared void" / "void value not ignored" hard error.
-                 * Emit the call as a bare statement and deliver the unit placeholder
-                 * `0` -- mirrors the CT_LETCALL nil arm above and emit_value's
-                 * TY_NIL/TY_NEVER skip in the direct emitter.  The callee's return
-                 * kind comes from its FnDef (the tailcall node carries no result
-                 * type of its own). */
-                const FnDef *cfd = g_prog
-                    ? fd_for_binding(g_prog, t->as.tailcall.fn) : NULL;
-                const Type *crt = cfd ? fn_ret_type(cfd) : NULL;
-                bool callee_void = crt && (crt->kind == TY_NIL ||
-                                           crt->kind == TY_NEVER);
-                if (callee_void) {
-                    ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
-                    emit_deliver(ce, &t->as.tailcall.kont, "0");
-                } else {
-                    /* __auto_type keeps the callee's real return type (int, cstr,
-                     * ...); the slot cast at delivery narrows it to the word. */
-                    ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
-                    emit_deliver(ce, &t->as.tailcall.kont, tmp);
-                }
+                /* __auto_type keeps the callee's real return type (int, cstr,
+                 * ...); the slot cast at delivery narrows it to the word. */
+                ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                emit_deliver(ce, &t->as.tailcall.kont, tmp);
                 free(argv_t);
                 free(tmp);
             }

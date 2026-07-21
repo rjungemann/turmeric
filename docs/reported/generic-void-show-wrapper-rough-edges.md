@@ -64,27 +64,24 @@ statement introduces a CPS boundary (here the `eq?` typeclass dispatch).  A
 the interaction with the following dispatch that trips it.  Workaround: use the
 explicit form `(let [s (show c)] (do (println (string/to-cstr s)) (string/release s)))`.
 
-### Edge 2 -- partial fix landed, but it UNMASKS a coupled misdispatch (2026-07-21)
+### Edge 2 -- OPEN; an attempted void-temp fix was REVERTED because it unmasks a coupled silent miscompile (2026-07-21)
 
-**Status: the void-temp compile error is fixed in code, but that fix alone
-converts the compile error into a SILENT MISCOMPILE for a common shape. Edge 2 is
-NOT fully resolved -- see "coupled defect" below.**
+**Status: OPEN.** A void-temp compile-error fix was written and briefly landed,
+then **reverted** (commit follows the revert note below) because it converts the
+compile error into a SILENT MISCOMPILE for a common shape -- see "coupled defect".
+Edge 2 must be fixed together with that coupled defect, not alone.
 
-The compile-error half was fixed in the CPS emitter (`src/compiler/emit_cps_ir.c`,
-the `CT_TAILCALL` `cps->direct` arm). A void call reaches this arm as a tailcall
-delivering to a continuation (KK_VAR inline join, in the repro), and the arm
-unconditionally bound the result into an `__auto_type` temp. The arm now queries
-the callee's return type via its `FnDef` (`fd_for_binding` + `fn_ret_type`) and,
-when it is `TY_NIL`/`TY_NEVER` (a `:void`/`:nil` callee, which emits as C `void`),
-emits the call as a bare statement and delivers the unit placeholder `0` to the
-continuation. This mirrors the existing `CT_LETCALL` nil arm (which already
-checked `x.ty == TY_NIL`) and `emit_value`'s `TY_NIL`/`TY_NEVER` skip in the
-direct emitter. The tailcall node carries no result type of its own, hence the
-`FnDef` lookup.
-
-Regression fixture: `tests/fixtures/cps-void-show-wrapper-midbody/` -- a
-`(show-line 42)` mid-`do` followed by `eq?` dispatches; prints `42 / T / F`. That
-fixture only exercises an **int** argument, which happens to render correctly.
+The attempted fix (for the record, so it is not re-tried in isolation): in the CPS
+emitter (`src/compiler/emit_cps_ir.c`, the `CT_TAILCALL` `cps->direct` arm) a void
+call reaches the arm as a tailcall delivering to a continuation and the arm
+unconditionally bound the result into an `__auto_type` temp (the
+`variable declared void` error). Making the arm detect a `TY_NIL`/`TY_NEVER`
+callee (via `fd_for_binding` + `fn_ret_type`) and emit a bare call + deliver the
+unit placeholder `0` -- mirroring the `CT_LETCALL` nil arm -- fixes the compile
+error. **But that is not enough to ship**: it merely lets `(show-line x)` compile
+inside a CPS-lowered helper, where the SAME arm then resolves the callee to the
+wrong (carrier-rep) clone. See below. So the compile-error fix and the
+callee-resolution fix are coupled and must land together.
 
 #### Coupled defect: generic `^Show a` wrapper misdispatches through the int carrier representative in a CPS-lowered helper
 
@@ -102,16 +99,19 @@ representative `__inst_Show_show_int(x)` -- instead of the emitted monomorph clo
 generic clone runs, treating the `String`/`Vec`/... pointer as an int and printing
 the carrier word. Result: a SILENT garbage render for every non-int element type.
 
-Repro (A misrenders, B renders correctly -- differ only by helper vs `main`):
+Repro (current reverted state: A fails to compile; WITH the void-temp fix applied
+alone, A compiles and misrenders, while B renders correctly -- A and B differ only
+by helper vs `main`):
 
 ```turmeric
 (load "stdlib/typeclass.tur")
-;; A -- show-line in a helper: prints a garbage pointer (e.g. 94330540635104)
+;; A -- show-line in a helper. Reverted state: `__t declared void` compile error.
+;;      With the void-temp fix alone: prints a garbage pointer (e.g. 94330540635104).
 (defn demo [] : int
   (let [c (string/concat (string/from-cstr "Hello") (string/from-cstr "World"))]
     (do (show-line c) 0)))
-(defn main [] : int (demo))       ;; A: garbage
-;; B -- same let directly in main: prints "HelloWorld"
+(defn main [] : int (demo))
+;; B -- same let directly in main: prints "HelloWorld" (monomorph resolves).
 ```
 
 General, not String-specific: `(show-line (vec-of 1 2 3))` in a helper prints a
