@@ -3,8 +3,11 @@
 **Severity:** low (both are narrow; each has an easy call-site workaround, used in
 the stage-4 fixtures)
 
-**Status: Edge 2 RESOLVED (2026-07-21), Edge 1 still OPEN.** Report retained here
-for Edge 1. See "Edge 2 resolution" below.
+**Status: both edges OPEN (2026-07-21).** Edge 1 unchanged. Edge 2's void-temp
+COMPILE error is fixed in code, but that fix alone UNMASKS a coupled silent
+misdispatch (a generic `^Show a` wrapper in a CPS-lowered helper renders garbage
+for non-int types) -- so Edge 2 is not resolved; the two must be fixed together.
+See "Edge 2" below.
 
 `show-line` and `print-show` (stdlib/typeclass-show.tur) are generic `^Show a`
 wrappers that `(show x)` an owned String, print it, release it, and return
@@ -61,30 +64,69 @@ statement introduces a CPS boundary (here the `eq?` typeclass dispatch).  A
 the interaction with the following dispatch that trips it.  Workaround: use the
 explicit form `(let [s (show c)] (do (println (string/to-cstr s)) (string/release s)))`.
 
-### Edge 2 resolution (2026-07-21)
+### Edge 2 -- partial fix landed, but it UNMASKS a coupled misdispatch (2026-07-21)
 
-Fixed in the CPS emitter (`src/compiler/emit_cps_ir.c`, the `CT_TAILCALL`
-`cps->direct` arm). A void call reaches this arm as a tailcall delivering to a
-continuation (KK_VAR inline join, in the repro), and the arm unconditionally
-bound the result into an `__auto_type` temp. The arm now queries the callee's
-return type via its `FnDef` (`fd_for_binding` + `fn_ret_type`) and, when it is
-`TY_NIL`/`TY_NEVER` (a `:void`/`:nil` callee, which emits as C `void`), emits the
-call as a bare statement and delivers the unit placeholder `0` to the
+**Status: the void-temp compile error is fixed in code, but that fix alone
+converts the compile error into a SILENT MISCOMPILE for a common shape. Edge 2 is
+NOT fully resolved -- see "coupled defect" below.**
+
+The compile-error half was fixed in the CPS emitter (`src/compiler/emit_cps_ir.c`,
+the `CT_TAILCALL` `cps->direct` arm). A void call reaches this arm as a tailcall
+delivering to a continuation (KK_VAR inline join, in the repro), and the arm
+unconditionally bound the result into an `__auto_type` temp. The arm now queries
+the callee's return type via its `FnDef` (`fd_for_binding` + `fn_ret_type`) and,
+when it is `TY_NIL`/`TY_NEVER` (a `:void`/`:nil` callee, which emits as C `void`),
+emits the call as a bare statement and delivers the unit placeholder `0` to the
 continuation. This mirrors the existing `CT_LETCALL` nil arm (which already
 checked `x.ty == TY_NIL`) and `emit_value`'s `TY_NIL`/`TY_NEVER` skip in the
 direct emitter. The tailcall node carries no result type of its own, hence the
 `FnDef` lookup.
 
 Regression fixture: `tests/fixtures/cps-void-show-wrapper-midbody/` -- a
-`(show-line 42)` mid-`do` followed by `eq?` dispatches (the CPS boundary); prints
-`42 / T / F`. (`show-line` on an int renders deterministically via `Show[int]`;
-the report's original String repro renders a raw pointer for a separate reason --
-there is no `Show[String]` instance, so `show` on a `String` falls back to the
-int carrier representative and prints the pointer. That carrier-fallback misrender
-is the dispatch gap tracked in
-`docs/reported/method-dispatch-missing-instance-falls-back-to-carrier-representative.md`,
-NOT this codegen bug; it reproduces identically in the direct emitter with no CPS
-boundary involved.)
+`(show-line 42)` mid-`do` followed by `eq?` dispatches; prints `42 / T / F`. That
+fixture only exercises an **int** argument, which happens to render correctly.
+
+#### Coupled defect: generic `^Show a` wrapper misdispatches through the int carrier representative in a CPS-lowered helper
+
+CORRECTION of an earlier note here: `Show[String]` DOES exist
+(`stdlib/typeclass-show.tur:126`, `(definstance Show [String] (show [x] : String
+(string/retain x)))`), so the String misrender is NOT a missing-instance carrier
+fallback and is NOT
+`docs/reported/method-dispatch-missing-instance-falls-back-to-carrier-representative.md`.
+The real cause: once the void-temp fix lets `(show-line x)` compile inside a
+CPS-lowered helper, the `CT_TAILCALL` `cps->direct` arm resolves the callee to the
+GENERIC base clone `show_hyline` -- whose body bakes the int carrier
+representative `__inst_Show_show_int(x)` -- instead of the emitted monomorph clone
+(`show_line__spec__void_int64_t`, which correctly calls `__inst_Show_show_String`
+/ `__inst_Show_show_Vec` / ...). The monomorph clone exists but is dead code; the
+generic clone runs, treating the `String`/`Vec`/... pointer as an int and printing
+the carrier word. Result: a SILENT garbage render for every non-int element type.
+
+Repro (A misrenders, B renders correctly -- differ only by helper vs `main`):
+
+```turmeric
+(load "stdlib/typeclass.tur")
+;; A -- show-line in a helper: prints a garbage pointer (e.g. 94330540635104)
+(defn demo [] : int
+  (let [c (string/concat (string/from-cstr "Hello") (string/from-cstr "World"))]
+    (do (show-line c) 0)))
+(defn main [] : int (demo))       ;; A: garbage
+;; B -- same let directly in main: prints "HelloWorld"
+```
+
+General, not String-specific: `(show-line (vec-of 1 2 3))` in a helper prints a
+pointer instead of `[1 2 3]`. NON-void `show` in a helper is fine
+(`(let [s (show v)] (println (string/to-cstr s)))` renders `[1 2 3]`) -- the gap
+is specific to the void-wrapper `CT_TAILCALL` `cps->direct` callee resolution.
+
+This is NOT independent of the void-temp fix: pre-fix, A/C fail to compile (the
+`__t declared void` error), so the misdispatch was latent. The void-temp fix
+UNMASKS it -- exactly the "do not ship a fix that converts a build error into a
+runtime miscompile" hazard (cf.
+`docs/reported/effectful-fnvalue-param-miscompile.md`). A complete Edge 2 fix must
+also make the `CT_TAILCALL` `cps->direct` arm resolve the wrapper's monomorph
+clone (or thread the Show dict) rather than fall back to the carrier-rep base
+clone; the two must land together.
 
 ## Root cause / fix directions
 
