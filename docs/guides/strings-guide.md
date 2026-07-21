@@ -219,6 +219,50 @@ frees them?** Each type answers it differently.
   **copies** into a fresh heap cstr (you free it) -- a slice is not
   NUL-terminated at its end, so it can't lend a borrow.
 
+### Owned builders: wrap vs build
+
+`stdlib/str-build-string` ships owned-String siblings for the two foundational
+cstr builders -- `str-concat-string` (over `str-concat`) and `cstr-sub-string`
+(over `cstr-sub`) -- each a one-line `string/adopt-cstr` wrapper. There is a
+real fork in how to reach for them:
+
+- **Single join / one substring -- wrap.** `(str-concat-string a b)`,
+  `(cstr-sub-string s i j)`. Minimal, obviously correct, one allocation. This is
+  the common case.
+- **Multi-join accumulation -- build, don't fold.** A formatter that
+  concatenates more than twice (a csv row, a json object, `re/union`,
+  `re/replace-all`) must **not** be written by nesting `str-concat-string`.
+  `str-concat` allocates a fresh throwaway cstr per join, so folding the wrapper
+  inherits an O(n^2) allocation profile -- adopting the result only launders the
+  leak, it doesn't remove the intermediate churn. Build into a `StringBuilder`
+  instead (`builder/new` -> `builder/push-cstr!` / `builder/push-string!` ->
+  `builder/finish`): linear time, a single allocation of the final buffer. The
+  `String` stays immutable; the builder is the sanctioned mutable escape hatch
+  for accumulation.
+
+### Mixed fresh/static returns -- choose per branch
+
+Some accessors/formatters return a **fresh malloc on one branch and a static
+string literal on another** -- e.g. `httpd-req-cookie` (malloc on a hit, static
+`""` when the cookie is absent) or `bound->str` (malloc for Inclusive/Exclusive,
+static `"unbounded"` for Unbounded). A blind `string/adopt-cstr` over the whole
+return is **undefined behavior** the moment the static branch fires: `adopt`
+frees its argument, and freeing a string literal is UB. The rule:
+
+- **`adopt` the malloc'd branches, `from-cstr` the literal branches** -- never
+  blind-`adopt` the whole thing. `bound->str-string` (in
+  `stdlib/range-bound-string`) does exactly this: `adopt` the fresh
+  Inclusive/Exclusive renders, `string/from-cstr "unbounded"` (copy, no free)
+  for Unbounded.
+- **Pick the return type by whether absence is meaningful.** When every branch
+  has a valid rendering (a *formatter*), return a total `String` -- that is
+  `bound->str-string`. When a branch means "not there" (an *accessor*), return
+  `option<String>` -- that is `httpd-req-cookie-opt` / `httpd-req-form-opt` (in
+  `stdlib/httpd-string`), which answer `none` on every miss and `some` owned
+  bytes on a hit. `option` also fixes a sentinel ambiguity the `cstr` form
+  can't: "present but empty" is `some ""`, distinct from "absent" (`none`),
+  where the old `""` return conflated the two.
+
 ### The pitfalls
 
 - **`adopt-cstr` on a literal or a borrow -> undefined behavior.** It frees its
@@ -265,7 +309,15 @@ frees them?** Each type answers it differently.
 
 - `stdlib/string.tur` -- the module.
 - `stdlib/string-slice.tur` -- `StringSlice`, the zero-copy view.
+- `stdlib/str-build-string.tur` -- owned-String builders (`str-concat-string`,
+  `cstr-sub-string`); the wrap-vs-build fork above.
+- `stdlib/httpd-string.tur` -- optional owned-String accessors
+  (`httpd-req-cookie-opt`, `httpd-req-form-opt`).
+- `stdlib/range-bound-string.tur` -- `bound->str-string`, the per-branch
+  adopt/from-cstr formatter.
 - `src/runtime/tur_string.c` -- the refcounted payload + operations.
 - `docs/archive/owned-string-type-plan.md` -- the design plan.
 - `docs/upcoming/v2/string-adoption-stdlib-plan.md` -- the borrowed-`cstr`
   migration audit.
+- `docs/upcoming/v2/string-owned-builders-and-optional-accessors-plan.md` --
+  the owned-builders / optional-accessors design (this section).
