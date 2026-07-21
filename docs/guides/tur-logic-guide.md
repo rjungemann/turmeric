@@ -426,6 +426,15 @@ defn reify-term [t subs] :cstr
       "?"
 ```
 
+Each `str-concat` / `int->cstr` here returns a fresh "caller frees" `cstr`, and
+the recursive nesting leaks every intermediate while handing back a heap buffer
+the caller must remember to free. When the reified text is a value you *return*
+and pass around, prefer an owned `String`: build it with `stdlib/string.tur`'s
+`StringBuilder` (`builder/push-cstr!` the constant pieces, `builder/push-string!`
+the recursive results, `builder/finish` to freeze), or wrap the final buffer in
+`string/adopt-cstr`. The result owns its bytes and frees exactly once. See
+[strings-guide.md](strings-guide.md).
+
 ### `conde` macro
 
 The classic miniKanren `conde` is syntactic sugar over nested `disjoined` /

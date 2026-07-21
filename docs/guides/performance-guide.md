@@ -329,6 +329,17 @@ defn join [sep parts] :str
     str/builder/finish(b)
 ```
 
+`str/builder/finish` produced fresh bytes, but the `:str` return above is a
+*borrowed view* -- fine while the builder's buffer is alive, but not a value the
+result can safely outlive. When the joined string must be **returned, stored, or
+used as a Map/Set key**, reach for the owned `String` builder instead:
+`stdlib/string.tur`'s `StringBuilder` (`builder/new`, `builder/push-cstr!` /
+`builder/push-string!`, `builder/finish`) accumulates bytes in the same linear
+time and `builder/finish` freezes them into an **owned, immutable `String`** with
+no lifetime tie to the builder. `Clone[String]` is an O(1) refcount bump, so
+handing that `String` to a container is free. See
+[strings-guide.md](strings-guide.md) for the `cstr` vs `str` vs `String` tiering.
+
 ### Text search
 
 For simple substring search, `str/index-of` wraps `strstr` and is O(n·m) in

@@ -121,6 +121,14 @@ handle read-config("/etc/foo.toml")
 Chains of `bind` threading `Result<T, Error>` become linear, direct-style
 code. The handler is the only place errors are visible.
 
+A `Cfg-Error` thrown here travels up the stack to a handler that runs *after*
+`read-config` has returned, so any `what`/`where` string it carries outlives the
+frame that produced it. `cstr` fields are safe only while they hold static
+literals; the moment a message is *computed* (e.g. `(str-concat "bad key: "
+key)`), a `cstr` field dangles. For error payloads that may carry computed text,
+prefer owned `String` fields (`[what : String where : String]`). See
+[strings-guide.md](strings-guide.md).
+
 ### State threading
 
 ```turmeric

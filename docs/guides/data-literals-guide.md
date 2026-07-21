@@ -227,6 +227,12 @@ fused `:T` element-type suffix immediately after the closer:
 ; empty Vec[Vec[int]]  (parenthesize a compound element type)
 ```
 
+The `#set{}:cstr` above pins the element type, but note the element *type* you
+pick still matters for lifetimes: a `Set[cstr]` of **computed** keys borrows
+each key pointer and dangles once the source is freed. When the keys are built or
+stored (not static literals), use `#set{}:String` -- a `Set[String]` copies each
+key into a box the set owns. See [strings-guide.md](strings-guide.md).
+
 The suffix desugars to an ascription on the literal, so `[]:int` is exactly
 `(:: (vec-of) (Vec int))` and `#set{}:T` is `(:: (set-of) (Set T))` -- the
 generated code is identical. It replaces the verbose
