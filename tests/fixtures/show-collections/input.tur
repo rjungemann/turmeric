@@ -6,8 +6,8 @@
 
 (defn main [] : int
   (show-line (vec-of 1 2 3))
-  (show-line (:: (vec-new) (Vec int)))
+  (show-line (vec-new))
   (show-line (set-of 7 8 9))
   (show-line (hamt-of 1 10 2 20))
-  (show-line (:: (hamt-of) (Map int int)))
+  (show-line (hamt-of))
   0)

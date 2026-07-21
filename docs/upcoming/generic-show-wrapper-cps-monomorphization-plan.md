@@ -1,8 +1,9 @@
 # Generic `^Show a` / `^Class a` wrapper monomorphization in the CPS backend
 
-**Status:** DONE (2026-07-21) -- both edges fixed; only optional Phase 3
-(guardrail) and Phase 5 cleanups (5.4 remove stage-4 workarounds) remain.
-Prepared from the (now-archived) report
+**Status:** DONE (2026-07-21) -- both edges fixed, fixtures + stage-4 workaround
+cleanup landed. Only the OPTIONAL Phase 3 guardrail remains (not needed -- the
+fixes are sound by construction, see Phase 3). Prepared from the (now-archived)
+report
 `docs/archive/generic-void-show-wrapper-rough-edges.md`, which recorded two
 coupled rough edges in the generic `^Show a` wrappers (`show-line`, `print-show`,
 `stdlib/typeclass-show.tur`).
@@ -329,23 +330,29 @@ Verified: `(show-line (vec-new))` renders `[]`, `(show-line (hamt-of ...))` rend
 `#map{}`; the Edge 2 cases are unaffected; full suite green. Fixture
 `tests/fixtures/show-wrapper-empty-container/`.
 
-### Phase 5 -- Fixtures, suite, docs
+### Phase 5 -- Fixtures, suite, docs -- LANDED
 
-- **5.1** Add regression fixtures under `tests/fixtures/`:
-  `show-wrapper-helper-<type>` for `String`/`Vec`/`Set`/`Map`/`cstr`, each
-  asserting the correct render from a helper `defn` (the shape that used to
-  garble); plus a `show-wrapper-two-element-types` fixture exercising the
-  clone-naming fix (2b.3); plus the Edge 1 fixture (correct render or clean
-  diagnostic).
-- **5.2** ASan/valgrind pass on the wrapper-in-helper fixtures (owned-String
-  render + release; no leak, no double free).
-- **5.3** Full suite green (`bash tests/run.sh`, 12-min timeout). Regenerate any
-  codegen snapshots the clone-naming change moves, in the same PR.
-- **5.4** Update `stdlib/typeclass-show.tur` docstrings if the wrapper's
-  monomorphization contract changes in any user-visible way. Remove the
-  interim workarounds from the stage-4 fixtures (`show-collections` type
-  ascription; `string-basic`/`string-slice` explicit-release form) where the
-  wrapper now works directly.
+- **5.1 -- done.** `tests/fixtures/show-wrapper-helper-dispatch` covers RC1
+  (Vec/Set/Map), RC2 (cstr), and 2b.3 (int/bool/cstr in one helper) in a helper
+  `defn`; `tests/fixtures/show-wrapper-empty-container` covers Edge 1. (A single
+  multi-type fixture replaced the per-type `show-wrapper-helper-<type>` sketch --
+  same coverage, less churn.)
+- **5.2 -- done.** The cstr wrapper-in-helper path is valgrind-clean. (The
+  String-element cases carry a PRE-EXISTING, orthogonal leak -- the
+  `string/from-cstr`/`concat` `let` temporaries are never released -- which
+  reproduces identically in the direct `main` path, so it is not a wrapper/dispatch
+  regression and is left to the separate String-local-drop work.)
+- **5.3 -- done.** Full suite green (`bash tests/run.sh`) at each landing
+  (2243/0 for Edge 2, 2244/0 for Edge 1). No `expected.c` snapshots are attached to
+  the touched fixtures, so no regen was needed.
+- **5.4 -- done.** Removed the interim workarounds now that the wrapper works
+  directly: `show-collections` drops the `(:: (vec-new) (Vec int))` /
+  `(:: (hamt-of) (Map int int))` ascriptions (`(vec-new)` / `(hamt-of)` render
+  `[]` / `#map{}` directly); `string-basic` and `string-slice` replace the
+  explicit `(let [__s (show x)] (do (println (string/to-cstr __s)) (string/release
+  __s)))` form with a plain `(show-line x)`. All three are output-neutral (same
+  `expected.stdout`). No `stdlib/typeclass-show.tur` docstring change was needed --
+  the wrapper's public contract is unchanged; only its codegen was fixed.
 
 ## Acceptance criteria
 
@@ -416,3 +423,10 @@ Verified: `(show-line (vec-new))` renders `[]`, `(show-line (hamt-of ...))` rend
   `#ifndef NDEBUG` so the bail also runs in Release. Renders `[]` / `#map{}` like
   the direct path; Edge 2 unaffected; full suite green. Fixture
   `show-wrapper-empty-container`. Both edges of the original report are now fixed.
+- 2026-07-21 -- **Phase 5.4 cleanup LANDED.** Removed the interim workarounds the
+  wrapper bugs had forced: `show-collections` now passes `(vec-new)` / `(hamt-of)`
+  unascribed; `string-basic` / `string-slice` use `(show-line x)` instead of the
+  explicit `show`+`to-cstr`+`release` form. All output-neutral (same
+  `expected.stdout`), suite green. Also removed a stale untracked
+  `cps-void-show-wrapper-midbody` fixture dir (leftover run-artifacts from the
+  reverted Edge 2a commit). Plan complete except the optional Phase 3 guardrail.
