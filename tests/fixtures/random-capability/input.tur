@@ -1,0 +1,78 @@
+;; Regression guard for random-tur-nested-static-fn: Real-Random and
+;; Seeded-Random previously built their Random capability struct from `static`
+;; NESTED C functions (rejected by a standard/clang toolchain). The next_int /
+;; next_float slots are now file-scope defns referenced via __TUR_CNAME_...__,
+;; so these constructors compile and the capability is usable.
+;;
+;; rand() output is not portable across libc implementations, so this fixture
+;; asserts only portable PROPERTIES -- reproducibility of a fixed seed and that
+;; every draw lands in range -- never exact random values.
+(load "stdlib/random.tur")
+
+;; Call the capability's next_int slot through the struct.
+(defn rng-next-int [rng : ptr min : int max : int] : int
+  ```c
+  typedef struct Random Random;
+  struct Random {
+      int64_t (*next_int)(int64_t, int64_t);
+      int64_t (*next_float)(void);
+  };
+  Random *r = (Random *)rng;
+  return r->next_int((int64_t)min, (int64_t)max);
+  ```)
+
+;; Call the capability's next_float slot through the struct.
+(defn rng-next-float [rng : ptr] : int
+  ```c
+  typedef struct Random Random;
+  struct Random {
+      int64_t (*next_int)(int64_t, int64_t);
+      int64_t (*next_float)(void);
+  };
+  Random *r = (Random *)rng;
+  return r->next_float();
+  ```)
+
+(defn in-range? [v : int lo : int hi : int] : bool
+  (if (< v lo) false (if (> v hi) false true)))
+
+(defn main [] : int
+  ;; Seeded-Random shares libc's global rand() stream, so reproducibility means
+  ;; "same seed, drawn in the same order" -- draw a's whole sequence, then
+  ;; re-seed via b and draw the same sequence, and the two must match.
+  (let [a         (Seeded-Random 42)
+        a1        (rng-next-int a 1 6)
+        a2        (rng-next-int a 1 6)
+        af        (rng-next-float a)
+        b         (Seeded-Random 42)
+        b1        (rng-next-int b 1 6)
+        b2        (rng-next-int b 1 6)
+        bf        (rng-next-float b)
+        repro     (if (= a1 b1) (if (= a2 b2) (if (= af bf) 1 0) 0) 0)
+        ;; every draw lands in the requested range
+        seeded-ok (if (in-range? a1 1 6)
+                    (if (in-range? a2 1 6)
+                      (if (in-range? af 0 9999) 1 0)
+                      0)
+                    0)
+        ;; Real-Random constructs and draws in range too
+        real      (Real-Random)
+        real-ok   (if (in-range? (rng-next-int real 10 20) 10 20)
+                    (if (in-range? (rng-next-float real) 0 9999) 1 0)
+                    0)]
+    (do
+      (Seeded-Random-free a)
+      (Seeded-Random-free b)
+      (Real-Random-free real)
+      (if (= repro 1)
+        (println "seeded-reproducible: ok")
+        (println "seeded-reproducible: FAIL"))
+      (if (= seeded-ok 1)
+        (println "seeded-in-range: ok")
+        (println "seeded-in-range: FAIL"))
+      (if (= real-ok 1)
+        (println "real-in-range: ok")
+        (println "real-in-range: FAIL"))
+      0)))
+
+(main)
