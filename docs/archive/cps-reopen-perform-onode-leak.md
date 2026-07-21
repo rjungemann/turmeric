@@ -1,5 +1,40 @@
 # Effect re-opening leaks DK nodes O(N) per re-opened perform
 
+**RESOLVED (2026-07-21).** Fixed in `src/compiler/emit_dk_runtime.c` (tramp
+path). The leaked chains were NOT at the E7 yield point (as the earlier probe
+concluded) but at two owners that a tail-resume `longjmp` unwinds before their
+eager free runs:
+
+1. **`dk_perform`, non-tail deep branch.** A non-tail deep case that RE-OPENS an
+   outer effect ends its body in that interior `perform`; if the outer effect is
+   tail-resumed, `dk_tail_resume` longjmps to the entry driver and the
+   `dk_perform` frame is unwound, so `dk_free(sub)` never runs -> `sub` leaks
+   once per re-opened perform.
+2. **`dk_invoke`.** When the invoked chain itself tail-resumes (e.g. the
+   re-opening resume frame `dk_invoke`s the captured continuation, which drives
+   the NEXT re-opened perform), the same longjmp unwinds `dk_invoke` before its
+   `dk_free(c)` -> `c` leaks once per invoke.
+
+Both are given a boundary owner via the existing reap machinery
+(`__dk_reap_keep`) BEFORE the call that may longjmp, and their eager `dk_free`
+is dropped on that path. Safe against double-free: only a TAIL case hands its
+`sub` to the driver (the E7 branch, which the driver frees), a case body only
+reaps COPIES of `subk` (never `subk`/`sub`), and the driver frees only the fresh
+sub a tail-resume yields (a copy taken from within `c`) -- never `sub`/`c`
+themselves. `dk_invoke` reaps only under an active driver (a longjmp is
+possible); with no driver it frees eagerly as before, so the non-tramp path is
+byte-identical.
+
+Verified with `valgrind --leak-check=full`: the repro table below (N = 1, 2, 4,
+8) all drop to **0 bytes lost, 0 errors**, and the E7 fixtures
+(`cps-tramp-resume-deep`, `effect-reopen`, `cps-tramp-resume-reopen`, `-nested`,
+`-multicase`, `-nontail`, `-join`, `-while-handle`,
+`-loop-in-handle-continuation`) stay clean with no `Invalid free`. This is now
+the same bounded-at-entry retention the surrounding re-opening reaps
+(`__kont`/`__ce`/frame nodes) already use -- not a new unbounded class.
+
+---
+
 **Severity:** low (memory only; correctness is fine).  Flag-on only
 (`--enable=cps-tramp-resume`), and only for a program that uses effect
 RE-OPENING (a handler case that performs an effect handled by an ENCLOSING

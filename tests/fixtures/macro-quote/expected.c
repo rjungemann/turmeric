@@ -1150,8 +1150,21 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
 }
 static intptr_t dk_run(DK *k, intptr_t v)      { return dk_run_impl(k, v, false); }
 static intptr_t dk_run_root(DK *k, intptr_t v) { return dk_run_impl(k, v, true); }
+/* Forward decl of the entry driver (defined with the E7 runtime below): dk_invoke
+ * consults it to know whether running the invoked chain might tail-resume out. */
+static jmp_buf *g_dk_driver;
 static intptr_t dk_invoke(DK *sub, intptr_t w) {
-    DK *c = dk_copy_range(sub, NULL); intptr_t r = dk_run_impl(c, w, false);
+    DK *c = dk_copy_range(sub, NULL);
+    /* Under an active driver the invoked chain may tail-resume: dk_tail_resume
+     * longjmps to the driver, unwinding this frame BEFORE `dk_free(c)` runs, which
+     * would strand `c` once per such invoke -> O(N)
+     * (docs/archive/cps-reopen-perform-onode-leak.md).  Give `c` a boundary owner
+     * via the reap list so it is freed exactly once at the outermost entry whether
+     * dk_run_impl returns or longjmps.  No double free: the driver frees only the
+     * fresh sub a tail-resume yields (a copy taken from within `c`), never `c`
+     * itself.  With no driver a longjmp is impossible -- free eagerly as before. */
+    if (g_dk_driver) { __dk_reap_keep(c); return dk_run_impl(c, w, false); }
+    intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
 }
 /* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *
@@ -1255,14 +1268,22 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
     }
     g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
+    /* A non-tail deep case that RE-OPENS an outer effect ends its body in that
+     * interior perform; if the outer effect is tail-resumed, dk_tail_resume
+     * longjmps to the entry driver and this dk_perform frame is unwound -- so the
+     * `dk_free(sub)` below never runs and `sub` leaks once per re-opened perform
+     * (O(N), docs/archive/cps-reopen-perform-onode-leak.md).  Give `sub` an owner
+     * that survives the longjmp: register it for a boundary dk_free at the
+     * outermost entry (__dk_reap_run), mirroring how every other per-perform node
+     * on this path is owned.  This is safe against double-free -- only a TAIL case
+     * hands its `sub` to the driver (the E7 branch above, which the driver frees),
+     * and a case body only ever reaps COPIES of `subk`, never `subk`/`sub` itself
+     * -- so reaping is `sub`'s sole disposal on both the return and longjmp paths.
+     * We reap BEFORE the handler call so a longjmp cannot skip the registration. */
+    __dk_reap_keep(sub);
     intptr_t r = H->handler(H->handler_env, arg, sub);
-    dk_free(sub);
     return dk_run_impl(H->next, r, false);
 }
-/* Abortive shift body: deliver the precomputed receiver result f(v),
- * ignoring the captured sub-continuation (Turmeric shift never resumes it). */
-static intptr_t __dk_abort_body(intptr_t env, DK *subk) { (void)subk; return env; }
-
 /* Phase T21: FiberBlock */
 #ifdef __clang__
 #pragma clang diagnostic push
