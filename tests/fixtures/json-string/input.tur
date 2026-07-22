@@ -1,0 +1,19 @@
+;; string-adoption-stdlib-plan batch 3: owned String sibling for tur/json.
+;; json/encode-string adopts the malloc'd cstr from json/encode into an owned
+;; String (via string/adopt-cstr), so the serialized output is safe to store /
+;; return / key a map with.
+(load "stdlib/json-string.tur")
+
+(defn demo [] : int
+  (let [node (json/decode "{\"x\":1,\"y\":[2,3]}")
+        s    (json/encode-string node)]
+    (do
+      (println (string/to-cstr s))
+      ;; owned result survives as a Map key
+      (let [m (map-assoc (:: (map-new) (Map String int)) s 7)]
+        (do
+          (println (map-get m s))
+          (map-free m)))
+      0)))
+
+(demo)

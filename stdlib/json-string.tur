@@ -1,0 +1,35 @@
+;;; tur/json-string -- owned String sibling for the tur/json encoder.
+;;;
+;;; json/encode returns a freshly-allocated cstr the caller must free (a
+;;; malloc'd growable buffer typed as a borrowed cstr -- the exact hazard the
+;;; owned String type fixes; see string-adoption-stdlib-plan.md). Serialized
+;;; output is almost always returned, stored, or written past the call frame,
+;;; which is where a borrowed-typed owned buffer becomes a leak/lifetime hazard.
+;;; This opt-in module returns it as an owned String, safe to store and pass on.
+;;;
+;;; Separate module so the lean tur/json stays free of the map/typeclass
+;;; dependency; only programs wanting an owned encode result load this.
+;;;
+;;; Note: json/encode is inline-C, so like tur/json itself this runs on the
+;;; compiled path; use the underlying json/encode cstr form under --interpret.
+;;;
+;;; Since: v2 (string-adoption-stdlib-plan, batch 3)
+(load "stdlib/json.tur")
+
+(load "stdlib/string.tur")
+;;; json/encode-string -- serialize a JSON node tree to an owned String.
+;;;
+;;; Parameters:
+;;;   node -- a JSON node tree (as from json/decode or the json/* builders)
+;;;
+;;; Returns:
+;;;   An owned String holding the encoded JSON, safe to store or return.
+;;;
+;;; Example:
+;;;   (string/to-cstr (json/encode-string (json/decode "{\"x\":1}")))
+;;;   ; => "{\"x\":1}"
+;;;
+;;; Since: v2
+
+(defn json/encode-string [node : int] : String
+  (string/adopt-cstr (json/encode node)))
