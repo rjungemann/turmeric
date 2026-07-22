@@ -1,0 +1,14 @@
+;; codegen-user-defn-collides-with-libc-pipe2: a user top-level `defn` named
+;; after a libc/POSIX symbol (`read`, `write`, `time`, ...) must not emit a bare
+;; `static int64_t read(...)` that redeclares the system-header prototype. The
+;; emitter guards such names with a `tur_u_` prefix. This fixture defines three
+;; and calls them; a regression (collision back) fails the C compile.
+(defn read [a : int b : int] : int (+ a b))
+(defn write [a : int b : int] : int (* a b))
+(defn time [] : int 7)
+
+(defn main [] : int
+  (println (read 2 3))
+  (println (write 4 5))
+  (println (time))
+  0)

@@ -88,4 +88,14 @@ void tur_mangle_ident(const char *name, char *out, size_t cap);
  * `cap >= strlen(mangled) + 1` always suffices. */
 size_t tur_demangle(const char *mangled, char *out, size_t cap);
 
+/* True if `name[0..len)` is a libc/POSIX function symbol that a C toolchain's
+ * system headers declare in the emitted translation unit, so a user top-level
+ * `defn` lowered to a bare `static int64_t <name>(...)` would be a
+ * redeclaration conflict.  The emitter (raw_name_for_binding) consults this to
+ * mangle ONLY a bare, non-module-prefixed global whose spelling collides --
+ * module-qualified names (`geom__read`) and extern-c bindings (which name the
+ * real libc symbol on purpose) are unaffected.  See
+ * docs/archive/codegen-user-defn-collides-with-libc-pipe2.md. */
+int tur_name_collides_libc(const char *name, size_t len);
+
 #endif /* TUR_COMPILER_MANGLE_H */

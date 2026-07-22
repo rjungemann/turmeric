@@ -1376,7 +1376,9 @@ char *raw_name_for_binding(const Binding *b) {
         mod_prefix_len  = j;
     }
 
-    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len);
+    /* +8 slack reserves room for the `tur_u_` libc-collision guard prefix
+     * (6 bytes) plus the NUL, applied to a bare global below. */
+    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len) + 8;
     char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
@@ -1399,6 +1401,22 @@ char *raw_name_for_binding(const Binding *b) {
         memcpy(p + k, b->name->name, b->name->len);
         k += b->name->len;
     } else if (b->is_global) {
+        /* codegen-user-defn-collides-with-libc-pipe2: a bare (non-module)
+         * top-level global whose spelling is a libc/POSIX symbol the system
+         * headers declare would emit `static int64_t read(...)` and conflict
+         * with e.g. <unistd.h>'s `read` ("static declaration follows non-static
+         * declaration"). Prefix such names with `tur_u_` so the user function
+         * gets its own C symbol. Module-qualified globals already carry a
+         * distinguishing prefix (mod_prefix_len > 0, so `geom__read` never
+         * matches), and extern-c bindings (handled above) intentionally keep
+         * the libc spelling to name the real symbol. Applied at both definition
+         * and every use through this single chokepoint, so all sites agree;
+         * `main` is never remapped. */
+        if (mod_prefix_len == 0 && !is_main_binding &&
+            tur_name_collides_libc(b->name->name, b->name->len)) {
+            memcpy(p + k, "tur_u_", 6);
+            k += 6;
+        }
         tur_mangle_append(p, &k, b->name->name, b->name->len);
     } else {
         tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
