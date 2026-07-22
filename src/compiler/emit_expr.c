@@ -1361,7 +1361,21 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     bool fresh_call = pinit && pinit->kind == EX_CALL
                       && pinit->as.call_.fn_binding
                       && pinit->as.call_.fn_binding->returns_fresh_closure;
-    if (init->kind != EX_CLOSURE && !fresh_call) return false;
+    /* closure-drop-glue (Model R): a PARTIAL-APPLICATION head -- e.g. the
+     * `(mw-cors-opts opts)` in `((mw-cors-opts opts) base)` -- desugars to
+     * `(let [<pre-applied args>] <EX_CLOSURE>)`: a freshly-malloc'd `__pap` env
+     * that is applied once as the call head and then dead.  Its thunk returns the
+     * UNDERLYING fn's result, never its own env, so freeing it at scope exit can
+     * never alias-UAF the result.  Admit it (the escape checks below still guard
+     * a __pap that leaked into a sibling/result).  Gated on the experiment. */
+    bool fresh_pap = false;
+    if (g_opt_closure_drop_glue) {
+        const Expr *p = pinit;
+        while (p && (p->kind == EX_ASCRIBE || p->kind == EX_LET))
+            p = (p->kind == EX_ASCRIBE) ? p->as.ascribe_.inner : p->as.let_.body;
+        fresh_pap = p && p->kind == EX_CLOSURE && init->kind == EX_LET;
+    }
+    if (init->kind != EX_CLOSURE && !fresh_call && !fresh_pap) return false;
     if (init->kind == EX_CLOSURE) {
         /* Scalar-result gate: a closure returning a reference/struct/pointer could
          * hand back a value derived from its env; restrict to scalar returns whose
