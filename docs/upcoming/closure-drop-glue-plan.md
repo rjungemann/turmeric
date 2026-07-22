@@ -47,6 +47,35 @@ below is ready to execute if/when that family is prioritized. Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-22) -- #1b LANDED: Drop-typeclass dispatch in the
+> closure drop-glue; `httpd-mw-cors` leak-clean flag-on.** The drop-glue now
+> releases an owned Drop-typeclass capture, and mw-cors captures owned `String`.
+> Suite 2254/0.
+>
+> - **Codegen (flag-gated, zero flag-off churn):** `Closure` gains
+>   `capture_drop_insts` (resolved at elaboration -- `elab_fns.c` via
+>   `typeclass_env_lookup_typeclass`/`_instance`; NULL-init at all 3 non-zeroing
+>   construction sites). A Drop-implementing capture is MOVED into the env (an
+>   opaque Drop type has NO scope-exit auto-drop, so retaining a second owner would
+>   leak the source -- moving makes the closure the sole owner, releases once, and a
+>   second capture is `TUR-E0005`). The `capture_clone_insts` retain path was
+>   REMOVED after finding the retain model leaks the source for auto-drop-less
+>   opaques. rc/ref and `^fat` captures keep their own arms (no double-handling).
+>   The drop-glue releases via the resolved instance
+>   (`__inst_Drop_drop_<T>(env->field)`, `emit_fns.c` + `emit_expr.c` fallback).
+> - **httpd:** `httpd-cors-own-str` returns owned `String` (`string/from-cstr`);
+>   `mw-cors-with` captures `String` and passes `string/to-cstr` borrow views to the
+>   emit helpers; `httpd.tur` loads `stdlib/string.tur`. `httpd-mw-cors` flipped to
+>   `--enable=closure-drop-glue`, marker dropped (leak-clean, stdout matches,
+>   flag-off byte-identical).
+>
+> **Remaining cors-family follow-ups** (each captures its OWN owned strings, same
+> recipe -- own as `String`, pass `string/to-cstr` views): `httpd-mw-cors-opts`
+> (64B), `-cookie` (12B), `-form` (26B), `-compose` (88B), `-compose-of` (208B).
+> `-fold-many` / `-rate-limit` are non-closure buffer leaks (out of scope). The
+> reactor/CPS async blocker (`__dk_reap_ptr`, `owns_cb` -- precompiled libturi C)
+> still needs a runtime-API change before `httpd-async-*` is safe flag-on.
+>
 > **Progress note (2026-07-21i) -- #1a Drop typeclass LANDED; #1b codegen
 > integration spec (turn-key).** The `Drop` typeclass + `Drop[String]` instance
 > are in and verified (`(drop s)` -> `__inst_Drop_drop_String` -> `string/release`,
