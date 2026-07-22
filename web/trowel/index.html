@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Trowel -- The Turmeric Editor</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Trowel is a fast, native macOS editor for Turmeric -- run your code and open a REPL in one click, with the compiler built in.">
+<meta name="description" content="Trowel is a fast, native desktop editor for Turmeric -- run your code and open a REPL in one click, with the compiler built in.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://turmeric-lang.com/trowel">
 <meta property="og:title" content="Trowel -- The Turmeric Editor">
-<meta property="og:description" content="A fast, native macOS editor for Turmeric. Run your code and open a REPL in one click, with the compiler built in.">
+<meta property="og:description" content="A fast, native desktop editor for Turmeric. Run your code and open a REPL in one click, with the compiler built in.">
 <meta property="og:image" content="https://turmeric-lang.com/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -21,7 +21,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:url" content="https://turmeric-lang.com/trowel">
 <meta name="twitter:title" content="Trowel -- The Turmeric Editor">
-<meta name="twitter:description" content="A fast, native macOS editor for Turmeric. Run your code and open a REPL in one click, with the compiler built in.">
+<meta name="twitter:description" content="A fast, native desktop editor for Turmeric. Run your code and open a REPL in one click, with the compiler built in.">
 <meta name="twitter:image" content="https://turmeric-lang.com/og-image.png">
 
 <link rel="stylesheet" href="/site.css">
@@ -185,6 +185,18 @@
   flex-wrap: wrap;
 }
 
+/* ── TWO-UP: RUN+REPL / NATIVE+THEMED ──── */
+/* Two text columns side by side (code snippets removed). */
+.trowel-duo {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 96px 48px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 80px;
+  align-items: start;
+}
+
 /* Credit line above the footer */
 .trowel-credit {
   max-width: 1100px;
@@ -211,6 +223,8 @@
   .trowel-hero .install-hint { justify-content: center; }
   .trowel-shot { grid-row: 1; max-width: 400px; }
 
+  .trowel-duo { grid-template-columns: 1fr; gap: 44px; padding: 60px 24px; }
+
   .download-section { padding: 60px 24px 24px; }
   .dl-grid { grid-template-columns: 1fr; gap: 16px; }
   .trowel-credit { padding: 0 24px 32px; }
@@ -236,16 +250,16 @@
     <div class="trowel-hero-copy">
       <div class="hero-eyebrow">
         <span class="eyebrow-dot"></span>
-        Meet Trowel -- now available for macOS
+        Trowel Editor -- now available for macOS and Linux
       </div>
-      <h1>The <em>native</em> editor for Turmeric.</h1>
+      <h1>The perfect way to get started with Turmeric.</h1>
       <p class="hero-desc">
-        Open a file, press Run, see output. Trowel is a fast, native macOS
+        Open a file, press Run, see output. Trowel is a fast, native desktop
         app with a live REPL and the Turmeric compiler built right in --
         nothing else to install.
       </p>
       <div class="hero-actions">
-        <a href="https://github.com/rjungemann/trowel/releases/latest" class="btn-hero btn-hero-primary">Download for macOS <span class="arrow">→</span></a>
+        <a href="https://github.com/rjungemann/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel <span class="arrow">→</span></a>
         <a href="https://github.com/rjungemann/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
       </div>
       <div class="install-hint">
@@ -271,108 +285,58 @@
 <div class="feature-grid reveal">
 
   <div class="feature-card">
-    <div class="feat-icon">▶</div>
+    <div class="feat-icon"><t-icon name="play"></t-icon></div>
     <div class="feat-title">Run instantly</div>
     <p class="feat-desc">Save and run the current file with a single command. Output streams into the pane below -- edit, run, repeat without leaving the editor.</p>
-    <span class="feat-badge">Run · one keystroke</span>
   </div>
 
   <div class="feature-card">
-    <div class="feat-icon">⟳</div>
+    <div class="feat-icon"><t-icon name="refresh-cw"></t-icon></div>
     <div class="feat-title">Built-in REPL</div>
     <p class="feat-desc">A live Turmeric REPL opens in a split below your code. Evaluate expressions as you go and keep the language at your fingertips.</p>
-    <span class="feat-badge">built-in REPL</span>
   </div>
 
   <div class="feature-card">
-    <div class="feat-icon">◇</div>
+    <div class="feat-icon"><t-icon name="book-open"></t-icon></div>
     <div class="feat-title">Docs &amp; autocomplete</div>
     <p class="feat-desc">Docstrings and completion for stdlib and buffer-local names surface right at the cursor, drawn from the bundled compiler's doc index.</p>
-    <span class="feat-badge">stdlib + buffer docs</span>
   </div>
 
   <div class="feature-card">
-    <div class="feat-icon">≋</div>
+    <div class="feat-icon"><t-icon name="align-left"></t-icon></div>
     <div class="feat-title">Sweet-exp aware</div>
     <p class="feat-desc">Full Turmeric syntax highlighting, with a toolbar toggle between classic s-expressions and the indentation-based sweet-exp dialect.</p>
-    <span class="feat-badge">s-expr · sweet-exp</span>
   </div>
 
   <div class="feature-card">
-    <div class="feat-icon">⊕</div>
+    <div class="feat-icon"><t-icon name="folder-plus"></t-icon></div>
     <div class="feat-title">Scaffold projects</div>
     <p class="feat-desc">Spin up a new binary, sweet-exp, or library project without touching the terminal -- Trowel runs the scaffolder and opens the files for you.</p>
-    <span class="feat-badge">tur init</span>
   </div>
 
   <div class="feature-card">
-    <div class="feat-icon">⚡</div>
+    <div class="feat-icon"><t-icon name="zap"></t-icon></div>
     <div class="feat-title">Compiler included</div>
-    <p class="feat-desc">A real native macOS app -- not Electron -- that ships the Turmeric compiler inside the bundle. One download, and you are ready to build.</p>
-    <span class="feat-badge">Turmeric bundled</span>
+    <p class="feat-desc">A real native desktop app -- not Electron -- that ships the Turmeric compiler inside the bundle. One download, and you are ready to build.</p>
   </div>
 
 </div>
 
 <hr class="divider mt-80">
 
-<!-- ── SPLIT: RUN + REPL ──────────────── -->
-<div class="split-section reveal">
-  <div>
+<!-- ── SPLIT: RUN + REPL / NATIVE + THEMED ──────── -->
+<div class="trowel-duo reveal">
+  <div class="trowel-duo-col">
     <p class="section-label">Run &amp; REPL</p>
     <h2 class="section-title">From blank file<br>to running code.</h2>
     <p class="section-desc mb-24">Trowel is built around the tightest possible loop: open a <code>.tur</code> file, hit Run, and watch it compile and execute in the pane below. Errors come back with clickable locations.</p>
     <p class="section-desc">Need to poke at something? Open the REPL pane and evaluate expressions against the same toolchain -- the compiler is already there, no setup required.</p>
-    <span class="feat-badge">Run · REPL · clickable errors</span>
   </div>
-  <div class="code-card code-card--sm">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">square.tur</span>
-    </div>
-    <div class="code-card-body">
-      <div class="code-version turmeric-version">(defn square [x : int] : int
-  (* x x))
-
-(defn main [] : int
-  (println (square 7))  ;; => 49
-  0)</div>
-    </div>
-  </div>
-</div>
-
-<hr class="divider">
-
-<!-- ── SPLIT: THEMED + NATIVE ─────────── -->
-<div class="split-section reverse reveal">
-  <div>
+  <div class="trowel-duo-col">
     <p class="section-label">Native &amp; themed</p>
     <h2 class="section-title">Fast, native,<br>and <em>spiced</em> to match.</h2>
     <p class="section-desc mb-24">Trowel is a genuine Qt&nbsp;6 desktop app with a Scintilla editing core -- responsive on large files and light on your machine. No web view, no bundled browser.</p>
     <p class="section-desc">It ships with the "Spice Market" dark theme that matches this site, plus a light variant. Your editor looks like it belongs to the language.</p>
-    <span class="feat-badge">Qt 6 · Scintilla · dark + light</span>
-  </div>
-  <div class="code-card code-card--sm">
-    <div class="code-card-bar">
-      <div class="win-dot wd-r"></div>
-      <div class="win-dot wd-y"></div>
-      <div class="win-dot wd-g"></div>
-      <span class="code-card-filename">lens-example-2.tur</span>
-    </div>
-    <div class="code-card-body">
-      <div class="code-version turmeric-version">(defstruct Lens' [S A]
-  (get (fn [S] A))
-  (put (fn [S A] S)))
-
-(defstruct Person :copy
-  [name : cstr
-   age  : int])
-
-(defn name-get [p : Person] : cstr
-  (. p name))</div>
-    </div>
   </div>
 </div>
 
@@ -385,21 +349,21 @@
 
   <div class="dl-grid">
     <div class="dl-card">
-      <div class="dl-os"><span class="dl-glyph">◆</span> macOS</div>
+      <div class="dl-os"><span class="dl-glyph"><t-icon name="command"></t-icon></span> macOS</div>
       <span class="dl-tag">Available now</span>
       <p class="dl-note">Signed and notarized. Grab the <code>.dmg</code> from the latest release, or install with Homebrew.</p>
       <a href="https://github.com/rjungemann/trowel/releases/latest" class="dl-btn">Download .dmg</a>
     </div>
 
-    <div class="dl-card soon">
-      <div class="dl-os"><span class="dl-glyph">▲</span> Linux</div>
-      <span class="dl-tag pending">Coming soon</span>
-      <p class="dl-note">Native Linux builds are on the way. Watch the repository for release announcements.</p>
-      <span class="dl-btn disabled">Coming soon</span>
+    <div class="dl-card">
+      <div class="dl-os"><span class="dl-glyph"><t-icon name="terminal"></t-icon></span> Linux</div>
+      <span class="dl-tag">Available now</span>
+      <p class="dl-note">Portable <code>.AppImage</code> -- download, mark it executable, and run. No install step, and the compiler is bundled in.</p>
+      <a href="https://github.com/rjungemann/trowel/releases/latest" class="dl-btn">Download AppImage</a>
     </div>
 
     <div class="dl-card soon">
-      <div class="dl-os"><span class="dl-glyph">■</span> Windows</div>
+      <div class="dl-os"><span class="dl-glyph"><t-icon name="app-window"></t-icon></span> Windows</div>
       <span class="dl-tag pending">Coming soon</span>
       <p class="dl-note">Windows support is planned. Watch the repository for release announcements.</p>
       <span class="dl-btn disabled">Coming soon</span>
@@ -422,7 +386,7 @@
       <div class="step-num">01 -- Install</div>
       <div class="step-title">Install Trowel</div>
       <div class="step-code">brew install --cask rjungemann/trowel/trowel</div>
-      <p class="step-desc">Or download the <code>.dmg</code> from the <a href="https://github.com/rjungemann/trowel/releases/latest" style="color:var(--gold);">latest release</a> and drag it to Applications. The Turmeric compiler is bundled -- nothing else to install.</p>
+      <p class="step-desc">Or grab the <code>.dmg</code> (macOS) or portable <code>.AppImage</code> (Linux) from the <a href="https://github.com/rjungemann/trowel/releases/latest" style="color:var(--gold);">latest release</a>. The Turmeric compiler is bundled -- nothing else to install.</p>
     </div>
 
     <div class="step-card">
@@ -435,7 +399,6 @@
 
     <div class="step-card">
       <div class="step-num">03 -- Run</div>
-      <div class="step-title">Press Run</div>
       <div class="step-code">(defn main [] : int
   (println "Hello from Trowel!")
   0)</div>
@@ -455,20 +418,14 @@
 <!-- ── CTA ───────────────────────────── -->
 <div class="cta-section reveal">
   <div class="cta-box">
-    <h2 class="cta-title">Ready to build with<br><em>Turmeric?</em></h2>
+    <h2 class="cta-title">Don't forget to bring a <em>Trowel</em></h2>
     <p class="cta-desc">Download Trowel and go from a blank file to running code in minutes.</p>
     <div class="cta-actions">
-      <a href="https://github.com/rjungemann/trowel/releases/latest" class="btn-hero btn-hero-primary">Download for macOS →</a>
+      <a href="https://github.com/rjungemann/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel →</a>
       <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
     </div>
   </div>
 </div>
-
-<!-- ── CREDIT ────────────────────────── -->
-<p class="trowel-credit">
-  Built with <a href="https://www.qt.io/">Qt&nbsp;6</a> and
-  <a href="https://www.scintilla.org/">Scintilla</a>.
-</p>
 
 <!-- ── FOOTER ─────────────────────────── -->
 <site-footer></site-footer>

@@ -3,6 +3,7 @@
 // is deferred by default, so it runs after the DOM is parsed.
 
 import Prism from 'prismjs';
+import './icons.js'; // registers the <t-icon> custom element (Lucide set)
 
 // ── TURMERIC SYNTAX GRAMMAR ─────────────────────────────────────────────────
 
