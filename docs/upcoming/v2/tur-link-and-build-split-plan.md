@@ -1,6 +1,8 @@
 # `tur link` and the build compile/link split
 
-**Status:** Proposed (not started). Motivated by
+**Status:** In progress. Phases 1, 3, and 4 (the compile/link split mental model)
+have landed; the prebuilt-runtime archive (Phase 2 / 3c) and the ccache CI wiring
+(Phase 5) remain. See the checklist in Section 5. Motivated by
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
@@ -189,22 +191,33 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
 
 ## 5. Phased plan
 
-1. **Factor `link_objects(...)`** out of the monolithic build in `main.c`
+1. **[DONE] Factor `link_objects(...)`** out of the monolithic build in `main.c`
    (ASan autodetect, `-lturi` filter, autolink anchoring) with no behavior
-   change. Land + full suite green.
-2. **Prebuilt runtime (3c).** `tur build --runtime=lib` links `libturi.a`;
-   measure suite wall-clock delta. Make default once green.
-3. **`tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link` sidecar
-   (written by `tur compile`). Register both commands in `builtins[]` /
-   `CANONICAL_COMMANDS[]` and the `main()` dispatch; document the
-   `tur compile -> tur link` pipeline. `emit-c` is left untouched.
-4. **Redefine `tur build` as `compile + link` (3b)** behind `--no-split-build`;
-   wire ccache; measure
-   cold vs warm suite wall-clock (expect the big drop here). Flip default.
-5. **CI: install + cache ccache**, now that calls are cacheable (was a no-op
-   before -- do NOT do this before step 4). Cache the ccache dir across runs in
-   `.github/workflows/ci.yml`.
-6. Retire `--no-split-build` after a green soak.
+   change. Landed as `resolve_autolink_flags(...)` (the four resolution blocks)
+   + `link_command_run(...)` (the `cc` assembly/run), plus the shared
+   `scan_autolink_markers(...)` and `collect_build_aux(...)` helpers. Full suite
+   green (2264 passed, 0 failed).
+2. **[TODO] Prebuilt runtime (3c).** `tur build --runtime=lib` links `libturi.a`;
+   measure suite wall-clock delta. Make default once green. (Independent of the
+   split; the higher-leverage cold-run win. Not yet started -- the `-L` discovery
+   for a dev-tree `build/src/libturi.a` is the fiddly part to get right.)
+3. **[DONE] `tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link`
+   sidecar (written by `tur compile`). Both commands are registered in
+   `builtins[]` / `CANONICAL_COMMANDS[]` and dispatched from `main()`; `emit-c`
+   is untouched. The sidecar (`# tur link sidecar v1`) records the fully
+   *resolved* link flags (`autolink:` / `asan:` / `cmake:` / `auxsrc:`) so
+   `tur link` reproduces the link without re-running the frontend.
+4. **[DONE] Redefine `tur build` as `compile + link` (3b)** behind
+   `--split-build` (opt-in) / `--no-split-build` (the default remains the
+   monolithic single-`cc` call, so output stays byte-identical during rollout).
+   A single-file `tur build --split-build` runs the real `cmd_compile` then
+   `cmd_link` code paths, so the three cannot drift. Flipping the default and
+   wiring ccache measurement is the remaining work here.
+5. **[TODO] CI: install + cache ccache**, now that the `cc -c` calls are
+   cacheable (was a no-op before -- do NOT do this before the default flips in
+   step 4). Cache the ccache dir across runs in `.github/workflows/ci.yml`.
+6. **[TODO]** Retire `--no-split-build` after a green soak (and flip
+   `--split-build` on by default).
 
 ## 6. Finishing the Section 3 work (folded in from the archived report)
 
