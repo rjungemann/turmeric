@@ -98,7 +98,11 @@
         mid    (make-mw "middle")
         inner  (make-mw "inner")
         composed (compose-middleware-of base outer mid inner)
-        h      (httpd-new-pool 0 1 composed)
+        ;; `composed` is an owned Handler; hand it to the server by CONSUMING it
+        ;; (httpd-handler-carrier moves it -> the scope-exit auto-drop is
+        ;; suppressed, so the server is the sole owner and httpd-free reclaims it
+        ;; -- no double-free).
+        h      (httpd-new-pool 0 1 (httpd-handler-carrier composed))
         port   (httpd-port h)
         server (spawn-server h)
         client (spawn-client port)]

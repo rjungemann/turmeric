@@ -3365,6 +3365,64 @@
   (if (empty? mws)
     base
     (list (first mws) (list compose-middleware base ~@(rest mws)))))
+;;; Handler -- an owned, composed request-handler onion (the result of
+;;; `compose-middleware-of` / a folded middleware chain).
+;;;
+;;; `:affine` (use-at-most-once, move-only) is the key: a bound Handler the owner
+;;; neither MOVES (hands to a server via `httpd-handler-carrier`) nor BORROWS
+;;; (invokes via `(:: h :int)` / `httpd-call`) is AUTO-DROPPED at scope exit
+;;; through its Drop instance -- `TUR_CLOSURE_DROP` walks the captured `next`
+;;; boxes down to the base handler, reclaiming the whole onion.  This retires the
+;;; explicit `httpd-mw-drop` for the runtime-built-chain case: bind the fold
+;;; result as a Handler and the compiler drops it for you.  The carrier is the
+;;; same int64 fat-closure handle every httpd handler rides, so a Handler bridges
+;;; to `:int` / `(fn [int] int)` by ascription.
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+(defopaque Handler :int :affine)
+;;; httpd-handler-drop -- internal: reclaim a composed Handler onion.
+;;;
+;;; Routes to `TUR_CLOSURE_DROP`, which recovers the env's drop-glue header and
+;;; walks the owning captures (the wrapped downstream handlers) before freeing --
+;;; the whole onion down to the base, released exactly once.  Consumes its affine
+;;; argument.  This is the Drop instance's method; it is not normally called by
+;;; hand (the scope-exit auto-drop calls it).
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+(defn httpd-handler-drop [h : Handler] : void
+  ```c
+  int64_t __h = (int64_t)h;
+  if (__h) TUR_CLOSURE_DROP(__h);
+  ```)
+;;; Drop [Handler] -- reclaim the onion when a bound Handler dies unmoved/unborrowed.
+(definstance Drop [Handler]
+  (drop [x] : void (httpd-handler-drop x)))
+;;; httpd-handler-carrier -- CONSUME a Handler, yielding its raw int64 carrier for
+;;; a server constructor (`^fat handler : int`) or any `:int` handler sink that
+;;; TAKES OWNERSHIP.
+;;;
+;;; Because the parameter is the affine Handler itself, passing a bound Handler
+;;; here MOVES it -- which suppresses the scope-exit auto-drop, so the server
+;;; (whose `httpd-free` / `httpd-async-free` already `TUR_CLOSURE_DROP`s its
+;;; handler) becomes the SOLE owner with no double-free.  Use this at a server
+;;; handoff; use `(:: h :int)` (a non-consuming read) only for a BORROW where the
+;;; owner keeps the Handler and lets it auto-drop.
+;;;
+;;; Parameters:
+;;;   h -- the composed Handler onion (consumed).
+;;;
+;;; Returns:
+;;;   The raw int64 fat-closure carrier.
+;;;
+;;; Example:
+;;;   (let [composed (compose-middleware-of base mw1 mw2)]
+;;;     (httpd-new-pool 0 1 (httpd-handler-carrier composed)))
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+(defn httpd-handler-carrier [h : Handler] : int
+  ```c
+  return (int64_t)h;
+  ```)
 ;;; httpd-mw-apply -- internal: apply one fat-closure middleware to a handler.
 ;;;
 ;;; The middleware is a fat closure of shape
@@ -3405,25 +3463,29 @@
       p = n;
   }
   ```)
-;;; httpd-mw-drop -- reclaim a composed handler onion (the result of
-;;; `httpd-mw-fold` / `compose-middleware`). Under `--enable=closure-drop-glue`
-;;; this releases the outermost wrapper AND walks the captured downstream `next`
-;;; boxes via the env's drop-glue header, so the whole onion (down to the base
-;;; handler) is freed. Flag-off it is a plain free of the outer box (inner layers
-;;; leak, as before). Use for a runtime-built chain that no server owns (a server
-;;; handle's `httpd-free` / `httpd-async-free` already does this for you).
+;;; httpd-mw-drop -- SUPERSEDED: reclaim a raw-`:int` composed handler onion.
+;;;
+;;; Retired in favor of the `Handler` auto-drop (automatic R3a): bind the fold
+;;; result as a `Handler` (`(:: (httpd-mw-fold base chain) :Handler)`, or use
+;;; `compose-middleware-of`, which returns `Handler`) and the compiler drops the
+;;; onion for you at scope exit -- no explicit call, and no risk of forgetting
+;;; it.  Kept only for a legacy raw-`:int` onion that was never bound as a
+;;; Handler; new code should not use it.
+;;;
+;;; Releases the outermost wrapper AND walks the captured downstream `next` boxes
+;;; via the env's drop-glue header, so the whole onion (down to the base handler)
+;;; is freed.
 ;;;
 ;;; Parameters:
 ;;;   handler -- the composed handler closure (:int); 0 is a no-op.
 ;;;
 ;;; Returns: nothing.
 ;;;
-;;; Example:
-;;;   (let [composed (httpd-mw-fold base chain)]
-;;;     (httpd-call composed conn)
-;;;     (httpd-mw-drop composed))
+;;; Example (legacy -- prefer the Handler auto-drop):
+;;;   (let [composed (:: (httpd-mw-fold base chain) :Handler)]
+;;;     (httpd-call (:: composed :int) conn))   ; composed auto-drops at scope exit
 ;;;
-;;; Since: R3a (closure-drop-glue runtime-chain teardown)
+;;; Since: R3a; superseded by Handler auto-drop (automatic R3a).
 
 (defn httpd-mw-drop [handler : int] : nil
   ```c
@@ -3495,17 +3557,21 @@
 ;;;           to whatever closure type the call site uses.
 ;;;
 ;;; Returns:
-;;;   The fully-wrapped handler closure (:int).
+;;;   The fully-wrapped handler onion as an owned `Handler` -- bind it and the
+;;;   compiler auto-drops it at scope exit (no explicit `httpd-mw-drop`), or hand
+;;;   it to a server via `httpd-handler-carrier` (which moves it, suppressing the
+;;;   auto-drop so the server owns it).
 ;;;
 ;;; Since: Phase H8 (M8 core); requires the V1 cast fix in
 ;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
+;;;        Returns `Handler` since automatic R3a (closure-drop-glue).
 
 (defn compose-middleware-of [A]
   [^fat base :int ^borrow & mws :A]
-  :int
+  :Handler
   (let [composed (httpd-mw-fold base mws)]
     (httpd-mw-free-spine mws)
-    composed))
+    (:: composed :Handler)))
 ;; =============================================================================
 ;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
 ;; =============================================================================

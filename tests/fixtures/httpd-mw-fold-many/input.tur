@@ -45,13 +45,15 @@
 (defn main [] : int
   (let [base     (let [_b (ctr 1)] (fn [conn : ptr<void>] : nil (ctr _b)))
         chain    (build-chain 70 (tnil))
-        composed (httpd-mw-fold (:: base int) chain)]
-    (httpd-call composed (:: 0 ptr<void>))
+        composed (:: (httpd-mw-fold (:: base int) chain) :Handler)]
+    ;; `composed` is bound as an owned `Handler`, so the compiler auto-drops it
+    ;; at scope exit (the Drop instance's TUR_CLOSURE_DROP walks the captured
+    ;; `next` boxes down to base) -- no explicit `httpd-mw-drop` needed. The
+    ;; `(:: composed :int)` here is a non-consuming BORROW, so the auto-drop
+    ;; still fires. This is the automatic-R3a replacement for httpd-mw-drop.
+    (httpd-call (:: composed :int) (:: 0 ptr<void>))
     (println (ctr 1))
-    ;; Reclaim the runtime-built chain: drop the composed onion (walks the
-    ;; captured `next` boxes down to base) and free the input list (each fresh
-    ;; factory head + its cell). Under --enable=closure-drop-glue this is
-    ;; leak-clean; flag-off the inner layers leak as before.
-    (httpd-mw-drop composed)
+    ;; The input chain spine + fresh factory heads are still owned by the builder
+    ;; (the fold only borrows them), so reclaim them explicitly.
     (httpd-mw-free-chain chain)
     0))

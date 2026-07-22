@@ -228,28 +228,59 @@ This closes the corpus leak. What it does NOT do -- and what a future
 `build-chain` off `:int` onto `Closure` / `list<Closure>` so the holder's
 drop-glue drops the field/spine with no explicit call (the Model U fn-field drop
 generalized to a captured `TY_FN`-boxed field + a cons spine, move-gated exactly
-as the landed `is_fat` arm). That is a larger httpd-fold re-typing, deferred
-until the `:int` middleware ABI is revisited; the explicit primitives are the
-sound stopgap and are independently useful for any hand-built dynamic chain.
+as the landed `is_fat` arm). That was a larger httpd-fold re-typing; the explicit
+primitives are the sound stopgap and are independently useful for any hand-built
+dynamic chain. **Update: half of it -- retiring `httpd-mw-drop` via an automatic
+onion auto-drop -- landed 2026-07-22 (see below); the input-spine half
+(`httpd-mw-free-chain`) remains deferred.**
 
-**Feasibility probe (2026-07-22) -- two concrete blockers, both cross-cutting,
-neither httpd-local.** Splitting automatic R3a into its two halves:
+**Automatic R3a, half 1 -- `httpd-mw-drop` RETIRED (2026-07-22).** A bound
+composed onion now auto-drops at scope exit, no explicit call. The route turned
+out cleaner than the first feasibility probe guessed: rather than generalize the
+`returns_fresh_closure` escape analysis, it rides the **Drop typeclass** plus an
+**`:affine` opaque**.
 
-1. *Auto-drop the composed onion* (would retire `httpd-mw-drop`). Needs a
-   `let [composed (httpd-mw-fold ...)]` binding to auto-drop at scope exit. The
-   only existing scope-exit auto-drop for a *returned* closure is
-   `returns_fresh_closure` (`elab_fns.c` ~3518), and it is hard-restricted to
-   (a) a body that is a bare capturing `EX_CLOSURE` (possibly under a peeled
-   `let`), (b) **scalar Copy captures only**, and (c) a **scalar Copy result**,
-   precisely so a bare `free(env)` is safe. `httpd-mw-fold` fails all three: its
-   body is a recursive *call* (`httpd-mw-apply mw inner`), and the onion captures
-   an *owning* downstream `next` box (not scalar Copy). Retiring `httpd-mw-drop`
-   thus means generalizing that inference to owning-capture, call-shaped returns
-   routed through `TUR_CLOSURE_DROP` instead of bare `free` -- a compiler change
-   to the fresh-closure escape analysis, plus an honest droppable return type on
-   `httpd-mw-fold` (opaque `Handler` with a Drop instance, or a boxed `TY_FN`).
+- *Compiler (`elab_forms.c`).* The let scope-exit auto-drop injection -- which
+  previously fired only for `TY_REF` (rc/ref) bindings, emitting `(defer (drop!
+  r))` -- now also fires for a binding whose type is a **move-only (`:affine`,
+  non-Clone) Drop-instance opaque** initialized by a fresh-producing call. For
+  those it injects `(defer (<Drop.drop> b))`, dispatching through the type's Drop
+  instance (which routes to `TUR_CLOSURE_DROP`) instead of `drop!`->`free` (a bare
+  free of the past-header fat pointer is the interior-free abort). New helper
+  `binding_closure_drop_inst`. The existing move/consume filters (`is_moved`,
+  `is_binding_consumed`, moved-during-init) are reused unchanged, so a handle
+  handed to a consumer (poisoned by the affine arg-move) is not double-dropped.
+- *stdlib (`httpd.tur`).* `(defopaque Handler :int :affine)` + a non-Clone `Drop
+  [Handler]` instance (-> `httpd-handler-drop` -> `TUR_CLOSURE_DROP`).
+  `compose-middleware-of` returns `Handler`. A bound Handler that is neither moved
+  nor borrowed auto-drops. Two use-shapes:
+  - **borrow** (invoke and keep): `(httpd-call (:: composed :int) conn)` -- the
+    ascription is a non-consuming read, so the scope-exit auto-drop still fires.
+  - **handoff** (server takes ownership): `httpd-handler-carrier [h : Handler] :
+    int` consumes the affine Handler (arg-move) and yields the raw carrier, which
+    *suppresses* the auto-drop so the server's `httpd-free`/`httpd-async-free` is
+    the sole owner -- no double-free.
+  `httpd-mw-drop` is kept only for legacy raw-`:int` onions; the fixtures no
+  longer use it.
+- *Soundness.* Deterministic (alloc/free counter, LSan-independent) fixture
+  `closure-drop-affine-opaque-autodrop` proves all three shapes: unused -> drop
+  once; `^borrow` -> drop once; consuming move -> suppressed (ASan-clean, no
+  double-free). `httpd-mw-fold-many` (leak-checked, was the driver) now uses the
+  Handler auto-drop in place of `httpd-mw-drop` -- byte-equivalent reclaim (same
+  `TUR_CLOSURE_DROP`, compiler-injected). `httpd-mw-compose-of` exercises the
+  server handoff via `httpd-handler-carrier`. Full suite 2266/0.
 
-2. *Auto-drop the input spine + heads* (would retire `httpd-mw-free-chain`).
+Half 2 (below) -- auto-dropping the input spine + heads -- remains deferred.
+
+*Original probe of half 1 (superseded by the landed route above; kept for the
+record):* the only pre-existing scope-exit auto-drop for a *returned* closure is
+`returns_fresh_closure` (`elab_fns.c` ~3518), restricted to a bare `EX_CLOSURE`
+body with scalar-Copy captures/result and a bare `free`; generalizing *that* was
+one option, but the Drop-typeclass + `:affine`-opaque route avoided touching the
+fresh-closure escape analysis entirely.
+
+**Automatic R3a, half 2 -- `httpd-mw-free-chain` (still deferred).** Auto-dropping
+the input spine + heads would retire `httpd-mw-free-chain`.
    Needs a `list<Closure>` holder whose drop glue walks the spine dropping each
    fn-typed head. But the list ABI is `:int`-erased at the **struct** level --
    `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` and
