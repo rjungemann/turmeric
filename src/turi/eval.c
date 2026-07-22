@@ -7628,8 +7628,14 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         const char *qkey = NULL;
         bool is_private = (modname && !exported);
         if (is_private) {
+            /* The env keeps this key for the binding's lifetime. Allocate it from
+             * the env's sym_arena (which every EnvBinding->name is expected to
+             * point into and which turi_env_free reclaims wholesale) rather than a
+             * bare malloc -- otherwise the string is owned by the env yet never
+             * released, and LeakSanitizer reports it as a direct leak at exit
+             * (forcing a sanitizer build to exit non-zero on every clean run). */
             size_t need = strlen(modname) + 1 + strlen(fname) + 1;
-            char *qk = (char *)malloc(need);  /* env keeps the pointer; leak ok */
+            char *qk = (char *)arena_alloc(&env->sym_arena, need);
             if (qk) { snprintf(qk, need, "%s/%s", modname, fname); qkey = qk; }
         }
         /* The key whose existing native (if any) must not be clobbered. For a

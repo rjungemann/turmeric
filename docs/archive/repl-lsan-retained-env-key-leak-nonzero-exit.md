@@ -1,5 +1,15 @@
 # Sanitizer (`-fsanitize=address`) builds of `tur` always exit `1` — LeakSanitizer flags the env's intentionally-retained module-key strings on every run
 
+> **RESOLVED.** The module-private qualified key at `src/turi/eval.c` (the
+> `EX_FN_DEF` path) is now allocated from the env's `sym_arena` instead of a
+> bare `malloc`. Every `EnvBinding->name` is already expected to point into
+> `sym_arena`, and `turi_env_free` reclaims that arena wholesale via
+> `arena_free(&env->sym_arena)` -- so the key is now genuinely owned by the env
+> and released at teardown. Under ASan/LSan a clean interpret/REPL run
+> (`:quit` or immediate EOF) now exits `0` with no leak reported, and the full
+> suite is green. The "leak ok" assumption in the old comment is now true under
+> LSan too.
+
 **Severity:** low (sanitizer-build-only; no correctness impact and no effect on
 release builds — the OS reclaims the memory at exit regardless). Two knock-on
 costs make it worth fixing: (1) an ASan/LSan `tur` exits **non-zero on every
