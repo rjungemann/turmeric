@@ -48,16 +48,46 @@ Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
 is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
 env now carries an `env[-1]` drop-glue header walked by `drop_glue_env_N`, with
 retain/move at capture, a `Drop` typeclass for owned-opaque (String) captures,
-and a partial-application-head free. **11 httpd fixtures** are flipped leak-clean
+and a partial-application-head free. **12 httpd fixtures** are flipped leak-clean
 flag-on (mw-log, basic-auth{,-attr,-noncapture}, body-size, json, static, cors,
-cors-opts, compose, compose-of). Residuals (documented in the dated notes + reports):
-the `httpd-async-*`
-family needs the reactor/CPS runtime-API change (precompiled libturi C); and
+cors-opts, compose, compose-of, async-mw-compose), and the whole async/reactor
+family (the `reactor-*` fixtures, `async-capturing-closure`, ...) is corruption-
+and leak-free flag-on. Residuals (documented in the dated notes + reports):
 `mw-cookie`/`-form` are an httpd request-accessor cstr leak, not a closure issue
 (`docs/reported/httpd-request-accessor-cstr-leak.md`). Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-22c) -- reactor/CPS async blocker RESOLVED; the
+> async/reactor family is corruption- and leak-free flag-on.** Flag-on, every
+> heap fat-closure env is headered (env[-1] drop-glue, fat pointer PAST it), so a
+> bare free of the fat pointer is an interior free. Three teardown sites still
+> did that; each is now header-aware, and `httpd-async-mw-compose` flipped
+> leak-clean (marker dropped, `flags: --enable=closure-drop-glue`; suite 2264/0,
+> flag-off byte-identical):
+>
+> 1. **httpd handler teardown** (`httpd-async-free`) -- the user handler box was
+>    bare-freed; now `TUR_CLOSURE_DROP(ha->handler)` (as the blocking `httpd-free`
+>    already did). `accept_clos`/`body_closure` stay plain `free` -- they are
+>    hand-rolled `{ __fn, ptr }` boxes with no header.
+> 2. **CPS boundary reap** (`__dk_reap_ptr` / `__dk_reap_run`, emitted) -- a
+>    boundary-reaped closure env (`cps_closure_env_freeable`, e.g.
+>    `(let [c (fn ...)] (await (async c)))`) was reaped with a kind-0 bare free.
+>    Added reap kind 2 = "headered closure" (released via `TUR_CLOSURE_DROP`,
+>    walking owning captures); the `reap_env` emit site uses it flag-on. The DK
+>    runtime keeps its exact 2-kind form flag-off -- byte-identical.
+> 3. **Reactor / fiber-group owned boxes** (`owns_cb` in `tur_reactor_free`,
+>    `owns_body` in `tur_local_fiber_group_free`, precompiled libturi C that
+>    cannot name the per-program `tur_closure_drop`) -- both bare-freed a headered
+>    callback box. Fixed with a runtime flag `tur_closure_headers_enabled`
+>    (**weak** 0 default in libturi; a flag-on program emits a **strong** `= 1`
+>    override -- no extern+constructor, so a flag-on program that never links
+>    reactor.o still resolves the symbol). When set, the reactor releases an owned
+>    box through its header (recovering `env[-1]`, walking captures) instead of an
+>    interior free. Sound because every box the reactor/fiber OWNS is an emitted
+>    (headered) closure -- httpd's hand-rolled boxes are all disowned
+>    (`tur_reactor_disown_cb` / `tur_local_disown_body`).
+>
 > **Progress note (2026-07-22b) -- `httpd-mw-compose-of` LANDED leak-clean
 > flag-on; the three leak sources resolved without a per-apply uniqueness
 > analysis.** The earlier note pinned three sources; each is now handled by the

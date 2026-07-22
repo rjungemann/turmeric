@@ -5846,6 +5846,17 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
         buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
         buf_puts(out, "}\n");
         buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+        /* async/reactor blocker: the precompiled reactor/fiber group in libturi
+         * owns callback closure boxes and frees them at teardown, but cannot name
+         * the per-program tur_closure_drop.  libturi defines a WEAK
+         * `tur_closure_headers_enabled = 0`; this STRONG definition overrides it to
+         * 1 so the reactor releases owned boxes through their drop-glue header
+         * (walking captures) instead of interior-freeing the past-header fat
+         * pointer.  A strong-over-weak override (not an extern + constructor) so a
+         * flag-on program that never links reactor.o still defines the symbol
+         * cleanly.  Emitted only under the experiment -> flag-off is byte-identical
+         * and the reactor keeps its plain-free ABI via the weak 0 default. */
+        buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
     } else {
         buf_puts(out, "#define TUR_CLOSURE_DROP(h) free((void *)(intptr_t)(h))\n");
     }

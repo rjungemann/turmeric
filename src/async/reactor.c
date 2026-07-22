@@ -63,6 +63,38 @@
 
 #define REACTOR_INITIAL_CAP 16
 
+/* closure-drop-glue (async/reactor blocker): under `--enable=closure-drop-glue`
+ * every heap fat-closure env the emitted program builds carries an 8-byte
+ * drop-glue header at env[-1] and the fat pointer is handed back PAST it.  The
+ * reactor and fiber group own such callback boxes and free them at teardown,
+ * but this precompiled libturi C cannot name the per-program `tur_closure_drop`.
+ * The emitted program instead flips this runtime flag to 1 at startup (flag-off
+ * it stays 0), and the reactor releases an owned box through its header (which
+ * also walks owning captures) instead of interior-freeing the past-header
+ * pointer.  Every box the reactor/fiber OWNS is an emitted (headered) closure --
+ * httpd's hand-rolled { __fn, ptr } boxes are all disowned (tur_reactor_disown_cb
+ * / tur_local_disown_body) -- so consulting the flag is sound.
+ *
+ * WEAK so a flag-on emitted program's STRONG `tur_closure_headers_enabled = 1`
+ * overrides this default at link; flag-off (no override) it stays 0 and the
+ * reactor keeps its plain-free behavior. */
+__attribute__((weak)) int tur_closure_headers_enabled = 0;
+
+/* Release a reactor/fiber-owned fat-closure box.  Header-aware when the emitted
+ * program enabled closure headers; otherwise a plain free (the flag-off ABI). */
+static void tur_reactor_release_box(int64_t box) {
+    if (!box) return;
+    if (tur_closure_headers_enabled) {
+        void *h = (void *)(intptr_t)box;
+        void (**hdr)(void *) = ((void (**)(void *))h) - 1;
+        void (*drop)(void *) = *hdr;
+        if (drop) drop(h);          /* walks owning captures, frees the base */
+        else free((void *)hdr);     /* header-only (e.g. shim box): free base */
+    } else {
+        free((void *)(intptr_t)box);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Internal types                                                       */
 /* ------------------------------------------------------------------ */
@@ -300,7 +332,7 @@ void tur_reactor_free(void *rp) {
                     if (grown) { freed = grown; freed_cap = new_cap; }
                 }
                 if (nfreed < freed_cap) freed[nfreed++] = src->tur_cb;
-                free((void *)(intptr_t)src->tur_cb);
+                tur_reactor_release_box(src->tur_cb);
             }
         }
         free(src);
@@ -815,7 +847,7 @@ void tur_local_fiber_group_free(void *gp) {
                     if (grown) { freed = grown; freed_cap = new_cap; }
                 }
                 if (nfreed < freed_cap) freed[nfreed++] = lf->tur_body;
-                free((void *)(intptr_t)lf->tur_body);
+                tur_reactor_release_box(lf->tur_body);
             }
         }
         free(lf);

@@ -2875,12 +2875,21 @@
   HttpdAsync *ha = (HttpdAsync *)h;
   if (ha->fiber_group) tur_local_fiber_group_free(ha->fiber_group);
   if (ha->reactor) tur_reactor_free(ha->reactor);
+  /* accept_clos and body_closure are hand-rolled synthetic { __fn, ptr } boxes
+   * (no codegen drop-glue header), so they are freed with a plain free -- NOT
+   * TUR_CLOSURE_DROP, which would read a header 8 bytes before the un-headered
+   * allocation. */
   if (ha->accept_clos) free(ha->accept_clos);
   if (ha->body_closure) free((void *)(intptr_t)ha->body_closure);
-  /* Free the user handler box (passed ^fat, always heap; distinct from
-   * body_closure). Sole free -- no double free. Outer layer only for a
-   * compose-middleware onion; see httpd-free / the plan. */
-  if (ha->handler) free((void *)(intptr_t)ha->handler);
+  /* Free the user handler box (passed ^fat, always a heap fat-closure box;
+   * distinct from body_closure). Sole free -- no double free. For a bare handler
+   * this reclaims the whole thing; for a compose-middleware onion,
+   * TUR_CLOSURE_DROP releases the outermost layer AND (under
+   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * env's drop-glue header, so the whole onion is freed. Flag-off,
+   * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
+   * before). */
+  if (ha->handler) TUR_CLOSURE_DROP(ha->handler);
   if (ha->listen_fd >= 0) close(ha->listen_fd);
   free(ha);
   ```)
