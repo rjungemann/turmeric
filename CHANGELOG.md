@@ -6,8 +6,29 @@ All notable changes to Turmeric are documented here.
 
 ## [0.30.2] -- 2026-07-21
 
+### Added
+
+- **Owned `String` builders and optional accessors**: `stdlib/str-build-string.tur`
+  adds `str-concat-string` / `cstr-sub-string` (owned-`String` wrappers over the
+  `cstr` builders), with wrap-vs-build guidance steering multi-join accumulation
+  to `StringBuilder` (linear) rather than an O(n^2) fold. `stdlib/httpd-string.tur`
+  adds `httpd-req-cookie-opt` / `httpd-req-form-opt` returning `option<String>`, so
+  "present but empty" (`some ""`) is distinct from "absent" (`none`) (#701).
+- **Owned `String` sibling modules for the stdlib**: opt-in `*-string` modules
+  wrapping each freshly-allocated-`cstr` function in `string/adopt-cstr` --
+  `json-string`, `csv-string`, `term-string`, `re-string`, `range-string`, and
+  `schema-string` (Bucket A) (#702).
+
+### Changed
+
+- **Leak-clean fixtures**: dropped 6 stale `requires.no-leak-check` markers now
+  that the S1/S2 fat-closure drop machinery reclaims the escaping / HOF-passed
+  value-closure envs the opt-outs were guarding (#703).
+
 ### Fixed
 
+- **Macros invisible across stdlib re-elaboration**: fixed macros not resolving
+  across stdlib re-elaboration (`elab_core.c`, `eval.c`, `fiber.h`).
 - **`void*`/`int64_t` carrier straddles for `String` returns**: compiled
   `String`-returning functions (and taskgroup handles) emitted C that straddled
   `void*` and `int64_t`, which clang's default `-Wint-conversion` and GCC 14+

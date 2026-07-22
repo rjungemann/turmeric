@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.2` -- fixes `void*`/`int64_t` carrier straddles for `String` returns (#699), unblocking AOT-compiled `String` use and correcting interactive `show` of results in `tur repl`, plus additional macOS codegen fixes.
+**Latest release:** `v0.30.2` -- fixes `void*`/`int64_t` carrier straddles for `String` returns (#699), unblocking AOT-compiled owned-`String` use and correcting interactive `show` in `tur repl`, and adds owned-`String` builders plus opt-in `*-string` stdlib sibling modules (#701, #702).
 
 ## What
 
