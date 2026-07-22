@@ -559,6 +559,26 @@ static void cmd_reload(TuriEnv *env, const char *path) {
     }
 }
 
+/* Reinstate the interactive prompt's stdlib surface on a freshly created env.
+ * Startup does this inline (turi_env_new -> preload macros/collections/
+ * typeclasses -> re-register the inline-C native overrides -> reload native);
+ * :reset and :run (cmd_run) recreate the env and MUST run the same sequence or
+ * the session loses everything the preload bound -- `#map{}`/`#set{}`, the
+ * typeclass Show instances, and the carrier list helpers (list-head/list-tail),
+ * which then warn TUR-W0040 and, for the non-native ones (hamt-of, ...), fail
+ * at runtime. Keeping the three call sites in one helper stops them drifting.
+ * NOTE: spice auto-discovery (RP3) is intentionally NOT re-run here -- it is
+ * cwd-dependent and prints its own banner; only the always-on stdlib preload
+ * belongs in the shared reinit. */
+static void repl_preload_stdlib_and_natives(TuriEnv *env) {
+    const char *stdlib_root = getenv("TUR_STDLIB_DIR");
+    turi_env_preload_macros(env, stdlib_root);
+    turi_env_preload_collections(env, stdlib_root);
+    turi_env_preload_typeclasses(env, stdlib_root);
+    turi_env_register_interpreter_natives(env);
+    tur_ffi_register_reload_native(env);
+}
+
 /* -------------------------------------------------------------------------
  * :run <file>  -- DrRacket-style "press Run" semantic.
  *
@@ -582,7 +602,7 @@ static void cmd_run(TuriEnv **env_io, const char *path) {
         return;
     }
     turi_env_set_diag_sink(env, repl_diag_sink, env);
-    tur_ffi_register_reload_native(env);
+    repl_preload_stdlib_and_natives(env);
     *env_io = env;
 
     printf(";; run: %s\n", path);
@@ -970,34 +990,14 @@ int turi_repl_run(bool watch_mode) {
      * preload; the report's fix direction 3 names the REPL as a drift point).
      * TUR_STDLIB_DIR is set by main.c's resolve_stdlib_root(); the helper
      * defaults to a cwd-relative "stdlib" when it is unset. */
-    {
-        const char *stdlib_root = getenv("TUR_STDLIB_DIR");
-        turi_env_preload_macros(env, stdlib_root);
-        turi_env_preload_collections(env, stdlib_root);
-        /* REPL-only: load the full typeclass.tur so the prompt can render Vec /
-         * Set / Map results through their Show instances (turi_try_show_by_tag)
-         * and `(show x)` resolves without an explicit (load ...).  Kept out of
-         * the shared preload so --interpret and the fixture worker still treat
-         * Show/Ord/Num as opt-in (some fixtures define their own Show class or
-         * assert a missing-instance error). */
-        turi_env_preload_typeclasses(env, stdlib_root);
-    }
-
-    /* Register the interpreter native overrides (sym/:Sym, contracts, seq,
-     * json/schema, safe box/unbox, comonad/mutex/future/chan/... ) so the
-     * prompt can evaluate ops whose stdlib body is inline-C -- e.g. `#map{:a 1}`
-     * needs the Hash[Sym]/Eq[Sym] natives, `assert!` needs the contract natives.
-     * Relocated from src/main.c into tur_core so the REPL and the WASM REPL
-     * register the same block as --interpret and cannot drift
-     * (web-repl-repl-inline-c-native-gap).  Runs AFTER the preload so the native
-     * shims win over the loaded inline-C bodies. */
-    turi_env_register_interpreter_natives(env);
-
-    /* RP5: register `(reload)` unconditionally so users always have
-     * a callable handle, even outside a spice project (the native
-     * surfaces a "no spice loaded" message in that case rather than
-     * an unbound-variable error). */
-    tur_ffi_register_reload_native(env);
+    /* Preload the core macros (when/cond/for/and/or + assert!/require!/...),
+     * the typed-collection stdlib (so `#map{...}`/`#set{...}` and the carrier
+     * list helpers resolve), and the REPL-only typeclass surface, then register
+     * the inline-C native overrides and the `(reload)` native.  :reset and :run
+     * recreate the env and re-run this exact sequence via the shared helper --
+     * see repl_preload_stdlib_and_natives.  (web-repl-missing-stdlib-preload,
+     * web-repl-repl-inline-c-native-gap.) */
+    repl_preload_stdlib_and_natives(env);
 
     /* RP3: auto-discover an enclosing spice project and load its
      * shared library. Skipped silently when:
@@ -1122,6 +1122,7 @@ int turi_repl_run(bool watch_mode) {
                 env = turi_env_new();
                 if (env) {
                     turi_env_set_diag_sink(env, repl_diag_sink, env);
+                    repl_preload_stdlib_and_natives(env);
                 }
                 balance = 0;
                 multi.len = 0;
