@@ -4,6 +4,17 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.5] -- 2026-07-22
+
+### Fixed
+
+- **REPL `:reset` / `:run` restore the full stdlib surface**: recreating the
+  session env (via `:reset`, or an editor "Run" that resets first) no longer
+  drops the interactive stdlib preload. `list-head`/`list-tail` and other
+  carrier helpers stop emitting spurious `TUR-W0040` warnings, and `#map{}` /
+  `#set{}` and typeclass `Show` work again after a reset instead of failing
+  with "unknown function or operator".
+
 ## [0.30.4] -- 2026-07-22
 
 ### Added

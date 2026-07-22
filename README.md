@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.4` -- graduates automatic closure/Drop reclamation to the default (scope-exit auto-drop for move-only Drop-instance bindings), adds `tur compile`/`tur link` subcommands and `--runtime=lib` linking against a prebuilt runtime archive, and lifts the interpreter FFI arity ceiling.
+**Latest release:** `v0.30.5` -- fixes REPL `:reset`/`:run` dropping the stdlib preload, so `list-head`/`#map{}`/typeclass `Show` keep working (no spurious `TUR-W0040`) after a session reset.
 
 ## What
 
