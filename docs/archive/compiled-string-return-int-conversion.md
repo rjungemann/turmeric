@@ -1,5 +1,13 @@
 # Compiled `String`-returning functions fail to build (`-Wint-conversion`)
 
+**Status: RESOLVED (2026-07-22).** The primary codegen straddle was fixed
+2026-07-21 (see the Progress note below); the remaining **secondary blocker**
+(`(load "stdlib/string.tur")` in an *imported* module) is now fixed too -- an
+imported module's spliced top-level `defn`s get a forward-declaration pre-pass
+before their bodies elaborate, so a self-recursive spliced defn like
+`vec-show-loop` resolves. See the "Resolution (2026-07-22)" section at the
+bottom. This report is archived.
+
 **Severity:** High -- blocks *all* AOT-compiled use of the owned `String` type
 under a modern clang/GCC where `-Wint-conversion` is a default-error. The entire
 `String` adoption effort (stdlib + spices) targets compiled code; this makes the
@@ -183,3 +191,58 @@ documented as the still-open String front, mirroring the retained
 `-Wno-error=implicit-function-declaration`. This unblocks compiled `String` (and
 the spice `String` adoption) at the cost of leaving these two warnings
 non-fatal until the codegen bridge lands.
+
+## Resolution (2026-07-22): secondary blocker fixed -- imported-module forward-decl pre-pass
+
+Root cause of the secondary blocker was an **asymmetry in the two-pass
+elaboration**. Three code paths elaborate top-level `defn`s, but only two ran a
+Pass-1 forward-declaration scan before elaborating bodies:
+
+- the **entry unit** (`elaborate_program`, `src/compiler/elab_toplevel.c`) --
+  had a Pass-1 forward-decl scan;
+- a **`(defmodule ...)` body** (`elab_defmodule`, `src/compiler/elab_module.c`)
+  -- had its own Pass-1 forward-decl scan;
+- the **top-level forms of an imported module** (`elab_load_module`,
+  `src/compiler/elab_module.c`) -- did **not**. Its loop just called
+  `elab_form` per form with no pre-pass.
+
+`(load "stdlib/string.tur")` inside an imported module splices string.tur ->
+typeclass.tur -> typeclass-show.tur into that module's *top level* (outside its
+`defmodule`), including the self-recursive `vec-show-loop`. Because
+`elab_load_module` ran no forward-decl pass over those spliced top-level forms,
+`vec-show-loop`'s own recursive call at `typeclass-show.tur:174` resolved to
+`unknown function or operator 'vec-show-loop'` -- the exact symptom reported.
+
+### Fix
+
+`src/compiler/elab_module.c`:
+
+1. Extracted the defmodule Pass-1 forward-decl scan into a shared static helper
+   `elab_forward_declare_defns(e, items, start, end)` (identical logic, now in
+   one place -- return-kind sniffing, `^`-marker-aware arity, `scope_lookup`
+   "already defined" guard).
+2. `elab_defmodule` now calls the helper (no behaviour change there).
+3. `elab_load_module` now calls the helper over the imported module's top-level
+   `forms` **before** the elaboration loop, so spliced self-/mutually-recursive
+   top-level defns forward-declare exactly as the entry unit and defmodule
+   bodies already did.
+
+The `scope_lookup` guard makes the new pre-pass a no-op for names already in
+global scope (auto-loaded stdlib, already-elaborated siblings), so it only adds
+the missing forward declarations.
+
+### Verification
+
+- The secondary-blocker repro (an imported `greeter` module doing
+  `(load "stdlib/string.tur")` and exporting `String`-returning `greet-int` /
+  `greet-vec`) now **compiles and runs** on both `tur run` and `tur build`,
+  printing `42` and `[10 20 30]` (the `vec-show-loop` path).
+- New regression fixture `tests/fixtures/load-string-in-imported-module/`
+  (compiled path by default -- also covers the primary String-return straddle
+  end to end).
+- Full `bash tests/run.sh` green.
+
+A proper fix to the load/import ordering was the stated prerequisite for spices
+to use stdlib `String` directly and retire the `session/ownstr` workaround
+described above; that path is now open. (`session/ownstr` lives in the
+tourist-session spice, outside this repo, so it is not touched here.)
