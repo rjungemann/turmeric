@@ -232,6 +232,38 @@ as the landed `is_fat` arm). That is a larger httpd-fold re-typing, deferred
 until the `:int` middleware ABI is revisited; the explicit primitives are the
 sound stopgap and are independently useful for any hand-built dynamic chain.
 
+**Feasibility probe (2026-07-22) -- two concrete blockers, both cross-cutting,
+neither httpd-local.** Splitting automatic R3a into its two halves:
+
+1. *Auto-drop the composed onion* (would retire `httpd-mw-drop`). Needs a
+   `let [composed (httpd-mw-fold ...)]` binding to auto-drop at scope exit. The
+   only existing scope-exit auto-drop for a *returned* closure is
+   `returns_fresh_closure` (`elab_fns.c` ~3518), and it is hard-restricted to
+   (a) a body that is a bare capturing `EX_CLOSURE` (possibly under a peeled
+   `let`), (b) **scalar Copy captures only**, and (c) a **scalar Copy result**,
+   precisely so a bare `free(env)` is safe. `httpd-mw-fold` fails all three: its
+   body is a recursive *call* (`httpd-mw-apply mw inner`), and the onion captures
+   an *owning* downstream `next` box (not scalar Copy). Retiring `httpd-mw-drop`
+   thus means generalizing that inference to owning-capture, call-shaped returns
+   routed through `TUR_CLOSURE_DROP` instead of bare `free` -- a compiler change
+   to the fresh-closure escape analysis, plus an honest droppable return type on
+   `httpd-mw-fold` (opaque `Handler` with a Drop instance, or a boxed `TY_FN`).
+
+2. *Auto-drop the input spine + heads* (would retire `httpd-mw-free-chain`).
+   Needs a `list<Closure>` holder whose drop glue walks the spine dropping each
+   fn-typed head. But the list ABI is `:int`-erased at the **struct** level --
+   `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` and
+   `list-head`/`list-tail`/`compose-middleware-of`/`httpd-mw-fold` are all
+   `:int -> :int`. There is no `list<Closure>` type to hang drop glue on; the
+   cons *tail* is itself erased. Retiring `httpd-mw-free-chain` therefore requires
+   de-erasing the cons-cell tail type (`Cons.tail`) and generalizing the Model U
+   fn-field drop to a cons spine of fn-typed heads -- a list-ABI change, not an
+   httpd change.
+
+Both remain correctly **deferred**: each is a roadmap-sized ABI/compiler item,
+not a bounded follow-up, and the shipped explicit primitives are already sound
+and leak-clean for the corpus. Do not fold either into a "cleanup" PR.
+
 **R3b -- "Model R (refcount)"** (build-on-demand). The per-env `__rc` word for
 genuinely *shared* closures (Design section below). A heavier ABI change to the
 `^fat` layout / HKT thunk recovery / `tur_poly_fn_t` (audited in
