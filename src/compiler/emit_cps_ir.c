@@ -5993,9 +5993,19 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * leaks its captured value (no closure drop glue yet) but never
                  * double-frees -- the conservative interim of
                  * docs/reported/escaping-fat-closure-env-leak.md, applied to the
-                 * one non-escaping closure the CPS backend itself constructs. */
+                 * one non-escaping closure the CPS backend itself constructs.
+                 *
+                 * closure-drop-glue: flag-on this receiver box is headered
+                 * (env[-1] drop-glue; fat pointer PAST it), so a bare free is an
+                 * interior free.  Reap it as a headered closure (kind 2 ->
+                 * TUR_CLOSURE_DROP: recovers the header, walks owning captures --
+                 * also closing the "owning capture leaks" caveat above -- frees
+                 * the base).  Flag-off keep the exact plain reap: byte-identical. */
                 indent_buf(&tmp, 4);
-                buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
+                if (g_opt_closure_drop_glue)
+                    buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
+                else
+                    buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
             } else if (case_reopens(body)) {
                 /* Effect re-opening: `k` is captured into a perform-continuation
                  * env whose field is the int64_t word (k is typed TY_INT).  Bind
