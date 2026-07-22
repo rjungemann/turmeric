@@ -350,6 +350,16 @@
 
 (definstance Clone [String]
   (clone [x] : int (:: (string/retain x) int)))
+;;; Drop [String] -- release one owning handle (refcount--), freeing at zero.
+;;;
+;;; Paired with Clone [String] (retain), this lets the closure drop-glue treat a
+;;; captured String as a shared refcounted owner: retained when captured, released
+;;; when the capturing env dies -- so an owned String captured into an escaping
+;;; closure (e.g. httpd mw-cors config strings) is reclaimed instead of leaking.
+;;;
+;;; Since: v2 (Model R)
+(definstance Drop [String]
+  (drop [x] : void (string/release x)))
 ;;; MapKey [String] -- owned key: the map copies the bytes into a boxed key it
 ;;; owns and frees (mk-owned? = 1), so a String key never dangles.  mk-cmp is the
 ;;; size-aware content comparator over boxed keys.

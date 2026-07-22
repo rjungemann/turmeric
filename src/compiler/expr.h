@@ -671,6 +671,16 @@ struct Closure {
     Binding      **captures;     /* captured bindings from enclosing scope */
     uint8_t        n_captures;
     const Symbol *env_name;     /* generated name for the env struct type */
+    /* closure-drop-glue (Model R) #1b: per-capture Drop/Clone instance resolved at
+     * elaboration (parallel to `captures`, entry NULL = the capture's type has no
+     * such instance).  When a capture's type implements Drop, the closure drop-glue
+     * releases it through capture_drop_insts[i]'s `drop` method; if it also
+     * implements Clone (a refcounted owner like String), the env-fill retains it
+     * through capture_clone_insts[i]'s `clone` method (retain/release balances,
+     * aliasing-safe -- the rc-capture pattern generalized through typeclasses).
+     * Both arrays are NULL when no capture implements Drop (the common case). */
+    struct TypeClassInstance **capture_drop_insts;
+    struct TypeClassInstance **capture_clone_insts;
     /* cps-native-handle-in-reset (Reduction B): set when this closure is the
      * RECEIVER of a cross-function `shift` desugared onto __Shift -- i.e. the
      * single argument of `(perform (__Shift recv))`.  Such a receiver is invoked

@@ -14,8 +14,71 @@
 
 **Severity:** low (bounded per-closure-construction leak; not a crash or
 miscompile). General codegen -- **not** CPS/effect-specific (reproduces with no
-effects at all). Keeps `requires.no-leak-check` on `cps-backend-fn-param`.
+effects at all).
 
+> **Status (2026-07-21, CURRENT) -- S1 + S2/Model U RESOLVED; Model R LANDING
+> behind `--enable=closure-drop-glue`. Report STILL OPEN for the flag-off httpd
+> residual.** READ THIS BEFORE RE-ANALYZING: the design questions (Model U vs
+> Model R, why type-erasure blocks a static drop-glue, why a walk needs
+> move/uniqueness) are SETTLED and written up in
+> `docs/upcoming/closure-drop-glue-plan.md` (progress notes 2026-07-21b..g). Do not
+> re-derive them. The remaining work is the concrete slices that note lists, not a
+> fresh investigation.
+>
+> - **RESOLVED (base language, flag-off):** the `make-scaler` value-closure repro
+>   (S1c) and the STORED-in-a-Turmeric-holder case (`hkt-stdlib-parser-instances` /
+>   `-backtrack-instances`, closures in a `Parser` value freed by the holder's
+>   generated drop glue -- S2/Model U). Eight leak-check opt-outs this leak was
+>   gating are dropped and LSan-clean: `cps-backend-fn-param`, `free-lift-bind`,
+>   `unsafe-closure-capture`, `hkt-stdlib-parser-instances`,
+>   `hkt-stdlib-backtrack-instances`, `ascribe-fat-closure-call`,
+>   `fat-closure-ascription`, `captureless-autobox`.
+>
+> - **Model R -- LANDED behind the `closure-drop-glue` experiment (OFF by
+>   default; base language byte-for-byte unchanged, snapshots stable).** A heap fat
+>   env now carries an 8-byte drop-glue header at `env[-1]` (prepend, so `fat[0]`
+>   dispatch + capture-by-field are byte-identical); `TUR_CLOSURE_DROP` releases
+>   ANY fat handle through it. Slices, each fixture-verified:
+>     1. Header ABI foundation + `TUR_CLOSURE_DROP` + scope-exit wiring.
+>     2. rc-capture walk: rc captures are retained at capture and released in the
+>        drop-glue (refcount-sound, no move analysis).
+>     3. Uniform header across all fat representations (`struct __env_N`,
+>        `__tur_fatshim` `{shim,orig}`, poly-to-fat `{shim,fn,env}`).
+>     4. **Type-honesty (a) -- the `^fat` nested-closure walk.** A `^fat` capture
+>        is the erased int64 carrier in the env FIELD, but the capture BINDING keeps
+>        `is_fat` (it survives the `(let [_n next])` rebind), so `cap->is_fat`
+>        identifies an owned closure handle. Capturing it MOVES it
+>        (`binding_mark_moved`) -> a second capture is `TUR-E0005` use-after-move,
+>        so the env is sole owner and the drop-glue walk (`TUR_CLOSURE_DROP` per
+>        `is_fat` capture) cannot double-free. The `(fn [next] (fn [conn] ...))`
+>        middleware chain now frees whole.
+>     5. **httpd teardown rewire:** `TUR_CLOSURE_DROP` is emitted unconditionally
+>        (flag-off == the identical `free`; all codegen snapshots regenerated with
+>        just that one preamble line), and `httpd.tur`'s `free(handler)` ->
+>        `TUR_CLOSURE_DROP(hb->handler)`. Result: **`httpd-mw-log` is leak-clean
+>        flag-on** -- flipped to `--enable=closure-drop-glue` via a `flags` file,
+>        its `requires.no-leak-check` DROPPED. (`accept_clos` is a hand-rolled
+>        header-less `{__fn,hb}` box and MUST stay a plain `free`.)
+>
+> - **Remaining (this report stays OPEN):**
+>     - Flag-OFF, the httpd/reactor family still leaks -- Model R is opt-in, so the
+>       base language is unchanged and `httpd-async-mw-compose` / the other
+>       `httpd-mw-*` keep `requires.no-leak-check`.
+>     - The other `httpd-mw-*` fixtures capture strdup'd CORS strings as `cstr`
+>       (not walked); they need owned `String` captures before flag-on is clean.
+>     - `reactor.c`'s `owns_cb` free and the CPS `__dk_reap_ptr` still bare-free a
+>       (now-headered, flag-on) handle. `reactor.c` is precompiled libturi C and
+>       CANNOT use the codegen `TUR_CLOSURE_DROP` macro -- it needs a runtime-API
+>       change (thread a drop fn through callback registration). So flag-on is safe
+>       only for SIMPLE programs (no reactor / CPS-reap / async httpd) until then.
+>     - Cross-function double-ownership: the move closes same-function aliasing; a
+>       caller that independently frees a handle it also passed in would still
+>       double-free (not a current pattern -- flag-off such handles just leak).
+>
+> Next-agent guidance: continue from the plan's remaining-slice list (owned
+> `String` CORS captures -> more `httpd-mw-*` flag-on; reactor/CPS free-site
+> rewiring -> async httpd flag-on). Do not reopen the settled design.
+>
 > **Progress (2026-07-20), report STILL OPEN.** Two adjacent slices landed:
 >
 > 1. A *different* env leak in the same machinery: a NON-escaping closure's env

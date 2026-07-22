@@ -1,5 +1,16 @@
 # Closure env drop glue -- freeing captured fat-closure environments
 
+> # ✅ DIRECTIVE SATISFIED (2026-07-22) -- Model R walk-glue LANDED.
+> The blocking directive below has been carried out (left intact, unreworded,
+> as instructed). Model R shipped behind `--enable=closure-drop-glue`: the
+> `drop_glue_env_N` header + walk, capture-time retain/move, the `Drop`
+> typeclass owned-opaque release, and 10 httpd fixtures flipped leak-clean --
+> see the dated progress notes below (2026-07-21d..2026-07-22) and the updated
+> Status. The remaining residuals are documented and out of the original
+> blocking scope (variadic-rest uniqueness for `mw-compose-of`; the reactor/CPS
+> runtime-API for the async family; and the httpd request-accessor cstr leak,
+> now `docs/reported/httpd-request-accessor-cstr-leak.md`).
+
 > # ⛔ ACTIVE / BLOCKING -- BUILD THIS NOW. DO NOT DEFER. DO NOT REWORD.
 >
 > This is not deferred, not "until later," not "the next slice," not a
@@ -31,11 +42,397 @@
 > "nothing blocks the track" posture in CLAUDE.md **for this work only** --
 > by explicit owner instruction (2026-07-21).
 
-**Status:** ACTIVE, BLOCKING. S1.2 (borrowed HOF-arg free) LANDED; the rest of S1 (owning-capture
-walk-glue + capture-clone) and S2 remain. Prepared from
+**Status:** S1, S2/Model U, AND **Model R LANDED** (behind
+`--enable=closure-drop-glue`; base language byte-for-byte unchanged, suite green).
+Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
+is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
+env now carries an `env[-1]` drop-glue header walked by `drop_glue_env_N`, with
+retain/move at capture, a `Drop` typeclass for owned-opaque (String) captures,
+and a partial-application-head free. **10 httpd fixtures** are flipped leak-clean
+flag-on (mw-log, basic-auth{,-attr,-noncapture}, body-size, json, static, cors,
+cors-opts, compose). Residuals (documented in the dated notes + reports):
+`mw-compose-of` needs variadic-rest uniqueness analysis; the `httpd-async-*`
+family needs the reactor/CPS runtime-API change (precompiled libturi C); and
+`mw-cookie`/`-form` are an httpd request-accessor cstr leak, not a closure issue
+(`docs/reported/httpd-request-accessor-cstr-leak.md`). Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-22) -- #1b LANDED: Drop-typeclass dispatch in the
+> closure drop-glue; `httpd-mw-cors` leak-clean flag-on.** The drop-glue now
+> releases an owned Drop-typeclass capture, and mw-cors captures owned `String`.
+> Suite 2254/0.
+>
+> - **Codegen (flag-gated, zero flag-off churn):** `Closure` gains
+>   `capture_drop_insts` (resolved at elaboration -- `elab_fns.c` via
+>   `typeclass_env_lookup_typeclass`/`_instance`; NULL-init at all 3 non-zeroing
+>   construction sites). A Drop-implementing capture is MOVED into the env (an
+>   opaque Drop type has NO scope-exit auto-drop, so retaining a second owner would
+>   leak the source -- moving makes the closure the sole owner, releases once, and a
+>   second capture is `TUR-E0005`). The `capture_clone_insts` retain path was
+>   REMOVED after finding the retain model leaks the source for auto-drop-less
+>   opaques. rc/ref and `^fat` captures keep their own arms (no double-handling).
+>   The drop-glue releases via the resolved instance
+>   (`__inst_Drop_drop_<T>(env->field)`, `emit_fns.c` + `emit_expr.c` fallback).
+> - **httpd:** `httpd-cors-own-str` returns owned `String` (`string/from-cstr`);
+>   `mw-cors-with` captures `String` and passes `string/to-cstr` borrow views to the
+>   emit helpers; `httpd.tur` loads `stdlib/string.tur`. `httpd-mw-cors` flipped to
+>   `--enable=closure-drop-glue`, marker dropped (leak-clean, stdout matches,
+>   flag-off byte-identical).
+>
+> **Remaining leakers -- now categorized by ROOT CAUSE (not all the String
+> recipe).** Profiling each flag-on:
+> - **`httpd-mw-cors` -- FIXED** (String captures, #1b).
+> - **`httpd-mw-compose` -- FIXED** by marking `mw-tag`'s handler param `^fat next`
+>   (it IS a fat closure handle -- `httpd-call` dispatches it as one -- so `^fat`
+>   lets the is_fat walk free the chain; behavior-neutral flag-off). The fixture's
+>   `next : int` was simply under-annotated.
+> - **`httpd-mw-cors-opts` (64B) -- FIXED.** The `(mw-cors-opts opts)`
+>   PARTIAL-APPLICATION head desugars to `(let [<pre-applied args>] <EX_CLOSURE>)`
+>   and is bound by the call-head hoist (`elab_call_head_expr`) as a `__call_head`
+>   let. `let_binding_env_freeable` now admits such a fresh partial-app head (its
+>   `__pap` thunk returns the underlying fn's result, never its own env, so freeing
+>   it at scope exit can't alias-UAF), freeing it via TUR_CLOSURE_DROP. Flipped
+>   flag-on, marker dropped.
+> - **`httpd-mw-compose-of` (120B) -- THREE leak sources, one of them unsound to
+>   auto-fix.** Investigated in full:
+>   1. **Closure chain** -- fixed by `^fat next` on the middlewares (as mw-compose).
+>   2. **Cons spine** (`__tur_cons_of`) -- the fresh `& mws` rest-list cells.
+>      SOUNDLY fixable: `compose-middleware-of` owns the fresh list and
+>      `httpd-mw-fold` only walks it, so the callee can free the cells after the
+>      fold (a spine-free that leaves the head VALUES, which live on in the chain).
+>      A prototype confirmed this reclaims the spine with correct stdout flag-off.
+>   3. **Transient factory heads** (`make_hymw`, 72B) -- each `& mws` element is a
+>      middleware FACTORY `(fn [next] ...)` that `httpd-mw-fold` applies ONCE and
+>      discards; its env leaks. This is the `__pap` shape, BUT unlike a partial-app
+>      head (provably fresh/inline) a fold list element has NO uniqueness guarantee:
+>      `(compose-middleware-of base m m)` applies the same factory twice, so freeing
+>      a consumed factory would UAF the duplicate. Freeing-after-apply is therefore
+>      UNSOUND without per-element uniqueness/linearity analysis on the rest list.
+>   So mw-compose-of is a genuine blocker: (1)+(2) are sound but insufficient alone
+>   (LSan still aborts on the remaining (3), eating buffered stdout), and (3) needs
+>   move/uniqueness tracking over variadic-rest elements. Left marked.
+> - **`httpd-mw-cookie` (12B) / `-form` (26B)** -- OUT OF SCOPE for the closure
+>   drop-glue: the leaks are request-scoped strings from `httpd-req-cookie` /
+>   `httpd-req-form` (each returns a fresh malloc'd `cstr` the handler never frees).
+>   An httpd request-accessor ownership cleanup, unrelated to closures.
+> - **`-fold-many` / `-rate-limit`** -- non-closure buffer/state leaks (out of scope).
+>
+> The reactor/CPS async blocker (`__dk_reap_ptr`, `owns_cb` -- precompiled libturi
+> C) still needs a runtime-API change before `httpd-async-*` is safe flag-on.
+>
+> **Progress note (2026-07-21i) -- #1a Drop typeclass LANDED; #1b codegen
+> integration spec (turn-key).** The `Drop` typeclass + `Drop[String]` instance
+> are in and verified (`(drop s)` -> `__inst_Drop_drop_String` -> `string/release`,
+> leak-clean; no snapshot churn -- Drop instances emit only when referenced). What
+> remains for the cors cluster is wiring the closure drop-glue to dispatch a
+> capture's Drop instance. Exact recipe:
+>
+> - **Resolve at ELABORATION** (typeclass method resolution is an elab-time thing;
+>   emit has no `TypeClassEnv`). In `elab_fns.c` capture finalization (~4642, beside
+>   the `^fat` move-marking), for each capture:
+>   `Sym drop = intern_cstr(st,"Drop"); TypeClass *dtc =
+>   typeclass_env_lookup_typeclass(&e->typeclass_env, drop);
+>   TypeClassInstance *di = typeclass_env_lookup_instance(&e->typeclass_env, dtc,
+>   &cap->type, 1);` -- likewise `Clone` -> `ci`.
+> - **Store on `Closure`** (add two parallel `TypeClassInstance **` arrays,
+>   `capture_drop_insts` / `capture_clone_insts`, NULL per capture with no Drop).
+>   Init to NULL at ALL THREE Closure construction sites (arena is NON-zeroing):
+>   `elab_fns.c:4636`, `elab_call.c:3268`, `elab_call.c:6029`.
+> - **Emit** (emit_fns.c drop-glue + emit_expr.c fallback, in lockstep; and the
+>   env-fill in emit_expr.c): for a capture with `capture_drop_insts[i] != NULL`,
+>   the symbol is `raw_name_for_binding(inst->method_impls[0]->binding)`.
+>   - If `capture_clone_insts[i] != NULL` (Drop+Clone, e.g. String -- refcounted):
+>     RETAIN at fill `clone_sym(field)`, RELEASE in drop-glue `drop_sym(field)`.
+>     Sound without move analysis (refcount balances) -- exactly the rc-capture
+>     pattern, generalized through the typeclass methods.
+>   - If Clone is absent (move-only Drop): move-mark the capture at elab (like
+>     `^fat`) and RELEASE in drop-glue, no retain.
+> - **httpd refactor** (separate, after the wiring): `httpd-cors-own-str` returns
+>   `String` (`string/adopt-cstr` of the strdup, or `string/from-cstr`);
+>   `mw-cors-with` captures `String`; pass `string/to-cstr` views to
+>   `httpd-mw-cors-emit-preflight`/`-decorate` (they keep taking `cstr`). Then flip
+>   `httpd-mw-cors` (+ `-cors-opts`, `-cookie`, `-form`, `-compose`) to flag-on and
+>   drop markers as each goes leak-clean.
+>
+> **Progress note (2026-07-21h) -- httpd harvest (7 fixtures leak-clean flag-on)
+> + the cors cluster's remaining blocker pinned to a NEW mechanism.** With the
+> handler teardown routed through `TUR_CLOSURE_DROP` (2026-07-21, prior commit), a
+> profile of the whole `httpd-mw-*` family showed the teardown+walk already
+> reclaims every fixture whose only leak was the env chain. Flipped to
+> `--enable=closure-drop-glue` + markers dropped (suite 2254/0): `httpd-mw-log`,
+> `httpd-mw-basic-auth`, `-basic-auth-attr`, `-basic-auth-noncapture`,
+> `-body-size`, `-json`, `-static`.
+>
+> Still leaking flag-on, with the cause now pinned per fixture:
+> - **Owned-cstr CORS cluster** (`httpd-mw-cors` 48B, `-cors-opts`, `-compose`,
+>   `-compose-of`, `-cookie`, `-form`): the env chain is freed; what remains is the
+>   `httpd-cors-own-str` strdup'd strings, captured as `cstr`. The type system sees
+>   `cstr` (borrowed), so no walk can know they are owned.
+> - **Larger/non-closure** (`-fold-many` 4504B/211 allocs, `-rate-limit`
+>   24640B/2 allocs): buffer/state leaks, not closure envs -- out of scope for the
+>   closure walk.
+> - `-compress`: a `requires.spices` skip (missing zlib dep), unrelated.
+>
+> **KEY FINDING for the cors cluster (do not attempt a quick walk-extension).**
+> The strings should become owned `String` (an `(defopaque String :ptr<void>)`,
+> refcounted, with `string/retain`/`string/release` and an O(1) `string/to-cstr`
+> borrow view -- so the emit helpers keep taking `cstr`). BUT: there is NO `Drop`
+> typeclass and NO droppable-opaque machinery -- a `String` LOCAL is not even
+> auto-released at scope exit today (release is manual), and codegen has no
+> principled way to know "this opaque capture is owned, release it with X." So the
+> cors slice is really **two pieces**: (1) a compiler mechanism -- a `Drop`
+> typeclass (`(drop [x] : void)`) that a `defopaque` implements and that the
+> closure drop-glue dispatches through for a capture whose type has a `Drop`
+> instance (for `String`, `(drop [x] (string/release x))`), with retain-at-capture
+> since `String` is refcounted (reuse the rc retain/release path); then (2) the
+> httpd stdlib refactor (own-str returns `String`, mw-cors captures `String`, pass
+> `string/to-cstr` views to the emit helpers). Piece (1) is a real typeclass+codegen
+> feature -- do NOT special-case the name "String" in the compiler (the codebase
+> has zero such precedent and it is the wrong shape).
+>
+> **The reactor/CPS async blocker is unchanged and separate:** `reactor.c`
+> `owns_cb` free + CPS `__dk_reap_ptr` bare-free a headered handle and are
+> PRECOMPILED libturi C that cannot use the codegen `TUR_CLOSURE_DROP` macro ->
+> they need a runtime-API change (thread a drop fn through callback registration)
+> before the async httpd family (`httpd-async-*`) is safe flag-on.
+>
+> **Progress note (2026-07-21g) -- Model R type-honesty (a): the `^fat`
+> nested-closure walk LANDED (move-gated, sound). The middleware
+> `(fn [next] (fn [conn] ...))` shape now frees its whole chain.** Three parts,
+> all flag-gated:
+>
+> - **Identify (type-honesty).** A `^fat` capture is the erased int64 carrier in
+>   the env FIELD, but the capture BINDING keeps `is_fat` (it propagates through
+>   the `(let [_n next])` re-bind, elab_forms.c:878). So `cap->is_fat` distinguishes
+>   an owned fat closure handle from a scalar int -- no new type needed, the signal
+>   already survives. (The generalized fix -- carrying `^fat` as an owning-closure
+>   TYPE rather than a flag-on-int -- is still worthwhile but not required for this.)
+> - **Move (soundness).** Capturing a `^fat` handle now MARKS the source consumed
+>   (`binding_mark_moved`, elab_fns.c), mirroring Model U's store-into-fn-field
+>   move.  A SECOND capture of the same handle -- which would double-free -- is a
+>   compile-time use-after-move (TUR-E0005), so the env is the handle's sole owner.
+> - **Walk.** `drop_glue_<env>` releases each `is_fat` capture via TUR_CLOSURE_DROP
+>   (uniform across representations thanks to 2026-07-21f), excluding the letrec
+>   self-capture.  Releasing the outer handle frees the whole chain.
+>
+> Fixtures: `closure-drop-glue-fat-capture` (a `wrap`/`base` chain freed through
+> the outer handle -- leak-clean, no double-free) and
+> `errors/closure-drop-glue-fat-alias` (double capture -> TUR-E0005). Suite 2254/0;
+> flag-off byte-identical.
+>
+> **What this still does NOT do (remaining for an httpd marker to drop):**
+> 1. **Rewire httpd/reactor/CPS teardown.** httpd's `free(handler)` (and the
+>    reactor `owns_cb` free, and `__dk_reap_ptr`) still bare-free a now-headered
+>    handle -- so httpd cannot be built flag-on yet without corruption. Rewiring
+>    them to `TUR_CLOSURE_DROP` requires the macro to be emitted unconditionally
+>    (flag-off it expands to the identical `free`), which churns every codegen
+>    snapshot -- a mechanical same-PR regen, deferred out of THIS slice to keep it
+>    churn-free.
+> 2. **The CORS strings.** mw-cors captures strdup'd strings as `cstr` (not
+>    walked); they need owned `String` captures. Orthogonal to the closure walk.
+> 3. **Cross-function double-ownership caveat.** The move closes same-function
+>    aliasing; a caller that independently frees a handle it also passed in would
+>    still double-free. Not a current pattern (flag-off such handles just leak), but
+>    a general fix wants the move to thread across the call boundary.
+>
+> **Progress note (2026-07-21f) -- Model R: uniform header across every fat
+> representation (`__tur_fatshim` / poly-to-fat boxes), + the type-honesty wall
+> pinned for the nested-closure walk.** Two findings:
+>
+> - **Landed: multi-representation headers.** The prepend-header now also wraps the
+>   `__tur_fatshim` box (bare-fn-to-fat, `{shim, orig_fn}`) and the poly-to-fat box
+>   (`{shim, fn, env}`), flag-on. Both own nothing walkable, so their header is
+>   NULL and `tur_closure_drop` frees the base. This makes `TUR_CLOSURE_DROP`
+>   release ANY fat handle uniformly regardless of representation -- the
+>   prerequisite for a walk that recurses a captured handle without statically
+>   knowing which representation it is (the documented "give the `__tur_fatshim`
+>   box its own header so a bare-fn handler is safe" item). Fixture
+>   `closure-drop-glue-fatshim` (a bare fn shimmed to `^fat` then TUR_CLOSURE_DROP'd)
+>   is leak-clean, no corruption. Suite 2252/0; flag-off byte-identical.
+>
+> - **Pinned: the nested-closure walk is blocked on TYPE-HONESTY, not just move
+>   analysis.** Auto-deriving the walk needs to identify which captures are owned
+>   closure handles. But the middleware `_n` capture comes from a `^fat next : int`
+>   parameter -- erased to `TY_INT`, indistinguishable from a scalar. No type
+>   predicate can pick it out, and `TY_PTR_VOID` is ambiguous (any pointer). So the
+>   walk cannot fire on the httpd shape until `^fat` is carried as an owning-closure
+>   TYPE (un-erased) rather than an `int` carrier -- a type-system change. A
+>   type-HONEST `boxed TY_FN` capture COULD be walked (move-gated), but such
+>   captures are rare in the corpus.
+>
+> - **Flag-on free-site boundary (audited).** Header-on programs are sound only
+>   where every fat-handle free routes through `TUR_CLOSURE_DROP`. Still doing a
+>   bare free of a (now-headered) handle, and therefore needing header-aware
+>   rewiring before flag-on is safe for those programs: the CPS boundary reap
+>   (`__dk_reap_ptr`, `emit_cps_ir.c`), the reactor `owns_cb` free
+>   (`src/async/reactor.c`), and httpd's `free(handler)` (`stdlib/httpd.tur:949`).
+>   The flag stays opt-in for simple programs (no CPS-reap / reactor / httpd
+>   teardown of headered handles) until these are rewired.
+>
+> **Progress note (2026-07-21e) -- Model R walk slice: rc-capture retain/release
+> (the unconditionally-sound half of the owning-capture walk).** The env drop-glue
+> now WALKS refcounted owning captures, so an rc-capturing closure participates in
+> the rc lifecycle regardless of escape:
+>
+> - **Retain at capture** (`emit_expr.c` env-fill): flag-on, storing an rc-typed
+>   capture emits `rc_strong_increment(env->field)` -- the closure holds its own
+>   strong count.
+> - **Release in drop-glue** (`emit_fns.c` + the `emit_expr.c` fallback, kept in
+>   lockstep): `drop_glue_<env>` emits `rc_strong_decrement` + `rc_free_queue_drain`
+>   per rc capture (reverse order) before freeing the base.
+> - **Soundness:** this is finding-#1's "retain when duplicated" for the capture
+>   kind where it needs NO move/uniqueness analysis -- rc counting is aliasing-safe,
+>   so retain+release always balances. An ESCAPING rc-capturing closure that
+>   flag-off dangles (the constructor's auto-drop frees the rc out from under it)
+>   is now correct flag-on: the retain keeps the rc alive for the closure's life
+>   and the drop-glue releases it exactly once.
+> - **Verified:** fixture `closure-drop-glue-rc-capture` (`make-counter` returns an
+>   rc-capturing closure; `strong-count` reads 1 while held; released on
+>   TUR_CLOSURE_DROP) is leak-clean, no UAF, no double-free flag-on. Generated C
+>   shows the paired increment/decrement. Full suite 2251/0 (flag off -> a snapshot
+>   re-emits byte-identically; the two new fixtures run flag-on).
+>
+> **Still to do in the walk:** the NON-refcounted owning captures -- a raw
+> nested-closure handle (the middleware `_n`), a `ref` -- still are NOT walked,
+> because recursing one blind is the finding-#1 double-free without move/uniqueness
+> analysis. That analysis (or refcounting the env, Model R proper) plus the httpd
+> type-honesty layer (owned `String` CORS captures) is what remains before an
+> httpd/reactor marker can drop.
+>
+> **Progress note (2026-07-21d) -- Model R ABI FOUNDATION landed behind
+> `--enable=closure-drop-glue` (experiment, off by default).** The runtime
+> drop-glue header + generic-release plumbing is in; the move-aware owning-capture
+> WALK and the httpd type-honesty layer are the remaining increments. What landed:
+>
+> - **Experiment** `closure-drop-glue` (`src/runtime/experiments.c`,
+>   `g_opt_closure_drop_glue`, prototype, introduced 0.30.1 / expires 0.34.0).
+>   Off by default -> the base language is byte-for-byte unchanged (verified: a
+>   sample snapshot re-emits identically; full suite 2250/0 with the flag off).
+> - **Prepend-header ABI (contained variant).** Flag-on, every heap
+>   `struct __env_N` is allocated as `malloc(sizeof(void*) + sizeof(env))` with the
+>   fat pointer handed back PAST an 8-byte header; `env[-1]` holds the env's
+>   `drop_glue_<env>` pointer. `fat[0]` dispatch, capture-by-field access, and the
+>   escaping handle are all byte-identical to the headerless layout -- chosen over
+>   inserting a slot at `[1]` precisely because `[1]` is the fn slot in the
+>   `__tur_fatshim` / `tur_poly_fn_t` representations, so an inserted slot would
+>   collide (emit_module.c:678, :5910). Box internals stay untouched; only `[-1]`
+>   is new. (`src/compiler/emit_expr.c`, `src/compiler/emit_fns.c`.)
+> - **Generic release.** `TUR_CLOSURE_DROP(h)` (preamble, emitted only under the
+>   flag) recovers `h[-1]` and calls it; `drop_glue_<env>` frees the base
+>   allocation. The scope-exit env free (`let_binding_env_freeable`) routes through
+>   it flag-on. Fixture `closure-drop-glue-model-r` (a `flags` file enables the
+>   experiment) proves construction+dispatch+generic-drop is leak-clean and
+>   corruption-free.
+>
+> **Remaining increments (both needed before any httpd/reactor marker can drop):**
+>
+> 1. **Move-aware owning-capture WALK.** `drop_glue_<env>` currently frees only the
+>    base -- it does NOT recurse owning captures, because doing so blind is the
+>    finding-#1 double-free (a captured closure/rc the caller still owns would be
+>    freed twice). The walk must gate on move/uniqueness (`is_moved` /
+>    `is_unique_consumed` / a fresh capture-clone) so it recurses ONLY when the env
+>    is the capture's sole owner. This is what actually reclaims a middleware
+>    chain's inner `_n` env.
+> 2. **httpd type-honesty + teardown wiring.** The httpd handler reaches an opaque-C
+>    holder as a type-erased `:int` and its CORS strings are secretly-owned `cstr`;
+>    neither is walkable until `_n` is a recognizable owned-closure capture and the
+>    strings are owned `String`. Then rewire httpd's `free(handler)` (~line 949)
+>    and the reactor callback frees to `TUR_CLOSURE_DROP`, and give the
+>    `__tur_fatshim` (rep-2) box its own header so a bare-fn handler is safe. Until
+>    every env free site on those paths is header-aware, the flag stays opt-in for
+>    simple programs (no reactor/httpd/CPS-env-reap).
+>
+> **Progress note (2026-07-21c) -- S1 + S2/Model U closeout; Model R scoped &
+> deferred.** After the 2026-07-21b marker sweep, a full audit of every remaining
+> `requires.no-leak-check` fixture (rebuilt suite-faithfully, LSan on) established
+> that NO tractable closure-env leak remains -- the only closure-family opt-outs
+> left are the httpd/reactor server closures, and their sound elimination is
+> blocked on the Model R ABI, not on any missing S1/S2 analysis. Concretely:
+>
+> - **Type erasure is the wall.** `compose-middleware-of` returns `:int`
+>   (`stdlib/httpd.tur`), so at `(httpd-new-async 0 composed)` the compiler sees a
+>   bare `:int` handler with no env type -- it cannot emit or select the right
+>   `drop_glue_env_N`. Model U (the holder's *generated* drop glue frees the
+>   field) requires the holder to be a Turmeric struct/ADT whose field type names
+>   the closure; httpd's holder is an opaque C `struct { int64_t handler; ... }`.
+> - **Sound-without-clone, for these captures.** The httpd chain's captures are
+>   either scalar (`donech`) or uniquely-owned-fresh (the `httpd-cors-own-str`
+>   strdup'd strings; the `_n` next-closure handle, moved in) -- none alias an
+>   outer owner that also drops them, so a walk-glue free of them would NOT
+>   double-free. The blocker is purely *dispatch* (how opaque C names the glue),
+>   not the finding-#1 capture-clone hazard. That hazard remains real for the
+>   general case (capturing a live `rc`), so a general owning-capture walk-glue
+>   still needs capture-clone first -- but the httpd family does not.
+> - **Decision:** do not force the Model R env-layout ABI change speculatively
+>   (it perturbs every closure's env struct + `TUR_APPLY` dispatch assumptions +
+>   HKT poly-thunk recovery + `tur_poly_fn_t` + WASM glue, and churns every
+>   closure snapshot) to reclaim a documented process-lifetime allocation. Keep
+>   the httpd/reactor markers; land Model R only when that family is explicitly
+>   prioritized, using the sketch below.
+>
+> **Model R -- ready-to-execute sketch (contained variant).** Because httpd
+> handlers are monomorphic one-word envs (not poly/HKT), the change can be scoped
+> to the plain `struct __env_N` path and leave `tur_poly_fn_t` untouched:
+>
+> 1. **Env header:** emit `struct __env_N { int64_t __fn; void (*__drop)(void *);
+>    <captures> }`. `__fn` stays at offset 0 so every `fat[0]` dispatch
+>    (`TUR_APPLY*`, httpd/reactor C) is unchanged; captures shift by one word but
+>    are always field-accessed, so lifted thunks are unaffected. Audit for any raw
+>    `fat[1]`/offset-1 capture read (there should be none).
+> 2. **Glue:** emit `drop_glue_env_N(void *p)` per env type -- free owning `cstr`
+>    captures, recurse `((struct{int64_t __fn; void(*d)(void*);}*)cap)->d(cap)`
+>    into nested fat-closure captures, then `free(p)`. Fill `tmp->__drop =
+>    drop_glue_env_N` at construction (or `NULL` for a scalar-only env -> bare
+>    free).
+> 3. **Teardown:** replace `httpd.tur`'s bare `free((void *)handler)` (~line 949)
+>    and the reactor callback frees with
+>    `{ void(*d)(void*) = ((...__drop layout...)handler)->__drop; if (d) d((void*)handler); else free((void*)handler); }`.
+> 4. **Capture-clone (only if generalized):** for the general owning-capture case
+>    (an env capturing a live `rc`/`ref`/nested closure the caller still owns),
+>    add capture-time retain/clone at the env fill BEFORE enabling walk-glue on
+>    that capture kind, per finding #1. NOT needed for the httpd family.
+> 5. **Regen** every closure snapshot in the same PR (env struct + `__drop` fill).
+
+
+> **Progress note (2026-07-21b) -- S2 exit-gate marker cleanup: six
+> `requires.no-leak-check` markers DROPPED (now verified leak-clean under LSan;
+> suite 2249/0).** The landed S1/S2 drop machinery has made the escaping /
+> HOF-passed value-closure fixtures ASan-clean, so their leak-check opt-outs are
+> stale and removed. Each was rebuilt exactly as `tests/run.sh` does
+> (`-O2 -L<tur>/src`, ASan/LSan-instrumented output binary) and confirmed to emit
+> ZERO LeakSanitizer output:
+>
+> - **S1/S2 exit-gate fixtures** (`free-lift-bind`, `unsafe-closure-capture`,
+>   `cps-backend-fn-param`): the plan's "become ASan-clean and DROP their
+>   `requires.no-leak-check` markers" gate item -- now satisfied. (The residual
+>   free-monad `Suspend` ADT 16 B leak that kept `free-lift-bind` marked is also
+>   gone.)
+> - **S2 stored-closure fixture** `hkt-stdlib-parser-instances`: the closure
+>   stored in a `Parser` value is now reclaimed -- the "flip ... and become
+>   leak-clean" gate item for it is met.
+> - **Fat-closure-dispatch regressions** `ascribe-fat-closure-call` /
+>   `fat-closure-ascription`: their `make-adder` escaping-env leak, which the
+>   marker only ever papered over, is now reclaimed.
+>
+> Also re-verified: the `make-scaler` minimal repro from
+> `escaping-fat-closure-env-leak.md` is ASan-clean, and `currying-effect-partial`
+> is green. Full `bash tests/run.sh` = 2249 passed, 0 failed with the six markers
+> removed (i.e. those fixtures now run WITH leak detection on).
+>
+> **Still open (markers RETAINED, correctly):** the **httpd middleware family**
+> still leaks -- `httpd-async-mw-compose` (64 B / 5 allocs) and the `httpd-mw-*`
+> set (16-64 B each). Root cause confirmed: `httpd.tur` (~line 949) tears down the
+> stored handler with a bare `free((void *)handler)`, which reclaims only the
+> OUTER env word of a `compose-middleware` chain -- it neither recurses into the
+> chained `_n` next-closure envs nor drops the env's OWNING captures (the strdup'd
+> `const char *` CORS/header strings). Freeing those needs the `drop_glue_env_N`
+> walk-glue AND a way to dispatch it from opaque hand-written C (a drop-glue
+> pointer in the fat handle, or Model U with the async server as a
+> generated-drop holder) -- both still unbuilt (finding #1: captures are stored
+> without a retain/clone, so a naive walk-glue would double-free). So those
+> markers stay until the walk-glue + capture-clone unit lands.
+>
 > **Progress note (2026-07-21) -- local fn-field struct drop LANDED (direct
 > path); the "Remaining S2 gap" below is closed for uncolored functions.** A
 > by-value struct local that owns a BOXED fn-field now frees that heap fat handle

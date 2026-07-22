@@ -1,3 +1,0 @@
-Boxing a captureless fn into a fat closure registers a process-lifetime
-shim allocation; opt out of leak detection like the other parser-combinator
-fat-closure fixtures.

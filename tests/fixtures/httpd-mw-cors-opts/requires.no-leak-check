@@ -1,7 +1,0 @@
-Leaks the inner layers of the compose-middleware closure onion: each
-layer captures the downstream `next` box, and the outer-handler free done in
-httpd-free/httpd-async-free cannot reach the inner boxes from C (the box is
-opaque and the env layout is not a stable ABI). Intentional, bounded,
-process-lifetime leak -- one box per middleware layer. Fix tracked in
-docs/httpd-middleware-chain-drop-plan.md (reified server-owned chain); kept
-marked until that lands.

@@ -1361,7 +1361,21 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     bool fresh_call = pinit && pinit->kind == EX_CALL
                       && pinit->as.call_.fn_binding
                       && pinit->as.call_.fn_binding->returns_fresh_closure;
-    if (init->kind != EX_CLOSURE && !fresh_call) return false;
+    /* closure-drop-glue (Model R): a PARTIAL-APPLICATION head -- e.g. the
+     * `(mw-cors-opts opts)` in `((mw-cors-opts opts) base)` -- desugars to
+     * `(let [<pre-applied args>] <EX_CLOSURE>)`: a freshly-malloc'd `__pap` env
+     * that is applied once as the call head and then dead.  Its thunk returns the
+     * UNDERLYING fn's result, never its own env, so freeing it at scope exit can
+     * never alias-UAF the result.  Admit it (the escape checks below still guard
+     * a __pap that leaked into a sibling/result).  Gated on the experiment. */
+    bool fresh_pap = false;
+    if (g_opt_closure_drop_glue) {
+        const Expr *p = pinit;
+        while (p && (p->kind == EX_ASCRIBE || p->kind == EX_LET))
+            p = (p->kind == EX_ASCRIBE) ? p->as.ascribe_.inner : p->as.let_.body;
+        fresh_pap = p && p->kind == EX_CLOSURE && init->kind == EX_LET;
+    }
+    if (init->kind != EX_CLOSURE && !fresh_call && !fresh_pap) return false;
     if (init->kind == EX_CLOSURE) {
         /* Scalar-result gate: a closure returning a reference/struct/pointer could
          * hand back a value derived from its env; restrict to scalar returns whose
@@ -1757,7 +1771,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * the let body (their last use) has been emitted. */
     for (uint32_t i = 0; i < n_env_free; i++) {
         indent_buf(body, ctx->indent);
-        buf_printf(body, "free((void *)(intptr_t)%s);\n", env_free_names[i]);
+        /* closure-drop-glue (Model R): a headered env must be released through
+         * its drop-glue header (which also walks owning captures), not a bare
+         * `free` of the past-header pointer.  Flag-off, TUR_CLOSURE_DROP is a
+         * plain free, so the emitted text is unchanged. */
+        if (g_opt_closure_drop_glue) {
+            buf_printf(body, "TUR_CLOSURE_DROP(%s);\n", env_free_names[i]);
+        } else {
+            buf_printf(body, "free((void *)(intptr_t)%s);\n", env_free_names[i]);
+        }
         free(env_free_names[i]);
     }
     free(env_free_names);
@@ -6453,6 +6475,57 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 buf_puts(ctx->file, "};\n");
                 free(thunk_typedef);
+
+                /* closure-drop-glue (Model R): per-env drop-glue so an escaping env
+                 * can be released generically (opaque-C teardown or scope-exit)
+                 * through its env[-1] header.  Releases each refcounted owning
+                 * capture (rc decrement, balancing the env-fill retain) then frees
+                 * the base.  MUST stay in lockstep with the emit_fns.c twin site
+                 * (that pre-pass normally wins the shared env_struct_names guard;
+                 * this arm is the fallback) so the rc retain/release always pairs.
+                 * Non-refcounted owning captures await move analysis -- see the
+                 * emit_fns.c site for the rationale. */
+                if (g_opt_closure_drop_glue) {
+                    buf_printf(ctx->file,
+                        "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                    buf_printf(ctx->file,
+                        "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+                        env_name->name, env_name->name);
+                    for (int32_t i = (int32_t)closure->n_captures - 1; i >= 0; i--) {
+                        Binding *cap = closure->captures[i];
+                        if (cap && cap->is_global) continue;
+                        if (cap && cap->type.kind == TY_RC) {
+                            char *cf = raw_name_for_binding(cap);
+                            buf_printf(ctx->file,
+                                "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                                cf, cf);
+                            free(cf);
+                        } else if (cap && cap->is_fat &&
+                                   !(cap->closure_fn_binding && closure->fn &&
+                                     closure->fn->binding &&
+                                     cap->closure_fn_binding == closure->fn->binding)) {
+                            /* Type-honesty (a): release an OWNED `^fat` closure
+                             * handle capture (see emit_fns.c twin site). Kept in
+                             * lockstep so the move/walk pairing holds either site. */
+                            char *cf = raw_name_for_binding(cap);
+                            buf_printf(ctx->file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                            free(cf);
+                        } else if (closure->capture_drop_insts &&
+                                   closure->capture_drop_insts[i] &&
+                                   closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                                   closure->capture_drop_insts[i]->method_impls[0] &&
+                                   closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                            /* Model R #1b: Drop-instance release (see emit_fns.c twin). */
+                            char *cf = raw_name_for_binding(cap);
+                            char *dm = raw_name_for_binding(
+                                closure->capture_drop_insts[i]->method_impls[0]->binding);
+                            buf_printf(ctx->file, "    %s(__e->%s);\n", dm, cf);
+                            free(dm); free(cf);
+                        }
+                    }
+                    buf_puts(ctx->file,
+                        "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+                }
             }
             
             /* Phase HKT §5: heap-allocate the fat closure struct so that the
@@ -6478,8 +6551,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 : raw_name_for_binding(closure->fn->binding);
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",
-                       env_name->name, fat_tmp, env_name->name, env_name->name);
+            if (g_opt_closure_drop_glue) {
+                /* closure-drop-glue (Model R): allocate an 8-byte drop-glue
+                 * header BEFORE the env and hand back a pointer PAST it, so every
+                 * existing use (dispatch via fat[0], capture access by field, the
+                 * fat handle that escapes) is byte-identical to the headerless
+                 * layout -- only env[-1] is new.  env[-1] holds drop_glue_env_N;
+                 * TUR_CLOSURE_DROP(handle) recovers it to release the env. */
+                char *base_tmp = fresh_tmp(ctx);
+                buf_printf(body,
+                    "void *%s = malloc(sizeof(void *) + sizeof(struct %s));\n",
+                    base_tmp, env_name->name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "*(void (**)(void *))%s = drop_glue_%s;\n",
+                    base_tmp, env_name->name);
+                indent_buf(body, ctx->indent);
+                buf_printf(body,
+                    "struct %s *%s = (struct %s *)((char *)%s + sizeof(void *));\n",
+                    env_name->name, fat_tmp, env_name->name, base_tmp);
+                free(base_tmp);
+            } else {
+                buf_printf(body, "struct %s *%s = (struct %s *)malloc(sizeof(struct %s));\n",
+                           env_name->name, fat_tmp, env_name->name, env_name->name);
+            }
             indent_buf(body, ctx->indent);
             if (thunk_typedef) {
                 buf_printf(body, "%s->__fn = (%s)%s;\n", fat_tmp, thunk_typedef, thunk_sym);
@@ -6543,6 +6638,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "%s->%s = %s%s;\n",
                                fat_tmp, field, captured_is_pbp ? "*" : "", cn);
                 }
+                /* closure-drop-glue (Model R) walk slice: an rc-typed capture is a
+                 * SHARED owning reference.  Flag-on, RETAIN it at capture (a strong
+                 * increment) so the closure holds its own count -- balancing the
+                 * decrement the env's drop-glue performs when the closure dies.
+                 * This is finding-#1's "retain when duplicated", done for the
+                 * refcounted capture kind where it is unconditionally sound: rc
+                 * counting handles aliasing, so no move/uniqueness analysis is
+                 * needed and an ESCAPING rc-capturing closure no longer dangles
+                 * (flag-off it borrows and the source's auto-drop frees the rc out
+                 * from under the escaped closure).  Owning captures that are NOT
+                 * refcounted (a raw nested-closure handle, a ref) still need move
+                 * analysis and are left to the next slice. */
+                if (g_opt_closure_drop_glue && captured->type.kind == TY_RC) {
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "if (%s->%s) rc_strong_increment(%s->%s);\n",
+                               fat_tmp, field, fat_tmp, field);
+                }
+                /* A Drop-typeclass capture is MOVED into the env (no retain) -- the
+                 * source is consumed at elab, so the stored handle is the sole owner
+                 * and the drop-glue releases it once. */
                 free(field);
                 free(cn);
             }
@@ -8017,8 +8132,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
 
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
-                       fat_tmp);
+            if (g_opt_closure_drop_glue) {
+                /* closure-drop-glue (Model R): give the bare-fn-to-fat box the same
+                 * env[-1] drop-glue header as a capturing env, so TUR_CLOSURE_DROP
+                 * releases ANY fat handle uniformly (a captured handle may be either
+                 * representation).  A `{shim, orig_fn}` box owns nothing, so its
+                 * header is NULL -> tur_closure_drop frees the base allocation. */
+                char *base_tmp = fresh_tmp(ctx);
+                buf_printf(body, "void *%s = malloc(sizeof(void *) + 2 * sizeof(int64_t));\n",
+                           base_tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))%s = 0;\n", base_tmp);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n",
+                           fat_tmp, base_tmp);
+                free(base_tmp);
+            } else {
+                buf_printf(body, "int64_t *%s = (int64_t *)malloc(2 * sizeof(int64_t));\n",
+                           fat_tmp);
+            }
             indent_buf(body, ctx->indent);
             if (typed_shim) {
                 buf_printf(body, "%s[0] = (int64_t)(intptr_t)%s;\n", fat_tmp, typed_shim);
@@ -8051,7 +8183,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             buf_printf(body, "tur_poly_fn_t %s = %s;\n", pf, pv);
             char *box = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
+            if (g_opt_closure_drop_glue) {
+                /* closure-drop-glue (Model R): header the poly-to-fat box too so
+                 * TUR_CLOSURE_DROP is uniform across every fat representation.
+                 * Header NULL -> tur_closure_drop frees the base (freeing the box
+                 * only, as today; the boxed inner env, if any, is not walked here). */
+                char *pbase = fresh_tmp(ctx);
+                buf_printf(body, "void *%s = malloc(sizeof(void *) + 3 * sizeof(int64_t));\n",
+                           pbase);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*(void (**)(void *))%s = 0;\n", pbase);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "int64_t *%s = (int64_t *)((char *)%s + sizeof(void *));\n",
+                           box, pbase);
+                free(pbase);
+            } else {
+                buf_printf(body, "int64_t *%s = (int64_t *)malloc(3 * sizeof(int64_t));\n", box);
+            }
             /* poly-to-fat-typed-shim-plan + multiarg fix: pick the slot-0 shim
              * arity from the sink's declared ^fat fn signature.  When that
              * signature is concrete and non-int64, ensure_typed_poly_to_fat

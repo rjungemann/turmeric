@@ -75,7 +75,7 @@
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
 ;; Middleware constructor: captures a tag and a next handler.
-(defn mw-tag [tag : cstr next : int] : ptr<void>
+(defn mw-tag [tag : cstr ^fat next : int] : ptr<void>
   (let [_t tag]
     (fn [conn : ptr<void>] : nil
       (print-pre _t)

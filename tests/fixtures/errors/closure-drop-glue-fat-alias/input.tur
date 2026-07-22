@@ -1,0 +1,12 @@
+;; closure-drop-glue (Model R): capturing a `^fat` handle MOVES it into the env
+;; (the env's drop-glue will free it), so capturing the SAME handle into a second
+;; closure -- which would double-free -- is a compile-time use-after-move.
+(defn call-next [^fat n : int c : int] : int
+  ```c return (int)TUR_APPLY1((int64_t)(intptr_t)n, (int64_t)c); ```)
+
+(defn dup [^fat next : int] : int
+  (let [a (fn [c : int] : int (call-next next c))
+        b (fn [c : int] : int (call-next next c))]
+    (call-next a 1)))
+
+(defn main [] : int 0)

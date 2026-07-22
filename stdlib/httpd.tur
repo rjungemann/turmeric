@@ -67,6 +67,10 @@
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
 
+;; mw-cors owns its config strings as Drop-typeclass String captures so the
+;; closure drop-glue releases them (Model R); needs the String API.
+(load "stdlib/string.tur")
+
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the httpd server constructors (which bind+listen) and
 ;; the run/stop lifecycle functions carry the #{Net} capability tag.  The
@@ -940,13 +944,19 @@
       if (hb->listen_src_id >= 0) tur_reactor_remove(hb->reactor, hb->listen_src_id);
       tur_reactor_free(hb->reactor);
   }
+  /* accept_clos is a hand-rolled synthetic { __fn, hb } box (no codegen
+   * drop-glue header), so it is freed with a plain free -- NOT TUR_CLOSURE_DROP,
+   * which would read a header 8 bytes before this un-headered allocation. */
   if (hb->accept_clos) free(hb->accept_clos);
   /* Free the user handler box. It is passed ^fat (always a heap fat-closure
    * box) and nothing else frees it, so this is the sole free -- no double free.
    * For a bare handler this reclaims the whole thing; for a compose-middleware
-   * onion it frees only the outermost layer (the inner captured `next` boxes
-   * still leak, pending closure drop glue -- see the plan). */
-  if (hb->handler) free((void *)(intptr_t)hb->handler);
+   * onion, TUR_CLOSURE_DROP releases the outermost layer AND (under
+   * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+   * env's drop-glue header, so the whole onion is freed.  Flag-off,
+   * TUR_CLOSURE_DROP is a plain free of the outer box (the inner boxes leak, as
+   * before). */
+  if (hb->handler) TUR_CLOSURE_DROP(hb->handler);
   if (hb->listen_fd >= 0) close(hb->listen_fd);
   if (hb->fdq) {
       /* Close any pending fds we never got to. */
@@ -1762,16 +1772,13 @@
 ;;; mw-cors-with stores its origin/methods/headers strings in a middleware
 ;;; closure that lives for the whole server run.  Capturing the caller's cstr
 ;;; BY BORROW dangles if the caller passed a computed/freed buffer (see
-;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an owned heap copy
-;;; the closure keeps for its lifetime; NULL is passed through unchanged so the
-;;; emit helpers' NULL-defaulting still applies.  The copy is process-lifetime
-;;; (freed at server shutdown) -- the accepted pattern for server-lifetime
-;;; closure state, mirroring reactor callbacks.
-(defn httpd-cors-own-str [s : cstr] : cstr
-  ```c
-  const char *cs = (const char *)(intptr_t)s;
-  return (const char *)(cs ? strdup(cs) : (char *)0);
-  ```)
+;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an OWNED String
+;;; (a refcounted copy) the closure keeps for its lifetime.  Under
+;;; --enable=closure-drop-glue the String is a Drop-typeclass capture, so the
+;;; closure's drop-glue releases it when the middleware is torn down (Model R);
+;;; flag-off it lives to process exit, as before.
+(defn httpd-cors-own-str [s : cstr] : String
+  (string/from-cstr s))
 
 (defn mw-cors-with [allow-origin : cstr
                     allow-methods : cstr
@@ -1782,7 +1789,9 @@
                     ^fat next : int] : ptr<void>
   ;; Own the captured strings so the server-lifetime closure never holds a
   ;; borrowed pointer into a caller buffer that may be freed (the dangling
-  ;; hazard when allow-origin/headers are computed rather than literals).
+  ;; hazard when allow-origin/headers are computed rather than literals).  The
+  ;; owned String captures are Drop-released by the closure drop-glue (Model R);
+  ;; the emit helpers take a borrowed `cstr` view via string/to-cstr.
   (let [_ao (httpd-cors-own-str allow-origin)
         _am (httpd-cors-own-str allow-methods)
         _ah (httpd-cors-own-str allow-headers)
@@ -1792,8 +1801,10 @@
         _n  next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
-        (httpd-mw-cors-emit-preflight c _ao _am _ah _ac _ma)
-        (do (httpd-call _n c) (httpd-mw-cors-decorate c _ao _eh _ac))))))
+        (httpd-mw-cors-emit-preflight c (string/to-cstr _ao) (string/to-cstr _am)
+                                        (string/to-cstr _ah) _ac _ma)
+        (do (httpd-call _n c)
+            (httpd-mw-cors-decorate c (string/to-cstr _ao) (string/to-cstr _eh) _ac))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin

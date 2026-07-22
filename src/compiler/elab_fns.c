@@ -4643,6 +4643,67 @@ Expr *elab_fn(Elab *e, const Form *call) {
         closure->env_name = env_name_sym;
         closure->is_shift_receiver = false;   /* arena mem is not zeroed */
         closure->is_effect_payload = false;
+        closure->capture_drop_insts = NULL;   /* Model R #1b (arena is non-zeroing) */
+        closure->capture_clone_insts = NULL;
+
+        /* closure-drop-glue (Model R): make each OWNING capture participate in the
+         * env's lifecycle so it is released when the env dies instead of leaking.
+         * Gated on the experiment; the base language is unchanged.  Two kinds:
+         *
+         *  (a) type-honesty -- an OWNED `^fat` closure handle: MOVE it into the env
+         *      (mark the source consumed), so the env is its sole owner and a second
+         *      capture is a compile-time use-after-move, not a double-free.  The
+         *      is_fat drop-glue walk releases it via TUR_CLOSURE_DROP.
+         *
+         *  (b) Drop typeclass -- a capture whose type implements Drop (e.g. an owned
+         *      refcounted String): record its Drop instance (and Clone, if any).  A
+         *      Drop+Clone type is RETAINed at capture / released at env death
+         *      (refcount balances, aliasing-safe -- like the rc walk); a Drop-only
+         *      (move-only) type is consumed at capture and released once.
+         *
+         * The letrec self-capture (env storing its own pointer) is not a transfer
+         * and is skipped. */
+        if (g_opt_closure_drop_glue) {
+            const Symbol *drop_name = intern_cstr(e->st, "Drop");
+            TypeClass *drop_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, drop_name);
+            struct TypeClassInstance **drops = NULL;
+            for (uint32_t ci = 0; ci < n_captures; ci++) {
+                Binding *cap = arena_captures[ci];
+                if (!cap || cap->is_global) continue;
+                bool self_cap = cap->closure_fn_binding &&
+                                cap->closure_fn_binding == fd->binding;
+                if (self_cap) continue;
+                /* (a) ^fat owned closure handle -> move (is_fat walk releases it). */
+                if (cap->is_fat) {
+                    (void)binding_mark_moved(cap, call->span);
+                    continue;
+                }
+                /* rc/weak/ref are already released by the type-kind drop-glue arms;
+                 * do not also route them through Drop (would double-release). */
+                if (cap->type.kind == TY_RC || cap->type.kind == TY_WEAK ||
+                    cap->type.kind == TY_REF || cap->type.kind == TY_LREF)
+                    continue;
+                /* (b) Drop-implementing capture (e.g. an owned String).  MOVE it:
+                 * an opaque Drop type has NO scope-exit auto-drop (release is
+                 * manual), so retaining a second owner would leak the source (which
+                 * nothing releases).  Moving makes the closure the SOLE owner -- the
+                 * drop-glue releases it exactly once via the Drop instance, and a
+                 * second capture is a compile-time use-after-move. */
+                struct TypeClassInstance *di = drop_tc
+                    ? typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &cap->type, 1)
+                    : NULL;
+                if (!di) continue;
+                if (!drops) {
+                    drops = (struct TypeClassInstance **)arena_alloc(
+                        e->arena, n_captures * sizeof(struct TypeClassInstance *));
+                    for (uint32_t k = 0; k < n_captures; k++) drops[k] = NULL;
+                }
+                drops[ci] = di;
+                (void)binding_mark_moved(cap, call->span);
+            }
+            closure->capture_drop_insts  = drops;
+            closure->capture_clone_insts = NULL;   /* unused: Drop captures MOVE */
+        }
 
         /* Store closure reference in FnDef for codegen */
         fd->closure = closure;

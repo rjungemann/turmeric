@@ -2881,6 +2881,70 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
             }
             buf_puts(file, "};\n");
             free(thunk_typedef);
+
+            /* closure-drop-glue (Model R): emit the env's drop-glue beside its
+             * struct def (this pre-pass is the authoritative early emission site;
+             * the EX_CLOSURE path shares the env_struct_names guard, so the glue is
+             * emitted exactly once).  The glue RELEASES each refcounted owning
+             * capture (rc strong decrement, balancing the env-fill's retain) and
+             * frees the base allocation (the header word precedes the env pointer).
+             *
+             * The rc walk is sound regardless of aliasing -- rc counting is the
+             * sharing-safe owning mechanism.  Owning captures that are NOT
+             * refcounted -- a raw nested-closure handle (`!is_poly_fn` TY_FN), a
+             * `ref` -- are NOT walked here: recursing one blind is finding #1's
+             * double-free (a capture another owner also drops), which needs
+             * move/uniqueness analysis.  The httpd `_n`/string case additionally
+             * needs type-honest owned captures.  Both are the next slice. */
+            if (g_opt_closure_drop_glue) {
+                buf_printf(file, "static void drop_glue_%s(void *__p) {\n", env_name->name);
+                buf_printf(file, "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
+                           env_name->name, env_name->name);
+                for (int32_t i = (int32_t)fd->closure->n_captures - 1; i >= 0; i--) {
+                    Binding *cap = fd->closure->captures[i];
+                    if (cap && cap->is_global) continue;
+                    if (cap && cap->type.kind == TY_RC) {
+                        char *cf = raw_name_for_binding(cap);
+                        buf_printf(file,
+                            "    if (__e->%s) { rc_strong_decrement(__e->%s); rc_free_queue_drain(); }\n",
+                            cf, cf);
+                        free(cf);
+                    } else if (cap && cap->is_fat &&
+                               !(cap->closure_fn_binding &&
+                                 fd->binding &&
+                                 cap->closure_fn_binding == fd->binding)) {
+                        /* Type-honesty (a): a `^fat` capture carries is_fat even
+                         * though its env field is the erased int64 carrier, so it
+                         * is provably an OWNED fat closure handle -- release it via
+                         * TUR_CLOSURE_DROP (uniform across representations).  Sound
+                         * because the capture is MOVED into this env (elab marks the
+                         * source consumed, so no other owner drops it -- an aliasing
+                         * second capture is a use-after-consume error, not a
+                         * double-free).  The letrec self-capture (the env storing
+                         * its OWN pointer) is excluded -- dropping it would recurse
+                         * into itself. */
+                        char *cf = raw_name_for_binding(cap);
+                        buf_printf(file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
+                        free(cf);
+                    } else if (fd->closure->capture_drop_insts &&
+                               fd->closure->capture_drop_insts[i] &&
+                               fd->closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                               fd->closure->capture_drop_insts[i]->method_impls[0] &&
+                               fd->closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                        /* Model R #1b: a capture whose type implements Drop -- release
+                         * it through the resolved Drop instance's `drop` method.  A
+                         * Drop+Clone (refcounted) capture was retained at env-fill, so
+                         * this decrement balances; a move-only Drop capture was
+                         * consumed at capture, so this is its sole release. */
+                        char *cf = raw_name_for_binding(cap);
+                        char *dm = raw_name_for_binding(
+                            fd->closure->capture_drop_insts[i]->method_impls[0]->binding);
+                        buf_printf(file, "    %s(__e->%s);\n", dm, cf);
+                        free(dm); free(cf);
+                    }
+                }
+                buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
+            }
         }
     }
 
