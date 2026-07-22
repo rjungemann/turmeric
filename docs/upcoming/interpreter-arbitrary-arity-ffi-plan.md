@@ -1,10 +1,21 @@
 # Arbitrary-arity spice calls in the interpreter (retiring the shape-dispatch ceiling)
 
-**Status:** Proposed (not started). _Verified 2026-07-19: still unstarted._
-`src/turi/ffi_thunk.c:175` still dispatches through the generated
-`tur_ffi_thunk_call` switch; `tools/gen_ffi_dispatch.py` still carries the
-`--max-arity <= 16` clamp (:420); and no per-export `<mangled>__ffi` shim is
-emitted in `src/compiler/emit_module.c`. None of Phases 1-4 have landed.
+**Status:** Phases 1-3 landed (2026-07-22). The recommended spice-emitted
+per-export FFI shim is implemented: `src/compiler/emit_module.c`
+(`emit_ffi_export_shims`) emits a `<mangled>__ffi(const int64_t*, const
+double*, int64_t*, double*)` shim next to each exported defn in the
+separate-compilation path; `src/turi/spice_loader.c` probes the shim symbol
+with `dlsym` (NULL when absent) and stores it on the descriptor
+(`TurSpiceExport.ffi_shim`); and `src/turi/ffi_thunk.c` calls the shim
+directly when present -- lifting the shape-table arity ceiling entirely --
+falling back to the generated `tur_ffi_thunk_call` switch for spices built
+before this change. High-arity calls (arity 12, and an interleaved
+int/float arity-8 case) are guarded in `tests/turi/repl-spice-call.sh`.
+
+Phase 4 (retire/shrink the committed `ffi_dispatch*` table) is intentionally
+deferred: the table stays as the fallback for never-rebuilt spices, and
+`tools/gen_ffi_dispatch.py` keeps its `--max-arity <= 16` clamp since it now
+only bounds that fallback, not the shim path.
 
 Removes the last arity ceiling in the
 arbitrary-fn-arity story: the interpreter/REPL path that calls a `dlopen`ed

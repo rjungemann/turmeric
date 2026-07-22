@@ -30,6 +30,18 @@ extern "C" {
  * interpreter-FFI limit, not a descriptor limit. */
 #define TUR_SPICE_ARITY_FASTPATH 16
 
+/* interpreter-arbitrary-arity-ffi (Phase 2): the uniform-signature FFI shim
+ * emitted next to each exported defn (see src/compiler/emit_module.c
+ * emit_ffi_export_shims).  It reads the interpreter's marshalled int-register
+ * / float args from `iv` / `fv` and writes the result to *out_i (int-class
+ * return) or *out_f (float-class return); a :void return writes neither.
+ * Calling through it lifts the shape-table arity ceiling entirely -- the shim
+ * was generated with the export's concrete signature, so arity and int/float
+ * mix are irrelevant.  NULL when the loaded .so predates shim emission; the
+ * caller then falls back to the generated shape table (still capped). */
+typedef void (*TurFfiShimFn)(const int64_t *iv, const double *fv,
+                             int64_t *out_i, double *out_f);
+
 /* One row from exports.manifest, post-parse. The dispatcher class chars
  * use the encoding shared with src/runtime/ffi_dispatch.h:
  *   'i' -- int64_t (covers :int / :cstr / :bool / :ptr / sized ints)
@@ -42,6 +54,7 @@ typedef struct TurSpiceExport {
     char    *name;        /* defn name, e.g. "add42" */
     char    *mangled;     /* C symbol name, e.g. "smokelib__add42" */
     void    *fn_ptr;      /* dlsym'd address */
+    TurFfiShimFn ffi_shim; /* dlsym'd `<mangled>__ffi` shim, or NULL (old .so) */
     char     ret_class;
     char    *arg_classes; /* heap array of length n_args (NULL iff n_args == 0) */
     uint32_t n_args;      /* unbounded -- no fixed arity cap */

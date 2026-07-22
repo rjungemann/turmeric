@@ -348,7 +348,8 @@ static char *skip_ws(char *p) {
 static int append_export(TurSpiceImage *img, char *module, char *name,
                          char *mangled, char ret_class,
                          char *arg_classes, uint32_t n_args,
-                         bool is_variadic, void *fn_ptr) {
+                         bool is_variadic, void *fn_ptr,
+                         TurFfiShimFn ffi_shim) {
     if (img->n_exports == img->cap_exports) {
         uint32_t nc = img->cap_exports ? img->cap_exports * 2 : 8;
         TurSpiceExport *na = realloc(img->exports, nc * sizeof(*na));
@@ -367,6 +368,7 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->n_args = n_args;
     e->is_variadic = is_variadic;
     e->fn_ptr = fn_ptr;
+    e->ffi_shim = ffi_shim;
     e->arg_classes = arg_classes;  /* owned; freed in spice_export_free */
     return 0;
 }
@@ -477,9 +479,30 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
         free(module); free(name); free(mangled); free(arg_classes);
         return -2;  /* RP7: caller skips the generic "malformed" message */
     }
+    /* interpreter-arbitrary-arity-ffi (Phase 2): probe for the per-export
+     * `<mangled>__ffi` shim.  Its absence is expected and benign -- a spice
+     * built before shim emission has no such symbol -- so a NULL result is
+     * not an error; the call path falls back to the generated shape table. */
+    TurFfiShimFn ffi_shim = NULL;
+    {
+        size_t shim_len = strlen(mangled) + 5 + 1;  /* "__ffi" + NUL */
+        char  *shim_sym = (char *)malloc(shim_len);
+        if (shim_sym) {
+            snprintf(shim_sym, shim_len, "%s__ffi", mangled);
+            dlerror();
+            /* The shim is `void(*)(const int64_t*, const double*, int64_t*,
+             * double*)`; dlsym hands back a `void *`, which is not portably
+             * convertible to a function pointer by a direct cast (ISO C), so
+             * round-trip through the object-pointer-sized shim slot. */
+            void *sym = dlsym(img->handle, shim_sym);
+            (void)dlerror();  /* clear; a missing shim is not reported */
+            memcpy(&ffi_shim, &sym, sizeof ffi_shim);
+            free(shim_sym);
+        }
+    }
     /* Ownership of arg_classes transfers to the export. */
     return append_export(img, module, name, mangled, ret_class,
-                          arg_classes, n_args, is_variadic, fn_ptr);
+                          arg_classes, n_args, is_variadic, fn_ptr, ffi_shim);
 }
 
 static int load_manifest(TurSpiceImage *img, const char *manifest_path) {
