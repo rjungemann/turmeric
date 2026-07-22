@@ -1565,6 +1565,7 @@
     {"builder/push-byte!", "builder/push-byte! -- append a single byte (0..255) to the builder.\n\nSince: v2"},
     {"builder/len", "builder/len -- number of bytes accumulated so far.\n\nSince: v2"},
     {"builder/finish", "builder/finish -- freeze the accumulated bytes into an immutable String.\n\nExample:\n  (let [b (builder/new)]\n      (do (builder/push-cstr! b \"a\")\n          (builder/push-cstr! b \"b\")\n          (builder/finish b)))  ; => String \"ab\"\n\nSince: v2"},
+    {"Drop", "Drop [String] -- release one owning handle (refcount--), freeing at zero.\n\nSince: v2 (Model R)"},
     {"string/autolink-hint", "string/autolink-hint -- internal marker triggering tur_string.c compilation."},
     {"tur/string", "tur/string -- owned, immutable, refcounted String.\n\nSince: v2 (owned-string-type-plan)"},
     {"str->sym", "str->sym -- intern a string into a symbol at runtime.\n\nParameters:\n  s -- the NUL-terminated name to intern (without a leading colon)\n\nReturns:\n  The interned symbol for s.\n\nExample:\n  (eq? :hello (str->sym \"hello\"))  ; => true\n\nSince: Phase SYM5"},
