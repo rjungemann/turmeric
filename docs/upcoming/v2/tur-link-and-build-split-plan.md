@@ -4,9 +4,11 @@
 `resolve_autolink_flags`/`link_command_run` factoring; `tur compile`/`tur link`
 + `.link` sidecar; `tur build --split-build`; `tur build --runtime=lib` backed
 by the lean non-ASan `libturt_runtime.a`; and the default flipped to `auto`.
-Remaining: the ccache CI wiring (Phase 5), and -- as a *separate, larger*
-effort -- extending an archive-linked runtime to project/directory builds
-(Section 6a explains why that is not a wiring task). Motivated by
+Executable project/directory builds are covered too -- they reroute through the
+single-file path (Section 6a). Remaining: the ccache CI wiring (Phase 5). The
+only path that still embeds the runtime is separate compilation (shared libs /
+multi-`main`), where embedding is intentional -- Section 6a explains why
+externalizing it is an explicit non-goal. Motivated by
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
@@ -262,32 +264,38 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
    `--runtime=source` forces recompile, `TUR_RUNTIME=auto|lib|source` seeds the
    default. Full suite green under the flipped default (2264 passed, 0 failed).
 
-## 6a. Project/directory builds -- a *different* runtime architecture
+## 6a. Project/directory builds -- what actually routes where
 
-An investigation while wiring runtime-lib established that
-`tur build <dir>` / project builds do **not** bare-source-autolink at all, so
-`--runtime=lib` does not apply to them and there is nothing to "wire in":
+A closer investigation (correcting an earlier draft of this section) established
+that **executable project builds already get runtime-lib**, because
+`cmd_build_project` reroutes the common case to the single-file path:
 
-- `cmd_build_multi` and `cmd_build_project` both delegate to
-  `cmd_build_multi_files` (`src/main.c`), which emits a **shared runtime owner
-  TU** (`tur_runtime.c` + `tur_runtime.h` via `emit_shared_runtime_header`, the
-  `emit_runtime_preamble(..., shared=true)` path). The runtime is **embedded
-  inline** (owner TU defines the globals; every module TU carries static
-  replicas), and the link command appends **no** `__tur_autolink__` flags.
-- Confirmed empirically: a project build of a fixture referencing dozens of
-  `tur_hamt_*` functions links and runs correctly with no `hamt.c` and no
-  `-lturi` on the link line.
+- `cmd_build_project` (`src/main.c`): for an **executable with exactly one
+  `main`** (and no non-entry `#[used]` module), it builds the entry module
+  *single-file* via `cmd_build(entry, ...)` -- whole-program inlining pulls in
+  every transitively-imported module into one TU. That path runs
+  `apply_runtime_lib_mode`, so it links the lean archive under the `auto`
+  default. Verified empirically: a **multi-module** single-`main` project
+  (`main` importing a sibling, using `#map`) links `-lturt_runtime` and runs
+  correctly. This is the common case and covers the entire single-file test
+  suite.
+- The separate-compilation path (`cmd_build_multi_files`) -- which emits a
+  shared runtime owner TU (`tur_runtime.c`/`.h` via `emit_shared_runtime_header`,
+  the `emit_runtime_preamble(..., shared=true)` path: owner TU defines globals,
+  every module TU carries static replicas) and appends **no** autolink flags --
+  is used only for: **shared libraries** (`--shared`, or a no-`main` spice),
+  **multi-`main`** projects, and **`#[used]`** non-entry projects.
 
-So the recompile cost in project builds is the **emitted runtime preamble**, a
-codegen concern, not the bare-source autolink the `--runtime=lib` work targets.
-Making project builds link a prebuilt runtime instead of embedding it is a
-genuine but **separate, larger** optimization: it needs (a) a codegen change to
-have `emit_shared_runtime_header` emit *declarations* and link externally
-instead of embedding definitions + static replicas, and (b) a **full** non-ASan
-runtime archive (the lean 3-TU `libturt_runtime.a` does not cover the whole
-preamble; the full `libturi.a` is ASan in Debug, which reintroduces the LSan
-problem for project fixture programs). Tracked as a future item, not part of
-this plan's compile/link split.
+So runtime-lib is **not** missing from executable builds; it is only the
+separate-compilation path that embeds the runtime. And for that path the
+embedding is largely **intentional**: a distributable `.so` should be
+self-contained, not acquire a load-time dependency on an external
+`libturt_runtime.a`. Externalizing the runtime there would also need a **full**
+non-ASan runtime archive (the lean 3-TU `libturt_runtime.a` does not cover the
+whole preamble; the full `libturi.a` is ASan in Debug, reintroducing the LSan
+problem). Given the common case is already covered and the remaining case wants
+self-containment, externalizing the separate-compilation runtime is **low value
+and not recommended** -- left as an explicit non-goal rather than a TODO.
 
 ## 6. Finishing the Section 3 work (folded in from the archived report)
 
