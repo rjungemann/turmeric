@@ -10930,6 +10930,133 @@ int emit_exports_manifest(Buf *out, const Expr *program) {
     return 0;
 }
 
+/* interpreter-arbitrary-arity-ffi (Phase 1): classify a parameter/return
+ * TypeKind for the per-export FFI shim.  Returns:
+ *   'i' -- int-register class (read from iv[]): :int / :bool / :cstr / :ptr /
+ *          sized ints.  The shim casts iv[k] (via intptr_t) to the real C type.
+ *   'f' -- float class (read from fv[]): :float / :float32 / :float64.
+ *   'v' -- :void return only (never an arg class).
+ *   '?' -- not representable as a scalar the FFI layer marshals (structs,
+ *          ADTs, carriers, :never).  The shim is omitted for this export and
+ *          the loader falls back to the legacy shape table / clean error.
+ *
+ * The 'i'/'f'/'v' results agree with the loader's class_for_tag(
+ * manifest_type_tag(k)) mapping in src/turi/spice_loader.c so the shim reads
+ * the same buffer the interpreter marshalled the arg into.  This is stricter
+ * than that mapping only in that a non-scalar (which the manifest spells :any,
+ * class 'i') is reported '?' here -- the shim cannot cast a struct to int64,
+ * so it declines rather than emit invalid C. */
+static char ffi_shim_class_for_kind(TypeKind k, bool is_return) {
+    switch (k) {
+        case TY_NIL:      return is_return ? 'v' : '?';
+        case TY_BOOL:
+        case TY_INT:
+        case TY_CSTR:
+        case TY_PTR_VOID:
+        case TY_INT8:  case TY_INT16:  case TY_INT32:  case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+            return 'i';
+        case TY_FLOAT:
+        case TY_FLOAT32:
+        case TY_FLOAT64:
+            return 'f';
+        default:
+            return '?';
+    }
+}
+
+/* interpreter-arbitrary-arity-ffi (Phase 1): emit a uniform-signature FFI
+ * shim next to each exported defn so the interpreter/REPL can call it at
+ * arbitrary arity without a generated shape table.  For an export
+ * `m__big(A0, A1, ...) -> R`, emits:
+ *
+ *     void m__big__ffi(const int64_t *iv, const double *fv,
+ *                      int64_t *out_i, double *out_f) {
+ *         *out_i = (int64_t)(intptr_t)m__big((A0)(intptr_t)iv[0],
+ *                                            (A1)fv[1], ...);
+ *     }
+ *
+ * Each parameter reads iv[k] (int-register class) or fv[k] (float class) --
+ * the exact buffer/position the interpreter marshals to -- cast to the real
+ * declared C parameter type (more precise than the generic shape-table
+ * trampolines, which rely on a blanket function-pointer cast).  The result is
+ * written back to *out_i (int-class return) or *out_f (float-class return); a
+ * :void return writes neither.  The shim symbol name is the export's mangled
+ * name plus `__ffi`; the loader probes it with dlsym and falls back to the
+ * legacy shape table when it is absent (spices built before this change).
+ *
+ * Skipped (no shim; legacy path / clean error handles the call): variadic
+ * exports, and any export whose return or a parameter is not a scalar the FFI
+ * layer represents (its class is '?').  The set walked here mirrors
+ * emit_exports_manifest exactly so the manifest and the shim stay in lockstep.
+ *
+ * Emitted with external linkage (no `static`) so dlsym can find it. */
+static void emit_ffi_export_shims(Buf *out, const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return;
+    uint32_t n_items;
+    const Expr **items = flatten_program_items(program, &n_items);
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind != EX_FN_DEF) continue;
+        FnDef *fd = e->as.fn_def_.fn;
+        const Binding *b = fd->binding;
+        if (!b->is_exported) continue;
+        /* Same skips as emit_exports_manifest: static stdlib defns aren't in
+         * the .so's dynamic symbol table, and `main` is never module-exported. */
+        if (b->is_from_stdlib) continue;
+        if (b->name->len == 4 && memcmp(b->name->name, "main", 4) == 0) continue;
+        if (e->type.kind != TY_FN) continue;
+        /* Variadic exports are not callable from the REPL yet (cons-list
+         * marshaling is a separate feature); leave them to the clean error. */
+        if (e->type.as.fn.is_variadic) continue;
+
+        /* Classify return + params; decline the shim on any non-scalar slot. */
+        char ret_cls = ffi_shim_class_for_kind(e->type.as.fn.result_kind,
+                                                /*is_return=*/true);
+        if (ret_cls == '?') continue;
+        bool representable = true;
+        for (uint32_t j = 0; j < fd->n_params; j++) {
+            if (ffi_shim_class_for_kind(fd->param_types[j].kind,
+                                        /*is_return=*/false) == '?') {
+                representable = false;
+                break;
+            }
+        }
+        if (!representable) continue;
+
+        char *mangled = raw_name_for_binding(b);
+        buf_printf(out,
+                   "void %s__ffi(const int64_t *iv, const double *fv, "
+                   "int64_t *out_i, double *out_f) {\n",
+                   mangled);
+        buf_puts(out, "    ");
+        if (ret_cls == 'i')      buf_puts(out, "*out_i = (int64_t)(intptr_t)");
+        else if (ret_cls == 'f') buf_puts(out, "*out_f = (double)");
+        /* ret 'v': call for effect, no assignment. */
+        buf_printf(out, "%s(", mangled);
+        for (uint32_t j = 0; j < fd->n_params; j++) {
+            if (j > 0) buf_puts(out, ", ");
+            char cls = ffi_shim_class_for_kind(fd->param_types[j].kind,
+                                               /*is_return=*/false);
+            const char *cty = type_c_name(fd->param_types[j]);
+            if (cls == 'f') {
+                buf_printf(out, "(%s)fv[%u]", cty, (unsigned)j);
+            } else {
+                /* intptr_t intermediate makes both int->int and int->pointer
+                 * (e.g. :cstr -> const char *) casts warning-free. */
+                buf_printf(out, "(%s)(intptr_t)iv[%u]", cty, (unsigned)j);
+            }
+        }
+        buf_puts(out, ");\n");
+        /* Silence -Wunused-parameter for buffers this shim never touches
+         * (an all-int export never reads fv/out_f, a :void one never writes). */
+        buf_puts(out, "    (void)iv; (void)fv; (void)out_i; (void)out_f;\n");
+        buf_puts(out, "}\n");
+        free(mangled);
+    }
+    free(items);
+}
+
 /* Emit a C header file for a module. Contains declarations (not definitions).
  * When separate_compilation is true (Phase M3): only exported functions are
  * declared, and #includes for each imported module's header are emitted. */
@@ -11775,6 +11902,13 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         ctx.current_abi_specialization = NULL;
         ctx.current_scan_fn = NULL;
     }
+
+    /* interpreter-arbitrary-arity-ffi (Phase 1): emit one uniform-signature
+     * `<mangled>__ffi` shim per exported defn so the REPL/interpreter can call
+     * a spice export at arbitrary arity without the generated shape table.
+     * Appended after the real function bodies above (which the shim calls) so
+     * the definition precedes the shim in this TU. */
+    emit_ffi_export_shims(&file, program);
 
     /* project-mode-rc-runtime-preamble-missing: drain function-level defer
      * thunks accumulated while emitting the bodies above.  Auto-drop of rc/ref

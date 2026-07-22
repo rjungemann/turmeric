@@ -172,22 +172,33 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     {
         int64_t out_i = 0;
         double  out_f = 0.0;
-        int rc = tur_ffi_thunk_call(e->ret_class,
-                                    e->arg_classes, e->n_args,
-                                    e->fn_ptr, i_vals, f_vals,
-                                    &out_i, &out_f);
-        if (rc != 0) {
-            /* The generated dispatcher covers arg-shapes up to its --max-arity
-             * (6 by default).  A call whose shape exceeds that fails here with a
-             * regenerate-the-table diagnostic.  This is an interpreter-FFI
-             * dispatch limit, independent of the (now unbounded) descriptor: the
-             * export loaded fine and its siblings remain callable. */
-            result = turi_errorf(
-                "ffi: '%s/%s' has no registered dispatcher for shape "
-                "(arity %u). Regenerate src/runtime/ffi_dispatch_thunk.c "
-                "with `python3 tools/gen_ffi_dispatch.py --max-arity N`.",
-                e->module, e->name, (unsigned)e->n_args);
-            goto cleanup;
+        if (e->ffi_shim) {
+            /* interpreter-arbitrary-arity-ffi (Phase 3): the spice emitted a
+             * per-export shim with its concrete signature baked in.  Call it
+             * directly with the marshalled buffers -- no shape table, so no
+             * arity ceiling and int/float mix is irrelevant. */
+            e->ffi_shim(i_vals, f_vals, &out_i, &out_f);
+        } else {
+            /* Fallback: a spice built before shim emission.  The generated
+             * dispatcher covers arg-shapes up to its --max-arity (6 by
+             * default); a call whose shape exceeds that fails here with a
+             * rebuild/regenerate diagnostic.  This is an interpreter-FFI
+             * dispatch limit, independent of the (now unbounded) descriptor:
+             * the export loaded fine and its siblings remain callable. */
+            int rc = tur_ffi_thunk_call(e->ret_class,
+                                        e->arg_classes, e->n_args,
+                                        e->fn_ptr, i_vals, f_vals,
+                                        &out_i, &out_f);
+            if (rc != 0) {
+                result = turi_errorf(
+                    "ffi: '%s/%s' has no registered dispatcher for shape "
+                    "(arity %u). Rebuild the spice (its sources changed -> "
+                    "the REPL regenerates an unbounded per-export shim), or "
+                    "regenerate src/runtime/ffi_dispatch_thunk.c with "
+                    "`python3 tools/gen_ffi_dispatch.py --max-arity N`.",
+                    e->module, e->name, (unsigned)e->n_args);
+                goto cleanup;
+            }
         }
         switch (e->ret_class) {
             case 'i': result = turi_int(out_i);   break;
