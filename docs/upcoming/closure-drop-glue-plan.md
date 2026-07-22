@@ -162,15 +162,34 @@ appears it is an *escape* case, so the fix belongs in R3 / the Model U fn-field
 drop, keyed on the field type (`TY_FN` boxed / owned `ref`) with the same
 move-gate the `is_fat` arm already uses. R2a is therefore **merged into R3**.
 
-**R2b -- cross-function double-ownership** (deferred, soundness hardening, no
-leak). The capture move closes *same-function* aliasing (a second capture of a
-moved `^fat` handle is `TUR-E0005`). A caller that independently frees a handle it
-also passed into a `^fat` consumer would still double-free; a general fix threads
-the move across the call boundary. Not a current pattern (flag-off such handles
-merely leak; flag-on the corpus has no such caller). Keep deferred; revisit only
-if a fixture constructs cross-function shared ownership.
+**R2b -- cross-function double-ownership -- FINDINGS (2026-07-22): NOT a live
+hazard; closed.** The concern was: the capture move closes *same-function*
+aliasing (a second capture of a moved `^fat` handle is `TUR-E0005`), but a caller
+that also freed a handle it passed into a consumer could double-free across the
+call boundary. Probed it directly and it is **not reachable** for an honest
+consumer:
+- Passing a fat handle to a `^fat` (consuming) param: the escape analysis
+  (`binding_escapes_impl`, "only ever greenlights a free") treats the arg as
+  ESCAPING, so `let_binding_env_freeable` does NOT free it caller-side -- the
+  consumer is the sole owner. Verified: a `(fn ..k..)` heap closure passed to a
+  `^fat` consumer that `TUR_CLOSURE_DROP`s it -> main emits no caller free, no
+  double-free (ASan clean). The ownership transfer is effectively threaded across
+  the boundary already, by conservatism.
+- The only theoretical double-free needs a `^borrow`/nonretain consumer that
+  VIOLATES its contract by freeing a handle it promised only to borrow. That is
+  (a) a consumer bug, not a general hole; (b) present flag-OFF too (a `^borrow`
+  callee that frees double-frees regardless of closure-drop-glue); and (c) not
+  even reachable in these shapes -- the `:int`-erased consumer params force a
+  `(:: h int)` ascription on the arg, which defeats the escape-analysis
+  borrow-arg recognition, so the caller does not free the handle anyway.
 
-Neither is a prerequisite for graduation (R4) on the current corpus.
+Conclusion: closure-drop-glue introduces no new cross-function double-free.
+Nothing to build. If `^fat`/borrow handles are ever un-erased to honest
+owning-closure types (the R2a/R3a type-honesty theme), thread the move across the
+call boundary then for defense-in-depth -- but there is no live hazard to guard
+today. R2b **closed**.
+
+Neither R2a nor R2b is a prerequisite for graduation (R4) on the current corpus.
 
 ### R3 -- Escaping owned-closure captures + shared closures
 
