@@ -809,8 +809,13 @@
       volatile int stop_flag;
       void *tls_ctx;
   } HttpdBlock;
+  /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
+   * is never handed to httpd-new-pool, so release it here or it leaks -- via
+   * TUR_CLOSURE_DROP so a compose-middleware onion is fully reclaimed (flag-off,
+   * a plain free of the outer box). */
   if (ctx == 0) {
       fprintf(stderr, "httpd-new-tls: ctx is 0\n");
+      TUR_CLOSURE_DROP(handler);
       return NULL;
   }
   if (!httpd_tls_ops.wrap_fd || !httpd_tls_ops.handshake ||
@@ -818,6 +823,7 @@
       fprintf(stderr,
           "httpd-new-tls: TLS ops not registered "
           "-- did you forget to import tls/httpd and call tls-httpd-init?\n");
+      TUR_CLOSURE_DROP(handler);
       return NULL;
   }
   HttpdBlock *hb = (HttpdBlock *)httpd_hynew_hypool((int64_t)port,
@@ -3058,10 +3064,13 @@
   Route *cur = router->routes;
   while (cur) {
       Route *nx = cur->next;
-      /* Each route handler is passed ^fat (heap box) and freed nowhere else;
-       * reclaim the outer box here (inner middleware layers, if any, still
-       * leak pending closure drop glue -- see the plan). */
-      if (cur->handler) free((void *)(intptr_t)cur->handler);
+      /* Each route handler is passed ^fat (heap fat-closure box) and freed
+       * nowhere else. TUR_CLOSURE_DROP releases the outer box AND (under
+       * --enable=closure-drop-glue) walks the inner captured `next` boxes via the
+       * env's drop-glue header, so a compose-middleware onion is fully freed.
+       * Flag-off, TUR_CLOSURE_DROP is a plain free of the outer box (inner layers
+       * leak, as before). */
+      if (cur->handler) TUR_CLOSURE_DROP(cur->handler);
       free(cur);
       cur = nx;
   }

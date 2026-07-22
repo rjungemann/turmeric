@@ -48,11 +48,12 @@ Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
 is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
 env now carries an `env[-1]` drop-glue header walked by `drop_glue_env_N`, with
 retain/move at capture, a `Drop` typeclass for owned-opaque (String) captures,
-and a partial-application-head free. **12 httpd fixtures** are flipped leak-clean
+and a partial-application-head free. **14 httpd fixtures** are flipped leak-clean
 flag-on (mw-log, basic-auth{,-attr,-noncapture}, body-size, json, static, cors,
-cors-opts, compose, compose-of, async-mw-compose), and the whole async/reactor
-family (the `reactor-*` fixtures, `async-capturing-closure`, ...) is corruption-
-and leak-free flag-on. Residuals (documented in the dated notes + reports):
+cors-opts, compose, compose-of, async-mw-compose, h7-middleware, h5-tls), and the
+whole async/reactor family (the `reactor-*` fixtures, `async-capturing-closure`,
+...) is corruption- and leak-free flag-on. Residuals (documented in the dated
+notes + reports):
 `mw-cookie`/`-form` are an httpd request-accessor cstr leak, not a closure issue
 (`docs/reported/httpd-request-accessor-cstr-leak.md`). Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
@@ -75,24 +76,30 @@ and leak-free flag-on. Residuals (documented in the dated notes + reports):
    for genuinely *shared* closures. This is a DEFERRED fallback (R3), never
    built, because the move model (Model U) covers the whole corpus.
 
-### R1 -- Cleanup: flip the last closure-shaped httpd markers (small, mechanical)
+### R1 -- Cleanup: flip the last closure-shaped httpd markers -- DONE (2026-07-22)
 
-Two fixtures still leak a *closure* env flag-on only because a teardown site or
-a fixture annotation was never updated to the landed machinery. Same shapes as
-the already-flipped `compose` / `async-mw-compose`:
+Two fixtures leaked a *closure* env flag-on only because a teardown site or a
+fixture annotation was never updated to the landed machinery. Same shapes as the
+already-flipped `compose` / `async-mw-compose`; both are now leak-clean flag-on,
+markers dropped, `flags: --enable=closure-drop-glue` added (suite green):
 
-- **`httpd-h7-middleware`** -- its `mw-tag` is under-annotated (`next : int`);
-  the wrapper onion is a fat-closure chain, so `^fat next` lets the drop-glue
-  walk free it (identical to `mw-compose` / `mw-compose-of` source #1). Flip to
-  `flags: --enable=closure-drop-glue`, drop the marker.
-- **`router-free`** (`stdlib/httpd.tur`, the `free((void *)(intptr_t)cur->handler)`
-  in the router linked-list teardown) and the **TLS server handler teardown**
-  still bare-free a now-headered handler box. Rewire to `TUR_CLOSURE_DROP`
-  (byte-identical flag-off), exactly as `httpd-free` / `httpd-async-free` already
-  do. This is what `httpd-h5-tls`'s residual 24 B `main` leak looks like -- confirm
-  the TLS holder's handler free is the last bare one.
+- **`httpd-h7-middleware`** [DONE] -- `mw-tag`'s handler param annotated
+  `^fat next`, so the drop-glue walk frees the wrapper onion (identical to
+  `mw-compose` / `mw-compose-of` source #1). Was 56 B / 2 allocs from `mw-tag`.
+- **`router-free`** (`stdlib/httpd.tur`) [DONE] -- the linked-list teardown's
+  bare `free(cur->handler)` rewired to `TUR_CLOSURE_DROP` (walks the onion;
+  flag-off it is the identical plain free). Covers any router that stores a fat
+  handler (`httpd-h6-routing` is now header-safe flag-on).
+- **`httpd-new-tls`** (`stdlib/httpd.tur`) [DONE] -- this was `httpd-h5-tls`'s
+  residual 24 B: `httpd-new-tls` takes `^fat handler` but its two EARLY refusal
+  paths (`ctx == 0`; TLS ops unregistered) returned NULL without freeing the
+  owned box. Both now `TUR_CLOSURE_DROP(handler)` before returning. (The deeper
+  `httpd-new-pool` failure-path handler leak is pre-existing, not closure-onion
+  shaped, and unexercised -- left for a separate httpd-teardown pass.)
 
-Exit: those fixtures leak-clean flag-on, markers dropped, suite green.
+Exit: MET -- `httpd-h7-middleware` and `httpd-h5-tls` leak-clean flag-on, markers
+dropped, `bash tests/run.sh` green. No snapshot churn (no `expected.c` embeds the
+changed httpd functions).
 
 **Explicitly NOT R1** (the marker text is stale; these are non-closure leaks that
 Model R cannot and should not touch -- keep the markers, they belong to other
