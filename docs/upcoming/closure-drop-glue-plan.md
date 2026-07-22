@@ -240,7 +240,8 @@ always-on, `EXPERIMENTS[]` row deleted, flag removed):
 > closure-drop-glue fixture passes) that the opt-in surface never exercised, in
 > four clusters -- **catch-unwind/panic (~16), effect/continuation/shift-resume
 > (~8), fn-field/struct-closure drop (~5), rc-drop-closure + misc (~4)**. Full
-> list + fix directions: `docs/reported/closure-drop-glue-graduation-blockers.md`.
+> list + fix directions: `docs/archive/closure-drop-glue-graduation-blockers.md`
+> (archived on resolution -- see the R4-prep note below).
 >
 > Each is the SAME bug class already fixed for httpd/reactor/DK-reap: a free site
 > (emitted or precompiled runtime C) that must route through `TUR_CLOSURE_DROP`
@@ -248,14 +249,39 @@ always-on, `EXPERIMENTS[]` row deleted, flag removed):
 > clusters is the real bulk of R4-prep -- a genuine body of work, NOT the
 > mechanical snapshot-regen the plan assumed.
 
-Decision gate at the 0.34.0 cut: **graduate** (only once the 33 blockers are
-fixed and the corpus is clean flag-on), **extend `expires_at`** (if that work
-slips past the cut), or **shelve** (revert the ABI). **Current recommendation:
-HOLD graduation.** We are at 0.30.2, four minors before the 0.34.0 gate; the
-experiment stays opt-in and sound for everything that opts in. The next concrete
-R4 step is **R4-prep**: work the four blocker clusters (header-aware teardown)
-until a forced-on full suite is green, THEN do the 140-snapshot regen + flag
-deletion. Do not graduate before that suite is clean.
+> **R4-prep DONE (2026-07-22) -- crashes fixed, forced-on suite 2261/3.** All
+> three crash clusters routed through the header-aware release, each gated so
+> flag-off is byte-identical (0 snapshot churn):
+> - **catch-unwind / catch-panic-of** thunk box (`emit_expr.c`) -- 16 fixtures.
+> - **effect / shift receiver** reap (`emit_cps_ir.c`, `__dk_reap_ptr` ->
+>   `__dk_reap_closure`) -- 8 fixtures.
+> - **struct/ADT fn-field drop** glue `drop_fnfields_<T>` (`emit_module.c`) -- 5
+>   fixtures (+ `dot-receiver-first-call`).
+>
+> A fresh forced-on full suite is **2261 passed, 3 failed** (was 33). The 3
+> remaining are NOT bugs: `rc-auto-drop-closure-capture`,
+> `rc-elision-negative-closure-capture`, `closure-env-free-with-owning-sibling`
+> print an rc strong-count that legitimately rises by 1-2 flag-on because the
+> drop-glue RETAINS an rc capture (the closure holds its own strong ref -- the
+> intended Model R semantics). Their `expected.stdout` is flag-off and cannot
+> change now without breaking the flag-off suite -- a graduation-time
+> expected-output regen, folded into the mass regen below. Report archived:
+> `docs/archive/closure-drop-glue-graduation-blockers.md`.
+
+Decision gate at the 0.34.0 cut: **graduate** (the crash blockers are now fixed;
+what remains for graduation is mechanical), **extend `expires_at`** (if the cut
+arrives first), or **shelve** (revert the ABI). **Current recommendation: HOLD
+graduation until the 0.34.0 gate**, but it is now a MECHANICAL step, not a
+research one. When taken, the graduation PR is a single coordinated change:
+1. Default `g_opt_closure_drop_glue` on / drop the gates, emit the header ABI
+   unconditionally.
+2. Regen all **140 `expected.c`** snapshots + the **3** rc-count
+   `expected.stdout` (the intended flag-on counts).
+3. Delete the `EXPERIMENTS[]` row.
+Verify with a full suite (now flag-on by default) -- expected green after the
+regen. We are at 0.30.2, four minors before the gate; the experiment stays
+opt-in until then and is sound (crash-free) for the whole corpus, not just the
+opted-in set.
 
 > **Progress note (2026-07-22c) -- reactor/CPS async blocker RESOLVED; the
 > async/reactor family is corruption- and leak-free flag-on.** Flag-on, every

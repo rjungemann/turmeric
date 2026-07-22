@@ -1,5 +1,25 @@
 # closure-drop-glue graduation blockers: ~33 flag-on teardown bare-frees
 
+> **RESOLVED (2026-07-22, R4-prep) -- 33 -> 3, all crashes fixed.** The four
+> teardown clusters' bare-frees of headered handles were routed through
+> `TUR_CLOSURE_DROP` / `__dk_reap_closure` (all gated, flag-off byte-identical):
+> - catch-unwind / catch-panic-of thunk box (`emit_expr.c`) -- 16 fixtures.
+> - effect/shift receiver reap `__dk_reap_ptr((intptr_t)arg)` (`emit_cps_ir.c`)
+>   -> `__dk_reap_closure` -- 8 fixtures.
+> - struct/ADT fn-field drop glue `drop_fnfields_<T>` (`emit_module.c`) -- 5
+>   fixtures (also fixed `dot-receiver-first-call`).
+>
+> A fresh forced-on full suite is now **2261 passed, 3 failed**. The 3 remaining
+> are NOT crashes and NOT bugs: `rc-auto-drop-closure-capture`,
+> `rc-elision-negative-closure-capture`, `closure-env-free-with-owning-sibling`
+> print an rc strong-count that legitimately INCREASES by 1-2 flag-on, because the
+> drop-glue RETAINS an rc capture (the closure holds its own strong ref -- the
+> sound, intended Model R semantics). Their `expected.stdout` is flag-off and
+> cannot be changed now without breaking the flag-off suite; they are a
+> graduation-time expected-output regen (alongside the 140 `expected.c`), not a
+> blocker. See R4 in `docs/upcoming/closure-drop-glue-plan.md`. Original report
+> below.
+
 **Summary:** forcing `--enable=closure-drop-glue` ON corpus-wide and running the
 full suite (snapshots moved aside so codegen churn cannot mask runtime failures)
 yields **2231 passed, 33 failed**. Every failure is a teardown path that
