@@ -6442,6 +6442,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             char *cf = raw_name_for_binding(cap);
                             buf_printf(ctx->file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
                             free(cf);
+                        } else if (closure->capture_drop_insts &&
+                                   closure->capture_drop_insts[i] &&
+                                   closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                                   closure->capture_drop_insts[i]->method_impls[0] &&
+                                   closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                            /* Model R #1b: Drop-instance release (see emit_fns.c twin). */
+                            char *cf = raw_name_for_binding(cap);
+                            char *dm = raw_name_for_binding(
+                                closure->capture_drop_insts[i]->method_impls[0]->binding);
+                            buf_printf(ctx->file, "    %s(__e->%s);\n", dm, cf);
+                            free(dm); free(cf);
                         }
                     }
                     buf_puts(ctx->file,
@@ -6576,6 +6587,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "if (%s->%s) rc_strong_increment(%s->%s);\n",
                                fat_tmp, field, fat_tmp, field);
                 }
+                /* A Drop-typeclass capture is MOVED into the env (no retain) -- the
+                 * source is consumed at elab, so the stored handle is the sole owner
+                 * and the drop-glue releases it once. */
                 free(field);
                 free(cn);
             }

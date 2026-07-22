@@ -2926,6 +2926,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                         char *cf = raw_name_for_binding(cap);
                         buf_printf(file, "    TUR_CLOSURE_DROP(__e->%s);\n", cf);
                         free(cf);
+                    } else if (fd->closure->capture_drop_insts &&
+                               fd->closure->capture_drop_insts[i] &&
+                               fd->closure->capture_drop_insts[i]->n_method_impls > 0 &&
+                               fd->closure->capture_drop_insts[i]->method_impls[0] &&
+                               fd->closure->capture_drop_insts[i]->method_impls[0]->binding) {
+                        /* Model R #1b: a capture whose type implements Drop -- release
+                         * it through the resolved Drop instance's `drop` method.  A
+                         * Drop+Clone (refcounted) capture was retained at env-fill, so
+                         * this decrement balances; a move-only Drop capture was
+                         * consumed at capture, so this is its sole release. */
+                        char *cf = raw_name_for_binding(cap);
+                        char *dm = raw_name_for_binding(
+                            fd->closure->capture_drop_insts[i]->method_impls[0]->binding);
+                        buf_printf(file, "    %s(__e->%s);\n", dm, cf);
+                        free(dm); free(cf);
                     }
                 }
                 buf_puts(file, "    free((void *)((char *)__p - sizeof(void *)));\n}\n");
