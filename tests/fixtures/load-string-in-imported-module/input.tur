@@ -1,0 +1,16 @@
+;; Entry unit: imports a module that carries stdlib `String` in its signatures
+;; via `(load "stdlib/string.tur")`.  Prints both an int Show and a Vec Show
+;; rendered as owned Strings, releasing each.  Compiled path (default), so this
+;; also covers the primary String-return codegen straddle end to end.
+(defmodule main-mod
+  (export)
+  (import greeter :refer [greet-int greet-vec])
+  (defn main [] : int
+    (let [si  (greet-int 42)
+          sv  (greet-vec)]
+      (do
+        (println (string/to-cstr si))
+        (println (string/to-cstr sv))
+        (string/release si)
+        (string/release sv)
+        0))))
