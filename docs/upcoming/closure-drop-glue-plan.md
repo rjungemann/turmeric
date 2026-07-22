@@ -221,24 +221,41 @@ always-on, `EXPERIMENTS[]` row deleted, flag removed):
 
 1. **Emit the header ABI unconditionally.** Flag-off, `TUR_CLOSURE_DROP` already
    expands to a plain `free`, but the header changes the env allocation layout,
-   so making it default CHURNS every closure codegen snapshot -- a single
-   coordinated `expected.c` regen in the graduation PR (see the fixture-churn
+   so making it default CHURNS every closure codegen snapshot -- **measured: all
+   140 `expected.c` snapshots change** (the header preamble is emitted into every
+   program), a single coordinated regen in the graduation PR (fixture-churn
    policy in CLAUDE.md).
-2. **Prove the whole corpus clean flag-on.** R1 done; the remaining marked
-   fixtures either fall to R1 or are out-of-scope non-closure leaks (which must
-   NOT block graduation -- re-home their markers to their own reports first).
+2. **Prove the whole corpus clean flag-on.** **NOT YET -- this is the blocker.**
 3. **Delete the `EXPERIMENTS[]` row** in `src/runtime/experiments.c` and the
    `g_opt_closure_drop_glue` gates (each gate becomes always-taken).
 
-Decision gate at the 0.34.0 cut: **graduate** (if the corpus is clean and the
-snapshot regen is acceptable), **extend `expires_at`** (if a driver for R3a
-appears and its escape-path leaks are deemed a graduation prerequisite), or
-**shelve** (revert the ABI). Current recommendation (reinforced by the R2
-findings): **graduate after R1.** R1 is DONE; R2a proved not to be a standalone
-item (it folds into R3a, which has no forcing corpus leak beyond the documented,
-bounded `fold-many`/`rate-limit` residuals); R2b and R3b add generality/hardening,
-not correctness. The flag-gated ABI is already sound for everything the corpus
-builds, so the remaining open items are enhancements, not graduation blockers.
+> **R4 VALIDATION FINDINGS (2026-07-22) -- graduation is BLOCKED; earlier
+> "graduate after R1" recommendation RETRACTED.** Forcing the flag on corpus-wide
+> (`g_opt_closure_drop_glue = true`) with snapshots moved aside so codegen churn
+> cannot mask runtime failures, the full suite is **2231 passed, 33 FAILED** --
+> not the clean corpus step 2 assumed. All 33 are teardown paths that bare-free a
+> now-headered fat handle (interior free -> `invalid pointer` / SIGABRT crashes;
+> confirmed on `panic-catch-unwind-basic`, `capturing-closure-struct-field`).
+> These are PRE-EXISTING latent flag-on bugs (flag-off is 2264/0; every opted-in
+> closure-drop-glue fixture passes) that the opt-in surface never exercised, in
+> four clusters -- **catch-unwind/panic (~16), effect/continuation/shift-resume
+> (~8), fn-field/struct-closure drop (~5), rc-drop-closure + misc (~4)**. Full
+> list + fix directions: `docs/reported/closure-drop-glue-graduation-blockers.md`.
+>
+> Each is the SAME bug class already fixed for httpd/reactor/DK-reap: a free site
+> (emitted or precompiled runtime C) that must route through `TUR_CLOSURE_DROP`
+> (or the `tur_reactor_release_box` header-aware pattern). Fixing the four
+> clusters is the real bulk of R4-prep -- a genuine body of work, NOT the
+> mechanical snapshot-regen the plan assumed.
+
+Decision gate at the 0.34.0 cut: **graduate** (only once the 33 blockers are
+fixed and the corpus is clean flag-on), **extend `expires_at`** (if that work
+slips past the cut), or **shelve** (revert the ABI). **Current recommendation:
+HOLD graduation.** We are at 0.30.2, four minors before the 0.34.0 gate; the
+experiment stays opt-in and sound for everything that opts in. The next concrete
+R4 step is **R4-prep**: work the four blocker clusters (header-aware teardown)
+until a forced-on full suite is green, THEN do the 140-snapshot regen + flag
+deletion. Do not graduate before that suite is clean.
 
 > **Progress note (2026-07-22c) -- reactor/CPS async blocker RESOLVED; the
 > async/reactor family is corruption- and leak-free flag-on.** Flag-on, every
