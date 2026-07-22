@@ -3159,7 +3159,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * bare-variable thunk is left alone -- it may alias a shared closure). */
             if (catch_thunk_owns_fat_box(thunk)) {
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "free((void *)(intptr_t)%s);\n", thunk_val);
+                /* closure-drop-glue: flag-on the thunk fat box is headered
+                 * (env[-1] drop-glue; the fat pointer is PAST it), so a bare free
+                 * of the past-header pointer is an interior free.  Release it via
+                 * TUR_CLOSURE_DROP (recovers the header, walks any owning captures,
+                 * frees the base).  Flag-off, keep the exact plain free -- byte
+                 * identical, no snapshot churn. */
+                if (g_opt_closure_drop_glue)
+                    buf_printf(body, "TUR_CLOSURE_DROP(%s);\n", thunk_val);
+                else
+                    buf_printf(body, "free((void *)(intptr_t)%s);\n", thunk_val);
             }
             free(thunk_val);
             return strdup(result_var);
@@ -3180,7 +3189,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the propagate paths. */
             if (catch_thunk_owns_fat_box(thunk)) {
                 indent_buf(body, ctx->indent);
-                buf_printf(body, "free((void *)(intptr_t)%s);\n", thunk_val);
+                /* closure-drop-glue: header-aware release of the headered thunk
+                 * box (see EX_CATCH_UNWIND above).  Flag-off byte-identical. */
+                if (g_opt_closure_drop_glue)
+                    buf_printf(body, "TUR_CLOSURE_DROP(%s);\n", thunk_val);
+                else
+                    buf_printf(body, "free((void *)(intptr_t)%s);\n", thunk_val);
             }
             free(thunk_val);
             /* A type-mismatched catch-panic-of leaves the signal set to
