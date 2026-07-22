@@ -1,5 +1,16 @@
 # Closure env drop glue -- freeing captured fat-closure environments
 
+> # ✅ DIRECTIVE SATISFIED (2026-07-22) -- Model R walk-glue LANDED.
+> The blocking directive below has been carried out (left intact, unreworded,
+> as instructed). Model R shipped behind `--enable=closure-drop-glue`: the
+> `drop_glue_env_N` header + walk, capture-time retain/move, the `Drop`
+> typeclass owned-opaque release, and 10 httpd fixtures flipped leak-clean --
+> see the dated progress notes below (2026-07-21d..2026-07-22) and the updated
+> Status. The remaining residuals are documented and out of the original
+> blocking scope (variadic-rest uniqueness for `mw-compose-of`; the reactor/CPS
+> runtime-API for the async family; and the httpd request-accessor cstr leak,
+> now `docs/reported/httpd-request-accessor-cstr-leak.md`).
+
 > # ⛔ ACTIVE / BLOCKING -- BUILD THIS NOW. DO NOT DEFER. DO NOT REWORD.
 >
 > This is not deferred, not "until later," not "the next slice," not a
@@ -31,19 +42,19 @@
 > "nothing blocks the track" posture in CLAUDE.md **for this work only** --
 > by explicit owner instruction (2026-07-21).
 
-**Status:** S1 and S2/Model U LANDED to their achievable extent -- every
-value-closure, HOF-arg, and stored-in-a-GENERATED-holder (struct/ADT/`Parser`)
-escaping closure is now freed, and all eight leak-check opt-outs the feature was
-gating are dropped (suite 2249/0; see the 2026-07-21b/c notes). The ONE residual
-is the **httpd/reactor server-closure family** (`httpd-async-mw-compose`,
-`httpd-mw-*`, ...), which stays on `requires.no-leak-check`: its handler is stored
-in an OPAQUE hand-written-C holder and reaches it type-erased through
-`compose-middleware`'s `:int` return, so no static `drop_glue_env_N` can be
-selected and Model U's generated-holder drop cannot reach it. Eliminating it
-needs **Model R** (a runtime drop-glue pointer carried on the fat env), which this
-plan deliberately DEFERS (high ABI cost; the captured strings are already a
-documented process-lifetime pattern, `stdlib/httpd.tur:1762`). The Model R sketch
-below is ready to execute if/when that family is prioritized. Prepared from
+**Status:** S1, S2/Model U, AND **Model R LANDED** (behind
+`--enable=closure-drop-glue`; base language byte-for-byte unchanged, suite green).
+Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
+is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
+env now carries an `env[-1]` drop-glue header walked by `drop_glue_env_N`, with
+retain/move at capture, a `Drop` typeclass for owned-opaque (String) captures,
+and a partial-application-head free. **10 httpd fixtures** are flipped leak-clean
+flag-on (mw-log, basic-auth{,-attr,-noncapture}, body-size, json, static, cors,
+cors-opts, compose). Residuals (documented in the dated notes + reports):
+`mw-compose-of` needs variadic-rest uniqueness analysis; the `httpd-async-*`
+family needs the reactor/CPS runtime-API change (precompiled libturi C); and
+`mw-cookie`/`-form` are an httpd request-accessor cstr leak, not a closure issue
+(`docs/reported/httpd-request-accessor-cstr-leak.md`). Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
