@@ -416,6 +416,40 @@ if(HAVE_EDITLINE)
 endif()
 
 # ---------------------------------------------------------------------------
+# tur-link-and-build-split-plan Phase 6 prerequisite: libturt_runtime.a
+# ---------------------------------------------------------------------------
+# A lean, deliberately NON-sanitized static archive of exactly the runtime TUs
+# that stdlib reaches via bare-source `__tur_autolink__` hints
+# (src/runtime/{hamt,symbols,tur_string}.c).  `tur build --runtime=lib` links
+# this instead of recompiling those sources on every build.
+#
+# Crucially it is built WITHOUT the Debug ASan/UBSan flags: linking the full
+# (Debug) libturi.a pulls -fsanitize into the program and turns LeakSanitizer on
+# for the whole binary, which trips fixtures that intentionally leak
+# process-lifetime allocations.  This archive keeps the runtime-lib link
+# behaviorally identical to the bare-source recompile (non-sanitized), so it can
+# back `--runtime=lib` as a default.  See the plan's ASan caveat (Section 5/6).
+#
+# Compile flags mirror the default `tur build` cc_flags (-O2 -std=c99
+# -fno-strict-aliasing) so the objects are ABI-identical to a bare-source
+# compile; no -Werror so a stray warning here never fails the archive build.
+set(TURT_RUNTIME_SOURCES
+    runtime/hamt.c
+    runtime/symbols.c
+    runtime/tur_string.c
+)
+add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
+set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")
+target_include_directories(turt_runtime PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(turt_runtime PRIVATE
+    -O2 -std=c99 -fno-strict-aliasing -Wall -Wno-unused-parameter
+    $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
+)
+if(APPLE)
+    target_compile_options(turt_runtime PRIVATE -Wno-deprecated-declarations)
+endif()
+
+# ---------------------------------------------------------------------------
 # Phase S8: install targets — libturi, public headers, tur binary, man page
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)

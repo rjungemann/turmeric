@@ -535,6 +535,20 @@ static bool g_no_auto_stdlib;
  * set by parse_no_abi_cache in main(). */
 static bool g_no_abi_cache;
 
+/* tur-link-and-build-split-plan Phase 2/3c/6: runtime-linkage mode, read by
+ * apply_runtime_lib_mode() in cmd_build / cmd_compile.  Set by the build/compile
+ * dispatch and seeded from TUR_RUNTIME.  Values:
+ *   TUR_RT_AUTO   (0, the default) -- prefer the lean non-ASan libturt_runtime.a
+ *                 when it is locatable, else transparently fall back to
+ *                 recompiling the bare runtime sources.  Never links the
+ *                 (possibly ASan) full libturi.a on its own, so a default build
+ *                 is always behaviorally identical to the old source path.
+ *   TUR_RT_LIB    (1) -- force the archive link (lean preferred, else libturi.a,
+ *                 else a -lturi fallback with a warning); explicit opt-in.
+ *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources. */
+enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2 };
+static int g_runtime_mode = TUR_RT_AUTO;
+
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
  * (called by the LSP server) and the per-file dispatchers.
  *
@@ -1779,6 +1793,430 @@ static void stable_c_path(const char *input, char *out, size_t cap) {
     out[i] = '\0';
 }
 
+/* tur-link-and-build-split-plan Phase 3: scan generated C for
+ * `__tur_autolink__` comments and collect the linker flags they embed (e.g.
+ * -lturi from stdlib/turi/eval.tur).  The marker format is:
+ *   slash-star __tur_autolink__: FLAGS star-slash
+ * On return `autolink` holds the raw space-joined flag string (NUL-terminated
+ * content when non-empty), before any SDK/ASan/anchor resolution.  Shared by
+ * cmd_build and cmd_compile so the two cannot drift. */
+static void scan_autolink_markers(const Buf *csrc, Buf *autolink) {
+    const char *marker = "/* __tur_autolink__: ";
+    size_t mlen = strlen(marker);
+    const char *p = csrc->data;
+    while (p && (p = strstr(p, marker)) != NULL) {
+        p += mlen;
+        const char *end = strstr(p, " */");
+        if (!end) break;
+        if (autolink->len > 0) buf_putc(autolink, ' ');
+        buf_write(autolink, p, (size_t)(end - p));
+        p = end + 3;
+    }
+    if (autolink->len > 0) buf_putc(autolink, '\0');
+}
+
+/* tur-link-and-build-split-plan Phase 3: collect the enclosing spice's cmake
+ * dep flags (-I/-L/-l from cmake/spice-deps-manifest.json) plus its
+ * `:c-includes` (-I) and `:c-sources` (vendored .c) by walking up from the
+ * input file to the project root.  No-op when the input is not inside a
+ * manifested project.  Shared by cmd_build and cmd_compile. */
+static void collect_build_aux(const char *input, Buf *cmake_flags,
+                              Buf *aux_includes, Buf *aux_sources) {
+    /* Walk up from the input file's directory to find project root.  Resolve
+     * to an absolute path first -- find_project_root walks via strrchr('/'),
+     * so a bare "." or "foo.tur" would stop after one step. */
+    char input_dir[4096];
+    strncpy(input_dir, input, sizeof(input_dir) - 1);
+    input_dir[sizeof(input_dir) - 1] = '\0';
+    char *slash = strrchr(input_dir, '/');
+    if (slash) *slash = '\0';
+    else strncpy(input_dir, ".", sizeof(input_dir));
+    char abs_input_dir[4096];
+    if (realpath(input_dir, abs_input_dir)) {
+        strncpy(input_dir, abs_input_dir, sizeof(input_dir) - 1);
+        input_dir[sizeof(input_dir) - 1] = '\0';
+    }
+    char *proj_root = find_project_root(input_dir);
+    if (proj_root) {
+        char manifest_path[4096];
+        snprintf(manifest_path, sizeof(manifest_path),
+                 "%s/cmake/spice-deps-manifest.json", proj_root);
+        PkgCmakeManifest cmake_manifest;
+        if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
+            pkg_cmake_manifest_append_cc_flags(&cmake_manifest, cmake_flags);
+            pkg_cmake_manifest_free(&cmake_manifest);
+        }
+        collect_spice_aux_c(proj_root, aux_includes, aux_sources);
+        free(proj_root);
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 3: append the -I tokens from a resolved
+ * autolink/link flag string to `dst` (each space-prefixed).  The `-c` compile
+ * of the generated TU needs the include dirs (e.g. -Isrc/runtime for inline-C
+ * referencing runtime headers) but must not receive -l/-L or bare .c sources. */
+static void append_include_tokens(Buf *dst, const char *flags) {
+    if (!flags) return;
+    const char *p = flags;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ' ') p++;
+        size_t tlen = (size_t)(p - start);
+        if (tlen >= 2 && start[0] == '-' && start[1] == 'I') {
+            buf_putc(dst, ' ');
+            buf_write(dst, start, tlen);
+        }
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c: true when the raw autolink string
+ * carries at least one bare `.c` source arg (a runtime TU like
+ * src/runtime/hamt.c).  These are exactly what --runtime=lib replaces with a
+ * link against the prebuilt libturi.a. */
+static int autolink_has_bare_c_source(const Buf *autolink) {
+    if (!autolink || autolink->len == 0) return 0;
+    const char *p = autolink->data;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != ' ') p++;
+        size_t t = (size_t)(p - s);
+        if (t > 2 && s[0] != '-' && s[t - 2] == '.' && s[t - 1] == 'c') return 1;
+    }
+    return 0;
+}
+
+/* Probe `dir` for a runtime archive, preferring the lean non-sanitized
+ * libturt_runtime.a over the full libturi.a.  On a hit, writes the linker name
+ * (`turt_runtime` or `turi`) to `libname` and returns 1. */
+static int probe_runtime_lib_in(const char *dir, char *libname, size_t ncap) {
+    struct stat st;
+    char probe[4096];
+    snprintf(probe, sizeof(probe), "%s/libturt_runtime.a", dir);
+    if (stat(probe, &st) == 0) { snprintf(libname, ncap, "turt_runtime"); return 1; }
+    snprintf(probe, sizeof(probe), "%s/libturi.a", dir);
+    if (stat(probe, &st) == 0) { snprintf(libname, ncap, "turi"); return 1; }
+    return 0;
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c + Phase 6 prereq: locate the runtime
+ * archive to link under --runtime=lib.  Prefers the lean, non-sanitized
+ * libturt_runtime.a (behaviorally identical to a bare-source recompile) and
+ * falls back to the full libturi.a (which is ASan-instrumented in Debug builds).
+ * Resolution order for the directory:
+ *   1. $TUR_RUNTIME_LIB (an archive file path, or the directory holding one).
+ *   2. <exe_dir>/src         (dev layout: build/tur -> build/src).
+ *   3. <turmeric_root>/build/src.
+ * A prefix-installed SDK's libturi.a is picked up separately by
+ * resolve_autolink_flags step 1 once -lturi is on the line.  Returns 1 with the
+ * dir in `libdir` and the linker name in `libname` on success, else 0. */
+static int locate_runtime_lib(char *libdir, size_t dcap,
+                              char *libname, size_t ncap) {
+    libdir[0] = '\0';
+    libname[0] = '\0';
+    struct stat st;
+    const char *env = getenv("TUR_RUNTIME_LIB");
+    if (env && *env && stat(env, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            if (probe_runtime_lib_in(env, libname, ncap)) {
+                snprintf(libdir, dcap, "%s", env);
+                return 1;
+            }
+            return 0;
+        }
+        /* A file path: derive libname from lib<name>.a and use its dir. */
+        char d[4096];
+        dir_of_path(env, d, sizeof(d));
+        snprintf(libdir, dcap, "%s", d);
+        const char *base = strrchr(env, '/');
+        base = base ? base + 1 : env;
+        if (strncmp(base, "lib", 3) == 0) base += 3;
+        snprintf(libname, ncap, "%s", base);
+        char *dot = strrchr(libname, '.');
+        if (dot) *dot = '\0';
+        return libname[0] ? 1 : 0;
+    }
+    char exe[4096];
+    if (get_exe_path(exe, sizeof(exe)) == 0) {
+        char d[4096];
+        dir_of_path(exe, d, sizeof(d));
+        char sd[4200];
+        snprintf(sd, sizeof(sd), "%s/src", d);
+        if (probe_runtime_lib_in(sd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", sd);
+            return 1;
+        }
+    }
+    char root[4096];
+    resolve_turmeric_root(root, sizeof(root));
+    if (root[0]) {
+        char bd[4200];
+        snprintf(bd, sizeof(bd), "%s/build/src", root);
+        if (probe_runtime_lib_in(bd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", bd);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Rebuild `autolink` dropping every bare `.c` source token (a runtime TU),
+ * keeping all flags.  Used when --runtime=lib replaces the recompiled sources
+ * with a link against a runtime archive.  Appends into a fresh buffer. */
+static void autolink_drop_bare_sources(const Buf *autolink, Buf *out) {
+    const char *p = autolink->data;
+    while (p && *p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != ' ') p++;
+        size_t t = (size_t)(p - s);
+        int bare_c = t > 2 && s[0] != '-' && s[t - 2] == '.' && s[t - 1] == 'c';
+        if (bare_c) continue;
+        if (out->len > 0) buf_putc(out, ' ');
+        buf_write(out, s, t);
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c/6: replace the bare runtime `.c`
+ * autolink sources with a link against a prebuilt runtime archive so the
+ * runtime TUs (hamt/symbols/tur_string) are linked instead of recompiled per
+ * build.  Behavior by mode (see g_runtime_mode):
+ *   AUTO (default) -- use the lean non-ASan libturt_runtime.a when locatable;
+ *     otherwise leave the bare sources in place (recompile).  Never links the
+ *     full libturi.a here, so a default build cannot regress into a link
+ *     failure (no archive -> source) or an unexpected ASan/LSan run.
+ *   LIB -- force the archive: lean preferred, else the full libturi.a, else a
+ *     -lturi fallback (with a warning) that relies on a -L in TUR_CC_FLAGS.
+ * No-op when the program autolinks no runtime sources or already links -lturi.
+ * `autolink` is consumed and replaced in place. */
+static void apply_runtime_lib_mode(Buf *autolink) {
+    if (g_runtime_mode == TUR_RT_SOURCE) return;
+    if (!autolink_has_bare_c_source(autolink)) return;
+    if (autolink->len > 0 && strstr(autolink->data, "-lturi")) return;
+
+    char libdir[4096], libname[128];
+    int found = locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname));
+
+    /* AUTO only links the lean, guaranteed-non-ASan archive; anything else
+     * (only the full libturi.a, or no archive at all) falls back to recompiling
+     * the sources so a default build stays behaviorally identical to source. */
+    if (g_runtime_mode == TUR_RT_AUTO &&
+        !(found && strcmp(libname, "turt_runtime") == 0))
+        return;
+
+    Buf inj;
+    buf_init(&inj);
+    if (found) {
+        buf_printf(&inj, "-l%s -L%s", libname, libdir);
+    } else {
+        /* Reachable only in explicit LIB mode: rely on a -L in TUR_CC_FLAGS. */
+        buf_puts(&inj, "-lturi");
+        fprintf(stderr,
+                "tur: --runtime=lib could not locate a runtime archive; relying "
+                "on a -L in TUR_CC_FLAGS (set TUR_RUNTIME_LIB to override)\n");
+    }
+    /* Keep every flag, drop the bare .c sources the archive supersedes.  The
+     * drop helper inserts the separating space before each kept token. */
+    if (autolink->len > 1) autolink_drop_bare_sources(autolink, &inj);
+    buf_putc(&inj, '\0');
+    buf_free(autolink);
+    *autolink = inj;
+}
+
+/* tur-link-and-build-split-plan Phase 1: resolve the raw `__tur_autolink__`
+ * flag string (as scanned out of the generated C, or read from a `.link`
+ * sidecar) into the final link-ready flag set, and report whether the linked
+ * libturi was ASan-instrumented.
+ *
+ * This is the shared link-side flag logic factored out of the old monolithic
+ * cmd_build.  It performs, in order:
+ *   1. -lturi SDK anchoring -- prepend absolute -I/-L for a prefix-installed SDK.
+ *   2. ASan autodetect -- scan libturi.a for __asan_init via nm.
+ *   3. Turmeric-tree-relative path anchoring (src/runtime/hamt.c -> abs).
+ *   4. -lturi supersedes bare .c source args (drop them; libturi has the objs).
+ *
+ * `autolink` is consumed and replaced in place: on return it holds the resolved
+ * flag string (NUL-terminated content, like the caller's original buffer).
+ * `cc_flags` is read for -L paths during the ASan probe.  `*out_needs_asan` is
+ * set true when a sanitized libturi.a is on the link line.
+ *
+ * Behavior is byte-for-byte identical to the inline blocks it replaces; both
+ * cmd_build and `tur link` call it so they cannot drift. */
+static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
+                                    bool *out_needs_asan) {
+    *out_needs_asan = false;
+
+    /* 1. -lturi SDK anchoring. */
+    if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
+        char sdk_root[4096] = "";
+        const char *sdk_env = getenv("TUR_SDK_ROOT");
+        if (sdk_env && *sdk_env) {
+            snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
+        } else {
+            char exe_buf[4096] = "";
+            if (get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
+                char dir[4096];
+                dir_of_path(exe_buf, dir, sizeof(dir));
+                for (int d = 0; d < 8; d++) {
+                    char probe[4096];
+                    struct stat sdk_st;
+                    snprintf(probe, sizeof(probe),
+                             "%s/share/turmeric/src/turi/eval.h", dir);
+                    if (stat(probe, &sdk_st) == 0 && S_ISREG(sdk_st.st_mode)) {
+                        snprintf(sdk_root, sizeof(sdk_root),
+                                 "%s/share/turmeric", dir);
+                        break;
+                    }
+                    char *sl = strrchr(dir, '/');
+                    if (!sl || sl == dir) break;
+                    *sl = '\0';
+                }
+            }
+        }
+        if (sdk_root[0]) {
+            Buf sdk_flags;
+            buf_init(&sdk_flags);
+            buf_printf(&sdk_flags, "-I%s/src -I%s/src/compiler -I%s/src/runtime",
+                       sdk_root, sdk_root, sdk_root);
+            struct stat sdk_lib_st;
+            char lib_probe[4096];
+            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libturi.a", sdk_root);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&sdk_flags, " -L%s/lib", sdk_root);
+            snprintf(lib_probe, sizeof(lib_probe), "%s/build/src/libturi.a", sdk_root);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&sdk_flags, " -L%s/build/src", sdk_root);
+            Buf new_al;
+            buf_init(&new_al);
+            buf_write(&new_al, sdk_flags.data, sdk_flags.len);
+            buf_free(&sdk_flags);
+            buf_putc(&new_al, ' ');
+            if (autolink->len > 1)
+                buf_write(&new_al, autolink->data, autolink->len - 1);
+            buf_putc(&new_al, '\0');
+            buf_free(autolink);
+            *autolink = new_al;
+        }
+    }
+
+    /* 2. ASan autodetect: sanitized libturi.a needs -fsanitize on the link. */
+    if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
+        char nm_cmd[512];
+        const char *cf = cc_flags;
+        while (cf && *cf) {
+            const char *lf = strstr(cf, "-L");
+            if (!lf) break;
+            lf += 2;
+            const char *lf_end = lf;
+            while (*lf_end && *lf_end != ' ') lf_end++;
+            if (lf_end > lf) {
+                char lib_path[512];
+                size_t plen = (size_t)(lf_end - lf);
+                if (plen < sizeof(lib_path) - 20) {
+                    memcpy(lib_path, lf, plen);
+                    snprintf(lib_path + plen, sizeof(lib_path) - plen, "/libturi.a");
+                    snprintf(nm_cmd, sizeof(nm_cmd),
+                             "nm %s 2>/dev/null | grep -q __asan_init", lib_path);
+                    if (system(nm_cmd) == 0) {
+                        *out_needs_asan = true;
+                        break;
+                    }
+                }
+            }
+            cf = lf_end;
+        }
+    }
+
+    /* 3. Anchor turmeric-tree-relative autolink paths at the located root. */
+    if (autolink->len > 1) {
+        char tur_root[4096];
+        resolve_turmeric_root(tur_root, sizeof(tur_root));
+        if (tur_root[0] && strcmp(tur_root, ".") != 0) {
+            Buf rewritten;
+            buf_init(&rewritten);
+            rewrite_autolink_relative_paths(autolink->data, tur_root, &rewritten);
+            buf_putc(&rewritten, '\0');
+            buf_free(autolink);
+            *autolink = rewritten;
+        }
+    }
+
+    /* 4. -lturi supersedes bare .c source args; drop them to avoid duplicate
+     * symbols (libturi.a already provides every runtime TU's object). */
+    if (autolink->len > 1 && strstr(autolink->data, "-lturi")) {
+        Buf filtered;
+        buf_init(&filtered);
+        const char *p = autolink->data;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') p++;
+            size_t tlen = (size_t)(p - start);
+            bool is_c_source = tlen > 2 && start[0] != '-' &&
+                               start[tlen - 2] == '.' && start[tlen - 1] == 'c';
+            if (is_c_source) continue;
+            if (filtered.len > 0) buf_putc(&filtered, ' ');
+            buf_write(&filtered, start, tlen);
+        }
+        buf_putc(&filtered, '\0');
+        buf_free(autolink);
+        *autolink = filtered;
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 1: assemble and run the final link `cc`
+ * command.  `inputs` is the space-joined list of primary inputs -- the single
+ * generated `.c` for the monolithic path, or one-or-more `.o`/`.c` args for the
+ * split/`tur link` path.  Every other argument mirrors what the old inline
+ * assembly appended, in the same order, so a monolithic build (inputs = the
+ * generated `.c`) produces a byte-identical command.
+ *
+ * Returns 0 on success, 2 on cc failure or a failed exe settle.  Does not touch
+ * the generated-C temp file (the caller owns that lifecycle). */
+static int link_command_run(const char *cc, const char *cc_flags,
+                            const char *inputs,
+                            const Buf *aux_includes, const Buf *aux_sources,
+                            const Buf *autolink, bool needs_asan,
+                            const Buf *cmake_flags,
+                            const char **include_dirs, int n_include_dirs,
+                            const char *out_path) {
+    Buf cmd;
+    buf_init(&cmd);
+    buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, inputs);
+    if (aux_includes && aux_includes->len > 0) buf_puts(&cmd, aux_includes->data);
+    if (aux_sources  && aux_sources->len  > 0) buf_puts(&cmd, aux_sources->data);
+    if (autolink && autolink->len > 0) buf_printf(&cmd, " %s", autolink->data);
+    if (needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
+    if (cmake_flags && cmake_flags->len > 0) buf_puts(&cmd, cmake_flags->data);
+    for (int _i = 0; _i < n_include_dirs; _i++) {
+        if (include_dirs[_i] && include_dirs[_i][0])
+            buf_printf(&cmd, " -I%s", include_dirs[_i]);
+    }
+    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
+    buf_puts(&cmd, " -lm");
+#ifdef _WIN32
+    buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
+#endif
+    buf_putc(&cmd, '\0');
+    int sys_rc = system(cmd.data);
+    buf_free(&cmd);
+
+    if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
+        fprintf(stderr, "tur: could not place the linked binary at '%s'\n", out_path);
+        return 2;
+    }
+    if (sys_rc != 0) {
+        fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
+        return 2;
+    }
+    return 0;
+}
+
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
                      const char *target,
@@ -1836,25 +2274,11 @@ static int cmd_build(const char *input, const char *out_path,
     }
     fclose(tf);
 
-    /* Phase S2: scan generated C for __tur_autolink__ comments and collect
-     * any linker flags they embed (e.g. -lturi from stdlib/turi/eval.tur).
-     * The marker format is: slash-star __tur_autolink__: FLAGS star-slash */
+    /* Phase S2 / tur-link-and-build-split-plan Phase 3: scan the generated C
+     * for __tur_autolink__ comments (shared helper). */
     Buf autolink;
     buf_init(&autolink);
-    {
-        const char *marker = "/* __tur_autolink__: ";
-        size_t mlen = strlen(marker);
-        const char *p = csrc.data;
-        while (p && (p = strstr(p, marker)) != NULL) {
-            p += mlen;
-            const char *end = strstr(p, " */");
-            if (!end) break;
-            if (autolink.len > 0) buf_putc(&autolink, ' ');
-            buf_write(&autolink, p, (size_t)(end - p));
-            p = end + 3;
-        }
-        if (autolink.len > 0) buf_putc(&autolink, '\0');
-    }
+    scan_autolink_markers(&csrc, &autolink);
     buf_free(&csrc);
 
     bool wasm_target = target && strcmp(target, "wasm") == 0;
@@ -1909,259 +2333,32 @@ static int cmd_build(const char *input, const char *out_path,
      * manifest dir found by walking up from the input file. */
     Buf aux_includes; buf_init(&aux_includes);
     Buf aux_sources;  buf_init(&aux_sources);
-    {
-        /* Walk up from the input file's directory to find project root.
-         * Resolve to an absolute path first -- find_project_root walks via
-         * strrchr('/'), so a bare "." or "foo.tur" would stop after one
-         * step and miss the enclosing spice. */
-        char input_dir[4096];
-        strncpy(input_dir, input, sizeof(input_dir) - 1);
-        input_dir[sizeof(input_dir) - 1] = '\0';
-        char *slash = strrchr(input_dir, '/');
-        if (slash) *slash = '\0';
-        else strncpy(input_dir, ".", sizeof(input_dir));
-        char abs_input_dir[4096];
-        if (realpath(input_dir, abs_input_dir)) {
-            strncpy(input_dir, abs_input_dir, sizeof(input_dir) - 1);
-            input_dir[sizeof(input_dir) - 1] = '\0';
-        }
-        char *proj_root = find_project_root(input_dir);
-        if (proj_root) {
-            char manifest_path[4096];
-            snprintf(manifest_path, sizeof(manifest_path),
-                     "%s/cmake/spice-deps-manifest.json", proj_root);
-            PkgCmakeManifest cmake_manifest;
-            if (pkg_cmake_manifest_read(manifest_path, &cmake_manifest)) {
-                pkg_cmake_manifest_append_cc_flags(&cmake_manifest, &cmake_flags);
-                pkg_cmake_manifest_free(&cmake_manifest);
-            }
-            collect_spice_aux_c(proj_root, &aux_includes, &aux_sources);
-            free(proj_root);
-        }
-    }
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
 
-    /* If the autolink flags include -lturi, locate the turmeric SDK and
-     * prepend absolute -I/-L paths so the build succeeds regardless of the
-     * working directory.  This is required for prefix-installed builds
-     * (e.g. Homebrew) where `tur install` cannot anchor to the source tree
-     * and the relative -Lbuild/src / -Isrc in __tur_autolink__ won't resolve.
-     *
-     * Resolution order:
-     *   1. $TUR_SDK_ROOT (explicit override)
-     *   2. Walk up from exe looking for share/turmeric/src/turi/eval.h
-     *      (prefix/Homebrew installed layout written by the formula)
-     *
-     * For dev builds the cwd is already set to the turmeric root by
-     * `tur install`, so the relative paths already work; the extra absolute
-     * flags are harmless redundancy in that case. */
-    if (autolink.len > 0 && strstr(autolink.data, "-lturi")) {
-        char sdk_root[4096] = "";
-        const char *sdk_env = getenv("TUR_SDK_ROOT");
-        if (sdk_env && *sdk_env) {
-            snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
-        } else {
-            char exe_buf[4096] = "";
-            if (get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
-                char dir[4096];
-                dir_of_path(exe_buf, dir, sizeof(dir));
-                for (int d = 0; d < 8; d++) {
-                    char probe[4096];
-                    struct stat sdk_st;
-                    snprintf(probe, sizeof(probe),
-                             "%s/share/turmeric/src/turi/eval.h", dir);
-                    if (stat(probe, &sdk_st) == 0 && S_ISREG(sdk_st.st_mode)) {
-                        snprintf(sdk_root, sizeof(sdk_root),
-                                 "%s/share/turmeric", dir);
-                        break;
-                    }
-                    char *sl = strrchr(dir, '/');
-                    if (!sl || sl == dir) break;
-                    *sl = '\0';
-                }
-            }
-        }
-        if (sdk_root[0]) {
-            Buf sdk_flags;
-            buf_init(&sdk_flags);
-            buf_printf(&sdk_flags, "-I%s/src -I%s/src/compiler -I%s/src/runtime",
-                       sdk_root, sdk_root, sdk_root);
-            struct stat sdk_lib_st;
-            char lib_probe[4096];
-            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libturi.a", sdk_root);
-            if (stat(lib_probe, &sdk_lib_st) == 0)
-                buf_printf(&sdk_flags, " -L%s/lib", sdk_root);
-            snprintf(lib_probe, sizeof(lib_probe), "%s/build/src/libturi.a", sdk_root);
-            if (stat(lib_probe, &sdk_lib_st) == 0)
-                buf_printf(&sdk_flags, " -L%s/build/src", sdk_root);
-            /* Prepend SDK flags so absolute paths take priority over the relative
-             * -Lbuild/src and -Isrc entries that follow in the autolink block. */
-            Buf new_al;
-            buf_init(&new_al);
-            buf_write(&new_al, sdk_flags.data, sdk_flags.len);
-            buf_free(&sdk_flags);
-            buf_putc(&new_al, ' ');
-            /* autolink has a '\0' terminator counted in len; copy content only. */
-            if (autolink.len > 1)
-                buf_write(&new_al, autolink.data, autolink.len - 1);
-            buf_putc(&new_al, '\0');
-            buf_free(&autolink);
-            autolink = new_al;
-        }
-    }
+    /* tur-link-and-build-split-plan Phase 2/3c: under --runtime=lib, swap bare
+     * runtime .c autolink sources for a link against the prebuilt libturi.a
+     * (native builds only -- emcc/wasm has no libturi.a). */
+    if (!wasm_target) apply_runtime_lib_mode(&autolink);
 
-    /* If the autolink flags include -lturi, check whether the installed
-     * libturi.a was compiled with AddressSanitizer (common in debug builds).
-     * When it was, propagate -fsanitize=address,undefined so the linker can
-     * resolve the ASAN runtime symbols.  We detect ASAN by looking for the
-     * __asan_init symbol via `nm`; if nm is unavailable we skip the check. */
+    /* tur-link-and-build-split-plan Phase 1: resolve the raw autolink flags
+     * (SDK anchoring, ASan autodetect, tree-relative path anchoring, and the
+     * -lturi bare-.c filter) via the shared helper -- the same resolution
+     * `tur link` runs on flags read from a `.link` sidecar. */
     bool autolink_needs_asan = false;
-    if (autolink.len > 0 && strstr(autolink.data, "-lturi")) {
-        /* Walk -L flags in cc_flags and autolink to find libturi.a */
-        /* Build a best-effort nm command: check build/src/libturi.a (dev layout)
-         * and any -L<dir> paths specified in cc_flags. */
-        char nm_cmd[512];
-        /* Collect -L paths from cc_flags */
-        const char *cf = cc_flags;
-        while (cf && *cf) {
-            const char *lf = strstr(cf, "-L");
-            if (!lf) break;
-            lf += 2;
-            /* Extract the path (no space between -L and path in our cc_flags) */
-            const char *lf_end = lf;
-            while (*lf_end && *lf_end != ' ') lf_end++;
-            if (lf_end > lf) {
-                char lib_path[512];
-                size_t plen = (size_t)(lf_end - lf);
-                if (plen < sizeof(lib_path) - 20) {
-                    memcpy(lib_path, lf, plen);
-                    snprintf(lib_path + plen, sizeof(lib_path) - plen, "/libturi.a");
-                    snprintf(nm_cmd, sizeof(nm_cmd),
-                             "nm %s 2>/dev/null | grep -q __asan_init", lib_path);
-                    if (system(nm_cmd) == 0) {
-                        autolink_needs_asan = true;
-                        break;
-                    }
-                }
-            }
-            cf = lf_end;
-        }
-    }
+    resolve_autolink_flags(&autolink, cc_flags, &autolink_needs_asan);
 
-    /* T2: anchor any turmeric-tree-relative autolink paths (e.g.
-     * `src/runtime/hamt.c -Isrc/runtime`) at the located turmeric root so
-     * the cc step resolves the runtime sources regardless of cwd.  Without
-     * this, project-mode `tur run` from an arbitrary directory fails with
-     * `src/runtime/hamt.c: No such file`.  The -lturi SDK block above
-     * already prepends absolute -I/-L flags; rewriting the trailing relative
-     * ones is harmless redundancy there and the fix for the hamt.c case. */
-    if (autolink.len > 1) {
-        char tur_root[4096];
-        resolve_turmeric_root(tur_root, sizeof(tur_root));
-        if (tur_root[0] && strcmp(tur_root, ".") != 0) {
-            Buf rewritten;
-            buf_init(&rewritten);
-            rewrite_autolink_relative_paths(autolink.data, tur_root, &rewritten);
-            buf_putc(&rewritten, '\0');
-            buf_free(&autolink);
-            autolink = rewritten;
-        }
-    }
-
-    /* When -lturi is linked, libturi.a already contains every runtime
-     * translation unit (hamt.c.o, gc.c.o, eval.c.o, ...).  A program that
-     * also pulls in a runtime source directly via a `__tur_autolink__:
-     * src/runtime/<x>.c` hint (e.g. stdlib/hamt.tur's hamt/autolink-hint,
-     * dragged in transitively by `import turi/eval`) would then define those
-     * symbols twice and the link fails with `multiple definition of
-     * tur_hamt_*`.  The library supersedes the standalone sources, so drop
-     * any bare `.c` source argument from the autolink flags whenever -lturi
-     * is present.  See docs/archive/tur-eval-import-duplicate-hamt-symbols.md. */
-    if (autolink.len > 1 && strstr(autolink.data, "-lturi")) {
-        Buf filtered;
-        buf_init(&filtered);
-        const char *p = autolink.data;
-        while (*p) {
-            while (*p == ' ') p++;          /* skip leading spaces */
-            if (!*p) break;
-            const char *start = p;
-            while (*p && *p != ' ') p++;     /* token = [start, p) */
-            size_t tlen = (size_t)(p - start);
-            /* Drop a source-file argument (does not begin with '-', ends in
-             * ".c") -- libturi already provides its object.  Keep flags and
-             * non-source paths (-I.../-L.../-lturi/-fsanitize=...). */
-            bool is_c_source = tlen > 2 && start[0] != '-' &&
-                               start[tlen - 2] == '.' && start[tlen - 1] == 'c';
-            if (is_c_source) continue;
-            if (filtered.len > 0) buf_putc(&filtered, ' ');
-            buf_write(&filtered, start, tlen);
-        }
-        buf_putc(&filtered, '\0');
-        buf_free(&autolink);
-        autolink = filtered;
-    }
-
-    Buf cmd;
-    buf_init(&cmd);
-    buf_printf(&cmd, "%s %s -o %s %s", cc, cc_flags, out_path, tmpl);
-    /* spices-c-sources-plan: vendored include dirs (-I) early so inline-C in
-     * the generated TU can find its private headers; vendored sources before
-     * the autolink/-lm flags so they can resolve against them. */
-    if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
-    if (aux_sources.len  > 0) buf_puts(&cmd, aux_sources.data);
+    /* tur-link-and-build-split-plan Phase 1: assemble + run the link `cc`
+     * command via the shared helper.  Inputs is the single generated `.c`, so
+     * this is the byte-identical monolithic compile+link -- the same helper
+     * `tur link` calls with `.o` inputs. */
+    int link_rc = link_command_run(cc, cc_flags, tmpl, &aux_includes,
+                                   &aux_sources, &autolink, autolink_needs_asan,
+                                   &cmake_flags, include_dirs, n_include_dirs,
+                                   out_path);
     buf_free(&aux_includes);
     buf_free(&aux_sources);
-    /* Append any __tur_autolink__ flags discovered in the generated C. */
-    if (autolink.len > 0) buf_printf(&cmd, " %s", autolink.data);
     buf_free(&autolink);
-    /* If libturi was ASAN-instrumented, add sanitizer flags to avoid linker errors. */
-    if (autolink_needs_asan) buf_puts(&cmd, " -fsanitize=address,undefined");
-    /* Append cmake dep flags (-I/-L/-l). */
-    if (cmake_flags.len > 0) buf_puts(&cmd, cmake_flags.data);
     buf_free(&cmake_flags);
-    /* Append spice include dirs (-I). */
-    for (int _i = 0; _i < n_include_dirs; _i++) {
-        if (include_dirs[_i] && include_dirs[_i][0])
-            buf_printf(&cmd, " -I%s", include_dirs[_i]);
-    }
-    /* Always link libm last. Pure spices can reference libm symbols
-     * (sqrt/fabs/sin/cos/...) directly from inline-C, and static spice deps
-     * (e.g. plutovg) reference them without carrying -lm themselves. GNU ld
-     * resolves archives left-to-right, so -lm must come AFTER any
-     * -l<staticlib> flags or the math symbols go unresolved -- hence it is
-     * appended last. On Linux an unused -lm is a harmless no-op; on macOS
-     * libm lives in libSystem so -lm is a no-op there too. Linking it
-     * unconditionally means libm is usable from a pure spice without forcing
-     * a fake cmake-dep just to pull it in. */
-    /* GCC 14 / Apple clang 15+ promoted -Wincompatible-pointer-types and
-     * -Wint-conversion from warnings to hard errors.  The generated C used to
-     * trip both -- carrier<->concrete representation straddles (void*<->int64_t)
-     * -- tracked under docs/archive/codegen-gcc14-permerrors.md and
-     * docs/archive/macos-clang-int-conversion-hard-error.md.  Every straddle is
-     * now bridged at emit time (String returns, cloneable-frame call args,
-     * cps->direct spawn/void* params, closure-env void* fields, and __ps_N
-     * binder-init crossings), and the whole fixture tree emits 0
-     * -Wint-conversion / -Wincompatible-pointer-types hard errors, so the two
-     * downgrades are removed -- a NEW straddle now fails the build (as intended)
-     * instead of hiding behind the macOS CI red.
-     *
-     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open concern
-     * (e.g. an emitted inline-C call to `tur_hamt_hash_xxh64` with no in-scope
-     * prototype) and stays.  Appended after the user's TUR_CC_FLAGS on purpose,
-     * so an override cannot accidentally drop it. */
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
-    buf_puts(&cmd, " -lm");
-#ifdef _WIN32
-    /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
-     * On glibc both live in libc; MinGW puts pthreads in winpthreads and
-     * select() in Winsock, so they must be linked explicitly.  This is a LINK
-     * decision about the host toolchain, not codegen, so keying it off the
-     * host is correct -- the generated C itself stays portable. */
-    buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
-#endif
-    /* Ensure the command string is null-terminated before passing to system(). */
-    buf_putc(&cmd, '\0');
-    int sys_rc = system(cmd.data);
-    buf_free(&cmd);
     /* Leave the stable temp file for ccache; only unlink random fallbacks.
      * Tested against the real prefix rather than a literal "/tmp/tur-build/":
      * on Windows the path starts with a drive letter, so the old check was
@@ -2173,19 +2370,7 @@ static int cmd_build(const char *input, const char *out_path,
             unlink(tmpl);
         }
     }
-
-    /* Windows: the linker may have appended ".exe" to a -o with no extension.
-     * Put the binary back where the caller asked for it. */
-    if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
-        fprintf(stderr, "tur: could not place the linked binary at '%s'\n", out_path);
-        return 2;
-    }
-
-    if (sys_rc != 0) {
-        fprintf(stderr, "tur: cc invocation failed (status %d)\n", sys_rc);
-        return 2;
-    }
-    return 0;
+    return link_rc;
 }
 
 /* Walk up from 'start' to find a directory containing build.tur.
@@ -4785,6 +4970,287 @@ static int cmd_build_project(const char *root_in, const char *out_path,
     return rc;
 }
 
+/* tur-link-and-build-split-plan Phase 3: derive the `.link` sidecar path for an
+ * object -- strip a trailing ".o" and append ".link"; otherwise append ".link"
+ * to the whole name.  Also used to derive the intermediate ".c" path (with a
+ * ".c" suffix) for `tur compile`. */
+static void obj_sibling_path(const char *obj, const char *suffix,
+                             char *out, size_t cap) {
+    size_t n = strlen(obj);
+    if (n >= 2 && obj[n - 2] == '.' && obj[n - 1] == 'o') n -= 2;
+    snprintf(out, cap, "%.*s%s", (int)n, obj, suffix);
+}
+
+/* Write one sidecar field line.  Handles both NUL-terminated buffers (autolink)
+ * and non-terminated ones (cmake/aux) by writing exact content bytes minus a
+ * single trailing NUL. */
+static void sidecar_write_field(FILE *f, const char *key, const Buf *b) {
+    fputs(key, f);
+    if (b && b->len > 0) {
+        size_t n = b->len;
+        if (b->data[n - 1] == '\0') n--;
+        if (n > 0) fwrite(b->data, 1, n, f);
+    }
+    fputc('\n', f);
+}
+
+/* tur-link-and-build-split-plan Phase 3a-A: write the `.link` sidecar next to a
+ * compiled object.  It records the fully resolved link flags so `tur link` can
+ * reproduce the link without re-running the frontend -- the single source of
+ * truth for link-flag drift (plan section 7). */
+static int write_link_sidecar(const char *path, const Buf *autolink,
+                              bool needs_asan, const Buf *cmake_flags,
+                              const Buf *aux_sources) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    fputs("# tur link sidecar v1\n", f);
+    fprintf(f, "asan: %d\n", needs_asan ? 1 : 0);
+    sidecar_write_field(f, "autolink:", autolink);
+    sidecar_write_field(f, "cmake:", cmake_flags);
+    sidecar_write_field(f, "auxsrc:", aux_sources);
+    fclose(f);
+    return 0;
+}
+
+/* Append `val` to `dst` (NUL-terminating) only if that exact value has not been
+ * appended before, tracked via the caller's seen-list.  Keeps `tur link` from
+ * duplicating identical sidecar content when several objects of one program
+ * each carry the same resolved flags (which would re-link a runtime .c twice
+ * and fail with multiple-definition). */
+static void sidecar_accum_unique(Buf *dst, char ***seen, int *n_seen,
+                                 const char *val) {
+    if (!val || !*val) return;
+    for (int i = 0; i < *n_seen; i++)
+        if (strcmp((*seen)[i], val) == 0) return;
+    *seen = (char **)realloc(*seen, sizeof(char *) * (size_t)(*n_seen + 1));
+    (*seen)[(*n_seen)++] = tur_strdup(val);
+    buf_puts(dst, val);
+}
+
+/* Read one object's `.link` sidecar, accumulating its fields into the caller's
+ * link-flag buffers.  ASan is OR-accumulated; the string fields are unioned via
+ * sidecar_accum_unique.  Missing sidecar is not an error (a bare .o may have
+ * none). */
+static void read_link_sidecar(const char *path, Buf *autolink, bool *needs_asan,
+                              Buf *cmake_flags, Buf *aux_sources,
+                              char ***seen_al, int *n_seen_al,
+                              char ***seen_cm, int *n_seen_cm,
+                              char ***seen_ax, int *n_seen_ax) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[8192];
+    while (fgets(line, sizeof(line), f)) {
+        size_t L = strlen(line);
+        while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r'))
+            line[--L] = '\0';
+        if (strncmp(line, "asan:", 5) == 0) {
+            if (atoi(line + 5) != 0) *needs_asan = true;
+        } else if (strncmp(line, "autolink:", 9) == 0) {
+            sidecar_accum_unique(autolink, seen_al, n_seen_al, line + 9);
+        } else if (strncmp(line, "cmake:", 6) == 0) {
+            sidecar_accum_unique(cmake_flags, seen_cm, n_seen_cm, line + 6);
+        } else if (strncmp(line, "auxsrc:", 7) == 0) {
+            sidecar_accum_unique(aux_sources, seen_ax, n_seen_ax, line + 7);
+        }
+    }
+    fclose(f);
+}
+
+/* tur-link-and-build-split-plan Phase 3a-0: `tur compile <in.tur> -o <out.o>`.
+ * Lowers one Turmeric source to an object file (the emit-c lowering fused with
+ * `cc -c`) plus a `.link` sidecar carrying the resolved link flags.  This is
+ * the cacheable half of the compile/link pipeline -- ccache hits on unchanged
+ * input.  `emit-c` is untouched; this is the additive fused step. */
+static int cmd_compile(const char *input, const char *out_obj,
+                       const char **include_dirs, int n_include_dirs,
+                       const char **reader_macro_paths,
+                       int n_reader_macro_paths) {
+    /* Frontend: lower to C, force-loading any #[used] sibling modules just as
+     * cmd_build does (single-file whole-program TU). */
+    Buf csrc;
+    buf_init(&csrc);
+    int n_used_mods = 0;
+    char **used_mods = collect_used_attr_modules(input, include_dirs,
+                                                 n_include_dirs, &n_used_mods);
+    UsedModulesCtx used_ctx = { (const char **)used_mods, n_used_mods };
+    if (n_used_mods > 0) used_modules_ctx_set(&used_ctx);
+    int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
+                          reader_macro_paths, n_reader_macro_paths);
+    if (n_used_mods > 0) used_modules_ctx_set(NULL);
+    free_tur_files(used_mods, n_used_mods);
+    if (rc != 0) { buf_free(&csrc); return rc; }
+    hoist_tur_include_directives(&csrc);
+
+    /* Resolve the object path (default: <name>.o beside cwd). */
+    char obj_buf[1024];
+    if (!out_obj) {
+        char base[512];
+        default_output_name(input, base, sizeof(base));
+        snprintf(obj_buf, sizeof(obj_buf), "%s.o", base);
+        out_obj = obj_buf;
+    }
+
+    /* Write the generated C next to the object (deterministic -> ccache-able). */
+    char cpath[1100];
+    obj_sibling_path(out_obj, ".c", cpath, sizeof(cpath));
+    FILE *tf = fopen(cpath, "wb");
+    if (!tf || fwrite(csrc.data, 1, csrc.len, tf) != csrc.len) {
+        fprintf(stderr, "tur compile: cannot write generated C to '%s'\n", cpath);
+        if (tf) fclose(tf);
+        buf_free(&csrc);
+        return 2;
+    }
+    fclose(tf);
+
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+    buf_free(&csrc);
+
+    /* Phase 2/3c: --runtime=lib swaps bare runtime sources for libturi.a so the
+     * sidecar records the -lturi link and the object never carries the runtime
+     * TUs.  cmd_compile is native-only, so no wasm guard is needed. */
+    apply_runtime_lib_mode(&autolink);
+
+    const char *cc = getenv("CC");
+    if (!cc || !*cc) cc = "cc";
+    const char *cc_flags = getenv("TUR_CC_FLAGS");
+    if (!cc_flags || !*cc_flags) {
+        cc_flags = g_emit_debug_lines
+            ? "-g -Og -std=c99 -Wall -fno-strict-aliasing"
+            : "-O2 -std=c99 -Wall -fno-strict-aliasing";
+    }
+
+    Buf cmake_flags;  buf_init(&cmake_flags);
+    Buf aux_includes; buf_init(&aux_includes);
+    Buf aux_sources;  buf_init(&aux_sources);
+    collect_build_aux(input, &cmake_flags, &aux_includes, &aux_sources);
+
+    bool needs_asan = false;
+    resolve_autolink_flags(&autolink, cc_flags, &needs_asan);
+
+    /* The cacheable `cc -c`.  Include dirs come from the spice aux includes,
+     * cmake -I, the autolink -I tokens (e.g. -Isrc/runtime), and any explicit
+     * -I.  -l/-L and bare .c sources are link-time only and stay out of here. */
+    Buf cmd;
+    buf_init(&cmd);
+    buf_printf(&cmd, "%s %s", cc, cc_flags);
+    if (aux_includes.len > 0) buf_puts(&cmd, aux_includes.data);
+    if (cmake_flags.len > 0)  buf_puts(&cmd, cmake_flags.data);
+    append_include_tokens(&cmd, autolink.len > 0 ? autolink.data : NULL);
+    for (int i = 0; i < n_include_dirs; i++) {
+        if (include_dirs[i] && include_dirs[i][0])
+            buf_printf(&cmd, " -I%s", include_dirs[i]);
+    }
+    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
+    buf_printf(&cmd, " -c %s -o %s", cpath, out_obj);
+    buf_putc(&cmd, '\0');
+    int sys_rc = system(cmd.data);
+    buf_free(&cmd);
+    buf_free(&aux_includes);
+
+    if (sys_rc != 0) {
+        fprintf(stderr, "tur compile: cc -c invocation failed (status %d)\n", sys_rc);
+        buf_free(&autolink);
+        buf_free(&cmake_flags);
+        buf_free(&aux_sources);
+        return 2;
+    }
+
+    /* Emit the .link sidecar carrying the resolved link flags. */
+    char side[1100];
+    obj_sibling_path(out_obj, ".link", side, sizeof(side));
+    if (write_link_sidecar(side, &autolink, needs_asan, &cmake_flags,
+                           &aux_sources) != 0) {
+        fprintf(stderr, "tur compile: cannot write link sidecar '%s'\n", side);
+        buf_free(&autolink);
+        buf_free(&cmake_flags);
+        buf_free(&aux_sources);
+        return 2;
+    }
+
+    buf_free(&autolink);
+    buf_free(&cmake_flags);
+    buf_free(&aux_sources);
+    return 0;
+}
+
+/* tur-link-and-build-split-plan Phase 3a: `tur link <obj-or-source>... -o <out>`.
+ * Links precompiled objects (+ their `.link` sidecars) and/or .c sources into an
+ * executable (or a shared library with --shared).  Reuses link_command_run --
+ * the same link path `tur build` drives -- so the two cannot drift. */
+static int cmd_link(const char *out, const char **inputs, int n_inputs,
+                    bool shared, const char *extra_link_flags) {
+    if (n_inputs == 0) {
+        fprintf(stderr, "tur link: no input objects/sources\n");
+        return 1;
+    }
+
+    /* Join the input paths and gather link flags from each object's sidecar. */
+    Buf inputs_joined; buf_init(&inputs_joined);
+    Buf autolink;      buf_init(&autolink);
+    Buf cmake_flags;   buf_init(&cmake_flags);
+    Buf aux_sources;   buf_init(&aux_sources);
+    bool needs_asan = false;
+    char **seen_al = NULL; int n_seen_al = 0;
+    char **seen_cm = NULL; int n_seen_cm = 0;
+    char **seen_ax = NULL; int n_seen_ax = 0;
+
+    for (int i = 0; i < n_inputs; i++) {
+        if (inputs_joined.len > 0) buf_putc(&inputs_joined, ' ');
+        buf_puts(&inputs_joined, inputs[i]);
+        /* A .o (or bare object) may carry a sidecar; look it up. */
+        char side[1100];
+        obj_sibling_path(inputs[i], ".link", side, sizeof(side));
+        read_link_sidecar(side, &autolink, &needs_asan, &cmake_flags,
+                          &aux_sources, &seen_al, &n_seen_al,
+                          &seen_cm, &n_seen_cm, &seen_ax, &n_seen_ax);
+    }
+    buf_putc(&inputs_joined, '\0');
+    for (int i = 0; i < n_seen_al; i++) free(seen_al[i]);
+    for (int i = 0; i < n_seen_cm; i++) free(seen_cm[i]);
+    for (int i = 0; i < n_seen_ax; i++) free(seen_ax[i]);
+    free(seen_al); free(seen_cm); free(seen_ax);
+
+    /* User-supplied extra link flags fold into the autolink buffer (which
+     * link_command_run appends verbatim after the inputs). */
+    if (extra_link_flags && *extra_link_flags) {
+        if (autolink.len > 0) buf_putc(&autolink, ' ');
+        buf_puts(&autolink, extra_link_flags);
+    }
+    /* NUL-terminate the accumulated flag buffers so link_command_run's `%s` /
+     * buf_puts reads stop cleanly. */
+    if (autolink.len > 0)    buf_putc(&autolink, '\0');
+    if (cmake_flags.len > 0) buf_putc(&cmake_flags, '\0');
+    if (aux_sources.len > 0) buf_putc(&aux_sources, '\0');
+
+    /* --shared rides on cc_flags (position-independent shared object). */
+    const char *cc = getenv("CC");
+    if (!cc || !*cc) cc = "cc";
+    const char *base_flags = getenv("TUR_CC_FLAGS");
+    if (!base_flags || !*base_flags) base_flags = "-O2 -fno-strict-aliasing";
+    Buf cc_flags; buf_init(&cc_flags);
+    buf_puts(&cc_flags, base_flags);
+    if (shared) buf_puts(&cc_flags, " -shared -fPIC");
+    buf_putc(&cc_flags, '\0');
+
+    char out_buf[1024];
+    if (!out) {
+        default_output_name(inputs[0], out_buf, sizeof(out_buf));
+        out = out_buf;
+    }
+
+    int link_rc = link_command_run(cc, cc_flags.data, inputs_joined.data,
+                                   NULL, &aux_sources, &autolink, needs_asan,
+                                   &cmake_flags, NULL, 0, out);
+    buf_free(&inputs_joined);
+    buf_free(&autolink);
+    buf_free(&cmake_flags);
+    buf_free(&aux_sources);
+    buf_free(&cc_flags);
+    return link_rc;
+}
+
 static int is_directory(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
@@ -6576,7 +7042,8 @@ static void list_external_subcommands(void) {
     if (!path_env || !*path_env) return;
 
     static const char *const builtins[] = {
-        "build", "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
+        "build", "compile", "link",
+        "emit-c", "emit-h", "emit-cmake", "run", "repl", "worker",
         "eval", "doc", "explain", "test", "check", "format", "fmt",
         "parse-check", "audit-spans", "debug", "dap", "lsp-lite",
         "init", "add", "add-cmake", "fetch",
@@ -6668,7 +7135,7 @@ cleanup:
 static const char *const CANONICAL_COMMANDS[] = {
     "emit-c", "emit-h", "emit-cmake", "check", "audit-spans",
     "lsp", "mcp", "dap", "lsp-lite",
-    "build", "run", "repl", "worker", "interpret", "debug",
+    "build", "compile", "link", "run", "repl", "worker", "interpret", "debug",
     "eval", "doc", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test",
     "new", "init", "add", "add-cmake", "fetch",
@@ -6707,6 +7174,8 @@ static int usage(void) {
         "usage:\n"
         "  tur build <file.tur> [-o <out>]    build a single file\n"
         "  tur build <dir> [-o <out>]         build all .tur files in directory\n"
+        "  tur compile <file.tur> -o <out.o>  lower a .tur to an object (+ .link sidecar)\n"
+        "  tur link <obj/src>... -o <out>     link objects (+ .link sidecars) into an exe\n"
         "  tur emit-c <input.tur>            print the generated C to stdout\n"
         "  tur emit-h <input.tur>            print the generated header to stdout\n"
         "  tur run <input.tur>               build + execute a single file\n"
@@ -6785,6 +7254,8 @@ static int usage_build(void) {
         "  tur build [-I <dir>...] <file.tur> [-o <out>]   build a single file\n"
         "  tur build <dir> [-o <out>]                       build all .tur in dir\n"
         "  tur build --shared <dir> [-o <out>] [--manifest <p>]  build a shared library (.so)\n"
+        "  tur compile [-I <dir>...] <file.tur> -o <out.o>  lower a .tur to an object + .link\n"
+        "  tur link [--shared] <obj/src>... -o <out>        link objects (+ .link) into an exe/.so\n"
         "  tur emit-c [-I <dir>...] <file.tur>              emit C to stdout\n"
         "  tur emit-c [-I <dir>...] --build-dir <dir> <files...>  emit per-module .h/.c\n"
         "  tur emit-h [-I <dir>...] <file.tur>              emit header to stdout\n"
@@ -6801,6 +7272,18 @@ static int usage_build(void) {
         "  --shared          build a shared library (`-fPIC -shared`, no main);\n"
         "                    requires a directory argument. Exported defns are\n"
         "                    callable via dlopen/dlsym as `<module>__<name>`.\n"
+        "  --split-build     build a single file as `compile` + `link` (cacheable\n"
+        "                    `cc -c` object compiles + a link). Native builds only.\n"
+        "  --no-split-build  force the monolithic single-`cc` build (the default).\n"
+        "  --runtime=auto    (default) link the lean non-ASan libturt_runtime.a when\n"
+        "                    locatable, else recompile the bare src/runtime autolink\n"
+        "                    sources -- never links the ASan libturi.a on its own, so\n"
+        "                    a default build matches the old source path.\n"
+        "  --runtime=lib     force the archive link (lean preferred, else libturi.a).\n"
+        "                    Set TUR_RUNTIME_LIB to point at the archive if not found.\n"
+        "  --runtime=source  force recompiling the runtime sources.\n"
+        "                    TUR_RUNTIME=auto|lib|source seeds the default for a build.\n"
+        "  --link-flags <f>  (tur link) extra linker flags, e.g. \"-L<dir> -lfoo\"\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"
         "                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.\n"
@@ -7436,6 +7919,17 @@ int main(int argc, char **argv) {
     /* J6: --no-abi-cache / TUR_NO_ABI_CACHE disables the persistent
      * cross-module ABI specialization cache (.tur-abi-cache/). */
     g_no_abi_cache = parse_no_abi_cache(argc, argv);
+    /* tur-link-and-build-split-plan Phase 2/3c/6: TUR_RUNTIME overrides the
+     * default runtime-linkage mode (auto).  A CLI --runtime= flag, parsed
+     * later, still wins. */
+    {
+        const char *rt = getenv("TUR_RUNTIME");
+        if (rt) {
+            if      (strcmp(rt, "lib") == 0)    g_runtime_mode = TUR_RT_LIB;
+            else if (strcmp(rt, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+            else if (strcmp(rt, "auto") == 0)   g_runtime_mode = TUR_RT_AUTO;
+        }
+    }
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {
@@ -8038,6 +8532,11 @@ int main(int argc, char **argv) {
         bool        shared = false;  /* RP0: --shared selects shared-library build */
         const char *manifest_out = NULL; /* RP1: --manifest <path> override */
         const char *cli_build_dir = NULL; /* build-output-directory-plan: --build-dir/-B */
+        /* tur-link-and-build-split-plan Phase 3b/4: opt in to the compile+link
+         * split for a single-file build.  Default stays the monolithic `cc`
+         * call so output is byte-identical until the split is proven; the two
+         * flags let a build force either path during rollout. */
+        int split_build = 0;  /* 0 = default(monolithic), 1 = split, -1 = forced monolithic */
         /* SC1: collect -I flags once via the shared helper, then walk argv
          * a second time for the build-specific flags (`-o`, `--target`)
          * and the positional input. */
@@ -8053,6 +8552,21 @@ int main(int argc, char **argv) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "--shared") == 0) {
                 shared = true;
+            } else if (strcmp(argv[i], "--split-build") == 0) {
+                split_build = 1;
+            } else if (strcmp(argv[i], "--no-split-build") == 0) {
+                split_build = -1;
+            } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
+                       (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
+                const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
+                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+                else {
+                    fprintf(stderr, "tur build: unknown --runtime '%s' "
+                            "(supported: auto, lib, source)\n", mode);
+                    free(build_inc); return 1;
+                }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
                 /* J6: consumed globally by parse_no_abi_cache; no-op here. */
             } else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc) {
@@ -8136,8 +8650,37 @@ int main(int argc, char **argv) {
             auto_append_spice_includes(input, &build_inc, &n_build_inc,
                                        &b_owned, &n_b_owned, &b_ls2);
             ls2_resolver_ctx_set(&b_ls2);
-            rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
-                           build_target, (const char **)b_rm, b_n);
+            if (split_build == 1 && !build_target) {
+                /* tur-link-and-build-split-plan Phase 3b: `tur build` defined as
+                 * `tur compile` + `tur link` composed -- the exact subcommand
+                 * code paths, so the three can never drift.  The generated
+                 * object + `.link` sidecar land under the build temp dir. */
+                char base[512];
+                default_output_name(input, base, sizeof(base));
+                char objp[1200];
+                snprintf(objp, sizeof(objp), "%s%s.o", stable_c_prefix(), base);
+                rc = cmd_compile(input, objp, (const char **)build_inc,
+                                 n_build_inc, (const char **)b_rm, b_n);
+                if (rc == 0) {
+                    const char *outp = out;
+                    char outbuf[1024];
+                    if (!outp) {
+                        default_output_name(input, outbuf, sizeof(outbuf));
+                        outp = outbuf;
+                    }
+                    const char *lk[1] = { objp };
+                    rc = cmd_link(outp, lk, 1, false, NULL);
+                }
+                /* Drop the intermediate .o/.c/.link (ccache keyed on content
+                 * already caches the underlying object compile). */
+                char scrap[1300];
+                unlink(objp);
+                obj_sibling_path(objp, ".c",    scrap, sizeof(scrap)); unlink(scrap);
+                obj_sibling_path(objp, ".link", scrap, sizeof(scrap)); unlink(scrap);
+            } else {
+                rc = cmd_build(input, out, (const char **)build_inc, n_build_inc,
+                               build_target, (const char **)b_rm, b_n);
+            }
             ls2_resolver_ctx_set(NULL);
             ls2_resolver_ctx_dispose(&b_ls2);
             for (int i = 0; i < n_b_owned; i++) free(b_owned[i]);
@@ -8146,6 +8689,117 @@ int main(int argc, char **argv) {
             free(b_root);
         }
         free(build_inc);
+        return rc;
+    }
+    /* tur-link-and-build-split-plan Phase 3a-0: tur compile <in.tur> -o <out.o> */
+    if (strcmp(cmd, "compile") == 0) {
+        const char *input = NULL;
+        const char *out = NULL;
+        const char *cli_build_dir = NULL;
+        char  **comp_inc = NULL;
+        int     n_comp_inc = parse_include_flags(argc, argv, 2, &comp_inc);
+        if (n_comp_inc < 0) { free(comp_inc); return usage_build(); }
+        for (int i = 2; i < argc; i++) {
+            int c;
+            if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(comp_inc); return usage_build();
+            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+                out = argv[++i];
+            } else if ((strcmp(argv[i], "--build-dir") == 0 ||
+                        strcmp(argv[i], "-B") == 0) && i + 1 < argc) {
+                cli_build_dir = argv[++i];
+            } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
+                       (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
+                const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
+                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
+                else {
+                    fprintf(stderr, "tur compile: unknown --runtime '%s' "
+                            "(supported: auto, lib, source)\n", mode);
+                    free(comp_inc); return 1;
+                }
+            } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
+                /* global, consumed elsewhere */
+            } else if (argv[i][0] != '-') {
+                if (input) { free(comp_inc); return usage_build(); }
+                input = argv[i];
+            } else {
+                free(comp_inc); return usage_build();
+            }
+        }
+        if (!input) { free(comp_inc); return usage_build(); }
+        if (is_directory(input)) {
+            fprintf(stderr, "tur compile: expects a single .tur file, not a directory\n");
+            free(comp_inc); return 1;
+        }
+        /* Default the object under <build-dir>/obj/ when --build-dir/-B (or a
+         * manifest :build-dir) applies and no explicit -o was given. */
+        char obj_default[1200];
+        if (!out) {
+            char *bd = resolve_build_dir(input, cli_build_dir);
+            if (bd) {
+                char base[512];
+                default_output_name(input, base, sizeof(base));
+                snprintf(obj_default, sizeof(obj_default), "%s/obj/%s.o", bd, base);
+                out = obj_default;
+                free(bd);
+            }
+        }
+        /* Reader macros + spice include auto-discovery, mirroring cmd_build. */
+        char *c_root = find_spice_root(input);
+        char **c_rm = NULL; int c_n = 0;
+        if (c_root) {
+            char mp[4096];
+            (void)pkg_resolve_manifest_path(c_root, mp, sizeof(mp));
+            PkgManifest cm; memset(&cm, 0, sizeof(cm));
+            if (pkg_manifest_read(mp, &cm))
+                c_rm = resolve_manifest_reader_macros(c_root, &cm, &c_n);
+            pkg_manifest_free(&cm);
+        }
+        char **c_owned = NULL; int n_c_owned = 0;
+        Ls2ResolverCtx c_ls2 = {0};
+        auto_append_spice_includes(input, &comp_inc, &n_comp_inc,
+                                   &c_owned, &n_c_owned, &c_ls2);
+        ls2_resolver_ctx_set(&c_ls2);
+        int rc = cmd_compile(input, out, (const char **)comp_inc, n_comp_inc,
+                             (const char **)c_rm, c_n);
+        ls2_resolver_ctx_set(NULL);
+        ls2_resolver_ctx_dispose(&c_ls2);
+        for (int i = 0; i < n_c_owned; i++) free(c_owned[i]);
+        free(c_owned);
+        free_reader_macro_paths(c_rm, c_n);
+        free(c_root);
+        free(comp_inc);
+        return rc;
+    }
+    /* tur-link-and-build-split-plan Phase 3a: tur link <obj/src>... -o <out> */
+    if (strcmp(cmd, "link") == 0) {
+        const char *out = NULL;
+        bool shared = false;
+        const char *link_flags = NULL;
+        const char **inputs = (const char **)malloc((size_t)argc * sizeof(char *));
+        int n_inputs = 0;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                free(inputs); return usage_build();
+            } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+                out = argv[++i];
+            } else if (strcmp(argv[i], "--shared") == 0) {
+                shared = true;
+            } else if (strcmp(argv[i], "--link-flags") == 0 && i + 1 < argc) {
+                link_flags = argv[++i];
+            } else if (argv[i][0] != '-') {
+                inputs[n_inputs++] = argv[i];
+            } else {
+                fprintf(stderr, "tur link: unknown option '%s'\n", argv[i]);
+                free(inputs); return usage_build();
+            }
+        }
+        if (n_inputs == 0) { free(inputs); return usage_build(); }
+        int rc = cmd_link(out, inputs, n_inputs, shared, link_flags);
+        free(inputs);
         return rc;
     }
     if (strcmp(cmd, "run") == 0) {

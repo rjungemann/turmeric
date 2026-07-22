@@ -1,6 +1,15 @@
 # `tur link` and the build compile/link split
 
-**Status:** Proposed (not started). Motivated by
+**Status:** Landed (single-file/compile path). Phases 1-4 and 6 are done:
+`resolve_autolink_flags`/`link_command_run` factoring; `tur compile`/`tur link`
++ `.link` sidecar; `tur build --split-build`; `tur build --runtime=lib` backed
+by the lean non-ASan `libturt_runtime.a`; and the default flipped to `auto`.
+Executable project/directory builds are covered too -- they reroute through the
+single-file path (Section 6a). Phase 5 (ccache in CI) is now wired too. The only
+path that still embeds the runtime is separate compilation (shared libs /
+multi-`main`), where embedding is intentional -- Section 6a explains why
+externalizing it is an explicit non-goal. All phases of this plan have landed.
+Motivated by
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
@@ -189,22 +198,123 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
 
 ## 5. Phased plan
 
-1. **Factor `link_objects(...)`** out of the monolithic build in `main.c`
+1. **[DONE] Factor `link_objects(...)`** out of the monolithic build in `main.c`
    (ASan autodetect, `-lturi` filter, autolink anchoring) with no behavior
-   change. Land + full suite green.
-2. **Prebuilt runtime (3c).** `tur build --runtime=lib` links `libturi.a`;
-   measure suite wall-clock delta. Make default once green.
-3. **`tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link` sidecar
-   (written by `tur compile`). Register both commands in `builtins[]` /
-   `CANONICAL_COMMANDS[]` and the `main()` dispatch; document the
-   `tur compile -> tur link` pipeline. `emit-c` is left untouched.
-4. **Redefine `tur build` as `compile + link` (3b)** behind `--no-split-build`;
-   wire ccache; measure
-   cold vs warm suite wall-clock (expect the big drop here). Flip default.
-5. **CI: install + cache ccache**, now that calls are cacheable (was a no-op
-   before -- do NOT do this before step 4). Cache the ccache dir across runs in
-   `.github/workflows/ci.yml`.
-6. Retire `--no-split-build` after a green soak.
+   change. Landed as `resolve_autolink_flags(...)` (the four resolution blocks)
+   + `link_command_run(...)` (the `cc` assembly/run), plus the shared
+   `scan_autolink_markers(...)` and `collect_build_aux(...)` helpers. Full suite
+   green (2264 passed, 0 failed).
+2. **[DONE] Prebuilt runtime (3c).** `tur build --runtime=lib` (and
+   `tur compile --runtime=lib`) links the prebuilt `libturi.a` instead of
+   autolinking+recompiling the bare `src/runtime/*.c` sources.
+   `apply_runtime_lib_mode()` prepends `-lturi -L<libdir>` to the raw autolink
+   when it carries a bare runtime `.c`; the existing `-lturi`-supersedes-bare-.c
+   filter in `resolve_autolink_flags` then drops the sources. `libturi.a` is
+   auto-located via `$TUR_RUNTIME_LIB` -> `<exe_dir>/src` -> `<root>/build/src`;
+   a prefix-installed SDK's lib is picked up by the SDK-anchoring step once
+   `-lturi` is on the line. Default remains `--runtime=source` (opt-in for now).
+   Output-identical to the source path on the runtime-autolinking fixtures
+   (measured: ~15% faster per build on a hamt-only fixture; larger for
+   runtime-heavy programs, and it compounds with ccache in step 5).
+
+   **[DONE] Non-ASan runtime archive (the ASan-caveat fix, step-6 prereq).**
+   The dev-tree `libturi.a` is the *Debug* build, so it is ASan-instrumented;
+   the ASan autodetect in `resolve_autolink_flags` (correctly) pulls
+   `-fsanitize=address,undefined` into the link, which turns LeakSanitizer on
+   for the *whole program*. Fixtures that intentionally leak process-lifetime
+   allocations then fail under LSan, whereas the bare-source build (non-ASan)
+   runs them clean.
+
+   Fixed by building a dedicated lean, **non-sanitized** static archive
+   `libturt_runtime.a` (CMake target `turt_runtime`, `src/CMakeLists.txt`)
+   containing exactly the autolinkable runtime TUs -- `hamt.c`, `symbols.c`,
+   `tur_string.c` (the complete set of bare-source `__tur_autolink__` hints).
+   `--runtime=lib` now prefers this archive, links `-lturt_runtime`, and drops
+   the bare sources itself (`apply_runtime_lib_mode`/`autolink_drop_bare_sources`
+   no longer depend on the `-lturi` ASan/filter path). Because the archive is
+   non-ASan, the linked program is behaviorally identical to the bare-source
+   recompile -- no LSan imposed. It falls back to the full `libturi.a` (and the
+   old `-lturi` behavior) when the lean archive is absent.
+
+   Evidence: the **full suite is green under `TUR_RUNTIME=lib`** (2264 passed,
+   0 failed) -- the suite builds every compiled fixture through `tur build`, so
+   this exercises the runtime-lib link path suite-wide. Plus a direct A/B sweep
+   of ~90 runtime-autolinking fixtures (source vs lib) matched byte-for-byte,
+   including the previously-LSan-tripping leaky fixtures.
+3. **[DONE] `tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link`
+   sidecar (written by `tur compile`). Both commands are registered in
+   `builtins[]` / `CANONICAL_COMMANDS[]` and dispatched from `main()`; `emit-c`
+   is untouched. The sidecar (`# tur link sidecar v1`) records the fully
+   *resolved* link flags (`autolink:` / `asan:` / `cmake:` / `auxsrc:`) so
+   `tur link` reproduces the link without re-running the frontend.
+4. **[DONE] Redefine `tur build` as `compile + link` (3b)** behind
+   `--split-build` (opt-in) / `--no-split-build` (the default remains the
+   monolithic single-`cc` call, so output stays byte-identical during rollout).
+   A single-file `tur build --split-build` runs the real `cmd_compile` then
+   `cmd_link` code paths, so the three cannot drift. Flipping the default and
+   wiring ccache measurement is the remaining work here.
+5. **[DONE] CI: install + cache ccache.** `.github/workflows/ci.yml` now
+   installs ccache and caches its dir across runs in every `tur`-building job
+   (`test` x2 OSes, `check-guides`, `check-snapshots`, `web-smoke`), with
+   `-DCMAKE_C_COMPILER_LAUNCHER=ccache` on the cmake configure and
+   `CCACHE_NOHASHDIR`/`CCACHE_BASEDIR` so the `-g` Debug build's embedded paths
+   don't defeat cross-run hits. Uses the split `actions/cache/restore` +
+   `actions/cache/save` (`if: always()`) rather than the combined action, whose
+   post-save defaults to `save-always:false` and would skip saving whenever a
+   later step (notably the `test` job's fixture suite) fails -- exactly the runs
+   where the freshly-built compiler cache is most worth keeping.
+
+   Note (corrected from the original plan framing): the high-value target is the
+   **cmake build of `tur` itself** -- ~100 `cc -c` TUs compiled in every job.
+   Measured locally: a warm-cache rebuild at a stable path hits 101/101 and
+   drops the compiler build from ~32 s to ~1 s. The *fixture* builds see little
+   ccache benefit now: the `auto`/runtime-lib default already skips the runtime
+   recompile (a prebuilt archive, not a per-fixture `cc`), and each fixture's
+   generated `.c` is unique and invalidated by any `src/` change -- so the two
+   levers (ccache vs runtime-lib) largely overlapped, and runtime-lib carried
+   the fixture win. `tests/run.sh` already wraps the fixture `cc` with ccache
+   when present, so installing ccache in CI also feeds that (marginal) path.
+6. **[DONE] Default flipped to `auto`.** The single-file/compile default is now
+   `auto` (`g_runtime_mode`): link the lean non-ASan `libturt_runtime.a` when
+   locatable, else recompile the bare runtime sources. `auto` never links the
+   full (Debug/ASan) `libturi.a` on its own, so a default build is behaviorally
+   identical to the old source path -- no link failure when no archive is
+   present, no ASan/LSan imposed. `--runtime=lib` forces the archive,
+   `--runtime=source` forces recompile, `TUR_RUNTIME=auto|lib|source` seeds the
+   default. Full suite green under the flipped default (2264 passed, 0 failed).
+
+## 6a. Project/directory builds -- what actually routes where
+
+A closer investigation (correcting an earlier draft of this section) established
+that **executable project builds already get runtime-lib**, because
+`cmd_build_project` reroutes the common case to the single-file path:
+
+- `cmd_build_project` (`src/main.c`): for an **executable with exactly one
+  `main`** (and no non-entry `#[used]` module), it builds the entry module
+  *single-file* via `cmd_build(entry, ...)` -- whole-program inlining pulls in
+  every transitively-imported module into one TU. That path runs
+  `apply_runtime_lib_mode`, so it links the lean archive under the `auto`
+  default. Verified empirically: a **multi-module** single-`main` project
+  (`main` importing a sibling, using `#map`) links `-lturt_runtime` and runs
+  correctly. This is the common case and covers the entire single-file test
+  suite.
+- The separate-compilation path (`cmd_build_multi_files`) -- which emits a
+  shared runtime owner TU (`tur_runtime.c`/`.h` via `emit_shared_runtime_header`,
+  the `emit_runtime_preamble(..., shared=true)` path: owner TU defines globals,
+  every module TU carries static replicas) and appends **no** autolink flags --
+  is used only for: **shared libraries** (`--shared`, or a no-`main` spice),
+  **multi-`main`** projects, and **`#[used]`** non-entry projects.
+
+So runtime-lib is **not** missing from executable builds; it is only the
+separate-compilation path that embeds the runtime. And for that path the
+embedding is largely **intentional**: a distributable `.so` should be
+self-contained, not acquire a load-time dependency on an external
+`libturt_runtime.a`. Externalizing the runtime there would also need a **full**
+non-ASan runtime archive (the lean 3-TU `libturt_runtime.a` does not cover the
+whole preamble; the full `libturi.a` is ASan in Debug, reintroducing the LSan
+problem). Given the common case is already covered and the remaining case wants
+self-containment, externalizing the separate-compilation runtime is **low value
+and not recommended** -- left as an explicit non-goal rather than a TODO.
 
 ## 6. Finishing the Section 3 work (folded in from the archived report)
 
