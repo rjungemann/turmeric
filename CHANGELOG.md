@@ -4,6 +4,33 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.4] -- 2026-07-22
+
+### Added
+
+- **`tur compile` / `tur link` subcommands**: `tur build`'s compile and link
+  phases are now separately invokable, and `tur build --runtime=lib` links a
+  prebuilt `libturi.a` instead of recompiling the runtime. A lean, non-ASan
+  `libturt_runtime.a` ships so `--runtime=lib` is defaultable.
+
+### Changed
+
+- **Automatic closure/Drop reclamation graduated**: the drop-glue header ABI is
+  now the default (closure-drop-glue R4). The compiler emits scope-exit
+  auto-drop for move-only `Drop`-instance opaque let-bindings, letting httpd
+  retire its manual `httpd-mw-drop` / `httpd-mw-free-chain` markers and reclaim
+  runtime-built middleware chains automatically.
+- **Default runtime linkage is now auto**, preferring the lean prebuilt archive.
+- **Interpreter FFI arity ceiling lifted** via per-export shims.
+
+### Fixed
+
+- **stdlib `String` load in imported modules**: fixed via a forward-decl
+  pre-pass (#705).
+- **Leak of module-private env keys** in the interpreter (LSan-reported) (#704).
+- **Flag-on crash clusters** cleared during graduation prep (33 -> 3), plus
+  `^fat` handler drops on httpd construction-failure paths.
+
 ## [0.30.3] -- 2026-07-21
 
 ### Added

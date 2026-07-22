@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.3` -- adds owned-`String` builders (`str-concat-string`/`cstr-sub-string`) and `option<String>` httpd accessors (#701), owned-`String` `*-string` sibling modules for json/csv/term/re/range/schema (#702), and fixes macro visibility across stdlib re-elaboration.
+**Latest release:** `v0.30.4` -- graduates automatic closure/Drop reclamation to the default (scope-exit auto-drop for move-only Drop-instance bindings), adds `tur compile`/`tur link` subcommands and `--runtime=lib` linking against a prebuilt runtime archive, and lifts the interpreter FFI arity ceiling.
 
 ## What
 
