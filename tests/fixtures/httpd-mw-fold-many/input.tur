@@ -44,16 +44,17 @@
 
 (defn main [] : int
   (let [base     (let [_b (ctr 1)] (fn [conn : ptr<void>] : nil (ctr _b)))
-        chain    (build-chain 70 (tnil))
-        composed (:: (httpd-mw-fold (:: base int) chain) :Handler)]
-    ;; `composed` is bound as an owned `Handler`, so the compiler auto-drops it
-    ;; at scope exit (the Drop instance's TUR_CLOSURE_DROP walks the captured
-    ;; `next` boxes down to base) -- no explicit `httpd-mw-drop` needed. The
-    ;; `(:: composed :int)` here is a non-consuming BORROW, so the auto-drop
-    ;; still fires. This is the automatic-R3a replacement for httpd-mw-drop.
+        chain    (:: (build-chain 70 (tnil)) :ClosureChain)
+        composed (:: (httpd-mw-fold (:: base int) (:: chain :int)) :Handler)]
+    ;; Both `composed` (an owned Handler onion) and `chain` (an owned
+    ;; ClosureChain of factory heads + cells) are bound as :affine Drop types, so
+    ;; the compiler AUTO-DROPS both at scope exit -- no explicit `httpd-mw-drop`
+    ;; and no explicit `httpd-mw-free-chain`. The `(:: _ :int)` ascriptions are
+    ;; non-consuming BORROWS (httpd-mw-fold reads the chain; httpd-call invokes
+    ;; the onion), so the auto-drops still fire. Defers run LIFO: `composed`
+    ;; (bound last) drops first -- the onion's wrappers down to base -- then
+    ;; `chain` drops -- the factory heads + spine cells -- matching the previous
+    ;; explicit (httpd-mw-drop composed) / (httpd-mw-free-chain chain) order.
     (httpd-call (:: composed :int) (:: 0 ptr<void>))
     (println (ctr 1))
-    ;; The input chain spine + fresh factory heads are still owned by the builder
-    ;; (the fold only borrows them), so reclaim them explicitly.
-    (httpd-mw-free-chain chain)
     0))

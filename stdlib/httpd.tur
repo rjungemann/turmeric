@@ -3423,6 +3423,46 @@
   ```c
   return (int64_t)h;
   ```)
+;;; ClosureChain -- an owned runtime-built middleware chain: a cons list whose
+;;; heads are fresh, uniquely-owned factory closures and whose spine cells the
+;;; builder owns.  `httpd-mw-fold` only BORROWS it (applies each head once); once
+;;; the fold has produced its onion the whole chain -- heads and cells -- is dead.
+;;;
+;;; `:affine` (same discipline as `Handler`): a bound ClosureChain the builder
+;;; neither MOVES nor BORROWS (`(:: chain :int)`) is AUTO-DROPPED at scope exit
+;;; via its Drop instance, which walks the spine dropping each head
+;;; (`TUR_CLOSURE_DROP`) and freeing each cell.  This is the automatic-R3a
+;;; replacement for the explicit `httpd-mw-free-chain`.
+;;;
+;;; SOUNDNESS: sound iff each head is a DISTINCT, uniquely-owned closure (a fresh
+;;; `(make-mw)` per cell) -- the same contract `httpd-mw-free-chain` documents.
+;;; Do NOT cons the same closure value into the list twice (double-drop), and do
+;;; NOT wrap a chain whose heads are the borrowed `& mws` of `compose-middleware-of`
+;;; (those heads belong to the variadic caller; use `httpd-mw-free-spine`, which
+;;; frees ONLY the cells).
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+(defopaque ClosureChain :int :affine)
+;;; httpd-chain-drop -- internal: reclaim a ClosureChain (drop each head factory
+;;; via TUR_CLOSURE_DROP + free each spine cell).  Consumes its affine argument;
+;;; it is the Drop instance's method, normally invoked by the scope-exit auto-drop.
+;;;
+;;; Since: automatic R3a (closure-drop-glue)
+(defn httpd-chain-drop [c : ClosureChain] : void
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)(int64_t)c;
+  while (p) {
+      __tur_cons_cell *n = (__tur_cons_cell *)(intptr_t)p->tail;
+      if (p->head) TUR_CLOSURE_DROP(p->head);
+      free(p);
+      p = n;
+  }
+  ```)
+;;; Drop [ClosureChain] -- reclaim a runtime-built chain when its builder binding
+;;; dies unmoved/unborrowed.
+(definstance Drop [ClosureChain]
+  (drop [x] : void (httpd-chain-drop x)))
 ;;; httpd-mw-apply -- internal: apply one fat-closure middleware to a handler.
 ;;;
 ;;; The middleware is a fat closure of shape
@@ -3491,15 +3531,23 @@
   ```c
   if (handler) TUR_CLOSURE_DROP(handler);
   ```)
-;;; httpd-mw-free-chain -- free a runtime-built middleware cons list (the INPUT
-;;; to `httpd-mw-fold`): drop each head factory closure AND free each spine cell.
+;;; httpd-mw-free-chain -- SUPERSEDED: free a runtime-built middleware cons list
+;;; (the INPUT to `httpd-mw-fold`): drop each head factory closure AND free each
+;;; spine cell.
+;;;
+;;; Retired in favor of the `ClosureChain` auto-drop (automatic R3a half 2): bind
+;;; the runtime chain as a `ClosureChain` (`(:: (build-chain n (tnil))
+;;; :ClosureChain)`) and the compiler walks the spine, dropping each head and
+;;; freeing each cell, at scope exit -- no explicit call.  This function's body is
+;;; exactly the `Drop [ClosureChain]` method; kept only for a legacy raw-`:int`
+;;; chain that was never bound as a ClosureChain.
 ;;;
 ;;; Unlike `httpd-mw-free-spine` (which leaves the heads, because the variadic
 ;;; `compose-middleware-of` caller owns and frees them), a hand-built runtime
 ;;; chain (e.g. from a `build-chain` loop) is owned entirely by its builder: the
 ;;; fold only BORROWS each factory (applies it once, discards it), so once the
 ;;; fold has produced the composed onion the whole list -- factories and cells --
-;;; is dead and the builder reclaims it here. Sound iff each head is a distinct,
+;;; is dead and the builder reclaims it. Sound iff each head is a distinct,
 ;;; uniquely-owned closure (a fresh `(make-mw)` per cell); do NOT cons the same
 ;;; closure value into the list twice (that would double-drop it).
 ;;;
@@ -3508,14 +3556,12 @@
 ;;;
 ;;; Returns: nothing.
 ;;;
-;;; Example:
-;;;   (let [chain    (build-chain 70 (tnil))
-;;;         composed (httpd-mw-fold base chain)]
-;;;     (httpd-call composed conn)
-;;;     (httpd-mw-drop composed)
-;;;     (httpd-mw-free-chain chain))
+;;; Example (legacy -- prefer the ClosureChain auto-drop):
+;;;   (let [chain    (:: (build-chain 70 (tnil)) :ClosureChain)
+;;;         composed (:: (httpd-mw-fold base (:: chain :int)) :Handler)]
+;;;     (httpd-call (:: composed :int) conn))  ; composed + chain auto-drop at scope exit
 ;;;
-;;; Since: R3a (closure-drop-glue runtime-chain teardown)
+;;; Since: R3a; superseded by ClosureChain auto-drop (automatic R3a half 2).
 
 (defn httpd-mw-free-chain [mws : int] : nil
   ```c

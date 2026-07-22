@@ -231,8 +231,9 @@ generalized to a captured `TY_FN`-boxed field + a cons spine, move-gated exactly
 as the landed `is_fat` arm). That was a larger httpd-fold re-typing; the explicit
 primitives are the sound stopgap and are independently useful for any hand-built
 dynamic chain. **Update: half of it -- retiring `httpd-mw-drop` via an automatic
-onion auto-drop -- landed 2026-07-22 (see below); the input-spine half
-(`httpd-mw-free-chain`) remains deferred.**
+onion auto-drop -- landed 2026-07-22 (see below), and the input-spine half
+(`httpd-mw-free-chain`) landed the same day via the same affine-opaque mechanism.
+The deeper typed-recursive `Cons.tail` de-erasure was found not to be needed.**
 
 **Automatic R3a, half 1 -- `httpd-mw-drop` RETIRED (2026-07-22).** A bound
 composed onion now auto-drops at scope exit, no explicit call. The route turned
@@ -270,7 +271,7 @@ out cleaner than the first feasibility probe guessed: rather than generalize the
   `TUR_CLOSURE_DROP`, compiler-injected). `httpd-mw-compose-of` exercises the
   server handoff via `httpd-handler-carrier`. Full suite 2266/0.
 
-Half 2 (below) -- auto-dropping the input spine + heads -- remains deferred.
+Half 2 (below) -- auto-dropping the input spine + heads -- landed the same day.
 
 *Original probe of half 1 (superseded by the landed route above; kept for the
 record):* the only pre-existing scope-exit auto-drop for a *returned* closure is
@@ -279,21 +280,51 @@ body with scalar-Copy captures/result and a bare `free`; generalizing *that* was
 one option, but the Drop-typeclass + `:affine`-opaque route avoided touching the
 fresh-closure escape analysis entirely.
 
-**Automatic R3a, half 2 -- `httpd-mw-free-chain` (still deferred).** Auto-dropping
-the input spine + heads would retire `httpd-mw-free-chain`.
-   Needs a `list<Closure>` holder whose drop glue walks the spine dropping each
-   fn-typed head. But the list ABI is `:int`-erased at the **struct** level --
-   `Cons` is `(defstruct Cons :heap [A] (head A) (tail :int))` and
-   `list-head`/`list-tail`/`compose-middleware-of`/`httpd-mw-fold` are all
-   `:int -> :int`. There is no `list<Closure>` type to hang drop glue on; the
-   cons *tail* is itself erased. Retiring `httpd-mw-free-chain` therefore requires
-   de-erasing the cons-cell tail type (`Cons.tail`) and generalizing the Model U
-   fn-field drop to a cons spine of fn-typed heads -- a list-ABI change, not an
-   httpd change.
+**Automatic R3a, half 2 -- `httpd-mw-free-chain` RETIRED (2026-07-22).** The input
+spine + factory heads now auto-drop, via the SAME affine-opaque + Drop mechanism
+as half 1 -- no compiler change beyond the half-1 `elab_forms.c` injection.
 
-Both remain correctly **deferred**: each is a roadmap-sized ABI/compiler item,
-not a bounded follow-up, and the shipped explicit primitives are already sound
-and leak-clean for the corpus. Do not fold either into a "cleanup" PR.
+- *stdlib (`httpd.tur`).* `(defopaque ClosureChain :int :affine)` + a non-Clone
+  `Drop [ClosureChain]` instance whose method (`httpd-chain-drop`) is the exact
+  body of the old `httpd-mw-free-chain`: walk the cons spine, `TUR_CLOSURE_DROP`
+  each head, `free` each cell.  Bind the runtime chain as a ClosureChain and it
+  auto-drops at scope exit; `httpd-mw-fold` BORROWS it via `(:: chain :int)`.
+  `httpd-mw-free-chain` is kept only for legacy raw-`:int` chains (docstring marks
+  it superseded).
+- *Soundness.* Deterministic fixture `closure-drop-affine-chain-autodrop`
+  (alloc/free counters, LSan-independent, ASan-guarded): a bound 4-cell chain,
+  borrowed then left to auto-drop, frees all 4 heads + cells exactly once.
+  `httpd-mw-fold-many` now binds BOTH `composed` (Handler) and `chain`
+  (ClosureChain) as affine Drop types -- defers fire LIFO (onion first, chain
+  second), matching the old explicit `httpd-mw-drop` / `httpd-mw-free-chain`
+  order, byte-equivalent reclaim, still leak-checked + ASan-clean.
+
+**Why NOT the `Cons.tail` de-erasure.** The original blocker framed half 2 as
+needing a typed recursive `list<Closure>` whose *type-driven* drop glue walks a
+typed spine -- i.e. de-erasing `Cons.tail` from `:int` to `(Cons A)`.  That was
+empirically confirmed to be a large, *absent* compiler capability, and it is NOT
+needed to retire `httpd-mw-free-chain`:
+- A plain `:heap` recursive owning ADT (`(defdata WList :heap (WNil) (WCons Widget
+  WList))`) emits **no** drop glue and leaks its whole spine at scope exit -- even
+  its ctor erases the tail to `int64_t`.  `emit_adt_byval_drop_glue`
+  (`emit_module.c` ~5411) *does* emit a recursive field-releasing `drop_glue_<T>`,
+  but only under `needs_drop_glue`, only for rc-driven teardown of *distinct*
+  nested aggregates -- not triggered for a plain owning-ADT let-binding, and not
+  built for self-recursion.  So the honest path is: (a) set `needs_drop_glue` +
+  recognize affine/closure heads and a self-recursive tail as owning fields, and
+  (b) add a scope-exit trigger category for owning-ADT let-bindings in
+  `emit_let_value`.  Both are real compiler work with broad blast radius (touches
+  owning-ADT semantics generally), benefiting one corpus site.
+- The affine-opaque + hand-written spine-walk `Drop` achieves the same retirement
+  at the same honesty level as the shipped `Handler` (an affine newtype over the
+  int carrier with a Drop instance), soundly and with near-zero blast radius.
+
+The typed-recursive `list<Closure>` drop glue remains available as a *future*,
+independently-scoped compiler feature (the honest generalization), but it is no
+longer a blocker for anything in the corpus.
+
+**R3b -- "Model R (refcount)"** below remains deferred: a roadmap-sized ABI/compiler
+item, not a bounded follow-up, with no driver in the corpus.
 
 **R3b -- "Model R (refcount)"** (build-on-demand). The per-env `__rc` word for
 genuinely *shared* closures (Design section below). A heavier ABI change to the
