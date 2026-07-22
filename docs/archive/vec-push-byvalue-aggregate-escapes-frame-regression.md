@@ -1,5 +1,13 @@
 # Regression: by-value aggregate vec element dangles again (escapes-frame fixture reads garbage)
 
+> **RESOLVED (2026-07-22).** The `vec-push!` concrete->carrier boundary again
+> heap-promotes (malloc + copy) a by-value aggregate element, so the pushed
+> `Option__int` outlives the producing frame. Verified on the current tree: the
+> regression-guard fixture `vec-push-byvalue-aggregate-escapes-frame` prints
+> `5` / `99` (not the `0x40000000` reclaimed-stack garbage) and passes in `bash
+> tests/run.sh` (green, no `requires.*` marker masking it). Original finding
+> below.
+
 **Severity:** High -- a previously-fixed, archived correctness bug has
 regressed. A `Vec` of by-value aggregates built in a child frame reads back
 garbage after the frame is reclaimed.
