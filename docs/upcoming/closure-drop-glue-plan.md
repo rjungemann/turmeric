@@ -128,37 +128,76 @@ Also filed while closing R1: `docs/reported/httpd-new-pool-failure-handler-leak.
 -- `httpd-new-pool` leaks the `^fat handler` on its own construction-failure
 paths (deeper than the R1 `httpd-new-tls` early-refusal fix; unexercised).
 
-### R2 -- Walk generality gaps (new analysis; corpus does not force them)
+### R2 -- Walk generality gaps -- FINDINGS (2026-07-22): R2a folds into R3; R2b deferred
 
-The walk fires today via the `is_fat`-flag heuristic and same-function move
-analysis. Two general gaps remain, both documented in the dated notes
-(2026-07-21f/g) and neither exercised by the current corpus:
+A tractability pass (mirroring the S1 "Implementation findings" discipline) tried
+to drive each gap with a real fixture. Result: **R2a is not independently
+testable and should fold into R3; R2b is a soundness-hardening item with no
+current driver.** The gaps and the evidence:
 
-- **Type-honest owning-closure captures.** A `^fat` capture rides as an erased
-  `int64` carrier + the `cap->is_fat` flag; there is no *type* predicate for "this
-  capture is an owned closure handle" (`TY_INT` is a scalar, `TY_PTR_VOID` is any
-  pointer). A general owning-closure-capture walk (a boxed `TY_FN` capture, a
-  captured `ref`) needs `^fat` carried as an un-erased owning-closure TYPE -- a
-  type-system change. Until then only the flag-carried and rc-typed captures are
-  walked; a bare boxed-`TY_FN` capture is left to leak (never double-freed).
-- **Cross-function double-ownership.** The capture move closes *same-function*
-  aliasing (a second capture of a moved `^fat` handle is `TUR-E0005`). A caller
-  that independently frees a handle it also passed into a consumer would still
-  double-free; a general fix threads the move across the call boundary. Not a
-  current pattern (flag-off such handles merely leak).
+**R2a -- type-honest owning-closure captures.** The drop-glue walk
+(`emit_fns.c` ~2903) frees a capture only when it is `TY_RC` (rc decrement),
+`cap->is_fat` (moved-in `^fat` handle -> `TUR_CLOSURE_DROP`), or `Drop`-typed
+(the `Drop` instance). A capture that is an owned closure handle of type
+**boxed `TY_FN`** but did NOT arrive via a `^fat` param has `is_fat == false` and
+is skipped -- confirmed: for `(let [inner (fn..k..)] (fn [y] (inner y)))`,
+`drop_glue___env_<wrap>` frees only its base and leaves the `inner` field. So the
+gap is real in the emitter.
 
-These are prerequisites for auto-deriving the walk on arbitrary owned-closure
-captures; they are NOT prerequisites for graduation on the current corpus.
+BUT it **cannot be exhibited as an isolated leaking fixture**:
+- If the outer closure is scope-local (the only case the scope-exit drop-glue
+  governs), `-O2` statically traces the whole closure graph and **elides every
+  malloc** -- verified down to a bare unused `malloc(64)` reporting zero leaks;
+  and even an *observable* small alloc is hidden by LSan stack-leftover
+  false-negatives. No leak is observable, so the walk's coverage of that capture
+  is moot.
+- The gap only bites when the outer closure **escapes** into a heap structure
+  (returned, stored in a struct field, threaded into a chain/list). There the
+  captured inner closure's lifetime is governed by the escape machinery --
+  **Model U** (the holder struct's fn-field drop glue) or **R3** (an owned
+  runtime `list<Closure>`) -- NOT the scope-exit walk. `httpd-mw-fold-many`
+  (`docs/reported/...`) is exactly this: its factory heads + spine escape into a
+  `build-chain` list consumed by `httpd-mw-fold`.
 
-### R3 -- "Model R (refcount)" -- build-on-demand fallback only
+Conclusion: there is nothing to build in the scope-exit walk. When a real driver
+appears it is an *escape* case, so the fix belongs in R3 / the Model U fn-field
+drop, keyed on the field type (`TY_FN` boxed / owned `ref`) with the same
+move-gate the `is_fat` arm already uses. R2a is therefore **merged into R3**.
 
-The per-env `__rc` word for genuinely *shared* closures (Design section below).
-Deliberately unbuilt: Model U (move) expresses every ownership shape the corpus
-needs, and the refcount word is an ABI change to the `^fat` layout / HKT thunk
-recovery / `tur_poly_fn_t` (audited in
-`docs/archive/fat-closure-abi-audit-plan.md`). Build ONLY if a fixture appears
-that Model U's move-check genuinely cannot express (a closure legitimately owned
-by two live owners at once). No action until then.
+**R2b -- cross-function double-ownership** (deferred, soundness hardening, no
+leak). The capture move closes *same-function* aliasing (a second capture of a
+moved `^fat` handle is `TUR-E0005`). A caller that independently frees a handle it
+also passed into a `^fat` consumer would still double-free; a general fix threads
+the move across the call boundary. Not a current pattern (flag-off such handles
+merely leak; flag-on the corpus has no such caller). Keep deferred; revisit only
+if a fixture constructs cross-function shared ownership.
+
+Neither is a prerequisite for graduation (R4) on the current corpus.
+
+### R3 -- Escaping owned-closure captures + shared closures (build-on-demand)
+
+Two sub-cases, both about closures that ESCAPE their constructor (so the
+scope-exit walk does not reach them). The concrete driver that exists today is
+`httpd-mw-fold-many` (`docs/reported/httpd-mw-fold-many-closure-list-leak.md`) --
+a runtime `build-chain` list of factory closures consumed by `httpd-mw-fold`,
+whose spine + factory heads + fold result leak.
+
+- **R3a -- owned runtime `list<Closure>` (absorbs R2a).** A holder (a struct
+  field, an ADT payload, a cons list) that owns escaping closures should drop
+  each via the drop-glue when the holder dies -- the Model U fn-field drop
+  generalized to a captured `TY_FN`-boxed field and to a cons spine of closures.
+  Move-gated exactly as the landed `is_fat` arm: storing a closure into the
+  holder consumes the source, so a double-store is `TUR-E0005`, not a
+  double-free. This is the general form of the `mw-compose-of` fix (which only
+  handled the *variadic-rest, distinct-let-binding* special case caller-side).
+- **R3b -- "Model R (refcount)".** The per-env `__rc` word for genuinely *shared*
+  closures (Design section below). A heavier ABI change to the `^fat` layout /
+  HKT thunk recovery / `tur_poly_fn_t` (audited in
+  `docs/archive/fat-closure-abi-audit-plan.md`). Reserve for the case R3a's move
+  model cannot express -- a closure legitimately owned by two live owners at once.
+
+No action required for graduation; build R3a when `httpd-mw-fold-many`-class
+leaks are prioritized, R3b only if a genuinely-shared-closure fixture appears.
 
 ### R4 -- Graduation off the experiment (`expires_at 0.34.0`)
 
@@ -179,11 +218,14 @@ always-on, `EXPERIMENTS[]` row deleted, flag removed):
    `g_opt_closure_drop_glue` gates (each gate becomes always-taken).
 
 Decision gate at the 0.34.0 cut: **graduate** (if the corpus is clean and the
-snapshot regen is acceptable), **extend `expires_at`** (if R2/type-honesty is
-deemed a graduation prerequisite), or **shelve** (revert the ABI). Current
-recommendation: graduate after R1, treating R2/R3 as post-graduation
-enhancements -- they add generality, not correctness, and the flag-gated ABI is
-already sound for everything the corpus builds.
+snapshot regen is acceptable), **extend `expires_at`** (if a driver for R3a
+appears and its escape-path leaks are deemed a graduation prerequisite), or
+**shelve** (revert the ABI). Current recommendation (reinforced by the R2
+findings): **graduate after R1.** R1 is DONE; R2a proved not to be a standalone
+item (it folds into R3a, which has no forcing corpus leak beyond the documented,
+bounded `fold-many`/`rate-limit` residuals); R2b and R3b add generality/hardening,
+not correctness. The flag-gated ABI is already sound for everything the corpus
+builds, so the remaining open items are enhancements, not graduation blockers.
 
 > **Progress note (2026-07-22c) -- reactor/CPS async blocker RESOLVED; the
 > async/reactor family is corruption- and leak-free flag-on.** Flag-on, every
