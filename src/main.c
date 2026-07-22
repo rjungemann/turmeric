@@ -535,11 +535,19 @@ static bool g_no_auto_stdlib;
  * set by parse_no_abi_cache in main(). */
 static bool g_no_abi_cache;
 
-/* tur-link-and-build-split-plan Phase 2/3c: --runtime=lib links the prebuilt
- * libturi.a instead of autolinking (and thus recompiling) the bare
- * src/runtime .c sources per build.  Set by the build dispatch; read by
- * apply_runtime_lib_mode() in cmd_build / cmd_compile.  Default 0 = source. */
-static int g_runtime_lib;
+/* tur-link-and-build-split-plan Phase 2/3c/6: runtime-linkage mode, read by
+ * apply_runtime_lib_mode() in cmd_build / cmd_compile.  Set by the build/compile
+ * dispatch and seeded from TUR_RUNTIME.  Values:
+ *   TUR_RT_AUTO   (0, the default) -- prefer the lean non-ASan libturt_runtime.a
+ *                 when it is locatable, else transparently fall back to
+ *                 recompiling the bare runtime sources.  Never links the
+ *                 (possibly ASan) full libturi.a on its own, so a default build
+ *                 is always behaviorally identical to the old source path.
+ *   TUR_RT_LIB    (1) -- force the archive link (lean preferred, else libturi.a,
+ *                 else a -lturi fallback with a warning); explicit opt-in.
+ *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources. */
+enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2 };
+static int g_runtime_mode = TUR_RT_AUTO;
 
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
  * (called by the LSP server) and the per-file dispatchers.
@@ -1973,25 +1981,39 @@ static void autolink_drop_bare_sources(const Buf *autolink, Buf *out) {
     }
 }
 
-/* tur-link-and-build-split-plan Phase 2/3c: when --runtime=lib is active, drop
- * the bare runtime `.c` autolink sources and prepend `-l<archive> -L<dir>` so
- * the runtime TUs (hamt/symbols/tur_string) are linked from the prebuilt
- * archive instead of recompiled per build.  Prefers the lean libturt_runtime.a
- * (non-ASan, so it does not impose LeakSanitizer on the program -- unlike the
- * full libturi.a).  No-op when the program autolinks no runtime sources
- * (nothing to replace) or already links -lturi.  `autolink` is consumed and
- * replaced in place. */
+/* tur-link-and-build-split-plan Phase 2/3c/6: replace the bare runtime `.c`
+ * autolink sources with a link against a prebuilt runtime archive so the
+ * runtime TUs (hamt/symbols/tur_string) are linked instead of recompiled per
+ * build.  Behavior by mode (see g_runtime_mode):
+ *   AUTO (default) -- use the lean non-ASan libturt_runtime.a when locatable;
+ *     otherwise leave the bare sources in place (recompile).  Never links the
+ *     full libturi.a here, so a default build cannot regress into a link
+ *     failure (no archive -> source) or an unexpected ASan/LSan run.
+ *   LIB -- force the archive: lean preferred, else the full libturi.a, else a
+ *     -lturi fallback (with a warning) that relies on a -L in TUR_CC_FLAGS.
+ * No-op when the program autolinks no runtime sources or already links -lturi.
+ * `autolink` is consumed and replaced in place. */
 static void apply_runtime_lib_mode(Buf *autolink) {
-    if (!g_runtime_lib) return;
+    if (g_runtime_mode == TUR_RT_SOURCE) return;
     if (!autolink_has_bare_c_source(autolink)) return;
     if (autolink->len > 0 && strstr(autolink->data, "-lturi")) return;
+
     char libdir[4096], libname[128];
+    int found = locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname));
+
+    /* AUTO only links the lean, guaranteed-non-ASan archive; anything else
+     * (only the full libturi.a, or no archive at all) falls back to recompiling
+     * the sources so a default build stays behaviorally identical to source. */
+    if (g_runtime_mode == TUR_RT_AUTO &&
+        !(found && strcmp(libname, "turt_runtime") == 0))
+        return;
+
     Buf inj;
     buf_init(&inj);
-    if (locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname))) {
+    if (found) {
         buf_printf(&inj, "-l%s -L%s", libname, libdir);
     } else {
-        /* Last resort: rely on a -L already in TUR_CC_FLAGS + the full lib. */
+        /* Reachable only in explicit LIB mode: rely on a -L in TUR_CC_FLAGS. */
         buf_puts(&inj, "-lturi");
         fprintf(stderr,
                 "tur: --runtime=lib could not locate a runtime archive; relying "
@@ -7253,12 +7275,14 @@ static int usage_build(void) {
         "  --split-build     build a single file as `compile` + `link` (cacheable\n"
         "                    `cc -c` object compiles + a link). Native builds only.\n"
         "  --no-split-build  force the monolithic single-`cc` build (the default).\n"
-        "  --runtime=lib     link the prebuilt runtime archive (lean non-ASan\n"
-        "                    libturt_runtime.a, else libturi.a) instead of recompiling\n"
-        "                    the bare src/runtime autolink sources per build. Set\n"
-        "                    TUR_RUNTIME_LIB to point at the archive if not auto-found;\n"
-        "                    TUR_RUNTIME=lib seeds this default for every build.\n"
-        "  --runtime=source  autolink+recompile the runtime sources (the default).\n"
+        "  --runtime=auto    (default) link the lean non-ASan libturt_runtime.a when\n"
+        "                    locatable, else recompile the bare src/runtime autolink\n"
+        "                    sources -- never links the ASan libturi.a on its own, so\n"
+        "                    a default build matches the old source path.\n"
+        "  --runtime=lib     force the archive link (lean preferred, else libturi.a).\n"
+        "                    Set TUR_RUNTIME_LIB to point at the archive if not found.\n"
+        "  --runtime=source  force recompiling the runtime sources.\n"
+        "                    TUR_RUNTIME=auto|lib|source seeds the default for a build.\n"
         "  --link-flags <f>  (tur link) extra linker flags, e.g. \"-L<dir> -lfoo\"\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"
@@ -7895,12 +7919,16 @@ int main(int argc, char **argv) {
     /* J6: --no-abi-cache / TUR_NO_ABI_CACHE disables the persistent
      * cross-module ABI specialization cache (.tur-abi-cache/). */
     g_no_abi_cache = parse_no_abi_cache(argc, argv);
-    /* tur-link-and-build-split-plan Phase 2/3c: TUR_RUNTIME=lib seeds the
-     * runtime-lib default (link the prebuilt archive instead of recompiling the
-     * runtime sources).  A CLI --runtime= flag, parsed later, still wins. */
+    /* tur-link-and-build-split-plan Phase 2/3c/6: TUR_RUNTIME overrides the
+     * default runtime-linkage mode (auto).  A CLI --runtime= flag, parsed
+     * later, still wins. */
     {
         const char *rt = getenv("TUR_RUNTIME");
-        if (rt && strcmp(rt, "lib") == 0) g_runtime_lib = 1;
+        if (rt) {
+            if      (strcmp(rt, "lib") == 0)    g_runtime_mode = TUR_RT_LIB;
+            else if (strcmp(rt, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+            else if (strcmp(rt, "auto") == 0)   g_runtime_mode = TUR_RT_AUTO;
+        }
     }
 
     for (int i = 1; i < argc; i++) {
@@ -8531,11 +8559,12 @@ int main(int argc, char **argv) {
             } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
                        (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
                 const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
-                if (strcmp(mode, "lib") == 0) g_runtime_lib = 1;
-                else if (strcmp(mode, "source") == 0) g_runtime_lib = 0;
+                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
                 else {
                     fprintf(stderr, "tur build: unknown --runtime '%s' "
-                            "(supported: lib, source)\n", mode);
+                            "(supported: auto, lib, source)\n", mode);
                     free(build_inc); return 1;
                 }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
@@ -8683,11 +8712,12 @@ int main(int argc, char **argv) {
             } else if (strncmp(argv[i], "--runtime=", 10) == 0 ||
                        (strcmp(argv[i], "--runtime") == 0 && i + 1 < argc)) {
                 const char *mode = argv[i][9] == '=' ? argv[i] + 10 : argv[++i];
-                if (strcmp(mode, "lib") == 0) g_runtime_lib = 1;
-                else if (strcmp(mode, "source") == 0) g_runtime_lib = 0;
+                if (strcmp(mode, "lib") == 0) g_runtime_mode = TUR_RT_LIB;
+                else if (strcmp(mode, "source") == 0) g_runtime_mode = TUR_RT_SOURCE;
+                else if (strcmp(mode, "auto") == 0) g_runtime_mode = TUR_RT_AUTO;
                 else {
                     fprintf(stderr, "tur compile: unknown --runtime '%s' "
-                            "(supported: lib, source)\n", mode);
+                            "(supported: auto, lib, source)\n", mode);
                     free(comp_inc); return 1;
                 }
             } else if (strcmp(argv[i], "--no-abi-cache") == 0) {
