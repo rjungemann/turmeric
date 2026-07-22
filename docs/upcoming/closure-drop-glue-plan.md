@@ -101,15 +101,32 @@ Exit: MET -- `httpd-h7-middleware` and `httpd-h5-tls` leak-clean flag-on, marker
 dropped, `bash tests/run.sh` green. No snapshot churn (no `expected.c` embeds the
 changed httpd functions).
 
-**Explicitly NOT R1** (the marker text is stale; these are non-closure leaks that
-Model R cannot and should not touch -- keep the markers, they belong to other
-work): `httpd-mw-cookie` / `-form` (request-accessor `cstr` leak from
-`httpd-req-cookie` / `-form`, tracked in
-`docs/reported/httpd-request-accessor-cstr-leak.md`); `httpd-mw-fold-many` /
-`-rate-limit` (non-closure buffer/state leaks); `httpd-req-string-opt`
-(inline-C-fabricated `HttpdConn` graphs); `httpd-mw-compress` (`requires.spices`
-skip). The non-httpd markers (`panic-catch-unwind*`, `panic-*`, `cli-*`,
-`cps-backend-heap-adt-return`) are unrelated to closures entirely.
+**Explicitly NOT R1** (the marker text on several is stale). Profiled flag-on and
+split by ACTUAL root cause (all now have `docs/reported/` findings where genuine):
+
+- `httpd-mw-cookie` / `-form` -- request-accessor `cstr` leak from
+  `httpd-req-cookie` / `-form`
+  (`docs/reported/httpd-request-accessor-cstr-leak.md`). Non-closure.
+- `httpd-mw-fold-many` -- NOT buffer/state; it is the compose onion + cons spine
+  + factory heads "at scale", but built from a RUNTIME list (`build-chain` +
+  `httpd-mw-fold`), so the caller-side variadic-rest trick that fixed
+  `mw-compose-of` does not reach it, and `composed` (the fold result) is freed
+  nowhere. This is an R2/R3 case -- the general owned-`list<Closure>` consumed by
+  a fold. `docs/reported/httpd-mw-fold-many-closure-list-leak.md`.
+- `httpd-mw-rate-limit` -- the `RLState` counter table
+  (`httpd-mw-ratelimit-new`) is never freed; non-closure httpd-teardown gap.
+  `docs/reported/httpd-mw-rate-limit-state-leak.md` (option (b) there folds it
+  into the `Drop`-capture path).
+- `httpd-req-string-opt` -- the fixture's own inline-C fabricates `HttpdConn` /
+  cookie / body graphs with no server to reclaim them; an intentional
+  test-scaffold leak (the marker documents it). Not a compiler/stdlib bug.
+- `httpd-mw-compress` -- `requires.spices` skip (missing zlib dep).
+- Non-httpd markers (`panic-catch-unwind*`, `panic-*`, `cli-*`,
+  `cps-backend-heap-adt-return`) -- unrelated to closures entirely.
+
+Also filed while closing R1: `docs/reported/httpd-new-pool-failure-handler-leak.md`
+-- `httpd-new-pool` leaks the `^fat handler` on its own construction-failure
+paths (deeper than the R1 `httpd-new-tls` early-refusal fix; unexercised).
 
 ### R2 -- Walk generality gaps (new analysis; corpus does not force them)
 
