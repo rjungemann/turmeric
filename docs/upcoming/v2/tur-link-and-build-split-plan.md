@@ -212,18 +212,30 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
    (measured: ~15% faster per build on a hamt-only fixture; larger for
    runtime-heavy programs, and it compounds with ccache in step 5).
 
-   **ASan caveat for step 6 (making it default).** The dev-tree `libturi.a` is
-   the *Debug* build, so it is ASan-instrumented; the ASan autodetect in
-   `resolve_autolink_flags` (correctly) pulls `-fsanitize=address,undefined`
-   into the link, which turns LeakSanitizer on for the *whole program*. Fixtures
-   that intentionally leak process-lifetime allocations then fail under LSan,
-   whereas the bare-source build (non-ASan) runs them clean. So flipping
-   `--runtime=lib` on by default in the suite requires linking a **non-ASan**
-   runtime archive -- a dedicated leaner `libturt_runtime.a` (just the
-   autolinkable `src/runtime/*.c` TUs, built without the sanitizers), or a
-   Release `libturi.a`, or a blanket `ASAN_OPTIONS=detect_leaks=0` for the
-   compiled fixture programs. This does not affect the opt-in flag, where
-   linking the ASan lib and getting ASan is the expected behavior.
+   **[DONE] Non-ASan runtime archive (the ASan-caveat fix, step-6 prereq).**
+   The dev-tree `libturi.a` is the *Debug* build, so it is ASan-instrumented;
+   the ASan autodetect in `resolve_autolink_flags` (correctly) pulls
+   `-fsanitize=address,undefined` into the link, which turns LeakSanitizer on
+   for the *whole program*. Fixtures that intentionally leak process-lifetime
+   allocations then fail under LSan, whereas the bare-source build (non-ASan)
+   runs them clean.
+
+   Fixed by building a dedicated lean, **non-sanitized** static archive
+   `libturt_runtime.a` (CMake target `turt_runtime`, `src/CMakeLists.txt`)
+   containing exactly the autolinkable runtime TUs -- `hamt.c`, `symbols.c`,
+   `tur_string.c` (the complete set of bare-source `__tur_autolink__` hints).
+   `--runtime=lib` now prefers this archive, links `-lturt_runtime`, and drops
+   the bare sources itself (`apply_runtime_lib_mode`/`autolink_drop_bare_sources`
+   no longer depend on the `-lturi` ASan/filter path). Because the archive is
+   non-ASan, the linked program is behaviorally identical to the bare-source
+   recompile -- no LSan imposed. It falls back to the full `libturi.a` (and the
+   old `-lturi` behavior) when the lean archive is absent.
+
+   Evidence: the **full suite is green under `TUR_RUNTIME=lib`** (2264 passed,
+   0 failed) -- the suite builds every compiled fixture through `tur build`, so
+   this exercises the runtime-lib link path suite-wide. Plus a direct A/B sweep
+   of ~90 runtime-autolinking fixtures (source vs lib) matched byte-for-byte,
+   including the previously-LSan-tripping leaky fixtures.
 3. **[DONE] `tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link`
    sidecar (written by `tur compile`). Both commands are registered in
    `builtins[]` / `CANONICAL_COMMANDS[]` and dispatched from `main()`; `emit-c`
@@ -239,8 +251,14 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
 5. **[TODO] CI: install + cache ccache**, now that the `cc -c` calls are
    cacheable (was a no-op before -- do NOT do this before the default flips in
    step 4). Cache the ccache dir across runs in `.github/workflows/ci.yml`.
-6. **[TODO]** Retire `--no-split-build` after a green soak (and flip
-   `--split-build` on by default).
+6. **[PARTIAL]** Retire `--no-split-build` / flip the defaults after a green
+   soak. The runtime-lib blocker is cleared: `TUR_RUNTIME=lib` seeds the
+   runtime-lib default (a CLI `--runtime=` still wins) and the full suite is
+   green under it. Remaining before flipping the *compiler* default: extend
+   runtime-lib to the project/directory build paths (`cmd_build_project` /
+   `cmd_build_multi` -- currently only single-file `cmd_build` and `cmd_compile`
+   honor it), and let the opt-in soak. Kept opt-in here to avoid changing every
+   build's behavior in one step.
 
 ## 6. Finishing the Section 3 work (folded in from the archived report)
 

@@ -1881,68 +1881,125 @@ static int autolink_has_bare_c_source(const Buf *autolink) {
     return 0;
 }
 
-/* tur-link-and-build-split-plan Phase 2/3c: locate the directory holding the
- * prebuilt libturi.a.  Resolution order:
- *   1. $TUR_RUNTIME_LIB (a libturi.a file path, or the directory holding it).
- *   2. <exe_dir>/src/libturi.a  (dev layout: build/tur -> build/src).
- *   3. <turmeric_root>/build/src/libturi.a.
- * A prefix-installed SDK's lib is picked up separately by
- * resolve_autolink_flags step 1 once -lturi is on the line, so it is not probed
- * here.  Returns 1 and writes the dir to `out` on success, else 0. */
-static int locate_runtime_lib_dir(char *out, size_t cap) {
-    out[0] = '\0';
+/* Probe `dir` for a runtime archive, preferring the lean non-sanitized
+ * libturt_runtime.a over the full libturi.a.  On a hit, writes the linker name
+ * (`turt_runtime` or `turi`) to `libname` and returns 1. */
+static int probe_runtime_lib_in(const char *dir, char *libname, size_t ncap) {
+    struct stat st;
+    char probe[4096];
+    snprintf(probe, sizeof(probe), "%s/libturt_runtime.a", dir);
+    if (stat(probe, &st) == 0) { snprintf(libname, ncap, "turt_runtime"); return 1; }
+    snprintf(probe, sizeof(probe), "%s/libturi.a", dir);
+    if (stat(probe, &st) == 0) { snprintf(libname, ncap, "turi"); return 1; }
+    return 0;
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c + Phase 6 prereq: locate the runtime
+ * archive to link under --runtime=lib.  Prefers the lean, non-sanitized
+ * libturt_runtime.a (behaviorally identical to a bare-source recompile) and
+ * falls back to the full libturi.a (which is ASan-instrumented in Debug builds).
+ * Resolution order for the directory:
+ *   1. $TUR_RUNTIME_LIB (an archive file path, or the directory holding one).
+ *   2. <exe_dir>/src         (dev layout: build/tur -> build/src).
+ *   3. <turmeric_root>/build/src.
+ * A prefix-installed SDK's libturi.a is picked up separately by
+ * resolve_autolink_flags step 1 once -lturi is on the line.  Returns 1 with the
+ * dir in `libdir` and the linker name in `libname` on success, else 0. */
+static int locate_runtime_lib(char *libdir, size_t dcap,
+                              char *libname, size_t ncap) {
+    libdir[0] = '\0';
+    libname[0] = '\0';
     struct stat st;
     const char *env = getenv("TUR_RUNTIME_LIB");
     if (env && *env && stat(env, &st) == 0) {
-        if (S_ISDIR(st.st_mode)) { snprintf(out, cap, "%s", env); return 1; }
+        if (S_ISDIR(st.st_mode)) {
+            if (probe_runtime_lib_in(env, libname, ncap)) {
+                snprintf(libdir, dcap, "%s", env);
+                return 1;
+            }
+            return 0;
+        }
+        /* A file path: derive libname from lib<name>.a and use its dir. */
         char d[4096];
         dir_of_path(env, d, sizeof(d));
-        snprintf(out, cap, "%s", d);
-        return 1;
+        snprintf(libdir, dcap, "%s", d);
+        const char *base = strrchr(env, '/');
+        base = base ? base + 1 : env;
+        if (strncmp(base, "lib", 3) == 0) base += 3;
+        snprintf(libname, ncap, "%s", base);
+        char *dot = strrchr(libname, '.');
+        if (dot) *dot = '\0';
+        return libname[0] ? 1 : 0;
     }
-    char probe[4096];
     char exe[4096];
     if (get_exe_path(exe, sizeof(exe)) == 0) {
         char d[4096];
         dir_of_path(exe, d, sizeof(d));
-        snprintf(probe, sizeof(probe), "%s/src/libturi.a", d);
-        if (stat(probe, &st) == 0) { snprintf(out, cap, "%s/src", d); return 1; }
+        char sd[4200];
+        snprintf(sd, sizeof(sd), "%s/src", d);
+        if (probe_runtime_lib_in(sd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", sd);
+            return 1;
+        }
     }
     char root[4096];
     resolve_turmeric_root(root, sizeof(root));
     if (root[0]) {
-        snprintf(probe, sizeof(probe), "%s/build/src/libturi.a", root);
-        if (stat(probe, &st) == 0) { snprintf(out, cap, "%s/build/src", root); return 1; }
+        char bd[4200];
+        snprintf(bd, sizeof(bd), "%s/build/src", root);
+        if (probe_runtime_lib_in(bd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", bd);
+            return 1;
+        }
     }
     return 0;
 }
 
-/* tur-link-and-build-split-plan Phase 2/3c: when --runtime=lib is active,
- * replace bare runtime `.c` autolink sources with a link against the prebuilt
- * libturi.a by prepending `-lturi -L<libdir>` to the raw autolink.  The
- * `-lturi`-supersedes-bare-.c filter in resolve_autolink_flags then drops the
- * bare sources, so `hamt.c` (etc.) is linked from the archive instead of
- * recompiled.  No-op when the program autolinks no runtime sources (nothing to
- * replace) or when libturi.a already appears via -lturi.  `autolink` is
- * consumed and replaced in place. */
+/* Rebuild `autolink` dropping every bare `.c` source token (a runtime TU),
+ * keeping all flags.  Used when --runtime=lib replaces the recompiled sources
+ * with a link against a runtime archive.  Appends into a fresh buffer. */
+static void autolink_drop_bare_sources(const Buf *autolink, Buf *out) {
+    const char *p = autolink->data;
+    while (p && *p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *s = p;
+        while (*p && *p != ' ') p++;
+        size_t t = (size_t)(p - s);
+        int bare_c = t > 2 && s[0] != '-' && s[t - 2] == '.' && s[t - 1] == 'c';
+        if (bare_c) continue;
+        if (out->len > 0) buf_putc(out, ' ');
+        buf_write(out, s, t);
+    }
+}
+
+/* tur-link-and-build-split-plan Phase 2/3c: when --runtime=lib is active, drop
+ * the bare runtime `.c` autolink sources and prepend `-l<archive> -L<dir>` so
+ * the runtime TUs (hamt/symbols/tur_string) are linked from the prebuilt
+ * archive instead of recompiled per build.  Prefers the lean libturt_runtime.a
+ * (non-ASan, so it does not impose LeakSanitizer on the program -- unlike the
+ * full libturi.a).  No-op when the program autolinks no runtime sources
+ * (nothing to replace) or already links -lturi.  `autolink` is consumed and
+ * replaced in place. */
 static void apply_runtime_lib_mode(Buf *autolink) {
     if (!g_runtime_lib) return;
     if (!autolink_has_bare_c_source(autolink)) return;
     if (autolink->len > 0 && strstr(autolink->data, "-lturi")) return;
-    char libdir[4096];
+    char libdir[4096], libname[128];
     Buf inj;
     buf_init(&inj);
-    buf_puts(&inj, "-lturi");
-    if (locate_runtime_lib_dir(libdir, sizeof(libdir)))
-        buf_printf(&inj, " -L%s", libdir);
-    else
+    if (locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname))) {
+        buf_printf(&inj, "-l%s -L%s", libname, libdir);
+    } else {
+        /* Last resort: rely on a -L already in TUR_CC_FLAGS + the full lib. */
+        buf_puts(&inj, "-lturi");
         fprintf(stderr,
-                "tur: --runtime=lib could not locate libturi.a; relying on a "
-                "-L in TUR_CC_FLAGS (set TUR_RUNTIME_LIB to override)\n");
-    if (autolink->len > 1) {
-        buf_putc(&inj, ' ');
-        buf_write(&inj, autolink->data, autolink->len - 1);
+                "tur: --runtime=lib could not locate a runtime archive; relying "
+                "on a -L in TUR_CC_FLAGS (set TUR_RUNTIME_LIB to override)\n");
     }
+    /* Keep every flag, drop the bare .c sources the archive supersedes.  The
+     * drop helper inserts the separating space before each kept token. */
+    if (autolink->len > 1) autolink_drop_bare_sources(autolink, &inj);
     buf_putc(&inj, '\0');
     buf_free(autolink);
     *autolink = inj;
@@ -7196,9 +7253,11 @@ static int usage_build(void) {
         "  --split-build     build a single file as `compile` + `link` (cacheable\n"
         "                    `cc -c` object compiles + a link). Native builds only.\n"
         "  --no-split-build  force the monolithic single-`cc` build (the default).\n"
-        "  --runtime=lib     link the prebuilt libturi.a instead of recompiling the\n"
-        "                    bare src/runtime/*.c autolink sources per build. Set\n"
-        "                    TUR_RUNTIME_LIB to point at libturi.a if not auto-found.\n"
+        "  --runtime=lib     link the prebuilt runtime archive (lean non-ASan\n"
+        "                    libturt_runtime.a, else libturi.a) instead of recompiling\n"
+        "                    the bare src/runtime autolink sources per build. Set\n"
+        "                    TUR_RUNTIME_LIB to point at the archive if not auto-found;\n"
+        "                    TUR_RUNTIME=lib seeds this default for every build.\n"
         "  --runtime=source  autolink+recompile the runtime sources (the default).\n"
         "  --link-flags <f>  (tur link) extra linker flags, e.g. \"-L<dir> -lfoo\"\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
@@ -7836,6 +7895,13 @@ int main(int argc, char **argv) {
     /* J6: --no-abi-cache / TUR_NO_ABI_CACHE disables the persistent
      * cross-module ABI specialization cache (.tur-abi-cache/). */
     g_no_abi_cache = parse_no_abi_cache(argc, argv);
+    /* tur-link-and-build-split-plan Phase 2/3c: TUR_RUNTIME=lib seeds the
+     * runtime-lib default (link the prebuilt archive instead of recompiling the
+     * runtime sources).  A CLI --runtime= flag, parsed later, still wins. */
+    {
+        const char *rt = getenv("TUR_RUNTIME");
+        if (rt && strcmp(rt, "lib") == 0) g_runtime_lib = 1;
+    }
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--panic-abort") == 0) {

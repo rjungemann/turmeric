@@ -93,19 +93,31 @@ tur build --runtime=lib foo.tur -o foo     # link libturi.a
 tur build --runtime=source foo.tur -o foo  # autolink+recompile sources (default)
 ```
 
-It also works with `tur compile` (the `.link` sidecar then records the `-lturi`
-link) and composes with `--split-build`.
+It also works with `tur compile` (the `.link` sidecar then records the runtime
+link) and composes with `--split-build`. `TUR_RUNTIME=lib` in the environment
+seeds the same default for every build (a CLI `--runtime=` flag still wins), so
+CI can flip the whole suite over with one env var.
 
-`libturi.a` is auto-located in this order: `$TUR_RUNTIME_LIB` (a `libturi.a` file
+### Which archive gets linked
+
+Two archives can back `--runtime=lib`, probed per directory in this order:
+
+1. **`libturt_runtime.a`** (preferred) -- a lean, **non-sanitized** archive of
+   exactly the autolinkable runtime TUs (`hamt.c`, `symbols.c`, `tur_string.c`).
+   Built by the `turt_runtime` CMake target. Because it is non-ASan, linking it
+   is behaviorally identical to the bare-source recompile -- no sanitizer is
+   imposed on your program.
+2. **`libturi.a`** (fallback) -- the full runtime library. In a Debug build this
+   is AddressSanitizer-instrumented, so the ASan autodetect pulls
+   `-fsanitize=address,undefined` into the link and your program then runs under
+   ASan/LeakSanitizer. That is by design when only the full lib is available;
+   use a Release/non-sanitized `libturi.a` (or `ASAN_OPTIONS=detect_leaks=0`) if
+   you want a plain run.
+
+Archive directories are searched in order: `$TUR_RUNTIME_LIB` (an archive file
 or its directory) -> `<tur_exe_dir>/src` -> `<turmeric_root>/build/src`. A
-prefix-installed SDK's lib is found automatically once `-lturi` is on the line.
-Set `TUR_RUNTIME_LIB` if your archive lives elsewhere.
-
-**Note on sanitizers.** If the `libturi.a` you link was built with AddressSanitizer
-(the Debug build is), the ASan autodetect pulls `-fsanitize=address,undefined`
-into the link -- so the resulting program runs under ASan/LeakSanitizer. That is
-by design (you asked to link the ASan library); use a Release/non-sanitized
-`libturi.a`, or `ASAN_OPTIONS=detect_leaks=0`, if you want a plain run.
+prefix-installed SDK's `libturi.a` is found automatically once `-lturi` is on
+the line. Set `TUR_RUNTIME_LIB` if your archive lives elsewhere.
 
 ## Why this exists
 
