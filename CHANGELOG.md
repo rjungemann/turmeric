@@ -4,7 +4,7 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
-## [0.30.2] -- 2026-07-21
+## [0.30.3] -- 2026-07-21
 
 ### Added
 
@@ -29,6 +29,11 @@ All notable changes to Turmeric are documented here.
 
 - **Macros invisible across stdlib re-elaboration**: fixed macros not resolving
   across stdlib re-elaboration (`elab_core.c`, `eval.c`, `fiber.h`).
+
+## [0.30.2] -- 2026-07-21
+
+### Fixed
+
 - **`void*`/`int64_t` carrier straddles for `String` returns**: compiled
   `String`-returning functions (and taskgroup handles) emitted C that straddled
   `void*` and `int64_t`, which clang's default `-Wint-conversion` and GCC 14+

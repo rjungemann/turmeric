@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.2` -- fixes `void*`/`int64_t` carrier straddles for `String` returns (#699), unblocking AOT-compiled owned-`String` use and correcting interactive `show` in `tur repl`, and adds owned-`String` builders plus opt-in `*-string` stdlib sibling modules (#701, #702).
+**Latest release:** `v0.30.3` -- adds owned-`String` builders (`str-concat-string`/`cstr-sub-string`) and `option<String>` httpd accessors (#701), owned-`String` `*-string` sibling modules for json/csv/term/re/range/schema (#702), and fixes macro visibility across stdlib re-elaboration.
 
 ## What
 
