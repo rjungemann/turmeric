@@ -29,3 +29,15 @@ that free `hb` after `hb->handler` was set must also drop the handler (or route
 `hb` teardown through `httpd-free`). Byte-identical flag-off (`TUR_CLOSURE_DROP`
 -> plain free). Add a fixture that forces a construction failure (e.g. an
 already-bound port) under LSan to lock it in.
+
+---
+
+**RESOLVED (2026-07-22):** Every failure `return NULL` in `httpd-new-pool`
+and `httpd-new-async-with-limit` now calls `TUR_CLOSURE_DROP(handler)` before
+returning, dropping the owned `^fat handler` box on the bind/listen/calloc/
+malloc/reactor error paths. Audited to confirm no double-drop with the R1
+`httpd-new-tls` early-refusal fix or the success-path `httpd-free`/
+`httpd-async-free` owner. Locked in by the leak-checked fixture
+`tests/fixtures/httpd-new-pool-fail-drops-handler/`, which occupies an
+ephemeral loopback port so `httpd-new-pool` bind-fails and must drop the
+capturing handler ("refused", LSan clean). Full suite green (2265/0).

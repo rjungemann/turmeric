@@ -675,7 +675,7 @@
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return NULL;
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   int opt = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
   int flags = fcntl(fd, F_GETFL, 0);
@@ -688,26 +688,26 @@
    * Firewall prompting "allow this app" for every fixture binary. */
   addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdBlock *hb = (HttpdBlock *)calloc(1, sizeof(HttpdBlock));
-  if (!hb) { close(fd); return NULL; }
+  if (!hb) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   hb->listen_fd = fd;
   hb->handler   = (int64_t)handler;
   hb->n_workers = (int)workers;
   /* Initialise the shared queue with a small capacity (will grow). */
   hb->fdq_cap = 16;
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
-  if (!hb->fdq) { close(fd); free(hb); return NULL; }
+  if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
   pthread_cond_init(&hb->fdq_cv,  NULL);
   /* Reactor + accept callback (synthetic fat closure { __fn, hb }). */
   hb->reactor = tur_reactor_new();
-  if (!hb->reactor) { free(hb->fdq); close(fd); free(hb); return NULL; }
+  if (!hb->reactor) { free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
   if (!clos) {
       tur_reactor_free(hb->reactor);
-      free(hb->fdq); close(fd); free(hb); return NULL;
+      free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL;
   }
   clos[0] = (int64_t)(intptr_t)httpd_hyaccept_hycb;
   clos[1] = (int64_t)(intptr_t)hb;
@@ -721,7 +721,7 @@
   if (hb->listen_src_id < 0) {
       free(clos);
       tur_reactor_free(hb->reactor);
-      free(hb->fdq); close(fd); free(hb); return NULL;
+      free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL;
   }
   /* Spawn worker threads. */
   hb->workers = (pthread_t *)malloc((size_t)workers * sizeof(pthread_t));
@@ -729,7 +729,7 @@
       tur_reactor_remove(hb->reactor, hb->listen_src_id);
       free(clos);
       tur_reactor_free(hb->reactor);
-      free(hb->fdq); close(fd); free(hb); return NULL;
+      free(hb->fdq); close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL;
   }
   for (int i = 0; i < workers; i++) {
       pthread_create(&hb->workers[i], NULL,
@@ -2735,7 +2735,7 @@
       int   in_flight;            /* A4: live request count */
   } HttpdAsync;
   int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) return NULL;
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   int opt = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
   int flags = fcntl(fd, F_GETFL, 0);
@@ -2748,26 +2748,26 @@
    * Firewall prompting "allow this app" for every fixture binary. */
   addr.sin_addr.s_addr = htonl(getenv("TUR_BIND_LOOPBACK") ? INADDR_LOOPBACK : INADDR_ANY);
   addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); return NULL; }
+  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
-  if (!ha) { close(fd); return NULL; }
+  if (!ha) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   ha->listen_fd     = fd;
   ha->handler       = handler;
   ha->max_in_flight = (int)max_in_flight;
   ha->reactor       = tur_reactor_new();
-  if (!ha->reactor) { close(fd); free(ha); return NULL; }
+  if (!ha->reactor) { close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   ha->fiber_group = tur_local_fiber_group_new(ha->reactor);
-  if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  if (!ha->fiber_group) { tur_reactor_free(ha->reactor); close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   /* Synthetic fat closure for the accept callback: { __fn, ha }. */
   int64_t *clos = (int64_t *)malloc(2 * sizeof(int64_t));
-  if (!clos) { tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  if (!clos) { tur_reactor_free(ha->reactor); close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   clos[0] = (int64_t)(intptr_t)httpd_hyasync_hyaccept_hycb;
   clos[1] = (int64_t)(intptr_t)ha;
   ha->accept_clos = (void *)clos;
   /* Synthetic fat closure for the fiber body. */
   int64_t *body_clos = (int64_t *)malloc(2 * sizeof(int64_t));
-  if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); free(ha); return NULL; }
+  if (!body_clos) { free(clos); tur_reactor_free(ha->reactor); close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL; }
   body_clos[0] = (int64_t)(intptr_t)httpd_hyasync_hyfiber_hybody;
   body_clos[1] = 0;
   ha->body_closure = (int64_t)(intptr_t)body_clos;
@@ -2779,7 +2779,7 @@
   if (ha->listen_src_id < 0) {
       free(body_clos); free(clos);
       tur_reactor_free(ha->reactor);
-      close(fd); free(ha); return NULL;
+      close(fd); TUR_CLOSURE_DROP(handler); free(ha); return NULL;
   }
   return (void *)ha;
   ```)
