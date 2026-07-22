@@ -79,6 +79,34 @@ Under `--split-build`, a single-file build runs the real `cmd_compile` then
 dir and cleaned up afterward), so `tur build`, `tur compile`, and `tur link`
 share one implementation and cannot drift.
 
+## `tur build --runtime=lib` -- link the prebuilt runtime
+
+By default a program that uses runtime facilities (maps, arc, reactor, ...)
+*autolinks the bare `src/runtime/*.c` sources* -- which means `cc` **recompiles**
+`hamt.c` (etc.) on every build. `--runtime=lib` links the prebuilt `libturi.a`
+archive instead, turning "recompile the runtime per build" into "link a static
+archive built once." Static linking dead-strips to only the referenced TUs, so
+the binary is unchanged.
+
+```
+tur build --runtime=lib foo.tur -o foo     # link libturi.a
+tur build --runtime=source foo.tur -o foo  # autolink+recompile sources (default)
+```
+
+It also works with `tur compile` (the `.link` sidecar then records the `-lturi`
+link) and composes with `--split-build`.
+
+`libturi.a` is auto-located in this order: `$TUR_RUNTIME_LIB` (a `libturi.a` file
+or its directory) -> `<tur_exe_dir>/src` -> `<turmeric_root>/build/src`. A
+prefix-installed SDK's lib is found automatically once `-lturi` is on the line.
+Set `TUR_RUNTIME_LIB` if your archive lives elsewhere.
+
+**Note on sanitizers.** If the `libturi.a` you link was built with AddressSanitizer
+(the Debug build is), the ASan autodetect pulls `-fsanitize=address,undefined`
+into the link -- so the resulting program runs under ASan/LeakSanitizer. That is
+by design (you asked to link the ASan library); use a Release/non-sanitized
+`libturi.a`, or `ASAN_OPTIONS=detect_leaks=0`, if you want a plain run.
+
 ## Why this exists
 
 See [docs/upcoming/v2/tur-link-and-build-split-plan.md](../upcoming/v2/tur-link-and-build-split-plan.md).

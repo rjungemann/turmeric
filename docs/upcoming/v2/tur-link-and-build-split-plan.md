@@ -1,8 +1,10 @@
 # `tur link` and the build compile/link split
 
-**Status:** In progress. Phases 1, 3, and 4 (the compile/link split mental model)
-have landed; the prebuilt-runtime archive (Phase 2 / 3c) and the ccache CI wiring
-(Phase 5) remain. See the checklist in Section 5. Motivated by
+**Status:** In progress. Phases 1, 2, 3, and 4 have landed
+(`resolve_autolink_flags`/`link_command_run` factoring; `tur compile`/`tur link`
++ `.link` sidecar; `tur build --split-build`; and `tur build --runtime=lib`).
+Making `--runtime=lib` the default and the ccache CI wiring (Phases 5-6) remain;
+see the checklist in Section 5 and the ASan caveat noted there. Motivated by
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
@@ -197,10 +199,31 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
    + `link_command_run(...)` (the `cc` assembly/run), plus the shared
    `scan_autolink_markers(...)` and `collect_build_aux(...)` helpers. Full suite
    green (2264 passed, 0 failed).
-2. **[TODO] Prebuilt runtime (3c).** `tur build --runtime=lib` links `libturi.a`;
-   measure suite wall-clock delta. Make default once green. (Independent of the
-   split; the higher-leverage cold-run win. Not yet started -- the `-L` discovery
-   for a dev-tree `build/src/libturi.a` is the fiddly part to get right.)
+2. **[DONE] Prebuilt runtime (3c).** `tur build --runtime=lib` (and
+   `tur compile --runtime=lib`) links the prebuilt `libturi.a` instead of
+   autolinking+recompiling the bare `src/runtime/*.c` sources.
+   `apply_runtime_lib_mode()` prepends `-lturi -L<libdir>` to the raw autolink
+   when it carries a bare runtime `.c`; the existing `-lturi`-supersedes-bare-.c
+   filter in `resolve_autolink_flags` then drops the sources. `libturi.a` is
+   auto-located via `$TUR_RUNTIME_LIB` -> `<exe_dir>/src` -> `<root>/build/src`;
+   a prefix-installed SDK's lib is picked up by the SDK-anchoring step once
+   `-lturi` is on the line. Default remains `--runtime=source` (opt-in for now).
+   Output-identical to the source path on the runtime-autolinking fixtures
+   (measured: ~15% faster per build on a hamt-only fixture; larger for
+   runtime-heavy programs, and it compounds with ccache in step 5).
+
+   **ASan caveat for step 6 (making it default).** The dev-tree `libturi.a` is
+   the *Debug* build, so it is ASan-instrumented; the ASan autodetect in
+   `resolve_autolink_flags` (correctly) pulls `-fsanitize=address,undefined`
+   into the link, which turns LeakSanitizer on for the *whole program*. Fixtures
+   that intentionally leak process-lifetime allocations then fail under LSan,
+   whereas the bare-source build (non-ASan) runs them clean. So flipping
+   `--runtime=lib` on by default in the suite requires linking a **non-ASan**
+   runtime archive -- a dedicated leaner `libturt_runtime.a` (just the
+   autolinkable `src/runtime/*.c` TUs, built without the sanitizers), or a
+   Release `libturi.a`, or a blanket `ASAN_OPTIONS=detect_leaks=0` for the
+   compiled fixture programs. This does not affect the opt-in flag, where
+   linking the ASan lib and getting ASan is the expected behavior.
 3. **[DONE] `tur compile` + `tur link` subcommands (3a-0, 3a)** + the `.link`
    sidecar (written by `tur compile`). Both commands are registered in
    `builtins[]` / `CANONICAL_COMMANDS[]` and dispatched from `main()`; `emit-c`
