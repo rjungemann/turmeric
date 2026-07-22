@@ -22,7 +22,7 @@
 
 ;; mw-count -- middleware constructor returning a fat closure that captures
 ;; `next`, bumps the counter on entry, then delegates downstream.
-(defn mw-count [next : int] : ptr<void>
+(defn mw-count [^fat next : int] : ptr<void>
   (let [_n next]
     (fn [conn : ptr<void>] : nil
       (ctr 0)
@@ -44,8 +44,17 @@
 
 (defn main [] : int
   (let [base     (let [_b (ctr 1)] (fn [conn : ptr<void>] : nil (ctr _b)))
-        chain    (build-chain 70 (tnil))
-        composed (httpd-mw-fold (:: base int) chain)]
-    (httpd-call composed (:: 0 ptr<void>))
+        chain    (:: (build-chain 70 (tnil)) :ClosureChain)
+        composed (:: (httpd-mw-fold (:: base int) (:: chain :int)) :Handler)]
+    ;; Both `composed` (an owned Handler onion) and `chain` (an owned
+    ;; ClosureChain of factory heads + cells) are bound as :affine Drop types, so
+    ;; the compiler AUTO-DROPS both at scope exit -- no explicit `httpd-mw-drop`
+    ;; and no explicit `httpd-mw-free-chain`. The `(:: _ :int)` ascriptions are
+    ;; non-consuming BORROWS (httpd-mw-fold reads the chain; httpd-call invokes
+    ;; the onion), so the auto-drops still fire. Defers run LIFO: `composed`
+    ;; (bound last) drops first -- the onion's wrappers down to base -- then
+    ;; `chain` drops -- the factory heads + spine cells -- matching the previous
+    ;; explicit (httpd-mw-drop composed) / (httpd-mw-free-chain chain) order.
+    (httpd-call (:: composed :int) (:: 0 ptr<void>))
     (println (ctr 1))
     0))

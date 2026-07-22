@@ -13,6 +13,7 @@
  */
 
 #include "emit_dk_runtime.h"
+#include "globals.h"  /* compiler config globals */
 
 /* ---- (call/cc f) / (escape f): undelimited escape-continuation runtime ---- */
 
@@ -501,14 +502,24 @@ void emit_cps_runtime_prelude_ex(Buf *out, bool tramp) {
 "__attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_push((void *)p, 0); return p; }\n"
 "/* Register a single spliced node (->next points into an enclosing k) for a\n"
 " * single-node free at reap -- dk_free would walk into the enclosing chain. */\n"
-"__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }\n"
+"__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }\n");
+    /* closure-drop-glue: a boundary-reaped closure env is headered (env[-1] holds
+     * its drop-glue), so a bare free of the past-header pointer would be an
+     * interior free (corruption).  Reap kind 2 = "headered closure", released
+     * through TUR_CLOSURE_DROP (recovers the header, walks owning captures, frees
+     * the base). */
+    buf_puts(out,
+"__attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }\n"
 "static void __dk_reap_run(void) {\n"
 "    for (size_t i = 0; i < __dk_reap_n; i++) {\n"
-"        if (__dk_reap_kind[i]) dk_free((DK *)__dk_reap_v[i]); else free(__dk_reap_v[i]);\n"
+"        if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);\n"
+"        else if (__dk_reap_kind[i] == 2) TUR_CLOSURE_DROP(__dk_reap_v[i]);\n"
+"        else free(__dk_reap_v[i]);\n"
 "    }\n"
 "    free(__dk_reap_v); free(__dk_reap_kind);\n"
 "    __dk_reap_v = NULL; __dk_reap_kind = NULL; __dk_reap_n = __dk_reap_cap = 0;\n"
-"}\n"
+"}\n");
+    buf_puts(out,
 "static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {\n"
 "    while (k) {\n"
 "        switch (k->kind) {\n"

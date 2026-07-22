@@ -132,13 +132,14 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * bounded by the base drop's shallowness, not this gate.  The name moves to
      * GRADUATED[] below (a lingering --enable is a TUR-W0063 no-op).  See
      * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
-    { "closure-drop-glue",
-      "Model R: runtime drop-glue header on escaping fat-closure envs",
-      "docs/upcoming/closure-drop-glue-plan.md",
-      "0.30.1",                 /* introduced */
-      "0.34.0",                 /* expires_at (soft deadline; review at that cut) */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_closure_drop_glue },
+    /* closure-drop-glue GRADUATED 2026-07-22 -- Model R (runtime drop-glue header
+     * on every heap fat-closure env, walked on release via TUR_CLOSURE_DROP) is
+     * now unconditional: the header ABI is emitted in every build and every
+     * fat-handle free (scope-exit, catch-unwind, effect/shift reap, struct
+     * fn-field drop, httpd/reactor teardown) routes through it.  The whole corpus
+     * is crash- and leak-clean under the always-on ABI (forced-on suite verified
+     * before graduation).  The name moves to GRADUATED[] below (a lingering
+     * --enable is a TUR-W0063 no-op).  See docs/upcoming/closure-drop-glue-plan.md. */
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -160,6 +161,7 @@ static const char *const GRADUATED[] = {
     "cps-tramp-resume", /* graduated 2026-07-19; DK trampolined tail-resume is the default+sole effect lowering */
     "cps-async",     /* graduated 2026-07-19; heap-continuation async/await is the unconditional CPS-path lowering */
     "owning-cloneable-capture", /* graduated 2026-07-20; owning capture into a multi-shot cloneable continuation is always-on */
+    "closure-drop-glue", /* graduated 2026-07-22; Model R drop-glue header ABI is unconditional */
     NULL,
 };
 

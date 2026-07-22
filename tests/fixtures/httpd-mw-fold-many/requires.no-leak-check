@@ -1,7 +1,0 @@
-Leaks the inner layers of the compose-middleware closure onion, at scale:
-mw-fold builds ~200 capturing fat-closures (each captures the downstream
-`next`). The outer-handler free in httpd-free reaches only the outermost box;
-the rest are an intentional, bounded, process-lifetime leak (~3360 B / ~210
-allocs). This is the runtime-length stress case for the reified server-owned
-middleware chain in docs/httpd-middleware-chain-drop-plan.md; kept marked
-until that lands.

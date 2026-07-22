@@ -2,6 +2,7 @@
 #include "emit_internal.h"
 #include "mangle.h"
 #include "platform_fs.h"  /* strndup() on Windows */
+#include "globals.h"      /* compiler config globals */
 
 /* ------------ helpers ------------ */
 
@@ -716,6 +717,41 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                         if (fb && i < 32 &&
                             (fb->nonretain_param_mask & (1u << i)))
                             continue;
+                    }
+                    /* closure-drop-glue (mw-compose-of): a `^borrow & rest` callee
+                     * reads/invokes each rest element but retains none.  The rest
+                     * param is the last declared param (index arity-1); any argument
+                     * at or past it is a rest element, so `b` passed there does NOT
+                     * escape -- the caller frees its env at scope exit (once per
+                     * binding, so passing the same value twice cannot double-free,
+                     * unlike a callee-side per-apply free).  The rest arguments are
+                     * collected into a single EX_CONS_LIST node whose items reach the
+                     * cons builder wrapped in carrier casts (EX_CAST / EX_ASCRIBE /
+                     * fat/poly coercions); walk the items, skip an item that peels to
+                     * `b` (borrowed, non-escaping), and push the rest. */
+                    if (arg && arg->kind == EX_CONS_LIST) {
+                        const Binding *fb = cur->as.call_.fn_binding;
+                        if (fb && fb->type.kind == TY_FN
+                            && fb->type.as.fn.is_variadic
+                            && fb->type.as.fn.rest_borrow
+                            && fb->type.as.fn.arity >= 1
+                            && i >= fb->type.as.fn.arity - 1) {
+                            for (uint32_t ci = 0; ci < arg->as.cons_list_.n; ci++) {
+                                const Expr *pa = arg->as.cons_list_.items[ci];
+                                while (pa) {
+                                    if (pa->kind == EX_ASCRIBE) pa = pa->as.ascribe_.inner;
+                                    else if (pa->kind == EX_CAST) pa = pa->as.cast_.expr;
+                                    else if (pa->kind == EX_FN_TO_FAT) pa = pa->as.fn_to_fat_.inner;
+                                    else if (pa->kind == EX_POLY_TO_FAT) pa = pa->as.poly_to_fat_.inner;
+                                    else if (pa->kind == EX_POLY_WRAP) pa = pa->as.poly_wrap_.inner;
+                                    else break;
+                                }
+                                if (pa && pa->kind == EX_VAR && pa->as.var.binding == b)
+                                    continue; /* borrowed rest element -- no escape */
+                                ESC_PUSH(arg->as.cons_list_.items[ci]);
+                            }
+                            continue; /* handled the cons-list arg element-wise */
+                        }
                     }
                     ESC_PUSH(arg);
                 }

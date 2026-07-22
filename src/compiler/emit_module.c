@@ -5498,7 +5498,11 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                   ctor->fields[fi].full_type->as.fn.boxed))
                 continue;
             char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
-            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
+            /* closure-drop-glue: a boxed fn-field holds a headered fat handle
+             * (env[-1] drop-glue; the fat pointer is PAST it), so a bare free of
+             * the field would be an interior free.  Release via TUR_CLOSURE_DROP
+             * (recovers the header, walks owning captures, frees the base). */
+            buf_printf(out, "    if (s->%s) TUR_CLOSURE_DROP(s->%s);\n", mp, mp);
             free(mp);
         }
         buf_printf(out, "}\n\n");
@@ -5829,26 +5833,28 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * is allocated with an 8-byte drop-glue header at env[-1]; the handle is
      * released through that header's `drop_glue_env_N`, which walks owning captures
      * and frees the base allocation.  NULL is a safe no-op either way. */
-    /* TUR_CLOSURE_DROP is emitted UNCONDITIONALLY so stdlib teardown written in
-     * Turmeric (httpd.tur's `free(handler)`) can reference it in every build.
-     * Flag-off it expands to the SAME plain `free` those sites used before, so
-     * their behavior is byte-for-byte unchanged; only the preamble gains the
-     * macro line (a mechanical codegen-snapshot regen).  Flag-on it routes through
-     * the env[-1] drop-glue header so a headered escaping handle is released
-     * (and its owning captures walked) instead of interior-freed. */
-    if (g_opt_closure_drop_glue) {
-        experiment_warn_if_used("closure-drop-glue");
-        buf_puts(out, "static void tur_closure_drop(void *__h) __attribute__((unused));\n");
-        buf_puts(out, "static void tur_closure_drop(void *__h) {\n");
-        buf_puts(out, "    if (!__h) return;\n");
-        buf_puts(out, "    void (**__hdr)(void *) = ((void (**)(void *))__h) - 1;\n");
-        buf_puts(out, "    void (*__d)(void *) = *__hdr;\n");
-        buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
-        buf_puts(out, "}\n");
-        buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
-    } else {
-        buf_puts(out, "#define TUR_CLOSURE_DROP(h) free((void *)(intptr_t)(h))\n");
-    }
+    /* closure-drop-glue (GRADUATED 2026-07-22): every heap fat-closure env
+     * carries an env[-1] drop-glue header; TUR_CLOSURE_DROP routes a fat-handle
+     * free through it (recovering the header, walking owning captures, freeing the
+     * base) instead of interior-freeing the past-header pointer.  Emitted in every
+     * build so stdlib teardown written in Turmeric (httpd.tur) can reference it. */
+    buf_puts(out, "static void tur_closure_drop(void *__h) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_closure_drop(void *__h) {\n");
+    buf_puts(out, "    if (!__h) return;\n");
+    buf_puts(out, "    void (**__hdr)(void *) = ((void (**)(void *))__h) - 1;\n");
+    buf_puts(out, "    void (*__d)(void *) = *__hdr;\n");
+    buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+    /* async/reactor: the precompiled reactor/fiber group in libturi owns callback
+     * closure boxes and frees them at teardown, but cannot name the per-program
+     * tur_closure_drop.  libturi defines a WEAK `tur_closure_headers_enabled = 0`;
+     * this STRONG definition overrides it to 1 so the reactor releases owned boxes
+     * through their drop-glue header (walking captures) instead of interior-freeing
+     * the past-header fat pointer.  A strong-over-weak override (not an extern +
+     * constructor) so a program that never links reactor.o still defines the
+     * symbol cleanly. */
+    buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to

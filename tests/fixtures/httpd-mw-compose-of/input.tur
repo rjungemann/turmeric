@@ -74,7 +74,7 @@
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
 ;; Middleware constructor, returns a fat closure that captures `tag`.
-(defn mw-tag [tag : cstr next : int] : ptr<void>
+(defn mw-tag [tag : cstr ^fat next : int] : ptr<void>
   (let [_t tag]
     (fn [conn : ptr<void>] : nil
       (print-pre _t)
@@ -98,7 +98,11 @@
         mid    (make-mw "middle")
         inner  (make-mw "inner")
         composed (compose-middleware-of base outer mid inner)
-        h      (httpd-new-pool 0 1 composed)
+        ;; `composed` is an owned Handler; hand it to the server by CONSUMING it
+        ;; (httpd-handler-carrier moves it -> the scope-exit auto-drop is
+        ;; suppressed, so the server is the sole owner and httpd-free reclaims it
+        ;; -- no double-free).
+        h      (httpd-new-pool 0 1 (httpd-handler-carrier composed))
         port   (httpd-port h)
         server (spawn-server h)
         client (spawn-client port)]

@@ -1,0 +1,40 @@
+;; Regression: httpd-new-pool takes its handler ^fat (owns the heap fat-closure
+;; box). On a construction FAILURE it must release that box, not leak it.
+;;
+;; Force the failure in-process: occupy an ephemeral loopback port, then ask
+;; httpd-new-pool to bind the same port -- its bind() fails and it returns NULL
+;; with the (capturing, heap) handler still owned. With the drop in place the
+;; run is LeakSanitizer-clean; a regression re-introduces the handler-box leak.
+;;
+;; Expected output:
+;;   refused
+
+(load "stdlib/httpd.tur")
+
+(defn seed [] : int ```c return 7; ```)
+(defn note [x : int] : nil ```c (void)x; ```)
+
+;; Bind+listen an ephemeral loopback port and keep it open (holding the port so
+;; the subsequent httpd bind conflicts); return the assigned port number.
+(defn occupy-port [] : int
+  ```c
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  int opt = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  struct sockaddr_in a; memset(&a, 0, sizeof(a));
+  a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); a.sin_port = 0;
+  bind(s, (struct sockaddr *)&a, sizeof(a));
+  listen(s, 1);
+  socklen_t l = sizeof(a); getsockname(s, (struct sockaddr *)&a, &l);
+  return (int)ntohs(a.sin_port);
+  ```)
+
+(defn refused? [h : ptr<void>] : int ```c return h == NULL ? 1 : 0; ```)
+
+(defn main [] : int
+  (let [port (occupy-port)
+        k    (seed)
+        ;; capturing handler -> a heap fat-closure box httpd-new-pool owns ^fat
+        h    (httpd-new-pool port 1
+               (fn [conn : ptr<void>] : nil (note k)))]
+    (println (if (= (refused? h) 1) "refused" "built"))
+    0))

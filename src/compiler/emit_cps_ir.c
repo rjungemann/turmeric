@@ -5669,8 +5669,13 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * reap never double-frees, and never walks -- __dk_reap_ptr is a bare free).
      * A scalar-captured closure frees cleanly; the freeable gate already excluded
      * a non-scalar-returning closure (result could alias the env). */
-    if (t->as.letraw.reap_env)
-        ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
+    if (t->as.letraw.reap_env) {
+        /* closure-drop-glue: flag-on this env is headered (env[-1] drop-glue),
+         * so reap it as a headered closure (kind 2 -> TUR_CLOSURE_DROP: recovers
+         * the header, walks owning captures, frees the base) rather than a bare
+         * interior free. */
+        ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
+    }
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);
@@ -5985,9 +5990,16 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * leaks its captured value (no closure drop glue yet) but never
                  * double-frees -- the conservative interim of
                  * docs/reported/escaping-fat-closure-env-leak.md, applied to the
-                 * one non-escaping closure the CPS backend itself constructs. */
+                 * one non-escaping closure the CPS backend itself constructs.
+                 *
+                 * closure-drop-glue: flag-on this receiver box is headered
+                 * (env[-1] drop-glue; fat pointer PAST it), so a bare free is an
+                 * interior free.  Reap it as a headered closure (kind 2 ->
+                 * TUR_CLOSURE_DROP: recovers the header, walks owning captures --
+                 * also closing the "owning capture leaks" caveat above -- frees
+                 * the base). */
                 indent_buf(&tmp, 4);
-                buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
+                buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
             } else if (case_reopens(body)) {
                 /* Effect re-opening: `k` is captured into a perform-continuation
                  * env whose field is the int64_t word (k is typed TY_INT).  Bind

@@ -74,7 +74,7 @@
 
 ;; Middleware: capture a tag so the closure becomes a fat closure, then
 ;; print "<tag>-pre", call next, print "<tag>-post".
-(defn mw-tag [tag : cstr next : int] : ptr<void>
+(defn mw-tag [tag : cstr ^fat next : int] : ptr<void>
   (let [_t tag]
     (fn [conn : ptr<void>] : nil
       (print-pre _t)

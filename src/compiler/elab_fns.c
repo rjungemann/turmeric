@@ -1187,6 +1187,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
     bool is_variadic = false;
     TypeKind rest_kind = TY_INT;  /* default rest element type */
     Type *rest_full_type = NULL;  /* typed-variadic: full Type for user-defined rest */
+    /* closure-drop-glue (mw-compose-of): a `^borrow` immediately before `&`
+     * marks the whole rest list as borrowed -- the callee reads/invokes each
+     * element but retains none, so the caller may free a fresh uniquely-owned
+     * closure passed as a rest arg at its own scope exit.  Recorded only under
+     * the experiment; flag-off it stays false so the fn type is unchanged. */
+    bool rest_borrow_flag = false;
 
     for (uint32_t i = 0; i < params_f->as.list.len; i++) {
         Form *p = params_f->as.list.items[i];
@@ -1240,6 +1246,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
             is_variadic = true;
+            /* closure-drop-glue (mw-compose-of): consume a pending `^borrow`
+             * (`^borrow & rest ...`) as the rest-list borrow marker. */
+            if (next_param_borrow) {
+                rest_borrow_flag = true;
+            }
+            next_param_borrow = false;
             /* Add rest param as a regular int binding (cons-list pointer at runtime) */
             if (n_params == 0) {
                 params = (Binding **)arena_alloc(e->arena, pcap * sizeof(Binding *));
@@ -2407,6 +2419,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         existing->type.as.fn.is_variadic = is_variadic;
         existing->type.as.fn.rest_kind   = rest_kind;
         existing->type.as.fn.rest_full_type = rest_full_type;
+        existing->type.as.fn.rest_borrow = rest_borrow_flag; /* closure-drop-glue (mw-compose-of) */
         bool _any_poly = false;
         for (uint32_t _ei = 0; _ei < n_params; _ei++) {
             if (param_poly_types[_ei]) { _any_poly = true; break; }
@@ -3182,6 +3195,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
     fn_type.as.fn.is_variadic = is_variadic;
     fn_type.as.fn.rest_kind   = rest_kind;
     fn_type.as.fn.rest_full_type = rest_full_type;
+    fn_type.as.fn.rest_borrow = rest_borrow_flag; /* closure-drop-glue (mw-compose-of) */
 
     /* Phase G3: attach full ADT return type if declared (for proper def propagation) */
     if (return_adt_def) {
@@ -3505,6 +3519,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     {
         const Expr *_fc = body;
         while (_fc && _fc->kind == EX_ASCRIBE) _fc = _fc->as.ascribe_.inner;
+        /* closure-drop-glue (mw-compose-of): peel a trailing `(let [...] <closure>)`
+         * wrapper so a factory like `(defn make-mw [tag] (let [_t tag] (fn [n] ...)))`
+         * is still recognised as fresh-closure-returning.  Every call allocates a
+         * fresh env (Turmeric lets are not memoised); the let-bound intermediates
+         * are the factory's own scope and do not affect the returned env, whose
+         * captures/result are still checked scalar-Copy below. */
+        while (_fc && (_fc->kind == EX_LET || _fc->kind == EX_ASCRIBE))
+            _fc = (_fc->kind == EX_ASCRIBE) ? _fc->as.ascribe_.inner
+                                            : _fc->as.let_.body;
         if (_fc && _fc->kind == EX_CLOSURE && _fc->as.closure_.closure &&
             _fc->as.closure_.closure->n_captures > 0 &&
             _fc->as.closure_.closure->fn) {
@@ -4663,7 +4686,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
          *
          * The letrec self-capture (env storing its own pointer) is not a transfer
          * and is skipped. */
-        if (g_opt_closure_drop_glue) {
+        {
             const Symbol *drop_name = intern_cstr(e->st, "Drop");
             TypeClass *drop_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, drop_name);
             struct TypeClassInstance **drops = NULL;
