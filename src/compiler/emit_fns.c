@@ -2896,7 +2896,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * double-free (a capture another owner also drops), which needs
              * move/uniqueness analysis.  The httpd `_n`/string case additionally
              * needs type-honest owned captures.  Both are the next slice. */
-            if (g_opt_closure_drop_glue) {
+            {
                 buf_printf(file, "static void drop_glue_%s(void *__p) {\n", env_name->name);
                 buf_printf(file, "    struct %s *__e = (struct %s *)__p; (void)__e;\n",
                            env_name->name, env_name->name);

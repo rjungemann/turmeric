@@ -42,7 +42,15 @@
 > "nothing blocks the track" posture in CLAUDE.md **for this work only** --
 > by explicit owner instruction (2026-07-21).
 
-**Status:** S1, S2/Model U, AND **Model R LANDED** (behind
+**Status: GRADUATED 2026-07-22 -- the drop-glue header ABI is now the DEFAULT and
+the `closure-drop-glue` experiment is retired.** The `EXPERIMENTS[]` row is gone
+(name moved to `GRADUATED[]` as a TUR-W0063 no-op), the `g_opt_closure_drop_glue`
+bit and all 19 codegen gates are removed (each always-taken), every per-fixture
+`--enable` flag file dropped, and all 140 `expected.c` + 3 rc-count
+`expected.stdout` regenerated to the always-on codegen. Full suite green
+(2264/0). Everything below is the historical development record.
+
+**Status (pre-graduation):** S1, S2/Model U, AND **Model R LANDED** (behind
 `--enable=closure-drop-glue`; base language byte-for-byte unchanged, suite green).
 Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
 is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
@@ -231,12 +239,34 @@ genuinely *shared* closures (Design section below). A heavier ABI change to the
 model cannot express -- a closure legitimately owned by two live owners at once.
 No driver in the corpus; no action until one appears.
 
-### R4 -- Graduation off the experiment (`expires_at 0.34.0`)
+### R4 -- Graduation off the experiment -- DONE (2026-07-22)
 
-`closure-drop-glue` is `XF_LIFECYCLE_PROTOTYPE`, off by default, expiring at the
-0.34.0 cut (a hard contract the release-cut skills enforce: they refuse to bump
-past it until this row is graduated or shelved). To graduate (feature goes
-always-on, `EXPERIMENTS[]` row deleted, flag removed):
+**Graduated at 0.30.2** (early, by owner instruction; the 0.34.0 `expires_at` was
+a deadline, not an earliest date). The header ABI is now unconditional and the
+experiment is retired. The steps executed, in one coordinated change:
+1. Removed all 19 `g_opt_closure_drop_glue` codegen gates (each made
+   always-taken), across `elab_fns.c`, `emit_core.c`, `emit_cps_ir.c`,
+   `emit_dk_runtime.c`, `emit_expr.c`, `emit_fns.c`, `emit_module.c`.
+2. Deleted the `EXPERIMENTS[]` row and the `g_opt_closure_drop_glue` bit
+   (`experiments.c`, `globals.c/.h`); added `closure-drop-glue` to `GRADUATED[]`
+   so a lingering `--enable` is a TUR-W0063 no-op.
+3. Dropped all 21 per-fixture `--enable=closure-drop-glue` flag files.
+4. Regenerated all **140** `expected.c` snapshots + the **3** rc-count
+   `expected.stdout` (rc-auto-drop-closure-capture 1->2,
+   rc-elision-negative-closure-capture 2->3, closure-env-free-with-owning-sibling
+   37->39 -- the intended rc-retain semantics).
+5. Full suite green: **2264 passed, 0 failed.** The gate removals are faithful (a
+   mis-removed gate would have re-introduced a flag-off crash the suite catches).
+
+The remaining open items are the by-design deferrals only: R2b closed (not a live
+hazard), R3a shipped (explicit primitives; automatic re-typing still future),
+R3b build-on-demand (no driver). Original graduation plan retained below.
+
+#### Original graduation procedure (executed above)
+
+`closure-drop-glue` was `XF_LIFECYCLE_PROTOTYPE`, off by default, with a 0.34.0
+`expires_at`. To graduate (feature goes always-on, `EXPERIMENTS[]` row deleted,
+flag removed):
 
 1. **Emit the header ABI unconditionally.** Flag-off, `TUR_CLOSURE_DROP` already
    expands to a plain `free`, but the header changes the env allocation layout,

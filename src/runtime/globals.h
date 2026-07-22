@@ -215,14 +215,10 @@ extern bool g_opt_cps_tramp_resume;
  * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
 extern bool g_opt_owning_cloneable_capture;
 
-/* closure-drop-glue (Model R): give an escaping fat-closure env a runtime
- * lifecycle.  Under this flag every heap `struct __env_N` is allocated with an
- * 8-byte drop-glue header at env[-1] holding a `drop_glue_env_N` pointer, and an
- * escaping env freed from opaque C (httpd/reactor teardown) or at scope exit is
- * released through TUR_CLOSURE_DROP -> that header.  Off by default; the base
- * language leaks escaping envs exactly as before.  See
- * docs/upcoming/closure-drop-glue-plan.md (Model R sketch). */
-extern bool g_opt_closure_drop_glue;
+/* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI
+ * (env[-1] -> drop_glue_env_N, released via TUR_CLOSURE_DROP) is now
+ * unconditional; the g_opt_closure_drop_glue enable bit and its codegen gates are
+ * gone.  See docs/upcoming/closure-drop-glue-plan.md. */
 
 
 /* ---------------------------------------------------------------------------

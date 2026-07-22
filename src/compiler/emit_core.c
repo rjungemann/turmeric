@@ -2,7 +2,7 @@
 #include "emit_internal.h"
 #include "mangle.h"
 #include "platform_fs.h"  /* strndup() on Windows */
-#include "globals.h"      /* g_opt_closure_drop_glue (closure-drop-glue experiment) */
+#include "globals.h"      /* compiler config globals */
 
 /* ------------ helpers ------------ */
 
@@ -728,10 +728,8 @@ static bool binding_escapes_impl(const Expr *e, const Binding *b,
                      * collected into a single EX_CONS_LIST node whose items reach the
                      * cons builder wrapped in carrier casts (EX_CAST / EX_ASCRIBE /
                      * fat/poly coercions); walk the items, skip an item that peels to
-                     * `b` (borrowed, non-escaping), and push the rest.  Gated on the
-                     * experiment. */
-                    if (g_opt_closure_drop_glue && arg
-                        && arg->kind == EX_CONS_LIST) {
+                     * `b` (borrowed, non-escaping), and push the rest. */
+                    if (arg && arg->kind == EX_CONS_LIST) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && fb->type.as.fn.is_variadic

@@ -5673,11 +5673,8 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         /* closure-drop-glue: flag-on this env is headered (env[-1] drop-glue),
          * so reap it as a headered closure (kind 2 -> TUR_CLOSURE_DROP: recovers
          * the header, walks owning captures, frees the base) rather than a bare
-         * interior free.  Flag-off, __dk_reap_ptr is unchanged -- byte-identical. */
-        if (g_opt_closure_drop_glue)
-            ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
-        else
-            ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
+         * interior free. */
+        ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
     }
     free(bn);
     free(rhs);
@@ -6000,12 +5997,9 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                  * interior free.  Reap it as a headered closure (kind 2 ->
                  * TUR_CLOSURE_DROP: recovers the header, walks owning captures --
                  * also closing the "owning capture leaks" caveat above -- frees
-                 * the base).  Flag-off keep the exact plain reap: byte-identical. */
+                 * the base). */
                 indent_buf(&tmp, 4);
-                if (g_opt_closure_drop_glue)
-                    buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
-                else
-                    buf_puts(&tmp, "__dk_reap_ptr((intptr_t)arg);\n");
+                buf_puts(&tmp, "__dk_reap_closure((intptr_t)arg);\n");
             } else if (case_reopens(body)) {
                 /* Effect re-opening: `k` is captured into a perform-continuation
                  * env whose field is the int64_t word (k is typed TY_INT).  Bind

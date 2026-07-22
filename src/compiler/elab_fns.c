@@ -1247,9 +1247,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             is_variadic = true;
             /* closure-drop-glue (mw-compose-of): consume a pending `^borrow`
-             * (`^borrow & rest ...`) as the rest-list borrow marker.  Gated on the
-             * experiment so flag-off the fn type is byte-identical. */
-            if (next_param_borrow && g_opt_closure_drop_glue) {
+             * (`^borrow & rest ...`) as the rest-list borrow marker. */
+            if (next_param_borrow) {
                 rest_borrow_flag = true;
             }
             next_param_borrow = false;
@@ -3525,13 +3524,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * is still recognised as fresh-closure-returning.  Every call allocates a
          * fresh env (Turmeric lets are not memoised); the let-bound intermediates
          * are the factory's own scope and do not affect the returned env, whose
-         * captures/result are still checked scalar-Copy below.  Gated on the
-         * experiment so flag-off inference (and its scope-exit frees) is unchanged. */
-        if (g_opt_closure_drop_glue) {
-            while (_fc && (_fc->kind == EX_LET || _fc->kind == EX_ASCRIBE))
-                _fc = (_fc->kind == EX_ASCRIBE) ? _fc->as.ascribe_.inner
-                                                : _fc->as.let_.body;
-        }
+         * captures/result are still checked scalar-Copy below. */
+        while (_fc && (_fc->kind == EX_LET || _fc->kind == EX_ASCRIBE))
+            _fc = (_fc->kind == EX_ASCRIBE) ? _fc->as.ascribe_.inner
+                                            : _fc->as.let_.body;
         if (_fc && _fc->kind == EX_CLOSURE && _fc->as.closure_.closure &&
             _fc->as.closure_.closure->n_captures > 0 &&
             _fc->as.closure_.closure->fn) {
@@ -4690,7 +4686,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
          *
          * The letrec self-capture (env storing its own pointer) is not a transfer
          * and is skipped. */
-        if (g_opt_closure_drop_glue) {
+        {
             const Symbol *drop_name = intern_cstr(e->st, "Drop");
             TypeClass *drop_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, drop_name);
             struct TypeClassInstance **drops = NULL;
