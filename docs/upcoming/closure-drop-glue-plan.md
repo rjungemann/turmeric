@@ -83,9 +83,24 @@ below is ready to execute if/when that family is prioritized. Prepared from
 >   `__pap` thunk returns the underlying fn's result, never its own env, so freeing
 >   it at scope exit can't alias-UAF), freeing it via TUR_CLOSURE_DROP. Flipped
 >   flag-on, marker dropped.
-> - **`httpd-mw-compose-of` (120B)** -- the variadic `compose-middleware-of` builds
->   a cons list of its `& mws` (`__tur_cons_of`) that leaks; the closure chain also
->   needs `^fat next`. Two causes; the cons-list is a variadic-rest ownership issue.
+> - **`httpd-mw-compose-of` (120B) -- THREE leak sources, one of them unsound to
+>   auto-fix.** Investigated in full:
+>   1. **Closure chain** -- fixed by `^fat next` on the middlewares (as mw-compose).
+>   2. **Cons spine** (`__tur_cons_of`) -- the fresh `& mws` rest-list cells.
+>      SOUNDLY fixable: `compose-middleware-of` owns the fresh list and
+>      `httpd-mw-fold` only walks it, so the callee can free the cells after the
+>      fold (a spine-free that leaves the head VALUES, which live on in the chain).
+>      A prototype confirmed this reclaims the spine with correct stdout flag-off.
+>   3. **Transient factory heads** (`make_hymw`, 72B) -- each `& mws` element is a
+>      middleware FACTORY `(fn [next] ...)` that `httpd-mw-fold` applies ONCE and
+>      discards; its env leaks. This is the `__pap` shape, BUT unlike a partial-app
+>      head (provably fresh/inline) a fold list element has NO uniqueness guarantee:
+>      `(compose-middleware-of base m m)` applies the same factory twice, so freeing
+>      a consumed factory would UAF the duplicate. Freeing-after-apply is therefore
+>      UNSOUND without per-element uniqueness/linearity analysis on the rest list.
+>   So mw-compose-of is a genuine blocker: (1)+(2) are sound but insufficient alone
+>   (LSan still aborts on the remaining (3), eating buffered stdout), and (3) needs
+>   move/uniqueness tracking over variadic-rest elements. Left marked.
 > - **`httpd-mw-cookie` (12B) / `-form` (26B)** -- OUT OF SCOPE for the closure
 >   drop-glue: the leaks are request-scoped strings from `httpd-req-cookie` /
 >   `httpd-req-form` (each returns a fresh malloc'd `cstr` the handler never frees).
