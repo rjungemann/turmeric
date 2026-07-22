@@ -6029,70 +6029,13 @@ static int cmd_eval_h(const char *path, bool use_color,
      * turi_env_preload_macros (src/turi/preload.c) is the shared helper the WASM
      * REPL also calls, so the two entry points cannot drift. */
     turi_env_preload_macros(env, resolve_stdlib_root());
-    /* Inject typed stubs so the elaborator knows the signatures of native
-     * functions used by benchmark scripts.  The native shims registered below
-     * replace these no-op closures at runtime. */
-    {
-        TuriValue sv = turi_eval(env,
-            /* list operations */
-            "(defn nil-value [] :int 0)\n"
-            "(defn cons [v :int n :int] :int 0)\n"
-            "(defn head [lst :int] :int 0)\n"
-            "(defn tail [lst :int] :int 0)\n"
-            /* vec operations.  TI8.b/W1: vec-get/vec-set!/vec-free are dropped
-             * here -- the real vec.tur (preloaded below) defines them, and a
-             * stub would collide with "already defined by an auto-loaded stdlib
-             * module".  vec-new-filled is benchmark-only (no module defn). */
-            "(defn vec-new-filled [n :int v :int] :int 0)\n"
-            /* numeric helpers.  cstr->parse-int and int->float stubs were dropped:
-             * both are native-backed (their natives resolve the bare call at
-             * elaboration), so the stubs were redundant -- and a fixture that
-             * (load ...)s str.tur / math.tur no longer collides with them via the
-             * "already defined by an auto-loaded stdlib module" guard. */
-            /* bit-shr / bit-xor stubs dropped: both are kind-preserving builtins
-             * (builtins.c BITWISE_OPS, registered for every integer kind) AND
-             * native-backed (native_bit_shr / native_bit_xor below), so the bare
-             * call resolves at elaboration without a stub.  The :int-typed stubs
-             * actually *shadowed* the kind-preserving builtins, breaking narrow-int
-             * use (e.g. (bit-xor 65535u16 3855u16) -> "expected int, got uint16")
-             * -- a divergence from the compiled path.  bit-and/bit-or/bit-shl were
-             * never stubbed and worked on narrow types all along. */
-            "(defn println-float [x :float d :int] :nil nil)\n"
-            "(defn int->unit-float [x :int] :float 0.0)\n"
-            "(defn tur-sqrt [x :float] :float 0.0)\n"
-            /* HAMT operations for hash_map benchmark */
-            "(defn hamt-new [] :int 0)\n"
-            "(defn hamt-free [m :int] :nil nil)\n"
-            "(defn hamt-set [m :int hash :int key :int val :int] :int 0)\n"
-            "(defn hamt-get [m :int hash :int key :int] :int 0)\n"
-            "(defn hamt-hash-ptr [p :int] :int 0)\n"
-            /* I/O benchmark helpers (file_read.tur, file_write.tur) */
-            "(defn write-temp-file [path :cstr n :int] :nil nil)\n"
-            "(defn io-fopen-read [path :cstr] :int 0)\n"
-            "(defn io-fread-chunk [fp :int buf :int] :int 0)\n"
-            "(defn io-fclose [fp :int] :nil nil)\n"
-            "(defn io-remove [path :cstr] :nil nil)\n"
-            "(defn io-buf-new [] :int 0)\n"
-            "(defn io-buf-free [buf :int] :nil nil)\n"
-            "(defn io-alloc [n :int v :int] :int 0)\n"
-            "(defn io-free [buf :int] :nil nil)\n"
-            "(defn io-fopen-write [path :cstr] :int 0)\n"
-            "(defn io-fwrite-chunk [fp :int buf :int offset :int chunk :int] :int 0)\n"
-            /* Whole-benchmark natives (random_access, thread_ring, nbody, ray_tracing) */
-            "(defn random-access-bench [size :int reads :int] :int 0)\n"
-            "(defn run-ring [n :int m :int] :nil nil)\n"
-            "(defn run-nbody [n :int steps :int] :nil nil)\n"
-            "(defn run-raytracer [w :int h :int] :int 0)\n"
-            /* none? predicate signature the elaborator needs so the native
-             * types as :bool (not :int, which trips the strict "if condition
-             * must be bool" check).  TI8.b/W1b: ok?/err?/some? are dropped here
-             * because result.tur / option.tur (both preloaded below) define them
-             * -- a stub would collide with the auto-loaded module defn.  none?
-             * has no module defn, so its stub stays. */
-            "(defn none? [r :int] :bool false)\n"
-        );
-        (void)sv;
-    }
+    /* Inject typed stubs so the elaborator knows the signatures of the native
+     * functions used by benchmark scripts and the carrier-list ops.  The native
+     * shims registered below replace these no-op closures at runtime.  Factored
+     * into turi_env_preload_native_stubs (src/turi/preload.c) so the REPL shares
+     * the exact same set and cannot drift (the missing stubs there were the
+     * `(list-head (cons ...)) => nil` REPL bug). */
+    turi_env_preload_native_stubs(env);
     /* TI8.b/W1 (turi-interpreter-gap-closure-plan): preload the typeclass-stub
      * + typed-collection stdlib set that the compiled path auto-loads in
      * compile_to_c().  Without it the interpreter cannot resolve Cons/Option/

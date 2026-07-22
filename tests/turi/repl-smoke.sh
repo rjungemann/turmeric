@@ -44,6 +44,15 @@ check "map display"   "=> #map{1 10 2 20}" "$(repl_out '#map{1 10 2 20}')"
 # (show 5) yields the cstr "5", which the prompt prints quoted.
 check "show int"      '=> "5"'             "$(repl_out '(show 5)')"
 
+# --- Carrier-list ops resolve to the runtime natives, not the unhandled
+#     elaborator builtin (repl-list-head-over-cons-returns-nil).  Without the
+#     native-function stubs the REPL preload injects, `cons` elaborates to a
+#     BS_FUNC_CALL builtin the tree-walker cannot execute, so it (and any
+#     list-head over it) returned nil at the prompt while --interpret and the
+#     compiled path returned 65. ---
+check "list-head over cons" "=> 65" "$(repl_out '(list-head (cons 65 (cons 66 0)))')"
+check "head over cons"      "=> 42" "$(repl_out '(head (cons 42 0))')"
+
 # --- Multi-line: split across two input lines ---
 check "multi-line +"  "=> 3"  "$(repl_out '(+' '1 2)')"
 check "multi-line let" "=> 7" "$(repl_out '(let [x 3' '      y 4] (+ x y))')"

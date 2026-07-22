@@ -91,6 +91,12 @@ void turi_wasm_free(void *p) {
 static void wasm_preload_stdlib(TuriEnv *env) {
     if (!env) return;
     turi_env_preload_macros(env, WASM_STDLIB_ROOT);
+    /* Typed native-function stubs (nil-value/cons/head/tail + benchmark helpers)
+     * in the same after-macros/before-collections slot as --interpret and the
+     * native REPL, so `(list-head (cons 65 (cons 66 0)))` evaluates to 65 at the
+     * browser prompt instead of nil (cons would otherwise be an elaborator
+     * builtin the tree-walker cannot execute). */
+    turi_env_preload_native_stubs(env);
     turi_env_preload_collections(env, WASM_STDLIB_ROOT);
     /* Preload the REPL-only Show slice (Show [Vec] / [Set] / [Map]) so a
      * collection result renders through its Show instance via

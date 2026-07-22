@@ -573,6 +573,13 @@ static void cmd_reload(TuriEnv *env, const char *path) {
 static void repl_preload_stdlib_and_natives(TuriEnv *env) {
     const char *stdlib_root = getenv("TUR_STDLIB_DIR");
     turi_env_preload_macros(env, stdlib_root);
+    /* Typed native-function stubs, in the SAME slot the `--interpret` path uses
+     * (after macros, before collections).  Without these, `cons`/`head`/`tail`
+     * resolve to the elaborator builtin the tree-walker cannot execute, so
+     * `(list-head (cons 65 (cons 66 0)))` returned nil at the prompt while the
+     * compiled and `--interpret` paths gave 65.  See
+     * docs/archive/repl-list-head-over-cons-returns-nil.md. */
+    turi_env_preload_native_stubs(env);
     turi_env_preload_collections(env, stdlib_root);
     turi_env_preload_typeclasses(env, stdlib_root);
     turi_env_register_interpreter_natives(env);
