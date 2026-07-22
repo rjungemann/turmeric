@@ -47,18 +47,26 @@
 (defn image/build-stamp [] : int
   ```c
   #include <stdint.h>
-  /* Read the running executable.  The path to "myself" is platform-specific:
+  #include <windows.h>
+  #include <mach-o/dyld.h>
+  /* The two platform headers above are emitted as bare LEADING includes so the
+   * codegen top-include hoister lifts them to file scope (each wrapped in
+   * __has_include, so a platform that lacks one skips it).  They MUST NOT move
+   * back inside the #ifdef blocks below: <mach-o/dyld.h> (macOS) and
+   * <windows.h> (Windows) transitively define static-inline functions, and a
+   * function-scope #include of either is a hard "function definition is not
+   * allowed here" (codegen-image-dyld-include-emitted-mid-function).
+   *
+   * Read the running executable.  The path to "myself" is platform-specific:
    * Linux exposes /proc/self/exe, macOS has _NSGetExecutablePath, and Windows
    * has GetModuleFileNameA.  Without this, the build-stamp is 0 on Windows, so
    * with-image-cache-after-init never writes an image and warm-start silently
    * degrades to cold-start every time. */
 #ifdef _WIN32
-  #include <windows.h>
   char __exe_path[MAX_PATH];
   DWORD __plen = GetModuleFileNameA(NULL, __exe_path, (DWORD)sizeof(__exe_path));
   FILE *exe = (__plen > 0 && __plen < sizeof(__exe_path)) ? fopen(__exe_path, "rb") : NULL;
 #elif defined(__APPLE__)
-  #include <mach-o/dyld.h>
   char __exe_path[4096];
   uint32_t __plen = (uint32_t)sizeof(__exe_path);
   FILE *exe = (_NSGetExecutablePath(__exe_path, &__plen) == 0) ? fopen(__exe_path, "rb") : NULL;
