@@ -214,6 +214,52 @@ Expr *elab_define_error(Elab *e, const Form *call) {
     return NULL;
 }
 
+/* closure-drop-glue (automatic R3a): a let-binding whose type is a MOVE-ONLY
+ * (non-Clone) Drop-instance OPAQUE newtype -- e.g. httpd's `Handler` -- carries a
+ * heap fat-closure onion it solely owns.  Such a binding gets the same scope-exit
+ * auto-drop the TY_REF (rc/ref) path gets, but dispatched through the type's Drop
+ * instance (which routes to TUR_CLOSURE_DROP) instead of the `drop!`->free
+ * builtin (a bare free of the past-header fat pointer is the interior-free abort).
+ *
+ * Restricted, in the conservative "only ever greenlight a drop" spirit, to:
+ *   - an opaque ADT with a Drop instance and NO Clone instance (sole-owner, so a
+ *     single scope-exit release is correct -- a Clone/refcounted type like String
+ *     balances via capture retain/release, not a let scope-exit drop), and
+ *   - an initializer that is a genuine fresh-producing CALL (optionally ascribed),
+ *     so the binding owns a fresh value rather than aliasing a borrowed handle.
+ * The per-binding move/consume filtering (is_moved / is_linear_consumed /
+ * is_binding_consumed) is applied by the injection loops exactly as for TY_REF, so
+ * a Handler handed to a consumer (server constructor / httpd-call) that moves it is
+ * NOT double-dropped.  Returns the resolved Drop instance (for the method binding)
+ * or NULL when the binding is not a closure-drop opaque. */
+static struct TypeClassInstance *binding_closure_drop_inst(Elab *e, Binding *b,
+                                                           Expr *init) {
+    if (!b || !init) return NULL;
+    /* opaque ADT newtype only */
+    if (b->type.kind != TY_ADT || !b->type.as.adt_.def ||
+        !b->type.as.adt_.def->is_opaque)
+        return NULL;
+    /* fresh-producing call initializer (peel ascriptions) */
+    const Expr *pinit = init;
+    while (pinit && pinit->kind == EX_ASCRIBE) pinit = pinit->as.ascribe_.inner;
+    if (!pinit || pinit->kind != EX_CALL) return NULL;
+    /* Drop instance present, Clone instance absent (move-only sole owner) */
+    const Symbol *drop_name  = intern_cstr(e->st, "Drop");
+    const Symbol *clone_name = intern_cstr(e->st, "Clone");
+    TypeClass *drop_tc  = typeclass_env_lookup_typeclass(&e->typeclass_env, drop_name);
+    TypeClass *clone_tc = typeclass_env_lookup_typeclass(&e->typeclass_env, clone_name);
+    if (!drop_tc) return NULL;
+    struct TypeClassInstance *di =
+        typeclass_env_lookup_instance(&e->typeclass_env, drop_tc, &b->type, 1);
+    if (!di || di->n_method_impls == 0 || !di->method_impls[0] ||
+        !di->method_impls[0]->binding)
+        return NULL;
+    if (clone_tc &&
+        typeclass_env_lookup_instance(&e->typeclass_env, clone_tc, &b->type, 1))
+        return NULL;   /* Clone == shared refcount owner; not a sole-owner drop */
+    return di;
+}
+
 /* ---- special forms ---- */
 
 Expr *elab_let(Elab *e, const Form *call) {
@@ -925,6 +971,13 @@ Expr *elab_let(Elab *e, const Form *call) {
             has_ref_bindings = true;
             break;
         }
+        /* closure-drop-glue (automatic R3a): a move-only Drop-instance opaque
+         * (Handler) also needs the do-wrap so its scope-exit drop can be
+         * appended.  Over-detecting is harmless (the injection loop re-checks). */
+        if (binding_closure_drop_inst(e, binds[k].binding, binds[k].init)) {
+            has_ref_bindings = true;
+            break;
+        }
     }
 
     /* The binding_moved_during_init array (built during the binding loop) records which
@@ -1029,6 +1082,15 @@ Expr *elab_let(Elab *e, const Form *call) {
                     !is_binding_consumed(body, binds[k].binding)) {
                     n_refs++;
                 }
+                /* closure-drop-glue (automatic R3a): count a move-only Drop opaque
+                 * (Handler) binding not moved/consumed by scope exit -- same move
+                 * filters as the ref path, so a handed-off Handler is not dropped. */
+                else if (binding_closure_drop_inst(e, binds[k].binding, binds[k].init) &&
+                         !binding_moved_during_init[k] &&
+                         !binds[k].binding->is_moved &&
+                         !is_binding_consumed(body, binds[k].binding)) {
+                    n_refs++;
+                }
             }
             
             if (n_refs > 0) {
@@ -1100,11 +1162,53 @@ Expr *elab_let(Elab *e, const Form *call) {
                         
                         defer_expr->as.defer_.captures = captures;
                         defer_expr->as.defer_.n_captures = n_captures;
-                        
+
                         new_items[defer_idx++] = defer_expr;
                     }
+                    /* closure-drop-glue (automatic R3a): a move-only Drop opaque
+                     * (Handler) -- inject `(defer (<Drop.drop> b))`, dispatching
+                     * through the Drop instance's method (TUR_CLOSURE_DROP) rather
+                     * than drop!->free (a bare free of a headered onion aborts). */
+                    else {
+                        struct TypeClassInstance *di =
+                            binding_closure_drop_inst(e, binds[k].binding, binds[k].init);
+                        if (di && !binding_moved_during_init[k] &&
+                            !binds[k].binding->is_moved &&
+                            !is_binding_consumed(body, binds[k].binding)) {
+                            Binding *dm = di->method_impls[0]->binding;
+                            Expr *var_expr = expr_new(e->arena, EX_VAR,
+                                                      binds[k].binding->type, call->span);
+                            var_expr->as.var.binding = binds[k].binding;
+
+                            Expr *drop_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
+                            drop_call->as.call_.fn_binding = dm;
+                            drop_call->as.call_.n_args = 1;
+                            drop_call->as.call_.args =
+                                (Expr **)arena_alloc(e->arena, sizeof(Expr *));
+                            drop_call->as.call_.args[0] = var_expr;
+
+                            Expr *defer_expr = expr_new(e->arena, EX_DEFER, TYPE_NIL, call->span);
+                            defer_expr->as.defer_.body = drop_call;
+                            uint32_t n_free = 0;
+                            Binding **free_vars =
+                                collect_free_vars(drop_call, NULL, 0, NULL, 0, &n_free);
+                            Binding **captures = NULL;
+                            uint8_t n_captures = 0;
+                            if (n_free > 0) {
+                                captures = (Binding **)arena_alloc(
+                                    e->arena, n_free * sizeof(Binding *));
+                                memcpy(captures, free_vars, n_free * sizeof(Binding *));
+                                n_captures = (uint8_t)n_free;
+                            }
+                            free(free_vars);
+                            defer_expr->as.defer_.captures = captures;
+                            defer_expr->as.defer_.n_captures = n_captures;
+
+                            new_items[defer_idx++] = defer_expr;
+                        }
+                    }
                 }
-                
+
                 /* Update the body with new items */
                 body->as.do_.items = new_items;
                 body->as.do_.n = new_n;
