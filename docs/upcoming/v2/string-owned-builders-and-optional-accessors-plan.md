@@ -1,10 +1,38 @@
 # Owned-`String` builders & optional accessors -- stdlib
 
-> **Status:** Proposed 2026-07-21. Split out of
+> **Status:** LANDED 2026-07-21. Split out of
 > [string-adoption-stdlib-plan.md](string-adoption-stdlib-plan.md) as its
 > "Bucket B" -- the deferred sites where the mechanical `path-string` recipe
 > (one `string/adopt-cstr` wrapper per function) does **not** apply and a real
-> design decision is required.
+> design decision is required. Both parts shipped; see the per-part LANDED notes
+> below.
+>
+> **Part 1 landed:** `stdlib/str-build-string.tur` (`str-concat-string`,
+> `cstr-sub-string`), the wrap-vs-build guidance in the module docstring and
+> [strings-guide.md](../../guides/strings-guide.md), and fixture
+> `tests/fixtures/str-build-string`. (`show-concat` left internal/untouched, as
+> the plan allows -- no Show-side owned path materialized.)
+>
+> **Part 2 landed:** `bound->str-string` (in `stdlib/range-bound-string.tur`,
+> per-branch adopt/from-cstr) and `httpd-req-cookie-opt` / `httpd-req-form-opt`
+> (`(Option String)`, in `stdlib/httpd-string.tur`), additive alongside the
+> existing `cstr` accessors. Each `*-opt` is a thin Turmeric wrapper (`some`/
+> `none`) over an inline-C `*-raw` helper that returns a fresh `cstr` on a match
+> and NULL on any miss. Fixtures: `tests/fixtures/bound-string` (all three
+> `Bound` variants incl. the Unbounded no-crash case) and
+> `tests/fixtures/httpd-req-string-opt` (cookie/form present / present-empty /
+> absent -> `some`/`some ""`/`none`).
+>
+> **Implementation note (Part 2 accessors).** The `*-opt` accessors assemble the
+> `(Option String)` in Turmeric (`some`/`none`) over a low-level `*-raw` helper,
+> rather than returning `(Option String)` straight from inline-C via
+> `tur_some_ptr` / `tur_none`. That is the workaround a compiler carrier-straddle
+> forced (an inline-C-built `(Option String)` could not be passed into a by-value
+> `(Option String)` parameter). That straddle has since been **fixed** (a
+> carrier->by-value bridge at the call-argument boundary --
+> [docs/archive/inline-c-option-byvalue-carrier-straddle.md](../../archive/inline-c-option-byvalue-carrier-straddle.md)),
+> so the `*-raw` + wrapper form is no longer *required*; simplifying it to a
+> direct inline-C return is an available, optional follow-up.
 >
 > **Prerequisite:** the owned `String` type and its foundation --
 > `string/adopt-cstr`, `string/from-cstr`, `int->string`, and the
