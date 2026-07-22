@@ -69,12 +69,30 @@ below is ready to execute if/when that family is prioritized. Prepared from
 >   `--enable=closure-drop-glue`, marker dropped (leak-clean, stdout matches,
 >   flag-off byte-identical).
 >
-> **Remaining cors-family follow-ups** (each captures its OWN owned strings, same
-> recipe -- own as `String`, pass `string/to-cstr` views): `httpd-mw-cors-opts`
-> (64B), `-cookie` (12B), `-form` (26B), `-compose` (88B), `-compose-of` (208B).
-> `-fold-many` / `-rate-limit` are non-closure buffer leaks (out of scope). The
-> reactor/CPS async blocker (`__dk_reap_ptr`, `owns_cb` -- precompiled libturi C)
-> still needs a runtime-API change before `httpd-async-*` is safe flag-on.
+> **Remaining leakers -- now categorized by ROOT CAUSE (not all the String
+> recipe).** Profiling each flag-on:
+> - **`httpd-mw-cors` -- FIXED** (String captures, #1b).
+> - **`httpd-mw-compose` -- FIXED** by marking `mw-tag`'s handler param `^fat next`
+>   (it IS a fat closure handle -- `httpd-call` dispatches it as one -- so `^fat`
+>   lets the is_fat walk free the chain; behavior-neutral flag-off). The fixture's
+>   `next : int` was simply under-annotated.
+> - **`httpd-mw-cors-opts` (64B)** -- NOT strings: the `(mw-cors-opts opts)`
+>   PARTIAL-APPLICATION closure (captures the `CorsOpts` by value) is applied once
+>   by `compose-middleware` and discarded, but its `__pap` env is never freed. A
+>   distinct S1-shape ("a fresh closure applied once as a callee, freed after the
+>   call") -- the `__pap` closure is built at elab_call.c:3268, not the EX_CLOSURE
+>   path.
+> - **`httpd-mw-compose-of` (120B)** -- the variadic `compose-middleware-of` builds
+>   a cons list of its `& mws` (`__tur_cons_of`) that leaks; the closure chain also
+>   needs `^fat next`. Two causes; the cons-list is a variadic-rest ownership issue.
+> - **`httpd-mw-cookie` (12B) / `-form` (26B)** -- OUT OF SCOPE for the closure
+>   drop-glue: the leaks are request-scoped strings from `httpd-req-cookie` /
+>   `httpd-req-form` (each returns a fresh malloc'd `cstr` the handler never frees).
+>   An httpd request-accessor ownership cleanup, unrelated to closures.
+> - **`-fold-many` / `-rate-limit`** -- non-closure buffer/state leaks (out of scope).
+>
+> The reactor/CPS async blocker (`__dk_reap_ptr`, `owns_cb` -- precompiled libturi
+> C) still needs a runtime-API change before `httpd-async-*` is safe flag-on.
 >
 > **Progress note (2026-07-21i) -- #1a Drop typeclass LANDED; #1b codegen
 > integration spec (turn-key).** The `Drop` typeclass + `Drop[String]` instance
