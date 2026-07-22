@@ -58,6 +58,109 @@ and leak-free flag-on. Residuals (documented in the dated notes + reports):
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+## Remaining work -- roadmap to graduation
+
+> This section is the CURRENT forward plan. Everything above the dated progress
+> notes (the "ACTIVE / BLOCKING" directive, the original Design / Phasing /
+> Implementation-findings sections) is now a HISTORICAL record of the landed
+> S1 / S2 / Model-R core -- read it for context, not for what to do next. The
+> ownership machinery is functionally complete for the corpus; what follows is
+> everything left, in priority order.
+
+**Naming, to avoid confusion.** Two distinct things share the name "Model R":
+1. **The header/walk ABI that shipped** (the dated notes call this "Model R"):
+   the `env[-1]` drop-glue header + `drop_glue_env_N` walk + capture-time
+   retain/move + `Drop` typeclass. This is LANDED behind the experiment.
+2. **"Model R (refcount)"** in the Design section below: a per-env `__rc` word
+   for genuinely *shared* closures. This is a DEFERRED fallback (R3), never
+   built, because the move model (Model U) covers the whole corpus.
+
+### R1 -- Cleanup: flip the last closure-shaped httpd markers (small, mechanical)
+
+Two fixtures still leak a *closure* env flag-on only because a teardown site or
+a fixture annotation was never updated to the landed machinery. Same shapes as
+the already-flipped `compose` / `async-mw-compose`:
+
+- **`httpd-h7-middleware`** -- its `mw-tag` is under-annotated (`next : int`);
+  the wrapper onion is a fat-closure chain, so `^fat next` lets the drop-glue
+  walk free it (identical to `mw-compose` / `mw-compose-of` source #1). Flip to
+  `flags: --enable=closure-drop-glue`, drop the marker.
+- **`router-free`** (`stdlib/httpd.tur`, the `free((void *)(intptr_t)cur->handler)`
+  in the router linked-list teardown) and the **TLS server handler teardown**
+  still bare-free a now-headered handler box. Rewire to `TUR_CLOSURE_DROP`
+  (byte-identical flag-off), exactly as `httpd-free` / `httpd-async-free` already
+  do. This is what `httpd-h5-tls`'s residual 24 B `main` leak looks like -- confirm
+  the TLS holder's handler free is the last bare one.
+
+Exit: those fixtures leak-clean flag-on, markers dropped, suite green.
+
+**Explicitly NOT R1** (the marker text is stale; these are non-closure leaks that
+Model R cannot and should not touch -- keep the markers, they belong to other
+work): `httpd-mw-cookie` / `-form` (request-accessor `cstr` leak from
+`httpd-req-cookie` / `-form`, tracked in
+`docs/reported/httpd-request-accessor-cstr-leak.md`); `httpd-mw-fold-many` /
+`-rate-limit` (non-closure buffer/state leaks); `httpd-req-string-opt`
+(inline-C-fabricated `HttpdConn` graphs); `httpd-mw-compress` (`requires.spices`
+skip). The non-httpd markers (`panic-catch-unwind*`, `panic-*`, `cli-*`,
+`cps-backend-heap-adt-return`) are unrelated to closures entirely.
+
+### R2 -- Walk generality gaps (new analysis; corpus does not force them)
+
+The walk fires today via the `is_fat`-flag heuristic and same-function move
+analysis. Two general gaps remain, both documented in the dated notes
+(2026-07-21f/g) and neither exercised by the current corpus:
+
+- **Type-honest owning-closure captures.** A `^fat` capture rides as an erased
+  `int64` carrier + the `cap->is_fat` flag; there is no *type* predicate for "this
+  capture is an owned closure handle" (`TY_INT` is a scalar, `TY_PTR_VOID` is any
+  pointer). A general owning-closure-capture walk (a boxed `TY_FN` capture, a
+  captured `ref`) needs `^fat` carried as an un-erased owning-closure TYPE -- a
+  type-system change. Until then only the flag-carried and rc-typed captures are
+  walked; a bare boxed-`TY_FN` capture is left to leak (never double-freed).
+- **Cross-function double-ownership.** The capture move closes *same-function*
+  aliasing (a second capture of a moved `^fat` handle is `TUR-E0005`). A caller
+  that independently frees a handle it also passed into a consumer would still
+  double-free; a general fix threads the move across the call boundary. Not a
+  current pattern (flag-off such handles merely leak).
+
+These are prerequisites for auto-deriving the walk on arbitrary owned-closure
+captures; they are NOT prerequisites for graduation on the current corpus.
+
+### R3 -- "Model R (refcount)" -- build-on-demand fallback only
+
+The per-env `__rc` word for genuinely *shared* closures (Design section below).
+Deliberately unbuilt: Model U (move) expresses every ownership shape the corpus
+needs, and the refcount word is an ABI change to the `^fat` layout / HKT thunk
+recovery / `tur_poly_fn_t` (audited in
+`docs/archive/fat-closure-abi-audit-plan.md`). Build ONLY if a fixture appears
+that Model U's move-check genuinely cannot express (a closure legitimately owned
+by two live owners at once). No action until then.
+
+### R4 -- Graduation off the experiment (`expires_at 0.34.0`)
+
+`closure-drop-glue` is `XF_LIFECYCLE_PROTOTYPE`, off by default, expiring at the
+0.34.0 cut (a hard contract the release-cut skills enforce: they refuse to bump
+past it until this row is graduated or shelved). To graduate (feature goes
+always-on, `EXPERIMENTS[]` row deleted, flag removed):
+
+1. **Emit the header ABI unconditionally.** Flag-off, `TUR_CLOSURE_DROP` already
+   expands to a plain `free`, but the header changes the env allocation layout,
+   so making it default CHURNS every closure codegen snapshot -- a single
+   coordinated `expected.c` regen in the graduation PR (see the fixture-churn
+   policy in CLAUDE.md).
+2. **Prove the whole corpus clean flag-on.** R1 done; the remaining marked
+   fixtures either fall to R1 or are out-of-scope non-closure leaks (which must
+   NOT block graduation -- re-home their markers to their own reports first).
+3. **Delete the `EXPERIMENTS[]` row** in `src/runtime/experiments.c` and the
+   `g_opt_closure_drop_glue` gates (each gate becomes always-taken).
+
+Decision gate at the 0.34.0 cut: **graduate** (if the corpus is clean and the
+snapshot regen is acceptable), **extend `expires_at`** (if R2/type-honesty is
+deemed a graduation prerequisite), or **shelve** (revert the ABI). Current
+recommendation: graduate after R1, treating R2/R3 as post-graduation
+enhancements -- they add generality, not correctness, and the flag-gated ABI is
+already sound for everything the corpus builds.
+
 > **Progress note (2026-07-22c) -- reactor/CPS async blocker RESOLVED; the
 > async/reactor family is corruption- and leak-free flag-on.** Flag-on, every
 > heap fat-closure env is headered (env[-1] drop-glue, fat pointer PAST it), so a
@@ -918,11 +1021,16 @@ annotation + post-call free for HOF args. Only step (a) unblocks a hazard-free
 
 ## Test targets & exit gate
 
+> This was the ORIGINAL S1/S2 exit gate and is now MET -- see the dated progress
+> notes and the Status above. The forward gate is R1-R4 in "Remaining work --
+> roadmap to graduation" near the top of this file.
+
 - `currying-effect-partial`, `hkt-stdlib-parser-instances` flip from
-  `BODY-UNSUPPORTED` (`EX_CLOSURE`) to CPS-emitted (direct == cps == turi).
+  `BODY-UNSUPPORTED` (`EX_CLOSURE`) to CPS-emitted (direct == cps == turi). [MET]
 - `free-lift-bind`, `unsafe-closure-capture`, `cps-backend-fn-param` become
-  ASan-clean and DROP their `requires.no-leak-check` markers.
+  ASan-clean and DROP their `requires.no-leak-check` markers. [MET]
 - The minimal no-effects repro in `escaping-fat-closure-env-leak.md`
-  (`make-scaler`) is ASan-clean.
-- httpd middleware fixtures stay green and leak-clean.
-- Full `bash tests/run.sh` green; the report moves to `docs/archive/` when closed.
+  (`make-scaler`) is ASan-clean. [MET]
+- httpd middleware fixtures stay green and leak-clean. [MET for the flipped 12 +
+  the async/reactor family; remaining markers are R1 or non-closure -- see R1.]
+- Full `bash tests/run.sh` green. [MET -- 2264/0]
