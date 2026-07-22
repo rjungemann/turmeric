@@ -10,6 +10,20 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
+    # across runs. ccache launches every `cc -c` in the cmake build of `tur`
+    # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
+    # the bulk of each job's build step. (Fixture builds see little benefit now:
+    # the auto/runtime-lib default already skips the runtime recompile, and each
+    # fixture's generated .c is unique and invalidated by any src/ change.)
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,17 +43,28 @@ jobs:
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install libedit || true
+        run: brew install libedit ccache || true
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-test-${{ runner.os }}-
 
       - name: Configure (Debug + ASAN)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build -j
+
+      - name: ccache stats
+        run: ccache -s
 
       - name: Smoke check (tur --version must not hang)
         run: |
@@ -77,15 +102,30 @@ jobs:
   check-guides:
     name: Check guide toggle pairs
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-guides-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-guides-${{ runner.os }}-
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
       - name: Build tur
         run: cmake --build build -j --target tur
       - name: Check guide pairs (AST-verified via tur parse-check)
@@ -107,16 +147,32 @@ jobs:
     runs-on: ubuntu-latest
     # Only run when src/codegen/ changed or expected.c files changed.
     # This prevents the job from failing on PRs that don't touch codegen at all.
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-snapshots-${{ runner.os }}-
 
       - name: Configure (Debug)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build tur
         run: cmake --build build -j --target tur
@@ -130,11 +186,27 @@ jobs:
     # Pre-deploy gate for try.turmeric-lang.com: builds the wasm bundle and
     # drives the browser REPL through one evaluation.  If this fails, the
     # branch is not safe to `npm run deploy` from web/.
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      # Don't hash the build dir, and rewrite absolute paths under the workspace
+      # to relative, so the -g Debug build's embedded paths don't defeat cross-run
+      # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libedit-dev
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-web-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-web-${{ runner.os }}-
 
       - name: Set up Python (for gendocs)
         uses: actions/setup-python@v5
@@ -161,7 +233,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Configure (Debug, native tur)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
       - name: Build native tur (needed for docs / doc-names.json)
         run: cmake --build build -j --target tur

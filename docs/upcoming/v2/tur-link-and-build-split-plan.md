@@ -5,10 +5,11 @@
 + `.link` sidecar; `tur build --split-build`; `tur build --runtime=lib` backed
 by the lean non-ASan `libturt_runtime.a`; and the default flipped to `auto`.
 Executable project/directory builds are covered too -- they reroute through the
-single-file path (Section 6a). Remaining: the ccache CI wiring (Phase 5). The
-only path that still embeds the runtime is separate compilation (shared libs /
+single-file path (Section 6a). Phase 5 (ccache in CI) is now wired too. The only
+path that still embeds the runtime is separate compilation (shared libs /
 multi-`main`), where embedding is intentional -- Section 6a explains why
-externalizing it is an explicit non-goal. Motivated by
+externalizing it is an explicit non-goal. All phases of this plan have landed.
+Motivated by
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
@@ -252,9 +253,23 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
    A single-file `tur build --split-build` runs the real `cmd_compile` then
    `cmd_link` code paths, so the three cannot drift. Flipping the default and
    wiring ccache measurement is the remaining work here.
-5. **[TODO] CI: install + cache ccache**, now that the `cc -c` calls are
-   cacheable (was a no-op before -- do NOT do this before the default flips in
-   step 4). Cache the ccache dir across runs in `.github/workflows/ci.yml`.
+5. **[DONE] CI: install + cache ccache.** `.github/workflows/ci.yml` now
+   installs ccache and caches its dir across runs (`actions/cache`) in every
+   `tur`-building job (`test` x2 OSes, `check-guides`, `check-snapshots`,
+   `web-smoke`), with `-DCMAKE_C_COMPILER_LAUNCHER=ccache` on the cmake
+   configure and `CCACHE_NOHASHDIR`/`CCACHE_BASEDIR` so the `-g` Debug build's
+   embedded paths don't defeat cross-run hits.
+
+   Note (corrected from the original plan framing): the high-value target is the
+   **cmake build of `tur` itself** -- ~100 `cc -c` TUs compiled in every job.
+   Measured locally: a warm-cache rebuild at a stable path hits 101/101 and
+   drops the compiler build from ~32 s to ~1 s. The *fixture* builds see little
+   ccache benefit now: the `auto`/runtime-lib default already skips the runtime
+   recompile (a prebuilt archive, not a per-fixture `cc`), and each fixture's
+   generated `.c` is unique and invalidated by any `src/` change -- so the two
+   levers (ccache vs runtime-lib) largely overlapped, and runtime-lib carried
+   the fixture win. `tests/run.sh` already wraps the fixture `cc` with ccache
+   when present, so installing ccache in CI also feeds that (marginal) path.
 6. **[DONE] Default flipped to `auto`.** The single-file/compile default is now
    `auto` (`g_runtime_mode`): link the lean non-ASan `libturt_runtime.a` when
    locatable, else recompile the bare runtime sources. `auto` never links the
