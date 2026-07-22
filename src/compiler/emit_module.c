@@ -5498,7 +5498,15 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                   ctor->fields[fi].full_type->as.fn.boxed))
                 continue;
             char *mp = adt_field_member_path(def, ctor, (uint32_t)fi);
-            buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
+            /* closure-drop-glue: flag-on a boxed fn-field holds a headered fat
+             * handle (env[-1] drop-glue; the fat pointer is PAST it), so a bare
+             * free of the field is an interior free.  Release via TUR_CLOSURE_DROP
+             * (recovers the header, walks owning captures, frees the base).
+             * Flag-off keep the exact plain free -- byte-identical, no churn. */
+            if (g_opt_closure_drop_glue)
+                buf_printf(out, "    if (s->%s) TUR_CLOSURE_DROP(s->%s);\n", mp, mp);
+            else
+                buf_printf(out, "    if (s->%s) free((void *)(intptr_t)s->%s);\n", mp, mp);
             free(mp);
         }
         buf_printf(out, "}\n\n");
