@@ -1,5 +1,14 @@
 # httpd-mw-fold-many: runtime-built closure list leaks (onion + spine + factories)
 
+> **RESOLVED (2026-07-22, closure-drop-glue R3a).** Leak-clean flag-on: `mw-count`
+> annotated `^fat next` (onion walkable) + two new stdlib teardown primitives the
+> fixture calls -- `httpd-mw-drop` (drops the composed onion) and
+> `httpd-mw-free-chain` (drops each head factory + frees each spine cell of the
+> input list). Marker dropped, `flags: --enable=closure-drop-glue` added, suite
+> green. The *automatic* auto-drop (honest `Closure` / `list<Closure>` typing off
+> `:int`) remains future work -- see R3a in
+> `docs/upcoming/closure-drop-glue-plan.md`. Original finding below.
+
 **Summary:** `httpd-mw-fold-many` leaks ~4.5 KB / ~211 allocs flag-on
 (`--enable=closure-drop-glue`) -- the compose-middleware onion "at scale", built
 from a RUNTIME cons list rather than a variadic-rest call, so none of the landed

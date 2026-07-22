@@ -48,12 +48,12 @@ Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
 is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
 env now carries an `env[-1]` drop-glue header walked by `drop_glue_env_N`, with
 retain/move at capture, a `Drop` typeclass for owned-opaque (String) captures,
-and a partial-application-head free. **14 httpd fixtures** are flipped leak-clean
+and a partial-application-head free. **15 httpd fixtures** are flipped leak-clean
 flag-on (mw-log, basic-auth{,-attr,-noncapture}, body-size, json, static, cors,
-cors-opts, compose, compose-of, async-mw-compose, h7-middleware, h5-tls), and the
-whole async/reactor family (the `reactor-*` fixtures, `async-capturing-closure`,
-...) is corruption- and leak-free flag-on. Residuals (documented in the dated
-notes + reports):
+cors-opts, compose, compose-of, async-mw-compose, h7-middleware, h5-tls,
+mw-fold-many), and the whole async/reactor family (the `reactor-*` fixtures,
+`async-capturing-closure`, ...) is corruption- and leak-free flag-on. Residuals
+(documented in the dated notes + reports):
 `mw-cookie`/`-form` are an httpd request-accessor cstr leak, not a closure issue
 (`docs/reported/httpd-request-accessor-cstr-leak.md`). Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
@@ -107,12 +107,10 @@ split by ACTUAL root cause (all now have `docs/reported/` findings where genuine
 - `httpd-mw-cookie` / `-form` -- request-accessor `cstr` leak from
   `httpd-req-cookie` / `-form`
   (`docs/reported/httpd-request-accessor-cstr-leak.md`). Non-closure.
-- `httpd-mw-fold-many` -- NOT buffer/state; it is the compose onion + cons spine
-  + factory heads "at scale", but built from a RUNTIME list (`build-chain` +
-  `httpd-mw-fold`), so the caller-side variadic-rest trick that fixed
-  `mw-compose-of` does not reach it, and `composed` (the fold result) is freed
-  nowhere. This is an R2/R3 case -- the general owned-`list<Closure>` consumed by
-  a fold. `docs/reported/httpd-mw-fold-many-closure-list-leak.md`.
+- `httpd-mw-fold-many` -- RESOLVED (R3a, 2026-07-22): the runtime-built onion +
+  spine + factory heads, now leak-clean flag-on via the `httpd-mw-drop` /
+  `httpd-mw-free-chain` teardown primitives + `^fat next`. Report archived at
+  `docs/archive/httpd-mw-fold-many-closure-list-leak.md`. See R3a below.
 - `httpd-mw-rate-limit` -- the `RLState` counter table
   (`httpd-mw-ratelimit-new`) is never freed; non-closure httpd-teardown gap.
   `docs/reported/httpd-mw-rate-limit-state-leak.md` (option (b) there folds it
@@ -174,30 +172,45 @@ if a fixture constructs cross-function shared ownership.
 
 Neither is a prerequisite for graduation (R4) on the current corpus.
 
-### R3 -- Escaping owned-closure captures + shared closures (build-on-demand)
+### R3 -- Escaping owned-closure captures + shared closures
 
-Two sub-cases, both about closures that ESCAPE their constructor (so the
-scope-exit walk does not reach them). The concrete driver that exists today is
-`httpd-mw-fold-many` (`docs/reported/httpd-mw-fold-many-closure-list-leak.md`) --
-a runtime `build-chain` list of factory closures consumed by `httpd-mw-fold`,
-whose spine + factory heads + fold result leak.
+Closures that ESCAPE their constructor (so the scope-exit walk does not reach
+them). The driver is `httpd-mw-fold-many`
+(`docs/reported/httpd-mw-fold-many-closure-list-leak.md`) -- a runtime
+`build-chain` list of factory closures consumed by `httpd-mw-fold`, whose spine +
+factory heads + composed onion all leak.
 
-- **R3a -- owned runtime `list<Closure>` (absorbs R2a).** A holder (a struct
-  field, an ADT payload, a cons list) that owns escaping closures should drop
-  each via the drop-glue when the holder dies -- the Model U fn-field drop
-  generalized to a captured `TY_FN`-boxed field and to a cons spine of closures.
-  Move-gated exactly as the landed `is_fat` arm: storing a closure into the
-  holder consumes the source, so a double-store is `TUR-E0005`, not a
-  double-free. This is the general form of the `mw-compose-of` fix (which only
-  handled the *variadic-rest, distinct-let-binding* special case caller-side).
-- **R3b -- "Model R (refcount)".** The per-env `__rc` word for genuinely *shared*
-  closures (Design section below). A heavier ABI change to the `^fat` layout /
-  HKT thunk recovery / `tur_poly_fn_t` (audited in
-  `docs/archive/fat-closure-abi-audit-plan.md`). Reserve for the case R3a's move
-  model cannot express -- a closure legitimately owned by two live owners at once.
+**R3a -- runtime-built chain teardown -- DONE (2026-07-22), explicit-primitive
+increment.** `httpd-mw-fold-many` is now leak-clean flag-on (marker dropped,
+`flags: --enable=closure-drop-glue`). Because `httpd-mw-fold` and its cons list
+are `:int`-erased (no honest `Closure` / `list<Closure>` type), the compiler
+cannot auto-derive the drop the way `mw-compose-of`'s *variadic-rest,
+distinct-let-binding* shape allowed caller-side. So R3a shipped as two sound
+stdlib teardown primitives the builder of a runtime chain calls explicitly:
 
-No action required for graduation; build R3a when `httpd-mw-fold-many`-class
-leaks are prioritized, R3b only if a genuinely-shared-closure fixture appears.
+- `httpd-mw-drop [handler]` -- `TUR_CLOSURE_DROP` the composed onion; under the
+  experiment the drop-glue walk (needs `^fat next` on the middleware, as
+  `mw-count` now has) frees every wrapper down to base.
+- `httpd-mw-free-chain [mws]` -- drop each head factory + free each spine cell of
+  the INPUT list (the fold only borrows the factories). Sound iff each head is a
+  distinct fresh closure (documented); it is the "free the heads too" companion
+  to the existing `httpd-mw-free-spine`.
+
+This closes the corpus leak. What it does NOT do -- and what a future
+*automatic* R3a needs -- is the honest re-typing of `httpd-mw-fold` /
+`build-chain` off `:int` onto `Closure` / `list<Closure>` so the holder's
+drop-glue drops the field/spine with no explicit call (the Model U fn-field drop
+generalized to a captured `TY_FN`-boxed field + a cons spine, move-gated exactly
+as the landed `is_fat` arm). That is a larger httpd-fold re-typing, deferred
+until the `:int` middleware ABI is revisited; the explicit primitives are the
+sound stopgap and are independently useful for any hand-built dynamic chain.
+
+**R3b -- "Model R (refcount)"** (build-on-demand). The per-env `__rc` word for
+genuinely *shared* closures (Design section below). A heavier ABI change to the
+`^fat` layout / HKT thunk recovery / `tur_poly_fn_t` (audited in
+`docs/archive/fat-closure-abi-audit-plan.md`). Reserve for the case the move
+model cannot express -- a closure legitimately owned by two live owners at once.
+No driver in the corpus; no action until one appears.
 
 ### R4 -- Graduation off the experiment (`expires_at 0.34.0`)
 

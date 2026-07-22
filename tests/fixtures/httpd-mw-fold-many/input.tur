@@ -22,7 +22,7 @@
 
 ;; mw-count -- middleware constructor returning a fat closure that captures
 ;; `next`, bumps the counter on entry, then delegates downstream.
-(defn mw-count [next : int] : ptr<void>
+(defn mw-count [^fat next : int] : ptr<void>
   (let [_n next]
     (fn [conn : ptr<void>] : nil
       (ctr 0)
@@ -48,4 +48,10 @@
         composed (httpd-mw-fold (:: base int) chain)]
     (httpd-call composed (:: 0 ptr<void>))
     (println (ctr 1))
+    ;; Reclaim the runtime-built chain: drop the composed onion (walks the
+    ;; captured `next` boxes down to base) and free the input list (each fresh
+    ;; factory head + its cell). Under --enable=closure-drop-glue this is
+    ;; leak-clean; flag-off the inner layers leak as before.
+    (httpd-mw-drop composed)
+    (httpd-mw-free-chain chain)
     0))

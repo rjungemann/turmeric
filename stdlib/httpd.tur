@@ -3405,6 +3405,67 @@
       p = n;
   }
   ```)
+;;; httpd-mw-drop -- reclaim a composed handler onion (the result of
+;;; `httpd-mw-fold` / `compose-middleware`). Under `--enable=closure-drop-glue`
+;;; this releases the outermost wrapper AND walks the captured downstream `next`
+;;; boxes via the env's drop-glue header, so the whole onion (down to the base
+;;; handler) is freed. Flag-off it is a plain free of the outer box (inner layers
+;;; leak, as before). Use for a runtime-built chain that no server owns (a server
+;;; handle's `httpd-free` / `httpd-async-free` already does this for you).
+;;;
+;;; Parameters:
+;;;   handler -- the composed handler closure (:int); 0 is a no-op.
+;;;
+;;; Returns: nothing.
+;;;
+;;; Example:
+;;;   (let [composed (httpd-mw-fold base chain)]
+;;;     (httpd-call composed conn)
+;;;     (httpd-mw-drop composed))
+;;;
+;;; Since: R3a (closure-drop-glue runtime-chain teardown)
+
+(defn httpd-mw-drop [handler : int] : nil
+  ```c
+  if (handler) TUR_CLOSURE_DROP(handler);
+  ```)
+;;; httpd-mw-free-chain -- free a runtime-built middleware cons list (the INPUT
+;;; to `httpd-mw-fold`): drop each head factory closure AND free each spine cell.
+;;;
+;;; Unlike `httpd-mw-free-spine` (which leaves the heads, because the variadic
+;;; `compose-middleware-of` caller owns and frees them), a hand-built runtime
+;;; chain (e.g. from a `build-chain` loop) is owned entirely by its builder: the
+;;; fold only BORROWS each factory (applies it once, discards it), so once the
+;;; fold has produced the composed onion the whole list -- factories and cells --
+;;; is dead and the builder reclaims it here. Sound iff each head is a distinct,
+;;; uniquely-owned closure (a fresh `(make-mw)` per cell); do NOT cons the same
+;;; closure value into the list twice (that would double-drop it).
+;;;
+;;; Parameters:
+;;;   mws -- the middleware cons list (:int); 0 is a no-op.
+;;;
+;;; Returns: nothing.
+;;;
+;;; Example:
+;;;   (let [chain    (build-chain 70 (tnil))
+;;;         composed (httpd-mw-fold base chain)]
+;;;     (httpd-call composed conn)
+;;;     (httpd-mw-drop composed)
+;;;     (httpd-mw-free-chain chain))
+;;;
+;;; Since: R3a (closure-drop-glue runtime-chain teardown)
+
+(defn httpd-mw-free-chain [mws : int] : nil
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
+  while (p) {
+      __tur_cons_cell *n = (__tur_cons_cell *)(intptr_t)p->tail;
+      if (p->head) TUR_CLOSURE_DROP(p->head);
+      free(p);
+      p = n;
+  }
+  ```)
 ;;; compose-middleware-of -- runtime variadic form of compose-middleware.
 ;;;
 ;;; This is a defn, not a macro. Use when the chain is built at runtime
