@@ -254,11 +254,15 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
    `cmd_link` code paths, so the three cannot drift. Flipping the default and
    wiring ccache measurement is the remaining work here.
 5. **[DONE] CI: install + cache ccache.** `.github/workflows/ci.yml` now
-   installs ccache and caches its dir across runs (`actions/cache`) in every
-   `tur`-building job (`test` x2 OSes, `check-guides`, `check-snapshots`,
-   `web-smoke`), with `-DCMAKE_C_COMPILER_LAUNCHER=ccache` on the cmake
-   configure and `CCACHE_NOHASHDIR`/`CCACHE_BASEDIR` so the `-g` Debug build's
-   embedded paths don't defeat cross-run hits.
+   installs ccache and caches its dir across runs in every `tur`-building job
+   (`test` x2 OSes, `check-guides`, `check-snapshots`, `web-smoke`), with
+   `-DCMAKE_C_COMPILER_LAUNCHER=ccache` on the cmake configure and
+   `CCACHE_NOHASHDIR`/`CCACHE_BASEDIR` so the `-g` Debug build's embedded paths
+   don't defeat cross-run hits. Uses the split `actions/cache/restore` +
+   `actions/cache/save` (`if: always()`) rather than the combined action, whose
+   post-save defaults to `save-always:false` and would skip saving whenever a
+   later step (notably the `test` job's fixture suite) fails -- exactly the runs
+   where the freshly-built compiler cache is most worth keeping.
 
    Note (corrected from the original plan framing): the high-value target is the
    **cmake build of `tur` itself** -- ~100 `cc -c` TUs compiled in every job.

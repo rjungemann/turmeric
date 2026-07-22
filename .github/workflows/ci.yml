@@ -49,8 +49,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libedit ccache || true
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      # Restore + explicit save (not the combined cache action): the combined
+      # action's post-save defaults to save-always:false, so it would skip
+      # saving whenever a later step -- e.g. the fixture suite below -- fails,
+      # exactly the runs where the freshly-built ccache is most worth keeping.
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-test-${{ runner.os }}-${{ github.sha }}
@@ -99,6 +103,16 @@ jobs:
         # this runs unconditionally once per OS.
         run: ctest --output-on-failure --progress --test-dir build -E '^tur_tests$'
 
+      # Save after everything (incl. the fixture suite, which also feeds ccache
+      # via run.sh) regardless of whether the suite passed. The exact key never
+      # pre-exists (it embeds the commit SHA), so this always writes a fresh entry.
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-test-${{ runner.os }}-${{ github.sha }}
+
   check-guides:
     name: Check guide toggle pairs
     runs-on: ubuntu-latest
@@ -117,8 +131,8 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-guides-${{ runner.os }}-${{ github.sha }}
@@ -128,6 +142,12 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
       - name: Build tur
         run: cmake --build build -j --target tur
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-guides-${{ runner.os }}-${{ github.sha }}
       - name: Check guide pairs (AST-verified via tur parse-check)
         run: python3 tools/check-guide-pairs.py --tur build/tur docs/guides/
 
@@ -163,8 +183,8 @@ jobs:
       - name: Install dependencies (Linux)
         run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
@@ -176,6 +196,13 @@ jobs:
 
       - name: Build tur
         run: cmake --build build -j --target tur
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-snapshots-${{ runner.os }}-${{ github.sha }}
 
       - name: Check for snapshot drift
         run: ./build/tur run regen-snapshots -- --check
@@ -200,8 +227,8 @@ jobs:
       - name: Install dependencies (Linux)
         run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-web-${{ runner.os }}-${{ github.sha }}
@@ -237,6 +264,13 @@ jobs:
 
       - name: Build native tur (needed for docs / doc-names.json)
         run: cmake --build build -j --target tur
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-web-${{ runner.os }}-${{ github.sha }}
 
       - name: Generate stdlib docs (writes web/public/doc-names.json)
         run: ./build/tur run docs
