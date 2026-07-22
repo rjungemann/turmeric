@@ -1,0 +1,49 @@
+;; inline-c-option-byvalue-carrier-straddle (fixed): an inline-C body that builds
+;; (Option T) / (Result T E) via tur_some_ptr / tur_none / tur_ok_ptr /
+;; tur_err_int returns the int64 carrier.  Passing that carrier as an argument to
+;; a Turmeric function whose parameter is the by-value ADT struct
+;; (tur_adt_Option__String, or the pass-by-pointer tur_adt_Result__String__int)
+;; used to be a hard cc type error.  The compiler now bridges the carrier into
+;; the by-value aggregate at the call-argument boundary (both the by-value-param
+;; and the wide pass-by-pointer-param cases).
+(load "stdlib/string.tur")
+(load "stdlib/str-build.tur")
+
+;; (Option String) built in inline-C -- 16-byte by-value param.
+(defn mk-opt [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("hi", 2));
+  ```)
+
+;; by-value (Option String) parameter -- the straddle site.
+(defn show-opt [o : (Option String)] : nil
+  (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+
+;; (Result String int) built in inline-C -- 24-byte pass-by-pointer param.
+(defn mk-res [n : int] : (Result String int)
+  ```c
+  if (n < 0) return tur_err_int(99);
+  return tur_ok_ptr(tur_string_from_bytes("ok", 2));
+  ```)
+
+;; pass-by-pointer (Result String int) parameter -- the wide-aggregate straddle.
+(defn show-res [r : (Result String int)] : nil
+  (if (ok? r)
+    (println (string/to-cstr (ok-val r)))
+    (println (int->str (err-val r)))))
+
+(defn main [] : int
+  (do
+    ;; direct consumption (always worked)
+    (let [o (mk-opt 1)]
+      (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+    ;; passed to a by-value-param fn (the fixed case)
+    (show-opt (mk-opt 1))
+    (show-opt (mk-opt 0))
+    ;; passed to a pass-by-pointer-param fn (the fixed wide-aggregate case)
+    (show-res (mk-res 1))
+    (show-res (mk-res -1))
+    0))
+
+(main)

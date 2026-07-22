@@ -5946,6 +5946,46 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                              CK_CONCRETE, CK_CARRIER,
                                              e->as.call_.args[i]->type);
                 }
+                /* inline-c-option-byvalue-carrier-straddle: the FORWARD mirror of
+                 * the concrete->carrier spill above.  The argument is a carrier
+                 * PRODUCER whose logical type is a by-value carrier-ABI aggregate
+                 * -- an inline-C fn (or a form whose tail is one) returning
+                 * `(Option T)` / `(Result T E)` as the int64 carrier via
+                 * tur_box_* / tur_some_ptr / tur_none -- but the callee's param is
+                 * the CONCRETE by-value ADT struct (`tur_adt_Option__String`).
+                 * Passing the int64 carrier straight into that by-value slot is a
+                 * hard cc type error (`incompatible type ... expected
+                 * 'tur_adt_Option__String' ... got 'int64_t'`).  Deref the carrier
+                 * into the aggregate -- the exact CK_CARRIER->CK_CONCRETE bridge
+                 * the `let` binder applies (init_carrier_to_byval).  Gated by the
+                 * same two predicates the binder uses (the arg's by-value carrier
+                 * type is known AND the arg does not itself emit the aggregate)
+                 * plus the callee's recorded param being a by-value ADT struct
+                 * (`tur_adt_...`, not the int64 carrier or a pointer), so an
+                 * ordinary carrier-`:int` consumer or an already-by-value arg is
+                 * untouched.  See
+                 * docs/reported/inline-c-option-byvalue-carrier-straddle.md. */
+                else if (!needs_fn_cast && !matched_spec &&
+                         !callee_param_is_typed_heap_ptr &&
+                         emit_arg && fn_name &&
+                         !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg)) {
+                    Type arg_bv = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                    if (arg_bv.kind != TY_UNKNOWN) {
+                        const char *pc = emit_sig_lookup_param_ctype(fn_name, i);
+                        if (!pc && fn_binding->type.kind == TY_FN &&
+                            i < fn_binding->type.as.fn.arity &&
+                            fn_binding->type.as.fn.arg_full_types &&
+                            fn_binding->type.as.fn.arg_full_types[i])
+                            pc = emit_type_c_name(ctx, emit_resolve_type(ctx,
+                                     *fn_binding->type.as.fn.arg_full_types[i]));
+                        if (pc && strncmp(pc, "tur_adt_", 8) == 0 &&
+                            strchr(pc, '*') == NULL) {
+                            raw = emit_carrier_bridge(ctx, body, raw,
+                                                      CK_CARRIER, CK_CONCRETE,
+                                                      arg_bv);
+                        }
+                    }
+                }
                 /* M4c Path A (RETIRED -- M5 D.4, end-to-end-monomorphization
                  * plan): a by-value spec body that called an int64-carrier-sink
                  * stdlib helper (e.g. `(vec-len x)` / `(vec-get x i)` inside an
@@ -6001,6 +6041,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     _callee_pbp &&
                     type_struct_pass_by_ptr(e->as.call_.args[i]->type) &&
                     !expr_is_pbp_param(ctx, emit_arg)) {
+                    /* inline-c-option-byvalue-carrier-straddle (pass-by-ptr spill):
+                     * a WIDE by-value carrier-ABI aggregate param (`(Result T E)`,
+                     * > 16 bytes) is taken `const T *`, so the arg is spilled to a
+                     * temp whose address is passed.  When the arg is a carrier
+                     * PRODUCER (an inline-C fn returning the int64 carrier), the
+                     * bare spill `T __tmp = <int64 carrier>;` is an invalid
+                     * initializer -- deref the carrier into the aggregate first,
+                     * the same CK_CARRIER->CK_CONCRETE bridge the by-value-param
+                     * branch above and the `let` binder apply. */
+                    Type _pbp_bv = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                    if (_pbp_bv.kind != TY_UNKNOWN &&
+                        !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg))
+                        raw = emit_carrier_bridge(ctx, body, raw,
+                                                  CK_CARRIER, CK_CONCRETE, _pbp_bv);
                     char *_tmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "%s %s = %s;\n",

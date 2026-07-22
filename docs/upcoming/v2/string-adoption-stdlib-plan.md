@@ -1,10 +1,54 @@
 # `String` Adoption Audit -- stdlib
 
 > **Status:** Batches 1-2 landed 2026-07-20 (foundational bridge, path + digest
-> clusters, and the httpd server-lifetime capture fix); remaining formatter
-> batches proposed.
+> clusters, and the httpd server-lifetime capture fix). **Batch 3 landed
+> 2026-07-21: the entire Bucket A mechanical checklist below is complete** --
+> the six `*-string` sibling surfaces (json, csv, term, re, range, and schema)
+> all ship as opt-in modules with fixtures. **Bucket B (its own plan) also
+> landed 2026-07-21** -- the foundational owned builders and the sentinel-mixed
+> optional accessors; see
+> [string-owned-builders-and-optional-accessors-plan.md](string-owned-builders-and-optional-accessors-plan.md).
 
 ## Progress
+
+**Batch 3 (landed) -- Bucket A mechanical clusters, all six.**
+
+Every Bucket A item is done, each following the `path-string` recipe (one
+opt-in `*-string` sibling module, one `string/adopt-cstr` wrapper per function).
+All wrapped functions always return a freshly-malloc'd `cstr` (verified at
+their source), so a plain `adopt` wrapper is memory-safe; where a function can
+return `0` on invalid input (`csv/emit*` bad delimiter, `re/union-patterns`
+empty/null list), `string/adopt-cstr` renders that as an empty String rather
+than crashing (`tur_string_adopt_cstr` is NULL-safe). The accumulating emitters
+(`csv/emit*`, `re/union*`) already build a single buffer in their own C/pure
+bodies, so adopting the finished result is linear -- no StringBuilder rework was
+needed at the wrapper layer (the StringBuilder rule governs *new* multi-join
+String formatters, per Bucket B Part 1, not the wrapping of a builder that
+already returns one buffer).
+
+- `stdlib/json-string.tur` -- `json/encode-string`. Fixture `json-string`.
+- `stdlib/csv-string.tur` -- `csv/emit-string`, `csv/emit-row-string`,
+  `csv/emit-with-delim-string`, `csv/emit-row-with-delim-string`. Fixture
+  `csv-string`.
+- `stdlib/term-string.tur` -- `term/{bold,dim,red,green,yellow,blue,cyan}-string`.
+  Fixture `term-string`.
+- `stdlib/re-string.tur` -- `re/replace-string`, `re/replace-all-string`,
+  `re/union-patterns-string`. Fixture `re-string`.
+- `stdlib/range-string.tur` -- `range-fmt-string`, `range->str-string`,
+  `bound-fmt-string`, `bound-show-fmt-string`. `bound->str` deliberately
+  excluded (static-literal miss path -> Bucket B). Fixture `range-string`.
+- `stdlib/schema-string.tur` -- `schema-error-message-string`. **Shipped as a
+  separate opt-in module, NOT inline in `schema.tur`** (a deliberate departure
+  from the checklist's `stdlib/schema.tur` note). `schema.tur` is auto-loaded
+  into every compiled program by the prelude (`src/main.c`, for the `#json(...)`
+  reader macro), so a `(load "stdlib/string.tur")` inside it pulls the String
+  type and its typeclass instances into every program's global namespace --
+  churning ~187 codegen snapshots and colliding with typeclass fixtures
+  (`typeclass-*`, `van-laarhoven-lens-*` failed to build). The separate module
+  keeps the String dependency opt-in, exactly like the other five siblings, with
+  zero global blast radius. Fixture `schema-error-message-string`.
+
+`docstrings.tur` regenerated to register the new surfaces.
 
 **Batch 2 (landed) -- previously-blocked items.**
 
@@ -66,30 +110,40 @@ an opt-in `*-string` sibling module with one `string/adopt-cstr` wrapper per
 function, identical to `stdlib/path-string.tur`. Batch them per module as
 capacity allows, in the priority order below. Checklist:
 
-- [ ] `stdlib/json-string.tur` -- `json/encode` (`json.tur:502`).
-- [ ] `stdlib/csv-string.tur` -- `csv/emit`, `csv/emit-row`,
+- [x] `stdlib/json-string.tur` -- `json/encode` (`json.tur:502`).
+- [x] `stdlib/csv-string.tur` -- `csv/emit`, `csv/emit-row`,
       `csv/emit-with-delim`, `csv/emit-row-with-delim` (`csv.tur:271/326/348/404`).
-      For the accumulating emitters, build via `StringBuilder` rather than
-      folding `str-concat-string` (see the Bucket B plan, Part 1).
-- [ ] `stdlib/term-string.tur` -- `term/{bold,dim,red,green,yellow,blue,cyan}`
+      The emitters already accumulate into a single malloc/realloc'd buffer, so
+      the wrapper adopts that finished buffer (linear); the `StringBuilder` rule
+      (Bucket B, Part 1) governs *new* multi-join String formatters, not this
+      wrap of an existing one-buffer builder.
+- [x] `stdlib/term-string.tur` -- `term/{bold,dim,red,green,yellow,blue,cyan}`
       (`term.tur:138..264`); each path is a fresh `strdup`/malloc.
-- [ ] `stdlib/re-string.tur` -- `re/replace`, `re/replace-all`,
-      `re/union-patterns` (`re.tur:461/484/539`); internal `re/wrap-paren`,
-      `re/union-acc` accumulate, so route them through `StringBuilder`.
-- [ ] `stdlib/range-string.tur` -- `range-fmt`, `range->str`, `bound-fmt`,
+- [x] `stdlib/re-string.tur` -- `re/replace`, `re/replace-all`,
+      `re/union-patterns` (`re.tur:461/484/539`); the internal `re/wrap-paren`
+      / `re/union-acc` accumulate and free their intermediates, returning one
+      fresh cstr, so the wrapper adopts that single result.
+- [x] `stdlib/range-string.tur` -- `range-fmt`, `range->str`, `bound-fmt`,
       `bound-show-fmt` (`range-bound.tur:211/240/275`, `range.tur:133`); these
       always malloc. **`bound->str` is the exception** -- it mixes a fresh
       alloc with a static literal, so it is Bucket B, not here.
-- [ ] `stdlib/schema.tur` -- `schema-error-message-string`
+- [x] `stdlib/schema-string.tur` -- `schema-error-message-string`
       (`schema.tur:696`); always mallocs (`sprintf`), so a plain `adopt` wrapper.
+      Shipped as a separate opt-in module rather than inline in `schema.tur`:
+      the latter is prelude-loaded into every compiled program (`#json(...)`
+      reader macro), so an inline String dependency would cascade globally. See
+      the Batch 3 note above.
 
-**Bucket B -- non-mechanical (own plan).** The sites where the `adopt`-wrapper
-recipe breaks -- the foundational builders (`str-concat`/`cstr-sub`, whose
-wrap-vs-`StringBuilder` choice steers every accumulating formatter above) and
-the sentinel-mixed accessors (`httpd-req-cookie`, `httpd-req-form`,
-`bound->str`, which return a static literal on their miss path and so cannot be
-blindly adopted). These carry real design decisions and are planned separately:
+**Bucket B -- non-mechanical (own plan). LANDED 2026-07-21.** The sites where
+the `adopt`-wrapper recipe breaks -- the foundational builders
+(`str-concat`/`cstr-sub`, whose wrap-vs-`StringBuilder` choice steers every
+accumulating formatter above) and the sentinel-mixed accessors
+(`httpd-req-cookie`, `httpd-req-form`, `bound->str`, which return a static
+literal on their miss path and so cannot be blindly adopted). These carried real
+design decisions and were planned + executed separately:
 [string-owned-builders-and-optional-accessors-plan.md](string-owned-builders-and-optional-accessors-plan.md).
+Shipped: `str-concat-string` / `cstr-sub-string` (Part 1), and `bound->str-string`
++ `httpd-req-cookie-opt` / `httpd-req-form-opt` (Part 2).
 
 ---
 
