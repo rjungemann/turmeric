@@ -1,10 +1,12 @@
 # `tur link` and the build compile/link split
 
-**Status:** In progress. Phases 1, 2, 3, and 4 have landed
-(`resolve_autolink_flags`/`link_command_run` factoring; `tur compile`/`tur link`
-+ `.link` sidecar; `tur build --split-build`; and `tur build --runtime=lib`).
-Making `--runtime=lib` the default and the ccache CI wiring (Phases 5-6) remain;
-see the checklist in Section 5 and the ASan caveat noted there. Motivated by
+**Status:** Landed (single-file/compile path). Phases 1-4 and 6 are done:
+`resolve_autolink_flags`/`link_command_run` factoring; `tur compile`/`tur link`
++ `.link` sidecar; `tur build --split-build`; `tur build --runtime=lib` backed
+by the lean non-ASan `libturt_runtime.a`; and the default flipped to `auto`.
+Remaining: the ccache CI wiring (Phase 5), and -- as a *separate, larger*
+effort -- extending an archive-linked runtime to project/directory builds
+(Section 6a explains why that is not a wiring task). Motivated by
 `docs/archive/test-suite-runtime-cps-consolidation-and-speed.md` Section 3, which
 measured that `ccache` is a **no-op** on the current build path and that the
 per-fixture runtime recompile dominates suite wall-clock. This plan adds a
@@ -251,14 +253,41 @@ Order of landing: 3c first (fast, low-risk), then 3a/3b (the general split).
 5. **[TODO] CI: install + cache ccache**, now that the `cc -c` calls are
    cacheable (was a no-op before -- do NOT do this before the default flips in
    step 4). Cache the ccache dir across runs in `.github/workflows/ci.yml`.
-6. **[PARTIAL]** Retire `--no-split-build` / flip the defaults after a green
-   soak. The runtime-lib blocker is cleared: `TUR_RUNTIME=lib` seeds the
-   runtime-lib default (a CLI `--runtime=` still wins) and the full suite is
-   green under it. Remaining before flipping the *compiler* default: extend
-   runtime-lib to the project/directory build paths (`cmd_build_project` /
-   `cmd_build_multi` -- currently only single-file `cmd_build` and `cmd_compile`
-   honor it), and let the opt-in soak. Kept opt-in here to avoid changing every
-   build's behavior in one step.
+6. **[DONE] Default flipped to `auto`.** The single-file/compile default is now
+   `auto` (`g_runtime_mode`): link the lean non-ASan `libturt_runtime.a` when
+   locatable, else recompile the bare runtime sources. `auto` never links the
+   full (Debug/ASan) `libturi.a` on its own, so a default build is behaviorally
+   identical to the old source path -- no link failure when no archive is
+   present, no ASan/LSan imposed. `--runtime=lib` forces the archive,
+   `--runtime=source` forces recompile, `TUR_RUNTIME=auto|lib|source` seeds the
+   default. Full suite green under the flipped default (2264 passed, 0 failed).
+
+## 6a. Project/directory builds -- a *different* runtime architecture
+
+An investigation while wiring runtime-lib established that
+`tur build <dir>` / project builds do **not** bare-source-autolink at all, so
+`--runtime=lib` does not apply to them and there is nothing to "wire in":
+
+- `cmd_build_multi` and `cmd_build_project` both delegate to
+  `cmd_build_multi_files` (`src/main.c`), which emits a **shared runtime owner
+  TU** (`tur_runtime.c` + `tur_runtime.h` via `emit_shared_runtime_header`, the
+  `emit_runtime_preamble(..., shared=true)` path). The runtime is **embedded
+  inline** (owner TU defines the globals; every module TU carries static
+  replicas), and the link command appends **no** `__tur_autolink__` flags.
+- Confirmed empirically: a project build of a fixture referencing dozens of
+  `tur_hamt_*` functions links and runs correctly with no `hamt.c` and no
+  `-lturi` on the link line.
+
+So the recompile cost in project builds is the **emitted runtime preamble**, a
+codegen concern, not the bare-source autolink the `--runtime=lib` work targets.
+Making project builds link a prebuilt runtime instead of embedding it is a
+genuine but **separate, larger** optimization: it needs (a) a codegen change to
+have `emit_shared_runtime_header` emit *declarations* and link externally
+instead of embedding definitions + static replicas, and (b) a **full** non-ASan
+runtime archive (the lean 3-TU `libturt_runtime.a` does not cover the whole
+preamble; the full `libturi.a` is ASan in Debug, which reintroduces the LSan
+problem for project fixture programs). Tracked as a future item, not part of
+this plan's compile/link split.
 
 ## 6. Finishing the Section 3 work (folded in from the archived report)
 
