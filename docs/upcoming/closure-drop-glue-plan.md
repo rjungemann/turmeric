@@ -48,16 +48,49 @@ Every value-closure, HOF-arg, and stored-in-a-generated-holder escaping closure
 is freed unconditionally (8 opt-outs dropped); and under the experiment the fat
 env now carries an `env[-1]` drop-glue header walked by `drop_glue_env_N`, with
 retain/move at capture, a `Drop` typeclass for owned-opaque (String) captures,
-and a partial-application-head free. **10 httpd fixtures** are flipped leak-clean
+and a partial-application-head free. **11 httpd fixtures** are flipped leak-clean
 flag-on (mw-log, basic-auth{,-attr,-noncapture}, body-size, json, static, cors,
-cors-opts, compose). Residuals (documented in the dated notes + reports):
-`mw-compose-of` needs variadic-rest uniqueness analysis; the `httpd-async-*`
+cors-opts, compose, compose-of). Residuals (documented in the dated notes + reports):
+the `httpd-async-*`
 family needs the reactor/CPS runtime-API change (precompiled libturi C); and
 `mw-cookie`/`-form` are an httpd request-accessor cstr leak, not a closure issue
 (`docs/reported/httpd-request-accessor-cstr-leak.md`). Prepared from
 `docs/reported/escaping-fat-closure-env-leak.md` and the B2 residuals in
 `cps-runtime-finish-plan.md` (Progress-log PD).
 
+> **Progress note (2026-07-22b) -- `httpd-mw-compose-of` LANDED leak-clean
+> flag-on; the three leak sources resolved without a per-apply uniqueness
+> analysis.** The earlier note pinned three sources; each is now handled by the
+> soundest available mechanism, and the fixture is LSan-clean flag-on (stdout
+> matches, suite 2264/0, flag-off byte-identical):
+>
+> 1. **Closure chain** -- `mw-tag`'s handler param marked `^fat next` (it IS a fat
+>    closure handle), so the drop-glue walk frees the wrapper onion, exactly as in
+>    `httpd-mw-compose`. Fixture annotation only.
+> 2. **Cons spine** (`__tur_cons_of`) -- `compose-middleware-of` owns the fresh
+>    `& mws` list and only walks it, so it now frees the cells after the fold via a
+>    fixed-arity inline-C helper `httpd-mw-free-spine` (frees the cells, leaves the
+>    head VALUES). A stdlib change, flag-off too (the spine was a genuine leak);
+>    the cells are always distinct so this needs no uniqueness analysis.
+> 3. **Transient factory heads** (`make_hymw`) -- reclaimed CALLER-side, not
+>    callee-side. The plan's unsoundness worry (a `(compose-middleware-of base m m)`
+>    freeing a consumed factory twice) is specific to a *callee-side per-apply*
+>    free. Freeing each factory at the CALLER's scope exit is per-binding-once, so
+>    a value passed twice is still freed exactly once -- the aliasing hazard never
+>    arises. Wiring (all gated on `--enable=closure-drop-glue`, flag-off
+>    byte-identical): (a) `compose-middleware-of`'s rest param is `^borrow & mws`
+>    -- a new `TY_FN.rest_borrow` bit set from a `^borrow` immediately before `&`
+>    (elab_fns.c); (b) `binding_escapes_impl` (emit_core.c) treats a fresh closure
+>    passed in the rest `EX_CONS_LIST` of a `rest_borrow` variadic as non-escaping,
+>    peeling the carrier casts on each element; (c) `returns_fresh_closure` now
+>    peels a trailing `(let [...] <closure>)` wrapper so a factory like
+>    `(defn make-mw [tag] (let [_t tag] (fn [n] (mw-tag _t n))))` is recognised as
+>    fresh-closure-returning. The existing `let_binding_env_freeable` then frees the
+>    factory envs at the caller's scope exit via `TUR_CLOSURE_DROP`. Sound because
+>    the factory captures are scalar-Copy (borrowed cstr, copied into the wrappers),
+>    so the surviving chain is unaffected. `requires.no-leak-check` DROPPED; the
+>    fixture carries `flags: --enable=closure-drop-glue`.
+>
 > **Progress note (2026-07-22) -- #1b LANDED: Drop-typeclass dispatch in the
 > closure drop-glue; `httpd-mw-cors` leak-clean flag-on.** The drop-glue now
 > releases an owned Drop-typeclass capture, and mw-cors captures owned `String`.

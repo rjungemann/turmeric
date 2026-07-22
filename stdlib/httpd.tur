@@ -3370,6 +3370,23 @@
     (let [inner (httpd-mw-fold base (list-tail mws))
           mw    (list-head mws)]
       (if (= mw 0) inner (httpd-mw-apply mw inner)))))
+;;; httpd-mw-free-spine -- internal: free the cons-cell spine of a variadic
+;;; middleware rest-list, leaving the head VALUES untouched. `compose-middleware-of`
+;;; owns the fresh `& mws` list; `httpd-mw-fold` only walks it (applying each head
+;;; once), so once the fold has built the wrapper chain the spine cells are dead
+;;; and can be reclaimed. The head factories are borrowed (the caller frees them
+;;; at its own scope exit), so this frees ONLY the cells, never the heads.
+
+(defn httpd-mw-free-spine [mws : int] : nil
+  ```c
+  typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
+  __tur_cons_cell *p = (__tur_cons_cell *)(intptr_t)mws;
+  while (p) {
+      __tur_cons_cell *n = (__tur_cons_cell *)(intptr_t)p->tail;
+      free(p);
+      p = n;
+  }
+  ```)
 ;;; compose-middleware-of -- runtime variadic form of compose-middleware.
 ;;;
 ;;; This is a defn, not a macro. Use when the chain is built at runtime
@@ -3405,9 +3422,11 @@
 ;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
 
 (defn compose-middleware-of [A]
-  [^fat base :int & mws :A]
+  [^fat base :int ^borrow & mws :A]
   :int
-  (httpd-mw-fold base mws))
+  (let [composed (httpd-mw-fold base mws)]
+    (httpd-mw-free-spine mws)
+    composed))
 ;; =============================================================================
 ;; MW1: mw-body-size -- Content-Length cap (per docs/upcoming/httpd-middleware-plan.md)
 ;; =============================================================================

@@ -651,6 +651,15 @@ typedef struct Type {
              * NULL for primitive rest (`& rest :int`, etc.), in which case the
              * fast-path TypeKind comparison on rest_kind is used. */
             struct Type *rest_full_type;
+            /* closure-drop-glue (mw-compose-of): the `& rest` parameter carries a
+             * `^borrow` annotation -- the callee invokes/reads each rest element
+             * but does not store or return it, so a fresh uniquely-owned closure
+             * passed as a rest argument does NOT escape and the CALLER may free it
+             * at scope exit (per-binding-once, so the duplicate-argument aliasing
+             * hazard of a callee-side per-apply free does not arise).  Set only
+             * under `--enable=closure-drop-glue`; default false keeps flag-off
+             * codegen byte-identical. */
+            bool rest_borrow;
             /* LS4: index of the parameter whose lifetime the borrow return is
              * tied to (the returned &'a T aliases this argument's storage), or
              * -1 when the return is not a lifetime-tied borrow.  Used by the
@@ -1306,6 +1315,7 @@ static inline Type type_fn(const TypeKind arg_kinds[], uint32_t arity, TypeKind 
     t.as.fn.result_borrow_arg = -1; /* LS4: no lifetime-tied borrow return by default */
     t.as.fn.rest_kind   = TY_INT; /* AR6: default rest type */
     t.as.fn.rest_full_type = NULL; /* typed-variadic: NULL = primitive rest */
+    t.as.fn.rest_borrow = false; /* closure-drop-glue: ^borrow rest, default off */
     t.as.fn.param_type_forms = NULL; /* sized-types-cross-param-unification: filled by defn elab */
     t.as.fn.result_type_form = NULL; /* SZ8 non-GADT: filled by defn elab when a return ann was recorded */
     return t;
