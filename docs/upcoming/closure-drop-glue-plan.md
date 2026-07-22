@@ -76,12 +76,13 @@ below is ready to execute if/when that family is prioritized. Prepared from
 >   (it IS a fat closure handle -- `httpd-call` dispatches it as one -- so `^fat`
 >   lets the is_fat walk free the chain; behavior-neutral flag-off). The fixture's
 >   `next : int` was simply under-annotated.
-> - **`httpd-mw-cors-opts` (64B)** -- NOT strings: the `(mw-cors-opts opts)`
->   PARTIAL-APPLICATION closure (captures the `CorsOpts` by value) is applied once
->   by `compose-middleware` and discarded, but its `__pap` env is never freed. A
->   distinct S1-shape ("a fresh closure applied once as a callee, freed after the
->   call") -- the `__pap` closure is built at elab_call.c:3268, not the EX_CLOSURE
->   path.
+> - **`httpd-mw-cors-opts` (64B) -- FIXED.** The `(mw-cors-opts opts)`
+>   PARTIAL-APPLICATION head desugars to `(let [<pre-applied args>] <EX_CLOSURE>)`
+>   and is bound by the call-head hoist (`elab_call_head_expr`) as a `__call_head`
+>   let. `let_binding_env_freeable` now admits such a fresh partial-app head (its
+>   `__pap` thunk returns the underlying fn's result, never its own env, so freeing
+>   it at scope exit can't alias-UAF), freeing it via TUR_CLOSURE_DROP. Flipped
+>   flag-on, marker dropped.
 > - **`httpd-mw-compose-of` (120B)** -- the variadic `compose-middleware-of` builds
 >   a cons list of its `& mws` (`__tur_cons_of`) that leaks; the closure chain also
 >   needs `^fat next`. Two causes; the cons-list is a variadic-rest ownership issue.
