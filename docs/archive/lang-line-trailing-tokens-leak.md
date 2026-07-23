@@ -1,5 +1,12 @@
 # `#lang` line: trailing tokens leak into the body
 
+**Status:** RESOLVED -- `detect_lang` now consumes the remainder of the `#lang`
+line (`src/compiler/reader.c`) before setting `out_rest`, so trailing tokens no
+longer reach the reader. `p` halts at the newline (matching the existing
+no-trailing-token path), leaving the terminator in place so body line numbers
+are preserved -- the stripped `#lang` line shows as an empty line 1. Regression
+fixture: `tests/fixtures/lang-trailing-tokens/`.
+
 **Severity:** low (cosmetic today; a prerequisite for the `#lang` layers plan).
 
 ## Summary
