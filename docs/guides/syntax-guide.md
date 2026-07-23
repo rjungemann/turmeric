@@ -12,8 +12,13 @@ This guide is the front door to Turmeric's surface syntax. It teaches you to
 1. The default **S-expression** dialect used by `.tur` files. SRFI-105
    **curly-infix** is enabled here too -- `{a + b}` reads as `(+ a b)` in
    every dialect, no `#lang` directive required.
-2. The **sweet-expression** dialect activated by `#lang sweet-exp` or a
-   `.tur.sweet` extension (indentation + neoteric + `$` + curly-infix).
+2. The **sweet-expression** dialect activated by `#lang turmeric/sweet`
+   (legacy alias: `#lang sweet-exp`) or a `.tur.sweet` extension (indentation
+   + neoteric + `$` + curly-infix).
+
+The `#lang` line also carries an optional set of additive **layers** after the
+base dialect (e.g. `#lang turmeric stringed`); see
+[Part 2.5](#part-25----lang-base-dialects-and-layers).
 
 It does not re-explain the semantics of every special form -- the deep-dive
 guides own that. Instead it shows you the *shape* of the language and points
@@ -412,6 +417,74 @@ let [add3 make-adder(3)
   println(add3(10))    ; 13
   println(add7(10))    ; 17
 ```
+
+---
+
+## Part 2.5 -- `#lang` base dialects and layers
+
+A `#lang` line is more than a dialect switch. Its full shape is:
+
+```
+#lang <base>[/<dialect>] <layer>*
+```
+
+The whole line is read *before the first form*, so everything that changes how
+the file reads or checks is declared up front and is guaranteed file-scoped.
+
+### Base dialect (mutually exclusive)
+
+The first, possibly slash-namespaced, token picks exactly one **base reader**:
+
+| Base | Reader |
+|---|---|
+| `turmeric` | plain s-expression (the default; curly-infix is always on) |
+| `turmeric/curly-infix` | curly-infix emphasis (same as the default) |
+| `turmeric/neoteric` | curly-infix + neoteric `f(x)` |
+| `turmeric/sweet` | full sweet-expressions (indentation + neoteric + `$`) |
+
+`turmeric/sweet` is the preferred spelling for the sweet-exp base. The older
+`#lang sweet-exp` is still accepted as a legacy alias, so
+`#lang sweet-exp` and `#lang turmeric/sweet` are equivalent -- migrate to the
+slash-namespaced form when convenient. A `.tur.sweet` extension selects the
+sweet base without any directive.
+
+Bases do not compose (sweet-exp is a whole indentation pass; curly/neoteric are
+flags on the same reader), which is exactly why they share the one slash-named
+slot.
+
+### Layers (an additive, order-independent set)
+
+The space-separated tokens *after* the base are **layers**: a set, not a
+pipeline. Order does not matter, and each layer is either a **reader layer**
+(it flips on a `#`-dispatch) or a **semantic layer** (it flips on an
+elaboration/checker gate). Layers are a small, curated set -- an arbitrary
+one-off macro bundle still belongs in a `#use-reader-macros` file, not here.
+
+The reader layer available today is **`stringed`**, which turns on the
+`#s"..."` owned-String literal with no `#use-reader-macros` directive:
+
+```turmeric
+#lang turmeric stringed
+(load "stdlib/string.tur")
+(defn main [] : int
+  (let [g #s"hello"]        ; owned String, not a borrowed cstr
+    (string/len g)))
+```
+
+Because layers ride alongside the base, they compose with any dialect --
+`#lang turmeric/sweet stringed` gives sweet-exp *and* `#s"..."`:
+
+```sweet-exp
+#lang turmeric/sweet stringed
+$ load "stdlib/string.tur"
+defn main [] : int
+  string/len(#s"hello")
+```
+
+A `#lang` layer is a hard requirement of the file: an unrecognised layer token
+is a compile error (`TUR-E0330`), never silently ignored. Run `tur lang-layers`
+(add `--json` for the machine-readable form) to list every registered layer,
+its kind, and a one-line summary.
 
 ---
 

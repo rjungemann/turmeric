@@ -177,6 +177,7 @@ set(TUR_CORE_SOURCES
     compiler/install.c
     compiler/reader.c
     compiler/reader_macros.c
+    compiler/lang_layers.c
     compiler/symbols.c
     compiler/typeclass.c
     compiler/types.c

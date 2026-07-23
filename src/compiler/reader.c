@@ -1,5 +1,6 @@
 #include "reader.h"
 #include "reader_macros.h"
+#include "lang_layers.h" /* L0: #lang layer registry */
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 #include "globals.h" /* DL0: g_data_literals_enabled */
 #include "buf.h"     /* sweet-exp preprocessor */
@@ -3939,6 +3940,13 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
     }
     r.user_macros = reg;
 
+    /* L2: activate every `#lang` reader layer before the first form.  Each
+     * hook registers its `#`-dispatch into `reg` (idempotently, so a
+     * persistent REPL/interp registry is safe).  `file->lang_layers` (not
+     * eff_file's) carries the set: the sweet-exp xform copies it via `*xfile
+     * = *file`, and layers are orthogonal to the base reader. */
+    lang_layers_apply_readers(file->lang_layers, reg, arena, st);
+
     switch (file->reader_type) {
         case READER_TURMERIC:
             /* Standard s-expression syntax only */
@@ -4031,11 +4039,37 @@ Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
 
 /* #lang directive detection and reader type utilities */
 
-/* Parse #lang directive from the first line of source */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
-                       size_t *out_rest_len) {
+/* Resolve a `#lang` base name (the first, possibly slash-namespaced, token)
+ * to a ReaderType.  Returns (ReaderType)-1 for an unknown base. */
+static ReaderType lang_base_from_name(const char *name, size_t len) {
+    if (len == 8 && memcmp(name, "turmeric", 8) == 0)
+        return READER_TURMERIC;
+    if (len == 20 && memcmp(name, "turmeric/curly-infix", 20) == 0)
+        return READER_CURLY_INFIX;
+    if (len == 17 && memcmp(name, "turmeric/neoteric", 17) == 0)
+        return READER_NEOTERIC;
+    /* L3: `turmeric/sweet` is the slash-namespaced spelling; `sweet-exp` is
+     * the legacy alias, accepted silently through v1. */
+    if (len == 14 && memcmp(name, "turmeric/sweet", 14) == 0)
+        return READER_SWEET;
+    if (len == 9 && memcmp(name, "sweet-exp", 9) == 0)
+        return READER_SWEET;
+    return (ReaderType)-1;
+}
+
+/* Parse #lang directive, reporting the base reader plus the additive layer
+ * set (lang-layers-plan L0).  See the declaration in diag.h for the
+ * out-param contract. */
+ReaderType detect_lang_layered(const char *src, size_t len,
+                               const char **out_rest, size_t *out_rest_len,
+                               LangLayerSet *out_layers,
+                               const char **out_bad, size_t *out_bad_len) {
     const char *p = src;
     size_t remaining = len;
+
+    if (out_layers)  *out_layers  = 0;
+    if (out_bad)     *out_bad     = NULL;
+    if (out_bad_len) *out_bad_len = 0;
 
     /* Racket-style shebang: if the file starts with `#!` (followed by `/` or
      * whitespace, to disambiguate from any future `#!`-dispatched form),
@@ -4055,7 +4089,7 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
     }
 
     /* Check for #lang */
-    if (remaining >= 5 && p[0] == '#' && p[1] == 'l' && p[2] == 'a' && 
+    if (remaining >= 5 && p[0] == '#' && p[1] == 'l' && p[2] == 'a' &&
         p[3] == 'n' && p[4] == 'g') {
         p += 5;
         remaining -= 5;
@@ -4066,7 +4100,7 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
             remaining--;
         }
 
-        /* Extract the language name (can contain slashes) */
+        /* Extract the base name (the first token; it can contain slashes). */
         const char *lang_start = p;
         size_t lang_len = 0;
         while (remaining > 0 && p[0] != ' ' && p[0] != '\t' &&
@@ -4076,52 +4110,61 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
             remaining--;
         }
 
-        /* Consume the remainder of the `#lang` line so trailing tokens never
-         * leak into the body handed to the reader. `p` stops AT the newline
-         * (matching the no-trailing-token path, where the name loop above
-         * already halts on `\n`/`\r`), leaving the terminator in place so the
-         * body keeps its original line numbering -- the empty line 1 the
-         * reader sees stands in for the stripped `#lang` line. When the
-         * `#lang` layers work lands (docs/upcoming/lang-layers-plan.md, phase
-         * L0), these trailing tokens become the layer list; the same
-         * EOL-consumption is what makes the leak impossible. */
-        while (remaining > 0 && p[0] != '\n' && p[0] != '\r') {
-            p++;
-            remaining--;
+        ReaderType base = lang_base_from_name(lang_start, lang_len);
+
+        /* Collect the space-separated trailing tokens as the layer set, then
+         * consume to end-of-line so no token ever leaks into the body handed
+         * to the reader.  `p` stops AT the newline (matching the
+         * no-trailing-token path, where the base-name loop already halts on
+         * `\n`/`\r`), leaving the terminator in place so the body keeps its
+         * original line numbering -- the empty line 1 the reader sees stands
+         * in for the stripped `#lang` line. */
+        for (;;) {
+            while (remaining > 0 && (p[0] == ' ' || p[0] == '\t')) {
+                p++;
+                remaining--;
+            }
+            if (remaining == 0 || p[0] == '\n' || p[0] == '\r') break;
+
+            const char *tok = p;
+            size_t tok_len = 0;
+            while (remaining > 0 && p[0] != ' ' && p[0] != '\t' &&
+                   p[0] != '\n' && p[0] != '\r') {
+                p++;
+                tok_len++;
+                remaining--;
+            }
+
+            /* Only classify tokens when the caller wants the layer set; the
+             * base-only detect_lang wrapper just consumes them. */
+            if (out_layers) {
+                long idx = lang_layer_index(tok, tok_len);
+                if (idx >= 0) {
+                    *out_layers = lang_layer_add(*out_layers, idx);
+                } else if (out_bad && *out_bad == NULL) {
+                    *out_bad = tok;              /* first unknown token */
+                    if (out_bad_len) *out_bad_len = tok_len;
+                }
+            }
         }
 
-        /* Determine reader type from language name */
-        if (lang_len == 8 && memcmp(lang_start, "turmeric", 8) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_TURMERIC;
-        } else if (lang_len == 20 && memcmp(lang_start, "turmeric/curly-infix", 20) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_CURLY_INFIX;
-        } else if (lang_len == 17 && memcmp(lang_start, "turmeric/neoteric", 17) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_NEOTERIC;
-        } else if (lang_len == 9 && memcmp(lang_start, "sweet-exp", 9) == 0) {
-            if (out_rest) *out_rest = p;
-            if (out_rest_len) *out_rest_len = remaining;
-            return READER_SWEET;
-        }
-
-        /* Unknown #lang - return a special value to indicate error */
-        /* We'll use READER_TURMERIC + 1 as a sentinel, but better to add a new type */
-        /* For now, just return TURMERIC and let the caller check */
         if (out_rest) *out_rest = p;
         if (out_rest_len) *out_rest_len = remaining;
-        /* Return a special "unknown" type - we'll add this to the enum */
-        return (ReaderType)-1; /* Unknown/invalid */
+        return base;   /* (ReaderType)-1 when the base name is unknown */
     }
 
     /* No #lang directive found */
     if (out_rest) *out_rest = src;
     if (out_rest_len) *out_rest_len = len;
     return READER_TURMERIC;
+}
+
+/* Base-reader-only wrapper: parses (and EOL-consumes) any layer tokens but
+ * discards them.  Existing callers that don't thread the layer set use this. */
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
+                       size_t *out_rest_len) {
+    return detect_lang_layered(src, len, out_rest, out_rest_len,
+                               NULL, NULL, NULL);
 }
 
 /* Get reader type from file extension */

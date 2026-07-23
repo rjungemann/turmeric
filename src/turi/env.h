@@ -254,6 +254,11 @@ typedef struct TuriEnv {
     EnvHashTable globals_ht;
     /* Active reader syntax mode — settable via #lang in the REPL */
     ReaderType   reader_type;
+    /* Additive `#lang` layer set active for the session (lang-layers-plan
+     * L1), the neighbor of reader_type: carried onto each eval's SourceFile
+     * so reader layers (e.g. `stringed` => #s"...") stay active across the
+     * accumulated <eval> blob.  Reset alongside reader_type on a #lang switch. */
+    LangLayerSet lang_layers;
     /* Base directory for resolving module imports (NULL = ".").
      * Set this before turi_eval_file when the input uses (import ...). */
     const char  *module_base_dir;

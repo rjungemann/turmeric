@@ -1,1 +1,1 @@
-trailing tokens on the #lang line are stripped
+trailing #lang layer tokens are stripped, not leaked into the body

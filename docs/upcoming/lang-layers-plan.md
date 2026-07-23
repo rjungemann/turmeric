@@ -1,7 +1,31 @@
 # `#lang` Layers -- base dialect + additive feature layers
 
-Status: Not started (design agreed)
+Status: L0-L3 + L5 landed (2026-07-23). L4 (semantic-layer bridge / `refined`)
+still rides the refinement-types work -- the LANG_LAYERS[] row struct already
+carries the `LAYER_SEMANTIC` kind + `experiment` field for it, but no semantic
+layer is registered until its backing EXPERIMENTS[] row exists.
 Introduced: 2026-07-23
+
+## What landed
+
+- `src/compiler/lang_layers.{h,c}` -- the curated `LANG_LAYERS[]` registry
+  (`LangLayerSet` bitset, `LangLayerKind`, lookup/count/at, and
+  `lang_layers_apply_readers`). One row today: the `stringed` reader layer.
+- `detect_lang_layered` parses the base + the trailing layer set, consumes to
+  EOL (the old trailing-token leak is gone), and reports an unknown layer via
+  the `out_bad` token; `detect_lang` is now a base-only wrapper over it.
+- `SourceFile.lang_layers` + `TuriEnv.lang_layers` carry the set through the
+  compiled build (`main.c`), the `--interpret` path (`eval.c`), and the REPL
+  (`repl.c`). `read_all_with_registry` runs each enabled reader layer's hook
+  before the first form.
+- `stringed` => `#s"..."` owned-String literal, built-in and curated (same
+  expansion as `stdlib/string-reader.tur`, no `#use-reader-macros` needed).
+- `turmeric/sweet` base accepted; `sweet-exp` kept as a legacy alias.
+- Unknown layer token => hard error `TUR-E0330` (compiled, interpret, REPL).
+- `tur lang-layers [--json]` lists the registry. Docs in
+  `docs/guides/syntax-guide.md` (Part 2.5) and `reader-forms-guide.md`.
+- Fixtures: `lang-layer-stringed`, `lang-layer-stringed-sweet`,
+  `errors/lang-layer-unknown`.
 
 ## Motivation
 
