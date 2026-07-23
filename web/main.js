@@ -34,7 +34,7 @@ let currentLangMode = 'turmeric'; // tracks active #lang mode
 // ============================================================================
 
 const CONFIG = {
-    DEFAULT_CODE: `#lang sweet-exp
+    DEFAULT_CODE: `#lang turmeric/sweet
 
 println "Hello, Turmeric!"
 `,
@@ -78,7 +78,7 @@ const EXAMPLES = {
 
 (println (handle (use-ask)
   (Ask [] k) (resume k 41)))`,
-    sweet: `#lang sweet-exp
+    sweet: `#lang turmeric/sweet
 ;; Sweet-exp syntax: indentation, curly-infix, neoteric, $
 
 defn square [x : int] : int
@@ -887,7 +887,7 @@ async function initWasm() {
  * blank line (leading spaces/tabs are allowed but not newlines).
  *
  * Returns { lang: string|null, body: string }
- *   lang -- the language name (e.g. "sweet-exp") or null if no directive found
+ *   lang -- the base language name (e.g. "turmeric/sweet") or null if no directive found
  *   body -- source text with the #lang line removed
  */
 function parseLangDirective(code) {
