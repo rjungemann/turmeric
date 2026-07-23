@@ -190,6 +190,33 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
     #undef IFC
 }
 
+/* E2 (fat-closure fn-value threading): the single argument of a fat-closure
+ * fn-value call crosses the `tur_poly_fn_t.fn_cps` ABI as one `int64_t` word.  The
+ * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) force-declares the
+ * wrapped fn's direct entry as `int64_t <fn>(int64_t)`, so the wrapped fn's C
+ * signature must be exactly that -- restrict to a plain `int`/`int64` arg (and,
+ * at the poly-wrap gate, result).  A wider int-register kind (cstr/ptr/bool/
+ * sub-int) has a distinct C spelling that would mismatch the twin's forward
+ * declaration, so it stays on the delegated direct path (correct as before, just
+ * not newly DK-threaded). */
+static bool fncps_arg_kind_ok(TypeKind k) {
+    return k == TY_INT || k == TY_INT64;
+}
+/* E2 (fat-closure fn-value threading): is a call `(fn arg)` through the poly-fn
+ * PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a CONCRETE fat
+ * closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn` signature
+ * (poly_type TY_FN) -- with a single int-register-class NON-poly argument (the
+ * `tur_poly_fn_t.fn_cps` ABI is `(void*, int64_t, DK*)`).  A rank-2/3 forall poly
+ * param (poly_type TY_FORALL) or a poly-wrapped arg (poly_arg_mask) crosses a
+ * different, wider ABI and is excluded (it stays on the delegated direct path). */
+static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
+    if (!fn || !fn->is_poly_fn) return false;
+    if (fn->poly_type && fn->poly_type->kind == TY_FORALL) return false;
+    if (e->as.call_.n_args != 1) return false;
+    if (e->as.call_.poly_arg_mask) return false;
+    return fncps_arg_kind_ok(e->as.call_.args[0]->type.kind);
+}
+
 /* ---- small allocation helpers ----------------------------------------- */
 
 static CTerm *new_term(CpsB *b, CTermKind k) {
@@ -3412,6 +3439,26 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            /* E2 (fat-closure fn-value threading): a TAIL call THROUGH a
+             * fat-closure poly-fn PARAM (`f : (-> int int)`, is_poly_fn) is
+             * dispatched through the closure's `fn_cps` DK-threading slot instead
+             * of being delegated to the direct emitter (which would call `f.fn`
+             * off the trampoline, escaping an effectful callback's perform).  The
+             * emitter picks `fn_cps` when populated (an effectful fn-value) and
+             * the direct `f.fn` path otherwise, so a pure fn-value is unchanged.
+             * Restricted to the single-int-arg `tur_poly_fn_t.fn_cps` ABI. */
+            if (g_opt_cps_tramp_resume && fncps_param_call_ok(fn, e)) {
+                Pending pp = {0};
+                CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
+                CAtom *args = arena_alloc(b->a, sizeof(CAtom));
+                args[0] = a0;
+                CTerm *t = new_term(b, CT_TAILCALL);
+                t->as.tailcall.fn = fn; t->as.tailcall.args = args;
+                t->as.tailcall.n = 1; t->as.tailcall.kont = kont;
+                t->as.tailcall.via_fncps = true;
+                t->as.tailcall.call_expr = e;
+                return fold_pending(b, &pp, t);
+            }
             /* A cps->direct call to an uncolored callee with atomic args is
              * delegated to the direct emitter, which resolves the monomorphized
              * callee name (constructors, specialized fns) the CPS backend's own
@@ -3865,6 +3912,28 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     return t;
                 }
                 return build_letraw(b, e, x, rest);
+            }
+            /* E2 (fat-closure fn-value threading), BIND position: a NON-tail call
+             * through a fat-closure poly-fn param reifies the continuation `rest`
+             * as a heap join `j(x)` and threads it to the closure's `fn_cps` slot
+             * (or the direct `f.fn` path when NULL).  Mirrors the E2a via_registry
+             * non-tail shape (single int-register-class arg). */
+            if (g_opt_cps_tramp_resume && fncps_param_call_ok(fn, e)) {
+                Pending pp = {0};
+                CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
+                CAtom *fargs = arena_alloc(b->a, sizeof(CAtom));
+                fargs[0] = a0;
+                CVar j = fresh_cvar(b, x.type);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *call = new_term(b, CT_TAILCALL);
+                call->as.tailcall.fn = fn; call->as.tailcall.args = fargs;
+                call->as.tailcall.n = 1; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.via_fncps = true;
+                call->as.tailcall.call_expr = e;
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = call;
+                return fold_pending(b, &pp, t);
             }
             /* cps->direct call to an uncolored callee with atomic args: delegate
              * to the direct emitter (monomorphized callee names). */

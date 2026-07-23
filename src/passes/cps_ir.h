@@ -222,6 +222,13 @@ struct CTerm {
          * binding).  The emitter uses fn_atom's atom_str as the `__tur_cps_lookup`
          * key in that case. */
         struct { const Binding *fn; CAtom fn_atom; CAtom *args; uint32_t n; CKont kont; bool via_registry;
+                 /* E2 (fat-closure fn-value threading): the callee `fn` is a
+                  * poly-fn PARAM whose runtime value is a `tur_poly_fn_t` fat
+                  * closure.  Dispatch through its `fn_cps` DK-threading slot when
+                  * populated (an effectful fn-value), else the direct `fn.fn`
+                  * call delivered to the continuation.  Single int arg only (the
+                  * tur_poly_fn_t.fn_cps ABI is `(void*, int64_t, DK*)`). */
+                 bool via_fncps;
                  /* RC2: source EX_CALL retained for per-ABI-spec typeclass
                   * re-resolution in the CPS emitter (see letcall.call_expr). */
                  const Expr *call_expr; } tailcall;

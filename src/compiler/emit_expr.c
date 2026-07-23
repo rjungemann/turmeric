@@ -1,5 +1,6 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
+#include "effect.h"     /* E2 fat-fn-value threading: EffectRow kind gate */
 #include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 
@@ -8084,12 +8085,73 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     wparams[nwp++] = emit_fn_arg_type_from_type(wbnd->type, i);
                 spill = ensure_aggregate_spill_shim(ctx, wn, wres, wparams, nwp);
             }
+            /* E2 (fat-closure fn-value threading): when the wrapped inner fn is
+             * EFFECTFUL (CPS-colored -- it performs or calls a colored fn), emit a
+             * `<wrapper>__cps` twin and populate the fat closure's `fn_cps`
+             * DK-threading slot, so a call through a fat-closure poly-fn param
+             * dispatches the callback onto the caller's trampoline instead of a
+             * fresh root (which would leave the effect unhandled).  Restricted to a
+             * single `int`/`int64` arg + result (the twin's fixed int64 ABI); an
+             * aggregate-result carrier (spill) is excluded. */
+            char *fn_cps_name = NULL;
+            if (g_opt_cps_tramp_resume && !spill) {
+                const Expr *inner = e->as.poly_wrap_.inner;
+                while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+                const Binding *ib = (inner && inner->kind == EX_VAR)
+                    ? inner->as.var.binding : NULL;
+                if (ib && ib->source_binding) ib = ib->source_binding;
+                /* Gate on the wrapped fn being EFFECTFUL (a non-empty effect row):
+                 * it performs / propagates an effect, so it is CPS-colored and has
+                 * a registered `__cps` entry the twin threads through.  A pure fn
+                 * (empty / no row) needs no twin -- the fat closure's direct `.fn`
+                 * path is unchanged (no fixture churn, no fn_cps slot).  The
+                 * pass-inferred row (FnDef.inferred_effect_row) is the reliable
+                 * signal -- a `defn`'s binding TY_FN often carries no declared row;
+                 * fall back to the declared row if inference has not run. */
+                const struct EffectRow *er = NULL;
+                if (ib && ib->source_fn_def && ib->source_fn_def->inferred_effect_row)
+                    er = ib->source_fn_def->inferred_effect_row;
+                else if (ib && ib->type.kind == TY_FN)
+                    er = ib->type.as.fn.effect_row;
+                bool effectful = er && er->kind != ERK_EMPTY;
+                /* The twin force-declares the wrapped fn as `int64_t <fn>(int64_t)`
+                 * (emit_module.c) and dispatches its int64 `__cps` entry, so the
+                 * wrapped fn's arg AND result must both be a plain `int`/`int64`
+                 * (spelled `int64_t` in C).  A wider kind would mismatch the twin's
+                 * forward decl -- exclude it (stays on the delegated direct path). */
+                if (ib && ib->is_global && effectful
+                    && ib->type.kind == TY_FN && ib->type.as.fn.arity == 1) {
+                    TypeKind ak = ib->type.as.fn.arg_kinds[0];
+                    TypeKind rk = ib->type.as.fn.result_kind;
+                    bool ak_ok = (ak == TY_INT || ak == TY_INT64);
+                    bool rk_ok = (rk == TY_INT || rk == TY_INT64);
+                    if (ak_ok && rk_ok) {
+                        char *iname = raw_name_for_binding(ib);
+                        char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname);
+                        /* twin==NULL means already emitted -- reuse the name. */
+                        if (twin) { fn_cps_name = twin; }
+                        else {
+                            Buf tn; buf_init(&tn);
+                            buf_printf(&tn, "%s__cps", wn);
+                            buf_putc(&tn, '\0');
+                            fn_cps_name = strdup(tn.data);
+                            buf_free(&tn);
+                        }
+                        free(iname);
+                    }
+                }
+            }
             Buf out; buf_init(&out);
-            buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s }",
-                       spill ? spill : wn);
+            if (fn_cps_name)
+                buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s, %s }",
+                           spill ? spill : wn, fn_cps_name);
+            else
+                buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s }",
+                           spill ? spill : wn);
             buf_putc(&out, '\0');
             free(wn);
             free(spill);
+            free(fn_cps_name);
             char *result = strdup(out.data);
             buf_free(&out);
             return result;

@@ -708,6 +708,58 @@ char *ensure_typed_fatshim(EmitCtx *ctx,
     return name;
 }
 
+/* E2 (fat-closure fn-value threading): emit a `<wrapper>__cps` twin for a
+ * poly-wrap thunk `<wrapper>` (e.g. `__poly_1285`) that boxes an EFFECTFUL named
+ * fn `inner_fn` (e.g. `cb`) into a `tur_poly_fn_t`.  The twin has the fat
+ * closure's `fn_cps` ABI -- `(void *env, int64_t arg, struct DK *__kont)` -- and
+ * DK-threads the call to `inner_fn`'s CPS entry, recovered from the direct->CPS
+ * registry (the same channel E2a uses for a fn-value param).  So an effectful
+ * callback invoked through a fat-closure param performs on the caller's
+ * trampoline, not a fresh root.  `inner_fn` is force-declared here (thunk_typedefs
+ * is emitted ahead of the normal forward decls) and is registered by its own
+ * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
+ * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
+ * The caller restricts `inner_fn` to a plain `int`/`int64` arg AND result, whose
+ * C spelling is exactly the `int64_t <fn>(int64_t)` this forward-declares. */
+char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
+                                 const char *inner_fn) {
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, wrapper_name);
+    buf_puts(&nb, "__cps");
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) { free(name); return NULL; }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    /* thunk_typedefs precedes the normal forward decls, so declare inner_fn's
+     * direct entry ourselves (single int64 arg + int64 return -- the caller's
+     * gate guarantees an int-register-class arg/result).  `__tur_cps_fn` /
+     * `__tur_cps_lookup` / `dk_run` come from the DK runtime preamble, already
+     * emitted above this section. */
+    buf_printf(target, "static int64_t %s(int64_t);\n", inner_fn);
+    buf_printf(target, "static int64_t %s(void *__pwe, int64_t __pwx, struct DK *__kont) {\n", name);
+    buf_puts(target, "    (void)__pwe;\n");
+    buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)%s);\n", inner_fn);
+    buf_puts(target, "    if (__c) return ((int64_t(*)(int64_t, struct DK *))__c)(__pwx, __kont);\n");
+    buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(__pwx));\n", inner_fn);
+    buf_puts(target, "}\n");
+    return name;
+}
+
 char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
                                   Type result_type, Type *param_types,
                                   uint8_t n_params) {

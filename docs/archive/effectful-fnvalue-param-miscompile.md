@@ -1,5 +1,11 @@
 # Effectful fn-value passed to a fn-value-param function miscompiles
 
+**STATUS: RESOLVED (2026-07-23).** All three defects are fixed and in-tree; the
+minimal repro now prints `15` and runs clean (full suite 2272/0). Defect 1 (the
+poly-wrap binder ABI) landed earlier; this pass closes defects 2+3, the E2
+DK-threading of an effectful callback through a fat-closure (`tur_poly_fn_t`)
+fn-value parameter. See the resolution section at the bottom.
+
 Summary: passing an EFFECTFUL callback (a fn that `perform`s) as a `(-> int int)`
 argument to a function whose signature takes a fn-value, then invoking it under a
 `handle`, emits C that does not compile. Severity: medium (blocks the E2
@@ -141,3 +147,52 @@ in-tree investigation pins exactly what they need:
 So defect 1 is a clean ABI fix (landed); defects 2+3 are the coordinated E2
 DK-threading feature across the CT-IR translation, the poly-wrap emitter, and the
 CPS-candidate machinery.
+
+## Resolution (2026-07-23): defects 2+3 landed -- E2 fat-closure fn_cps threading
+
+Defect 1 (the binder-ABI compile error) was already fixed. This pass closes
+defects 2+3 -- the runtime effect-threading -- by giving a fat closure
+(`tur_poly_fn_t`) a populated `fn_cps` DK-threading slot and dispatching through
+it. The repro (and non-tail / multi-call variants) now thread `cb`'s
+`(perform (Ask))` to the enclosing `handle` and print the correct result.
+
+**The four coordinated pieces:**
+
+1. **`tur_poly_fn_t.fn_cps` populated at the poly-wrap literal**
+   (`emit_expr.c`, EX_POLY_WRAP wrapper-binding case). When the wrapped inner fn
+   is EFFECTFUL (its `FnDef.inferred_effect_row` is non-empty) and has a plain
+   `int`/`int64` arg + result, the literal emits a third field
+   `__poly_N__cps` and calls `ensure_poly_wrap_cps_thunk`. A pure fn-value is
+   unchanged (two-field literal, `fn_cps` stays NULL) -- no fixture churn.
+
+2. **The `__poly_N__cps` twin** (`emit_module.c` `ensure_poly_wrap_cps_thunk`).
+   Emitted into the `thunk_typedefs` prelude with the fat closure's `fn_cps` ABI
+   `(void*, int64_t, DK*)`; it recovers the wrapped fn's CPS entry from the
+   direct->CPS registry (`__tur_cps_lookup((intptr_t)cb)` -> `cb__cps`, the same
+   channel E2a uses) and tail-calls it threading `__kont`. `cb` is already
+   registered by its addr-taken CPS-registration constructor.
+
+3. **A `via_fncps` CT-IR tail call** (`cps_ir.h` + `cps_ir.c`). A call through a
+   fat-closure poly-fn PARAM (`fn->is_poly_fn`, a concrete `:fn` carrier, single
+   `int`/`int64` arg) becomes a `CT_TAILCALL{via_fncps}` in both TAIL position
+   (`cps_tail`) and BIND position (`cps_bind`, reifying the continuation as a
+   heap join). Rank-2/3 forall poly params and poly-wrapped args are excluded
+   (`fncps_param_call_ok`).
+
+4. **The callee dispatch** (`emit_cps_ir.c` CT_TAILCALL + `emit_heap_join`).
+   `if (f.fn_cps) return f.fn_cps(f.env, arg, <kont>)` threads an effectful
+   fn-value onto the caller's trampoline; a NULL slot (pure fn-value) falls to
+   the direct `f.fn` call delivered to the continuation, exactly as the old
+   delegated CT_LETRAW path did. The non-tail heap-join reifies the continuation
+   as a DK frame and captures the fat closure `f` on the frame env as a
+   `tur_poly_fn_t` field (`collect_caps`/`has_capture`/`jbody_has_cps_tailcall`
+   extended for `via_fncps`), so a lifted-body `f.fn_cps` resolves.
+
+Regression fixture: `tests/fixtures/cps-tramp-resume-e2-fat-fnvalue-param`
+(tail + non-tail `(+ 1 (f x))` + two-call `(+ (f x) (f (+ x 1)))`, output `252`).
+
+**Residual (out of scope, no regression):** the fn_cps channel is the single
+int-arg `tur_poly_fn_t.fn_cps` ABI, so a fat-closure fn-value with a wider arg
+(cstr/ptr/float/multi-arg) or a non-`int` result stays on the delegated direct
+path (correct as before -- the effect escapes only if it was already escaping);
+widening the slot is a future extension.
