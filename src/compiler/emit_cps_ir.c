@@ -7589,38 +7589,77 @@ static void emit_callcc(CE *ce, const CTerm *t) {
 
 /* ---- signatures ------------------------------------------------------ */
 
+/* The by-value C type spelling for param `i` of `fd` -- the __cps ABI spelling.
+ * Extracted so the direct->cps entry wrapper can reuse it for the params it does
+ * NOT rewrite to const-pointer (see cps_entry_param_by_ptr). */
+static const char *emit_param_ctype(EmitCtx *ctx, const FnDef *fd, uint32_t i) {
+    /* A rank-2 poly fn value crosses as a fat closure (`tur_poly_fn_t`),
+     * matching the direct emitter's signature -- not the `void *` its scalar-
+     * pointer type kind would otherwise pick.  A delegated indirect call
+     * (`fnv.fn` / `fnv.env`) reads the struct's fields, so the parameter must
+     * be declared as the fat closure, not an opaque pointer. */
+    if (fd->params[i]->is_poly_fn)
+        return "tur_poly_fn_t";
+    if (fd->params[i]->type.kind == TY_FN) {
+        /* A plain (non-rank-2) fn param crosses as the direct emitter's
+         * function-pointer spelling: a typed C-ABI pointer becomes its
+         * registered `R (*)(A...)` typedef, an ordinary closure carrier the
+         * opaque `int64_t`.  type_c_name(TY_FN) leaks a bad spelling, so this
+         * mirrors emit_module.c's signature emission exactly -- otherwise a
+         * delegated call through the param (which the direct emitter emits)
+         * and the __cps declaration would disagree. */
+        const char *td = fd->params[i]->type.as.fn.cfnptr
+            ? register_fn_ptr_typedef(&fd->params[i]->type) : NULL;
+        return td ? td : "int64_t";
+    }
+    /* A by-value aggregate param needs its real (monomorphized) C type,
+     * which emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full
+     * Type. */
+    return binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
+}
+
 static void emit_params(EmitCtx *ctx, Buf *file, const FnDef *fd) {
     for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
-        const char *pty;
-        /* A rank-2 poly fn value crosses as a fat closure (`tur_poly_fn_t`),
-         * matching the direct emitter's signature -- not the `void *` its scalar-
-         * pointer type kind would otherwise pick.  A delegated indirect call
-         * (`fnv.fn` / `fnv.env`) reads the struct's fields, so the parameter must
-         * be declared as the fat closure, not an opaque pointer. */
-        if (fd->params[i]->is_poly_fn)
-            pty = "tur_poly_fn_t";
-        else if (fd->params[i]->type.kind == TY_FN) {
-            /* A plain (non-rank-2) fn param crosses as the direct emitter's
-             * function-pointer spelling: a typed C-ABI pointer becomes its
-             * registered `R (*)(A...)` typedef, an ordinary closure carrier the
-             * opaque `int64_t`.  type_c_name(TY_FN) leaks a bad spelling, so this
-             * mirrors emit_module.c's signature emission exactly -- otherwise a
-             * delegated call through the param (which the direct emitter emits)
-             * and the __cps declaration would disagree. */
-            const char *td = fd->params[i]->type.as.fn.cfnptr
-                ? register_fn_ptr_typedef(&fd->params[i]->type) : NULL;
-            pty = td ? td : "int64_t";
-        }
-        else
-            /* A by-value aggregate param needs its real (monomorphized) C type,
-             * which emit_type_from_kind(TY_ADT/APP/STRUCT) loses -- use the full
-             * Type. */
-            pty = binder_ctype_full(ctx, fd->params[i]->type.kind, &fd->params[i]->type);
+        const char *pty = emit_param_ctype(ctx, fd, i);
         char *pn = name_for_binding(ctx, fd->params[i]);
         buf_printf(file, "%s %s", pty, pn);
         free(pn);
     }
+}
+
+/* True iff the direct emitter / forward decl passes param `i` of `fd` by const
+ * pointer (a large by-value product / record ADT -- type_struct_pass_by_ptr).
+ * The direct->cps entry wrapper is the plain-name boundary symbol that direct
+ * (uncolored) callers reach, so its C signature must mirror the direct forward
+ * decl (emit_module.c emit_fn_forward_decls, `const <type_c_name> *`).  Its
+ * `__cps` body keeps the by-value spelling (emit_param_ctype), so the wrapper
+ * dereferences the pointer when threading the arg into the `__cps` call.  Spell
+ * such a param by value in the wrapper and it clashes with the const-pointer
+ * forward decl ("conflicting types for '<fn>'").  Mirrors emit_module.c:
+ * emit_fn_forward_decls and emit_fns.c's direct param emission exactly. */
+static bool cps_entry_param_by_ptr(const Expr *e, const FnDef *fd, uint32_t i) {
+    if (fd->params[i]->is_poly_fn) return false;
+    if (fd->params[i]->type.kind == TY_FN) return false;
+    if (fd->params[i]->is_fat && fd->body && fd->body->kind == EX_INLINE_C)
+        return false;
+    Type pty = (!fd->params[i]->is_fat && e->type.as.fn.arg_full_types
+                && e->type.as.fn.arg_full_types[i])
+        ? *e->type.as.fn.arg_full_types[i]
+        : fd->param_types[i];
+    bool inline_c = (fd->body && fd->body->kind == EX_INLINE_C);
+    return !fd->closure && !inline_c && type_struct_pass_by_ptr(pty);
+}
+
+/* The `type_c_name` spelling used inside the `const %s *` for a by-ptr wrapper
+ * param -- must match emit_fn_forward_decls' `type_c_name(_fwd_pty)`. */
+static const char *cps_entry_param_byptr_ctype(const Expr *e, const FnDef *fd,
+                                               uint32_t i) {
+    Type pty = (!fd->params[i]->is_fat && e->type.as.fn.arg_full_types
+                && e->type.as.fn.arg_full_types[i])
+        ? *e->type.as.fn.arg_full_types[i]
+        : fd->param_types[i];
+    return type_c_name(pty);
 }
 
 /* Emit forward declarations for every emittable __cps function, once per
@@ -8046,15 +8085,31 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         && !fd->binding->is_from_stdlib);
     buf_printf(file, "__attribute__((unused)) %s%s %s(",
                entry_static ? "static " : "", rety, cn);
-    emit_params(ctx, file, fd);
+    /* Params: the __cps ABI spelling (emit_params) EXCEPT a pass-by-ptr
+     * aggregate, which is spelled `const T *` to agree with the direct forward
+     * decl (the wrapper is the plain-name symbol direct callers link against). */
+    for (uint32_t i = 0; i < fd->n_params; i++) {
+        if (i) buf_puts(file, ", ");
+        char *pn = name_for_binding(ctx, fd->params[i]);
+        if (cps_entry_param_by_ptr(e, fd, i)) {
+            buf_printf(file, "const %s *%s",
+                       cps_entry_param_byptr_ctype(e, fd, i), pn);
+        } else {
+            buf_printf(file, "%s %s", emit_param_ctype(ctx, fd, i), pn);
+        }
+        free(pn);
+    }
     buf_puts(file, ") {\n");
     buf_puts(file, "    __dk_entry_depth++;\n");
     buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
-    /* Build the argument list "<params>, __root" once. */
+    /* Build the argument list "<params>, __root" once.  A const-pointer param
+     * (cps_entry_param_by_ptr) is dereferenced back to the by-value `__cps`
+     * signature. */
     Buf __args; buf_init(&__args);
     for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(&__args, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
+        if (cps_entry_param_by_ptr(e, fd, i)) buf_putc(&__args, '*');
         buf_puts(&__args, pn);
         free(pn);
     }

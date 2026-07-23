@@ -1,5 +1,26 @@
 # Separate compilation: CPS entry-wrapper spells a by-pointer aggregate param by value, conflicting with the forward decl
 
+> **RESOLVED (2026-07-22).** Fixed in `src/compiler/emit_cps_ir.c`: the
+> direct->cps entry wrapper now spells a pass-by-ptr aggregate param as the
+> direct emitter's `const T *` (via `cps_entry_param_by_ptr` +
+> `cps_entry_param_byptr_ctype`, mirroring `emit_fn_forward_decls`) and
+> dereferences it (`*p`) when threading the arg into the by-value `__cps` call.
+> `emit_params`' by-value per-param logic was extracted into `emit_param_ctype`
+> so the wrapper reuses it for the params it does not rewrite. `chol`/`lu`/`qr`
+> in `linalg` now emit a wrapper signature that agrees with their forward decl;
+> `linalg__decomp.c` compiles with zero `conflicting types`. Full suite: 2264
+> passed, 2 failed (both pre-existing: `re-string`, `vec-push-...`).
+>
+> **NOTE -- `linalg` is still not a clean `--shared` build, but for an
+> unrelated, pre-existing, build-mode-INDEPENDENT reason:** several linalg
+> inline-C helpers declared `: cstr` (`__vec-fmt`, `__mat-fmt`, and others in
+> `small.tur`/`sized.tur`) `return (int64_t)(intptr_t)buf;` -- returning the
+> int64 carrier from a function whose C signature is `const char *`. Apple
+> clang 21 promotes `-Wint-conversion` to a hard error, so this fails in
+> whole-program `tur build` too (reproduced with a 6-line single-file program).
+> It is a spice-source portability issue (the inline-C should `return buf;`),
+> not the CPS ABI bug this report covers, and is tracked separately.
+
 **Severity:** medium (blocks `tur build --shared` of a spice with a
 CPS-lowered `defn` that takes a pass-by-pointer aggregate param). Pre-existing;
 surfaced while auditing `../turmeric-spices` after the base-ADT-typedef header
