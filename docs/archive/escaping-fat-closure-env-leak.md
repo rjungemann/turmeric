@@ -1,6 +1,15 @@
 # Escaping fat closure's captured-env struct is never freed
 
-> # ⛔ ACTIVE / BLOCKING -- this report is the exit gate for real work in progress.
+> # ✅ RESOLVED / ARCHIVED (2026-07-23). Superseded by the single source of truth:
+> # docs/upcoming/closure-drop-glue.md
+> #
+> # The closure drop-glue subsystem shipped and GRADUATED to always-on
+> # (2026-07-22): experiments.c:135/164, globals.h:220. The minimal repro in this
+> # report (`make-scaler` fat-env) is fixed. The "ACTIVE / BLOCKING" banner below
+> # is stale pre-graduation cruft -- DO NOT act on it; it is retained only as the
+> # historical record. Any remaining follow-up is tracked in the single file above.
+
+> # [HISTORICAL, STALE] ⛔ ACTIVE / BLOCKING -- this report is the exit gate for real work in progress.
 >
 > The fix is NOT deferred and NOT waiting on anything else. It is
 > [docs/upcoming/closure-drop-glue-plan.md](../upcoming/closure-drop-glue-plan.md),
