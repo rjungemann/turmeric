@@ -1,20 +1,25 @@
 # Struct-of-functions lens composition -- downstream codegen blockers
 
-**Severity:** medium (front-end accepts the program; codegen still can't lower
-the composed generic builder end to end). Blocks the plain `:copy`
-struct-of-functions lens idiom through `compose-lens`.
+**Severity:** medium. **Status: FULLY RESOLVED (2026-07-23).** The plain `:copy`
+struct-of-functions lens idiom now compiles AND runs correctly end to end
+through a generic `compose-lens` at wide by-value element types. Fixture
+`tests/fixtures/lens-compose-wide-byvalue-get-put/` exercises get/put/structural
+sharing (prints `Ann` / `Bob` / `42`); the whole suite stays green (2272/0).
 
 **Status (2026-07-23):**
 - **Blocker 1 -- RESOLVED.** Struct-name apostrophe no longer leaks into C
-  identifiers (fix below; fixture
-  `tests/fixtures/adt-name-apostrophe-monomorph-mangle/`).
-- **Blocker 2 -- PARTIALLY RESOLVED.** It was two independent facets:
+  identifiers (fixture `tests/fixtures/adt-name-apostrophe-monomorph-mangle/`).
+- **Blocker 2 -- RESOLVED.** Three facets, all fixed:
   - **Facet 2a (captured-lens env-field carrier mismatch) -- RESOLVED.** A
     generic fn returning a struct of *N* closures now specializes the env of
-    *every* closure, not just the first (fix below).
+    *every* closure, not just the first.
   - **Facet 2b (intermediate middle-type-param erased to the int64 carrier) --
-    OPEN.** This is the genuine end-to-end-monomorphization north-star; root
-    cause pinpointed below.
+    RESOLVED, emit-side.** The by-value aggregate result of a fat-dispatched
+    fn-value call is recovered per-spec (no elab-layer carrier-convention
+    change, so no return-poly regressions).
+  - **Facet 2c (b4box param ABI on fat-dispatched closures) -- RESOLVED.** A
+    closure stored into a typed `(fn ...)` struct field is marked and has its
+    B4 `b4box` wide-param boxing suppressed, matching the by-value typed thunk.
 
 ## Context
 
@@ -102,9 +107,9 @@ With this, all `->l1 = l1` / undefined-`__env_*__spec__` / invalid-storage-class
 errors are gone; the second closure gets a proper `__env_N__spec__<...>` with
 concrete field types, exactly like the first.
 
-### Facet 2b -- intermediate middle-type-param erased to int64 carrier -- OPEN
+### Facet 2b -- intermediate middle-type-param erased to int64 carrier -- RESOLVED
 
-Remaining symptom (after 2a):
+Original symptom (after 2a):
 
 ```
 error: incompatible type for argument 2 of
@@ -115,84 +120,77 @@ error: incompatible type for argument 2 of
 In `((. l2 get) ((. l1 get) s))` the intermediate `((. l1 get) s)` has type `A`
 (compose-lens's *middle* type param; `A = Person` at this instantiation). The
 outer call's fat thunk correctly wants a by-value `tur_adt_Person`, but the
-intermediate value materializes into an `int64_t` temp.
+intermediate value materialized into an `int64_t` temp.
 
-**Root cause (empirically verified 2026-07-23 -- corrects an earlier wrong
-guess in this report that blamed the defstruct field type).** The struct field
-type is FINE: instrumentation shows the field-access head `(. l1 get)` carries
-`result_full_type = A` (a named `TY_TYVAR`). The erasure happens later, in
-`elab_call_fn_inner` (`src/compiler/elab_call.c`, the
-`result_is_concrete_composite` block ~5493-5503): when a call's result is a
-bare `TY_TYVAR`, that block collapses `call_result_type` to `TYPE_INT` (the
-int64 carrier) -- `TY_APP/TY_ADT/TY_EXISTS/TY_FORALL/TY_FN` are preserved, but a
-bare named tyvar is not. This runs during compose-lens's GENERIC elaboration,
-before monomorphization, so the tyvar NAME is discarded and the per-spec
-resolver (which *does* bind `A -> Person`; verified: the inner-closure spec
-carries `S->Company, A->Person, B->cstr`) has nothing left to resolve. The
-materialization temp is then declared `int64_t` while a 16-byte `Person` flows
-through it.
+**Root cause (empirically verified -- corrects an earlier wrong guess in this
+report that blamed the defstruct field type).** The struct field type is FINE:
+the field-access head `(. l1 get)` carries `result_full_type = A` (a named
+`TY_TYVAR`). The erasure happens later, in `elab_call_fn_inner`
+(`src/compiler/elab_call.c`, the `result_is_concrete_composite` block): when a
+call's result is a bare `TY_TYVAR`, `call_result_type` collapses to `TYPE_INT`
+(the int64 carrier) during compose-lens's GENERIC elaboration, before
+monomorphization -- so the per-spec resolver (which *does* bind `A -> Person`)
+has nothing left to resolve, and the materialization temp is `int64_t`.
 
-**A fix was proven to work end to end but has re-architecture-scale blast
-radius.** Adding `TY_TYVAR` (named) to `result_is_concrete_composite` +
-disabling the B4 `b4box` param boxing for the composed closures makes the repro
-below compile AND run correctly (`get`->`Ann`, `put "Bob"`+`get`->`Bob`, and the
-untouched `age`->`42`). But it regresses 13 previously-green fixtures, because it
-breaks two load-bearing conventions:
+**Fix -- emit-side, per-spec (does NOT touch the elab collapse, so the
+int64-carrier convention for return-poly results is preserved).** An earlier
+attempt to preserve the tyvar at elab regressed 13 fixtures (front-end
+`println`-on-tyvar, `vec-push!` carrier bridge, scalar reinterpret) -- it broke
+that load-bearing convention. Instead, emit now RECOVERS the by-value aggregate
+where -- and only where -- it is needed: a **fat-dispatched call through a fn
+VALUE** (`(. l1 get) s`, whose callee is a boxed/`is_fat` fn value with no
+`closure_fn_binding` -- i.e. NOT a directly-called named closure) whose resolved
+`result_full_type` is a **wide by-value ADT**. At those sites the fat thunk /
+by-value fatshim returns the aggregate by value, so the call materializes it by
+value:
+- `fn_body_tail_byvalue_carrier_type` and its bool sibling
+  `fn_body_tail_emits_byvalue_carrier_abi` (emit_expr.c) report that type, so the
+  control-merge temp is declared by value and NOT deref-unboxed.
+- the fat-dispatch thunk-cast return (`disp_result`) is spelled by value.
 
-1. **The int64-carrier convention for return-polymorphic results.** Preserving
-   the tyvar changes the type every downstream consumer sees. It breaks the
-   FRONT END (`(println (option-eq? ...))` -> `TUR-E0006 operator lookup failed
-   for 'println': first arg type tyvar` -- fixture `option-consumers-byvalue-arg`)
-   and the back end (the `vec-push!` carrier bridge stops firing when `(ok-val
-   r)` is no longer int64 -- fixture
-   `constrained-loop-vec-push-byvalue-result-element`; the scalar reinterpret
-   bitcast is skipped -- fixture `constrained-generic-dispatch-float-element`).
-   The correct shape is to KEEP the elab collapse and recover the by-value
-   aggregate type EMIT-SIDE, per-spec, only where the tyvar resolves to a wide
-   by-value aggregate (a currently-uncompilable path, so near-zero regression).
+The guard `!closure_fn_binding && (is_fat || boxed)` scopes it to real
+fat-dispatch: a directly-called (letrec `go`) or uniform-`tur_poly_fn_t` closure
+is untouched, so its existing carrier ABI is preserved. Near-zero blast radius
+(these sites were previously uncompilable).
 
-2. **The `b4box` wide-by-value-ADT closure-param ABI** (facet 2c, below).
+### Facet 2c -- b4box param ABI on fat-dispatched closures -- RESOLVED
 
-### Facet 2c -- b4box param ABI: direct-call vs fat-dispatch -- OPEN
-
-Once 2b compiles, the composed `get` SIGSEGVs: its wide by-value `Company`
-param is boxed by B4 slice 2 (`__tur_b4box_s`, `emit_fns.c` needs_box_load) in
+Once 2b compiled, the composed `get` SIGSEGV'd: its wide by-value `Company`
+param was boxed by B4 slice 2 (`__tur_b4box_s`, `emit_fns.c` needs_box_load) in
 the DEFINITION, but the fat-dispatch call site and the env `__fn` typed-thunk
-slot pass it BY VALUE (`tur_adt_Company`) -- so 16 bytes handed in as two
-registers are read back as a heap-box pointer and dereferenced (the string
-content lands in the pointer slot).
+slot pass it BY VALUE (`tur_adt_Company`) -- 16 bytes handed in as two registers
+read back as a heap-box pointer and dereferenced.
 
-The distinction, verified against the working B4 fixture
-`letrec-self-recursive-carrier-struct-return`: a **directly-called** closure
-(`letrec go`, invoked by its C name) has its direct call sites box the wide
-param, matching the boxed definition -- b4box is CORRECT there, and its typed
-thunk typedef (unused for dispatch) being by-value is harmless. A
-**fat-dispatched** closure (a lens `get`/`put` stored in a struct field and
-invoked through the typed thunk, whose slot-0 fatshims take the value BY VALUE)
-must pass the param by value -- b4box is WRONG there. So b4box's determinant is
-direct-vs-fat dispatch, NOT the naive "does a typed thunk exist" proxy (both
-have one; gating on it broke the directly-called case -- the letrec-carrier
-build failure). A correct fix must (a) tell fat-dispatched closures apart from
-directly-called ones and (b) keep the definition, base + spec forward decls, env
-`__fn` slot type, and every call site in agreement -- ~5 sites, the same
-van-Laarhoven-grade coordination.
+The determinant is the closure's real per-call DISPATCH MODE:
 
-### Conclusion
+| closure | dispatch | correct param ABI |
+| --- | --- | --- |
+| `letrec-self-recursive-carrier-struct-return` `__fn_1286` | DIRECT (called by C name; call sites box) | boxed (b4box) |
+| `hkt-cata-wide-byvalue-carrier` `__fn_1303__spec__` | UNIFORM (`fmap` dispatches through `tur_poly_fn_t`) | boxed (b4box) |
+| composed `get`/`put` (`__fn_1293__spec__`) | TYPED (stored in a `Lens` fn-field, invoked through its typed thunk / by-value fatshims) | by value (NO b4box) |
 
-Blocker 2b+2c is not a bounded fix; it is the monomorphization / van-Laarhoven
-north-star (`docs/archive/history/van-laarhoven-*`): recover erased return-poly
-types emit-side per spec, AND resolve the fat-vs-direct closure-param ABI, in
-lockstep across elab result-typing, the scalar reinterpret, and ~5 closure-ABI
-emit sites. The working proof-of-concept and the exact 13-fixture blast radius
-are recorded here so the coordinated change can be scoped deliberately.
+Every simpler proxy misfires (typed-thunk-exists breaks the directly-called
+case; spec-vs-base breaks hkt-cata; the env `__fn` slot type is misleading --
+hkt-cata's looks by-value yet dispatches through `tur_poly_fn_t`). The clean
+signal is the closure's DESTINATION: a closure stored as a VALUE into a typed
+`(fn ...)` struct/ADT field is invoked through that field's by-value typed
+thunk. **Fix:** a pre-pass (`emit_mark_byval_fn_field_closures`, emit_module.c)
+walks the program and marks every lifted closure that is a make-struct / ctor
+fn-field value (`FnDef.byval_fn_field_closure`; the base FnDef is marked, which
+every ABI spec shares via `spec->fn`).  b4box (`needs_box_load` in emit_fns.c and
+both forward-decl sites in emit_module.c) is suppressed for marked closures, so
+the definition, forward decls, typed thunk, and call site all agree on by value.
+Closures dispatched through `tur_poly_fn_t` or called directly are unmarked and
+keep b4box.
 
 ## Minimal repros
 
 Blocker 1 (RESOLVED): fixture
 `tests/fixtures/adt-name-apostrophe-monomorph-mangle/`.
 
-Blocker 2 (facet 2b still open): compose two concrete lenses over wide by-value
-`:copy` structs and force the composed `get`/`put` to run --
+Blocker 2 (RESOLVED): fixture
+`tests/fixtures/lens-compose-wide-byvalue-get-put/` -- compose two concrete
+lenses over wide by-value `:copy` structs and run get/put/structural-sharing:
 
 ```turmeric
 (defstruct Person :copy [name : cstr age : int])
@@ -203,6 +201,5 @@ Blocker 2 (facet 2b still open): compose two concrete lenses over wide by-value
     (fn [s : S] : B ((. l2 get) ((. l1 get) s)))
     (fn [s : S b : B] : S ((. l1 put) s ((. l2 put) ((. l1 get) s) b)))))
 ;; build ceo-lens : (Lens Company Person), name-lens : (Lens Person cstr),
-;; then (compose-lens ceo-lens name-lens) and call its get -- cc errors on the
-;; int64/tur_adt_Person intermediate (facet 2b).
+;; then (compose-lens ceo-lens name-lens); get -> "Ann", put+get -> "Bob".
 ```

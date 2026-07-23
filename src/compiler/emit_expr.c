@@ -841,6 +841,24 @@ bool fn_body_tail_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
                 return true;
             if (closure_call_emits_byval_aggregate(ctx, e))
                 return true;
+            /* lens-composition-codegen-blockers (Blocker 2b): a fat-dispatched
+             * call through a fn VALUE (`(. l1 get) s`) whose result the enclosing
+             * spec resolves to a wide by-value ADT now emits that aggregate BY
+             * VALUE -- the fat thunk cast return + materialization temp were
+             * recovered (disp_result / fn_body_tail_byvalue_carrier_type).  Report
+             * it so the control-merge bridge does NOT deref-unbox the already-by-
+             * value result ("aggregate value used where an integer was expected").
+             * Same gate as the type-returning sibling. */
+            if (e->kind == EX_CALL) {
+                const Binding *fcb = e->as.call_.fn_binding;
+                if (fcb && !fcb->is_global && fcb->type.kind == TY_FN &&
+                    !fcb->closure_fn_binding &&
+                    (fcb->is_fat || fcb->type.as.fn.boxed) &&
+                    fcb->type.as.fn.result_full_type &&
+                    type_is_wide_byval_adt(
+                        emit_resolve_type(ctx, *fcb->type.as.fn.result_full_type)))
+                    return true;
+            }
             return expr_emits_byvalue_carrier_abi(ctx, e);
     }
 }
@@ -895,6 +913,27 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
             if (type_uses_carrier_abi(sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
+        }
+        /* lens-composition-codegen-blockers (Blocker 2b): a fat-dispatched call
+         * through a fn VALUE -- a captured closure / call-head binding, e.g.
+         * `((. l1 get) s)` desugared to `(let [ch (. l1 get)] (ch s))` -- whose
+         * declared result is a bare tyvar the enclosing spec resolves to a WIDE
+         * by-value aggregate.  The call's own e->type was collapsed to the int64
+         * carrier at elaboration (elab_call_fn_inner), but the fat thunk / by-value
+         * fatshim returns the aggregate BY VALUE, so the materialization temp must
+         * be that aggregate, not int64.  Gated to a non-global fn-value callee
+         * whose resolved result is a wide by-value ADT, so ordinary carrier calls
+         * are untouched. */
+        {
+            const Binding *fcb = x->as.call_.fn_binding;
+            if (fcb && !fcb->is_global && fcb->type.kind == TY_FN &&
+                !fcb->closure_fn_binding &&
+                (fcb->is_fat || fcb->type.as.fn.boxed) &&
+                fcb->type.as.fn.result_full_type) {
+                Type rr = emit_resolve_type(ctx, *fcb->type.as.fn.result_full_type);
+                if (type_is_wide_byval_adt(rr))
+                    return rr;
+            }
         }
         /* byvalue-option-if-join-function-call-arm-aggregate-cast: an ordinary
          * top-level defn call whose declared result is a concrete by-value
@@ -4173,6 +4212,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         Type rfull_resolved = emit_resolve_type(ctx,
                             *fn_binding->type.as.fn.result_full_type);
                         if (!type_uses_carrier_abi(rfull_resolved))
+                            disp_result = rfull_resolved;
+                    }
+                    /* lens-composition-codegen-blockers (Blocker 2b): the recovery
+                     * above only fires when e->type resolved to a carrier-ABI
+                     * app/adt.  A WIDE by-value aggregate result -- `(. l1 get)`
+                     * returning `Person` -- erased all the way to the bare int64
+                     * carrier (TY_INT), which is NOT carrier-ABI per the predicate,
+                     * so the fat thunk cast's return slot stayed int64 while the
+                     * actual by-value fatshim returns `tur_adt_Person` by value.
+                     * Recover it from the callee's resolved result_full_type when it
+                     * is a concrete wide by-value ADT (matches the temp-var recovery
+                     * in fn_body_tail_byvalue_carrier_type).  Skipped in a dict-clone
+                     * body, where CM4 keeps the carrier. */
+                    else if (disp_result.kind == TY_INT &&
+                             !(ctx->current_abi_specialization &&
+                               ctx->current_abi_specialization->fn &&
+                               ctx->current_abi_specialization->fn->n_dict_clone > 0) &&
+                             fn_binding->type.kind == TY_FN &&
+                             fn_binding->type.as.fn.result_full_type) {
+                        Type rfull_resolved = emit_resolve_type(ctx,
+                            *fn_binding->type.as.fn.result_full_type);
+                        if (type_is_wide_byval_adt(rfull_resolved))
                             disp_result = rfull_resolved;
                     }
                     const char *ret_c = type_c_name(disp_result);

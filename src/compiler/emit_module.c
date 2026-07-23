@@ -5151,7 +5151,8 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
          * pointer -- mirror emit_fns.c's needs_box_load signature.  spec args are
          * already concrete, so type_is_wide_byval_adt reads them directly. */
         const char *pc;
-        if (spec->fn->closure && !spec->fn->params[i]->is_poly_fn &&
+        if (spec->fn->closure && !spec->fn->byval_fn_field_closure &&
+            !spec->fn->params[i]->is_poly_fn &&
             spec->fn->param_types[i].kind != TY_FN &&
             type_is_wide_byval_adt(spec->arg_types[i])) {
             pc = "int64_t";
@@ -5435,7 +5436,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
              * box pointer -- mirror emit_fns.c's needs_box_load signature. */
             Type _b4_pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[j])
                 ? *e->type.as.fn.arg_full_types[j] : fd->param_types[j];
-            if (fd->closure && !fd->params[j]->is_poly_fn &&
+            if (fd->closure && !fd->byval_fn_field_closure &&
+                !fd->params[j]->is_poly_fn &&
                 fd->param_types[j].kind != TY_FN &&
                 type_is_wide_byval_adt(emit_resolve_type(ctx, _b4_pty))) {
                 buf_puts(out, "int64_t");
@@ -9636,11 +9638,111 @@ static const Binding *vl_composed_adapter_binding(const Expr *body) {
     return NULL;
 }
 
+/* lens-composition-codegen-blockers (Blocker 2c): peel value-wrappers off `arg`
+ * and return the lifted-closure FnDef it constructs, or NULL. */
+static FnDef *emit_arg_closure_fndef(const Expr *arg) {
+    while (arg) {
+        if (arg->kind == EX_ASCRIBE)          arg = arg->as.ascribe_.inner;
+        else if (arg->kind == EX_FN_TO_FAT)   arg = arg->as.fn_to_fat_.inner;
+        else if (arg->kind == EX_POLY_TO_FAT) arg = arg->as.poly_to_fat_.inner;
+        else if (arg->kind == EX_POLY_WRAP)   arg = arg->as.poly_wrap_.inner;
+        else break;
+    }
+    if (arg && arg->kind == EX_CLOSURE && arg->as.closure_.closure)
+        return arg->as.closure_.closure->fn;
+    if (arg && arg->kind == EX_FN && arg->as.fn_.fn)
+        return arg->as.fn_.fn;
+    return NULL;
+}
+
+/* Blocker 2c: mark every lifted closure stored as a VALUE into a struct/ADT
+ * fn-field.  A `make-struct S ... clo ...` lowers to a ctor CALL (call_.ctor
+ * set) or an EX_MAKE_STRUCT whose field values are the closures; such a closure
+ * is invoked through the field's TYPED thunk (by-value params), so its wide
+ * by-value ADT params must NOT be B4-boxed.  Marks the base FnDef, which every
+ * ABI spec shares via spec->fn, so the b4box gate sees it in both. */
+static void emit_mark_byval_fn_field_closures(const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_PROGRAM:
+            for (uint32_t i = 0; i < e->as.program.n; i++)
+                emit_mark_byval_fn_field_closures(e->as.program.items[i]);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn)
+                emit_mark_byval_fn_field_closures(e->as.fn_def_.fn->body);
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn)
+                emit_mark_byval_fn_field_closures(e->as.fn_.fn->body);
+            return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                emit_mark_byval_fn_field_closures(e->as.closure_.closure->fn->body);
+            return;
+        case EX_DEF:
+            emit_mark_byval_fn_field_closures(e->as.def_.init);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                emit_mark_byval_fn_field_closures(e->as.let_.bindings[i].init);
+            emit_mark_byval_fn_field_closures(e->as.let_.body);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                emit_mark_byval_fn_field_closures(e->as.do_.items[i]);
+            return;
+        case EX_IF:
+            emit_mark_byval_fn_field_closures(e->as.if_.cond);
+            emit_mark_byval_fn_field_closures(e->as.if_.then_);
+            emit_mark_byval_fn_field_closures(e->as.if_.else_or_null);
+            return;
+        case EX_RETURN:
+            emit_mark_byval_fn_field_closures(e->as.return_.value);
+            return;
+        case EX_ASCRIBE:
+            emit_mark_byval_fn_field_closures(e->as.ascribe_.inner);
+            return;
+        case EX_MATCH:
+            emit_mark_byval_fn_field_closures(e->as.match_.scrutinee);
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                emit_mark_byval_fn_field_closures(e->as.match_.arms[i].body);
+            return;
+        case EX_MAKE_STRUCT:
+            for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
+                FnDef *cf = emit_arg_closure_fndef(e->as.make_struct_.field_values[i]);
+                if (cf) cf->byval_fn_field_closure = true;
+                emit_mark_byval_fn_field_closures(e->as.make_struct_.field_values[i]);
+            }
+            return;
+        case EX_CALL:
+            /* A ctor call (make-struct lowered to the auto-bound record ctor)
+             * stores each arg into a struct field; a closure arg is a typed
+             * fn-field value. */
+            if (e->as.call_.ctor ||
+                (e->as.call_.fn_binding &&
+                 e->as.call_.fn_binding->is_construct_template)) {
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    FnDef *cf = emit_arg_closure_fndef(e->as.call_.args[i]);
+                    if (cf) cf->byval_fn_field_closure = true;
+                }
+            }
+            emit_mark_byval_fn_field_closures(e->as.call_.fn_expr);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                emit_mark_byval_fn_field_closures(e->as.call_.args[i]);
+            return;
+        default:
+            return;
+    }
+}
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
         return -1;
     }
+    emit_mark_byval_fn_field_closures(program);
 
     /* Two buffers: file scope (statics) and main body. We assemble at the end. */
     Buf file; buf_init(&file);

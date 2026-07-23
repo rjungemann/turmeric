@@ -3200,7 +3200,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * carrier. */
     bool *needs_box_load = (bool *)arena_alloc(ctx->type_arena, nbp * sizeof(bool));
     for (uint32_t i = 0; i < nbp; i++) needs_box_load[i] = false;
-    if (fd->closure) {
+    /* Blocker 2c: a closure stored into a typed fn-field is invoked through that
+     * field's by-value typed thunk, so its wide by-value ADT params cross by
+     * value -- suppress B4 b4box boxing (it would disagree with the typed thunk
+     * + call site and corrupt the arg). */
+    if (fd->closure && !fd->byval_fn_field_closure) {
         for (uint32_t i = 0; i < fd->n_params; i++) {
             if (fd->params[i]->is_poly_fn ||
                 fd->param_types[i].kind == TY_FN) continue;
