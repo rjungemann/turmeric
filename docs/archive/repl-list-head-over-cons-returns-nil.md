@@ -1,5 +1,27 @@
 # REPL `list-head`/`list-tail` over a prompt-built `cons` returns `nil`
 
+> **RESOLVED (2026-07-22).** Root cause was NOT a `native_cons` /
+> `native_list_head` drift -- both natives are correct and correctly paired.
+> The REPL preload (`repl_preload_stdlib_and_natives`) omitted the typed
+> native-function *stubs* that the `--interpret` path (`cmd_eval_h`) injects.
+> Without the `(defn cons [v :int n :int] :int 0)` stub, a bare `cons` at the
+> prompt elaborates to the `BS_FUNC_CALL` `cons` builtin, whose tree-walker
+> handler falls through `eval_builtin`'s `default` arm and **silently returns
+> nil** (`src/turi/eval.c`). `(list-head <nil>)` is then nil. Under
+> `--interpret` the stub makes `cons` a user-defn call the runtime native
+> (registered last, overriding the stub body) services -- returning a real
+> carrier cell -- so the same expression gives 65.
+>
+> Fix: the stub block was factored out of `src/main.c` into a shared
+> `turi_env_preload_native_stubs()` (`src/turi/preload.c`) and is now called in
+> the same after-macros/before-collections slot by **all three** interpreter
+> entry points -- `--interpret` (`cmd_eval_h`), the native REPL
+> (`repl_preload_stdlib_and_natives`), and the WASM/web REPL
+> (`wasm_preload_stdlib`) -- so they cannot drift again. Regression guard:
+> `tests/turi/repl-smoke.sh` now asserts `(list-head (cons 65 (cons 66 0)))
+> => 65` and `(head (cons 42 0)) => 42`. Verified: `tur repl` returns 65,
+> full `bash tests/run.sh` green (2268 passed). Original finding below.
+
 **Severity:** medium (silent wrong answer at the interactive prompt; the
 `--interpret` and compiled paths are correct, so it is REPL-only).
 

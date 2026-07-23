@@ -1,5 +1,15 @@
 # Codegen: cstr literal in `cons` head emitted as `char[]`, not coerced to int64
 
+> **RESOLVED (2026-07-22).** A bare cstr literal in an `int64`-typed argument
+> slot (the `cons` head) is now coerced/cast the same as any other cstr rvalue,
+> so it no longer lands as a naked `char[]`. Verified on the current tree:
+> - The `re-string` fixture -- whose `(re/union-patterns-string (cons
+>   "[A-Za-z]+" (cons "[0-9]+" 0)))` line is the report's exact repro -- builds
+>   and passes (`bash tests/run.sh` green).
+> - A standalone `(cons "[A-Za-z]+" (cons "[0-9]+" 0))` compiles clean even
+>   under `-Werror=int-conversion` (previously two hard `-Wint-conversion`
+>   errors). Original finding below.
+
 **Severity:** Medium -- building a cons-list of string literals fails to
 compile (`re-string` fixture). A common pattern (list of pattern strings)
 does not build.

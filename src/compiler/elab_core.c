@@ -2589,7 +2589,9 @@ char *elab_mangle_binding_name(const Binding *b) {
         mod_prefix_len  = j;
     }
 
-    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len);
+    /* +8 slack mirrors raw_name_for_binding: room for the `tur_u_` libc-
+     * collision guard prefix (6 bytes) plus the NUL. */
+    size_t total = mod_prefix_len + tur_mangle_bound(b->name->len) + 8;
     char *p = (char *)malloc(total);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
     size_t k = 0;
@@ -2602,6 +2604,15 @@ char *elab_mangle_binding_name(const Binding *b) {
         memcpy(p + k, b->name->name, b->name->len);
         k += b->name->len;
     } else if (b->is_global) {
+        /* codegen-user-defn-collides-with-libc-pipe2: mirror raw_name_for_binding
+         * -- a bare (non-module) global whose spelling is a libc symbol gets the
+         * `tur_u_` guard prefix so def, use, and inline-C `__TUR_CNAME_` all
+         * resolve to the same collision-free C name. */
+        if (mod_prefix_len == 0 && !is_main_binding &&
+            tur_name_collides_libc(b->name->name, b->name->len)) {
+            memcpy(p + k, "tur_u_", 6);
+            k += 6;
+        }
         tur_mangle_append(p, &k, b->name->name, b->name->len);
     } else {
         tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);

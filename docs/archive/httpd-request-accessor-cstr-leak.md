@@ -1,5 +1,21 @@
 # httpd request accessors leak their returned cstr (false "per-call ownership" contract)
 
+> **RESOLVED (2026-07-23).** Implemented the report's preferred fix -- a
+> per-request arena. `HttpdConn` gained an `owned_cstrs` field (a
+> `HttpdOwnedStr {char *s; next}` free-list) and a file-scope helper
+> `httpd_conn_own_cstr(conn, s)`; `httpd-req-cookie` and `httpd-req-form` now
+> route their fresh `malloc` through it, and BOTH `httpd-handle` teardown paths
+> (`__cleanup_iteration` blocking + `__async_cleanup` async) drain the list at
+> request end. The ergonomic "do not free" docstring contract is now true.
+>
+> Verified on Linux with LSan: pre-fix, `httpd-mw-cookie` leaked exactly
+> `12 byte(s) in 2 allocation(s)` in `httpd_hyreq_hycookie` (matching this
+> report); post-fix both `httpd-mw-cookie` and `httpd-mw-form` are LSan-clean
+> under default flags (no `--enable=closure-drop-glue` needed -- these fixtures
+> carry no residual closure-env leak), so their `requires.no-leak-check` markers
+> were dropped. All 33 `httpd-*` fixtures pass; full `bash tests/run.sh` green
+> (2269 passed). Original finding below.
+
 **Severity:** low (bounded per-request-lookup leak; not a crash or miscompile).
 httpd stdlib request-string ownership -- **not** a closure / drop-glue issue.
 
