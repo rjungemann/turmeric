@@ -1,5 +1,22 @@
 # reactor/fiber teardown does a bad-free on an interior closure-box pointer
 
+> **RESOLVED (verified 2026-07-22, macOS-arm64).** The bad-free is gone: the
+> reactor/fiber teardown is now header-aware. `tur_reactor_release_box`
+> (`src/async/reactor.c:85`) consults the emitted program's
+> `tur_closure_headers_enabled` flag (strong `= 1` in every compiled program,
+> overriding libturi's weak `0`) and, when set, recovers the allocation base via
+> the `env[-1]` drop-glue header (`*hdr` walks owning captures and frees the
+> base) instead of interior-freeing the past-header pointer -- exactly the
+> "store/back-compute the base" fix this report prescribed. Flag-off it keeps the
+> plain-free ABI.
+>
+> **Verification:** all 14 fixtures below were built **with ASan**
+> (`-fsanitize=address`, `ASAN_OPTIONS=detect_leaks=0`) and run to completion:
+> 14/14 exit 0, **no AddressSanitizer bad-free, no SIGABRT**, stdout matches
+> `expected.stdout`. (The default `tests/run.sh` compiles fixtures `-O2` without
+> ASan, so these already show green there; the ASan build is what exercises the
+> original abort.) Archived per the docs/reported STRICT RULE.
+
 **Severity:** High -- every compiled reactor/fiber program aborts (SIGABRT)
 at teardown under ASan; 13 fixtures red. Under a non-ASan Release build the
 same free corrupts the heap silently.
