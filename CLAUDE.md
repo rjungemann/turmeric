@@ -267,6 +267,36 @@ codegen/operator knobs (`--dump-*`, `--emit-abi-trace`), build-system options
 always-on at their current level. See
 [docs/guides/experimental-flags-guide.md](docs/guides/experimental-flags-guide.md).
 
+## `#lang` Layers -- curated only
+
+`#lang <base>[/<dialect>] <layer>*` selects one mutually-exclusive base
+reader (slash-namespaced: `turmeric`, `turmeric/curly-infix`,
+`turmeric/neoteric`, `turmeric/sweet`) plus an order-independent **set** of
+additive layers (the space-separated trailing tokens). See
+[docs/upcoming/lang-layers-plan.md](docs/upcoming/lang-layers-plan.md).
+
+A `#lang` layer token is legal **only** if it has a row in `LANG_LAYERS[]`.
+Adding a layer means:
+
+- One `LANG_LAYERS[]` row with every field populated (`name`, `kind`,
+  `reader_hook` or `experiment`, `summary`, `since`).
+- **Reader layers** (a layer that flips on a `#`-dispatch, e.g. `stringed` =>
+  `#s"..."`): the dispatch must be additive and commutative with every other
+  reader layer -- no ordering dependence. If it isn't, it is a base dialect
+  (slash-namespaced), not a layer.
+- **Semantic layers** (a layer that flips on an elaboration/checker gate, e.g.
+  `refined`): **must** point at an existing `EXPERIMENTS[]` row -- never a
+  second, parallel enable path. The experiment carries the lifecycle
+  (TUR-W0060/W0061) and `expires_at`. `#lang turmeric refined` is exactly
+  `--enable=refined` scoped to one file; a manifest that disables the
+  experiment makes the file a **hard error**, never a silent-ignore.
+- A doc paragraph in [docs/guides/syntax-guide.md](docs/guides/syntax-guide.md).
+
+Prefer *not* adding a layer. A one-off syntax convenience belongs in a
+`#use-reader-macros` file, not the curated `#lang` set. Graduate a layer to
+always-on (delete the row, behavior unconditional) rather than letting layers
+accumulate.
+
 ## Build System
 
 The main turmeric compiler is built with CMake directly. Once `tur` is on
