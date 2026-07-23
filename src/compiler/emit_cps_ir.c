@@ -8033,7 +8033,19 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * rather than returning an int64. */
     bool void_ret = (rt->kind == TY_NIL);
     const char *rety = void_ret ? "void" : binder_ctype_full(ctx, rt->kind, rt);
-    buf_printf(file, "__attribute__((unused)) static %s %s(", rety, cn);
+    /* Linkage must mirror the direct emitter's `needs_static` (emit_fns.c) and
+     * the forward decl (emit_fn_forward_decls): in separate compilation an
+     * exported (or retain_c_linkage) non-stdlib defn keeps external linkage so
+     * the plain-mangled entry wrapper is reachable from its forward declaration
+     * and from other TUs / the FFI export shim.  A bare `static` here on an
+     * exported CPS defn contradicts its non-static prototype -- "static
+     * declaration follows non-static declaration". */
+    bool entry_static = !(ctx->separate_compilation
+        && fd->binding
+        && (fd->binding->is_exported || fd->binding->retain_c_linkage)
+        && !fd->binding->is_from_stdlib);
+    buf_printf(file, "__attribute__((unused)) %s%s %s(",
+               entry_static ? "static " : "", rety, cn);
     emit_params(ctx, file, fd);
     buf_puts(file, ") {\n");
     buf_puts(file, "    __dk_entry_depth++;\n");

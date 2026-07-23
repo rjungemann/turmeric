@@ -5581,7 +5581,8 @@ static const char *adt_ctor_field_c_type(const CtorField *f, bool byval) {
  * typedef, only monomorphized type-applications, so without this the per-module
  * .c references `tur_adt_Either` / `ctor_Left` with no definition.  See
  * docs/reported/load-not-expanded-in-imported-or-project-modules.md. */
-static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
+static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
+                                       bool typedef_only) {
     /* CONV-S1 (defstruct-as-defadt): a struct-origin ADT superseded by a later
      * same-name defgadt/defdata is skipped at emission -- the winner owns the
      * `tur_adt_<Name>` C name, so emitting the loser's typedef/ctors here would
@@ -5610,6 +5611,13 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
      * named, C-ABI-compatible aggregate + a `<Name>` surface alias, so inline-C
      * that reads it by its surface type/field names compiles unchanged. */
     bool named = adt_uses_named_layout(def);
+    /* Guard the base layout typedef so the module header (separate compilation,
+     * emit_header calls this with typedef_only) and the per-module .c
+     * (impl_early) can both emit it without a C `redefinition` -- the header is
+     * #included first and wins.  Constructors + drop/walk glue are emitted below
+     * (.c-local, `static`) only when !typedef_only. */
+    buf_printf(out, "#ifndef TUR_TD_%s\n#define TUR_TD_%s\n",
+               adt_c_name, adt_c_name);
     if (named) {
         CtorDef *ctor = def->ctors[0];
         buf_printf(out, "typedef struct %s {\n", adt_c_name);
@@ -5677,6 +5685,8 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def) {
             free(sname);
         }
     }
+    buf_puts(out, "#endif\n");  /* TUR_TD_<Name> base layout guard */
+    if (typedef_only) return;
 
     /* CONV-S1 (slice 2): a by-value ADT with rc/ref/weak fields needs the same
      * drop/walk glue a struct gets, so an `rc/of` wrapping it releases the inner
@@ -5853,8 +5863,24 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
      * through their drop-glue header (walking captures) instead of interior-freeing
      * the past-header fat pointer.  A strong-over-weak override (not an extern +
      * constructor) so a program that never links reactor.o still defines the
-     * symbol cleanly. */
-    buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
+     * symbol cleanly.
+     *
+     * Separate compilation (guarded == shared): this preamble is replicated into
+     * every module TU, so a bare strong `= 1` would be defined N times and the
+     * link fails with duplicate symbols.  Route it through the owner-TU pattern
+     * (TUR_RT_OWNER, the generated tur_runtime.c, which pulls this block via
+     * tur_runtime.h): the single owner TU carries the strong override; every
+     * other module TU sees only an `extern` declaration.  Single-file mode keeps
+     * the historical bare strong def (one TU, byte-identical output). */
+    if (guarded) {
+        buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+        buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "extern int tur_closure_headers_enabled;\n");
+        buf_puts(out, "#endif\n");
+    } else {
+        buf_puts(out, "int tur_closure_headers_enabled = 1;\n");
+    }
     /* C#1 (test-suite-idioms): inline-C Option/Result ABI helpers.
      * A `:Option<int>` value is a heap pointer to { bool is_some; int64_t value; }
      * with none == NULL (0).  A `:Result<int,E>` value is a heap pointer to
@@ -11328,6 +11354,26 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
     type_codegen_emit_adt_apps(out);
     type_codegen_emit_fn_ptr_typedefs(out);
 
+    /* Base ADT typedefs (split-path-missing-adt-base-typedefs): the header is
+     * the sole cross-TU emitter of the base `tur_adt_<Name>` layout --
+     * type_codegen_emit_adt_apps above emits only the monomorphized
+     * type-applications, and emit_implementation's impl_early emits the base
+     * typedef into the .c (guarded, so redundant once the header carries it).  A
+     * non-parametric by-value defstruct/ADT that appears in an exported
+     * prototype (e.g. `f(const tur_adt_ADSRParams *)`) is otherwise named by the
+     * header with no definition -- "unknown type name" / "field has incomplete
+     * type".  Emit the guarded layout (typedef_only: no ctors/glue) for every
+     * module-local base ADT ahead of the exported prototypes below. */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < h_n_items; i++) {
+            const Expr *e = h_items[i];
+            if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
+            AdtDef *adef = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                                   : e->as.defdata_.def;
+            if (adef) emit_adt_typedef_and_ctors(out, adef, true);
+        }
+    }
+
     if (separate_compilation) {
         uint32_t n_decls = 0;
         for (uint32_t i = 0; i < hdr_ctx.n_abi_specializations; i++) {
@@ -11810,7 +11856,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT) {
             const AdtDef *adef = (e->kind == EX_DEFGADT)
                 ? e->as.defgadt_.def : e->as.defdata_.def;
-            emit_adt_typedef_and_ctors(&impl_early, adef);
+            emit_adt_typedef_and_ctors(&impl_early, adef, false);
         }
     }
 
