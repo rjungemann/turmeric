@@ -1,0 +1,32 @@
+;; E2 (fat-closure fn-value threading): an EFFECTFUL named callback passed as a
+;; FAT closure (`tur_poly_fn_t`) argument to a HOF whose fn-value parameter has a
+;; NON-scalar signature (`f : (-> int int)`), then called under a `handle`, must
+;; thread the effect onto the CPS/DK backend.  Before this fix the poly-wrap
+;; literal left the `fn_cps` slot NULL and the callee dispatched `f.fn(f.env, x)`
+;; directly, so `cb`'s `(perform (Ask))` ran on a fresh root and aborted with
+;; "unhandled effect" (a runtime miscompile -- the compile error was fixed earlier
+;; by the poly-wrap binder ABI, docs/reported/effectful-fnvalue-param-miscompile).
+;;
+;; The fix: the poly-wrap literal populates `tur_poly_fn_t.fn_cps` with a
+;; `__poly_N__cps` twin (which threads the wrapped fn's `__cps` via the direct->cps
+;; registry), and a fn-value-param call in a `__cps` body dispatches through
+;; `f.fn_cps` when populated.  So `cb`'s perform reaches `run`'s DK handler.
+;;
+;; Covers tail (`apply-cb`), non-tail (`apply-inc`: `(+ 1 (f x))`), and two-call
+;; (`apply-two`: `(+ (f x) (f (+ x 1)))`) fn-value-param shapes.
+(defeffect Ask [] :int)
+
+(defn apply-cb [f : (-> int int) x : int] : int (f x))
+(defn apply-inc [f : (-> int int) x : int] : int (+ 1 (f x)))
+(defn apply-two [f : (-> int int) x : int] : int (+ (f x) (f (+ x 1))))
+
+(defn cb [x : int] : int (+ x (perform (Ask))))
+
+(defn run [] : int
+  (handle
+    (+ (apply-cb cb 10)
+       (+ (apply-inc cb 20)
+          (apply-two cb 100)))
+    (Ask [] k) (resume k 5)))
+
+(defn main [] : int (println (run)) 0)

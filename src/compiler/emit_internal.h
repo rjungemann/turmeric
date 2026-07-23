@@ -747,6 +747,12 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
 char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
                                   Type result_type, Type *param_types,
                                   uint8_t n_params);
+/* E2 (fat-closure fn-value threading): ensure a `<wrapper>__cps` twin exists for
+ * a poly-wrap thunk boxing an effectful named fn, DK-threading its call through
+ * the direct->CPS registry.  Returns the malloc'd twin name (caller uses it for
+ * the tur_poly_fn_t.fn_cps slot), or NULL when already emitted. */
+char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
+                                 const char *inner_fn);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
  * given (result, arg0..argN) method signature, returning its C function name.
  * Returns NULL for the all-int64_t carrier case (caller uses the preamble

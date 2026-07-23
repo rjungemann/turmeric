@@ -746,7 +746,7 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
             /* E2c: a `via_registry` tailcall's fn-value callee is a capture when it
              * is an enclosing (non-local, non-global) param -- mirrors the
              * collect_caps_rec CT_TAILCALL case. */
-            if (t->as.tailcall.via_registry) {
+            if (t->as.tailcall.via_registry || t->as.tailcall.via_fncps) {
                 const Binding *fn = t->as.tailcall.fn;
                 if (fn && !fn->is_global && !binding_excluded(fn)) {
                     uint32_t _id = fn->id; bool _f = (_id != exclude);
@@ -1157,6 +1157,18 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                     uint32_t _id = fn->id; bool _f = (_id != exclude);
                     for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
                     if (_f) cap_add_fn_scalar(cs, fn);
+                }
+            }
+            /* E2 (fat-closure fn-value threading): a `via_fncps` tailcall reads its
+             * fat-closure poly-fn CALLEE `f` (fn_cps / fn / env); when `f` is an
+             * enclosing param, carry it on the frame env as a `tur_poly_fn_t` field
+             * (cap_add detects is_poly_fn) so the lifted body's `f.fn_cps` resolves. */
+            if (t->as.tailcall.via_fncps) {
+                const Binding *fn = t->as.tailcall.fn;
+                if (fn && !fn->is_global && !binding_excluded(fn)) {
+                    uint32_t _id = fn->id; bool _f = (_id != exclude);
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _id) { _f = false; break; }
+                    if (_f) cap_add(cs, fn, fn->type.kind, &fn->type);
                 }
             }
             return;
@@ -2897,9 +2909,11 @@ static bool letcont_is_heap_join(const CTerm *t) {
     return b && b->kind == CT_TAILCALL
         && b->as.tailcall.kont.kind == KK_VAR
         && b->as.tailcall.kont.id == t->as.letcont.j.id
-        /* colored callee threads `<fn>__cps`, OR (E2a tier-`nontail`) a fn-value
-         * callee threads via the registry -- both reify this join as a DK frame. */
-        && (binding_in_s(b->as.tailcall.fn) || b->as.tailcall.via_registry);
+        /* colored callee threads `<fn>__cps`, (E2a tier-`nontail`) a fn-value
+         * callee threads via the registry, OR (E2) a fat-closure poly-fn param
+         * threads via its fn_cps slot -- all reify this join as a DK frame. */
+        && (binding_in_s(b->as.tailcall.fn) || b->as.tailcall.via_registry
+            || b->as.tailcall.via_fncps);
 }
 
 /* A heap-join jbody is lowered into a value-transform frame fn `(env, value)`
@@ -2917,7 +2931,12 @@ static bool letcont_is_heap_join(const CTerm *t) {
 static bool jbody_has_cps_tailcall(const CTerm *t) {
     if (!t) return false;
     switch (t->kind) {
-        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn);
+        /* E2/E2a: a fn-value tail call (via the registry, or a fat-closure fn_cps
+         * slot) also threads the DK continuation, so a jbody containing one needs
+         * a resume-frame (LH_RESUME_CONT) that receives `__kont` at run time. */
+        case CT_TAILCALL: return binding_in_s(t->as.tailcall.fn)
+                              || t->as.tailcall.via_registry
+                              || t->as.tailcall.via_fncps;
         case CT_LETVAL:   return jbody_has_cps_tailcall(t->as.letval.body);
         case CT_LETPRIM:  return jbody_has_cps_tailcall(t->as.letprim.body);
         case CT_LETCALL:  return jbody_has_cps_tailcall(t->as.letcall.body);
@@ -5318,6 +5337,31 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_TAILCALL: {
+            if (t->as.tailcall.via_fncps) {
+                /* E2 (fat-closure fn-value threading): the callee is a poly-fn
+                 * PARAM whose value is a `tur_poly_fn_t` fat closure.  When the
+                 * passed fn-value is EFFECTFUL its `fn_cps` DK-threading slot is
+                 * populated -- tail-dispatch through it, threading the current
+                 * continuation so the callback's `perform` reaches the caller's
+                 * handler.  When the slot is NULL (a pure fn-value) fall to the
+                 * direct `f.fn` call, delivering its result to the continuation
+                 * exactly as the delegated CT_LETRAW path did. */
+                char *pf = name_for_binding(ce->ctx, t->as.tailcall.fn);
+                char *arg = atom_str(ce, &t->as.tailcall.args[0]);
+                const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
+                    ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
+                ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value */",
+                        pf, pf, pf, arg, thread);
+                /* Pure fallback: call the direct entry and deliver the result. */
+                Buf pv; buf_init(&pv);
+                buf_printf(&pv, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
+                           pf, pf, arg);
+                buf_putc(&pv, '\0');
+                emit_deliver(ce, &t->as.tailcall.kont, pv.data);
+                buf_free(&pv);
+                free(pf); free(arg);
+                break;
+            }
             if (t->as.tailcall.via_registry) {
                 /* E2a: callee is a fn-value PARAM; recover its CPS entry from the
                  * registry and thread __kont so its perform reaches the caller's
@@ -6131,7 +6175,18 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     }
     free(xn);
 
-    if (call->as.tailcall.via_registry) {
+    if (call->as.tailcall.via_fncps) {
+        /* E2 (fat-closure fn-value threading), heap join: thread the reified join
+         * `frame` to the closure's `fn_cps` slot (an effectful fn-value), or the
+         * direct `f.fn` call delivered to `frame` (a pure one). */
+        char *pf = name_for_binding(ce->ctx, call->as.tailcall.fn);
+        char *a0 = atom_str(ce, &call->as.tailcall.args[0]);
+        ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value heap join */",
+                pf, pf, pf, a0, frame);
+        ce_line(ce, "return dk_run(%s, (intptr_t)((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)));",
+                frame, pf, pf, a0);
+        free(pf); free(a0);
+    } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
          * join `frame` to its CPS entry recovered from the registry. */
         char cast[512]; int coff = snprintf(cast, sizeof cast, "int64_t (*)(");
