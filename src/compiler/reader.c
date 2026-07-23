@@ -4069,10 +4069,24 @@ ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
         /* Extract the language name (can contain slashes) */
         const char *lang_start = p;
         size_t lang_len = 0;
-        while (remaining > 0 && p[0] != ' ' && p[0] != '\t' && 
+        while (remaining > 0 && p[0] != ' ' && p[0] != '\t' &&
                p[0] != '\n' && p[0] != '\r') {
             p++;
             lang_len++;
+            remaining--;
+        }
+
+        /* Consume the remainder of the `#lang` line so trailing tokens never
+         * leak into the body handed to the reader. `p` stops AT the newline
+         * (matching the no-trailing-token path, where the name loop above
+         * already halts on `\n`/`\r`), leaving the terminator in place so the
+         * body keeps its original line numbering -- the empty line 1 the
+         * reader sees stands in for the stripped `#lang` line. When the
+         * `#lang` layers work lands (docs/upcoming/lang-layers-plan.md, phase
+         * L0), these trailing tokens become the layer list; the same
+         * EOL-consumption is what makes the leak impossible. */
+        while (remaining > 0 && p[0] != '\n' && p[0] != '\r') {
+            p++;
             remaining--;
         }
 

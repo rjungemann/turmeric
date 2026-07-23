@@ -1,0 +1,4 @@
+#lang turmeric xyzzy
+(defn main [] : int
+  (println "trailing tokens on the #lang line are stripped")
+  0)
