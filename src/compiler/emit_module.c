@@ -7193,7 +7193,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }\n");
     buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
-    buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int);\n");
+    buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);\n");
     buf_puts(out, "static void tur_panic(const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
@@ -7205,7 +7205,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * The defer chain stops at this function's frame tree (the catch boundary
      * lives in a different call frame), giving partial unwind for free. */
     buf_printf(out, "    if (tur_handler_chain) {\n");
-    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__);\n", (int)TY_CSTR);
+    /* owns_value = 1: the strdup'd message is a heap block this payload owns. */
+    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
     /* Signal transport -- set the flag and RETURN; the caller's per-call-site
      * check propagates it up to the catch-unwind boundary. */
@@ -7249,23 +7250,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    void *value;\n");
     buf_puts(out, "    const char *file;\n");
     buf_puts(out, "    int line;\n");
+    /* catch-unwind-panic-payload-leaks (Leak 1): 1 iff `value` is a heap block
+     * this payload owns and must free (the `strdup`'d message on the tur_panic
+     * path).  0 for every tur_panic_with payload -- those carry a
+     * caller-supplied / borrowed / inline-scalar value that must NOT be freed.
+     * This bit resolves the ambiguity that previously forced the payload value
+     * to leak unconditionally to stay sound. */
+    buf_puts(out, "    int owns_value;\n");
     buf_puts(out, "};\n\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload = NULL;\n\n", "tur_panic_payload *global_panic_payload");
-    buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {\n");
+    buf_puts(out, "static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line, int owns_value) {\n");
     buf_puts(out, "    tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));\n");
     buf_puts(out, "    if (!p) { fprintf(stderr, \"panic: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line;\n");
+    buf_puts(out, "    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line; p->owns_value = owns_value;\n");
     buf_puts(out, "    return p;\n");
     buf_puts(out, "}\n\n");
-    /* Free the payload *record* only, never p->value: the panic value is
-     * opaque -- a user may (panic-with <scalar>) so p->value can be an inline
-     * scalar reinterpreted as a pointer (never heap), or a value borrowed
-     * elsewhere.  Freeing it is a nonheap-free / double-free hazard.  This
-     * matches tur_result_box_free's deliberate refusal to free the caught
-     * payload value (see its comment below and
+    /* catch-unwind-panic-payload-leaks (Leak 1): free the payload record, and
+     * additionally free p->value iff this payload OWNS it (owns_value == 1 --
+     * the heap `strdup`'d message on the tur_panic path).  A tur_panic_with
+     * payload carries owns_value == 0: its value may be an inline scalar
+     * reinterpreted as a pointer (never heap) or a value borrowed elsewhere, so
+     * freeing it is a nonheap-free / double-free hazard.  The ownership bit is
+     * exactly what resolves the ambiguity that previously forced the value to
+     * leak unconditionally (see
      * docs/archive/history/catch-unwind-returned-err-box-payload-leak.md). */
     buf_puts(out, "static void panic_payload_free(tur_panic_payload *p) {\n");
-    buf_puts(out, "    if (p) { free(p); }\n");
+    buf_puts(out, "    if (p) { if (p->owns_value) free(p->value); free(p); }\n");
     buf_puts(out, "}\n\n");
     /* Phase R2: Panic payload accessors */
     buf_puts(out, "static int tur_panic_payload_type(tur_panic_payload *p) {\n");
@@ -7381,8 +7391,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "            return tur_box_err((int64_t)(intptr_t)__p);\n");
         buf_puts(out, "        }\n");
         buf_puts(out, "        /* type mismatch: leave the signal + payload staged so it\n");
-        buf_puts(out, "         * propagates to the next outer boundary via the return path. */\n");
-        buf_puts(out, "        return tur_box_err(0);\n");
+        buf_puts(out, "         * propagates to the next outer boundary via the return path.\n");
+        buf_puts(out, "         * catch-unwind-panic-payload-leaks: return a NULL box rather\n");
+        buf_puts(out, "         * than allocating tur_box_err(0).  tur_panicking is still set,\n");
+        buf_puts(out, "         * so the caller's per-call-site check propagates without ever\n");
+        buf_puts(out, "         * inspecting this value; allocating a box here only leaks it\n");
+        buf_puts(out, "         * (the re-raise skips its scope-exit free).  A stray free of a\n");
+        buf_puts(out, "         * NULL box is a safe no-op. */\n");
+        buf_puts(out, "        return 0;\n");
         buf_puts(out, "    }\n");
         buf_puts(out, "    return tur_box_ok(__v);\n");
         buf_puts(out, "}\n\n");
@@ -7392,19 +7408,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * discarded (statement-position catch-unwind / catch-panic-of).  The box is the
      * tur_result_box_t minted by tur_box_ok/tur_box_err in the *_box helpers above;
      * an err box additionally owns the caught tur_panic_payload record (moved out of
-     * global_panic_payload), so free that record too.  We free only the payload
-     * *struct*, never payload->value: catch-unwind's payload value is opaque -- a
-     * user may panic-with an inline scalar (e.g. (void*)42) or a value owned
-     * elsewhere, so freeing it is a nonheap-free / double-free hazard (this is why
-     * panic_payload_free, which does free(p->value), is not reused here).  An ok
-     * box's ok_val is likewise a plain value/handle the box never owned -- left
-     * untouched.  Only called where the value provably does not escape, so this is
-     * not a premature free. */
+     * global_panic_payload), so free that record too.  catch-unwind-panic-payload-leaks
+     * (Leak 1): route the payload free through panic_payload_free, which reclaims
+     * payload->value iff the payload OWNS it (owns_value == 1 -- the strdup'd panic
+     * message); a scalar/borrowed panic-with value (owns_value == 0) is left alone,
+     * so this is neither a nonheap-free nor a double-free.  An ok box's ok_val is a
+     * plain value/handle the box never owned -- left untouched.  Only called where
+     * the value provably does not escape, so this is not a premature free. */
     buf_puts(out, "static void tur_result_box_free(int64_t __r) __attribute__((unused));\n");
     buf_puts(out, "static void tur_result_box_free(int64_t __r) {\n");
     buf_puts(out, "    tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;\n");
     buf_puts(out, "    if (!__b) return;\n");
-    buf_puts(out, "    if (!__b->is_ok) free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
+    buf_puts(out, "    if (!__b->is_ok) panic_payload_free((tur_panic_payload *)(intptr_t)__b->err_val);\n");
     buf_puts(out, "    free(__b);\n");
     buf_puts(out, "}\n\n");
 
@@ -7610,14 +7625,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_panic_in_progress = 1;\n");
     /* Phase TG-004-2 PR: Check global handler first (try/catch has priority), then fiber */
     buf_puts(out, "    if (tur_handler_chain) {\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    /* owns_value = 0: panic-with carries a caller-supplied / scalar / borrowed
+     * value the payload must never free (catch-unwind-panic-payload-leaks). */
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     /* Signal transport (always-on): fire defers, set the flag, RETURN. */
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }\n");
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {\n");
     buf_puts(out, "        /* Use per-fiber panic buffer - set up global payload for cleanup */\n");
-    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line);\n");
+    /* owns_value = 0: panic-with carries a caller-supplied / scalar / borrowed
+     * value the payload must never free (catch-unwind-panic-payload-leaks). */
+    buf_puts(out, "        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);\n");
     buf_puts(out, "        longjmp(tur_current_fiber->panic_jmpbuf, 1);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d\\n\", file ? file : \"(unknown)\", line);\n");
