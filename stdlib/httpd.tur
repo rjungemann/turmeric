@@ -88,7 +88,9 @@
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
-  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; } HttpdConn; */
+  /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
+  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; } HttpdConn; */
+  /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
   return 0;
   ```)
 ;;; httpd-register-tls-impl -- install TLS function pointers into the H5 hook table.
@@ -512,6 +514,18 @@
               ap = nx;
           }
           conn->attr_list = NULL;
+      }
+      /* httpd-request-accessor-cstr-leak: free the per-request accessor strings
+       * (httpd-req-cookie / httpd-req-form results) registered on owned_cstrs. */
+      if (conn->owned_cstrs) {
+          HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
+          while (op) {
+              HttpdOwnedStr *nx = op->next;
+              if (op->s) free(op->s);
+              free(op);
+              op = nx;
+          }
+          conn->owned_cstrs = NULL;
       }
   }
   if (tls && httpd_tls_ops.shutdown) {
@@ -1344,7 +1358,11 @@
           if (!out) return "";
           if (vlen > 0) memcpy(out, vstart, vlen);
           out[vlen] = '\0';
-          return out;
+          /* httpd-request-accessor-cstr-leak: register the fresh malloc on the
+           * per-request owned-cstr list so httpd-handle's cleanup frees it at
+           * request end -- the docstring's "per-call ownership; do not free"
+           * contract is now actually implemented. */
+          return httpd_conn_own_cstr((HttpdConn *)conn, out);
       }
   }
   return "";
@@ -1541,7 +1559,9 @@
               }
           }
           out[oi] = '\0';
-          return out;
+          /* httpd-request-accessor-cstr-leak: register on the per-request
+           * owned-cstr list so httpd-handle's cleanup frees it at request end. */
+          return httpd_conn_own_cstr(c, out);
       }
       if (p < end && *p == '&') p++;
   }
@@ -2624,6 +2644,18 @@
           }
       }
       if (conn->req_json_cache) { json_slfree(conn->req_json_cache); conn->req_json_cache = 0; }
+      /* httpd-request-accessor-cstr-leak: free per-request accessor strings on
+       * the async path too (httpd-req-cookie / httpd-req-form results). */
+      if (conn->owned_cstrs) {
+          HttpdOwnedStr *op = (HttpdOwnedStr *)conn->owned_cstrs;
+          while (op) {
+              HttpdOwnedStr *nx = op->next;
+              if (op->s) free(op->s);
+              free(op);
+              op = nx;
+          }
+          conn->owned_cstrs = NULL;
+      }
   }
   close(fd);
   /* A4: release the in-flight slot. */
