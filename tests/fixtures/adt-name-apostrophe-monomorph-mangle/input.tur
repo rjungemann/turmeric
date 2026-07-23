@@ -1,0 +1,18 @@
+;; lens-composition-codegen-blockers (Blocker 1): a `defstruct` whose NAME
+;; carries an apostrophe (`Lens'`) used at a monomorphized (type-argument)
+;; position.  The base ADT typedef already mangled the name (`tur_adt_Lens_`),
+;; but the monomorph name path (type_register_adt_app / append_type_mangle in
+;; types.c) spelled the raw def name into the C identifier
+;; (`tur_adt_Lens'__int__int`) -- a bare apostrophe, which `cc` rejects.
+;;
+;; The fix folds any non-[A-Za-z0-9_] byte of an ADT/APP def name to '_' at the
+;; monomorph-name sites too, matching mangle_field_name / adt_byval_c_name, so
+;; the monomorph typedef, its ctor, and every reference agree on `tur_adt_Lens_`
+;; and the emitted C compiles.
+(defstruct Lens' :copy [S A] (get (fn [S] A)) (put (fn [S A] S)))
+
+(defn main [] : int
+  (let [l (make-struct Lens'
+            (fn [s : int] : int s)
+            (fn [s : int a : int] : int a))]
+    (println ((. l get) 42))))

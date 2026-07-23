@@ -3873,12 +3873,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (ctx->fn_name_override && ctx->current_abi_specialization &&
                     ctx->current_abi_specialization->binding == thunk_binding) {
                     thunk_name = strdup(ctx->fn_name_override);
-                } else if (ctx->current_abi_specialization &&
-                           ctx->current_abi_specialization->inner_closure_spec_idx >= 0) {
+                } else if (ctx->current_abi_specialization) {
+                    /* struct-of-closures monomorphization: resolve across the
+                     * primary + extra inner-closure links (see EX_CLOSURE emit). */
                     const EmitAbiSpecialization *_isp =
-                        &ctx->abi_specializations[
-                            ctx->current_abi_specialization->inner_closure_spec_idx];
-                    if (_isp->binding == thunk_binding && _isp->clone_name)
+                        emit_inner_closure_spec_for_binding(
+                            ctx, ctx->current_abi_specialization, thunk_binding);
+                    if (_isp && _isp->clone_name)
                         thunk_name = strdup(_isp->clone_name);
                 }
                 if (!thunk_name) thunk_name = raw_name_for_binding(thunk_binding);
@@ -6404,13 +6405,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * typed thunk slot is xmm0-correct.  No-op outside a matching spec. */
             const char *thunk_sym_override = NULL;
             const EmitAbiSpecialization *_cur_spec = ctx->current_abi_specialization;
-            if (_cur_spec && _cur_spec->inner_closure_spec_idx >= 0) {
-                const EmitAbiSpecialization *_isp =
-                    &ctx->abi_specializations[_cur_spec->inner_closure_spec_idx];
-                if (_isp->binding == closure->fn->binding) {
-                    if (_isp->env_name_override) env_name = _isp->env_name_override;
-                    thunk_sym_override = _isp->clone_name;
-                }
+            /* struct-of-closures monomorphization: match this closure against the
+             * outer spec's primary inner-closure link AND its extra links, so
+             * EVERY closure a `(make-struct S clo1 clo2 ...)` return builds picks
+             * its own suffixed env + clone -- not just the first. */
+            const EmitAbiSpecialization *_isp =
+                emit_inner_closure_spec_for_binding(ctx, _cur_spec,
+                                                    closure->fn->binding);
+            if (_isp) {
+                if (_isp->env_name_override) env_name = _isp->env_name_override;
+                thunk_sym_override = _isp->clone_name;
             }
 
             /* Emit env struct type definition at file scope if not already emitted */

@@ -546,6 +546,21 @@ bool type_is_transparent_int_newtype(Type t) {
     return false;
 }
 
+/* Append `name` folded to a valid C-identifier component: any non-[A-Za-z0-9_]
+ * byte becomes '_'.  Mirrors mangle_field_name (emit_core.c) and
+ * adt_byval_c_name so a monomorph name built here agrees, byte for byte, with
+ * the base typedef the emitter produces.  A struct/ADT name may carry sigils
+ * (e.g. `Lens'`); folding it here keeps the apostrophe from leaking into an
+ * emitted C identifier (`tur_adt_Lens'__...` is not valid C). */
+static void append_c_ident_mangled(Buf *b, const char *name) {
+    for (const char *p = name; p && *p; p++) {
+        char c = *p;
+        bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '_';
+        buf_putc(b, ident ? c : '_');
+    }
+}
+
 static void append_type_mangle(Buf *b, Type t) {
     switch (t.kind) {
         case TY_NIL:      buf_puts(b, "nil"); break;
@@ -571,7 +586,8 @@ static void append_type_mangle(Buf *b, Type t) {
         case TY_REF_IMMUT: buf_puts(b, "ref_immut"); break;
         case TY_REF_MUT:  buf_puts(b, "ref_mut"); break;
         case TY_ADT:
-            buf_puts(b, t.as.adt_.def && t.as.adt_.def->name ? t.as.adt_.def->name : "adt");
+            append_c_ident_mangled(b, t.as.adt_.def && t.as.adt_.def->name
+                                          ? t.as.adt_.def->name : "adt");
             break;
         case TY_UNKNOWN:
         case TY_TYVAR:
@@ -590,7 +606,7 @@ static void append_type_mangle(Buf *b, Type t) {
             AdtDef *adef = NULL;
             uint8_t an_args = 0;
             if (type_extract_adt_app(&t, &adef, args, &an_args) && adef) {
-                buf_puts(b, adef->name);
+                append_c_ident_mangled(b, adef->name);
                 for (uint32_t i = 0; i < an_args; i++) {
                     buf_puts(b, "__");
                     append_type_mangle(b, args[i]);
@@ -977,7 +993,7 @@ const char *type_register_adt_app(Type t) {
     /* Build the C typedef name: tur_adt_<Name>__<arg1>__... */
     Buf name; buf_init(&name);
     buf_puts(&name, "tur_adt_");
-    buf_puts(&name, def->name);
+    append_c_ident_mangled(&name, def->name);
     append_adt_app_type_suffix(&name, def, args, n_args);
     buf_putc(&name, '\0');
     g_adt_apps[g_n_adt_apps].type     = clone_struct_app_type(t);

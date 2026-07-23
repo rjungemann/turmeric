@@ -1184,6 +1184,100 @@ static Binding *emit_find_passed_spec_closure(const Expr *e,
     }
 }
 
+/* struct-of-closures monomorphization: collecting sibling of
+ * emit_find_passed_spec_closure.  Where that finder returns the FIRST captured
+ * closure PASSED as a call argument whose result type follows the active spec's
+ * tyvars, this gathers EVERY such closure -- the N closures a
+ * `(make-struct S clo1 clo2 ...)` (lowered to a ctor CALL) hands to its ctor.
+ * The single-result finder links only clo1; this collects all so each gets its
+ * own per-spec clone + suffixed env.  Appends to out[*n_out..cap), de-duping by
+ * binding identity, never exceeding `cap`. */
+static void emit_collect_passed_spec_closures(
+        const Expr *e, const AbiTypeBinding *bindings, uint8_t n_bindings,
+        Arena *arena, Binding **out, uint8_t cap, uint8_t *n_out) {
+    if (!e || *n_out >= cap) return;
+    switch (e->kind) {
+        case EX_CLOSURE: {
+            struct Closure *cl = e->as.closure_.closure;
+            if (cl && cl->fn && cl->fn->binding &&
+                cl->fn->binding->type.kind == TY_FN) {
+                const Type *rt = cl->fn->binding->type.as.fn.result_full_type;
+                if (rt) {
+                    Type inst = emit_abi_instantiate_type(rt, bindings, n_bindings, arena);
+                    if (inst.kind != rt->kind || !type_eq(inst, *rt)) {
+                        for (uint8_t i = 0; i < *n_out; i++)
+                            if (out[i] == cl->fn->binding) return;  /* de-dup */
+                        if (*n_out < cap) out[(*n_out)++] = cl->fn->binding;
+                    }
+                }
+            }
+            return;
+        }
+        case EX_CALL:
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+                emit_collect_passed_spec_closures(e->as.call_.args[i], bindings,
+                                                  n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_ASCRIBE:
+            emit_collect_passed_spec_closures(e->as.ascribe_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_POLY_WRAP:
+            emit_collect_passed_spec_closures(e->as.poly_wrap_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_FN_TO_FAT:
+            emit_collect_passed_spec_closures(e->as.fn_to_fat_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_POLY_TO_FAT:
+            emit_collect_passed_spec_closures(e->as.poly_to_fat_.inner, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_LET:
+            emit_collect_passed_spec_closures(e->as.let_.body, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++)
+                emit_collect_passed_spec_closures(e->as.do_.items[i], bindings,
+                                                  n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_IF:
+            emit_collect_passed_spec_closures(e->as.if_.then_, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            emit_collect_passed_spec_closures(e->as.if_.else_or_null, bindings,
+                                              n_bindings, arena, out, cap, n_out);
+            return;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                emit_collect_passed_spec_closures(e->as.match_.arms[i].body, bindings,
+                                                  n_bindings, arena, out, cap, n_out);
+            return;
+        default:
+            return;
+    }
+}
+
+/* struct-of-closures monomorphization: the lookup the EX_CLOSURE construction
+ * and thunk-call emit sites share.  See the header doc. */
+const EmitAbiSpecialization *emit_inner_closure_spec_for_binding(
+        const EmitCtx *ctx, const EmitAbiSpecialization *cur,
+        const Binding *binding) {
+    if (!ctx || !cur || !binding) return NULL;
+    if (cur->inner_closure_spec_idx >= 0) {
+        const EmitAbiSpecialization *isp =
+            &ctx->abi_specializations[cur->inner_closure_spec_idx];
+        if (isp->binding == binding) return isp;
+    }
+    for (uint8_t i = 0; i < cur->n_extra_inner_closure_spec_idx; i++) {
+        const EmitAbiSpecialization *isp =
+            &ctx->abi_specializations[cur->extra_inner_closure_spec_idx[i]];
+        if (isp->binding == binding) return isp;
+    }
+    return NULL;
+}
+
 /* constrained-instance-element-dispatch-in-closures: does `bindings` map `name`
  * to a concrete (non-tyvar) type?  A constrained-instance method body that reads
  * its element through the constraint var `A` re-dispatches per element type only
@@ -1955,6 +2049,56 @@ static const Symbol *emit_arena_symbol(Arena *arena, const char *s) {
     sym->len = (uint32_t)n;
     sym->hash = 0;
     return sym;
+}
+
+/* poly-closure-result-specialization: build and assign the suffixed env-struct
+ * name (`__env_N__spec__<res>`) for an inner-closure body spec, so a register-
+ * class- or layout-changing specialization gets its own struct instead of
+ * aliasing the base int64-carrier env.  Handles the `__h<n>` disambiguator when
+ * two sibling specs would otherwise collapse to the same suffixed name (the
+ * hkt-cata-mixed-carrier-env-collision case).  No-op if the spec already has an
+ * override or the closure has no env.  Extracted so both the primary inner
+ * closure and the extra struct-of-closures links share one implementation. */
+static void emit_assign_inner_env_override(EmitCtx *ctx, FnDef *inner_fd,
+                                           Type inner_res,
+                                           EmitAbiSpecialization *inner_spec) {
+    if (inner_spec->env_name_override) return;
+    if (!inner_fd->closure || !inner_fd->closure->env_name) return;
+    Buf en; buf_init(&en);
+    buf_puts(&en, inner_fd->closure->env_name->name);
+    buf_puts(&en, "__spec__");
+    append_sanitized_c_token(&en, type_c_name(inner_res));
+    buf_putc(&en, '\0');
+    bool en_collides = false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        EmitAbiSpecialization *os = &ctx->abi_specializations[i];
+        if (os == inner_spec || !os->env_name_override) continue;
+        if (strcmp(os->env_name_override->name, en.data) == 0) {
+            en_collides = true;
+            break;
+        }
+    }
+    if (en_collides) {
+        char *base = strdup(en.data);
+        if (!base) { fprintf(stderr, "tur: oom\n"); abort(); }
+        for (uint32_t n = 1; en_collides; n++) {
+            en.len = 0;
+            buf_printf(&en, "%s__h%u", base, n);
+            buf_putc(&en, '\0');
+            en_collides = false;
+            for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+                EmitAbiSpecialization *os = &ctx->abi_specializations[i];
+                if (os == inner_spec || !os->env_name_override) continue;
+                if (strcmp(os->env_name_override->name, en.data) == 0) {
+                    en_collides = true;
+                    break;
+                }
+            }
+        }
+        free(base);
+    }
+    inner_spec->env_name_override = emit_arena_symbol(ctx->type_arena, en.data);
+    buf_free(&en);
 }
 
 static bool emit_inner_closure_needs_float_spec(Binding *inner,
@@ -3635,60 +3779,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * the base env struct (no suffixed override).  Suffixing it would emit
              * a redundant identical struct; sharing keeps the base `__env_N` and
              * snapshots minimal. */
-            if (!inner_dispatch && !inner_spec->env_name_override &&
-                inner_fd->closure && inner_fd->closure->env_name) {
-                Buf en; buf_init(&en);
-                buf_puts(&en, inner_fd->closure->env_name->name);
-                buf_puts(&en, "__spec__");
-                append_sanitized_c_token(&en, type_c_name(inner_res));
-                buf_putc(&en, '\0');
-                /* hkt-cata-mixed-carrier-env-collision: the carrier `B` lowers to
-                 * the int64 carrier (`type_c_name` -> `int64_t`) for BOTH a fat
-                 * function carrier (`B = (fn [int] int)`, whose env's `__fn` slot
-                 * is a `tur_thunk_*`) and a plain value carrier (`B = int`, whose
-                 * `__fn` is a bare `int64_t`).  The two specs are genuinely
-                 * distinct (type_eq kept them apart and emit_abi_clone_name
-                 * already gave them distinct `__h<n>` clone names), but this
-                 * env-struct name collapses both to `__env_N__spec__int64_t`, so
-                 * the two struct definitions redefine each other in the same TU.
-                 * Mirror the Gap H clone-name disambiguator here: when the base
-                 * env name collides with another spec's already-assigned
-                 * env_name_override, append `__h<n>` (deterministic in intern
-                 * order, so it reproduces across the header/impl emit passes).
-                 * No effect on non-colliding names -> existing snapshots are
-                 * untouched. */
-                bool en_collides = false;
-                for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
-                    EmitAbiSpecialization *os = &ctx->abi_specializations[i];
-                    if (os == inner_spec || !os->env_name_override) continue;
-                    if (strcmp(os->env_name_override->name, en.data) == 0) {
-                        en_collides = true;
-                        break;
-                    }
-                }
-                if (en_collides) {
-                    char *base = strdup(en.data);
-                    if (!base) { fprintf(stderr, "tur: oom\n"); abort(); }
-                    for (uint32_t n = 1; en_collides; n++) {
-                        en.len = 0;
-                        buf_printf(&en, "%s__h%u", base, n);
-                        buf_putc(&en, '\0');
-                        en_collides = false;
-                        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
-                            EmitAbiSpecialization *os = &ctx->abi_specializations[i];
-                            if (os == inner_spec || !os->env_name_override) continue;
-                            if (strcmp(os->env_name_override->name, en.data) == 0) {
-                                en_collides = true;
-                                break;
-                            }
-                        }
-                    }
-                    free(base);
-                }
-                inner_spec->env_name_override =
-                    emit_arena_symbol(ctx->type_arena, en.data);
-                buf_free(&en);
-            }
+            if (!inner_dispatch)
+                emit_assign_inner_env_override(ctx, inner_fd, inner_res, inner_spec);
             uint32_t inner_idx = (uint32_t)(inner_spec - ctx->abi_specializations);
             ctx->abi_specializations[outer_spec_idx].inner_closure_spec_idx = (int32_t)inner_idx;
             if (inner_passed)
@@ -3712,6 +3804,73 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     ? (uint32_t)(saved_c - ctx->abi_specializations) : 0;
                 ctx->current_abi_specialization = &ctx->abi_specializations[inner_idx];
                 emit_abi_scan_expr(ctx, inner_fd->body, items, n_items);
+                ctx->current_abi_specialization = saved_in
+                    ? &ctx->abi_specializations[saved_ci] : saved_c;
+            }
+        }
+    }
+
+    /* struct-of-closures monomorphization: the block above links the FIRST
+     * closure a struct-of-closures return builds (`compose-lens` returning
+     * `(make-struct Lens get put)`, lowered to a ctor CALL whose args are the
+     * `get`/`put` closures).  `emit_find_passed_spec_closure` returns only that
+     * first closure, and `inner_closure_spec_idx` holds only its index -- so the
+     * SECOND (and further) closures keep the base int64-carrier env, and the
+     * ctor-body construction assigns a by-value monomorph struct (`l1`) into an
+     * `int64_t` slot: a hard C type error.  Collect every additional passed
+     * closure here and link each with its own per-spec clone + suffixed env.
+     * Gated to the plain-passed (`inner_passed`) case: `inner_dispatch`
+     * (constrained-instance) needs constraint grounding this slim path omits,
+     * and `inner_float`-only returns are single-closure by construction. */
+    if (inner_passed && inner_closure && fd && fd->body) {
+        Binding *extras[TUR_EXTRA_INNER_CLOSURE_MAX + 1];
+        uint8_t n_extras = 0;
+        emit_collect_passed_spec_closures(fd->body, bindings, n_bindings,
+                                          ctx->type_arena, extras,
+                                          TUR_EXTRA_INNER_CLOSURE_MAX + 1,
+                                          &n_extras);
+        for (uint8_t ci = 0; ci < n_extras; ci++) {
+            Binding *xclo = extras[ci];
+            if (xclo == inner_closure) continue;   /* already linked above */
+            const Expr *xexpr = emit_abi_find_fn_expr(items, n_items, xclo);
+            if (!xexpr || xexpr->kind != EX_FN_DEF || !xexpr->as.fn_def_.fn)
+                continue;
+            FnDef *xfd = xexpr->as.fn_def_.fn;
+            Type xargs[MAX_FN_ARITY];
+            uint32_t xn = xfd->n_params;
+            for (uint8_t i = 0; i < xn; i++) {
+                if (i == 0) { xargs[i] = xfd->param_types[0]; continue; }
+                const Type *aft = (xclo->type.as.fn.arg_full_types &&
+                                   i < xclo->type.as.fn.arity)
+                    ? xclo->type.as.fn.arg_full_types[i] : NULL;
+                xargs[i] = emit_abi_instantiate_type(
+                    aft ? aft : &xfd->param_types[i], bindings, n_bindings,
+                    ctx->type_arena);
+            }
+            Type xres = xclo->type.as.fn.result_full_type
+                ? emit_abi_instantiate_type(xclo->type.as.fn.result_full_type,
+                                            bindings, n_bindings, ctx->type_arena)
+                : emit_type_from_kind(xclo->type.as.fn.result_kind);
+            uint32_t x_before = ctx->n_abi_specializations;
+            EmitAbiSpecialization *xspec = emit_abi_intern_spec(
+                ctx, xclo, xexpr, xfd, bindings, n_bindings,
+                xargs, (uint8_t)xn, xres, NULL, false);
+            bool x_is_new = ctx->n_abi_specializations != x_before;
+            emit_assign_inner_env_override(ctx, xfd, xres, xspec);
+            uint32_t x_idx = (uint32_t)(xspec - ctx->abi_specializations);
+            ctx->abi_specializations[x_idx].is_passed_closure_clone = true;
+            EmitAbiSpecialization *osp = &ctx->abi_specializations[outer_spec_idx];
+            if (osp->n_extra_inner_closure_spec_idx < TUR_EXTRA_INNER_CLOSURE_MAX)
+                osp->extra_inner_closure_spec_idx[
+                    osp->n_extra_inner_closure_spec_idx++] = (int32_t)x_idx;
+            if (x_is_new && xfd->body) {
+                const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
+                bool saved_in = saved_c >= ctx->abi_specializations &&
+                                saved_c < ctx->abi_specializations + ctx->n_abi_specializations;
+                uint32_t saved_ci = saved_in
+                    ? (uint32_t)(saved_c - ctx->abi_specializations) : 0;
+                ctx->current_abi_specialization = &ctx->abi_specializations[x_idx];
+                emit_abi_scan_expr(ctx, xfd->body, items, n_items);
                 ctx->current_abi_specialization = saved_in
                     ? &ctx->abi_specializations[saved_ci] : saved_c;
             }
@@ -10102,10 +10261,19 @@ int emit_program(Buf *out, const Expr *program) {
         EmitAbiSpecialization *sp = &ctx.abi_specializations[i];
         /* poly-closure-result-specialization: hoist a linked inner-closure clone
          * ahead of its outer so the suffixed env struct is defined at file scope
-         * before the outer body's EX_CLOSURE references it. */
-        if (sp->inner_closure_spec_idx >= 0) {
-            EmitAbiSpecialization *isp =
-                &ctx.abi_specializations[sp->inner_closure_spec_idx];
+         * before the outer body's EX_CLOSURE references it.  struct-of-closures
+         * monomorphization: hoist the primary link AND every extra link, so each
+         * closure a `(make-struct S clo1 clo2 ...)` return builds has its env +
+         * drop-glue at file scope (else the outer body's EX_CLOSURE emits them
+         * inline as invalid nested definitions). */
+        int32_t hoist_idxs[TUR_EXTRA_INNER_CLOSURE_MAX + 1];
+        uint8_t n_hoist = 0;
+        if (sp->inner_closure_spec_idx >= 0)
+            hoist_idxs[n_hoist++] = sp->inner_closure_spec_idx;
+        for (uint8_t hi = 0; hi < sp->n_extra_inner_closure_spec_idx; hi++)
+            hoist_idxs[n_hoist++] = sp->extra_inner_closure_spec_idx[hi];
+        for (uint8_t hi = 0; hi < n_hoist; hi++) {
+            EmitAbiSpecialization *isp = &ctx.abi_specializations[hoist_idxs[hi]];
             if (!isp->emitted) {
                 ctx.current_abi_specialization = isp;
                 ctx.fn_name_override = isp->clone_name;

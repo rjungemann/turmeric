@@ -107,6 +107,13 @@ extern bool g_dump_clone_plan;
 /* Forward declarations */
 struct DeferThunk;
 
+/* struct-of-closures monomorphization: upper bound on the number of ADDITIONAL
+ * (beyond the first) inner closures a single struct-of-closures return can link
+ * to one outer spec.  A generic fn returning `(make-struct S clo1 .. cloN)`
+ * links clo1 via inner_closure_spec_idx and clo2..cloN here, so this caps N-1.
+ * 15 (total 16 closures) matches the practical struct field ceiling. */
+#define TUR_EXTRA_INNER_CLOSURE_MAX 15
+
 /* GS5/CS3: AbiTypeBinding is defined in expr.h and shared with elab_call.c so
  * the emit phase consumes the substitution that elab already computed. */
 typedef struct EmitAbiSpecialization {
@@ -135,6 +142,17 @@ typedef struct EmitAbiSpecialization {
      * the linked inner-closure-body spec, or -1 when none.  Lets the outer
      * spec body's EX_CLOSURE emit reference the inner clone's name + env. */
     int32_t inner_closure_spec_idx;
+    /* struct-of-closures monomorphization: a generic fn that RETURNS a
+     * struct-of-closures (`(make-struct S clo1 clo2 ...)`, lowered to a ctor
+     * CALL whose args are the closures) links its FIRST closure via
+     * inner_closure_spec_idx above; every ADDITIONAL closure needs its own
+     * per-spec clone + suffixed env too, or its captured monomorph fields keep
+     * the base int64-carrier type and the ctor-body construction assigns a
+     * by-value struct into an int64 slot.  These are the extra links; the
+     * EX_CLOSURE / thunk emit sites resolve a closure's inner spec by matching
+     * `binding` across the primary index and this list. */
+    int32_t extra_inner_closure_spec_idx[TUR_EXTRA_INNER_CLOSURE_MAX];
+    uint8_t n_extra_inner_closure_spec_idx;
     /* M6 / gap G6(c): true when this spec is the per-spec clone of a CAPTURED
      * closure PASSED to a generic combinator (the recursive `(fn [c] : B
      * (re-cata alg c))` handed to `fmap`).  Scopes the return-only-poly result
@@ -643,6 +661,15 @@ char *mangle_field_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
 char *raw_name_for_binding(const Binding *b);
 char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b);
+/* struct-of-closures monomorphization: find the inner-closure body spec (the
+ * primary inner_closure_spec_idx or one of the extra struct-of-closures links)
+ * of outer spec `cur` whose lifted-fn binding is `binding`.  NULL when none
+ * matches.  The EX_CLOSURE construction and thunk-call emit sites use this to
+ * pick the register-class-/layout-correct clone + suffixed env for EACH closure
+ * a struct-of-closures return builds, not just the first. */
+const EmitAbiSpecialization *emit_inner_closure_spec_for_binding(
+        const EmitCtx *ctx, const EmitAbiSpecialization *cur,
+        const Binding *binding);
 /* MB2.5 (constrained-hkt-forall-mode-b-plan): true when `call` is a class-method
  * call inside a dict-clone body that dispatches through the runtime dict param
  * (the same condition emit_call_name uses to route the call through
