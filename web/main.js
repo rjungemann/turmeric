@@ -1996,14 +1996,46 @@ function initEventListeners() {
     // Copy console button
     document.getElementById('copy-console-btn')?.addEventListener('click', copyConsole);
     
-    // Examples select
-    document.getElementById('examples-select')?.addEventListener('change', (e) => {
-        if (e.target.value) {
-            loadExample(e.target.value);
-            e.target.value = '';
+    // Examples dropdown (hamburger button + popover). Mirrors the ⋯ overflow
+    // menu below: reparent to <body> so it escapes ancestor overflow/stacking
+    // contexts, anchor with position:fixed, close on outside-click / Escape.
+    const examplesBtn = document.getElementById('examples-btn');
+    const examplesMenu = document.getElementById('examples-menu');
+    if (examplesBtn && examplesMenu) {
+        if (examplesMenu.parentElement !== document.body) {
+            document.body.appendChild(examplesMenu);
         }
-    });
-    
+        const closeExamples = () => {
+            examplesMenu.hidden = true;
+            examplesBtn.setAttribute('aria-expanded', 'false');
+        };
+        const openExamples = () => {
+            examplesMenu.hidden = false;
+            examplesBtn.setAttribute('aria-expanded', 'true');
+            const r = examplesBtn.getBoundingClientRect();
+            examplesMenu.style.top = `${r.bottom + 4}px`;
+            examplesMenu.style.right = `${Math.max(4, window.innerWidth - r.right)}px`;
+        };
+        examplesBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            examplesMenu.hidden ? openExamples() : closeExamples();
+        });
+        examplesMenu.addEventListener('click', (e) => {
+            const item = e.target.closest('.more-item');
+            if (!item || !item.dataset.example) return;
+            loadExample(item.dataset.example);
+            closeExamples();
+        });
+        document.addEventListener('click', (e) => {
+            if (!examplesMenu.hidden && !examplesMenu.contains(e.target) && e.target !== examplesBtn) {
+                closeExamples();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !examplesMenu.hidden) closeExamples();
+        });
+    }
+
     // Solve button
     document.getElementById('solve-btn')?.addEventListener('click', solveStep);
 
@@ -2049,11 +2081,7 @@ function initEventListeners() {
             if (cmd) {
                 document.getElementById(cmd)?.click();
             } else if (example) {
-                const sel = document.getElementById('examples-select');
-                if (sel) {
-                    sel.value = example;
-                    sel.dispatchEvent(new Event('change'));
-                }
+                loadExample(example);
             }
             closeMenu();
         });
