@@ -11089,6 +11089,28 @@ static void emit_ffi_export_shims(Buf *out, const Expr *program) {
     free(items);
 }
 
+/* True iff any constructor field of `def` embeds a parametric monomorph
+ * (`(Option cstr)` -> tur_adt_Option__cstr, a nested struct-app) BY VALUE.  Such
+ * a base typedef must be emitted AFTER type_codegen_emit_adt_apps flushes that
+ * monomorph.  A base with no such field can -- and, for a recursive by-value
+ * fixed point whose monomorph embeds IT by value (`GNode ~= GNodeF GNode`,
+ * `tur_adt_GNodeF__GNode` holding `tur_adt_GNode` fields), MUST -- be emitted
+ * BEFORE the flush, so the monomorph sees a complete base type instead of an
+ * incomplete forward decl. */
+static bool adt_has_inline_byval_monomorph_field(const AdtDef *def) {
+    if (!def) return false;
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+            const CtorField *pf = &ctor->fields[fi];
+            if (pf->full_type && pf->full_type->kind == TY_APP &&
+                adt_field_is_inline_byval(pf))
+                return true;
+        }
+    }
+    return false;
+}
+
 /* Emit a C header file for a module. Contains declarations (not definitions).
  * When separate_compilation is true (Phase M3): only exported functions are
  * declared, and #includes for each imported module's header are emitted. */
@@ -11351,11 +11373,31 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
         }
     }
 
+    /* Base ADT typedefs, Pass A (recursive-byval-fixpoint ordering): a
+     * monomorph can embed a module-local base ADT BY VALUE -- e.g. the by-value
+     * fixed point `GNode ~= GNodeF GNode`, where `tur_adt_GNodeF__GNode` holds
+     * `tur_adt_GNode` fields.  That base typedef must precede the
+     * type_codegen_emit_adt_apps flush below, or the monomorph names an
+     * incomplete type ("field has incomplete type 'tur_adt_GNode'").  Emit,
+     * BEFORE the flush, every base ADT that does NOT itself embed a monomorph by
+     * value (those have no forward dependency on the about-to-be-flushed set;
+     * mirrors emit_program's Pass-0-before-monomorph-flush ordering). */
+    if (separate_compilation) {
+        for (uint32_t i = 0; i < h_n_items; i++) {
+            const Expr *e = h_items[i];
+            if (e->kind != EX_DEFDATA && e->kind != EX_DEFGADT) continue;
+            AdtDef *adef = (e->kind == EX_DEFGADT) ? e->as.defgadt_.def
+                                                   : e->as.defdata_.def;
+            if (adef && !adt_has_inline_byval_monomorph_field(adef))
+                emit_adt_typedef_and_ctors(out, adef, true);
+        }
+    }
+
     type_codegen_emit_adt_apps(out);
     type_codegen_emit_fn_ptr_typedefs(out);
 
-    /* Base ADT typedefs (split-path-missing-adt-base-typedefs): the header is
-     * the sole cross-TU emitter of the base `tur_adt_<Name>` layout --
+    /* Base ADT typedefs, Pass B (split-path-missing-adt-base-typedefs): the
+     * header is the sole cross-TU emitter of the base `tur_adt_<Name>` layout --
      * type_codegen_emit_adt_apps above emits only the monomorphized
      * type-applications, and emit_implementation's impl_early emits the base
      * typedef into the .c (guarded, so redundant once the header carries it).  A
@@ -11363,7 +11405,9 @@ int emit_header(Buf *out, const char *module_name, const Expr *program,
      * prototype (e.g. `f(const tur_adt_ADSRParams *)`) is otherwise named by the
      * header with no definition -- "unknown type name" / "field has incomplete
      * type".  Emit the guarded layout (typedef_only: no ctors/glue) for every
-     * module-local base ADT ahead of the exported prototypes below. */
+     * module-local base ADT (a base with an inline-by-value monomorph field is
+     * emitted here, AFTER its field monomorphs were flushed; Pass A's guarded
+     * emissions are no-ops on the second pass). */
     if (separate_compilation) {
         for (uint32_t i = 0; i < h_n_items; i++) {
             const Expr *e = h_items[i];

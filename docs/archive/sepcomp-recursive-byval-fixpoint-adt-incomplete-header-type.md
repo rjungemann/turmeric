@@ -1,5 +1,25 @@
 # Separate compilation: recursive by-value fixed-point ADT emits an incomplete-type field in the header
 
+> **RESOLVED (2026-07-22).** Root cause was header type-emission ORDER, not the
+> layout itself: `emit_header` (`src/compiler/emit_module.c`) flushed the
+> monomorph type-applications (`type_codegen_emit_adt_apps`) BEFORE the base
+> `tur_adt_<Name>` typedefs, so `tur_adt_GNodeF__GNode` -- which embeds base
+> `tur_adt_GNode` by value -- named an incomplete forward decl. Fixed by
+> mirroring `emit_program`'s Pass-0 ordering: base ADT typedefs that do NOT
+> themselves embed a monomorph by value (`adt_has_inline_byval_monomorph_field`
+> is false -- e.g. glsl's `Roll` newtype `GNode`, which holds an int64 carrier)
+> are now emitted in a "Pass A" BEFORE the monomorph flush; bases that DO embed
+> a monomorph by value stay in "Pass B" after it (the `TUR_TD_<Name>` guard
+> makes the second pass a no-op for Pass-A types). The monomorph now sees a
+> complete base type.
+>
+> **Verification:** `glsl`, `c-dsl`, `scscm`, `template` now build clean as
+> `--shared` libraries; `ansi`/`ecs`/`signal`/`linalg`/... unaffected (17/21
+> pure spices build, the 4 remaining being external-dep/spice-source). glsl's
+> test suites pass under ASan (ir 21, shaders 43, codegen 46 -- exercising the
+> `GNode` cata/fold). Full turmeric suite: 2267 passed, 2 failed (both
+> pre-existing: `re-string`, `vec-push-byvalue-aggregate`).
+
 **Severity:** medium (blocks `tur build --shared` / project-mode builds of any
 spice whose public API rests on a `:copy` fixed-point ADT; whole-program
 `emit-c` of the same code is unaffected). Pre-existing; surfaced while auditing
