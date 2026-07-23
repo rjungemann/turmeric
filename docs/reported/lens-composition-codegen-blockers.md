@@ -115,29 +115,76 @@ error: incompatible type for argument 2 of
 In `((. l2 get) ((. l1 get) s))` the intermediate `((. l1 get) s)` has type `A`
 (compose-lens's *middle* type param; `A = Person` at this instantiation). The
 outer call's fat thunk correctly wants a by-value `tur_adt_Person`, but the
-intermediate value is materialized into an `int64_t` temp.
+intermediate value materializes into an `int64_t` temp.
 
-Root cause -- **defstruct fn-field result-type erasure.** The struct field
-`get : (fn [S] A)` is stored with its fn-type **result_kind collapsed to
-TY_INT** (the int64 carrier), and no named `result_full_type` preserving `A`.
-So the field-access-call `(. l1 get) s` elaborates with a bare `TY_INT` result,
-not `TY_TYVAR A`. The outer spec *does* bind `A -> Person` (verified: the
-inner-closure spec carries `S->Company, A->Person, B->cstr`), so if the field
-type preserved `A` as a named tyvar, `emit_resolve_type` would spell every use
--- the materialization temp (`emit_temp_decl`/`emit_control_result_temp_decl`),
-the fat-dispatch return, and the next call's arg -- as by-value `tur_adt_Person`
-consistently. Because the tyvar is gone, the temp is declared `int64_t` while a
-16-byte `Person` flows through it.
+**Root cause (empirically verified 2026-07-23 -- corrects an earlier wrong
+guess in this report that blamed the defstruct field type).** The struct field
+type is FINE: instrumentation shows the field-access head `(. l1 get)` carries
+`result_full_type = A` (a named `TY_TYVAR`). The erasure happens later, in
+`elab_call_fn_inner` (`src/compiler/elab_call.c`, the
+`result_is_concrete_composite` block ~5493-5503): when a call's result is a
+bare `TY_TYVAR`, that block collapses `call_result_type` to `TYPE_INT` (the
+int64 carrier) -- `TY_APP/TY_ADT/TY_EXISTS/TY_FORALL/TY_FN` are preserved, but a
+bare named tyvar is not. This runs during compose-lens's GENERIC elaboration,
+before monomorphization, so the tyvar NAME is discarded and the per-spec
+resolver (which *does* bind `A -> Person`; verified: the inner-closure spec
+carries `S->Company, A->Person, B->cstr`) has nothing left to resolve. The
+materialization temp is then declared `int64_t` while a 16-byte `Person` flows
+through it.
 
-Fix direction: preserve fn-typed defstruct/defadt field types with their named
-tyvar arg/result full-types (not just `result_kind`), so a monomorphized
-field-access-call recovers the concrete type from the enclosing spec's
-bindings. This is squarely the end-to-end-monomorphization territory tracked by
-`docs/archive/history/van-laarhoven-*` and the monomorphization north-star plan;
-it touches how every fn-typed struct field is represented and accessed, so it
-wants a dedicated, carefully-scoped change rather than a fat-dispatch-site
-band-aid (a band-aid recovers the thunk-cast return type but leaves the
-materialization temp `int64_t`, i.e. still inconsistent).
+**A fix was proven to work end to end but has re-architecture-scale blast
+radius.** Adding `TY_TYVAR` (named) to `result_is_concrete_composite` +
+disabling the B4 `b4box` param boxing for the composed closures makes the repro
+below compile AND run correctly (`get`->`Ann`, `put "Bob"`+`get`->`Bob`, and the
+untouched `age`->`42`). But it regresses 13 previously-green fixtures, because it
+breaks two load-bearing conventions:
+
+1. **The int64-carrier convention for return-polymorphic results.** Preserving
+   the tyvar changes the type every downstream consumer sees. It breaks the
+   FRONT END (`(println (option-eq? ...))` -> `TUR-E0006 operator lookup failed
+   for 'println': first arg type tyvar` -- fixture `option-consumers-byvalue-arg`)
+   and the back end (the `vec-push!` carrier bridge stops firing when `(ok-val
+   r)` is no longer int64 -- fixture
+   `constrained-loop-vec-push-byvalue-result-element`; the scalar reinterpret
+   bitcast is skipped -- fixture `constrained-generic-dispatch-float-element`).
+   The correct shape is to KEEP the elab collapse and recover the by-value
+   aggregate type EMIT-SIDE, per-spec, only where the tyvar resolves to a wide
+   by-value aggregate (a currently-uncompilable path, so near-zero regression).
+
+2. **The `b4box` wide-by-value-ADT closure-param ABI** (facet 2c, below).
+
+### Facet 2c -- b4box param ABI: direct-call vs fat-dispatch -- OPEN
+
+Once 2b compiles, the composed `get` SIGSEGVs: its wide by-value `Company`
+param is boxed by B4 slice 2 (`__tur_b4box_s`, `emit_fns.c` needs_box_load) in
+the DEFINITION, but the fat-dispatch call site and the env `__fn` typed-thunk
+slot pass it BY VALUE (`tur_adt_Company`) -- so 16 bytes handed in as two
+registers are read back as a heap-box pointer and dereferenced (the string
+content lands in the pointer slot).
+
+The distinction, verified against the working B4 fixture
+`letrec-self-recursive-carrier-struct-return`: a **directly-called** closure
+(`letrec go`, invoked by its C name) has its direct call sites box the wide
+param, matching the boxed definition -- b4box is CORRECT there, and its typed
+thunk typedef (unused for dispatch) being by-value is harmless. A
+**fat-dispatched** closure (a lens `get`/`put` stored in a struct field and
+invoked through the typed thunk, whose slot-0 fatshims take the value BY VALUE)
+must pass the param by value -- b4box is WRONG there. So b4box's determinant is
+direct-vs-fat dispatch, NOT the naive "does a typed thunk exist" proxy (both
+have one; gating on it broke the directly-called case -- the letrec-carrier
+build failure). A correct fix must (a) tell fat-dispatched closures apart from
+directly-called ones and (b) keep the definition, base + spec forward decls, env
+`__fn` slot type, and every call site in agreement -- ~5 sites, the same
+van-Laarhoven-grade coordination.
+
+### Conclusion
+
+Blocker 2b+2c is not a bounded fix; it is the monomorphization / van-Laarhoven
+north-star (`docs/archive/history/van-laarhoven-*`): recover erased return-poly
+types emit-side per spec, AND resolve the fat-vs-direct closure-param ABI, in
+lockstep across elab result-typing, the scalar reinterpret, and ~5 closure-ABI
+emit sites. The working proof-of-concept and the exact 13-fixture blast radius
+are recorded here so the coordinated change can be scoped deliberately.
 
 ## Minimal repros
 
