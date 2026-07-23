@@ -4,6 +4,32 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.6] -- 2026-07-23
+
+### Fixed
+
+- **Composed lens codegen**: lower composed struct-of-closures lenses end to
+  end -- specialize every closure of a struct-of-closures return and mangle
+  apostrophes in ADT monomorph names (Blocker 2b/2c).
+- **Effectful fn-value params**: thread effectful callbacks correctly through
+  fat-closure function-value parameters (E2).
+- **catch-unwind leaks**: reclaim the caught result box and panic-message
+  string on unwind.
+- **`#lang` line parsing**: strip trailing tokens on the `#lang` line before
+  handing source to the reader.
+- **Separate compilation (`--shared`)**: unblock `--shared` spice builds, order
+  base ADT typedefs ahead of the monomorph flush in the header, and mirror the
+  direct forward-decl param ABI in the CPS entry-wrapper.
+- **libc symbol collisions**: mangle user globals whose names collide with libc
+  symbols.
+- **Imported-module defns**: forward-declare load-spliced top-level defns in
+  imported modules.
+- **stdlib/httpd leaks**: free per-limiter `RateLimit` state at process exit and
+  per-request cookie/form accessor strings.
+- **stdlib/image**: hoist platform executable-path includes to file scope.
+- **REPL builtins**: inject native-function stubs so `cons`/`head`/`tail`
+  resolve at the prompt.
+
 ## [0.30.5] -- 2026-07-22
 
 ### Fixed

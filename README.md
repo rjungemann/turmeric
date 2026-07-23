@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.5` -- fixes REPL `:reset`/`:run` dropping the stdlib preload, so `list-head`/`#map{}`/typeclass `Show` keep working (no spurious `TUR-W0040`) after a session reset.
+**Latest release:** `v0.30.6` -- a codegen and memory-hygiene fix release: composed struct-of-closures lenses lower end to end, effectful fn-value params thread correctly, and catch-unwind/httpd/image leaks are reclaimed.
 
 ## What
 
