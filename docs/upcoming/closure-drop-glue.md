@@ -77,26 +77,66 @@ their `requires.no-leak-check` markers were dropped.
 Each item is standalone. **Blocked by: nothing. Blocks: nothing.** Pick up any,
 none, or all, in any order. None gates graduation (already done) or the v1 track.
 
-### F1 -- Verify/close the catch-unwind + panic leak markers  (the one real open item)
+### F1 -- Catch-unwind + panic leak markers  (INVESTIGATED 2026-07-23 -- not a closure-drop-glue item; markers stay)
 
-At graduation the interior-free **crashes** in the catch-unwind / panic teardown
-cluster were fixed (routed through `TUR_CLOSURE_DROP`). Whether those paths are
-now also **leak-clean** was never confirmed, so these fixtures still carry
-`requires.no-leak-check`:
+**Resolved as a closure-drop-glue item.** Investigated on Linux under forced
+ASan (`-fsanitize=address,undefined`). The closure-drop-glue portion of this
+cluster is genuinely done: the `catch-unwind` thunk fat-closure env is dropped
+at every catch site (`TUR_CLOSURE_DROP(<thunk-env>)` fires right after
+`tur_catch_unwind_box` consumes it -- verify in any emitted `main`). The leaks
+that remain in these fixtures are **not** closure-env leaks -- they belong to
+the separate *catch-unwind result-box / panic-payload* track and are each an
+already-tracked, deliberate residual. Nothing here routes through
+`TUR_CLOSURE_DROP` (these are heap `tur_result_box_t` / `tur_panic_payload`
+records with no drop-glue header, not fat closures), so the original "route the
+residual free through `TUR_CLOSURE_DROP`" fix direction does not apply.
 
-`panic-catch-panic-of`, `panic-catch-unwind-caught`, `panic-catch-unwind-defer`,
+Fixtures (all keep `requires.no-leak-check`): `panic-catch-panic-of`,
+`panic-catch-unwind-caught`, `panic-catch-unwind-defer`,
 `panic-catch-unwind-double`, `panic-catch-unwind-nested`,
 `panic-catch-unwind-nested-deep`, `panic-in-handler`, `panic-reset-clears`,
 `panic-with-catch-of`, `stackless-catch-unwind-result`.
 
-- **How to close:** on Linux (LSan is Linux-only -- it cannot be checked on
-  macOS), run each fixture's program under leak detection with the marker
-  removed. If clean, delete the `requires.no-leak-check` marker. If it still
-  leaks, the residual free is the caught-box payload / defer-captured closure --
-  route it through `TUR_CLOSURE_DROP` (byte-identical for scalar payloads) and
-  then drop the marker.
-- **Driver:** the fixtures above.
-- **Blocks: nothing. Blocked by: nothing.**
+The residual leaks decompose into three deliberate classes, none of them
+closure-drop-glue:
+
+1. **Caught panic message string** (`tur_panic` `strdup`, small byte counts).
+   A string panic tags its payload `type_tag == TY_CSTR` with a heap `strdup`'d
+   value -- but `(panic-with "literal")` also produces a `TY_CSTR` payload whose
+   value is a non-heap string literal, so freeing `payload->value` by tag is an
+   unsound nonheap-free. Left to leak on purpose. Tracked:
+   `docs/archive/history/panic-with-scalar-payload-free-nonheap.md`.
+2. **Let-bound result box** read via `err-val` or handed to an unknown call
+   (e.g. `panic-catch-unwind-caught`'s inline-C `panic-msg` accessor reads
+   `res->err_val` directly). `emit_let_value`'s box escape analysis
+   (`catch_box_binding_escapes`) frees a caught Result at scope exit only when
+   it is inspected solely through `ok?`/`err?`/`ok-val`; a read through
+   `err-val` or an opaque call is conservatively treated as an escape and the
+   box is left to leak rather than risk a use-after-free on the extracted
+   payload pointer. Deliberate sound tradeoff. Tracked:
+   `docs/archive/history/catch-unwind-thunk-closure-leak-report.md`.
+3. **Stackless aggregate box** (`stackless-catch-unwind-result`, the ~4.8 MB /
+   199999-box loop leak from `tur_box_ok` in the stackless lowering). The
+   stackless segment splitter keeps its own residual aggregate-box leak.
+   Tracked: `docs/upcoming/catch-unwind-aggregate-followups-plan.md` (Part B).
+
+**Why the markers stay.** The fixtures genuinely still leak, so removing
+`requires.no-leak-check` would falsely assert leak-clean. Separately, under the
+default `bash tests/run.sh` these fixtures compile **without** any sanitizer
+(they inline `hamt.c` rather than link a sanitized `-lturi`, so `tur build`'s
+ASan autodetect at `src/main.c:2106` never triggers), which makes the marker
+dormant today but forward-correct: it correctly suppresses the real leak in any
+build configuration that does sanitize them.
+
+- **Reproduce (no rediscovery needed):** build a fixture with ASan forced in
+  and run under LSan:
+  ```sh
+  export TUR_CC_FLAGS="-O1 -g -std=c99 -fno-strict-aliasing -fsanitize=address,undefined -fno-omit-frame-pointer -L$(pwd)/build/src"
+  CC=cc ./build/tur build tests/fixtures/panic-catch-unwind-caught/input.tur -o /tmp/x
+  ASAN_OPTIONS=detect_leaks=1 /tmp/x   # LeakSanitizer: 24 B result box + payload
+  ```
+- **Blocks: nothing. Blocked by: nothing.** Closed as a closure-drop-glue item;
+  the residuals live on their own tracks above.
 
 ### F2 -- Typed-recursive `list<Closure>` drop glue  (honest generalization; no driver)
 
