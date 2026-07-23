@@ -1451,7 +1451,15 @@ static bool let_binding_box_freeable(const Expr *e, uint32_t idx) {
     if (!init || !b) return false;
     if (init->kind != EX_CATCH_UNWIND && init->kind != EX_CATCH_PANIC_OF)
         return false;
-    if (catch_box_binding_escapes(e->as.let_.body, b)) return false;
+    /* catch-unwind-panic-payload-leaks (Leak 2): the body may read the box only
+     * through the scalar-accessor whitelist (catch_box_binding_escapes), OR
+     * through a reader whose result is confined to the scope
+     * (catch_box_binding_reader_confined -- e.g. the fixture's
+     * `(println (panic-msg r))`, where panic-msg hands back a pointer into the
+     * box-owned message that println consumes before the scope-exit free). */
+    if (catch_box_binding_escapes(e->as.let_.body, b) &&
+        !catch_box_binding_reader_confined(e->as.let_.body, b, e->type.kind))
+        return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++) {
         if (j == idx) continue;
         if (catch_box_binding_escapes(e->as.let_.bindings[j].init, b)) return false;

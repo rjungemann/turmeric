@@ -997,6 +997,160 @@ bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/true, ignore);
 }
 
+/* catch-unwind-panic-payload-leaks (Leak 2): runtime sinks that CONSUME their
+ * argument -- print it -- and never retain a pointer into it beyond the call.
+ * A box-owned pointer (the caught message an err-val / inline-C accessor hands
+ * back) passed to one of these is dead once the call returns, so the box may be
+ * deep-freed at scope exit.  A general call is NOT on this list: it could stash
+ * the pointer invisibly (e.g. through an inline-C body), so it never confines. */
+static bool box_reader_result_void_sink(const char *name) {
+    if (!name) return false;
+    static const char *const sinks[] = {
+        "println", "print", "eprintln", "eprint",
+        "println-float", "printf-float", "print-show", "print-char",
+        "print-char-list", NULL,
+    };
+    for (int i = 0; sinks[i]; i++)
+        if (strcmp(name, sinks[i]) == 0) return true;
+    return false;
+}
+
+/* catch-unwind-panic-payload-leaks (Leak 2): is every use of caught-box binding
+ * `b` in `e` safe for a DEEP box free (box struct + owned payload/message) at
+ * b's scope exit?  Beyond the scalar-accessor whitelist that
+ * catch_box_binding_escapes admits, this also admits handing `b` to a reader
+ * (e.g. the fixture's inline-C `panic-msg`, which returns a pointer INTO the
+ * box-owned message) PROVIDED the reader's result is `confined` -- consumed
+ * within the scope so no box-owned pointer is live at the free point.
+ *
+ * `confined` is true when the value of `e` is discarded or flows only into a
+ * known non-retaining runtime sink (the print family above).  It must start
+ * true only for a box scope whose own result cannot carry a box-owned pointer
+ * out (a non-pointer scalar / nil scope value); the caller enforces that.
+ *
+ * Soundness (only ever greenlights a free):
+ *   - a reader result reaching a store / return / capture is caught because that
+ *     context recurses with confined=false (or, for a `b` appearing directly,
+ *     falls to the strict escape walk), and an unconfined reader use returns
+ *     false;
+ *   - a reader result BOUND to a local is caught: a let-binding init is walked
+ *     with confined=false, so the alias cannot later escape unnoticed;
+ *   - an unmodeled form defers to the strict escape walk, whose own default is
+ *     to treat the unknown as an escape. */
+static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_BOOL_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_NIL_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_VAR:
+            /* A bare `b` as this expression's result is safe only if confined --
+             * its value (the box pointer) is then discarded / printed, not kept. */
+            return e->as.var.binding != b || confined;
+        case EX_ASCRIBE: return box_uses_confined(e->as.ascribe_.inner, b, confined);
+        case EX_CAST:    return box_uses_confined(e->as.cast_.expr, b, confined);
+        case EX_IF:
+            return box_uses_confined(e->as.if_.cond, b, /*discarded=*/true) &&
+                   box_uses_confined(e->as.if_.then_, b, confined) &&
+                   box_uses_confined(e->as.if_.else_or_null, b, confined);
+        case EX_MATCH: {
+            if (!box_uses_confined(e->as.match_.scrutinee, b, /*discarded=*/true))
+                return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+                if (!box_uses_confined(e->as.match_.arms[i].guard, b, true))
+                    return false;
+                if (!box_uses_confined(e->as.match_.arms[i].body, b, confined))
+                    return false;
+            }
+            return true;
+        }
+        case EX_DO:
+            for (uint32_t i = 0; i < e->as.do_.n; i++) {
+                bool tail = (i + 1 == e->as.do_.n);
+                if (!box_uses_confined(e->as.do_.items[i], b, tail ? confined : true))
+                    return false;
+            }
+            return true;
+        case EX_LET:
+        case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                /* A binding init's value is retained in the bound local, so a
+                 * box-owned pointer flowing there could outlive the box: NOT
+                 * confined. */
+                if (!box_uses_confined(e->as.let_.bindings[i].init, b, false))
+                    return false;
+            return box_uses_confined(e->as.let_.body, b, confined);
+        case EX_BUILTIN: {
+            /* A print-family builtin (e.g. `println`) consumes -- prints -- its
+             * argument and never retains a pointer into it, so it confines its
+             * args' results.  Any other builtin operates on scalars; a box-owned
+             * pointer never flows into one, and if `b` somehow appears it is
+             * checked unconfined (conservative). */
+            const char *bn = e->as.builtin.spec ? e->as.builtin.spec->name : NULL;
+            bool sink = box_reader_result_void_sink(bn);
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!box_uses_confined(e->as.builtin.args[i], b, sink))
+                    return false;
+            return true;
+        }
+        case EX_CALL: {
+            if (e->as.call_.fn_expr) return false;   /* indirect: opaque callee */
+            const Binding *fb = e->as.call_.fn_binding;
+            const char *nm = (fb && fb->name) ? fb->name->name : NULL;
+            bool acc = nm && (strcmp(nm, "ok?") == 0 || strcmp(nm, "err?") == 0 ||
+                              strcmp(nm, "ok-val") == 0);
+            if (!acc && nm && strcmp(nm, "err-val") == 0 &&
+                err_val_result_is_freeable_scalar(e->type.kind))
+                acc = true;
+            bool sink = box_reader_result_void_sink(nm);
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = e->as.call_.args[i];
+                if (a && a->kind == EX_VAR && a->as.var.binding == b) {
+                    if (acc) continue;             /* scalar result cannot alias */
+                    if (sink) continue;            /* printed, not retained */
+                    /* general reader: its result aliases box memory -- safe only
+                     * if THIS call's result is itself confined. */
+                    if (!confined) return false;
+                    continue;
+                }
+                /* A sink/accessor confines its args' results; a general call does
+                 * not (it may stash them), so recurse with confined=false there. */
+                if (!box_uses_confined(a, b, (sink || acc)))
+                    return false;
+            }
+            return box_uses_confined(e->as.call_.dict_arg, b, false);
+        }
+        default:
+            /* Stores / returns / captures / unmodeled forms: defer to the strict
+             * escape walk.  It sees `b` itself (not a bound alias -- those are
+             * gated at their let-binding above) and treats any unknown as an
+             * escape, so a `true` there correctly denies the free. */
+            return !catch_box_binding_escapes(e, b);
+    }
+}
+
+/* catch-unwind-panic-payload-leaks (Leak 2): true when a caught-box binding `b`
+ * whose scope is `body` may be deep-freed at scope exit even though it is read
+ * through a reader (not only the scalar-accessor whitelist).  `scope_result`
+ * is the type of the box's scope value: the relaxation is sound only if that
+ * value cannot itself carry a box-owned pointer out, i.e. it is a non-pointer
+ * scalar or nil. */
+bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
+                                       TypeKind scope_result) {
+        fprintf(stderr, "[boxfree] scope_result=%d body_kind=%d\n",
+                (int)scope_result, body ? (int)body->kind : -1);
+    switch (scope_result) {
+        case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+        case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+        case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+        case TY_FLOAT64: case TY_FLOAT32:
+            break;
+        default:
+            return false;   /* scope value could carry a box-owned pointer out */
+    }
+    return box_uses_confined(body, b, /*confined=*/true);
+}
+
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every
  * path through `e` ends in a return/panic.  Unlike expr_is_divergent (which
  * only inspects the last item of a `do`), this treats a `do` as divergent when

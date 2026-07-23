@@ -647,6 +647,13 @@ bool catch_box_binding_escapes(const Expr *e, const Binding *b);
  * caught box is sole-owned -- it escapes nowhere except that return. */
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
+/* catch-unwind-panic-payload-leaks (Leak 2): admit a deep box free when `b` is
+ * read through a reader (not only the scalar-accessor whitelist) but every such
+ * reader result is confined to the scope (consumed by a non-retaining print
+ * sink), and the scope value itself cannot carry a box-owned pointer out
+ * (`scope_result` is a non-pointer scalar / nil).  See emit_core.c. */
+bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
+                                       TypeKind scope_result);
 bool expr_has_multishot_handler(const Expr *e);
 char *fresh_tmp(EmitCtx *ctx);
 char *fresh_frame(EmitCtx *ctx);

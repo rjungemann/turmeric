@@ -1,11 +1,51 @@
 ---
-status: open
+status: resolved
 severity: low
 discovered: 2026-07-23
+resolved: 2026-07-23
 area: compiled backend / runtime (catch-unwind, panic payloads, result boxes)
 ---
 
 # `catch-unwind` / `catch-panic-of` leak the caught result box and panic-message string
+
+## Resolution (2026-07-23)
+
+All three leaks are fixed and every affected fixture now runs clean under
+`ASAN_OPTIONS=detect_leaks=1` with ASan forced in (recipe below); their
+`requires.no-leak-check` markers are deleted. `bash tests/run.sh` stays green
+and no `Invalid free` / use-after-free appears.
+
+- **Leak 1 (panic-message string)** -- `tur_panic_payload` gained an explicit
+  `int owns_value` bit (`emit_module.c`). It is set to `1` only on the
+  `tur_panic` `strdup(msg)` path and `0` on every `tur_panic_with` path
+  (caller-supplied / borrowed / inline-scalar value). `panic_payload_free`
+  now frees `payload->value` iff `owns_value`, and `tur_result_box_free`
+  routes its err-payload free through `panic_payload_free`, so a caught box's
+  owned message is reclaimed when the box is freed -- with no nonheap-free /
+  double-free.
+- **Leak 2 (caught box read via an opaque reader)** -- a let-bound caught box
+  read through a reader that hands back a pointer INTO the box-owned message
+  (the fixture's inline-C `panic-msg`) is now deep-freed at scope exit when the
+  reader's result is *confined* to the scope (consumed by a non-retaining print
+  sink) and the scope value itself cannot carry a box-owned pointer out. See
+  `box_uses_confined` / `catch_box_binding_reader_confined` (`emit_core.c`),
+  wired into `let_binding_box_freeable` (`emit_expr.c`). The confinement walk
+  only ever greenlights a free, so it never frees a still-live box.
+- **Leak 3 (stackless aggregate/result box)** -- the stackless segment splitter
+  now reclaims a let-bound caught box in its resume segment when the
+  continuation is straight-line and non-escaping, via a `free_box` field on the
+  terminal `GsSink` emitted just before the delivery break (`emit_fns.c`). This
+  removes the `stackless-catch-unwind-result` loop leak (~4.8 MB over 199999
+  iters) and, as a bonus, `stackless-catch-unwind-okval` and
+  `stackless-catch-unwind-panic-unwind-aggregate-leak`.
+- The `catch-panic-of` type-mismatch re-raise path now returns a NULL box
+  instead of allocating `tur_box_err(0)` (which the re-raise stranded), fixing
+  a 24 B leak in `panic-catch-panic-of` / `panic-with-catch-of`.
+
+Panic-preamble snapshots were regenerated in the same change.
+
+---
+
 
 ## THIS IS NOT CLOSURE DROP-GLUE WORK. Read this line before touching anything.
 

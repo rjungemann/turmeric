@@ -1341,6 +1341,16 @@ typedef struct GsSink {
     const LetBinding *binds; uint32_t bi, bn; const Expr *body;  /* GSK_ASSIGN */
     const Expr **items; uint32_t si, sn;                 /* GSK_SEQ */
     const struct GsSink *cont;                           /* GSK_ASSIGN / GSK_SEQ */
+    /* catch-unwind-panic-payload-leaks (Leak 3): C-name of a caught Result box
+     * to tur_result_box_free just before this sink consumes its value.  Set on
+     * the terminal sink of a let-bound catch-box continuation that is
+     * straight-line and non-escaping (gs_catch_descend), so the box (and its
+     * owned payload/message) is reclaimed once the reads that consume it have
+     * completed -- the stackless counterpart to the native let_binding_box_freeable
+     * scope-exit free.  The delivered value is proven not to alias the box (the
+     * escape check greenlights only scalar-returning accessor reads), so freeing
+     * before the delivery is safe. */
+    const char *free_box;                                /* deferred box free */
 } GsSink;
 
 typedef struct {
@@ -1632,6 +1642,14 @@ static void cps_emit_do(GsCtx *gs, Buf *b, const Expr **items, uint32_t i,
 /* Route a produced value `val` to its sink (may continue emitting a let/do
  * tail into the same segment, or end the segment with a RETURN + break). */
 static void gs_deliver(GsCtx *gs, Buf *b, const char *val, const GsSink *sink) {
+    /* catch-unwind-panic-payload-leaks (Leak 3): reclaim a let-bound caught
+     * Result box now that its consuming reads have run and `val` (proven not to
+     * alias the box) is ready to be delivered.  Emitted before the sink's
+     * terminal write/break so it is not stranded as dead code after it. */
+    if (sink->free_box) {
+        indent_buf(b, gs->cur_ind);
+        buf_printf(b, "tur_result_box_free((int64_t)(intptr_t)%s);\n", sink->free_box);
+    }
     switch (sink->kind) {
         case GSK_RETURN: {
             if (sink->ret_aggr) {
@@ -1888,7 +1906,33 @@ static void gs_catch_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sin
             gs_deliver(gs, rb, aggnm, sink);
             free(bridged);
         } else {
-            gs_deliver(gs, rb, boxnm, sink);
+            /* catch-unwind-panic-payload-leaks (Leak 3): a let-bound caught box
+             * (`(let [r (catch-unwind ...)] BODY)`) whose BODY is straight-line
+             * (no further suspension / catch / panic) and reads `r` only through
+             * non-escaping scalar accessors is reclaimable at scope exit, just
+             * like the native let_binding_box_freeable path.  Arm the terminal
+             * sink of BODY to free the box once its consuming reads have run (the
+             * delivered value is proven not to alias the box), so the loop leak
+             * (~4.8 MB over 200k iters) is gone.  A body that suspends would save
+             * `r` across a descend, so the straight-line gate is required for the
+             * one-shot free to be sound. */
+            GsSink cont_copy, assign_copy;
+            const GsSink *dsink = sink;
+            if (sink->kind == GSK_ASSIGN && sink->bi >= 1 &&
+                sink->bi == sink->bn && sink->cont && sink->body) {
+                const Binding *boxbind = sink->binds[sink->bi - 1].binding;
+                if (boxbind && !gs_suspends_live(gs, sink->body) &&
+                    !gs_has_catch(sink->body, gs->fd) &&
+                    !gs_has_panic(sink->body) &&
+                    !catch_box_binding_escapes(sink->body, boxbind)) {
+                    cont_copy = *sink->cont;
+                    cont_copy.free_box = boxnm;
+                    assign_copy = *sink;
+                    assign_copy.cont = &cont_copy;
+                    dsink = &assign_copy;
+                }
+            }
+            gs_deliver(gs, rb, boxnm, dsink);
         }
     }
     gs->cur_ind = saved_ind;

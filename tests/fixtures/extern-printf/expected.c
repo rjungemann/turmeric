@@ -745,7 +745,7 @@ static inline double  tur_sc_f64_from_bits(int64_t i){ double d; memcpy(&d,&i,si
 static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof f); return i; }
 static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }
 static tur_panic_payload *global_panic_payload;
-static tur_panic_payload *panic_payload_new(int, void *, const char *, int);
+static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);
 static void tur_panic(const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -753,7 +753,7 @@ static void tur_panic(const char *msg) {
     }
     tur_panic_in_progress = 1;
     if (tur_handler_chain) {
-        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, __FILE__, __LINE__);
+        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);
         if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }
         tur_panicking = 1;
         return;
@@ -781,19 +781,20 @@ struct tur_panic_payload {
     void *value;
     const char *file;
     int line;
+    int owns_value;
 };
 
 static tur_panic_payload *global_panic_payload = NULL;
 
-static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line) {
+static tur_panic_payload *panic_payload_new(int type_tag, void *payload, const char *file, int line, int owns_value) {
     tur_panic_payload *p = (tur_panic_payload *)malloc(sizeof(tur_panic_payload));
     if (!p) { fprintf(stderr, "panic: oom\n"); abort(); }
-    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line;
+    p->type_tag = type_tag; p->value = payload; p->file = file; p->line = line; p->owns_value = owns_value;
     return p;
 }
 
 static void panic_payload_free(tur_panic_payload *p) {
-    if (p) { free(p); }
+    if (p) { if (p->owns_value) free(p->value); free(p); }
 }
 
 static int tur_panic_payload_type(tur_panic_payload *p) {
@@ -904,8 +905,14 @@ static int64_t tur_catch_panic_of_box(int expected_type, int64_t thunk) {
             return tur_box_err((int64_t)(intptr_t)__p);
         }
         /* type mismatch: leave the signal + payload staged so it
-         * propagates to the next outer boundary via the return path. */
-        return tur_box_err(0);
+         * propagates to the next outer boundary via the return path.
+         * catch-unwind-panic-payload-leaks: return a NULL box rather
+         * than allocating tur_box_err(0).  tur_panicking is still set,
+         * so the caller's per-call-site check propagates without ever
+         * inspecting this value; allocating a box here only leaks it
+         * (the re-raise skips its scope-exit free).  A stray free of a
+         * NULL box is a safe no-op. */
+        return 0;
     }
     return tur_box_ok(__v);
 }
@@ -914,7 +921,7 @@ static void tur_result_box_free(int64_t __r) __attribute__((unused));
 static void tur_result_box_free(int64_t __r) {
     tur_result_box_t *__b = (tur_result_box_t *)(intptr_t)__r;
     if (!__b) return;
-    if (!__b->is_ok) free((tur_panic_payload *)(intptr_t)__b->err_val);
+    if (!__b->is_ok) panic_payload_free((tur_panic_payload *)(intptr_t)__b->err_val);
     free(__b);
 }
 
@@ -1328,13 +1335,13 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
     }
     tur_panic_in_progress = 1;
     if (tur_handler_chain) {
-        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);
         if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); }
         tur_panicking = 1;
         return;
     } else if (tur_current_fiber && tur_current_fiber->panic_jmpbuf_valid) {
         /* Use per-fiber panic buffer - set up global payload for cleanup */
-        global_panic_payload = panic_payload_new(type_tag, payload, file, line);
+        global_panic_payload = panic_payload_new(type_tag, payload, file, line, 0);
         longjmp(tur_current_fiber->panic_jmpbuf, 1);
     }
     fprintf(stderr, "panic at %s:%d\n", file ? file : "(unknown)", line);
