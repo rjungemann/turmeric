@@ -754,6 +754,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 strcmp(e->sig_tyvars[si], sym->name) == 0) {
                 if (e->sig_tyvar_kinds[si] != KIND_STAR)
                     t->hkt_kind = e->sig_tyvar_kinds[si];
+                /* van-laarhoven-lens-composition: a name quantified by an
+                 * ENCLOSING fn signature is an unconstrained type variable, so
+                 * it must follow the same copy discipline as a LOCAL declared
+                 * type param -- CK_COPY (see type_tyvar_named / the n_type_params
+                 * branch above), NOT the CK_MOVE forced on genuinely-free unknown
+                 * names.  Without this, an inner closure param typed by an outer
+                 * tyvar (e.g. `(fn [s : S] ...)` in a lens `put`) is wrongly
+                 * treated as affine and a legitimate double-use trips TUR-E0005. */
+                t->copy_kind = CK_COPY;
                 break;
             }
         }

@@ -1,0 +1,20 @@
+;; van-laarhoven-lens-composition (move-check slice): an inner closure param
+;; annotated with an ENCLOSING signature's type variable is an unconstrained
+;; type variable, so it must follow the same copy discipline as a locally
+;; declared type param -- CK_COPY, NOT the CK_MOVE forced on genuinely-free
+;; unknown names in type_expr_from_form.
+;;
+;; Before the fix, `s : S` (where `S` is quantified by the enclosing `apply-twice`)
+;; resolved to a CK_MOVE tyvar inside the inner lambda, so using `s` more than
+;; once -- as a lens `put` body must (read a sub-value via `get` AND rebuild via
+;; `put`, both from the same `s`) -- tripped a bogus TUR-E0005 use-after-move,
+;; plus a misleading "parameter looks like it was followed by a type annotation"
+;; note on the perfectly-correct `[s : S]`.
+(defn apply-twice [S] [g : (fn [S S] S) x : S] : S
+  (let [h (fn [s : S] : S (g s s))]
+    (h x)))
+
+(defn add [a : int b : int] : int (+ a b))
+
+(defn main [] : int
+  (println (apply-twice add 21)))
