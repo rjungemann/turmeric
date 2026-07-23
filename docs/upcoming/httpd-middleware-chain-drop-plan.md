@@ -1,17 +1,37 @@
 # Plan: Reify the httpd middleware chain so it can be freed
 
-> **Status:** Accepted-and-deferred. The leak is accepted as a bounded,
-> process-lifetime leak *now* (markers kept); the reified-chain fix below is the
-> planned resolution, to land with the next middleware-API revision.
-> **Re-verified 2026-07-19:** still deferred, unchanged. No `MwChain` /
-> `mw-chain-dispatch` / `mw-chain-free` exists in `stdlib/httpd.tur` -- the
-> closure-onion representation (`compose-middleware` / `httpd-mw-fold`) is intact,
-> and every listed middleware fixture (`httpd-mw-*`, `httpd-async-mw-*`,
-> `httpd-h5-tls`, `httpd-h7-middleware`, `httpd-mw-fold-many`, spices-gated
-> `httpd-mw-compress`) still carries `requires.no-leak-check` with the "intentional
-> bounded leak" rationale. The reified-chain phases (1-5 below) remain entirely
-> unstarted, awaiting the next middleware-API revision to amortize the fixture
-> churn. This plan stays OPEN.
+> **Status: RESOLVED-SUPERSEDED (2026-07-22). The middleware-onion leak this plan
+> targets is fixed -- but by the general closure-drop feature this plan explicitly
+> rejected, NOT by chain reification. Phases 1-5 below were never implemented and
+> are withdrawn.**
+>
+> What actually happened: `closure-drop-glue` (the compiler drop-glue header ABI --
+> `docs/upcoming/closure-drop-glue-plan.md`) shipped behind `--enable=` and then
+> **graduated to always-on 2026-07-22** (`src/runtime/experiments.c`). `httpd-free`
+> / `httpd-async-free` now drop the composed handler via `TUR_CLOSURE_DROP`
+> (`stdlib/httpd.tur:971-979`, `:2930`), whose drop-glue walk frees every inner
+> `next` box down the onion; the runtime-built `httpd-mw-fold` chain auto-drops via
+> an `:affine` `ClosureChain`/`Handler` opaque with a `Drop` instance
+> (`stdlib/httpd.tur:3414`, `:3477`); and the `mw-rate-limit` bucket table is freed
+> via a file-scope registry + one-time atexit hook (commit `301466236`). No
+> `MwChain` / `mw-chain-dispatch` / `mw-chain-free` was ever built (0 hits in tree).
+>
+> Outcome vs the "Why C rather than a general closure-drop feature" bet below: that
+> bet -- that drop-glue's cost was "not justified by this one bounded leak" -- was
+> overtaken, because a second, independent need for drop-glue appeared and the
+> feature shipped anyway. Its walk drained this onion for free.
+>
+> **16 of the 17 markers are dropped.** Every listed fixture
+> (`httpd-mw-*` incl. `-fold-many`, `httpd-async-mw-compose`, `httpd-h5-tls`,
+> `httpd-h7-middleware`) is now leak-clean with NO `requires.no-leak-check`. The
+> lone remaining marker is `httpd-mw-compress`, and it stays only because it is
+> `requires.spices` (zlib absent) -- the onion-leak rationale on it is vestigial.
+> Per the CLAUDE.md archive convention this resolved plan is a candidate to move to
+> `docs/archive/`. Phases 1-5 below are retained as a withdrawn design record.
+>
+> **(Prior status, now historical.)** Accepted-and-deferred; re-verified
+> 2026-07-19 as still deferred with phases 1-5 unstarted. That deferral was
+> resolved by the closure-drop-glue route above two days later.
 > **Type:** Stdlib redesign (`stdlib/httpd.tur`); no compiler change.
 > **Related:**
 > - `docs/leak-detection-followups-plan.md` -- parent plan; this is its last

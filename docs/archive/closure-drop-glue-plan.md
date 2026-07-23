@@ -1,5 +1,18 @@
 # Closure env drop glue -- freeing captured fat-closure environments
 
+> **Re-verified 2026-07-22: DONE / GRADUATED, plan is accurate.** All phases (S1,
+> S2/Model U, Model R, R1, R2, R3a, R4) confirmed in the tree. Graduation to
+> always-on is commit `3f4a5c980` (`EXPERIMENTS[]` row -> `GRADUATED[]` as a
+> TUR-W0063 no-op; `drop_glue_<env>` walk in `emit_fns.c`, `TUR_CLOSURE_DROP` +
+> `env[-1]` header ABI in `emit_module.c`). The two R3a auto-drop increments
+> (`Handler` half 1, `ClosureChain` half 2) landed AFTER graduation as shipped
+> stdlib, not pending -- commits `8a5c59a71` and `cff818796`. R2b/R3b remain the
+> only by-design deferrals (no corpus driver). **Doc-hygiene only:** the three
+> `docs/reported/...` report paths cited below (httpd-request-accessor-cstr-leak,
+> httpd-mw-rate-limit-state-leak, httpd-new-pool-failure-handler-leak) have all
+> been moved to `docs/archive/...`; and `docs/reported/escaping-fat-closure-env-leak.md`
+> (the report this plan resolves) is itself now due for archival -- its gate is met.
+>
 > # ✅ DIRECTIVE SATISFIED (2026-07-22) -- Model R walk-glue LANDED.
 > The blocking directive below has been carried out (left intact, unreworded,
 > as instructed). Model R shipped behind `--enable=closure-drop-glue`: the

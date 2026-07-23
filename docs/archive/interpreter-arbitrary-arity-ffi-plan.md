@@ -208,20 +208,28 @@ libffi exists to do. Rejected.
 
 ## 4. Recommended plan (phased)
 
-1. **Phase 1 -- emit the shim.** In emit_module.c, for each exported defn (the
+> **Landed status (2026-07-22, commit `0620909f4`):** Phases 1-3 **DONE**
+> (`emit_ffi_export_shims` in `emit_module.c`; derived-name `dlsym` probe storing
+> `TurSpiceExport.ffi_shim` in `spice_loader.c`; direct shim call in `ffi_thunk.c`
+> with the legacy `tur_ffi_thunk_call` retained as fallback). Phase 4
+> **DEFERRED by design** -- the `ffi_dispatch*` table stays as the fallback for
+> never-rebuilt spices, and `tools/gen_ffi_dispatch.py` keeps its `--max-arity <= 16`
+> clamp (it now bounds only that fallback, not the shim path).
+
+1. **Phase 1 -- emit the shim. [DONE]** In emit_module.c, for each exported defn (the
    set already walked by `emit_exports_manifest`), emit a
    `<mangled>__ffi(const int64_t *iv, const double *fv, int64_t *out_i, double
    *out_f)` shim that calls the real function with per-position `iv`/`fv` reads
    cast to the declared parameter C types, and stores the result (or nothing for
    `:void`). Reuse the direct-call type->C mapping. Skip `?`-class (struct)
    returns for now (leave them to the existing clean error).
-2. **Phase 2 -- advertise it.** Record the shim in `exports.manifest` (or rely
+2. **Phase 2 -- advertise it. [DONE]** Record the shim in `exports.manifest` (or rely
    on the derived-name probe) so the loader can find it. Keep it optional.
-3. **Phase 3 -- use it.** In src/turi/ffi_thunk.c, if the export has a shim,
+3. **Phase 3 -- use it. [DONE]** In src/turi/ffi_thunk.c, if the export has a shim,
    `dlsym` it once (cache on the descriptor) and call it directly with the
    marshaled buffers; otherwise fall back to `tur_ffi_thunk_call` (unchanged).
    Remove the arity cap from the shim path.
-4. **Phase 4 -- (optional) retire/shrink the generated table.** Once shims are
+4. **Phase 4 -- (optional) retire/shrink the generated table. [DEFERRED]** Once shims are
    the default, the committed `ffi_dispatch*` table can drop to a small default
    (or be removed if we accept that a spice must be rebuilt once to gain a
    shim). Decide based on how much we care about never-rebuilt spices; if we do,
@@ -230,16 +238,28 @@ libffi exists to do. Rejected.
 
 ## 5. Correctness gates / tests
 
-- A spice exporting a high-arity function (e.g. 100 `:int` params, and a mixed
-  `:int`/`:float`/`:cstr` case) is callable from the REPL and returns the
-  correct value -- guarded by `requires.spices`.
-- Argument-class fidelity: a `:cstr` argument round-trips as a pointer (not a
-  truncated/sign-extended int), and a `:float32` param is passed correctly.
-- Fallback: a spice `.so` lacking the shim symbol still loads and its
-  small-arity exports still call through the legacy table.
-- Sibling isolation (already fixed by the descriptor work, keep asserting): one
-  high-arity export never breaks the loadability of its siblings.
-- `:void` return and 0-arg exports still work through the shim.
+> **Coverage status (2026-07-22).** The shipped gate is `tests/turi/repl-spice-call.sh`.
+> `[COVERED]` gates below are asserted there; `[NOT YET TESTED]` gates are handled
+> by the shim code path but have no fixture asserting them -- they are the
+> remaining test follow-ups, not implementation gaps.
+
+- **[COVERED, at lower arity]** A spice exporting a high-arity function is callable
+  from the REPL and returns the correct value. The fixture uses `sum12` (arity-12
+  all-`:int`), `wide-mix` (arity-8 interleaved `:int`/`:float`), and `imix9`
+  (arity-9 `:int`) -- not the aspirational 100-`:int` case, and **no `:cstr` case**.
+- **[NOT YET TESTED]** Argument-class fidelity: a `:cstr` argument round-trips as a
+  pointer (not a truncated/sign-extended int) -- the shim casts it correctly
+  (`(cty)(intptr_t)iv[j]`, `emit_module.c:11053`) but no fixture asserts it -- and
+  a `:float32` param (mapped `'f'` at `ffi_shim_class_for_kind`) is passed
+  correctly, also untested.
+- **[NOT EXPLICITLY TESTED]** Fallback: a spice `.so` lacking the shim symbol still
+  loads and its small-arity exports call through the legacy table. The branch
+  exists (`ffi_thunk.c`) but is hard to exercise now that every fresh build emits
+  shims -- no fixture forces a shim-less `.so`.
+- **[COVERED]** Sibling isolation (pre-existing descriptor work): one high-arity
+  export never breaks the loadability of its siblings.
+- **[COVERED]** `:void` return (`noisy`) and 0-arg exports (`answer`) work through
+  the shim.
 
 ## 6. Non-goals
 

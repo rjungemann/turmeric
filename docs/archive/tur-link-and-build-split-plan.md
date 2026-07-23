@@ -1,5 +1,15 @@
 # `tur link` and the build compile/link split
 
+> **Re-verified 2026-07-22: COMPLETE.** All six phases confirmed in the tree --
+> `resolve_autolink_flags`/`link_command_run`/`write_link_sidecar` (`src/main.c`),
+> the `compile`/`link` entries in `builtins[]` + `CANONICAL_COMMANDS[]`, `tur build
+> --split-build`, the `turt_runtime` STATIC target (`src/CMakeLists.txt`), the
+> `--runtime=auto|lib|source` default flip, and the ccache CI wiring
+> (`.github/workflows/ci.yml`). No functional gaps. Note: several raw
+> `src/main.c:NNNN` line citations in Sections 1/3 predate the refactor and now
+> point off-target -- prefer the stable function names above when navigating.
+> Candidate to relocate out of `docs/upcoming/`.
+
 **Status:** Landed (single-file/compile path). Phases 1-4 and 6 are done:
 `resolve_autolink_flags`/`link_command_run` factoring; `tur compile`/`tur link`
 + `.link` sidecar; `tur build --split-build`; `tur build --runtime=lib` backed

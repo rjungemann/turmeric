@@ -1,5 +1,14 @@
 # Owned-`String` builders & optional accessors -- stdlib
 
+> **Re-verified 2026-07-22:** all Part 1 + Part 2 deliverables confirmed present
+> in the tree (`stdlib/str-build-string.tur`, `stdlib/range-bound-string.tur`,
+> `stdlib/httpd-string.tur`, the four fixtures, guide prose, and docstring-table
+> rows). The ONLY open line is the optional simplification in the "Implementation
+> note (Part 2 accessors)" below -- the `*-raw` + Turmeric-wrapper form is still
+> in place; collapsing it to a direct inline-C `(Option String)` return is now
+> unblocked but has not been done. Everything else is done. This plan is a
+> candidate to relocate out of `docs/upcoming/`.
+>
 > **Status:** LANDED 2026-07-21. Split out of
 > [string-adoption-stdlib-plan.md](string-adoption-stdlib-plan.md) as its
 > "Bucket B" -- the deferred sites where the mechanical `path-string` recipe

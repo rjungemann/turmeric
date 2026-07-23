@@ -1,5 +1,13 @@
 # `String` Adoption Audit -- stdlib
 
+> **COMPLETE (re-verified 2026-07-22).** Every batch and bucket in this audit has
+> landed and is confirmed in the tree (all `*-string` modules, the runtime bridge
+> helpers, and every enumerated fixture). Bucket B lives in its own now-landed
+> plan ([string-owned-builders-and-optional-accessors-plan.md](string-owned-builders-and-optional-accessors-plan.md)).
+> Nothing is unimplemented; a follow-up hardening commit (`9e1ec779f`, frees
+> per-request cookie/form accessor strings) landed after this plan and is not one
+> of its items. Candidate to relocate out of `docs/upcoming/`.
+>
 > **Status:** Batches 1-2 landed 2026-07-20 (foundational bridge, path + digest
 > clusters, and the httpd server-lifetime capture fix). **Batch 3 landed
 > 2026-07-21: the entire Bucket A mechanical checklist below is complete** --
@@ -60,7 +68,7 @@ already returns one buffer).
   FIPS/RFC vectors (fixture `tests/fixtures/digest-hex`). The owned siblings
   `digest/{sha256,md5}-string` now ship in `stdlib/digest-string.tur` (fixture
   `tests/fixtures/digest-string`). Report archived:
-  `docs/archive/digest-hex-nested-static-fn.md`.
+  `docs/archive/history/digest-hex-nested-static-fn.md`.
 - **httpd CorsOpts capture (items 2/3) -- the genuine hazard fixed.** On analysis,
   the strongest real hazard was not the struct field type but `mw-cors-with`
   capturing borrowed origin/methods/headers strings into a **server-lifetime**

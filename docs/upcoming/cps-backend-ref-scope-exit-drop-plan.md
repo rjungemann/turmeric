@@ -1,12 +1,45 @@
 ---
 title: CPS backend -- ref<T> scope-exit auto-drop in colored functions (O1-b)
 category: Planning
-status: P1 landed -- non-crossing ref<T> auto-drop now CPS-emits; P2/P3 remain gated on the env-capture substrate
+status: P1 landed (generalized to all owning locals -- rc + ref); P2 single-shot-crossing slice landed; only P2 abortive + P3 multi-shot crossing still fall back. Substrate (cps-tramp-resume, owning-cloneable-capture) graduated to always-on 2026-07-19.
 description: A `ref<T>` (also `weak`/`lref`) local gets a `(defer (drop! r))` injected at let scope exit (elab_forms.c). In an uncolored function the direct path fires it through the tur_frame LIFO defer stack. In a colored (CPS-emitted) function there is no equivalent: `EX_DEFER` has no CT-IR lowering case, so the whole function falls back, and even if it were lowered the injected drop lands textually after the control op, which `owning_dropped_before_control` rejects. This plan defines and implements ref scope-exit drop under CPS: P1 hoists the drop to last-use for a ref that does not cross a control op (self-contained, no runtime); P2/P3 (a ref live across an abortive or resumable control op) ride the DK-teardown / clone-drop discipline from the env-capture plan. Sound on the fallback today -- missed coverage, not a correctness gap.
 ---
 
 # CPS backend -- ref<T> scope-exit auto-drop (O1-b)
 
+> **Progress note (2026-07-22) -- re-verified; plan was under-reporting. Two
+> things have moved since the 2026-07-19 note below.**
+>
+> 1. **P1 landed AND was generalized beyond `ref<T>`** to all owning locals
+>    (rc + ref). The hoist recognizer is `autodrop_defer_owning`
+>    (`src/passes/cps_ir.c:2239`, via `autodrop_owning_kind` / `autodrop_root_local`),
+>    NOT the `autodrop_defer_ref` named in the "P1 as landed" section below --
+>    that symbol does not exist; read every `autodrop_defer_ref` there as
+>    `autodrop_defer_owning`. Emitter: `plan_autodrop`
+>    (`cps_ir.c:2531`), `cps_emit_hoisted_drops` (`:2601`). Commit `de6a2e6b0`.
+>    Fixtures: `cps-backend-ref-noncrossing-drop` and the generalized
+>    `cps-backend-owning-autodrop-noncrossing`.
+>
+> 2. **The P2/P3 substrate the note below calls "not built" has GRADUATED to
+>    always-on** (2026-07-19): `cps-tramp-resume` (`g_opt_cps_tramp_resume`
+>    defaults true, `src/runtime/experiments.c`) and owning-cloneable-capture
+>    (commit `bdb3385a2`). Riding that, **the single-shot slice of P2 landed**:
+>    `plan_autodrop` has a crossing branch (`cps_ir.c:2578-2592`) gated by
+>    `expr_has_unsafe_control` (`:2349`, "P2 gate"), and `ref_dropped_before_control`
+>    now GRANTS the single-shot-continuation drop pass at PERFORM/HANDLE/RESET/AWAIT
+>    (`emit_cps_ir.c:2016-2026`) -- which directly inverts the "a ref gets NO
+>    single-shot pass" paragraph in the "P1 as landed" section below (that
+>    paragraph is now false). Commit `c54789ddf`; fixture
+>    `cps-backend-owning-autodrop-crossing-singleshot` (`b9590f023`).
+>
+> **Still open (narrowed):** only a *genuinely abortive* crossing (`shift` /
+> discontinue that discards the continuation) and a *multi-shot* resumable
+> crossing still fall back (`expr_has_unsafe_control` returns false ->
+> fallback, `cps_ir.c:2355-2360`). P3's O3 substrate has graduated, so P3 is now
+> *buildable*, not *blocked* -- it just is not wired to a ref-multishot auto-drop
+> path yet. Line-number citations in the older sections below have drifted (the
+> gate trio is now `emit_cps_ir.c:1983/2003/2039`, not `:1890-1922`).
+>
 > **Progress note (2026-07-19).** Verified against the tree. **P1 is landed.**
 > The hoist (`plan_autodrop` + the widened `autodrop_defer_owning` recognizer in
 > `src/passes/cps_ir.c`) and the soundness gate (`ref_dropped_before_control` /
