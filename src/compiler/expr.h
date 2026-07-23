@@ -640,6 +640,16 @@ struct FnDef {
      * uniquely to a mono lens (--enable=vl-wide-mono), so those return `(f A)` by
      * value straight into the by-value mono body. */
     bool                 box_aggregate_result;
+    /* lens-composition-codegen-blockers (Blocker 2c): set when this lifted
+     * closure is stored as a VALUE into a typed `(fn ...)` struct/ADT field (a
+     * lens `get`/`put`), so it is invoked through that field's TYPED thunk (its
+     * params spelled by their real C type / by-value fatshims), NOT the uniform
+     * int64 carrier.  A wide by-value ADT param of such a closure must cross BY
+     * VALUE, so the B4 `b4box` boxing (emit_fns.c needs_box_load) is suppressed
+     * for it -- otherwise the boxed definition disagrees with the by-value typed
+     * thunk + call site and the arg is corrupted (SIGSEGV).  Closures dispatched
+     * through `tur_poly_fn_t` (fmap etc.) or called directly keep b4box. */
+    bool                 byval_fn_field_closure;
 };
 
 /* Phase 2: ExternC represents an (extern-c ...) declaration. */
