@@ -251,6 +251,12 @@ typedef enum ReaderType {
     READER_SWEET,          /* Full sweet-expressions */
 } ReaderType;
 
+/* The additive `#lang` layer set: a bitset over the LANG_LAYERS[] table
+ * (src/compiler/lang_layers.c), one bit per table index.  Rides alongside
+ * the base ReaderType, not in place of it.  Empty (0) for a bare file or a
+ * `#lang` line with no trailing layer tokens.  See lang_layers.h. */
+typedef uint32_t LangLayerSet;
+
 /* Source map for syntax-transforming readers (currently sweet-exp).
  * Each run says "starting at xform_offset in the transformed text,
  * `length` bytes were copied verbatim from orig_offset of the original
@@ -287,6 +293,11 @@ typedef struct SourceFile {
     size_t      len;
     uint16_t    file_id;
     ReaderType  reader_type;  /* Phase S1: for enabling syntax features */
+    /* Additive `#lang` layer set parsed from the same directive line as
+     * reader_type (lang-layers-plan).  Reader layers in this set have their
+     * `#`-dispatch registered at reader init; empty for files without layers.
+     * A SourceFile built with `{0}`/memset starts with no layers. */
+    LangLayerSet lang_layers;
     /* Sweet-exp transformation support: when xform_map is non-NULL, src
      * is the preprocessed s-expression text and orig_src/orig_len point
      * to the user's original source.  Diagnostics render snippets from
@@ -296,9 +307,23 @@ typedef struct SourceFile {
     const SweetMap *xform_map;
 } SourceFile;
 
-/* Detect #lang directive from file source (Phase S0) */
-ReaderType detect_lang(const char *src, size_t len, const char **out_rest, 
+/* Detect #lang directive from file source (Phase S0).  Base reader only;
+ * any trailing layer tokens are consumed (never leaked into the body) but
+ * not reported.  A thin wrapper over detect_lang_layered. */
+ReaderType detect_lang(const char *src, size_t len, const char **out_rest,
                        size_t *out_rest_len);
+
+/* Detect #lang directive, reporting both the base ReaderType and the
+ * additive layer set (lang-layers-plan L0).  `out_layers` receives the set of
+ * recognized layer tokens; when a trailing token is NOT a registered layer,
+ * `*out_bad`/`*out_bad_len` point at the first offending token (into `src`)
+ * and it is omitted from the set -- the caller reports TUR-E0330.  Any of the
+ * out-params may be NULL; passing NULL for `out_layers` makes this behave like
+ * detect_lang (layers parsed for EOL-consumption but discarded). */
+ReaderType detect_lang_layered(const char *src, size_t len,
+                               const char **out_rest, size_t *out_rest_len,
+                               LangLayerSet *out_layers,
+                               const char **out_bad, size_t *out_bad_len);
 
 /* Get reader type from file extension (Phase S0) */
 ReaderType reader_type_from_extension(const char *path);

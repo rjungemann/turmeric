@@ -1,0 +1,10 @@
+#lang turmeric/sweet stringed
+$ load "stdlib/string.tur"
+
+defn demo [] : int
+  let [g #s"hello world"]
+    do
+      println(string/to-cstr(g))
+      println(string/len(g))
+      0
+demo()

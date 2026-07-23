@@ -9787,9 +9787,14 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     }
 
     {
-        const char *rest     = src_body;
-        size_t      rest_len = body_len;
-        ReaderType  detected = detect_lang(src_body, body_len, &rest, &rest_len);
+        const char  *rest     = src_body;
+        size_t       rest_len  = body_len;
+        LangLayerSet layers    = 0;
+        const char  *bad       = NULL;
+        size_t       bad_len   = 0;
+        ReaderType   detected  = detect_lang_layered(src_body, body_len,
+                                                     &rest, &rest_len,
+                                                     &layers, &bad, &bad_len);
         if (rest != src_body) {
             /* A #lang directive was found.  Reject an unknown / not-yet-
              * implemented reader the same way the compiled entry points do
@@ -9800,6 +9805,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                 return turi_errorf("error: #lang %s is not yet implemented",
                                    reader_type_name(detected));
             }
+            /* Unknown layer token is a hard error (TUR-E0330), matching the
+             * compiled path. */
+            if (bad) {
+                return turi_errorf("error [TUR-E0330]: unknown #lang layer '%.*s'",
+                                   (int)bad_len, bad);
+            }
             /* Strip the directive from the source body. */
             if (detected != env->reader_type) {
                 /* Reader type is changing: discard accumulated source so that
@@ -9809,6 +9820,9 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                 env->prior_prog_items  = 0;
                 env->reader_type       = detected;
             }
+            /* Layers are additive and file-scoped; union them into the
+             * session set so reader layers stay active across the eval blob. */
+            env->lang_layers |= layers;
             src_body = rest;
             body_len = rest_len;
         }
@@ -9853,6 +9867,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     sfile->len         = src_len;
     sfile->file_id     = 0;
     sfile->reader_type = env->reader_type;
+    sfile->lang_layers = env->lang_layers;   /* lang-layers-plan L1 */
     diag_register_file(sfile);
 
     /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined

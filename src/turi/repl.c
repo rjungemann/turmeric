@@ -1244,13 +1244,22 @@ int turi_repl_run(bool watch_mode) {
                 continue;
             }
             if (strncmp(line, "#lang ", 6) == 0) {
-                const char *rest = NULL;
-                size_t rest_len  = 0;
-                ReaderType rt = detect_lang(line, strlen(line), &rest, &rest_len);
+                const char  *rest    = NULL;
+                size_t       rest_len = 0;
+                LangLayerSet layers  = 0;
+                const char  *bad     = NULL;
+                size_t       bad_len = 0;
+                ReaderType rt = detect_lang_layered(line, strlen(line),
+                                                    &rest, &rest_len,
+                                                    &layers, &bad, &bad_len);
                 if (rt == READER_UNKNOWN || rt == (ReaderType)-1) {
                     fprintf(stderr, "unknown #lang: '%s'\n", line + 6);
-                } else if (rt != env->reader_type) {
+                } else if (bad) {
+                    fprintf(stderr, "unknown #lang layer: '%.*s'\n",
+                            (int)bad_len, bad);
+                } else if (rt != env->reader_type || layers != env->lang_layers) {
                     env->reader_type      = rt;
+                    env->lang_layers      = layers;
                     env->src_acc.len      = 0;   /* accumulated source may be incompatible */
                     env->prior_toplevel   = 0;
                     env->prior_prog_items = 0;

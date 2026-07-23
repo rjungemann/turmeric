@@ -1,0 +1,19 @@
+#lang turmeric stringed
+;; lang-layers-plan L2: the `stringed` reader layer enables #s"..." with no
+;; #use-reader-macros directive -- it is curated and built-in.  The layer is
+;; read-time only; (load) still brings in the String code it expands to.
+(load "stdlib/string.tur")
+
+(defn yn [b : bool] : cstr (if b "T" "F"))
+
+(defn demo [] : int
+  (let [g #s"hello"
+        h #s"hello"]
+    (do
+      (println (string/to-cstr g))
+      (println (string/len g))
+      (println (yn (string/eq? g (string/from-cstr "hello"))))
+      (println (yn (eq? g h)))
+      (println "plain-cstr-still-works")
+      0)))
+(demo)

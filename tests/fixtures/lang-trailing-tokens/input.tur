@@ -1,4 +1,4 @@
-#lang turmeric xyzzy
+#lang turmeric stringed
 (defn main [] : int
-  (println "trailing tokens on the #lang line are stripped")
+  (println "trailing #lang layer tokens are stripped, not leaked into the body")
   0)

@@ -71,6 +71,7 @@
 #include "pass.h"         /* Phase P19-1: pass scheduling */
 #include "reader.h"
 #include "reader_macros.h"
+#include "lang_layers.h"  /* L5: `tur lang-layers` registry listing */
 #include "span_audit.h"  /* debugger Phase 1: breakpoint-span coverage audit */
 #include "symbols.h"
 /* Phase S0: eval API for tur repl */
@@ -136,18 +137,35 @@ static bool g_dump_kinds = false;
 static bool g_audit_spans = false;
 static int  g_audit_span_holes = 0;
 
-/* Helper to detect language and adjust source for #lang directive */
+/* Helper to detect language and adjust source for #lang directive.  Also
+ * yields the additive `#lang` layer set (lang-layers-plan L1) via
+ * `out_layers` (may be NULL for callers that don't thread it). */
 static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len,
-                                        const char **out_src, size_t *out_len) {
+                                        const char **out_src, size_t *out_len,
+                                        LangLayerSet *out_layers) {
     ReaderType ext_type = reader_type_from_extension(path);
 
     /* Always run detect_lang so any leading "#lang ..." line is stripped from
      * the source — otherwise the chosen reader would choke on the '#'. When
      * the extension already selected a non-default reader, the extension
-     * still wins; the directive is treated as an optional, redundant hint. */
+     * still wins for the base; the directive is treated as an optional,
+     * redundant hint.  Layers ride alongside the base regardless of source. */
     const char *src_rest = src;
     size_t len_rest = len;
-    ReaderType lang_type = detect_lang(src, len, &src_rest, &len_rest);
+    LangLayerSet layers = 0;
+    const char *bad = NULL;
+    size_t bad_len = 0;
+    ReaderType lang_type = detect_lang_layered(src, len, &src_rest, &len_rest,
+                                               &layers, &bad, &bad_len);
+
+    if (bad) {
+        /* Unknown layer token -- hard error (TUR-E0330), mirroring the
+         * unimplemented-base exit below. */
+        fprintf(stderr,
+                "tur: error [TUR-E0330]: unknown #lang layer '%.*s' in %s\n",
+                (int)bad_len, bad, path);
+        exit(1);
+    }
 
     ReaderType detected_type = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
 
@@ -160,6 +178,7 @@ static ReaderType detect_and_adjust_lang(const char *path, char *src, size_t len
 
     *out_src = src_rest;
     *out_len = len_rest;
+    if (out_layers) *out_layers = layers;
     return detected_type;
 }
 
@@ -788,7 +807,8 @@ static int compile_to_c(const char *path, Buf *out_c,
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+    LangLayerSet lang_layers = 0;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
 
     /* Each compile_to_c call is a self-contained compilation unit.  Clear the
      * global diagnostic state (the `had_error_` flag and the file registry)
@@ -807,6 +827,7 @@ static int compile_to_c(const char *path, Buf *out_c,
     file.len = len_adj;
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -984,7 +1005,8 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+    LangLayerSet lang_layers = 0;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -999,6 +1021,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
     file.len = len_adj;
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -1082,7 +1105,8 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     /* Detect language and adjust source for #lang directive */
     const char *src_adj = src;
     size_t len_adj = len;
-    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj);
+    LangLayerSet lang_layers = 0;
+    ReaderType reader_type = detect_and_adjust_lang(path, src, len, &src_adj, &len_adj, &lang_layers);
 
     /* Fresh diagnostic slate per compilation unit -- see compile_to_c.  The
      * project-mode dir build loops compile_to_h / compile_to_implementation
@@ -1097,6 +1121,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
     file.len = len_adj;
     file.file_id = 0;
     file.reader_type = reader_type;
+    file.lang_layers = lang_layers;
     diag_register_file(&file);
 
     Arena arena;
@@ -5993,9 +6018,17 @@ static int cmd_eval_h(const char *path, bool use_color,
             fclose(pf);
             head[hn] = '\0';
             const char *rest = head; size_t rest_len = hn;
-            ReaderType rt = detect_lang(head, hn, &rest, &rest_len);
-            if (rest != head && reader_type_is_implemented(rt))
+            LangLayerSet layers = 0;
+            ReaderType rt = detect_lang_layered(head, hn, &rest, &rest_len,
+                                                &layers, NULL, NULL);
+            if (rest != head && reader_type_is_implemented(rt)) {
                 env->reader_type = rt;
+                /* Pre-seed the layer set too so the prelude and the user file
+                 * read under the same layers (lang-layers-plan L1); turi_eval
+                 * unions the authoritative set again when it strips the
+                 * directive. */
+                env->lang_layers = layers;
+            }
         }
     }
     /* Preload macros.tur so that and/or/when/cond/for etc. are available.
@@ -7082,7 +7115,7 @@ static const char *const CANONICAL_COMMANDS[] = {
     "eval", "doc", "image-info", "image-verify", "explain",
     "format", "fmt", "parse-check", "test",
     "new", "init", "add", "add-cmake", "fetch",
-    "install", "uninstall", "list", "upgrade", "experiments",
+    "install", "uninstall", "list", "upgrade", "experiments", "lang-layers",
     NULL,
 };
 
@@ -7702,6 +7735,65 @@ static int cmd_experiments(int argc, char **argv) {
                d->expires_at, enabled, d->plan_path);
     }
     printf("\n%zu experimental feature%s registered.\n", n, n == 1 ? "" : "s");
+    return 0;
+}
+
+/* L5: list the curated `#lang` layer registry (LANG_LAYERS[]), mirroring
+ * `tur experiments`.  `--json` emits the machine-readable form. */
+static int cmd_lang_layers(int argc, char **argv) {
+    bool json = use_json_output;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--json") == 0) {
+            json = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("usage:\n  tur lang-layers [--json]\n\n"
+                   "List the curated `#lang` additive layers.  A `#lang "
+                   "<base> <layer>*`\nline may name any of these after the "
+                   "base dialect; each is order-\nindependent and file-scoped."
+                   "  --json emits the machine-readable form.\n");
+            return 0;
+        } else {
+            fprintf(stderr, "tur lang-layers: unexpected argument '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+
+    size_t n = lang_layers_count();
+
+    if (json) {
+        printf("[");
+        for (size_t i = 0; i < n; i++) {
+            const LangLayerDescriptor *d = lang_layer_at(i);
+            if (i) printf(",");
+            printf("\n  {");
+            printf("\"name\":");    xf_json_puts(stdout, d->name);
+            printf(",\"kind\":");   xf_json_puts(stdout,
+                                        d->kind == LAYER_READER ? "reader"
+                                                                : "semantic");
+            printf(",\"summary\":"); xf_json_puts(stdout, d->summary);
+            printf(",\"since\":");  xf_json_puts(stdout, d->since);
+            if (d->kind == LAYER_SEMANTIC && d->experiment) {
+                printf(",\"experiment\":"); xf_json_puts(stdout, d->experiment);
+            }
+            printf("}");
+        }
+        printf("%s]\n", n ? "\n" : "");
+        return 0;
+    }
+
+    if (n == 0) {
+        printf("No `#lang` layers are registered.\n");
+        return 0;
+    }
+
+    printf("%-12s %-9s %-7s %s\n", "NAME", "KIND", "SINCE", "SUMMARY");
+    for (size_t i = 0; i < n; i++) {
+        const LangLayerDescriptor *d = lang_layer_at(i);
+        printf("%-12s %-9s %-7s %s\n",
+               d->name, d->kind == LAYER_READER ? "reader" : "semantic",
+               d->since, d->summary);
+    }
+    printf("\n%zu `#lang` layer%s registered.\n", n, n == 1 ? "" : "s");
     return 0;
 }
 
@@ -8938,6 +9030,9 @@ int main(int argc, char **argv) {
     /* XF3: experimental-feature registry listing */
     if (strcmp(cmd, "experiments") == 0)
         return cmd_experiments(argc, argv);
+    /* L5: `#lang` layer registry listing */
+    if (strcmp(cmd, "lang-layers") == 0)
+        return cmd_lang_layers(argc, argv);
 
     /* GS-M2: subcommand fallthrough — `tur foo bar` execs `tur-foo bar`
      * from $PATH when "foo" isn't a built-in. Built-ins always win.
