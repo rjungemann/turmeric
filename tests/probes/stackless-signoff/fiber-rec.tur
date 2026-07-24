@@ -1,3 +1,9 @@
+;; STATUS 2026-07-24: KNOWN-BROKEN (xfail in tests/stackless-signoff-probes.sh).
+;; This probe currently SIGSEGVs (exit 139) on the sanitized Debug build,
+;; deterministically and at every stack size. Root cause + repro:
+;; docs/reported/fiber-rec-async-fiber-segfault.md. Remove fiber-rec from the
+;; script's xfail set once fixed.
+;;
 ;; D4 sign-off probe: fiber-rec -- a trampolined deep catch-unwind run inside an
 ;; `async` fiber (G7 verified this interoperates).  The fiber body recurses with
 ;; nested catch-unwind (cu-rec N = N); main awaits the future.

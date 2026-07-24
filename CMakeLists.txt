@@ -263,6 +263,11 @@ add_test(
   COMMAND bash tests/stackless-signoff-probes.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Defense-in-depth backstop: the script already caps each probe with a portable
+# per-probe timeout, but a ctest-level TIMEOUT guarantees the whole target can
+# never wedge the job even if that logic is bypassed. A clean run finishes in a
+# few seconds; 300s is comfortably above the sum of every per-probe cap.
+set_tests_properties(stackless_signoff_probes PROPERTIES TIMEOUT 300)
 # Fat-closure-env scoped-free gate. Compiles tests/fixtures/closure-env-no-leak
 # (a capturing closure built in a loop and in a repeatedly-invoked effect
 # handler) with ASan/UBSan + LeakSanitizer ON and asserts the emitted program is
