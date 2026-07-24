@@ -1,11 +1,40 @@
 ---
-status: open
+status: resolved
 severity: high
 discovered: 2026-07-24
+resolved: 2026-07-24
 area: runtime (async fiber stack / deep catch-unwind inside a fiber)
 ---
 
 # `fiber-rec` probe SIGSEGVs: deep catch-unwind inside an async fiber crashes
+
+## Resolution (2026-07-24)
+
+Not a fiber-stack-size issue -- a **codegen eviction**. The crash was depth-
+dependent (fine to ~1,000 deep, SIGSEGV by ~10,000), i.e. an O(N) native-stack
+overflow of the fiber's bounded (1 MB) stack, not an immediate context bug. The
+same `cu-rec` that lowers to the flat `tur_cont` stackless trampoline standalone
+(and runs to 1,000,000 on a 256 KB stack) was instead lowered to **native
+recursion** (`tur_catch_unwind_box` -> `TUR_APPLY0` -> self-call) inside the
+async program.
+
+Root cause: the CPS-marking pass (`src/passes/cps.c`, `cps_mark_expr`, which runs
+over the whole program once it contains `async`) shallow-clones every `FnDef`
+(`*new_fd = *fd`) but left the binding's canonical-defn link
+(`binding->source_fn_def`) pointing at the pre-clone `fd`. The stackless
+catch-unwind eligibility check (`gs_basic_ok` in `emit_fns.c`) gates on
+`binding->source_fn_def == fd` to identify the canonical top-level defn, so the
+emitted clone failed it and every catch-unwind function in an async program
+silently lost its flat-stack trampoline. Fix: re-point `source_fn_def` at the
+clone when it replaces the canonical defn (one guarded assignment in the
+`EX_FN_DEF` case).
+
+Verified: `fiber-rec` passes at 1,000,000 depth under `ulimit -s 256` (the async
+`cu-rec` now emits the `tur_cont` trampoline); depth sweep clean through 100,000;
+full `bash tests/run.sh` is 2278 passed / 0 failed (the change is codegen-neutral
+for every snapshot fixture -- it only affects async + deep-catch-unwind programs,
+which are not snapshotted). `fiber-rec` was removed from the `xfail` set in
+`tests/stackless-signoff-probes.sh` (which is now empty -- all probes pass).
 
 ## Summary
 

@@ -1140,6 +1140,18 @@ static Expr *cps_mark_expr(Arena *a, Expr *e) {
             FnDef *new_fd = arena_alloc(a, sizeof(FnDef));
             *new_fd = *fd;
             new_fd->body = cps_mark_expr(a, fd->body);
+            /* This clone replaces `fd` in the program tree the backend emits, so
+             * keep the binding's canonical-defn link pointing at it.  Downstream
+             * passes gate on `binding->source_fn_def == fd` to recognize the
+             * canonical top-level defn -- notably the stackless catch-unwind
+             * eligibility in emit_fns.c (gs_basic_ok).  Left stale, the clone
+             * fails that check, so every catch-unwind function in an async
+             * program silently loses its flat-stack trampoline and recurses
+             * natively -> fiber stack overflow (fiber-rec).  See
+             * docs/archive/fiber-rec-async-fiber-segfault.md. */
+            if (new_fd->binding && new_fd->binding->source_fn_def == fd) {
+                new_fd->binding->source_fn_def = new_fd;
+            }
             /* CPS-CL1: populate live_captures at each cloneable-shift site */
             if (cps_fn_needs_cloneable_transform(new_fd)) {
                 cps_compute_live_at_shift(a, new_fd->body);

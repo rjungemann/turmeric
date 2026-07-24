@@ -79,23 +79,20 @@ declare -A pflags=(
     [async-rec]=--enable=cps-async
 )
 
-# Probes that currently expose a genuine, still-open runtime bug.  They stay in
-# the rotation as live regression guards but are EXPECTED to fail, so they do not
-# fail the suite -- the alternative (a hard failure, or worse a hang) is what
-# stalled CI.  If one starts PASSING it is reported as an unexpected XPASS and
-# DOES fail the suite, prompting its removal from this list and re-arming it as a
-# normal probe.
+# Probes that expose a genuine, still-open runtime bug are listed here.  They
+# stay in the rotation as live regression guards but are EXPECTED to fail, so
+# they do not fail the suite -- the alternative (a hard failure, or worse a
+# hang) is what stalled CI.  If one starts PASSING it is reported as an
+# unexpected XPASS and DOES fail the suite, prompting its removal from this list
+# and re-arming it as a normal probe.
 #
-#   fiber-rec  -- SIGSEGV under the sanitized Debug build: deep catch-unwind run
-#                 inside an async fiber crashes immediately (all stack sizes).
-#                 See docs/reported/fiber-rec-async-fiber-segfault.md
-#
-# (effect-rec graduated back to a normal probe on 2026-07-24 once the nested-
-# handler non-termination was fixed -- see
-# docs/archive/effect-rec-nested-handler-nonterminates.md.)
-declare -A xfail=(
-    [fiber-rec]=1
-)
+# The list is currently empty -- all probes pass:
+#   - effect-rec graduated 2026-07-24 (nested-handler non-termination fixed;
+#     docs/archive/effect-rec-nested-handler-nonterminates.md).
+#   - fiber-rec  graduated 2026-07-24 (async + deep catch-unwind no longer
+#     evicted from the flat-stack trampoline; a CPS-marked clone kept the
+#     stackless lowering -- docs/archive/fiber-rec-async-fiber-segfault.md).
+declare -A xfail=()
 
 # Run $bin under a reduced stack ($STACK_KB) with a hard wall-clock cap ($2
 # seconds).  Echoes combined stdout+stderr and returns the child's exit status
