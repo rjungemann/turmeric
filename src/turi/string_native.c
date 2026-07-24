@@ -34,7 +34,22 @@ static TuriValue n_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
 }
 static TuriValue n_adopt_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
-    return turi_int((int64_t)(intptr_t)tur_string_adopt_cstr(n >= 1 ? arg_cstr(a[0]) : ""));
+    /* Copy the bytes into an owned String but do NOT free the source cstr.
+     *
+     * The compiled path's tur_string_adopt_cstr() does from_bytes()+free(s):
+     * the callee handed back a genuinely malloc'd buffer (strdup / a fresh
+     * malloc in the colorizer / range / re inline-C), so adopting frees it.
+     * Under --interpret those same inline-C bodies are reproduced by the
+     * tree-walker via the env value-arena (turi_val_alloc), NOT raw malloc
+     * (see native_extern_free's rationale in eval.c and the ic_exec_* string
+     * builders).  Handing such an arena pointer to libc free() is a hard
+     * bad-free / double-free abort -- the exact crash the term-string and
+     * range-string fixtures hit.  Since the interpreter runs process-lifetime
+     * and never frees its arena until env teardown, skip the free: from_bytes
+     * already made an independent owned copy, and leaking the (arena) source
+     * is consistent with the rest of the interpreter's allocation model. */
+    const char *s = n >= 1 ? arg_cstr(a[0]) : "";
+    return turi_int((int64_t)(intptr_t)tur_string_from_cstr(s));
 }
 static TuriValue n_from_int(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;

@@ -59,7 +59,16 @@ void turi_env_preload_native_stubs(TuriEnv *env) {
     TuriValue sv = turi_eval(env,
         /* list operations */
         "(defn nil-value [] :int 0)\n"
-        "(defn cons [v :int n :int] :int 0)\n"
+        /* Head is a polymorphic tyvar, not :int, so the stub matches the
+         * compiled-path `cons` builtin's wildcard head (elab_call.c's
+         * cons_wildcard bypass): a cons cell is a pointer-as-int64 carrier and
+         * accepts any 64-bit-sized head -- int, cstr, opaque handle.  Typing it
+         * :int made the elaborator reject a cstr head (`(cons "a" 0)`) under
+         * --interpret while the compiled path accepted it, the re-string parity
+         * gap.  The tail stays :int (the carrier) and the return stays :int; the
+         * runtime native (native_cons) boxes the head through intptr_t exactly
+         * as codegen does. */
+        "(defn cons [A] [v :A n :int] :int 0)\n"
         "(defn head [lst :int] :int 0)\n"
         "(defn tail [lst :int] :int 0)\n"
         /* vec operations.  vec-get/vec-set!/vec-free are dropped here -- the real

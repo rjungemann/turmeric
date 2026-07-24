@@ -5232,6 +5232,16 @@ static bool ws_has_perform(const Expr *e) {
     case EX_GET_FIELD:  return ws_has_perform(e->as.get_field_.struct_expr);
     case EX_RESUME:     return ws_has_perform(e->as.resume_.resume->k) ||
                                ws_has_perform(e->as.resume_.resume->value);
+    /* fn-to-fat / poly wrappers are transparent: evaluating one just builds a
+     * closure value (eval unwraps to `inner`, see the EX_*_TO_FAT / EX_POLY_WRAP
+     * eval cases), so a wrapped bare/poly fn is no more a synchronous perform
+     * than the EX_FN / EX_FN_DEF it wraps.  Without these the default arm treats
+     * the wrapper as a possible perform -- e.g. a `^multishot` receiver passed to
+     * `perform` (multishot-effect-cont-kv-sugar) forced the whole handle onto the
+     * one-shot fiber path, which aborts on the second resume. */
+    case EX_POLY_WRAP:   return ws_has_perform(e->as.poly_wrap_.inner);
+    case EX_FN_TO_FAT:   return ws_has_perform(e->as.fn_to_fat_.inner);
+    case EX_POLY_TO_FAT: return ws_has_perform(e->as.poly_to_fat_.inner);
     default:
         /* EX_CALL, EX_HANDLE, EX_WHILE, EX_TRY_CATCH, ... -- conservatively
          * assume a perform may run synchronously. */
@@ -5356,6 +5366,13 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
      * so reject those outright -- keeps the native-HOF case on the fiber path. */
     case EX_FN:      return !ws_has_perform(((FnDef *)e->as.fn_.fn)->body);
     case EX_FN_DEF:  return !ws_has_perform(((FnDef *)e->as.fn_def_.fn)->body);
+    /* fn-to-fat / poly wrappers are transparent (eval unwraps to `inner`); a
+     * wrapped fn value is capturable to evaluate exactly when the fn it wraps is
+     * -- recurse so the wrapped EX_FN / EX_VAR receiver lands on its own case
+     * rather than the perform-conservative default. */
+    case EX_POLY_WRAP:   return ws_capturable(env, frame, e->as.poly_wrap_.inner, depth);
+    case EX_FN_TO_FAT:   return ws_capturable(env, frame, e->as.fn_to_fat_.inner, depth);
+    case EX_POLY_TO_FAT: return ws_capturable(env, frame, e->as.poly_to_fat_.inner, depth);
     /* Leaves / values with no synchronous perform. */
     case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
     case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DEFAULT_OF:
@@ -6011,7 +6028,19 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 frame_bind(env, hf, matched->k_binding->name->name, turi_ws_cont_val(env, wc));
                 env->current_module = st[pidx].saved_module;
                 env->in_no_unwind   = st[pidx].was_no_unwind;
-                control = matched->body; cf = hf; tail = st[pidx].tail;
+                /* The case body runs delimited by DK_PROMPT@pidx: its value flows
+                 * to the prompt (which restores the env boundary and propagates),
+                 * NOT to an enclosing DK_CALL_RET.  So it must run NON-tail, even
+                 * when the handle itself was in tail position (st[pidx].tail).  A
+                 * tail call in the body would otherwise try to reuse st[len-2] as
+                 * its activation, but st[len-2] is the DK_PROMPT, not a
+                 * DK_CALL_RET -- tripping the tail-fold invariant assert
+                 * (multishot-effect-cont-kv-sugar: a `^multishot` handler whose
+                 * case body `(f k)` is a tail call).  The prompt still forwards
+                 * the value to the true (possibly tail) continuation below it, so
+                 * TCO of the enclosing call is preserved; only the one direct call
+                 * in the case body costs a single DK_CALL_RET frame. */
+                control = matched->body; cf = hf; tail = false;
                 /* descending stays true */
                 break;
             }
@@ -7732,6 +7761,29 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         cl->fn             = e->as.closure_.closure->fn;
         cl->captured       = frame; /* interpreter uses lexical frame */
         cl->skip_env_param = true;  /* codegen added __env_p as first param */
+        /* Retain-on-capture parity: the compiled backend's closure env owns a
+         * strong reference to each rc<T> it captures -- codegen stores the handle
+         * into the env with a retain, so `rc/strong-count` inside (or alongside) a
+         * capturing closure sees the +1.  The interpreter shares the elaborator
+         * but not codegen, so without this a captured rc read back count 1 where
+         * the compiled path reads 2 (rc-auto-drop-closure-capture and siblings).
+         * Increment the strong count of every captured value that is an `__rc`
+         * wrapper.  There is no matching decrement: interpreter frames are never
+         * freed (eval_frame_free is a no-op, process-lifetime), so the closure
+         * env has no drop point -- consistent with the interpreter's leak-on-exit
+         * allocation model, and the enclosing binding's own auto-drop defer still
+         * runs.  Detected structurally (struct name "__rc") exactly as rc/clone,
+         * rc/drop, and rc/strong-count do, so no static capture-type info needed. */
+        const struct Closure *cd = e->as.closure_.closure;
+        for (uint8_t i = 0; i < cd->n_captures; i++) {
+            if (!cd->captures[i] || !cd->captures[i]->name) continue;
+            TuriValue cv = eval_lookup(env, frame, cd->captures[i]->name->name);
+            if (cv.tag == TURI_STRUCT && cv.as_struct && cv.as_struct->name &&
+                strcmp(cv.as_struct->name, "__rc") == 0 && cv.as_struct->n_fields >= 2) {
+                int64_t *cnt = (int64_t *)(intptr_t)cv.as_struct->fields[0].as_int;
+                if (cnt) (*cnt)++;
+            }
+        }
         return turi_closure(cl);
     }
 
@@ -10014,6 +10066,19 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     if (!lifetime_check_program(prog)) {
         return turi_error("elaboration error");
     }
+
+    /* Publish this elaboration's TypeClassEnv BEFORE evaluating the new forms,
+     * not only at the successful end of the call.  Runtime typeclass dispatch
+     * (gde_reresolve_method / gde_reresolve_method_by_value / turi_try_show)
+     * reads env->last_tc_env during evaluation.  Previously last_tc_env was set
+     * only in the success epilogue below, so the FIRST program to introduce a
+     * class's instances (e.g. `Show [String]`, loaded via string.tur) evaluated
+     * against the PREVIOUS call's tc_env -- which lacked those instances -- and
+     * a generic method like `(show-line s)` fell back to the baked int-carrier
+     * representative (printing the raw String pointer instead of its content).
+     * Setting it here makes the current elaboration's instances live for this
+     * eval; the epilogue assignment keeps it pinned across subsequent calls. */
+    env->last_tc_env = tc_env_slot;
 
     /* 7. Evaluate the new top-level expressions.
      *
