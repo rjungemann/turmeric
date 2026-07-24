@@ -155,7 +155,11 @@ forwarding-pointer walk that makes frame<->closure `letrec` cycles safe to copy.
 
 TR0 measured this as the **dominant** long-lived-growth term by far: ~4.1 GB of
 `eval_arenas` (plus quadratic re-parse time) vs 158 MB for the value pool, even
-with promotion rewinding 100%. This is the phase that actually bounds a REPL.
+with promotion rewinding 100%. This is the phase that actually bounds a REPL. The
+CPU side of it (each eval re-parses the whole accumulated source, O(N^2)) is
+tracked as `docs/reported/turi-repl-quadratic-reparse.md` -- prefer parsing only
+the new tail over merely reclaiming arenas, so the quadratic parse cost goes away
+too.
 
 Promotion resets `value_scratch` but never touches `eval_arenas` or `src_acc`
 (`env.h:165`, `eval.c:9920-9924`), so AST/elaboration memory and source text
