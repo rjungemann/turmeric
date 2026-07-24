@@ -9808,7 +9808,8 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
  * is enabled; conservatively skips the rewind whenever safety cannot be proven. */
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
-    if (!promo_env_quiescent(env)) return;
+    env->promo_attempts++;   /* TR0: promotion attempted this eval boundary */
+    if (!promo_env_quiescent(env)) { env->promo_decline_busy++; return; }
 
     /* Pass 1: is the whole root set relocatable? */
     PromoMap seen;
@@ -9820,7 +9821,7 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
         }
     }
     promo_map_free(&seen);
-    if (!ok) return;   /* keep scratch intact this cycle */
+    if (!ok) { env->promo_decline_unrelocatable++; return; }   /* keep scratch intact this cycle */
 
     /* Pass 2: copy roots into perm, rewriting pointers (shared fwd table keeps
      * cross-root sharing and cycles consistent). */
@@ -9834,6 +9835,7 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
 
     /* Everything reachable now lives in value_perm; reclaim the scratch region. */
     arena_reset(&env->value_scratch);
+    env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 }
 
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,

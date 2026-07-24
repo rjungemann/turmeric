@@ -26,6 +26,13 @@
 > semantics). Enabling promotion-by-default in the REPL is a behavior change to
 > stage carefully but needs no `EXPERIMENTS[]` row.
 >
+> **Progress:** TR0 measured (2026-07-24) -- promotion instrumented with per-env
+> outcome counters and measured at ~100% rewind on ordinary REPL input. Two
+> findings reshaped the plan: (1) TR1 carrier relocation is NOT load-bearing for
+> typical use (0 declines; declines only on live generators/continuations), and
+> (2) the dominant long-lived-growth term is `eval_arenas`/`src_acc` (~4.1 GB +
+> O(N^2) re-parse), not the value pool -- so **TR2 is promoted ahead of TR1**.
+>
 > **Last updated:** 2026-07-24
 
 ---
@@ -82,7 +89,7 @@ enable it, complete its coverage, and extend it past the value pool.
 
 ## Phases
 
-### TR0 -- Enable + measure promotion in the REPL
+### TR0 -- Enable + measure promotion in the REPL [MEASURED 2026-07-24]
 
 Turn on `turi_env_set_scratch_promotion(env,true)` in `repl.c` and add a
 steady-state memory assertion to the existing long-lived harness
@@ -91,7 +98,52 @@ how often does the conservative walk decline to rewind (the "quiescent" gate,
 `eval.c:9811`)? This quantifies how much of the problem Phase A alone solves and
 prioritizes TR1.
 
-### TR1 -- Complete carrier relocation (revive the hard-tail plan)
+**Done: instrumentation + measurement.** Added per-env `promo_attempts` /
+`promo_rewinds` / `promo_decline_busy` / `promo_decline_unrelocatable` counters
+(`env.h`, incremented in `turi_promote_escaping`, `eval.c`) and a steady-state
+assertion in `tur_env_longlived`. Measured with a promotion-enabled env across
+varied REPL-like input:
+
+| Workload | Result |
+|----------|--------|
+| 14 mixed REPL lines (arith, `let`, `defn`, `defstruct`+`make-struct`, escaping `cons`/closure/ADT/struct globals) | **14/14 rewind, 0 declines** |
+| 3000-eval transient churn (`build 300`) | **3001/3001 rewind, 0 declines**; `value_scratch` steady at **0 B** |
+| same churn, promotion OFF (control) | `value_scratch` grows to **158 MB** |
+| unstarted generator global, then churn | rewinds (relocatable) |
+| **started** generator global, then churn | **decline-unrelocatable** every cycle; scratch stuck |
+
+**Two findings that reshape the plan:**
+
+1. **Phase A already rewinds ~100% on ordinary workloads.** Every common
+   escaping shape (cons lists, closures, ADTs, structs) relocates. Declines are
+   confined to *live control-flow state* -- a started generator, a captured
+   continuation slice with a nested prompt. So **TR1 (carrier relocation) is NOT
+   load-bearing for typical REPL/interpreter use** -- it only matters for
+   embeddings that hold suspended generators/continuations across eval
+   boundaries. TR1 is demand-driven, not the priority.
+
+2. **Promotion alone does NOT bound a long-lived env -- the value pool is not
+   even the dominant term.** With promotion rewinding 100% (scratch steady at 0),
+   the same 3000-eval session still grew **`eval_arenas` to ~4.1 GB across 3001
+   nodes** plus **`src_acc` linearly (0.1 -> 39 KB)**, because each eval retains
+   its AST arena forever *and re-parses the whole accumulated source blob*
+   (O(N^2) in both memory and time). This dwarfs the 158 MB value-pool term.
+
+**Re-prioritization:** promote **TR2 ahead of TR1**. Enabling promotion in the
+REPL (the literal TR0 action) is worth doing but is necessary-not-sufficient;
+without TR2 the REPL still grows multi-GB and parses quadratically. The counters
+and harness in scratchpad (`scratchpad/promo/measure.c`) reproduce all of the
+above.
+
+> **Note:** flipping promotion ON in `repl.c` unconditionally is deferred until
+> TR2 lands -- on its own it changes REPL timing (a promotion walk per line) for
+> a memory win that TR2's eval-arena growth would still swamp. Ship them together.
+
+### TR1 -- Complete carrier relocation (revive the hard-tail plan) [DEPRIORITIZED -- see TR0]
+
+Note (TR0, 2026-07-24): measured 0 declines on ordinary REPL input -- this phase
+only benefits embeddings that keep suspended generators/continuations live across
+eval boundaries. Demand-driven; do TR2 first.
 
 Execute `turi-value-pool-carrier-relocation-plan`: teach the promotion walk to
 relocate carrier-encoded bare-int pointers (cons/vec/set/ADT) and live
@@ -99,7 +151,11 @@ control-flow C-state, so `arena_reset(value_scratch)` becomes safe in the common
 cases that currently force a decline. This is the substantive GC work -- the
 forwarding-pointer walk that makes frame<->closure `letrec` cycles safe to copy.
 
-### TR2 -- Reclaim `eval_arenas` + stop `src_acc` re-accumulation
+### TR2 -- Reclaim `eval_arenas` + stop `src_acc` re-accumulation [PRIORITY -- see TR0]
+
+TR0 measured this as the **dominant** long-lived-growth term by far: ~4.1 GB of
+`eval_arenas` (plus quadratic re-parse time) vs 158 MB for the value pool, even
+with promotion rewinding 100%. This is the phase that actually bounds a REPL.
 
 Promotion resets `value_scratch` but never touches `eval_arenas` or `src_acc`
 (`env.h:165`, `eval.c:9920-9924`), so AST/elaboration memory and source text

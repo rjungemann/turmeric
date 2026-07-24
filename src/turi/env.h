@@ -187,6 +187,16 @@ typedef struct TuriEnv {
      * (create/eval/free) needs no promotion and the default path is unchanged.
      * Set via turi_env_set_scratch_promotion. */
     bool        scratch_promotion;
+    /* TR0 measurement (turi-interp-incremental-reclamation-plan.md): per-env
+     * scratch-promotion outcome tally, incremented once per top-level eval
+     * boundary while scratch_promotion is on. Quantifies how often the
+     * conservative walk actually rewinds vs declines, and why -- the signal
+     * that decides whether the TR1 carrier-relocation work is load-bearing.
+     * Zero-initialized (env is calloc'd); read directly by measurement harnesses. */
+    uint64_t    promo_attempts;               /* promotion entered (feature on) */
+    uint64_t    promo_rewinds;                /* reached arena_reset (scratch reclaimed) */
+    uint64_t    promo_decline_busy;           /* bailed: env not quiescent (live control flow) */
+    uint64_t    promo_decline_unrelocatable;  /* bailed: root set not relocatable (carrier/wscont) */
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
     bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
     TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
