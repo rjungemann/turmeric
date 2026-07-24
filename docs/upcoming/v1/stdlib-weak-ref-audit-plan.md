@@ -18,6 +18,9 @@
 > **Gate:** none. This is stdlib API + docs + a CI guard, not an experimental
 > compiler feature.
 >
+> **Progress:** WR0 (guide section) and WR2 (regression guard) landed 2026-07-24.
+> WR1 (weak API surface), WR3 (guidance doc), WR4 (fixtures) remain.
+>
 > **Last updated:** 2026-07-24
 
 ---
@@ -81,12 +84,16 @@ in-library tool to break the cycle -- they'd drop to raw intrinsics.
 
 ## Phases
 
-### WR0 -- Formalize the audit as a guide section
+### WR0 -- Formalize the audit as a guide section [DONE 2026-07-24]
 
 Add a short "Ownership model" section to `docs/guides/gc-guide.md` (or a new
 `docs/guides/ownership-guide.md`) recording the finding: stdlib is cycle-free by
 construction, via persistence + linearity, and uses `rc<T>` essentially nowhere.
 This is the "where we stand vs Rust" reference the audit was asked for.
+
+Landed as the "Ownership across the stdlib" section of `docs/guides/gc-guide.md`
+(the three strategies -- persistent-immutable, single-owner-mutable,
+linear/affine -- plus the vs-Rust framing and a pointer to the WR2 guard).
 
 ### WR1 -- Surface a `weak<T>` API in `stdlib/rc.tur`
 
@@ -103,13 +110,20 @@ Add the escape hatch to the library so it exists before it's needed:
   (`docs/reported/gc-strong-cycles-not-collected.md`); the manual `weak`/`upgrade`
   pattern has no such dependency.
 
-### WR2 -- Regression guard (keep stdlib cycle-free)
+### WR2 -- Regression guard (keep stdlib cycle-free) [DONE 2026-07-24]
 
 A lightweight CI check (grep-based or a small `tur` lint) that flags a new
 `rc<T>` field on a `defstruct`/ADT in `stdlib/` -- especially a self-referential
 or mutually-referential one -- so any future shared-ownership structure gets a
 conscious review for a `weak<T>` break. The property is valuable precisely
 because it currently holds trivially; the guard makes regressing it loud.
+
+Landed as `tests/check-stdlib-no-rc-cycles.sh`, registered as the
+`tur_stdlib_no_rc_cycles` ctest (so CI's non-suite `ctest` run exercises it). It
+is a tripwire, not a prohibition: any `: rc<...>` type annotation in stdlib
+(outside `rc.tur` / generated `docstrings.tur`) fails the guard unless the line
+carries an explicit `rc-cycle-ok` review marker, forcing a conscious "did I break
+the cycle with `weak<T>`?" review before a shared-ownership field can land.
 
 ### WR3 -- Design-guidance doc: when to reach for what
 

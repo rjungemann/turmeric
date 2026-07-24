@@ -205,6 +205,15 @@ add_test(
   COMMAND bash tests/check-sf-let-bind-inner-call.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# WR2 stdlib ownership guard: no stored rc<T> field may land in stdlib without an
+# explicit `rc-cycle-ok` review marker, since a live strong rc<T> cycle is not
+# reclaimable today. See docs/upcoming/v1/stdlib-weak-ref-audit-plan.md and the
+# "Ownership across the stdlib" section of docs/guides/gc-guide.md.
+add_test(
+  NAME tur_stdlib_no_rc_cycles
+  COMMAND bash tests/check-stdlib-no-rc-cycles.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

@@ -149,6 +149,45 @@ walker, when they have no `rc<T>` children.
 
 ---
 
+## Ownership across the stdlib
+
+Where does that leave the standard library? A 2026-07-24 audit of all ~138
+stdlib modules found that **stdlib builds no `rc<T>` cycles and uses `weak<T>`
+nowhere -- because it barely reaches for shared ownership at all.** `rc<T>`
+appears only in `stdlib/rc.tur` (the module that *defines* it) and the generated
+`stdlib/docstrings.tur`; no other module constructs, stores, or imports one. The
+library reaches its leak-free state by *sidestepping* shared mutable ownership,
+via three strategies:
+
+- **Persistent-immutable with structural sharing** -- `hamt`, `map`, `set`,
+  `list`, `string`. Every update returns a new root; sharing is refcounted at the
+  **C layer** (`tur_hamt_retain`, the string header's `rc` field), not via the
+  Turmeric `rc<T>` type. An immutable DAG has no mutable back-edges, so no cycle
+  can form.
+- **By-value / single-owner mutable storage** -- `vec`, `mutmap`, `grid`, `ref`,
+  `sized-*`. Each owns the one buffer it mutates; there are no shared handles and
+  no back-pointers written into shared nodes.
+- **Linear / affine opaque handles** -- `chan`, `future`, `taskgroup`, `mutex`,
+  `reactor`, `net`, ... are `defopaque ... :linear` / `:affine`. Single ownership
+  and exactly-once teardown are the deliberate alternative to refcounting.
+
+**Relative to Rust, the stdlib is already at or beyond the ideal.** Rust's rule
+is "use `Rc`/`Arc` only when ownership is genuinely shared, and break every cycle
+with `Weak`." The stdlib clears that bar by rarely needing shared ownership in
+the first place (Clojure/Haskell-style persistence plus linear types), so there
+are no cycles to break and `weak<T>` is unused.
+
+The one forward-looking caveat: a stored `rc<T>` field is what *would* enable a
+cycle, and the collector cannot reclaim a live strong cycle today
+(see the Known gaps below). To keep the property from regressing silently, the
+`tur_stdlib_no_rc_cycles` ctest guard (`tests/check-stdlib-no-rc-cycles.sh`)
+fails if a stdlib type annotation introduces `rc<...>` without an explicit
+`rc-cycle-ok` review marker. The plan to surface a proper `weak<T>` escape-hatch
+API in `rc.tur` -- for the day shared ownership *is* wanted -- is
+`docs/upcoming/v1/stdlib-weak-ref-audit-plan.md`.
+
+---
+
 ## The interpreter is different
 
 The tree-walking interpreter (`turi_eval`, `src/turi/eval.c`) makes
