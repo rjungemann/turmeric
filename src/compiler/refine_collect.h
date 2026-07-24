@@ -44,6 +44,23 @@ typedef struct RefineHyp {
     struct RefineHyp *next;
 } RefineHyp;
 
+/* What the encoder needs to know about a CALLED function to make use of its
+ * result.  A call inside a predicate or an argument is encoded as an opaque
+ * (uninterpreted) application either way -- but when the callee declares a
+ * return refinement, that refinement is a fact about the value the call
+ * produces, and asserting it turns `(twice (double-pos p))` from unknown into
+ * provable. */
+typedef struct RefineFnInfo {
+    const Form  *ret_pred;     /* the q of `: #refine{ r : T | q }` */
+    const char  *ret_var;      /* the r */
+    const char **param_names;  /* so q may mention the callee's parameters */
+    uint32_t     n_params;
+} RefineFnInfo;
+
+/* Resolve a function name to the above.  Supplied by the elaborator (which
+ * owns the scope); NULL disables result propagation entirely. */
+typedef bool (*RefineFnResolver)(void *ud, const char *name, RefineFnInfo *out);
+
 typedef struct RefineEnv {
     Arena       *arena;
     RefineHyp   *head;
@@ -52,10 +69,14 @@ typedef struct RefineEnv {
     const char **names;
     VCSort      *sorts;
     uint32_t     n_names, cap_names;
+    /* Return-refinement lookup for calls appearing in encoded expressions. */
+    RefineFnResolver resolve_fn;
+    void            *resolve_ud;
 } RefineEnv;
 
 RefineEnv *refine_env_new(Arena *a);
 void refine_env_declare(RefineEnv *env, const char *name, VCSort sort);
+void refine_env_set_resolver(RefineEnv *env, RefineFnResolver fn, void *ud);
 void refine_env_push(RefineEnv *env, const Form *pred,
                      const char *bound_var, const char *subject_name);
 VCSort refine_env_sort_of(const RefineEnv *env, const char *name);
@@ -94,6 +115,9 @@ typedef struct RefineObligation {
      * ordinary condition of code that has not been fully annotated yet.
      * Erroring on it would make `refined` impossible to adopt incrementally. */
     bool         runtime_guarded;
+    /* A speculative probe (RT4 template inference): decide it, report nothing,
+     * count nothing.  The caller only wants the verdict. */
+    bool         speculative;
     VCSort       base_sort;      /* sort of the refined base type T */
     const char  *base_type_name; /* T, for diagnostics */
     Span         loc;

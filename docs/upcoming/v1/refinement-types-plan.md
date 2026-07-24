@@ -20,7 +20,8 @@
 > | S3 Nelson-Oppen | done (convex exchange; no integer case-split) | `refine_solver_no.c` |
 > | S4 boolean structure | done (small-DNF cube expansion) | `refine_solver.c` |
 > | RT5b stdlib refinement aliases | done | `stdlib/refine.tur` |
-> | RT4 propagation, RT5a WASM confirm, RT6 hints, RT7 caching | not started | -- |
+> | RT4 predicate propagation | done (+ declared-result propagation) | `elab_fns.c`, `refine_collect.c` |
+> | RT5a WASM confirm, RT6 hints, RT7 caching | not started | -- |
 >
 > ### Deliberate deviations from the plan as written
 >
@@ -113,18 +114,58 @@
 > whole-program call-graph knowledge including exported and indirect callers,
 > and that is a separate piece of work with real soundness preconditions.
 >
+> ### RT4 predicate propagation (landed 2026-07-24)
+>
+> Landed with a piece the plan does not name, and which turned out to matter
+> more than the templates: **propagating DECLARED return refinements into call
+> results.** A call encodes as an uninterpreted term either way, but when the
+> callee has a return refinement that predicate is a fact about the value the
+> call produced. Asserting it is what makes refined code compose --
+> `(twice (double-pos p))` goes from unknown to proved -- and without it RT4's
+> inferred refinements would have had nowhere to be used. Both flow through the
+> same `RefineFnResolver` hook, so `refine_collect.c` stays free of scope and
+> binding knowledge.
+>
+> The soundness argument for assuming a declared refinement is that something
+> enforces it: it was proved statically, or the runtime check that guarantees
+> it would have panicked first. That is conditional, and the condition is
+> checked -- when contracts are stripped (`--no-contracts`, or a release build
+> without `--keep-contracts`) an unproved refinement is **not** published, and
+> call sites go back to treating the result as opaque. A first cut put a
+> blanket `g_no_contracts` refusal in the resolver instead; that was both
+> redundant (the publish gate already knows) and wrong (it discarded INFERRED
+> refinements, which are proved facts and hold regardless of any check).
+>
+> The template layer itself is what the plan describes: five shapes tried
+> against the body, first proved one wins, nothing emitted. It is emphatically
+> not inference -- no search over a recursive constraint system, just guesses
+> that are individually checked, so a wrong guess costs a discarded proof
+> attempt rather than a wrong answer. `tests/fixtures/errors/refine-
+> unpropagated-result` is the fixture that would go green if that ever stopped
+> being true.
+>
+> Known asymmetry: call-site crossings are resolved after the whole unit, so
+> they see every callee's refinement; a function's own return obligation is
+> decided inline (that is what lets its check be elided), so it only sees
+> functions already elaborated. Under mutual recursion one direction may miss
+> one. This can only lose a hypothesis, never add a false one.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
-> - **RT4 template-based propagation** -- infer a result refinement from the
->   argument refinements for simple arithmetic bodies, cutting the annotation
->   burden. Small and self-contained now that the machinery exists.
 > - **RT6 error-message quality** -- the hint half ("constrain the parameter,
 >   e.g. `x : #refine{ v : int | (>= v 0) }`") derived by a second seam query.
+>   The counterexample half already landed.
 > - **Indirect calls** -- a call through a closure, a function-typed parameter,
 >   or a typeclass method does not carry the callee's predicates to the call
 >   site.
+> - **A purity gate on the encoder** -- two syntactically identical calls
+>   currently encode to the same term. Predicates must be pure, but argument
+>   expressions need not be, so an effectful call appearing twice in one
+>   obligation would be modelled as one value.
+> - **Branching-body propagation** -- RT4 is limited to single-expression
+>   bodies; a path-sensitive join at merge points would cover `if`/`match`.
 > - **Whole-program entry-check elision** -- the piece that turns the call-site
 >   layer from a diagnostic into a code-size/perf win. Needs an
 >   exported/address-taken analysis before it can be sound.

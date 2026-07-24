@@ -43,6 +43,12 @@ void refine_env_declare(RefineEnv *env, const char *name, VCSort sort) {
     env->n_names++;
 }
 
+void refine_env_set_resolver(RefineEnv *env, RefineFnResolver fn, void *ud) {
+    if (!env) return;
+    env->resolve_fn = fn;
+    env->resolve_ud = ud;
+}
+
 VCSort refine_env_sort_of(const RefineEnv *env, const char *name) {
     if (!env || !name) return VS_INT;
     for (uint32_t i = 0; i < env->n_names; i++)
@@ -124,6 +130,8 @@ typedef struct EncSubst {
     VCTerm     *term;
 } EncSubst;
 
+#define ENC_MAX_PROPAGATE 4
+
 typedef struct Enc {
     RefineVC        *vc;
     const RefineEnv *env;
@@ -131,6 +139,10 @@ typedef struct Enc {
     uint32_t         n_subst;
     const char      *fail;   /* set on the first unsupported construct */
     uint32_t         depth;
+    /* Names whose return refinement is currently being propagated, so a
+     * refinement that mentions its own function cannot recurse forever. */
+    const char      *propagating[ENC_MAX_PROPAGATE];
+    uint32_t         n_propagating;
 } Enc;
 
 static VCTerm *enc(Enc *E, const Form *f);
@@ -251,7 +263,51 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     }
     uint32_t fn = vc_declare_ufunc(E->vc, head->as.sym->name, argc, VS_INT,
                                    f, /*nonlinear=*/false);
-    return vc_app(E->vc, fn, args, argc);
+    VCTerm *app = vc_app(E->vc, fn, args, argc);
+
+    /* RT4: if the callee declares (or had inferred) a return refinement, that
+     * predicate holds of the value this call produced -- either because it was
+     * proved statically or because the runtime check would have panicked
+     * otherwise.  Assert it, so the result of a refined function can satisfy
+     * the next obligation instead of being an opaque term.
+     *
+     * The hypothesis is about THIS application term, so it is sound wherever
+     * the call appears in the formula -- including under a negation. */
+    if (E->env && E->env->resolve_fn) {
+        const char *nm = head->as.sym->name;
+        bool cycling = false;
+        for (uint32_t i = 0; i < E->n_propagating; i++)
+            if (strcmp(E->propagating[i], nm) == 0) { cycling = true; break; }
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (!cycling && E->n_propagating < ENC_MAX_PROPAGATE &&
+            E->env->resolve_fn(E->env->resolve_ud, nm, &info) &&
+            info.ret_pred && info.ret_var) {
+            Enc E2; memset(&E2, 0, sizeof(E2));
+            E2.vc = E->vc; E2.env = E->env;
+            for (uint32_t i = 0; i < E->n_propagating; i++)
+                E2.propagating[E2.n_propagating++] = E->propagating[i];
+            E2.propagating[E2.n_propagating++] = nm;
+            /* The refinement is written in the CALLEE's names: its own result
+             * variable and its own parameters.  Bind both to what this call
+             * site actually supplied. */
+            E2.subst[E2.n_subst].name = info.ret_var;
+            E2.subst[E2.n_subst].term = app;
+            E2.n_subst++;
+            for (uint32_t i = 0; i < info.n_params && i < argc &&
+                                 E2.n_subst < ENC_MAX_SUBST; i++) {
+                if (!info.param_names[i]) continue;
+                E2.subst[E2.n_subst].name = info.param_names[i];
+                E2.subst[E2.n_subst].term = args[i];
+                E2.n_subst++;
+            }
+            VCTerm *fact = enc(&E2, info.ret_pred);
+            /* A refinement we cannot encode is simply not asserted -- fewer
+             * hypotheses can only make a goal harder to prove. */
+            if (fact && fact->sort == VS_BOOL) vc_add_hyp(E->vc, fact);
+        }
+    }
+    return app;
 }
 
 static VCTerm *enc(Enc *E, const Form *f) {

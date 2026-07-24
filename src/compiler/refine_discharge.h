@@ -32,6 +32,8 @@ typedef struct RefineStats {
     uint32_t invalid;
     uint32_t unknown;
     uint32_t backend_calls;
+    uint32_t templates_tried;   /* RT4 speculative probes (not obligations) */
+    uint32_t inferred;          /* RT4 refinements successfully inferred */
 } RefineStats;
 
 const RefineStats *refine_stats(void);

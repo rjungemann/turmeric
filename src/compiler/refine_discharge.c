@@ -124,6 +124,26 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     if (!ob) return false;
     if (ob->discharged) return ob->proven;
     ob->discharged = true;
+    /* A speculative probe (RT4 template inference) asks a question the user
+     * did not; it reports nothing and is counted separately so the summary
+     * still describes real obligations. */
+    if (ob->speculative) {
+        g_stats.templates_tried++;
+        const char *why = NULL;
+        RefineVC *pvc = refine_vc_build(ob, a, &why);
+        if (!pvc) return false;
+        for (size_t i = 0; i < CHAIN_LEN; i++) {
+            g_stats.backend_calls++;
+            RefineDecision pd = CHAIN[i](pvc, a);
+            if (pd.verdict == RT_VALID) {
+                ob->proven = true;
+                g_stats.inferred++;
+                return true;
+            }
+            if (pd.verdict != RT_UNKNOWN) break;
+        }
+        return false;
+    }
     g_stats.collected++;
 
     char what[128];
@@ -245,5 +265,10 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                 "(%u backend call(s))\n",
                 g_stats.collected, g_stats.proven, g_stats.invalid,
                 g_stats.unknown, g_stats.backend_calls);
+        if (g_stats.templates_tried)
+            fprintf(stderr,
+                    "refine: %u result refinement(s) inferred from %u template "
+                    "probe(s)\n",
+                    g_stats.inferred, g_stats.templates_tried);
     }
 }

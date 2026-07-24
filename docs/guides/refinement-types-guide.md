@@ -131,6 +131,60 @@ site is proved. Eliding it would need whole-program knowledge of the call graph
 that was protecting something. The call-site layer is a diagnostic on top of
 that guard, not a licence to remove it.
 
+### Results carry their refinements
+
+A call is an opaque term to the solver -- but when the callee has a return
+refinement, that predicate is a *fact about the value this call produced*, so
+it is asserted. Refined code composes instead of going opaque at every call:
+
+```turmeric
+(defn double-pos [x : Pos] : #refine{ r : int | (> r 0) }
+  (* x 2))
+
+(defn twice [y : Pos] : int (* y 2))
+
+(defn use [p : Pos] : int
+  (twice (double-pos p)))    ; proved -- double-pos's result is known positive
+```
+
+Assuming a declared return refinement is sound because something enforces it:
+either it was proved statically, or the runtime check that guarantees it would
+have panicked first. When neither is true -- contracts stripped by
+`--no-contracts`, or a release build without `--keep-contracts` -- the
+refinement is **not** published, and call sites go back to treating the result
+as opaque.
+
+### Inferred result refinements
+
+A function with no declared return refinement gets one tried for it. RT4 runs a
+small fixed vocabulary of shapes (`> 0`, `< 0`, `>= 0`, `<= 0`, `!= 0`) against
+the body and keeps the first a backend **proves**:
+
+```turmeric
+(defn inc-pos [x : Pos] : int
+  (+ x 1))          ; (> result 0) is inferred and published to call sites
+
+(defn use [p : Pos] : int
+  (twice (inc-pos p)))    ; proved, with no annotation on inc-pos at all
+```
+
+This is not general refinement inference. There is no search over a recursive
+constraint system -- the layer that makes a LiquidHaskell-style backend hard is
+exactly the one Turmeric deletes by making refinements *written*. These are a
+handful of guesses, each individually checked, so a wrong guess costs a
+discarded proof attempt and never a wrong answer. A function whose result
+genuinely satisfies none of them simply gets nothing:
+
+```turmeric
+(defn lower [x : Pos] : int (- x 5))   ; can be negative -- nothing inferred
+(defn use [p : Pos] : int (twice (lower p)))   ; correctly stays undischarged
+```
+
+Scope, deliberately narrow: single-expression bodies, a numeric result, at most
+four refined parameters. Branching bodies need a path-sensitive join at the
+merge point and are deferred. `TUR_REFINE_STATS=1` reports how many
+refinements were inferred and how many probes it took.
+
 ---
 
 ## The predicate language
@@ -307,14 +361,24 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **Only direct calls to named functions are checked.** A call through a
   closure, a function-typed parameter, or a typeclass method does not carry the
   callee's predicates to the call site.
-- **No refinement inference.** Refinements are written, not inferred. A function
-  with no declared return refinement gets none.
+- **Result-refinement propagation is order-dependent for a function's OWN
+  return obligation.** Call-site crossings are resolved after the whole unit,
+  so they always see every callee's refinement. A function's own return
+  obligation is decided inline (that is what lets its check be elided), so it
+  only sees refinements of functions already elaborated. Under mutual
+  recursion, one direction may miss one. This can only lose a hypothesis, never
+  add a false one.
 - **No branching-body path sensitivity.** The return obligation is taken against
   the function's tail expression. A body whose tail is a `let`, a `match`, or a
   call lands outside the encoder's fragment and answers unknown.
 - **No refinements on type parameters, typeclass method signatures, or
   higher-order predicates.** These are rejected or fall through to runtime.
 - **Nonlinear arithmetic** is uninterpreted, as described above.
+- **Two syntactically identical calls encode to the same term**, so the solver
+  treats them as equal. Predicates are required to be pure, but an *argument*
+  expression is not, so an effectful call appearing twice in one obligation
+  would be modelled as one value. In practice an argument form occurs once per
+  obligation; a purity gate on the encoder is the proper fix.
 
 Every one of these fails toward a runtime check, never toward a wrong answer.
 

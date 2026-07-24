@@ -49,6 +49,30 @@ static VCSort rt_sort_of_kind(TypeKind k) {
     }
 }
 
+/* RT4: resolve a called function's return refinement for the encoder.  Owned
+ * by the elaborator because it is the only side that can look a name up in the
+ * global scope; refine_collect.c reaches it through a function pointer so it
+ * stays free of scope/binding knowledge. */
+static bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
+    Elab *e = (Elab *)ud;
+    if (!e || !name) return false;
+    /* No flag test here on purpose.  A refinement only reaches
+     * `refine_return_pred` when something actually enforces it -- it was proved
+     * statically, or the runtime check that guarantees it is being emitted --
+     * and that decision is made where the callee is elaborated, which is the
+     * only place that knows whether contracts survived for it.  Re-testing
+     * `--no-contracts` here would also throw away INFERRED refinements, which
+     * are proved facts and hold whether or not any check is emitted. */
+    const Symbol *sym = symtab_intern(e->st, strslice(name, (uint32_t)strlen(name)));
+    Binding *b = scope_lookup(&e->global, sym);
+    if (!b || !b->refine_return_pred) return false;
+    out->ret_pred    = b->refine_return_pred;
+    out->ret_var     = b->refine_return_var;
+    out->param_names = b->refine_param_names;
+    out->n_params    = b->n_refine_params;
+    return true;
+}
+
 /* Build the hypothesis environment visible at a function's return point. */
 static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
                                const Form **ct_param_preds,
@@ -57,6 +81,7 @@ static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
                                uint32_t n_ct_param_preds,
                                const Form *ct_pre_form) {
     RefineEnv *env = refine_env_new(e->arena);
+    refine_env_set_resolver(env, rt_resolve_fn, e);
     for (uint32_t i = 0; i < n_params; i++) {
         if (!params[i] || !params[i]->name) continue;
         refine_env_declare(env, params[i]->name->name,
@@ -73,6 +98,60 @@ static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
      * rename, so it rides in with a NULL bound variable. */
     if (ct_pre_form) refine_env_push(env, ct_pre_form, NULL, NULL);
     return env;
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT4: template-based predicate propagation.
+ *
+ * A deliberately small convenience, NOT the general refinement inference the
+ * plan rules out.  We do not search for a predicate that satisfies a recursive
+ * constraint system (that is the LiquidHaskell layer we deleted by making
+ * refinements written rather than inferred); we try a fixed vocabulary of
+ * shapes against the body and keep the first the solver can prove.  Wrong
+ * guesses cost a discarded proof attempt, never a wrong answer.
+ * ------------------------------------------------------------------------- */
+
+#define RT4_RESULT_VAR "__rt_result"
+
+/* Build the predicate Form `(<op> __rt_result 0)`. */
+static const Form *rt4_template(Elab *e, const char *op, Span span, bool is_float) {
+    Form **items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(e->arena, span,
+                        symtab_intern(e->st, strslice(op, (uint32_t)strlen(op))));
+    items[1] = form_sym(e->arena, span,
+                        symtab_intern(e->st, strslice(RT4_RESULT_VAR,
+                                                      (uint32_t)strlen(RT4_RESULT_VAR))));
+    items[2] = is_float ? form_float(e->arena, span, 0.0)
+                        : form_int(e->arena, span, 0);
+    return form_list(e->arena, span, items, 3);
+}
+
+/* Try each shape against `subject` under `env`; return the first one a backend
+ * proves, or NULL.  Silent: these are probes, not obligations the user wrote,
+ * so a failed one reports nothing and counts for nothing. */
+static const Form *rt4_infer_return(Elab *e, const Form *subject, TypeKind ret_kind,
+                                    RefineEnv *env, Span span) {
+    if (!subject || !env) return NULL;
+    bool is_float = (ret_kind == TY_FLOAT || ret_kind == TY_FLOAT32 ||
+                     ret_kind == TY_FLOAT64);
+    /* Ordered most-informative first, so `(> r 0)` wins over `(>= r 0)` when
+     * both hold. */
+    static const char *const SHAPES[] = { ">", "<", ">=", "<=", "not=" };
+    for (size_t i = 0; i < sizeof(SHAPES) / sizeof(SHAPES[0]); i++) {
+        const Form *tmpl = rt4_template(e, SHAPES[i], span, is_float);
+        RefineObligation probe;
+        memset(&probe, 0, sizeof(probe));
+        probe.predicate   = tmpl;
+        probe.var_name    = RT4_RESULT_VAR;
+        probe.subject     = subject;
+        probe.base_sort   = rt_sort_of_kind(ret_kind);
+        probe.loc         = span;
+        probe.env         = env;
+        probe.what        = "inferred result refinement";
+        probe.speculative = true;
+        if (refine_discharge_one(&probe, e->arena)) return tmpl;
+    }
+    return NULL;
 }
 
 /* Collect one return-position obligation and decide it now.  Returns true when
@@ -2211,6 +2290,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * return_kind == TY_CONTRACT and every caller failed to type the call. */
     const Form *ct_ret_pred = NULL;
     const char *ct_ret_var  = NULL;
+    /* RT4: a return refinement the solver PROVED about the body, when none was
+     * declared.  Published on the binding so call sites can use it; never
+     * turned into a runtime check. */
+    const Form *rt_inferred_ret = NULL;
+    const char *rt_inferred_var = NULL;
+    /* True when a DECLARED return refinement is actually guaranteed of every
+     * value this function returns -- either it was proved statically, or the
+     * runtime check that enforces it is being emitted.  Neither holds when
+     * contracts are stripped (`--no-contracts`, or a release build without
+     * --keep-contracts), and assuming it then would let a call site prove a
+     * goal from a fact nothing enforces. */
+    bool rt_ret_guaranteed = false;
     uint32_t body_start = params_idx + 1;  /* params_idx = params vector */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -3229,6 +3320,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
                     arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
                     call->span);
+                rt_ret_guaranteed = rt_ret_proven || should_check;
             }
             if (ct_post_form) {
                 snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
@@ -3236,6 +3328,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e, ct_post_form, "result", rt_subject, return_kind, rt_env,
                     arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
                     call->span);
+            }
+            /* RT4: with no DECLARED return refinement, try to infer one from
+             * the parameter refinements and the body.  Scope is deliberately
+             * narrow (the plan's): a single-expression body over a numeric
+             * result, at most four refined parameters.  A branching body would
+             * need a path-sensitive join at the merge point, which is deferred.
+             * Nothing is emitted for an inferred refinement -- it is extra
+             * knowledge published to call sites, not a new runtime check. */
+            if (!ct_ret_pred && n_body == 1 && n_ct_param_preds > 0 &&
+                n_ct_param_preds <= 4 && rt_subject &&
+                (return_kind == TY_INT || return_kind == TY_FLOAT ||
+                 return_kind == TY_FLOAT32 || return_kind == TY_FLOAT64)) {
+                rt_inferred_ret = rt4_infer_return(e, rt_subject, return_kind,
+                                                   rt_env, call->span);
+                if (rt_inferred_ret) rt_inferred_var = RT4_RESULT_VAR;
             }
         }
 
@@ -3820,6 +3927,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
         b->refine_param_vars  = rv;
         b->refine_param_names = rn;
         b->n_refine_params    = n_params;
+    }
+    if (g_opt_refined) {
+        /* A declared return refinement wins -- but only when something
+         * actually enforces it (see rt_ret_guaranteed).  An INFERRED one is
+         * always safe to publish: RT4 only records what a backend proved. */
+        if (ct_ret_pred && rt_ret_guaranteed) {
+            b->refine_return_pred = ct_ret_pred;
+            b->refine_return_var  = ct_ret_var;
+        } else if (!ct_ret_pred && rt_inferred_ret) {
+            b->refine_return_pred = rt_inferred_ret;
+            b->refine_return_var  = rt_inferred_var;
+        }
     }
 
     /* Phase R5: Store #[no-unwind] attribute on the binding */

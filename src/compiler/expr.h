@@ -285,6 +285,13 @@ struct Binding {
     const char        **refine_param_vars;
     const char        **refine_param_names;
     uint32_t            n_refine_params;
+    /* RT4: the refinement this function's RESULT satisfies -- either declared
+     * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
+     * appearing inside a predicate or an argument asserts it about the value
+     * that call produced, so a refined result can discharge the next
+     * obligation instead of being an opaque term. */
+    const struct Form  *refine_return_pred;
+    const char         *refine_return_var;
     /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
      * the FnDef it defines -- lets make_dict_clone reach the original body/params
      * from the binding without scanning file-scope defs (user defns are not yet
