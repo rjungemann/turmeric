@@ -104,11 +104,15 @@ is rare; the pin is by design).
 
 ## Sub-phases (each independently landable, tested)
 
-- **TR2.0 -- close the test gap first.** There is no in-process C test for a
-  reader macro defined in one eval and used in the next (item 5). Add one, plus
-  assert the existing cross-eval coverage (`env-longlived.c` 7 sub-tests,
-  `eval-basic.c:112-122`) passes unchanged. `env-teardown.c` (leak-cleanliness)
-  must stay green throughout.
+- **TR2.0 -- close the test gap first. [DONE 2026-07-24]** There was no in-process
+  C test for a reader macro defined in one eval and used in the next (item 5).
+  Added `tests/turi/reader-macro-cross-eval.c` (`tur_reader_macro_cross_eval`
+  ctest): define in one `turi_eval`, use across separate later evals, survive 50
+  intervening evals (the incremental case -- the define is not re-run), and
+  redefinition. Green on the current tree; must stay green through TR2.1--TR2.4.
+  The existing cross-eval coverage (`env-longlived.c` 7 sub-tests,
+  `eval-basic.c:112-122`) and `env-teardown.c` (leak-cleanliness) are the rest of
+  the safety net.
 - **TR2.1 -- persist the elaboration environment.** Thread a persistent
   `TypeClassEnv` + type/name/struct/ADT tables on `env`, built in a persistent
   arena; have `elaborate_program` seed from it. Behavior-preserving (still

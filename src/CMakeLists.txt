@@ -498,6 +498,24 @@ set_target_properties(tur_eval_basic PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# TR2.0 (turi-incremental-elaboration-design): cross-eval reader-macro coverage
+# ---------------------------------------------------------------------------
+add_executable(tur_reader_macro_cross_eval ${CMAKE_SOURCE_DIR}/tests/turi/reader-macro-cross-eval.c)
+target_include_directories(tur_reader_macro_cross_eval PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_reader_macro_cross_eval PRIVATE libturi)
+target_compile_options(tur_reader_macro_cross_eval PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_reader_macro_cross_eval PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_reader_macro_cross_eval PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # turi-interp-collections-libturi: Vec/Set/HAMT C-embedding parity harness
 # ---------------------------------------------------------------------------
 add_executable(tur_collections_embed ${CMAKE_SOURCE_DIR}/tests/turi/collections-embed.c)
