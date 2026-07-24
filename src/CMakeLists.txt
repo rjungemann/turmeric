@@ -178,6 +178,20 @@ set(TUR_CORE_SOURCES
     compiler/reader.c
     compiler/reader_macros.c
     compiler/lang_layers.c
+    # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
+    # types.  refine_libz3.c is a DEV-ONLY scaffold -- it compiles to nothing
+    # unless TUR_REFINE_Z3_ORACLE is defined, and that option refuses Release
+    # and WASM builds, so no shipped artifact can ever link Z3.
+    compiler/refine_vc.c
+    compiler/refine_collect.c
+    compiler/refine_smtlib.c
+    compiler/refine_discharge.c
+    compiler/refine_solver.c
+    compiler/refine_solver_s0.c
+    compiler/refine_solver_euf.c
+    compiler/refine_solver_arith.c
+    compiler/refine_solver_no.c
+    compiler/refine_libz3.c
     compiler/symbols.c
     compiler/typeclass.c
     compiler/types.c
@@ -344,6 +358,13 @@ file(READ "${CMAKE_SOURCE_DIR}/VERSION" _TUR_VERSION_RAW)
 string(STRIP "${_TUR_VERSION_RAW}" _TUR_VERSION_STR)
 target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 
+# RT3: the dev-only refinement oracle.  OFF by default and refused for Release
+# and WASM in the top-level CMakeLists, so this never reaches a shipped build.
+if(TUR_REFINE_Z3_ORACLE)
+    target_compile_definitions(tur_core PRIVATE TUR_REFINE_Z3_ORACLE=1)
+    target_link_libraries(tur_core PRIVATE z3::libz3)
+endif()
+
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
 # ---------------------------------------------------------------------------
@@ -387,6 +408,11 @@ endif()
 
 # E2: inject version into tur executable (main.c reads TUR_VERSION)
 target_compile_definitions(tur PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
+
+# RT3: dev-only refinement oracle -- see the top-level CMakeLists.
+if(TUR_REFINE_Z3_ORACLE)
+    target_link_libraries(tur PRIVATE z3::libz3)
+endif()
 
 # Ensure the compiler binary ends up at build/tur (same path the test scripts
 # and games expect).
@@ -710,6 +736,35 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_ffi_dispatch_unit PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 set_target_properties(tur_ffi_dispatch_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# RT2/S0--S3: refinement normalized-VC + decision-procedure unit test
+# (docs/upcoming/v1/refinement-types-plan.md).  Exercises hash-consing,
+# constant folding, each in-house stage, the cube expansion, the bounded
+# counterexample search, and the SMT-LIB serializer -- including the
+# "must NOT prove" direction, which is where the soundness invariant lives.
+# ---------------------------------------------------------------------------
+add_executable(tur_refine_solver
+    ${CMAKE_SOURCE_DIR}/tests/unit/refine_solver.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_refine_solver PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_refine_solver PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_refine_solver PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_refine_solver PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_refine_solver PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_refine_solver PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_refine_solver PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 

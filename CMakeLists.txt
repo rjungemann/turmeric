@@ -59,6 +59,36 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# RT3 (docs/upcoming/v1/refinement-types-plan.md): the Z3 refinement SCAFFOLD.
+#
+# Z3 is a development-time correctness oracle and a transitional bootstrap for
+# the refinement-types pipeline -- never a shipped backend.  The in-house
+# staged decision procedure (S0..S3, src/compiler/refine_solver_*.c) is the
+# only solver a user ever runs, which is why the shipped compiler carries ZERO
+# heavyweight solver dependency and the WASM bundle pays nothing for it.
+#
+# Deliberate departures from a conventional dependency: no CPMAddPackage, no
+# FetchContent, no auto-download, no static linking into a distributable.  The
+# oracle uses a Z3 the developer already has; absent one, the option is simply
+# unavailable and the build proceeds in-house-only.  Release and WASM builds
+# REFUSE the option, so there is structurally no path by which Z3 reaches a
+# shipped binary or the web bundle.
+#
+# This whole block is deleted once S0..S3 meet the plan's retirement criteria.
+option(TUR_REFINE_Z3_ORACLE
+  "link a system Z3 as a dev-build refinement oracle (never shipped)"
+  OFF)
+
+if(TUR_REFINE_Z3_ORACLE)
+  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR EMSCRIPTEN)
+    message(FATAL_ERROR
+      "TUR_REFINE_Z3_ORACLE is a dev scaffold; not allowed in Release or WASM builds")
+  endif()
+  find_package(Z3 4.12 CONFIG REQUIRED)   # SYSTEM install only -- never fetched/bundled
+  message(STATUS "tur: refinement Z3 oracle ENABLED (dev scaffold; not shippable)")
+endif()
+
+# ---------------------------------------------------------------------------
 # CPM: package manager for fetching Raylib (and any future C dependencies).
 # ---------------------------------------------------------------------------
 include(cmake/CPM.cmake)
@@ -380,6 +410,13 @@ add_test(
 add_test(
   NAME tur_ffi_dispatch_unit
   COMMAND "${CMAKE_BINARY_DIR}/tur_ffi_dispatch_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# RT2/S0--S3: refinement VC + decision-procedure unit test
+# (docs/upcoming/v1/refinement-types-plan.md).
+add_test(
+  NAME tur_refine_solver
+  COMMAND "${CMAKE_BINARY_DIR}/tur_refine_solver"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # UC-2: user-level experiments file reader unit test

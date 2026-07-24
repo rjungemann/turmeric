@@ -1,0 +1,282 @@
+# Refinement Types
+
+> **Status:** prototype, behind the `refined` experiment.
+> Enable with `--enable=refined` on the command line, `:experiments [:refined]`
+> in `build.tur`, or `#lang turmeric refined` at the top of a single file.
+> See [contract-types-guide.md](contract-types-guide.md) for the always-on
+> runtime half, and
+> [../upcoming/v1/refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md)
+> for the design.
+
+Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
+Refinement types go one step further: with the `refined` experiment on, the
+compiler tries to **prove** the predicate at compile time, and emits a runtime
+check only where the proof fails.
+
+The single fact that shapes the whole feature: **every refinement already has a
+runtime meaning.** So the static discharger is allowed to give up on any
+obligation and stay sound -- the obligation just falls back to the check it
+would have had anyway. That is why a partial, hand-rolled solver is a real
+feature rather than a broken one, and why turning `refined` on can never make a
+correct program wrong.
+
+```turmeric
+;; Proved: x > 0 entails 2x > 0, so no runtime check is emitted for the return.
+(defn double-pos [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (* x 2))
+```
+
+---
+
+## Turning it on
+
+| Spelling | Scope |
+|---|---|
+| `--enable=refined` | this compiler invocation |
+| `:experiments [:refined]` in `build.tur` | the project |
+| `#lang turmeric refined` (first line of a file) | that file |
+| `~/.config/turmeric/experiments.tur` `:enable [:refined]` | the user |
+
+`#lang turmeric refined` is **exactly** `--enable=refined` scoped to one file --
+the `#lang` layer points at the same `EXPERIMENTS[]` row, so there is one enable
+path, one lifecycle warning, and one `expires_at`. If a project manifest states
+its own `:experiments` list and leaves `refined` out, a `#lang ... refined` file
+is a **hard error**, never a silent downgrade: the project owner said no, and
+compiling the file under different semantics than it asked for would be worse
+than failing.
+
+With the experiment off, everything below still parses and still runs its
+runtime checks. Nothing here is required to use contract types.
+
+### `--strict-refine`
+
+`--strict-refine` is a diagnostic-strictness knob, not an experiment. It turns
+every obligation the solver could not prove into a hard compile error instead of
+a warning plus a runtime check. Use it when you want a build in which *every*
+refinement is discharged statically:
+
+```sh
+tur build --enable=refined --strict-refine src/main.tur
+```
+
+---
+
+## What gets checked
+
+Two things become **hypotheses** -- facts the prover may assume:
+
+- each parameter declared with a contract type (or a named refinement alias);
+- the function's `:pre` predicate.
+
+Two things become **goals** -- things it must prove:
+
+- a contract **return type**, `: #refine{ r : T | p }`;
+- the function's `:post` predicate.
+
+```turmeric
+(defn index-ok [v : int, n : int, i : int] : #refine{ r : int | (< r (size-of v)) }
+  :pre (and (= (size-of v) n) (>= i 0) (< i n))
+  i)
+```
+
+Here the `:pre` clause supplies three hypotheses, and the return refinement is
+the goal. It is discharged statically, so the return check disappears; the
+`:pre` clause itself is still checked at runtime (it constrains the *caller*,
+and callers are not analysed yet -- see [Limits](#limits)).
+
+When a goal is proved, **no runtime check is emitted for it**. When it is not,
+the check stays exactly where it was.
+
+---
+
+## The predicate language
+
+The supported fragment is quantifier-free linear integer/real arithmetic with
+equality and uninterpreted functions.
+
+```
+pred ::= (= e e) | (not= e e) | (< e e) | (<= e e) | (> e e) | (>= e e)
+       | (and pred ...) | (or pred ...) | (not pred) | (=> pred pred)
+       | (measure e ...)          ; a named measure -> an uninterpreted function
+       | true | false
+
+expr ::= <int literal> | <float literal>
+       | <the refinement's bound variable>
+       | <any parameter in scope>
+       | (+ e e) | (- e e) | (* e <literal>) | (/ e <literal>) | (mod e <literal>)
+```
+
+Two rules keep this on the cheap side of the solver cliff. They are rules, not
+accidents:
+
+**Named measures are uninterpreted functions.** Any call the encoder does not
+recognise -- `len`, `size-of`, your own helper -- becomes an opaque symbol that
+congruence closure reasons about but never unfolds. This is what makes the
+equality theory tractable, and it is why `(= (size-of v) n)` above is usable as
+a hypothesis without the solver knowing anything about `size-of`'s body.
+
+**Variable * variable is uninterpreted.** `(* x 2)` is linear and fully decided;
+`(* x y)` with both sides variable is abstracted to an opaque term and reported
+with `TUR-W0373`. Congruence closure still relates two occurrences of the same
+product, so nothing becomes unsound -- the arithmetic facts are simply gone, and
+the obligation falls back to its runtime check.
+
+```turmeric
+;; TUR-W0373 + TUR-W0372: true, but not provable in the linear fragment.
+(defn mul-pos [x : #refine{ v : int | (> v 0) }, y : #refine{ w : int | (> w 0) }]
+             : #refine{ r : int | (> r 0) }
+  (* x y))
+```
+
+We do not climb the nonlinear wall. A genuinely nonlinear obligation gets a
+runtime check, and that is the intended outcome.
+
+---
+
+## Named refinements: `stdlib/refine.tur`
+
+A `deftype` bound to a contract type is a **refinement alias**:
+
+```turmeric
+(deftype Pos #refine{ x : int | (> x 0) })
+```
+
+A parameter declared `[n : Pos]` takes the base `int` at the C level, gets
+`(> n 0)` as its entry check, and contributes that predicate as a hypothesis.
+
+`stdlib/refine.tur` ships the common ones. It is **load-on-demand**, not
+auto-loaded -- names like `Byte` and `Percent` do not belong in every program's
+type namespace by default:
+
+```turmeric
+(load "stdlib/refine.tur")
+
+(defn safe-div [n : int, d : NonZero] : int
+  (/ n d))
+```
+
+| Alias | Predicate |
+|---|---|
+| `Nat` | `(>= x 0)` |
+| `Pos` | `(> x 0)` |
+| `Neg` | `(< x 0)` |
+| `NonZero` | `(not= x 0)` |
+| `Byte` | `0 <= x <= 255` |
+| `Percent` | `0 <= x <= 100` |
+| `NonNegFloat` | `(>= x 0.0)` |
+| `PosFloat` | `(> x 0.0)` |
+| `UnitFloat` | `0.0 <= x <= 1.0` |
+
+A refinement alias takes no type parameters in this prototype.
+
+---
+
+## The solver
+
+There is **no heavyweight solver dependency**. The shipped compiler carries a
+small, staged, in-house decision procedure, which is also why the WASM
+playground gets static checking at zero download cost. Obligations run through
+the stages in ascending cost and stop at the first one that decides:
+
+| Stage | What it decides |
+|---|---|
+| **S0** trivial | constant goals, a goal that is syntactically a hypothesis, contradictory hypotheses |
+| **S1** congruence closure (EUF) | equality and uninterpreted functions -- measures, abstracted products |
+| **S2** linear arithmetic | conjunctions of linear constraints, by Fourier-Motzkin elimination over exact rationals (a superset of difference logic) |
+| **S3** Nelson-Oppen | mixed goals, by exchanging entailed equalities between S1 and S2 |
+
+Anything none of them decides is answered *unknown* and keeps its runtime check.
+Every internal cap -- cube count, variable count, constraint growth -- degrades
+the same way. The invariant the whole design rests on is one-directional: a
+stage may never say "valid" for something that is not, but saying "unknown" is
+always allowed.
+
+Integers get one extra step: a strict constraint over integral data is tightened
+(`e < 0` becomes `e <= -1`), which is what lets `x > 0` entail `2x > 0`. Full
+integer completeness (branch-and-bound, Omega) is deliberately not attempted.
+
+### Counterexamples
+
+Failing to *prove* something proves nothing, so a separate bounded search tries
+to **refute** the obligation: it enumerates a small candidate assignment space
+and evaluates the formula exactly. A satisfying assignment is a real
+counterexample, so it is reported as an error with a model rather than a shrug:
+
+```
+error[TUR-E0371]: refinement predicate on the return value of wrong cannot be
+                  proved statically
+note: counterexample: x = -2
+```
+
+The search declines VCs containing uninterpreted symbols -- a measure has no
+fixed interpretation to evaluate, so guessing one would be dishonest.
+
+---
+
+## Diagnostics
+
+| Code | Meaning |
+|---|---|
+| `TUR-E0371` | a counterexample was found -- the predicate genuinely does not hold |
+| `TUR-W0372` | nothing decided it; the runtime check is kept |
+| `TUR-W0373` | a nonlinear subterm was abstracted; arithmetic reasoning is incomplete for it |
+| `TUR-W0060` | the `refined` experiment is in use (prototype lifecycle notice) |
+
+`TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
+survives in each case. Under `--strict-refine` both become hard errors.
+
+Run `tur explain TUR-W0372` (or any of the codes above) for the long form.
+
+---
+
+## Debugging an obligation
+
+Two environment variables:
+
+```sh
+TUR_REFINE_STATS=1 tur build --enable=refined main.tur
+# refine: 3 obligation(s): 2 proven, 0 refuted, 1 unknown (7 backend call(s))
+
+TUR_REFINE_DUMP=1 tur emit-c --enable=refined main.tur
+# --- refinement VC (return value of double-pos) ---
+# (set-logic QF_UFLIA)
+# (declare-const x Int)
+# (assert (< 0 x))
+# (assert (not (< 0 (* x 2))))
+# (check-sat)
+```
+
+The dump is SMT-LIB2 with the goal **negated** -- `unsat` means valid. It is
+there to read, and to paste into an external solver when you want a second
+opinion; the in-house stages consume the internal representation directly and
+never go through this text.
+
+---
+
+## Limits
+
+Known and deliberate, in rough order of how likely you are to hit them:
+
+- **Call sites are not checked yet.** Passing an argument into a
+  contract-typed parameter is a crossing the collector does not visit, so a
+  parameter's entry check is never elided -- the callee still validates what it
+  was handed. Statically checking callers is the next slice.
+- **No refinement inference.** Refinements are written, not inferred. A function
+  with no declared return refinement gets none.
+- **No branching-body path sensitivity.** The return obligation is taken against
+  the function's tail expression. A body whose tail is a `let`, a `match`, or a
+  call lands outside the encoder's fragment and answers unknown.
+- **No refinements on type parameters, typeclass method signatures, or
+  higher-order predicates.** These are rejected or fall through to runtime.
+- **Nonlinear arithmetic** is uninterpreted, as described above.
+
+Every one of these fails toward a runtime check, never toward a wrong answer.
+
+---
+
+## See also
+
+- [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half
+- [experimental-flags-guide.md](experimental-flags-guide.md) -- the `--enable=` mechanism
+- [syntax-guide.md](syntax-guide.md) -- `#lang` layers
+- [../upcoming/v1/refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md) -- design, staging, and what is left

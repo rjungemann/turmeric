@@ -19,6 +19,7 @@
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
 #include "globals.h"   /* ET4: g_effect_types_enabled */
+#include "refine_collect.h" /* RT1: refinement proof obligations */
 /* Phase U5: External declarations for global unsafe linting configuration */
 extern uint32_t g_unsafe_max_lines;
 extern bool g_unsafe_warn_nested;
@@ -814,6 +815,12 @@ typedef struct Elab {
      * rewritten call through; elab_call reads-and-clears it at entry so a nested
      * user `(Name ...)` during arg elaboration is still rejected. */
     bool              make_struct_ctor_rewrite;
+    /* RT1 (refinement-types-plan): proof obligations collected from
+     * `#refine{...}` crossings during this compilation unit.  Only populated
+     * when the `refined` experiment is on; the discharge pass (RT3) decides
+     * each one and the runtime contract check is elided exactly for those a
+     * backend proved. */
+    RefineObligationVec refine_obs;
 } Elab;
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */

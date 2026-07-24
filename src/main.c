@@ -72,6 +72,7 @@
 #include "reader.h"
 #include "reader_macros.h"
 #include "lang_layers.h"  /* L5: `tur lang-layers` registry listing */
+#include "refine_discharge.h" /* RT3: per-compile refinement stats reset */
 #include "span_audit.h"  /* debugger Phase 1: breakpoint-span coverage audit */
 #include "symbols.h"
 /* Phase S0: eval API for tur repl */
@@ -862,6 +863,7 @@ static int compile_to_c(const char *path, Buf *out_c,
      * gate below. */
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
     file.path = path;
@@ -1059,6 +1061,7 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
     file.path = path;
@@ -1159,6 +1162,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
      * otherwise short-circuit every later module's `diag_had_error()` gate. */
     diag_reset();
     experiment_reset_warnings();  /* XF2: once-per-compile TUR-W006x dedup */
+    refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
     SourceFile file = {0};
     file.path = path;
@@ -2593,6 +2597,12 @@ static char *find_spice_root(const char *file_path) {
  * hard configuration error: emit TUR-E0310 and abort, the same "typos surface
  * immediately" contract the CLI path enforces. */
 static void apply_manifest_experiments(const PkgManifest *m) {
+    /* lang-layers L4: a manifest that states its own :experiments list (even
+     * the empty one) has SCOPED the experiment set for this project.  A file
+     * that then asks for a semantic `#lang` layer whose experiment is not in
+     * that list is a hard error rather than a silent ignore -- see
+     * lang_layers_apply_semantic. */
+    if (m->has_experiments_key) g_manifest_experiments_scoped = true;
     for (int i = 0; i < m->n_experiments; i++) {
         if (!experiment_enable(m->experiments[i], XF_SRC_MANIFEST)) {
             fprintf(stderr,
@@ -6478,6 +6488,7 @@ static void wk_apply_flags(const char *flags_str) {
         if      (is_known_deprecated_x_flag(tok))             { /* TUR-W0050: silently accept in worker; fixtures get cleaned up separately. */ }
         else if (strcmp(tok, "--unsafe-stats")      == 0) { g_lint_unsafe_enabled = true; g_unsafe_stats_enabled = true; }
         else if (strcmp(tok, "--strict-effects")    == 0) g_strict_effects           = true;
+        else if (strcmp(tok, "--strict-refine")     == 0) g_strict_refine            = true;
         else if (strcmp(tok, "--dump-effects")      == 0) g_dump_effects             = true;
         else if (strcmp(tok, "--dump-cps-coloring") == 0) g_dump_cps_coloring        = true;
         else if (strcmp(tok, "--dump-cps")          == 0) g_dump_cps                 = true;
@@ -7282,6 +7293,7 @@ static int usage(void) {
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
+        "  --strict-refine                  hard-fail refinement obligations the solver cannot prove\n"
         "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
         "  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)\n"
         "  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)\n"
@@ -8189,6 +8201,17 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--dump-kinds") == 0) {
             /* Phase HKT-P6: enable kind-annotation dump after kind-check */
             g_dump_kinds = true;
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--strict-refine") == 0) {
+            /* RT3: upgrade every undecided/refuted refinement obligation from
+             * "keep the runtime check" to a hard compile error.  A
+             * diagnostic-strictness knob, NOT an experiment -- it changes how
+             * loudly the compiler reports, not what it compiles. */
+            g_strict_refine = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

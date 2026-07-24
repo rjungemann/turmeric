@@ -80,4 +80,11 @@ void lang_layers_apply_readers(LangLayerSet set,
                                struct ReaderMacroRegistry *reg,
                                Arena *arena, SymbolTable *st);
 
+/* Apply every enabled SEMANTIC layer: turn on its backing experiment (the
+ * layer IS the enable, scoped to one file -- there is no parallel enable
+ * path).  A project manifest that scoped its own `:experiments` list and left
+ * the experiment out makes this a hard error instead; returns false in that
+ * case, having emitted the diagnostic.  `path` is used in the message only. */
+bool lang_layers_apply_semantic(LangLayerSet set, const char *path);
+
 #endif /* TUR_LANG_LAYERS_H */

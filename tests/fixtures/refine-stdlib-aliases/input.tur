@@ -1,0 +1,28 @@
+;; RT5b: stdlib/refine.tur -- named refinement aliases.
+;;
+;; `(deftype Pos #refine{ x : int | (> x 0) })` binds the NAME to the contract
+;; type, so `[x : Pos]` takes the base `int` at the C level, gets `(> x 0)` as
+;; its entry check, and (under `refined`) contributes that as a hypothesis.
+;; The parameter predicate is recovered from the RESOLVED TYPE, which is what
+;; makes an alias work at all -- at the use site there is no contract Form to
+;; inspect.
+;;
+;; refine.tur is load-on-demand rather than auto-loaded: names like `Byte` and
+;; `Percent` do not belong in every program's type namespace by default.
+(load "stdlib/refine.tur")
+
+(defn safe-div [n : int, d : NonZero] : int
+  (/ n d))
+
+(defn quadruple [x : Pos] : #refine{ r : int | (> r 0) }
+  (* x 4))
+
+(defn clamp-lo [p : Percent] : #refine{ r : int | (>= r 0) }
+  p)
+
+(defn main [] : int
+  (println (safe-div 10 2))
+  (println (quadruple 3))
+  (println (clamp-lo 42))
+  (println "refine-stdlib-aliases")
+  0)

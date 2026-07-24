@@ -481,6 +481,25 @@ defn main [] : int
   string/len(#s"hello")
 ```
 
+The semantic layer available today is **`refined`**, which turns on static
+discharge of `#refine{...}` predicates for this file -- the compiler tries to
+*prove* each refinement instead of only checking it at runtime:
+
+```turmeric
+#lang turmeric refined
+(defn double-pos [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (* x 2))          ; proved statically -- no runtime check emitted
+```
+
+A semantic layer is never a second enable path. It points at an existing
+`EXPERIMENTS[]` row, so `#lang turmeric refined` is *exactly*
+`--enable=refined` scoped to one file, and the experiment's lifecycle warning
+and `expires_at` govern both spellings. If a project manifest states its own
+`:experiments` list and leaves the backing experiment out, such a file is a
+**hard error** rather than a silent downgrade -- compiling it under different
+semantics than it asked for would be worse than refusing. See
+[refinement-types-guide.md](refinement-types-guide.md).
+
 A `#lang` layer is a hard requirement of the file: an unrecognised layer token
 is a compile error (`TUR-E0330`), never silently ignored. Run `tur lang-layers`
 (add `--json` for the machine-readable form) to list every registered layer,

@@ -2420,6 +2420,26 @@ Expr *elab_deftype(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* CT0/RT5b: `(deftype Nat #refine{ x : int | (>= x 0) })` is a REFINEMENT
+     * ALIAS, not a recursive type.  Bind the name straight to the contract
+     * type so `[n : Nat]` resolves to `{ x : int | (>= x 0) }` -- the
+     * parameter takes the base type, the predicate becomes its contract check,
+     * and (under `refined`) its hypothesis.  Wrapping it in a TY_REC the way an
+     * ordinary deftype body is wrapped would make every use site fail to type
+     * (`expected <rec>, got int`), which is what stdlib/refine.tur needs. */
+    if (body_type->kind == TY_CONTRACT) {
+        if (n_type_params > 0) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "deftype '%s': a refinement alias takes no type parameters "
+                      "in this prototype (the predicate cannot mention them)",
+                      name->name);
+            return NULL;
+        }
+        Binding *cb = binding_new(e, name, *body_type, false, true, name_form->span);
+        scope_add(&e->global, cb);
+        return e_nil(e, call->span);
+    }
+
     /* Phase HKT-P2: Validate guarded recursion
      * The recursive type name must only appear under type constructors
      * (i.e., as an argument to a type constructor, not at the top level) */

@@ -3963,6 +3963,13 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
      * = *file`, and layers are orthogonal to the base reader. */
     lang_layers_apply_readers(file->lang_layers, reg, arena, st);
 
+    /* L4: a SEMANTIC layer turns on its backing experiment for this file --
+     * `#lang turmeric refined` is exactly `--enable=refined`, scoped here.
+     * A manifest that scoped :experiments without it is a hard error; the
+     * diagnostic is already emitted, and the caller sees it via
+     * diag_had_error(). */
+    (void)lang_layers_apply_semantic(file->lang_layers, file->path);
+
     switch (file->reader_type) {
         case READER_TURMERIC:
             /* Standard s-expression syntax only */

@@ -1,5 +1,7 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
+#include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
+#include "runtime/experiments.h" /* RT0: experiment_warn_if_used("refined") */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
  * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
@@ -27,6 +29,66 @@ static bool fn_result_kind_is_scalar_copy(TypeKind k) {
         default:
             return false;
     }
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT1 (refinement-types-plan): obligation collection for a `defn`.
+ *
+ * Parameter refinements and `:pre` become HYPOTHESES; the return refinement
+ * and `:post` become GOALS.  When a backend proves a goal, the runtime
+ * contract check for it is not emitted at all -- that elision is the whole
+ * point of the feature, and it is sound because the proof is over the same
+ * body the check would have guarded.
+ * ------------------------------------------------------------------------- */
+
+/* Map a Turmeric type kind to the VC sort the solver reasons in. */
+static VCSort rt_sort_of_kind(TypeKind k) {
+    switch (k) {
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return VS_REAL;
+        default: return VS_INT;
+    }
+}
+
+/* Build the hypothesis environment visible at a function's return point. */
+static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,
+                               const Form **ct_param_preds,
+                               const char **ct_param_varnames,
+                               const uint32_t *ct_param_param_idx,
+                               uint32_t n_ct_param_preds,
+                               const Form *ct_pre_form) {
+    RefineEnv *env = refine_env_new(e->arena);
+    for (uint32_t i = 0; i < n_params; i++) {
+        if (!params[i] || !params[i]->name) continue;
+        refine_env_declare(env, params[i]->name->name,
+                           rt_sort_of_kind(params[i]->type.kind));
+    }
+    for (uint32_t i = 0; i < n_ct_param_preds; i++) {
+        if (!ct_param_preds[i]) continue;
+        uint32_t pi = ct_param_param_idx[i];
+        if (pi >= n_params || !params[pi] || !params[pi]->name) continue;
+        refine_env_push(env, ct_param_preds[i], ct_param_varnames[i],
+                        params[pi]->name->name);
+    }
+    /* A `:pre` predicate mentions the parameters directly -- nothing to
+     * rename, so it rides in with a NULL bound variable. */
+    if (ct_pre_form) refine_env_push(env, ct_pre_form, NULL, NULL);
+    return env;
+}
+
+/* Collect one return-position obligation and decide it now.  Returns true when
+ * a backend proved it, so the caller can skip injecting the runtime check. */
+static bool rt_return_obligation_proven(Elab *e, const Form *pred,
+                                        const char *var_name,
+                                        const Form *subject, TypeKind base_kind,
+                                        RefineEnv *env, const char *what,
+                                        const char *fn_name, Span loc) {
+    if (!g_opt_refined || !pred) return false;
+    experiment_warn_if_used("refined");
+    RefineObligation *ob =
+        refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
+                                  rt_sort_of_kind(base_kind), type_name(type_simple(base_kind, CK_COPY)),
+                                  loc, env, what, fn_name);
+    return refine_discharge_one(ob, e->arena);
 }
 
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
@@ -479,11 +541,20 @@ static bool form_mentions_type_param(const Form *form, const Symbol *sym) {
         case F_SYM:
         case F_KEYWORD:
             return form->as.sym == sym;
+        case F_CONTRACT_TYPE:
+            /* items: [var, base-type, "|", predicate].  Only the BASE TYPE is
+             * a type expression.  The bound variable and the predicate are
+             * value-level: their free names are ordinary values, and treating
+             * them as type-variable mentions makes the implicit-type-param
+             * inference swallow the very parameters the predicate constrains
+             * (`[v : int, n : int]` with a `(len v)` refinement lost both
+             * parameters and then failed to parse their annotations). */
+            return form->as.list.len > 1 &&
+                   form_mentions_type_param(form->as.list.items[1], sym);
         case F_TYPE_ANN:
         case F_LIST:
         case F_VEC:
         case F_MAP:
-        case F_CONTRACT_TYPE:
             for (uint32_t i = 0; i < form->as.list.len; i++) {
                 if (form_mentions_type_param(form->as.list.items[i], sym)) return true;
             }
@@ -1487,22 +1558,6 @@ Expr *elab_defn(Elab *e, const Form *call) {
                           "defn: type annotation without preceding parameter");
                 return NULL;
             }
-            /* CT0: For F_CONTRACT_TYPE, use the base type for the param kind.
-             * The predicate is collected for injection as a precondition. */
-            /* For F_CONTRACT_TYPE: collect predicate, use base type */
-            if (p->tag == F_CONTRACT_TYPE && p->as.list.len >= 4) {
-                /* items: [var, type-ann, "|", pred] */
-                const char *ct_var = NULL;
-                if (p->as.list.items[0]->tag == F_SYM) {
-                    ct_var = p->as.list.items[0]->as.sym->name;
-                }
-                if (n_ct_param_preds < MAX_FN_ARITY) {
-                    ct_param_preds[n_ct_param_preds]     = p->as.list.items[3];
-                    ct_param_varnames[n_ct_param_preds]  = ct_var;
-                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
-                    n_ct_param_preds++;
-                }
-            }
             /* For F_TYPE_ANN, unwrap to the inner type form first */
             const Form *type_form = (p->tag == F_TYPE_ANN) ? p->as.list.items[0] : p;
             /* sized-types-cross-param-unification: record the raw type form so
@@ -1530,11 +1585,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
             Type *ann = fn_type_from_form(e, type_form,
                                           fn_type_params, fn_type_param_kinds, n_fn_type_params);
             if (!ann) return NULL;
-            /* CT0: For contract types, use base type for C-level representation */
+            /* CT0: a contract-typed parameter takes its BASE type at the C
+             * level, and its predicate becomes an entry check (CT1) plus --
+             * under `refined` -- a hypothesis for the return obligation (RT1).
+             *
+             * Collecting from the RESOLVED TYPE rather than from the raw Form
+             * is what makes all three spellings work uniformly: the bare
+             * brace form `[x {v : int | p}]`, the current `[x : #refine{...}]`
+             * (which the reader wraps in an F_TYPE_ANN -- the Form-shaped
+             * check missed this one entirely, so such a parameter silently got
+             * NO runtime check at all), and a NAMED refinement alias
+             * `[x : Nat]` declared with `deftype` (stdlib/refine.tur), which
+             * has no contract Form at the use site at all. */
             if (ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
                 TypeKind base_kind = ann->as.contract_.base_type->kind;
                 param_kinds[n_params - 1] = base_kind;
                 params[n_params - 1]->type = *ann->as.contract_.base_type;
+                if (ann->as.contract_.predicate && n_ct_param_preds < MAX_FN_ARITY) {
+                    ct_param_preds[n_ct_param_preds]     = ann->as.contract_.predicate;
+                    ct_param_varnames[n_ct_param_preds]  = ann->as.contract_.var_name;
+                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
+                    n_ct_param_preds++;
+                }
                 continue;
             }
             if (ann->kind == TY_FORALL) {
@@ -1985,6 +2057,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
     Type *return_tyvar_type = NULL; /* GS4: full TY_TYVAR return type for call-site substitution */
     Type *return_borrow_type = NULL; /* LS2: full borrow return type (&'a T) so lifetime IDs survive */
     const Form *return_type_form_kept = NULL; /* SZ8 non-GADT: retain raw return-type Form for size-index inference at call sites */
+    /* CT0/RT0: a contract RETURN type -- `: #refine{ r : T | p }`.  The
+     * declared return kind is the BASE type T (mirroring how a contract
+     * parameter annotation is handled); the predicate becomes a postcondition
+     * on the result, checked at runtime and -- under the `refined` experiment
+     * -- proved statically when a backend can, in which case no runtime check
+     * is emitted at all.  Before this, a contract return type left
+     * return_kind == TY_CONTRACT and every caller failed to type the call. */
+    const Form *ct_ret_pred = NULL;
+    const char *ct_ret_var  = NULL;
     uint32_t body_start = params_idx + 1;  /* params_idx = params vector */
 
     /* Phase 19: Parse optional effect-row annotation #{Read Write} or #{e} before return type.
@@ -2211,6 +2292,18 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_type_form_kept = ret_f->as.list.items[0];
                 Type *ann = fn_type_from_form(e, ret_f->as.list.items[0],
                                               fn_type_params, fn_type_param_kinds, n_fn_type_params);
+                /* CT0/RT0: peel a contract return type down to its base type.
+                 * Everything downstream (return_kind, the ADT/session/forall
+                 * capture below, codegen, call sites) then sees exactly the
+                 * type it would have seen without the refinement, and the
+                 * predicate rides along as a postcondition on the result.
+                 * Before this, a `: #refine{...}` return left return_kind ==
+                 * TY_CONTRACT and every call site failed to type the result. */
+                if (ann && ann->kind == TY_CONTRACT) {
+                    ct_ret_pred = ann->as.contract_.predicate;
+                    ct_ret_var  = ann->as.contract_.var_name;
+                    ann = ann->as.contract_.base_type;
+                }
                 if (ann) {
                     return_kind = ann->kind;
                     if (ann->kind == TY_TYVAR) {
@@ -2946,6 +3039,38 @@ Expr *elab_defn(Elab *e, const Form *call) {
         /* Phase C2: --no-contracts strips refinement-type ({ x : T | pred })
          * contract injection too, so the flag removes *all* contract checks. */
         if (g_no_contracts) should_check = false;
+
+        /* RT1: under the `refined` experiment, build the hypothesis
+         * environment (parameter refinements + `:pre`) once and decide the
+         * return-position obligations against it.  A proved obligation gets no
+         * runtime check emitted; an unproved one keeps exactly the check it
+         * would have had with contract types alone.
+         *
+         * NOTE (next slice): the CALLER-side crossing -- passing an argument
+         * into a contract-typed parameter -- is not collected yet, so a
+         * parameter's own entry check is never elided.  That keeps the current
+         * state sound: the callee still validates what it was handed. */
+        const Form *rt_subject = (call->as.list.len > body_start)
+                               ? call->as.list.items[call->as.list.len - 1] : NULL;
+        RefineEnv *rt_env = NULL;
+        bool rt_ret_proven  = false;
+        bool rt_post_proven = false;
+        if (g_opt_refined && (ct_ret_pred || ct_post_form)) {
+            rt_env = rt_build_env(e, params, n_params, ct_param_preds,
+                                  ct_param_varnames, ct_param_param_idx,
+                                  n_ct_param_preds, ct_pre_form);
+            if (ct_ret_pred)
+                rt_ret_proven = rt_return_obligation_proven(
+                    e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
+                    "return value", name_f->as.sym ? name_f->as.sym->name : NULL,
+                    call->span);
+            if (ct_post_form)
+                rt_post_proven = rt_return_obligation_proven(
+                    e, ct_post_form, "result", rt_subject, return_kind, rt_env,
+                    "postcondition", name_f->as.sym ? name_f->as.sym->name : NULL,
+                    call->span);
+        }
+
         if (should_check && body) {
             /* Look up tur-contract-check binding */
             Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
@@ -3047,23 +3172,37 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 }
             }
 
-            /* CT1: :post — wrap body as:
-             *   (let [result body] (tur-contract-check post_pred "Postcondition failed") result) */
-            if (ct_post_form && check_fn) {
-                /* Create 'result' binding for the return value */
-                Binding *result_b = binding_new(e, e->sym_result, body->type, false, false, call->span);
-                /* Elaborate post predicate with 'result' in scope */
+            /* CT1: :post and a contract RETURN type — wrap body as:
+             *   (let [<var> body] (tur-contract-check pred "...failed") <var>)
+             *
+             * `:post` binds the result as `result`; a `: #refine{ r : T | p }`
+             * return type binds it as the contract's own variable (`r`).  RT3:
+             * an obligation a backend proved emits NO check at all.
+             *
+             * Both can be present; the return contract wraps outermost. */
+            for (int ct_pass = 0; ct_pass < 2 && check_fn; ct_pass++) {
+                const Form *pred_form = ct_pass == 0 ? ct_post_form : ct_ret_pred;
+                if (!pred_form) continue;
+                if (ct_pass == 0 ? rt_post_proven : rt_ret_proven) continue;
+                const Symbol *bind_sym = e->sym_result;
+                if (ct_pass == 1 && ct_ret_var)
+                    bind_sym = symtab_intern(e->st,
+                                             strslice(ct_ret_var, (uint32_t)strlen(ct_ret_var)));
+                const char *fail_msg = ct_pass == 0 ? "Postcondition failed"
+                                                    : "Return contract violated";
+                /* Create the result binding for the return value */
+                Binding *result_b = binding_new(e, bind_sym, body->type, false, false, call->span);
+                /* Elaborate the predicate with the result name in scope */
                 scope_add(e->scope, result_b);
-                Expr *post_pred_e = elab_form(e, (Form *)ct_post_form);
-                /* Remove 'result' from scope (done via scope exit, but we patch manually) */
+                Expr *post_pred_e = elab_form(e, (Form *)pred_form);
                 /* Note: scope is already cleaned up below; we just need the expr */
                 if (post_pred_e) {
                     /* Build (tur-contract-check post_pred "Postcondition failed") */
                     Expr **post_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
                     post_args[0] = post_pred_e;
                     Expr *post_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                    post_msg->as.s.p = "Postcondition failed";
-                    post_msg->as.s.len = 20;
+                    post_msg->as.s.p = fail_msg;
+                    post_msg->as.s.len = (uint32_t)strlen(fail_msg);
                     post_args[1] = post_msg;
                     Expr *post_check = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
                     post_check->as.call_.fn_binding = check_fn;
@@ -4258,6 +4397,12 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (ret_f->as.list.len > 0) {
                 Type *ann = fn_type_from_form(e, ret_f->as.list.items[0],
                                               fn_type_params, fn_type_param_kinds, n_fn_type_params);
+                /* CT0: a contract return type on a lambda contributes its base
+                 * type; the predicate is a `defn`-level construct (there is no
+                 * postcondition injection point for an anonymous fn), so it is
+                 * peeled and dropped rather than left to break the result kind. */
+                if (ann && ann->kind == TY_CONTRACT && ann->as.contract_.base_type)
+                    ann = ann->as.contract_.base_type;
                 if (ann) {
                     return_kind = ann->kind;
                     if (ann->kind == TY_TYVAR || fn_type_has_named_tyvar(ann)) {

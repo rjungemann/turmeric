@@ -238,6 +238,14 @@ const char *diag_code_to_string(DiagCode code) {
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
+        /* RT3: refinement-type discharge */
+        case TUR_E0370_REFINE_ILL_TYPED:          return "TUR-E0370";
+        case TUR_E0371_REFINE_NOT_PROVED:         return "TUR-E0371";
+        case TUR_W0372_REFINE_UNKNOWN:            return "TUR-W0372";
+        case TUR_W0373_REFINE_NONLINEAR:          return "TUR-W0373";
+        case TUR_E0375_REFINE_EFFECTFUL:          return "TUR-E0375";
+        case TUR_E0376_REFINE_TYPE_PARAM:         return "TUR-E0376";
+        case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
         case TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER: return "TUR-E0501";
@@ -376,6 +384,14 @@ DiagCode diag_code_from_string(const char *s) {
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
+    /* RT3: refinement-type discharge */
+    if (strcmp(s, "TUR-E0370") == 0) return TUR_E0370_REFINE_ILL_TYPED;
+    if (strcmp(s, "TUR-E0371") == 0) return TUR_E0371_REFINE_NOT_PROVED;
+    if (strcmp(s, "TUR-W0372") == 0) return TUR_W0372_REFINE_UNKNOWN;
+    if (strcmp(s, "TUR-W0373") == 0) return TUR_W0373_REFINE_NONLINEAR;
+    if (strcmp(s, "TUR-E0375") == 0) return TUR_E0375_REFINE_EFFECTFUL;
+    if (strcmp(s, "TUR-E0376") == 0) return TUR_E0376_REFINE_TYPE_PARAM;
+    if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
     if (strcmp(s, "TUR-E0501") == 0) return TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER;
@@ -1306,6 +1322,64 @@ static const DiagExplanation diag_explanations_[] = {
       "widen the intersection to include the actual type.\n"
       "\n"
       "Enable with: turc -Xintersection-types myfile.tur\n",
+    },
+    /* RT3: refinement-type discharge explanations */
+    { TUR_E0371_REFINE_NOT_PROVED,
+      "TUR-E0371: Refinement predicate cannot be proved statically\n"
+      "\n"
+      "Under the `refined` experiment the compiler tries to PROVE each\n"
+      "#refine{...} predicate instead of only checking it at runtime.  This\n"
+      "obligation was not just undecided -- a backend found a counterexample,\n"
+      "so the predicate genuinely does not hold for every input.\n"
+      "\n"
+      "Example:\n"
+      "  (defn wrong [x : int] : #refine{ r : int | (> r 0) }\n"
+      "    x)          ; x may be 0 or negative\n"
+      "\n"
+      "Fix by constraining the input so the result follows:\n"
+      "  (defn ok [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }\n"
+      "    x)\n"
+      "\n"
+      "The runtime contract check is still emitted, so the program remains\n"
+      "safe; --strict-refine turns this into a hard failure instead.\n"
+      "\n"
+      "Enable with: tur build --enable=refined myfile.tur\n",
+    },
+    { TUR_W0372_REFINE_UNKNOWN,
+      "TUR-W0372: Solver returned unknown for a refinement predicate\n"
+      "\n"
+      "No stage of the in-house decision procedure could decide this\n"
+      "obligation, so the runtime contract check is kept -- exactly the\n"
+      "behavior you would get with contract types alone.  This is a sound\n"
+      "outcome, not a miscompile.\n"
+      "\n"
+      "Common causes:\n"
+      "  - the predicate or the expression it constrains falls outside the\n"
+      "    supported fragment (quantifier-free linear integer/real arithmetic\n"
+      "    with equality and uninterpreted functions);\n"
+      "  - a nonlinear subterm was abstracted away (see TUR-W0373);\n"
+      "  - the propositional structure exceeded the small-DNF cap.\n"
+      "\n"
+      "Adding an explicit refinement to a parameter usually supplies the\n"
+      "missing hypothesis.  --strict-refine turns this into a hard error for\n"
+      "builds that want every obligation discharged statically.\n",
+    },
+    { TUR_W0373_REFINE_NONLINEAR,
+      "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
+      "\n"
+      "Multiplication or division of two variables (`(* x y)`, `(/ x y)`) is\n"
+      "outside the linear fragment the refinement solver decides.  Such a term\n"
+      "is abstracted to an opaque function symbol: congruence closure still\n"
+      "relates two occurrences of the same product, but no arithmetic facts\n"
+      "about it are available, so proofs that depend on them will come back\n"
+      "unknown (TUR-W0372) and fall back to the runtime check.\n"
+      "\n"
+      "This is deliberate.  Turmeric does not climb the nonlinear wall; a\n"
+      "genuinely nonlinear obligation gets a runtime check instead.\n"
+      "\n"
+      "Multiplication by a LITERAL stays linear and is fully decided:\n"
+      "  (* x 2)   ; linear -- decided\n"
+      "  (* x y)   ; nonlinear -- uninterpreted\n",
     },
     { TUR_E0151_RELEVANT_DROPPED,
       "TUR-E0151: Relevant value dropped without being used\n"

@@ -1,0 +1,17 @@
+;; RT3/S2: a float refinement discharged over the rationals (QF_UFLRA).
+;;
+;; Hypothesis: x >= 0.0.  Goal: x * 0.5 >= 0.0.  Multiplication by a LITERAL
+;; stays linear, so Fourier-Motzkin decides it exactly -- no runtime check.
+;; Note the deliberate non-zero fractional literals: an integral 1.0/2.0 test
+;; could not tell a truncating path from a correct one.
+(defn shrink [x : #refine{ v : float | (>= v 0.0) }] : #refine{ r : float | (>= r 0.0) }
+  (* x 0.25))
+
+(defn lift [x : #refine{ v : float | (>= v 0.0) }] : #refine{ r : float | (> r 0.0) }
+  (+ x 7.1))
+
+(defn main [] : int
+  (println (shrink 8.4))
+  (println (lift 0.0))
+  (println "refine-float-lra")
+  0)

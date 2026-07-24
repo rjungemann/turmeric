@@ -1,0 +1,20 @@
+;; RT3/S1+S3: a NAMED MEASURE is an uninterpreted function.  `size-of` is
+;; never unfolded by the solver -- congruence closure reasons about it as an
+;; opaque symbol, which is the language rule that keeps the fragment cheap.
+;;
+;; Hypotheses: size-of(v) = n, 0 <= i, i < n.
+;; Goal:       i < size-of(v).
+;; Neither arithmetic nor equality alone gets there: LA cannot see that
+;; `size-of(v)` and `n` denote the same value, and EUF cannot do the ordering.
+;; The combination does.
+(defn size-of [v : int] : int
+  (* v 2))
+
+(defn index-ok [v : int, n : int, i : int] : #refine{ r : int | (< r (size-of v)) }
+  :pre (and (= (size-of v) n) (>= i 0) (< i n))
+  i)
+
+(defn main [] : int
+  (println (index-ok 4 8 3))
+  (println "refine-measure-euf")
+  0)

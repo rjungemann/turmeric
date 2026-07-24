@@ -1,6 +1,93 @@
 # Refinement Types -- Prototype Plan (RT0--RT7 + in-house solver S0--S4)
 
-> **Status:** Not started. RT0 syntax/storage is largely covered by the
+> ## Landed so far (2026-07-24)
+>
+> **RT0--RT3 and S0--S3 are implemented and on `main`'s feature branch**, gated
+> behind `--enable=refined` / `#lang turmeric refined`. RT5b (`stdlib/refine.tur`)
+> landed with them. The user-facing write-up is
+> [docs/guides/refinement-types-guide.md](../../guides/refinement-types-guide.md).
+>
+> | Phase | State | Where |
+> |---|---|---|
+> | RT0 gate + discharge bit + pipeline hook | done | `experiments.c`, `lang_layers.c`, `elab_fns.c`, `elab_toplevel.c` |
+> | RT1 constraint collector + env | done | `refine_collect.{c,h}` |
+> | RT2 normalized VC + seam + SMT-LIB | done | `refine_vc.{c,h}`, `refine_smtlib.{c,h}` |
+> | RT3 discharge chain + diagnostics | done | `refine_discharge.{c,h}` |
+> | RT3 Z3 scaffold (dev-only) | done, unexercised | `refine_libz3.c`, `TUR_REFINE_Z3_ORACLE` |
+> | S0 trivial | done | `refine_solver_s0.c` |
+> | S1 congruence closure (EUF) | done | `refine_solver_euf.c` |
+> | S2 linear arithmetic | done (Fourier-Motzkin, not simplex -- see below) | `refine_solver_arith.c` |
+> | S3 Nelson-Oppen | done (convex exchange; no integer case-split) | `refine_solver_no.c` |
+> | S4 boolean structure | done (small-DNF cube expansion) | `refine_solver.c` |
+> | RT5b stdlib refinement aliases | done | `stdlib/refine.tur` |
+> | RT4 propagation, RT5a WASM confirm, RT6 hints, RT7 caching | not started | -- |
+>
+> ### Deliberate deviations from the plan as written
+>
+> - **S2 is Fourier-Motzkin over exact rationals, not S2a-Bellman-Ford-then-
+>   S2b-simplex.** FM is a strict superset of difference logic (so the S2a
+>   coverage target -- `0 <= i`, `i < len`, `i + 1 <= n` -- is met), decides
+>   conjunctions of linear constraints outright over the rationals, and is a few
+>   hundred lines rather than the multi-week incremental-simplex investment. Its
+>   weakness is combinatorial blow-up, which the `Unknown` escape hatch absorbs:
+>   `REFINE_MAX_LA_CONSTR` bounds growth and a cap hit degrades to a runtime
+>   check. Integer strict constraints are tightened (`e < 0` => `e <= -1`), which
+>   is what discharges `x > 0 |= 2x > 0`. If profiling ever shows the cap biting
+>   on real obligations, the Dutertre--de Moura simplex slots in behind the same
+>   `la_*` interface with no change above it.
+> - **S4 is not a separate stage.** The small-DNF cube expansion the plan
+>   assigns to S4 is shared machinery in `refine_solver.c` that S1/S2/S3 all run
+>   over, because every theory stage needs conjunctions of literals to work on.
+>   The cap-to-`Unknown` behavior is as specified; no DPLL(T) engine exists or
+>   is planned.
+> - **`RT_INVALID` comes from a bounded counterexample search**, not from a
+>   theory solver. The proving stages only ever answer Valid or Unknown -- they
+>   refute the negated goal, and failing to refute proves nothing. So after the
+>   chain comes back Unknown, `refine_model_search` enumerates a small candidate
+>   assignment space and *evaluates* `hyps AND (not goal)` exactly; a satisfying
+>   assignment is a genuine witness, which is what makes `TUR-E0371` an
+>   actionable error with a model rather than a guess. It declines VCs containing
+>   uninterpreted symbols (a measure has no fixed interpretation to evaluate).
+> - **The `refined` experiment's `introduced`/`expires_at` are `0.31.0` /
+>   `0.34.0`** (VERSION was 0.30.8 at landing).
+>
+> ### Bugs found and fixed on the way (all pre-existing, all in the CT layer)
+>
+> 1. **A `#refine{...}` parameter got no runtime check at all.** `[x : #refine{...}]`
+>    reaches the elaborator wrapped in an `F_TYPE_ANN` (the `:` separator), and
+>    the CT1 predicate collector only unwrapped a bare `F_CONTRACT_TYPE` -- the
+>    spelling the migration away from bare braces left behind. The predicate was
+>    silently dropped. Now collected from the RESOLVED TYPE instead of the Form,
+>    which fixes all three spellings at once (bare brace, `: #refine{...}`, and a
+>    named alias, which has no contract Form at the use site).
+> 2. **A contract RETURN type did not compile.** `: #refine{ r : int | p }` left
+>    `return_kind == TY_CONTRACT`, so every call site failed to type the result
+>    (`got { _ : ? | ... }`). Now peeled to the base type, with the predicate
+>    riding along as a postcondition.
+> 3. **A refinement predicate's free names were mistaken for implicit type
+>    parameters.** `form_mentions_type_param` walked the whole `F_CONTRACT_TYPE`
+>    including the predicate, so `[v : int, n : int]` with a `(len v)` refinement
+>    lost both parameters to type-variable inference and then failed to parse
+>    their annotations. It now descends only into the base-type slot.
+> 4. **`deftype` of a contract body produced a `TY_REC`**, making every use site
+>    fail with `expected <rec>, got int`. A contract body now binds the name
+>    directly to the contract type -- which is what makes `stdlib/refine.tur`
+>    possible at all.
+>
+> ### Next slice
+>
+> **Call-site crossings (RT1's first table row).** Passing an argument into a
+> contract-typed parameter is the one crossing the collector does not visit yet,
+> because the callee's per-parameter predicates are not stored on the `FnDef`.
+> Until they are, a parameter's entry check is never elided (the callee still
+> validates what it was handed -- sound, just not yet optimal) and
+> `(safe-div 10 0)` is not a compile error. This is the highest-value remaining
+> item and it unlocks the plan's `safe-div` acceptance criterion.
+>
+> ---
+
+> **Status:** RT0--RT3 + S0--S3 + RT5b landed (see "Landed so far" above);
+> RT4/RT5a/RT6/RT7 not started. RT0 syntax/storage is largely covered by the
 > existing Contract Types (CT0--CT4) infrastructure; the `#refine{var : T | p}`
 > reader is already shipped. The remaining work is the constraint-generation
 > and discharge pipeline (RT1--RT4), a stdlib layer of predicate-annotated
@@ -20,7 +107,7 @@
 > `-Xrefinements` flag; the retired `-X` surface does not come back for this.
 > See "Gating" below.
 >
-> **Last updated:** 2026-07-23
+> **Last updated:** 2026-07-24
 
 ---
 

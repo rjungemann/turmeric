@@ -1,0 +1,97 @@
+;;; tur/refine -- named refinement types (predicate-annotated aliases).
+;;;
+;;; Each alias below is a `deftype` bound to a contract type
+;;; `#refine{ x : T | p }`.  A parameter declared with one takes the BASE
+;;; type at the C level, gets `p` as a runtime contract check on entry, and --
+;;; under the `refined` experiment (`--enable=refined`, or `#lang turmeric
+;;; refined` for a single file) -- contributes `p` as a HYPOTHESIS the static
+;;; discharger may use to prove the function's return refinement, in which
+;;; case no runtime check is emitted for that return at all.
+;;;
+;;; With `refined` off these behave exactly as contract types always have:
+;;; the predicates parse and stay runtime-only.  Nothing here requires the
+;;; experiment.
+;;;
+;;; Example:
+;;;   (import refine)
+;;;   (defn double-pos [x : Pos] : #refine{ r : int | (> r 0) }
+;;;     (* x 2))          ; return refinement proved statically; no check emitted
+;;;
+;;; See docs/guides/refinement-types-guide.md.
+;;;
+;;; Since: v1 (RT5b)
+;; Named refinement aliases
+
+;;; Nat -- a non-negative integer (>= 0).
+;;;
+;;; Example:
+;;;   (defn len-of [n : Nat] : int n)   ; => callers must pass n >= 0
+;;;
+;;; Since: v1
+(deftype Nat #refine{ x : int | (>= x 0) })
+
+;;; Pos -- a strictly positive integer (> 0).
+;;;
+;;; Example:
+;;;   (defn halve [n : Pos] : int (/ n 2))
+;;;
+;;; Since: v1
+(deftype Pos #refine{ x : int | (> x 0) })
+
+;;; NonZero -- an integer that is not zero.  The canonical divisor type: a
+;;; `(/ n d)` with `d : NonZero` can never divide by zero.
+;;;
+;;; Example:
+;;;   (defn safe-div [n : int, d : NonZero] : int (/ n d))
+;;;
+;;; Since: v1
+(deftype NonZero #refine{ x : int | (not= x 0) })
+
+;;; Neg -- a strictly negative integer (< 0).
+;;;
+;;; Example:
+;;;   (defn abs-of-neg [n : Neg] : int (- 0 n))
+;;;
+;;; Since: v1
+(deftype Neg #refine{ x : int | (< x 0) })
+
+;;; Byte -- an integer in [0, 255].
+;;;
+;;; Example:
+;;;   (defn write-byte [b : Byte] : int b)
+;;;
+;;; Since: v1
+(deftype Byte #refine{ x : int | (and (>= x 0) (<= x 255)) })
+
+;;; Percent -- an integer in [0, 100].
+;;;
+;;; Example:
+;;;   (defn scale [p : Percent] : int (/ (* p 255) 100))
+;;;
+;;; Since: v1
+(deftype Percent #refine{ x : int | (and (>= x 0) (<= x 100)) })
+
+;;; NonNegFloat -- a non-negative float (>= 0.0).  The domain of `sqrt`.
+;;;
+;;; Example:
+;;;   (defn root [x : NonNegFloat] : float (sqrt x))
+;;;
+;;; Since: v1
+(deftype NonNegFloat #refine{ x : float | (>= x 0.0) })
+
+;;; PosFloat -- a strictly positive float (> 0.0).
+;;;
+;;; Example:
+;;;   (defn recip [x : PosFloat] : float (/ 1.0 x))
+;;;
+;;; Since: v1
+(deftype PosFloat #refine{ x : float | (> x 0.0) })
+
+;;; UnitFloat -- a float in [0.0, 1.0]; the usual interpolation parameter.
+;;;
+;;; Example:
+;;;   (defn lerp [a : float, b : float, t : UnitFloat] : float
+;;;     (+ a (* (- b a) t)))
+;;;
+;;; Since: v1
+(deftype UnitFloat #refine{ x : float | (and (>= x 0.0) (<= x 1.0)) })

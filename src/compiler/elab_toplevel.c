@@ -2,6 +2,7 @@
 #include "elab_internal.h"
 #include "platform_fs.h"  /* realpath() on Windows */
 #include "globals.h"      /* g_opt_cps_tramp_resume (top-level-main synthesis gate) */
+#include "refine_discharge.h" /* RT3: final refinement discharge + stats */
 
 Expr *elab_as_cast(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
@@ -2078,6 +2079,17 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
                 mn->name, mn->name, tc->name->name, mn->name, mn->name);
         }
     }
+
+    /* RT3 (refinement-types-plan): decide any obligation the elaborator did
+     * not already resolve in place, and print the per-compile summary when
+     * TUR_REFINE_STATS=1.  A no-op when `refined` is off (nothing collected).
+     *
+     * Runs BEFORE the session branch below: the obligations were collected
+     * during this elaboration and have to be decided either way.  Handing the
+     * session back to the caller is not a reason to leave them undischarged --
+     * that would silently skip static checking for every session-based
+     * elaboration. */
+    if (g_opt_refined) refine_discharge_all(&e.refine_obs, arena);
 
     if (sess) {
         /* TR2: the accumulated state IS the session -- hand it back instead of

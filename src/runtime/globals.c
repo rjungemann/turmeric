@@ -243,6 +243,19 @@ bool g_opt_cycle_gc = false;
  * unconditional; the enable bit and its codegen gates are gone.  See
  * docs/upcoming/closure-drop-glue-plan.md. */
 
+/* RT0 (refinement-types-plan): the `refined` experiment's enable bit.  Read by
+ * elab_fns.c (obligation collection + runtime-check elision) and by the
+ * discharge pass.  Off by default -- refinement checking is an in-flight
+ * prototype and ships behind --enable=refined / `#lang turmeric refined`. */
+bool g_opt_refined = false;
+
+/* --strict-refine: hard-fail on any obligation the chain could not prove. */
+bool g_strict_refine = false;
+
+/* lang-layers L4: set when a project manifest declared an `:experiments` key.
+ * See globals.h. */
+bool g_manifest_experiments_scoped = false;
+
 
 /* ---------------------------------------------------------------------------
  * Interpreter-native return-type signature registry (see globals.h).
