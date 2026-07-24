@@ -49,6 +49,90 @@ static VCSort rt_sort_of_kind(TypeKind k) {
     }
 }
 
+/* CT1: inject a contract entry check for each `{ v : T | pred }` parameter:
+ *
+ *     (tur-contract-check (let [v <param>] pred) "Contract violated")
+ *
+ * Shared by `defn` and `fn` so a lambda's contract parameters behave exactly
+ * like a defn's rather than being silently decorative.  Returns the new body
+ * (the original when nothing was injected).  Must run while the function's
+ * inner scope is still current -- the predicate is elaborated in it. */
+static Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
+                                    Binding **params, uint32_t n_params,
+                                    const Form **ct_preds, const char **ct_vars,
+                                    const uint32_t *ct_idx, uint32_t n_ct,
+                                    Span span) {
+    if (!check_fn || !body) return body;
+    for (uint32_t ci = 0; ci < n_ct; ci++) {
+        if (ct_preds[ci] == NULL) continue;
+        uint32_t pi = ct_idx[ci];
+        if (pi >= n_params || !params[pi]) continue;
+        const char *var_nm = ct_vars[ci];
+
+        /* Bind the contract's own variable name as an alias for the parameter,
+         * unless it already IS the parameter's name. */
+        Binding *cv_b = NULL;
+        if (var_nm) {
+            StrSlice vnsl = strslice(var_nm, (uint32_t)strlen(var_nm));
+            const Symbol *cv_sym = symtab_intern(e->st, vnsl);
+            Binding *existing_cv = scope_lookup(e->scope, cv_sym);
+            if (!existing_cv || existing_cv != params[pi]) {
+                cv_b = binding_new(e, cv_sym, params[pi]->type, false, false, span);
+                scope_add(e->scope, cv_b);
+            }
+        }
+        Expr *pred_e = elab_form(e, (Form *)ct_preds[ci]);
+        if (!pred_e) continue;
+
+        Expr *check_expr = pred_e;
+        if (cv_b) {
+            Expr *param_var_e = expr_new(e->arena, EX_VAR, params[pi]->type, span);
+            param_var_e->as.var.binding = params[pi];
+            LetBinding *cv_lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+            cv_lb->binding = cv_b;
+            cv_lb->init = param_var_e;
+            Expr *let_cv = expr_new(e->arena, EX_LET, pred_e->type, span);
+            let_cv->as.let_.bindings = cv_lb;
+            let_cv->as.let_.n = 1;
+            let_cv->as.let_.body = pred_e;
+            check_expr = let_cv;
+        }
+
+        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        ck_args[0] = check_expr;
+        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+        ck_msg->as.s.p = "Contract violated";
+        ck_msg->as.s.len = 17;
+        ck_args[1] = ck_msg;
+        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+        ck_call->as.call_.fn_binding  = check_fn;
+        ck_call->as.call_.args        = ck_args;
+        ck_call->as.call_.n_args      = 2;
+        ck_call->as.call_.fn_expr     = NULL;
+        ck_call->as.call_.dict_arg    = NULL;
+        ck_call->as.call_.is_poly_call = false;
+        ck_call->as.call_.poly_arg_mask = 0;
+
+        Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        do2[0] = ck_call;
+        do2[1] = body;
+        Expr *new_b = expr_new(e->arena, EX_DO, body->type, span);
+        new_b->as.do_.items = do2;
+        new_b->as.do_.n = 2;
+        body = new_b;
+    }
+    return body;
+}
+
+/* True when contract checks are being emitted for this build.  `--no-contracts`
+ * strips them, and a release build drops them unless --keep-contracts. */
+static bool rt_contracts_emitted(void) {
+#ifdef NDEBUG
+    if (!g_keep_contracts_in_release) return false;
+#endif
+    return !g_no_contracts;
+}
+
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
  * global scope; refine_collect.c reaches it through a function pointer so it
@@ -3350,71 +3434,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
             /* Look up tur-contract-check binding */
             Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
 
-            /* CT1: Param contract type predicates — inject as pre-checks.
-             * For each { v : T | pred } param annotation, inject:
-             *   (tur-contract-check (let [v param] pred) "Contract violated") */
-            if (check_fn) {
-                for (uint8_t ct_pi = 0; ct_pi < n_ct_param_preds; ct_pi++) {
-                    if (ct_param_preds[ct_pi] == NULL) continue;
-                    const char *var_nm = ct_param_varnames[ct_pi];
-                    const Form *pred_f = ct_param_preds[ct_pi];
-                    uint8_t pi = ct_param_param_idx[ct_pi];
-                    /* Add contract var binding (alias for param) */
-                    Binding *cv_b = NULL;
-                    if (var_nm) {
-                        StrSlice vnsl = strslice(var_nm, (uint32_t)strlen(var_nm));
-                        const Symbol *cv_sym = symtab_intern(e->st, vnsl);
-                        /* Only add if different from param name */
-                        Binding *existing_cv = scope_lookup(e->scope, cv_sym);
-                        if (!existing_cv || existing_cv != params[pi]) {
-                            cv_b = binding_new(e, cv_sym, params[pi]->type, false, false, call->span);
-                            /* Make cv_b reference same value as param by sharing the binding.
-                             * We create a var expr below to read params[pi]. */
-                            scope_add(e->scope, cv_b);
-                        }
-                    }
-                    Expr *pred_e = elab_form(e, (Form *)pred_f);
-                    if (pred_e) {
-                        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                        /* If cv_b was added, wrap in let: (let [v param] pred) */
-                        Expr *check_expr = pred_e;
-                        if (cv_b) {
-                            /* Build: let [cv_b = param_var] in pred_e */
-                            Expr *param_var_e = expr_new(e->arena, EX_VAR, params[pi]->type, call->span);
-                            param_var_e->as.var.binding = params[pi];
-                            LetBinding *cv_lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
-                            cv_lb->binding = cv_b;
-                            cv_lb->init = param_var_e;
-                            Expr *let_cv = expr_new(e->arena, EX_LET, pred_e->type, call->span);
-                            let_cv->as.let_.bindings = cv_lb;
-                            let_cv->as.let_.n = 1;
-                            let_cv->as.let_.body = pred_e;
-                            check_expr = let_cv;
-                        }
-                        ck_args[0] = check_expr;
-                        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                        ck_msg->as.s.p = "Contract violated";
-                        ck_msg->as.s.len = 17;
-                        ck_args[1] = ck_msg;
-                        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                        ck_call->as.call_.fn_binding = check_fn;
-                        ck_call->as.call_.args = ck_args;
-                        ck_call->as.call_.n_args = 2;
-                        ck_call->as.call_.fn_expr = NULL;
-                        ck_call->as.call_.dict_arg = NULL;
-                        ck_call->as.call_.is_poly_call = false;
-                        ck_call->as.call_.poly_arg_mask = 0;
-                        /* Prepend to body */
-                        Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                        do2[0] = ck_call;
-                        do2[1] = body;
-                        Expr *new_b = expr_new(e->arena, EX_DO, body->type, call->span);
-                        new_b->as.do_.items = do2;
-                        new_b->as.do_.n = 2;
-                        body = new_b;
-                    }
-                }
-            }
+            /* CT1: parameter contract predicates -- entry checks.  Shared
+             * with `fn` so a lambda's contract parameters behave identically. */
+            body = rt_inject_param_checks(e, body, check_fn, params, n_params,
+                                          ct_param_preds, ct_param_varnames,
+                                          ct_param_param_idx, n_ct_param_preds,
+                                          call->span);
 
             /* CT1: :pre — prepend (tur-contract-check pre_pred "Precondition failed") */
             if (ct_pre_form && check_fn) {
@@ -3997,6 +4022,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
         }
     }
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+
     /* closure-drop-glue S1c (fresh-closure-returning fn): a fn whose body is a
      * bare capturing EX_CLOSURE constructs a FRESH, uniquely-owned heap env on
      * every call and returns it.  When such a call result is consumed by a
@@ -4262,6 +4288,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* CT0/CT1: contract-typed parameters of this lambda, collected during
+     * parameter parsing and injected as entry checks once the body exists. */
+    const Form *ct_param_preds[MAX_FN_ARITY];
+    const char *ct_param_varnames[MAX_FN_ARITY];
+    uint32_t    ct_param_param_idx[MAX_FN_ARITY];
+    uint32_t    n_ct_param_preds = 0;
+
     /* Edge 1: snapshot and clear the active letrec self-exclude group at entry.
      * This `fn` IS the letrec init's top-level lambda iff elab_letrec set the
      * group right before calling us; a direct self/mutual call in our own body
@@ -4429,7 +4462,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
             params[n_params++] = rest_b;
             break;
         }
-        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN || p->tag == F_LIST || p->tag == F_VEC) {
+        if (p->tag == F_KEYWORD || p->tag == F_TYPE_ANN || p->tag == F_LIST ||
+            p->tag == F_VEC || p->tag == F_CONTRACT_TYPE) {
             if (n_params == 0) {
                 diag_emit(DIAG_ERROR, p->span,
                           "fn: type annotation without preceding parameter");
@@ -4439,6 +4473,20 @@ Expr *elab_fn(Elab *e, const Form *call) {
             Type *ann = fn_type_from_form(e, type_form,
                                           fn_type_params, fn_type_param_kinds, n_fn_type_params);
             if (!ann) return NULL;
+            /* CT0: a contract-typed lambda parameter takes its BASE type, and
+             * its predicate becomes an entry check -- exactly as for a `defn`.
+             * Without the peel the parameter's type stayed TY_CONTRACT and
+             * every call site failed with `expected { _ : ? | ... }, got int`,
+             * so `#refine` on a lambda parameter did not compile at all. */
+            if (ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
+                if (ann->as.contract_.predicate && n_ct_param_preds < MAX_FN_ARITY) {
+                    ct_param_preds[n_ct_param_preds]     = ann->as.contract_.predicate;
+                    ct_param_varnames[n_ct_param_preds]  = ann->as.contract_.var_name;
+                    ct_param_param_idx[n_ct_param_preds] = n_params - 1;
+                    n_ct_param_preds++;
+                }
+                ann = ann->as.contract_.base_type;
+            }
             param_kinds[n_params - 1] = ann->kind;
             params[n_params - 1]->type = *ann;
             /* Record the full type whenever the annotation carries information
@@ -4855,6 +4903,17 @@ Expr *elab_fn(Elab *e, const Form *call) {
         }
     }
 
+    /* CT1: inject this lambda's parameter contract checks.  Done BEFORE capture
+     * analysis so the final body is what gets scanned, and while the inner
+     * scope is still current so the predicate can be elaborated in it. */
+    if (n_ct_param_preds > 0 && body && rt_contracts_emitted()) {
+        Binding *ct_check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+        body = rt_inject_param_checks(e, body, ct_check_fn, params, n_params,
+                                      ct_param_preds, ct_param_varnames,
+                                      ct_param_param_idx, n_ct_param_preds,
+                                      call->span);
+    }
+
     /* Phase 3: Capture analysis - collect free variables in the body */
     /* We need to do this before popping the scope */
     uint32_t n_captures = 0;
@@ -5014,6 +5073,31 @@ Expr *elab_fn(Elab *e, const Form *call) {
      * __fn_N (whose C signature returns the int64 carrier, not a fn pointer). */
     b->is_lifted_lambda = true;
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
+
+    /* RT1: publish this lambda's contract parameters on its lifted thunk
+     * binding.  A `let` bound to the lambda copies them across (elab_forms.c),
+     * which is what lets `(let [f (fn [x : Pos] ...)] (f 0))` be checked at the
+     * call the way a call to a named function is. */
+    if (g_opt_refined && n_ct_param_preds > 0 && n_params > 0) {
+        const Form **rp = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
+        const char **rv = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        const char **rn = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        for (uint32_t _pi = 0; _pi < n_params; _pi++) {
+            rp[_pi] = NULL;
+            rv[_pi] = NULL;
+            rn[_pi] = (params[_pi] && params[_pi]->name) ? params[_pi]->name->name : NULL;
+        }
+        for (uint32_t _ci = 0; _ci < n_ct_param_preds; _ci++) {
+            uint32_t _pi = ct_param_param_idx[_ci];
+            if (_pi >= n_params) continue;
+            rp[_pi] = ct_param_preds[_ci];
+            rv[_pi] = ct_param_varnames[_ci];
+        }
+        b->refine_param_preds = rp;
+        b->refine_param_vars  = rv;
+        b->refine_param_names = rn;
+        b->n_refine_params    = n_params;
+    }
     b->closure_return_dispatches = expr_closure_return_dispatches(body);
     b->closure_return_dispatches_untyped = expr_closure_return_dispatches_untyped(body);
     /* let-bound-sf-loses-outer-arg-type: see the defn path -- record whether the

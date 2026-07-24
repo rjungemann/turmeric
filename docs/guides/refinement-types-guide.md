@@ -131,6 +131,29 @@ site is proved. Eliding it would need whole-program knowledge of the call graph
 that was protecting something. The call-site layer is a diagnostic on top of
 that guard, not a licence to remove it.
 
+### Indirect callees
+
+A call does not have to name a global function to be checked. Two shapes carry
+their parameter refinements to the call site:
+
+```turmeric
+;; a lambda with contract parameters
+(let [f (fn [x : #refine{ v : int | (> v 0) }] : int (* x 2))]
+  (f 21))     ; proved
+  ;; (f 0)   -- error[TUR-E0371]
+
+;; an alias of a global function
+(let [g safe-div]
+  (g 10 0))   ; error[TUR-E0371] -- the alias resolves to safe-div
+```
+
+A lambda's contract parameter gets an entry check exactly like a `defn`'s, and
+a captured value's own refinement is in scope as a hypothesis inside the
+lambda body.
+
+What is *not* checked is a genuinely higher-order callee -- see
+[Limits](#limits).
+
 ### Results carry their refinements
 
 A call is an opaque term to the solver -- but when the callee has a return
@@ -396,9 +419,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.
-- **Only direct calls to named functions are checked.** A call through a
-  closure, a function-typed parameter, or a typeclass method does not carry the
-  callee's predicates to the call site.
+- **Higher-order callees are not checked.** A function-typed parameter carries
+  no refinements in its type, so `(defn apply2 [f : (fn [int int] int) ...])`
+  cannot know what `f`'s arguments must satisfy, and neither can a call to
+  `apply2`. Passing a refined function as a value is legal and the callee's own
+  entry checks still run -- only the static crossing is lost. Refinements in
+  function *types* are outside the prototype.
+- **Typeclass method calls are not checked.** A method's per-instance
+  parameter refinements are not carried to the dispatch site.
 - **Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,
   so they always see every callee's refinement. A function's own return

@@ -1,0 +1,39 @@
+;; Indirect calls: which callee shapes carry their parameter refinements to the
+;; call site, and which cannot.
+;;
+;; 1. A LAMBDA with contract parameters.  This did not compile at all before --
+;;    `elab_fn` never peeled the contract to its base type, so the parameter's
+;;    type stayed TY_CONTRACT and every call failed with
+;;    `expected { _ : ? | ... }, got int`.  A `#refine` on a lambda parameter
+;;    now behaves exactly like one on a `defn` parameter: entry check included,
+;;    and checkable at the call site.
+;;
+;; 2. An ALIAS of a global function.  Already worked -- elab_call folds a
+;;    let-bound alias of a global to the global before the refinement hook
+;;    runs, so the crossing is recorded against the real callee.
+;;
+;; 3. A CAPTURING lambda -- the captured value's own refinement is in scope as
+;;    a hypothesis, so `(f k)` is provable from `k : Pos`.
+(load "stdlib/refine.tur")
+
+(defn safe-div [n : int, d : NonZero] : int
+  (/ n d))
+
+(defn via-lambda [] : int
+  (let [f (fn [x : #refine{ v : int | (> v 0) }] : int (* x 2))]
+    (f 21)))
+
+(defn via-alias [] : int
+  (let [g safe-div]
+    (g 10 2)))
+
+(defn via-capture [k : Pos] : int
+  (let [f (fn [x : #refine{ v : int | (> v 0) }] : int (+ x k))]
+    (f k)))
+
+(defn main [] : int
+  (println (via-lambda))
+  (println (via-alias))
+  (println (via-capture 5))
+  (println "refine-indirect-calls")
+  0)

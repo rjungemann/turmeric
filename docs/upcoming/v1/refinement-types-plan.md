@@ -190,13 +190,48 @@
 > fixtures plus tightened assertions on the existing closed-value, unknown, and
 > nonlinear fixtures.
 >
+> ### Indirect calls (investigated + partly landed 2026-07-24)
+>
+> Three shapes, three different answers:
+>
+> - **Alias of a global** (`(let [g safe-div] (g 10 0))`) -- already worked.
+>   `elab_call` folds a let-bound alias of a global to the global before the
+>   refinement hook runs, so the crossing lands on the real callee. Pinned by a
+>   fixture now.
+> - **Lambda with contract parameters** -- was a HARD COMPILE ERROR, not a
+>   missing feature. `elab_fn` never peeled `TY_CONTRACT` to its base type (the
+>   same hole the contract *return* type had), so the parameter's type stayed
+>   the contract type and every call failed with `expected { _ : ? | ... }, got
+>   int`. `#refine` on a lambda parameter did not compile at all. Now peeled,
+>   given a CT1 entry check, and checkable at the call site.
+> - **Function-typed parameter** -- genuinely higher-order. Nothing is checked
+>   and nothing can be without refinements in function types, which the
+>   prototype excludes. Sound (the callee's entry checks still run); documented
+>   rather than papered over.
+>
+> Two things worth recording from the implementation:
+>
+> - The CT1 parameter-check injection is now ONE function shared by `defn` and
+>   `fn`, rather than a second copy in the lambda path. A lambda's contract
+>   parameter being silently decorative is exactly what a divergent second copy
+>   produces.
+> - The link from a `let` binding to its lambda's predicates is read off the
+>   INIT EXPRESSION's FnDef, not the closure-binding graph. A non-capturing
+>   lambda has no closure box, so `closure_fn_binding` is unset for it -- the
+>   graph route would have missed the simplest case, which is the one people
+>   write.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
-> - **Indirect calls** -- a call through a closure, a function-typed parameter,
->   or a typeclass method does not carry the callee's predicates to the call
->   site.
+> - **Typeclass method calls** -- a method's per-instance parameter refinements
+>   are not carried to the dispatch site.
+> - **Higher-order callees** -- a function-typed parameter carries no
+>   refinements in its type, so neither its body nor its callers can check the
+>   eventual call. This needs refinements in function types, which the
+>   prototype excludes; the callee's own entry checks still run, so only the
+>   static crossing is lost.
 > - **A purity gate on the encoder** -- two syntactically identical calls
 >   currently encode to the same term. Predicates must be pure, but argument
 >   expressions need not be, so an effectful call appearing twice in one

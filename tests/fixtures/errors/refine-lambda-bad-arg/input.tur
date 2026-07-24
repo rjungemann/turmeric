@@ -1,0 +1,12 @@
+;; A lambda's contract parameter is enforced like any other: the argument is
+;; definitely wrong, so the call fails to compile rather than panicking at run
+;; time.  Before this, the file did not compile for an unrelated reason -- the
+;; parameter's type was left as the contract type itself, so the call could not
+;; be typed at all.
+(defn via-lambda [] : int
+  (let [f (fn [x : #refine{ v : int | (> v 0) }] : int x)]
+    (f 0)))
+
+(defn main [] : int
+  (println (via-lambda))
+  0)

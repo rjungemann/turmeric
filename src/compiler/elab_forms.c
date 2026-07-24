@@ -859,6 +859,31 @@ Expr *elab_let(Elab *e, const Form *call) {
             if (!binding_moved_during_init) { fprintf(stderr, "tur: oom\n"); abort(); }
         }
         
+        /* RT1: a `let` bound directly to a lambda literal inherits that
+         * lambda's contract parameters, so `(let [f (fn [x : Pos] ...)] (f 0))`
+         * checks its argument the way a call to a named function does.  Read
+         * straight off the init expression's FnDef rather than chasing the
+         * closure-binding graph: a non-capturing lambda has no closure box, so
+         * closure_fn_binding is not set for it and that route would miss
+         * exactly the simplest case. */
+        {
+            /* A non-capturing lambda is returned as an EX_VAR naming its lifted
+             * thunk binding; a capturing one as an EX_FN_DEF.  Both carry the
+             * contract parameters on the FnDef's binding. */
+            const Binding *lam = NULL;
+            if (init && init->kind == EX_VAR)
+                lam = init->as.var.binding;
+            else if (init && init->kind == EX_FN_DEF && init->as.fn_def_.fn)
+                lam = init->as.fn_def_.fn->binding;
+            if (init) fprintf(stderr, "DBG let init kind=%d lam=%p preds=%p\n", (int)init->kind, (void*)lam, lam?(void*)lam->refine_param_preds:NULL);
+            if (lam && lam->refine_param_preds) {
+                b->refine_param_preds = lam->refine_param_preds;
+                b->refine_param_vars  = lam->refine_param_vars;
+                b->refine_param_names = lam->refine_param_names;
+                b->n_refine_params    = lam->n_refine_params;
+            }
+        }
+
         /* Propagate closure metadata through lets so a binding produced by a
          * closure literal or a closure-returning call remains callable with the
          * underlying thunk signature. */
