@@ -4882,10 +4882,22 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
         case BS_FUNC_CALL: {
             /* A plain C runtime call `c_op(args)` -- e.g. cons, the continuation
              * resume/clone/drop/serialize primitives.  Args are slot carriers. */
+            /* The `cons` builtin takes any 64-bit-sized head/tail (int, cstr,
+             * opaque, pointer) into its `int64_t` params -- cast through intptr_t
+             * so a non-int arg (e.g. a `cstr` pattern literal in
+             * `(cons "[0-9]+" ...)`) does not trip C's "incompatible pointer to
+             * integer conversion" (a hard -Wint-conversion error under macOS
+             * clang).  Mirrors the non-CPS emit path (emit_core.c BS_FUNC_CALL),
+             * keyed on the same c_op identity. */
+            bool cast_args = (sp->c_op && strcmp(sp->c_op, "cons") == 0);
             buf_printf(&b, "%s(", sp->c_op);
             for (uint32_t i = 0; i < n; i++) {
                 if (i) buf_puts(&b, ", ");
-                buf_printf(&b, "(%s)", as[i]);
+                if (cast_args) {
+                    buf_printf(&b, "(int64_t)(intptr_t)(%s)", as[i]);
+                } else {
+                    buf_printf(&b, "(%s)", as[i]);
+                }
             }
             buf_putc(&b, ')');
             break;

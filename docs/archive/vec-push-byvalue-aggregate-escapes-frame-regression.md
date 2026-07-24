@@ -1,5 +1,24 @@
 # Regression: by-value aggregate vec element dangles again (escapes-frame fixture reads garbage)
 
+> **RE-REGRESSED then RESOLVED again (2026-07-23).** Surfaced as a macOS-only CI
+> failure (`5`/`99` -> `1`/`1` on that stack layout; `0x40000000` locally). Root
+> cause this time: the `vec-push! [A] [val : A]` element param's monomorph kind
+> is now reported as `TY_APP` (the resolved `(Option int)`), not `TY_TYVAR`, so
+> the heap-promote seam that keys on `TY_TYVAR/FORALL/EXISTS`
+> (`emit_expr.c`, "vec-push-heap-struct-element-not-carrier-cast", block ~5343)
+> no longer fired -- the neighbouring `TY_APP` carrier-bridge block (~5388) took
+> over and used the plain (non-escaping) bridge, spilling `&stack_tmp` again.
+> Fix: that `TY_APP` block now routes through `emit_carrier_bridge_escaping`
+> (malloc + copy) when three conditions hold together -- the callee is an
+> inline-C carrier body (`body_is_inline_c`), the element's emitted C type is a
+> genuine by-value aggregate struct (not `int64_t`/pointer -- excludes a
+> single-scalar-field product like `(Box int)` that collapses to the int64
+> carrier, e.g. a `(box-new ...)` receiver), and a sibling argument is a heap
+> container (`(Vec A)`/`(Map K V)`/`(Set A)`) so the value is genuinely STORED
+> and outlives the frame (excludes transient consumers like `unwrap-or` / `map`
+> on a by-value `(Option A)`). `bash tests/run.sh` green (2278/0). Earlier
+> resolution note + original finding below.
+
 > **RESOLVED (2026-07-22).** The `vec-push!` concrete->carrier boundary again
 > heap-promotes (malloc + copy) a by-value aggregate element, so the pushed
 > `Option__int` outlives the producing frame. Verified on the current tree: the

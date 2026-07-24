@@ -5433,6 +5433,52 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * cc error) and then the pass-by-ptr `(*(...))` deref below
                          * would compound it.  Emit the cast directly and flag it so
                          * that deref is skipped. */
+                        /* vec-push-byvalue-aggregate-escapes-frame (regression
+                         * guard): when the carrier sink is an inline-C heap-container
+                         * insert (`vec-push! [A] [val : A]`, map-set!, set-add!) and
+                         * the element's emitted representation is a genuine by-value
+                         * aggregate STRUCT (`(some 5)` -> `tur_adt_Option__int`), the
+                         * stored element OUTLIVES the push expression AND the
+                         * producing frame.  The default (non-escaping) bridge spills
+                         * the aggregate to a stack local and carries
+                         * `(int64_t)(intptr_t)(&tmp)`, a stack address that dangles
+                         * once this frame returns -- the fixture reads reclaimed-stack
+                         * garbage.  Block 5343 heap-promotes this for a `val : A`
+                         * whose monomorph kind stays TY_TYVAR, but when `A` resolves
+                         * to a by-value parametric app (`(Option int)`) the param kind
+                         * here is TY_APP, so this seam handles it instead.
+                         *
+                         * The discriminator is the arg's emitted C type name: only a
+                         * real struct (not `int64_t`, not a pointer) is spilled by the
+                         * plain bridge and needs heap-promotion.  A single-scalar-field
+                         * product that collapses to the int64 carrier (`(Box int)` ->
+                         * `int64_t`, an inline-C method's `(box-new ...)` receiver) is
+                         * already pointer-sized: the plain pointer-reinterpret bridge
+                         * below is correct and a heap-promote would corrupt the
+                         * receiver deref. */
+                        const char *_argcn = emit_type_c_name(ctx, emit_arg->type);
+                        size_t _acnl = _argcn ? strlen(_argcn) : 0;
+                        bool _arg_is_byval_struct = _argcn &&
+                            strcmp(_argcn, "int64_t") != 0 &&
+                            !(_acnl >= 1 && _argcn[_acnl - 1] == '*');
+                        /* ...and the call actually STORES the element into a
+                         * persistent heap collection: a sibling argument is a heap
+                         * container (`(Vec A)`/`(Map K V)`/`(Set A)`).  This is what
+                         * separates a container insert (vec-push!/map-set!/set-add!,
+                         * whose element outlives the frame) from a TRANSIENT inline-C
+                         * consumer of a by-value aggregate (`unwrap-or`, `map` on an
+                         * `(Option A)`, catch-unwind result readers), which reads the
+                         * value in-place and must NOT heap-promote -- doing so both
+                         * leaks the malloc'd copy and needlessly churns codegen. */
+                        bool _has_heap_container_sibling = false;
+                        for (uint32_t _j = 0; _j < e->as.call_.n_args; _j++) {
+                            if (_j == i) continue;
+                            Type _st = emit_resolve_type(ctx, e->as.call_.args[_j]->type);
+                            if (type_is_heap_adt(_st) || type_is_heap_struct(_st)) {
+                                _has_heap_container_sibling = true;
+                                break;
+                            }
+                        }
                         if (expr_is_pbp_param(ctx, emit_arg)) {
                             Buf _pb; buf_init(&_pb);
                             buf_printf(&_pb, "(int64_t)(intptr_t)(%s)", raw);
@@ -5440,6 +5486,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             raw = strdup(_pb.data);
                             buf_free(&_pb);
                             pbp_carrier_cast = true;
+                        } else if (fn_binding->body_is_inline_c &&
+                                   _arg_is_byval_struct &&
+                                   _has_heap_container_sibling) {
+                            /* Bridge with the value's REAL by-value type (a
+                             * return-only-poly accessor collapses its elab type to the
+                             * int64 scalar). */
+                            Type bridge_ty =
+                                fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                            if (bridge_ty.kind == TY_UNKNOWN)
+                                bridge_ty = emit_arg->type;
+                            raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                                               CK_CONCRETE, CK_CARRIER,
+                                                               bridge_ty);
                         } else {
                             raw = emit_carrier_bridge(ctx, body, raw,
                                                       CK_CONCRETE, CK_CARRIER,
