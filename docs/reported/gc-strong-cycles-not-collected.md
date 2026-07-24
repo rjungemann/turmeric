@@ -56,9 +56,60 @@ trial-deletion is still zombie-only ... so the live cycle is not reclaimed by
 
 `tests/fixtures/exg5-exists-cycle/input.tur` already builds the topology:
 `(defstruct S :move [next : rc<S>])`, wire `s1 <-> s2`, both end at
-`strong_count = 2`, `(gc!)` runs, both survive. Under `ASAN_OPTIONS=detect_leaks=1`
-on the compiled binary (the program runtime is not leak-checked by the suite),
-the two `S` blocks leak whether GC is disabled, manual, or threshold.
+`strong_count = 2`, `(gc!)` runs, both survive. The two `S` control blocks are
+then leaked whether GC is disabled, manual, or threshold -- but see **Measured**
+below for why LeakSanitizer alone does *not* surface this.
+
+## Measured (2026-07-24)
+
+Empirically confirmed on a Debug build (`v0.30.8`, gcc 13, Linux) with four
+probes looping the cycle build 200000 times and reading `mallinfo2().uordblks`
+before/after. The cycle body is a self-referential struct
+`(defstruct S :move [next : rc<S>])` wired into a two-node ring:
+
+    (defn build-cycle [] : int
+      (let [s1 (rc/of (make-struct S (null-rc-s)))     ; null-rc-s: inline-C NULL sentinel
+            s2 (rc/of (make-struct S (rc/clone s1)))]
+        (set! (.next s1) (rc/clone s2))   ; both at strong=2; scope-exit drops each to 1
+        0))
+
+Heap retained over 200000 iterations:
+
+| Probe | Configuration | Retained | Per cycle |
+|-------|---------------|---------:|----------:|
+| acyclic control (`rc/of` + `rc/drop`) | -- | **0 B** | **0** |
+| strong cycle | GC off (default `GC_DISABLED`) | 38,400,000 B | **192 B** |
+| strong cycle | `(gc-enable!)` + `(gc!)` | 38,400,000 B | **192 B** |
+
+Three conclusions: (a) plain RC is leak-clean (0 B retained across 200000
+build/drop cycles); (b) a strong cycle leaks 192 B each (2 nodes x a 96-B
+control-block+value allocation); (c) **`(gc!)` reclaims nothing** -- the
+GC-enabled column is byte-for-byte identical to GC-off. This is the direct
+measurement behind the analysis above.
+
+### Why LeakSanitizer alone reports "clean"
+
+Running the *same* probe under `ASAN_OPTIONS=detect_leaks=1` reports **no leaks**
+for a single cycle. Cause: `rc_cb_alloc_kinded` registers every control block in
+the static global `gc_all_blocks[]` (`rc.c:109`), so a leaked block stays
+*reachable* from that global and LSan files it under "still reachable" (never
+printed) rather than "leaked." This is why leak-checking the compiled program's
+runtime would not catch cycle garbage even if the suite did it.
+
+The masking is bounded by the 4096-entry registry cap, which makes it *exactly*
+observable. Looping 202000 cycles under LSan reports:
+
+```
+SUMMARY: AddressSanitizer: 25,593,856 byte(s) leaked in 799,808 allocation(s)
+  -> 199,952 leaked objects per allocation site
+```
+
+`202000 - 199952 = 2048` cycles are *not* reported == `4096 blocks / 2 per cycle`
+== the registry cap. The first 4096 blocks are pinned in `gc_all_blocks[]`
+(invisible to LSan); every block past the cap is silently dropped by
+`gc_register_block` (`gc.c:207-210`) and *becomes* LSan-visible. One run thus
+confirms both this report's headline and the registry-overflow defect below, to
+the integer.
 
 ## Related latent defects discovered alongside (same subsystem, GC-enabled only)
 
