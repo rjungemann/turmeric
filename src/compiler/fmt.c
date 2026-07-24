@@ -325,6 +325,7 @@ typedef enum SpecialForm {
     SF_WHEN, SF_UNLESS,
     SF_DO,
     SF_CASE,
+    SF_COND,
     SF_HANDLE,
     SF_DEFCLASS,
     SF_DEFINSTANCE,
@@ -353,6 +354,7 @@ static SpecialForm classify_list(const Form *f) {
     if (sym_eq(h, "unless"))      return SF_UNLESS;
     if (sym_eq(h, "do"))          return SF_DO;
     if (sym_eq(h, "case"))        return SF_CASE;
+    if (sym_eq(h, "cond"))        return SF_COND;
     if (sym_eq(h, "loop"))        return SF_LOOP;
     if (sym_eq(h, "handle"))      return SF_HANDLE;
     if (sym_eq(h, "handle-shallow")) return SF_HANDLE;  /* F2: same layout as handle */
@@ -696,6 +698,46 @@ static void fmt_case(FmtState *s, const Form *f) {
     fs_putc(s, ')');
 }
 
+/* (cond test1 body1\n      test2 body2\n      :else  bodyN) — clause table.
+ * The head `cond` and the first test share the opening line; every subsequent
+ * test aligns under the first test's column, and all bodies align at a common
+ * column one space past the widest single-line test, so the test/body pairs
+ * read like a table (the documented Clojure-style cond layout).  A body that is
+ * itself multi-line wraps from the shared body column.  The whole-form-fits
+ * inline case is handled by fmt_list before this runs. */
+static void fmt_cond(FmtState *s, const Form *f) {
+    uint32_t n = f->as.list.len;
+
+    fs_putc(s, '(');
+    if (n >= 1) fmt_form(s, f->as.list.items[0]);   /* 'cond' */
+
+    /* The first test sits one space after the head; later tests align there. */
+    uint32_t test_col = s->col + 1;
+
+    /* Widest single-line test, so every body shares one column.  A test that is
+     * itself multi-line (rare) is skipped from the width like fmt_let does. */
+    uint32_t max_test = 0;
+    for (uint32_t i = 1; i + 1 < n; i += 2) {
+        uint32_t w = fmt_measure(f->as.list.items[i]);
+        if (w != UINT32_MAX && w > max_test) max_test = w;
+    }
+    uint32_t value_col = test_col + max_test + 1;
+
+    uint32_t i = 1;
+    while (i < n) {
+        if (i == 1) fs_putc(s, ' ');
+        else        fs_newline_indent(s, test_col);
+        fmt_form(s, f->as.list.items[i]); i++;             /* test */
+        if (i < n) {
+            uint32_t pad = (value_col > s->col) ? (value_col - s->col) : 1;
+            for (uint32_t k = 0; k < pad; k++) fs_putc(s, ' ');
+            fmt_form(s, f->as.list.items[i]); i++;         /* body */
+        }
+    }
+
+    fs_putc(s, ')');
+}
+
 /* (handle expr\n  arm...) */
 static void fmt_handle(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -921,6 +963,7 @@ static void fmt_list(FmtState *s, const Form *f) {
         case SF_UNLESS:      fmt_when(s, f);       break;
         case SF_DO:          fmt_do(s, f);         break;
         case SF_CASE:        fmt_case(s, f);       break;
+        case SF_COND:        fmt_cond(s, f);       break;
         case SF_HANDLE:      fmt_handle(s, f);     break;
         case SF_DEFPACKAGE:  fmt_defpackage(s, f);  break;
         case SF_DEFCLASS:    fmt_defclass(s, f);   break;

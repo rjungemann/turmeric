@@ -34,24 +34,25 @@
 ;; byte primitives the matcher and parser read input through. The load registry
 ;; dedups, so re-loading an already-present module is a no-op.
 (load "stdlib/str.tur")
+
 (load "stdlib/cstr.tur")
+
 (load "stdlib/option.tur")
-
 ;; ================= AST =================
-(defdata RxCls :copy
-  (RxClsNil)
-  (RxClsRange :int :int :RxCls))
 
-(defdata Regex :copy
-  (RChar   :int)
+(defdata RxCls :copy (RxClsNil) (RxClsRange :int :int :RxCls))
+
+(defdata Regex
+  :copy
+  (RChar :int)
   (RAny)
-  (RClass  :bool :RxCls)
-  (RStar   :Regex)
-  (RPlus   :Regex)
-  (ROpt    :Regex)
+  (RClass :bool :RxCls)
+  (RStar :Regex)
+  (RPlus :Regex)
+  (ROpt :Regex)
   (RConcat :Regex :Regex)
-  (RAlt    :Regex :Regex)
-  (RGroup  :Regex)
+  (RAlt :Regex :Regex)
+  (RGroup :Regex)
   (REmpty)
   (RNever)
   (RBegin)
@@ -60,20 +61,23 @@
 (defdata RxPos :copy (RxNil) (RxCons :int :RxPos))
 ;; RxPair / RxParse are single-constructor records: a positional pair and a
 ;; (parsed-Regex, next-position) parse result.
-(defdata RxPair (RxIP :int :int))
-(defdata RxParse (RxPR :Regex :int))
-(defdata RxStrs (RxStrsNil) (RxStrsCons :cstr :RxStrs))
 
+(defdata RxPair (RxIP :int :int))
+
+(defdata RxParse (RxPR :Regex :int))
+
+(defdata RxStrs (RxStrsNil) (RxStrsCons :cstr :RxStrs))
 ;; ================= RxPos leaf helpers =================
+
 (defn re-pos-append [a : RxPos b : RxPos] : RxPos
-  (match a
-    (RxNil)       b
-    (RxCons x xs) (RxCons x (re-pos-append xs b))))
+  (match a (RxNil) b (RxCons x xs) (RxCons x (re-pos-append xs b))))
 
 (defn re-pos-contains? [a : RxPos v : int] : bool
   (match a
-    (RxNil)       false
-    (RxCons x xs) (if (= x v) true (re-pos-contains? xs v))))
+    (RxNil)
+    false
+    (RxCons x xs)
+    (if (= x v) true (re-pos-contains? xs v))))
 
 (defn re-pos-empty? [a : RxPos] : bool
   (match a (RxNil) true (RxCons x xs) false))
@@ -82,109 +86,127 @@
   (match a (RxNil) 0 (RxCons x xs) (+ 1 (re-pos-len xs))))
 
 (defn re-pos-max [a : RxPos acc : int] : int
-  (match a
-    (RxNil)       acc
-    (RxCons x xs) (re-pos-max xs (if (> x acc) x acc))))
+  (match a (RxNil) acc (RxCons x xs) (re-pos-max xs (if (> x acc) x acc))))
 
 (defn re-pos-dedup-go [a : RxPos seen : RxPos] : RxPos
   (match a
-    (RxNil)       (RxNil)
-    (RxCons x xs) (if (re-pos-contains? seen x)
-                   (re-pos-dedup-go xs seen)
-                   (RxCons x (re-pos-dedup-go xs (RxCons x seen))))))
+    (RxNil)
+    (RxNil)
+    (RxCons x xs)
+    (if (re-pos-contains? seen x)
+      (re-pos-dedup-go xs seen)
+      (RxCons x (re-pos-dedup-go xs (RxCons x seen))))))
 
 (defn re-pos-dedup [a : RxPos] : RxPos (re-pos-dedup-go a (RxNil)))
 
 (defn re-range-list [lo : int hi : int] : RxPos
   (if (> lo hi) (RxNil) (RxCons lo (re-range-list (+ lo 1) hi))))
-
 ;; ================= cstr helpers =================
+
 (defn re-cstr-eq-loop [a : cstr b : cstr i : int n : int] : bool
   (if (>= i n)
     true
-    (if (= (cstr-nth a i) (cstr-nth b i))
-      (re-cstr-eq-loop a b (+ i 1) n)
-      false)))
+    (if (= (cstr-nth a i) (cstr-nth b i)) (re-cstr-eq-loop a b (+ i 1) n) false)))
 
 (defn re-cstr-eq? [a : cstr b : cstr] : bool
   (let [la (cstr-len a)
         lb (cstr-len b)]
     (if (= la lb) (re-cstr-eq-loop a b 0 la) false)))
-
 ;; ================= class membership (leaf) =================
+
 (defn re-class-match? [items : RxCls b : int] : bool
   (match items
-    (RxClsNil) false
+    (RxClsNil)
+    false
     (RxClsRange lo hi rest)
-      (if (if (>= b lo) (<= b hi) false)
-        true
-        (re-class-match? rest b))))
-
+    (if (if (>= b lo) (<= b hi) false) true (re-class-match? rest b))))
 ;; ================= per-position step helpers (leaf) =================
+
 (defn re-step-char [starts : RxPos input : cstr len : int c : int] : RxPos
   (match starts
-    (RxNil) (RxNil)
+    (RxNil)
+    (RxNil)
     (RxCons s rest)
-      (if (if (< s len) (= (cstr-nth input s) c) false)
-        (RxCons (+ s 1) (re-step-char rest input len c))
-        (re-step-char rest input len c))))
+    (if (if (< s len) (= (cstr-nth input s) c) false)
+      (RxCons (+ s 1) (re-step-char rest input len c))
+      (re-step-char rest input len c))))
 
 (defn re-step-any [starts : RxPos input : cstr len : int] : RxPos
   (match starts
-    (RxNil) (RxNil)
+    (RxNil)
+    (RxNil)
     (RxCons s rest)
-      (if (< s len)
-        (RxCons (+ s 1) (re-step-any rest input len))
-        (re-step-any rest input len))))
+    (if (< s len)
+      (RxCons (+ s 1) (re-step-any rest input len))
+      (re-step-any rest input len))))
 
-(defn re-step-class [starts : RxPos input : cstr len : int neg : bool items : RxCls] : RxPos
+(defn re-step-class [starts : RxPos
+                     input : cstr
+                     len : int
+                     neg : bool
+                     items : RxCls] : RxPos
   (match starts
-    (RxNil) (RxNil)
+    (RxNil)
+    (RxNil)
     (RxCons s rest)
-      (if (< s len)
-        (let [b   (cstr-nth input s)
-              m   (re-class-match? items b)
-              hit (if neg (not m) m)]
-          (if hit
-            (RxCons (+ s 1) (re-step-class rest input len neg items))
-            (re-step-class rest input len neg items)))
-        (re-step-class rest input len neg items))))
+    (if (< s len)
+      (let [b   (cstr-nth input s)
+            m   (re-class-match? items b)
+            hit (if neg (not m) m)]
+        (if hit
+          (RxCons (+ s 1) (re-step-class rest input len neg items))
+          (re-step-class rest input len neg items)))
+      (re-step-class rest input len neg items))))
 
 (defn re-step-begin [starts : RxPos] : RxPos
   (match starts
-    (RxNil) (RxNil)
+    (RxNil)
+    (RxNil)
     (RxCons s rest)
-      (if (= s 0) (RxCons s (re-step-begin rest)) (re-step-begin rest))))
+    (if (= s 0) (RxCons s (re-step-begin rest)) (re-step-begin rest))))
 
 (defn re-step-end [starts : RxPos len : int] : RxPos
   (match starts
-    (RxNil) (RxNil)
+    (RxNil)
+    (RxNil)
     (RxCons s rest)
-      (if (= s len) (RxCons s (re-step-end rest len)) (re-step-end rest len))))
-
+    (if (= s len) (RxCons s (re-step-end rest len)) (re-step-end rest len))))
 ;; ================= matcher: single self-recursive function =================
+
 (defn re-run-k [re : Regex starts : RxPos input : cstr len : int] : RxPos
   (match re
-    (RChar c)       (re-step-char starts input len c)
-    (RAny)          (re-step-any starts input len)
-    (RClass neg it) (re-step-class starts input len neg it)
-    (REmpty)        starts
-    (RNever)        (RxNil)
-    (RBegin)        (re-step-begin starts)
-    (REnd)          (re-step-end starts len)
-    (RGroup g)      (re-run-k g starts input len)
-    (RConcat a b)   (re-run-k b (re-run-k a starts input len) input len)
-    (RAlt a b)      (re-pos-append (re-run-k a starts input len) (re-run-k b starts input len))
-    (ROpt a)        (re-pos-append starts (re-run-k a starts input len))
-    (RPlus a)       (re-run-k (RStar a) (re-run-k a starts input len) input len)
+    (RChar c)
+    (re-step-char starts input len c)
+    (RAny)
+    (re-step-any starts input len)
+    (RClass neg it)
+    (re-step-class starts input len neg it)
+    (REmpty)
+    starts
+    (RNever)
+    (RxNil)
+    (RBegin)
+    (re-step-begin starts)
+    (REnd)
+    (re-step-end starts len)
+    (RGroup g)
+    (re-run-k g starts input len)
+    (RConcat a b)
+    (re-run-k b (re-run-k a starts input len) input len)
+    (RAlt a b)
+    (re-pos-append (re-run-k a starts input len) (re-run-k b starts input len))
+    (ROpt a)
+    (re-pos-append starts (re-run-k a starts input len))
+    (RPlus a)
+    (re-run-k (RStar a) (re-run-k a starts input len) input len)
     (RStar a)
-      (let [s0    (re-pos-dedup starts)
-            grown (re-pos-dedup (re-pos-append s0 (re-run-k a s0 input len)))]
-        (if (= (re-pos-len grown) (re-pos-len s0))
-          s0
-          (re-run-k (RStar a) grown input len)))))
-
+    (let [s0    (re-pos-dedup starts)
+          grown (re-pos-dedup (re-pos-append s0 (re-run-k a s0 input len)))]
+      (if (= (re-pos-len grown) (re-pos-len s0))
+        s0
+        (re-run-k (RStar a) grown input len)))))
 ;; ================= parser leaf helpers =================
+
 (defn re-digit? [c : int] : bool (if (>= c 48) (<= c 57) false))
 
 (defn re-read-int [input : cstr len : int pos : int acc : int] : RxPair
@@ -201,33 +223,35 @@
     (if (= n 1) atom (RConcat atom (re-repeat-n atom (- n 1))))))
 
 (defn re-repeat-opt [atom : Regex n : int] : Regex
-  (if (<= n 0)
-    (REmpty)
-    (RConcat (ROpt atom) (re-repeat-opt atom (- n 1)))))
+  (if (<= n 0) (REmpty) (RConcat (ROpt atom) (re-repeat-opt atom (- n 1)))))
 
 (defn re-parse-brace [input : cstr len : int atom : Regex pos : int] : RxParse
   (match (re-read-int input len pos 0)
     (RxIP n p1)
-      (if (if (< p1 len) (= (cstr-nth input p1) 44) false)
-        (if (if (< (+ p1 1) len) (= (cstr-nth input (+ p1 1)) 125) false)
-          (RxPR (RConcat (re-repeat-n atom n) (RStar atom)) (+ p1 2))
-          (match (re-read-int input len (+ p1 1) 0)
-            (RxIP m p2)
-              (let [endp (if (if (< p2 len) (= (cstr-nth input p2) 125) false) (+ p2 1) p2)]
-                (RxPR (RConcat (re-repeat-n atom n) (re-repeat-opt atom (- m n))) endp))))
-        (let [endp (if (if (< p1 len) (= (cstr-nth input p1) 125) false) (+ p1 1) p1)]
-          (RxPR (re-repeat-n atom n) endp)))))
+    (if (if (< p1 len) (= (cstr-nth input p1) 44) false)
+      (if (if (< (+ p1 1) len) (= (cstr-nth input (+ p1 1)) 125) false)
+        (RxPR (RConcat (re-repeat-n atom n) (RStar atom)) (+ p1 2))
+        (match (re-read-int input len (+ p1 1) 0)
+          (RxIP m p2)
+          (let [endp (if (if (< p2 len) (= (cstr-nth input p2) 125) false)
+                       (+ p2 1)
+                       p2)]
+            (RxPR (RConcat (re-repeat-n atom n) (re-repeat-opt atom (- m n)))
+              endp))))
+      (let [endp (if (if (< p1 len) (= (cstr-nth input p1) 125) false)
+                   (+ p1 1)
+                   p1)]
+        (RxPR (re-repeat-n atom n) endp)))))
 
 (defn re-apply-quant [input : cstr len : int ra : Regex pos : int] : RxParse
   (if (>= pos len)
     (RxPR ra pos)
     (let [c (cstr-nth input pos)]
-      (cond
-        (= c 42)  (RxPR (RStar ra) (+ pos 1))
-        (= c 43)  (RxPR (RPlus ra) (+ pos 1))
-        (= c 63)  (RxPR (ROpt ra)  (+ pos 1))
-        (= c 123) (re-parse-brace input len ra (+ pos 1))
-        :else     (RxPR ra pos)))))
+      (cond (= c 42)  (RxPR (RStar ra) (+ pos 1))
+            (= c 43)  (RxPR (RPlus ra) (+ pos 1))
+            (= c 63)  (RxPR (ROpt ra) (+ pos 1))
+            (= c 123) (re-parse-brace input len ra (+ pos 1))
+            :else     (RxPR ra pos)))))
 
 (defn re-parse-escape [input : cstr len : int pos : int] : RxParse
   (if (>= pos len)
@@ -240,16 +264,19 @@
     (if (= (cstr-nth input pos) 58) pos (re-scan-name-end input len (+ pos 1)))))
 
 (defn re-posix-ranges [name : cstr acc : RxCls] : RxCls
-  (cond
-    (re-cstr-eq? name "digit")  (RxClsRange 48 57 acc)
-    (re-cstr-eq? name "alpha")  (RxClsRange 65 90 (RxClsRange 97 122 acc))
-    (re-cstr-eq? name "alnum")  (RxClsRange 48 57 (RxClsRange 65 90 (RxClsRange 97 122 acc)))
-    (re-cstr-eq? name "upper")  (RxClsRange 65 90 acc)
-    (re-cstr-eq? name "lower")  (RxClsRange 97 122 acc)
-    (re-cstr-eq? name "space")  (RxClsRange 9 13 (RxClsRange 32 32 acc))
-    (re-cstr-eq? name "blank")  (RxClsRange 9 9 (RxClsRange 32 32 acc))
-    (re-cstr-eq? name "xdigit") (RxClsRange 48 57 (RxClsRange 65 70 (RxClsRange 97 102 acc)))
-    :else                    acc))
+  (cond (re-cstr-eq? name "digit")  (RxClsRange 48 57 acc)
+        (re-cstr-eq? name "alpha")  (RxClsRange 65 90 (RxClsRange 97 122 acc))
+        (re-cstr-eq? name "alnum")  (RxClsRange 48
+                                      57
+                                      (RxClsRange 65 90 (RxClsRange 97 122 acc)))
+        (re-cstr-eq? name "upper")  (RxClsRange 65 90 acc)
+        (re-cstr-eq? name "lower")  (RxClsRange 97 122 acc)
+        (re-cstr-eq? name "space")  (RxClsRange 9 13 (RxClsRange 32 32 acc))
+        (re-cstr-eq? name "blank")  (RxClsRange 9 9 (RxClsRange 32 32 acc))
+        (re-cstr-eq? name "xdigit") (RxClsRange 48
+                                      57
+                                      (RxClsRange 65 70 (RxClsRange 97 102 acc)))
+        :else                       acc))
 
 (defn re-posix-open? [input : cstr len : int pos : int] : bool
   (if (= (cstr-nth input pos) 91)
@@ -263,7 +290,11 @@
       false)
     false))
 
-(defn re-re-parse-class-items [input : cstr len : int pos : int neg : bool acc : RxCls] : RxParse
+(defn re-re-parse-class-items [input : cstr
+                               len : int
+                               pos : int
+                               neg : bool
+                               acc : RxCls] : RxParse
   (if (>= pos len)
     (RxPR (RClass neg acc) pos)
     (let [c (cstr-nth input pos)]
@@ -273,12 +304,23 @@
           (let [nend  (re-scan-name-end input len (+ pos 2))
                 nm    (cstr-sub input (+ pos 2) nend)
                 added (re-posix-ranges nm acc)
-                after (if (if (< (+ nend 1) len) (= (cstr-nth input (+ nend 1)) 93) false)
-                        (+ nend 2) (+ nend 1))]
+                after (if (if (< (+ nend 1) len)
+                            (= (cstr-nth input (+ nend 1)) 93)
+                            false)
+                        (+ nend 2)
+                        (+ nend 1))]
             (re-re-parse-class-items input len after neg added))
           (if (re-range-here? input len pos)
-            (re-re-parse-class-items input len (+ pos 3) neg (RxClsRange c (cstr-nth input (+ pos 2)) acc))
-            (re-re-parse-class-items input len (+ pos 1) neg (RxClsRange c c acc))))))))
+            (re-re-parse-class-items input
+              len
+              (+ pos 3)
+              neg
+              (RxClsRange c (cstr-nth input (+ pos 2)) acc))
+            (re-re-parse-class-items input
+              len
+              (+ pos 1)
+              neg
+              (RxClsRange c c acc))))))))
 
 (defn re-parse-class [input : cstr len : int pos : int] : RxParse
   (let [neg (if (< pos len) (= (cstr-nth input pos) 94) false)
@@ -288,55 +330,57 @@
 (defn re-concat-end? [input : cstr len : int pos : int] : bool
   (if (>= pos len)
     true
-    (let [c (cstr-nth input pos)]
-      (if (= c 124) true (if (= c 41) true false)))))
-
+    (let [c (cstr-nth input pos)] (if (= c 124) true (if (= c 41) true false)))))
 ;; ================= parser: single self-recursive function =================
 ;; modes: 0 alt, 1 alt-loop, 2 concat, 3 concat-loop, 4 repeat, 5 atom
-(defn re-parse-go [input : cstr len : int pos : int mode : int acc : Regex] : RxParse
-  (cond
-    (= mode 0)
-      (match (re-parse-go input len pos 2 (REmpty))
-        (RxPR r1 p1) (re-parse-go input len p1 1 r1))
-    (= mode 1)
-      (if (if (< pos len) (= (cstr-nth input pos) 124) false)
-        (match (re-parse-go input len (+ pos 1) 2 (REmpty))
-          (RxPR r2 p2) (re-parse-go input len p2 1 (RAlt acc r2)))
-        (RxPR acc pos))
-    (= mode 2)
-      (if (re-concat-end? input len pos)
-        (RxPR (REmpty) pos)
-        (match (re-parse-go input len pos 4 (REmpty))
-          (RxPR r1 p1) (re-parse-go input len p1 3 r1)))
-    (= mode 3)
-      (if (re-concat-end? input len pos)
-        (RxPR acc pos)
-        (match (re-parse-go input len pos 4 (REmpty))
-          (RxPR r2 p2) (re-parse-go input len p2 3 (RConcat acc r2))))
-    (= mode 4)
-      (match (re-parse-go input len pos 5 (REmpty))
-        (RxPR ra p) (re-apply-quant input len ra p))
-    :else
-      (if (>= pos len)
-        (RxPR (REmpty) pos)
-        (let [c (cstr-nth input pos)]
-          (cond
-            (= c 40) (match (re-parse-go input len (+ pos 1) 0 (REmpty))
-                       (RxPR ri p)
-                         (if (if (< p len) (= (cstr-nth input p) 41) false)
-                           (RxPR (RGroup ri) (+ p 1))
-                           (RxPR (RGroup ri) p)))
-            (= c 91) (re-parse-class input len (+ pos 1))
-            (= c 46) (RxPR (RAny)   (+ pos 1))
-            (= c 94) (RxPR (RBegin) (+ pos 1))
-            (= c 36) (RxPR (REnd)   (+ pos 1))
-            (= c 92) (re-parse-escape input len (+ pos 1))
-            :else    (RxPR (RChar c) (+ pos 1)))))))
 
+(defn re-parse-go [input : cstr len : int pos : int mode : int acc : Regex] : RxParse
+  (cond (= mode 0) (match (re-parse-go input len pos 2 (REmpty))
+                     (RxPR r1 p1)
+                     (re-parse-go input len p1 1 r1))
+        (= mode 1) (if (if (< pos len) (= (cstr-nth input pos) 124) false)
+                     (match (re-parse-go input len (+ pos 1) 2 (REmpty))
+                       (RxPR r2 p2)
+                       (re-parse-go input len p2 1 (RAlt acc r2)))
+                     (RxPR acc pos))
+        (= mode 2) (if (re-concat-end? input len pos)
+                     (RxPR (REmpty) pos)
+                     (match (re-parse-go input len pos 4 (REmpty))
+                       (RxPR r1 p1)
+                       (re-parse-go input len p1 3 r1)))
+        (= mode 3) (if (re-concat-end? input len pos)
+                     (RxPR acc pos)
+                     (match (re-parse-go input len pos 4 (REmpty))
+                       (RxPR r2 p2)
+                       (re-parse-go input len p2 3 (RConcat acc r2))))
+        (= mode 4) (match (re-parse-go input len pos 5 (REmpty))
+                     (RxPR ra p)
+                     (re-apply-quant input len ra p))
+        :else      (if (>= pos len)
+                     (RxPR (REmpty) pos)
+                     (let [c (cstr-nth input pos)]
+                       (cond (= c 40) (match (re-parse-go input
+                                               len
+                                               (+ pos 1)
+                                               0
+                                               (REmpty))
+                                        (RxPR ri p)
+                                        (if (if (< p len)
+                                              (= (cstr-nth input p) 41)
+                                              false)
+                                          (RxPR (RGroup ri) (+ p 1))
+                                          (RxPR (RGroup ri) p)))
+                             (= c 91) (re-parse-class input len (+ pos 1))
+                             (= c 46) (RxPR (RAny) (+ pos 1))
+                             (= c 94) (RxPR (RBegin) (+ pos 1))
+                             (= c 36) (RxPR (REnd) (+ pos 1))
+                             (= c 92) (re-parse-escape input len (+ pos 1))
+                             :else    (RxPR (RChar c) (+ pos 1)))))))
 ;; ================= public API =================
 ;; re-find-from: leftmost match at or after `from`. Returns (RxIP start end)
 ;; with the longest end at the first matching start, or (RxIP -1 -1) if no
 ;; match occurs from `from` onward.
+
 (defn re-find-from [re : Regex input : cstr len : int from : int] : RxPair
   (if (> from len)
     (RxIP (- 0 1) (- 0 1))
@@ -344,30 +388,38 @@
       (if (re-pos-empty? ends)
         (re-find-from re input len (+ from 1))
         (RxIP from (re-pos-max ends (- 0 1)))))))
-
 ;; re-find-all-go / re-replace-go: internal loops for find-all / replace-all.
+
 (defn re-find-all-go [re : Regex input : cstr len : int from : int] : RxStrs
   (match (re-find-from re input len from)
     (RxIP s e)
-      (if (< s 0)
-        (RxStrsNil)
-        (RxStrsCons (cstr-sub input s e)
-                    (re-find-all-go re input len (if (> e s) e (+ s 1)))))))
+    (if (< s 0)
+      (RxStrsNil)
+      (RxStrsCons (cstr-sub input s e)
+        (re-find-all-go re input len (if (> e s) e (+ s 1)))))))
 
-(defn re-replace-go [re : Regex input : cstr len : int from : int
-                     replacement : cstr acc : cstr] : cstr
+(defn re-replace-go [re : Regex
+                     input : cstr
+                     len : int
+                     from : int
+                     replacement : cstr
+                     acc : cstr] : cstr
   (match (re-find-from re input len from)
     (RxIP s e)
-      (if (< s 0)
-        (str-concat acc (cstr-sub input from len))
-        (let [acc1 (str-concat (str-concat acc (cstr-sub input from s)) replacement)]
-          (if (> e s)
-            (re-replace-go re input len e replacement acc1)
-            (if (< s len)
-              (re-replace-go re input len (+ s 1) replacement
-                             (str-concat acc1 (cstr-sub input s (+ s 1))))
-              acc1))))))
-
+    (if (< s 0)
+      (str-concat acc (cstr-sub input from len))
+      (let [acc1 (str-concat (str-concat acc (cstr-sub input from s))
+                   replacement)]
+        (if (> e s)
+          (re-replace-go re input len e replacement acc1)
+          (if (< s len)
+            (re-replace-go re
+              input
+              len
+              (+ s 1)
+              replacement
+              (str-concat acc1 (cstr-sub input s (+ s 1))))
+            acc1))))))
 ;;; re/compile -- compile a regular expression pattern into a Regex.
 ;;;
 ;;; Parameters:
@@ -381,10 +433,9 @@
 ;;;   (re/compile "([0-9]+)")  ; => <Regex>
 ;;;
 ;;; Since: Phase B2
-(defn re/compile [pattern : cstr] : Regex
-  (match (re-parse-go pattern (cstr-len pattern) 0 0 (REmpty))
-    (RxPR r p) r))
 
+(defn re/compile [pattern : cstr] : Regex
+  (match (re-parse-go pattern (cstr-len pattern) 0 0 (REmpty)) (RxPR r p) r))
 ;;; re/match? -- test whether a pattern matches anywhere in input.
 ;;;
 ;;; Parameters:
@@ -398,10 +449,10 @@
 ;;;   (re/match? (re/compile "[0-9]+") "abc123")  ; => true
 ;;;
 ;;; Since: Phase B2
+
 (defn re/match? [re : Regex input : cstr] : bool
   (let [len (cstr-len input)]
     (not (re-pos-empty? (re-run-k re (re-range-list 0 len) input len)))))
-
 ;;; re/match -- return the leftmost-longest whole match as an Option.
 ;;;
 ;;; Group captures are not yet threaded through the engine, so only the whole
@@ -419,11 +470,12 @@
 ;;;   (re/match (re/compile "[0-9]+") "a12b")  ; => (some "12")
 ;;;
 ;;; Since: Phase B2 (pure-Turmeric rewrite)
+
 (defn re/match [re : Regex input : cstr] : (Option cstr)
   (let [len (cstr-len input)]
     (match (re-find-from re input len 0)
-      (RxIP s e) (if (< s 0) (none) (some (cstr-sub input s e))))))
-
+      (RxIP s e)
+      (if (< s 0) (none) (some (cstr-sub input s e))))))
 ;;; re/find-all -- all non-overlapping matches, left to right.
 ;;;
 ;;; Advances past each match (by one byte on an empty match to avoid stalling),
@@ -440,9 +492,9 @@
 ;;;   (re/find-all (re/compile "[0-9]+") "a1b22c")  ; => ("1" "22")
 ;;;
 ;;; Since: Phase B2 (pure-Turmeric rewrite)
+
 (defn re/find-all [re : Regex input : cstr] : RxStrs
   (re-find-all-go re input (cstr-len input) 0))
-
 ;;; re/replace -- replace the first match with a literal replacement.
 ;;;
 ;;; Parameters:
@@ -458,15 +510,15 @@
 ;;;   (re/replace (re/compile "world") "hello world" "WORLD")  ; => "hello WORLD"
 ;;;
 ;;; Since: Phase B2
+
 (defn re/replace [re : Regex input : cstr replacement : cstr] : cstr
   (let [len (cstr-len input)]
     (match (re-find-from re input len 0)
       (RxIP s e)
-        (if (< s 0)
-          (cstr-sub input 0 len)
-          (str-concat (str-concat (cstr-sub input 0 s) replacement)
-                      (cstr-sub input e len))))))
-
+      (if (< s 0)
+        (cstr-sub input 0 len)
+        (str-concat (str-concat (cstr-sub input 0 s) replacement)
+          (cstr-sub input e len))))))
 ;;; re/replace-all -- replace all non-overlapping matches with a literal.
 ;;;
 ;;; Parameters:
@@ -481,30 +533,31 @@
 ;;;   (re/replace-all (re/compile "[0-9]") "a1b2c3" "X")  ; => "aXbXcX"
 ;;;
 ;;; Since: Phase B2
+
 (defn re/replace-all [re : Regex input : cstr replacement : cstr] : cstr
   (re-replace-go re input (cstr-len input) 0 replacement ""))
-
 ;;; re/free -- no-op shim (a Regex is a GC/heap value, not a malloc'd handle).
 ;;;
 ;;; Parameters:
 ;;;   re -- a Regex (ignored)
 ;;;
 ;;; Since: Phase B2 (no-op since the pure-Turmeric rewrite)
+
 (defn re/free [re : Regex] : void 0)
-
 ;;; re/match-free -- no-op shim; the Option result needs no manual free.
+
 (defn re/match-free [m : (Option cstr)] : void 0)
-
 ;;; re/find-all-free -- no-op shim; the RxStrs result needs no manual free.
-(defn re/find-all-free [lst : RxStrs] : void 0)
 
+(defn re/find-all-free [lst : RxStrs] : void 0)
 ;;; re/wrap-paren -- internal: wrap one pattern as "(p)" (heap; caller frees).
+
 (defn re/wrap-paren [p : cstr] : cstr
   (let [open (str-concat "(" p)
         out  (str-concat open ")")]
     (do (str-free (:: open int)) out)))
-
 ;;; re/union-acc -- internal: right-fold the rest onto acc, joining with "|".
+
 (defn re/union-acc [acc : cstr patterns : int] : cstr
   (if (tnil? patterns)
     acc
@@ -519,7 +572,6 @@
             (str-free (:: bar int))
             (str-free (:: wrap int))
             (re/union-acc out (list-tail patterns))))))))
-
 ;;; re/union-patterns -- build an alternation regex string from a cons list of
 ;;; patterns. Each pattern is wrapped in a parenthesised branch and joined with
 ;;; `|`. Returns a fresh cstr (caller frees), or 0 if the list is empty or
@@ -536,6 +588,7 @@
 ;;;     ; => "([A-Za-z]+)|([0-9]+)"
 ;;;
 ;;; Since: Phase RU1
+
 (defn re/union-patterns [patterns : int] : cstr
   (if (tnil? patterns)
     (:: 0 cstr)
@@ -543,7 +596,6 @@
       (if (= p0 0)
         (:: 0 cstr)
         (re/union-acc (re/wrap-paren (:: p0 cstr)) (list-tail patterns))))))
-
 ;;; re/compile-union -- compile an alternation of multiple patterns into a Regex.
 ;;;
 ;;; Convenience wrapper around re/union-patterns followed by re/compile. The
@@ -560,6 +612,7 @@
 ;;;   (re/compile-union (cons "[A-Za-z]+" (cons "[0-9]+" 0)))  ; => <Regex>
 ;;;
 ;;; Since: Phase RU2
+
 (defn re/compile-union [patterns : int] : Regex
   (let [pat (re/union-patterns patterns)]
     (if (= (:: pat int) 0)

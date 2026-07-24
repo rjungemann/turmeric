@@ -518,16 +518,28 @@ add_test(
 set_tests_properties(tur_stdlib_natives_embed PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# LeakSanitizer ships with ASan on Linux but is ABSENT on macOS, where
+# detect_leaks=1 aborts at process startup ("detect_leaks is not supported on
+# this platform") before the harness runs at all. The two leak harnesses below
+# force detection ON, so gate it by platform: keep the leak assertion as a
+# Linux-CI guarantee, and on macOS fall back to detect_leaks=0 (the
+# create/eval/free cycle still runs under ASan's use-after-free / OOB checks,
+# just without the leak count). See CLAUDE.md "Leak detection (ASan/LSan)".
+if(APPLE)
+  set(TUR_LEAK_HARNESS_ASAN "ASAN_OPTIONS=detect_leaks=0")
+else()
+  set(TUR_LEAK_HARNESS_ASAN "ASAN_OPTIONS=detect_leaks=1")
+endif()
 # libturi-per-embed-env-and-peripherals: Gaps 1-4 embed-API harness. Runs with
-# leak detection FORCED ON -- the create/reset/free cycles plus the owned
-# module_base_dir copy must leave zero turi-attributable live allocations.
+# leak detection FORCED ON (Linux) -- the create/reset/free cycles plus the
+# owned module_base_dir copy must leave zero turi-attributable live allocations.
 add_test(
   NAME tur_embed_peripherals
   COMMAND "${CMAKE_BINARY_DIR}/tur_embed_peripherals"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_embed_peripherals PROPERTIES
-  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1"
+  ENVIRONMENT "${TUR_LEAK_HARNESS_ASAN}"
 )
 # turi-env-owned-value-arena-pool-plan: env-teardown leak harness. Unlike the
 # other turi targets (which default detect_leaks=0 because the interpreter
@@ -540,7 +552,7 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_env_teardown PROPERTIES
-  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1"
+  ENVIRONMENT "${TUR_LEAK_HARNESS_ASAN}"
 )
 # turi-value-pool-scratch-promotion-plan: long-lived-env steady-state + cross-
 # reset correctness harness. Exercises the scratch/permanent split with escape

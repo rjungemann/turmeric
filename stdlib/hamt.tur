@@ -39,10 +39,10 @@
 ; sharing) for multi-word struct/ADT keys.
 
 (extern-c tur_hamt_box_key [src :ptr n :int] :ptr)
-
 ; Generic size-aware content comparator for two boxed-key payloads (reads each
 ; length from its box header).  One comparator serves every multi-word by-value
 ; key type -- a MapKey `mk-cmp` for a struct/ADT key returns its address.
+
 (extern-c tur_hamt_box_key_eq [a :int b :int] :bool)
 
 (extern-c tur_hamt_set_eq_o

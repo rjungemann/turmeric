@@ -147,7 +147,7 @@
   #fx{Proc}
   : ChildHandle
   ```c
-#ifdef _WIN32
+  #ifdef _WIN32
   #include <process.h>
 #else
   #include <unistd.h>
@@ -195,7 +195,7 @@
   #fx{Proc}
   : int
   ```c
-#ifdef _WIN32
+  #ifdef _WIN32
   /* _cwait yields the child's exit code directly -- there is no POSIX
    * wait-status word to unpack, so no WIFEXITED/WEXITSTATUS here. */
   #include <process.h>

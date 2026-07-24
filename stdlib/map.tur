@@ -471,7 +471,6 @@
 ;;;   (map-assoc (:: (map-new) (Map int int)) 42 100)     ; => Map {42 -> 100}
 ;;;
 ;;; Since: Phase TMS3 (macro accessor; was map-assoc-g; GHE3)
-
 ;;; tur-wide-byval? -- 1 if V is a multi-word (> 8 byte) by-value struct/ADT that
 ;;; the compiler heap-BOXES onto the value carrier, else 0.  The compiled backend
 ;;; folds it to a constant per monomorphization (emit_expr.c), in lockstep with
@@ -481,6 +480,7 @@
 ;;; `owned` flag so a Map[K Point]-style boxed value is released on map-free.
 ;;;
 ;;; Since: multiword-value-box-lifecycle
+
 
 (defn tur-wide-byval? [V] [x : V] : int 0)
 

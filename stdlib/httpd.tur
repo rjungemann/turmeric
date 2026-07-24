@@ -66,9 +66,9 @@
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
-
 ;; mw-cors owns its config strings as Drop-typeclass String captures so the
 ;; closure drop-glue releases them (Model R); needs the String API.
+
 (load "stdlib/string.tur")
 
 (load "stdlib/effects.tur")
@@ -1791,7 +1791,6 @@
 ;;;                   "" 1 60))
 ;;;
 ;;; Since: Phase H8 (M4)
-
 ;;; httpd-cors-own-str -- internal: heap-copy a cstr for a server-lifetime
 ;;; capture, preserving NULL.
 ;;;
@@ -1803,8 +1802,8 @@
 ;;; --enable=closure-drop-glue the String is a Drop-typeclass capture, so the
 ;;; closure's drop-glue releases it when the middleware is torn down (Model R);
 ;;; flag-off it lives to process exit, as before.
-(defn httpd-cors-own-str [s : cstr] : String
-  (string/from-cstr s))
+
+(defn httpd-cors-own-str [s : cstr] : String (string/from-cstr s))
 
 (defn mw-cors-with [allow-origin : cstr
                     allow-methods : cstr
@@ -1827,10 +1826,18 @@
         _n  next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
-        (httpd-mw-cors-emit-preflight c (string/to-cstr _ao) (string/to-cstr _am)
-                                        (string/to-cstr _ah) _ac _ma)
-        (do (httpd-call _n c)
-            (httpd-mw-cors-decorate c (string/to-cstr _ao) (string/to-cstr _eh) _ac))))))
+        (httpd-mw-cors-emit-preflight c
+          (string/to-cstr _ao)
+          (string/to-cstr _am)
+          (string/to-cstr _ah)
+          _ac
+          _ma)
+        (do
+          (httpd-call _n c)
+          (httpd-mw-cors-decorate c
+            (string/to-cstr _ao)
+            (string/to-cstr _eh)
+            _ac))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
@@ -3411,6 +3418,7 @@
 ;;; to `:int` / `(fn [int] int)` by ascription.
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
+
 (defopaque Handler :int :affine)
 ;;; httpd-handler-drop -- internal: reclaim a composed Handler onion.
 ;;;
@@ -3421,14 +3429,15 @@
 ;;; hand (the scope-exit auto-drop calls it).
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
+
 (defn httpd-handler-drop [h : Handler] : void
   ```c
   int64_t __h = (int64_t)h;
   if (__h) TUR_CLOSURE_DROP(__h);
   ```)
 ;;; Drop [Handler] -- reclaim the onion when a bound Handler dies unmoved/unborrowed.
-(definstance Drop [Handler]
-  (drop [x] : void (httpd-handler-drop x)))
+
+(definstance Drop [Handler] (drop [x] : void (httpd-handler-drop x)))
 ;;; httpd-handler-carrier -- CONSUME a Handler, yielding its raw int64 carrier for
 ;;; a server constructor (`^fat handler : int`) or any `:int` handler sink that
 ;;; TAKES OWNERSHIP.
@@ -3451,6 +3460,7 @@
 ;;;     (httpd-new-pool 0 1 (httpd-handler-carrier composed)))
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
+
 (defn httpd-handler-carrier [h : Handler] : int
   ```c
   return (int64_t)h;
@@ -3474,12 +3484,14 @@
 ;;; frees ONLY the cells).
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
+
 (defopaque ClosureChain :int :affine)
 ;;; httpd-chain-drop -- internal: reclaim a ClosureChain (drop each head factory
 ;;; via TUR_CLOSURE_DROP + free each spine cell).  Consumes its affine argument;
 ;;; it is the Drop instance's method, normally invoked by the scope-exit auto-drop.
 ;;;
 ;;; Since: automatic R3a (closure-drop-glue)
+
 (defn httpd-chain-drop [c : ClosureChain] : void
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
@@ -3493,8 +3505,8 @@
   ```)
 ;;; Drop [ClosureChain] -- reclaim a runtime-built chain when its builder binding
 ;;; dies unmoved/unborrowed.
-(definstance Drop [ClosureChain]
-  (drop [x] : void (httpd-chain-drop x)))
+
+(definstance Drop [ClosureChain] (drop [x] : void (httpd-chain-drop x)))
 ;;; httpd-mw-apply -- internal: apply one fat-closure middleware to a handler.
 ;;;
 ;;; The middleware is a fat closure of shape

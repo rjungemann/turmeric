@@ -31,26 +31,22 @@
 ;;;
 ;;; Since: v2
 
-(defn term/bold-string [s : cstr] : String
-  (string/adopt-cstr (term/bold s)))
+(defn term/bold-string [s : cstr] : String (string/adopt-cstr (term/bold s)))
 ;;; term/dim-string -- wrap a string in ANSI dim codes, as an owned String.
 ;;;
 ;;; Since: v2
 
-(defn term/dim-string [s : cstr] : String
-  (string/adopt-cstr (term/dim s)))
+(defn term/dim-string [s : cstr] : String (string/adopt-cstr (term/dim s)))
 ;;; term/red-string -- wrap a string in ANSI red codes, as an owned String.
 ;;;
 ;;; Since: v2
 
-(defn term/red-string [s : cstr] : String
-  (string/adopt-cstr (term/red s)))
+(defn term/red-string [s : cstr] : String (string/adopt-cstr (term/red s)))
 ;;; term/green-string -- wrap a string in ANSI green codes, as an owned String.
 ;;;
 ;;; Since: v2
 
-(defn term/green-string [s : cstr] : String
-  (string/adopt-cstr (term/green s)))
+(defn term/green-string [s : cstr] : String (string/adopt-cstr (term/green s)))
 ;;; term/yellow-string -- wrap a string in ANSI yellow codes, as an owned String.
 ;;;
 ;;; Since: v2
@@ -61,11 +57,9 @@
 ;;;
 ;;; Since: v2
 
-(defn term/blue-string [s : cstr] : String
-  (string/adopt-cstr (term/blue s)))
+(defn term/blue-string [s : cstr] : String (string/adopt-cstr (term/blue s)))
 ;;; term/cyan-string -- wrap a string in ANSI cyan codes, as an owned String.
 ;;;
 ;;; Since: v2
 
-(defn term/cyan-string [s : cstr] : String
-  (string/adopt-cstr (term/cyan s)))
+(defn term/cyan-string [s : cstr] : String (string/adopt-cstr (term/cyan s)))

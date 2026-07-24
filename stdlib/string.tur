@@ -105,8 +105,7 @@
 ;;;
 ;;; Since: v2
 
-(defn string/from-cstr [s : cstr] : String
-  (:: (tur_string_from_cstr s) String))
+(defn string/from-cstr [s : cstr] : String (:: (tur_string_from_cstr s) String))
 ;;; string/to-cstr -- borrow the String's NUL-terminated bytes (O(1), no copy).
 ;;;
 ;;; The returned cstr points into the String's payload and stays valid only
@@ -123,8 +122,7 @@
 ;;;
 ;;; Since: v2
 
-(defn string/to-cstr [s : String] : cstr
-  (tur_string_cstr (:: s ptr<void>)))
+(defn string/to-cstr [s : String] : cstr (tur_string_cstr (:: s ptr<void>)))
 ;;; string/adopt-cstr -- take ownership of a freshly-allocated cstr as a String.
 ;;;
 ;;; Copies the bytes of `s` into a fresh owned String and FREES `s`.  This is the
@@ -166,8 +164,7 @@
 ;;;
 ;;; Since: v2 (string-adoption-stdlib-plan, batch 1)
 
-(defn int->string [v : int] : String
-  (:: (tur_string_from_int v) String))
+(defn int->string [v : int] : String (:: (tur_string_from_int v) String))
 ;;; string/retain -- increment the refcount, returning a second owning handle.
 ;;;
 ;;; Since: v2
@@ -178,21 +175,18 @@
 ;;;
 ;;; Since: v2
 
-(defn string/release [s : String] : void
-  (tur_string_release (:: s ptr<void>)))
+(defn string/release [s : String] : void (tur_string_release (:: s ptr<void>)))
 ;; ---- Queries ---------------------------------------------------------------
 ;;; string/len -- byte length of the String (not counting the NUL).
 ;;;
 ;;; Since: v2
 
-(defn string/len [s : String] : int
-  (tur_string_len (:: s ptr<void>)))
+(defn string/len [s : String] : int (tur_string_len (:: s ptr<void>)))
 ;;; string/empty? -- true iff the String has length zero.
 ;;;
 ;;; Since: v2
 
-(defn string/empty? [s : String] : bool
-  (tur_string_empty (:: s ptr<void>)))
+(defn string/empty? [s : String] : bool (tur_string_empty (:: s ptr<void>)))
 ;;; string/byte-at -- the byte (0..255) at index i, or -1 if out of range.
 ;;;
 ;;; Since: v2
@@ -215,8 +209,7 @@
 ;;;
 ;;; Since: v2
 
-(defn string/hash [s : String] : int
-  (tur_string_hash (:: s ptr<void>)))
+(defn string/hash [s : String] : int (tur_string_hash (:: s ptr<void>)))
 ;;; string/starts-with? -- true iff s begins with prefix.
 ;;;
 ;;; Since: v2
@@ -274,8 +267,7 @@
 ;;;
 ;;; Since: v2
 
-(defn builder/new [] : StringBuilder
-  (:: (tur_sb_new) StringBuilder))
+(defn builder/new [] : StringBuilder (:: (tur_sb_new) StringBuilder))
 ;;; builder/push-cstr! -- append a cstr's bytes to the builder.
 ;;;
 ;;; Since: v2
@@ -298,8 +290,7 @@
 ;;;
 ;;; Since: v2
 
-(defn builder/len [b : StringBuilder] : int
-  (tur_sb_len (:: b ptr<void>)))
+(defn builder/len [b : StringBuilder] : int (tur_sb_len (:: b ptr<void>)))
 ;;; builder/finish -- freeze the accumulated bytes into an immutable String.
 ;;;
 ;;; Consumes the builder (frees it); do not use the builder afterward.
@@ -319,6 +310,7 @@
 ;; `Show` loads this file back -- reentrant, but harmless now that String and
 ;; every string/* op above are defined.  Show[String] itself lives in
 ;; typeclass-show.tur (Show's own module).
+
 (load "stdlib/typeclass-eq.tur")
 
 (load "stdlib/typeclass.tur")
@@ -331,25 +323,22 @@
 ;; ---- Typeclass instances ---------------------------------------------------
 ;;; Eq [String] -- content equality.
 
-(definstance Eq [String]
-  (eq? [x y] (string/eq? x y)))
+(definstance Eq [String] (eq? [x y] (string/eq? x y)))
 ;;; Ord [String] -- lexicographic byte ordering.
 
 (definstance Ord [String]
-  (lt?  [x y] (< (string/compare x y) 0))
+  (lt? [x y] (< (string/compare x y) 0))
   (lte? [x y] (<= (string/compare x y) 0))
-  (gt?  [x y] (> (string/compare x y) 0))
+  (gt? [x y] (> (string/compare x y) 0))
   (gte? [x y] (>= (string/compare x y) 0)))
 ;; Show [String] -- lives in stdlib/typeclass-show.tur (Show's own module),
 ;; O(1) retain; moved there in stage 4 when Show's result became owned String.
 ;;; Hash [String] -- content hash over the byte range.
 
-(definstance Hash [String]
-  (hash [x] (string/hash x)))
+(definstance Hash [String] (hash [x] (string/hash x)))
 ;;; Clone [String] -- O(1) retain (refcount++), returning a second owning handle.
 
-(definstance Clone [String]
-  (clone [x] : int (:: (string/retain x) int)))
+(definstance Clone [String] (clone [x] : int (:: (string/retain x) int)))
 ;;; Drop [String] -- release one owning handle (refcount--), freeing at zero.
 ;;;
 ;;; Paired with Clone [String] (retain), this lets the closure drop-glue treat a
@@ -358,8 +347,8 @@
 ;;; closure (e.g. httpd mw-cors config strings) is reclaimed instead of leaking.
 ;;;
 ;;; Since: v2 (Model R)
-(definstance Drop [String]
-  (drop [x] : void (string/release x)))
+
+(definstance Drop [String] (drop [x] : void (string/release x)))
 ;;; MapKey [String] -- owned key: the map copies the bytes into a boxed key it
 ;;; owns and frees (mk-owned? = 1), so a String key never dangles.  mk-cmp is the
 ;;; size-aware content comparator over boxed keys.

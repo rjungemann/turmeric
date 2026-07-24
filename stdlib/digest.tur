@@ -54,6 +54,7 @@
 ;;; digest/md5-transform! -- one MD5 compression round over a 64-byte block.
 ;;; Internal; mutates the 4-word state in place.  st: uint32_t[4] carrier;
 ;;; blk: 64-byte block carrier.
+
 (defn digest/md5-transform! [st : int blk : int] : void
   ```c
   uint32_t *S = (uint32_t *)(intptr_t)st;
@@ -103,6 +104,7 @@
 ;;;   (digest/sha256 buf 32)  ; => vec of 32 byte ints
 ;;;
 ;;; Since: Phase B2
+
 (defn digest/sha256 [data : int len : int] : int
   ```c
   const uint8_t *in = (const uint8_t*)(intptr_t)data;

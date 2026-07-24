@@ -44,6 +44,13 @@ typedef struct ReaderMacroRegistry {
      * leaves it false so iterative redefinition (and `src_acc` replay)
      * continues to work. */
     bool                strict;
+    /* When true, a top-level `(reader-macros/define ...)` directive is still
+     * registered but is ALSO kept in the emitted Form stream instead of being
+     * stripped.  The formatter sets this so it can round-trip the directive
+     * (stripping it silently deletes source -- see fmt_format_source); the
+     * compiler leaves it false so the directive stays a pure read-time
+     * side effect. */
+    bool                keep_define_forms;
 } ReaderMacroRegistry;
 
 /* Initialize an empty registry. Backing storage uses `arena`. */

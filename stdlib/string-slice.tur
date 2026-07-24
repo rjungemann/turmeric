@@ -28,6 +28,7 @@
 
 (load "stdlib/typeclass-hash.tur")
 ;; ---- Opaque handle newtype -------------------------------------------------
+
 (defopaque StringSlice :ptr<void>)
 ;; ---- Runtime primitives (src/runtime/tur_string.c) -------------------------
 
@@ -106,8 +107,7 @@
 ;;;
 ;;; Since: v2
 
-(defn slice/len [sl : StringSlice] : int
-  (tur_slice_len (:: sl ptr<void>)))
+(defn slice/len [sl : StringSlice] : int (tur_slice_len (:: sl ptr<void>)))
 ;;; slice/empty? -- true iff the slice has length zero.
 ;;;
 ;;; Since: v2
@@ -136,8 +136,7 @@
 ;;;
 ;;; Since: v2
 
-(defn slice/hash [sl : StringSlice] : int
-  (tur_slice_hash (:: sl ptr<void>)))
+(defn slice/hash [sl : StringSlice] : int (tur_slice_hash (:: sl ptr<void>)))
 ;; ---- Sub-slicing (O(1)) ----------------------------------------------------
 ;;; slice/sub -- a sub-view [off, off+len) RELATIVE to this slice (clamped).
 ;;;
@@ -171,14 +170,13 @@
 ;; ---- Typeclass instances ---------------------------------------------------
 ;;; Eq [StringSlice] -- content equality (no allocation).
 
-(definstance Eq [StringSlice]
-  (eq? [x y] (slice/eq? x y)))
+(definstance Eq [StringSlice] (eq? [x y] (slice/eq? x y)))
 ;;; Ord [StringSlice] -- lexicographic byte ordering.
 
 (definstance Ord [StringSlice]
-  (lt?  [x y] (< (slice/compare x y) 0))
+  (lt? [x y] (< (slice/compare x y) 0))
   (lte? [x y] (<= (slice/compare x y) 0))
-  (gt?  [x y] (> (slice/compare x y) 0))
+  (gt? [x y] (> (slice/compare x y) 0))
   (gte? [x y] (>= (slice/compare x y) 0)))
 ;;; Show [StringSlice] -- the slice content as a fresh owned String.
 ;;; slice/to-cstr always mallocs, so adopting it is leak-free.
@@ -187,5 +185,4 @@
   (show [x] : String (string/adopt-cstr (slice/to-cstr x))))
 ;;; Hash [StringSlice] -- content hash over the byte range.
 
-(definstance Hash [StringSlice]
-  (hash [x] (slice/hash x)))
+(definstance Hash [StringSlice] (hash [x] (slice/hash x)))

@@ -21,7 +21,6 @@
 ;;;
 ;;; Since: Phase 15
 ;; Ord typeclass - ordering
-
 (defclass Ord [a]
   (lt? [x y] : bool)
   (lte? [x y] : bool)
@@ -729,4 +728,5 @@
 ;; Show (owned String result) -- loaded LAST so that its transitive load of
 ;; stdlib/string.tur (which loads this file back) finds Ord/Num/Display/Debug/
 ;; Error already defined.  See the note at the top of this file.
+
 (load "stdlib/typeclass-show.tur")

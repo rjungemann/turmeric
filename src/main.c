@@ -5627,6 +5627,10 @@ static int fmt_format_source(const char *path_label, const char *src, size_t len
     ReaderMacroRegistry rmreg;
     reader_macros_init(&rmreg, &arena);
     rmreg.strict = true;
+    /* Keep `(reader-macros/define ...)` directives in the form stream so the
+     * formatter emits them -- stripping them (the compiler default) would make
+     * `tur fmt` silently delete the definition. */
+    rmreg.keep_define_forms = true;
 
     uint32_t nforms = 0;
     Form **forms = read_all_with_registry(&arena, &st, &file, &rmreg, &nforms);

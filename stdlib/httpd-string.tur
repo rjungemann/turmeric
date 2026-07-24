@@ -101,9 +101,7 @@
 
 (defn httpd-req-cookie-opt [conn : ptr<void> name : cstr] : (Option String)
   (let [raw (httpd-req-cookie-raw conn name)]
-    (if (cstr-null? raw)
-      (none)
-      (some (string/adopt-cstr raw)))))
+    (if (cstr-null? raw) (none) (some (string/adopt-cstr raw)))))
 ;;; httpd-req-form-raw -- internal: decoded form value as a fresh cstr, or NULL.
 ;;;
 ;;; Same body walk + percent/plus decode as httpd-req-form, but returns NULL (not
@@ -180,10 +178,7 @@
 
 (defn httpd-req-form-opt [conn : ptr<void> field : cstr] : (Option String)
   (let [raw (httpd-req-form-raw conn field)]
-    (if (cstr-null? raw)
-      (none)
-      (some (string/adopt-cstr raw)))))
+    (if (cstr-null? raw) (none) (some (string/adopt-cstr raw)))))
 ;;; cstr-null? -- internal: true iff the cstr pointer is NULL (a miss sentinel).
 
-(defn cstr-null? [s : cstr] : bool
-  ```c return (s == NULL); ```)
+(defn cstr-null? [s : cstr] : bool ```c return (s == NULL); ```)

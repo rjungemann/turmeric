@@ -76,6 +76,7 @@
 #include "buf.h"
 #include "builtins.h"
 #include "runtime/hamt.h"   /* tur_hamt_hash_str -- struct-key content hash */
+#include "runtime/tur_string.h"  /* tur_string_cstr/release -- Show returns owned String */
 #include "diag.h"
 #include "elab.h"
 #include "expr.h"
@@ -7074,6 +7075,35 @@ static TuriValue eval_apply(TuriEnv *env, TuriClosure *cl,
      * native HOF's turi_call, so the callee never runs while unwinding to the
      * DK_CATCH_UNWIND boundary (the value is discarded). */
     if (env->panicking) return turi_nil();
+
+    /* DEPR-R0 rejection primitives vs the Error typeclass.  `error-message` /
+     * `error-cause` are BOTH native primitives over a builtin TURI_REJECTION
+     * value AND methods of the `Error` typeclass (stdlib/typeclass.tur), whose
+     * only instance -- Error[ptr<void>] -- carries an inline-C body the
+     * tree-walker cannot run.  A rejection is a builtin value with no (and no
+     * possible) user Error instance, so a call like `(error-message r)` on a
+     * rejection wrongly dispatches into that uninterpretable instance and fails
+     * with "inline-C not supported".  Route it back to the native primitive.
+     * `error?` needs no such handling -- it is not a typeclass method. */
+    if (n_args == 1 && args[0].tag == TURI_REJECTION && cl && !cl->native &&
+        cl->fn) {
+        const FnDef *fn = (const FnDef *)cl->fn;
+        const char *mname = (fn->binding && fn->binding->name)
+                            ? fn->binding->name->name : NULL;
+        /* Instance methods are mangled `__inst_<Class>_<method>_<component>`
+         * (emit_core.c), so the Error methods surface as
+         * `__inst_Error_error_hymessage_*` / `__inst_Error_error_hycause_*`.
+         * Match the stable class prefix, then the method by keyword -- robust
+         * to the exact hyphen encoding.  A genuine ptr<void> error value is a
+         * boxed TURI_INT, never a TURI_REJECTION, so real Error instances are
+         * unaffected. */
+        if (mname && strncmp(mname, "__inst_Error_", 13) == 0) {
+            if (strstr(mname, "message"))
+                return native_error_message(env, args, n_args, NULL);
+            if (strstr(mname, "cause"))
+                return turi_int(0);   /* a rejection carries no cause pointer */
+        }
+    }
     const char *saved_module = env->current_module;
     TuriValue r = eval_apply_driven(env, cl, args, n_args);
     env->current_module = saved_module;
@@ -8195,7 +8225,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         /* Allocate and initialise the fiber struct. */
         /* Escaping payload: a fiber is linked into the scheduler/future and lives
          * until env teardown; pool-owned (its stack stays mmap/malloc below). */
-        TuriFiber *fiber = (TuriFiber *)turi_val_calloc(env, sizeof(TuriFiber));
+        /* TuriFiber leads with a ucontext_t that requires 16-byte alignment;
+         * the default pointer-aligned pool would trip UBSan and can corrupt
+         * makecontext/swapcontext register save areas.  Request _Alignof. */
+        TuriFiber *fiber = (TuriFiber *)turi_val_calloc_aligned(
+            env, sizeof(TuriFiber), _Alignof(TuriFiber));
 
         fiber->own_future    = f;
         f->owner             = fiber;
@@ -11132,8 +11166,20 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
     TuriValue result = turi_call(env, fn_val, &val, 1);
     free(cl);
 
-    if (result.tag != TURI_CSTR || !result.as_cstr) return NULL;
-    return strdup(result.as_cstr);
+    /* A pre-Stage-4 instance may still hand back a bare cstr. */
+    if (result.tag == TURI_CSTR && result.as_cstr) return strdup(result.as_cstr);
+    /* Stage 4 (cb414fbd8): `Show`'s method now returns an owned `String`
+     * (`defopaque String :ptr<void>`, carried as a TURI_INT handle in the
+     * interpreter).  Copy its bytes for display, then release the owned String
+     * so the render does not leak one String per REPL result. */
+    if (result.tag == TURI_INT && result.as_int) {
+        void       *s   = (void *)(intptr_t)result.as_int;
+        const char *cs  = tur_string_cstr(s);
+        char       *out = cs ? strdup(cs) : NULL;
+        tur_string_release(s);
+        return out;
+    }
+    return NULL;
 }
 
 const char *turi_try_show(TuriEnv *env, TuriValue val) {
@@ -11221,6 +11267,21 @@ const char *turi_show_result(TuriEnv *env, TuriValue val, const char *type_tag) 
     /* "Cons" kept for backwards compat; "ConsPtr" is the defopaque name */
     if (strcmp(type_tag, "Cons") == 0 || strcmp(type_tag, "ConsPtr") == 0)
         return show_cons_ptr(val.as_int);
+    /* A String RESULT value (Stage 4: `defopaque String :ptr<void>`) displays
+     * like a string literal -- quoted, matching the TURI_CSTR repr -- rather
+     * than routing through Show[String] (which would print it bare).  This is
+     * the owned result the REPL binds to `_`, so read its bytes without
+     * releasing it. */
+    if (strcmp(type_tag, "String") == 0) {
+        const char *cs = val.as_int
+                         ? tur_string_cstr((void *)(intptr_t)val.as_int) : "";
+        if (!cs) cs = "";
+        size_t need = strlen(cs) + 3;   /* two quotes + NUL */
+        char *buf = (char *)malloc(need);
+        if (!buf) return NULL;
+        snprintf(buf, need, "\"%s\"", cs);
+        return buf;
+    }
     return NULL;
 }
 

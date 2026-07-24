@@ -277,7 +277,10 @@
   `(let [__tur_sv__ ~v
          __tur_si__ ~i
          __tur_sx__ ~val]
-     (vec-set-o! __tur_sv__ __tur_si__ __tur_sx__ (tur-vec-elem-wide? __tur_sv__))))
+     (vec-set-o! __tur_sv__
+       __tur_si__
+       __tur_sx__
+       (tur-vec-elem-wide? __tur_sv__))))
 ;;; tur-vec-elem-wide? -- 1 if the Vec's element type A is a multi-word (> 8
 ;;; byte) by-value struct/ADT that rides its data slot as an int64 heap-box
 ;;; pointer, else 0.  Compiler-intercepted (src/compiler/emit_expr.c) as an
@@ -346,8 +349,7 @@
 ;;; Since: Phase TC1
 
 (defmacro vec-free [v]
-  `(let [__tur_fv__ ~v]
-     (vec-free-o __tur_fv__ (tur-vec-elem-wide? __tur_fv__))))
+  `(let [__tur_fv__ ~v] (vec-free-o __tur_fv__ (tur-vec-elem-wide? __tur_fv__))))
 ;;; vec-push-each__ -- internal helper for the vec-of macro.
 ;;;
 ;;; Expands a sequence of pushes onto `v` followed by `v` itself as the

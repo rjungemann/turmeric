@@ -50,8 +50,7 @@
 ;;;
 ;;; Since: v2
 
-(defn path/stem-string [p : cstr] : String
-  (string/adopt-cstr (path/stem p)))
+(defn path/stem-string [p : cstr] : String (string/adopt-cstr (path/stem p)))
 ;;; path/normalize-string -- normalized path, as an owned String.
 ;;;
 ;;; Since: v2

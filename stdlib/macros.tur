@@ -131,7 +131,9 @@
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (symbol-name (first field)) (symbol-name field))
+            label         (if is-vec
+                            (symbol-name (first field))
+                            (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -149,7 +151,9 @@
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (symbol-name (first field)) (symbol-name field))
+              label         (if is-vec
+                              (symbol-name (first field))
+                              (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)
@@ -201,13 +205,13 @@
   ;; The sibling `derive-show-cstr` covers the minimal local-`Show`-class case.
   (defmacro derive-show-string-rest__ [& fields]
     (if (empty? fields)
-      (list do
-        (list builder/push-cstr! __b " }")
-        (list builder/finish __b))
+      (list do (list builder/push-cstr! __b " }") (list builder/finish __b))
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (symbol-name (first field)) (symbol-name field))
+            label         (if is-vec
+                            (symbol-name (first field))
+                            (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -215,7 +219,8 @@
             prefix        (str-append ", " label " = ")]
         (list do
           (list builder/push-cstr! __b prefix)
-          (list let (vec __e (list show accessor-form))
+          (list let
+            (vec __e (list show accessor-form))
             (list do
               (list builder/push-string! __b __e)
               (list string/release __e)))
@@ -223,23 +228,28 @@
   (defmacro derive-show-string-body__ [TypeName & fields]
     (let [type-str (symbol-name TypeName)]
       (if (empty? fields)
-        (list let (vec __b (list builder/new))
+        (list let
+          (vec __b (list builder/new))
           (list do
             (list builder/push-cstr! __b (str-append type-str " { }"))
             (list builder/finish __b)))
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (symbol-name (first field)) (symbol-name field))
+              label         (if is-vec
+                              (symbol-name (first field))
+                              (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)
                               (list (dot-sym accessor-sym) __p))
               first-prefix  (str-append type-str " { " label " = ")]
-          (list let (vec __b (list builder/new))
+          (list let
+            (vec __b (list builder/new))
             (list do
               (list builder/push-cstr! __b first-prefix)
-              (list let (vec __e (list show accessor-form))
+              (list let
+                (vec __e (list show accessor-form))
                 (list do
                   (list builder/push-string! __b __e)
                   (list string/release __e)))
@@ -255,7 +265,9 @@
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (symbol-name (first field)) (symbol-name field))
+            label         (if is-vec
+                            (symbol-name (first field))
+                            (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -273,7 +285,9 @@
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (symbol-name (first field)) (symbol-name field))
+              label         (if is-vec
+                              (symbol-name (first field))
+                              (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)
@@ -295,7 +309,9 @@
       (let [field         (first fields)
             rest-fields   (rest fields)
             is-vec        (vec? field)
-            label         (if is-vec (symbol-name (first field)) (symbol-name field))
+            label         (if is-vec
+                            (symbol-name (first field))
+                            (symbol-name field))
             accessor-sym  (if is-vec (second field) field)
             accessor-form (if is-vec
                             (list accessor-sym __p)
@@ -313,7 +329,9 @@
         (let [field         (first fields)
               rest-fields   (rest fields)
               is-vec        (vec? field)
-              label         (if is-vec (symbol-name (first field)) (symbol-name field))
+              label         (if is-vec
+                              (symbol-name (first field))
+                              (symbol-name field))
               accessor-sym  (if is-vec (second field) field)
               accessor-form (if is-vec
                               (list accessor-sym __p)

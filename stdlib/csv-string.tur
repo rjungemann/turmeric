@@ -92,5 +92,4 @@
 ;;;
 ;;; Since: v2
 
-(defn csv/emit-string [rows : int] : String
-  (string/adopt-cstr (csv/emit rows)))
+(defn csv/emit-string [rows : int] : String (string/adopt-cstr (csv/emit rows)))

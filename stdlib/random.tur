@@ -9,12 +9,12 @@
 (extern-c rand [^] :int)
 
 (extern-c srand [^int] :void)
-
 ;; NOTE: `time` is NOT declared via extern-c. It is only ever called from
 ;; inline-C as `time(NULL)`, which resolves to the libc prototype in <time.h>
 ;; (pulled in by the codegen preamble). An `(extern-c time [^ptr] :ptr)`
 ;; binding emits `extern void *time(void *)`, which conflicts with the real
 ;; `time_t time(time_t *)` and breaks the C compile on a standard toolchain.
+
 
 (extern-c malloc [^ptr size] :ptr)
 
@@ -39,11 +39,11 @@
 ;;; Since: Phase 16
 ;; Real-Random implementation
 ;; Uses libc rand() function
-
 ;;; random-next-int! -- Real-Random's next_int slot: a random integer in
 ;;; [min, max], auto-seeding libc rand() with time(NULL) on first use.
 ;;; Internal; hoisted to file scope so Real-Random's inline-C can take its
 ;;; address (nested + static functions are non-standard C).
+
 (defn random-next-int! [min : int max : int] : int
   ```c
   static int seeded = 0;
@@ -58,6 +58,7 @@
 ;;; random-next-float! -- Real-Random's next_float slot: a random integer in
 ;;; [0, 10000), auto-seeding libc rand() with time(NULL) on first use.
 ;;; Internal; hoisted to file scope (see random-next-int!).
+
 (defn random-next-float! [] : int
   ```c
   static int seeded = 0;
@@ -117,11 +118,11 @@
 ;;; Since: Phase 16
 ;; Seeded-Random implementation - uses a fixed seed for reproducibility
 ;; Useful for testing
-
 ;;; seeded-next-int! -- Seeded-Random's next_int slot: a random integer in
 ;;; [min, max] drawn from the current libc rand() state. Does not auto-seed;
 ;;; Seeded-Random calls srand(seed) at construction. Internal; hoisted to file
 ;;; scope so Seeded-Random's inline-C can take its address.
+
 (defn seeded-next-int! [min : int max : int] : int
   ```c
   int range = (int)max - (int)min + 1;
@@ -131,6 +132,7 @@
 ;;; seeded-next-float! -- Seeded-Random's next_float slot: a random integer in
 ;;; [0, 10000) drawn from the current libc rand() state. Does not auto-seed
 ;;; (see seeded-next-int!). Internal; hoisted to file scope.
+
 (defn seeded-next-float! [] : int
   ```c
   return (int64_t)(rand() % 10000);

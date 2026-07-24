@@ -149,11 +149,11 @@
 ;;;   (show (Unbounded))    ; => "unbounded"
 ;;;
 ;;; Since: range-gadt-typeclass-migration-plan B2
-
 ;;; Show [Bound] -- render a lone endpoint as an owned String: "[v" (Inclusive),
 ;;; "(v" (Exclusive), or "unbounded".  Mixed borrow/malloc: the bracket arms
 ;;; adopt the bound-show-fmt malloc (leak-free), the Unbounded arm copies the
 ;;; borrowed literal via from-cstr.
+
 
 (definstance Show [Bound]
   (show [x]

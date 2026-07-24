@@ -23,6 +23,7 @@
 ;;;   A fresh owned String (refcount 1); the caller string/releases it.
 ;;;
 ;;; Since: Phase 15 (owned since stage 4)
+
 (defclass Show [a] (show [x] : String))
 ;; ---------------------------------------------------------------------------
 ;; Primitive instances.  Each builds the owned String directly (no cstr
@@ -168,9 +169,7 @@
     (do
       (when (> i 0) (builder/push-cstr! b " "))
       (let [es (show (:: (vec-get v i) A))]
-        (do
-          (builder/push-string! b es)
-          (string/release es)))
+        (do (builder/push-string! b es) (string/release es)))
       (vec-show-loop v (+ i 1) len b))))
 ;;; Show [Vec] -- render a Vec[A] as an owned "[a b c]" String.
 ;;;
@@ -196,9 +195,7 @@
     (do
       (when (not first) (builder/push-cstr! b " "))
       (let [es (show (:: (hamt/iter-cur-key iter) A))]
-        (do
-          (builder/push-string! b es)
-          (string/release es)))
+        (do (builder/push-string! b es) (string/release es)))
       (set-show-loop s iter false b))
     b))
 ;;; Show [Set] -- render a Set[A] as an owned "#set{a b c}" String.
@@ -258,7 +255,9 @@
 ;; ---------------------------------------------------------------------------
 ;;; show-string-fputs -- internal: write a cstr to stdout with no newline.
 
-(defn show-string-fputs [s : cstr] #fx{FS} : void
+(defn show-string-fputs [s : cstr]
+  #fx{FS}
+  : void
   ```c
   fputs((const char *)s, stdout);
   ```)
@@ -271,11 +270,11 @@
 ;;;
 ;;; Since: v2 (show-owned-result-plan)
 
-(defn print-show [^Show a] [x : a] : void
+(defn print-show [^Show a]
+  [x : a]
+  : void
   (let [s (show x)]
-    (do
-      (show-string-fputs (string/to-cstr s))
-      (string/release s))))
+    (do (show-string-fputs (string/to-cstr s)) (string/release s))))
 ;;; show-line -- render x via Show and print it with a trailing newline.
 ;;;
 ;;; Shows x to an owned String, prints its bytes plus a newline, releases it.
@@ -285,8 +284,7 @@
 ;;;
 ;;; Since: v2 (show-owned-result-plan)
 
-(defn show-line [^Show a] [x : a] : void
-  (let [s (show x)]
-    (do
-      (println (string/to-cstr s))
-      (string/release s))))
+(defn show-line [^Show a]
+  [x : a]
+  : void
+  (let [s (show x)] (do (println (string/to-cstr s)) (string/release s))))

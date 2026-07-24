@@ -45,9 +45,16 @@ void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
     if (size == 0) size = 1;
     if (align < sizeof(void *)) align = sizeof(void *);
 
+    /* Align the ABSOLUTE address, not the offset: the slab's data[] field sits
+     * at a non-trivial offset past the ArenaSlab header (e.g. 24 bytes), so a
+     * 16-byte-aligned malloc base leaves data[] only 8-byte aligned.  Aligning
+     * s->used alone would therefore never satisfy align > 8 (a TuriFiber leads
+     * with a ucontext_t needing 16-byte alignment -- see turi/fiber.c).  Round
+     * the real pointer up instead so any power-of-two alignment is honored. */
     ArenaSlab *s = a->head;
     if (s) {
-        size_t aligned_used = align_up(s->used, align);
+        uintptr_t base = (uintptr_t)s->data;
+        size_t aligned_used = align_up(base + s->used, align) - base;
         if (aligned_used + size <= s->cap) {
             void *p = s->data + aligned_used;
             s->used = aligned_used + size;
@@ -57,14 +64,16 @@ void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
         }
     }
 
-    /* Need a new slab. Grow if the request is large. */
+    /* Need a new slab. Grow if the request is large. The extra `align` bytes
+     * cover worst-case alignment padding at the head of a fresh slab. */
     size_t cap = a->default_slab;
     if (size + align > cap) cap = size + align;
     ArenaSlab *fresh = slab_new(cap);
     fresh->next = a->head;
     a->head = fresh;
 
-    size_t aligned_used = align_up(0, align);
+    uintptr_t base = (uintptr_t)fresh->data;
+    size_t aligned_used = align_up(base, align) - base;
     void *p = fresh->data + aligned_used;
     fresh->used = aligned_used + size;
     a->total_bytes += size;

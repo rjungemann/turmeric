@@ -4012,7 +4012,12 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
                 free(forms);
                 return NULL;
             }
-            continue;
+            /* Normally the directive is a pure read-time side effect and is
+             * stripped from the output.  The formatter opts to keep it (via
+             * reg->keep_define_forms) so `tur fmt` round-trips the source
+             * instead of silently deleting the definition. */
+            if (!reg || !reg->keep_define_forms)
+                continue;
         }
 
         if (n == cap) {

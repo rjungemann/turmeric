@@ -109,6 +109,11 @@ static inline bool turi_is_throw(TuriValue v) { return v.tag == TURI_THROW; }
 void *turi_val_alloc(TuriEnv *env, size_t n);
 /* Bump-allocate n zeroed bytes from env's scratch value pool. */
 void *turi_val_calloc(TuriEnv *env, size_t n);
+/* Bump-allocate n zeroed bytes from env's scratch value pool, aligned to
+ * `align` (power of two).  For payloads whose leading member has a stricter
+ * alignment than the default pointer size -- e.g. a TuriFiber leading with a
+ * ucontext_t that requires 16-byte alignment. */
+void *turi_val_calloc_aligned(TuriEnv *env, size_t n, size_t align);
 /* Copy s into env's scratch value pool (returns NULL when s is NULL). */
 char *turi_val_strdup(TuriEnv *env, const char *s);
 

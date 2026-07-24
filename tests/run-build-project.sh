@@ -737,8 +737,12 @@ elif command -v nm >/dev/null 2>&1; then
     # must resolve to exactly one owning definition (the owner TU), not one per
     # module .c -- proving single shared GC state across the separately-compiled
     # translation units.
-    has_export=$(nm -D "$WORK/rcbox.so" 2>/dev/null | grep -cE 'widget__box__alloc_hybox')
-    gc_owners=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' [A-Za-z] gc_all_blocks$')
+    # Portable across GNU nm (Linux) and Apple nm (macOS): macOS has no `nm -D`
+    # (Mach-O has no dynamic symbol table -- the flag errors) and prefixes every
+    # symbol with an underscore, so read plain `nm` and allow an optional leading
+    # `_`.  The exported rc-using function is the external (uppercase T) def.
+    has_export=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' T _?widget__box__alloc_hybox$')
+    gc_owners=$(nm "$WORK/rcbox.so" 2>/dev/null | grep -cE ' [A-Za-z] _?gc_all_blocks$')
     if [ "$has_export" -ge 1 ] && [ "$gc_owners" -eq 1 ]; then
         pass "build-shared-rc-runtime"
     else
