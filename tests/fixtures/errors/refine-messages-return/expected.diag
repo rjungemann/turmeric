@@ -1,0 +1,5 @@
+TUR-E0371
+the predicate (> r 0) does not hold for every input here
+counterexample: x =
+help: (> x 0) would discharge it
+x : #refine{ v : int | (> v 0) }

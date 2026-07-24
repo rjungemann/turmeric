@@ -21,7 +21,8 @@
 > | S4 boolean structure | done (small-DNF cube expansion) | `refine_solver.c` |
 > | RT5b stdlib refinement aliases | done | `stdlib/refine.tur` |
 > | RT4 predicate propagation | done (+ declared-result propagation) | `elab_fns.c`, `refine_collect.c` |
-> | RT5a WASM confirm, RT6 hints, RT7 caching | not started | -- |
+> | RT6 error message quality | done | `refine_discharge.c` |
+> | RT5a WASM confirm, RT7 caching | not started | -- |
 >
 > ### Deliberate deviations from the plan as written
 >
@@ -150,13 +151,49 @@
 > functions already elaborated. Under mutual recursion one direction may miss
 > one. This can only lose a hypothesis, never add a false one.
 >
+> ### RT6 error message quality (landed 2026-07-24)
+>
+> A failing obligation now reports claim -> witness -> remedy: the predicate as
+> the user wrote it (rendered through `fmt_print`, so it matches the source),
+> the counterexample, and a `help:` line naming a fact that would discharge it.
+>
+> The hint is the plan's "second seam query" taken literally: a candidate is
+> asserted as a hypothesis and the chain is asked again, so only a candidate
+> that genuinely discharges the goal is offered. Two candidate families --
+> comparisons against literals the VC already mentions, and relations between
+> two variables. The second family is what produces `(< i n)` for an index
+> obligation; no literal bound can express it, and that is the shape the plan's
+> `SizedVec` motivation is about.
+>
+> Two guards, both learned by writing the tests:
+>
+> - **A contradictory candidate is rejected.** Adding `(> x 0)` when `x < 0` is
+>   already known makes the hypotheses unsatisfiable, which discharges the goal
+>   by ex falso -- and would have the compiler suggest constraining a variable
+>   to be both negative and positive. Each candidate is checked for
+>   satisfiability before it is offered.
+> - **An already-valid obligation gets no hint.** The discharge pass only calls
+>   the search on a failure, so this was unreachable in practice; the check
+>   belongs in the function anyway, because the function is exported and should
+>   be correct for any caller.
+>
+> `refine_hint_search` is exported rather than static specifically so the
+> "never suggests a contradiction" property can be unit-tested. Substring
+> matching over a fixture's stderr can confirm a hint *appears*; it cannot
+> confirm a wrong one does not, and that is the property that matters.
+>
+> Deviation from the acceptance criteria: the plan asks for snapshots in
+> `tests/fixtures/refine/error-messages/` diffed by the session-types snapshot
+> mechanism. The repo's error-fixture harness matches `expected.diag`
+> substrings, so the five representative shapes are asserted that way instead
+> of inventing a parallel mechanism -- three new `errors/refine-messages-*`
+> fixtures plus tightened assertions on the existing closed-value, unknown, and
+> nonlinear fixtures.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
-> - **RT6 error-message quality** -- the hint half ("constrain the parameter,
->   e.g. `x : #refine{ v : int | (>= v 0) }`") derived by a second seam query.
->   The counterexample half already landed.
 > - **Indirect calls** -- a call through a closure, a function-typed parameter,
 >   or a typeclass method does not carry the callee's predicates to the call
 >   site.

@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "lsp/lsp_sym.h"            /* LspSymbol, for the link stub below */
+#include "compiler/refine_discharge.h"   /* RT6 hint search */
 #include "compiler/refine_solver.h"
 #include "compiler/refine_smtlib.h"
 #include "runtime/arena.h"
@@ -260,6 +261,57 @@ static void test_closed_goal(Arena *a) {
        "closed goal: no counterexample for a satisfied predicate");
 }
 
+/* RT6: the hint search must offer a fact that genuinely discharges the goal,
+ * and must never offer one that contradicts what is already known -- a
+ * contradictory hypothesis "proves" anything by ex falso, so without the
+ * satisfiability guard the search would happily suggest constraining a
+ * variable to be both negative and positive. */
+static void test_hint_search(Arena *a) {
+    char cand[128], decl[128];
+    const char *var = NULL;
+    bool is_real = false;
+
+    /* |- x > 0, unconstrained: the obvious strengthening is the answer. */
+    RefineVC *vc = vc_new(a);
+    VCTerm *x = V(vc, "x");
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), x));
+    ok(refine_hint_search(vc, a, cand, sizeof(cand), decl, sizeof(decl),
+                          &var, &is_real),
+       "hint: finds a strengthening for an unconstrained goal");
+    ok(strcmp(cand, "(> x 0)") == 0, "hint: names the fact in the variable's own name");
+    ok(strcmp(decl, "(> v 0)") == 0, "hint: renders a declaration in the bound variable");
+
+    /* An INDEX bound needs a relation between two variables -- no literal
+     * comparison can express `(< i n)`. */
+    vc = vc_new(a);
+    VCTerm *i = V(vc, "i"), *n = V(vc, "n");
+    vc_set_goal(vc, lt(vc, i, n));
+    ok(refine_hint_search(vc, a, cand, sizeof(cand), decl, sizeof(decl),
+                          &var, &is_real),
+       "hint: finds a variable-vs-variable strengthening");
+    ok(strcmp(cand, "(< i n)") == 0, "hint: suggests the index bound itself");
+
+    /* THE ONE THAT MATTERS: x < 0 is already known and the goal needs x > 0.
+     * Every candidate strong enough to discharge the goal contradicts the
+     * hypothesis, so nothing may be offered. */
+    vc = vc_new(a);
+    x = V(vc, "x");
+    vc_add_hyp(vc, lt(vc, x, vc_int(vc, 0)));
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), x));
+    ok(!refine_hint_search(vc, a, cand, sizeof(cand), decl, sizeof(decl),
+                           &var, &is_real),
+       "hint: never suggests a candidate that contradicts the hypotheses");
+
+    /* An already-valid obligation has nothing to suggest either. */
+    vc = vc_new(a);
+    x = V(vc, "x");
+    vc_add_hyp(vc, lt(vc, vc_int(vc, 0), x));
+    vc_set_goal(vc, lt(vc, vc_int(vc, 0), x));
+    ok(!refine_hint_search(vc, a, cand, sizeof(cand), decl, sizeof(decl),
+                           &var, &is_real),
+       "hint: offers nothing when the goal already holds");
+}
+
 static void test_smtlib(Arena *a) {
     RefineVC *vc = vc_new(a);
     VCTerm *x = V(vc, "x");
@@ -301,6 +353,7 @@ int main(void) {
     test_disjunction(&a);
     test_model_search(&a);
     test_closed_goal(&a);
+    test_hint_search(&a);
     test_smtlib(&a);
 
     arena_free(&a);

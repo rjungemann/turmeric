@@ -1,0 +1,4 @@
+TUR-E0371
+the predicate (< r n) does not hold for every input here
+help: (< i n) would discharge it
+i : #refine{ v : int | (< v n) }

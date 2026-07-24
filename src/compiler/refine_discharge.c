@@ -94,14 +94,10 @@ static void describe(const RefineObligation *ob, char *buf, size_t cap) {
 }
 
 static void emit_model_note(const RefineObligation *ob) {
-    if (!ob->counterex) return;
-    if (ob->counterex->n == 0) {
-        /* A closed goal -- every term was a literal, so there is nothing to
-         * bind.  The values are already written at the site. */
-        diag_emit(DIAG_NOTE, ob->loc,
-                  "the predicate is false for the value given here");
-        return;
-    }
+    /* The closed case is handled by emit_predicate_note, which can say it in
+     * one line ("... is false for the value given here") instead of two
+     * notes that repeat each other. */
+    if (!ob->counterex || ob->counterex->n == 0) return;
     char buf[256]; size_t off = 0;
     for (uint32_t i = 0; i < ob->counterex->n && off + 1 < sizeof(buf); i++) {
         const RefineModelBinding *b = &ob->counterex->bindings[i];
@@ -114,6 +110,200 @@ static void emit_model_note(const RefineObligation *ob) {
         off += (size_t)k;
     }
     diag_emit(DIAG_NOTE, ob->loc, "counterexample: %s", buf);
+}
+
+/* ------------------------------------------------------------------------- *
+ * RT6: hint generation.
+ *
+ * "Cannot be proved" is only half an answer.  The other half -- which extra
+ * fact would have discharged it -- is a second query through the same seam:
+ * add a candidate hypothesis and ask the chain again.  A candidate that works
+ * is a real answer, because it was checked, not guessed.
+ * ------------------------------------------------------------------------- */
+
+#define HINT_MAX_VARS   4
+#define HINT_MAX_LITS   4
+#define HINT_MAX_TRIES  96
+
+/* Run the whole chain over `vc` as the discharge loop does. */
+static RefineVerdict run_chain(RefineVC *vc, Arena *a) {
+    for (size_t i = 0; i < CHAIN_LEN; i++) {
+        RefineDecision d = CHAIN[i](vc, a);
+        if (d.verdict != RT_UNKNOWN) return d.verdict;
+    }
+    return RT_UNKNOWN;
+}
+
+/* Collect the integer literals mentioned anywhere in the VC, so a hint can
+ * suggest a bound the surrounding code actually talks about (`(>= i 0)`,
+ * `(< i n)`) rather than only comparisons against zero. */
+static void hint_collect_lits(const VCTerm *t, int64_t *out, uint32_t *n) {
+    if (!t || *n >= HINT_MAX_LITS) return;
+    if (t->op == VC_CONST_INT) {
+        for (uint32_t i = 0; i < *n; i++) if (out[i] == t->as.i) return;
+        out[(*n)++] = t->as.i;
+        return;
+    }
+    for (uint32_t i = 0; i < t->n; i++) hint_collect_lits(t->kids[i], out, n);
+}
+
+static VCTerm *hint_build(RefineVC *vc, const char *op, VCTerm *x, VCTerm *k) {
+    if (strcmp(op, ">")  == 0) return vc_mk2(vc, VC_LT, k, x);
+    if (strcmp(op, ">=") == 0) return vc_mk2(vc, VC_LE, k, x);
+    if (strcmp(op, "<")  == 0) return vc_mk2(vc, VC_LT, x, k);
+    if (strcmp(op, "<=") == 0) return vc_mk2(vc, VC_LE, x, k);
+    return vc_not(vc, vc_mk2(vc, VC_EQ, x, k));   /* not= */
+}
+
+/* Would asserting `cand` discharge the goal?  Two things have to hold: the
+ * goal must become valid, AND the hypotheses must stay satisfiable.  Without
+ * the second test a candidate that CONTRADICTS what is already known would
+ * "work" by ex falso, and we would helpfully suggest constraining `x` to be
+ * both positive and negative. */
+static bool hint_discharges(RefineVC *vc, Arena *a, VCTerm *cand) {
+    uint32_t saved_hyps = vc->n_hyps;
+    VCTerm  *saved_goal = vc->goal;
+
+    vc_add_hyp(vc, cand);
+    if (vc->n_hyps == saved_hyps) return false;   /* already known: no new information */
+
+    vc->goal = vc_bool(vc, false);
+    bool contradictory = (run_chain(vc, a) == RT_VALID);
+    vc->goal = saved_goal;
+
+    bool ok = !contradictory && (run_chain(vc, a) == RT_VALID);
+    vc->n_hyps = saved_hyps;
+    return ok;
+}
+
+/* Search for a strengthening that discharges `vc`.  Returns true and fills
+ * `out` with source syntax in the variable's own name (`(> x 0)`) and
+ * `out_decl` with the same fact in a refinement's bound variable (`(> v 0)`).
+ *
+ * Two families of candidate, literal bounds first because they are the common
+ * case, then variable-vs-variable -- which is what produces `(< i n)` for an
+ * index obligation, the shape a bound literal can never express. */
+bool refine_hint_search(RefineVC *vc, Arena *a, char *out, size_t cap,
+                        char *out_decl, size_t decl_cap,
+                        const char **out_var, bool *out_real) {
+    if (!vc || !vc->goal) return false;
+    /* An obligation that already holds has nothing to suggest -- every
+     * consistent candidate would "discharge" it vacuously.  The discharge
+     * pass only calls this on a failure, but the check belongs here so the
+     * function is correct for any caller, not just the careful one. */
+    if (run_chain(vc, a) == RT_VALID) return false;
+
+    static const char *const OPS[]     = { ">", ">=", "not=", "<", "<=" };
+    static const char *const REL_OPS[] = { "<", "<=", ">", ">=" };
+
+    int64_t lits[HINT_MAX_LITS]; uint32_t n_lits = 0;
+    for (uint32_t i = 0; i < vc->n_hyps; i++) hint_collect_lits(vc->hyps[i], lits, &n_lits);
+    hint_collect_lits(vc->goal, lits, &n_lits);
+    /* Zero first: it is the bound most refinements are about. */
+    int64_t bounds[HINT_MAX_LITS + 1]; uint32_t n_bounds = 0;
+    bounds[n_bounds++] = 0;
+    for (uint32_t i = 0; i < n_lits && n_bounds <= HINT_MAX_LITS; i++)
+        if (lits[i] != 0) bounds[n_bounds++] = lits[i];
+
+    uint32_t tries = 0;
+    uint32_t n_vars = vc->n_vars < HINT_MAX_VARS ? vc->n_vars : HINT_MAX_VARS;
+
+    /* Family 1: x <op> <literal>. */
+    for (uint32_t b = 0; b < n_bounds; b++) {
+        for (size_t o = 0; o < sizeof(OPS) / sizeof(OPS[0]); o++) {
+            for (uint32_t v = 0; v < n_vars; v++) {
+                if (tries++ >= HINT_MAX_TRIES) return false;
+                bool is_real = vc->vars[v].sort == VS_REAL;
+                VCTerm *x = vc_var_ref(vc, v);
+                VCTerm *k = is_real ? vc_real(vc, (double)bounds[b])
+                                    : vc_int(vc, bounds[b]);
+                VCTerm *cand = hint_build(vc, OPS[o], x, k);
+                if (!cand || cand->sort != VS_BOOL) continue;
+                if (!hint_discharges(vc, a, cand)) continue;
+                if (is_real) {
+                    snprintf(out, cap, "(%s %s %.1f)", OPS[o], vc->vars[v].name,
+                             (double)bounds[b]);
+                    snprintf(out_decl, decl_cap, "(%s v %.1f)", OPS[o], (double)bounds[b]);
+                } else {
+                    snprintf(out, cap, "(%s %s %lld)", OPS[o], vc->vars[v].name,
+                             (long long)bounds[b]);
+                    snprintf(out_decl, decl_cap, "(%s v %lld)", OPS[o],
+                             (long long)bounds[b]);
+                }
+                *out_var  = vc->vars[v].name;
+                *out_real = is_real;
+                return true;
+            }
+        }
+    }
+
+    /* Family 2: x <op> y.  An index bound (`(< i n)`) is only expressible
+     * here -- no literal can stand in for another variable. */
+    for (size_t o = 0; o < sizeof(REL_OPS) / sizeof(REL_OPS[0]); o++) {
+        for (uint32_t vi = 0; vi < n_vars; vi++) {
+            for (uint32_t vj = 0; vj < n_vars; vj++) {
+                if (vi == vj) continue;
+                if (vc->vars[vi].sort != vc->vars[vj].sort) continue;
+                if (tries++ >= HINT_MAX_TRIES) return false;
+                VCTerm *cand = hint_build(vc, REL_OPS[o], vc_var_ref(vc, vi),
+                                          vc_var_ref(vc, vj));
+                if (!cand || cand->sort != VS_BOOL) continue;
+                if (!hint_discharges(vc, a, cand)) continue;
+                snprintf(out, cap, "(%s %s %s)", REL_OPS[o],
+                         vc->vars[vi].name, vc->vars[vj].name);
+                snprintf(out_decl, decl_cap, "(%s v %s)", REL_OPS[o],
+                         vc->vars[vj].name);
+                *out_var  = vc->vars[vi].name;
+                *out_real = vc->vars[vi].sort == VS_REAL;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Render a source Form the way the user wrote it. */
+static void render_form(const Form *f, char *buf, size_t cap) {
+    buf[0] = '\0';
+    if (!f) return;
+    Buf fb; buf_init(&fb);
+    FmtOptions fo; memset(&fo, 0, sizeof(fo));
+    fo.indent_width = 2; fo.line_width = 200;
+    Form *one = (Form *)f;
+    if (fmt_print(&fb, &one, 1, fo) == 0 && fb.data && fb.len) {
+        size_t n = fb.len < cap - 1 ? fb.len : cap - 1;
+        while (n && (fb.data[n - 1] == '\n' || fb.data[n - 1] == ' ')) n--;
+        memcpy(buf, fb.data, n);
+        buf[n] = '\0';
+    }
+    buf_free(&fb);
+}
+
+/* What the predicate was.  Emitted before the counterexample so the diagnostic
+ * reads as claim -> witness -> remedy.  A CLOSED refutation gets the stronger
+ * phrasing: the values are written right there, so this is not "not for every
+ * input", it is "not for this one". */
+static void emit_predicate_note(const RefineObligation *ob, bool closed) {
+    char pred[192];
+    render_form(ob->predicate, pred, sizeof(pred));
+    if (!pred[0]) return;
+    diag_emit(DIAG_NOTE, ob->loc,
+              closed ? "the predicate %s is false for the value given here"
+                     : "the predicate %s does not hold for every input here",
+              pred);
+}
+
+/* What would fix it. */
+static void emit_hint(const RefineObligation *ob, RefineVC *vc, Arena *a) {
+    char cand[128], decl[128];
+    const char *var = NULL;
+    bool is_real = false;
+    if (!vc || !refine_hint_search(vc, a, cand, sizeof(cand), decl, sizeof(decl),
+                                   &var, &is_real))
+        return;
+    diag_emit(DIAG_HELP, ob->loc,
+              "%s would discharge it -- e.g. declare %s : #refine{ v : %s | %s }",
+              cand, var, is_real ? "float" : "int", decl);
 }
 
 /* ------------------------------------------------------------------------- *
@@ -241,17 +431,22 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             g_stats.invalid++;
             diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
                                 "refinement on %s cannot be proved statically", what);
+            emit_predicate_note(ob, closed);
             emit_model_note(ob);
+            emit_hint(ob, vc, a);
             return false;
         }
 
         default:
             g_stats.unknown++;
-            if (g_strict_refine || !ob->runtime_guarded)
+            if (g_strict_refine || !ob->runtime_guarded) {
                 diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
                                     TUR_W0372_REFINE_UNKNOWN,
                                     "solver returned unknown for the refinement on %s; "
                                     "runtime check kept", what);
+                emit_predicate_note(ob, false);
+                emit_hint(ob, vc, a);
+            }
             return false;
     }
 }

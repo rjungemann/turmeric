@@ -39,4 +39,21 @@ typedef struct RefineStats {
 const RefineStats *refine_stats(void);
 void refine_discharge_reset(void);
 
+/* RT6: search for an additional hypothesis that would discharge `vc`.  This is
+ * a SECOND query through the solver seam, not a heuristic -- a candidate is
+ * only offered once the chain confirms it makes the goal valid AND leaves the
+ * hypotheses satisfiable.
+ *
+ * `out` receives the fact in the variable's own name (`(> x 0)`), `out_decl`
+ * the same fact in a refinement's bound variable (`(> v 0)`), which is what a
+ * declaration would be written with.  Returns false when nothing helps.
+ *
+ * Exposed (rather than kept static) so the property that matters -- that a
+ * CONTRADICTORY candidate is never suggested -- can be asserted directly by
+ * the unit test.  Substring-matching a fixture's stderr can confirm a hint
+ * appears; it cannot confirm a wrong one does not. */
+bool refine_hint_search(RefineVC *vc, Arena *a, char *out, size_t cap,
+                        char *out_decl, size_t decl_cap,
+                        const char **out_var, bool *out_real);
+
 #endif /* TUR_REFINE_DISCHARGE_H */

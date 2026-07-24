@@ -298,16 +298,54 @@ integer completeness (branch-and-bound, Omega) is deliberately not attempted.
 Failing to *prove* something proves nothing, so a separate bounded search tries
 to **refute** the obligation: it enumerates a small candidate assignment space
 and evaluates the formula exactly. A satisfying assignment is a real
-counterexample, so it is reported as an error with a model rather than a shrug:
-
-```
-error[TUR-E0371]: refinement predicate on the return value of wrong cannot be
-                  proved statically
-note: counterexample: x = -2
-```
+counterexample, so it is reported with a model rather than a shrug.
 
 The search declines VCs containing uninterpreted symbols -- a measure has no
 fixed interpretation to evaluate, so guessing one would be dishonest.
+
+### What a failure tells you
+
+A failing obligation reports in three parts: the claim, a witness against it,
+and a remedy.
+
+```
+error[TUR-E0371]: refinement on the return value of 'wrong' cannot be proved statically
+note: the predicate (> r 0) does not hold for every input here
+note: counterexample: x = -2
+help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) }
+```
+
+The `help:` line is **not a heuristic**. It is a second query through the same
+solver seam: a candidate fact is asserted as a hypothesis and the chain is
+asked again, so only a candidate that genuinely discharges the goal is ever
+offered. Two families are tried -- comparisons against the literals the code
+already mentions, and relations between two variables, which is what produces
+an index bound:
+
+```
+error[TUR-E0371]: refinement on the return value of 'at' cannot be proved statically
+note: the predicate (< r n) does not hold for every input here
+help: (< i n) would discharge it -- e.g. declare i : #refine{ v : int | (< v n) }
+```
+
+A candidate that *contradicts* what is already known is rejected explicitly.
+Without that check a contradictory hypothesis would discharge the goal by ex
+falso, and the compiler would cheerfully suggest constraining a variable to be
+both negative and positive. When nothing consistent helps, no `help:` line is
+printed -- silence beats a nonsense suggestion:
+
+```turmeric
+(defn impossible [x : #refine{ v : int | (< v 0) }] : #refine{ r : int | (> r 0) }
+  x)      ; reported, with a counterexample, and NO hint -- none exists
+```
+
+When the values are written right at the site, the wording sharpens
+accordingly -- this is not "not for every input", it is "not for this one":
+
+```
+error[TUR-E0371]: refinement on argument 2 of 'safe-div' in 'main' cannot be proved statically
+note: the predicate (not= x 0) is false for the value given here
+```
 
 ---
 
