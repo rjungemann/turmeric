@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.6` -- a codegen and memory-hygiene fix release: composed struct-of-closures lenses lower end to end, effectful fn-value params thread correctly, and catch-unwind/httpd/image leaks are reclaimed.
+**Latest release:** `v0.30.7` -- curated `#lang` layers: one base reader (`turmeric`, `curly-infix`, `neoteric`, or `sweet`) plus an order-independent set of additive layers, including the new `stringed` (`#s"..."`) reader layer.
 
 ## What
 

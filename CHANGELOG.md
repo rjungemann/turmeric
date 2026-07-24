@@ -4,6 +4,22 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.7] -- 2026-07-23
+
+### Added
+
+- **Curated `#lang` layers**: `#lang <base>[/<dialect>] <layer>*` selects one
+  mutually-exclusive base reader (`turmeric`, `turmeric/curly-infix`,
+  `turmeric/neoteric`, `turmeric/sweet`) plus an order-independent set of
+  additive layers. Ships the `stringed` reader layer (`#s"..."`) and validates
+  every layer token against the curated `LANG_LAYERS[]` table -- an unknown
+  layer is a hard error, not a silent ignore.
+
+### Docs
+
+- Reader-forms and syntax guides document the base/layer split; the web REPL
+  handles the new `#lang` line form.
+
 ## [0.30.6] -- 2026-07-23
 
 ### Fixed
