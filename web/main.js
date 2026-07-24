@@ -1359,11 +1359,16 @@ async function initEditor() {
 
 /**
  * Shared eval + output path used by both the Run button and the REPL input.
- * @param {string} code        Source to evaluate
- * @param {string} promptHtml  HTML for the prompt prefix (e.g. '<span ...>></span>')
- * @param {boolean} showTiming Whether to call updateExecTime and show the loading indicator
+ * @param {string} code           Source to evaluate
+ * @param {string} promptHtml     HTML for the prompt prefix (e.g. '<span ...>></span>')
+ * @param {boolean} showTiming    Whether to call updateExecTime and show the loading indicator
+ * @param {boolean} echoSource    Whether to echo the source to the console
+ * @param {boolean} suppressResult Whether to suppress the result line (errors still shown).
+ *                                 Used by the Run button to hide the bare `#<fn main>`
+ *                                 closure while it defines `main`, before invoking it.
+ * @returns {{ isError: boolean }} Whether the evaluation reported an error.
  */
-async function executeCode(source, promptHtml, showTiming = false, echoSource = true) {
+async function executeCode(source, promptHtml, showTiming = false, echoSource = true, suppressResult = false) {
     const consoleLoading = showTiming ? document.getElementById('console-loading') : null;
     if (consoleLoading) consoleLoading.style.display = 'flex';
 
@@ -1380,18 +1385,32 @@ async function executeCode(source, promptHtml, showTiming = false, echoSource = 
 
         if (isError) {
             appendToConsole(`<span class="console-error">${escapeHtml(result)}</span>`);
-        } else if (result && result !== 'nil') {
+        } else if (!suppressResult && result && result !== 'nil') {
             appendToConsole(`<span class="console-result">${escapeHtml(result)}</span>`);
         }
 
         if (showTiming) updateExecTime(execTime);
         maybeShowDoc(source.trim());
 
+        return { isError };
+
     } catch (err) {
         if (consoleLoading) consoleLoading.style.display = 'none';
         appendToConsole(`<span class="console-error">Error: ${escapeHtml(err.message)}</span>`);
         if (showTiming) updateExecTime(0);
+        return { isError: true };
     }
+}
+
+/**
+ * Detect whether a program defines a top-level `main` function, in either
+ * s-expression (`(defn main ...)`) or sweet-exp (`defn main ...`) form. Used to
+ * mirror `tur run`: a program that defines `main` should have it invoked as the
+ * entry point, rather than the REPL leaving the bare `#<fn main>` closure as the
+ * last top-level value.
+ */
+function definesMainEntry(code) {
+    return /(^|\n)[ \t]*\(?defn\s+main\b/.test(code);
 }
 
 /**
@@ -1407,6 +1426,18 @@ async function runCode() {
         appendToConsole('<span class="console-error">Error: No code to evaluate</span>');
         return;
     }
+
+    // Mirror `tur run`: a program that defines a top-level `main` uses it as its
+    // entry point. Evaluate the program's top-level forms (which define `main`),
+    // suppressing the bare `#<fn main>` closure result, then invoke `(main)` and
+    // show ITS output/return -- so running e.g. `(defn main [] : int (+ 1 1))`
+    // shows `2`, not `#<fn main>`.
+    if (definesMainEntry(code)) {
+        const { isError } = await executeCode(code, '', true, false, true);
+        if (!isError) await executeCode('(main)', '', false, false);
+        return;
+    }
+
     await executeCode(code, '', true, false);
 }
 
@@ -2078,10 +2109,13 @@ function initEventListeners() {
             if (!item) return;
             const cmd = item.dataset.cmd;
             const example = item.dataset.example;
+            const action = item.dataset.action;
             if (cmd) {
                 document.getElementById(cmd)?.click();
             } else if (example) {
                 loadExample(example);
+            } else if (action === 'force-update') {
+                forceUpdatePWA();
             }
             closeMenu();
         });
@@ -2547,6 +2581,33 @@ if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .catch((err) => console.warn('SW registration failed:', err));
     });
+}
+
+/**
+ * Force-update the installed PWA: unregister every service worker and drop all
+ * Cache Storage entries, then hard-reload so the page (and the WASM/JS assets)
+ * are fetched fresh from the network. This is the user-facing escape hatch for a
+ * stuck cache -- it works even when the shipped sw.js forgot to bump
+ * CACHE_VERSION, because it nukes the SW entirely so the post-reload navigation
+ * is uncontrolled and hits the network directly. localStorage (the editor tabs)
+ * is intentionally left alone, so no code is lost.
+ */
+async function forceUpdatePWA() {
+    if (typeof showStatus === 'function') showStatus('Updating...', 'info');
+    try {
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.unregister()));
+        }
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+    } catch (err) {
+        console.warn('Force update failed:', err);
+    }
+    // Reload from the network now that no SW/cache can serve stale assets.
+    window.location.reload();
 }
 
 // ============================================================================
