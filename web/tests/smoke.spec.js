@@ -82,6 +82,28 @@ test.describe('Try Turmeric smoke tests', () => {
         await expect(page.locator('#console')).toContainText('42', { timeout: 10_000 });
     });
 
+    test('Run invokes a top-level main entry point', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForReady(page);
+
+        // A program that defines `main` should have it invoked (like `tur run`),
+        // showing its computed value -- not the bare `#<fn main>` closure.
+        await setCode(page, '(defn main [] :int (+ 1 1))');
+        await page.click('#run-btn');
+        await expect(page.locator('#console')).toContainText('2', { timeout: 10_000 });
+        await expect(page.locator('#console')).not.toContainText('#<fn main>');
+    });
+
+    test('Run invokes main and shows its printed output', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForReady(page);
+
+        await setCode(page, '(defn main [] :int\n  (println "from main")\n  0)');
+        await page.click('#run-btn');
+        await expect(page.locator('#console')).toContainText('from main', { timeout: 10_000 });
+        await expect(page.locator('#console')).not.toContainText('#<fn main>');
+    });
+
     test('REPL history navigates with arrow keys', async ({ page }) => {
         await page.goto('/try/');
         await waitForReady(page);
