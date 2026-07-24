@@ -102,6 +102,39 @@ is rare; the pin is by design).
 - **`#lang` / reader-type change** still invalidates the accumulated environment
   (as it invalidates `src_acc` today, `eval.c:9903-9910`) -- a reset point.
 
+## Implementation constraints discovered (2026-07-24)
+
+Probing the eval loop for a safe first slice surfaced two facts that shape how
+the change must be built:
+
+1. **Parsed `Form`s are immutable during elaboration -- reuse is safe (good).**
+   The only writes to `Form` fields anywhere are the constructors in `forms.c`;
+   the elaborator takes `Form *const *` and never mutates the AST. So reusing a
+   prior eval's `Form*` across later evals (instead of re-parsing) is sound from
+   a mutation standpoint, and prior forms already live in retained `eval_arenas`.
+
+2. **The diagnostic file model blocks *naive* form reuse (the real snag).**
+   `turi_eval_impl` calls `diag_reset()` every eval, which clears the entire
+   registered-file table (`diag.c:101`), and each eval registers its `SourceFile`
+   at `file_id = 0` holding the *whole accumulated blob*. A reused prior form's
+   span still says `file_id = 0` but with offsets into the *old* blob, so after a
+   reset + re-register it would resolve against the new eval's (shorter) source --
+   a wrong or out-of-bounds diagnostic read. Giving each eval a distinct
+   `file_id` does not scale either: `MAX_FILES` is **64** (`diag.c:11`), so a
+   long session would exhaust it in 64 evals -- exactly the lifetime we are
+   trying to support.
+
+**Consequence.** "Parse only the new source" is *not* a cleanly separable safe
+slice -- it is co-entangled with the diagnostic file model. Whichever pass lands
+the incremental change must also rework `SourceFile`/span handling for a
+long-lived interpreter env (options: a single accumulating interpreter
+`SourceFile` whose spans stay valid as it grows; a resizable file table; or
+interpreter-mode spans that carry their own retained source). That, plus the
+shared-compiler constraint on `elaborate_program`, is why this is a co-designed
+change validated by the full suite + an A/B differential (incremental vs
+whole-program results compared) behind a default-off gate -- not a sequence of
+small independent edits.
+
 ## Sub-phases (each independently landable, tested)
 
 - **TR2.0 -- close the test gap first. [DONE 2026-07-24]** There was no in-process
