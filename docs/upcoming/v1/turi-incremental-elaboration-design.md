@@ -124,16 +124,15 @@ the change must be built:
    long session would exhaust it in 64 evals -- exactly the lifetime we are
    trying to support.
 
-**Consequence.** "Parse only the new source" is *not* a cleanly separable safe
-slice -- it is co-entangled with the diagnostic file model. Whichever pass lands
-the incremental change must also rework `SourceFile`/span handling for a
-long-lived interpreter env (options: a single accumulating interpreter
-`SourceFile` whose spans stay valid as it grows; a resizable file table; or
-interpreter-mode spans that carry their own retained source). That, plus the
-shared-compiler constraint on `elaborate_program`, is why this is a co-designed
-change validated by the full suite + an A/B differential (incremental vs
-whole-program results compared) behind a default-off gate -- not a sequence of
-small independent edits.
+**Consequence, and how it was resolved (landed 2026-07-24).** The diag snag has
+a clean answer: keep passing the **full accumulated blob** as the `SourceFile`
+and only skip *re-parsing* it. Because `src_acc` grows purely by appending, a
+prior form's span offsets remain valid in the longer blob, so one `file_id`
+serves the whole session -- no `MAX_FILES` pressure, no `diag_reset` conflict,
+and error snippets render byte-identically (verified: the A/B differential shows
+identical multi-turn diagnostics with correct absolute line numbers). Forms are
+also self-contained -- `form_str` `arena_strdup`s its bytes -- so a reused form
+never points into a source buffer.
 
 ## Sub-phases (each independently landable, tested)
 
@@ -173,9 +172,32 @@ small independent edits.
   `elaborate_program_incremental(persistent_state*, new_forms, ...)` that seeds
   `elab_init_state` from `persistent_state`, elaborates only the new forms, and
   merges new defs/instances/registries back into `persistent_state`.
-- **TR2.2 -- incremental elaboration entry.** New elaborator entry that
-  elaborates only `[prior..nforms)` against the persistent env and merges back;
-  eval loop parses only new source. This is where the O(N^2) -> O(N) win lands.
+- **TR2.2a -- incremental PARSE. [DONE 2026-07-24]** The eval loop now re-reads
+  only the newly appended source and reuses prior evals' Forms, behind the
+  default-off `turi_env_set_incremental_elab` gate.
+  - `read_all_with_registry_from(..., start_offset, start_line, ...)`
+    (`reader.c`) is the offset-aware core; `read_all_with_registry` is it with
+    `(0, 1)`, so **every compiler path is byte-identical**.
+  - `env->acc_forms` accumulates top-level Forms; committed only on a successful
+    eval (mirroring `src_acc`) and rolled back on parse/elaboration/eval error.
+    `env->acc_next_line` tracks the resume line incrementally (counting newlines
+    in the new chunk only, never rescanning the prefix).
+  - Automatic fallback to the whole-blob parse whenever the fast path does not
+    apply (sweet-exp reader, first eval, a reader-type reset, or a vector/session
+    desync), so correctness never depends on the fast path firing.
+  - Guarded by `tur_incremental_elab_diff`: an A/B differential running scripted
+    sessions (cross-eval defs, multi-line turns, reader macros, mid-session
+    errors, redefinition, 300-turn churn) through both paths and comparing every
+    turn's result.
+  - **Measured:** N=800 turns, 2.32s -> 0.91s (-61%) and 299 MB -> 240 MB
+    (-20%). The time win grows with N (30% at N=400, 61% at N=800), confirming
+    the quadratic *parse* term is gone. Memory only drops ~20% because
+    elaboration is still whole-program -- that residue is TR2.2b.
+
+- **TR2.2b -- incremental ELABORATION (the remaining memory win).** New
+  elaborator entry that elaborates only `[prior..nforms)` against the persistent
+  env from TR2.1 and merges back. This is what takes retained memory from
+  O(N^2) to O(N); the parse side is already done.
 - **TR2.3 -- drop `src_acc` re-accumulation.** Re-point `:type` at the persistent
   env; stop accumulating source text.
 - **TR2.4 -- enable promotion in the REPL (the literal TR0 action).** Now that a

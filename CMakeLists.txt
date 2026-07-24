@@ -509,6 +509,16 @@ add_test(
 set_tests_properties(tur_reader_macro_cross_eval PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# TR2: the incremental parse path must be result-identical to the default
+# whole-blob re-parse path (A/B differential over scripted eval sessions).
+add_test(
+  NAME tur_incremental_elab_diff
+  COMMAND "${CMAKE_BINARY_DIR}/tur_incremental_elab_diff"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_incremental_elab_diff PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # SB0: sandboxed environment test harness
 add_test(
   NAME tur_eval_sandbox
@@ -726,7 +736,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_collections_embed tur_stdlib_natives_embed
-                     tur_reader_macro_cross_eval
+                     tur_reader_macro_cross_eval tur_incremental_elab_diff
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur
 )

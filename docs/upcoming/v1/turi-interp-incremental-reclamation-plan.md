@@ -165,7 +165,14 @@ Promotion resets `value_scratch` but never touches `eval_arenas` or `src_acc`
 (`env.h:165`, `eval.c:9920-9924`), so AST/elaboration memory and source text
 still grow per line.
 
-**Design worked out (2026-07-24): `docs/upcoming/v1/turi-incremental-elaboration-design.md`.**
+**Status: incremental PARSE landed (TR2.2a, 2026-07-24), gated default-off via
+`turi_env_set_incremental_elab`.** N=800 turns: 2.32s -> 0.91s (-61%, win grows
+with N -- the quadratic parse term is gone) and 299 MB -> 240 MB (-20%). The
+remaining memory is whole-program *elaboration* (TR2.1 + TR2.2b). Guarded by an
+A/B differential (`tur_incremental_elab_diff`) that compares every turn's result
+between the two paths.
+
+**Design: `docs/upcoming/v1/turi-incremental-elaboration-design.md`.**
 The investigation corrected an assumption this phase originally carried -- a
 completed eval's arena **cannot** simply be freed: parse output and elaborated
 IR share one arena, and closures/ctors/handlers/conts (nine escape categories)

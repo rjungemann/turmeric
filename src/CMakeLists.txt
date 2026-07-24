@@ -516,6 +516,25 @@ set_target_properties(tur_reader_macro_cross_eval PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# TR2 (turi-incremental-elaboration-design): A/B differential -- the incremental
+# parse path must be result-identical to the default whole-blob path
+# ---------------------------------------------------------------------------
+add_executable(tur_incremental_elab_diff ${CMAKE_SOURCE_DIR}/tests/turi/incremental-elab-differential.c)
+target_include_directories(tur_incremental_elab_diff PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_incremental_elab_diff PRIVATE libturi)
+target_compile_options(tur_incremental_elab_diff PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_incremental_elab_diff PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_incremental_elab_diff PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # turi-interp-collections-libturi: Vec/Set/HAMT C-embedding parity harness
 # ---------------------------------------------------------------------------
 add_executable(tur_collections_embed ${CMAKE_SOURCE_DIR}/tests/turi/collections-embed.c)

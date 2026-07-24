@@ -162,6 +162,27 @@ typedef struct TuriEnv {
      * shifts the boundary and previously-run top-level forms get evaluated
      * again (e.g. a prior (gen-next g) double-advances a suspended generator). */
     uint32_t    prior_prog_items;
+    /* TR2 (turi-incremental-elaboration-design): opt-in incremental parse.
+     * OFF by default -- the default path stays byte-identical (re-parse the
+     * whole accumulated blob every eval). When on, turi_eval re-reads only the
+     * newly appended source and reuses the prior evals' Forms, removing the
+     * O(N^2) re-parse that dominates a long-lived session (Trowel / Try
+     * Turmeric / Godot embeddings). Set via turi_env_set_incremental_elab. */
+    bool          incremental_elab;
+    /* Accumulated top-level Forms from all prior evals, in parse order. Each
+     * Form* lives in the eval arena that parsed it (all retained in
+     * eval_arenas) and is immutable after parse -- only forms.c constructors
+     * ever write Form fields -- so reuse across evals is sound. The vector
+     * itself is malloc/realloc'd, freed in turi_env_free. Committed only on a
+     * successful eval, mirroring src_acc; reset to 0 whenever src_acc resets
+     * (a reader-type change), since forms cannot mix across readers. */
+    struct Form **acc_forms;
+    uint32_t      n_acc_forms;
+    uint32_t      cap_acc_forms;
+    /* Line number at which the next appended source chunk begins, tracked
+     * incrementally (counting newlines in the new text only) so resuming the
+     * reader never rescans the prefix. 1-based; 0 means "not yet initialised". */
+    uint32_t      acc_next_line;
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),
@@ -415,6 +436,24 @@ void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image);
  * live continuations/generators/fibers, pending async work), that eval's scratch
  * is left intact rather than corrupted -- it simply does not shrink that cycle. */
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
+
+/* TR2 (turi-incremental-elaboration-design): opt into incremental parsing for a
+ * long-lived env.  OFF by default, so the standard path is unchanged.
+ *
+ * When enabled, turi_eval parses only the newly appended source each turn and
+ * reuses the Forms parsed by earlier evals, instead of re-parsing the entire
+ * accumulated session source every time (which is O(N^2) in both time and
+ * retained AST over a session -- see docs/reported/turi-repl-quadratic-reparse.md).
+ * The full accumulated blob is still handed to diagnostics, so spans and error
+ * snippets render exactly as before.
+ *
+ * Results are identical to the default path: the same forms array is elaborated
+ * either way, since parsed Forms are immutable and the reader-macro registry
+ * persists on the env.  The interpreter automatically falls back to a whole-blob
+ * re-parse for any turn it cannot handle incrementally (a sweet-exp reader, a
+ * reader-type change, a `define` rewrite), so correctness never depends on the
+ * fast path applying.  Safe to toggle between top-level eval cycles. */
+void turi_env_set_incremental_elab(TuriEnv *env, bool enable);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

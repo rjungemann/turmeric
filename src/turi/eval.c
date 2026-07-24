@@ -9806,6 +9806,46 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
 /* Promote everything that escapes this top-level eval (its result plus every
  * global) into value_perm, then rewind value_scratch.  A no-op unless promotion
  * is enabled; conservatively skips the rewind whenever safety cannot be proven. */
+/* TR2 (turi-incremental-elaboration-design): accumulated top-level Form vector.
+ *
+ * Holds every top-level Form parsed so far this session, in parse order, so a
+ * long-lived env can re-read only the newly appended source instead of
+ * re-parsing the whole accumulated blob each turn. The Forms live in the eval
+ * arenas that produced them (all retained), and are immutable after parse, so
+ * holding them across evals is sound. Storage is a plain malloc'd pointer
+ * vector, freed in turi_env_free. */
+static bool acc_forms_set(TuriEnv *env, Form **src, uint32_t n) {
+    if (n > env->cap_acc_forms) {
+        uint32_t ncap = env->cap_acc_forms ? env->cap_acc_forms : 16;
+        while (ncap < n) ncap *= 2;
+        Form **grown = (Form **)realloc(env->acc_forms, (size_t)ncap * sizeof(Form *));
+        if (!grown) return false;
+        env->acc_forms     = grown;
+        env->cap_acc_forms = ncap;
+    }
+    if (n && src != env->acc_forms)
+        memcpy(env->acc_forms, src, (size_t)n * sizeof(Form *));
+    env->n_acc_forms = n;
+    return true;
+}
+
+static bool acc_forms_append(TuriEnv *env, Form **src, uint32_t n) {
+    uint32_t base = env->n_acc_forms;
+    uint32_t total = base + n;
+    if (total < base) return false;               /* overflow guard */
+    if (total > env->cap_acc_forms) {
+        uint32_t ncap = env->cap_acc_forms ? env->cap_acc_forms : 16;
+        while (ncap < total) ncap *= 2;
+        Form **grown = (Form **)realloc(env->acc_forms, (size_t)ncap * sizeof(Form *));
+        if (!grown) return false;
+        env->acc_forms     = grown;
+        env->cap_acc_forms = ncap;
+    }
+    if (n) memcpy(env->acc_forms + base, src, (size_t)n * sizeof(Form *));
+    env->n_acc_forms = total;
+    return true;
+}
+
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
     env->promo_attempts++;   /* TR0: promotion attempted this eval boundary */
@@ -9907,6 +9947,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                 env->prior_toplevel    = 0;
                 env->prior_prog_items  = 0;
                 env->reader_type       = detected;
+                /* TR2: accumulated forms belong to the OLD reader; drop them
+                 * along with the source they came from. */
+                env->n_acc_forms       = 0;
+                env->acc_next_line     = 0;
             }
             /* Layers are additive and file-scoped; union them into the
              * session set so reader layers stay active across the eval blob. */
@@ -9959,12 +10003,57 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     diag_register_file(sfile);
 
     /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined
-     * in earlier eval calls remain visible. */
+     * in earlier eval calls remain visible.
+     *
+     * TR2: with incremental parsing enabled, re-read only the newly appended
+     * tail (offset `prefix_len` into the combined blob) and reuse the Forms
+     * earlier evals already parsed, instead of re-parsing everything each turn.
+     * `sfile` still carries the FULL blob, so spans stay absolute and
+     * diagnostics render exactly as on the default path. Any turn we cannot
+     * handle incrementally falls back to the whole-blob parse below, so
+     * correctness never depends on the fast path applying. */
+    const uint32_t acc_committed = env->n_acc_forms;  /* rollback point */
+    const uint32_t prefix_len =
+        (env->src_acc.len > 0) ? (uint32_t)env->src_acc.len + 1u : 0u;
+    const bool use_incremental =
+        env->incremental_elab &&
+        /* sweet-exp rewrites the whole buffer, so an offset in original
+         * coordinates is meaningless after transformation */
+        env->reader_type != READER_SWEET &&
+        prefix_len > 0 &&                       /* nothing accumulated yet */
+        prefix_len <= src_len &&
+        env->n_acc_forms == env->prior_toplevel; /* vector in sync with session */
+
     uint32_t  nforms = 0;
-    Form    **forms  = read_all_with_registry(eval_arena, &env->st, sfile,
-                                              env->reader_macros, &nforms);
-    if (!forms || diag_had_error()) {
-        return turi_error("parse error");
+    Form    **forms  = NULL;
+    if (use_incremental) {
+        uint32_t n_new = 0;
+        Form **new_forms =
+            read_all_with_registry_from(eval_arena, &env->st, sfile,
+                                        env->reader_macros, prefix_len,
+                                        env->acc_next_line ? env->acc_next_line : 1,
+                                        &n_new);
+        if (!new_forms || diag_had_error()) {
+            return turi_error("parse error");
+        }
+        if (!acc_forms_append(env, new_forms, n_new)) {
+            env->n_acc_forms = acc_committed;
+            return turi_error("out of memory");
+        }
+        forms  = env->acc_forms;
+        nforms = env->n_acc_forms;
+    } else {
+        forms = read_all_with_registry(eval_arena, &env->st, sfile,
+                                       env->reader_macros, &nforms);
+        if (!forms || diag_had_error()) {
+            return turi_error("parse error");
+        }
+        /* Whole-blob parse: the result already contains the prior forms
+         * (re-parsed), so it replaces the accumulated vector wholesale. */
+        if (!acc_forms_set(env, forms, nforms)) {
+            env->n_acc_forms = acc_committed;
+            return turi_error("out of memory");
+        }
     }
 
     /* 5b. REPL implicit-do: if the new turn's forms contain a top-level
@@ -10011,6 +10100,13 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             src_body = arena_strdup(eval_arena, wrapped_src.data, wrapped_src.len);
             body_len = wrapped_src.len;
             buf_free(&wrapped_src);
+            /* TR2: the wrap rewrote the new-turn forms into a single (do ...);
+             * keep the accumulated vector in sync with what is elaborated (and
+             * with the rewritten src_body that step 8 appends to src_acc). */
+            if (!acc_forms_set(env, forms, nforms)) {
+                env->n_acc_forms = acc_committed;
+                return turi_error("out of memory");
+            }
         }
     }
 
@@ -10044,6 +10140,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                     * see the same macros the entry did. */
                                    env->reader_macros);
     if (!prog || diag_had_error()) {
+        env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         return turi_error("elaboration error");
     }
 
@@ -10066,6 +10163,7 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * The full move/borrow checker is intentionally left to the elaborator
      * (which the interpreter already shares). */
     if (!lifetime_check_program(prog)) {
+        env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
         return turi_error("elaboration error");
     }
 
@@ -10142,6 +10240,17 @@ eval_done:;
         /* Append new source (without any leading #lang line) to accumulator */
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
         buf_write(&env->src_acc, src_body, body_len);
+        /* TR2: advance the incremental line cursor across the chunk just
+         * appended, counting newlines in the NEW text only (never rescanning
+         * the prefix, which would reintroduce an O(N) term per eval). The next
+         * chunk is separated by one '\n', hence the trailing +1. */
+        {
+            uint32_t start_line = env->acc_next_line ? env->acc_next_line : 1;
+            uint32_t nl = 0;
+            for (size_t i = 0; i < body_len; i++)
+                if (src_body[i] == '\n') nl++;
+            env->acc_next_line = start_line + nl + 1;
+        }
         env->prior_toplevel = nforms;  /* track parsed count, not total */
         /* Every non-fsd program item run this call is "accumulated" next time.
          * total = n_fsd + (all non-fsd items), so total - n_fsd is that count.
@@ -10155,6 +10264,11 @@ eval_done:;
             Expr *last_expr = prog->as.program.items[total - 1];
             if (last_expr) extract_type_tag(last_expr->type, out_type_tag, tag_cap);
         }
+    } else {
+        /* TR2: this turn's source is not appended to src_acc on failure, so its
+         * forms must not stay in the accumulated vector either -- otherwise the
+         * next turn's offset/count bookkeeping would disagree with src_acc. */
+        env->n_acc_forms = acc_committed;
     }
 
     /* turi-value-pool-scratch-promotion-plan: at this top-level boundary,
@@ -10195,6 +10309,8 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
         env->src_acc.len      = 0;
         env->prior_toplevel   = 0;
         env->prior_prog_items = 0;
+        env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
+        env->acc_next_line    = 0;
     }
 
     TuriValue v = turi_eval(env, buf);

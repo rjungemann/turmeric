@@ -335,6 +335,13 @@ void turi_env_free(TuriEnv *env) {
     arena_free(&env->value_perm);
     turi_val_global_pool_free();
 
+    /* TR2: the accumulated-Form vector is malloc'd (the Forms themselves live
+     * in eval_arenas, already freed above). */
+    free(env->acc_forms);
+    env->acc_forms     = NULL;
+    env->n_acc_forms   = 0;
+    env->cap_acc_forms = 0;
+
     /* Free global bindings */
     EnvBinding *b = env->globals;
     while (b) {
@@ -494,6 +501,11 @@ void turi_env_set_interpret_mode(TuriEnv *env, bool interpret) {
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable) {
     if (!env) return;
     env->scratch_promotion = enable;
+}
+
+void turi_env_set_incremental_elab(TuriEnv *env, bool enable) {
+    if (!env) return;
+    env->incremental_elab = enable;
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

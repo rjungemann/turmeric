@@ -3882,10 +3882,24 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
     return result;
 }
 
-Form **read_all_with_registry(Arena *arena, SymbolTable *st,
-                              const SourceFile *file,
-                              struct ReaderMacroRegistry *external_reg,
-                              uint32_t *out_count) {
+/* TR2 (turi-incremental-elaboration-design): offset-aware core.
+ *
+ * `start_offset` / `start_line` let the interpreter re-read ONLY the newly
+ * appended tail of a long-lived eval session's accumulated source while still
+ * passing the FULL accumulated blob as `file` -- so the Forms it produces carry
+ * absolute spans into that blob and diagnostics render correctly, without
+ * re-parsing the prefix every turn (the O(N^2) re-parse).
+ *
+ * `read_all_with_registry` is exactly this with (0, 1), so the compiler path is
+ * byte-identical. Callers must not use a non-zero offset with READER_SWEET: the
+ * t-expression preprocessor rewrites the whole buffer, so an offset expressed in
+ * original coordinates is meaningless in transformed ones. The interpreter
+ * guards on reader_type before opting in. */
+Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
+                                   const SourceFile *file,
+                                   struct ReaderMacroRegistry *external_reg,
+                                   uint32_t start_offset, uint32_t start_line,
+                                   uint32_t *out_count) {
     /* For READER_SWEET, run the t-expression preprocessor first.  The
      * transformed source replaces the SourceFile in the diag registry so
      * that span offsets recorded in Forms (which index into r.src) match
@@ -3920,8 +3934,10 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
     r.st = st;
     r.src = eff_file->src;
     r.len = eff_file->len;
-    r.pos = 0;
-    r.line = 1;
+    /* TR2: resume at the caller's offset (0 for every non-interpreter caller).
+     * Clamped so a stale offset can never read past the buffer. */
+    r.pos = (start_offset <= eff_file->len) ? start_offset : (uint32_t)eff_file->len;
+    r.line = start_line ? start_line : 1;
     r.col = 1;
     r.error = false;
     /* Phase S1: Set syntax feature flags based on reader type from SourceFile.
@@ -3970,7 +3986,7 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
      * etc.).  The shebang is recognized only at byte 0 and must look like
      * `#!` followed by `/`, whitespace, or EOL — leaving `#!fold-case`-style
      * future reader directives unaffected. */
-    if (r.len >= 2 && r.src[0] == '#' && r.src[1] == '!' &&
+    if (r.pos == 0 && r.len >= 2 && r.src[0] == '#' && r.src[1] == '!' &&
         (r.len < 3 || r.src[2] == '/' || r.src[2] == ' ' || r.src[2] == '\t' ||
          r.src[2] == '\n' || r.src[2] == '\r')) {
         while (r.pos < r.len && r.src[r.pos] != '\n') r.pos++;
@@ -4035,6 +4051,17 @@ Form **read_all_with_registry(Arena *arena, SymbolTable *st,
 
     *out_count = (uint32_t)n;
     return out;
+}
+
+/* Whole-file read: the offset-aware core starting at the top. Every compiler
+ * path goes through here, so its behavior is unchanged by TR2. */
+Form **read_all_with_registry(Arena *arena, SymbolTable *st,
+                              const SourceFile *file,
+                              struct ReaderMacroRegistry *external_reg,
+                              uint32_t *out_count) {
+    return read_all_with_registry_from(arena, st, file, external_reg,
+                                       /*start_offset=*/0, /*start_line=*/1,
+                                       out_count);
 }
 
 Form **read_all(Arena *arena, SymbolTable *st, const SourceFile *file,
