@@ -1,11 +1,37 @@
 ---
-status: open
+status: resolved
 severity: high
 discovered: 2026-07-24
+resolved: 2026-07-24
 area: runtime (DK-lowered effects / nested handler resume)
 ---
 
 # Resuming an outer effect through an inner `handle` loop never terminates
+
+## Resolution (2026-07-24)
+
+Fixed in `src/compiler/emit_dk_runtime.c`: the E7 entry driver's yield-branch
+`dk_free(ch)` (`__dk_drive_after`) was eagerly freeing a resumed chain that a
+pending meta-stack delivery still referenced under nested handlers -- a
+heap-use-after-free (ASan-confirmed: freed in the yield branch, read back in
+`dk_run_impl`, allocated as a `dk_perform` `sub`). The chain now gets a boundary
+owner via `__dk_reap_keep(ch)` -- the same treatment `dk_invoke` already gives a
+chain that may tail-resume out -- so it is freed exactly once at the outermost
+entry (`__dk_reap_run`), after every delivery that references it has drained.
+
+Verified: `effect-rec` probe passes at 1,000,000 depth under `ulimit -s 256`;
+the minimal repro (a single inner `perform` under a nested handler) returns the
+correct value and is leak-clean under ASan/LSan; the full `bash tests/run.sh`
+suite has no non-snapshot regressions (the 140 `expected.c` snapshots were
+regenerated for the changed DK-runtime preamble). `effect-rec` was removed from
+the `xfail` set in `tests/stackless-signoff-probes.sh`.
+
+Tradeoff: because a yielded chain is now reap-owned rather than eagerly freed,
+a deep effect loop retains those chains until the entry boundary -- ~3x peak
+heap at 1,000,000 depth (single-handle: 175 MB -> 559 MB). This is a
+constant-factor memory cost on deep loops, not a complexity change; a
+memory-bounded refinement (free eagerly when the yielded chain is provably not
+aliased by any pending delivery) is possible follow-up work.
 
 ## Summary
 

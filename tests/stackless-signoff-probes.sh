@@ -86,15 +86,14 @@ declare -A pflags=(
 # DOES fail the suite, prompting its removal from this list and re-arming it as a
 # normal probe.
 #
-#   effect-rec -- non-terminates: resuming an OUTER effect whose continuation
-#                 re-enters an INNER handle's perform/resume loop loops forever
-#                 (hangs even at depth 10).  See
-#                 docs/reported/effect-rec-nested-handler-nonterminates.md
 #   fiber-rec  -- SIGSEGV under the sanitized Debug build: deep catch-unwind run
 #                 inside an async fiber crashes immediately (all stack sizes).
 #                 See docs/reported/fiber-rec-async-fiber-segfault.md
+#
+# (effect-rec graduated back to a normal probe on 2026-07-24 once the nested-
+# handler non-termination was fixed -- see
+# docs/archive/effect-rec-nested-handler-nonterminates.md.)
 declare -A xfail=(
-    [effect-rec]=1
     [fiber-rec]=1
 )
 
