@@ -5232,6 +5232,16 @@ static bool ws_has_perform(const Expr *e) {
     case EX_GET_FIELD:  return ws_has_perform(e->as.get_field_.struct_expr);
     case EX_RESUME:     return ws_has_perform(e->as.resume_.resume->k) ||
                                ws_has_perform(e->as.resume_.resume->value);
+    /* fn-to-fat / poly wrappers are transparent: evaluating one just builds a
+     * closure value (eval unwraps to `inner`, see the EX_*_TO_FAT / EX_POLY_WRAP
+     * eval cases), so a wrapped bare/poly fn is no more a synchronous perform
+     * than the EX_FN / EX_FN_DEF it wraps.  Without these the default arm treats
+     * the wrapper as a possible perform -- e.g. a `^multishot` receiver passed to
+     * `perform` (multishot-effect-cont-kv-sugar) forced the whole handle onto the
+     * one-shot fiber path, which aborts on the second resume. */
+    case EX_POLY_WRAP:   return ws_has_perform(e->as.poly_wrap_.inner);
+    case EX_FN_TO_FAT:   return ws_has_perform(e->as.fn_to_fat_.inner);
+    case EX_POLY_TO_FAT: return ws_has_perform(e->as.poly_to_fat_.inner);
     default:
         /* EX_CALL, EX_HANDLE, EX_WHILE, EX_TRY_CATCH, ... -- conservatively
          * assume a perform may run synchronously. */
@@ -5356,6 +5366,13 @@ static bool ws_capturable(TuriEnv *env, EvalFrame *frame, const Expr *e, int dep
      * so reject those outright -- keeps the native-HOF case on the fiber path. */
     case EX_FN:      return !ws_has_perform(((FnDef *)e->as.fn_.fn)->body);
     case EX_FN_DEF:  return !ws_has_perform(((FnDef *)e->as.fn_def_.fn)->body);
+    /* fn-to-fat / poly wrappers are transparent (eval unwraps to `inner`); a
+     * wrapped fn value is capturable to evaluate exactly when the fn it wraps is
+     * -- recurse so the wrapped EX_FN / EX_VAR receiver lands on its own case
+     * rather than the perform-conservative default. */
+    case EX_POLY_WRAP:   return ws_capturable(env, frame, e->as.poly_wrap_.inner, depth);
+    case EX_FN_TO_FAT:   return ws_capturable(env, frame, e->as.fn_to_fat_.inner, depth);
+    case EX_POLY_TO_FAT: return ws_capturable(env, frame, e->as.poly_to_fat_.inner, depth);
     /* Leaves / values with no synchronous perform. */
     case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
     case EX_CSTR_LIT: case EX_SYM_LIT: case EX_VAR: case EX_DEFAULT_OF:
@@ -6011,7 +6028,19 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 frame_bind(env, hf, matched->k_binding->name->name, turi_ws_cont_val(env, wc));
                 env->current_module = st[pidx].saved_module;
                 env->in_no_unwind   = st[pidx].was_no_unwind;
-                control = matched->body; cf = hf; tail = st[pidx].tail;
+                /* The case body runs delimited by DK_PROMPT@pidx: its value flows
+                 * to the prompt (which restores the env boundary and propagates),
+                 * NOT to an enclosing DK_CALL_RET.  So it must run NON-tail, even
+                 * when the handle itself was in tail position (st[pidx].tail).  A
+                 * tail call in the body would otherwise try to reuse st[len-2] as
+                 * its activation, but st[len-2] is the DK_PROMPT, not a
+                 * DK_CALL_RET -- tripping the tail-fold invariant assert
+                 * (multishot-effect-cont-kv-sugar: a `^multishot` handler whose
+                 * case body `(f k)` is a tail call).  The prompt still forwards
+                 * the value to the true (possibly tail) continuation below it, so
+                 * TCO of the enclosing call is preserved; only the one direct call
+                 * in the case body costs a single DK_CALL_RET frame. */
+                control = matched->body; cf = hf; tail = false;
                 /* descending stays true */
                 break;
             }
