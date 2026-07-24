@@ -4,6 +4,21 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.30.8] -- 2026-07-24
+
+### Fixed
+
+- **Interpreter (`--interpret`) parity**: retain `rc<T>` on closure capture,
+  resume multishot/cross-fn continuations correctly, and close String-parity
+  fixture gaps so the tree-walking interpreter matches compiled behavior.
+- **Async catch-unwind**: keep `catch-unwind` stackless inside async programs
+  (fiber-rec).
+- **Nested effect handlers**: resolve non-termination when handlers are nested
+  (effect-rec).
+- **macOS build & codegen**: broad macOS compatibility fixes across the
+  compiler, runtime, and stdlib, plus CPS cons/cstr argument casting and
+  by-value aggregate frame-escape codegen fixes.
+
 ## [0.30.7] -- 2026-07-23
 
 ### Added

@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.7` -- curated `#lang` layers: one base reader (`turmeric`, `curly-infix`, `neoteric`, or `sweet`) plus an order-independent set of additive layers, including the new `stringed` (`#s"..."`) reader layer.
+**Latest release:** `v0.30.8` -- interpreter (`--interpret`) parity fixes for closure capture and multishot continuations, plus async catch-unwind, nested effect-handler, and macOS build fixes.
 
 ## What
 
