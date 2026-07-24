@@ -7761,6 +7761,29 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         cl->fn             = e->as.closure_.closure->fn;
         cl->captured       = frame; /* interpreter uses lexical frame */
         cl->skip_env_param = true;  /* codegen added __env_p as first param */
+        /* Retain-on-capture parity: the compiled backend's closure env owns a
+         * strong reference to each rc<T> it captures -- codegen stores the handle
+         * into the env with a retain, so `rc/strong-count` inside (or alongside) a
+         * capturing closure sees the +1.  The interpreter shares the elaborator
+         * but not codegen, so without this a captured rc read back count 1 where
+         * the compiled path reads 2 (rc-auto-drop-closure-capture and siblings).
+         * Increment the strong count of every captured value that is an `__rc`
+         * wrapper.  There is no matching decrement: interpreter frames are never
+         * freed (eval_frame_free is a no-op, process-lifetime), so the closure
+         * env has no drop point -- consistent with the interpreter's leak-on-exit
+         * allocation model, and the enclosing binding's own auto-drop defer still
+         * runs.  Detected structurally (struct name "__rc") exactly as rc/clone,
+         * rc/drop, and rc/strong-count do, so no static capture-type info needed. */
+        const struct Closure *cd = e->as.closure_.closure;
+        for (uint8_t i = 0; i < cd->n_captures; i++) {
+            if (!cd->captures[i] || !cd->captures[i]->name) continue;
+            TuriValue cv = eval_lookup(env, frame, cd->captures[i]->name->name);
+            if (cv.tag == TURI_STRUCT && cv.as_struct && cv.as_struct->name &&
+                strcmp(cv.as_struct->name, "__rc") == 0 && cv.as_struct->n_fields >= 2) {
+                int64_t *cnt = (int64_t *)(intptr_t)cv.as_struct->fields[0].as_int;
+                if (cnt) (*cnt)++;
+            }
+        }
         return turi_closure(cl);
     }
 
