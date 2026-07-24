@@ -1009,7 +1009,52 @@ function configureMonaco() {
             ]
         }
     });
-    
+
+    // Language configuration — teaches Monaco which characters form bracket
+    // pairs so its native bracket-pair colorization (rainbow parens, matching
+    // the trowel editor) can depth-color them. `colorizedBracketPairs` lists
+    // the pairs that participate in the rainbow cycle.
+    monaco.languages.setLanguageConfiguration('turmeric', {
+        brackets: [
+            ['(', ')'],
+            ['[', ']'],
+            ['{', '}'],
+        ],
+        colorizedBracketPairs: [
+            ['(', ')'],
+            ['[', ']'],
+            ['{', '}'],
+        ],
+        autoClosingPairs: [
+            { open: '(', close: ')' },
+            { open: '[', close: ']' },
+            { open: '{', close: '}' },
+            { open: '"', close: '"' },
+        ],
+        surroundingPairs: [
+            { open: '(', close: ')' },
+            { open: '[', close: ']' },
+            { open: '{', close: '}' },
+            { open: '"', close: '"' },
+        ],
+        comments: { lineComment: ';' },
+    });
+
+    // Rainbow-bracket palette, mirrored from trowel's turmeric-dark theme
+    // (resources/turmeric-dark.theme.json rainbow0..6 + bracketError). Monaco
+    // supports six depth colors before the cycle repeats, so we take six of
+    // trowel's seven levels spanning the spectrum; the unexpected-bracket color
+    // is trowel's BracketError red.
+    const rainbowBrackets = {
+        'editorBracketHighlight.foreground1':               '#EFA030', // orange
+        'editorBracketHighlight.foreground2':               '#D7C94A', // yellow
+        'editorBracketHighlight.foreground3':               '#A8C98A', // green
+        'editorBracketHighlight.foreground4':               '#7AC4B8', // teal
+        'editorBracketHighlight.foreground5':               '#8AB0E8', // blue
+        'editorBracketHighlight.foreground6':               '#C4A0E8', // purple
+        'editorBracketHighlight.unexpectedBracket.foreground': '#FF5C57', // error red
+    };
+
     // Define theme
     monaco.editor.defineTheme('turmeric-light', {
         base: 'vs',
@@ -1034,10 +1079,11 @@ function configureMonaco() {
             'editor.selectionBackground': 'rgba(3, 102, 214, 0.3)',
             'editor.inactiveSelectionBackground': 'rgba(3, 102, 214, 0.1)',
             'editorIndentGuide.background': '#e1e4e8',
-            'editorIndentGuide.activeBackground': '#959da5'
+            'editorIndentGuide.activeBackground': '#959da5',
+            ...rainbowBrackets
         }
     });
-    
+
     monaco.editor.defineTheme('turmeric-dark', {
         base: 'vs-dark',
         inherit: true,
@@ -1111,6 +1157,9 @@ function configureMonaco() {
 
             // Focus ring — gold instead of VS Code blue
             'focusBorder':                          'rgba(212,139,28,0.40)',
+
+            // Rainbow brackets — depth-colored, matching the trowel editor
+            ...rainbowBrackets
         }
     });
 
@@ -1152,6 +1201,15 @@ async function initEditor() {
         autoClosingQuotes: 'beforeWhitespace',
         autoSurround: 'never',
         bracketMatching: true,
+        bracketPairColorization: {
+            enabled: true,
+            independentColorPoolPerBracketType: false
+        },
+        guides: {
+            bracketPairs: true,
+            bracketPairsHorizontal: 'active',
+            highlightActiveBracketPair: true
+        },
         colorDecorators: true,
         contextmenu: true,
         cursorBlinking: 'blink',
