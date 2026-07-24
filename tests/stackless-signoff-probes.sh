@@ -37,6 +37,20 @@ PROBE_DIR="$HERE/probes/stackless-signoff"
 ENABLE="${TUR_STACKLESS_ENABLE:-}"
 STACK_KB="${TUR_PROBE_STACK_KB:-256}"
 
+# Per-probe wall-clock cap.  A probe that runs longer than this is treated as a
+# hang and killed, so a NON-TERMINATING probe surfaces as a loud failure instead
+# of stalling the whole CI job indefinitely.  (This guard exists because a probe
+# added without it hung the Ubuntu/macOS `ctest` job until GitHub canceled it ~32
+# minutes in.)  `perl -e 'alarm N; exec @ARGV'` is the portable timeout used
+# across this repo -- coreutils `timeout` is absent on the macOS runners; SIGALRM
+# survives `exec` and terminates the child, so a hang exits 142 rather than
+# waiting forever.  A healthy probe finishes in well under a second.
+TIMEOUT_S="${TUR_PROBE_TIMEOUT_S:-60}"
+# Known-broken probes are capped tighter: they either crash instantly or hang, so
+# there is no point burning a full TIMEOUT_S per CI run re-confirming they are
+# still broken.
+XFAIL_TIMEOUT_S="${TUR_PROBE_XFAIL_TIMEOUT_S:-20}"
+
 if [ ! -x "$TUR" ]; then
     echo "stackless-signoff: compiler not found at $TUR (set TUR=...)" >&2
     exit 2
@@ -65,27 +79,72 @@ declare -A pflags=(
     [async-rec]=--enable=cps-async
 )
 
+# Probes that expose a genuine, still-open runtime bug are listed here.  They
+# stay in the rotation as live regression guards but are EXPECTED to fail, so
+# they do not fail the suite -- the alternative (a hard failure, or worse a
+# hang) is what stalled CI.  If one starts PASSING it is reported as an
+# unexpected XPASS and DOES fail the suite, prompting its removal from this list
+# and re-arming it as a normal probe.
+#
+# The list is currently empty -- all probes pass:
+#   - effect-rec graduated 2026-07-24 (nested-handler non-termination fixed;
+#     docs/archive/effect-rec-nested-handler-nonterminates.md).
+#   - fiber-rec  graduated 2026-07-24 (async + deep catch-unwind no longer
+#     evicted from the flat-stack trampoline; a CPS-marked clone kept the
+#     stackless lowering -- docs/archive/fiber-rec-async-fiber-segfault.md).
+declare -A xfail=()
+
+# Run $bin under a reduced stack ($STACK_KB) with a hard wall-clock cap ($2
+# seconds).  Echoes combined stdout+stderr and returns the child's exit status
+# (142 when SIGALRM fires, i.e. the probe hung and was killed).
+run_probe() {
+    local bin="$1" cap="$2"
+    ( ulimit -s "$STACK_KB"; exec perl -e 'alarm shift; exec @ARGV' "$cap" "$bin" ) 2>&1
+}
+
 fails=0
+xfails=0
 for p in "${names[@]}"; do
     src="$PROBE_DIR/$p.tur"
     bin="$WORK/$p.bin"
+    is_xfail="${xfail[$p]:-}"
     if ! "$TUR" $ENABLE ${pflags[$p]:-} build "$src" -o "$bin" >"$WORK/$p.build.log" 2>&1; then
-        echo "FAIL $p: build error"; sed 's/^/    /' "$WORK/$p.build.log"; fails=$((fails+1)); continue
+        if [ -n "$is_xfail" ]; then
+            echo "XFAIL $p: build error (known-broken)"; xfails=$((xfails+1))
+        else
+            echo "FAIL $p: build error"; sed 's/^/    /' "$WORK/$p.build.log"; fails=$((fails+1))
+        fi
+        continue
     fi
-    out="$( (ulimit -s "$STACK_KB"; "$bin") 2>&1 )"; rc=$?
+    cap="$TIMEOUT_S"; [ -n "$is_xfail" ] && cap="$XFAIL_TIMEOUT_S"
+    out="$(run_probe "$bin" "$cap")"; rc=$?
     exp="${expect[$p]}"
-    if [ "$rc" = "0" ] && [ "$out" = "$exp" ]; then
-        echo "PASS $p: $out (1000000-depth, ${STACK_KB}KB stack)"
+    passed=0
+    if [ "$rc" = "0" ] && [ "$out" = "$exp" ]; then passed=1; fi
+    note=""
+    if [ "$rc" = "142" ]; then note=" (timed out after ${cap}s -- treated as hang)"; fi
+    if [ -n "$is_xfail" ]; then
+        if [ "$passed" = "1" ]; then
+            echo "XPASS $p: $out -- now passing; remove it from the xfail list to re-arm the guard"
+            fails=$((fails+1))
+        else
+            echo "XFAIL $p: rc=$rc out='$out' expected='$exp'$note (known-broken)"
+            xfails=$((xfails+1))
+        fi
     else
-        echo "FAIL $p: rc=$rc out='$out' expected='$exp'"; fails=$((fails+1))
+        if [ "$passed" = "1" ]; then
+            echo "PASS $p: $out (1000000-depth, ${STACK_KB}KB stack)"
+        else
+            echo "FAIL $p: rc=$rc out='$out' expected='$exp'$note"; fails=$((fails+1))
+        fi
     fi
 done
 
 echo "---"
 if [ "$fails" = "0" ]; then
-    echo "stackless-signoff: all ${#names[@]} probes passed"
+    echo "stackless-signoff: ${#names[@]} probes checked, $xfails known-broken (xfail), all others passed"
     exit 0
 else
-    echo "stackless-signoff: $fails probe(s) failed"
+    echo "stackless-signoff: $fails probe(s) failed, $xfails known-broken (xfail)"
     exit 1
 fi

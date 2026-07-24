@@ -1238,7 +1238,20 @@ static intptr_t __dk_drive_after(void) {
             g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
             g_dk_resume_val = r;
         } else {
-            dk_free(ch);   /* yielded again mid-run: loop, flat */
+            /* Yielded mid-run: `ch` tail-resumed again from deep inside its own
+             * execution.  With nested handlers the pending meta-stack delivery
+             * queued by that interior perform re-enters the machine and reifies
+             * continuations that still point into `ch`, so eagerly freeing it
+             * here is a use-after-free (an inner `perform` under an outer
+             * handler resumed across it -> dk_run_impl walks freed nodes and
+             * spins forever).  Hand `ch` a boundary owner instead -- the same
+             * treatment dk_invoke gives a chain that may tail-resume out -- so it
+             * is freed exactly once at the outermost entry (__dk_reap_run) after
+             * every delivery that references it has drained.  A single-handler
+             * deep loop is unaffected in correctness; it only defers these frees
+             * to the entry boundary.  See
+             * docs/archive/effect-rec-nested-handler-nonterminates.md. */
+            __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */
         }
     }
 }
