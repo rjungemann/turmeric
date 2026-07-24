@@ -114,9 +114,32 @@ is rare; the pin is by design).
   `eval-basic.c:112-122`) and `env-teardown.c` (leak-cleanliness) are the rest of
   the safety net.
 - **TR2.1 -- persist the elaboration environment.** Thread a persistent
-  `TypeClassEnv` + type/name/struct/ADT tables on `env`, built in a persistent
-  arena; have `elaborate_program` seed from it. Behavior-preserving (still
-  re-elaborates all forms) -- this is pure plumbing that unblocks TR2.2.
+  elaboration state on `env`, built in a persistent arena, and have the
+  elaborator seed from it. Behavior-preserving (still re-elaborates all forms) --
+  pure plumbing that unblocks TR2.2.
+
+  *Concrete scope (from the `Elab` struct, `elab_internal.h:155-812`).* The struct
+  is dominated by cheap `Symbol*` dispatch caches that are re-derived from the
+  symbol table each call -- those stay per-call. The state that must persist
+  across evals is small and specific:
+  - `Scope global` (`:159`) -- the name -> binding environment.
+  - `TypeClassEnv typeclass_env` (`:173`) -- accumulated instances.
+  - `Expr **file_scope_defs` (`:169-171`).
+  - `AdtDef **adt_defs` (`:331-333`) -- ADT registry (+ GADT signature stack).
+  - `EffectEnv *effect_env` (`:290`) -- effect registry.
+  - `ElabModule *loaded_modules` (`:414-416`) -- module registry.
+  - the struct/type registry (registered through the scope/type env).
+
+  *Hard constraint.* `elaborate_program` is shared with the **batch compiler**
+  (`main.c` compile path), not only the interpreter. TR2.1 must add an *opt-in*
+  seed/merge path (a persistent-state handle the interpreter passes and the
+  compiler passes NULL for) so whole-program compilation stays byte-identical;
+  the incremental path is interpreter-only. This is why TR2.1 is its own focused
+  pass with a full `bash tests/run.sh` gate (the ~1442 fixtures exercise the
+  compiler's use of `elaborate_program`), not a quick edit. The new entry shape:
+  `elaborate_program_incremental(persistent_state*, new_forms, ...)` that seeds
+  `elab_init_state` from `persistent_state`, elaborates only the new forms, and
+  merges new defs/instances/registries back into `persistent_state`.
 - **TR2.2 -- incremental elaboration entry.** New elaborator entry that
   elaborates only `[prior..nforms)` against the persistent env and merges back;
   eval loop parses only new source. This is where the O(N^2) -> O(N) win lands.
