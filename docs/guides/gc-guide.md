@@ -104,6 +104,15 @@ Runtime knobs surface as three compiler intrinsics wired in
 | `(gc-enable!)` | Switch to `GC_THRESHOLD`        |
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
 
+> **What a collection actually reclaims today.** The collector as wired is
+> *zombie-only*: it frees a block whose strong count reached 0 while a `weak<T>`
+> still observes it. It does **not** reclaim a live strong-reference cycle -- the
+> members keep `strong_count > 0`, are treated as roots, and survive `(gc!)` in
+> every mode. So `(gc!)` is not a remedy for `rc<T>` cycles today; break them
+> with `weak<T>` as in Rust. See
+> `docs/reported/gc-strong-cycles-not-collected.md` (with measured numbers) and
+> the plan `docs/upcoming/v1/gc-cycle-collection-plan.md`.
+
 ---
 
 ## What is *not* GC-managed
@@ -145,23 +154,35 @@ walker, when they have no `rc<T>` children.
 The tree-walking interpreter (`turi_eval`, `src/turi/eval.c`) makes
 deliberately different choices, and this trips people up.
 
-**Closures are never freed.** `eval.c:435-443` documents the reason:
-frames may be captured by closures that outlive their defining scope, and
-the interpreter does not try to figure out which. Process-lifetime is fine
-for the REPL and for compilation, which is what the interpreter is for.
+**Closures are never freed *individually*.** Frames, bindings, and closures
+are region-allocated from the env's value pool (`turi_val_alloc`,
+`value.c:16-18`; `eval_frame_new`/`eval_frame_free`, `eval.c:424-451`), and the
+per-object free is a deliberate no-op because a closure can capture a frame that
+outlives its defining scope and the interpreter does not track which. The whole
+pool is then reclaimed wholesale at `turi_env_free` (`env.c:334-336`) -- this is
+region memory reclaimed at teardown, **not** memory abandoned to the OS. The
+practical split: a short-lived process (fork-per-fixture, one-shot `tur build`)
+reclaims everything at exit; a **long-lived env** (a REPL/kernel that never tears
+down) grows the pool monotonically until teardown. That growth -- not a lost
+pointer -- is the real caveat; incremental reclamation via opt-in scratch
+promotion exists but is off by default (see
+`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`).
 
-**Collections (Vec/Set/Map) are never freed** unless user code calls
-`vec-free` / `set-free` / `map-free` explicitly. The natives in `main.c`
-`calloc` their backing storage and never register it for cleanup. See
-`docs/reported/interp-collections-never-freed.md` for the active report and
-`docs/upcoming/turi-interp-collections-libturi-plan.md` for the plan to
-move those natives into `libturi.a` where the embedder can wrap them.
+**Collections (Vec/Set/Map) backing buffers** are `calloc`/`malloc`'d outside
+the value pool and are **not** reclaimed on scope exit unless user code calls
+`vec-free` / `set-free` / `map-free`. They are, however, tracked at creation and
+swept at teardown (`env.c:320-327`), so they no longer leak past process exit --
+that historical bug is resolved (`docs/archive/history/interp-collections-never-freed.md`,
+`docs/archive/history/turi-interp-collections-libturi-plan.md`). Reclaiming them
+*mid-run* (drop-glue on scope exit) is still future work
+(`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`).
 
 **Consequence for `bash tests/run.sh`.** The compiler/codegen path is
 leak-clean and runs with LeakSanitizer enabled. The interpreter harnesses
-(`run-turi.sh`, `run-flags.sh`) default to `ASAN_OPTIONS=detect_leaks=0`
-because a genuine leak in the interpreter is expected. See
-`docs/asan-debug-leaks-plan.md`.
+(`run-turi.sh`, `run-flags.sh`) default to `ASAN_OPTIONS=detect_leaks=0` -- not
+because memory is abandoned, but because the interpreter deliberately does not
+free incrementally, so LSan on the interp path is noise rather than signal. See
+`docs/archive/history/asan-debug-leaks-plan.md`.
 
 ---
 
@@ -197,15 +218,15 @@ If you want to touch this code:
    `mark_phase` (242-293), `trial_deletion_phase` (296-343).
 4. `src/compiler/emit_expr.c` — where `rc_cb_alloc_*` calls are emitted
    (lines 5594-5656); this is how types acquire walkers.
-5. `src/turi/eval.c` — the interpreter's opposing policy (lines 435-443,
-   318-324) and why it is deliberate.
+5. `src/turi/eval.c` — the interpreter's opposing policy (region allocation +
+   no-op per-object free, lines 424-451) and why it is deliberate.
 
 For historical context:
 
 - `docs/archive/history/existential-gc-plan.md` — original EXG1 RC-for-existentials plan.
 - `docs/archive/existential-gc-followup-plan.md` — EXG4/5/6 (cross-scope
   ownership, cycle visibility, `:linear`), shipped 2026-05.
-- `docs/upcoming/end-to-end-monomorphization-plan.md` — the longer-term
+- `docs/archive/history/end-to-end-monomorphization-plan.md` — the longer-term
   ABI direction; the current hybrid carrier/by-value boxing is the seam RC
   and GC sit on.
 
@@ -213,12 +234,17 @@ For historical context:
 
 ## Known gaps
 
-- Cycle collection is off by default. Programs that build cycles need to
-  call `(gc!)` explicitly, or opt into `GC_THRESHOLD` via `(gc-enable!)`.
+- Cycle collection is off by default, and even when enabled it is zombie-only:
+  a live strong `rc<T>` cycle is **not** reclaimed by `(gc!)` in any mode
+  (measured: `docs/reported/gc-strong-cycles-not-collected.md`). Break cycles
+  with `weak<T>` as in Rust; the plan to actually collect them is
+  `docs/upcoming/v1/gc-cycle-collection-plan.md`.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.
 - The walker relies on per-block metadata registered at allocation. Runtime
   type reflection is not available; a block with no `walk_fn` is opaque to
   the collector no matter what it actually points to.
-- Interpreter collections leak until the process exits. This is by design
-  today; the plan to fix it is `turi-interp-collections-libturi-plan.md`.
+- Interpreter memory is reclaimed at env teardown, but a long-lived env
+  (REPL/kernel) is not bounded incrementally -- the value pool and per-eval
+  arenas grow until teardown. The plan to bound it is
+  `docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`.

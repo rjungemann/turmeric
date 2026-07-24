@@ -1,11 +1,29 @@
 ---
-status: open
+status: resolved
 severity: low
 discovered: 2026-07-24
+resolved: 2026-07-24
 area: docs (docs/guides/gc-guide.md)
 ---
 
 # `gc-guide.md` overstates cycle collection and the interpreter "leak"
+
+## Resolution (2026-07-24)
+
+All three items fixed in `docs/guides/gc-guide.md`:
+
+1. Added a "What a collection actually reclaims today" note under the intrinsics
+   table and rewrote the Known-gaps bullet -- both now state the collector is
+   zombie-only and `(gc!)` does not reclaim strong `rc<T>` cycles, pointing at
+   `gc-strong-cycles-not-collected.md` and the cycle-collection plan.
+2. Reworded the interpreter section from "closures are never freed" to
+   "region-allocated, reclaimed wholesale at `turi_env_free`", with the
+   long-lived-env growth caveat, and softened the `detect_leaks=0` rationale.
+3. Refreshed stale citations -- the interp-collections plans, `asan-debug-leaks-plan.md`,
+   and `end-to-end-monomorphization-plan.md` now point at `docs/archive/history/`;
+   the `eval.c:435-443` cite is now `eval.c:424-451`.
+
+The original report follows for the record.
 
 ## Summary
 
