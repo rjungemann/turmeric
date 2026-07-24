@@ -183,6 +183,16 @@ typedef struct TuriEnv {
      * incrementally (counting newlines in the new text only) so resuming the
      * reader never rescans the prefix. 1-based; 0 means "not yet initialised". */
     uint32_t      acc_next_line;
+    /* TR2.2b: persistent elaboration session (opaque ElabSession, elab.h). Holds
+     * the accumulated scope / typeclass env / ADT+effect+module registries so a
+     * new turn's forms elaborate against prior definitions WITHOUT re-elaborating
+     * them -- the O(N^2) retained-elaboration term. `elab_session_forms` is how
+     * many accumulated forms the session has already absorbed, so a turn hands
+     * the elaborator only acc_forms[elab_session_forms .. n_acc_forms).
+     * Discarded (and rebuilt by replaying all accumulated forms) after any
+     * failed elaboration, since a partial program may have entered its scope. */
+    struct Elab  *elab_session;
+    uint32_t      elab_session_forms;
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),

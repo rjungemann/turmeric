@@ -9948,9 +9948,15 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                 env->prior_prog_items  = 0;
                 env->reader_type       = detected;
                 /* TR2: accumulated forms belong to the OLD reader; drop them
-                 * along with the source they came from. */
+                 * along with the source they came from, and with them the
+                 * elaboration session built from those forms. */
                 env->n_acc_forms       = 0;
                 env->acc_next_line     = 0;
+                if (env->elab_session) {
+                    elab_session_free(env->elab_session);
+                    env->elab_session       = NULL;
+                    env->elab_session_forms = 0;
+                }
             }
             /* Layers are additive and file-scoped; union them into the
              * session set so reader layers stay active across the eval blob. */
@@ -10125,9 +10131,26 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     TypeClassEnv *tc_env_slot =
         (TypeClassEnv *)arena_alloc(eval_arena, sizeof(TypeClassEnv));
     memset(tc_env_slot, 0, sizeof(*tc_env_slot));
-    Expr *prog = elaborate_program(eval_arena, &env->st,
-                                   forms, nforms,
-                                   /*stdlib_prefix=*/prior,
+
+    /* TR2.2b: incremental elaboration. When the session already holds exactly
+     * the previously-accumulated forms, hand the elaborator ONLY this turn's
+     * new forms -- prior definitions resolve out of the session's accumulated
+     * scope instead of being re-elaborated (and re-allocated) every turn.
+     *
+     * Otherwise (no session yet, or one just discarded after a failure) fall
+     * back to elaborating the whole accumulated program, which both reproduces
+     * today's behavior exactly and rebuilds the session from scratch. */
+    if (env->incremental_elab && !env->elab_session) {
+        env->elab_session       = elab_session_new();
+        env->elab_session_forms = 0;
+    }
+    const bool use_incr_elab = env->elab_session && prior > 0 &&
+                               env->elab_session_forms == prior;
+    const uint32_t elab_from = use_incr_elab ? prior : 0;
+
+    Expr *prog = elaborate_program_session(eval_arena, &env->st,
+                                   forms + elab_from, nforms - elab_from,
+                                   /*stdlib_prefix=*/prior - elab_from,
                                    /*module_base_dir=*/mbase,
                                    /*separate_compilation=*/false,
                                    /*sandboxed=*/import_blocked,
@@ -10138,9 +10161,17 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                    /* RM transitive: REPL/eval reuses the
                                     * env-owned registry so module loads
                                     * see the same macros the entry did. */
-                                   env->reader_macros);
+                                   env->reader_macros,
+                                   env->elab_session);
     if (!prog || diag_had_error()) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
+        /* A failed program may have left partial definitions in the session;
+         * discard it so the next turn rebuilds from the accumulated forms. */
+        if (env->elab_session) {
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
         return turi_error("elaboration error");
     }
 
@@ -10164,6 +10195,11 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * (which the interpreter already shares). */
     if (!lifetime_check_program(prog)) {
         env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
+        if (env->elab_session) {            /* see the discard note above */
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
         return turi_error("elaboration error");
     }
 
@@ -10227,7 +10263,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * prior_prog non-fsd program items from earlier evals.  Skip exactly that
      * many; everything after is genuinely new (see prior_prog_items above --
      * parsed-form count is the wrong unit once (load ...) expands inline). */
-    uint32_t prior_prog = env->prior_prog_items;
+    /* TR2.2b: under incremental elaboration the program holds ONLY this turn's
+     * items, so none of them have run before -- the already-run prefix is zero.
+     * On the whole-program path the cumulative count applies, as before. */
+    uint32_t prior_prog = use_incr_elab ? 0u : env->prior_prog_items;
     EVAL_TOPLEVEL_RANGE(0, n_fsd);                   /* imported module bodies */
     EVAL_TOPLEVEL_RANGE(n_fsd + prior_prog, total);  /* new user forms         */
 eval_done:;
@@ -10256,7 +10295,13 @@ eval_done:;
          * total = n_fsd + (all non-fsd items), so total - n_fsd is that count.
          * Keying the skip off this (not the parsed nforms) is what keeps a
          * re-expanded (load ...) from re-running earlier top-level forms. */
-        env->prior_prog_items = total - n_fsd;
+        /* TR2.2b: keep this CUMULATIVE across turns. The whole-program path
+         * elaborates everything, so (total - n_fsd) is already the running
+         * total; the incremental path only sees this turn's items, so add. */
+        if (use_incr_elab) env->prior_prog_items += (total - n_fsd);
+        else               env->prior_prog_items  = total - n_fsd;
+        /* The session has now absorbed every accumulated form. */
+        if (env->elab_session) env->elab_session_forms = nforms;
         /* SI4: persist TypeClassEnv for turi_try_show dispatch. */
         env->last_tc_env = tc_env_slot;
         /* SI4: extract type tag from the last new top-level expression. */
@@ -10269,6 +10314,14 @@ eval_done:;
          * forms must not stay in the accumulated vector either -- otherwise the
          * next turn's offset/count bookkeeping would disagree with src_acc. */
         env->n_acc_forms = acc_committed;
+        /* TR2.2b: the session HAS absorbed this turn's definitions even though
+         * the turn failed at runtime, so it no longer matches the accumulated
+         * forms. Discard it; the next turn rebuilds from acc_forms. */
+        if (env->elab_session) {
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
     }
 
     /* turi-value-pool-scratch-promotion-plan: at this top-level boundary,
@@ -10311,6 +10364,11 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
         env->prior_prog_items = 0;
         env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
         env->acc_next_line    = 0;
+        if (env->elab_session) {
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
     }
 
     TuriValue v = turi_eval(env, buf);

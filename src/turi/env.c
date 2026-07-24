@@ -2,6 +2,7 @@
 #include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL */
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
+#include "elab.h"           /* TR2.2b: persistent ElabSession lifecycle */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 #include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
 #include "string_native.h"        /* owned String type native overrides */
@@ -335,6 +336,13 @@ void turi_env_free(TuriEnv *env) {
     arena_free(&env->value_perm);
     turi_val_global_pool_free();
 
+    /* TR2.2b: the persistent elaboration session owns malloc'd scope/registry
+     * storage; free it before the vector below. */
+    if (env->elab_session) {
+        elab_session_free((ElabSession *)env->elab_session);
+        env->elab_session       = NULL;
+        env->elab_session_forms = 0;
+    }
     /* TR2: the accumulated-Form vector is malloc'd (the Forms themselves live
      * in eval_arenas, already freed above). */
     free(env->acc_forms);

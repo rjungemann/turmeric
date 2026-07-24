@@ -1265,6 +1265,11 @@ int turi_repl_run(bool watch_mode) {
                     env->prior_prog_items = 0;
                     env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
                     env->acc_next_line    = 0;
+                    if (env->elab_session) {
+                        elab_session_free(env->elab_session);
+                        env->elab_session       = NULL;
+                        env->elab_session_forms = 0;
+                    }
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));

@@ -122,17 +122,72 @@ static const char *const S_ERRORS[] = {
     "(ok2 (ok1 3))",
 };
 
-/* Redefinition across turns. */
+/* Redefinition across turns. `defn` redefinition is a KNOWN, intentional
+ * divergence covered separately by test_known_divergence below, so it is not
+ * part of this identical-results session. */
 static const char *const S_REDEF[] = {
-    "(defn f [x : int] : int (+ x 1))",
-    "(f 10)",
-    "(defn f [x : int] : int (+ x 100))",
-    "(f 10)",
     "(def v 1)",
     "v",
     "(def v 2)",
     "v",
 };
+
+/* ---------------------------------------------------------------------------
+ * KNOWN, INTENTIONAL DIVERGENCE: redefining a top-level `defn` across turns.
+ *
+ * Default (whole-program) path: every turn re-elaborates the accumulated
+ * program with stdlib_prefix = (count of prior forms), which marks all
+ * previously-accumulated forms as stdlib. Redefining your own function then
+ * fails with the actively misleading "'f' is already defined by an auto-loaded
+ * stdlib module".
+ *
+ * Incremental path: prior turns' definitions live in the session scope as
+ * ordinary user bindings, so redefinition behaves the way a REPL should -- the
+ * new definition wins.
+ *
+ * The incremental behavior is the desirable one; this test pins BOTH so the
+ * difference is explicit and any further drift on either path is caught.
+ * ------------------------------------------------------------------------- */
+static void test_known_divergence(void) {
+    TuriEnv *base = turi_env_new();
+    TuriEnv *incr = turi_env_new();
+    turi_env_set_incremental_elab(incr, true);
+
+    turi_eval(base, "(defn f [x : int] : int (+ x 1))");
+    turi_eval(incr, "(defn f [x : int] : int (+ x 1))");
+
+    TuriValue rb = turi_eval(base, "(defn f [x : int] : int (+ x 100))");
+    TuriValue ri = turi_eval(incr, "(defn f [x : int] : int (+ x 100))");
+
+    if (rb.tag != TURI_ERROR) {
+        fprintf(stderr, "FAIL [known-divergence]: default path no longer rejects "
+                        "defn redefinition (tag %d) -- update this test\n", rb.tag);
+        failures++;
+    }
+    if (ri.tag == TURI_ERROR) {
+        fprintf(stderr, "FAIL [known-divergence]: incremental path rejected defn "
+                        "redefinition: %s\n", ri.as_error ? ri.as_error : "?");
+        failures++;
+    }
+    TuriValue vb = turi_eval(base, "(f 10)");
+    TuriValue vi = turi_eval(incr, "(f 10)");
+    if (vb.tag != TURI_INT || vb.as_int != 11) {
+        fprintf(stderr, "FAIL [known-divergence]: default kept old defn? got %lld\n",
+                (long long)vb.as_int);
+        failures++;
+    }
+    if (vi.tag != TURI_INT || vi.as_int != 110) {
+        fprintf(stderr, "FAIL [known-divergence]: incremental redefinition did not "
+                        "take effect; got %lld (want 110)\n", (long long)vi.as_int);
+        failures++;
+    }
+    if (!failures)
+        printf("PASS [known-divergence] defn redefinition: default=error, "
+               "incremental=new definition wins\n");
+
+    turi_env_free(base);
+    turi_env_free(incr);
+}
 
 #define SESSION(name, arr) diff_session(name, arr, (int)(sizeof(arr)/sizeof((arr)[0])))
 
@@ -142,6 +197,7 @@ int main(void) {
     SESSION("reader-macros",  S_READER_MACROS);
     SESSION("errors",         S_ERRORS);
     SESSION("redefinition",   S_REDEF);
+    test_known_divergence();
 
     /* Longer churn: many turns, to shake out offset/line drift that only shows
      * up once the accumulated prefix is large. */

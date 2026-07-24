@@ -165,12 +165,15 @@ Promotion resets `value_scratch` but never touches `eval_arenas` or `src_acc`
 (`env.h:165`, `eval.c:9920-9924`), so AST/elaboration memory and source text
 still grow per line.
 
-**Status: incremental PARSE landed (TR2.2a, 2026-07-24), gated default-off via
-`turi_env_set_incremental_elab`.** N=800 turns: 2.32s -> 0.91s (-61%, win grows
-with N -- the quadratic parse term is gone) and 299 MB -> 240 MB (-20%). The
-remaining memory is whole-program *elaboration* (TR2.1 + TR2.2b). Guarded by an
-A/B differential (`tur_incremental_elab_diff`) that compares every turn's result
-between the two paths.
+**Status: LANDED (TR2.0 + TR2.2a + TR2.1/TR2.2b, 2026-07-24), gated default-off
+via `turi_env_set_incremental_elab`.** A long-lived env now parses AND elaborates
+only each turn's new forms, resolving prior definitions out of a persistent
+elaboration session. **N=800 turns: 299.3 MB -> 3.6 MB (83x less) and 1.54s ->
+0.03s (51x faster)**; growth is ~linear where it was quadratic. The shared
+compiler path is untouched (full suite 2278 passed, 0 failed). Guarded by an A/B
+differential (`tur_incremental_elab_diff`) comparing every turn's result between
+the two paths, with the one intentional divergence (defn redefinition now works
+instead of erroring) pinned explicitly.
 
 **Design: `docs/upcoming/v1/turi-incremental-elaboration-design.md`.**
 The investigation corrected an assumption this phase originally carried -- a

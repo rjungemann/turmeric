@@ -1,9 +1,15 @@
 # Incremental Elaboration for the turi REPL -- Design (TR2 core)
 
-> **Status:** Design. This is the substantive core of TR2 in
-> `turi-interp-incremental-reclamation-plan.md` -- broken out because it is an
-> architectural change to the interpreter's eval loop and the elaborator's
-> entry contract, not a localized edit. No code written yet.
+> **Status:** LANDED (gated, default-off) as of 2026-07-24 -- TR2.0, TR2.2a
+> (incremental parse) and TR2.1 + TR2.2b (persistent elaboration session) are
+> all in. Enable per-env with `turi_env_set_incremental_elab(env, true)`.
+> Remaining: TR2.3 (drop `src_acc`), TR2.4 (scratch promotion in the REPL), and
+> flipping the gate on for real consumers.
+>
+> **Headline result (N=800-turn session): 299.3 MB -> 3.6 MB (83x less retained
+> elaboration memory) and 1.54s -> 0.03s (51x faster).** Growth is now ~linear
+> where it was quadratic. Full suite: 2278 passed, 0 failed -- the shared
+> compiler path is unaffected (it passes `session = NULL`).
 >
 > **Problem owner:** `docs/reported/turi-repl-quadratic-reparse.md` (CPU) and
 > TR0's measurement (memory: ~4.1 GB `eval_arenas` over a 3000-eval session).
@@ -134,6 +140,24 @@ identical multi-turn diagnostics with correct absolute line numbers). Forms are
 also self-contained -- `form_str` `arena_strdup`s its bytes -- so a reused form
 never points into a source buffer.
 
+## Known behavioral divergence (one, and it is an improvement)
+
+The A/B differential found exactly one semantic difference, and it is worth a
+product decision rather than being papered over:
+
+**Redefining a top-level `defn` across turns.** On the default path every turn
+re-elaborates the accumulated program with `stdlib_prefix` = count of prior
+forms, which marks all previously-accumulated forms as *stdlib*. Redefining your
+own function therefore fails with the actively misleading *"'f' is already
+defined by an auto-loaded stdlib module"*. On the incremental path prior turns'
+definitions are ordinary user bindings in the session scope, so redefinition
+does what a REPL should: the new definition wins.
+
+The incremental behavior is the better one, and the gate is off by default, so
+nothing changes for existing consumers until they opt in. `test_known_divergence`
+in the differential harness pins BOTH behaviors so further drift on either path
+is caught. (`def` redefinition still errors on both paths -- unchanged.)
+
 ## Sub-phases (each independently landable, tested)
 
 - **TR2.0 -- close the test gap first. [DONE 2026-07-24]** There was no in-process
@@ -145,7 +169,32 @@ never points into a source buffer.
   The existing cross-eval coverage (`env-longlived.c` 7 sub-tests,
   `eval-basic.c:112-122`) and `env-teardown.c` (leak-cleanliness) are the rest of
   the safety net.
-- **TR2.1 -- persist the elaboration environment.** Thread a persistent
+- **TR2.1 + TR2.2b -- persistent elaboration session. [DONE 2026-07-24]**
+  Landed together (they cannot ship separately: reusing the scope while still
+  re-elaborating every form would re-declare prior definitions into an
+  already-populated scope). The implementation turned out far smaller than the
+  original loop-restriction sketch below, because **the caller slices the form
+  array** -- no elaborator loop bounds change at all:
+  - `ElabSession` (opaque `Elab`) + `elab_session_new/free` (`elab.h`,
+    `elab_toplevel.c`). `elaborate_program_session(...)` takes it;
+    `elaborate_program(...)` is now a wrapper passing `NULL`, so **every
+    compiler path is untouched** (verified: full suite 2278 passed, 0 failed).
+  - State restore/save is a struct copy, re-anchoring the one self-referential
+    field (`scope = &global`). With a session the per-return teardown is skipped
+    and the state is handed back instead; per-call working sets that ARE freed
+    (`file_scope_defs`, `bare_fat_*`) are nulled so no dangling pointers persist.
+  - The interpreter hands the elaborator only `acc_forms[elab_session_forms..)`,
+    with `stdlib_prefix` and the already-run program-item prefix adjusted for the
+    slice, and keeps `prior_prog_items` cumulative across both paths.
+  - **Discard-on-failure:** any elaboration or runtime error frees the session,
+    so the next turn rebuilds by replaying all accumulated forms (exactly the
+    old behavior). This is what keeps a half-elaborated program from poisoning
+    the session, and it is self-correcting rather than requiring rollback.
+  - **Measured (N=800 turns): 299.3 MB -> 3.6 MB (83x less) and 1.54s -> 0.03s
+    (51x faster).** Growth is now ~linear where the default path is quadratic
+    (400->800 turns: default 76->299 MB, incremental 1.2->3.6 MB).
+
+  *Original sketch (superseded, kept for context):* Thread a persistent
   elaboration state on `env`, built in a persistent arena, and have the
   elaborator seed from it. Behavior-preserving (still re-elaborates all forms) --
   pure plumbing that unblocks TR2.2.
