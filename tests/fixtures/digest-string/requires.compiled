@@ -1,0 +1,3 @@
+tur/digest-string's md5/sha256 core is inline-C with no interpreter native
+override; --interpret aborts with "inline-C not supported". Digest support in
+the tree-walker is out of scope for v1. Compiled path is green (bash tests/run.sh).

@@ -1,0 +1,6 @@
+tur/re-string's re/union-patterns builder is backed by inline-C str ops with no
+interpreter native override; --interpret aborts with "inline-C not supported" at
+the union-patterns-string line. (The cstr-head `cons` elaboration gap this
+fixture also exercised is fixed -- the preload cons stub now takes a polymorphic
+head -- and replace-string/replace-all-string interpret correctly; only the
+inline-C union builder is out of scope.) Compiled path is green (bash tests/run.sh).

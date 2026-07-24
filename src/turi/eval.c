@@ -10015,6 +10015,19 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         return turi_error("elaboration error");
     }
 
+    /* Publish this elaboration's TypeClassEnv BEFORE evaluating the new forms,
+     * not only at the successful end of the call.  Runtime typeclass dispatch
+     * (gde_reresolve_method / gde_reresolve_method_by_value / turi_try_show)
+     * reads env->last_tc_env during evaluation.  Previously last_tc_env was set
+     * only in the success epilogue below, so the FIRST program to introduce a
+     * class's instances (e.g. `Show [String]`, loaded via string.tur) evaluated
+     * against the PREVIOUS call's tc_env -- which lacked those instances -- and
+     * a generic method like `(show-line s)` fell back to the baked int-carrier
+     * representative (printing the raw String pointer instead of its content).
+     * Setting it here makes the current elaboration's instances live for this
+     * eval; the epilogue assignment keeps it pinned across subsequent calls. */
+    env->last_tc_env = tc_env_slot;
+
     /* 7. Evaluate the new top-level expressions.
      *
      * elaborate_program prepends actual file-scope defs (EX_DEFMODULE nodes
