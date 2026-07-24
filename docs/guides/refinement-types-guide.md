@@ -151,6 +151,22 @@ A lambda's contract parameter gets an entry check exactly like a `defn`'s, and
 a captured value's own refinement is in scope as a hypothesis inside the
 lambda body.
 
+A **typeclass method** is checked too, when the dispatch resolves to a known
+instance:
+
+```turmeric
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+(.scale-by 3 4)   ; proved
+(.scale-by 3 0)   ; error[TUR-E0371] on argument 2 of 'scale-by'
+```
+
+Both the dotted `(.m x ...)` and bare `(m x ...)` forms go through the same
+resolution and are checked identically. A dispatch that stays dynamic -- no
+statically-selected instance -- is not checked, because which method runs is
+not known at the site; the method's own entry check still guards it.
+
 What is *not* checked is a genuinely higher-order callee -- see
 [Limits](#limits).
 
@@ -425,8 +441,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
   `apply2`. Passing a refined function as a value is legal and the callee's own
   entry checks still run -- only the static crossing is lost. Refinements in
   function *types* are outside the prototype.
-- **Typeclass method calls are not checked.** A method's per-instance
-  parameter refinements are not carried to the dispatch site.
+- **A dynamic typeclass dispatch is not checked.** When the instance is
+  statically resolved the crossing is checked; when it is not, which method
+  runs is unknown at the site, so only the method's own entry check applies.
+- **An instance may declare a stronger refinement than its class.** Nothing
+  verifies that an instance's parameter refinement is no stronger than the one
+  the class signature declares, so an over-strict instance will panic at its
+  entry check on an argument a generic caller was entitled to pass. Checking
+  that variance is separate work.
 - **Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,
   so they always see every callee's refinement. A function's own return

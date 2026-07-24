@@ -57,7 +57,7 @@ static VCSort rt_sort_of_kind(TypeKind k) {
  * like a defn's rather than being silently decorative.  Returns the new body
  * (the original when nothing was injected).  Must run while the function's
  * inner scope is still current -- the predicate is elaborated in it. */
-static Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
+Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
                                     Binding **params, uint32_t n_params,
                                     const Form **ct_preds, const char **ct_vars,
                                     const uint32_t *ct_idx, uint32_t n_ct,
@@ -126,7 +126,7 @@ static Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
 
 /* True when contract checks are being emitted for this build.  `--no-contracts`
  * strips them, and a release build drops them unless --keep-contracts. */
-static bool rt_contracts_emitted(void) {
+bool rt_contracts_emitted(void) {
 #ifdef NDEBUG
     if (!g_keep_contracts_in_release) return false;
 #endif
@@ -318,8 +318,21 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
         e->refine_call_sites = nb;
         e->cap_refine_call_sites = ncap;
     }
+    /* Prefer the name at the call site over the binding's, which for a
+     * typeclass method is the mangled instance symbol.  A leading '.' is the
+     * dispatch marker, not part of the method name. */
+    const char *display = callee->name ? callee->name->name : "?";
+    if (call_form->tag == F_LIST && call_form->as.list.len > 0) {
+        const Form *head = call_form->as.list.items[0];
+        if (head->tag == F_SYM && head->as.sym && head->as.sym->name) {
+            const char *hn = head->as.sym->name;
+            display = (hn[0] == '.' && hn[1]) ? hn + 1 : hn;
+        }
+    }
+
     RefineCallSite *cs = &e->refine_call_sites[e->n_refine_call_sites++];
-    cs->callee      = callee;
+    cs->callee         = callee;
+    cs->callee_display = display;
     cs->call_form   = call_form;
     cs->arg_offset  = arg_offset;
     cs->env         = NULL;   /* back-filled by refine_fill_call_site_env */
@@ -372,13 +385,14 @@ void refine_resolve_call_sites(Elab *e) {
                            p < callee->type.as.fn.arity)
                         ? callee->type.as.fn.arg_kinds[p] : TY_INT;
 
+            const char *cname = cs->callee_display ? cs->callee_display
+                              : (callee->name ? callee->name->name : "?");
             char what[160];
             if (cs->caller_name)
-                snprintf(what, sizeof(what), "argument %u of '%s' in '%s'", p + 1,
-                         callee->name ? callee->name->name : "?", cs->caller_name);
+                snprintf(what, sizeof(what), "argument %u of '%s' in '%s'",
+                         p + 1, cname, cs->caller_name);
             else
-                snprintf(what, sizeof(what), "argument %u of '%s'", p + 1,
-                         callee->name ? callee->name->name : "?");
+                snprintf(what, sizeof(what), "argument %u of '%s'", p + 1, cname);
             const char *what_owned = arena_strdup(e->arena, what, strlen(what));
 
             experiment_warn_if_used("refined");

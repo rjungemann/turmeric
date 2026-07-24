@@ -839,11 +839,49 @@ typedef struct Elab {
     uint32_t               refine_cs_htab_cap;
 } Elab;
 
+/* CT0: a contract type in ANNOTATION position contributes its BASE type to the
+ * signature; the predicate rides separately, as an entry check and (under
+ * `refined`) as a hypothesis.  EVERY site that resolves a parameter or return
+ * annotation must peel it -- leaving a TY_CONTRACT in a signature makes every
+ * use of that value fail to type with `expected { _ : ? | ... }`.
+ *
+ * That defect reached three sites independently before this helper existed:
+ * `defn` return types, `fn` parameters, and typeclass instance-method
+ * parameters.  If you are adding a fourth annotation site, call this.
+ *
+ * `*out_pred` / `*out_var` receive the predicate and its bound variable when
+ * one was peeled; both are left untouched otherwise. */
+static inline Type *rt_peel_contract(Type *ann, const Form **out_pred,
+                                     const char **out_var) {
+    if (ann && ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
+        if (out_pred) *out_pred = ann->as.contract_.predicate;
+        if (out_var)  *out_var  = ann->as.contract_.var_name;
+        return ann->as.contract_.base_type;
+    }
+    return ann;
+}
+
+/* CT1: inject an entry check for each `{ v : T | pred }` parameter.  Shared by
+ * `defn`, `fn`, and typeclass instance methods so a contract parameter is
+ * enforced identically wherever it is written.  Must be called while the
+ * function's own scope is current -- the predicate is elaborated in it. */
+Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
+                             Binding **params, uint32_t n_params,
+                             const Form **ct_preds, const char **ct_vars,
+                             const uint32_t *ct_idx, uint32_t n_ct, Span span);
+
+/* True when contract checks are being emitted for this build. */
+bool rt_contracts_emitted(void);
+
 /* One pending call-site crossing: `call_form`'s arguments cross into
  * `callee`'s parameters.  Nothing is looked up here -- see the field comment
  * on Elab.refine_call_sites for why. */
 typedef struct RefineCallSite {
     const Binding *callee;
+    /* The callee's name AS WRITTEN at this site.  A typeclass method's binding
+     * carries its mangled C symbol (`__inst_Scaler_scale_hyby_int`), which is
+     * not something to put in a diagnostic; the source form's head is. */
+    const char    *callee_display;
     const Form    *call_form;    /* the whole `(f a b)` form */
     uint32_t       arg_offset;   /* index of the first argument in call_form */
     RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */

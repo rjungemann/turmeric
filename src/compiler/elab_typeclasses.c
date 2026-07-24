@@ -916,7 +916,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                       "unsupported type form in typeclass method parameter");
                             return NULL;
                         }
-                        param_types[actual_p] = *ft;
+                        param_types[actual_p] = *rt_peel_contract(ft, NULL, NULL);
                     }
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
@@ -928,7 +928,7 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type form in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[actual_p] = *ft;
+                    param_types[actual_p] = *rt_peel_contract(ft, NULL, NULL);
                 } else {
                     param_types[actual_p] = TYPE_INT; /* default */
                 }
@@ -3389,6 +3389,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Binding **method_params = NULL;
         uint8_t n_method_params = 0;
         Type *method_param_types = NULL;
+        /* CT0/CT1: contract-typed parameters of this instance method.  Collected
+         * while the annotations are resolved, injected as entry checks once the
+         * body exists -- the same treatment a `defn` or `fn` parameter gets. */
+        const Form *m_ct_preds[MAX_FN_ARITY];
+        const char *m_ct_vars[MAX_FN_ARITY];
+        uint32_t    m_ct_param_idx[MAX_FN_ARITY];
+        uint32_t    n_m_ct_preds = 0;
         
         if (impl_params_form->tag == F_VEC) {
             uint8_t max_method_params = (uint8_t)impl_params_form->as.list.len;
@@ -3416,6 +3423,20 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                                 diag_emit(DIAG_ERROR, p->span,
                                           "unsupported type form in method parameter");
                                 return NULL;
+                            }
+                            /* CT0: peel a contract annotation to its base type and
+                             * keep the predicate for the entry check below.
+                             * Without this the parameter's type stayed the
+                             * contract type and the method body could not use
+                             * the value at all. */
+                            const Form *ct_pred = NULL;
+                            const char *ct_var  = NULL;
+                            ann = rt_peel_contract(ann, &ct_pred, &ct_var);
+                            if (ct_pred && n_m_ct_preds < MAX_FN_ARITY) {
+                                m_ct_preds[n_m_ct_preds]    = ct_pred;
+                                m_ct_vars[n_m_ct_preds]     = ct_var;
+                                m_ct_param_idx[n_m_ct_preds] = prev;
+                                n_m_ct_preds++;
                             }
                             param_type = *ann;
                         } else {
@@ -3794,6 +3815,31 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * it via c_export_name, the documented "emit this C name as-is" bypass. */
         method_binding->c_export_name = method_sym->name;
         method_binding->is_instance_method = true;   /* B6: internal export, CPS-eligible */
+        /* CT0/RT1: carry this method's contract parameters on its binding.  The
+         * parameters are resolved in THIS pass but the body is elaborated in
+         * pass 2, so the binding is the record that spans both -- and it is
+         * also where a dispatch site would look for them. */
+        if (n_m_ct_preds > 0 && n_method_params > 0) {
+            const Form **rp = (const Form **)arena_alloc(e->arena, n_method_params * sizeof(Form *));
+            const char **rv = (const char **)arena_alloc(e->arena, n_method_params * sizeof(char *));
+            const char **rn = (const char **)arena_alloc(e->arena, n_method_params * sizeof(char *));
+            for (uint8_t _pi = 0; _pi < n_method_params; _pi++) {
+                rp[_pi] = NULL;
+                rv[_pi] = NULL;
+                rn[_pi] = (method_params[_pi] && method_params[_pi]->name)
+                        ? method_params[_pi]->name->name : NULL;
+            }
+            for (uint32_t _ci = 0; _ci < n_m_ct_preds; _ci++) {
+                uint32_t _pi = m_ct_param_idx[_ci];
+                if (_pi >= n_method_params) continue;
+                rp[_pi] = m_ct_preds[_ci];
+                rv[_pi] = m_ct_vars[_ci];
+            }
+            method_binding->refine_param_preds = rp;
+            method_binding->refine_param_vars  = rv;
+            method_binding->refine_param_names = rn;
+            method_binding->n_refine_params    = n_method_params;
+        }
         method_fd->binding = method_binding;
         method_fd->params = method_params;
         method_fd->n_params = n_method_params;
@@ -3907,6 +3953,28 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
 
         e->fn_body_depth--;
+
+        /* CT1: inject this instance method's parameter contract checks, while
+         * the method scope is still current (the predicate elaborates in it).
+         * Shared with `defn` and `fn` so a refined method parameter is enforced
+         * rather than decorative. */
+        {
+            const Binding *mb = mp->method_fd ? mp->method_fd->binding : NULL;
+            if (mb && mb->refine_param_preds && method_body && rt_contracts_emitted()) {
+                /* The arrays are indexed by parameter, with NULL where there is
+                 * no refinement, so the index list is just 0..n-1. */
+                uint32_t idx[MAX_FN_ARITY];
+                uint32_t n_idx = mb->n_refine_params < MAX_FN_ARITY
+                               ? mb->n_refine_params : MAX_FN_ARITY;
+                for (uint32_t _i = 0; _i < n_idx; _i++) idx[_i] = _i;
+                Binding *m_check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+                method_body = rt_inject_param_checks(
+                    e, method_body, m_check_fn,
+                    mp->method_params, mp->n_method_params,
+                    mb->refine_param_preds, mb->refine_param_vars,
+                    idx, n_idx, impl_form->span);
+            }
+        }
 
         /* Pop method scope */
         e->scope = method_scope.parent;
@@ -6254,6 +6322,16 @@ resolved_user_fallback:;
      * annotation for downstream passes that may still want to know which
      * instance was selected.  Fall back to dict dispatch only when there is
      * no resolved instance (defensive). */
+    /* RT1: a statically-resolved method dispatch is a crossing into whatever
+     * refinements the SELECTED INSTANCE's method parameters declare.  The
+     * receiver sits at argument 0 of the impl and at index 1 of the source
+     * form, so the parameter/argument slots line up exactly as for a named
+     * call.  A dispatch that stays dynamic (no resolved instance -- the
+     * dict_expr branch below) is not checked: which instance runs is not known
+     * here, and the method's own entry check still guards it. */
+    if (best_method && best_method->binding && g_opt_refined)
+        (void)refine_note_call_site(e, best_method->binding, call, 1);
+
     if (best_method && best_method->binding) {
         out->as.call_.fn_binding = best_method->binding;
         out->as.call_.fn_expr    = NULL;

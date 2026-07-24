@@ -221,12 +221,46 @@
 >   graph route would have missed the simplest case, which is the one people
 >   write.
 >
+> ### Typeclass method dispatch (landed 2026-07-24)
+>
+> The same contract-peel defect, reached a THIRD time: an instance method's
+> parameter annotation kept its `TY_CONTRACT` type, so the method body could
+> not use the value (`'*' arg 2: expected int, got { v : int | ... }`) and a
+> refined method signature did not compile. After fixing it in `defn` returns
+> and then `fn` parameters, the third occurrence was the signal to stop
+> patching sites: the peel now lives in one documented helper
+> (`rt_peel_contract`, elab_internal.h) that names the failure mode and says to
+> call it from any new annotation site. The CT1 entry-check injection is
+> likewise one shared function across `defn`, `fn`, and instance methods.
+>
+> Instance methods parse their parameters in pass 1 and elaborate their bodies
+> in pass 2, so the predicates ride on the method's BINDING -- the record that
+> spans both passes, and also where a dispatch site looks for them.
+>
+> A statically-resolved dispatch is now checked like any other call; the
+> receiver occupies slot 0 of the impl, so parameter and argument slots line up
+> without special-casing. Dotted and bare forms share the resolution point and
+> so are checked identically. A dispatch that stays dynamic is deliberately not
+> checked -- which method runs is unknown there.
+>
+> One diagnostic detail worth keeping: the message names the method as the
+> SOURCE writes it. A method binding carries its mangled instance symbol
+> (`__inst_Scaler_scale_hyby_int`), which is not something to put in front of a
+> user, so the crossing records the call form's head instead.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
-> - **Typeclass method calls** -- a method's per-instance parameter refinements
->   are not carried to the dispatch site.
+> - **Class/instance refinement variance** -- nothing checks that an instance's
+>   parameter refinement is no stronger than its class signature's, so an
+>   over-strict instance panics at its entry check on an argument a generic
+>   caller was entitled to pass. (Open Question 6 in this plan proposed
+>   rejecting refined method signatures outright; supporting them and leaving
+>   variance unchecked is the softer landing, since the entry check catches the
+>   case loudly.)
+> - **Dynamic typeclass dispatch** -- a dispatch with no statically-resolved
+>   instance is not checked; which method runs is unknown at the site.
 > - **Higher-order callees** -- a function-typed parameter carries no
 >   refinements in its type, so neither its body nor its callers can check the
 >   eventual call. This needs refinements in function types, which the
