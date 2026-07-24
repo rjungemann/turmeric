@@ -875,7 +875,6 @@ Expr *elab_let(Elab *e, const Form *call) {
                 lam = init->as.var.binding;
             else if (init && init->kind == EX_FN_DEF && init->as.fn_def_.fn)
                 lam = init->as.fn_def_.fn->binding;
-            if (init) fprintf(stderr, "DBG let init kind=%d lam=%p preds=%p\n", (int)init->kind, (void*)lam, lam?(void*)lam->refine_param_preds:NULL);
             if (lam && lam->refine_param_preds) {
                 b->refine_param_preds = lam->refine_param_preds;
                 b->refine_param_vars  = lam->refine_param_vars;
