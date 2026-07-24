@@ -104,6 +104,36 @@ test.describe('Try Turmeric smoke tests', () => {
         await expect(page.locator('#console')).not.toContainText('#<fn main>');
     });
 
+    test('Force update clears caches and reloads', async ({ page }) => {
+        await page.goto('/try/');
+        await waitForReady(page);
+
+        // Stub the destructive bits so the test observes intent without actually
+        // unregistering the SW or navigating away.
+        await page.evaluate(() => {
+            window.__cachesDeleted = [];
+            window.__reloaded = false;
+            if (window.caches) {
+                caches.keys = async () => ['stale-cache'];
+                caches.delete = async (k) => { window.__cachesDeleted.push(k); return true; };
+            }
+            if (navigator.serviceWorker) {
+                navigator.serviceWorker.getRegistrations = async () => [];
+            }
+            // reload is non-configurable on some engines; override via defineProperty.
+            Object.defineProperty(window.location, 'reload', {
+                configurable: true,
+                value: () => { window.__reloaded = true; },
+            });
+        });
+
+        await page.locator('#more-btn').click();
+        await page.locator('.more-item[data-action="force-update"]').click();
+
+        await expect.poll(() => page.evaluate(() => window.__reloaded)).toBe(true);
+        expect(await page.evaluate(() => window.__cachesDeleted)).toContain('stale-cache');
+    });
+
     test('REPL history navigates with arrow keys', async ({ page }) => {
         await page.goto('/try/');
         await waitForReady(page);

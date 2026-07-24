@@ -2109,10 +2109,13 @@ function initEventListeners() {
             if (!item) return;
             const cmd = item.dataset.cmd;
             const example = item.dataset.example;
+            const action = item.dataset.action;
             if (cmd) {
                 document.getElementById(cmd)?.click();
             } else if (example) {
                 loadExample(example);
+            } else if (action === 'force-update') {
+                forceUpdatePWA();
             }
             closeMenu();
         });
@@ -2578,6 +2581,33 @@ if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
             .catch((err) => console.warn('SW registration failed:', err));
     });
+}
+
+/**
+ * Force-update the installed PWA: unregister every service worker and drop all
+ * Cache Storage entries, then hard-reload so the page (and the WASM/JS assets)
+ * are fetched fresh from the network. This is the user-facing escape hatch for a
+ * stuck cache -- it works even when the shipped sw.js forgot to bump
+ * CACHE_VERSION, because it nukes the SW entirely so the post-reload navigation
+ * is uncontrolled and hits the network directly. localStorage (the editor tabs)
+ * is intentionally left alone, so no code is lost.
+ */
+async function forceUpdatePWA() {
+    if (typeof showStatus === 'function') showStatus('Updating...', 'info');
+    try {
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.unregister()));
+        }
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+    } catch (err) {
+        console.warn('Force update failed:', err);
+    }
+    // Reload from the network now that no SW/cache can serve stale assets.
+    window.location.reload();
 }
 
 // ============================================================================
