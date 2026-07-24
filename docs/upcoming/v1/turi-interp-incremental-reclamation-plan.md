@@ -163,11 +163,25 @@ too.
 
 Promotion resets `value_scratch` but never touches `eval_arenas` or `src_acc`
 (`env.h:165`, `eval.c:9920-9924`), so AST/elaboration memory and source text
-still grow per line. After promotion has copied out everything the eval result
-reaches, the completed eval's AST/elaboration arena can be freed rather than
-retained forever; and the REPL should stop concatenating + re-parsing the whole
-prior source blob each input. This is orthogonal to the value pool and may be the
-larger REPL win per line.
+still grow per line.
+
+**Design worked out (2026-07-24): `docs/upcoming/v1/turi-incremental-elaboration-design.md`.**
+The investigation corrected an assumption this phase originally carried -- a
+completed eval's arena **cannot** simply be freed: parse output and elaborated
+IR share one arena, and closures/ctors/handlers/conts (nine escape categories)
+hold live pointers into it, so an arena is pinned as long as anything defined in
+that eval is reachable. The real cause is that both parse *and* elaboration are
+whole-program every call (there is no persistent cross-eval elaboration
+environment), so each arena accumulates *dead* re-elaborated copies of all prior
+forms. The fix is **incremental elaboration** -- persist the elaboration
+environment on `env` and parse/elaborate only the new forms against it, so each
+retained arena holds only its own new forms and total memory is O(N), not O(N^2).
+The design breaks this into TR2.0 (close a reader-macro test gap) -> TR2.1
+(persist the elaboration env) -> TR2.2 (incremental entry; the O(N^2)->O(N) win)
+-> TR2.3 (drop `src_acc`) -> TR2.4 (enable promotion in `repl.c`). It is a large
+change to a fragile subsystem and remains v1-non-blocking (one-shot builds never
+hit it); the scoping call is whether a long-lived REPL/kernel is a real v1 use
+case.
 
 ### TR3 -- Collection drop-glue (reclaim mid-run, not just at teardown)
 
