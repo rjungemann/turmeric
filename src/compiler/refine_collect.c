@@ -103,6 +103,15 @@ RefineObligation *refine_collect_obligation(RefineObligationVec *v,
     return ob;
 }
 
+void refine_obligation_set_subst(RefineObligation *ob, Arena *a,
+                                 const RefineSubst *subst, uint32_t n) {
+    if (!ob || !subst || n == 0) return;
+    RefineSubst *copy = (RefineSubst *)arena_alloc(a, n * sizeof(RefineSubst));
+    memcpy(copy, subst, n * sizeof(RefineSubst));
+    ob->subst   = copy;
+    ob->n_subst = n;
+}
+
 /* ------------------------------------------------------------------------- *
  * Form -> VCTerm encoder
  * ------------------------------------------------------------------------- */
@@ -352,15 +361,34 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     /* --- goal ------------------------------------------------------------ */
     Enc E; memset(&E, 0, sizeof(E));
     E.vc = vc; E.env = ob->env;
+    /* Sibling substitutions first (a call-site crossing replaces every callee
+     * parameter name with the caller's argument), then the refinement's own
+     * bound variable.  Encoding each substituted form BEFORE the map is
+     * consulted is deliberate: an argument expression is written in the
+     * caller's names, so it must not be rewritten by the callee's. */
+    for (uint32_t i = 0; i < ob->n_subst && E.n_subst < ENC_MAX_SUBST; i++) {
+        if (!ob->subst[i].name || !ob->subst[i].form) continue;
+        Enc E2; memset(&E2, 0, sizeof(E2));
+        E2.vc = vc; E2.env = ob->env;
+        VCTerm *t = enc(&E2, ob->subst[i].form);
+        if (!t) continue;   /* un-encodable argument: leave the name free */
+        E.subst[E.n_subst].name = ob->subst[i].name;
+        E.subst[E.n_subst].term = t;
+        E.n_subst++;
+    }
     if (ob->var_name && ob->subject) {
-        VCTerm *subj = enc(&E, ob->subject);
+        Enc E2; memset(&E2, 0, sizeof(E2));
+        E2.vc = vc; E2.env = ob->env;
+        VCTerm *subj = enc(&E2, ob->subject);
         if (!subj) {
-            if (out_reason) *out_reason = E.fail ? E.fail : "subject expression is outside the supported fragment";
+            if (out_reason) *out_reason = E2.fail ? E2.fail : "subject expression is outside the supported fragment";
             return NULL;
         }
-        E.subst[E.n_subst].name = ob->var_name;
-        E.subst[E.n_subst].term = subj;
-        E.n_subst++;
+        if (E.n_subst < ENC_MAX_SUBST) {
+            E.subst[E.n_subst].name = ob->var_name;
+            E.subst[E.n_subst].term = subj;
+            E.n_subst++;
+        }
     }
     VCTerm *goal = enc(&E, ob->predicate);
     if (!goal) {

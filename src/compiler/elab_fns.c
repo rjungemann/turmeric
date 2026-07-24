@@ -91,6 +91,151 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
     return refine_discharge_one(ob, e->arena);
 }
 
+/* ------------------------------------------------------------------------- *
+ * RT1 call-site crossings.
+ *
+ * Passing an argument where the parameter type is `#refine{ v : T | p }` is a
+ * crossing INTO the refinement, so the caller owes a proof of `p[arg/v]`.  We
+ * record the crossing during elaboration and resolve it afterwards; see the
+ * comment on Elab.refine_call_sites for why the deferral is load-bearing.
+ * ------------------------------------------------------------------------- */
+
+/* Hash of the (callee, call_form) pointer pair. */
+static uint32_t rt_cs_hash(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)a * 0x9e3779b97f4a7c15ull;
+    uintptr_t y = (uintptr_t)b * 0xc2b2ae3d27d4eb4full;
+    uint32_t h = (uint32_t)((x ^ (y >> 17)) >> 13);
+    return h ? h : 1;
+}
+
+/* Probe the dedup set; returns true when this pair was already recorded.
+ * Inserts `slot` otherwise. */
+static bool rt_cs_seen(Elab *e, const Binding *callee, const Form *cf, uint32_t slot) {
+    if (e->refine_cs_htab_cap == 0 ||
+        (e->n_refine_call_sites + 1) * 2 >= e->refine_cs_htab_cap) {
+        uint32_t ncap = e->refine_cs_htab_cap ? e->refine_cs_htab_cap * 2 : 128;
+        uint32_t *nt = (uint32_t *)arena_alloc(e->arena, ncap * sizeof(uint32_t));
+        memset(nt, 0, ncap * sizeof(uint32_t));
+        for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
+            uint32_t h = rt_cs_hash(e->refine_call_sites[i].callee,
+                                    e->refine_call_sites[i].call_form);
+            uint32_t j = h & (ncap - 1);
+            while (nt[j]) j = (j + 1) & (ncap - 1);
+            nt[j] = i + 1;
+        }
+        e->refine_cs_htab = nt;
+        e->refine_cs_htab_cap = ncap;
+    }
+    uint32_t h = rt_cs_hash(callee, cf);
+    uint32_t j = h & (e->refine_cs_htab_cap - 1);
+    while (e->refine_cs_htab[j]) {
+        const RefineCallSite *cs = &e->refine_call_sites[e->refine_cs_htab[j] - 1];
+        if (cs->callee == callee && cs->call_form == cf) return true;
+        j = (j + 1) & (e->refine_cs_htab_cap - 1);
+    }
+    e->refine_cs_htab[j] = slot + 1;
+    return false;
+}
+
+uint32_t refine_note_call_site(Elab *e, const Binding *callee,
+                               const Form *call_form, uint32_t arg_offset) {
+    if (!g_opt_refined || !e || !callee || !call_form)
+        return e ? e->n_refine_call_sites : 0;
+    /* A form can be elaborated more than once (macro expansion, specialization
+     * retries).  Deduplicate so one source call site yields one diagnostic. */
+    if (rt_cs_seen(e, callee, call_form, e->n_refine_call_sites))
+        return e->n_refine_call_sites;
+    if (e->n_refine_call_sites == e->cap_refine_call_sites) {
+        uint32_t ncap = e->cap_refine_call_sites ? e->cap_refine_call_sites * 2 : 16;
+        RefineCallSite *nb = (RefineCallSite *)arena_alloc(e->arena,
+                                                           ncap * sizeof(RefineCallSite));
+        if (e->n_refine_call_sites)
+            memcpy(nb, e->refine_call_sites,
+                   e->n_refine_call_sites * sizeof(RefineCallSite));
+        e->refine_call_sites = nb;
+        e->cap_refine_call_sites = ncap;
+    }
+    RefineCallSite *cs = &e->refine_call_sites[e->n_refine_call_sites++];
+    cs->callee      = callee;
+    cs->call_form   = call_form;
+    cs->arg_offset  = arg_offset;
+    cs->env         = NULL;   /* back-filled by refine_fill_call_site_env */
+    cs->caller_name = NULL;
+    cs->loc         = call_form->span;
+    return e->n_refine_call_sites;
+}
+
+void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
+                               const char *caller) {
+    if (!g_opt_refined || !e) return;
+    for (uint32_t i = from; i < e->n_refine_call_sites; i++) {
+        if (e->refine_call_sites[i].env) continue;   /* an inner defn already owns it */
+        e->refine_call_sites[i].env         = env;
+        e->refine_call_sites[i].caller_name = caller;
+    }
+}
+
+void refine_resolve_call_sites(Elab *e) {
+    if (!g_opt_refined || !e) return;
+    for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
+        RefineCallSite *cs = &e->refine_call_sites[i];
+        const Binding *callee = cs->callee;
+        if (!callee->refine_param_preds || callee->n_refine_params == 0) continue;
+
+        const Form *cf = cs->call_form;
+        if (!cf || cf->tag != F_LIST) continue;
+        uint32_t n_args = cf->as.list.len > cs->arg_offset
+                        ? cf->as.list.len - cs->arg_offset : 0;
+
+        /* Every callee parameter name maps to the caller's argument in that
+         * slot, so a predicate mentioning a SIBLING parameter is checked
+         * against the real argument rather than a free variable. */
+        RefineSubst subst[MAX_FN_ARITY];
+        uint32_t n_subst = 0;
+        for (uint32_t p = 0; p < callee->n_refine_params && p < n_args &&
+                             n_subst < MAX_FN_ARITY; p++) {
+            if (!callee->refine_param_names[p]) continue;
+            subst[n_subst].name = callee->refine_param_names[p];
+            subst[n_subst].form = cf->as.list.items[cs->arg_offset + p];
+            n_subst++;
+        }
+
+        for (uint32_t p = 0; p < callee->n_refine_params && p < n_args; p++) {
+            const Form *pred = callee->refine_param_preds[p];
+            if (!pred) continue;
+            const Form *arg = cf->as.list.items[cs->arg_offset + p];
+            TypeKind pk = (callee->type.kind == TY_FN &&
+                           callee->type.as.fn.arg_kinds &&
+                           p < callee->type.as.fn.arity)
+                        ? callee->type.as.fn.arg_kinds[p] : TY_INT;
+
+            char what[160];
+            if (cs->caller_name)
+                snprintf(what, sizeof(what), "argument %u of '%s' in '%s'", p + 1,
+                         callee->name ? callee->name->name : "?", cs->caller_name);
+            else
+                snprintf(what, sizeof(what), "argument %u of '%s'", p + 1,
+                         callee->name ? callee->name->name : "?");
+            const char *what_owned = arena_strdup(e->arena, what, strlen(what));
+
+            experiment_warn_if_used("refined");
+            RefineObligation *ob = refine_collect_obligation(
+                &e->refine_obs, pred, callee->refine_param_vars[p], arg,
+                rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
+                cs->loc, cs->env, what_owned, cs->caller_name);
+            if (!ob) continue;
+            refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+            /* The callee checks its own parameters on entry, so an argument
+             * we cannot prove is the ordinary case, not news.  What still
+             * errors is an argument that is DEFINITELY wrong -- a closed goal
+             * that evaluates false -- which is `(safe-div 10 0)` becoming a
+             * compile-time failure instead of a runtime panic. */
+            ob->runtime_guarded = true;
+            refine_discharge_one(ob, e->arena);
+        }
+    }
+}
+
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
  * For now, we only support : int return type annotation. Param types are
  * inferred from usage. */
@@ -2781,6 +2926,13 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * propagates to the call directly under the ascription.  We skip the
      * TY_TYVAR case because a bare type-variable return cannot bind a
      * callee's tyvar (no concrete witness to substitute). */
+    /* RT1: everything the body records from here on is a call-site crossing
+     * inside THIS function, so its hypotheses are this function's.  Marking the
+     * range now and back-filling once the environment exists avoids keeping a
+     * mutable "current env" that elab_defn's many error returns would have to
+     * unwind correctly. */
+    uint32_t rt_cs_start = e->n_refine_call_sites;
+
     Type *prev_body_expected = e->expected_type;
     Type *body_expected = NULL;
     /* structdef-retirement DS-C: the return_struct_def branch (a TY_STRUCT
@@ -3041,34 +3193,50 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (g_no_contracts) should_check = false;
 
         /* RT1: under the `refined` experiment, build the hypothesis
-         * environment (parameter refinements + `:pre`) once and decide the
-         * return-position obligations against it.  A proved obligation gets no
-         * runtime check emitted; an unproved one keeps exactly the check it
-         * would have had with contract types alone.
+         * environment (parameter refinements + `:pre`) once and use it twice --
+         * to decide this function's return-position obligations, and (via the
+         * back-fill below) as the hypotheses for every call-site crossing its
+         * body produced.  A proved obligation gets no runtime check emitted; an
+         * unproved one keeps exactly the check it would have had with contract
+         * types alone.
          *
-         * NOTE (next slice): the CALLER-side crossing -- passing an argument
-         * into a contract-typed parameter -- is not collected yet, so a
-         * parameter's own entry check is never elided.  That keeps the current
-         * state sound: the callee still validates what it was handed. */
+         * The parameter's own ENTRY check is still always emitted, even when
+         * every visible call site is proved: eliding it would need whole-program
+         * knowledge of the call graph (including exported and indirect callers),
+         * and getting that wrong drops a check that was protecting something.
+         * The call-site obligations here are a diagnostic layer on top -- they
+         * turn `(safe-div 10 0)` into a compile error -- not a licence to
+         * remove the callee's guard. */
         const Form *rt_subject = (call->as.list.len > body_start)
                                ? call->as.list.items[call->as.list.len - 1] : NULL;
         RefineEnv *rt_env = NULL;
         bool rt_ret_proven  = false;
         bool rt_post_proven = false;
-        if (g_opt_refined && (ct_ret_pred || ct_post_form)) {
+        if (g_opt_refined) {
             rt_env = rt_build_env(e, params, n_params, ct_param_preds,
                                   ct_param_varnames, ct_param_param_idx,
                                   n_ct_param_preds, ct_pre_form);
-            if (ct_ret_pred)
+            /* Unconditional: even a function with no refinements of its own is
+             * the named caller of the crossings its body produced, and its
+             * parameters still need declared sorts in the environment. */
+            refine_fill_call_site_env(e, rt_cs_start, rt_env,
+                                      name_f->as.sym ? name_f->as.sym->name : NULL);
+            const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
+            char rt_what[128];
+            if (ct_ret_pred) {
+                snprintf(rt_what, sizeof(rt_what), "the return value of '%s'", rt_fn);
                 rt_ret_proven = rt_return_obligation_proven(
                     e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
-                    "return value", name_f->as.sym ? name_f->as.sym->name : NULL,
+                    arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
                     call->span);
-            if (ct_post_form)
+            }
+            if (ct_post_form) {
+                snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
                 rt_post_proven = rt_return_obligation_proven(
                     e, ct_post_form, "result", rt_subject, return_kind, rt_env,
-                    "postcondition", name_f->as.sym ? name_f->as.sym->name : NULL,
+                    arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
                     call->span);
+            }
         }
 
         if (should_check && body) {
@@ -3626,6 +3794,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* RT1: publish the per-parameter refinement predicates on the binding so
+     * call sites can check their arguments against them.  This is the same
+     * Binding object pass 1 forward-declared, so a call elaborated BEFORE this
+     * defn sees the predicates too -- the resolution pass runs after the whole
+     * unit.  Parameter names ride along because a predicate may mention a
+     * sibling parameter, which the call site replaces with that slot's
+     * argument. */
+    if (g_opt_refined && n_params > 0) {
+        const Form **rp = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
+        const char **rv = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        const char **rn = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        for (uint32_t _pi = 0; _pi < n_params; _pi++) {
+            rp[_pi] = NULL;
+            rv[_pi] = NULL;
+            rn[_pi] = (params[_pi] && params[_pi]->name) ? params[_pi]->name->name : NULL;
+        }
+        for (uint32_t _ci = 0; _ci < n_ct_param_preds; _ci++) {
+            uint32_t _pi = ct_param_param_idx[_ci];
+            if (_pi >= n_params) continue;
+            rp[_pi] = ct_param_preds[_ci];
+            rv[_pi] = ct_param_varnames[_ci];
+        }
+        b->refine_param_preds = rp;
+        b->refine_param_vars  = rv;
+        b->refine_param_names = rn;
+        b->n_refine_params    = n_params;
+    }
+
     /* Phase R5: Store #[no-unwind] attribute on the binding */
     b->no_unwind = no_unwind;
     /* #[used]: retain with external C linkage under separate compilation */

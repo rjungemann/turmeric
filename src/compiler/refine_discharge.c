@@ -86,15 +86,22 @@ static RefineDecision oracle_crosscheck(RefineVC *vc, Arena *a,
  * Diagnostics
  * ------------------------------------------------------------------------- */
 
+/* `what` is written fully-formed by the collector ("the return value of
+ * 'f'", "argument 2 of 'g'"), so the message needs no connective of its own --
+ * which is what keeps "on the argument 2 of 'g'" from happening. */
 static void describe(const RefineObligation *ob, char *buf, size_t cap) {
-    snprintf(buf, cap, "%s%s%s",
-             ob->what ? ob->what : "value",
-             ob->fn_name ? " of " : "",
-             ob->fn_name ? ob->fn_name : "");
+    snprintf(buf, cap, "%s", ob->what ? ob->what : "value");
 }
 
 static void emit_model_note(const RefineObligation *ob) {
-    if (!ob->counterex || ob->counterex->n == 0) return;
+    if (!ob->counterex) return;
+    if (ob->counterex->n == 0) {
+        /* A closed goal -- every term was a literal, so there is nothing to
+         * bind.  The values are already written at the site. */
+        diag_emit(DIAG_NOTE, ob->loc,
+                  "the predicate is false for the value given here");
+        return;
+    }
     char buf[256]; size_t off = 0;
     for (uint32_t i = 0; i < ob->counterex->n && off + 1 < sizeof(buf); i++) {
         const RefineModelBinding *b = &ob->counterex->bindings[i];
@@ -128,15 +135,16 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
 
     if (!vc) {
         g_stats.unknown++;
-        diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
-                            TUR_W0372_REFINE_UNKNOWN,
-                            "refinement predicate on the %s could not be decided "
-                            "statically (%s); runtime check kept",
-                            what, reason ? reason : "outside the supported fragment");
+        if (g_strict_refine || !ob->runtime_guarded)
+            diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
+                                TUR_W0372_REFINE_UNKNOWN,
+                                "refinement on %s could not be decided statically "
+                                "(%s); runtime check kept",
+                                what, reason ? reason : "outside the supported fragment");
         return false;
     }
 
-    if (vc->has_nonlinear) {
+    if (vc->has_nonlinear && !ob->runtime_guarded) {
         /* Name the SOURCE subterm, not the internal symbol we abstracted it
          * to -- "(* x y)" is actionable, "__nl_mul_i" is not. */
         char sub[160] = "<nonlinear subterm>";
@@ -198,21 +206,32 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             g_stats.proven++;
             return true;
 
-        case RT_INVALID:
+        case RT_INVALID: {
+            /* A CLOSED counterexample -- no free variables, so the goal folded
+             * to false on the values written at the site -- is unconditionally
+             * wrong and always an error.  An OPEN one only says "not for every
+             * input", which for a runtime-guarded obligation is not itself a
+             * defect. */
+            bool closed = !d.model || d.model->n == 0;
+            if (ob->runtime_guarded && !closed && !g_strict_refine) {
+                g_stats.unknown++;
+                return false;
+            }
             ob->counterex = d.model;
             g_stats.invalid++;
             diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
-                                "refinement predicate on the %s cannot be proved "
-                                "statically", what);
+                                "refinement on %s cannot be proved statically", what);
             emit_model_note(ob);
             return false;
+        }
 
         default:
             g_stats.unknown++;
-            diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
-                                TUR_W0372_REFINE_UNKNOWN,
-                                "solver returned unknown for the refinement "
-                                "predicate on the %s; runtime check kept", what);
+            if (g_strict_refine || !ob->runtime_guarded)
+                diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
+                                    TUR_W0372_REFINE_UNKNOWN,
+                                    "solver returned unknown for the refinement on %s; "
+                                    "runtime check kept", what);
             return false;
     }
 }

@@ -11,14 +11,14 @@
  * Crossing points collected today:
  *   - a `defn` whose RETURN type is a contract type (subject = the body form)
  *   - a `defn` `:post` predicate            (subject = the body form, var `result`)
+ *   - a CALL-SITE argument crossing into a contract-typed parameter (subject =
+ *     the argument form; the callee's other parameter names are substituted by
+ *     the arguments in their slots, so a predicate mentioning a sibling
+ *     parameter is checked against real values)
  *
  * Hypotheses come from:
  *   - each parameter declared with a contract type (`v` renamed to the param)
  *   - the function's `:pre` predicate
- *
- * Call-site argument crossings (passing `expr` where the parameter type is a
- * contract type) need the callee's per-parameter predicates on the FnDef; that
- * plumbing is the next slice and is tracked in the plan.
  *
  * See docs/upcoming/v1/refinement-types-plan.md (phase RT1). */
 
@@ -64,10 +64,36 @@ VCSort refine_env_sort_of(const RefineEnv *env, const char *name);
  * Obligation record
  * ------------------------------------------------------------------------- */
 
+/* An extra name -> expression substitution applied while encoding a goal.
+ * Call-site crossings use these to replace the CALLEE's parameter names with
+ * the caller's argument expressions, so a predicate that mentions a sibling
+ * parameter (`[n : int, i : #refine{ j : int | (< j n) }]`) is checked against
+ * the actual arguments rather than against free variables. */
+typedef struct RefineSubst {
+    const char *name;
+    const Form *form;
+} RefineSubst;
+
 typedef struct RefineObligation {
     const Form  *predicate;      /* the p in #refine{ x : T | p } */
     const char  *var_name;       /* the x */
     const Form  *subject;        /* the form substituted for x (may be NULL) */
+    RefineSubst *subst;          /* applied before var_name/subject */
+    uint32_t     n_subst;
+    /* True when a runtime check ELSEWHERE already guards this obligation.  Set
+     * for call-site crossings: the callee validates its own parameters on
+     * entry, so an argument we merely cannot prove is the normal state of
+     * affairs, not news.  Such an obligation reports only when it is
+     * DEFINITELY wrong -- a closed goal that evaluates false, `(safe-div 10 0)`
+     * -- or when --strict-refine asks for a fully-discharged build.
+     *
+     * The distinction is who owes the proof.  A function's own return
+     * refinement is a claim it makes about itself, so an open counterexample
+     * means the claim is false: that is an error.  A call-site crossing is
+     * about a value flowing in, and "not proven for every input" is the
+     * ordinary condition of code that has not been fully annotated yet.
+     * Erroring on it would make `refined` impossible to adopt incrementally. */
+    bool         runtime_guarded;
     VCSort       base_sort;      /* sort of the refined base type T */
     const char  *base_type_name; /* T, for diagnostics */
     Span         loc;
@@ -102,6 +128,11 @@ RefineObligation *refine_collect_obligation(RefineObligationVec *v,
                                             RefineEnv *env,
                                             const char *what,
                                             const char *fn_name);
+
+/* Attach the sibling-parameter substitutions a call-site crossing needs.
+ * `n` entries are copied into the obligation's arena. */
+void refine_obligation_set_subst(RefineObligation *ob, Arena *a,
+                                 const RefineSubst *subst, uint32_t n);
 
 /* ------------------------------------------------------------------------- *
  * RT2 lowering: obligation -> normalized VC

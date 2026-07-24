@@ -2080,16 +2080,22 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         }
     }
 
-    /* RT3 (refinement-types-plan): decide any obligation the elaborator did
-     * not already resolve in place, and print the per-compile summary when
-     * TUR_REFINE_STATS=1.  A no-op when `refined` is off (nothing collected).
+    /* RT1/RT3 (refinement-types-plan): resolve the call-site crossings recorded
+     * during elaboration -- deferred to here so a call to a later-defined
+     * function is checked exactly like a call to an earlier-defined one -- then
+     * decide any obligation not already resolved in place and print the
+     * per-compile summary when TUR_REFINE_STATS=1.  A no-op when `refined` is
+     * off (nothing was collected).
      *
      * Runs BEFORE the session branch below: the obligations were collected
      * during this elaboration and have to be decided either way.  Handing the
      * session back to the caller is not a reason to leave them undischarged --
      * that would silently skip static checking for every session-based
      * elaboration. */
-    if (g_opt_refined) refine_discharge_all(&e.refine_obs, arena);
+    if (g_opt_refined) {
+        refine_resolve_call_sites(&e);
+        refine_discharge_all(&e.refine_obs, arena);
+    }
 
     if (sess) {
         /* TR2: the accumulated state IS the session -- hand it back instead of

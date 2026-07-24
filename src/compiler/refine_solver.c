@@ -249,7 +249,12 @@ static void add_cand(int64_t *c, uint32_t *n, int64_t v) {
 RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
     if (!vc || !vc->goal) return NULL;
     if (vc->n_ufuncs > 0) return NULL;              /* measures have no fixed meaning */
-    if (vc->n_vars == 0 || vc->n_vars > MODEL_MAX_VARS) return NULL;
+    /* n_vars == 0 is allowed and is the IMPORTANT case: a call site with
+     * literal arguments (`(safe-div 10 0)`) has a closed goal, so one
+     * evaluation decides it outright.  The odometer below runs exactly once and
+     * the model is empty -- there is nothing to bind, the arguments already
+     * say it. */
+    if (vc->n_vars > MODEL_MAX_VARS) return NULL;
     for (uint32_t i = 0; i < vc->n_vars; i++)
         if (vc->vars[i].sort != VS_INT) return NULL;
 
@@ -267,11 +272,11 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
         if (lits[i] < INT64_MAX) add_cand(cand, &n_cand, lits[i] + 1);
         if (lits[i] > INT64_MIN) add_cand(cand, &n_cand, lits[i] - 1);
     }
-    if (n_cand == 0) return NULL;
+    if (n_cand == 0 && vc->n_vars > 0) return NULL;
 
     uint32_t nv = vc->n_vars;
-    int64_t vals[MODEL_MAX_VARS];
-    uint32_t idx[MODEL_MAX_VARS];
+    int64_t vals[MODEL_MAX_VARS] = {0};
+    uint32_t idx[MODEL_MAX_VARS] = {0};
     for (uint32_t i = 0; i < nv; i++) idx[i] = 0;
 
     for (;;) {
@@ -284,7 +289,8 @@ RefineModel *refine_model_search(RefineVC *vc, Arena *a) {
         if (sat && !E.fail && !eval_bool(&E, vc->goal) && !E.fail) {
             RefineModel *m = (RefineModel *)arena_alloc(a, sizeof(RefineModel));
             m->n = nv;
-            m->bindings = (RefineModelBinding *)arena_alloc(a, nv * sizeof(RefineModelBinding));
+            m->bindings = nv ? (RefineModelBinding *)arena_alloc(
+                                   a, nv * sizeof(RefineModelBinding)) : NULL;
             for (uint32_t i = 0; i < nv; i++) {
                 m->bindings[i].name    = vc->vars[i].name;
                 m->bindings[i].is_real = false;

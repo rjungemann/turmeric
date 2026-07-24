@@ -239,6 +239,27 @@ static void test_model_search(Arena *a) {
        "model search: declines VCs containing uninterpreted functions");
 }
 
+/* The call-site shape: a closed goal (every term a literal) decides outright,
+ * which is what makes `(safe-div 10 0)` a compile error rather than a shrug. */
+static void test_closed_goal(Arena *a) {
+    RefineVC *vc = vc_new(a);
+    /* (not= 0 0) -- the predicate of NonZero with the argument substituted in */
+    vc_set_goal(vc, vc_not(vc, eq(vc, vc_int(vc, 0), vc_int(vc, 0))));
+    ok(vc->goal->op == VC_FALSE, "closed goal: folds to false at intern time");
+    ok(decide(vc, a) != RT_VALID, "closed goal: a false goal is never proved");
+    RefineModel *m = refine_model_search(vc, a);
+    ok(m != NULL, "closed goal: the search decides it (zero variables)");
+    ok(m && m->n == 0, "closed goal: the model is empty -- nothing to bind");
+
+    /* The satisfied counterpart must NOT produce a counterexample. */
+    vc = vc_new(a);
+    vc_set_goal(vc, vc_not(vc, eq(vc, vc_int(vc, 2), vc_int(vc, 0))));
+    ok(vc->goal->op == VC_TRUE, "closed goal: (not= 2 0) folds to true");
+    ok(refine_s0_decide(vc, a).verdict == RT_VALID, "closed goal: S0 proves it");
+    ok(refine_model_search(vc, a) == NULL,
+       "closed goal: no counterexample for a satisfied predicate");
+}
+
 static void test_smtlib(Arena *a) {
     RefineVC *vc = vc_new(a);
     VCTerm *x = V(vc, "x");
@@ -279,6 +300,7 @@ int main(void) {
     test_nonlinear_is_unknown(&a);
     test_disjunction(&a);
     test_model_search(&a);
+    test_closed_goal(&a);
     test_smtlib(&a);
 
     arena_free(&a);

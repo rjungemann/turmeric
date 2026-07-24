@@ -10,7 +10,7 @@
 > | Phase | State | Where |
 > |---|---|---|
 > | RT0 gate + discharge bit + pipeline hook | done | `experiments.c`, `lang_layers.c`, `elab_fns.c`, `elab_toplevel.c` |
-> | RT1 constraint collector + env | done | `refine_collect.{c,h}` |
+> | RT1 constraint collector + env | done (incl. call-site crossings) | `refine_collect.{c,h}` |
 > | RT2 normalized VC + seam + SMT-LIB | done | `refine_vc.{c,h}`, `refine_smtlib.{c,h}` |
 > | RT3 discharge chain + diagnostics | done | `refine_discharge.{c,h}` |
 > | RT3 Z3 scaffold (dev-only) | done, unexercised | `refine_libz3.c`, `TUR_REFINE_Z3_ORACLE` |
@@ -74,15 +74,60 @@
 >    directly to the contract type -- which is what makes `stdlib/refine.tur`
 >    possible at all.
 >
+> ### Call-site crossings (landed 2026-07-24)
+>
+> RT1's first table row -- passing an argument where the parameter declares a
+> refinement -- is now collected and discharged. `(safe-div 10 0)` is a compile
+> error rather than a runtime panic.
+>
+> Three implementation decisions worth recording:
+>
+> - **Resolution is DEFERRED to after the whole unit elaborates.** At the moment
+>   a call is elaborated the callee may still be a pass-1 forward declaration
+>   with no predicates stamped. Because `elab_defn` *reuses* that binding rather
+>   than replacing it, recording `(callee-binding, call-form)` during
+>   elaboration and resolving afterwards makes the check independent of
+>   definition order -- a call to a later-defined function behaves exactly like
+>   a call to an earlier-defined one. Crossings are deduplicated through a hash
+>   set, not a linear rescan, so an opted-in build does not go quadratic in its
+>   call count.
+> - **The caller's hypothesis environment is BACK-FILLED, not threaded.**
+>   `elab_defn` marks the crossing range its body produced and stamps the
+>   environment once the body is done. A mutable "current env" on `Elab` would
+>   have to be unwound correctly through that function's many early-error
+>   returns, and a stale one left behind by a failed path would hand a later
+>   crossing hypotheses that do not hold there -- the exact direction the
+>   soundness invariant forbids.
+> - **An unproven argument is NOT an error by default; a definitely-wrong one
+>   is.** The split is on whether the counterexample is *closed*: a goal with no
+>   free variables evaluates to false on the values written at the site, which
+>   is a defect. An open counterexample only says "not for every input", which
+>   for an argument is the ordinary condition of partially-annotated code -- and
+>   the callee still checks on entry. Erroring on it would have made the
+>   experiment impossible to adopt incrementally. `--strict-refine` opts into
+>   the stricter reading. (A function's own return refinement keeps the strict
+>   treatment either way: an open counterexample there means the function's
+>   claim about *itself* is false.)
+>
+> The callee's entry check is still always emitted. Eliding it needs
+> whole-program call-graph knowledge including exported and indirect callers,
+> and that is a separate piece of work with real soundness preconditions.
+>
 > ### Next slice
 >
-> **Call-site crossings (RT1's first table row).** Passing an argument into a
-> contract-typed parameter is the one crossing the collector does not visit yet,
-> because the callee's per-parameter predicates are not stored on the `FnDef`.
-> Until they are, a parameter's entry check is never elided (the callee still
-> validates what it was handed -- sound, just not yet optimal) and
-> `(safe-div 10 0)` is not a compile error. This is the highest-value remaining
-> item and it unlocks the plan's `safe-div` acceptance criterion.
+> Candidates, roughly by value:
+>
+> - **RT4 template-based propagation** -- infer a result refinement from the
+>   argument refinements for simple arithmetic bodies, cutting the annotation
+>   burden. Small and self-contained now that the machinery exists.
+> - **RT6 error-message quality** -- the hint half ("constrain the parameter,
+>   e.g. `x : #refine{ v : int | (>= v 0) }`") derived by a second seam query.
+> - **Indirect calls** -- a call through a closure, a function-typed parameter,
+>   or a typeclass method does not carry the callee's predicates to the call
+>   site.
+> - **Whole-program entry-check elision** -- the piece that turns the call-site
+>   layer from a diagnostic into a code-size/perf win. Needs an
+>   exported/address-taken analysis before it can be sound.
 >
 > ---
 

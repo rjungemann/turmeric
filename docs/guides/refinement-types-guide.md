@@ -68,10 +68,11 @@ Two things become **hypotheses** -- facts the prover may assume:
 - each parameter declared with a contract type (or a named refinement alias);
 - the function's `:pre` predicate.
 
-Two things become **goals** -- things it must prove:
+Three things become **goals** -- things it must prove:
 
 - a contract **return type**, `: #refine{ r : T | p }`;
-- the function's `:post` predicate.
+- the function's `:post` predicate;
+- every **argument** passed where the parameter declares a refinement.
 
 ```turmeric
 (defn index-ok [v : int, n : int, i : int] : #refine{ r : int | (< r (size-of v)) }
@@ -81,11 +82,54 @@ Two things become **goals** -- things it must prove:
 
 Here the `:pre` clause supplies three hypotheses, and the return refinement is
 the goal. It is discharged statically, so the return check disappears; the
-`:pre` clause itself is still checked at runtime (it constrains the *caller*,
-and callers are not analysed yet -- see [Limits](#limits)).
+`:pre` clause itself is still checked at runtime, since it constrains the
+caller rather than the body.
 
-When a goal is proved, **no runtime check is emitted for it**. When it is not,
-the check stays exactly where it was.
+When a return or postcondition goal is proved, **no runtime check is emitted
+for it**. When it is not, the check stays exactly where it was.
+
+### Call sites
+
+Passing a value where the parameter declares a refinement is a crossing into
+it, so the *caller* owes the proof:
+
+```turmeric
+(load "stdlib/refine.tur")
+
+(defn safe-div [n : int, d : NonZero] : int
+  (/ n d))
+
+(safe-div 10 2)   ; proved: 2 != 0
+(safe-div 10 0)   ; error[TUR-E0371] -- a compile failure, not a runtime panic
+```
+
+Definition order does not matter. Crossings are resolved after the whole
+compilation unit is elaborated, so a call to a function defined later in the
+file is checked exactly like a call to one defined earlier.
+
+A predicate may mention a **sibling parameter**, and the call site substitutes
+the argument in that slot rather than leaving a free variable:
+
+```turmeric
+(defn at [n : int, i : #refine{ j : int | (and (>= j 0) (< j n)) }] : int ...)
+
+(at 10 3)   ; proved: 0 <= 3 < 10
+(at 3 10)   ; error[TUR-E0371]
+```
+
+**An argument the solver cannot prove is not an error by default.** Only an
+argument that is *definitely* wrong -- one whose goal is closed, so it
+evaluates to false on the values written at the site -- fails the build. That
+distinction is deliberate: the callee still checks its parameters on entry, and
+erroring on every argument whose value is not statically known would make the
+experiment impossible to adopt incrementally. `--strict-refine` opts into the
+stricter reading, where any undischarged argument is a hard error.
+
+The callee's **entry check is always emitted**, even when every visible call
+site is proved. Eliding it would need whole-program knowledge of the call graph
+(including exported and indirect callers), and getting that wrong drops a check
+that was protecting something. The call-site layer is a diagnostic on top of
+that guard, not a licence to remove it.
 
 ---
 
@@ -217,7 +261,7 @@ fixed interpretation to evaluate, so guessing one would be dishonest.
 
 | Code | Meaning |
 |---|---|
-| `TUR-E0371` | a counterexample was found -- the predicate genuinely does not hold |
+| `TUR-E0371` | the predicate genuinely does not hold: a function's own claim is falsifiable, or an argument is definitely wrong at its call site |
 | `TUR-W0372` | nothing decided it; the runtime check is kept |
 | `TUR-W0373` | a nonlinear subterm was abstracted; arithmetic reasoning is incomplete for it |
 | `TUR-W0060` | the `refined` experiment is in use (prototype lifecycle notice) |
@@ -257,10 +301,12 @@ never go through this text.
 
 Known and deliberate, in rough order of how likely you are to hit them:
 
-- **Call sites are not checked yet.** Passing an argument into a
-  contract-typed parameter is a crossing the collector does not visit, so a
-  parameter's entry check is never elided -- the callee still validates what it
-  was handed. Statically checking callers is the next slice.
+- **A callee's entry check is never elided.** See above -- the call-site layer
+  reports, it does not remove the callee's guard. Whole-program elision is a
+  separate piece of work with real soundness preconditions.
+- **Only direct calls to named functions are checked.** A call through a
+  closure, a function-typed parameter, or a typeclass method does not carry the
+  callee's predicates to the call site.
 - **No refinement inference.** Refinements are written, not inferred. A function
   with no declared return refinement gets none.
 - **No branching-body path sensitivity.** The return obligation is taken against

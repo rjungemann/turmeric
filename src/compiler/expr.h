@@ -268,6 +268,23 @@ struct Binding {
      * type its arguments pin -- the constraint is checked abstractly in the
      * body but must be re-checked when the defn is instantiated. */
     const ConstraintSet *fn_constraints;
+    /* RT1 (refinement-types-plan): the defn's per-parameter refinement
+     * predicates, for the CALL-SITE crossing check.  All four arrays have
+     * `n_refine_params` entries -- one per declared parameter, in order -- and
+     * a parameter with no refinement has a NULL `refine_param_preds` slot.
+     * `refine_param_names` is kept because a predicate may mention a SIBLING
+     * parameter (`[n : int, i : #refine{ j : int | (< j n) }]`), which the call
+     * site must replace with the corresponding argument.
+     *
+     * Stamped by elab_defn onto the binding -- which for a top-level defn is
+     * the same object pass 1 forward-declared -- and read by the deferred
+     * resolution pass that runs after ALL elaboration.  Deferring is what makes
+     * the check order-independent: a call to a function defined later in the
+     * file is checked exactly like a call to one defined earlier. */
+    const struct Form **refine_param_preds;
+    const char        **refine_param_vars;
+    const char        **refine_param_names;
+    uint32_t            n_refine_params;
     /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
      * the FnDef it defines -- lets make_dict_clone reach the original body/params
      * from the binding without scanning file-scope defs (user defns are not yet

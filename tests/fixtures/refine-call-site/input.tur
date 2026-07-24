@@ -1,0 +1,33 @@
+;; RT1 call-site crossings: passing an argument where the parameter declares a
+;; refinement is a crossing INTO it, so the CALLER owes the proof.
+;;
+;; Four shapes, all proved here:
+;;   - a literal that satisfies the predicate
+;;   - an argument whose own parameter refinement supplies the hypothesis
+;;   - a predicate that mentions a SIBLING parameter, checked against the
+;;     argument in that slot rather than against a free variable
+;;   - a call to a function defined LATER in the file -- crossings are resolved
+;;     after the whole unit, so definition order does not matter
+(load "stdlib/refine.tur")
+
+(defn twice [x : Pos] : int
+  (* x 2))
+
+(defn at [n : int, i : #refine{ j : int | (and (>= j 0) (< j n)) }] : int
+  (+ n i))
+
+(defn forwarded [p : Pos] : int
+  (twice p))            ; hypothesis: p > 0
+
+(defn early-caller [] : int
+  (defined-later 5))    ; callee not yet elaborated at this point
+
+(defn defined-later [x : Pos] : int x)
+
+(defn main [] : int
+  (println (twice 3))         ; literal satisfies (> x 0)
+  (println (at 10 3))         ; sibling reference: 0 <= 3 < 10
+  (println (forwarded 4))
+  (println (early-caller))
+  (println "refine-call-site")
+  0)

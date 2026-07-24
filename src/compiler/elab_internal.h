@@ -821,7 +821,56 @@ typedef struct Elab {
      * each one and the runtime contract check is elided exactly for those a
      * backend proved. */
     RefineObligationVec refine_obs;
+    /* RT1 call-site crossings, recorded during elaboration and RESOLVED AFTER
+     * IT (refine_resolve_call_sites, elab_toplevel.c).  Deferral is what makes
+     * the check independent of definition order: at the moment `(safe-div 10 0)`
+     * is elaborated, `safe-div`'s parameter predicates may not be stamped yet
+     * (the binding is a pass-1 forward declaration), but by the end of the unit
+     * they always are -- and it is the SAME Binding object, because elab_defn
+     * reuses the forward declaration rather than replacing it. */
+    struct RefineCallSite *refine_call_sites;
+    uint32_t               n_refine_call_sites;
+    uint32_t               cap_refine_call_sites;
+    /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
+     * re-elaborated call site stays O(1) instead of rescanning every crossing
+     * recorded so far -- which would make an opted-in build quadratic in its
+     * call count. */
+    uint32_t              *refine_cs_htab;
+    uint32_t               refine_cs_htab_cap;
 } Elab;
+
+/* One pending call-site crossing: `call_form`'s arguments cross into
+ * `callee`'s parameters.  Nothing is looked up here -- see the field comment
+ * on Elab.refine_call_sites for why. */
+typedef struct RefineCallSite {
+    const Binding *callee;
+    const Form    *call_form;    /* the whole `(f a b)` form */
+    uint32_t       arg_offset;   /* index of the first argument in call_form */
+    RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */
+    const char    *caller_name;
+    Span           loc;
+} RefineCallSite;
+
+/* Record a crossing (deduplicated on (callee, call_form)).  No-op unless the
+ * `refined` experiment is on.  Returns the index it was stored at (or the
+ * current count when deduplicated), so elab_defn can back-fill the caller's
+ * hypotheses over the range its body produced. */
+uint32_t refine_note_call_site(Elab *e, const Binding *callee,
+                               const Form *call_form, uint32_t arg_offset);
+
+/* Attach `env` / `caller` to every crossing recorded at or after `from` that
+ * does not already have one.  Called by elab_defn once its body is elaborated
+ * and its hypothesis environment is built.  Back-filling rather than keeping a
+ * mutable "current env" on Elab is deliberate: elab_defn has many early-error
+ * returns, and a stale environment left behind by one of them would hand a
+ * later crossing hypotheses that do not hold there -- which is exactly the
+ * direction the soundness invariant forbids. */
+void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
+                               const char *caller);
+
+/* Resolve and discharge every recorded crossing.  Runs once, after all
+ * elaboration, from elaborate_program. */
+void refine_resolve_call_sites(Elab *e);
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
 typedef struct GenContext {
