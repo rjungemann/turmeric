@@ -437,12 +437,42 @@ correct, because that arm cannot run:
   (Neg n) 0)
 ```
 
-Two limits are worth knowing. A guard is a **necessary** condition for its arm,
-never a sufficient one -- an arm also requires every earlier arm to have failed,
-which is not asserted, so a guarded arm knows its guard and nothing about the
-arms above it. And there are no **constructor axioms**: `(.a (Box p q))` does
-not reduce to `p`, so a value that is constructed and immediately destructured
-in the same function gains nothing.
+A guard is a **necessary** condition for its arm, never a sufficient one -- an
+arm also requires every earlier arm to have failed, which is not asserted, so a
+guarded arm knows its guard and nothing about the arms above it.
+
+### Constructor axioms
+
+The arm hypotheses run one way: a binder is the field it destructures. The
+defining equation of the constructor runs the other way, and is asserted once
+per constructor application in the obligation:
+
+```
+(= (.width (Box p 3)) p)
+```
+
+It is universally true, not path-dependent. Together with the arm's field
+hypothesis it closes the build-then-destructure round trip:
+
+```turmeric
+(defn roundtrip [p : int] : #refine{ r : int | (= r p) }
+  (let [b (Box p 3)]
+    (match b (Box w h) w)))
+```
+
+`b = Box(p,3)` from the `let` split, `w = (.width b)` from the arm, and
+`(.width (Box p 3)) = p` from the axiom -- congruence closure does the rest.
+
+Only **record** constructors take part: a positional variant (`(Just :int)`)
+has no field name, so there is no accessor to write the equation about.
+
+A data constructor is treated as **pure**. It stores its arguments and runs no
+user code, so two applications to equal arguments hold equal fields, which is
+the only thing the VC ever asks -- a constructor term is reached only through a
+selector. Object identity does differ between two applications, but nothing in
+the predicate language can observe it. This says nothing about the constructor's
+*arguments*: `(Box (tick) 3)` twice is two different terms, exactly as `(tick)`
+twice is.
 
 Arm hypotheses are scoped to their own arm. Sibling arms assert different tags
 for the same scrutinee, so letting them accumulate would be a contradiction that

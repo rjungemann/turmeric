@@ -1145,6 +1145,43 @@
 > Verified: suite 2322/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
 >
+> ### Constructor axioms (landed 2026-07-25)
+>
+> The remaining half of the datatype theory, and the one the previous entry
+> named as its follow-up. The arm hypotheses run one way -- a binder is the
+> field it destructures -- and said nothing about a value just BUILT. The
+> defining equation runs the other way and is asserted once per constructor
+> application in the obligation, since it is universally true rather than
+> path-dependent:
+>
+>     (= (.width (Box p 3)) p)
+>
+> `(.width (Box p 3))` against `(= r p)` went `0 proven, 1 unknown` ->
+> `1 proven`, and so did the full round trip
+> `(let [b (Box p 3)] (match b (Box w h) w))`, which needs the axiom, the `let`
+> split, and the arm's field hypothesis all three.
+>
+> **It needed a second fix to do anything at all.** The axiom landed and
+> changed nothing: still Unknown. A constructor HAS a global binding and no
+> `defn` body, so the default-deny purity walk found no evidence and answered
+> UNKNOWN -- which congruence correctly reads as impure. Every occurrence got
+> its own symbol, so the `Box(p,3)` in the axiom and the `Box(p,3)` in the goal
+> were different terms and the axiom was inert. A data constructor stores its
+> arguments and runs no user code, so `rt_resolve_fn` now answers it pure
+> before the binding lookup.
+>
+> Worth being precise about why that is sound, since congruence is where this
+> feature's three miscompiles came from. Two applications of `Box` produce two
+> distinct OBJECTS; they are congruent only in the sense that equal arguments
+> give equal fields. That is enough because a constructor term is reached only
+> through a selector -- nothing in the predicate language can observe identity.
+> And it says nothing about the arguments: `(Box (tick) 3)` twice is two
+> different terms, exactly as `(tick)` twice is, which
+> `errors/refine-ctor-axioms-unsound` pins.
+>
+> Verified: suite 2324/0, solver unit 47/0, 400 fuzz cases across two seeds
+> with 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -1165,13 +1202,12 @@
 >   PURE only ever removes diagnostics. Note this is NOT the "purity from effect
 >   inference" item it replaces -- that one is struck as unworkable, per the
 >   finding above.
-> - ~~**A datatype theory for the VC**~~ -- LANDED, see above, and without the
->   new sort this entry assumed it needed. What remains of it is **constructor
->   axioms**: `(.a (Box p q))` still does not reduce to `p`, so a value
->   constructed and destructured in the same function gains nothing. That is a
->   smaller and better-understood job than the entry it replaces -- one rewrite
->   rule at the Form level, applied when a selector's argument is a literal
->   constructor application.
+> - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
+>   without the new sort this entry assumed it needed. Arm hypotheses and
+>   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What
+>   the VC still lacks is a way to express a datatype value's SHAPE beyond one
+>   level -- nested patterns bind through composed selectors that nothing
+>   emits -- but no measured program has wanted that yet.
 > - ~~**Whole-program entry-check elision**~~ -- MEASURED AND DECLINED, see
 >   below. It buys nothing measurable and carries the feature's largest
 >   soundness surface.

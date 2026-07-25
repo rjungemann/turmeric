@@ -510,6 +510,29 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * `--no-contracts` here would also throw away INFERRED refinements, which
      * are proved facts and hold whether or not any check is emitted. */
     const Symbol *sym = symtab_intern(e->st, strslice(name, (uint32_t)strlen(name)));
+
+    /* A DATA CONSTRUCTOR IS PURE BY CONSTRUCTION.  It stores its arguments and
+     * runs no user code, so two applications to equal arguments hold equal
+     * fields -- which is the only thing the VC ever asks, since a constructor
+     * term is only ever reached through a selector.  (Object IDENTITY differs
+     * between two applications, but nothing in the predicate language can
+     * observe it.)
+     *
+     * Answered before the binding lookup because a constructor DOES have a
+     * global binding and no `defn` body, so the default-deny body walk finds
+     * no evidence and lands on UNKNOWN -- which congruence reads as impure.
+     * That gave every occurrence its own symbol and made the constructor
+     * axioms below inert: the `Box(p,3)` in the axiom and the `Box(p,3)` in
+     * the goal were different terms. */
+    if (elab_lookup_ctor(e, sym)) {
+        out->ret_pred    = NULL;
+        out->ret_var     = NULL;
+        out->param_names = NULL;
+        out->n_params    = 0;
+        out->pure        = true;
+        return true;
+    }
+
     Binding *b = scope_lookup(&e->global, sym);
     if (!b) {
         /* A TYPECLASS METHOD has no global binding under its bare name -- the
@@ -1080,6 +1103,58 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
     return rt_prove_silent(e, pred, var_name, subject, base_kind, env, loc);
 }
 
+/* ------------------------------------------------------------------------- *
+ * Constructor axioms.
+ *
+ * The match-arm theory gives a selector its meaning going ONE way: a binder is
+ * the field it destructures.  It says nothing about a value that was just
+ * BUILT, so `(let [b (Box p 3)] (match b (Box w h) w))` against `(= r p)` had
+ * the chain `b = Box(p,3)`, `w = .width(b)`, goal `w = p` -- and no rule
+ * connecting `.width` to the `Box` that produced it.
+ *
+ * The missing fact is the defining equation of a record constructor:
+ *
+ *     (= (.width (Box p 3)) p)
+ *
+ * It is universally true -- not path-dependent, not an assumption -- so it can
+ * be asserted once per constructor application found anywhere in the obligation
+ * rather than per path.  Congruence closure then does the rest: `b` and
+ * `Box(p,3)` are equal, so `.width(b)` and `.width(Box(p,3))` are the same
+ * term, which is `p`.
+ *
+ * Only RECORD constructors take part.  A positional variant has no field name,
+ * so there is no accessor to write the equation about.
+ * ------------------------------------------------------------------------- */
+
+#define RT_CTOR_AXIOM_MAX_DEPTH 8
+
+static void rt_push_ctor_axioms(Elab *e, RefineEnv *env, const Form *f,
+                                uint32_t depth) {
+    if (!f || depth >= RT_CTOR_AXIOM_MAX_DEPTH) return;
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+
+    if (f->tag == F_LIST && f->as.list.len >= 1) {
+        CtorDef *cd = rt_pat_ctor(e, f);
+        /* Arity must match exactly: a partial application is a closure, not a
+         * value with fields, and over-applying is not this form at all. */
+        if (cd && cd->is_record && cd->n_fields == f->as.list.len - 1) {
+            for (uint32_t i = 0; i < cd->n_fields; i++) {
+                if (!cd->fields[i].name) continue;
+                char acc[128];
+                snprintf(acc, sizeof(acc), ".%s", cd->fields[i].name);
+                refine_env_push(env,
+                                rt_form_eq(e, f->span,
+                                           rt_form_call1(e, f->span, acc, f),
+                                           f->as.list.items[i + 1]),
+                                NULL, NULL);
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        rt_push_ctor_axioms(e, env, f->as.list.items[i], depth + 1);
+}
+
 static bool rt_return_obligation_proven(Elab *e, const Form *pred,
                                         const char *var_name,
                                         const Form *subject, TypeKind base_kind,
@@ -1092,6 +1167,13 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
     if (rt_pred_is_impure(e, pred)) return false;
     experiment_warn_if_used("refined");
 
+    /* Constructor axioms hold on every path, so they go in once, ahead of the
+     * split, and are rewound afterwards so nothing leaks into the next
+     * function's environment. */
+    RefineHyp *ax_head  = env->head;
+    uint32_t   ax_names = env->n_names;
+    rt_push_ctor_axioms(e, env, subject, 0);
+
     /* RT4: a branching body is proved per path when it can be.  Tried first
      * and silently; failing costs one extra pass and changes nothing the user
      * sees, because the whole-body obligation below still runs and still
@@ -1100,6 +1182,7 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
                     rt_head_is(subject, "match")) &&
         rt_prove_paths(e, pred, var_name, subject, base_kind, env, loc, 0)) {
         refine_note_split_proven();
+        env->head = ax_head; env->n_names = ax_names;
         return true;
     }
 
@@ -1107,7 +1190,9 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
         refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
                                   rt_sort_of_kind(base_kind), type_name(type_simple(base_kind, CK_COPY)),
                                   loc, env, what, fn_name);
-    return refine_discharge_one(ob, e->arena);
+    bool proven = refine_discharge_one(ob, e->arena);
+    env->head = ax_head; env->n_names = ax_names;
+    return proven;
 }
 
 /* ------------------------------------------------------------------------- *
