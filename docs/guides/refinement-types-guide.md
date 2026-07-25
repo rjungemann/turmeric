@@ -641,10 +641,10 @@ Known and deliberate, in rough order of how likely you are to hit them:
   add a false one.
 - **Path splitting covers `if` and `let`, not `match`.** A branching body is
   discharged per path -- `c |- pred[then/r]` and `(not c) |- pred[else/r]` --
-  and a `let` contributes `x = v`. A `let` whose binding SHADOWS a name in
-  scope declines to split, because the hypothesis would be a contradiction in
-  the flat namespace; those bodies keep their runtime check. `match` arms are
-  not split yet.
+  and a `let` contributes `x = v`. A `let` whose binding shadows a name in
+  scope is alpha-renamed first, so the hypothesis relates a fresh name rather
+  than asserting the contradiction `x = x - 1`. A body that rebinds the same
+  name a second time declines to split. `match` arms are not split yet.
 - **No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)

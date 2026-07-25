@@ -943,6 +943,25 @@
 > that turns `(safe-div 10 0)` into a compile error, which is where its value
 > actually was.
 >
+> ### Alpha-renaming shadowed let bindings (landed 2026-07-25)
+>
+> Path splitting declined to split a `let` that shadowed a name in scope,
+> because the hypothesis `x = v` in one flat namespace would assert
+> `x = <something mentioning x>`. The binding is now renamed to a fresh symbol
+> and the body rewritten to use it, so `(let [x (- x 1)] x)` yields
+> `x~0 = x - 1` -- correct, and correctly unprovable -- instead of a
+> contradiction that proves anything. A body that rebinds the same name AGAIN
+> still declines rather than rename twice.
+>
+> **Benefit undemonstrated.** I could not construct a program where this newly
+> proves something, because every shadowing shape I tried that would have been
+> provable fails to type-check with the gate OFF as well -- `let` shadowing a
+> parameter is only narrowly supported in the language today, independent of
+> refinements. So this is verified safe (suite, solver unit, 400 fuzz cases,
+> and the shadow miscompile fixture still aborts under both gates) and its
+> value is contingent on that unrelated limitation being lifted. Worth knowing
+> before anyone counts it as a win.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -961,10 +980,8 @@
 >   since moving a form from UNKNOWN to PURE only ever removes diagnostics.
 >   Note this is NOT the "purity from effect inference" item it replaces --
 >   that one is struck as unworkable, per the finding above.
-> - **Alpha-rename let bindings in path splitting** -- a `let` that shadows a
->   name in scope currently declines to split (the hypothesis `x = v` would be
->   a contradiction in the flat namespace). Renaming the binding recovers those
->   bodies. `match` arms are the same shape and would follow.
+> - **Split `match` arms**, the same shape as `if` but with pattern bindings.
+>   Alpha-renaming (below) is the machinery it would reuse.
 > - ~~**Whole-program entry-check elision**~~ -- MEASURED AND DECLINED, see
 >   below. It buys nothing measurable and carries the feature's largest
 >   soundness surface.

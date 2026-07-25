@@ -715,6 +715,51 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
                            const Form *subject, TypeKind base_kind,
                            RefineEnv *env, Span loc, uint32_t depth);
 
+/* Copy `f`, renaming every FREE occurrence of `from` to `to`.
+ *
+ * Path splitting asserts `x = v` in the environment's single flat namespace,
+ * so a `let` that rebinds a name already in scope would assert
+ * `x = <something mentioning x>` -- a contradiction, which proves the goal and
+ * elides a check that was protecting something.  Renaming the binding is what
+ * makes those bodies splittable instead of skipped.
+ *
+ * Returns NULL when the body REBINDS the same name again, which would need a
+ * second rename to stay correct; declining is the safe answer and the caller
+ * falls back to the whole-body obligation. */
+static Form *rt_rename_free(Elab *e, const Form *f,
+                            const Symbol *from, const Symbol *to) {
+    if (!f) return NULL;
+    if (f->tag == F_SYM)
+        return (f->as.sym == from)
+             ? form_sym(e->arena, f->span, to) : (Form *)f;
+    if (f->tag != F_LIST && f->tag != F_VEC) return (Form *)f;
+
+    /* A nested binder of the same name: decline rather than guess. */
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        f->as.list.items[0]->tag == F_SYM &&
+        f->as.list.items[0]->as.sym &&
+        strcmp(f->as.list.items[0]->as.sym->name, "let") == 0) {
+        const Form *b = f->as.list.items[1];
+        if (b && b->tag == F_VEC)
+            for (uint32_t i = 0; i + 1 < b->as.list.len; i += 2)
+                if (b->as.list.items[i]->tag == F_SYM &&
+                    b->as.list.items[i]->as.sym == from)
+                    return NULL;
+    }
+
+    uint32_t n = f->as.list.len;
+    Form **kids = (Form **)arena_alloc(e->arena, (n ? n : 1) * sizeof(Form *));
+    bool changed = false;
+    for (uint32_t i = 0; i < n; i++) {
+        kids[i] = rt_rename_free(e, f->as.list.items[i], from, to);
+        if (!kids[i]) return NULL;
+        if (kids[i] != f->as.list.items[i]) changed = true;
+    }
+    if (!changed) return (Form *)f;
+    return f->tag == F_LIST ? form_list(e->arena, f->span, kids, n)
+                            : form_vec(e->arena, f->span, kids, n);
+}
+
 /* Run `body` with `hyp` assumed.  The env's hypothesis list is a cons chain
  * and its name table only ever grows, so a scope is saved and restored by
  * rewinding both -- no copying. */
@@ -774,10 +819,31 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
              * runs and still answers unknown, exactly as before path
              * splitting existed.  Alpha-renaming the binding would recover
              * these bodies and is the natural follow-up. */
+            /* SHADOWING.  The hypothesis is `x = v` in one flat namespace,
+             * so rebinding a name already in scope would assert
+             * `x = <something mentioning x>` -- `(let [x (- x 1)] x)` becomes
+             * `x = x - 1`, false for every x, and a false hypothesis proves
+             * the goal.  That was a live miscompile.
+             *
+             * Alpha-rename instead of declining: the binding becomes a fresh
+             * name, the body is rewritten to use it, and `v` keeps referring
+             * to the OUTER x because only the body is renamed. */
+            bool shadows = false;
             for (uint32_t _i = 0; _i < env->n_names; _i++)
                 if (env->names[_i] &&
                     strcmp(env->names[_i], x->as.sym->name) == 0)
-                    return false;
+                    { shadows = true; break; }
+            if (shadows) {
+                char fresh[96];
+                snprintf(fresh, sizeof(fresh), "%s~%u", x->as.sym->name, depth);
+                const Symbol *fs = symtab_intern(
+                    e->st, strslice(arena_strdup(e->arena, fresh, strlen(fresh)),
+                                    (uint32_t)strlen(fresh)));
+                Form *nx = form_sym(e->arena, x->span, fs);
+                Form *nbody = rt_rename_free(e, body, x->as.sym, fs);
+                if (!nbody) return false;
+                x = nx; body = nbody;
+            }
             refine_env_declare(env, x->as.sym->name, rt_sort_of_kind(base_kind));
             Form **eqk = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
             eqk[0] = form_sym(e->arena, subject->span,
