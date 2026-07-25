@@ -197,12 +197,70 @@ wrinkles discovered since the original phase text:
   field. Wiring it up changes what gets buffered, so it needs its own evidence;
   do it here, where the instrumentation to measure it exists.
 
-### CG7 -- Test corpus + runtime leak-checking
+### CG7 -- Test corpus + runtime leak-checking [DONE 2026-07-25]
 
-*Partially done. `gc-live-cycle-survives` (the critical negative test) and the
-DEDUP-4a runtime parity battery both landed.*
+**Landed, with two of the three items ending somewhere other than planned.**
 
-Remaining:
+**1. `exg5-exists-cycle` promoted.** It was written before CG2, when trial
+deletion was zombie-only, so all it could assert was that the `RCK_STRUCT`
+walker ran without tripping. It now asserts the cycle is *reclaimed*
+(`gc-objects-freed > 0`, `gc-live-blocks == 0`) using the CG6 counters, and its
+header no longer claims the collector cannot do this.
+
+**2. The `vec`/`map`/closure blind-spot fixtures could not be written -- because
+the blind spot is not where the plan thought.** Measured:
+
+| shape | result |
+|---|---|
+| `vec` holding `rc<T>` | **does not compile** -- `emit: invalid EX_REINTERPRET rc -> int` |
+| `map`/`hamt` holding `rc<T>` | **does not compile** -- same error |
+| closure capturing `rc<T>` | **compiles, and the capture is released correctly** (live blocks back to 0 across a collection) |
+
+So there is no reachable `RCK_OPAQUE` cycle to assert non-collection *for*: the
+collection cases are closed by rejection rather than by tracing, and the closure
+case is not a blind spot at all. (An earlier probe that appeared to show a
+closure leak was an ordinary refcount leak in the probe itself -- a `rc/clone`
+inside the closure body that nothing dropped.)
+
+That is a better outcome than the fixtures would have been, but it comes with a
+real expressiveness hole, filed as
+[docs/reported/collections-cannot-hold-rc-values.md](../../reported/collections-cannot-hold-rc-values.md).
+The blind spot documented in the GC guide reopens the moment collections accept
+`rc<T>`, and the fixtures become writable and necessary at the same instant.
+
+**3. The leak harness became an ASan harness, because LeakSanitizer cannot
+express the assertion.** `tests/run-gc-leak-gate.sh`.
+
+LSan reports memory unreachable from roots, and every rc block sits in the
+`gc_all_blocks` registry -- a global. An uncollected cycle is therefore
+*reachable* by construction. Measured: the collector-off run retains ~1 MB of
+cycles and LSan reports **zero leaks**. The planned "collector off must leak"
+assertion is not expressible with LSan at all.
+
+What the gate does instead is the part that was actually missing: `tests/run.sh`
+compiles fixture programs **without sanitizers**, so nothing in the ordinary
+suite ever runs a compiled binary under ASan. A use-after-free in the
+collector's sweep is invisible to a suite that only diffs printed output --
+CG5's mid-construction walk of a half-built block was exactly that shape. The
+gate builds each fixture with `-fsanitize=address` and runs it twice, asserting
+ASan-clean both ways, expected output with the collector on, and *different*
+output with it off.
+
+A second measurement trap surfaced while building it: **`mallinfo2` reads
+glibc's allocator, which ASan replaces**, so a fixture measuring retention that
+way reports 0 under ASan no matter what. `gc-collects-strong-cycle` prints a
+1,087,232-byte delta with the collector off under normal flags and 0 under ASan
+-- its heap probe is simply blind there. The on/off control therefore runs only
+on fixtures whose output comes from the CG6 counters, which are allocator-
+independent; `gc-collects-strong-cycle` still gets the ASan-clean checks.
+
+Result: 11 passed, 0 failed. Opt-in (`bash tests/run-gc-leak-gate.sh`) -- a
+sanitized compile per fixture is slow, and it is a diagnostic gate rather than
+an everyday one.
+
+Thread-safety of the global buffers under `arc<T>` remains **out of scope**.
+
+*Original remaining items:*
 
 1. Promote `tests/fixtures/exg5-exists-cycle` from "documents non-collection" to
    a **collection** assertion. Its header already describes the topology.

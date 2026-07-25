@@ -192,6 +192,14 @@ freed when the count hits zero) but the cycle collector cannot see through
 them. Wrap C handles in `defopaque` and give them a proper drop, not a
 walker, when they have no `rc<T>` children.
 
+In practice this blind spot is currently narrower than it sounds, for a reason
+nobody would want: a `vec` or `map` **cannot hold an `rc<T>` at all** today
+(`emit: invalid EX_REINTERPRET rc -> int`), so the "cycle through a collection"
+case is closed by rejection rather than by tracing --
+see [docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md).
+A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
+spot. The gap reopens for real the moment collections accept `rc<T>`.
+
 ---
 
 ## Ownership across the stdlib
