@@ -63,22 +63,34 @@ storage path.
 
 Roughly in increasing order of work:
 
-1. ~~**Diagnose it properly.**~~ **Partially done 2026-07-25.** The message now
-   names the real constraint and points here:
+1. ~~**Diagnose it properly.**~~ **DONE 2026-07-25.** Rejected at check time
+   with a span, instead of an `abort()` deep in codegen:
 
    ```
-   tur: cannot store an owning value (rc) through the int64 element carrier --
-   collections (vec, map/hamt) cannot hold rc today.
-     Store a plain handle instead, or keep the rc outside the collection.
-     See docs/reported/collections-cannot-hold-rc-values.md
+   vpush.tur:6:18: error: cannot store an owning value (rc) in a collection:
+   elements go through an int64 carrier that cannot hold a reference the
+   collection would have to own. Store a plain handle, or keep the value
+   outside the collection
    ```
 
-   **Still an abort with no span**, which is the part that remains open. The
-   emit layer has no diagnostic channel at all -- there is no `diag_emit` call
-   anywhere in it -- so a span'd error must be raised earlier. The obvious hook
-   is wrong: `vec-of` is a *macro*, not a variadic defn, so the polymorphic
-   rest-arg check in `elab_call.c` never sees it (tried, and it never fired).
-   Finding the right elaboration-time hook is the remaining work.
+   The check sits where elaboration would build the carrier reinterpret
+   (`elab_call.c`) -- the last point that still has a span. Two earlier guesses
+   at the hook were wrong and are worth not repeating: the emit site has no
+   diagnostic channel at all (no `diag_emit` exists in that layer), and the
+   variadic rest-arg check never fires because `vec-of` is a *macro* expanding
+   to `vec-push!` calls.
+
+   Rejecting rather than passing the value through is deliberate: an
+   unconverted rc would put a control-block pointer in a slot the collection
+   does not own -- a leak or a double-free depending on which side drops it.
+
+   **Known wart:** a `(vec-of ...)` call reports the span of the macro's own
+   body in `stdlib/vec.tur` rather than the user's call site. A direct
+   `(vec-push! v x)` reports the user's span correctly. That is the general
+   macro-expansion span limitation, not specific to this check.
+
+   Pinned by `tests/fixtures/errors/collection-rejects-owning-element`.
+
 2. **Box the element.** Store `rc<T>` elements as their control-block pointer
    with the collection owning a strong reference -- taking a count on insert and
    releasing on removal/teardown. This is the shape the existing

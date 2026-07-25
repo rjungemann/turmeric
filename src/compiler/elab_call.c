@@ -728,6 +728,31 @@ static Expr *call_wrap_reinterpret(Elab *e, Expr *inner, TypeKind target_kind, S
             return inner;
         }
     }
+    /* collections-cannot-hold-rc-values: an OWNING kind has no bit-preserving
+     * reinterpretation to the int64 element carrier, and emit aborts on it --
+     * historically as a bare `tur: emit: invalid EX_REINTERPRET rc -> int` with
+     * no span, from deep in codegen, for an ordinary program like
+     * `(vec-of (rc/clone a))`.
+     *
+     * This is the last point that still has a span, so the rejection belongs
+     * here.  (The variadic rest-arg check is NOT the hook: `vec-of` is a macro
+     * expanding to `vec-push!` calls, so it never reaches that path.)
+     *
+     * Reporting it rather than silently returning `inner` matters: passing the
+     * rc through unconverted would store a control-block pointer the collection
+     * does not own -- a leak or a double-free depending on which side drops it.
+     * See docs/reported/collections-cannot-hold-rc-values.md for the real fix
+     * (the collection taking a strong reference). */
+    if (source_kind == TY_RC || source_kind == TY_WEAK ||
+        source_kind == TY_REF || source_kind == TY_LREF) {
+        diag_emit(DIAG_ERROR, span,
+                  "cannot store an owning value (%s) in a collection: elements "
+                  "go through an int64 carrier that cannot hold a reference the "
+                  "collection would have to own. Store a plain handle, or keep "
+                  "the value outside the collection",
+                  typekind_to_string(source_kind));
+        return NULL;
+    }
     Expr *out = expr_new(e->arena, EX_REINTERPRET, type_from_kind(target_kind), span);
     out->as.reinterpret_.expr = inner;
     out->as.reinterpret_.source_kind = source_kind;
