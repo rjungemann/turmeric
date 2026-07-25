@@ -7,7 +7,14 @@
 ;; Neither arithmetic nor equality alone gets there: LA cannot see that
 ;; `size-of(v)` and `n` denote the same value, and EUF cannot do the ordering.
 ;; The combination does.
-(defn size-of [v : int] : int
+;;
+;; The `#fx{}` is load-bearing, not decoration.  Congruence -- treating the two
+;; occurrences of `(size-of v)` as the same value -- is only valid for a PURE
+;; function, so the compiler requires the measure to say so.  Without it the
+;; obligation stays undischarged and the runtime check remains.  An unannotated
+;; function is assumed impure precisely because the other default silently
+;; elides real checks.
+(defn size-of [v : int] #fx{} : int
   (* v 2))
 
 (defn index-ok [v : int, n : int, i : int] : #refine{ r : int | (< r (size-of v)) }

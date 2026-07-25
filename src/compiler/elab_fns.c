@@ -149,11 +149,28 @@ static bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * are proved facts and hold whether or not any check is emitted. */
     const Symbol *sym = symtab_intern(e->st, strslice(name, (uint32_t)strlen(name)));
     Binding *b = scope_lookup(&e->global, sym);
-    if (!b || !b->refine_return_pred) return false;
+    /* Not a function we know: the encoder reads this as an abstract measure --
+     * an uninterpreted mathematical function, which the language defines as
+     * congruent. */
+    if (!b) return false;
+
     out->ret_pred    = b->refine_return_pred;
     out->ret_var     = b->refine_return_var;
     out->param_names = b->refine_param_names;
     out->n_params    = b->n_refine_params;
+
+    /* PURITY, which decides whether two occurrences of this call may be
+     * modelled as the same value.  The only evidence available at elaboration
+     * time is the DECLARED effect row -- inference has not run yet -- so an
+     * unannotated function is treated as impure.
+     *
+     * That default costs a little completeness (a measure written as an
+     * ordinary defn no longer gets congruence unless it declares `#fx{}`) and
+     * buys the soundness invariant, which is not negotiable.  The direction of
+     * the error matters: guessing "pure" wrongly elides a real runtime check,
+     * while guessing "impure" wrongly only leaves one in place. */
+    out->pure = (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
+                 effect_row_is_empty(b->type.as.fn.effect_row));
     return true;
 }
 

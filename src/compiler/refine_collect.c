@@ -244,16 +244,50 @@ static VCTerm *enc_nary_bool(Enc *E, VCOp op, const Form *f) {
 /* An unrecognised head becomes a named measure -- an uninterpreted function
  * symbol reasoned about by congruence closure, never unfolded.  This is the
  * language rule that keeps S1 tractable. */
+/* Two occurrences of a call may only be modelled as the same value when the
+ * callee is KNOWN pure.  An unresolvable name is an abstract measure, which the
+ * language defines as an uninterpreted mathematical function -- congruent by
+ * construction.  Anything else has to say so.
+ *
+ * Getting this wrong is not a missed proof, it is a miscompile: with `tick`
+ * counting up, `(- (tick) (tick))` encoded congruently becomes `t - t`, the
+ * solver proves `t - t >= 0`, and the runtime check that would have caught the
+ * real value of -1 is elided. */
+static bool enc_callee_is_pure(Enc *E, const char *name, RefineFnInfo *out) {
+    memset(out, 0, sizeof(*out));
+    if (!E->env || !E->env->resolve_fn) return false;   /* no information: assume not */
+    if (!E->env->resolve_fn(E->env->resolve_ud, name, out)) {
+        /* Unresolved: an abstract measure. */
+        out->pure = true;
+        return true;
+    }
+    return out->pure;
+}
+
+/* Mint a name that cannot collide with another occurrence's. */
+static const char *enc_fresh_name(Enc *E, const char *base) {
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%s#%u", base, E->vc->fresh_ctr++);
+    return arena_strdup(E->vc->arena, buf, strlen(buf));
+}
+
 static VCTerm *enc_measure(Enc *E, const Form *f) {
     const Form *head = f->as.list.items[0];
     if (head->tag != F_SYM && head->tag != F_KEYWORD) {
         E->fail = "predicate head is not a name";
         return NULL;
     }
+    RefineFnInfo info;
+    bool pure = enc_callee_is_pure(E, head->as.sym->name, &info);
+
     uint32_t argc = f->as.list.len - 1;
     if (argc == 0) {
-        /* A nullary measure is just an opaque constant: model it as a var. */
-        uint32_t v = vc_declare_var(E->vc, head->as.sym->name, VS_INT);
+        /* A nullary call is an opaque constant.  When it is not known pure,
+         * each occurrence is a DIFFERENT constant -- which is exactly what
+         * makes `(- (tick) (tick))` unprovable again. */
+        const char *nm = pure ? head->as.sym->name
+                              : enc_fresh_name(E, head->as.sym->name);
+        uint32_t v = vc_declare_var(E->vc, nm, VS_INT);
         return vc_var_ref(E->vc, v);
     }
     VCTerm **args = (VCTerm **)arena_alloc(E->vc->arena, argc * sizeof(VCTerm *));
@@ -261,7 +295,9 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
         args[i] = enc(E, f->as.list.items[i + 1]);
         if (!args[i]) return NULL;
     }
-    uint32_t fn = vc_declare_ufunc(E->vc, head->as.sym->name, argc, VS_INT,
+    const char *fname = pure ? head->as.sym->name
+                             : enc_fresh_name(E, head->as.sym->name);
+    uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, VS_INT,
                                    f, /*nonlinear=*/false);
     VCTerm *app = vc_app(E->vc, fn, args, argc);
 
@@ -278,10 +314,11 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
         bool cycling = false;
         for (uint32_t i = 0; i < E->n_propagating; i++)
             if (strcmp(E->propagating[i], nm) == 0) { cycling = true; break; }
-        RefineFnInfo info;
-        memset(&info, 0, sizeof(info));
+        /* `info` was filled by the purity probe above.  Propagating a return
+         * refinement is sound whether or not the callee is pure -- the fact is
+         * asserted about THIS occurrence's term, and an impure callee simply
+         * has a term of its own. */
         if (!cycling && E->n_propagating < ENC_MAX_PROPAGATE &&
-            E->env->resolve_fn(E->env->resolve_ud, nm, &info) &&
             info.ret_pred && info.ret_var) {
             Enc E2; memset(&E2, 0, sizeof(E2));
             E2.vc = E->vc; E2.env = E->env;

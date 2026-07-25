@@ -104,6 +104,9 @@ typedef struct RefineVC {
     /* Hash-cons table: open addressing over term ids.  Slots hold VCTerm*. */
     VCTerm   **htab;    uint32_t htab_cap, htab_len;
     uint32_t   next_id;
+    /* Serial for minting DISTINCT symbols when two occurrences of the same
+     * call must NOT be treated as the same value (see RefineFnInfo.pure). */
+    uint32_t   fresh_ctr;
 } RefineVC;
 
 RefineVC *vc_new(Arena *a);

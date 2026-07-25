@@ -51,14 +51,30 @@ typedef struct RefineHyp {
  * produces, and asserting it turns `(twice (double-pos p))` from unknown into
  * provable. */
 typedef struct RefineFnInfo {
-    const Form  *ret_pred;     /* the q of `: #refine{ r : T | q }` */
+    const Form  *ret_pred;     /* the q of `: #refine{ r : T | q }`, or NULL */
     const char  *ret_var;      /* the r */
     const char **param_names;  /* so q may mention the callee's parameters */
     uint32_t     n_params;
+    /* Whether two occurrences of this call may be treated as THE SAME VALUE.
+     *
+     * Encoding a call as an uninterpreted function makes its occurrences
+     * congruent -- `f(a)` equals `f(a)` -- which is the whole point for a
+     * measure like `len`, and which is FALSE for anything effectful.  With it
+     * assumed, `(- (tick) (tick))` where `tick` counts up encodes as `t - t`,
+     * the solver proves `t - t >= 0`, and the runtime check that would have
+     * caught the real value of -1 is elided.  That is a miscompile, and it is
+     * the one thing turning the experiment on must never do.
+     *
+     * So congruence is opt-in: only a callee that is KNOWN pure gets it. */
+    bool         pure;
 } RefineFnInfo;
 
-/* Resolve a function name to the above.  Supplied by the elaborator (which
- * owns the scope); NULL disables result propagation entirely. */
+/* Resolve a called name.  Returns false when the name does not resolve to a
+ * function at all -- an abstract measure, which the language treats as an
+ * uninterpreted (and therefore congruent) mathematical function.  Supplied by
+ * the elaborator, which owns the scope; NULL disables both result propagation
+ * and purity discrimination, so every call falls back to the safe
+ * fresh-per-occurrence encoding. */
 typedef bool (*RefineFnResolver)(void *ud, const char *name, RefineFnInfo *out);
 
 typedef struct RefineEnv {

@@ -322,6 +322,45 @@
 >   and no `TUR_REFINE_Z3_ORACLE` string; Release + oracle still fails
 >   configuration outright.
 >
+> ### The purity gap was a real miscompile (fixed 2026-07-25)
+>
+> Not a theoretical hole. Reduced to a program that the experiment silently
+> broke:
+>
+> ```turmeric
+> (defn tick [] #fx{Unsafe} : int  ```c static int64_t n = 0; return n++; ```)
+> (defn always-nonneg [] #fx{Unsafe} : #refine{ r : int | (>= r 0) }
+>   (- (tick) (tick)))
+> ```
+>
+> `(- (tick) (tick))` is -1. With the gate OFF the runtime check fires and the
+> program aborts, correctly. With `--enable=refined` it printed `-1` and exited
+> 0: encoding a call as an uninterpreted function makes its occurrences
+> congruent, both `(tick)`s became the same term `t`, the solver proved
+> `t - t >= 0`, and the check was elided. Turning the experiment on turned a
+> correct program into one that violates its own declared refinement -- exactly
+> what the whole design forbids.
+>
+> The fix makes congruence OPT-IN. A call is modelled as a shared value only
+> when the callee is known pure: an empty declared effect row (`#fx{}`), or a
+> name that resolves to no function at all, which is an abstract measure and
+> therefore a mathematical function by definition. Everything else gets a
+> distinct symbol per occurrence.
+>
+> The cost is real and was paid deliberately: a measure written as an ordinary
+> `defn` must now declare `#fx{}` to get congruence, and
+> `tests/fixtures/refine-measure-euf` was updated to do so. Effect *inference*
+> would answer this without annotation, but it runs after the discharge pass,
+> so the declared row is the only evidence available. The direction of the
+> default is what matters -- guessing "pure" wrongly elides a real check;
+> guessing "impure" wrongly only leaves one in place.
+>
+> Worth noting what did NOT catch this: the differential fuzzer works at the VC
+> level, below the encoder, so ~17,300 randomly generated VCs across six seeds
+> were all clean while the compiler was miscompiling. Fuzzing the solver does
+> not test the translation into it. `tests/fixtures/errors/refine-impure-not-
+> congruent` pins the behaviour where the bug actually lived.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -340,10 +379,10 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - **A purity gate on the encoder** -- two syntactically identical calls
->   currently encode to the same term. Predicates must be pure, but argument
->   expressions need not be, so an effectful call appearing twice in one
->   obligation would be modelled as one value.
+> - **Purity from effect INFERENCE, not just the declared row.** An unannotated
+>   function is currently assumed impure, which is sound but costs completeness
+>   for measure-style reasoning. Inference runs after the discharge pass; moving
+>   the call-site resolution behind it would recover the common case.
 > - **Branching-body propagation** -- RT4 is limited to single-expression
 >   bodies; a path-sensitive join at merge points would cover `if`/`match`.
 > - **Whole-program entry-check elision** -- the piece that turns the call-site

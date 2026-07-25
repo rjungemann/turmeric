@@ -252,6 +252,26 @@ congruence closure reasons about but never unfolds. This is what makes the
 equality theory tractable, and it is why `(= (size-of v) n)` above is usable as
 a hypothesis without the solver knowing anything about `size-of`'s body.
 
+**A measure must be declared pure.** Congruence -- treating two occurrences of
+`(size-of v)` as the same value -- is only valid for a pure function, so the
+compiler requires the function to say so with an empty effect row:
+
+```turmeric
+(defn size-of [v : int] #fx{} : int
+  (* v 2))
+```
+
+Without the annotation each occurrence is a *distinct* opaque value and the
+proof does not go through. That default is deliberate and it is the
+conservative direction: assuming purity wrongly elides a runtime check that was
+protecting something, while assuming impurity wrongly only leaves one in place.
+
+The rule has teeth. Given a `tick` that counts up, `(- (tick) (tick))` is `-1`,
+never `0` -- but encoded congruently it becomes `t - t`, and a refinement of
+`(>= r 0)` on it would be "proved" and its check elided. A name that resolves to
+no function at all is still treated as congruent: that is an abstract measure,
+a mathematical function by definition rather than code that runs.
+
 **Variable * variable is uninterpreted.** `(* x 2)` is linear and fully decided;
 `(* x y)` with both sides variable is abstracted to an opaque term and reported
 with `TUR-W0373`. Congruence closure still relates two occurrences of the same
@@ -492,11 +512,11 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **No refinements on type parameters, typeclass method signatures, or
   higher-order predicates.** These are rejected or fall through to runtime.
 - **Nonlinear arithmetic** is uninterpreted, as described above.
-- **Two syntactically identical calls encode to the same term**, so the solver
-  treats them as equal. Predicates are required to be pure, but an *argument*
-  expression is not, so an effectful call appearing twice in one obligation
-  would be modelled as one value. In practice an argument form occurs once per
-  obligation; a purity gate on the encoder is the proper fix.
+- **A function with no declared effect row is assumed impure**, so its calls
+  are not congruent and measure-style reasoning over it does not go through
+  until it declares `#fx{}`. Effect *inference* runs after the discharge pass,
+  so the declared row is the only evidence available; this costs completeness,
+  never soundness.
 
 Every one of these fails toward a runtime check, never toward a wrong answer.
 
