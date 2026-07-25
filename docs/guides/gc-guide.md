@@ -333,7 +333,7 @@ them produced five bugs, so the replica is being retired. As of DEDUP-4b:
 | build path | collector |
 |---|---|
 | `tur build` (executable) | **linked from `libturt_runtime.a`** -- the same code the interpreter runs |
-| `tur build --shared` (.so) | the emitted replica (a `.so` must stay self-contained) |
+| `tur build --shared` (.so) | the emitted replica, at **hidden visibility** -- a `.so` stays self-contained, and its collector is not exported, so a host that dlopens it cannot partially merge the two registries |
 | bare `tur emit-c` | the emitted replica (its output must be standalone C) |
 | no runtime archive locatable, or `--runtime=source` | the emitted replica |
 

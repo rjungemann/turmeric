@@ -278,10 +278,55 @@ Thread-safety of the global buffers under `arc<T>` remains **explicitly out of
 scope** -- and note DEDUP-4a's removal of the reentrant force-collect makes the
 buffers meaningfully easier to reason about if that scope ever opens.
 
-### DEDUP-5 -- Retire the last replica
+### DEDUP-5 -- Retire the last replica [DONE 2026-07-25]
 
-*New phase. DEDUP-4b took compiled executables off the hand-written collector;
-two paths still carry it.*
+**Landed, as two of three: the dead text is gone, `--shared` is now a defended
+decision rather than an accident, and bare `emit-c` keeps its replica by
+design.**
+
+**1. The `#if 0` text is elided.** DEDUP-4b emitted the whole replica and
+excluded it with `#if 0`, so it stayed readable next to its call sites while
+both implementations existed and the switch was a one-line revert. That has
+baked. `emit_rt_defs_begin` now records `out->len` and `emit_rt_defs_end`
+rewinds to it, discarding the run outright -- `Buf` is length-tracked with no
+NUL invariant, so truncation is the whole operation and no `Buf` change was
+needed. **7428 -> 6915 lines** per generated `.c` (513 lines, ~7%).
+
+**2. `--shared` keeps its replica, and that is now defended.** The question was
+whether a `.so` should link the archive. Measured first:
+
+| host | result |
+|---|---|
+| links `libturt_runtime.a`, dlopens the `.so` | **separate collectors** |
+| same, linked `-rdynamic` | **separate collectors** |
+
+Separate is the right answer -- a control block registered in one registry must
+never be freed through the other, since `cb->gc_index` would index the wrong
+array -- but it was true only because the host's symbols happened not to
+interpose. The `.so` was still *exporting* `gc_collect`, `rc_cb_alloc`,
+`gc_all_blocks` and friends as global dynamic symbols, so a differently-linked
+host, or `RTLD_GLOBAL`, could have partially merged the two.
+
+So the rc/GC block in a `--shared` build is now emitted with
+`__attribute__((visibility("hidden")))` (via a `TUR_RT_LOCAL` macro emitted only
+in shared mode, so single-file output and its 140 snapshots are untouched).
+Result: **zero** exported `gc_*`/`rc_*` dynamic symbols, module exports intact,
+and still exactly one collector instance per library -- DEDUP-3's win kept.
+Structural now, not lucky.
+
+**3. Bare `emit-c` keeps the replica, deliberately.** Its contract is a
+self-contained translation unit; a declare-without-define preamble is not that.
+The alternative -- emitting the runtime as a companion `.c` -- turns a
+one-file output into a two-file one and would break every caller that pipes
+`emit-c` to a single file. `TUR_RCGC_FROM_ARCHIVE=1` remains available for
+someone who links `libturt_runtime.a` from their own build system.
+
+**Consequence for the fences.** A replica still exists on two paths, so
+`tools/gc-copy-diff.py` (27 divergent, all cosmetic), the DEDUP-1 layout guard,
+the DEDUP-4b `RC_VT_*` asserts and the DEDUP-4a parity battery all stay load-
+bearing. This phase reduced the replica's blast radius; it did not remove it.
+
+*Original phase text:*
 
 Current state after DEDUP-4b:
 
