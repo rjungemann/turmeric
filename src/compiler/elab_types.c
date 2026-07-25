@@ -724,6 +724,31 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             if (pt) return pt;
         }
 
+        /* rc<T>/weak<T>/ref<T>/lref<T> in ANY type position, not just the defn
+         * param/return ladders that call the resolver directly (elab_fns.c).
+         * Without this the reference-family spelling reached the tyvar fallback
+         * below and became a type variable literally *named* "rc<S>" -- the
+         * very footgun rc_family_type_from_keyword_name was written to close,
+         * still open everywhere that routes through here: type-application
+         * arguments, `::` ascriptions, aliases.
+         *
+         * The symptom was a real program silently mistyped rather than
+         * rejected.  `(:: (vec-new) (Vec rc<S>))` bound the element tyvar A to
+         * the *name* "rc<S>", so a later `(vec-push! v a)` with an honest rc<S>
+         * value failed unification against its own annotation -- "expected
+         * tyvar, got rc<S>" -- while `(Vec S)` and `(Vec int)` were fine.  The
+         * error pointed at the argument when the annotation was at fault.
+         * Placed beside the ptr<T> hook, which has the same shape and was
+         * already wired in here. */
+        {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, rec_name,
+                                                        type_params,
+                                                        type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
+        }
+
         /* Unknown -- return an unresolved named type variable.
          * structdef-retirement slice 5 (P7): an unknown bare type name is an
          * unresolved type variable, not a nominal struct.  Emit a named
@@ -2180,6 +2205,31 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                                   rec_name, type_params,
                                                   type_param_kinds, n_type_params);
             if (pt) return pt;
+        }
+
+        /* rc<T>/weak<T>/ref<T>/lref<T> in ANY type position, not just the defn
+         * param/return ladders that call the resolver directly (elab_fns.c).
+         * Without this the reference-family spelling reached the tyvar fallback
+         * below and became a type variable literally *named* "rc<S>" -- the
+         * very footgun rc_family_type_from_keyword_name was written to close,
+         * still open everywhere that routes through here: type-application
+         * arguments, `::` ascriptions, aliases.
+         *
+         * The symptom was a real program silently mistyped rather than
+         * rejected.  `(:: (vec-new) (Vec rc<S>))` bound the element tyvar A to
+         * the *name* "rc<S>", so a later `(vec-push! v a)` with an honest rc<S>
+         * value failed unification against its own annotation -- "expected
+         * tyvar, got rc<S>" -- while `(Vec S)` and `(Vec int)` were fine.  The
+         * error pointed at the argument when the annotation was at fault.
+         * Placed beside the ptr<T> hook, which has the same shape and was
+         * already wired in here. */
+        {
+            Type *rt = rc_family_type_from_keyword_name(e, sym->name, sym->len,
+                                                        form->span, rec_name,
+                                                        type_params,
+                                                        type_param_kinds,
+                                                        n_type_params);
+            if (rt) return rt;
         }
 
         /* Unknown keyword type -- return an unresolved named type variable.

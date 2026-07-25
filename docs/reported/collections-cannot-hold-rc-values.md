@@ -204,6 +204,23 @@ Roughly in increasing order of work:
    alongside the `vec-*` entries; and the blind-spot fixture flipped from
    "50 live" to "0 live" once it lands.
 
+   ### Wrinkle found while probing this, now fixed
+
+   `(:: (vec-new) (Vec rc<S>))` followed by a push failed with `expected tyvar,
+   got rc<S>`, while `(Vec S)` and `(Vec int)` were fine -- so the fault looked
+   rc-specific rather than annotation-specific.
+
+   `rc<T>`/`weak<T>`/`ref<T>`/`lref<T>` written in a type-application argument
+   (or a `::` ascription, or an alias) resolved to a type variable literally
+   **named** `"rc<S>"`. `rc_family_type_from_keyword_name` exists to stop
+   exactly that, but only the defn param/return ladders in `elab_fns.c` called
+   it; `type_expr_from_form` hooked `ptr<T>` and then fell through to the
+   named-tyvar fallback. The annotation was accepted and silently mistyped, so
+   the error surfaced later and blamed the argument for the annotation's
+   mistake. Fixed by wiring the resolver in beside the `ptr<T>` hook at both
+   fallback sites (bare symbol and keyword form); pinned by
+   `tests/fixtures/rc-family-type-in-app-argument`.
+
    This does not retire the plain `Vec`. Manual, non-refcounted buffers stay the
    right default for element types with no shared ownership -- the rc-managed
    container is for the case that needs tracing, and its extra block per
