@@ -33,6 +33,12 @@ about. The default takes a bounded, deterministic sample per logic.
 Downloads land in a scratch directory (`--cache`, default `/tmp/smtlib-cache`)
 and are md5-verified against the record metadata before anything is extracted.
 
+`--base-url` fetches from a mirror (`<base-url>/<LOGIC>.tar.zst`) instead of the
+record's own URLs -- an S3 bucket, a static host, anything that serves the files
+by name. The md5 from the record is still enforced, so a mirror can only supply
+the same bytes; it cannot substitute different data. This is the escape hatch
+for an environment where the record's host is blocked but a bucket is not.
+
 ## Note on network access
 
 At the time this was written, `zenodo.org` was blocked by the egress policy of
@@ -178,6 +184,12 @@ def main():
                     help="benchmarks to keep per logic (0 = all; be careful)")
     ap.add_argument("--seed", type=int, default=1,
                     help="sampling seed, so an import is reproducible")
+    ap.add_argument("--base-url", default=None,
+                    help="fetch from a MIRROR instead of the record's URLs: "
+                         "<base-url>/<LOGIC>.tar.zst. The md5 from the record "
+                         "is still enforced, so a mirror cannot substitute "
+                         "different data. Useful when the record's host is "
+                         "blocked by an egress policy but a bucket is not.")
     ap.add_argument("--cache", default="/tmp/smtlib-cache")
     ap.add_argument("--dest", default=str(DEFAULT_DEST))
     ap.add_argument("--list", action="store_true",
@@ -218,8 +230,9 @@ def main():
     if args.dry_run:
         total = sum(entries[l]["size"] for l in wanted)
         for l in wanted:
-            print(f"  would fetch {l:12} {human(entries[l]['size']):>10}  "
-                  f"{entries[l]['url']}")
+            u = (f"{args.base_url.rstrip('/')}/{entries[l]['key']}"
+                 if args.base_url else entries[l]["url"])
+            print(f"  would fetch {l:12} {human(entries[l]['size']):>10}  {u}")
         print(f"\n  total download: {human(total)}")
         return 0
 
@@ -231,7 +244,9 @@ def main():
         meta = entries[logic]
         print(f"  {logic}")
         tarball = cache / meta["key"]
-        if not fetch(meta["url"], tarball, meta["md5"], meta["size"]):
+        url = (f"{args.base_url.rstrip('/')}/{meta['key']}"
+               if args.base_url else meta["url"])
+        if not fetch(url, tarball, meta["md5"], meta["size"]):
             failed += 1
             continue
 

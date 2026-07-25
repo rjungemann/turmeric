@@ -165,12 +165,38 @@ After importing, run `validate-labels.py` over the corpus. The library's own
 mis-imported file shows up as a disagreement rather than as a mysterious
 soundness failure later.
 
-**Not imported here:** `zenodo.org` is blocked by the egress policy of the
-container this was built in (the proxy answers 403 to CONNECT, recorded as
-`connect_rejected` for `zenodo.org:443`). That is an environment restriction,
-not a missing piece -- the importer runs anywhere with ordinary network access.
-Package registries ARE reachable and were searched rather than assumed, since
-they would be a viable transport for vendored data:
+### If the record's host is blocked: mirror it
+
+`zenodo.org` is blocked by the egress policy of the container this corpus was
+built in (the proxy answers 403 to CONNECT, recorded as `connect_rejected` for
+`zenodo.org:443`). Two ways around that, neither of which needs the policy
+changed.
+
+**Simplest -- import once, commit the sample.** The corpus wants a bounded
+sample, not the library: 25 benchmarks per logic across the eight fragment
+logics is ~200 small files. Run the importer somewhere with ordinary network
+access and commit what it produces. The corpus is then self-contained, which is
+the whole point -- labels as data in the repo, no fetch step in the test path.
+
+**Or serve the tarballs from a mirror.** S3 and `raw.githubusercontent.com` are
+both reachable from this environment (verified: a public S3 object fetched
+200/28 KB). Upload the per-logic tarballs under their own names and point the
+importer at the bucket:
+
+```sh
+python3 tests/corpus/import-smtlib.py \
+    --base-url https://YOUR-BUCKET.s3.amazonaws.com/smtlib \
+    --logics QF_UFLIA,QF_UF --sample 25
+```
+
+The **md5 from the committed record is still enforced**, so a mirror can only
+supply the same bytes the record describes -- it cannot substitute different
+data, and a truncated or tampered copy is rejected before anything is
+extracted. That is tested: a mirror serving same-length, different-content
+bytes fails with a checksum mismatch, imports nothing, and exits non-zero.
+
+Package registries are also reachable and were searched rather than assumed,
+since they would be a viable transport for vendored data:
 
 | source | result |
 |---|---|
