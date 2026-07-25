@@ -543,11 +543,13 @@ inputs while the program only exercises the arguments it happens to pass, so a
 sound refutation and a clean run coexist routinely. They are counted and saved
 for triage, never failed on.
 
-To confirm the harness can fail, break purity on purpose (in
-`rt_binding_is_pure`, return `true` unconditionally), rebuild, and rerun: a
-sabotaged compiler reports `BUG_soundness` cases with minimal saved repros.
 A fuzzer nobody has watched fail is a fuzzer that reports zero because it is
-broken.
+broken. Two one-line sabotages are documented in the script header, both
+verified to be caught where the shipped build reports zero: breaking purity
+(`rt_binding_is_pure` returns `true`), and eliding a callee's entry checks
+under the gate (`rt_inject_param_checks` returns early). The second simulates
+the whole-program entry-check elision feature built unsoundly, so rerunning it
+is the acceptance test for that work when it lands.
 
 ---
 

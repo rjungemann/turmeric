@@ -461,20 +461,43 @@
 > | abort | abort / reject | agreement |
 > | reject | -- | generator emitted invalid code; case dropped |
 >
-> Three generated shapes, because uniform random generation almost never lands
+> Five generated shapes, because uniform random generation almost never lands
 > inside the solver's fragment -- a 40-case smoke run proved 2 obligations, and
 > the soundness property has teeth only where a check was actually ELIDED:
-> `random` (fallback-path coverage), `linear` (decidable arithmetic, high prove
-> rate), and `congruence` (the bug shape: two occurrences of the same call
-> subtracted, over a helper pool where half the members declare `#fx{}` and lie).
-> With those, ~24% of cases prove at least one obligation.
 >
-> **The harness was verified to fail.** Sabotaging `rt_binding_is_pure` to
-> return `true` and rerunning the same seed turns 0 soundness bugs into 5 in 80
-> cases, with readable saved repros. Results on the shipped build: 1000 cases
-> across four seeds, **0 soundness bugs, 0 other BUG classes**, ~237 obligations
-> proven, 40 suspicious -- twelve of which I read, all legitimate universal
-> refutations on programs whose specific arguments dodge the bad case.
+> - `random` -- anything goes; covers the fallback path, which must never elide.
+> - `linear` -- decidable arithmetic with a bounding `:pre`; high prove rate.
+> - `congruence` -- the bug shape: two occurrences of one call subtracted, over
+>   a helper pool where half the members declare `#fx{}` and lie.
+> - `param` -- a refined PARAMETER feeding a refined return. Entry checks are
+>   never elided, so this cannot go wrong by elision on its own, but the
+>   parameter predicate becomes a HYPOTHESIS for the return obligation and the
+>   return check IS elided when that discharges.
+> - `propagate` -- RT4 result propagation across a call-site crossing: a refined
+>   result flows into a refined parameter through a caller with its own
+>   refinement. Three obligations per program, all in the elaboration layer --
+>   the layer both known soundness bugs lived in.
+>
+> With all five, ~45% of cases prove at least one obligation (up from ~24% on
+> the first three).
+>
+> **The harness was verified to fail, twice, with different sabotages** -- both
+> at n=200 seed=41, where the shipped build reports zero:
+>
+> - **A: congruence without evidence.** `rt_binding_is_pure` returns `true`.
+>   Reproduces the two historical bugs. Caught 8/200.
+> - **B: entry-check elision done wrong.** `rt_inject_param_checks` returns
+>   early when `g_opt_refined`. This simulates the NEXT planned feature --
+>   whole-program elision of a callee's entry check -- built without the
+>   exported/address-taken analysis that makes it sound. Caught 14/200. That
+>   feature was flagged as the most likely to introduce a real miscompile;
+>   this is now pre-validated coverage for it, and rerunning sabotage B when it
+>   lands is the acceptance test.
+>
+> Results on the shipped build: **3600 cases across eleven seeds, 0 soundness
+> bugs, 0 other BUG classes.** ~1100 obligations proven. ~110 suspicious, of
+> which I read eighteen by hand -- all legitimate universal refutations on
+> programs whose specific arguments dodge the bad case.
 >
 > Registered as ctest `tur_refine_fuzz_src` at smoke size (60 cases, ~21s).
 >

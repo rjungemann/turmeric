@@ -42,15 +42,23 @@ Three weaker properties are checked alongside it:
 Proving the fuzzer can fail
 ---------------------------
 A fuzzer nobody has seen fail is a fuzzer that reports zero because it is
-broken.  To confirm this one has teeth, break purity on purpose and rerun:
+broken.  Two one-line sabotages, both verified to be caught at n=200 seed=41
+where the shipped build reports zero:
 
-    # in src/compiler/elab_fns.c, rt_binding_is_pure:
-    #     return rt_pure_binding(&c, b);   ->   return true;
+  A. Congruence without evidence -- in `rt_binding_is_pure` (elab_fns.c),
+     replace `return rt_pure_binding(&c, b);` with `return true;`.
+     Reproduces the two historical soundness bugs.  Caught: 8/200.
+
+  B. Entry-check elision done wrong -- at the top of `rt_inject_param_checks`,
+     add `if (g_opt_refined) return body;`.  This SIMULATES the next planned
+     feature (whole-program elision of a callee's entry check) implemented
+     without the exported/address-taken analysis that would make it sound.
+     Caught: 14/200.  Worth rerunning when that feature is actually built.
+
     cmake -S . -B build-unsound -DCMAKE_BUILD_TYPE=Debug
     cmake --build build-unsound -j
-    python3 tests/refine-fuzz-src.py --tur ./build-unsound/tur --n 400
+    python3 tests/refine-fuzz-src.py --tur ./build-unsound/tur --n 200 --seed 41
 
-A sabotaged build reports SOUNDNESS bugs; the shipped build must report zero.
 `--self-test` runs a cheaper check of the plumbing (exit-code capture, stdout
 capture, classification) against the pinned regression fixtures.
 
@@ -304,15 +312,76 @@ class Gen:
         _ = truly_pure
         return params, self._target(params, ret_pred, None, body)
 
+    def _zero(self):
+        return "0" if self.mode == "int" else "0.0"
+
+    def bound(self, var):
+        """A simple, decidable bound on `var` -- the kind of hypothesis a
+        refined parameter is actually written to supply."""
+        z, k = self._zero(), self.lit()
+        return self.rng.choice([
+            "(>= %s %s)" % (var, z),
+            "(> %s %s)" % (var, z),
+            "(<= %s %s)" % (var, k),
+            "(and (>= %s %s) (<= %s %s))" % (var, z, var, self.lit()),
+        ])
+
+    def shape_param(self):
+        """A refined PARAMETER feeding a refined return.
+
+        Entry checks are never elided, so this shape cannot go wrong by
+        elision on its own -- but the parameter predicate becomes a HYPOTHESIS
+        for the return obligation, and the return check IS elided when that
+        obligation discharges. If the hypothesis were ever assumed without the
+        check that backs it, this is the shape that would show it."""
+        pp = self.bound("v")
+        body = self.rng.choice([
+            "p0",
+            "(+ p0 %s)" % self.lit(),
+            "(* p0 2)" if self.mode == "int" else "(* p0 2.0)",
+            "(- p0 %s)" % self.lit(),
+        ])
+        rp = "(%s r %s)" % (self.rng.choice(CMP_OPS),
+                            self.rng.choice([self._zero(), self.lit(), "p0"]))
+        return (["p0"],
+                "(defn target [p0 : #refine{ v : %s | %s }] : #refine{ r : %s | %s }\n  %s)"
+                % (self.ty, pp, self.ty, rp, body))
+
+    def shape_propagate(self):
+        """RT4 result propagation across a call-site crossing: a refined result
+        flows into a refined parameter, through a caller that has its own
+        refinement. Three obligations per program, all in the elaboration
+        layer -- the layer both known soundness bugs lived in."""
+        inner_pp = self.bound("v")
+        inner_rp = "(%s r %s)" % (self.rng.choice([">", ">=", "<", "<="]),
+                                  self.rng.choice([self._zero(), self.lit()]))
+        inner_body = self.rng.choice(
+            ["x", "(+ x %s)" % self.lit(),
+             "(* x 2)" if self.mode == "int" else "(* x 2.0)"])
+        outer_pp = self.bound("w")
+        fwd = self.rng.choice(["y", "(+ y %s)" % self.lit()])
+        lines = [
+            "(defn inner [x : #refine{ v : %s | %s }] : #refine{ r : %s | %s }\n  %s)"
+            % (self.ty, inner_pp, self.ty, inner_rp, inner_body),
+            "(defn outer [y : #refine{ w : %s | %s }] : %s\n  (inner %s))"
+            % (self.ty, outer_pp, self.ty, fwd),
+            "(defn target [p0 : %s] : %s\n  (outer p0))" % (self.ty, self.ty),
+        ]
+        return ["p0"], "\n\n".join(lines)
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         r = self.rng.random()
-        if r < 0.34:
+        if r < 0.24:
             params, target = self.shape_random()
-        elif r < 0.72:
+        elif r < 0.50:
             params, target = self.shape_linear()
-        else:
+        elif r < 0.70:
             params, target = self.shape_congruence()
+        elif r < 0.86:
+            params, target = self.shape_param()
+        else:
+            params, target = self.shape_propagate()
         lines.append(target)
         lines.append(self._main(params))
         return "\n\n".join(lines) + "\n"
