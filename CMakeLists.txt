@@ -419,6 +419,17 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_refine_solver"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Source-level differential fuzz: generated programs compiled and run with the
+# `refined` gate off and on, asserting the gate never turns a program the
+# runtime contract caught into one that exits 0.  tur_refine_solver fuzzes
+# BELOW the encoder and is blind to translation bugs; this one starts at the
+# top.  Smoke size here -- run tests/refine-fuzz-src.py directly for a session.
+add_test(
+  NAME tur_refine_fuzz_src
+  COMMAND bash tests/run-refine-fuzz-src.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_refine_fuzz_src PROPERTIES TIMEOUT 600)
 # UC-2: user-level experiments file reader unit test
 # (docs/upcoming/user-config-experiments-plan.md). Standalone executable
 # defined in src/CMakeLists.txt as tur_experiments_user_config.

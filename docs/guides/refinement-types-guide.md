@@ -516,6 +516,39 @@ an abstracted VC implies the concrete obligation holds, but a model that
 assigns an opaque symbol a convenient value proves nothing about the function
 it stands for.
 
+### Source-level differential fuzzing
+
+`tur_refine_fuzz` starts at the VC, *below* the encoder, so it is blind to
+every bug in the translation from Turmeric source into a VC. Both soundness
+bugs found in this work lived exactly there, and neither was visible to it.
+
+`tests/refine-fuzz-src.py` starts at the top instead. It generates whole
+programs, compiles and runs each one with the gate off and on, and compares
+what actually happened. It needs no Z3 -- the oracle is the gate-off build.
+
+```sh
+python3 tests/refine-fuzz-src.py --n 500 --seed 3
+bash tests/run-refine-fuzz-src.sh          # smoke size, also ctest
+```
+
+The property it enforces is the one the design turns on:
+
+> gate-off aborted on a contract  =>  gate-on must not run to completion
+
+plus identical stdout when both run clean, and no gate-on abort on a program
+that ran clean without it. A fourth bucket, `SUSPICIOUS_over_refute`, collects
+programs that run clean with the gate off and are rejected with it on. Those
+are usually *correct*: `TUR-E0371` is universally quantified over a function's
+inputs while the program only exercises the arguments it happens to pass, so a
+sound refutation and a clean run coexist routinely. They are counted and saved
+for triage, never failed on.
+
+To confirm the harness can fail, break purity on purpose (in
+`rt_binding_is_pure`, return `true` unconditionally), rebuild, and rerun: a
+sabotaged compiler reports `BUG_soundness` cases with minimal saved repros.
+A fuzzer nobody has watched fail is a fuzzer that reports zero because it is
+broken.
+
 ---
 
 ## Limits

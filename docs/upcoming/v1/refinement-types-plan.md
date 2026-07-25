@@ -14,7 +14,8 @@
 > | RT2 normalized VC + seam + SMT-LIB | done | `refine_vc.{c,h}`, `refine_smtlib.{c,h}` |
 > | RT3 discharge chain + diagnostics | done | `refine_discharge.{c,h}` |
 > | RT3 Z3 scaffold (dev-only) | done, EXERCISED against Z3 4.13 | `refine_libz3.c`, `TUR_REFINE_Z3_ORACLE` |
-> | RT3 differential fuzzing vs Z3 | done | `tests/unit/refine_fuzz.c` |
+> | RT3 differential fuzzing vs Z3 (VC level) | done | `tests/unit/refine_fuzz.c` |
+> | Source-level differential fuzzing (gate off vs on) | done | `tests/refine-fuzz-src.py` |
 > | S0 trivial | done | `refine_solver_s0.c` |
 > | S1 congruence closure (EUF) | done | `refine_solver_euf.c` |
 > | S2 linear arithmetic | done (Fourier-Motzkin, not simplex -- see below) | `refine_solver_arith.c` |
@@ -433,7 +434,49 @@
 >
 > The general lesson, twice now: the fuzzer works at the VC level, below the
 > encoder, so it is blind to every bug in the translation INTO the VC. Both
-> soundness bugs found so far have lived there.
+> soundness bugs found so far have lived there. Addressed by the source-level
+> fuzzer below.
+>
+> ### Source-level differential fuzzing (landed 2026-07-25)
+>
+> Both soundness bugs so far lived in the encoder, and ~17,300 VC-level fuzz
+> cases were clean through both of them. `tests/unit/refine_fuzz.c` starts
+> below the encoder, so it cannot see anything the encoder gets wrong. That is
+> not a gap in its implementation -- it is the wrong layer.
+>
+> `tests/refine-fuzz-src.py` starts at the top. It generates whole Turmeric
+> programs, compiles and runs each one with `--enable=refined` off and on, and
+> compares outcomes. **The gate-off build is the oracle** -- no Z3 required,
+> which also means this harness runs anywhere the compiler does, unlike the VC
+> fuzzer.
+>
+> Classification (BUG classes fail the run; SUSPICIOUS is report-only):
+>
+> | off | on | verdict |
+> |---|---|---|
+> | abort | clean | `BUG_soundness` -- the miscompile |
+> | clean | clean, different stdout | `BUG_output_divergence` |
+> | clean | abort | `BUG_new_abort` |
+> | clean | reject | `SUSPICIOUS_over_refute` |
+> | abort | abort / reject | agreement |
+> | reject | -- | generator emitted invalid code; case dropped |
+>
+> Three generated shapes, because uniform random generation almost never lands
+> inside the solver's fragment -- a 40-case smoke run proved 2 obligations, and
+> the soundness property has teeth only where a check was actually ELIDED:
+> `random` (fallback-path coverage), `linear` (decidable arithmetic, high prove
+> rate), and `congruence` (the bug shape: two occurrences of the same call
+> subtracted, over a helper pool where half the members declare `#fx{}` and lie).
+> With those, ~24% of cases prove at least one obligation.
+>
+> **The harness was verified to fail.** Sabotaging `rt_binding_is_pure` to
+> return `true` and rerunning the same seed turns 0 soundness bugs into 5 in 80
+> cases, with readable saved repros. Results on the shipped build: 1000 cases
+> across four seeds, **0 soundness bugs, 0 other BUG classes**, ~237 obligations
+> proven, 40 suspicious -- twelve of which I read, all legitimate universal
+> refutations on programs whose specific arguments dodge the bad case.
+>
+> Registered as ctest `tur_refine_fuzz_src` at smoke size (60 cases, ~21s).
 >
 > ### Next slice
 >
