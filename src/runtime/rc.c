@@ -103,6 +103,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
     cb->gc_index = RC_GC_INDEX_NONE;   /* CG0: set by gc_register_block below */
+    cb->gc_buffered = false;           /* CG1: not in the candidate buffer */
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;
@@ -191,6 +192,14 @@ bool rc_strong_decrement(RcControlBlock *cb) {
         }
     }
     
+    /* CG1: the count is still > 0. In classic Bacon-Rajan this is exactly the
+     * edge that reveals a possible cycle root -- dropping an external reference
+     * to a structure that keeps itself alive through its own back-edges. The
+     * pre-CG1 hook only fired at strong->0, which a self-sustaining cycle never
+     * reaches, so no cycle member was ever buffered. Gated on gc_mode so the
+     * default (collector off) path is a single global compare. */
+    if (gc_mode != GC_DISABLED) gc_possible_root(cb);
+
     return false;  /* Value not freed */
 }
 

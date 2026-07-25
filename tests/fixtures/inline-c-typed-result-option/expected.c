@@ -2491,6 +2491,7 @@ struct RcControlBlock {
     uint8_t color;           /* GC color */
     bool may_contain_cycles;  /* Hint for GC */
     uint32_t gc_index;        /* CG0: slot in gc_all_blocks, or RC_GC_INDEX_NONE */
+    bool gc_buffered;         /* CG1: in the candidate-root buffer */
     uint8_t reserved[6];
 };
 
@@ -2553,8 +2554,11 @@ static GcColor gc_get_color(RcControlBlock *cb) {
     return GC_WHITE;
 }
 
+static void gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */
+
 static void gc_register_block(RcControlBlock *cb) {
     if (!cb) return;
+    cb->gc_buffered = false;
     if (gc_all_blocks_count >= gc_all_blocks_capacity) {
         uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u : GC_GLOBAL_REGISTRY_CAPACITY;
         if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {
@@ -2570,6 +2574,7 @@ static void gc_register_block(RcControlBlock *cb) {
 
 static void gc_unregister_block(RcControlBlock *cb) {
     if (!cb) return;
+    gc_remove_suspect(cb);
     uint32_t idx = cb->gc_index;
     if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count || gc_all_blocks[idx] != cb) {
         cb->gc_index = RC_GC_INDEX_NONE; return;
@@ -2583,12 +2588,11 @@ static void gc_unregister_block(RcControlBlock *cb) {
 
 static void gc_add_suspect(RcControlBlock *cb) {
     if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;
-    for (uint32_t i = 0; i < gc_suspect_count; i++) {
-        if (gc_suspect_roots[i] == cb) return;
-    }
+    if (cb->gc_buffered) return;
     if (gc_suspect_count >= gc_suspect_capacity) {
         if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;
     }
+    cb->gc_buffered = true;
     gc_suspect_roots[gc_suspect_count++] = cb;
     cb->color = GC_PURPLE;
     /* Threshold mode: auto-collect when buffer is full */
@@ -2598,14 +2602,15 @@ static void gc_add_suspect(RcControlBlock *cb) {
 }
 
 static void gc_remove_suspect(RcControlBlock *cb) {
-    if (!cb) return;
+    if (!cb || !cb->gc_buffered) return;
     for (uint32_t i = 0; i < gc_suspect_count; i++) {
         if (gc_suspect_roots[i] == cb) {
             gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
             gc_suspect_count--;
-            return;
+            break;
         }
     }
+    cb->gc_buffered = false;
 }
 
 static void gc_on_strong_decrement(RcControlBlock *cb) {
@@ -2724,6 +2729,7 @@ bool rc_strong_decrement(RcControlBlock *cb) {
             return true;
         }
     }
+    if (gc_mode != GC_DISABLED) gc_add_suspect(cb);
     return false;
 }
 
@@ -2868,11 +2874,9 @@ static void gc_trial_deletion_phase(void) {
             cb->drop_fn(cb->value);
             cb->value = NULL;
         }
+        gc_remove_suspect(cb);
         /* Unregister from global registry (cb stays alive for weak refs) */
         gc_unregister_block(cb);
-        /* Remove from suspect buffer without advancing i */
-        gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
-        gc_suspect_count--;
     }
 }
 

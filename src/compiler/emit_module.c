@@ -9047,6 +9047,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    uint8_t color;           /* GC color */\n");
     buf_puts(out, "    bool may_contain_cycles;  /* Hint for GC */\n");
     buf_puts(out, "    uint32_t gc_index;        /* CG0: slot in gc_all_blocks, or RC_GC_INDEX_NONE */\n");
+    buf_puts(out, "    bool gc_buffered;         /* CG1: in the candidate-root buffer */\n");
     buf_puts(out, "    uint8_t reserved[6];\n");
     buf_puts(out, "};\n\n");
     /* Phase 9: Deferred free queue to avoid deep recursion in rc_strong_decrement */
@@ -9107,8 +9108,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (cb) return cb->color;\n");
     buf_puts(out, "    return GC_WHITE;\n");
     buf_puts(out, "}\n\n");
+    /* CG1: gc_unregister_block drops the block from the candidate buffer, but
+     * gc_remove_suspect is emitted further down -- forward-declare it. */
+    buf_puts(out, "static void gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */\n\n");
     buf_puts(out, "static void gc_register_block(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    cb->gc_buffered = false;\n");
     buf_puts(out, "    if (gc_all_blocks_count >= gc_all_blocks_capacity) {\n");
     buf_puts(out, "        uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u : GC_GLOBAL_REGISTRY_CAPACITY;\n");
     buf_puts(out, "        if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {\n");
@@ -9125,6 +9130,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * so the old linear scan was quadratic in a long-running program. */
     buf_puts(out, "static void gc_unregister_block(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return;\n");
+    /* CG1 safety: a freed block must leave the candidate buffer, or the next
+     * collection dereferences freed memory. */
+    buf_puts(out, "    gc_remove_suspect(cb);\n");
     buf_puts(out, "    uint32_t idx = cb->gc_index;\n");
     buf_puts(out, "    if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count || gc_all_blocks[idx] != cb) {\n");
     buf_puts(out, "        cb->gc_index = RC_GC_INDEX_NONE; return;\n");
@@ -9138,12 +9146,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase 10: Suspect buffer management (before rc_strong_decrement) */
     buf_puts(out, "static void gc_add_suspect(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;\n");
-    buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
-    buf_puts(out, "        if (gc_suspect_roots[i] == cb) return;\n");
-    buf_puts(out, "    }\n");
+    /* CG1: O(1) dedup via the classic `buffered` flag -- the old linear scan
+     * would be quadratic now that every non-zero strong decrement offers a
+     * candidate root. */
+    buf_puts(out, "    if (cb->gc_buffered) return;\n");
     buf_puts(out, "    if (gc_suspect_count >= gc_suspect_capacity) {\n");
     buf_puts(out, "        if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    cb->gc_buffered = true;\n");
     buf_puts(out, "    gc_suspect_roots[gc_suspect_count++] = cb;\n");
     buf_puts(out, "    cb->color = GC_PURPLE;\n");
     buf_puts(out, "    /* Threshold mode: auto-collect when buffer is full */\n");
@@ -9152,14 +9162,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_remove_suspect(RcControlBlock *cb) {\n");
-    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    if (!cb || !cb->gc_buffered) return;\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
     buf_puts(out, "        if (gc_suspect_roots[i] == cb) {\n");
     buf_puts(out, "            gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
     buf_puts(out, "            gc_suspect_count--;\n");
-    buf_puts(out, "            return;\n");
+    buf_puts(out, "            break;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    cb->gc_buffered = false;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_on_strong_decrement(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return;\n");
@@ -9270,6 +9281,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            return true;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
+    /* CG1: count still > 0 -- the edge a self-sustaining cycle produces, which
+     * the old zombie-only hook never saw. Gated on gc_mode so the default
+     * (collector off) path is a single global compare. */
+    buf_puts(out, "    if (gc_mode != GC_DISABLED) gc_add_suspect(cb);\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%suint64_t rc_weak_increment(RcControlBlock *cb) {\n", rt_fn);
@@ -9418,11 +9433,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            cb->drop_fn(cb->value);\n");
     buf_puts(out, "            cb->value = NULL;\n");
     buf_puts(out, "        }\n");
+    /* CG1: remove from the suspect buffer via gc_remove_suspect (which also
+     * clears cb->gc_buffered) BEFORE unregistering. The old code open-coded the
+     * swap-remove here; now that gc_unregister_block also drops the block from
+     * the buffer, doing both would decrement gc_suspect_count twice and walk the
+     * loop off the end of the buffer. `i` is deliberately not advanced -- the
+     * swap moved a new element into slot i. */
+    buf_puts(out, "        gc_remove_suspect(cb);\n");
     buf_puts(out, "        /* Unregister from global registry (cb stays alive for weak refs) */\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
-    buf_puts(out, "        /* Remove from suspect buffer without advancing i */\n");
-    buf_puts(out, "        gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
-    buf_puts(out, "        gc_suspect_count--;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_collect(void) {\n");

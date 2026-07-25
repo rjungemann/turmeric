@@ -84,6 +84,12 @@ struct RcControlBlock {
      * linear scan -- which matters because EVERY rc free unregisters, even
      * with the collector disabled. */
     uint32_t gc_index;
+    /* CG1: true while this block sits in the suspect/candidate-root buffer.
+     * Classic Bacon-Rajan `buffered` flag -- gives O(1) dedup on the
+     * PossibleRoot path, which now fires on EVERY strong decrement that leaves
+     * the count > 0. The old linear scan over the buffer would have made that
+     * quadratic. */
+    bool gc_buffered;
     /* EXG5: layout tag bytes -- reserved[0] is the high-level kind
      * (one of RCK_*), reserved[1] is the payload descriptor for
      * RCK_EXISTENTIAL blocks (one of RCEXP_*).  The remaining bytes

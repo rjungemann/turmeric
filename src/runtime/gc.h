@@ -52,6 +52,17 @@ void gc_shutdown(void);
 /* Called when strong count reaches 0 on a control block */
 void gc_on_strong_decrement(RcControlBlock *cb);
 
+/* CG1: classic Bacon-Rajan PossibleRoot. Called on a strong decrement that
+ * leaves the count > 0 -- the edge a self-sustaining cycle actually produces,
+ * and the one the old zombie-only hook never saw. Colors the block PURPLE and
+ * buffers it as a candidate root (O(1), deduped via cb->gc_buffered).
+ *
+ * Buffering alone does not reclaim anything: the mark phase still treats every
+ * block with strong_count > 0 as a root, so candidates are re-blackened each
+ * collection. CG2 replaces that phase with real trial deletion, which is what
+ * turns these candidates into collected garbage. */
+void gc_possible_root(RcControlBlock *cb);
+
 /* Main collection function - runs the Bacon-Rajan algorithm */
 void gc_collect(void);
 

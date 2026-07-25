@@ -1,7 +1,9 @@
 # Cycle-Collecting GC -- Reaching Past Rust (CG0--CG8)
 
-> **Status:** CG0 landed 2026-07-25 (dynamic buffers + registry, plus an O(1)
-> unregister); CG1-CG8 not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
+> **Status:** CG0 + CG1 landed 2026-07-25 (dynamic buffers + registry with an
+> O(1) unregister; classic PossibleRoot candidate buffering). CG2 -- real
+> trial deletion, the phase that actually reclaims cycles -- is next and is what
+> makes CG1's buffered candidates observable. CG2-CG8 not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
 > `src/runtime/gc.h`, colors + modes + suspect buffer + a global block registry
 > + `mark_phase`/`trial_deletion_phase`), but as wired it only reclaims the
 > **weak-zombie** case (strong->0 while weak>0). It cannot collect a live
@@ -143,7 +145,44 @@ made leaks visible is gone. Measure cycle garbage with heap growth (or the
 registry count), not LSan. See the Measured section of
 `docs/reported/gc-strong-cycles-not-collected.md`.
 
-### CG1 -- Candidate buffering (classic `PossibleRoot`)
+### CG1 -- Candidate buffering (classic `PossibleRoot`) [DONE 2026-07-25]
+
+**Landed.** `rc_strong_decrement` now calls `gc_possible_root` on the branch
+where the count stays **> 0** -- the edge a self-sustaining cycle actually
+produces, and the one the old zombie-only hook could never see. Gated on
+`gc_mode` so the default (collector off) path costs a single global compare.
+
+Two things this forced, both of which would have been bugs on their own:
+
+- **O(1) dedup.** `gc_add_suspect` deduped with a linear scan of the whole
+  buffer. That was tolerable when only zombies were buffered, but CG1 offers a
+  candidate on *every* non-zero decrement, which would have made it quadratic.
+  Each block now carries the classic Bacon-Rajan `buffered` flag
+  (`RcControlBlock.gc_buffered`).
+- **Freed blocks must leave the buffer.** Before CG1 only zombies were buffered,
+  and they were freed through a path that had already removed them. Now ordinary
+  blocks are buffered and are freed the moment their strong count hits 0, so
+  `gc_unregister_block` drops the block from the candidate buffer -- otherwise
+  the next collection would dereference freed memory.
+
+That second change collided with the **emitted** trial-deletion loop, which
+open-coded its own swap-remove instead of calling `gc_remove_suspect`: both ran,
+`gc_suspect_count` decremented twice, and the loop walked off the buffer --
+a segfault in three zombie fixtures (`gc-mixed`, `gc-cycle-freed`, `gc-stress`).
+The emitted loop now uses `gc_remove_suspect` like the runtime copy does. Worth
+noting the runtime `gc.c` was correct throughout; only the emitted copy diverged.
+
+**This changes no collection outcome yet, by design.** The mark phase still
+treats every `strong_count > 0` block as a root, so buffered candidates are
+re-blackened each cycle and survive. CG2 (real trial deletion) is what turns
+these candidates into reclaimed garbage; CG1 is the edge that makes them
+*visible* to it.
+
+Guarded by `tests/fixtures/gc-candidate-buffering` (suspect count 0 before a
+strong cycle is built, > 0 after), validated by removing the hook and confirming
+the fixture fails.
+
+*Original phase text:*
 
 Add the textbook Bacon-Rajan hook: on a strong *decrement that leaves the count
 > 0*, color the block PURPLE and buffer it as a candidate root (dedup against

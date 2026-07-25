@@ -110,12 +110,11 @@ static bool gc_add_suspect(RcControlBlock *cb) {
         return false;
     }
 
-    /* Check if already in suspect buffer */
-    for (uint32_t i = 0; i < gc_suspect_count; i++) {
-        if (gc_suspect_roots[i] == cb) {
-            return true;  /* Already tracked */
-        }
-    }
+    /* CG1: O(1) dedup via the classic `buffered` flag. This used to be a linear
+     * scan of the whole buffer, which was tolerable when only zombies were
+     * buffered but would be quadratic now that every non-zero strong decrement
+     * offers a candidate root. */
+    if (cb->gc_buffered) return true;
 
     /* CG0: at the force-collection watermark, try to drain the buffer first;
      * if collection cannot shrink it, GROW rather than drop the suspect (the
@@ -132,6 +131,7 @@ static bool gc_add_suspect(RcControlBlock *cb) {
     }
 
     /* Add to suspect buffer */
+    cb->gc_buffered = true;
     gc_suspect_roots[gc_suspect_count++] = cb;
     gc_set_color(cb, GC_PURPLE);
 
@@ -145,6 +145,7 @@ static bool gc_add_suspect(RcControlBlock *cb) {
 
 static void gc_remove_suspect(RcControlBlock *cb) {
     if (!cb) return;
+    if (!cb->gc_buffered) return;   /* CG1: not in the buffer, nothing to scan */
 
     for (uint32_t i = 0; i < gc_suspect_count; i++) {
         if (gc_suspect_roots[i] == cb) {
@@ -154,6 +155,7 @@ static void gc_remove_suspect(RcControlBlock *cb) {
             break;
         }
     }
+    cb->gc_buffered = false;
 }
 
 /* ========== Work queue management ========== */
@@ -242,6 +244,7 @@ static uint32_t gc_all_blocks_capacity = 0;
 /* Register a newly allocated control block */
 void gc_register_block(RcControlBlock *cb) {
     if (!cb) return;
+    cb->gc_buffered = false;   /* CG1: fresh block is not in the candidate buffer */
     if (gc_all_blocks_count >= gc_all_blocks_capacity) {
         uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u
                                                : GC_GLOBAL_REGISTRY_INITIAL_CAPACITY;
@@ -264,6 +267,12 @@ void gc_register_block(RcControlBlock *cb) {
  * all live blocks was quadratic in a long-running program. */
 void gc_unregister_block(RcControlBlock *cb) {
     if (!cb) return;
+    /* CG1 (safety): drop it from the candidate-root buffer too. Before CG1 only
+     * zombies were buffered and they were freed via a path that had already
+     * removed them; now ordinary blocks are buffered and are freed the moment
+     * their strong count hits 0, so leaving a stale pointer here would make the
+     * next collection read freed memory. */
+    gc_remove_suspect(cb);
     uint32_t idx = cb->gc_index;
     if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count ||
         gc_all_blocks[idx] != cb) {
@@ -412,6 +421,13 @@ void gc_collect(void) {
 }
 
 /* Called when strong count reaches 0 */
+/* CG1: classic Bacon-Rajan PossibleRoot -- see gc.h for why this is the edge
+ * that matters for strong cycles. */
+void gc_possible_root(RcControlBlock *cb) {
+    if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;
+    gc_add_suspect(cb);   /* colors PURPLE and buffers, O(1)-deduped */
+}
+
 void gc_on_strong_decrement(RcControlBlock *cb) {
     if (!gc_enabled || gc_mode == GC_DISABLED || !cb) {
         return;
