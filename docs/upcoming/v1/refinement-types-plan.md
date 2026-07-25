@@ -896,6 +896,53 @@
 > branching body vanished from the summary entirely -- four refined functions
 > reported as one obligation.
 >
+> ### Whole-program entry-check elision: measured, declined (2026-07-25)
+>
+> This was the top of the list for months on the strength of a claim nobody
+> had checked -- that eliding a proved callee's entry check is a "code-size /
+> perf win". It is not, on either count.
+>
+> **Runtime: unmeasurable.** A 50M-iteration loop whose body cc genuinely
+> cannot eliminate (the callee writes a `volatile` static, so every iteration
+> must run) calling a function with a `#refine{ v : int | (>= v 0) }`
+> parameter:
+>
+> | | run 1 | run 2 | run 3 |
+> |---|---|---|---|
+> | entry checks ON | 125 ms | 125 ms | 126 ms |
+> | `--no-contracts` | 125 ms | 125 ms | 127 ms |
+>
+> **Code size: zero bytes.** Same binary size with and without every contract
+> check; the emitted C differs by 9 lines out of 7219.
+>
+> The check is a compare and a branch that predicts perfectly. There is no win
+> here to collect.
+>
+> Two benchmarking traps worth recording, because both produced confident
+> wrong answers before the volatile version:
+>
+> - `cc -O2` **proves the check itself** when the argument is locally derived
+>   (`(step (if (>= acc 0) acc 0))`), so the elision that whole-program
+>   analysis would do is already done, for free, by the C compiler.
+> - `cc -O2` **closed-formed the loop**: a 200M-iteration arithmetic series ran
+>   in 3 ms. The answers were correct, which is exactly why the number looked
+>   plausible. Any benchmark here needs a side effect the optimizer must keep.
+> - A size comparison on a 200-refined-function file showed byte-identical
+>   binaries -- but that was dead-code elimination removing 199 functions
+>   `main` never calls, not evidence about checks. The valid size number is
+>   the one from the live loop above.
+>
+> Against zero measured benefit stands the largest soundness surface in the
+> feature: it needs an exported/address-taken analysis, and getting it wrong
+> drops a check that was protecting something. Fuzzer sabotage B already
+> quantifies that -- eliding entry checks naively produces 14 soundness bugs
+> in 200 generated programs.
+>
+> **Declined.** Revisit only with a profile from a real project showing entry
+> checks in the hot path. The call-site layer stays what it is: a diagnostic
+> that turns `(safe-div 10 0)` into a compile error, which is where its value
+> actually was.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -918,9 +965,9 @@
 >   name in scope currently declines to split (the hypothesis `x = v` would be
 >   a contradiction in the flat namespace). Renaming the binding recovers those
 >   bodies. `match` arms are the same shape and would follow.
-> - **Whole-program entry-check elision** -- the piece that turns the call-site
->   layer from a diagnostic into a code-size/perf win. Needs an
->   exported/address-taken analysis before it can be sound.
+> - ~~**Whole-program entry-check elision**~~ -- MEASURED AND DECLINED, see
+>   below. It buys nothing measurable and carries the feature's largest
+>   soundness surface.
 >
 > ---
 
