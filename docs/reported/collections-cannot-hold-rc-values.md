@@ -206,7 +206,44 @@ never referenced from inside `hamt.c`. The code is already shaped for it: keys
 do exactly this (`m->key_ops.release`), and the value side hardcodes
 `tur_hamt_box_release` in `tur_hamt_free` only because there has only ever been
 one value-box op. Making the value ops symmetric with the key ops is the
-enabling refactor, and it is behaviour-preserving for the existing bit-1 path.
+enabling refactor.
+
+**Attempted 2026-07-25 and reverted -- read this before trying again.** The
+refactor looks purely structural (`bool val_owned` -> a stored
+`tur_hamt_val_ops`, with `hamt_alloc_empty` / `hamt_copy` / `tur_hamt_free` /
+the `_o` wrappers updated to match) and the full suite passes with it. It is
+**not** behaviour-preserving. Measured under ASan+LSan on
+`tests/fixtures/map-move-typed-value`:
+
+| | leaked |
+| --- | --- |
+| baseline | 528 bytes in 7 allocations |
+| after the refactor | 856 bytes in 9 allocations |
+
+Deterministic across runs, and two allocation groups doubled in *object count*,
+so it is not struct-size growth (the struct does grow 8 bytes, which accounts
+for the separate 96 -> 112 direct-leak movement and is benign). Two extra
+objects survive to exit that did not before.
+
+Three hypotheses were tried and each disproved by measurement: that the
+"incoming map's stored ops win over the flag" precedence change caused it
+(removing it changed nothing); that some `Hamt` allocation site skipped the new
+field's initialisation (all of them route through `hamt_alloc_empty`); and that
+unconditionally assigning the thread-local hooks clobbered an enclosing
+operation's (restoring the original conditional install changed nothing). The
+cause is still unknown.
+
+Whoever picks this up: **bisect the edit mechanically rather than reasoning
+about it** -- the four changed sites are `hamt_alloc_empty`, the two
+`hamt_copy` inherits, `tur_hamt_free`'s release-op selection, and the `_o`
+wrappers -- and gate every step on the ASan number above, not on the suite. The
+suite is green on both sides of this bug, which is exactly why it went unnoticed
+for as long as it took to run the leak check.
+
+Worth noting for its own sake: those 528 baseline bytes are a pre-existing leak.
+The fixtures never free their maps, and a persistent map that is never freed
+leaks by design -- so the number is a *baseline to hold*, not a target to
+reach.
 
 **Wrong claim 2 -- and this one sat in front of all of it:
 `map-assoc` could not take a move-typed value at all. FIXED 2026-07-25.**
@@ -245,7 +282,7 @@ boxing decision -- a botched peel fails silently, folding to "narrow" and storin
 a wide value inline. Two snapshots regenerated for the extra binding.
 
 Order of work, then: ~~(a) let `map-assoc` accept a move-typed value~~ **(a)
-done**; (b) make the
+done**; (b) -- attempted and reverted, see above -- make the
 HAMT's value ops caller-supplied and stored, symmetric with the key ops;
 (c) thread bit 2 through `map.tur` passing `rc_strong_increment` /
 `rc_strong_decrement` from the emitted side; (d) register the map insert/read
