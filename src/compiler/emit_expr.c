@@ -2950,9 +2950,40 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             int dst_size = reinterpret_kind_size_bytes(dst_kind);
             if (!reinterpret_kind_is_scalar(src_kind) || !reinterpret_kind_is_scalar(dst_kind) ||
                 src_size <= 0 || dst_size <= 0) {
-                fprintf(stderr,
-                        "tur: emit: invalid EX_REINTERPRET %s -> %s\n",
-                        typekind_to_string(src_kind), typekind_to_string(dst_kind));
+                /* collections-cannot-hold-rc-values: the common way to reach
+                 * here is storing an owning value in a collection --
+                 * `(vec-of (rc/clone a))`, `(hamt-of :k some-rc)`.  Elements go
+                 * through an int64 carrier and rc/weak/ref have no
+                 * reinterpretation to it.  The bare "invalid EX_REINTERPRET
+                 * rc -> int" gave no hint that an ordinary program, not a
+                 * compiler invariant, was at fault.
+                 *
+                 * This is still an abort with no span: the emit layer has no
+                 * diagnostic channel (no diag_emit call exists in it), so a
+                 * proper span'd error has to be raised earlier.  vec-of is a
+                 * macro rather than a variadic defn, so the rest-arg check in
+                 * elab_call.c is not the right hook either -- finding the right
+                 * one is the open half of the report. */
+                bool owning_src = src_kind == TY_RC || src_kind == TY_WEAK ||
+                                  src_kind == TY_REF || src_kind == TY_LREF;
+                bool owning_dst = dst_kind == TY_RC || dst_kind == TY_WEAK ||
+                                  dst_kind == TY_REF || dst_kind == TY_LREF;
+                if (owning_src || owning_dst) {
+                    fprintf(stderr,
+                            "tur: cannot store an owning value (%s) through the "
+                            "int64 element carrier -- collections (vec, map/hamt) "
+                            "cannot hold %s today.\n"
+                            "  Store a plain handle instead, or keep the %s "
+                            "outside the collection.\n"
+                            "  See docs/reported/collections-cannot-hold-rc-values.md\n",
+                            typekind_to_string(owning_src ? src_kind : dst_kind),
+                            typekind_to_string(owning_src ? src_kind : dst_kind),
+                            typekind_to_string(owning_src ? src_kind : dst_kind));
+                } else {
+                    fprintf(stderr,
+                            "tur: emit: invalid EX_REINTERPRET %s -> %s\n",
+                            typekind_to_string(src_kind), typekind_to_string(dst_kind));
+                }
                 abort();
             }
 

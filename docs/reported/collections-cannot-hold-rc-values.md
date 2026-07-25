@@ -63,10 +63,22 @@ storage path.
 
 Roughly in increasing order of work:
 
-1. **Diagnose it properly.** Today it is a bare `tur: emit:` line with no span,
-   which is a poor error for something a user hits by writing an ordinary
-   program. A type-checker rejection with a source span and a "collections
-   cannot yet hold `rc<T>`" message would at least be honest.
+1. ~~**Diagnose it properly.**~~ **Partially done 2026-07-25.** The message now
+   names the real constraint and points here:
+
+   ```
+   tur: cannot store an owning value (rc) through the int64 element carrier --
+   collections (vec, map/hamt) cannot hold rc today.
+     Store a plain handle instead, or keep the rc outside the collection.
+     See docs/reported/collections-cannot-hold-rc-values.md
+   ```
+
+   **Still an abort with no span**, which is the part that remains open. The
+   emit layer has no diagnostic channel at all -- there is no `diag_emit` call
+   anywhere in it -- so a span'd error must be raised earlier. The obvious hook
+   is wrong: `vec-of` is a *macro*, not a variadic defn, so the polymorphic
+   rest-arg check in `elab_call.c` never sees it (tried, and it never fired).
+   Finding the right elaboration-time hook is the remaining work.
 2. **Box the element.** Store `rc<T>` elements as their control-block pointer
    with the collection owning a strong reference -- taking a count on insert and
    releasing on removal/teardown. This is the shape the existing
