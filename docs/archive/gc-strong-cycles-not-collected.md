@@ -19,9 +19,18 @@ refcount). Re-measured on the probe from the Measured section: **192 bytes per
 cycle -> 0**, with a GC-off control still leaking ~192 B/cycle. Guarded by
 `tests/fixtures/gc-collects-strong-cycle`.
 
-Related defect 1 (registry overflow) was fixed by CG0. Related defect 2 (trial
-deletion dangling live weak pointers) is also addressed: a collected block with
-`weak_count > 0` is kept as a zombie so `upgrade` returns none.
+Related defect 1 (registry overflow) was fixed by CG0.
+
+Related defect 2 (trial deletion dangling live weak pointers): the CG2 note here
+originally claimed this was fixed too. That was **overstated** -- CG2 gave the
+zombie discipline to its *new* cycle-collection phase, but the legacy zombie
+sweep in `src/runtime/gc.c` still zeroed `weak_count` and freed the block.
+Notably the *emitted* preamble had always done the right thing, so no compiled
+fixture could catch it; the defect lived only in the runtime library used by the
+interpreter and libturi embedders. Fixed for real by **CG4 (2026-07-25)**: the
+value is dropped but the control block survives while any `weak<T>` can still
+observe it, so `upgrade` reports "gone" instead of dangling, and
+`rc_weak_decrement` frees it once the last weak reference goes away.
 
 Still true, and now the accurate caveat: the collector only sees what the walker
 sees, so a cycle routed through an `RCK_OPAQUE` handle is still not collected

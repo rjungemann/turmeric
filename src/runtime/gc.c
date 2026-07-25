@@ -378,27 +378,27 @@ static void gc_trial_deletion_phase(void) {
         gc_remove_suspect(cb);
         gc_unregister_block(cb);
 
-        /* Decrement weak count and free if both counts are 0 */
-        /* Note: we need to be careful here - weak pointers might still exist */
-        /* For v1, we just free immediately since we're removing from suspect */
+        /* CG4: honour the zombie contract the rest of RC upholds.
+         *
+         * This used to force the block away even with live weak<T> observers:
+         * it zeroed weak_count and freed the control block, so the next
+         * upgrade() (or the last rc_weak_decrement) touched freed memory. The
+         * emitted preamble in emit_module.c already did the right thing here --
+         * this copy was the one that diverged.
+         *
+         * Correct behavior: drop the VALUE (it is genuinely dead) but keep the
+         * control block alive while any weak reference can still observe it, so
+         * upgrade() reports "gone" instead of dangling. rc_weak_decrement frees
+         * the block once the last weak reference goes away. */
+        if (cb->value) {
+            cb->drop_fn(cb->value);
+            cb->value = NULL;
+        }
         if (cb->weak_count == 0) {
-            /* No weak references - free immediately */
-            if (cb->value) {
-                cb->drop_fn(cb->value);
-            }
-            free(cb);
-            gc_objects_freed++;
-        } else {
-            /* Has weak references - decrement weak count for each
-             * For v1, we don't track individual weak pointers,
-             * so we just set weak_count to 0 to force free */
-            cb->weak_count = 0;
-            if (cb->value) {
-                cb->drop_fn(cb->value);
-            }
             free(cb);
             gc_objects_freed++;
         }
+        /* weak_count > 0: leave the zombie block for rc_weak_decrement. */
     }
 }
 

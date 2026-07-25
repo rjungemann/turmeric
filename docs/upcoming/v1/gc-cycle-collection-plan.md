@@ -308,7 +308,35 @@ walker. Document `RCK_OPAQUE` as the accepted blind spot (a cycle routed only
 through a raw C handle is not collected -- exactly Rust's `*mut` situation).
 Emit a lint/warning when a `defstruct` with rc fields is boxed without a walker.
 
-### CG4 -- Correct weak handling in collection
+### CG4 -- Correct weak handling in collection [DONE 2026-07-25]
+
+**Landed.** The legacy zombie sweep in `src/runtime/gc.c` force-freed a block
+that still had live `weak<T>` observers -- it zeroed `weak_count` and freed the
+control block, so the next `upgrade()` (or the final `rc_weak_decrement`) read
+freed memory. It now drops the *value* but keeps the control block alive while
+any weak reference can still observe it; `rc_weak_decrement` frees it when the
+last one goes.
+
+Two things worth recording:
+
+- **CG2's resolution note overclaimed this.** CG2 gave the zombie discipline to
+  its new cycle-collection phase only; this legacy path was untouched. The
+  archived report has been corrected rather than left to imply a fix that had
+  not happened.
+- **The two GC copies had diverged again, with the runtime being the wrong
+  one.** The emitted preamble in `emit_module.c` had always kept the block for
+  weak refs, so no compiled fixture could ever catch this -- the defect was
+  reachable only through the runtime library (the interpreter and libturi
+  embedders). CG1's divergence ran the other way. Divergence between the two
+  copies has now caused three separate bugs; a shared-source or generated-from-
+  one-source arrangement is worth considering (noted for CG7).
+
+Verified with a runtime-level ASan test: after collection `rc_is_alive` is
+false, `rc_upgrade` returns NULL rather than dangling, the block survives with
+`weak_count == 1`, and the final `rc_weak_decrement` frees it cleanly. No
+snapshot churn -- this copy is not emitted.
+
+*Original phase text:*
 
 When CollectWhite frees a cycle member that still has `weak_count > 0`, follow
 the RC zombie contract instead of the current force-zero (`gc.c:335`): run the
