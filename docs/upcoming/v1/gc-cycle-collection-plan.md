@@ -363,7 +363,52 @@ collection (count in, freed, survived). This is what makes "run the suite and
 see how much garbage accumulates" actually answerable -- today the counters
 exist (`gc.c:37-38`) but nothing surfaces them.
 
-### CG7 -- Test corpus + runtime leak-checking
+### CG7 -- Test corpus + runtime leak-checking [IN PROGRESS 2026-07-25]
+
+**Done so far: the missing negative test.** `tests/fixtures/gc-live-cycle-survives`
+covers the direction that matters most and was previously untested -- a cycle
+still reachable from a **live external root** must NOT be collected. This is the
+failure mode that is far worse than a leak: MarkGray subtracts the in-cycle
+edges, and if an external reference is not correctly accounted for, the cycle
+falls to a zero trial count and is freed while the program still holds it -- a
+use-after-free on live data. The pre-existing `gc-no-false-positives` only
+covered a plain live `rc` with no cycle at all.
+
+The fixture asserts both halves of the correctness statement: with roots live
+the cycle survives collection *and stays readable afterwards* (reading through
+it is what would expose a wrongly-freed block), and with roots gone the same
+shape is reclaimed. Verified clean under ASan as well as in the suite.
+
+**Assessment: de-duplicating the two GC copies (added to this phase).**
+Divergence between `src/runtime/gc.c` and the copy emitted by
+`emit_module.c` has now produced **three** bugs -- CG1's double suspect-removal
+(emitted copy wrong), CG3's `:heap` mis-cast (surfaced differently per copy), and
+CG4's weak force-free (runtime copy wrong). Each was invisible to half the test
+suite *by construction*: compiled fixtures exercise only the emitted copy, and
+the interpreter/libturi embedders exercise only the runtime copy.
+
+Scale of the duplication: ~949 lines of `gc.c` + `rc.c` against ~436 `buf_puts`
+lines emitting equivalent logic. Every GC change so far has had to be written
+twice, by hand, in two different notations.
+
+A concrete de-dup path exists and is worth costing out: `libturi.a` already
+exports `gc_collect`, and `--runtime=lib` already replaces emitted runtime
+sources with an archive link. What blocks it today is that AUTO mode links only
+the **lean** `libturt_runtime.a`, which does not contain the GC (verified: zero
+GC symbols). So the shape of the fix is *"move rc/gc into the lean runtime
+archive and have the preamble link it instead of inlining a copy"* -- not a new
+mechanism, just extending one that exists. That would also delete the
+`RcControlBlock`-layout-must-match-in-two-places hazard that CG0/CG1/CG2 each had
+to navigate.
+
+**Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
+fixtures for cycles through `vec`/`map`/closure payloads (currently the
+`RCK_OPAQUE` blind spot -- these would assert the *documented* non-collection);
+the opt-in `detect_leaks=1` harness for compiled binaries with a collector-off
+companion run. Thread-safety of the global buffers under `arc<T>` remains
+explicitly out of scope.
+
+*Original phase text:*
 
 - Promote `tests/fixtures/exg5-exists-cycle` from "documents non-collection" to
   a **collection** assertion (its own header already describes the topology).
