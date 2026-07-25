@@ -57,6 +57,33 @@ VCSort rt_sort_of_kind(TypeKind k) {
  * like a defn's rather than being silently decorative.  Returns the new body
  * (the original when nothing was injected).  Must run while the function's
  * inner scope is still current -- the predicate is elaborated in it. */
+static bool rt_expr_definitely_impure(const Expr *x);
+
+/* CT1: a contract predicate whose EVALUATION does something observable.
+ *
+ * Checks are conditional on the build: `--no-contracts` strips them, a release
+ * build drops them unless --keep-contracts, and `--enable=refined` elides the
+ * ones it can prove.  A predicate with side effects therefore makes program
+ * behaviour depend on whether its own contracts were compiled in --
+ * `(>= (tick) 0)` advances a counter every time it is checked and not at all
+ * when it is not.  That is a bug in the contract, not in any of those flags.
+ *
+ * Reported only on PROVEN impurity (`RT_P_IMPURE`), never on a predicate the
+ * walk merely does not model, so a measure written with a `match` or a field
+ * read is left alone.  That asymmetry is why the classifier is three-valued.
+ *
+ * Gate-independent on purpose: the predicate is equally wrong with the
+ * refinement experiment off. */
+static void rt_diag_impure_pred(Elab *e, const Expr *pred_e, Span span) {
+    (void)e;
+    if (!pred_e || !rt_expr_definitely_impure(pred_e)) return;
+    diag_emit_with_code(DIAG_ERROR, span, TUR_E0375_REFINE_EFFECTFUL,
+        "contract predicate has side effects; predicates must be pure");
+    diag_emit(DIAG_NOTE, span,
+        "evaluating this predicate changes program state, so whether the "
+        "check is compiled in becomes observable");
+}
+
 Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
                                     Binding **params, uint32_t n_params,
                                     const Form **ct_preds, const char **ct_vars,
@@ -83,6 +110,7 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
         }
         Expr *pred_e = elab_form(e, (Form *)ct_preds[ci]);
         if (!pred_e) continue;
+        rt_diag_impure_pred(e, pred_e, span);
 
         Expr *check_expr = pred_e;
         if (cv_b) {
@@ -149,6 +177,7 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     scope_add(e->scope, result_b);
     Expr *pred_e = elab_form(e, (Form *)pred);
     if (!pred_e) return body;
+    rt_diag_impure_pred(e, pred_e, span);
 
     Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
     args[0] = pred_e;
@@ -194,30 +223,47 @@ bool rt_contracts_emitted(void) {
 }
 
 /* ------------------------------------------------------------------------- *
- * RT4 purity -- may two occurrences of a call be modelled as the same value?
+ * RT4 purity -- a THREE-valued classification, because two questions are
+ * asked of it and they want OPPOSITE conservatism.
  *
- * Congruence ("same arguments => same result, and nothing observable changed")
- * is what lets the encoder turn two occurrences of `(len xs)` into one term.
- * Assume it wrongly and a real check gets elided: `(- (tick) (tick))` with a
- * counter-bumping `tick` encodes as `t - t`, the solver proves `t - t >= 0`,
- * and a program that actually returns -1 ships with no check.  That is a
- * miscompile, so the evidence for purity has to be real.
+ * 1. CONGRUENCE: "may two occurrences of this call be modelled as the same
+ *    value?"  Answering yes wrongly elides a real check -- `(- (tick) (tick))`
+ *    with a counter-bumping `tick` encodes as `t - t`, the solver proves
+ *    `t - t >= 0`, and a program that returns -1 ships unchecked.  This
+ *    question needs PURE to mean proven-pure; everything else reads as impure.
  *
- * The DECLARED EFFECT ROW IS NOT THAT EVIDENCE.  The effect system tracks
- * algebraic effects (`perform`/handlers) -- it does not infer anything from
- * `set!`, from mutable globals, or from inline C.  effect_check.c says so in
- * as many words where it suppresses W0031 for `#fx{Unsafe}` bodies containing
- * inline C.  A function can therefore declare `#fx{}`, carry a `static`
- * counter in a C block, and return a different value every call.
+ * 2. DIAGNOSTICS: "is this predicate effectful, so that evaluating the check
+ *    is itself part of the program's behaviour?"  Answering yes wrongly
+ *    REJECTS WORKING CODE.  This question needs IMPURE to mean proven-impure;
+ *    everything else must be left alone.
  *
- * So purity is decided by walking the body under a DEFAULT-DENY whitelist:
- * literals, immutable variable reads, if/let/do/return, the arithmetic and
- * comparison builtins, and direct calls to functions that are themselves
- * pure.  Everything else -- inline C, `set!`, `perform`, dereferences, field
- * reads, closures, indirect calls, and any body we cannot see -- is impure.
- * A case this walk has not learned yet costs completeness (one extra runtime
- * check); it can never cost soundness.
+ * These are not negations of each other, and collapsing them into one boolean
+ * is exactly how a default-deny purity test turns into false errors on a
+ * perfectly good measure whose body happens to use a form the walk has not
+ * learned (a `match`, a field read).  The gap between them is RT_P_UNKNOWN,
+ * and each caller reads it its own way.
+ *
+ * The DECLARED EFFECT ROW IS NOT EVIDENCE either way.  The effect system
+ * tracks algebraic effects (`perform`/handlers); it infers nothing from
+ * `set!`, from mutable globals, or from inline C -- effect_check.c says so
+ * where it suppresses W0031 for `#fx{Unsafe}` bodies containing inline C.  A
+ * function can declare `#fx{}`, carry a `static` counter in a C block, and
+ * return a different value every call.
  * ------------------------------------------------------------------------- */
+
+typedef enum RtPurity {
+    RT_P_PURE = 0,   /* proven: computes a value, touches nothing        */
+    RT_P_IMPURE,     /* proven: reaches a concrete effectful construct   */
+    RT_P_UNKNOWN,    /* neither proven -- a form the walk does not model */
+} RtPurity;
+
+/* Combine sibling results.  IMPURE dominates (one proven effect is enough);
+ * otherwise UNKNOWN dominates PURE. */
+static inline RtPurity rt_p_join(RtPurity a, RtPurity b) {
+    if (a == RT_P_IMPURE  || b == RT_P_IMPURE)  return RT_P_IMPURE;
+    if (a == RT_P_UNKNOWN || b == RT_P_UNKNOWN) return RT_P_UNKNOWN;
+    return RT_P_PURE;
+}
 
 #define RT_PURE_MAX_DEPTH 64
 #define RT_PURE_MAX_NODES 20000
@@ -232,12 +278,10 @@ typedef struct RtPureCtx {
     uint32_t budget;
 } RtPureCtx;
 
-static bool rt_pure_expr(RtPureCtx *c, const Expr *x);
+static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x);
 
-/* Builtins that compute a value from their arguments and touch nothing else.
- * Everything not listed -- the println family, pointer and raw-memory writes,
- * dlopen, `free` -- is impure. */
-static bool rt_pure_builtin_shape(BuiltinShape s) {
+/* Builtins that compute a value from their arguments and touch nothing. */
+static bool rt_builtin_shape_pure(BuiltinShape s) {
     switch (s) {
     case BS_BIN_INFIX:
     case BS_VARIADIC_FOLD:
@@ -251,108 +295,158 @@ static bool rt_pure_builtin_shape(BuiltinShape s) {
     }
 }
 
-static bool rt_pure_binding(RtPureCtx *c, Binding *b) {
-    if (!b) return false;
-    if (b->refine_purity == 1) return true;
-    if (b->refine_purity == 2) return false;
+/* Builtins that definitely DO something: printing, writing memory, freeing,
+ * loading libraries.  A shape in neither list is UNKNOWN, never impure. */
+static bool rt_builtin_shape_impure(BuiltinShape s) {
+    switch (s) {
+    case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT:  case BS_PRINTLN_BOOL:
+    case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:   case BS_PRINTLN_FLOAT32:
+    case BS_PREFIX_UNARY_FREE:
+    case BS_PTR_WRITE:    case BS_ARRAY_SET_UNCHECKED:
+    case BS_RAW_MALLOC:   case BS_RAW_FREE:       case BS_RAW_REALLOC:
+    case BS_RAW_MEMCPY:   case BS_RAW_MEMSET:
+    case BS_DLOPEN:       case BS_DLSYM:          case BS_DLCLOSE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static RtPurity rt_classify_binding(RtPureCtx *c, Binding *b) {
+    if (!b) return RT_P_UNKNOWN;
+    if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
     for (uint32_t i = 0; i < c->depth; i++) {
         if (c->stack[i] == b) {
             /* Recursion: assume pure for now.  Impurity only ever enters
              * through a concrete leaf, so the greatest fixpoint is the right
              * one -- but record that we leaned on frame `i`. */
             if (i < c->min_open) c->min_open = i;
-            return true;
+            return RT_P_PURE;
         }
     }
     FnDef *fd = b->source_fn_def;
     /* No body in hand: an extern, an inline-C-only defn whose FnDef never got
-     * linked, or a forward reference we have not elaborated yet.  Impure, and
-     * deliberately NOT memoized -- the same name may be resolvable later. */
-    if (!fd || !fd->body) return false;
-    if (c->depth >= RT_PURE_MAX_DEPTH || c->budget == 0) return false;
+     * linked, or a forward reference not yet elaborated.  UNKNOWN -- not
+     * congruent, and not diagnosable either -- and deliberately NOT memoized,
+     * since the same name may be resolvable later in the unit. */
+    if (!fd || !fd->body) return RT_P_UNKNOWN;
+    if (c->depth >= RT_PURE_MAX_DEPTH || c->budget == 0) return RT_P_UNKNOWN;
 
     uint32_t my_depth  = c->depth;
     uint32_t saved_min = c->min_open;
     c->stack[c->depth++] = b;
     c->min_open = UINT32_MAX;
 
-    bool r = rt_pure_expr(c, fd->body);
+    RtPurity r = rt_classify_expr(c, fd->body);
 
     uint32_t used = c->min_open;
     c->depth--;
-    if (used >= my_depth) b->refine_purity = r ? 1 : 2;
+    if (used >= my_depth) b->refine_purity = (uint8_t)(r + 1);
     c->min_open = (used < saved_min) ? used : saved_min;
     return r;
 }
 
-static bool rt_pure_expr(RtPureCtx *c, const Expr *x) {
-    if (!x) return true;
-    if (c->budget == 0) return false;
+static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
+    if (!x) return RT_P_PURE;
+    if (c->budget == 0) return RT_P_UNKNOWN;
     c->budget--;
 
     switch (x->kind) {
     case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
     case EX_FLOAT_LIT: case EX_CSTR_LIT:
-        return true;
+        return RT_P_PURE;
 
     case EX_VAR:
-        /* Reading a mutable binding is not congruent: two reads can differ. */
-        return x->as.var.binding && !x->as.var.binding->is_mut;
+        /* Reading a mutable binding is not congruent -- two reads can differ --
+         * but a read is not an EFFECT, so it is UNKNOWN, never impure. */
+        if (!x->as.var.binding) return RT_P_UNKNOWN;
+        return x->as.var.binding->is_mut ? RT_P_UNKNOWN : RT_P_PURE;
+
+    /* Proven effects. */
+    case EX_INLINE_C:
+    case EX_SET: case EX_SET_DEREF:
+    case EX_PERFORM:
+        return RT_P_IMPURE;
 
     case EX_IF:
-        return rt_pure_expr(c, x->as.if_.cond) &&
-               rt_pure_expr(c, x->as.if_.then_) &&
-               rt_pure_expr(c, x->as.if_.else_or_null);
+        return rt_p_join(rt_classify_expr(c, x->as.if_.cond),
+                         rt_p_join(rt_classify_expr(c, x->as.if_.then_),
+                                   rt_classify_expr(c, x->as.if_.else_or_null)));
 
-    case EX_DO:
+    case EX_DO: {
+        RtPurity r = RT_P_PURE;
         for (uint32_t i = 0; i < x->as.do_.n; i++)
-            if (!rt_pure_expr(c, x->as.do_.items[i])) return false;
-        return true;
+            r = rt_p_join(r, rt_classify_expr(c, x->as.do_.items[i]));
+        return r;
+    }
 
-    case EX_LET:
+    case EX_LET: {
+        RtPurity r = rt_classify_expr(c, x->as.let_.body);
         for (uint32_t i = 0; i < x->as.let_.n; i++)
-            if (!rt_pure_expr(c, x->as.let_.bindings[i].init)) return false;
-        return rt_pure_expr(c, x->as.let_.body);
+            r = rt_p_join(r, rt_classify_expr(c, x->as.let_.bindings[i].init));
+        return r;
+    }
 
     case EX_RETURN:
-        return rt_pure_expr(c, x->as.return_.value);
+        return rt_classify_expr(c, x->as.return_.value);
 
-    case EX_BUILTIN:
-        if (!x->as.builtin.spec ||
-            !rt_pure_builtin_shape(x->as.builtin.spec->shape)) return false;
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return RT_P_UNKNOWN;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        RtPurity r = rt_builtin_shape_impure(sh) ? RT_P_IMPURE
+                   : rt_builtin_shape_pure(sh)   ? RT_P_PURE
+                                                 : RT_P_UNKNOWN;
         for (uint32_t i = 0; i < x->as.builtin.n; i++)
-            if (!rt_pure_expr(c, x->as.builtin.args[i])) return false;
-        return true;
+            r = rt_p_join(r, rt_classify_expr(c, x->as.builtin.args[i]));
+        return r;
+    }
 
-    case EX_CALL:
-        /* Direct calls only.  An indirect call (`fn_expr`) or a rank-2 poly
-         * call can land anywhere, so there is no callee to interrogate. */
-        if (x->as.call_.fn_expr || x->as.call_.is_poly_call) return false;
-        if (!rt_pure_binding(c, x->as.call_.fn_binding)) return false;
+    case EX_CALL: {
+        /* An indirect call (`fn_expr`) or a rank-2 poly call can land
+         * anywhere, so there is no callee to interrogate. */
+        RtPurity r = (x->as.call_.fn_expr || x->as.call_.is_poly_call)
+                   ? RT_P_UNKNOWN
+                   : rt_classify_binding(c, x->as.call_.fn_binding);
         for (uint32_t i = 0; i < x->as.call_.n_args; i++)
-            if (!rt_pure_expr(c, x->as.call_.args[i])) return false;
-        return true;
+            r = rt_p_join(r, rt_classify_expr(c, x->as.call_.args[i]));
+        return r;
+    }
 
     default:
-        /* Default deny -- inline C, set!, perform, deref, field reads,
-         * closures, while, STM, async, panic, everything unlisted. */
-        return false;
+        /* A form the walk does not model -- match, field reads, closures,
+         * while, STM, async, panic.  Neither proven pure nor proven
+         * effectful, and that distinction is the whole point. */
+        return RT_P_UNKNOWN;
     }
 }
 
-/* True when calling `b` twice with equal arguments is guaranteed to produce
- * equal results with no observable side effect. */
-static bool rt_binding_is_pure(Binding *b) {
-    if (!b) return false;
-    if (b->refine_purity == 1) return true;
-    if (b->refine_purity == 2) return false;
-    /* A declared non-empty effect row is an immediate veto.  (The converse is
-     * not true, which is the whole reason the body walk exists.) */
-    if (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
-        !effect_row_is_empty(b->type.as.fn.effect_row))
-        return false;
+static RtPurity rt_classify_binding_top(Binding *b) {
+    if (!b) return RT_P_UNKNOWN;
+    if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
+    /* A declared non-empty effect row rules PURE out.  It does not prove
+     * IMPURE -- the row can name an effect the body never performs -- so it
+     * only ever downgrades to UNKNOWN. */
+    bool row_veto = (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
+                     !effect_row_is_empty(b->type.as.fn.effect_row));
     RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
-    return rt_pure_binding(&c, b);
+    RtPurity r = rt_classify_binding(&c, b);
+    if (row_veto && r == RT_P_PURE) return RT_P_UNKNOWN;
+    return r;
+}
+
+/* True when calling `b` twice with equal arguments is guaranteed to produce
+ * equal results with no observable side effect.  UNKNOWN reads as "no". */
+static bool rt_binding_is_pure(Binding *b) {
+    return rt_classify_binding_top(b) == RT_P_PURE;
+}
+
+/* CT1/RT: does evaluating this elaborated predicate DO something observable?
+ * Only a proven effect counts -- an unrecognised form answers false, so a
+ * predicate the walk cannot model is never diagnosed and never blocks
+ * elision on suspicion alone. */
+static bool rt_expr_definitely_impure(const Expr *x) {
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
+    return rt_classify_expr(&c, x) == RT_P_IMPURE;
 }
 
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
@@ -3791,6 +3885,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             /* CT1: :pre — prepend (tur-contract-check pre_pred "Precondition failed") */
             if (ct_pre_form && check_fn) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
+                rt_diag_impure_pred(e, pred_e, call->span);
                 if (pred_e) {
                     /* Build call: (tur-contract-check pred "Precondition failed") */
                     Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));

@@ -669,19 +669,57 @@
 > than diagnosed: the predicate is equally impure with the gate off, so turning
 > the experiment on should not invent an error.
 >
-> The deeper issue is out of scope and filed:
-> `docs/reported/impure-refinement-predicates-accepted.md`. `TUR-E0375`
-> ("refinement predicate mentions effects; pure predicates only") is declared
-> in `diag.h` and mapped in `diag.c` and **emitted by nothing** -- an impure
-> predicate is accepted everywhere contracts are elaborated, and
-> `--no-contracts` shows the same divergence with the experiment off entirely.
-> That is a contract-layer defect that predates this work.
+> The deeper issue was filed and then fixed the same day; the report is
+> archived at `docs/archive/impure-refinement-predicates-accepted.md`.
+> `TUR-E0375` is now emitted (see below).
 >
 > Fixture `refine-impure-predicate-not-elided` pins the behaviour. Note the
 > impure call is written first inside the `or`: `or` short circuits, so with
 > the tautology leading, the impure call is never reached and there is nothing
 > to pin -- the first version of the fixture made exactly that mistake and
 > passed for the wrong reason.
+>
+> ### TUR-E0375, and why purity had to become three-valued (landed 2026-07-25)
+>
+> Digging into the filed report turned a one-line diagnostic into a design
+> correction.
+>
+> `TUR_E0375_REFINE_EFFECTFUL` was declared in `diag.h` and mapped in `diag.c`
+> from the start and emitted by nothing. It is now emitted from the shared CT1
+> helpers, covering all four positions a predicate can appear in -- refined
+> parameter, `:pre`, `:post`, refined return -- and gate-independent, because
+> the predicate is equally wrong with the experiment off.
+>
+> The interesting part is what it could NOT be driven by. `rt_binding_is_pure`
+> is DEFAULT-DENY: anything the walk does not model -- a `match`, a struct
+> field read -- reads as impure. That is right for congruence, where a wrong
+> "pure" elides a real check. It is exactly wrong for a diagnostic, where a
+> wrong "impure" rejects working code: a measure written with a `match` would
+> have been reported as effectful.
+>
+> So purity is now three-valued -- `RT_P_PURE` / `RT_P_IMPURE` /
+> `RT_P_UNKNOWN` -- and the two callers read the middle value in OPPOSITE
+> directions:
+>
+> | question | wrong answer costs | reads UNKNOWN as |
+> |---|---|---|
+> | congruence: same value twice? | an elided check (miscompile) | impure |
+> | diagnostic: does this DO something? | a rejected valid program | pure |
+>
+> They are not negations of each other, and collapsing them into one boolean is
+> precisely how a default-deny purity test turns into false errors.
+> `refine-pure-predicate-unmodelled` is the false-positive guard: a
+> `match`-bodied measure in a `:post`, which must keep compiling.
+>
+> A hard error was affordable because it broke nothing: across 2308 fixtures
+> and the whole stdlib the only impure predicate was the one written to
+> demonstrate the bug. That is the measurement that justified using the E-code
+> as declared rather than softening it to a warning.
+>
+> One fuzzer follow-on: generated predicates were calling impure helpers ~8% of
+> the time, so those cases became `skip_invalid` and spent budget rediscovering
+> a rule one fixture already pins. `Gen.expr` grew a `pure_only` flag for
+> predicate generation; `skip_invalid` went from ~24/300 to ~2/300.
 >
 > ### Next slice
 >

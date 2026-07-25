@@ -636,12 +636,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)
 - **Nonlinear arithmetic** is uninterpreted, as described above.
-- **An impure predicate is never elided.** Running a check is only invisible
-  when the predicate is pure; a predicate that calls an effectful function
-  makes the check part of the program's behaviour, so its obligation is never
-  reported as proven. (That such a predicate is accepted at all is a separate,
-  pre-existing defect -- see
-  `docs/reported/impure-refinement-predicates-accepted.md`.)
+- **A predicate that calls an effectful function is rejected** (`TUR-E0375`),
+  in all four positions: a refined parameter, `:pre`, `:post`, and a refined
+  return. Whether a check runs depends on the build -- `--no-contracts` strips
+  them, a release build drops them, and this feature elides the ones it can
+  prove -- so an effectful predicate makes behaviour depend on whether its own
+  contracts were compiled in. Reported only on PROVEN impurity: a predicate
+  calling a function whose body the purity walk does not model (a `match`, a
+  field read) is left alone, since a wrong "impure" would reject working code.
 - **Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
   a `match`, a struct field read, or a loop is enough. Its calls are then not

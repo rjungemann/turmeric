@@ -190,8 +190,14 @@ class Gen:
 
     # -- expressions ----------------------------------------------------------
 
-    def expr(self, depth, scope):
-        """An arithmetic expression over `scope` (a list of variable names)."""
+    def expr(self, depth, scope, pure_only=False):
+        """An arithmetic expression over `scope` (a list of variable names).
+
+        `pure_only` restricts helper calls to the truly-pure pool.  Predicates
+        must set it: a contract predicate that calls an effectful function is
+        a `TUR-E0375` error, so generating one produces a program that does not
+        compile and the case is dropped.  That cost ~8% of the fuzz budget
+        rediscovering a rule one fixture already pins."""
         if depth <= 0 or self.rng.random() < 0.30:
             if scope and self.rng.random() < 0.6:
                 return self.rng.choice(scope)
@@ -199,23 +205,27 @@ class Gen:
         r = self.rng.random()
         if r < 0.45:
             op = self.rng.choice(["+", "-", "*"])
-            return "(%s %s %s)" % (op, self.expr(depth - 1, scope),
-                                   self.expr(depth - 1, scope))
+            return "(%s %s %s)" % (op, self.expr(depth - 1, scope, pure_only),
+                                   self.expr(depth - 1, scope, pure_only))
         if r < 0.55:
             # Divisor is a nonzero literal: a division trap would abort both
             # gates identically, which is noise rather than signal.
-            return "(/ %s %s)" % (self.expr(depth - 1, scope), self.nonzero_lit())
-        if r < 0.95 and self.helpers:
-            name, _kind, arity, _pure = self.rng.choice(self.helpers)
-            args = " ".join(self.expr(depth - 1, scope) for _ in range(arity))
+            return "(/ %s %s)" % (self.expr(depth - 1, scope, pure_only),
+                                  self.nonzero_lit())
+        pool = [h for h in self.helpers if h[3]] if pure_only else self.helpers
+        if r < 0.95 and pool:
+            name, _kind, arity, _pure = self.rng.choice(pool)
+            args = " ".join(self.expr(depth - 1, scope, pure_only)
+                            for _ in range(arity))
             return "(%s%s%s)" % (name, " " if args else "", args)
-        return self.expr(depth - 1, scope)
+        return self.expr(depth - 1, scope, pure_only)
 
     # -- predicates -----------------------------------------------------------
 
     def atom(self, scope):
         op = self.rng.choice(CMP_OPS)
-        return "(%s %s %s)" % (op, self.expr(2, scope), self.expr(1, scope))
+        return "(%s %s %s)" % (op, self.expr(2, scope, pure_only=True),
+                               self.expr(1, scope, pure_only=True))
 
     def pred(self, depth, scope):
         if depth <= 0 or self.rng.random() < 0.55:
