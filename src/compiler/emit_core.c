@@ -1105,9 +1105,16 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
             bool sink = box_reader_result_void_sink(nm);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = e->as.call_.args[i];
+                /* catch-box-reader-confinement-whitelist: beyond the hardcoded
+                 * print family, a USER-DEFINED callee confines this argument
+                 * when its body was inferred not to retain that parameter.
+                 * Per-argument rather than per-call: a two-parameter logger may
+                 * retain one and print the other. */
+                bool arg_sink = sink ||
+                    (fb && i < 32 && (fb->nonretain_ptr_param_mask & (1u << i)));
                 if (a && a->kind == EX_VAR && a->as.var.binding == b) {
                     if (acc) continue;             /* scalar result cannot alias */
-                    if (sink) continue;            /* printed, not retained */
+                    if (arg_sink) continue;        /* printed, not retained */
                     /* general reader: its result aliases box memory -- safe only
                      * if THIS call's result is itself confined. */
                     if (!confined) return false;
@@ -1115,7 +1122,7 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
                 }
                 /* A sink/accessor confines its args' results; a general call does
                  * not (it may stash them), so recurse with confined=false there. */
-                if (!box_uses_confined(a, b, (sink || acc)))
+                if (!box_uses_confined(a, b, (arg_sink || acc)))
                     return false;
             }
             return box_uses_confined(e->as.call_.dict_arg, b, false);
@@ -1137,8 +1144,6 @@ static bool box_uses_confined(const Expr *e, const Binding *b, bool confined) {
  * scalar or nil. */
 bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
                                        TypeKind scope_result) {
-        fprintf(stderr, "[boxfree] scope_result=%d body_kind=%d\n",
-                (int)scope_result, body ? (int)body->kind : -1);
     switch (scope_result) {
         case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
         case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
@@ -1149,6 +1154,26 @@ bool catch_box_binding_reader_confined(const Expr *body, const Binding *b,
             return false;   /* scope value could carry a box-owned pointer out */
     }
     return box_uses_confined(body, b, /*confined=*/true);
+}
+
+/* catch-box-reader-confinement-whitelist: true when `body` provably does not
+ * RETAIN a pointer into its pointer-carrying scalar parameter `p` -- every use
+ * of `p` is discarded or flows into another non-retaining sink.  This is the
+ * inferred replacement for trusting a name list: a user-defined logger whose
+ * body only prints its argument now confines exactly like `println` does.
+ *
+ * `result_cannot_carry` must be true only when the function's own result cannot
+ * carry the pointer back out (a non-pointer scalar or nil return); the caller
+ * establishes it, mirroring the scope_result gate on
+ * catch_box_binding_reader_confined.
+ *
+ * Same soundness posture as the rest of this family: it only ever greenlights a
+ * free, and every unmodeled form falls through to the strict escape walk whose
+ * default is "escapes". */
+bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry) {
+    if (!body || !p) return false;
+    return box_uses_confined(body, p, result_cannot_carry);
 }
 
 /* Check whether the fall-through point after `e` is unreachable -- i.e. every

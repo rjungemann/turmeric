@@ -7,6 +7,11 @@
  * pulling the whole emit-internal surface into the elaborator. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
 bool expr_subtree_has_inline_c(const Expr *e);
+/* catch-box-reader-confinement-whitelist: the box-confinement walk, likewise
+ * defined emit-side, reused here to infer per-param non-retention for
+ * pointer-carrying scalars when a defn is elaborated. */
+bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
+                               bool result_cannot_carry);
 
 /* closure-drop-glue S1c: a scalar Copy type kind -- safe to hold in / bare-free
  * around a closure env (no owning teardown, no aliasing of the env).  Excludes
@@ -3497,6 +3502,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * (a param is a C-visible formal, not an AST capture), so a body containing
      * any inline-C is never treated as non-retaining -- otherwise its stored
      * closure arg would be freed while the C-side copy is still live (UAF). */
+    /* catch-box-reader-confinement-whitelist: the same inference, for the
+     * pointer-carrying scalars (cstr / ptr<void>) that a caught-Result box
+     * hands out.  Trusting a hardcoded print-family name list made the
+     * confinement check a soundness-maintenance footgun AND needlessly leaked
+     * for a user-defined logger that is every bit as safe; inferring it from
+     * the body makes it a checked property.  The inline-C guard above is
+     * load-bearing here too -- a C body can stash the pointer where no AST
+     * walk can see it.
+     *
+     * The result gate mirrors catch_box_binding_reader_confined: the param may
+     * only be treated as non-retained if the function's own result cannot carry
+     * it back out. */
+    b->nonretain_ptr_param_mask = 0;
     if (body && !expr_subtree_has_inline_c(body)) {
         for (uint32_t _pi = 0; _pi < n_params && _pi < 32; _pi++) {
             Binding *_pb = params[_pi];
@@ -3505,6 +3523,23 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                _pb->type.kind == TY_FN;
             if (_is_fnparam && !closure_binding_escapes(body, _pb))
                 b->nonretain_param_mask |= (1u << _pi);
+            bool _is_ptr_scalar = _pb->type.kind == TY_CSTR ||
+                                  _pb->type.kind == TY_PTR_VOID;
+            if (_is_ptr_scalar) {
+                TypeKind _rk = (b->type.kind == TY_FN) ? b->type.as.fn.result_kind
+                                                       : TY_UNKNOWN;
+                bool _result_safe = false;
+                switch (_rk) {
+                    case TY_NIL: case TY_INT: case TY_BOOL: case TY_FLOAT:
+                    case TY_INT64: case TY_UINT64: case TY_INT32: case TY_UINT32:
+                    case TY_INT16: case TY_UINT16: case TY_INT8: case TY_UINT8:
+                    case TY_FLOAT64: case TY_FLOAT32:
+                        _result_safe = true; break;
+                    default: break;
+                }
+                if (_result_safe && ptr_param_is_nonretaining(body, _pb, true))
+                    b->nonretain_ptr_param_mask |= (1u << _pi);
+            }
         }
     }
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
