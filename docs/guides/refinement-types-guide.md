@@ -784,7 +784,8 @@ Known and deliberate, in rough order of how likely you are to hit them:
   Unknown regardless of what the loop does. There is no invariant *inference*
   and none is planned -- inferring facts is the thing this design deliberately
   does not do. A user-written `:invariant`, which would be checking rather than
-  inference, is a plausible future addition but is not in the prototype.
+  inference, is a plausible future addition but is not in the prototype; see
+  [docs/upcoming/hold/loop-invariants-plan.md](../upcoming/hold/loop-invariants-plan.md).
 - **No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)

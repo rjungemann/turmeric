@@ -1276,6 +1276,9 @@
 >   graduating what exists. Revisit when a real program wants it, and revisit
 >   it as `:invariant`, not as inference. Path conditions for call-site
 >   crossings are worth more and need no new syntax.
+>
+>   Placeholder plan, with the sketch and the trigger condition written down:
+>   [docs/upcoming/hold/loop-invariants-plan.md](../hold/loop-invariants-plan.md).
 > - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
 >   without the new sort this entry assumed it needed. Arm hypotheses and
 >   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What
