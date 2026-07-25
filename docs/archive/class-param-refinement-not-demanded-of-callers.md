@@ -1,4 +1,4 @@
-# A class parameter refinement is never demanded of callers
+# A class parameter refinement is never demanded of callers (RESOLVED)
 
 **Severity:** medium -- not a soundness hole. Nothing false is proved and the
 runtime check is retained in every case (gate-off and gate-on abort
@@ -108,6 +108,62 @@ would break it. Under the second, only the dynamic case (3) should be reported,
 since there the violation is genuinely reachable. Case 3 alone is the
 conservative slice and produces no false positives; case 1 is the coherent one.
 Worth deciding deliberately, because the first reading can reject existing code.
+
+## Resolution
+
+Both halves landed, and the design question was answered as **"only bounds
+instances", plus a lint**.
+
+**1. The inheritance asymmetry was a defect and is fixed.** An instance
+parameter with no annotation now inherits the class's refinement, exactly as an
+unannotated result inherits the class's promise. The inherited predicate is
+published on the instance method's binding, which is what both the call-site
+crossing and the entry-check injection read -- so case 2 above is now an error
+statically AND guarded at run time. Writing an explicit annotation (including a
+bare `: int`, which carries no predicate) is how an instance opts out and
+demands less, which stays legal.
+
+That shrank the design question considerably: once omission inherits, most
+instances demand exactly the class predicate, and the two readings stop
+differing for them.
+
+**2. For what remained -- an instance that EXPLICITLY demands less -- the
+resolved instance's predicate governs.** A statically-resolved dispatch knows
+which implementation runs, so it is checked against that implementation's
+contract, the more precise of the two. Case 1 above stays legal.
+
+But it is linted (`TUR-W0377`): the leniency is not part of the interface, and
+the same argument fails the moment dispatch goes dynamic or a stricter instance
+appears. Only a DEFINITE violation warns -- an argument the class predicate
+rejects outright, not one it merely cannot prove -- so an unconstrained
+argument is silent.
+
+Case 3 (dynamic dispatch) was fixed earlier by crossing into the class
+signature; see the plan entry.
+
+The alternative reading -- the class signature binding on callers, making case
+1 an error -- was rejected because it turns correct programs into failures.
+Under Liskov-style contract variance, a caller that statically knows the
+implementation may use its weaker precondition; that is the same reasoning that
+makes the instance the right contract here. The lint recovers the evolution
+argument (a stricter instance added later would break the caller) without the
+rejection.
+
+## Coverage
+
+- `tests/fixtures/refine-class-param-inheritance` -- inheritance, explicit
+  opt-out, the lint firing once, and the lint NOT firing on an argument the
+  class admits.
+- `tests/fixtures/errors/refine-class-param-inherited-violated` -- the
+  inherited demand is a hard error, not the lint.
+- `tests/fixtures/refine-class-param-dynamic-dispatch` and
+  `tests/fixtures/errors/refine-class-param-dynamic-violated` -- the dynamic
+  half.
+
+Negative controls checked by hand, all behaving: satisfying argument (no lint),
+unknown argument (no lint), instance restating the class predicate (E0371, no
+lint), class with no refinement at all (no lint), unannotated instance (E0371,
+no lint).
 
 ## Demand
 

@@ -246,6 +246,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0374_REFINE_INSTANCE_STRONGER:  return "TUR-E0374";
         case TUR_E0375_REFINE_EFFECTFUL:          return "TUR-E0375";
         case TUR_E0376_REFINE_TYPE_PARAM:         return "TUR-E0376";
+        case TUR_W0377_REFINE_INSTANCE_LENIENCY:  return "TUR-W0377";
         case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
@@ -393,6 +394,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0374") == 0) return TUR_E0374_REFINE_INSTANCE_STRONGER;
     if (strcmp(s, "TUR-E0375") == 0) return TUR_E0375_REFINE_EFFECTFUL;
     if (strcmp(s, "TUR-E0376") == 0) return TUR_E0376_REFINE_TYPE_PARAM;
+    if (strcmp(s, "TUR-W0377") == 0) return TUR_W0377_REFINE_INSTANCE_LENIENCY;
     if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
@@ -1366,6 +1368,28 @@ static const DiagExplanation diag_explanations_[] = {
       "missing hypothesis.  --strict-refine turns this into a hard error for\n"
       "builds that want every obligation discharged statically.\n",
     },
+    { TUR_W0377_REFINE_INSTANCE_LENIENCY,
+      "TUR-W0377: Call relies on instance-specific leniency\n"
+      "\n"
+      "The argument violates the CLASS signature's refinement, but the instance\n"
+      "this call resolved to explicitly demands less, so the call is allowed.\n"
+      "\n"
+      "A typeclass instance may accept more than its class promises (see\n"
+      "TUR-E0374 for the other direction), and a call whose instance is known\n"
+      "statically is checked against that instance -- the more precise contract\n"
+      "of the two. This warning marks where the two disagree.\n"
+      "\n"
+      "It matters because the leniency is not part of the interface. Adding a\n"
+      "stricter instance later, or lifting this call into a generic function\n"
+      "where dispatch stays dynamic, checks the argument against the CLASS\n"
+      "predicate instead -- and this call would then fail.\n"
+      "\n"
+      "Fix by passing an argument the class signature admits, or, if the\n"
+      "leniency is intended, by widening the class signature so it is part of\n"
+      "the published contract rather than one instance's private extension.\n"
+      "\n"
+      "Only a DEFINITE violation warns: the argument has to be one the class\n"
+      "predicate rejects outright, not merely one it cannot prove.\n" },
     { TUR_W0373_REFINE_NONLINEAR,
       "TUR-W0373: Nonlinear predicate subterm treated as uninterpreted\n"
       "\n"

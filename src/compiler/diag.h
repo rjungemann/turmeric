@@ -241,6 +241,8 @@ typedef enum DiagCode {
     TUR_E0374_REFINE_INSTANCE_STRONGER, /* instance method demands more than its class signature */
     TUR_E0375_REFINE_EFFECTFUL,   /* refinement predicate mentions effects */
     TUR_E0376_REFINE_TYPE_PARAM,  /* refinement on a type parameter (unsupported) */
+    TUR_W0377_REFINE_INSTANCE_LENIENCY, /* call allowed only because the resolved
+                                         * instance demands less than its class */
     TUR_I0379_REFINE_ORACLE_MISMATCH, /* dev oracle: in-house stage disagreed with Z3 */
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal

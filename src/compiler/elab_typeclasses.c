@@ -3463,6 +3463,15 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         const char *m_ct_vars[MAX_FN_ARITY];
         uint32_t    m_ct_param_idx[MAX_FN_ARITY];
         uint32_t    n_m_ct_preds = 0;
+        /* RT1: which parameters the INSTANCE annotated for itself.  An
+         * unannotated parameter inherits the class's refinement, exactly as an
+         * unannotated result inherits the class's promise; writing an explicit
+         * annotation -- including a bare `: int`, which carries no predicate --
+         * is how an instance opts out and demands less.  Without this an
+         * omitted annotation inherited NOTHING, so a class demand was enforced
+         * only by an instance that happened to restate it. */
+        bool m_param_annotated[MAX_FN_ARITY];
+        memset(m_param_annotated, 0, sizeof(m_param_annotated));
         
         if (impl_params_form->tag == F_VEC) {
             uint8_t max_method_params = (uint8_t)impl_params_form->as.list.len;
@@ -3481,6 +3490,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                             return NULL;
                         }
                         uint8_t prev = n_method_params - 1;
+                        if (prev < MAX_FN_ARITY) m_param_annotated[prev] = true;
                         Type param_type = method_param_types[prev];
                         if (p->tag == F_TYPE_ANN) {
                             Type *ann = (p->as.list.len > 0)
@@ -4011,7 +4021,23 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * parameters are resolved in THIS pass but the body is elaborated in
          * pass 2, so the binding is the record that spans both -- and it is
          * also where a dispatch site would look for them. */
-        if (n_m_ct_preds > 0 && n_method_params > 0) {
+        /* An UNANNOTATED parameter inherits the class's refinement, mirroring
+         * the result direction below.  So the arrays are published whenever
+         * either side has a predicate, not only when the instance restated
+         * one -- otherwise inheritance would produce a predicate the entry
+         * check (which reads exactly these arrays) never sees. */
+        bool _inherits_any = false;
+        if (g_opt_refined && tc->methods[i].param_refine_preds) {
+            for (uint8_t _pi = 0; _pi < n_method_params &&
+                                  _pi < tc->methods[i].n_params; _pi++) {
+                if (_pi < MAX_FN_ARITY && !m_param_annotated[_pi] &&
+                    tc->methods[i].param_refine_preds[_pi]) {
+                    _inherits_any = true;
+                    break;
+                }
+            }
+        }
+        if ((n_m_ct_preds > 0 || _inherits_any) && n_method_params > 0) {
             const Form **rp = (const Form **)arena_alloc(e->arena, n_method_params * sizeof(Form *));
             const char **rv = (const char **)arena_alloc(e->arena, n_method_params * sizeof(char *));
             const char **rn = (const char **)arena_alloc(e->arena, n_method_params * sizeof(char *));
@@ -4026,6 +4052,16 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 if (_pi >= n_method_params) continue;
                 rp[_pi] = m_ct_preds[_ci];
                 rv[_pi] = m_ct_vars[_ci];
+            }
+            if (_inherits_any) {
+                for (uint8_t _pi = 0; _pi < n_method_params &&
+                                      _pi < tc->methods[i].n_params; _pi++) {
+                    if (_pi >= MAX_FN_ARITY || m_param_annotated[_pi]) continue;
+                    if (rp[_pi]) continue;   /* instance restated it: keep that */
+                    rp[_pi] = tc->methods[i].param_refine_preds[_pi];
+                    rv[_pi] = tc->methods[i].param_refine_vars
+                            ? tc->methods[i].param_refine_vars[_pi] : NULL;
+                }
             }
             method_binding->refine_param_preds = rp;
             method_binding->refine_param_vars  = rv;
@@ -6666,8 +6702,33 @@ resolved_user_fallback:;
                 }
             }
         }
+        bool rt_is_class_cs = (rt_cs_callee != NULL);
         if (!rt_cs_callee && best_method) rt_cs_callee = best_method->binding;
-        if (rt_cs_callee) (void)refine_note_call_site(e, rt_cs_callee, call, 1);
+        if (rt_cs_callee) {
+            (void)refine_note_call_site(e, rt_cs_callee, call, 1);
+            /* Reading B + lint: a STATICALLY-resolved dispatch is obliged to
+             * satisfy the instance it resolved to, which is the more precise
+             * contract.  Carry the class's predicates alongside so a call the
+             * class would reject can be linted (TUR-W0377) without changing
+             * what it must prove.  Not for a dynamic crossing -- that one IS
+             * the class signature, so there is nothing to compare against. */
+            if (!rt_is_class_cs && best_inst && best_inst->typeclass) {
+                TypeClass *rt_tc = best_inst->typeclass;
+                for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
+                    const Symbol *mn = rt_tc->methods[rt_mi].name;
+                    if (!mn || strlen(mn->name) != method_name_len ||
+                        strncmp(mn->name, method_name, method_name_len) != 0)
+                        continue;
+                    if (rt_tc->methods[rt_mi].param_refine_preds)
+                        refine_note_call_site_class_preds(
+                            e, rt_cs_callee, call,
+                            rt_tc->methods[rt_mi].param_refine_preds,
+                            rt_tc->methods[rt_mi].param_refine_vars,
+                            rt_tc->methods[rt_mi].n_params);
+                    break;
+                }
+            }
+        }
     }
 
     if (best_method && best_method->binding) {

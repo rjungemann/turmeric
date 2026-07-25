@@ -1,6 +1,7 @@
 /* elab_fns.c -- function definition forms: defn, fn, extern-c, def. */
 #include "elab_internal.h"
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
+#include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "runtime/experiments.h" /* RT0: experiment_warn_if_used("refined") */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
@@ -1353,8 +1354,30 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     cs->env         = NULL;   /* back-filled by refine_fill_call_site_env */
     cs->caller_body = NULL;
     cs->caller_name = NULL;
+    cs->class_param_preds = NULL;
+    cs->class_param_vars  = NULL;
+    cs->n_class_params    = 0;
     cs->loc         = call_form->span;
     return e->n_refine_call_sites;
+}
+
+/* Keyed on (callee, call_form) rather than on the index refine_note_call_site
+ * returns: that function yields the CURRENT count when it deduplicates, which
+ * names the last crossing recorded rather than the matching one.  Attaching the
+ * class predicates to the wrong crossing would lint an unrelated call. */
+void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
+                                       const Form *call_form,
+                                       const Form **preds, const char **vars,
+                                       uint32_t n_params) {
+    if (!g_opt_refined || !e || !callee || !call_form) return;
+    for (uint32_t i = e->n_refine_call_sites; i-- > 0; ) {
+        RefineCallSite *cs = &e->refine_call_sites[i];
+        if (cs->callee != callee || cs->call_form != call_form) continue;
+        cs->class_param_preds = preds;
+        cs->class_param_vars  = vars;
+        cs->n_class_params    = n_params;
+        return;
+    }
 }
 
 void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
@@ -1582,12 +1605,69 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     return saved;
 }
 
+/* TUR-W0377: the resolved instance accepts this argument, but the CLASS
+ * signature rejects it outright, so the call is relying on that instance
+ * demanding less than its class.
+ *
+ * Only a DEFINITE violation warns.  `refine_model_search` returning a model
+ * with no free variables means the goal folded to false on the values written
+ * at the site; an OPEN model only says "not for every input", which for an
+ * argument the instance genuinely accepts is not worth a diagnostic.  That
+ * keeps the lint silent on `(.scale-by 3 n)` and loud on `(.scale-by 3 0)`.
+ *
+ * `speculative` keeps the obligation off the ordinary reporting path: its
+ * failure is an interface-versus-implementation disagreement with its own
+ * wording, not a TUR-E0371 about a value the program cannot supply. */
+static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
+                                   const Form *cls_pred, const Form *arg,
+                                   TypeKind pk, const RefineSubst *subst,
+                                   uint32_t n_subst) {
+    if (!cls_pred || !cs) return;
+    const Binding *callee = cs->callee;
+    /* An instance that restated its class predicate has nothing to disagree
+     * with -- the two are the same Form. */
+    if (callee->refine_param_preds && p < callee->n_refine_params &&
+        callee->refine_param_preds[p] == cls_pred) return;
+
+    const char *cvar = (cs->class_param_vars && p < cs->n_class_params)
+                     ? cs->class_param_vars[p] : NULL;
+    RefineObligation *ob = refine_collect_obligation(
+        &e->refine_obs, cls_pred, cvar, arg,
+        rt_sort_of_kind(pk), type_name(type_simple(pk, CK_COPY)),
+        cs->loc, cs->env, "class signature", cs->caller_name);
+    if (!ob) return;
+    refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+    ob->speculative = true;
+    if (refine_discharge_one(ob, e->arena)) return;   /* class admits it too */
+    if (!ob->vc) return;
+    RefineModel *m = refine_model_search(ob->vc, e->arena);
+    if (!m || m->n != 0) return;                      /* not a definite violation */
+
+    const char *cname = cs->callee_display
+                      ? cs->callee_display
+                      : (callee->name ? callee->name->name : "?");
+    diag_emit_with_code(DIAG_WARNING, cs->loc, TUR_W0377_REFINE_INSTANCE_LENIENCY,
+                        "argument %u of '%s' is accepted by the resolved "
+                        "instance but violates the class signature's refinement",
+                        p + 1, cname);
+    diag_emit(DIAG_NOTE, cs->loc,
+              "the instance demands less than its class, which is legal; this "
+              "call would fail if dispatch were dynamic or a stricter instance "
+              "existed");
+}
+
 void refine_resolve_call_sites(Elab *e) {
     if (!g_opt_refined || !e) return;
     for (uint32_t i = 0; i < e->n_refine_call_sites; i++) {
         RefineCallSite *cs = &e->refine_call_sites[i];
         const Binding *callee = cs->callee;
-        if (!callee->refine_param_preds || callee->n_refine_params == 0) continue;
+        /* A crossing is worth walking when EITHER side has a predicate.  An
+         * instance that explicitly demands nothing publishes no arrays of its
+         * own, and that is exactly the shape TUR-W0377 exists to lint. */
+        bool has_inst_preds = callee->refine_param_preds &&
+                              callee->n_refine_params > 0;
+        bool has_class_preds = cs->class_param_preds && cs->n_class_params > 0;
+        if (!has_inst_preds && !has_class_preds) continue;
 
         const Form *cf = cs->call_form;
         if (!cf || cf->tag != F_LIST) continue;
@@ -1606,22 +1686,34 @@ void refine_resolve_call_sites(Elab *e) {
          * against the real argument rather than a free variable. */
         RefineSubst subst[MAX_FN_ARITY];
         uint32_t n_subst = 0;
-        for (uint32_t p = 0; p < callee->n_refine_params && p < n_args &&
-                             n_subst < MAX_FN_ARITY; p++) {
+        for (uint32_t p = 0; has_inst_preds && p < callee->n_refine_params &&
+                             p < n_args && n_subst < MAX_FN_ARITY; p++) {
             if (!callee->refine_param_names[p]) continue;
             subst[n_subst].name = callee->refine_param_names[p];
             subst[n_subst].form = cf->as.list.items[cs->arg_offset + p];
             n_subst++;
         }
 
-        for (uint32_t p = 0; p < callee->n_refine_params && p < n_args; p++) {
-            const Form *pred = callee->refine_param_preds[p];
-            if (!pred) continue;
+        uint32_t n_slots = has_inst_preds ? callee->n_refine_params : 0;
+        if (has_class_preds && cs->n_class_params > n_slots)
+            n_slots = cs->n_class_params;
+        for (uint32_t p = 0; p < n_slots && p < n_args; p++) {
+            const Form *pred = (has_inst_preds && p < callee->n_refine_params)
+                             ? callee->refine_param_preds[p] : NULL;
+            const Form *cls_pred = (has_class_preds && p < cs->n_class_params)
+                                 ? cs->class_param_preds[p] : NULL;
+            if (!pred && !cls_pred) continue;
             const Form *arg = cf->as.list.items[cs->arg_offset + p];
             TypeKind pk = (callee->type.kind == TY_FN &&
                            callee->type.as.fn.arg_kinds &&
                            p < callee->type.as.fn.arity)
                         ? callee->type.as.fn.arg_kinds[p] : TY_INT;
+            if (!pred) {
+                /* The instance demands nothing here.  Nothing to prove -- but
+                 * the class may still reject this argument. */
+                rt_lint_class_leniency(e, cs, p, cls_pred, arg, pk, subst, n_subst);
+                continue;
+            }
 
             const char *cname = cs->callee_display ? cs->callee_display
                               : (callee->name ? callee->name->name : "?");
@@ -1646,7 +1738,22 @@ void refine_resolve_call_sites(Elab *e) {
              * that evaluates false -- which is `(safe-div 10 0)` becoming a
              * compile-time failure instead of a runtime panic. */
             ob->runtime_guarded = true;
-            refine_discharge_one(ob, e->arena);
+            bool inst_ok = refine_discharge_one(ob, e->arena);
+
+            /* Reading B + lint: the obligation above is the resolved INSTANCE's,
+             * which is the more precise of the two contracts and the one this
+             * call actually has to satisfy.  But when the instance demands less
+             * than its class and the argument is one the CLASS rejects
+             * outright, the call is leaning on that instance's private
+             * leniency -- which is not part of the interface, and is gone the
+             * moment dispatch goes dynamic or a stricter instance is added.
+             *
+             * Only when the instance obligation itself was PROVED: an argument
+             * that failed the instance check already has its own E0371 at this
+             * span, and a second diagnostic about the class would just be
+             * noise. */
+            if (inst_ok)
+                rt_lint_class_leniency(e, cs, p, cls_pred, arg, pk, subst, n_subst);
         }
         if (cs->env) cs->env->head = cs_saved;
     }

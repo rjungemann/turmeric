@@ -170,16 +170,35 @@ the class's:
 Both the dotted `(.m x ...)` and bare `(m x ...)` forms go through the same
 resolution and are checked identically.
 
-Two consequences are easy to miss, and the instance above is written the way it
-is to make them visible. Because the obligation comes from the *instance*:
+An instance parameter with **no annotation inherits** the class's refinement,
+the same way an unannotated result inherits the class's promise:
 
-An instance that **demands less** -- `(scale-by [self : int, k : int] ...)`,
-which is legal -- carries no parameter predicate, so `(.scale-by 3 0)` raises
-nothing. Omitting the annotation entirely does *not* inherit the class demand
-either; parameters differ from results here. The method's own entry check still
-guards the call, so nothing unsound follows -- what is lost is the compile-time
-error. Recorded in
-[docs/reported/class-param-refinement-not-demanded-of-callers.md](../reported/class-param-refinement-not-demanded-of-callers.md).
+```turmeric
+(definstance Scaler [int]
+  (scale-by [self k] (* self k)))   ; k inherits (> v 0)
+
+(.scale-by 3 0)   ; error[TUR-E0371] -- and the entry check enforces it too
+```
+
+Writing an explicit annotation is how an instance **demands less**, which is
+legal (`TUR-E0374` only forbids demanding *more*). A bare `: int` carries no
+predicate, so it opts the parameter out entirely:
+
+```turmeric
+(definstance Scaler [float]
+  (scale-by [self : float, k : int] : int k))   ; demands nothing of k
+
+(.scale-by 1.5 0)   ; allowed -- correct for the instance that runs
+                    ; warning[TUR-W0377]: relies on instance leniency
+```
+
+That call is allowed because a statically-resolved dispatch knows which
+implementation runs, and is checked against that implementation's contract --
+the more precise of the two. It is *linted* because the leniency is not part of
+the interface: the same argument fails the moment dispatch goes dynamic, or a
+stricter instance appears. Only a **definite** violation warns -- an argument
+the class predicate rejects outright, not one it merely cannot prove -- so
+`(.scale-by 1.5 n)` for an unconstrained `n` is silent.
 
 A **dynamic** dispatch -- an abstract receiver, so no instance is selected --
 is checked against the **class** signature instead:
@@ -782,14 +801,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
   `apply2`. Passing a refined function as a value is legal and the callee's own
   entry checks still run -- only the static crossing is lost. Refinements in
   function *types* are outside the prototype.
-- **A class parameter refinement is not demanded of callers at a STATIC site.**
-  When an instance is resolved the argument obligation comes from that
-  instance, so it exists only when the instance restates the class predicate;
-  one that demands less, or leaves the parameter unannotated, raises nothing.
-  A *dynamic* dispatch no longer has this gap -- it crosses into the class
-  signature (above). The method's own entry check applies in every case, so
-  this costs a compile-time error, not safety. See
-  [docs/reported/class-param-refinement-not-demanded-of-callers.md](../reported/class-param-refinement-not-demanded-of-callers.md).
+- **An instance that explicitly demands less is checked against its own,
+  weaker, predicate at a statically-resolved site** -- deliberately, since it
+  is the implementation that will actually run. `TUR-W0377` marks a call that
+  depends on that leniency; it is a warning rather than an error because the
+  call is correct for the instance it resolved to. See
+  [docs/archive/class-param-refinement-not-demanded-of-callers.md](../archive/class-param-refinement-not-demanded-of-callers.md)
+  for why that reading was chosen over making the class signature binding on
+  callers.
 - **A definite violation is only reported when the goal's model is closed**,
   and closedness is currently measured by the VC's variable count rather than
   the goal's. A caller with any parameter in scope -- which includes every

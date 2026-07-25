@@ -903,6 +903,19 @@ typedef struct RefineCallSite {
      * into this tree, so walking down to it collects every branch that had to
      * be taken to reach the call. */
     const Form    *caller_body;
+    /* RT1: when this crossing is a STATICALLY-resolved typeclass dispatch whose
+     * instance demands LESS than its class, the class's own parameter
+     * predicates.  The obligation is still the instance's -- the resolved
+     * instance is the more precise contract, and the argument is genuinely
+     * acceptable to it -- but an argument the CLASS rejects is relying on that
+     * instance's private leniency, which is not part of the interface and
+     * evaporates the moment dispatch goes dynamic or a stricter instance
+     * appears.  That is TUR-W0377.  NULL for every other crossing, and for a
+     * dispatch whose instance restates its class predicate (nothing to
+     * disagree about). */
+    const Form   **class_param_preds;
+    const char   **class_param_vars;
+    uint32_t       n_class_params;
     Span           loc;
 } RefineCallSite;
 
@@ -912,6 +925,14 @@ typedef struct RefineCallSite {
  * hypotheses over the range its body produced. */
 uint32_t refine_note_call_site(Elab *e, const Binding *callee,
                                const Form *call_form, uint32_t arg_offset);
+
+/* Attach the CLASS signature's parameter predicates to an already-recorded
+ * crossing, so a statically-resolved dispatch whose instance demands less can
+ * be linted (TUR-W0377) without changing what it is obliged to prove. */
+void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
+                                       const Form *call_form,
+                                       const Form **preds, const char **vars,
+                                       uint32_t n_params);
 
 /* Attach `env` / `caller` to every crossing recorded at or after `from` that
  * does not already have one.  Called by elab_defn once its body is elaborated

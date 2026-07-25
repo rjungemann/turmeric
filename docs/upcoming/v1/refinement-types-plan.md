@@ -1398,6 +1398,56 @@
 >
 > Candidates, roughly by value:
 >
+> ### Landed: class parameter inheritance, and reading B + a lint
+>
+> The design question the entry below was blocked on is answered: a class
+> parameter refinement **bounds instances**; it does not bind callers. Plus a
+> lint for the gap that leaves.
+>
+> **The inheritance asymmetry was a defect, and fixing it first shrank the
+> question.** An instance parameter with no annotation now inherits the class's
+> refinement, mirroring the result direction. The inherited predicate is
+> published on the instance method's binding -- the thing both the call-site
+> crossing and the entry-check injection read -- so an omitted annotation is now
+> enforced statically AND at run time, where before it was enforced nowhere.
+> Writing an explicit annotation (including a bare `: int`) is how an instance
+> opts out and demands less, which stays legal. Once omission inherits, most
+> instances demand exactly the class predicate and the two readings stop
+> differing for them.
+>
+> **For what remains -- an instance that EXPLICITLY demands less -- the resolved
+> instance governs.** A statically-resolved dispatch knows which implementation
+> runs, so it is checked against that implementation's contract, the more
+> precise of the two. This rejects no working program. It is linted
+> (`TUR-W0377`) because the leniency is not part of the interface and evaporates
+> when dispatch goes dynamic or a stricter instance appears. Only a DEFINITE
+> violation warns -- one the class predicate refutes outright, not one it merely
+> cannot prove -- so an unconstrained argument stays silent.
+>
+> The alternative (class binding on callers) was rejected: it turns correct
+> programs into errors, which is a bad thing to adopt while the experiment is
+> heading for a graduate-or-shelve decision at `0.34.0`. Liskov-style contract
+> variance also points the same way -- a caller that statically knows the
+> implementation may use its weaker precondition.
+>
+> Implementation notes worth keeping. The lint carries the class predicates on
+> the `RefineCallSite` rather than replacing the obligation, so what a call must
+> PROVE is unchanged. They are attached keyed on `(callee, call_form)`, not on
+> the index `refine_note_call_site` returns -- that function yields the current
+> count when it deduplicates, which names the last crossing rather than the
+> matching one, and would have linted an unrelated call. The crossing gate was
+> loosened to walk a site where only the CLASS has predicates, since an instance
+> that demands nothing publishes no arrays of its own and that is exactly the
+> shape being linted.
+>
+> Verified: suite 2336/0, solver units 1/1, 200 fuzz cases at seed 4401 with 0
+> soundness bugs. That seed reported 13 report-only suspicious cases against the
+> usual 4-5, so seeds 2201/2202/3301 were re-run and returned 4/5/4 -- identical
+> to their pre-change counts, confirming seed variation rather than a regression.
+> Six negative controls checked by hand: satisfying argument, unknown argument,
+> instance restating the predicate, class with no refinement, unannotated
+> instance, and the violating case itself.
+>
 > ### Landed: a dynamic dispatch crosses into the CLASS signature
 >
 > The conservative half of the entry below. A dispatch on an abstract receiver
@@ -1471,7 +1521,7 @@
 >   constrained generics; the intersection is **zero**.
 >
 >   Filed with repros:
->   [docs/reported/class-param-refinement-not-demanded-of-callers.md](../../reported/class-param-refinement-not-demanded-of-callers.md).
+>   [docs/archive/class-param-refinement-not-demanded-of-callers.md](../../archive/class-param-refinement-not-demanded-of-callers.md).
 >   Guide corrected -- it previously showed `(.scale-by 3 0)` erroring without
 >   noting that only holds when the instance restates the predicate.
 > - **Higher-order callees** -- a function-typed parameter carries no
