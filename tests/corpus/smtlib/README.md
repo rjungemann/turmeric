@@ -93,29 +93,63 @@ a scratch directory and replay them looking for a soundness failure. Only a
 bounded, curated subset belongs in the repo -- the point is a regression net,
 not a benchmark farm.
 
-## Importing the official distributions
+## Importing the SMT-LIB benchmark library
 
-External SMT-LIB benchmarks (the official QF_UF/QF_IDL/QF_LIA/QF_LRA
-distributions) can be dropped into a sibling directory as-is: they already
-carry `(set-info :status ...)`, which is the only thing the runner needs. The
-reader skips whatever falls outside the fragment, so an import does not have to
-be filtered by hand first, and `run_dir` recurses.
+A note on names, because they are easy to conflate and this repo got it wrong
+once. **"SMT-LIB" is two different things:**
 
-They are not here because the benchmark hosts are unreachable from the
-development container used to build this (proxy policy denies the CONNECT).
-Package registries ARE reachable, and were searched rather than assumed:
+1. **The standard** -- a specification: the SMT-LIB 2.6 language, the theory
+   declarations (`Ints`, `Reals`, `ArraysEx`, ...), and the logic declarations
+   (`QF_UF`, `QF_LIA`, `QF_NRA`, ...). These are reference *documents*. The
+   `(set-info :status ...)` attribute this corpus depends on is defined here.
+2. **The benchmark library** -- a separate, much larger *data* artifact: the
+   collection of benchmark files, per logic, each carrying a `:status` label.
+   This is the thing worth importing.
+
+**SMT-COMP is neither.** It is the annual solver competition (run alongside the
+SMT workshop). It *draws* its problems from the benchmark library and publishes
+results and tooling; it is not itself a benchmark distribution. An earlier
+version of this file said benchmarks could be fetched "from the SMT-COMP
+archives", which was wrong.
+
+The distinction has teeth. The crates.io search below found 38 `.smt2` files in
+the Rust `smtlib` crate -- and every one is a **logic declaration from the
+standard**:
+
+```
+(logic QF_NRA
+ :smt-lib-version 2.6
+ :written-by "Cesare Tinelli"
+ ...
+```
+
+No assertions, no `:status`, nothing to solve. The crate vendored the
+*reference*, which is what a parser needs and what a corpus does not.
+
+### Getting the real thing
+
+The benchmark library is released as versioned collections and mirrored as
+per-logic repositories by the Iowa CLC group; recent releases are archived with
+DOIs. Any of those routes works -- the harness needs nothing but files with
+`(set-info :status ...)`.
+
+They are not here because those hosts are unreachable from the development
+container used to build this (proxy policy denies the CONNECT). Package
+registries ARE reachable, and were searched rather than assumed, since they
+would be a viable transport for vendored data:
 
 | source | result |
 |---|---|
-| PyPI (`pysmt` wheel + sdist, `cvc5`, `sudoku-smt-solvers`, full simple-index grep) | no labelled benchmarks |
+| PyPI (`pysmt` wheel + sdist, `cvc5`, `sudoku-smt-solvers`, full simple-index grep) | no benchmarks |
 | npm (`smtlib`, `smtlib-ext`, `smtliblib`) | no `.smt2` at all |
-| crates.io (`smt2parser`, `smtlib`, `smtlib-lowlevel`, `easy-smt`) | 38 `.smt2`, but they are **logic definitions** (`QF_NRA` and friends), not benchmarks -- none carries `:status` |
+| crates.io (`smt2parser`, `smtlib`, `smtlib-lowlevel`, `easy-smt`) | 38 `.smt2` -- all **standard logic declarations**, not benchmarks |
 | `proxy.golang.org` | reachable, no module ships a corpus |
 
-So the registries are a viable transport but nobody publishes a labelled corpus
-through them. Anyone with ordinary network access can fetch the distributions
-from the SMT-LIB site or the SMT-COMP archives and drop them in; nothing in the
-harness needs to change.
+So the registries are a viable transport, but the benchmark library is not
+published through them. Anyone with ordinary network access can fetch it and
+drop it into a subdirectory unfiltered: the reader takes `(set-info :status
+...)` as the label, skips whatever falls outside the fragment rather than
+guessing, and `run_dir` recurses. Nothing in the harness needs to change.
 
 ## Running it
 

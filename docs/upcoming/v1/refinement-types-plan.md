@@ -1446,20 +1446,32 @@
 > against Z3 4.13 (0 soundness bugs, 0 refutation bugs). The last of these had
 > not been exercised in a long while -- it only builds in an oracle build.
 >
-> Not done: importing the official SMT-LIB distributions, whose hosts are
+> Not done: importing the **SMT-LIB benchmark library**, whose hosts are
 > unreachable from this environment by proxy policy. That is now a data drop --
 > the reader takes ordinary `.smt2` with `(set-info :status ...)`, skips what
 > falls outside the fragment, and the runner recurses -- rather than an
 > engineering task.
 >
-> The package registries (PyPI, npm, crates.io, the Go proxy) ARE reachable and
-> were searched rather than assumed, since they are a viable transport for
-> checked-in data. Nobody publishes a labelled corpus through them: the only
-> `.smt2` files found anywhere were 38 in the Rust `smtlib` crate, and those are
-> LOGIC DEFINITIONS (`QF_NRA` and friends), not benchmarks, carrying no
-> `:status`. The search is tabulated in `tests/corpus/smtlib/README.md` so it
-> does not get repeated. What the registries did yield is cvc5, which is why the
-> labels now carry two independent confirmations instead of one.
+> Worth naming precisely, because this plan and the corpus README both got it
+> loose at first. **SMT-LIB is a standard** (the 2.6 language, the theory and
+> logic declarations -- reference documents, and where `:status` is defined) and
+> **separately a benchmark library** (the labelled data). **SMT-COMP is neither**
+> -- it is the annual competition, which draws problems from the library and
+> publishes results and tooling. It is not a benchmark distribution, and an
+> earlier revision here implied it was.
+>
+> The distinction is not pedantry: the package-registry search below found 38
+> `.smt2` files in the Rust `smtlib` crate, and every one is a **logic
+> declaration from the standard** (`(logic QF_NRA :written-by "Cesare Tinelli"
+> ...)`) -- no assertions, no `:status`, nothing to solve. The crate vendored
+> the reference, which is what a parser needs and a corpus does not.
+>
+> The registries (PyPI, npm, crates.io, the Go proxy) ARE reachable and were
+> searched rather than assumed, since they would be a viable transport for
+> vendored data; the benchmark library is not published through any of them.
+> The search is tabulated in `tests/corpus/smtlib/README.md` so it does not get
+> repeated. What the registries did yield is cvc5, which is why the labels now
+> carry two independent confirmations instead of one.
 >
 > ### Landed: closedness is a property of the goal, not of the model
 >
@@ -2475,13 +2487,16 @@ all of the following hold:
   | generated soak, Z3-labelled | 3600 benchmarks (seeds 7/8/9) | 2646 sat, **0** wrongly proved |
   | VC-level differential vs Z3 4.13 | 7000 VCs | 0 soundness bugs, 0 refutation bugs |
 
-  What is NOT yet done is importing the official SMT-LIB distributions. That is
-  now a **data drop rather than an engineering task**: the reader takes ordinary
-  `.smt2` with `(set-info :status ...)`, skips whatever falls outside the
-  fragment rather than guessing, and the runner recurses, so a distribution can
-  be dropped in a subdirectory unfiltered. It was not done here because the
-  benchmark hosts are unreachable from this environment (proxy policy), not
-  because anything is missing.
+  What is NOT yet done is importing the **SMT-LIB benchmark library** -- the
+  labelled data artifact, as distinct from the SMT-LIB *standard* (the language
+  and logic declarations) and from SMT-COMP (the annual competition, which uses
+  the library but is not a distribution of it). That is now a **data drop rather
+  than an engineering task**: the reader takes ordinary `.smt2` with
+  `(set-info :status ...)`, skips whatever falls outside the fragment rather
+  than guessing, and the runner recurses, so a collection can be dropped in a
+  subdirectory unfiltered. It was not done here because those hosts are
+  unreachable from this environment (proxy policy), not because anything is
+  missing.
 - **No scaffold references remain in shippable code paths** (guaranteed by
   construction, since the CMake option refuses Release/WASM, but re-verified at
   deletion).
