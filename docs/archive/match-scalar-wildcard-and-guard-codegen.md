@@ -1,4 +1,6 @@
-# `match` on a non-ADT scrutinee whose first arm is a wildcard dereferences a null `AdtDef`
+# Two codegen defects in `match` on a non-ADT scrutinee (RESOLVED)
+
+## Defect 1: wildcard-only arms dereference a null `AdtDef`
 
 **Severity:** medium -- UBSan-caught null dereference in codegen. Not a
 miscompile in the shipped Release build (no sanitizer), but it is undefined
@@ -27,9 +29,10 @@ The scrutinee is an `:int`, so there is no `AdtDef` to name.
 
 ## Which shapes are affected
 
-It is decided by the FIRST arm's pattern, not by guards -- my first reading
-blamed `when`, which was wrong. A leading wildcard or bare binder takes the ADT
-path; a leading literal does not:
+It is decided by whether ANY arm spells a literal -- not by the first arm's
+pattern, and not by guards. Two earlier readings of this were wrong: the first
+blamed `when`, the second blamed arm 0's position. The gate is
+`_has_lit`, computed over every arm.
 
 ```turmeric
 (match p _ 0)                     ; UB
@@ -55,21 +58,10 @@ snprintf(adt_c_name, sizeof(adt_c_name), "tur_adt_%s", _mn);
 
 `adt` is NULL whenever the scrutinee is not an ADT.
 
-## Fix directions
+## Fix
 
-Guard the block on `adt != NULL` and take the scalar path for a non-ADT
-scrutinee, the same way a leading literal arm already does. The fix is probably
-one condition; the work is finding which of the `scrut_is_app_monomorph` /
-carrier branches below it also assume `adt` is non-NULL. Better still, fix the
-dispatch that classifies the match from arm 0, so the decision does not depend
-on which arm happens to come first.
-
-## Status
-
-Not fixed. Noticed while adding fuzzer coverage for match-arm hypotheses; the
-affected rungs were dropped from the generator (`shape_datatype`) so the fuzzer
-does not spend every datatype case on this one crash. Restore the leading-`_`
-rungs once this is fixed.
+Enter the scalar path whenever the scrutinee is not an ADT, rather than only
+when some arm spells a literal. One condition, at the `_has_lit` gate.
 
 ---
 
@@ -103,6 +95,22 @@ handle wildcard-plus-guard -- so the two are probably one fix. Severity is
 higher than the null deref in one respect: this one fails the C compile
 outright, so it is a hard "cannot build this program" rather than UB.
 
-Affected fixture rungs are avoided rather than fixed:
-`tests/fixtures/refine-crossing-path-conditions` uses a guarded arm on an ADT
-scrutinee instead.
+## Fix
+
+The if/else-if chain becomes a flat sequence of `if` blocks each jumping to an
+end label on success -- exactly what the ADT path already does, and for exactly
+this reason. A guarded arm's block tests its guard inside, so failing it falls
+through to the next arm; and a binder is bound before the guard that mentions
+it is evaluated.
+
+---
+
+## Both fixed
+
+Both are resolved by one rewrite of the scalar-match block in
+`emit_expr.c`. Covered by `tests/fixtures/match-scalar-wildcard-and-guard`, and
+the `shape_datatype` rungs dropped from `tests/refine-fuzz-src.py` are restored.
+
+The third defect noticed alongside these -- a var pattern's binder not being in
+scope for its own guard -- is in elaboration rather than codegen and stays
+open: `docs/reported/match-var-pattern-guard-scope.md`.

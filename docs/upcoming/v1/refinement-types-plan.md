@@ -1336,6 +1336,40 @@
 > Verified: suite 2329/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
 >
+> ### Fixing the match-lowering defects the fuzzer found (landed 2026-07-25)
+>
+> Not refinement work, but on the path: the two codegen defects the datatype
+> fuzzer shape turned up had forced fixture shapes to be routed around and
+> generator rungs to be dropped, and both reproduce with the gate off.
+>
+> They lived in one block and had one fix. The scalar-match path was entered
+> only when SOME arm spelled a literal, so a match with only wildcard or binder
+> arms fell through to the ADT path and read `adt->name` through a NULL AdtDef
+> -- an `:int` has no AdtDef. And that path emitted an if/else-if chain, which
+> cannot express a guard: a guarded arm may fail its guard and fall through, so
+> its test is not the whole condition. A guarded wildcard emitted a bare `else`
+> and the arm after it emitted a second one, producing `'else' without a
+> previous 'if'` -- a program that could not be built at all.
+>
+> The fix is one structure: a flat sequence of `if` blocks each jumping to an
+> end label on success, which is what the ADT path already did and for exactly
+> this reason. It also gives a binder somewhere to be bound BEFORE a guard that
+> mentions it is evaluated.
+>
+> Worth recording that the report was WRONG TWICE before it was right. The
+> first reading blamed `when`; the second blamed arm 0's position; the actual
+> gate is `_has_lit` over every arm. Both earlier readings were consistent with
+> the probes run at the time -- which is the argument for widening the probe
+> set before writing down a root cause, not after.
+>
+> The dropped `shape_datatype` rungs are restored, and a third defect noticed
+> alongside stays open: a var pattern's binder is not in scope for its own
+> guard (`docs/reported/match-var-pattern-guard-scope.md`). That one is
+> elaboration rather than lowering, so it never reaches the block above.
+>
+> Verified: suite 2330/0, solver unit 47/0, 400 fuzz cases across two seeds
+> with 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:

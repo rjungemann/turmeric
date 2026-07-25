@@ -553,15 +553,16 @@ class Gen:
             "(match p 0 %s 1 %s _ p)" % (z, z),
             "(match p 0 0 1 1 _ %s)" % z,
             "(match p 0 (- p 1) 1 p _ %s)" % z,
-            # guards: a necessary condition for the arm, never a sufficient one.
-            # Every rung leads with a LITERAL arm: a match on a non-ADT
-            # scrutinee whose first arm is a wildcard or bare binder null-derefs
-            # in codegen, gate or no gate -- see
-            # docs/reported/match-int-scrutinee-guard-null-adt.md. Restore the
-            # leading-`_` rungs once that is fixed.
+            # guards: a necessary condition for the arm, never a sufficient one
             "(match p 0 %s _ when (>= p %s) p _ %s)" % (z, z, z),
             "(match p 0 %s _ when (> p 100) p _ %s)" % (z, z),
             "(match p 0 when (>= p %s) %s _ p)" % (z, z),
+            # Leading wildcards and guarded wildcards, restored: both used to
+            # break codegen on a non-ADT scrutinee (a NULL AdtDef deref and an
+            # `else` with no `if`) regardless of the gate.
+            "(match p _ when (>= p %s) p _ %s)" % (z, z),
+            "(match p _ when (> p 100) p _ %s)" % z,
+            "(match p _ %s)" % z,
             # constructor tag + record selector
             "(let [b (FzBox p p)] (match b (FzBox x y) x))",
             "(let [b (FzBox p p)] (match b (FzBox x y) (if (>= x %s) x %s)))" % (z, z),

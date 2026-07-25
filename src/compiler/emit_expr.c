@@ -9361,7 +9361,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 bool _has_lit = false;
                 for (uint32_t _ai = 0; _ai < e->as.match_.n_arms && !_has_lit; _ai++)
                     _has_lit = e->as.match_.arms[_ai].pattern.is_literal;
-                if (_has_lit) {
+                /* A scrutinee that is not an ADT belongs here whether or not
+                 * any arm spells a literal.  Gating on `_has_lit` alone sent
+                 * `(match p _ 0)` and `(match p x x)` down the ADT path below,
+                 * which reads `adt->name` through a NULL AdtDef -- there is no
+                 * AdtDef for an `:int`.  See
+                 * docs/reported/match-int-scrutinee-guard-null-adt.md. */
+                const Type *_sbase = &e->as.match_.scrutinee->type;
+                while (_sbase && _sbase->kind == TY_APP && _sbase->as.app.fn)
+                    _sbase = _sbase->as.app.fn;
+                bool _scrut_is_adt = _sbase && (_sbase->kind == TY_ADT);
+                if (_has_lit || !_scrut_is_adt) {
                     bool nil_result = (e->type.kind == TY_NIL);
                     char *tmp = NULL;
                     if (!nil_result) {
@@ -9385,15 +9395,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                                    scrut_tmp, scrut_val);
                     free(scrut_val);
-                    bool _first = true;
+                    /* A FLAT SEQUENCE OF `if` BLOCKS, each jumping to the end
+                     * on success -- not an if/else-if chain.
+                     *
+                     * The chain could not express a GUARD.  A guarded arm may
+                     * fail its guard and fall through to the next arm, so its
+                     * test is not the whole condition; the chain emitted a bare
+                     * `else` for a guarded wildcard and then a second `else`
+                     * for the arm after it, producing `'else' without a
+                     * previous 'if'` from the C compiler -- a program that
+                     * simply could not be built.  It also had no place to bind
+                     * a var pattern BEFORE evaluating a guard that mentions it.
+                     *
+                     * This is the same shape the ADT path below already uses,
+                     * for the same reason. */
+                    char *_end_label = fresh_tmp(ctx);
                     for (uint32_t ai = 0; ai < e->as.match_.n_arms; ai++) {
                         MatchArm *arm = &e->as.match_.arms[ai];
                         MatchPattern *pat = &arm->pattern;
                         indent_buf(body, ctx->indent);
                         if (pat->is_wildcard || pat->is_var) {
-                            buf_puts(body, _first ? "{\n" : "else {\n");
+                            buf_puts(body, "{\n");
                         } else {
-                            const char *kw = _first ? "if" : "else if";
+                            const char *kw = "if";
                             switch (pat->lit_kind) {
                             case F_INT:
                                 buf_printf(body, "%s (%s == (int64_t)%lldLL) {\n",
@@ -9426,7 +9450,6 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 break;
                             }
                         }
-                        _first = false;
                         ctx->indent += 4;
                         /* Bind var capture to scrutinee value */
                         if (pat->is_var && pat->var_binding) {
@@ -9442,6 +9465,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                            _ctype, _vname, _ctype, scrut_tmp);
                             free(_vname);
                         }
+                        /* The guard is tested AFTER the pattern's binding
+                         * exists, since it is allowed to mention it. */
+                        if (arm->guard) {
+                            char *gv = emit_value(ctx, body, arm->guard);
+                            indent_buf(body, ctx->indent);
+                            buf_printf(body, "if (%s) {\n", gv);
+                            free(gv);
+                            ctx->indent += 4;
+                        }
                         if (!nil_result) {
                             char *bv = emit_value(ctx, body, arm->body);
                             indent_buf(body, ctx->indent);
@@ -9450,10 +9482,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         } else {
                             emit_stmt(ctx, body, arm->body);
                         }
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "goto __%s;\n", _end_label);
+                        if (arm->guard) {
+                            ctx->indent -= 4;
+                            indent_buf(body, ctx->indent);
+                            buf_puts(body, "}\n");
+                        }
                         ctx->indent -= 4;
                         indent_buf(body, ctx->indent);
                         buf_puts(body, "}\n");
                     }
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "__%s:;\n", _end_label);
+                    free(_end_label);
                     free(scrut_tmp);
                     return nil_result ? atom_nil() : tmp;
                 }
