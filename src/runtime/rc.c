@@ -6,11 +6,12 @@
 
 #include <stddef.h>   /* offsetof, for the layout guard below */
 #include "rc.h"
-/* DEDUP-2: rc.h is standalone (a compiled program must be able to include
- * it). The IMPLEMENTATION may still use the compiler's type definitions --
- * default_drop_fn_for_type switches on TY_REF/TY_RC/TY_WEAK -- so the
- * dependency lives here in the .c instead of leaking through the header. */
-#include "types.h"
+/* DEDUP-2 made rc.h standalone (a compiled program must be able to include it)
+ * by moving the compiler's types.h in here; DEDUP-4b removes it from here too.
+ * types.h is C11 and pulls in the whole type system, which kept this TU out of
+ * the C99 runtime archive.  The only thing it was needed for was the three
+ * TypeKind ordinals default_drop_fn_for_type switches on, which now live in
+ * rc.h as RC_VT_* and are asserted against the real enum by the compiler. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,11 +65,11 @@ static void drop_weak_payload(void *value) {
 
 static RcDropFn default_drop_fn_for_type(uint8_t value_type) {
     switch (value_type) {
-        case TY_REF:
+        case RC_VT_REF:
             return drop_ref_payload;
-        case TY_RC:
+        case RC_VT_RC:
             return drop_rc_payload;
-        case TY_WEAK:
+        case RC_VT_WEAK:
             return drop_weak_payload;
         default:
             return default_drop_fn;

@@ -434,10 +434,20 @@ endif()
 # Compile flags mirror the default `tur build` cc_flags (-O2 -std=c99
 # -fno-strict-aliasing) so the objects are ABI-identical to a bare-source
 # compile; no -Werror so a stray warning here never fails the archive build.
+# DEDUP-4b (gc-cycle-collection-plan): rc/gc/rc_free_queue join the archive so a
+# compiled program can LINK the one maintained copy of the reference counter and
+# cycle collector instead of carrying a hand-written replica of it in its
+# preamble.  Safe to add ahead of the emit-side switch: while the emitted copy
+# still defines these symbols itself, the linker simply never pulls these
+# members in (a static archive member is only extracted to resolve an undefined
+# symbol), so the archive grows but no existing link changes.
 set(TURT_RUNTIME_SOURCES
     runtime/hamt.c
     runtime/symbols.c
     runtime/tur_string.c
+    runtime/rc.c
+    runtime/gc.c
+    runtime/rc_free_queue.c
 )
 add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
 set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")

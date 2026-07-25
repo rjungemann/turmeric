@@ -685,8 +685,60 @@ runtime-only** (the two newly-visible divergences, `rc_cb_alloc_kinded` and
 The count does not drop much from 4a, and that is the honest outcome: the
 remaining 25 are overwhelmingly *cosmetic* (brace style, accessor helpers,
 `default_rc_drop_fn` vs `default_drop_fn`), and they disappear when the emitted
-copy does -- not by being rewritten to match. **4a is complete.** 4b is next,
-and is now purely mechanical.
+copy does -- not by being rewritten to match. **4a is complete.**
+
+### 4b -- link the archive
+
+**4b step 1 landed 2026-07-25 (and 4b is not "purely mechanical" -- correcting
+that too).**
+
+`rc.c`, `gc.c` and `rc_free_queue.c` are now in `TURT_RUNTIME_SOURCES`, so
+`libturt_runtime.a` carries the reference counter and collector. Safe to land
+ahead of the emit-side switch: a static archive member is only extracted to
+resolve an *undefined* symbol, and the emitted copy still defines all of these
+itself, so no existing link changes. Verified rather than assumed -- full suite
+green, all 140 snapshots unchanged, and rc-heavy fixtures
+(`byval-adt-local-owning-field-drop`, `backtrack-clone-rc`) built and run under
+an explicit `--runtime=lib` against the new archive.
+
+Getting there needed the last piece of DEDUP-2, which had been left half-done:
+`rc.c` still `#include`d the compiler's `types.h` for the three `TypeKind`
+ordinals its drop-glue switch dispatches on. That header is C11
+(`static_assert`) and drags in the whole type system, so `rc.c` **would not
+compile into the C99 archive at all**. Fixed by giving `rc.h` its own
+`RC_VT_REF` / `RC_VT_RC` / `RC_VT_WEAK`, so the header *and* the
+implementation are now standalone.
+
+That leaves three spellings of the same three numbers -- the enum, `RC_VT_*`,
+and the literals in the emitted switch -- so `emit_module.c` (the one place
+that sees both the enum and `rc.h`) now carries a two-part `_Static_assert`
+pinning enum-to-`RC_VT_*` and `RC_VT_*`-to-literals. Both validated by
+perturbing each side and watching the right assertion fire.
+
+**Gap analysis for step 2 (the emit-side declare-only switch).** Comparing
+what the archive exports against what emitted code references, the swap is
+*not* mechanical -- four things are missing or mismatched:
+
+| gap | detail |
+|---|---|
+| `tur_rc_from_ref`, `tur_ref_from_rc` | **do not exist in the runtime at all** -- emitted-only. Must be added to `rc.c` |
+| `default_rc_drop_fn` | emitted code names it this; the runtime's is `default_drop_fn` *and* `static`, so unexported. Needs renaming plus external linkage |
+| `__gc_mark_struct_child` | emitted struct `walk_fn`s call this; the runtime's `gc_mark_struct_child` is `static` |
+| `rc_free_queue` | the two copies give this name **incompatible types** -- a fixed `RcControlBlock *[65536]` array in the emitted copy, a struct in the runtime. So in archive mode the rc/gc globals must be *omitted entirely*, not `extern`-declared: a wrong `extern` here is worse than a missing one |
+
+Plus every internal collector helper (`gc_vec_reserve`, `gc_add_suspect`,
+`gc_remove_suspect`, `gc_enqueue_grey`, `gc_dequeue_grey`, `gc_mark_phase`,
+`gc_trial_deletion_phase`, `gc_each_child`, the scan/mark-gray/collect-white
+family) is `static` in `gc.c`. That is fine *if* no emitted module code calls
+them -- which needs to be established from the linker's undefined-symbol list,
+not from reading, since the preamble's own call sites are indistinguishable
+from module call sites by grep.
+
+Step 2 is therefore: export/add the four above, teach
+`emit_rt_defs_begin`/`_end` and `emit_rt_global` a third "archive supplies
+this" state, emit the prototypes unconditionally, resolve the archive at
+*emit* time (the probe is a pure filesystem check, so it can move ahead of
+codegen), and iterate against real link errors.
 
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the

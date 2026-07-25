@@ -146,6 +146,22 @@ struct RcControlBlock {
 #define RCEXP_OPAQUE      0  /* scalar / bit pattern (no recursion) */
 #define RCEXP_RC          1  /* RcControlBlock pointer (follow it) */
 
+/* DEDUP-4b: the three value-type ordinals the default drop glue dispatches on.
+ *
+ * These are TypeKind values (TY_REF / TY_RC / TY_WEAK), but the runtime must
+ * not include the compiler's types.h to learn them: that header is C11
+ * (`static_assert`) and drags in the whole type system, which is what stopped
+ * rc.c compiling into the C99 runtime archive.  DEDUP-2 moved the include out
+ * of this header into rc.c; DEDUP-4b removes it from rc.c too.
+ *
+ * The compiler asserts these agree with the real enum -- see the
+ * `_Static_assert` in src/compiler/emit_module.c, which includes this header
+ * precisely so the two cannot drift.  A reorder of TypeKind is a build error,
+ * not a runtime mystery. */
+#define RC_VT_REF    8
+#define RC_VT_RC     9
+#define RC_VT_WEAK  10
+
 /* Size of the control block header (without the value) */
 #define RC_CB_HEADER_SIZE (sizeof(RcControlBlock))
 
