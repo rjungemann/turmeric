@@ -1,11 +1,34 @@
 ---
-status: open
+status: resolved
 severity: medium
+resolved: 2026-07-25
 discovered: 2026-07-24
 area: runtime (Bacon-Rajan cycle collector, src/runtime/gc.c)
 ---
 
 # The cycle collector cannot reclaim live `rc<T>` strong cycles
+
+## Resolution (2026-07-25)
+
+**Fixed by CG0 + CG1 + CG2** (`docs/upcoming/v1/gc-cycle-collection-plan.md`).
+Both root causes below are addressed: CG1 added the classic Bacon-Rajan
+PossibleRoot hook so a strong decrement that leaves the count > 0 buffers a
+candidate, and CG2 replaced the mark-sweep-from-strong-roots core with real
+trial deletion (MarkGray / Scan / ScanBlack / CollectWhite over a scratch trial
+refcount). Re-measured on the probe from the Measured section: **192 bytes per
+cycle -> 0**, with a GC-off control still leaking ~192 B/cycle. Guarded by
+`tests/fixtures/gc-collects-strong-cycle`.
+
+Related defect 1 (registry overflow) was fixed by CG0. Related defect 2 (trial
+deletion dangling live weak pointers) is also addressed: a collected block with
+`weak_count > 0` is kept as a zombie so `upgrade` returns none.
+
+Still true, and now the accurate caveat: the collector only sees what the walker
+sees, so a cycle routed through an `RCK_OPAQUE` handle is still not collected
+(CG3), and collection is driven manually by `(gc!)` until CG5 adds an automatic
+trigger.
+
+The original report follows for the record.
 
 ## Summary
 

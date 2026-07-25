@@ -1,0 +1,53 @@
+; CG2 (gc-cycle-collection-plan): (gc!) must now RECLAIM a live strong rc<T>
+; cycle -- the case the collector could never handle before.
+;
+; Pre-CG2 the mark phase treated every strong_count>0 block as a root, and every
+; member of a self-sustaining cycle has strong_count>0 via its own back-edge, so
+; a cycle was unconditionally marked live. Measured leak: 192 bytes per cycle,
+; identical whether the collector was on or off
+; (docs/reported/gc-strong-cycles-not-collected.md).
+;
+; Real trial deletion subtracts the internal edges first, so a block referenced
+; only from within the candidate subgraph falls to a zero trial count and is
+; collected. This builds many two-node cycles, collecting after each, and
+; asserts the heap does not grow.
+(defstruct S :move [next : rc<S>])
+
+(defn null-rc-s [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn heap-uordblks [] : int
+  ```c
+  #include <malloc.h>
+  struct mallinfo2 mi = mallinfo2();
+  return (int64_t)mi.uordblks;
+  ```)
+
+(defn build-cycle [] : int
+  (let [s1 (rc/of (make-struct S (null-rc-s)))
+        s2 (rc/of (make-struct S (rc/clone s1)))]
+    ; after the back-edge both nodes sit at strong=2: one external binding plus
+    ; one in-cycle reference. Leaving this scope drops each to 1, which is the
+    ; PossibleRoot edge CG1 buffers and CG2 then proves is garbage.
+    (set! (.next s1) (rc/clone s2))
+    0))
+
+(defn run [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (build-cycle)
+      (gc!)
+      (set! i (+ i 1))))
+  0)
+
+(defn main [] : int
+  (gc-enable!)
+  (run 500)                       ; warm up allocator behaviour
+  (let [before (heap-uordblks)]
+    (run 5000)
+    (let [after (heap-uordblks)]
+      ; 0 == every cycle reclaimed. Pre-CG2 this was 192 bytes per cycle.
+      (println (if (= (- after before) 0) 0 (- after before)))
+      0)))

@@ -402,6 +402,192 @@ static void gc_trial_deletion_phase(void) {
     }
 }
 
+/* ========== CG2: Bacon-Rajan trial deletion ==========
+ *
+ * The pre-CG2 "trial deletion phase" was really a mark-sweep from strong roots:
+ * every block with strong_count > 0 was treated as a root, so a self-sustaining
+ * cycle -- whose members all have strong_count > 0 via their own back-edges --
+ * was unconditionally marked live and could never be collected. Real trial
+ * deletion subtracts the internal edges first, which is what distinguishes an
+ * in-cycle reference from an external one.
+ *
+ * Three deliberate departures from the textbook, all safety-motivated:
+ *   1. Trial decrements land on a SCRATCH counter (gc_trial), not the real
+ *      strong_count. A bad walker can then only cause a missed cycle, never a
+ *      corrupted live count.
+ *   2. The white set is collected into a pending list and freed only after the
+ *      whole traversal. Freeing during traversal would let a later sibling read
+ *      a freed block's color.
+ *   3. Members are flagged gc_collecting before their drop_fns run, so the
+ *      child decrements inside drop glue cannot double-free.
+ */
+
+static RcControlBlock **gc_pending_free = NULL;
+static uint32_t gc_pending_count = 0;
+static uint32_t gc_pending_capacity = 0;
+/* Candidate roots drained from the suspect buffer this collection. */
+static RcControlBlock **gc_cand_roots = NULL;
+static uint32_t gc_cand_count = 0;
+static uint32_t gc_cand_capacity = 0;
+
+/* Enumerate the rc children of a block. Only layouts we can describe are
+ * walkable: RCK_STRUCT via its registered walk_fn, and an RCK_EXISTENTIAL whose
+ * payload is itself an rc. RCK_OPAQUE blocks have no enumerable children -- a
+ * cycle routed through one is invisible to the collector, which is the
+ * documented blind spot (and exactly Rust's situation with raw pointers). */
+static void gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx) {
+    if (!cb || !cb->value) return;
+    if (cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {
+        int64_t raw = *(const int64_t *)cb->value;
+        RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
+        if (inner) fn(inner, ctx);
+    } else if (cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {
+        cb->walk_fn(cb->value, fn, ctx);
+    }
+}
+
+static void gc_mark_gray(RcControlBlock *s);
+static void gc_scan(RcControlBlock *s);
+static void gc_scan_black(RcControlBlock *s);
+static void gc_collect_white(RcControlBlock *s);
+
+/* MarkGray: subtract one trial reference for each internal edge. */
+static void gc_mark_gray_child(RcControlBlock *t, void *ctx) {
+    (void)ctx;
+    if (!t) return;
+    if (t->gc_trial > 0) t->gc_trial--;
+    gc_mark_gray(t);
+}
+static void gc_mark_gray(RcControlBlock *s) {
+    if (!s || s->color == GC_GREY) return;
+    s->color = GC_GREY;
+    gc_each_child(s, gc_mark_gray_child, NULL);
+}
+
+/* ScanBlack: this subgraph is externally reachable after all -- restore the
+ * trial counts we subtracted and re-blacken. */
+static void gc_scan_black_child(RcControlBlock *t, void *ctx) {
+    (void)ctx;
+    if (!t) return;
+    t->gc_trial++;
+    if (t->color != GC_BLACK) gc_scan_black(t);
+}
+static void gc_scan_black(RcControlBlock *s) {
+    if (!s) return;
+    s->color = GC_BLACK;
+    gc_each_child(s, gc_scan_black_child, NULL);
+}
+
+/* Scan: a grey block with trial refs left is reachable from outside the
+ * candidate subgraph; one with none is provisionally garbage (white). */
+static void gc_scan_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_scan(t); }
+static void gc_scan(RcControlBlock *s) {
+    if (!s || s->color != GC_GREY) return;
+    if (s->gc_trial > 0) {
+        gc_scan_black(s);
+    } else {
+        s->color = GC_WHITE;
+        gc_each_child(s, gc_scan_child, NULL);
+    }
+}
+
+/* CollectWhite: gather the garbage cycle. Nothing is freed here (see note 2). */
+static void gc_collect_white_child(RcControlBlock *t, void *ctx) {
+    (void)ctx;
+    gc_collect_white(t);
+}
+static void gc_collect_white(RcControlBlock *s) {
+    if (!s || s->color != GC_WHITE || s->gc_buffered) return;
+    s->color = GC_BLACK;   /* visited marker; prevents re-entry */
+    if (gc_pending_count >= gc_pending_capacity) {
+        if (!gc_vec_reserve(&gc_pending_free, &gc_pending_capacity,
+                            gc_pending_count + 1u))
+            return;   /* OOM: leave it uncollected (a leak, never unsafe) */
+    }
+    gc_pending_free[gc_pending_count++] = s;
+    gc_each_child(s, gc_collect_white_child, NULL);
+}
+
+/* Run one trial-deletion collection over the buffered candidate roots.
+ * Only roots with strong_count > 0 are candidates; strong==0 roots are zombies
+ * and are left for the pre-existing zombie sweep. */
+static void gc_cycle_collect_phase(void) {
+    if (gc_suspect_count == 0) return;
+
+    /* Reset scratch state over every registered block. Same order of work as
+     * the existing color reset, so no new asymptotic cost. */
+    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
+        RcControlBlock *cb = gc_all_blocks[i];
+        if (!cb) continue;
+        cb->gc_trial = cb->strong_count;
+    }
+
+    /* MarkRoots */
+    for (uint32_t i = 0; i < gc_suspect_count; i++) {
+        RcControlBlock *s = gc_suspect_roots[i];
+        if (s && s->color == GC_PURPLE && s->strong_count > 0) gc_mark_gray(s);
+    }
+    /* ScanRoots */
+    for (uint32_t i = 0; i < gc_suspect_count; i++) {
+        RcControlBlock *s = gc_suspect_roots[i];
+        if (s && s->strong_count > 0) gc_scan(s);
+    }
+    /* CollectRoots: drain the candidate roots (zombies stay), then gather. */
+    /* CollectRoots: drain the candidate roots (zombies stay in the buffer for
+     * the sweep below), then CollectWhite from EACH DRAINED CANDIDATE.
+     *
+     * It must be the candidates, not every registered block: blocks are born
+     * WHITE at registration, so sweeping all-WHITE would collect live values
+     * that this collection never even looked at. */
+    gc_pending_count = 0;
+    gc_cand_count = 0;
+    {
+        uint32_t w = 0;
+        for (uint32_t i = 0; i < gc_suspect_count; i++) {
+            RcControlBlock *s = gc_suspect_roots[i];
+            if (s && s->strong_count > 0) {
+                s->gc_buffered = false;      /* required before gc_collect_white */
+                if (gc_cand_count < gc_cand_capacity ||
+                    gc_vec_reserve(&gc_cand_roots, &gc_cand_capacity,
+                                   gc_cand_count + 1u))
+                    gc_cand_roots[gc_cand_count++] = s;
+                continue;                    /* dropped from the buffer */
+            }
+            gc_suspect_roots[w++] = s;       /* keep zombies for the sweep below */
+        }
+        gc_suspect_count = w;
+    }
+    for (uint32_t i = 0; i < gc_cand_count; i++)
+        gc_collect_white(gc_cand_roots[i]);
+    gc_cand_count = 0;
+
+    if (gc_pending_count == 0) return;
+
+    /* Free the white set. Flag first so drop glue cannot double-free (note 3),
+     * then run every drop_fn, then release the blocks. */
+    for (uint32_t i = 0; i < gc_pending_count; i++)
+        gc_pending_free[i]->gc_collecting = true;
+    for (uint32_t i = 0; i < gc_pending_count; i++) {
+        RcControlBlock *cb = gc_pending_free[i];
+        if (cb->value && cb->drop_fn) { cb->drop_fn(cb->value); cb->value = NULL; }
+    }
+    for (uint32_t i = 0; i < gc_pending_count; i++) {
+        RcControlBlock *cb = gc_pending_free[i];
+        gc_unregister_block(cb);
+        cb->strong_count = 0;
+        if (cb->weak_count > 0) {
+            /* CG4 discipline: a live weak<T> still observes this block, so keep
+             * the control block as a zombie -- upgrade() must return none, not
+             * dangle. It is freed by the last rc_weak_decrement. */
+            cb->gc_collecting = false;
+            continue;
+        }
+        free(cb);
+        gc_objects_freed++;
+    }
+    gc_pending_count = 0;
+}
+
 /* Main collection function */
 void gc_collect(void) {
     if (!gc_enabled || gc_mode == GC_DISABLED) {
@@ -410,13 +596,15 @@ void gc_collect(void) {
 
     gc_collections++;
 
+    /* CG2: real trial deletion over the buffered candidate roots -- this is the
+     * phase that reclaims genuine strong cycles. */
+    gc_cycle_collect_phase();
+
     /* Clear grey queue */
     gc_grey_count = 0;
 
-    /* Mark phase */
+    /* Pre-existing zombie sweep (strong==0 with live weak refs). Unchanged. */
     gc_mark_phase();
-
-    /* Trial deletion phase */
     gc_trial_deletion_phase();
 }
 

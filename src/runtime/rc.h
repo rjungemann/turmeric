@@ -90,6 +90,19 @@ struct RcControlBlock {
      * the count > 0. The old linear scan over the buffer would have made that
      * quadratic. */
     bool gc_buffered;
+    /* CG2: scratch trial refcount, recomputed at the start of every collection.
+     * Bacon-Rajan's trial deletion subtracts internal (in-cycle) edges to find
+     * blocks referenced only from within the candidate subgraph. The textbook
+     * algorithm decrements the REAL refcount and restores it; we use a scratch
+     * copy instead, so an incomplete or asymmetric walk_fn can never corrupt a
+     * live count -- the worst case becomes a missed cycle (a leak), never a
+     * use-after-free. */
+    uint64_t gc_trial;
+    /* CG2: set while this block is in the white set being freed. A struct's
+     * drop_fn decrements its rc children; for a cycle those children are also
+     * being freed, so rc_strong_decrement must neither queue them for free nor
+     * buffer them as candidates while this is set. */
+    bool gc_collecting;
     /* EXG5: layout tag bytes -- reserved[0] is the high-level kind
      * (one of RCK_*), reserved[1] is the payload descriptor for
      * RCK_EXISTENTIAL blocks (one of RCEXP_*).  The remaining bytes

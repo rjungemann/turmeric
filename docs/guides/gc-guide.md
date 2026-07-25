@@ -104,14 +104,20 @@ Runtime knobs surface as three compiler intrinsics wired in
 | `(gc-enable!)` | Switch to `GC_THRESHOLD`        |
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
 
-> **What a collection actually reclaims today.** The collector as wired is
-> *zombie-only*: it frees a block whose strong count reached 0 while a `weak<T>`
-> still observes it. It does **not** reclaim a live strong-reference cycle -- the
-> members keep `strong_count > 0`, are treated as roots, and survive `(gc!)` in
-> every mode. So `(gc!)` is not a remedy for `rc<T>` cycles today; break them
-> with `weak<T>` as in Rust. See
-> `docs/reported/gc-strong-cycles-not-collected.md` (with measured numbers) and
-> the plan `docs/upcoming/v1/gc-cycle-collection-plan.md`.
+> **What a collection actually reclaims (updated 2026-07-25).** `(gc!)` now
+> reclaims **live strong `rc<T>` cycles** as well as weak-zombie blocks. The
+> collector runs real Bacon-Rajan trial deletion: a strong decrement that leaves
+> the count > 0 buffers a candidate root, and collection subtracts the internal
+> (in-cycle) edges on a scratch counter to find blocks referenced only from
+> within the candidate subgraph. Measured: 192 bytes per two-node cycle -> 0.
+>
+> Two caveats remain. The collector only sees what the walker sees, so a cycle
+> routed through an `RCK_OPAQUE` handle is still not reclaimed. And collection is
+> **driven by user code** -- `(gc!)`, or the suspect threshold under
+> `(gc-enable!)`; there is no automatic background trigger yet. Breaking cycles
+> with `weak<T>`, as in Rust, remains valid and is still the only option with the
+> collector disabled (the default). See
+> `docs/upcoming/v1/gc-cycle-collection-plan.md`.
 
 ---
 
@@ -273,11 +279,13 @@ For historical context:
 
 ## Known gaps
 
-- Cycle collection is off by default, and even when enabled it is zombie-only:
-  a live strong `rc<T>` cycle is **not** reclaimed by `(gc!)` in any mode
-  (measured: `docs/reported/gc-strong-cycles-not-collected.md`). Break cycles
-  with `weak<T>` as in Rust; the plan to actually collect them is
-  `docs/upcoming/v1/gc-cycle-collection-plan.md`.
+- Cycle collection is off by default. When enabled it now reclaims live strong
+  `rc<T>` cycles as well as weak-zombies (CG0--CG2, 2026-07-25; measured 192
+  bytes per cycle -> 0, archived at
+  `docs/archive/gc-strong-cycles-not-collected.md`). Remaining gaps: a cycle
+  routed through an `RCK_OPAQUE` block is invisible to the walker, and there is
+  no automatic trigger -- user code drives collection via `(gc!)` or the
+  suspect threshold.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.
 - The walker relies on per-block metadata registered at allocation. Runtime

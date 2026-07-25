@@ -104,6 +104,8 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
     cb->may_contain_cycles = true;
     cb->gc_index = RC_GC_INDEX_NONE;   /* CG0: set by gc_register_block below */
     cb->gc_buffered = false;           /* CG1: not in the candidate buffer */
+    cb->gc_trial = 0;                  /* CG2: scratch, set per collection */
+    cb->gc_collecting = false;         /* CG2: not being collected */
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;
@@ -174,7 +176,17 @@ uint64_t rc_strong_increment(RcControlBlock *cb) {
  */
 bool rc_strong_decrement(RcControlBlock *cb) {
     if (!cb) return false;
-    
+
+    /* CG2: this block is part of a white set currently being freed. Its
+     * drop_fn is running and decrementing rc children that are themselves in
+     * that set, so the count must fall without triggering a free (double free)
+     * or a candidate buffering (dangling suspect). The collector frees every
+     * member itself once all drop_fns have run. */
+    if (cb->gc_collecting) {
+        if (cb->strong_count > 0) cb->strong_count--;
+        return false;
+    }
+
     cb->strong_count--;
     
     if (cb->strong_count == 0) {

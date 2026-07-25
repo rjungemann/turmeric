@@ -2492,6 +2492,8 @@ struct RcControlBlock {
     bool may_contain_cycles;  /* Hint for GC */
     uint32_t gc_index;        /* CG0: slot in gc_all_blocks, or RC_GC_INDEX_NONE */
     bool gc_buffered;         /* CG1: in the candidate-root buffer */
+    uint64_t gc_trial;        /* CG2: scratch trial refcount */
+    bool gc_collecting;       /* CG2: in the white set being freed */
     uint8_t reserved[6];
 };
 
@@ -2559,6 +2561,8 @@ static void gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */
 static void gc_register_block(RcControlBlock *cb) {
     if (!cb) return;
     cb->gc_buffered = false;
+    cb->gc_collecting = false;
+    cb->gc_trial = 0;
     if (gc_all_blocks_count >= gc_all_blocks_capacity) {
         uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u : GC_GLOBAL_REGISTRY_CAPACITY;
         if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {
@@ -2719,6 +2723,10 @@ uint64_t rc_strong_increment(RcControlBlock *cb) {
 
 bool rc_strong_decrement(RcControlBlock *cb) {
     if (!cb) return false;
+    if (cb->gc_collecting) {
+        if (cb->strong_count > 0) cb->strong_count--;
+        return false;
+    }
     cb->strong_count--;
     if (cb->strong_count == 0) {
         if (cb->weak_count > 0) {
@@ -2880,8 +2888,120 @@ static void gc_trial_deletion_phase(void) {
     }
 }
 
+static RcControlBlock **gc_pending_free = NULL;
+static uint32_t gc_pending_count = 0;
+static uint32_t gc_pending_capacity = 0;
+static RcControlBlock **gc_cand_roots = NULL;
+static uint32_t gc_cand_count = 0;
+static uint32_t gc_cand_capacity = 0;
+
+static void gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx) {
+    if (!cb || !cb->value) return;
+    if (cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {
+        int64_t raw = *(const int64_t *)cb->value;
+        RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
+        if (inner) fn(inner, ctx);
+    } else if (cb->reserved[0] == RCK_STRUCT && cb->walk_fn) {
+        cb->walk_fn(cb->value, fn, ctx);
+    }
+}
+
+static void gc_mark_gray(RcControlBlock *s);
+static void gc_scan(RcControlBlock *s);
+static void gc_scan_black(RcControlBlock *s);
+static void gc_collect_white(RcControlBlock *s);
+
+static void gc_mark_gray_child(RcControlBlock *t, void *ctx) {
+    (void)ctx; if (!t) return;
+    if (t->gc_trial > 0) t->gc_trial--;
+    gc_mark_gray(t);
+}
+static void gc_mark_gray(RcControlBlock *s) {
+    if (!s || s->color == GC_GREY) return;
+    s->color = GC_GREY;
+    gc_each_child(s, gc_mark_gray_child, NULL);
+}
+
+static void gc_scan_black_child(RcControlBlock *t, void *ctx) {
+    (void)ctx; if (!t) return;
+    t->gc_trial++;
+    if (t->color != GC_BLACK) gc_scan_black(t);
+}
+static void gc_scan_black(RcControlBlock *s) {
+    if (!s) return;
+    s->color = GC_BLACK;
+    gc_each_child(s, gc_scan_black_child, NULL);
+}
+
+static void gc_scan_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_scan(t); }
+static void gc_scan(RcControlBlock *s) {
+    if (!s || s->color != GC_GREY) return;
+    if (s->gc_trial > 0) { gc_scan_black(s); }
+    else { s->color = GC_WHITE; gc_each_child(s, gc_scan_child, NULL); }
+}
+
+static void gc_collect_white_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_collect_white(t); }
+static void gc_collect_white(RcControlBlock *s) {
+    if (!s || s->color != GC_WHITE || s->gc_buffered) return;
+    s->color = GC_BLACK;
+    if (gc_pending_count >= gc_pending_capacity) {
+        if (!gc_vec_reserve(&gc_pending_free, &gc_pending_capacity, gc_pending_count + 1u)) return;
+    }
+    gc_pending_free[gc_pending_count++] = s;
+    gc_each_child(s, gc_collect_white_child, NULL);
+}
+
+static void gc_cycle_collect_phase(void) {
+    if (gc_suspect_count == 0) return;
+    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
+        RcControlBlock *cb = gc_all_blocks[i];
+        if (cb) cb->gc_trial = cb->strong_count;
+    }
+    for (uint32_t i = 0; i < gc_suspect_count; i++) {
+        RcControlBlock *s = gc_suspect_roots[i];
+        if (s && s->color == GC_PURPLE && s->strong_count > 0) gc_mark_gray(s);
+    }
+    for (uint32_t i = 0; i < gc_suspect_count; i++) {
+        RcControlBlock *s = gc_suspect_roots[i];
+        if (s && s->strong_count > 0) gc_scan(s);
+    }
+    gc_pending_count = 0;
+    gc_cand_count = 0;
+    {
+        uint32_t w = 0;
+        for (uint32_t i = 0; i < gc_suspect_count; i++) {
+            RcControlBlock *s = gc_suspect_roots[i];
+            if (s && s->strong_count > 0) {
+                s->gc_buffered = false;
+                if (gc_cand_count < gc_cand_capacity || gc_vec_reserve(&gc_cand_roots, &gc_cand_capacity, gc_cand_count + 1u))
+                    gc_cand_roots[gc_cand_count++] = s;
+                continue;
+            }
+            gc_suspect_roots[w++] = s;
+        }
+        gc_suspect_count = w;
+    }
+    for (uint32_t i = 0; i < gc_cand_count; i++) gc_collect_white(gc_cand_roots[i]);
+    gc_cand_count = 0;
+    if (gc_pending_count == 0) return;
+    for (uint32_t i = 0; i < gc_pending_count; i++) gc_pending_free[i]->gc_collecting = true;
+    for (uint32_t i = 0; i < gc_pending_count; i++) {
+        RcControlBlock *cb = gc_pending_free[i];
+        if (cb->value && cb->drop_fn) { cb->drop_fn(cb->value); cb->value = NULL; }
+    }
+    for (uint32_t i = 0; i < gc_pending_count; i++) {
+        RcControlBlock *cb = gc_pending_free[i];
+        gc_unregister_block(cb);
+        cb->strong_count = 0;
+        if (cb->weak_count > 0) { cb->gc_collecting = false; continue; }
+        free(cb);
+    }
+    gc_pending_count = 0;
+}
+
 static void gc_collect(void) {
     if (!gc_enabled || gc_mode == GC_DISABLED) return;
+    gc_cycle_collect_phase();
     gc_grey_count = 0;
     gc_mark_phase();
     gc_trial_deletion_phase();

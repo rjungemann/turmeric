@@ -1,9 +1,9 @@
 # Cycle-Collecting GC -- Reaching Past Rust (CG0--CG8)
 
-> **Status:** CG0 + CG1 landed 2026-07-25 (dynamic buffers + registry with an
-> O(1) unregister; classic PossibleRoot candidate buffering). CG2 -- real
-> trial deletion, the phase that actually reclaims cycles -- is next and is what
-> makes CG1's buffered candidates observable. CG2-CG8 not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
+> **Status:** CG0 + CG1 + CG2 landed 2026-07-25. **`(gc!)` now reclaims live
+> strong `rc<T>` cycles** -- measured 192 bytes per cycle -> 0. Turmeric can now
+> do what Rust's `Rc`/`Arc` cannot, opt-in and off by default. CG3 (walker
+> completeness), CG5 (automatic trigger) and the rest are not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
 > `src/runtime/gc.h`, colors + modes + suspect buffer + a global block registry
 > + `mark_phase`/`trial_deletion_phase`), but as wired it only reclaims the
 > **weak-zombie** case (strong->0 while weak>0). It cannot collect a live
@@ -191,7 +191,52 @@ existing zombie path for weak-referenced blocks. New entry point
 `gc_on_strong_decrement_nonzero` (or fold both into one `gc_possible_root`)
 called from `rc_strong_decrement` on the `strong_count > 0` branch.
 
-### CG2 -- Real trial-deletion collection (the core)
+### CG2 -- Real trial-deletion collection (the core) [DONE 2026-07-25]
+
+**Landed. `(gc!)` now reclaims live strong `rc<T>` cycles** -- the thing the
+collector could never do. Measured on the same probe as the original report:
+**192 bytes per cycle -> 0**, with a GC-off control still leaking ~192 B/cycle,
+so the collector is demonstrably what reclaims it.
+
+`gc_cycle_collect_phase` implements MarkGray / Scan / ScanBlack / CollectWhite
+over the candidate roots CG1 buffers, then the pre-existing zombie sweep runs
+unchanged. Three deliberate departures from the textbook, all safety-motivated:
+
+1. **Trial decrements land on a scratch counter (`gc_trial`), never the real
+   `strong_count`.** The textbook decrements the live count and restores it in
+   ScanBlack; if a `walk_fn` were incomplete or asymmetric that would corrupt a
+   live refcount. With a scratch copy the worst case degrades to a missed cycle
+   (a leak), never a use-after-free.
+2. **The white set is freed only after the whole traversal.** Freeing inside
+   CollectWhite would let a later sibling read a freed block's color -- the
+   classic algorithm frees in-traversal and gets away with it only because
+   nothing re-reads a freed node; we do not rely on that.
+3. **Members are flagged `gc_collecting` before their `drop_fn`s run.** A
+   struct's drop glue decrements its rc children, which for a cycle are also
+   being freed; `rc_strong_decrement` honours the flag by decrementing without
+   freeing or buffering, so drop glue cannot double-free.
+
+**The bug the fixtures caught:** the first implementation ran CollectWhite over
+*every registered block* rather than over the drained candidate roots. Blocks
+are born WHITE at registration, so that collected live values the collection had
+never examined -- `gc-mixed` returned a garbage refcount for a live binding.
+CollectWhite now starts only from the candidates, as the classic algorithm
+specifies.
+
+CG4's weak discipline came along for free: a collected block with
+`weak_count > 0` keeps its control block as a zombie (value dropped, count
+zeroed) so `upgrade` returns none rather than dangling.
+
+Guarded by `tests/fixtures/gc-collects-strong-cycle` (5000 cycles built and
+collected, heap growth must be exactly 0). All pre-existing GC fixtures
+(`gc-mixed`, `gc-cycle-freed`, `gc-stress`, `gc-dag`, `gc-no-false-positives`,
+`gc-deterministic`, `exg5-exists-cycle`) still pass unchanged.
+
+**Still open:** the collector only sees what the walker sees, so a cycle routed
+through an `RCK_OPAQUE` block remains uncollectable (CG3), and collection is
+still driven manually by `(gc!)` / the suspect threshold (CG5).
+
+*Original phase text:*
 
 Replace `gc_mark_phase` + `gc_trial_deletion_phase` with the three-sub-phase
 Bacon-Rajan `MarkGray` / `Scan` / `CollectWhite` over the candidate set:
