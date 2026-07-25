@@ -175,6 +175,68 @@ Roughly in increasing order of work:
 
    **Still open:** `map`/`hamt`, and `weak<T>` in any collection (there is no
    count to take, so a weak slot would be a bare pointer nobody owns).
+### The `map`/`hamt` side (investigated 2026-07-25)
+
+Two things in the earlier notes here were wrong, and both would misdirect
+whoever picks this up.
+
+**Wrong claim 1: "a persistent HAMT shares nodes between versions, so release
+on removal is not well-defined without refcounted nodes."** The machinery
+already exists and is in use. `src/runtime/hamt.c` carries refcounted value
+boxes (`tur_hamt_box_key` -- a `[refcount|size][payload]` header -- with
+`tur_hamt_box_retain` / `tur_hamt_box_release`), thread-local retain/release
+hooks (`g_hamt_val_retain` / `g_hamt_val_release`) saved and restored around
+every mutating op, and a deferred free of structurally-shared nodes that runs
+those hooks as entries actually die. Bit 1 of the `owned` bitmask already turns
+it on for wide by-value values. Structural sharing is a solved problem here, not
+the blocker.
+
+**The real blocker is which copy of the refcounter gets called.** `hamt.c` has
+*zero* rc dependency today, and it must stay that way. It is precompiled into
+`libturt_runtime.a`, so an `rc_strong_decrement` call written inside it would
+always bind to the archive's `rc.c` -- correct under the default archive mode,
+but wrong under `TUR_RCGC_FROM_ARCHIVE=0` and `--shared`, where the program
+carries its own emitted replica and the two would be different collectors
+operating on the same blocks. This is exactly why the `vec` side works: its
+release lives in `stdlib/vec.tur` inline-C, which is *emitted into the program*
+and therefore binds to whichever copy that program uses.
+
+So the value ops have to be **supplied by the caller and stored on the map**,
+never referenced from inside `hamt.c`. The code is already shaped for it: keys
+do exactly this (`m->key_ops.release`), and the value side hardcodes
+`tur_hamt_box_release` in `tur_hamt_free` only because there has only ever been
+one value-box op. Making the value ops symmetric with the key ops is the
+enabling refactor, and it is behaviour-preserving for the existing bit-1 path.
+
+**Wrong claim 2 -- and this one sits in front of all of it:
+`map-assoc` cannot take a move-typed value at all.**
+
+```
+stdlib/map.tur:495: error [TUR-E0201]: cannot copy unique value '__tur_mv__'
+   (+ (mk-owned? __tur_mk__) (* 2 (tur-wide-byval? __tur_mv__)))
+```
+
+The macro binds the value once and *uses* it twice -- as the value, and as the
+argument to the emit-time type query `tur-wide-byval?` -- and a move-typed
+binding may be used at most once. It goes unnoticed because the only fixture
+covering boxed values, `map-multiword-struct-value`, declares its struct
+`:copy`. Declaring the query's parameter `^borrow` does **not** relax it; the
+check fires on the second use at the call site, not inside the callee.
+
+`rc<T>` is move-only, so **every** rc value would hit this before reaching any
+of the HAMT work. Whoever takes this on should fix the double-use first --
+probably by having the emit-time query take a type witness that is not the value
+binding, the way `vec-empty-like__` threads one -- and should treat it as its own
+change with its own fixture, since it unblocks move-typed map values generally,
+not just rc ones.
+
+Order of work, then: (a) let `map-assoc` accept a move-typed value; (b) make the
+HAMT's value ops caller-supplied and stored, symmetric with the key ops;
+(c) thread bit 2 through `map.tur` passing `rc_strong_increment` /
+`rc_strong_decrement` from the emitted side; (d) register the map insert/read
+sinks in `own_carry_for_arg` / `own_carry_for_result` alongside the `vec-*`
+entries.
+
 3. **Make the collection walkable** so the cycle collector can trace through it
    (CG3 item 2). **Measured and blocked -- see below.** Item (2) opened the
    blind spot for real: a `Vec[rc<T>]` compiles today, so a cycle can now
