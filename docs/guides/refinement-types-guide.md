@@ -173,22 +173,33 @@ resolution and are checked identically.
 Two consequences are easy to miss, and the instance above is written the way it
 is to make them visible. Because the obligation comes from the *instance*:
 
-- An instance that **demands less** -- `(scale-by [self : int, k : int] ...)`,
-  which is legal -- carries no parameter predicate, so `(.scale-by 3 0)`
-  raises nothing. Omitting the annotation entirely does *not* inherit the
-  class demand either; parameters differ from results here.
-- A dispatch that stays **dynamic** -- no statically-selected instance --
-  raises no argument obligation at all, because which method runs is not known
-  at the site.
-
-In both cases the method's own entry check still guards it, so nothing unsound
-follows; a violation is caught at runtime exactly as it is with the gate off.
-What does *not* happen is a compile-time error. A class parameter refinement is
-therefore an upper bound on what instances may demand (enforced by `TUR-E0374`
-below) rather than a demand on callers -- the mirror image of the result
-direction, where the class promise *is* enforced and propagated. Closing that
-asymmetry is recorded in
+An instance that **demands less** -- `(scale-by [self : int, k : int] ...)`,
+which is legal -- carries no parameter predicate, so `(.scale-by 3 0)` raises
+nothing. Omitting the annotation entirely does *not* inherit the class demand
+either; parameters differ from results here. The method's own entry check still
+guards the call, so nothing unsound follows -- what is lost is the compile-time
+error. Recorded in
 [docs/reported/class-param-refinement-not-demanded-of-callers.md](../reported/class-param-refinement-not-demanded-of-callers.md).
+
+A **dynamic** dispatch -- an abstract receiver, so no instance is selected --
+is checked against the **class** signature instead:
+
+```turmeric
+(defn use-dynamic [^Scaler a x : a] : int
+  (.scale-by x 5))    ; proved from the CLASS predicate alone
+```
+
+That is sound by the same variance argument that licenses result propagation,
+run in the other direction. `TUR-E0374` rejects an instance that demands more
+than its class, so every instance's parameter predicate is implied by the
+class's -- which makes the class predicate the strongest demand true of *every*
+instance, and an argument satisfying it acceptable to whichever instance runs.
+
+It is also the only honest choice available there. With no resolved instance
+the dispatch falls back to an arbitrary carrier-compatible one, which is not
+necessarily the instance that will run, and whose predicate is weaker than the
+class's -- checking against it would demand less than the contract while
+appearing to check the contract.
 
 An instance may accept **more** than its class signature promises, but not
 less. The class signature is the contract callers program against, so an
@@ -771,15 +782,21 @@ Known and deliberate, in rough order of how likely you are to hit them:
   `apply2`. Passing a refined function as a value is legal and the callee's own
   entry checks still run -- only the static crossing is lost. Refinements in
   function *types* are outside the prototype.
-- **A class parameter refinement is never demanded of callers.** The argument
-  obligation comes from the resolved INSTANCE, so it exists only when that
-  instance restates the class predicate. An instance that demands less, or that
-  leaves the parameter unannotated, raises nothing -- and a dynamic dispatch,
-  where no instance is selected, raises nothing either. The method's own entry
-  check still applies in every case, so this costs a compile-time error, not
-  safety. It is the mirror image of the result direction, where the class
-  promise is enforced against each instance and propagated to callers. See
+- **A class parameter refinement is not demanded of callers at a STATIC site.**
+  When an instance is resolved the argument obligation comes from that
+  instance, so it exists only when the instance restates the class predicate;
+  one that demands less, or leaves the parameter unannotated, raises nothing.
+  A *dynamic* dispatch no longer has this gap -- it crosses into the class
+  signature (above). The method's own entry check applies in every case, so
+  this costs a compile-time error, not safety. See
   [docs/reported/class-param-refinement-not-demanded-of-callers.md](../reported/class-param-refinement-not-demanded-of-callers.md).
+- **A definite violation is only reported when the goal's model is closed**,
+  and closedness is currently measured by the VC's variable count rather than
+  the goal's. A caller with any parameter in scope -- which includes every
+  caller of a dynamic dispatch, since the receiver is one -- has an open model,
+  so a literal violation like `(safe-div 10 0)` is reported there only under
+  `--strict-refine`. See
+  [docs/reported/runtime-guarded-refutation-needs-closed-model.md](../reported/runtime-guarded-refutation-needs-closed-model.md).
 
 - **Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,

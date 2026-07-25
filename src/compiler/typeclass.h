@@ -9,6 +9,8 @@
 
 /* Forward declaration for EffectRow (defined in effect.h) */
 struct EffectRow;
+/* Forward declaration for Binding (defined in expr.h) */
+struct Binding;
 
 /* Forward declarations */
 typedef struct TypeClassMethod TypeClassMethod;
@@ -43,6 +45,16 @@ struct TypeClassMethod {
      * caller was entitled to pass.  Arrays have n_params entries. */
     const struct Form **param_refine_preds;
     const char        **param_refine_vars;
+    /* RT1: lazily-built Binding carrying the CLASS's parameter refinements, so
+     * a DYNAMIC dispatch (no statically-resolved instance) can record an
+     * ordinary crossing against the class signature -- the strongest demand
+     * true of every instance, since `TUR-E0374` forbids an instance demanding
+     * more.  Cached here rather than rebuilt per call site because crossings
+     * deduplicate on (callee, call_form): a fresh Binding each time would
+     * defeat that and double-report a re-elaborated site.  NULL until the
+     * first dynamic dispatch that needs it, and never built when no parameter
+     * carries a refinement. */
+    struct Binding *refine_class_binding;
     uint8_t n_params;
     Type return_type;             /* Return type (contract PEELED to its base) */
     /* RT1: the refinement the CLASS signature declares on the method's RESULT,

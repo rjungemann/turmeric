@@ -1398,6 +1398,48 @@
 >
 > Candidates, roughly by value:
 >
+> ### Landed: a dynamic dispatch crosses into the CLASS signature
+>
+> The conservative half of the entry below. A dispatch on an abstract receiver
+> resolves to no instance -- it falls back to an arbitrary carrier-compatible
+> one, which is not necessarily the instance that runs -- so it now records its
+> crossing against the CLASS method signature instead.
+>
+> Sound by the variance argument that already licenses result propagation, run
+> backwards: `TUR-E0374` rejects an instance demanding more than its class, so
+> every instance's parameter predicate is implied by the class's, making the
+> class predicate the strongest demand true of every instance. It is also
+> strictly stronger than the alternative -- the fallback instance's predicate is
+> weaker than the class's, so checking against it would demand less than the
+> contract while appearing to check it.
+>
+> Implemented by synthesising a `Binding` that carries the class's parameter
+> predicates (`rt_class_method_refine_binding`), so `refine_resolve_call_sites`
+> needed no change at all. Cached on the `TypeClassMethod` because crossings
+> deduplicate on `(callee, call_form)` -- a fresh Binding per site would defeat
+> that and double-report a re-elaborated call.
+>
+> Deliberately NOT included: the static-site half, where an instance that
+> demands less still raises nothing. That one turns working programs into
+> errors and needs the design question below answered first.
+>
+> Measuring it turned up a separate, pre-existing defect that limits how much
+> the slice is worth by default: a runtime-guarded counterexample is reported
+> only when the model is CLOSED, and closedness is measured by the VC's
+> variable count rather than the goal's. Any caller with a parameter -- which
+> includes every caller of a dynamic dispatch, the receiver being one -- has an
+> open model, so the violation surfaces under `--strict-refine` rather than by
+> default. Independent of typeclasses; `(safe-div 10 0)` reports in a
+> zero-parameter caller and not in a one-parameter one. Filed as
+> [docs/reported/runtime-guarded-refutation-needs-closed-model.md](../../reported/runtime-guarded-refutation-needs-closed-model.md);
+> not fixed here because it widens hard errors across every crossing, which is
+> its own decision.
+>
+> Verified: suite 2334/0, solver units 1/1, 200 fuzz cases seed 3301 with 0
+> soundness bugs. Fixtures `refine-class-param-dynamic-dispatch` (proofs pinned
+> under `--strict-refine`) and `errors/refine-class-param-dynamic-violated`
+> (pinned by inversion).
+>
 > - **Dynamic typeclass dispatch** -- INVESTIGATED; the entry was mis-scoped.
 >   The gap is not specific to dynamic dispatch. The argument obligation is
 >   built from the resolved INSTANCE, and an instance may legally demand less

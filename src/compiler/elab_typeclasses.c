@@ -4472,6 +4472,71 @@ Expr *elab_definstance(Elab *e, const Form *call) {
  * using the same naming convention as emit.c (emit_dict_name / EX_INSTANCE_DEF).
  * Returns a TY_PTR_VOID-typed Expr that, when emitted, yields the address of
  * the global dictionary singleton cast to int64_t. */
+/* RT1: the Binding standing for a class method's CLASS-LEVEL signature, used to
+ * record a crossing at a dispatch that never resolved to an instance.
+ *
+ * Checking the caller's argument against the class predicate is sound by the
+ * same variance argument that already licenses result propagation, run in the
+ * other direction.  `TUR-E0374` rejects an instance that demands MORE than its
+ * class, so every instance's parameter predicate is implied by the class's --
+ * which makes the class predicate the strongest demand true of EVERY instance,
+ * and an argument satisfying it acceptable to whichever instance runs.
+ *
+ * It is also strictly stronger than what a dynamic site could otherwise use.
+ * With no resolved instance the dispatch falls back to an arbitrary
+ * carrier-compatible one, and that instance's predicate is *weaker* than the
+ * class's (or absent), so checking against it would demand less than the
+ * contract while claiming to check the contract.
+ *
+ * Returns NULL -- meaning "record nothing" -- when no parameter carries a
+ * refinement, which is the overwhelmingly common case. */
+static const Binding *rt_class_method_refine_binding(Elab *e, TypeClass *tc,
+                                                     uint8_t mi) {
+    if (!e || !tc || mi >= tc->n_methods) return NULL;
+    TypeClassMethod *m = &tc->methods[mi];
+    if (m->refine_class_binding) return m->refine_class_binding;
+    if (!m->param_refine_preds || m->n_params == 0) return NULL;
+
+    bool any = false;
+    for (uint8_t p = 0; p < m->n_params; p++)
+        if (m->param_refine_preds[p]) { any = true; break; }
+    if (!any) return NULL;
+
+    Binding *b = (Binding *)arena_alloc(e->arena, sizeof(Binding));
+    memset(b, 0, sizeof(*b));
+    b->name      = m->name;
+    b->is_global = true;
+
+    /* Arg kinds matter: refine_resolve_call_sites falls back to TY_INT for a
+     * parameter it cannot type, which would encode a float argument into the
+     * wrong sort. */
+    TypeKind kinds[MAX_FN_ARITY];
+    uint32_t arity = m->n_params < MAX_FN_ARITY ? m->n_params : MAX_FN_ARITY;
+    for (uint32_t p = 0; p < arity; p++)
+        kinds[p] = m->param_types ? m->param_types[p].kind : TY_INT;
+    b->type = type_fn(kinds, arity, m->return_type.kind);
+
+    const Form **preds = (const Form **)arena_alloc(e->arena,
+                              m->n_params * sizeof(const Form *));
+    const char **vars  = (const char **)arena_alloc(e->arena,
+                              m->n_params * sizeof(const char *));
+    const char **names = (const char **)arena_alloc(e->arena,
+                              m->n_params * sizeof(const char *));
+    for (uint8_t p = 0; p < m->n_params; p++) {
+        preds[p] = m->param_refine_preds[p];
+        vars[p]  = m->param_refine_vars ? m->param_refine_vars[p] : NULL;
+        names[p] = (m->param_names && m->param_names[p])
+                 ? m->param_names[p]->name : NULL;
+    }
+    b->refine_param_preds = preds;
+    b->refine_param_vars  = vars;
+    b->refine_param_names = names;
+    b->n_refine_params    = m->n_params;
+
+    m->refine_class_binding = b;
+    return b;
+}
+
 static Expr *make_dict_expr(Elab *e, TypeClassInstance *inst, Span span) {
     Expr *d = expr_new(e->arena, EX_DICT, type_from_kind(TY_PTR_VOID), span);
     d->as.dict_.instance = inst;
@@ -6578,11 +6643,32 @@ resolved_user_fallback:;
      * refinements the SELECTED INSTANCE's method parameters declare.  The
      * receiver sits at argument 0 of the impl and at index 1 of the source
      * form, so the parameter/argument slots line up exactly as for a named
-     * call.  A dispatch that stays dynamic (no resolved instance -- the
-     * dict_expr branch below) is not checked: which instance runs is not known
-     * here, and the method's own entry check still guards it. */
-    if (best_method && best_method->binding && g_opt_refined)
-        (void)refine_note_call_site(e, best_method->binding, call, 1);
+     * call.
+     *
+     * A dispatch on an ABSTRACT receiver never resolved to an instance -- it
+     * fell back to an arbitrary carrier-compatible one, which is not the
+     * instance that will run.  Cross into the CLASS signature there instead:
+     * it is the one demand every instance honours (see
+     * rt_class_method_refine_binding).  Class parameter indices line up with
+     * instance ones -- both count the receiver at 0 -- so the same arg_offset
+     * of 1 applies.  Either way the method's own entry check still guards the
+     * call; this layer reports, it never elides. */
+    if (g_opt_refined) {
+        const Binding *rt_cs_callee = NULL;
+        if (obj_is_abstract_tyvar && best_inst && best_inst->typeclass) {
+            TypeClass *rt_tc = best_inst->typeclass;
+            for (uint8_t rt_mi = 0; rt_mi < rt_tc->n_methods; rt_mi++) {
+                const Symbol *mn = rt_tc->methods[rt_mi].name;
+                if (mn && strlen(mn->name) == method_name_len &&
+                    strncmp(mn->name, method_name, method_name_len) == 0) {
+                    rt_cs_callee = rt_class_method_refine_binding(e, rt_tc, rt_mi);
+                    break;
+                }
+            }
+        }
+        if (!rt_cs_callee && best_method) rt_cs_callee = best_method->binding;
+        if (rt_cs_callee) (void)refine_note_call_site(e, rt_cs_callee, call, 1);
+    }
 
     if (best_method && best_method->binding) {
         out->as.call_.fn_binding = best_method->binding;
