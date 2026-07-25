@@ -288,6 +288,36 @@ class Gen:
                 ret_pred, self.rng.choice(CMP_OPS), self.lit())
         return params, self._target(params, ret_pred, pre, body)
 
+    def shape_congruence_method(self):
+        """The bug shape aimed at a TYPECLASS METHOD.
+
+        A method has no global binding under its bare name, so it used to fall
+        through to the abstract-measure rule -- "a name that resolves to no
+        function at all is an uninterpreted mathematical function, therefore
+        congruent" -- and pick up congruence for free even when the instance
+        was wired to a counter.  The plain `congruence` shape could not reach
+        this: it only ever repeats a call to a HELPER, and `typeclass` never
+        repeats a call at all.  The bug lived in the gap between two shapes
+        that each looked like they covered it."""
+        impure = [h for h in self.helpers if not h[3]]
+        pure = [h for h in self.helpers if h[3]]
+        pool = impure if (impure and self.rng.random() < 0.7) else (pure or impure)
+        if not pool:
+            return self.shape_congruence()
+        hname, _k, harity, _p = self.rng.choice(pool)
+        inner = "(%s%s)" % (hname, " self" * harity)
+        z = self._zero()
+        call = self.rng.choice(["(.tickm %s)", "(tickm %s)"]) % ("1" if self.mode == "int" else "1.25")
+        lines = [
+            "(defclass Ticker [a]\n  (tickm [self : a] : %s))" % self.ty,
+            "(definstance Ticker [%s]\n  (tickm [self : %s] : %s\n    %s))"
+            % (self.ty, self.ty, self.ty, inner),
+            "(defn target [] : #refine{ r : %s | %s }\n  (- %s %s))"
+            % (self.ty, self.rng.choice(["(>= r %s)" % z, "(= r %s)" % z,
+                                         "(<= r %s)" % z]), call, call),
+        ]
+        return [], "\n\n".join(lines)
+
     def shape_congruence(self):
         """The bug shape.  Two occurrences of the SAME call, subtracted, with a
         refinement that holds iff the callee is genuinely pure.  Half the
@@ -426,10 +456,12 @@ class Gen:
             params, target = self.shape_congruence()
         elif r < 0.74:
             params, target = self.shape_param()
-        elif r < 0.86:
+        elif r < 0.80:
             params, target = self.shape_propagate()
-        else:
+        elif r < 0.90:
             params, target = self.shape_typeclass()
+        else:
+            params, target = self.shape_congruence_method()
         lines.append(target)
         lines.append(self._main(params))
         return "\n\n".join(lines) + "\n"

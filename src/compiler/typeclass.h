@@ -162,6 +162,15 @@ TypeClassInstance *typeclass_env_register_instance(TypeClassEnv *env, TypeClass 
 /* Look up a typeclass by name */
 TypeClass *typeclass_env_lookup_typeclass(const TypeClassEnv *env, const Symbol *name);
 
+/* RT4: find the class METHOD a bare name denotes, if any.  The refinement
+ * encoder needs this to tell a typeclass method apart from a name that
+ * resolves to nothing at all -- the latter is an abstract measure, which the
+ * language defines as congruent, and a method is emphatically not one.
+ * Writes the declaring class to *out_class when non-NULL. */
+const TypeClassMethod *typeclass_env_find_method(const TypeClassEnv *env,
+                                                 const Symbol *name,
+                                                 const TypeClass **out_class);
+
 /* assoc-types-plan: find the typeclass that declares an associated type member
  * named `assoc_name`, writing the member's index within that class to
  * *out_index.  Returns NULL (leaving *out_index untouched) when no registered

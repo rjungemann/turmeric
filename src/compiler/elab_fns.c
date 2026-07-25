@@ -371,10 +371,41 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * are proved facts and hold whether or not any check is emitted. */
     const Symbol *sym = symtab_intern(e->st, strslice(name, (uint32_t)strlen(name)));
     Binding *b = scope_lookup(&e->global, sym);
-    /* Not a function we know: the encoder reads this as an abstract measure --
-     * an uninterpreted mathematical function, which the language defines as
-     * congruent. */
-    if (!b) return false;
+    if (!b) {
+        /* A TYPECLASS METHOD has no global binding under its bare name -- the
+         * dispatch is resolved elsewhere -- so it used to fall through to the
+         * abstract-measure rule below and pick up congruence for free.  That is
+         * the same miscompile as the `tick` case, reached through a third door:
+         * an instance method that counts up made `(- (tickm 1) (tickm 1))`
+         * encode as `t - t`, the solver proved `t - t >= 0`, and the runtime
+         * check that would have caught -1 was elided.
+         *
+         * A method is code that runs.  Report it as a known callee with NO
+         * purity, so each occurrence gets its own symbol.  The class's result
+         * refinement is deliberately NOT published here: which instance runs is
+         * not known at the encoder, and the enforcement question is
+         * per-instance. */
+        /* Both dispatch spellings reach here: the bare `(m x)` as `m`, and the
+         * dotted `(.m x)` as `.m`.  Look the dotted one up under its method
+         * name -- checking only `sym` fixed the bare form and left the dotted
+         * one still congruent, which the fuzzer caught two seeds later. */
+        const Symbol *msym = sym;
+        if (name[0] == '.' && name[1] != '\0')
+            msym = symtab_intern(e->st, strslice(name + 1,
+                                                 (uint32_t)strlen(name) - 1));
+        const TypeClass *owner = NULL;
+        if (typeclass_env_find_method(&e->typeclass_env, msym, &owner)) {
+            out->ret_pred    = NULL;
+            out->ret_var     = NULL;
+            out->param_names = NULL;
+            out->n_params    = 0;
+            out->pure        = false;
+            return true;
+        }
+        /* Genuinely nothing: an abstract measure -- an uninterpreted
+         * mathematical function, which the language defines as congruent. */
+        return false;
+    }
 
     out->ret_pred    = b->refine_return_pred;
     out->ret_var     = b->refine_return_var;

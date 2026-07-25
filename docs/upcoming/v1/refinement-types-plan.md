@@ -562,10 +562,72 @@
 > inconsistency, not a claim about the value the program produced. The bucket
 > holds legitimate DECLARATION errors as well as universal value refutations.
 >
+> ### The third congruence door: typeclass methods (landed 2026-07-25)
+>
+> The same miscompile, a third time, through a route neither previous fix
+> touched:
+>
+> ```turmeric
+> (defn raw-tick [] #fx{} : int ```c static int64_t n = 0; return n++; ```)
+> (defclass Ticker [a] (tickm [self : a] : int))
+> (definstance Ticker [int] (tickm [self : int] : int (raw-tick)))
+> (defn probe [] : #refine{ r : int | (>= r 0) }
+>   (- (tickm 1) (tickm 1)))
+> ```
+>
+> Gate off aborted. Gate on reported *1 proven*, printed `-1`, exited 0.
+>
+> The cause was the ABSTRACT MEASURE rule, which is correct and which I wrote:
+> a name resolving to no function at all is an uninterpreted mathematical
+> function, and those are congruent by definition. A typeclass method has no
+> global binding under its bare name -- the dispatch is resolved elsewhere --
+> so `rt_resolve_fn` returned false and the encoder happily read "abstract
+> measure". The purity work hardened the path where a callee IS found and left
+> the not-found path alone; that was the gap.
+>
+> `typeclass_env_find_method` now distinguishes the two. A method is reported
+> as a known callee with `pure = false`, so each occurrence gets its own
+> symbol. The class's result refinement is deliberately not published there:
+> which instance runs is unknown at the encoder, and enforcement is
+> per-instance.
+>
+> **The first fix was half a fix.** It looked the name up as interned, which
+> works for the bare `(tickm 1)` and not for the dotted `(.tickm 1)` -- the
+> encoder sees `.tickm`, which matches no method name. Two seeds later the
+> fuzzer produced a dotted case and reported it. The lookup now strips the dot.
+> Both spellings are in the fixture.
+>
+> Also fixed on the way: `refine_return_pred` was published on instance-method
+> bindings UNCONDITIONALLY, violating the field's documented contract
+> ("published only when enforced") under `--no-contracts`. Currently
+> unreachable -- no dispatch resolves to that binding -- but it is a trap for
+> whoever wires the propagation up, so it is now gated on
+> `rt_contracts_emitted()` like the `defn` path's `rt_ret_guaranteed`.
+>
+> #### What this says about the fuzzer
+>
+> The typeclass shape added an hour earlier did NOT catch this, and neither did
+> the congruence shape. `congruence` only ever repeats a call to a HELPER;
+> `typeclass` never repeats a call at all. The bug lived in the gap between two
+> shapes that each looked like they covered the area. `shape_congruence_method`
+> closes it, and with the fix reverted it reports 4 soundness bugs in 200 cases
+> where the fixed build reports 0 -- the four cases move to `agree_abort`.
+>
+> A fixture is `refine-typeclass-not-congruent`, and it is a RUNTIME fixture
+> rather than an error fixture: nothing here is statically refutable (the
+> method's result is opaque, so there is no closed counterexample), so the build
+> succeeds with `TUR-W0372` and the kept check is what fires. The bug was never
+> a missing diagnostic; it was a missing abort.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
+> - **Propagate a typeclass method's result refinement to callers.** Now that
+>   result variance is enforced, the class's promise is true of every instance,
+>   so it is sound to publish -- but it must be gated on enforcement, and a
+>   dispatch currently resolves to no binding the encoder can read. This is the
+>   completeness half of the work above.
 > - **Dynamic typeclass dispatch** -- a dispatch with no statically-resolved
 >   instance is not checked; which method runs is unknown at the site.
 > - **Higher-order callees** -- a function-typed parameter carries no

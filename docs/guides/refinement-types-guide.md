@@ -329,9 +329,17 @@ return a different value on every call.
 
 The rule has teeth. Given a `tick` that counts up, `(- (tick) (tick))` is `-1`,
 never `0` -- but encoded congruently it becomes `t - t`, and a refinement of
-`(>= r 0)` on it would be "proved" and its check elided. Both halves of that
-hole are pinned by regression fixtures
-(`errors/refine-impure-not-congruent`, `errors/refine-impure-fx-empty`).
+`(>= r 0)` on it would be "proved" and its check elided. Three separate routes
+into that hole are pinned by regression fixtures:
+`errors/refine-impure-not-congruent` (an unannotated callee),
+`errors/refine-impure-fx-empty` (a callee declaring `#fx{}` and lying), and
+`refine-typeclass-not-congruent` (a typeclass method, which has no global
+binding under its bare name and so used to be mistaken for an abstract
+measure).
+
+**A typeclass method is never congruent.** Which instance runs is not known at
+the encoder, and an instance body can do anything, so both `(m x)` and `(.m x)`
+get a distinct symbol per occurrence.
 
 The asymmetry is the point: a case the walk has not learned costs one runtime
 check, while a wrong purity guess elides a check that was protecting something.

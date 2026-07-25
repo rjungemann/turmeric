@@ -4032,10 +4032,21 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         }
         /* RT1/RT4: and the result refinement -- its own if it restated one, the
          * class's otherwise.  The binding is the only record that reaches pass
-         * 2, where the body exists and the check can be injected; it is also
-         * what RT4 reads to propagate the result refinement to a caller. */
-        method_binding->refine_return_pred = impl_ret_pred;
-        method_binding->refine_return_var  = impl_ret_var;
+         * 2, where the body exists and the check can be injected.
+         *
+         * Publishing it is gated on the check actually being emitted, matching
+         * `rt_ret_guaranteed` on the `defn` path.  `refine_return_pred` is read
+         * by RT4 as a FACT about the value a call produced, so a build that
+         * strips contracts (`--no-contracts`, or a release build without
+         * --keep-contracts) must not leave the fact behind after removing the
+         * thing that enforced it.  Nothing reads this binding today -- a
+         * dispatch does not resolve to it -- but the field's contract is
+         * "published only when enforced", and a latent violation of it is a
+         * trap for whoever wires the propagation up. */
+        if (rt_contracts_emitted()) {
+            method_binding->refine_return_pred = impl_ret_pred;
+            method_binding->refine_return_var  = impl_ret_var;
+        }
         method_fd->binding = method_binding;
         method_fd->params = method_params;
         method_fd->n_params = n_method_params;
