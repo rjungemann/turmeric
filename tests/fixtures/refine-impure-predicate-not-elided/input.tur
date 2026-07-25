@@ -1,0 +1,41 @@
+;; Turning the gate on must not change what a program PRINTS.
+;;
+;; This predicate is impure -- `h1` reaches a counter -- so evaluating the check
+;; is itself part of the program's behaviour: each check consumes a counter
+;; value. And it contains a tautology (`(not= r (+ 2 r))`), so the obligation
+;; discharges and the check would be elided, skipping those calls. Gate off
+;; printed 0 2 4; gate on printed 0 1 2.
+;;
+;; The impure call is written FIRST inside the `or` on purpose: `or` short
+;; circuits, so with the tautology leading, `h1` is never reached and there is
+;; no divergence to pin.
+;;
+;; That is not a soundness bug -- both runs are internally consistent -- which
+;; is why the source-level fuzzer files it as BUG_output_divergence rather than
+;; BUG_soundness. It is still a behaviour change caused by an experiment flag,
+;; which is not allowed.
+;;
+;; A check is only invisible to elide when running it was invisible, so a
+;; predicate that calls anything not known pure is never reported as proven.
+;;
+;; The predicate being impure AT ALL is a separate, pre-existing defect: it is
+;; accepted everywhere contracts are elaborated, TUR-E0375 is declared and never
+;; emitted, and `--no-contracts` shows the same divergence with the experiment
+;; off. See docs/reported/impure-refinement-predicates-accepted.md.
+(defn h0 [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn h1 [a : int, b : int] #fx{} : int
+  (h0))
+
+(defn target [] : #refine{ r : int | (or (>= (h1 1 r) 0) (not= r (+ 2 r))) }
+  (h0))
+
+(defn main [] : int
+  (println (target))
+  (println (target))
+  (println (target))
+  0)

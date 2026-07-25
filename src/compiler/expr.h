@@ -292,6 +292,18 @@ struct Binding {
      * obligation instead of being an opaque term. */
     const struct Form  *refine_return_pred;
     const char         *refine_return_var;
+    /* RT1: for a typeclass INSTANCE method that restated its own result
+     * refinement, the CLASS's promise -- checked in addition to its own, and
+     * only when `instance_pred |- class_pred` was not actually PROVED.
+     *
+     * This is what makes it sound to hand a dispatch site the class's result
+     * refinement without knowing which instance runs. The variance check
+     * reports only on a refutation, so an undecidable pair would otherwise
+     * leave the class promise enforced by nothing while callers relied on it.
+     * NULL whenever the instance inherited the class's predicate (its own
+     * check already IS the class's) or the variance obligation discharged. */
+    const struct Form  *refine_class_ret_pred;
+    const char         *refine_class_ret_var;
     /* RT4 purity memo, for the congruence question "may two occurrences of
      * this call be modelled as the SAME value?".  0 = not yet computed,
      * 1 = pure, 2 = impure.  Computed by rt_binding_is_pure (elab_fns.c) with

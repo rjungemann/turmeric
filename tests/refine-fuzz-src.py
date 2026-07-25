@@ -417,14 +417,22 @@ class Gen:
             ("(>= v %s)" % z, "(> v %s)" % z),    # instance demands more: E0374
         ])
         # Result ladder, the other way round: promising LESS than the class is
-        # the illegal direction.
+        # the illegal direction.  The last entry is the one that matters most:
+        # a NONLINEAR instance promise makes `instance |- class` abstract to an
+        # uninterpreted term, so the variance check answers unknown and emits
+        # no error -- while a caller is still handed the class promise. Only
+        # the extra class check injected on the instance keeps that sound, so
+        # this rung is what exercises it.
         use_ret = self.rng.random() < 0.6
+        nonlin = ("(>= (* r r) (* r 2))" if self.mode == "int"
+                  else "(>= (* r r) (* r 2.0))")
         c_rp, i_rp = self.rng.choice([
             ("(>= r %s)" % z, None),              # instance inherits
             ("(>= r %s)" % z, "(>= r %s)" % z),   # restated verbatim
             ("(>= r %s)" % z, "(> r %s)" % z),    # delivers more: legal
             ("(>= r %s)" % z, "(>= r -5)" if self.mode == "int"
                               else "(>= r -5.5)"),  # delivers less: E0374
+            ("(>= r %s)" % z, nonlin),            # weaker, but undecidably so
         ])
         cls_ret = (" : #refine{ r : %s | %s }" % (self.ty, c_rp)) if use_ret else " : %s" % self.ty
         if use_ret and i_rp:
@@ -436,12 +444,21 @@ class Gen:
             "(- self k)", "(+ (* self k) 1)" if self.mode == "int"
                           else "(+ (* self k) 1.25)"])
         call = self.rng.choice(["(.meth p0 %s)", "(meth p0 %s)"]) % self.lit()
+        # Give the caller its own refinement half the time: that is what makes
+        # RT4 propagate the CLASS promise across the dispatch and elide the
+        # caller's check, which is the path where a wrong promise turns into a
+        # wrong answer rather than just a missing hypothesis.
+        if use_ret and self.rng.random() < 0.5:
+            tgt_ret = "#refine{ r : %s | %s }" % (
+                self.ty, self.rng.choice(["(>= r %s)" % z, "(> r %s)" % z]))
+        else:
+            tgt_ret = self.ty
         lines = [
             "(defclass Cls [a]\n  (meth [self : a, k : #refine{ v : %s | %s }]%s))"
             % (self.ty, cp, cls_ret),
             "(definstance Cls [%s]\n  (meth [self : %s, k : #refine{ v : %s | %s }]%s\n    %s))"
             % (self.ty, self.ty, self.ty, ip, inst_ret, body),
-            "(defn target [p0 : %s] : %s\n  %s)" % (self.ty, self.ty, call),
+            "(defn target [p0 : %s] : %s\n  %s)" % (self.ty, tgt_ret, call),
         ]
         return ["p0"], "\n\n".join(lines)
 

@@ -217,6 +217,23 @@ much -- a caller programming against the class signature is relying on it:
 | parameter | `class_pred(p) \|- instance_pred(p)` | demand LESS (accept more) |
 | result | `instance_pred(r) \|- class_pred(r)` | deliver MORE (promise more) |
 
+Because of that rule, **the class's result refinement propagates to callers**
+even though which instance runs is unknown at the site -- it is the one promise
+true of every instance:
+
+```turmeric
+(defn use-it [] : #refine{ r : int | (>= r 0) }
+  (.unbox 3 4))          ; proved from the CLASS promise alone
+```
+
+An instance that restates a predicate the solver cannot prove implies the
+class's gets the class predicate checked alongside its own ("Class result
+contract violated"). That is what keeps the propagation honest: the variance
+check reports only on a refutation, so an *undecidable* pair emits no error,
+and without the extra check a caller would be relying on a promise nothing
+enforced. Under `--no-contracts` nothing enforces it either, so nothing is
+propagated.
+
 What is *not* checked is a genuinely higher-order callee -- see
 [Limits](#limits).
 
@@ -619,6 +636,12 @@ Known and deliberate, in rough order of how likely you are to hit them:
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)
 - **Nonlinear arithmetic** is uninterpreted, as described above.
+- **An impure predicate is never elided.** Running a check is only invisible
+  when the predicate is pure; a predicate that calls an effectful function
+  makes the check part of the program's behaviour, so its obligation is never
+  reported as proven. (That such a predicate is accepted at all is a separate,
+  pre-existing defect -- see
+  `docs/reported/impure-refinement-predicates-accepted.md`.)
 - **Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
   a `match`, a struct field read, or a loop is enough. Its calls are then not

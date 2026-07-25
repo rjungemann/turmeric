@@ -619,15 +619,74 @@
 > succeeds with `TUR-W0372` and the kept check is what fires. The bug was never
 > a missing diagnostic; it was a missing abort.
 >
+> ### Result propagation across a dispatch (landed 2026-07-25)
+>
+> The completeness half. A call to `(.unbox 3 4)` was fully opaque even when
+> the class promised `(>= r 0)`; now the CLASS's result refinement propagates
+> to the caller, so a caller's own obligation discharges from it.
+>
+> Publishing it without knowing which instance runs is sound *because of*
+> result variance, and the reasoning is worth writing down because the obvious
+> version of it is wrong:
+>
+> - An instance that INHERITS the class predicate is checked against it. Fine.
+> - An instance that RESTATES one owes `instance_pred |- class_pred`, and that
+>   check reports **only on a refutation**. An UNDECIDABLE pair emits no error
+>   -- so "the variance check passed" does not mean the class promise holds.
+>
+> So the variance obligation's result is now recorded, and when an instance
+> restates a predicate that was not PROVED to imply the class's, the class
+> predicate is checked alongside the instance's own ("Class result contract
+> violated"). The class promise is then enforced on every instance
+> unconditionally, which is what makes publishing it at a dispatch site safe
+> regardless of elaboration order or solver strength.
+>
+> `errors/`-style coverage for exactly that gap:
+> `refine-typeclass-result-unproved` uses a nonlinear instance promise
+> (`(>= (* r r) (* r 2))`), which abstracts to an uninterpreted term so
+> variance answers unknown and no E0374 fires -- while `r = -5` satisfies it and
+> violates the class's `(>= r 0)`. The caller's check IS elided; the injected
+> class check is the only thing between that program and printing -5.
+>
+> Publication is gated on `rt_contracts_emitted()`, matching
+> `rt_ret_guaranteed` on the `defn` path: `--no-contracts` removes what
+> enforces the promise, so the fact goes with it. Verified both ways.
+>
+> ### An impure PREDICATE, found as output divergence
+>
+> The fuzzer's non-soundness properties earned their keep here. Seed 93 case
+> 294 reported `BUG_output_divergence`: gate off printed `0 2 4`, gate on
+> printed `0 1 2`. Both runs internally consistent; neither violated a
+> refinement.
+>
+> The generated predicate called an impure helper AND contained a tautology
+> (`(not= r (+ 2 r))`). The obligation discharged, the check was elided, and
+> eliding it skipped the predicate's own side effects -- the counter no longer
+> advanced. An experiment flag changed what the program printed.
+>
+> `rt_pred_is_impure` now refuses to report a return obligation as proven when
+> the predicate calls anything not known pure. Reported as not-proven rather
+> than diagnosed: the predicate is equally impure with the gate off, so turning
+> the experiment on should not invent an error.
+>
+> The deeper issue is out of scope and filed:
+> `docs/reported/impure-refinement-predicates-accepted.md`. `TUR-E0375`
+> ("refinement predicate mentions effects; pure predicates only") is declared
+> in `diag.h` and mapped in `diag.c` and **emitted by nothing** -- an impure
+> predicate is accepted everywhere contracts are elaborated, and
+> `--no-contracts` shows the same divergence with the experiment off entirely.
+> That is a contract-layer defect that predates this work.
+>
+> Fixture `refine-impure-predicate-not-elided` pins the behaviour. Note the
+> impure call is written first inside the `or`: `or` short circuits, so with
+> the tautology leading, the impure call is never reached and there is nothing
+> to pin -- the first version of the fixture made exactly that mistake and
+> passed for the wrong reason.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
-> - **Propagate a typeclass method's result refinement to callers.** Now that
->   result variance is enforced, the class's promise is true of every instance,
->   so it is sound to publish -- but it must be gated on enforcement, and a
->   dispatch currently resolves to no binding the encoder can read. This is the
->   completeness half of the work above.
 > - **Dynamic typeclass dispatch** -- a dispatch with no statically-resolved
 >   instance is not checked; which method runs is unknown at the site.
 > - **Higher-order callees** -- a function-typed parameter carries no

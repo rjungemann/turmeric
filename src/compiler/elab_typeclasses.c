@@ -3967,6 +3967,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * Only checked when the instance RESTATED a predicate.  An instance
          * that writes a plain return type inherits the class's, which cannot
          * be a weakening. */
+        bool ret_variance_proved = false;
         if (g_opt_refined && impl_ret_pred_own && m_class_ret_pred &&
             impl_ret_pred != m_class_ret_pred) {
             const char *rvar = impl_ret_var ? impl_ret_var
@@ -3991,6 +3992,7 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             if (vob) {
                 vob->speculative = true;
                 bool ok = refine_discharge_one(vob, e->arena);
+                ret_variance_proved = ok;
                 if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
                     diag_emit_with_code(DIAG_ERROR, impl_form->span,
                         TUR_E0374_REFINE_INSTANCE_STRONGER,
@@ -4046,6 +4048,22 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         if (rt_contracts_emitted()) {
             method_binding->refine_return_pred = impl_ret_pred;
             method_binding->refine_return_var  = impl_ret_var;
+            /* An instance that RESTATED its own promise only enforces that
+             * one.  A dispatch site is handed the CLASS's promise (it cannot
+             * know which instance runs), so the class predicate has to be
+             * enforced here too -- unless the variance obligation actually
+             * proved that the instance's implies it, in which case the
+             * instance's own check already covers it.
+             *
+             * Reporting only on a refutation is right for the diagnostic and
+             * not enough for this: an UNDECIDABLE pair emits no error, so
+             * without the extra check the class promise would be enforced by
+             * nothing while callers relied on it. */
+            if (impl_ret_pred_own && m_class_ret_pred &&
+                impl_ret_pred != m_class_ret_pred && !ret_variance_proved) {
+                method_binding->refine_class_ret_pred = m_class_ret_pred;
+                method_binding->refine_class_ret_var  = m_class_ret_var;
+            }
         }
         method_fd->binding = method_binding;
         method_fd->params = method_params;
@@ -4199,6 +4217,14 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     e, method_body, m_check_fn, rb->refine_return_pred,
                     rb->refine_return_var, "Return contract violated",
                     impl_form->span);
+                /* ...and the class's promise on top, when the instance's own
+                 * was not proved to imply it.  See the comment where this is
+                 * set: a dispatch site relies on the class predicate. */
+                if (rb->refine_class_ret_pred)
+                    method_body = rt_wrap_return_check(
+                        e, method_body, m_check_fn, rb->refine_class_ret_pred,
+                        rb->refine_class_ret_var,
+                        "Class result contract violated", impl_form->span);
             }
         }
 

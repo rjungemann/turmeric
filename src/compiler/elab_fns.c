@@ -394,12 +394,40 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
             msym = symtab_intern(e->st, strslice(name + 1,
                                                  (uint32_t)strlen(name) - 1));
         const TypeClass *owner = NULL;
-        if (typeclass_env_find_method(&e->typeclass_env, msym, &owner)) {
+        const TypeClassMethod *m =
+            typeclass_env_find_method(&e->typeclass_env, msym, &owner);
+        if (m) {
             out->ret_pred    = NULL;
             out->ret_var     = NULL;
             out->param_names = NULL;
             out->n_params    = 0;
             out->pure        = false;
+            /* RT4: the CLASS's result refinement propagates, even though which
+             * instance runs is unknown here -- because it is the one promise
+             * true of EVERY instance.  Result variance is what buys that: an
+             * instance either inherits the class predicate (and is checked
+             * against it) or restates one, and then either its own is proved
+             * to imply the class's or the class's is checked alongside it.
+             *
+             * Gated on the check surviving, matching `rt_ret_guaranteed` on the
+             * `defn` path: `--no-contracts` removes the thing that enforces
+             * this, so the fact must go with it. */
+            if (m->return_refine_pred && rt_contracts_emitted()) {
+                out->ret_pred = m->return_refine_pred;
+                out->ret_var  = m->return_refine_var;
+                /* Parameter names let a predicate that mentions a parameter be
+                 * substituted with what the call site supplied.  The receiver
+                 * is slot 0 of both the class signature and the dispatch, so
+                 * the slots line up. */
+                if (m->param_names && m->n_params) {
+                    const char **pn = (const char **)arena_alloc(
+                        e->arena, m->n_params * sizeof(char *));
+                    for (uint8_t i = 0; i < m->n_params; i++)
+                        pn[i] = m->param_names[i] ? m->param_names[i]->name : NULL;
+                    out->param_names = pn;
+                    out->n_params    = m->n_params;
+                }
+            }
             return true;
         }
         /* Genuinely nothing: an abstract measure -- an uninterpreted
@@ -506,12 +534,51 @@ static const Form *rt4_infer_return(Elab *e, const Form *subject, TypeKind ret_k
 
 /* Collect one return-position obligation and decide it now.  Returns true when
  * a backend proved it, so the caller can skip injecting the runtime check. */
+/* True when evaluating `pred` would do something observable -- it calls a
+ * function that is not known pure.
+ *
+ * Eliding a check is only invisible when running the check was invisible.  A
+ * predicate like `(>= (tick) 0)`, where `tick` bumps a counter, makes the
+ * check itself part of the program's behaviour: with the check emitted the
+ * counter advances, without it the counter does not, and the program prints
+ * different numbers.  The fuzzer found exactly that as an OUTPUT DIVERGENCE
+ * (not a soundness bug -- both runs were internally consistent, they just
+ * disagreed).
+ *
+ * An impure predicate is a mistake in its own right -- `TUR-E0375` exists for
+ * it and nothing emits it, so a contract whose evaluation has side effects is
+ * accepted today and already behaves differently under `--no-contracts`. That
+ * is a contract-layer issue and is reported separately. What this feature owes
+ * is narrower and absolute: turning the gate on must not change behaviour, so
+ * a check guarding an impure predicate is never elided. */
+static bool rt_pred_is_impure(Elab *e, const Form *f) {
+    if (!f) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && head->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        /* A name that resolves to nothing is an abstract measure -- a
+         * mathematical function, so nothing runs.  Builtins (`+`, `and`, ...)
+         * land there too, which is correct: they are pure. */
+        if (rt_resolve_fn(e, head->as.sym->name, &info) && !info.pure)
+            return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_is_impure(e, f->as.list.items[i])) return true;
+    return false;
+}
+
 static bool rt_return_obligation_proven(Elab *e, const Form *pred,
                                         const char *var_name,
                                         const Form *subject, TypeKind base_kind,
                                         RefineEnv *env, const char *what,
                                         const char *fn_name, Span loc) {
     if (!g_opt_refined || !pred) return false;
+    /* Never elide a check that is itself observable.  Reported as not-proven
+     * rather than diagnosed, because the predicate is equally impure with the
+     * gate off -- turning the experiment on should not invent an error. */
+    if (rt_pred_is_impure(e, pred)) return false;
     experiment_warn_if_used("refined");
     RefineObligation *ob =
         refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
