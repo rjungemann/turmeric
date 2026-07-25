@@ -70,3 +70,39 @@ Not fixed. Noticed while adding fuzzer coverage for match-arm hypotheses; the
 affected rungs were dropped from the generator (`shape_datatype`) so the fuzzer
 does not spend every datatype case on this one crash. Restore the leading-`_`
 rungs once this is fixed.
+
+---
+
+## Second defect, same area: guarded wildcard arm emits invalid C
+
+Found the same way (fuzzer/fixture work on match arms), also nothing to do with
+refinements -- it reproduces with the gate off and no `#refine{...}` present.
+
+```turmeric
+(defn via-guard [x : int] : int
+  (match x
+    0 0
+    _ when (not= x 0) (/ 10 x)
+    _ 0))
+
+(defn main [] : int (println (via-guard 5)) 0)
+```
+
+```
+$ ./build/tur build repro.tur
+.../repro.c:7121:9: error: 'else' without a previous 'if'
+```
+
+The emitted C for the guarded wildcard arm opens an `else` with no preceding
+`if`. A guarded LITERAL arm (`0 when (>= x 0) 0`) is fine, and an unguarded
+wildcard in non-first position is fine; it is specifically a wildcard arm
+CARRYING a guard, in non-first position, on a non-ADT scrutinee.
+
+Same root area as the null deref above -- the non-ADT match lowering does not
+handle wildcard-plus-guard -- so the two are probably one fix. Severity is
+higher than the null deref in one respect: this one fails the C compile
+outright, so it is a hard "cannot build this program" rather than UB.
+
+Affected fixture rungs are avoided rather than fixed:
+`tests/fixtures/refine-crossing-path-conditions` uses a guarded arm on an ADT
+scrutinee instead.

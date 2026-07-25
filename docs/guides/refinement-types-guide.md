@@ -772,16 +772,27 @@ Known and deliberate, in rough order of how likely you are to hit them:
   form, but only when the preceding statements contain no assignment -- an
   assignment can stale a hypothesis about a parameter, and carrying that
   hypothesis across it would prove a function that violates its own refinement.
-- **A call-site crossing sees `if` path conditions, not `match` or `let`
-  ones.** A crossing is resolved after the whole unit, which is what lets it
-  see every callee's refinement; the branches that had to be taken to reach it
-  are recovered from the caller's body, so
-  `(if (= n 0) 0 (+ 1 (f (- n 1))))` discharges its recursive crossing from
-  `n >= 0` and `n != 0` together. A `match` arm's facts and a `let` binding's
-  equality are not yet collected this way, and a caller whose body assigns
-  anywhere declines path conditions outright, since a condition mentioning a
-  reassigned name may no longer hold at the call. Each of those costs a
-  diagnostic, never soundness -- the callee's own entry check always remains.
+- **A call-site crossing sees path conditions from `if`, `let`, and `match`.**
+  A crossing is resolved after the whole unit, which is what lets it see every
+  callee's refinement; the branches that had to be taken to reach it are
+  recovered from the caller's body, so `(if (= n 0) 0 (+ 1 (f (- n 1))))`
+  discharges its recursive crossing from `n >= 0` and `n != 0` together. A
+  `let` contributes `x = v`, a `match` arm contributes a literal pattern's
+  equation and its guard.
+
+  Four things are deliberately left out, and all four cost a diagnostic rather
+  than soundness -- the callee's own entry check always remains:
+  a caller whose body **assigns** anywhere (a condition naming a reassigned
+  variable may no longer hold at the call); a **constructor tag or field
+  selector**, since those arrive with pattern binders; a `let` that binds a
+  **function**, which is not an arithmetic fact; and a call reachable by more
+  than one route, which a macro sharing a node can produce.
+- **A crossing under a shadowing binder is abandoned, not answered.** The
+  encoder has one flat namespace, so an argument naming a shadowed variable
+  would inherit the outer one's hypotheses -- `(let [x (- x x)] (sdiv 10 x))`
+  under `x > 0` once "proved" `x != 0` of a value that is zero. Dropping the
+  binding's equation is not enough, because the collision is in the name rather
+  than the fact, so the whole crossing is skipped.
 - **A `while` loop is not analysed.** An accumulator built by a loop is
   Unknown regardless of what the loop does. There is no invariant *inference*
   and none is planned -- inferring facts is the thing this design deliberately

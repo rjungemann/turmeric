@@ -1285,6 +1285,57 @@
 > Verified: suite 2328/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
 >
+> ### Crossing path conditions for `let` and `match` (landed 2026-07-25)
+>
+> The follow-up named in the previous entry, plus a defect the follow-up's own
+> negative test exposed.
+>
+> | Shape | Before | After |
+> |---|---|---|
+> | `(let [y (+ x 1)] (sdiv 10 y))`, `x > 0` | unknown | proven |
+> | `(match x 5 (sdiv 10 x) _ 0)` | unknown | proven |
+> | `(match t (Num v) when (not= v 0) (sdiv 10 v) ...)` | unknown | proven |
+>
+> Constructor tags and field selectors are deliberately NOT collected. They
+> arrive with pattern binders, and a binder shadowing an outer name is the
+> unsound direction rather than the imprecise one -- which the next paragraph
+> is about.
+>
+> **A pre-existing false proof, found by a negative test.** The shadow probe
+> `(let [x (- x x)] (sdiv 10 x))` under `x > 0` came back PROVED. The encoder
+> has one flat namespace, so the argument's `x` encodes as the same variable as
+> the parameter `x` and inherits `x > 0` -- a fact about a different value.
+> This predates path conditions entirely: the crossing environment has always
+> carried the parameter refinements. It was never a miscompile, because a
+> crossing is a diagnostic layer that never elides the callee's entry check,
+> which still fires -- but `--strict-refine` accepted a program that panics,
+> which is a wrong answer.
+>
+> Dropping just the binding's equation did not fix it: the collision is in the
+> NAME, not the fact. `rt_prove_paths` handles the same collision by
+> alpha-renaming, which it can because it also rewrites the body it is about to
+> prove; a crossing has only a call form to leave alone, so the crossing is
+> abandoned instead. Archived as
+> `docs/archive/crossing-shadowed-binder-false-proof.md`.
+>
+> **Hypotheses are not free.** Adding the `let` equation broke
+> `errors/refine-lambda-bad-arg`, which went from a compile error to Unknown.
+> `(let [f (fn ...)] (f 0))` asserts `f = <lambda>`, the encoder abstracts the
+> lambda to an uninterpreted symbol, and `refine_model_search` declines any VC
+> containing one -- so a goal that was REFUTED with a counterexample degraded to
+> Unknown. A hypothesis can never make a goal easier to prove incorrectly, but
+> it can make it harder to REFUTE. Function bindings are now skipped, and the
+> general hazard is recorded at the site.
+>
+> Two more codegen defects surfaced, both unrelated to refinements and both
+> reproducing with the gate off: a guarded WILDCARD arm on a non-ADT scrutinee
+> emits invalid C (`else` without `if`). Appended to
+> `docs/reported/match-int-scrutinee-guard-null-adt.md`, which is now two
+> defects in the same non-ADT match lowering and probably one fix.
+>
+> Verified: suite 2329/0, solver unit 47/0, 400 fuzz cases across two seeds
+> with 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -1296,11 +1347,13 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - ~~**Path conditions for call-site crossings**~~ -- LANDED for `if`, see
->   above, and by syntactic recovery rather than the condition stack this entry
->   predicted. What is left is extending the same walk to `match` arms and
->   `let` bindings, which is now a small job: the hypothesis synthesis already
->   exists in `rt_prove_paths` and only needs to be shared.
+> - ~~**Path conditions for call-site crossings**~~ -- LANDED for `if`, `let`,
+>   and `match` alike, by syntactic recovery rather than the condition stack
+>   this entry predicted. What is still not collected is a constructor tag or
+>   field selector, because those arrive with pattern BINDERS and a binder that
+>   shadows an outer name is the unsound direction. Closing that needs the
+>   crossing walk to alpha-rename, which needs something to rewrite -- and a
+>   crossing has only a call form to leave alone. Not obviously worth it.
 > - ~~**Widen the purity whitelist**~~ -- `match` and field reads landed. The
 >   third item, `while` over provably-local state, is **struck**: measuring it
 >   showed it is not a classifier case at all. A loop accumulator is Unknown

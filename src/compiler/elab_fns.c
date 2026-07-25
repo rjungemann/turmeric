@@ -1412,19 +1412,41 @@ static uint32_t rt_form_occurrences(const Form *node, const Form *target,
  * A target inside the CONDITION of an `if` gets no fact from that `if`: the
  * condition is evaluated before either branch is chosen, so neither it nor its
  * negation holds there. */
-static bool rt_collect_path_conds(Elab *e, const Form *node, const Form *target,
-                                  const Form **hyps, uint32_t *n,
-                                  uint32_t depth) {
+/* True when `name` is already declared in the crossing's environment -- i.e.
+ * a binder of that name SHADOWS something the hypotheses talk about. */
+static bool rt_env_has_name(RefineEnv *env, const Symbol *sym) {
+    if (!env || !sym) return false;
+    for (uint32_t j = 0; j < env->n_names; j++)
+        if (env->names[j] && strcmp(env->names[j], sym->name) == 0) return true;
+    return false;
+}
+
+/* `*shadowed` is set when a binder on the path rebinds a name the environment
+ * already has hypotheses about.  The caller must then abandon the crossing
+ * entirely, not merely drop a fact: the encoder has ONE FLAT NAMESPACE, so the
+ * argument form's `x` is encoded as the same variable as the outer `x` and
+ * silently inherits its hypotheses.  `(let [x (- x x)] (sdiv 10 x))` under
+ * `x > 0` "proved" `x != 0` of a value that is zero.
+ *
+ * That predates path conditions -- the environment always carried the
+ * parameter refinements -- and it was never a miscompile, because a crossing
+ * is a diagnostic layer and never elides the callee's own entry check, which
+ * still fires. What it was is a WRONG ANSWER: --strict-refine accepted a
+ * program that panics. */
+static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
+                                  const Form *target, const Form **hyps,
+                                  uint32_t *n, bool *shadowed, uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
     if (node == target) return true;
     if (node->tag != F_LIST && node->tag != F_VEC) return false;
 
     if (rt_head_is(node, "if") && node->as.list.len == 4) {
         const Form *c = node->as.list.items[1];
-        if (rt_collect_path_conds(e, c, target, hyps, n, depth + 1)) return true;
+        if (rt_collect_path_conds(e, env, c, target, hyps, n, shadowed, depth + 1))
+            return true;
         for (uint32_t br = 2; br <= 3; br++) {
-            if (!rt_collect_path_conds(e, node->as.list.items[br], target,
-                                       hyps, n, depth + 1))
+            if (!rt_collect_path_conds(e, env, node->as.list.items[br], target,
+                                       hyps, n, shadowed, depth + 1))
                 continue;
             if (*n >= RT_CS_PATH_MAX_HYPS) return true;  /* deep enough */
             if (br == 2) {
@@ -1441,9 +1463,95 @@ static bool rt_collect_path_conds(Elab *e, const Form *node, const Form *target,
         return false;
     }
 
+    /* (let [x v] body) -- `x = v` is a fact for a call in the BODY, and no
+     * fact at all for a call inside `v` itself, which runs first.
+     *
+     * A binding that SHADOWS a name in scope contributes nothing rather than
+     * declining the whole path: the equation would be `x = <something
+     * mentioning x>` in one flat namespace -- false for every x, and a false
+     * hypothesis proves the goal.  The return-obligation splitter alpha-renames
+     * instead, which it can because it also rewrites the body; here there is no
+     * body to rewrite, only a call form to leave alone, so dropping the one
+     * fact is the honest answer.  Every other condition on the path stays. */
+    if (rt_head_is(node, "let") && node->as.list.len == 3) {
+        const Form *binds = node->as.list.items[1];
+        const Form *body  = node->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2 &&
+            binds->as.list.items[0]->tag == F_SYM &&
+            binds->as.list.items[0]->as.sym) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, depth + 1))
+                return true;
+            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, depth + 1))
+                return false;
+            if (rt_env_has_name(env, x->as.sym)) { *shadowed = true; return true; }
+            if (*n >= RT_CS_PATH_MAX_HYPS) return true;
+            /* A bound FUNCTION is not an arithmetic fact, and asserting it
+             * actively costs: the encoder abstracts the lambda to an
+             * uninterpreted symbol, and `refine_model_search` declines any VC
+             * containing one -- so a goal that was REFUTED with a
+             * counterexample degrades to Unknown. `(let [f (fn ...)] (f 0))`
+             * against `(> v 0)` stopped being a compile error the moment this
+             * equation was added.
+             *
+             * The general shape of that hazard is worth remembering: adding a
+             * hypothesis can never make a goal easier to PROVE incorrectly,
+             * but it can make it harder to REFUTE. Hypotheses are not free. */
+            if (!rt_head_is(v, "fn")) hyps[(*n)++] = rt_form_eq(e, node->span, x, v);
+            return true;
+        }
+        /* A wider binding list: descend without claiming any equation. */
+    }
+
+    /* (match scrut pat [when g] body ...) -- an arm contributes what selected
+     * it.  Only the two sources that introduce no NAMES are collected here: a
+     * literal pattern's `(= scrut <lit>)` and a guard, verbatim.  A
+     * constructor's tag and its field selectors are deliberately left out --
+     * they come with pattern BINDERS, and a binder that shadows an outer name
+     * would silently inherit its hypotheses in this flat namespace, which is
+     * the unsound direction rather than the imprecise one. */
+    if (rt_head_is(node, "match") && node->as.list.len >= 4) {
+        const Form *scrut = node->as.list.items[1];
+        const uint32_t len = node->as.list.len;
+        if (rt_collect_path_conds(e, env, scrut, target, hyps, n, shadowed, depth + 1))
+            return true;
+        uint32_t i = 2;
+        while (i < len) {
+            const Form *pat = node->as.list.items[i++];
+            const Form *guard = NULL;
+            if (i + 1 < len && rt_sym_is(node->as.list.items[i], "when")) {
+                guard = node->as.list.items[i + 1];
+                i += 2;
+            }
+            if (i >= len) return false;            /* malformed: no body */
+            const Form *arm = node->as.list.items[i++];
+            /* A call inside the guard runs before the arm is chosen. */
+            if (guard &&
+                rt_collect_path_conds(e, env, guard, target, hyps, n, shadowed, depth + 1))
+                return true;
+            if (!rt_collect_path_conds(e, env, arm, target, hyps, n, shadowed, depth + 1))
+                continue;
+            if (pat && (pat->tag == F_LIST || pat->tag == F_VEC))
+                for (uint32_t k = 1; k < pat->as.list.len; k++) {
+                    const Form *b = pat->as.list.items[k];
+                    if (b->tag == F_SYM && rt_env_has_name(env, b->as.sym)) {
+                        *shadowed = true;
+                        return true;
+                    }
+                }
+            if (guard && *n < RT_CS_PATH_MAX_HYPS) hyps[(*n)++] = guard;
+            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT) &&
+                *n < RT_CS_PATH_MAX_HYPS)
+                hyps[(*n)++] = rt_form_eq(e, pat->span, scrut, pat);
+            return true;
+        }
+        return false;
+    }
+
     for (uint32_t i = 0; i < node->as.list.len; i++)
-        if (rt_collect_path_conds(e, node->as.list.items[i], target, hyps, n,
-                                  depth + 1))
+        if (rt_collect_path_conds(e, env, node->as.list.items[i], target, hyps,
+                                  n, shadowed, depth + 1))
             return true;
     return false;
 }
@@ -1454,16 +1562,21 @@ static bool rt_collect_path_conds(Elab *e, const Form *node, const Form *target,
  * longer hold at the call, and when `call_form` is reachable by more than one
  * route, which a macro that shares a node can produce and which would make
  * "the" path ambiguous. */
-static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs) {
+static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
+                                        bool *skip) {
     RefineHyp *saved = cs->env ? cs->env->head : NULL;
+    *skip = false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
     if (rt_form_mentions_set(cs->caller_body, 0)) return saved;
     if (rt_form_occurrences(cs->caller_body, cs->call_form, 0) != 1) return saved;
 
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
     uint32_t n = 0;
-    if (!rt_collect_path_conds(e, cs->caller_body, cs->call_form, hyps, &n, 0))
+    bool shadowed = false;
+    if (!rt_collect_path_conds(e, cs->env, cs->caller_body, cs->call_form,
+                               hyps, &n, &shadowed, 0))
         return saved;
+    if (shadowed) { *skip = true; return saved; }
     for (uint32_t i = 0; i < n; i++)
         refine_env_push(cs->env, hyps[i], NULL, NULL);
     return saved;
@@ -1484,7 +1597,9 @@ void refine_resolve_call_sites(Elab *e) {
         /* The branches that had to be taken to reach this call are facts here.
          * Rewound below so one crossing's path never leaks into the next --
          * several crossings share one caller's env. */
-        RefineHyp *cs_saved = rt_push_cs_path_conds(e, cs);
+        bool cs_skip = false;
+        RefineHyp *cs_saved = rt_push_cs_path_conds(e, cs, &cs_skip);
+        if (cs_skip) continue;   /* shadowed binder: no honest answer here */
 
         /* Every callee parameter name maps to the caller's argument in that
          * slot, so a predicate mentioning a SIBLING parameter is checked
