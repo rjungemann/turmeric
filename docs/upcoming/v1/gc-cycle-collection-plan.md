@@ -433,11 +433,26 @@ first place.
 4. Add `rc.c`/`gc.c`/`rc_free_queue.c` to the lean archive and have AUTO link it.
 5. Regenerate the 140 snapshots; full suite as the gate.
 
-Step 1 alone is a worthwhile, self-contained change even if the rest never
-happens: it converts "two layouts that silently disagree" into "two layouts a
-compiler refuses to let disagree", which would have caught the CG1 and CG4
-divergences at build time. **Recommended as the next piece of work**, ahead of
-the full link-the-archive change.
+**Step 1 landed 2026-07-25.** `RcControlBlock.value_type_kind` and `.color` are
+now `uint8_t` in `src/runtime/rc.h`, matching what the emitted copy always used,
+so the two layouts finally agree. Both copies carry an identical 22-assertion
+guard (`RC_LAYOUT_ASSERT`, in `rc.c` and emitted into the preamble) pinning each
+field's width and the field ORDER via `offsetof` comparisons.
+
+Deliberately no assertion on total `sizeof` or absolute offsets -- those are
+padding/ABI-dependent and would fire on a different platform without indicating
+real divergence. Written with the typedef trick rather than `_Static_assert`
+because emitted programs compile as C99, and both copies carry the same text.
+
+Validated by reintroducing the historical divergence (`value_type_kind` back to
+4 bytes in the emitted copy only): the build now fails with
+`size of array 'rc_layout_vtk_w' is negative` instead of silently mis-reading
+every GC field. That is exactly the CG1/CG4 failure mode, now caught at compile
+time.
+
+Steps 2-5 (standalone `rc.h`/`gc.h`, declare-vs-define split, lean-archive link)
+remain. They are now unblocked -- the ABI hazard that made them dangerous is
+fenced.
 
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the

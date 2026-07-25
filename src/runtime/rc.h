@@ -72,11 +72,21 @@ struct RcControlBlock {
      * (the default for RCK_OPAQUE / RCK_EXISTENTIAL blocks). */
     RcWalkFn walk_fn;
 
-    /* Type information for debugging */
-    TypeKind value_type_kind;
+    /* Type information for debugging.
+     *
+     * DEDUP-1: stored as a fixed-width byte, NOT the `TypeKind` enum. The
+     * compiler emits its own copy of this struct into every compiled program
+     * (emit_module.c) where these two fields have always been `uint8_t`; an
+     * enum is implementation-defined width (4 bytes here), so the two layouts
+     * silently disagreed from `value_type_kind` onward -- every field after it,
+     * including all the GC bookkeeping, sat at a different offset in the two
+     * copies. That blocked ever linking one against the other and is the same
+     * class of bug as CG3's `:heap` mis-cast, but process-wide. The widths are
+     * now pinned by _Static_assert in rc.c and in the emitted preamble. */
+    uint8_t value_type_kind;
 
     /* Phase 10: Bacon-Rajan cycle collector fields */
-    GcColor color;           /* GC color for cycle collection */
+    uint8_t color;           /* GC color (GcColor), fixed-width -- see above */
     bool may_contain_cycles;  /* Hint: true if this could be part of a cycle */
     /* CG0: index of this block in the global gc_all_blocks registry, or
      * RC_GC_INDEX_NONE when not registered.  Storing it here makes

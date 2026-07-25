@@ -6749,6 +6749,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <pthread.h>\n");
     /* Phase 20-21: Software Transactional Memory */
     buf_puts(out, "#include <stdlib.h>\n");
+    /* DEDUP-1: offsetof, used by the RcControlBlock layout guard below. */
+    buf_puts(out, "#include <stddef.h>\n");
     buf_puts(out, "#include <string.h>\n");
     /* WIN1: ucontext over Win32 Fibers.  Emitted rather than #included because
      * generated C is standalone -- it cannot reach src/platform_ucontext_win.h.
@@ -9052,6 +9054,53 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    bool gc_collecting;       /* CG2: in the white set being freed */\n");
     buf_puts(out, "    uint8_t reserved[6];\n");
     buf_puts(out, "};\n\n");
+    /* DEDUP-1: same layout guard as src/runtime/rc.c, verbatim. */
+    buf_puts(out, "/* ---------------------------------------------------------------------------\n");
+    buf_puts(out, " * DEDUP-1: RcControlBlock layout guard.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * This struct exists TWICE: here, and hand-written into every compiled program\n");
+    buf_puts(out, " * by the compiler (emit_module.c). The two copies must stay layout-compatible,\n");
+    buf_puts(out, " * because linking one against the other -- the end goal of de-duplicating them\n");
+    buf_puts(out, " * -- silently mis-reads every field past the first divergence otherwise.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * They HAD diverged: `value_type_kind` and `color` were enums here (4 bytes)\n");
+    buf_puts(out, " * and `uint8_t` in the emitted copy, shifting every GC field after them. Both\n");
+    buf_puts(out, " * are fixed-width now, and these assertions pin the widths and the field order\n");
+    buf_puts(out, " * so any future drift is a COMPILE error in whichever copy changed, instead of\n");
+    buf_puts(out, " * a runtime mis-read. Three bugs this session (CG1, CG3, CG4) came from these\n");
+    buf_puts(out, " * copies drifting apart; each was invisible to half the test suite.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * Deliberately no assertion on the total sizeof or on absolute offsets: those\n");
+    buf_puts(out, " * are padding-dependent and would break on a different ABI without indicating\n");
+    buf_puts(out, " * a real divergence. Field widths and relative order are what must match.\n");
+    buf_puts(out, " *\n");
+    buf_puts(out, " * Written with the typedef trick rather than _Static_assert because the emitted\n");
+    buf_puts(out, " * programs are compiled as C99, and both copies carry the identical text.\n");
+    buf_puts(out, " * --------------------------------------------------------------------------- */\n");
+    buf_puts(out, "#define RC_LAYOUT_ASSERT(name, cond) typedef char rc_layout_##name[(cond) ? 1 : -1]\n");
+    buf_puts(out, "\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(strong_w,  sizeof(((RcControlBlock *)0)->strong_count)      == 8);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(weak_w,    sizeof(((RcControlBlock *)0)->weak_count)        == 8);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(vtk_w,     sizeof(((RcControlBlock *)0)->value_type_kind)   == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(color_w,   sizeof(((RcControlBlock *)0)->color)             == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(mcc_w,     sizeof(((RcControlBlock *)0)->may_contain_cycles) == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(index_w,   sizeof(((RcControlBlock *)0)->gc_index)          == 4);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(buffered_w,sizeof(((RcControlBlock *)0)->gc_buffered)       == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(trial_w,   sizeof(((RcControlBlock *)0)->gc_trial)          == 8);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(collect_w, sizeof(((RcControlBlock *)0)->gc_collecting)     == 1);\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_1, offsetof(RcControlBlock, strong_count)  < offsetof(RcControlBlock, weak_count));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_2, offsetof(RcControlBlock, weak_count)    < offsetof(RcControlBlock, value));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_3, offsetof(RcControlBlock, value)         < offsetof(RcControlBlock, drop_fn));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_4, offsetof(RcControlBlock, drop_fn)       < offsetof(RcControlBlock, walk_fn));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_5, offsetof(RcControlBlock, walk_fn)       < offsetof(RcControlBlock, value_type_kind));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_6, offsetof(RcControlBlock, value_type_kind) < offsetof(RcControlBlock, color));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_7, offsetof(RcControlBlock, color)         < offsetof(RcControlBlock, may_contain_cycles));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_8, offsetof(RcControlBlock, may_contain_cycles) < offsetof(RcControlBlock, gc_index));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_9, offsetof(RcControlBlock, gc_index)      < offsetof(RcControlBlock, gc_buffered));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_10, offsetof(RcControlBlock, gc_buffered)  < offsetof(RcControlBlock, gc_trial));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_11, offsetof(RcControlBlock, gc_trial)     < offsetof(RcControlBlock, gc_collecting));\n");
+    buf_puts(out, "RC_LAYOUT_ASSERT(ord_12, offsetof(RcControlBlock, gc_collecting) < offsetof(RcControlBlock, reserved));\n");
+    buf_puts(out, "\n");
     /* Phase 9: Deferred free queue to avoid deep recursion in rc_strong_decrement */
     buf_puts(out, "#define RC_FREE_QUEUE_CAPACITY 65536\n");
     emit_rt_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
