@@ -1255,8 +1255,27 @@
 >   third item, `while` over provably-local state, is **struck**: measuring it
 >   showed it is not a classifier case at all. A loop accumulator is Unknown
 >   because there is no loop-invariant inference, not because `while` is
->   classified impure, so widening the classifier would change nothing. Real
->   support needs invariants, which the prototype excludes.
+>   classified impure, so widening the classifier would change nothing.
+>
+>   The follow-up phrasing "needs invariants, which the prototype excludes"
+>   conflates two things and is worth separating. The prototype excludes
+>   INFERENCE -- that is the "Why checking, not inference" decision this whole
+>   design rests on. It does not exclude a user-WRITTEN invariant, which would
+>   be checking, and which is the same shape as the `:pre` / `:post`
+>   annotations that already ship: `(while c :invariant p ...)` gives the
+>   solver `p` on entry, requires the body to re-establish it, and hands
+>   `p AND (not c)` to whatever follows. That is a bounded, in-philosophy
+>   feature, not the multi-week analysis "invariants" suggests.
+>
+>   **Still not now.** There is no measured demand: 48 refinement fixtures and
+>   `stdlib/refine.tur` contain zero loops touching a refinement, and the
+>   stdlib layer is entirely scalar aliases (`Nat`, `Pos`, `Byte`, `Percent`)
+>   -- not even a bounded-index type, which is the canonical loop-shaped
+>   motivation. Adding surface syntax to an experiment that must graduate or be
+>   shelved by `0.34.0` is also the wrong direction while the priority is
+>   graduating what exists. Revisit when a real program wants it, and revisit
+>   it as `:invariant`, not as inference. Path conditions for call-site
+>   crossings are worth more and need no new syntax.
 > - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
 >   without the new sort this entry assumed it needed. Arm hypotheses and
 >   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What
