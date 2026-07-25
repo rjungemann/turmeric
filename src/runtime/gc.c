@@ -186,7 +186,22 @@ static void gc_enqueue_grey(RcControlBlock *cb) {
     }
 
     gc_grey_queue[gc_grey_count++] = cb;
-    gc_set_color(cb, GC_GREY);
+    /* DEDUP-4b: the caller owns the color; enqueuing must not change it.
+     *
+     * This used to set GC_GREY, which every one of the three call sites
+     * immediately contradicted -- each sets GC_BLACK and then enqueues, so the
+     * enqueue silently DOWNGRADED a just-marked-reachable block. The runtime
+     * stayed self-consistent (gc_trial_deletion_phase and gc_is_alive both
+     * accept BLACK or GREY), but it left the mark phase with a different
+     * observable end state than the emitted collector, which leaves reachable
+     * blocks BLACK.
+     *
+     * tests/fixtures/exg5-walker-rc-payload reads the inner block's color
+     * through inline C after `(gc!)` and expects BLACK; under the archive link
+     * it read GREY.  "Everything reachable is BLACK after the mark phase" is
+     * both the cleaner invariant and the one already asserted, so the runtime
+     * converges on it.  GREY remains what it should be: the trial-deletion
+     * traversal's own color, set by gc_mark_gray. */
 }
 
 static RcControlBlock *gc_dequeue_grey(void) {

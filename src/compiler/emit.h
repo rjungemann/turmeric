@@ -17,6 +17,17 @@ int emit_program(Buf *out, const Expr *program);
  * functions are file-local (static) replicas operating on that shared state. */
 void emit_shared_runtime_header(Buf *out);
 
+/* DEDUP-4b (gc-cycle-collection-plan): declare, rather than define, the
+ * rc<T>/GC runtime in the emitted preamble, because the program will link
+ * libturt_runtime.a (which carries src/runtime/{rc,gc,rc_free_queue}.c).
+ * Without this a compiled program runs a hand-written replica of the collector
+ * while the maintained implementation sits unused in the archive.
+ *
+ * Must be set BEFORE emission -- the generated text depends on it.  main.c
+ * resolves it from the same archive probe the link step uses; the probe is a
+ * pure filesystem check, so it is safe to run ahead of codegen. */
+void emit_set_rcgc_from_archive(bool from_archive);
+
 /* J5/J6: A forced ABI specialization -- a clone that a borrower module needs
  * emitted by the owner module (even when the owner has no local call sites).
  * Passed from cmd_build_multi / cmd_emit_c_to_dir to emit_header and

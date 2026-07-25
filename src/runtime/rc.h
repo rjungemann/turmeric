@@ -198,6 +198,16 @@ RcControlBlock *rc_cb_alloc_struct(size_t value_size, uint8_t value_type,
  */
 void rc_cb_free(RcControlBlock *cb);
 
+/* DEDUP-4b: the `(rc/from-ref ...)` / `(ref/from-rc ...)` bridge.
+ *
+ * tur_rc_from_ref adopts an already-allocated ref<T> payload into a fresh,
+ * header-only control block (the value is NOT the inline (cb + 1) region).
+ * tur_ref_from_rc is the inverse and requires a UNIQUE rc -- strong_count == 1
+ * and weak_count == 0 -- since it destroys the control block; it aborts
+ * otherwise.  Both existed only in the emitted copy until now. */
+RcControlBlock *tur_rc_from_ref(void *ref_value, uint8_t value_type);
+void *tur_ref_from_rc(RcControlBlock *cb);
+
 /* Retarget a block's payload and drop glue.  Used when the payload is a
  * separately-allocated cell rather than the inline (cb + 1) region -- which is
  * what the codegen emits for rc<T>, since the TY_RC drop glue free()s the

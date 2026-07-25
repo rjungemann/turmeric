@@ -470,6 +470,17 @@ install(TARGETS libturi
     COMPONENT libturi
 )
 
+# DEDUP-4b: the lean runtime archive has to ship too.  `--runtime=lib` PREFERS
+# it over libturi.a (it is the non-sanitized one), and AUTO links only it -- so
+# leaving it out of the install set meant an installed SDK could never take the
+# archive path at all, silently recompiling the runtime sources on every build.
+# It also gates the rc<T>/GC de-dup: without this archive an installed toolchain
+# has nothing to link the collector from, and falls back to the emitted replica.
+install(TARGETS turt_runtime
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT libturi
+)
+
 install(FILES
     turi/eval.h
     turi/env.h

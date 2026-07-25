@@ -740,6 +740,83 @@ this" state, emit the prototypes unconditionally, resolve the archive at
 *emit* time (the probe is a pure filesystem check, so it can move ahead of
 codegen), and iterate against real link errors.
 
+**4b step 2 landed 2026-07-25 -- archive mode works, behind `TUR_RCGC_FROM_ARCHIVE=1`.**
+
+Two of the four "gaps" above turned out to be phantom, and measurement is what
+showed it. Emitting every fixture and scanning what module code references
+*after* the preamble ends -- 1859 fixtures -- gives the definitive set:
+
+```
+gc_all_blocks_count gc_disable gc_enable gc_force gc_suspect_count
+rc_cb_alloc rc_cb_alloc_kinded rc_cb_alloc_struct rc_free_queue_drain
+rc_get_value rc_strong_count rc_strong_decrement rc_strong_increment
+rc_upgrade rc_weak_increment tur_rc_from_ref tur_ref_from_rc
+```
+
+`default_rc_drop_fn` and `__gc_mark_struct_child` never escape the preamble,
+so their name/linkage mismatches with the runtime do not matter; nor does any
+`static` collector helper. Both globals module code touches
+(`gc_all_blocks_count`, `gc_suspect_count`) are already exported. That left one
+real gap -- `tur_rc_from_ref` / `tur_ref_from_rc`, which existed *only* in the
+emitted copy -- now ported to `rc.c`.
+
+The port fixes a latent hazard on the way: the emitted `tur_rc_from_ref`
+leaves `gc_trial` / `gc_collecting` to `gc_register_block`, which zeroes them
+in the *emitted* collector but not in the runtime (which zeroes them in
+`rc_cb_alloc_kinded`, a path `from_ref` bypasses). The port initialises all
+four GC fields explicitly rather than inheriting that assumption.
+
+Mechanism: `emit_set_rcgc_from_archive()` adds the third state to the DEDUP-3
+switch. Definitions become `#if 0` blocks -- excluded, not deleted, so the text
+stays readable next to the call sites while both implementations exist and the
+switch is a one-line revert. `emit_rcgc_global` **omits** the rc/GC globals
+rather than externing them, because `rc_free_queue` names incompatible *types*
+in the two copies and a wrong `extern` links silently. The prototypes switch to
+the archive's `uint8_t value_type` signatures, since a prototype that disagrees
+with the real definition is a live ABI bug.
+
+**Result: the full suite is behaviorally green under the archive link.**
+
+| | |
+|---|---|
+| archive mode (`TUR_RCGC_FROM_ARCHIVE=1`) | 2143 passed, 140 failed |
+| ... of which non-`codegen mismatch` | **0** |
+| default mode | 2283 passed, 0 failed; 140 snapshots byte-identical |
+
+The 140 are exactly the snapshot fixtures: snapshots track *default* emission,
+so they mismatch whenever the opt-in flag is set. That regen is step 5, and it
+happens when archive mode graduates to the default -- not before.
+
+**One real divergence surfaced, and a fixture caught it.**
+`exg5-walker-rc-payload` reads an inner block's GC color through inline C after
+`(gc!)` and expects `GC_BLACK`; under the archive link it read `GC_GREY`. Root
+cause: the runtime's `gc_enqueue_grey` set `GC_GREY` on enqueue, which **every
+one of its three call sites immediately contradicted** -- each sets `GC_BLACK`
+and then enqueues, so the enqueue silently downgraded a just-marked-reachable
+block. The runtime stayed self-consistent (`gc_trial_deletion_phase` and
+`gc_is_alive` both accept BLACK or GREY), which is why nothing caught it
+before. Fixed by letting the caller own the color: "everything reachable is
+BLACK after the mark phase" is the cleaner invariant and the one already
+asserted. GREY goes back to being what it should be -- the trial-deletion
+traversal's own color, set by `gc_mark_gray`.
+
+This is the fifth bug from the duplication, and the first found by *running*
+one copy against the other's test suite rather than by reading.
+
+**What graduation to default still needs:**
+
+- `libturt_runtime.a` is now **installed** alongside `libturi.a` (done here).
+  It had never been, which meant an installed SDK could not take the archive
+  path at all -- AUTO links only the lean archive, so installed toolchains were
+  silently recompiling the runtime on every build. That was a pre-existing
+  `--runtime=lib` limitation, not just a de-dup one.
+- Flip `resolve_rcgc_from_archive` from the env opt-in to AUTO's own probe.
+  The fallback is already safe: no archive found -> emitted definitions stay,
+  so a toolchain without the archive still builds.
+- Regenerate the 140 snapshots (step 5), in the same commit as the flip.
+- Consider physically eliding the `#if 0` text once the swap has baked; it is
+  ~500 lines of dead code in every generated `.c`.
+
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the
 `RCK_OPAQUE` blind spot -- these would assert the *documented* non-collection);

@@ -132,6 +132,67 @@ RcControlBlock *rc_cb_alloc_struct(size_t value_size, uint8_t value_type,
     return cb;
 }
 
+/* DEDUP-4b: `(rc/from-ref r)` -- adopt an existing ref<T> payload into a fresh
+ * control block, taking ownership of it.  Unlike rc_cb_alloc* the value is NOT
+ * the inline (cb + 1) region: it is the caller's already-allocated payload, so
+ * the block is header-only and the drop glue is derived from the value type.
+ *
+ * Ported from the hand-written copy in emit_module.c, which is the only place
+ * it existed.  One difference, deliberate: that copy leaves gc_index,
+ * gc_buffered, gc_trial and gc_collecting to gc_register_block, which zeroes
+ * all four in the EMITTED collector but only the first two here (this runtime
+ * zeroes gc_trial/gc_collecting in rc_cb_alloc_kinded instead, which this path
+ * bypasses).  Initialising them explicitly is what keeps the port from handing
+ * the collector a block with a garbage trial count. */
+RcControlBlock *tur_rc_from_ref(void *ref_value, uint8_t value_type) {
+    if (!ref_value) return NULL;
+
+    RcControlBlock *cb = (RcControlBlock *)malloc(sizeof(RcControlBlock));
+    if (!cb) {
+        fprintf(stderr, "rc/from-ref: out of memory\n");
+        abort();
+    }
+
+    cb->strong_count = 1;
+    cb->weak_count = 0;
+    cb->value = ref_value;
+    cb->drop_fn = default_drop_fn_for_type(value_type);
+    cb->walk_fn = NULL;
+    cb->value_type_kind = value_type;
+
+    cb->color = GC_WHITE;
+    cb->may_contain_cycles = true;
+    cb->gc_index = RC_GC_INDEX_NONE;
+    cb->gc_buffered = false;
+    cb->gc_trial = 0;
+    cb->gc_collecting = false;
+    memset(cb->reserved, 0, sizeof(cb->reserved));
+
+    gc_register_block(cb);
+    return cb;
+}
+
+/* DEDUP-4b: `(ref/from-rc r)` -- the inverse.  Extracts the payload and
+ * destroys the control block, which is only sound when the rc is UNIQUE: any
+ * other strong owner would be left holding a freed block, and any weak
+ * observer would lose the liveness flag it polls.  Both are checked. */
+void *tur_ref_from_rc(RcControlBlock *cb) {
+    if (!cb) return NULL;
+    if (cb->strong_count != 1 || cb->weak_count != 0) {
+        fprintf(stderr,
+                "ref/from-rc requires unique rc (strong_count==1 and "
+                "weak_count==0), got strong=%llu weak=%llu\n",
+                (unsigned long long)cb->strong_count,
+                (unsigned long long)cb->weak_count);
+        abort();
+    }
+    void *value = cb->value;
+    cb->value = NULL;
+    gc_unregister_block(cb);
+    free(cb);
+    return value;
+}
+
 /* Free a control block and its value.
  * Called when both strong_count and weak_count reach 0.
  */

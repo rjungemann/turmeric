@@ -6239,6 +6239,39 @@ static void emit_rt_global(Buf *out, bool shared,
                owner_body, extern_decl);
 }
 
+/* ---------------------------------------------------------------------------
+ * DEDUP-4b: the rc<T>/GC runtime comes from the archive.
+ *
+ * When the program is going to link libturt_runtime.a (which since 4b step 1
+ * carries rc.c / gc.c / rc_free_queue.c), the preamble must stop DEFINING the
+ * collector and merely declare it -- otherwise the program runs a hand-written
+ * replica while the maintained implementation sits unused in the archive.
+ *
+ * A third state on the DEDUP-3 switch rather than a new mechanism.  Resolved at
+ * emit time, before codegen, because the emitted text depends on it; the probe
+ * is a pure filesystem check so it can move ahead of the link step that
+ * normally makes this decision (see apply_runtime_lib_mode in main.c).
+ * ------------------------------------------------------------------------- */
+static bool g_rcgc_from_archive = false;
+
+void emit_set_rcgc_from_archive(bool from_archive) {
+    g_rcgc_from_archive = from_archive;
+}
+
+/* DEDUP-4b: a runtime GLOBAL the archive owns.
+ *
+ * Omitted entirely rather than `extern`-declared, which looks over-cautious
+ * until you look at `rc_free_queue`: the emitted copy spells it
+ * `RcControlBlock *[RC_FREE_QUEUE_CAPACITY]` and the runtime spells it a
+ * struct.  An `extern` with the wrong type is strictly worse than no
+ * declaration -- it links silently and misreads memory, which is the exact
+ * failure mode this whole series exists to stamp out.  Module code only ever
+ * touches gc_all_blocks_count and gc_suspect_count (measured across all 1859
+ * fixtures), and gc.c exports both, so nothing needs a declaration here. */
+static bool rt_global_from_archive(void) {
+    return g_rcgc_from_archive;
+}
+
 /* gc-cycle-collection-plan DEDUP-3: open/close the owner-TU guard around a run
  * of rc<T>/GC runtime function DEFINITIONS.
  *
@@ -6256,10 +6289,31 @@ static void emit_rt_global(Buf *out, bool shared,
  * typedefs, `#define`s and emit_rt_global state stay outside, since every TU
  * needs to see them. */
 static void emit_rt_defs_begin(Buf *out, bool shared) {
+    if (g_rcgc_from_archive) {
+        /* DEDUP-4b: excluded rather than deleted from the stream.  The text
+         * stays in the generated .c where it can be read next to the call
+         * sites, which matters while both implementations still exist -- and
+         * makes the switch a one-line revert if an archive link misbehaves. */
+        buf_puts(out, "#if 0  /* DEDUP-4b: definition supplied by the runtime archive */\n");
+        return;
+    }
     if (shared) buf_puts(out, "#ifdef TUR_RT_OWNER\n");
 }
 static void emit_rt_defs_end(Buf *out, bool shared) {
+    if (g_rcgc_from_archive) {
+        buf_puts(out, "#endif /* DEDUP-4b */\n");
+        return;
+    }
     if (shared) buf_puts(out, "#endif /* TUR_RT_OWNER */\n");
+}
+
+/* DEDUP-4b: a runtime global belonging to the rc<T>/GC block specifically.
+ * Identical to emit_rt_global except that archive mode omits it -- see
+ * rt_global_from_archive for why omission beats an `extern`. */
+static void emit_rcgc_global(Buf *out, bool shared,
+                             const char *owner_body, const char *extern_decl) {
+    if (rt_global_from_archive()) return;
+    emit_rt_global(out, shared, owner_body, extern_decl);
 }
 
 /* DEDUP-3: prototypes for every rc<T>/GC runtime function, so a non-owner
@@ -6267,9 +6321,24 @@ static void emit_rt_defs_end(Buf *out, bool shared) {
  * single-file mode the definitions themselves precede every use.  Emitted after
  * the GcMode typedef, which gc_set_mode's signature needs. */
 static void emit_rcgc_prototypes(Buf *out) {
+    /* DEDUP-4b: the allocation entry points take `uint8_t value_type` in
+     * src/runtime/rc.c but `int value_type_kind` in the emitted copy.  While
+     * the emitted copy supplies the definitions the prototype must match IT;
+     * once the archive does, it must match the ARCHIVE, or the declaration
+     * conflicts with the real definition on every ABI that treats the two
+     * differently. */
+    const char *vt = g_rcgc_from_archive ? "uint8_t" : "int";
+    buf_printf(out,
+        "/* rc<T>/GC runtime prototypes -- definitions live %s. */\n",
+        g_rcgc_from_archive ? "in the runtime archive (DEDUP-4b)"
+                            : "in the TUR_RT_OWNER translation unit (DEDUP-3)");
+    buf_printf(out,
+        "RcControlBlock *rc_cb_alloc_kinded(size_t value_size, %s value_type, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind);\n"
+        "RcControlBlock *rc_cb_alloc(size_t value_size, %s value_type, RcDropFn drop_fn);\n"
+        "RcControlBlock *rc_cb_alloc_struct(size_t value_size, %s value_type, RcDropFn drop_fn, RcWalkFn walk_fn);\n"
+        "RcControlBlock *tur_rc_from_ref(void *ref_value, %s value_type);\n",
+        vt, vt, vt, vt);
     buf_puts(out,
-        "/* DEDUP-3: rc<T>/GC runtime prototypes -- definitions live in the\n"
-        " * TUR_RT_OWNER translation unit (tur_runtime.c). */\n"
         "void gc_set_color(RcControlBlock *cb, GcColor color);\n"
         "GcColor gc_get_color(RcControlBlock *cb);\n"
         "void gc_register_block(RcControlBlock *cb);\n"
@@ -6284,9 +6353,6 @@ static void emit_rcgc_prototypes(Buf *out) {
         "void drop_rc_payload(void *value);\n"
         "void drop_weak_payload(void *value);\n"
         "RcDropFn default_drop_fn_for_type(int value_type_kind);\n"
-        "RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind);\n"
-        "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn);\n"
-        "RcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn);\n"
         "uint64_t rc_strong_increment(RcControlBlock *cb);\n"
         "bool rc_strong_decrement(RcControlBlock *cb);\n"
         "uint64_t rc_weak_increment(RcControlBlock *cb);\n"
@@ -6296,7 +6362,6 @@ static void emit_rcgc_prototypes(Buf *out) {
         "bool rc_is_alive(RcControlBlock *cb);\n"
         "RcControlBlock *rc_upgrade(RcControlBlock *cb);\n"
         "void *rc_get_value(RcControlBlock *cb);\n"
-        "RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind);\n"
         "void *tur_ref_from_rc(RcControlBlock *cb);\n"
         "void __gc_mark_struct_child(RcControlBlock *child, void *ctx);\n"
         "void gc_mark_phase(void);\n"
@@ -6780,7 +6845,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * other module TUs to reach them.  Two prefixes because the two families
      * differ in single-file mode, which stays byte-identical: the internal
      * helpers were `static`, the rc_ / tur_rc_ API surface never was. */
-    const char *rcgc_helper = shared ? "" : "static ";
+    /* DEDUP-4b: archive mode has no local definitions at all, so a `static`
+     * forward declaration would name a function that this TU never defines
+     * ("used but never defined") and would hide the archive's. */
+    const char *rcgc_helper = (shared || g_rcgc_from_archive) ? "" : "static ";
     const char *rcgc_api    = "";
     buf_puts(out, "/* generated by tur (phase 2) */\n");
     /* Feature-test macro: must precede every #include so glibc exposes POSIX
@@ -9192,8 +9260,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "\n");
     /* Phase 9: Deferred free queue to avoid deep recursion in rc_strong_decrement */
     buf_puts(out, "#define RC_FREE_QUEUE_CAPACITY 65536\n");
-    emit_rt_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
-    emit_rt_global(out, shared, "uint32_t rc_free_queue_count = 0;\n", "uint32_t rc_free_queue_count");
+    emit_rcgc_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
+    emit_rcgc_global(out, shared, "uint32_t rc_free_queue_count = 0;\n", "uint32_t rc_free_queue_count");
     buf_printf(out, "%suint32_t rc_free_queue_drain(void);  /* Forward decl */\n", rcgc_helper);
     buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n", rcgc_helper);
     buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n", rcgc_api);
@@ -9211,9 +9279,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase 10: GC globals and helper functions (needed before rc_cb_alloc) */
     buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
     buf_puts(out, "#define RC_GC_INDEX_NONE ((uint32_t)0xFFFFFFFFu)\n");
-    emit_rt_global(out, shared, "RcControlBlock **gc_all_blocks = NULL;\n", "RcControlBlock **gc_all_blocks");
-    emit_rt_global(out, shared, "uint32_t gc_all_blocks_count = 0;\n", "uint32_t gc_all_blocks_count");
-    emit_rt_global(out, shared, "uint32_t gc_all_blocks_capacity = 0;\n\n", "uint32_t gc_all_blocks_capacity");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_all_blocks = NULL;\n", "RcControlBlock **gc_all_blocks");
+    emit_rcgc_global(out, shared, "uint32_t gc_all_blocks_count = 0;\n", "uint32_t gc_all_blocks_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_all_blocks_capacity = 0;\n\n", "uint32_t gc_all_blocks_capacity");
     /* CG0: growth helper shared by the registry, suspect buffer and grey queue.
      * The old fixed 4096-entry arrays silently dropped everything past the cap,
      * making the collector blind above 4096 live rc blocks. */
@@ -9237,18 +9305,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
     buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
     buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
-    emit_rt_global(out, shared, "RcControlBlock **gc_suspect_roots = NULL;\n", "RcControlBlock **gc_suspect_roots");
-    emit_rt_global(out, shared, "uint32_t gc_suspect_count = 0;\n", "uint32_t gc_suspect_count");
-    emit_rt_global(out, shared, "uint32_t gc_suspect_capacity = 0;\n", "uint32_t gc_suspect_capacity");
-    emit_rt_global(out, shared, "RcControlBlock **gc_grey_queue = NULL;\n", "RcControlBlock **gc_grey_queue");
-    emit_rt_global(out, shared, "uint32_t gc_grey_count = 0;\n", "uint32_t gc_grey_count");
-    emit_rt_global(out, shared, "uint32_t gc_grey_capacity = 0;\n", "uint32_t gc_grey_capacity");
-    emit_rt_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
-    emit_rt_global(out, shared, "bool gc_enabled = false;\n\n", "bool gc_enabled");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_suspect_roots = NULL;\n", "RcControlBlock **gc_suspect_roots");
+    emit_rcgc_global(out, shared, "uint32_t gc_suspect_count = 0;\n", "uint32_t gc_suspect_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_suspect_capacity = 0;\n", "uint32_t gc_suspect_capacity");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_grey_queue = NULL;\n", "RcControlBlock **gc_grey_queue");
+    emit_rcgc_global(out, shared, "uint32_t gc_grey_count = 0;\n", "uint32_t gc_grey_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_grey_capacity = 0;\n", "uint32_t gc_grey_capacity");
+    emit_rcgc_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
+    emit_rcgc_global(out, shared, "bool gc_enabled = false;\n\n", "bool gc_enabled");
     buf_printf(out, "%svoid gc_collect(void);  /* Forward decl */\n\n", rcgc_helper);
     /* DEDUP-3: every module TU sees the prototypes; only the owner sees bodies.
      * Placed here because gc_set_mode's signature needs the GcMode typedef. */
-    if (shared) emit_rcgc_prototypes(out);
+    if (shared || g_rcgc_from_archive) emit_rcgc_prototypes(out);
     emit_rt_defs_begin(out, shared);
     buf_printf(out, "%svoid gc_set_color(RcControlBlock *cb, GcColor color) {\n", rcgc_helper);
     buf_puts(out, "    if (cb) cb->color = color;\n");
@@ -9621,12 +9689,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * Trial decrements land on a scratch counter, never the real strong_count;
      * the white set is freed only after the whole traversal; members are
      * flagged gc_collecting so drop glue cannot double-free. */
-    emit_rt_global(out, shared, "RcControlBlock **gc_pending_free = NULL;\n", "RcControlBlock **gc_pending_free");
-    emit_rt_global(out, shared, "uint32_t gc_pending_count = 0;\n", "uint32_t gc_pending_count");
-    emit_rt_global(out, shared, "uint32_t gc_pending_capacity = 0;\n", "uint32_t gc_pending_capacity");
-    emit_rt_global(out, shared, "RcControlBlock **gc_cand_roots = NULL;\n", "RcControlBlock **gc_cand_roots");
-    emit_rt_global(out, shared, "uint32_t gc_cand_count = 0;\n", "uint32_t gc_cand_count");
-    emit_rt_global(out, shared, "uint32_t gc_cand_capacity = 0;\n\n", "uint32_t gc_cand_capacity");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_pending_free = NULL;\n", "RcControlBlock **gc_pending_free");
+    emit_rcgc_global(out, shared, "uint32_t gc_pending_count = 0;\n", "uint32_t gc_pending_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_pending_capacity = 0;\n", "uint32_t gc_pending_capacity");
+    emit_rcgc_global(out, shared, "RcControlBlock **gc_cand_roots = NULL;\n", "RcControlBlock **gc_cand_roots");
+    emit_rcgc_global(out, shared, "uint32_t gc_cand_count = 0;\n", "uint32_t gc_cand_count");
+    emit_rcgc_global(out, shared, "uint32_t gc_cand_capacity = 0;\n\n", "uint32_t gc_cand_capacity");
     emit_rt_defs_begin(out, shared);
     buf_printf(out, "%svoid gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb || !cb->value) return;\n");
