@@ -379,8 +379,12 @@ and the walker cannot trace through the box (a blind spot with it on).
 `option<T>` and `result<T,E>` are multi-variant, so this is not an exotic
 corner.
 
-Filed as
-[docs/reported/rc-of-sum-type-drops-no-glue.md](../../reported/rc-of-sum-type-drops-no-glue.md).
+**Fixed 2026-07-25**, archived at
+[docs/archive/rc-of-sum-type-drops-no-glue.md](../../archive/rc-of-sum-type-drops-no-glue.md).
+The glue now dispatches on the tag, and -- the part that was easy to miss --
+the boxing had the same double-indirection as the `:heap` bug, so emitting glue
+alone did not fix the leak. Both halves verified: the field is released, and a
+cycle routed *through* a boxed sum is collected.
 
 A lint is the wrong response: this is not a questionable-but-valid pattern for
 the user to reconsider, it is an ordinary program compiled into a leak. Emit

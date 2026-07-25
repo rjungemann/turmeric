@@ -5622,29 +5622,48 @@ static void emit_cons_helper(Buf *out) {
  * fields live at `s->as.<ctor>._<fi>`.  Mirrors the struct emission at the
  * `def->needs_drop_glue` site below; the names are keyed off the mangled C type
  * name (`drop_glue_tur_adt_<Name>`) so they never collide with the struct glue. */
+/* True when this ADT is laid out as a tag + union rather than a single flat
+ * product, i.e. the field paths are per-variant and releasing them needs a
+ * dispatch on `s->tag`. */
+static bool adt_glue_is_tagged(const AdtDef *def) {
+    return def->n_ctors > 1;
+}
+
 static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                                      const char *adt_c_name) {
     if (!def->needs_drop_glue || def->n_ctors == 0) return;
     const CtorDef *ctor = def->ctors[0];
+    const bool tagged = adt_glue_is_tagged(def);
 
     /* drop-glue-shallow-nested-owning-aggregate: forward-declare the drop/walk
      * glue of any nested owning aggregate field.  A boxed sub-aggregate is an
      * opaque int64 in this type's layout, so its glue may be emitted AFTER ours
      * (emission order is not guaranteed inner-first for a carrier field).  A
      * redundant forward decl of an already-defined static is valid C. */
-    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
-        if (ctor->fields[fi].drop_inner_def) {
-            char *imn = mangle_field_name(ctor->fields[fi].drop_inner_def->name);
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+    const CtorDef *fdc = def->ctors[ci];
+    for (uint32_t fi = 0; fi < fdc->n_fields; fi++) {
+        if (fdc->fields[fi].drop_inner_def) {
+            char *imn = mangle_field_name(fdc->fields[fi].drop_inner_def->name);
             buf_printf(out, "static void drop_glue_tur_adt_%s(void *);\n", imn);
             buf_printf(out, "static void walk_glue_tur_adt_%s(void *, RcWalkChildFn, void *);\n",
                        imn);
             free(imn);
         }
     }
+    }
 
     buf_printf(out, "static void drop_glue_%s(void *ptr) {\n", adt_c_name);
     buf_printf(out, "    if (!ptr) return;\n");
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+    /* rc-of-sum-type-drops-no-glue: a tagged ADT releases the owning fields of
+     * the LIVE variant only, so the field loop runs once per ctor inside a
+     * switch.  A single-variant (flat product) ADT keeps the original shape
+     * exactly, so its emitted text -- and every snapshot of it -- is unchanged. */
+    if (tagged) buf_printf(out, "    switch (s->tag) {\n");
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+    ctor = def->ctors[ci];
+    if (tagged) buf_printf(out, "    case %u:\n", ci);
     /* Drop fields in REVERSE order, matching struct drop-glue. */
     for (int32_t fi = (int32_t)ctor->n_fields - 1; fi >= 0; fi--) {
         TypeKind k = ctor->fields[fi].kind;
@@ -5681,8 +5700,12 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
         }
         free(mp);
     }
+    if (tagged) buf_printf(out, "        break;\n");
+    }
+    if (tagged) buf_printf(out, "    }\n");
     buf_printf(out, "    free(ptr);\n");
     buf_printf(out, "}\n\n");
+    ctor = def->ctors[0];   /* restore for the sections below */
 
     /* local-struct-drop (fn-field): free ONLY the boxed fn-field handles of a
      * STACK-resident by-value local (no rc/ref decrement -- those are discharged
@@ -5727,6 +5750,12 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
                adt_c_name);
     buf_printf(out, "    if (!ptr || !cb) return;\n");
     buf_printf(out, "    %s *s = (%s *)ptr;\n", adt_c_name, adt_c_name);
+    /* rc-of-sum-type-drops-no-glue: same per-variant dispatch as the drop glue,
+     * so the cycle walker can enumerate a tagged ADT's rc children. */
+    if (tagged) buf_printf(out, "    switch (s->tag) {\n");
+    for (uint32_t ci = 0; ci < (tagged ? def->n_ctors : 1u); ci++) {
+    ctor = def->ctors[ci];
+    if (tagged) buf_printf(out, "    case %u:\n", ci);
     for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
         char *mp = adt_field_member_path(def, ctor, fi);
         if (ctor->fields[fi].kind == TY_RC) {
@@ -5742,6 +5771,9 @@ static void emit_adt_byval_drop_glue(Buf *out, const AdtDef *def,
         }
         free(mp);
     }
+    if (tagged) buf_printf(out, "        break;\n");
+    }
+    if (tagged) buf_printf(out, "    }\n");
     buf_printf(out, "}\n\n");
 }
 
@@ -5905,7 +5937,13 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     /* CONV-S1 (slice 2): a by-value ADT with rc/ref/weak fields needs the same
      * drop/walk glue a struct gets, so an `rc/of` wrapping it releases the inner
      * owned fields when the control block hits zero. */
-    if (byval) emit_adt_byval_drop_glue(out, def, adt_c_name);
+    /* rc-of-sum-type-drops-no-glue: a MULTI-VARIANT ADT with owning fields needs
+     * this just as much.  It used to be byval-only, so `(rc/of (Full some-rc))`
+     * got a NULL drop_fn and no walker -- the rc payload was never released
+     * (a leak with the collector off) and the walker could not trace through the
+     * box (a blind spot with it on).  option<T> and result<T,E> are
+     * multi-variant, so this was not an exotic corner. */
+    emit_adt_byval_drop_glue(out, def, adt_c_name);
 
     /* CONV-S1 seam 3: a non-parametric :heap record ADT (a lowered `:heap`
      * struct with no type params) returns a typed pointer to its by-value header
@@ -10626,7 +10664,7 @@ int emit_program(Buf *out, const Expr *program) {
 
             /* CONV-S1 (slice 2): by-value ADT drop/walk glue (mirror of
              * emit_adt_typedef_and_ctors). */
-            if (byval) emit_adt_byval_drop_glue(&early_file, def, adt_c_name);
+            emit_adt_byval_drop_glue(&early_file, def, adt_c_name);
 
             /* Skip the dead generic-base ctor of a parametric `:heap` ADT --
              * see the mirror note in emit_adt_typedef_and_ctors above. */

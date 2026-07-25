@@ -6829,9 +6829,27 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 e->as.rc_of_.expr->type.as.adt_.def &&
                 e->as.rc_of_.expr->type.as.adt_.def->is_heap;
 
+            /* rc-of-sum-type-drops-no-glue: a MULTI-VARIANT ADT is the same
+             * shape.  Its ctor mallocs the tag+union record and hands back a
+             * pointer as an int64 carrier, so wrapping that in another malloc'd
+             * cell leaves cb->value pointing at a cell that *holds* the pointer
+             * rather than at the record.  The drop glue then casts the cell,
+             * reads the pointer bits as `s->tag`, and matches no case -- so the
+             * owning fields were never released even once the glue existed.
+             * Adopt the ctor's pointer directly, exactly as the heap case does. */
+            bool payload_is_boxed_adt =
+                e->as.rc_of_.expr->type.kind == TY_ADT &&
+                e->as.rc_of_.expr->type.as.adt_.def &&
+                !e->as.rc_of_.expr->type.as.adt_.def->is_heap &&
+                !adt_is_byvalue_product(e->as.rc_of_.expr->type.as.adt_.def) &&
+                e->as.rc_of_.expr->type.as.adt_.def->needs_drop_glue;
+
             char *val_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            if (payload_is_heap_adt) {
+            if (payload_is_boxed_adt) {
+                buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
+                           inner_type_c, val_tmp, inner_type_c, inner);
+            } else if (payload_is_heap_adt) {
                 buf_printf(body, "%s %s = %s;\n", inner_type_c, val_tmp, inner);
             } else {
                 /* Emit: allocate value separately, then attach it to rc control block. */
@@ -6857,7 +6875,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * an `rc/of` over one with rc/ref/weak fields needs the same
                  * field-releasing drop/walk glue (keyed off the C type name). */
                 AdtDef *adef = e->as.rc_of_.expr->type.as.adt_.def;
-                if (adef && adef->needs_drop_glue && adt_is_byvalue_product(adef)) {
+                /* rc-of-sum-type-drops-no-glue: this used to also require
+                 * adt_is_byvalue_product(adef), so a MULTI-VARIANT ADT with an
+                 * owning field fell through to the else branch below with
+                 * drop_fn_name still at its initial "NULL" -- no drop glue and
+                 * no walker.  The rc payload was never released and the walker
+                 * could not trace through the box.  The glue emitter now
+                 * dispatches on the tag, so both shapes are covered. */
+                if (adef && adef->needs_drop_glue) {
                     char *mn = mangle_field_name(adef->name);
                     snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_tur_adt_%s", mn);
                     snprintf(wg_name_buf, sizeof(wg_name_buf), "walk_glue_tur_adt_%s", mn);

@@ -1,7 +1,7 @@
 # `rc/of` over a multi-variant ADT emits no drop glue and no walker -- its `rc` fields leak
 
 **Severity:** high (silent leak; also a cycle-collector blind spot)
-**Status:** open
+**Status:** RESOLVED 2026-07-25
 **Found by:** CG3 residue (gc-cycle-collection-followup-plan), while checking
 whether the planned "struct with rc fields boxed without a walker" lint could
 ever fire
@@ -76,7 +76,32 @@ Two distinct problems from one branch:
 `option<T>` and `result<T,E>` are multi-variant, so `rc<option<rc<S>>>` and
 friends are in scope. Not measured how far the blast radius goes.
 
-## Fix directions
+## Fix (landed 2026-07-25)
+
+Two changes, and the second is the one that was easy to miss.
+
+**1. Glue for sums.** `emit_adt_byval_drop_glue` now dispatches on the tag,
+emitting a `case` per ctor that releases that variant's owning fields, and the
+emission is no longer gated on `byval`. The `rc/of` site drops its
+`adt_is_byvalue_product` requirement. A single-variant ADT keeps the original
+emitted text exactly, so no snapshot moved.
+
+**2. The boxing had the same double-indirection as the `:heap` bug.** Emitting
+glue alone did *not* fix the leak. A sum's ctor mallocs the tag+union record and
+returns a pointer, so the generic "malloc a cell and store the value" boxing
+left `cb->value` pointing at a cell that *held* the pointer rather than at the
+record. The glue then cast the cell, read the pointer bits as `s->tag`, and
+matched no case -- so the fields still were not released. The boxing now adopts
+the ctor's pointer directly, exactly as
+[gc-heap-struct-rc-not-a-control-block](gc-heap-struct-rc-not-a-control-block.md)
+did for `:heap`.
+
+Verified both halves: the owning field is released at scope exit (live blocks
+0), and a cycle routed *through* a boxed sum is now collected (live blocks 0) --
+so the walker traces through it too. Pinned by
+`tests/fixtures/rc-of-sum-type-releases-fields`.
+
+## Original fix directions
 
 1. **Emit drop glue for sums.** The glue has to switch on the variant tag and
    release the owning fields of that arm. `drop_glue_tur_adt_<name>` already
