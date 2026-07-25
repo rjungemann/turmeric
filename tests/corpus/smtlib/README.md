@@ -52,15 +52,23 @@ stage that legitimately decides more later must not break this corpus.
 
 ## Provenance of the labels
 
-Every label agrees with Z3. Two scripts, both **development scaffolding** in
-exactly the way `refine_libz3.c` is -- neither is built, linked, or run by the
-test suite, and `tur_refine_corpus` does not import them:
+Every label agrees with **both Z3 and cvc5**. Two scripts, both **development
+scaffolding** in exactly the way `refine_libz3.c` is -- neither is built,
+linked, or run by the test suite, and `tur_refine_corpus` does not import them:
 
 ```sh
-pip install z3-solver
-python3 tests/corpus/validate-labels.py          # every label vs z3
+pip install z3-solver          # required
+pip install cvc5               # optional, recommended
+python3 tests/corpus/validate-labels.py          # every label vs both
 python3 tests/corpus/generate-corpus.py --out DIR --n 2000 --seed 7
 ```
+
+Two solvers rather than one, because **Z3 is the thing being retired**. A label
+confirmed only by Z3 inherits whatever Z3 gets wrong, and this corpus exists
+precisely so the in-house chain can be trusted once Z3 is gone. cvc5 is a
+different implementation lineage, so agreement between them is meaningfully
+stronger than either alone. cvc5 is optional; without it the script still
+checks Z3 and says which seal each label carries (`z3+cvc5` or `z3 only`).
 
 `validate-labels.py` is the one that matters for review: it re-checks the
 committed labels, including the generated ones, so a rendering bug in the
@@ -85,11 +93,29 @@ a scratch directory and replay them looking for a soundness failure. Only a
 bounded, curated subset belongs in the repo -- the point is a regression net,
 not a benchmark farm.
 
+## Importing the official distributions
+
 External SMT-LIB benchmarks (the official QF_UF/QF_IDL/QF_LIA/QF_LRA
-distributions) can be dropped into `generated/`'s sibling directories as-is:
-they already carry `(set-info :status ...)`, which is the only thing the runner
-needs. The reader skips whatever falls outside the fragment, so an import does
-not have to be filtered by hand first.
+distributions) can be dropped into a sibling directory as-is: they already
+carry `(set-info :status ...)`, which is the only thing the runner needs. The
+reader skips whatever falls outside the fragment, so an import does not have to
+be filtered by hand first, and `run_dir` recurses.
+
+They are not here because the benchmark hosts are unreachable from the
+development container used to build this (proxy policy denies the CONNECT).
+Package registries ARE reachable, and were searched rather than assumed:
+
+| source | result |
+|---|---|
+| PyPI (`pysmt` wheel + sdist, `cvc5`, `sudoku-smt-solvers`, full simple-index grep) | no labelled benchmarks |
+| npm (`smtlib`, `smtlib-ext`, `smtliblib`) | no `.smt2` at all |
+| crates.io (`smt2parser`, `smtlib`, `smtlib-lowlevel`, `easy-smt`) | 38 `.smt2`, but they are **logic definitions** (`QF_NRA` and friends), not benchmarks -- none carries `:status` |
+| `proxy.golang.org` | reachable, no module ships a corpus |
+
+So the registries are a viable transport but nobody publishes a labelled corpus
+through them. Anyone with ordinary network access can fetch the distributions
+from the SMT-LIB site or the SMT-COMP archives and drop them in; nothing in the
+harness needs to change.
 
 ## Running it
 

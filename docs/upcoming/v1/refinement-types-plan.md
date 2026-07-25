@@ -1428,7 +1428,11 @@
 > `distinct`, `let`); plus 80 generated, curated to 10 per (theory, status)
 > bucket.
 >
-> **Every label agrees with Z3**, checked by `tests/corpus/validate-labels.py`.
+> **Every label agrees with both Z3 and cvc5**, checked by
+> `tests/corpus/validate-labels.py`. Two solvers rather than one because Z3 is
+> the thing being retired -- a label confirmed only by Z3 inherits whatever Z3
+> gets wrong, and cvc5 is a different implementation lineage, so agreement
+> between them is stronger evidence than either alone.
 > That check matters more than it looks: a benchmark wrongly labelled `sat` can
 > never fail and silently stops testing anything, while one wrongly labelled
 > `unsat` inverts the check entirely. Both scripts (`validate-labels.py`,
@@ -1447,6 +1451,15 @@
 > the reader takes ordinary `.smt2` with `(set-info :status ...)`, skips what
 > falls outside the fragment, and the runner recurses -- rather than an
 > engineering task.
+>
+> The package registries (PyPI, npm, crates.io, the Go proxy) ARE reachable and
+> were searched rather than assumed, since they are a viable transport for
+> checked-in data. Nobody publishes a labelled corpus through them: the only
+> `.smt2` files found anywhere were 38 in the Rust `smtlib` crate, and those are
+> LOGIC DEFINITIONS (`QF_NRA` and friends), not benchmarks, carrying no
+> `:status`. The search is tabulated in `tests/corpus/smtlib/README.md` so it
+> does not get repeated. What the registries did yield is cvc5, which is why the
+> labels now carry two independent confirmations instead of one.
 >
 > ### Landed: closedness is a property of the goal, not of the model
 >
