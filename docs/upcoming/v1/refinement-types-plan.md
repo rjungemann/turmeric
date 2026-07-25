@@ -2487,6 +2487,15 @@ all of the following hold:
   | generated soak, Z3-labelled | 3600 benchmarks (seeds 7/8/9) | 2646 sat, **0** wrongly proved |
   | VC-level differential vs Z3 4.13 | 7000 VCs | 0 soundness bugs, 0 refutation bugs |
 
+  The record metadata for **SMT-LIB release 2025 (non-incremental benchmarks)**
+  (Zenodo `16740866`, CC-BY-4.0, 90 per-logic tarballs, 4.89 GB) is committed at
+  `tests/corpus/smt-lib-benchmark-data-2025.json`, and
+  `tests/corpus/import-smtlib.py` turns it into a one-command import:
+  md5-verified download, deterministic seeded sample per logic, attribution
+  file, and a loud report when it keeps fewer than asked. Its offline paths are
+  tested (dedup, shortfall, checksum failure, dry-run); only the HTTP fetch is
+  not, because the host is blocked here.
+
   What is NOT yet done is importing the **SMT-LIB benchmark library** -- the
   labelled data artifact, as distinct from the SMT-LIB *standard* (the language
   and logic declarations) and from SMT-COMP (the annual competition, which uses

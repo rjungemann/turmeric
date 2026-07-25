@@ -128,15 +128,49 @@ No assertions, no `:status`, nothing to solve. The crate vendored the
 
 ### Getting the real thing
 
-The benchmark library is released as versioned collections and mirrored as
-per-logic repositories by the Iowa CLC group; recent releases are archived with
-DOIs. Any of those routes works -- the harness needs nothing but files with
-`(set-info :status ...)`.
+The record metadata for **SMT-LIB release 2025 (non-incremental benchmarks)**
+(Zenodo record `16740866`) is committed at
+[`tests/corpus/smt-lib-benchmark-data-2025.json`](../smt-lib-benchmark-data-2025.json).
+It lists 90 per-logic tarballs -- 4.89 GB in total -- with sizes, md5 checksums
+and content URLs. The metadata is committed; the tarballs are not.
 
-They are not here because those hosts are unreachable from the development
-container used to build this (proxy policy denies the CONNECT). Package
-registries ARE reachable, and were searched rather than assumed, since they
-would be a viable transport for vendored data:
+The release is **CC-BY-4.0**, so a sample may be redistributed inside this repo
+with attribution. `import-smtlib.py` writes an `ATTRIBUTION` file alongside
+whatever it imports; leave it in place.
+
+```sh
+pip install zstandard
+python3 tests/corpus/import-smtlib.py --list                     # what exists
+python3 tests/corpus/import-smtlib.py --logics QF_UFLIA --dry-run
+python3 tests/corpus/import-smtlib.py --logics QF_UFLIA,QF_UF --sample 25
+```
+
+It downloads to a scratch cache, **md5-verifies before extracting**, takes a
+deterministic sample per logic (seeded, so an import is reproducible), and
+flattens each logic into its own directory. It says how many it kept out of how
+many exist, and says so explicitly when it kept fewer than asked -- a silent
+shortfall is the same failure mode as a silently-skipped benchmark.
+
+Sizes for the logics in the fragment, so a sample can be scoped:
+
+| logic | compressed | logic | compressed |
+|---|---|---|---|
+| `QF_UFLIA` | 18.9 MB | `QF_UF` | 54.2 MB |
+| `QF_UFIDL` | 35.6 MB | `QF_RDL` | 10.0 MB |
+| `QF_LRA` | 181.5 MB | `QF_UFLRA` | 162.3 MB |
+| `QF_IDL` | 427.4 MB | `QF_LIA` | 687.5 MB |
+
+After importing, run `validate-labels.py` over the corpus. The library's own
+`:status` labels are authoritative, but re-checking is how a truncated or
+mis-imported file shows up as a disagreement rather than as a mysterious
+soundness failure later.
+
+**Not imported here:** `zenodo.org` is blocked by the egress policy of the
+container this was built in (the proxy answers 403 to CONNECT, recorded as
+`connect_rejected` for `zenodo.org:443`). That is an environment restriction,
+not a missing piece -- the importer runs anywhere with ordinary network access.
+Package registries ARE reachable and were searched rather than assumed, since
+they would be a viable transport for vendored data:
 
 | source | result |
 |---|---|
@@ -144,12 +178,6 @@ would be a viable transport for vendored data:
 | npm (`smtlib`, `smtlib-ext`, `smtliblib`) | no `.smt2` at all |
 | crates.io (`smt2parser`, `smtlib`, `smtlib-lowlevel`, `easy-smt`) | 38 `.smt2` -- all **standard logic declarations**, not benchmarks |
 | `proxy.golang.org` | reachable, no module ships a corpus |
-
-So the registries are a viable transport, but the benchmark library is not
-published through them. Anyone with ordinary network access can fetch it and
-drop it into a subdirectory unfiltered: the reader takes `(set-info :status
-...)` as the label, skips whatever falls outside the fragment rather than
-guessing, and `run_dir` recurses. Nothing in the harness needs to change.
 
 ## Running it
 
