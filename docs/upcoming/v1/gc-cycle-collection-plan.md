@@ -1,20 +1,11 @@
 # Cycle-Collecting GC -- Reaching Past Rust (CG0--CG8)
 
 > **Status:** CG0 + CG1 + CG2 landed 2026-07-25. **`(gc!)` now reclaims live
-> strong `rc<T>` cycles** -- measured 192 bytes per cycle -> 0. Turmeric can now
-> do what Rust's `Rc`/`Arc` cannot, opt-in and off by default. CG3 (walker
-> completeness), CG5 (automatic trigger) and the rest are not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
-> `src/runtime/gc.h`, colors + modes + suspect buffer + a global block registry
-> + `mark_phase`/`trial_deletion_phase`), but as wired it only reclaims the
-> **weak-zombie** case (strong->0 while weak>0). It cannot collect a live
-> **strong** reference cycle -- and not merely because of the suspect-buffering
-> condition: `gc_mark_phase` treats *every* block with `strong_count > 0` as a
-> root, and every member of a self-sustaining cycle has `strong_count > 0`, so
-> the cycle is unconditionally marked live. Real cycle collection requires
-> trial *decrements* to distinguish internal (in-cycle) references from external
-> roots. This plan replaces the mark-sweep-from-strong-roots core with a correct
-> synchronous Bacon-Rajan trial-deletion collector, and adds an opt-in
-> automatic trigger.
+> strong `rc<T>` cycles** -- measured 192 bytes per cycle -> 0, with a
+> collector-off control still leaking, so the collector is demonstrably what
+> reclaims them. Turmeric can now do what Rust's `Rc`/`Arc` cannot: opt-in, off
+> by default, zero-overhead when unused. CG3 is **audited but not complete**
+> (see below); CG5 (automatic trigger) and the rest are not started.
 >
 > **The reach-past-Rust claim:** Rust's `Rc`/`Arc` never collect cycles -- the
 > programmer must break them with `Weak`. Turmeric already matches Rust (rc<T> +
@@ -257,7 +248,49 @@ program mid-collection; use a scratch field (a spare `reserved[]` slot or a
 parallel map). The walker already enumerates children for `RCK_STRUCT` and
 `RCK_EXISTENTIAL`; CG3 widens that coverage.
 
-### CG3 -- Walker completeness (close the blind spots that matter)
+### CG3 -- Walker completeness (close the blind spots that matter) [AUDITED 2026-07-25]
+
+**Audit result: struct-shaped cycle coverage is better than the plan assumed,
+and the audit turned up a real bug instead.**
+
+A walker is attached only when the boxed payload is a by-value product ADT with
+drop glue (`emit_expr.c:6832-6845`); everything else boxes `RCK_OPAQUE` with a
+NULL walker. Empirically probing which cycle *shapes* that actually covers:
+
+| shape | collected? |
+|---|---|
+| two-node ring, one `rc` field each | yes (0 B retained) |
+| three-node ring | yes |
+| one node with **two** `rc` fields | yes |
+| two **different** struct types, mutually referencing | yes |
+| **`:heap`-annotated struct** with an `rc` field | **crashes** |
+
+So the walker enumerates multiple fields, longer rings, and heterogeneous types
+correctly -- the shapes the plan worried about are fine. What it found instead:
+an `rc<T>` over a **`:heap`** struct hands `rc_strong_decrement` something that
+is not a full `RcControlBlock`. Filed as
+`docs/reported/gc-heap-struct-rc-not-a-control-block.md`. That confusion is
+pre-existing and silent (a leak) with the collector off; CG1's `PossibleRoot`
+hook reads a field far enough into the block to turn it fatal. Every existing GC
+fixture uses `:move` structs, which is why nothing caught it.
+
+**Remaining CG3 work, re-scoped by the audit:**
+
+1. Fix the `:heap` + `rc<T>` lowering (the report above) and add a `:heap`-struct
+   cycle fixture. This is now the highest-value item in CG3 -- it is a live
+   crash, not a missed optimisation.
+2. Cycles routed through `RCK_OPAQUE` payloads (C handles, and collection
+   buffers such as a `vec` of `rc<T>`) remain uncollectable. This is the
+   **accepted** blind spot -- exactly Rust's situation with raw pointers -- and
+   is documented as such in `docs/guides/gc-guide.md`. Making collections
+   walkable would mean teaching the walker about C-backed storage; worth doing
+   only if a real consumer needs it.
+3. The lint the original phase called for -- warn when a `defstruct` with `rc`
+   fields is boxed without a walker -- is still unwritten. Note the audit
+   suggests it would fire rarely, since the by-value product path already covers
+   the reachable struct shapes.
+
+*Original phase text:*
 
 Audit every `rc_cb_alloc_*` site and ensure a `walk_fn` is attached wherever the
 payload can hold rc children. Known gaps to check: boxed closures with captured
