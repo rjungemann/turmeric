@@ -1233,6 +1233,58 @@
 > Verified: suite 2326/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
 >
+> ### Path conditions for call-site crossings (landed 2026-07-25)
+>
+> The largest remaining proving gap, closed without the change it looked like
+> it needed. A crossing is collected during elaboration and discharged after
+> the whole unit -- the deferral is load-bearing, it is what lets a crossing
+> see every callee's refinement -- and the cost was that a call inside a branch
+> was checked WITHOUT the condition that selected the branch.
+>
+> | Shape | Before | After |
+> |---|---|---|
+> | `(if (= n 0) 0 (+ 1 (f (- n 1))))`, `f : Nat -> _` | 1 proven, 2 unknown | 2 proven, 1 unknown |
+> | `(if (= x 0) 0 (sdiv 10 x))`, `d : NonZero` | unknown | proven |
+>
+> The previous entry said this "needs the path condition captured at COLLECTION
+> time, which means a condition stack threaded through expression elaboration:
+> a real change, not a slice." That was wrong, and usefully so. `call_form` is
+> a POINTER into the caller's body, so the conditions can be recovered
+> syntactically after the fact: walk the body down to that exact node and
+> collect every branch entered on the way. No `elab_*` function changes, and
+> the facts are the same ones `rt_prove_paths` already synthesizes for return
+> obligations. The only new state is the caller's body form, back-filled
+> alongside the env it already back-fills.
+>
+> Three declines, each because the alternative is unsound rather than merely
+> imprecise:
+>
+> - **A target inside an `if`'s CONDITION** gets no fact from that `if`. The
+>   condition is evaluated before either branch is chosen, so neither it nor
+>   its negation holds there.
+> - **A body that assigns anywhere** declines path conditions outright. A
+>   condition mentioning a reassigned name may no longer hold at the call --
+>   the same staleness the `do`-block scan guards, reusing the same scan.
+> - **A `call_form` reachable by more than one route** declines. A macro that
+>   shares a node can produce that, and then there is no single path to speak
+>   of.
+>
+> The remaining unknown in the recursion row is the function's OWN return, and
+> it is the already-documented mutual-recursion ordering limitation: a
+> function's return obligation is decided inline, so a self-recursive call
+> cannot yet see the refinement being defined. Not a new gap.
+>
+> Negatives are pinned by an errors fixture rather than by inversion, because
+> a crossing is `runtime_guarded` and therefore SILENT when merely unprovable.
+> All three negatives are refuted outright with a counterexample under
+> `--strict-refine`, so a bad path condition makes the refutation disappear and
+> the fixture stop erroring. `match` arms and `let` bindings are not yet
+> collected as crossing path conditions -- the natural follow-up, and now a
+> small one.
+>
+> Verified: suite 2328/0, solver unit 47/0, 400 fuzz cases across two seeds
+> with 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -1244,13 +1296,11 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - **Path conditions for call-site crossings** -- NEW, and now the largest
->   remaining proving gap. A crossing inside a branch is checked without the
->   condition that selected the branch, so the canonical decreasing-argument
->   recursion cannot discharge its own recursive call. Needs the path condition
->   captured at COLLECTION time, which means a condition stack threaded through
->   expression elaboration. Costs a diagnostic, never soundness -- the runtime
->   check stays.
+> - ~~**Path conditions for call-site crossings**~~ -- LANDED for `if`, see
+>   above, and by syntactic recovery rather than the condition stack this entry
+>   predicted. What is left is extending the same walk to `match` arms and
+>   `let` bindings, which is now a small job: the hypothesis synthesis already
+>   exists in `rt_prove_paths` and only needs to be shared.
 > - ~~**Widen the purity whitelist**~~ -- `match` and field reads landed. The
 >   third item, `while` over provably-local state, is **struck**: measuring it
 >   showed it is not a classifier case at all. A loop accumulator is Unknown

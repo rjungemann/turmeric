@@ -1,0 +1,41 @@
+;; SOUNDNESS -- every crossing here must stay unproved, and each is in fact
+;; REFUTED with a counterexample. A crossing is `runtime_guarded`, so it is
+;; silent unless --strict-refine is on; with it, all three report TUR-E0371.
+;; If a bad path condition made any of them provable the refutation disappears
+;; and this fixture stops erroring, which is the direction a positive fixture
+;; cannot pin.
+;;
+;;   unguarded -- no branch at all, so there is no path condition to find and
+;;   nothing may be invented.
+;;
+;;   wrong-branch -- the call sits in the arm where `(= x 0)` HOLDS, so the
+;;   fact on that path is `x = 0`, which is the opposite of what the callee
+;;   needs. Getting the branch's sign backwards would prove exactly this.
+;;
+;;   after-assignment -- the guard `(not= x 0)` held when the branch was
+;;   chosen, and then the body reassigned x to 0. A path condition carried
+;;   across an assignment is stale, so a body that assigns anywhere declines
+;;   path conditions outright.
+(defn sdiv [n : int d : #refine{ d : int | (not= d 0) }] : int
+  (/ n d))
+
+(defn unguarded [x : int] : int
+  (sdiv 10 x))
+
+(defn wrong-branch [x : int] : int
+  (if (= x 0)
+    (sdiv 10 x)
+    0))
+
+(defn after-assignment [^mut x : int] : int
+  (if (= x 0)
+    0
+    (do
+      (set! x 0)
+      (sdiv 10 x))))
+
+(defn main [] : int
+  (println (unguarded 2))
+  (println (wrong-branch 2))
+  (println (after-assignment 2))
+  0)

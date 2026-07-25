@@ -1351,19 +1351,122 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     cs->call_form   = call_form;
     cs->arg_offset  = arg_offset;
     cs->env         = NULL;   /* back-filled by refine_fill_call_site_env */
+    cs->caller_body = NULL;
     cs->caller_name = NULL;
     cs->loc         = call_form->span;
     return e->n_refine_call_sites;
 }
 
 void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
-                               const char *caller) {
+                               const char *caller, const Form *body) {
     if (!g_opt_refined || !e) return;
     for (uint32_t i = from; i < e->n_refine_call_sites; i++) {
         if (e->refine_call_sites[i].env) continue;   /* an inner defn already owns it */
         e->refine_call_sites[i].env         = env;
         e->refine_call_sites[i].caller_name = caller;
+        e->refine_call_sites[i].caller_body = body;
     }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Path conditions for call-site crossings.
+ *
+ * A crossing is collected during elaboration and discharged after the whole
+ * unit -- which is what lets it see every callee's refinement, and is why the
+ * deferral is load-bearing.  The cost was that a call inside a branch was
+ * checked WITHOUT the condition that selected the branch, so the canonical
+ * decreasing-argument recursion could not discharge its own recursive call:
+ *
+ *     (defn f [n : Nat] : Nat
+ *       (if (= n 0) 0 (+ 1 (f (- n 1)))))     ; needs n - 1 >= 0
+ *
+ * `n >= 0` is in the environment and `n != 0` is not, so `n - 1 >= 0` was
+ * Unknown and the crossing kept its check.
+ *
+ * The conditions are recovered SYNTACTICALLY rather than by threading a
+ * condition stack through expression elaboration.  `call_form` is a pointer
+ * into the caller's body, so walking the body down to that exact node collects
+ * every branch that had to be taken to reach it -- no change to any elab_*
+ * function, and the facts are the same ones `rt_prove_paths` already
+ * synthesizes for return obligations.
+ * ------------------------------------------------------------------------- */
+
+#define RT_CS_PATH_MAX_DEPTH 24
+#define RT_CS_PATH_MAX_HYPS  8
+
+/* Count pointer-identical occurrences of `target`, stopping at 2. */
+static uint32_t rt_form_occurrences(const Form *node, const Form *target,
+                                    uint32_t depth) {
+    if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return 0;
+    if (node == target) return 1;
+    if (node->tag != F_LIST && node->tag != F_VEC) return 0;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < node->as.list.len && n < 2; i++)
+        n += rt_form_occurrences(node->as.list.items[i], target, depth + 1);
+    return n;
+}
+
+/* Walk down to `target`, appending the condition of every `if` branch entered
+ * on the way.  Returns true when the target is in this subtree.
+ *
+ * A target inside the CONDITION of an `if` gets no fact from that `if`: the
+ * condition is evaluated before either branch is chosen, so neither it nor its
+ * negation holds there. */
+static bool rt_collect_path_conds(Elab *e, const Form *node, const Form *target,
+                                  const Form **hyps, uint32_t *n,
+                                  uint32_t depth) {
+    if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (node == target) return true;
+    if (node->tag != F_LIST && node->tag != F_VEC) return false;
+
+    if (rt_head_is(node, "if") && node->as.list.len == 4) {
+        const Form *c = node->as.list.items[1];
+        if (rt_collect_path_conds(e, c, target, hyps, n, depth + 1)) return true;
+        for (uint32_t br = 2; br <= 3; br++) {
+            if (!rt_collect_path_conds(e, node->as.list.items[br], target,
+                                       hyps, n, depth + 1))
+                continue;
+            if (*n >= RT_CS_PATH_MAX_HYPS) return true;  /* deep enough */
+            if (br == 2) {
+                hyps[(*n)++] = c;
+            } else {
+                Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+                notk[0] = form_sym(e->arena, node->span,
+                                   symtab_intern(e->st, strslice("not", 3)));
+                notk[1] = (Form *)c;
+                hyps[(*n)++] = form_list(e->arena, node->span, notk, 2);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    for (uint32_t i = 0; i < node->as.list.len; i++)
+        if (rt_collect_path_conds(e, node->as.list.items[i], target, hyps, n,
+                                  depth + 1))
+            return true;
+    return false;
+}
+
+/* Push this crossing's path conditions onto `cs->env`, returning the saved
+ * head so the caller can rewind.  Declines -- pushing nothing -- when the body
+ * assigns anywhere, since a condition mentioning a reassigned name may no
+ * longer hold at the call, and when `call_form` is reachable by more than one
+ * route, which a macro that shares a node can produce and which would make
+ * "the" path ambiguous. */
+static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs) {
+    RefineHyp *saved = cs->env ? cs->env->head : NULL;
+    if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
+    if (rt_form_mentions_set(cs->caller_body, 0)) return saved;
+    if (rt_form_occurrences(cs->caller_body, cs->call_form, 0) != 1) return saved;
+
+    const Form *hyps[RT_CS_PATH_MAX_HYPS];
+    uint32_t n = 0;
+    if (!rt_collect_path_conds(e, cs->caller_body, cs->call_form, hyps, &n, 0))
+        return saved;
+    for (uint32_t i = 0; i < n; i++)
+        refine_env_push(cs->env, hyps[i], NULL, NULL);
+    return saved;
 }
 
 void refine_resolve_call_sites(Elab *e) {
@@ -1377,6 +1480,11 @@ void refine_resolve_call_sites(Elab *e) {
         if (!cf || cf->tag != F_LIST) continue;
         uint32_t n_args = cf->as.list.len > cs->arg_offset
                         ? cf->as.list.len - cs->arg_offset : 0;
+
+        /* The branches that had to be taken to reach this call are facts here.
+         * Rewound below so one crossing's path never leaks into the next --
+         * several crossings share one caller's env. */
+        RefineHyp *cs_saved = rt_push_cs_path_conds(e, cs);
 
         /* Every callee parameter name maps to the caller's argument in that
          * slot, so a predicate mentioning a SIBLING parameter is checked
@@ -1425,6 +1533,7 @@ void refine_resolve_call_sites(Elab *e) {
             ob->runtime_guarded = true;
             refine_discharge_one(ob, e->arena);
         }
+        if (cs->env) cs->env->head = cs_saved;
     }
 }
 
@@ -4424,7 +4533,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * the named caller of the crossings its body produced, and its
              * parameters still need declared sorts in the environment. */
             refine_fill_call_site_env(e, rt_cs_start, rt_env,
-                                      name_f->as.sym ? name_f->as.sym->name : NULL);
+                                      name_f->as.sym ? name_f->as.sym->name : NULL,
+                                      rt_subject);
             const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
             char rt_what[128];
             if (ct_ret_pred) {

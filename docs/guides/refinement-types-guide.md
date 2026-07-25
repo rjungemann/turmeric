@@ -772,14 +772,16 @@ Known and deliberate, in rough order of how likely you are to hit them:
   form, but only when the preceding statements contain no assignment -- an
   assignment can stale a hypothesis about a parameter, and carrying that
   hypothesis across it would prove a function that violates its own refinement.
-- **A call-site crossing does not see path conditions.** Crossings are resolved
-  after the whole unit, which is what lets them see every callee's refinement,
-  but it also means a call inside a branch is checked without the condition
-  that selected the branch. In
-  `(if (= n 0) 0 (+ 1 (f (- n 1))))` the recursive crossing needs `n - 1 >= 0`,
-  which follows from `n >= 0` and `n != 0` -- and the second fact is not
-  available at the crossing. The runtime check for it remains, so this costs a
-  diagnostic, never soundness.
+- **A call-site crossing sees `if` path conditions, not `match` or `let`
+  ones.** A crossing is resolved after the whole unit, which is what lets it
+  see every callee's refinement; the branches that had to be taken to reach it
+  are recovered from the caller's body, so
+  `(if (= n 0) 0 (+ 1 (f (- n 1))))` discharges its recursive crossing from
+  `n >= 0` and `n != 0` together. A `match` arm's facts and a `let` binding's
+  equality are not yet collected this way, and a caller whose body assigns
+  anywhere declines path conditions outright, since a condition mentioning a
+  reassigned name may no longer hold at the call. Each of those costs a
+  diagnostic, never soundness -- the callee's own entry check always remains.
 - **A `while` loop is not analysed.** An accumulator built by a loop is
   Unknown regardless of what the loop does. There is no invariant *inference*
   and none is planned -- inferring facts is the thing this design deliberately

@@ -898,6 +898,11 @@ typedef struct RefineCallSite {
     uint32_t       arg_offset;   /* index of the first argument in call_form */
     RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */
     const char    *caller_name;
+    /* The caller's whole body form, back-filled alongside `env`.  The crossing
+     * needs it to recover its own PATH CONDITIONS: `call_form` is a pointer
+     * into this tree, so walking down to it collects every branch that had to
+     * be taken to reach the call. */
+    const Form    *caller_body;
     Span           loc;
 } RefineCallSite;
 
@@ -916,7 +921,7 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
  * later crossing hypotheses that do not hold there -- which is exactly the
  * direction the soundness invariant forbids. */
 void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
-                               const char *caller);
+                               const char *caller, const Form *body);
 
 /* Resolve and discharge every recorded crossing.  Runs once, after all
  * elaboration, from elaborate_program. */
