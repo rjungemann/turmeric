@@ -112,5 +112,6 @@ Both are resolved by one rewrite of the scalar-match block in
 the `shape_datatype` rungs dropped from `tests/refine-fuzz-src.py` are restored.
 
 The third defect noticed alongside these -- a var pattern's binder not being in
-scope for its own guard -- is in elaboration rather than codegen and stays
-open: `docs/reported/match-var-pattern-guard-scope.md`.
+scope for its own guard -- was in elaboration rather than codegen, so it was
+fixed separately and in a separate file:
+`docs/archive/match-var-pattern-guard-scope.md`.

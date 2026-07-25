@@ -563,6 +563,19 @@ class Gen:
             "(match p _ when (>= p %s) p _ %s)" % (z, z),
             "(match p _ when (> p 100) p _ %s)" % z,
             "(match p _ %s)" % z,
+            # Var patterns whose guard mentions the BINDER, not the scrutinee.
+            # These could not be compiled at all until the binder was brought
+            # into scope for its own guard, so they were never generated. They
+            # are the sharpest guard rung available: a hypothesis synthesized
+            # about `p` from a condition written about `x` is a fact about the
+            # wrong name, and the last two make the two names disagree on
+            # purpose -- `x` is shadowed or rebound, so reading the guard as if
+            # it constrained `p` asserts something false.
+            "(match p x when (>= x %s) x _ %s)" % (z, z),
+            "(match p x when (> x 100) x _ %s)" % z,
+            "(match p 0 %s x when (>= x %s) x _ %s)" % (z, z, z),
+            "(match (- p p) x when (>= x %s) x _ %s)" % (z, z),
+            "(let [x (- %s p)] (match p x when (>= x %s) x _ %s))" % (z, z, z),
             # constructor tag + record selector
             "(let [b (FzBox p p)] (match b (FzBox x y) x))",
             "(let [b (FzBox p p)] (match b (FzBox x y) (if (>= x %s) x %s)))" % (z, z),

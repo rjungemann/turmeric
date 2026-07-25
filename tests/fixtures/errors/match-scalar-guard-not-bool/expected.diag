@@ -1,0 +1,1 @@
+match: when-guard must have type bool, got int

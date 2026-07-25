@@ -1363,12 +1363,36 @@
 > set before writing down a root cause, not after.
 >
 > The dropped `shape_datatype` rungs are restored, and a third defect noticed
-> alongside stays open: a var pattern's binder is not in scope for its own
-> guard (`docs/reported/match-var-pattern-guard-scope.md`). That one is
-> elaboration rather than lowering, so it never reaches the block above.
+> alongside was fixed in the following slice: a var pattern's binder was not in
+> scope for its own guard (`docs/archive/match-var-pattern-guard-scope.md`).
+> That one is elaboration rather than lowering, so it never reached the block
+> above.
 >
 > Verified: suite 2330/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
+>
+> ### Landed: a var pattern's binder is in scope for its own guard
+>
+> `elab_match`'s scalar path elaborated a `when` guard BEFORE creating the arm
+> scope, so `(match p x when (> x 2) x _ 0)` failed with "unbound symbol 'x'".
+> The ADT path had it right and said so -- "while arm scope is still live" --
+> and the scalar path now matches it. A second gap closed with it: the scalar
+> path never type-checked the guard, so an `:int` guard was accepted on one
+> path and rejected on the other; the ADT path's bool check is now mirrored,
+> and it is reachable only because the guard is elaborated somewhere that has a
+> type to check.
+>
+> This unblocked a fuzzer rung class that had never been generated because it
+> could not compile. `shape_datatype` gained five var-binder-guard rungs, now
+> ~29% of that shape's samples. They are the sharpest guard rung available: the
+> guard is written about the BINDER while any synthesized hypothesis is about
+> the SCRUTINEE, and two of the five make the two names disagree on purpose, so
+> reading the guard as a constraint on `p` would assert something false.
+>
+> Verified: suite 2332/0, solver units 2/2, 400 fuzz cases over seeds
+> 2201/2202 plus the self-test, 0 soundness bugs. The 9 report-only
+> `SUSPICIOUS_over_refute` cases were inspected -- none is a var-binder-guard
+> shape.
 >
 > ### Next slice
 >
