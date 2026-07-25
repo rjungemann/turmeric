@@ -194,6 +194,29 @@ Roughly in increasing order of work:
      entirely about making the container itself GC-visible -- which is what the
      design below is.
 
+   ### Shipped: `stdlib/rcchain.tur`
+
+   That first consequence is now a stdlib module rather than advice. `RcChain`
+   is a parametric chain of `rc<A>` -- `[item : rc<A> next : rc<RcChain>]` --
+   with `rcchain-nil` / `-cons` / `-empty?` / `-head` / `-next`. Opt-in via
+   `(load "stdlib/rcchain.tur")` rather than autoloaded: it is only useful with
+   the collector on, and adding it to the autoload list would renumber every
+   codegen snapshot for a module most programs never touch.
+
+   It needs **no compiler or runtime change at all** -- no inline-C, no walker
+   hook, no elab sink. Every link is an ordinary `rc` field that the emitted
+   walk glue already enumerates. `tests/fixtures/rcchain-cycle-is-collected`
+   builds the same node-holds-its-own-collection cycle the vec arm strands and
+   reclaims all of it.
+
+   The accessors take their chain `^borrow`, which is load-bearing rather than
+   stylistic: `rc<T>` is move-only, so a by-value parameter would poison the
+   caller's binding after a single read and make the chain unwalkable.
+
+   The trade is the obvious one: O(n) indexing and one rc block per element,
+   against O(1) and one buffer. A `Vec` of handles that cannot cycle is still
+   the better default; `RcChain` is for when they can.
+
    ### Why the obvious fix is wrong
 
    The tempting change is three lines in `emit_adt_byval_walk_glue`

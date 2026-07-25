@@ -220,6 +220,16 @@ of rc cells is traced today**, with no new machinery -- its links are ordinary
 "collections" as a category and not a missing capability in the walker; it is
 one specific thing, a flat `malloc`'d buffer with no `walk_fn`. **If you need a
 collection of `rc<T>` the collector can trace, build it out of rc cells.**
+`stdlib/rcchain.tur` is one, opt-in via `(load "stdlib/rcchain.tur")`:
+
+```turmeric
+(defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
+```
+
+Nothing in the compiler or runtime knows about it -- both fields are ordinary
+`rc`, so the walk glue traces them like any other. Pinned by
+`tests/fixtures/rcchain-cycle-is-collected`. O(n) to index and one rc block per
+element, so a `Vec` of handles that cannot cycle is still the better default.
 
 Emitting a walk loop for the field would *not* fix this, and is the trap worth
 naming: `gc_collect_white` frees the whole white set together and never releases
