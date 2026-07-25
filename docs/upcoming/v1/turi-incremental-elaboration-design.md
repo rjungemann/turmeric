@@ -3,9 +3,12 @@
 > **Status:** LANDED (gated, default-off) as of 2026-07-24 -- TR2.0, TR2.2a
 > (incremental parse) and TR2.1 + TR2.2b (persistent elaboration session) are
 > all in. Enable per-env with `turi_env_set_incremental_elab(env, true)`.
-> TR2.3 (stop retaining the accumulated source per eval) landed 2026-07-25.
-> Remaining: TR2.4 (scratch promotion in the REPL) and flipping the gate on for
-> real consumers.
+> TR2.3 (stop retaining the accumulated source per eval) and TR2.4 (scratch
+> promotion in the REPL) landed 2026-07-25. **All TR2 sub-phases are now done.**
+> The one remaining step is a decision, not a build: flipping
+> `incremental_elab` on for the REPL and the embedding consumers. Until that
+> happens the REPL still grows ~1 GB over 1500 turns (see TR2.4's table) -- the
+> gate is where the win actually reaches users.
 >
 > **Headline result (N=800-turn session): 296.9 MB -> 1.2 MB (247x less retained
 > memory) and 2.65s -> 0.02s (132x faster).** Growth is now exactly linear where
@@ -268,9 +271,31 @@ is caught. (`def` redefinition still errors on both paths -- unchanged.)
   default path at N=800: **296.9 MB -> 1.2 MB (247x less), 2.65s -> 0.02s.**
 
   The REPL `:type` command still reads `src_acc` and needs no change.
-- **TR2.4 -- enable promotion in the REPL (the literal TR0 action).** Now that a
-  long session is bounded, turn on `turi_env_set_scratch_promotion` in `repl.c`
-  and ship it with the above.
+- **TR2.4 -- enable scratch promotion in the REPL. [DONE 2026-07-25]**
+  `repl_configure_env()` (`repl.c`) now sets `turi_env_set_scratch_promotion` on
+  every freshly created REPL env -- the main session, `:reset`, and `:run` --
+  alongside the diag sink, so the setting survives a session restart.
+  `TUR_NO_SCRATCH_PROMOTION=1` opts out for bisecting. Promotion stays OFF by
+  default for embedders (the create/eval/free pattern does not need it).
+
+  The differential harness now runs every scripted session under three
+  configurations against the default path -- `incremental`, `promotion` (what the
+  REPL runs today), and `both` -- and asserts a promotion-enabled env actually
+  rewound, so the config cannot pass vacuously.
+
+  **Measured over 1500 transient-heavy turns:**
+
+  | configuration | `value_scratch` | `eval_arenas` |
+  |---|---:|---:|
+  | no promotion (before) | 52.9 MB | 1045 MB |
+  | promotion (REPL today) | **0 B** | 1045 MB |
+  | promotion + incremental | **0 B** | **2.2 MB** |
+
+  Promotion does exactly its job -- the value pool goes to a hard zero. But note
+  what this measurement makes unavoidable: **the REPL still grows ~1 GB over 1500
+  turns**, because `eval_arenas` is only bounded by the incremental gate. TR2.4 is
+  necessary and not remotely sufficient; flipping `incremental_elab` on is what
+  actually fixes the REPL.
 
 ## Scoping call for the reader
 

@@ -34,44 +34,77 @@ static void render(TuriValue v, char *out, size_t cap) {
     }
 }
 
-/* Run one scripted session through both paths, comparing each turn. */
+/* The env configurations checked against the default path. "promotion" is what
+ * `tur repl` itself now runs (TR2.4); "both" is the configuration the REPL gets
+ * if the incremental gate is also flipped on. */
+typedef struct { const char *label; bool incr; bool promo; } DiffConfig;
+static const DiffConfig CONFIGS[] = {
+    { "incremental", true,  false },
+    { "promotion",   false, true  },
+    { "both",        true,  true  },
+};
+enum { N_CONFIGS = (int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])) };
+
+/* Run one scripted session through the default path and every configuration
+ * above, comparing each turn's result. */
 static void diff_session(const char *name, const char *const *lines, int n) {
-    TuriEnv *base = turi_env_new();                 /* default: whole-blob path */
-    TuriEnv *incr = turi_env_new();
-    turi_env_set_incremental_elab(incr, true);
+    for (int c = 0; c < N_CONFIGS; c++) {
+        TuriEnv *base = turi_env_new();            /* default: whole-blob path */
+        TuriEnv *test = turi_env_new();
+        if (CONFIGS[c].incr)  turi_env_set_incremental_elab(test, true);
+        if (CONFIGS[c].promo) turi_env_set_scratch_promotion(test, true);
 
-    int diverged = 0;
-    for (int i = 0; i < n; i++) {
-        TuriValue a = turi_eval(base, lines[i]);
-        TuriValue b = turi_eval(incr, lines[i]);
-        char sa[512], sb[512];
-        render(a, sa, sizeof sa);
-        render(b, sb, sizeof sb);
-        if (strcmp(sa, sb) != 0) {
-            fprintf(stderr, "FAIL [%s] turn %d diverged\n  src: %s\n"
-                            "  default:     %s\n  incremental: %s\n",
-                    name, i, lines[i], sa, sb);
-            failures++;
-            diverged = 1;
+        int diverged = 0;
+        for (int i = 0; i < n; i++) {
+            TuriValue a = turi_eval(base, lines[i]);
+            TuriValue b = turi_eval(test, lines[i]);
+            char sa[512], sb[512];
+            render(a, sa, sizeof sa);
+            render(b, sb, sizeof sb);
+            if (strcmp(sa, sb) != 0) {
+                fprintf(stderr, "FAIL [%s/%s] turn %d diverged\n  src: %s\n"
+                                "  default: %s\n  %s: %s\n",
+                        name, CONFIGS[c].label, i, lines[i], sa,
+                        CONFIGS[c].label, sb);
+                failures++;
+                diverged = 1;
+            }
         }
+
+        /* An incremental env must have actually accumulated forms and stayed in
+         * sync with the session's parsed-form count -- otherwise this session
+         * was only ever taking the fallback and proves nothing. */
+        if (CONFIGS[c].incr) {
+            if (test->n_acc_forms == 0) {
+                fprintf(stderr, "FAIL [%s/%s]: accumulated no forms\n",
+                        name, CONFIGS[c].label);
+                failures++;
+            } else if (test->n_acc_forms != test->prior_toplevel) {
+                fprintf(stderr, "FAIL [%s/%s]: acc_forms (%u) out of sync with "
+                                "prior_toplevel (%u)\n", name, CONFIGS[c].label,
+                        test->n_acc_forms, test->prior_toplevel);
+                failures++;
+            }
+        }
+        /* A promotion-enabled env must actually be rewinding, not silently
+         * declining every cycle (which would make this config vacuous). */
+        if (CONFIGS[c].promo && test->promo_rewinds == 0) {
+            fprintf(stderr, "FAIL [%s/%s]: promotion never rewound "
+                            "(attempts=%llu busy=%llu unreloc=%llu)\n",
+                    name, CONFIGS[c].label,
+                    (unsigned long long)test->promo_attempts,
+                    (unsigned long long)test->promo_decline_busy,
+                    (unsigned long long)test->promo_decline_unrelocatable);
+            failures++;
+        }
+
+        if (!diverged)
+            printf("PASS [%s/%s] (%d turns identical)\n",
+                   name, CONFIGS[c].label, n);
+
+        turi_env_free(base);
+        turi_env_free(test);
     }
-
-    /* The incremental env must have actually accumulated forms and stayed in
-     * sync with the session's parsed-form count -- otherwise this session was
-     * only ever taking the fallback and proves nothing. */
-    if (incr->n_acc_forms == 0) {
-        fprintf(stderr, "FAIL [%s]: incremental env accumulated no forms\n", name);
-        failures++;
-    } else if (incr->n_acc_forms != incr->prior_toplevel) {
-        fprintf(stderr, "FAIL [%s]: acc_forms (%u) out of sync with prior_toplevel (%u)\n",
-                name, incr->n_acc_forms, incr->prior_toplevel);
-        failures++;
-    }
-
-    if (!diverged) printf("PASS [%s] (%d turns identical)\n", name, n);
-
-    turi_env_free(base);
-    turi_env_free(incr);
 }
 
 /* Cross-eval definition and use: closures, structs, ADTs, recursion. */
