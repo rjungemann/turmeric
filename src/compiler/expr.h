@@ -292,6 +292,12 @@ struct Binding {
      * obligation instead of being an opaque term. */
     const struct Form  *refine_return_pred;
     const char         *refine_return_var;
+    /* RT4 purity memo, for the congruence question "may two occurrences of
+     * this call be modelled as the SAME value?".  0 = not yet computed,
+     * 1 = pure, 2 = impure.  Computed by rt_binding_is_pure (elab_fns.c) with
+     * a default-deny walk of the body; see the comment there for why the
+     * declared effect row is not sufficient evidence on its own. */
+    uint8_t             refine_purity;
     /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
      * the FnDef it defines -- lets make_dict_clone reach the original body/params
      * from the binding without scanning file-scope defs (user defns are not yet

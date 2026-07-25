@@ -133,6 +133,168 @@ bool rt_contracts_emitted(void) {
     return !g_no_contracts;
 }
 
+/* ------------------------------------------------------------------------- *
+ * RT4 purity -- may two occurrences of a call be modelled as the same value?
+ *
+ * Congruence ("same arguments => same result, and nothing observable changed")
+ * is what lets the encoder turn two occurrences of `(len xs)` into one term.
+ * Assume it wrongly and a real check gets elided: `(- (tick) (tick))` with a
+ * counter-bumping `tick` encodes as `t - t`, the solver proves `t - t >= 0`,
+ * and a program that actually returns -1 ships with no check.  That is a
+ * miscompile, so the evidence for purity has to be real.
+ *
+ * The DECLARED EFFECT ROW IS NOT THAT EVIDENCE.  The effect system tracks
+ * algebraic effects (`perform`/handlers) -- it does not infer anything from
+ * `set!`, from mutable globals, or from inline C.  effect_check.c says so in
+ * as many words where it suppresses W0031 for `#fx{Unsafe}` bodies containing
+ * inline C.  A function can therefore declare `#fx{}`, carry a `static`
+ * counter in a C block, and return a different value every call.
+ *
+ * So purity is decided by walking the body under a DEFAULT-DENY whitelist:
+ * literals, immutable variable reads, if/let/do/return, the arithmetic and
+ * comparison builtins, and direct calls to functions that are themselves
+ * pure.  Everything else -- inline C, `set!`, `perform`, dereferences, field
+ * reads, closures, indirect calls, and any body we cannot see -- is impure.
+ * A case this walk has not learned yet costs completeness (one extra runtime
+ * check); it can never cost soundness.
+ * ------------------------------------------------------------------------- */
+
+#define RT_PURE_MAX_DEPTH 64
+#define RT_PURE_MAX_NODES 20000
+
+typedef struct RtPureCtx {
+    Binding *stack[RT_PURE_MAX_DEPTH];
+    uint32_t depth;
+    /* Smallest stack index of an in-progress binding this subtree leaned on.
+     * A result derived from an assumption about an OUTER frame is provisional
+     * and must not be memoized -- that frame may still turn out impure. */
+    uint32_t min_open;
+    uint32_t budget;
+} RtPureCtx;
+
+static bool rt_pure_expr(RtPureCtx *c, const Expr *x);
+
+/* Builtins that compute a value from their arguments and touch nothing else.
+ * Everything not listed -- the println family, pointer and raw-memory writes,
+ * dlopen, `free` -- is impure. */
+static bool rt_pure_builtin_shape(BuiltinShape s) {
+    switch (s) {
+    case BS_BIN_INFIX:
+    case BS_VARIADIC_FOLD:
+    case BS_PREFIX_UNARY:
+    case BS_AND_SC:
+    case BS_OR_SC:
+    case BS_DIV_CHECK:   /* may trap on /0, but a trap is not a state change */
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool rt_pure_binding(RtPureCtx *c, Binding *b) {
+    if (!b) return false;
+    if (b->refine_purity == 1) return true;
+    if (b->refine_purity == 2) return false;
+    for (uint32_t i = 0; i < c->depth; i++) {
+        if (c->stack[i] == b) {
+            /* Recursion: assume pure for now.  Impurity only ever enters
+             * through a concrete leaf, so the greatest fixpoint is the right
+             * one -- but record that we leaned on frame `i`. */
+            if (i < c->min_open) c->min_open = i;
+            return true;
+        }
+    }
+    FnDef *fd = b->source_fn_def;
+    /* No body in hand: an extern, an inline-C-only defn whose FnDef never got
+     * linked, or a forward reference we have not elaborated yet.  Impure, and
+     * deliberately NOT memoized -- the same name may be resolvable later. */
+    if (!fd || !fd->body) return false;
+    if (c->depth >= RT_PURE_MAX_DEPTH || c->budget == 0) return false;
+
+    uint32_t my_depth  = c->depth;
+    uint32_t saved_min = c->min_open;
+    c->stack[c->depth++] = b;
+    c->min_open = UINT32_MAX;
+
+    bool r = rt_pure_expr(c, fd->body);
+
+    uint32_t used = c->min_open;
+    c->depth--;
+    if (used >= my_depth) b->refine_purity = r ? 1 : 2;
+    c->min_open = (used < saved_min) ? used : saved_min;
+    return r;
+}
+
+static bool rt_pure_expr(RtPureCtx *c, const Expr *x) {
+    if (!x) return true;
+    if (c->budget == 0) return false;
+    c->budget--;
+
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return true;
+
+    case EX_VAR:
+        /* Reading a mutable binding is not congruent: two reads can differ. */
+        return x->as.var.binding && !x->as.var.binding->is_mut;
+
+    case EX_IF:
+        return rt_pure_expr(c, x->as.if_.cond) &&
+               rt_pure_expr(c, x->as.if_.then_) &&
+               rt_pure_expr(c, x->as.if_.else_or_null);
+
+    case EX_DO:
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            if (!rt_pure_expr(c, x->as.do_.items[i])) return false;
+        return true;
+
+    case EX_LET:
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            if (!rt_pure_expr(c, x->as.let_.bindings[i].init)) return false;
+        return rt_pure_expr(c, x->as.let_.body);
+
+    case EX_RETURN:
+        return rt_pure_expr(c, x->as.return_.value);
+
+    case EX_BUILTIN:
+        if (!x->as.builtin.spec ||
+            !rt_pure_builtin_shape(x->as.builtin.spec->shape)) return false;
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            if (!rt_pure_expr(c, x->as.builtin.args[i])) return false;
+        return true;
+
+    case EX_CALL:
+        /* Direct calls only.  An indirect call (`fn_expr`) or a rank-2 poly
+         * call can land anywhere, so there is no callee to interrogate. */
+        if (x->as.call_.fn_expr || x->as.call_.is_poly_call) return false;
+        if (!rt_pure_binding(c, x->as.call_.fn_binding)) return false;
+        for (uint32_t i = 0; i < x->as.call_.n_args; i++)
+            if (!rt_pure_expr(c, x->as.call_.args[i])) return false;
+        return true;
+
+    default:
+        /* Default deny -- inline C, set!, perform, deref, field reads,
+         * closures, while, STM, async, panic, everything unlisted. */
+        return false;
+    }
+}
+
+/* True when calling `b` twice with equal arguments is guaranteed to produce
+ * equal results with no observable side effect. */
+static bool rt_binding_is_pure(Binding *b) {
+    if (!b) return false;
+    if (b->refine_purity == 1) return true;
+    if (b->refine_purity == 2) return false;
+    /* A declared non-empty effect row is an immediate veto.  (The converse is
+     * not true, which is the whole reason the body walk exists.) */
+    if (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
+        !effect_row_is_empty(b->type.as.fn.effect_row))
+        return false;
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES };
+    return rt_pure_binding(&c, b);
+}
+
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
  * global scope; refine_collect.c reaches it through a function pointer so it
@@ -160,17 +322,10 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
     out->n_params    = b->n_refine_params;
 
     /* PURITY, which decides whether two occurrences of this call may be
-     * modelled as the same value.  The only evidence available at elaboration
-     * time is the DECLARED effect row -- inference has not run yet -- so an
-     * unannotated function is treated as impure.
-     *
-     * That default costs a little completeness (a measure written as an
-     * ordinary defn no longer gets congruence unless it declares `#fx{}`) and
-     * buys the soundness invariant, which is not negotiable.  The direction of
-     * the error matters: guessing "pure" wrongly elides a real runtime check,
-     * while guessing "impure" wrongly only leaves one in place. */
-    out->pure = (b->type.kind == TY_FN && b->type.as.fn.effect_row &&
-                 effect_row_is_empty(b->type.as.fn.effect_row));
+     * modelled as the same value.  See rt_binding_is_pure above: the declared
+     * effect row is only a veto, the real evidence is a default-deny walk of
+     * the callee's body. */
+    out->pure = rt_binding_is_pure(b);
     return true;
 }
 

@@ -11,10 +11,13 @@
 ;; one that silently returns a value violating its own refinement -- the one
 ;; thing the design forbids.
 ;;
-;; Congruence is now opt-in: only a callee KNOWN pure (an `#fx{}` declaration,
-;; or a name that resolves to no function at all and is therefore an abstract
-;; measure) gets it. `tick` is neither, so each occurrence is a distinct
-;; opaque value and the obligation is refuted rather than proved.
+;; Congruence is now opt-in: only a callee KNOWN pure gets it -- one whose body
+;; passes a default-deny whitelist walk, or a name that resolves to no function
+;; at all and is therefore an abstract measure. `tick` is neither (inline C is
+;; not on the whitelist, and `#fx{Unsafe}` is a further veto), so each
+;; occurrence is a distinct opaque value and the obligation is refuted rather
+;; than proved. See the sibling fixture refine-impure-fx-empty for why the
+;; effect row alone was not enough evidence.
 ;;
 ;; This fixture asserts the DIAGNOSTIC. The behavioural half -- that the check
 ;; survives and fires -- is what the exit code of the gate-off build showed;

@@ -390,6 +390,51 @@
 >   `TUR-E0371` about a value, and `runtime_guarded` would have swallowed the
 >   counterexample before the caller could see it.
 >
+> ### Purity, take two: the effect row was never evidence (landed 2026-07-25)
+>
+> The next slice on the list was "purity from effect inference". Looking into
+> it did not produce that feature -- it produced the finding that the premise
+> was wrong and that the fix above was **still unsound**.
+>
+> The effect system tracks ALGEBRAIC effects: `perform` and handlers. It infers
+> nothing from `set!` (`collect_effects_in_expr` recurses into an `EX_SET`'s
+> value and registers no effect for the mutation), nothing from a mutable
+> global, and nothing from inline C -- `effect_check.c:696` says so in as many
+> words where it suppresses `W0031` for a `#fx{Unsafe}` body containing inline
+> C, "because the effect system does not infer Unsafe from it". An empty row
+> is therefore not a purity claim, and no amount of *inference* would have made
+> it one; inference would have produced the same empty row.
+>
+> The hole reproduced immediately: give `tick` a genuinely empty `#fx{}` and a
+> `static` counter in a C block, and the original miscompile came straight back
+> -- gate off aborts on the contract, gate on prints `-1` and exits 0.
+>
+> Purity is now decided by a **default-deny walk of the callee's body**
+> (`rt_binding_is_pure`, `src/compiler/elab_fns.c`). Admitted: literals, reads
+> of immutable bindings, `if` / `let` / `do` / `return`, the arithmetic,
+> comparison and logical builtin shapes, and direct calls to functions that are
+> themselves pure. Everything else -- inline C, `set!`, `perform`, deref, field
+> reads, closures, indirect and rank-2-poly calls, the `println` family, and any
+> callee whose body is not in hand -- is impure. A declared non-empty effect row
+> remains as a cheap veto; an empty one now proves nothing on its own.
+>
+> Recursion is handled with a Tarjan-style open-frame rule rather than a flat
+> memo: a self-call is optimistically assumed pure (impurity only ever enters
+> through a concrete leaf, so the greatest fixpoint is the right one), but a
+> result derived from an assumption about an OUTER frame is provisional and is
+> not memoized. Without that, `f -> g -> f` where `f` is impure for a reason
+> discovered *after* the call to `g` would leave `g` cached as pure. Recursive
+> measures do get congruence: verified with a recursive `rlen`.
+>
+> Net effect on completeness: the walk is strictly more permissive than the old
+> rule for ordinary code (`(* v 2)` needs no annotation now) and strictly less
+> permissive for anything that lied. `tests/fixtures/errors/refine-impure-fx-
+> empty` pins the new half; `refine-impure-not-congruent` still pins the old one.
+>
+> The general lesson, twice now: the fuzzer works at the VC level, below the
+> encoder, so it is blind to every bug in the translation INTO the VC. Both
+> soundness bugs found so far have lived there.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -401,10 +446,11 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - **Purity from effect INFERENCE, not just the declared row.** An unannotated
->   function is currently assumed impure, which is sound but costs completeness
->   for measure-style reasoning. Inference runs after the discharge pass; moving
->   the call-site resolution behind it would recover the common case.
+> - **Widen the purity whitelist.** `match`, immutable struct field reads, and
+>   `while` over provably-local state are all genuinely pure and all currently
+>   rejected. Each is a bounded addition to `rt_pure_expr` with a fixture. Note
+>   this is NOT the "purity from effect inference" item it replaces -- that one
+>   is struck as unworkable, per the finding above.
 > - **Branching-body propagation** -- RT4 is limited to single-expression
 >   bodies; a path-sensitive join at merge points would cover `if`/`match`.
 > - **Whole-program entry-check elision** -- the piece that turns the call-site

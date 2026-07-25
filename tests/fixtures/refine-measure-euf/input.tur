@@ -8,12 +8,15 @@
 ;; `size-of(v)` and `n` denote the same value, and EUF cannot do the ordering.
 ;; The combination does.
 ;;
-;; The `#fx{}` is load-bearing, not decoration.  Congruence -- treating the two
-;; occurrences of `(size-of v)` as the same value -- is only valid for a PURE
-;; function, so the compiler requires the measure to say so.  Without it the
-;; obligation stays undischarged and the runtime check remains.  An unannotated
-;; function is assumed impure precisely because the other default silently
-;; elides real checks.
+;; Congruence -- treating the two occurrences of `(size-of v)` as the same
+;; value -- is only valid for a PURE function, and purity here is EARNED, not
+;; declared: the compiler walks `size-of`'s body against a default-deny
+;; whitelist (literals, immutable reads, if/let/do, arithmetic builtins, calls
+;; to functions already known pure) and `(* v 2)` clears it.  The `#fx{}` is a
+;; veto only -- a non-empty declared row rules purity out, an empty one proves
+;; nothing on its own (the effect system does not infer anything from `set!`,
+;; mutable globals, or inline C).  Anything the walk does not recognise stays
+;; impure, so a missed case costs one runtime check and never a wrong proof.
 (defn size-of [v : int] #fx{} : int
   (* v 2))
 

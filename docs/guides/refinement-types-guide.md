@@ -275,25 +275,42 @@ congruence closure reasons about but never unfolds. This is what makes the
 equality theory tractable, and it is why `(= (size-of v) n)` above is usable as
 a hypothesis without the solver knowing anything about `size-of`'s body.
 
-**A measure must be declared pure.** Congruence -- treating two occurrences of
-`(size-of v)` as the same value -- is only valid for a pure function, so the
-compiler requires the function to say so with an empty effect row:
+**A measure must be provably pure.** Congruence -- treating two occurrences of
+`(size-of v)` as the same value -- is only valid for a pure function, and the
+compiler decides that for itself by walking the callee's body:
 
 ```turmeric
 (defn size-of [v : int] #fx{} : int
   (* v 2))
 ```
 
-Without the annotation each occurrence is a *distinct* opaque value and the
-proof does not go through. That default is deliberate and it is the
-conservative direction: assuming purity wrongly elides a runtime check that was
-protecting something, while assuming impurity wrongly only leaves one in place.
+The walk is **default-deny**. It admits literals, reads of immutable bindings,
+`if` / `let` / `do` / `return`, the arithmetic, comparison, and logical
+builtins, and direct calls to functions that are themselves pure -- recursion
+included, so a recursive measure still gets congruence. Everything else is
+impure: inline C, `set!`, `perform`, dereferences, field reads, closures,
+indirect and rank-2-polymorphic calls, the `println` family, raw memory, and
+any callee whose body is not available (an `extern`, or a forward reference not
+yet elaborated). Without a purity proof each occurrence is a *distinct* opaque
+value and the proof does not go through.
+
+A declared effect row is a **veto, not evidence**. `#fx{Log}` rules purity out;
+`#fx{}` on its own proves nothing, because the effect system tracks *algebraic*
+effects and infers nothing from `set!`, from a mutable global, or from inline C.
+A function can declare an empty row, keep a `static` counter in a C block, and
+return a different value on every call.
 
 The rule has teeth. Given a `tick` that counts up, `(- (tick) (tick))` is `-1`,
 never `0` -- but encoded congruently it becomes `t - t`, and a refinement of
-`(>= r 0)` on it would be "proved" and its check elided. A name that resolves to
-no function at all is still treated as congruent: that is an abstract measure,
-a mathematical function by definition rather than code that runs.
+`(>= r 0)` on it would be "proved" and its check elided. Both halves of that
+hole are pinned by regression fixtures
+(`errors/refine-impure-not-congruent`, `errors/refine-impure-fx-empty`).
+
+The asymmetry is the point: a case the walk has not learned costs one runtime
+check, while a wrong purity guess elides a check that was protecting something.
+A name that resolves to no function at all is still treated as congruent: that
+is an abstract measure, a mathematical function by definition rather than code
+that runs.
 
 **Variable * variable is uninterpreted.** `(* x 2)` is linear and fully decided;
 `(* x y)` with both sides variable is abstracted to an opaque term and reported
@@ -531,11 +548,13 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **No refinements on type parameters, typeclass method signatures, or
   higher-order predicates.** These are rejected or fall through to runtime.
 - **Nonlinear arithmetic** is uninterpreted, as described above.
-- **A function with no declared effect row is assumed impure**, so its calls
-  are not congruent and measure-style reasoning over it does not go through
-  until it declares `#fx{}`. Effect *inference* runs after the discharge pass,
-  so the declared row is the only evidence available; this costs completeness,
-  never soundness.
+- **Purity is a syntactic whitelist, not an analysis.** A function whose body
+  steps outside the admitted forms is impure even when it is in fact pure --
+  a `match`, a struct field read, or a loop is enough. Its calls are then not
+  congruent and measure-style reasoning over it does not go through. This
+  costs completeness, never soundness. Widening the whitelist is the natural
+  next increment; the effect row cannot substitute for it, because an empty
+  row is not a purity claim.
 
 Every one of these fails toward a runtime check, never toward a wrong answer.
 
