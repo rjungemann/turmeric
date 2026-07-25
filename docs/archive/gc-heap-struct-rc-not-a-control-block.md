@@ -1,11 +1,38 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-25
+resolved: 2026-07-25
 area: codegen + runtime (rc<T> over a `:heap` defstruct, cycle collector enabled)
 ---
 
 # `rc<T>` over a `:heap` struct passes a non-control-block to `rc_strong_decrement`
+
+## Resolution (2026-07-25)
+
+Root cause: a **double-indirection mismatch** at the `rc/of` boxing site. A
+`:heap` ADT is already represented as a pointer to its payload (its ctor mallocs
+and returns `T *`), but `rc/of` boxed it the generic way -- malloc a cell, store
+the value in it -- leaving `cb->value` a `T **`. Every consumer (field
+read/write, walk glue, drop glue) casts `cb->value` straight to `T *`, so all of
+them read the pointer cell as if it were the struct.
+
+That single mismatch produced every symptom: `.next` returned the struct pointer
+(handed to `rc_strong_decrement` as a bogus control block -> the crash), the
+walker traced garbage, and the drop glue freed the cell while leaking the struct
+(the ~64 B/ring of non-cycle leak).
+
+Fix (`src/compiler/emit_expr.c`, `EX_RC_OF`): when the payload is a heap ADT
+(`type.as.adt_.def->is_heap`), adopt the pointer the ctor already produced
+instead of adding a second indirection, so `cb->value` points AT the payload as
+every consumer assumes. Verified: the `:heap` cycle went from segfault to
+collected (0 bytes over 5000 rings), and the collector-off leak dropped by
+exactly the per-ring struct that drop glue had been leaking.
+
+Guarded by `tests/fixtures/gc-heap-struct-rc`, which asserts both halves: an
+acyclic `:heap` rc leaks nothing, and a `:heap` cycle is collected.
+
+The original report follows for the record.
 
 ## Summary
 

@@ -6809,14 +6809,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (rc/of x) - allocate control block, copy value into it */
             char *inner = emit_value(ctx, body, e->as.rc_of_.expr);
             char *inner_type_c = strdup(type_c_name(e->as.rc_of_.expr->type));
-            
-            /* Emit: allocate value separately, then attach it to rc control block. */
+
+            /* A `:heap` ADT is already represented as a POINTER to its payload
+             * (its ctor mallocs and returns `T *`), so boxing it the generic way
+             * -- malloc a cell and store the pointer in it -- leaves cb->value a
+             * `T **`. Every consumer (field read/write, walk glue, drop glue)
+             * casts cb->value straight to `T *`, so that extra indirection made
+             * them read the pointer cell as if it were the struct: `->next`
+             * yielded the struct pointer, which then reached
+             * rc_strong_decrement as a bogus control block (a crash once the
+             * collector touched fields past weak_count), the walker traced
+             * garbage, and drop glue freed the cell while leaking the struct.
+             *
+             * cb->value must point AT the payload, so for a heap ADT adopt the
+             * pointer the ctor already produced. See
+             * docs/reported/gc-heap-struct-rc-not-a-control-block.md. */
+            bool payload_is_heap_adt =
+                e->as.rc_of_.expr->type.kind == TY_ADT &&
+                e->as.rc_of_.expr->type.as.adt_.def &&
+                e->as.rc_of_.expr->type.as.adt_.def->is_heap;
+
             char *val_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
-                       inner_type_c, val_tmp, inner_type_c, inner_type_c);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+            if (payload_is_heap_adt) {
+                buf_printf(body, "%s %s = %s;\n", inner_type_c, val_tmp, inner);
+            } else {
+                /* Emit: allocate value separately, then attach it to rc control block. */
+                buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                           inner_type_c, val_tmp, inner_type_c, inner_type_c);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+            }
 
             char *cb_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);

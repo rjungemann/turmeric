@@ -5,7 +5,8 @@
 > collector-off control still leaking, so the collector is demonstrably what
 > reclaims them. Turmeric can now do what Rust's `Rc`/`Arc` cannot: opt-in, off
 > by default, zero-overhead when unused. CG3 is **audited but not complete**
-> (see below); CG5 (automatic trigger) and the rest are not started.
+> (see below -- its one live bug, `:heap` + `rc<T>`, is fixed); CG5
+> (automatic trigger) and the rest are not started.
 >
 > **The reach-past-Rust claim:** Rust's `Rc`/`Arc` never collect cycles -- the
 > programmer must break them with `Weak`. Turmeric already matches Rust (rc<T> +
@@ -276,9 +277,16 @@ fixture uses `:move` structs, which is why nothing caught it.
 
 **Remaining CG3 work, re-scoped by the audit:**
 
-1. Fix the `:heap` + `rc<T>` lowering (the report above) and add a `:heap`-struct
-   cycle fixture. This is now the highest-value item in CG3 -- it is a live
-   crash, not a missed optimisation.
+1. ~~Fix the `:heap` + `rc<T>` lowering and add a `:heap`-struct cycle
+   fixture.~~ **DONE 2026-07-25.** Root cause was a double-indirection mismatch
+   at the `rc/of` boxing site: a `:heap` ADT is already a pointer to its
+   payload, so the generic "malloc a cell and store the value" boxing left
+   `cb->value` a `T **` while every consumer cast it to `T *`. One fix
+   (`emit_expr.c`, adopt the ctor's pointer when the payload is a heap ADT)
+   resolved all four symptoms -- crash, mis-traced walker, mis-read fields, and
+   a leaked struct per allocation. Archived at
+   `docs/archive/gc-heap-struct-rc-not-a-control-block.md`; guarded by
+   `tests/fixtures/gc-heap-struct-rc`.
 2. Cycles routed through `RCK_OPAQUE` payloads (C handles, and collection
    buffers such as a `vec` of `rc<T>`) remain uncollectable. This is the
    **accepted** blind spot -- exactly Rust's situation with raw pointers -- and
