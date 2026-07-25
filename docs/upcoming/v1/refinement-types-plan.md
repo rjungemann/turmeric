@@ -734,9 +734,11 @@
 >   static crossing is lost.
 > - **Widen the purity whitelist.** `match`, immutable struct field reads, and
 >   `while` over provably-local state are all genuinely pure and all currently
->   rejected. Each is a bounded addition to `rt_pure_expr` with a fixture. Note
->   this is NOT the "purity from effect inference" item it replaces -- that one
->   is struck as unworkable, per the finding above.
+>   classified UNKNOWN. Each is a bounded addition to `rt_classify_expr` with a
+>   fixture -- and each one widens congruence WITHOUT widening `TUR-E0375`,
+>   since moving a form from UNKNOWN to PURE only ever removes diagnostics.
+>   Note this is NOT the "purity from effect inference" item it replaces --
+>   that one is struck as unworkable, per the finding above.
 > - **Branching-body propagation** -- RT4 is limited to single-expression
 >   bodies; a path-sensitive join at merge points would cover `if`/`match`.
 > - **Whole-program entry-check elision** -- the piece that turns the call-site
