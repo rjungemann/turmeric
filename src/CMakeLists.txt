@@ -776,6 +776,37 @@ set_target_properties(tur_refine_solver PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# Z3 retirement: replay a LABELLED SMT-LIB2 corpus against the in-house chain,
+# with no solver dependency of its own.  The oracle in refine_libz3.c is a live
+# cross-check that only exists on a dev build with a system Z3; what has to
+# survive its deletion is a corpus whose labels are DATA in the repo.  This
+# target is that regression, so it is built unconditionally -- exactly the
+# builds that have no Z3 are the ones it must run in.
+# See tests/unit/refine_corpus.c and tests/corpus/smtlib/README.md.
+# ---------------------------------------------------------------------------
+add_executable(tur_refine_corpus
+    ${CMAKE_SOURCE_DIR}/tests/unit/refine_corpus.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_refine_corpus PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_refine_corpus PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_refine_corpus PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_refine_corpus PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_refine_corpus PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_refine_corpus PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_refine_corpus PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # RT3: differential fuzzing of the in-house refinement solver against Z3.
 # Built only in an oracle build -- it links Z3, which no shipped build does.
 # See the file header for why fixture coverage is not differential coverage.

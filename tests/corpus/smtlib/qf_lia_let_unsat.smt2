@@ -1,0 +1,10 @@
+; Exercises let-binding in the reader: s is x+y, and s>10 with x<=5,y<=5 fails.
+(set-logic QF_LIA)
+(set-info :status unsat)
+(declare-fun x () Int)
+(declare-fun y () Int)
+(assert (<= x 5))
+(assert (<= y 5))
+(assert (let ((s (+ x y))) (> s 10)))
+(check-sat)
+(exit)

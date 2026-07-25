@@ -1398,6 +1398,56 @@
 >
 > Candidates, roughly by value:
 >
+> ### Landed: a labelled SMT-LIB corpus, replayed without Z3
+>
+> The one unmet Z3 retirement criterion was that the corpora be checked in and
+> replayable with no solver present. Nothing could read a `.smt2` file --
+> `refine_smtlib.c` is a serializer -- so this was blocked on a reader, not on
+> obtaining benchmarks.
+>
+> `tests/unit/refine_corpus.c` is that reader plus a runner (ctest target
+> `tur_refine_corpus`, ~0.1s, built unconditionally -- the builds with no Z3 are
+> exactly the ones it must run in). The bridge from satisfiability to entailment
+> is exact: assert everything as hypotheses and take `false` as the goal, so
+> `hyps |- false` is VALID iff the benchmark is UNSAT. A `sat` benchmark
+> answered VALID is then precisely the one-directional invariant broken, decided
+> from the label alone.
+>
+> The reader SKIPS a benchmark whole rather than parsing it partially. Dropping
+> an assertion only weakens hypotheses, so it cannot make the chain prove
+> something it should not -- but it would quietly turn a real benchmark into a
+> trivial one and report a pass for work not done. Skips are counted and
+> printed, and one benchmark is deliberately outside the fragment to keep that
+> path exercised. The runner also fails on an empty corpus or one where nothing
+> was decided, so losing the corpus cannot read as green.
+>
+> Corpus: 103 benchmarks -- 23 hand-written one-idea-each across QF_UF (incl.
+> arity-2 and transitive congruence), QF_IDL (negative-weight cycles), QF_LIA
+> (integer gap, scaling), QF_LRA (strictness where the integer version is
+> unsat), QF_UFLIA (needs both theories), and boolean structure (`or`, `=>`,
+> `distinct`, `let`); plus 80 generated, curated to 10 per (theory, status)
+> bucket.
+>
+> **Every label agrees with Z3**, checked by `tests/corpus/validate-labels.py`.
+> That check matters more than it looks: a benchmark wrongly labelled `sat` can
+> never fail and silently stops testing anything, while one wrongly labelled
+> `unsat` inverts the check entirely. Both scripts (`validate-labels.py`,
+> `generate-corpus.py`) are development scaffolding in exactly the way
+> `refine_libz3.c` is -- neither is built, linked, or imported by the suite.
+>
+> Evidence, all clean: 103 committed benchmarks replayed with no Z3 (55 unsat
+> proved, 47 sat correctly declined, 0 soundness failures); a 3600-benchmark
+> generated soak with Z3-supplied labels across seeds 7/8/9 (2646 satisfiable,
+> **0** wrongly proved); and 7000 VCs through the VC-level differential fuzzer
+> against Z3 4.13 (0 soundness bugs, 0 refutation bugs). The last of these had
+> not been exercised in a long while -- it only builds in an oracle build.
+>
+> Not done: importing the official SMT-LIB distributions, whose hosts are
+> unreachable from this environment by proxy policy. That is now a data drop --
+> the reader takes ordinary `.smt2` with `(set-info :status ...)`, skips what
+> falls outside the fragment, and the runner recurses -- rather than an
+> engineering task.
+>
 > ### Landed: closedness is a property of the goal, not of the model
 >
 > A runtime-guarded crossing errors on a DEFINITE violation and stays quiet on
@@ -2395,6 +2445,30 @@ all of the following hold:
   soak window, and those corpora are checked into the repo as a standing
   regression the in-house solver runs against *without* Z3 present (labels come
   from the corpus, not a live Z3).
+
+  **Status: the mechanism now exists and is green; the soak window is the part
+  still accruing.** `tests/corpus/smtlib/` holds 103 labelled benchmarks and
+  `tur_refine_corpus` (ctest target, ~0.1s) replays them with no solver linked.
+  The satisfiability/entailment bridge is exact -- assert everything as
+  hypotheses, take `false` as the goal, so `hyps |- false` is VALID iff the
+  benchmark is UNSAT -- which makes a `sat` benchmark answered VALID precisely a
+  break of the one-directional invariant, checkable from the label alone.
+
+  Evidence to date, all clean:
+
+  | run | size | result |
+  |---|---|---|
+  | committed corpus, no Z3 | 103 benchmarks | 55 unsat proved, 47 sat declined, 0 soundness failures |
+  | generated soak, Z3-labelled | 3600 benchmarks (seeds 7/8/9) | 2646 sat, **0** wrongly proved |
+  | VC-level differential vs Z3 4.13 | 7000 VCs | 0 soundness bugs, 0 refutation bugs |
+
+  What is NOT yet done is importing the official SMT-LIB distributions. That is
+  now a **data drop rather than an engineering task**: the reader takes ordinary
+  `.smt2` with `(set-info :status ...)`, skips whatever falls outside the
+  fragment rather than guessing, and the runner recurses, so a distribution can
+  be dropped in a subdirectory unfiltered. It was not done here because the
+  benchmark hosts are unreachable from this environment (proxy policy), not
+  because anything is missing.
 - **No scaffold references remain in shippable code paths** (guaranteed by
   construction, since the CMake option refuses Release/WASM, but re-verified at
   deletion).

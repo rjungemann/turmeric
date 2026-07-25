@@ -1,0 +1,10 @@
+; a <= b alone does not force a = b, so f may differ.
+(set-logic QF_UFLIA)
+(set-info :status sat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun f (Int) Int)
+(assert (<= a b))
+(assert (not (= (f a) (f b))))
+(check-sat)
+(exit)
