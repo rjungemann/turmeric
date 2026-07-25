@@ -391,15 +391,53 @@ Scale of the duplication: ~949 lines of `gc.c` + `rc.c` against ~436 `buf_puts`
 lines emitting equivalent logic. Every GC change so far has had to be written
 twice, by hand, in two different notations.
 
-A concrete de-dup path exists and is worth costing out: `libturi.a` already
-exports `gc_collect`, and `--runtime=lib` already replaces emitted runtime
-sources with an archive link. What blocks it today is that AUTO mode links only
-the **lean** `libturt_runtime.a`, which does not contain the GC (verified: zero
-GC symbols). So the shape of the fix is *"move rc/gc into the lean runtime
-archive and have the preamble link it instead of inlining a copy"* -- not a new
-mechanism, just extending one that exists. That would also delete the
-`RcControlBlock`-layout-must-match-in-two-places hazard that CG0/CG1/CG2 each had
-to navigate.
+**De-dup investigated 2026-07-25 -- there is a hard blocker underneath it, and
+it explains why the duplication exists at all.**
+
+The obvious path looked easy: `--runtime=lib` already swaps emitted runtime
+sources for an archive link, and the lean `libturt_runtime.a` just needs
+`rc.c`/`gc.c` added to `TURT_RUNTIME_SOURCES` (currently only `hamt.c`,
+`symbols.c`, `tur_string.c`). `emit_rt_global` already knows how to emit
+`extern` declarations instead of definitions under `TUR_RT_OWNER`, so the
+globals half is solved.
+
+**But the two `RcControlBlock` layouts are not ABI-identical**, which makes
+linking one against the other actively dangerous rather than merely tedious:
+
+| field | emitted (`emit_module.c`) | runtime (`rc.h`) |
+|---|---|---|
+| `value_type_kind` | `uint8_t` (1 byte) | `TypeKind` (enum, 4 bytes) |
+| `color` | `uint8_t` (1 byte) | `GcColor` (enum, 4 bytes) |
+
+Every field after those sits at a different offset in the two versions. Linking
+the runtime `rc.c`/`gc.c` into a compiled program today would silently mis-read
+`gc_index`, `gc_buffered`, `gc_trial` and `gc_collecting` -- the exact class of
+bug that CG3's `:heap` mis-cast turned out to be, but process-wide.
+
+Compounding it, `rc.h` includes `types.h` (the compiler's type system, which
+transitively pulls in `lifetimes.h` and friends), so a standalone compiled
+program cannot simply include the real header. That dependency is almost
+certainly *why* the emitted copy was hand-written with narrowed types in the
+first place.
+
+**Revised sequence** -- the de-dup is a prerequisite chain, not a one-step change:
+
+1. **Reconcile the ABI first.** Give `RcControlBlock` fixed-width fields in both
+   copies (`uint8_t` for the two enum-typed fields, or widen the emitted ones)
+   and assert the layout with `_Static_assert` on `sizeof`/`offsetof` in both,
+   so any future drift fails at compile time instead of at runtime.
+2. **Make `rc.h`/`gc.h` standalone** -- no `types.h` dependency -- so an emitted
+   program can include them.
+3. Split the 31 emitted `static` GC/RC functions into declare-vs-define, reusing
+   the `TUR_RT_OWNER` pattern already used for globals.
+4. Add `rc.c`/`gc.c`/`rc_free_queue.c` to the lean archive and have AUTO link it.
+5. Regenerate the 140 snapshots; full suite as the gate.
+
+Step 1 alone is a worthwhile, self-contained change even if the rest never
+happens: it converts "two layouts that silently disagree" into "two layouts a
+compiler refuses to let disagree", which would have caught the CG1 and CG4
+divergences at build time. **Recommended as the next piece of work**, ahead of
+the full link-the-archive change.
 
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the
