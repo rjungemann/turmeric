@@ -406,6 +406,36 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
         return r;
     }
 
+    /* A field read is exactly as pure as its receiver.  There is no per-field
+     * `mut` marker in the language, but there does not need to be one: `set!`
+     * on `(.f s)` requires `s` to be bound `^mut`, so an immutable binding's
+     * fields cannot be written THROUGH IT -- the same declaration-level
+     * guarantee that already makes a non-mut variable read congruent.
+     * Recursing on the receiver inherits that answer, and inherits IMPURE when
+     * computing the receiver itself has an effect (`(.w (next-box))`).
+     *
+     * BEHIND A REFERENCE IT IS DECLINED.  The guarantee is about one binding,
+     * not about the object: with `rc<T>` or a borrow, a caller can hold a
+     * `^mut` handle to the very object the callee reads through a non-mut one,
+     * and mutate it between two calls -- which is precisely the aliasing that
+     * congruence assumes away.  A by-value receiver has no second handle to
+     * mutate through (`:copy` copies, and a moved value leaves the caller
+     * nothing), so the vector closes by construction.  Declining costs
+     * precision on `rc` getters and nothing else.  Three congruence
+     * miscompiles on this feature have come from assuming an aliasing
+     * question away; this one is answered instead. */
+    case EX_GET_FIELD: {
+        const Expr *recv = x->as.get_field_.struct_expr;
+        if (!recv) return RT_P_UNKNOWN;
+        switch (recv->type.kind) {
+            case TY_REF: case TY_RC: case TY_PTR_VOID:
+            case TY_REF_IMMUT: case TY_REF_MUT:
+                return RT_P_UNKNOWN;
+            default: break;
+        }
+        return rt_classify_expr(c, recv);
+    }
+
     case EX_BUILTIN: {
         if (!x->as.builtin.spec) return RT_P_UNKNOWN;
         BuiltinShape sh = x->as.builtin.spec->shape;

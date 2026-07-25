@@ -366,6 +366,30 @@ measure).
 the encoder, and an instance body can do anything, so both `(m x)` and `(.m x)`
 get a distinct symbol per occurrence.
 
+**A field read is as pure as its receiver**, so an ordinary getter is
+congruent:
+
+```turmeric
+(defn width-of [b : Box] : int (.width b))
+```
+
+There is no per-field `mut` marker in the language and none is needed: `set!`
+on `(.f s)` requires `s` to be bound `^mut`, which is the same
+declaration-level guarantee that already makes a non-mut variable read
+congruent. Computing the receiver still counts -- `(.w (next-box))` is as
+impure as `next-box`.
+
+**Behind a reference it is declined.** With `rc<T>`, `ref<T>`, or a borrow, a
+caller can hold a `^mut` handle to the very object the callee reads through a
+non-mut one and mutate it between two calls -- exactly the aliasing congruence
+assumes away. A by-value receiver has no second handle to mutate through
+(`:copy` copies; a moved value leaves the caller nothing), so the vector closes
+by construction. `rc` getters lose precision and nothing else.
+
+Note this does not make `width-of` and `.width` interchangeable: they are two
+different uninterpreted symbols and nothing unfolds one into the other.
+Congruence is about repeated occurrences of the *same* call.
+
 ### What a `match` arm knows
 
 A body that is a `match` is proved one arm at a time, and each arm is proved

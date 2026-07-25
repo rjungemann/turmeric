@@ -1084,6 +1084,67 @@
 > Verified: suite 2319/0, solver unit 47/0, 400 fuzz cases across two seeds with
 > 0 soundness bugs.
 >
+> ### Field-read purity, and the equality goal it uncovered (landed 2026-07-25)
+>
+> **Field reads.** A field read is now classified as pure as its receiver, so
+> an ordinary getter is congruent -- `(- (width-of b) (width-of b))` against
+> `(>= r 0)` went `0 proven, 1 unknown` -> `1 proven`. The plan's next-slice
+> entry called this "immutable struct field reads", which presupposes a
+> declared immutability the language does not have: there is no per-field `mut`
+> marker. It does not need one. `set!` on `(.f s)` requires `s` to be bound
+> `^mut`, which is the same declaration-level guarantee that already makes a
+> non-mut variable read congruent, so recursing on the receiver inherits the
+> right answer.
+>
+> Declined behind `rc`/`ref`/a borrow: there a caller can hold a `^mut` handle
+> to the object the callee reads through a non-mut one and mutate between two
+> calls, which is precisely the aliasing congruence assumes away. A by-value
+> receiver has no second handle (`:copy` copies, a moved value leaves the
+> caller nothing), so the vector closes by construction. Three congruence
+> miscompiles on this feature have come from assuming an aliasing question
+> away; this one is answered instead.
+>
+> **The equality goal.** Measuring the field-read gain needed a control, and
+> the control failed: `(- (plain b) (plain b))` against `(= r 0)` was Unknown
+> even with `plain` returning a constant -- while the same body against
+> `(>= r 0)` proved. The predicate was the variable, not the callee.
+>
+> The cause is one skipped literal. An obligation is discharged by refuting
+> `hyps AND (not goal)`, so an equality goal puts `r != x` in the formula, and
+> `la_assert_cube` skipped a negated `VC_EQ` because a single linear constraint
+> cannot express a disequality. Sound, and documented as such -- but it meant
+> **no equality goal needing any arithmetic was ever provable**, and `(= r
+> <expr>)` is the most natural postcondition there is. `(- (+ x 1) 1)` against
+> `(= r x)` was Unknown.
+>
+> `a != b` over a totally ordered sort is `a < b OR b < a`. NNF now rewrites a
+> negated arithmetic equality to that disjunction, KEEPING the original literal
+> so EUF still sees the disequality it was already using. The rewrite must be
+> an EQUIVALENCE rather than a strengthening -- we are refuting, so a stronger
+> formula would be easier to refute and could prove a goal that does not hold.
+> It is one: the added disjunction is implied by the literal it joins.
+>
+> Both directions moved. `(- (+ x 1) 1)` against `(= r x)` proves; `(+ x 1)`
+> against the same goal is now REFUTED with a counterexample instead of
+> Unknown, so an off-by-one that used to surface as a runtime panic is a
+> compile-time `TUR-E0371`. Each disequality doubles the cube count, which
+> `REFINE_MAX_CUBES` bounds; blowing the cap answers Unknown as every cap here
+> does.
+>
+> This is the S2c "integer case-splitting on a disequality" tail the arith
+> comment pointed at, except it is not integer-specific and not a tail: it is
+> four lines in `nnf`, and it was gating a whole shape of postcondition.
+>
+> Worth recording how it was found: not by looking for it, but because a
+> measurement needed a control and the control disagreed with the hypothesis.
+> The `(>= r 0)` phrasing everywhere in the fixtures and the fuzzer's own
+> predicate pool is why it survived this long -- `shape_congruence` picks
+> `(= r 0)` one time in three and the case simply came back Unknown, which
+> reads as "outside the fragment" rather than "a bug".
+>
+> Verified: suite 2322/0, solver unit 47/0, 400 fuzz cases across two seeds
+> with 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -1095,11 +1156,12 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - **Widen the purity whitelist -- two of three left.** `match` landed (see
->   above); immutable struct field reads and `while` over provably-local state
->   are still genuinely pure and still classified UNKNOWN. Each is a bounded
->   addition to `rt_classify_expr` with a fixture -- and each one widens
->   congruence WITHOUT widening `TUR-E0375`, since moving a form from UNKNOWN to
+> - **Widen the purity whitelist -- one of three left.** `match` and field
+>   reads both landed (see above). What remains is `while` over provably-local
+>   state, the least common of the three in refined code and the only one that
+>   needs an actual analysis rather than a classifier case: "provably local"
+>   means no escape of the loop variable, which nothing here computes today.
+>   Widening still cannot grow `TUR-E0375`, since moving a form from UNKNOWN to
 >   PURE only ever removes diagnostics. Note this is NOT the "purity from effect
 >   inference" item it replaces -- that one is struck as unworkable, per the
 >   finding above.

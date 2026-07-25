@@ -31,6 +31,31 @@ static VCTerm *nnf(RefineVC *vc, VCTerm *t, bool neg) {
             return vc_mk(vc, op, kids, t->n);
         }
         default:
+            /* A DISEQUALITY IS A DISJUNCTION.  `a != b` over a totally ordered
+             * sort is `a < b OR b < a`, and until it is written that way S2
+             * cannot use it at all: `la_assert_cube` skips a negated VC_EQ
+             * because a single linear constraint cannot express it.  Since the
+             * goal is refuted by asserting its negation, that made an EQUALITY
+             * GOAL unprovable whenever it needed any arithmetic -- and `(= r
+             * <expr>)` is the most natural postcondition there is. `(- (+ x 1)
+             * 1)` against `(= r x)` was Unknown for exactly this reason.
+             *
+             * The original literal is KEPT alongside the split, so EUF still
+             * sees the disequality it was already using; the cubes only gain
+             * information. That matters for soundness: we are refuting, so the
+             * rewrite has to be an EQUIVALENCE, never a strengthening. It is
+             * one -- the added disjunction is implied by the literal it joins.
+             *
+             * Each disequality doubles the cube count, which REFINE_MAX_CUBES
+             * bounds; blowing the cap answers Unknown and keeps the runtime
+             * check, as every cap here does. */
+            if (neg && t->op == VC_EQ && t->n == 2 &&
+                vc_is_arith(t->kids[0]) && vc_is_arith(t->kids[1])) {
+                VCTerm *lt  = vc_mk2(vc, VC_LT, t->kids[0], t->kids[1]);
+                VCTerm *gt  = vc_mk2(vc, VC_LT, t->kids[1], t->kids[0]);
+                return vc_mk2(vc, VC_AND, vc_not(vc, t),
+                              vc_mk2(vc, VC_OR, lt, gt));
+            }
             return neg ? vc_not(vc, t) : t;
     }
 }
