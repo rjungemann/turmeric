@@ -472,6 +472,33 @@ class Gen:
         ]
         return ["p0"], "\n\n".join(lines)
 
+    def extra_targets(self):
+        """Additional refined functions, so a program carries SEVERAL
+        obligations rather than one.
+
+        This is not padding. The RT7 within-unit memo only engages when a
+        second obligation is decided, and a one-obligation program cannot
+        exercise it at all: a build with the memo's confirmation step deleted
+        -- which is a real miscompile, `refine-memo-distinct-obligations` pins
+        it -- ran 250 generated cases completely clean, because none of them
+        asked two questions."""
+        out, names = [], []
+        z = self._zero()
+        for i in range(self.rng.randint(1, 3)):
+            nm = "t%d" % i
+            names.append(nm)
+            pred = self.rng.choice([
+                "(>= r %s)" % z, "(> r %s)" % z, "(<= r %s)" % z,
+                "(not= r %s)" % z, "(= r p)",
+            ])
+            pre = self.rng.choice(["(>= p %s)" % z, "(<= p %s)" % self.lit(), None])
+            body = self.rng.choice(["p", "(+ p %s)" % self.lit(),
+                                    "(* p 2)" if self.mode == "int" else "(* p 2.0)"])
+            out.append("(defn %s [p : %s] : #refine{ r : %s | %s }%s\n  %s)"
+                       % (nm, self.ty, self.ty, pred,
+                          "\n  :pre " + pre if pre else "", body))
+        return out, names
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         r = self.rng.random()
@@ -490,7 +517,12 @@ class Gen:
         else:
             params, target = self.shape_congruence_method()
         lines.append(target)
-        lines.append(self._main(params))
+        extra, extra_names = self.extra_targets()
+        lines += extra
+        main = self._main(params)
+        calls = "\n".join("  (println (%s %s))" % (n, self.lit()) for n in extra_names)
+        main = main.replace("\n  0)", "\n" + calls + "\n  0)")
+        lines.append(main)
         return "\n\n".join(lines) + "\n"
 
 

@@ -404,3 +404,129 @@ void vc_term_print(const RefineVC *vc, const VCTerm *t, char *buf, size_t cap) {
     if (cap) buf[0] = '\0';
     print_rec(vc, t, &b);
 }
+
+/* ------------------------------------------------------------------------- *
+ * RT7: identity -- fingerprint + structural equality under alpha-renaming.
+ * ------------------------------------------------------------------------- */
+
+#define VCID_MAX_SYMS 256
+
+/* Canonical numbering of the symbols met so far, in first-occurrence order. */
+typedef struct {
+    uint32_t var_of[VCID_MAX_SYMS];   /* source index -> canonical ordinal */
+    uint32_t fn_of[VCID_MAX_SYMS];
+    uint32_t n_var, n_fn;
+    bool     overflow;
+} VCIdMap;
+
+static void vcid_init(VCIdMap *m) {
+    memset(m, 0, sizeof(*m));
+    for (uint32_t i = 0; i < VCID_MAX_SYMS; i++) {
+        m->var_of[i] = UINT32_MAX;
+        m->fn_of[i]  = UINT32_MAX;
+    }
+}
+
+static uint32_t vcid_var(VCIdMap *m, uint32_t idx) {
+    if (idx >= VCID_MAX_SYMS) { m->overflow = true; return 0; }
+    if (m->var_of[idx] == UINT32_MAX) m->var_of[idx] = m->n_var++;
+    return m->var_of[idx];
+}
+
+static uint32_t vcid_fn(VCIdMap *m, uint32_t idx) {
+    if (idx >= VCID_MAX_SYMS) { m->overflow = true; return 0; }
+    if (m->fn_of[idx] == UINT32_MAX) m->fn_of[idx] = m->n_fn++;
+    return m->fn_of[idx];
+}
+
+static void fp_mix(uint64_t *h, uint64_t v) {
+    *h ^= v + 0x9e3779b97f4a7c15ull + (*h << 6) + (*h >> 2);
+}
+
+static void fp_term(const RefineVC *vc, const VCTerm *t, VCIdMap *m, uint64_t *h) {
+    if (!t) { fp_mix(h, 0xdead); return; }
+    fp_mix(h, (uint64_t)t->op);
+    fp_mix(h, (uint64_t)t->sort);
+    switch (t->op) {
+    case VC_CONST_INT:  fp_mix(h, (uint64_t)t->as.i); break;
+    case VC_CONST_REAL: {
+        /* Hash the bit pattern: two doubles that print alike must not be
+         * allowed to differ, and two that differ must not collide by
+         * rounding. */
+        uint64_t bits; memcpy(&bits, &t->as.r, sizeof(bits));
+        fp_mix(h, bits);
+        break;
+    }
+    case VC_VAR:
+        /* The canonical ordinal, not the name -- that is the alpha-renaming. */
+        fp_mix(h, 1 + (uint64_t)vcid_var(m, t->as.idx));
+        break;
+    case VC_APP:
+        fp_mix(h, 2 + (uint64_t)vcid_fn(m, t->as.idx));
+        if (t->as.idx < vc->n_ufuncs) {
+            fp_mix(h, vc->ufuncs[t->as.idx].arity);
+            fp_mix(h, (uint64_t)vc->ufuncs[t->as.idx].sort);
+        }
+        break;
+    default: break;
+    }
+    fp_mix(h, t->n);
+    for (uint32_t i = 0; i < t->n; i++) fp_term(vc, t->kids[i], m, h);
+}
+
+uint64_t refine_vc_fingerprint(const RefineVC *vc) {
+    if (!vc) return 0;
+    VCIdMap m; vcid_init(&m);
+    uint64_t h = 0xcbf29ce484222325ull;
+    fp_mix(&h, vc->n_hyps);
+    for (uint32_t i = 0; i < vc->n_hyps; i++) fp_term(vc, vc->hyps[i], &m, &h);
+    fp_mix(&h, 0x60a1);   /* separator between hypotheses and goal */
+    fp_term(vc, vc->goal, &m, &h);
+    /* A VC whose symbol count blew the map gets 0 -- never a memo key -- so it
+     * is re-decided rather than matched on a truncated identity. */
+    if (m.overflow) return 0;
+    return h ? h : 1;
+}
+
+/* Lockstep structural compare under a shared alpha-renaming. */
+static bool eq_term(const RefineVC *va, const VCTerm *a, VCIdMap *ma,
+                    const RefineVC *vb, const VCTerm *b, VCIdMap *mb) {
+    if (!a || !b) return a == b;
+    if (a->op != b->op || a->sort != b->sort || a->n != b->n) return false;
+    switch (a->op) {
+    case VC_CONST_INT:
+        if (a->as.i != b->as.i) return false;
+        break;
+    case VC_CONST_REAL: {
+        uint64_t x, y;
+        memcpy(&x, &a->as.r, sizeof(x));
+        memcpy(&y, &b->as.r, sizeof(y));
+        if (x != y) return false;
+        break;
+    }
+    case VC_VAR:
+        if (vcid_var(ma, a->as.idx) != vcid_var(mb, b->as.idx)) return false;
+        break;
+    case VC_APP:
+        if (vcid_fn(ma, a->as.idx) != vcid_fn(mb, b->as.idx)) return false;
+        if (a->as.idx >= va->n_ufuncs || b->as.idx >= vb->n_ufuncs) return false;
+        if (va->ufuncs[a->as.idx].arity != vb->ufuncs[b->as.idx].arity) return false;
+        if (va->ufuncs[a->as.idx].sort  != vb->ufuncs[b->as.idx].sort)  return false;
+        break;
+    default: break;
+    }
+    for (uint32_t i = 0; i < a->n; i++)
+        if (!eq_term(va, a->kids[i], ma, vb, b->kids[i], mb)) return false;
+    return true;
+}
+
+bool refine_vc_equal(const RefineVC *a, const RefineVC *b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->n_hyps != b->n_hyps) return false;
+    VCIdMap ma, mb; vcid_init(&ma); vcid_init(&mb);
+    for (uint32_t i = 0; i < a->n_hyps; i++)
+        if (!eq_term(a, a->hyps[i], &ma, b, b->hyps[i], &mb)) return false;
+    if (!eq_term(a, a->goal, &ma, b, b->goal, &mb)) return false;
+    return !ma.overflow && !mb.overflow;
+}

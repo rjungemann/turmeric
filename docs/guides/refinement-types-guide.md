@@ -654,6 +654,11 @@ Known and deliberate, in rough order of how likely you are to hit them:
   contracts were compiled in. Reported only on PROVEN impurity: a predicate
   calling a function whose body the purity walk does not model (a `match`, a
   field read) is left alone, since a wrong "impure" would reject working code.
+- **Decisions are memoized within a compilation unit**, keyed by a fingerprint
+  of the normalized VC under alpha-renaming, and every hit is confirmed by
+  structural comparison before its verdict is reused. Repeating the same
+  refinement across many functions therefore costs one decision, not many.
+  There is no cross-build cache.
 - **Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
   a `match`, a struct field read, or a loop is enough. Its calls are then not

@@ -25,7 +25,7 @@
 > | RT4 predicate propagation | done (+ declared-result propagation) | `elab_fns.c`, `refine_collect.c` |
 > | RT6 error message quality | done | `refine_discharge.c` |
 > | RT5a WASM confirm | done (compiles AND agrees at wasm32) | `tests/run-refine-wasm.sh` |
-> | RT7 caching | not started | -- |
+> | RT7 caching | within-unit memo done; persistent cache NOT done (see below) | `refine_vc.c`, `refine_discharge.c` |
 >
 > ### Deliberate deviations from the plan as written
 >
@@ -771,6 +771,88 @@
 > order, which deserves its own suite run rather than riding along with an
 > unrelated slice. (`hamt.c` does the same shift on a `uint64_t` and is fine.)
 >
+> ### RT7 -- measured first, then half-built on purpose (2026-07-25)
+>
+> **A crash came out before any caching did.** The benchmark written to make
+> discharge expensive crashed the compiler instead: `(or (and A B) C)` in a
+> return refinement sent the DNF expansion into unbounded recursion. Three
+> lines was enough. Fixed separately; the fixture is
+> `refine-disjunctive-goal`, and since those goals previously crashed rather
+> than failed, the fix also turned on disjunctive reasoning that had never run.
+>
+> #### Where the time actually goes
+>
+> | workload | gate off | gate on (before) | gate on (after) |
+> |---|---|---|---|
+> | 200 easy obligations | 182 ms | 148 ms | 146 ms |
+> | 600 hard obligations | 782 ms | 21 908 ms | **1 450 ms** |
+>
+> Two things the measurement changed:
+>
+> - **Easy obligations cost nothing.** A provable goal exits at the first stage
+>   that proves it. Caching them is solving a problem nobody has.
+> - **The cost is concentrated in obligations that do NOT discharge, and most
+>   of it was not in the solver chain at all.** Memoizing the chain alone took
+>   the hard workload from 21.9s to 17.6s -- backend calls fell 2400 -> 20 and
+>   the wall clock barely moved. The rest was the RT6 HINT SEARCH, which runs
+>   the full chain *twice per candidate* over every literal and variable pair.
+>   It is decided by the VC just as the verdict is, so it went behind the same
+>   key. That is the 17.6s -> 1.45s step.
+>
+> #### The key, and why a hash alone is not enough
+>
+> `refine_vc_fingerprint` hashes the VC under a canonical ALPHA-RENAMING:
+> variables and uninterpreted symbols are numbered by first occurrence, not by
+> source name, because `x > 0 |- x + 1 > 0` and `n > 0 |- n + 1 > 0` are the
+> same question. Without renaming the memo would miss on every function that
+> spells its parameter differently, which is most of them.
+>
+> **Every hit is confirmed with `refine_vc_equal` before the verdict is
+> reused.** A 64-bit collision is unlikely, but "unlikely" is the wrong
+> standard when the consequence is reusing VALID for a different obligation and
+> eliding a check. Confirmation costs one structural compare on a hit.
+>
+> Proven load-bearing by construction, not by argument: with the confirmation
+> deleted and fingerprints forced to collide, a program whose first obligation
+> proves and whose second cannot prints its violating value and exits 0 instead
+> of aborting. `refine-memo-distinct-obligations` pins it.
+>
+> #### A fuzzer blind spot this exposed
+>
+> The source fuzzer did **not** catch that miscompile: its generated programs
+> carried ONE obligation each, and a single-obligation program cannot exercise
+> a memo at all. 250 cases ran completely clean against the broken build.
+> Generated programs now carry several obligations, and the same seed reports
+> 9 soundness bugs against that build and 0 against the shipped one.
+>
+> Also worth recording as a negative result: the *first* memo sabotage --
+> trusting the 64-bit hash without confirming -- is **not** detectable by
+> fuzzing at any realistic scale, because it needs a hash collision. Forcing
+> total collision is what made it testable. A fuzzer cannot validate a
+> probabilistic failure mode; only the confirming compare can.
+>
+> #### Why the persistent cache is not built
+>
+> The plan specifies `.tur-cache/refine.db` keyed by VC hash plus compiler
+> version, with per-file invalidation. That is deliberately NOT done, and the
+> reason is the measurement above plus one structural fact:
+>
+> **An on-disk cache cannot confirm a hit.** It has no second VC to compare
+> against -- only a digest. So the entire soundness argument rests on hash
+> strength, exactly the thing just shown to be untestable by fuzzing. Doing it
+> safely needs a wide digest (128-bit+) over a canonical serialization, plus
+> the compiler version, the solver chain's identity, and every cap constant in
+> `refine_solver.h` -- because changing `REFINE_MAX_CUBES` changes what is
+> provable, and a cache that outlives that change hands back verdicts the
+> current solver would not produce.
+>
+> With the within-unit memo in place the remaining prize is rebuild latency on
+> a file whose obligations are unchanged, against a first-build cost that is
+> now 1.9x the rest of compilation rather than 28x. That is a much smaller
+> prize than it looked like before the measurement, carrying the largest
+> soundness surface in the feature. Worth doing when there is a real project
+> whose builds are measurably slowed by discharge -- and not before.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -797,8 +879,9 @@
 >
 > ---
 
-> **Status:** RT0--RT6 + S0--S4 landed (see "Landed so far" above); RT7
-> (incremental discharge caching) is the only phase not started. RT0 syntax/storage is largely covered by the
+> **Status:** RT0--RT6 + S0--S4 landed (see "Landed so far" above). RT7 landed
+> only in its within-unit half; the persistent cross-build cache is
+> deliberately not built -- see the measurement below. RT0 syntax/storage is largely covered by the
 > existing Contract Types (CT0--CT4) infrastructure; the `#refine{var : T | p}`
 > reader is already shipped. The remaining work is the constraint-generation
 > and discharge pipeline (RT1--RT4), a stdlib layer of predicate-annotated

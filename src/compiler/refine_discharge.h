@@ -34,10 +34,15 @@ typedef struct RefineStats {
     uint32_t backend_calls;
     uint32_t templates_tried;   /* RT4 speculative probes (not obligations) */
     uint32_t inferred;          /* RT4 refinements successfully inferred */
+    uint32_t memo_hits;         /* RT7 obligations answered from the memo */
 } RefineStats;
 
 const RefineStats *refine_stats(void);
 void refine_discharge_reset(void);
+
+/* RT7: drop the within-unit decision memo.  Called by refine_discharge_reset;
+ * exposed separately for tests that want the memo cleared without the stats. */
+void refine_memo_reset(void);
 
 /* RT6: search for an additional hypothesis that would discharge `vc`.  This is
  * a SECOND query through the solver seam, not a heuristic -- a candidate is

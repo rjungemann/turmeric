@@ -1,0 +1,54 @@
+;; RT7 memo correctness.
+;;
+;; Deciding an obligation is the expensive part of this feature, and real code
+;; asks the same question many times, so decisions are memoized within a
+;; compilation unit. The key is a fingerprint of the normalized VC under a
+;; canonical alpha-renaming -- obligations that differ only in what their
+;; parameter is called are the same question.
+;;
+;; A HASH IS NOT PROOF OF EQUALITY. Every hit is confirmed with a structural
+;; compare before the verdict is reused, because the failure mode is reusing
+;; VALID for a different obligation and eliding a check that was protecting
+;; something.
+;;
+;; This file is what that confirmation buys. `good` proves and its check is
+;; elided. `liar` is a different question: its result is an opaque impure
+;; subtraction, so it cannot be proved and its check must survive -- and at
+;; run time it really does return -1, violating `(>= r 0)`.
+;;
+;; With the confirmation step deleted (and fingerprints forced to collide),
+;; `liar` inherits `good`'s VALID, its check is elided, and the program prints
+;; 6 and -1 and exits 0 instead of aborting. That is a miscompile, and it is
+;; what this fixture pins.
+;;
+;; Worth recording: the source-level fuzzer did NOT catch this at first. Its
+;; generated programs carried one obligation each, and a single-obligation
+;; program cannot exercise a memo at all -- 250 cases ran completely clean
+;; against a build with the confirmation deleted. It catches it now (9/250 on
+;; the same seed) because generated programs carry several obligations.
+(defn raw-tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+;; A typeclass method: opaque to the encoder AND never congruent, so `liar`
+;; below is UNKNOWN rather than refuted -- its check survives to run time,
+;; which is the behaviour this fixture needs to observe.
+(defclass Ticker [a]
+  (tickm [self : a] : int))
+
+(definstance Ticker [int]
+  (tickm [self : int] : int
+    (raw-tick)))
+
+(defn good [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (> r 0) }
+  (* x 2))
+
+(defn liar [] : #refine{ r : int | (>= r 0) }
+  (- (tickm 1) (tickm 1)))
+
+(defn main [] : int
+  (println (good 3))
+  (println (liar))
+  0)

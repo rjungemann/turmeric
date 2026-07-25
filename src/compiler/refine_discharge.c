@@ -33,7 +33,11 @@
 static RefineStats g_stats;
 
 const RefineStats *refine_stats(void) { return &g_stats; }
-void refine_discharge_reset(void) { memset(&g_stats, 0, sizeof(g_stats)); }
+void refine_memo_reset(void);
+void refine_discharge_reset(void) {
+    memset(&g_stats, 0, sizeof(g_stats));
+    refine_memo_reset();
+}
 
 static bool stats_enabled(void) {
     const char *s = getenv("TUR_REFINE_STATS");
@@ -293,14 +297,131 @@ static void emit_predicate_note(const RefineObligation *ob, bool closed) {
               pred);
 }
 
+/* ------------------------------------------------------------------------- *
+ * RT7: within-unit memo.
+ *
+ * Deciding an obligation is by far the most expensive thing this feature does,
+ * and the cost is concentrated in the ones that DO NOT discharge: a provable
+ * goal exits at the first stage that proves it, while an unprovable one runs
+ * every stage over every cube before answering unknown (~245 ms each with a
+ * measure in scope, measured; ~5 ms for a provable one).  Real code repeats
+ * predicates -- `Nat` on forty functions is forty identical questions -- so
+ * asking each distinct question once is where the win is.
+ *
+ * The key is `refine_vc_fingerprint`, which canonicalises variable and
+ * uninterpreted-symbol names, because obligations that differ only in what
+ * their parameter is called are the same question.
+ *
+ * A HIT IS CONFIRMED BY refine_vc_equal() BEFORE THE VERDICT IS REUSED.  A
+ * 64-bit collision is unlikely, but "unlikely" is the wrong standard when the
+ * consequence is reusing VALID for a different obligation and eliding a check
+ * that was protecting something.  Confirming costs one structural compare on
+ * a hit and removes the risk entirely.  (Worth noting for the persistent
+ * half of RT7: an on-disk cache has no second VC to compare against, so it
+ * cannot do this and must carry a much wider digest.)
+ *
+ * The memo is per-process and holds only decided, non-speculative
+ * obligations.  It is cleared with the stats between units. */
+
+#define REFINE_MEMO_CAP 2048   /* power of two */
+
+typedef struct {
+    uint64_t        fp;       /* 0 == empty slot */
+    const RefineVC *vc;
+    bool            proven;
+    /* The RT6 hint for this VC.  Searching for one is the single most
+     * expensive thing in the whole feature -- `hint_discharges` runs the full
+     * chain TWICE per candidate, over every literal and variable pair -- and
+     * it is decided entirely by the VC, so it belongs behind the same key.
+     * Memoizing the chain alone moved 600 obligations from 21.9s to 17.6s;
+     * memoizing the hint search is what collects the rest. */
+    bool            hint_done;
+    bool            hint_found;
+    char            hint_cand[128];
+    char            hint_decl[128];
+    char            hint_var[64];
+    bool            hint_is_real;
+} RefineMemoSlot;
+
+static RefineMemoSlot g_memo[REFINE_MEMO_CAP];
+static uint32_t       g_memo_len;
+
+void refine_memo_reset(void) {
+    memset(g_memo, 0, sizeof(g_memo));
+    g_memo_len = 0;
+}
+
+/* Returns true on a CONFIRMED hit, writing the remembered verdict. */
+static bool memo_lookup(const RefineVC *vc, uint64_t fp, bool *out_proven) {
+    if (!fp) return false;
+    uint32_t i = (uint32_t)(fp & (REFINE_MEMO_CAP - 1));
+    for (uint32_t probe = 0; probe < REFINE_MEMO_CAP; probe++) {
+        RefineMemoSlot *s = &g_memo[(i + probe) & (REFINE_MEMO_CAP - 1)];
+        if (!s->fp) return false;
+        if (s->fp == fp && refine_vc_equal(s->vc, vc)) {
+            *out_proven = s->proven;
+            g_stats.memo_hits++;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Find the slot for this VC, or NULL.  Used by the hint path, which wants to
+ * read AND write the cached hint on the same entry. */
+static RefineMemoSlot *memo_slot(const RefineVC *vc, uint64_t fp) {
+    if (!fp) return NULL;
+    uint32_t i = (uint32_t)(fp & (REFINE_MEMO_CAP - 1));
+    for (uint32_t probe = 0; probe < REFINE_MEMO_CAP; probe++) {
+        RefineMemoSlot *s = &g_memo[(i + probe) & (REFINE_MEMO_CAP - 1)];
+        if (!s->fp) return NULL;
+        if (s->fp == fp && refine_vc_equal(s->vc, vc)) return s;
+    }
+    return NULL;
+}
+
+static void memo_insert(const RefineVC *vc, uint64_t fp, bool proven) {
+    if (!fp || g_memo_len >= REFINE_MEMO_CAP / 2) return;   /* keep it sparse */
+    uint32_t i = (uint32_t)(fp & (REFINE_MEMO_CAP - 1));
+    for (uint32_t probe = 0; probe < REFINE_MEMO_CAP; probe++) {
+        RefineMemoSlot *s = &g_memo[(i + probe) & (REFINE_MEMO_CAP - 1)];
+        if (!s->fp) { s->fp = fp; s->vc = vc; s->proven = proven; g_memo_len++; return; }
+        if (s->fp == fp && refine_vc_equal(s->vc, vc)) return;   /* already there */
+    }
+}
+
 /* What would fix it. */
 static void emit_hint(const RefineObligation *ob, RefineVC *vc, Arena *a) {
     char cand[128], decl[128];
     const char *var = NULL;
     bool is_real = false;
-    if (!vc || !refine_hint_search(vc, a, cand, sizeof(cand), decl, sizeof(decl),
-                                   &var, &is_real))
+
+    /* Reuse the remembered hint when this exact question was already asked.
+     * The hint is a property of the VC, not of the site, so the text is the
+     * same -- it is just emitted at each site's own location. */
+    RefineMemoSlot *slot = vc ? memo_slot(vc, refine_vc_fingerprint(vc)) : NULL;
+    if (slot && slot->hint_done) {
+        if (!slot->hint_found) return;
+        diag_emit(DIAG_HELP, ob->loc,
+                  "%s would discharge it -- e.g. declare %s : #refine{ v : %s | %s }",
+                  slot->hint_cand, slot->hint_var,
+                  slot->hint_is_real ? "float" : "int", slot->hint_decl);
         return;
+    }
+
+    bool found = vc && refine_hint_search(vc, a, cand, sizeof(cand),
+                                          decl, sizeof(decl), &var, &is_real);
+    if (slot) {
+        slot->hint_done  = true;
+        slot->hint_found = found;
+        if (found) {
+            snprintf(slot->hint_cand, sizeof(slot->hint_cand), "%s", cand);
+            snprintf(slot->hint_decl, sizeof(slot->hint_decl), "%s", decl);
+            snprintf(slot->hint_var,  sizeof(slot->hint_var),  "%s", var ? var : "?");
+            slot->hint_is_real = is_real;
+        }
+    }
+    if (!found) return;
     diag_emit(DIAG_HELP, ob->loc,
               "%s would discharge it -- e.g. declare %s : #refine{ v : %s | %s }",
               cand, var, is_real ? "float" : "int", decl);
@@ -343,6 +464,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     const char *reason = NULL;
     RefineVC *vc = refine_vc_build(ob, a, &reason);
     ob->vc = vc;
+
+    /* RT7: has this exact question already been decided in this unit?  Only
+     * the VERDICT is reused -- diagnostics still run below, so a repeated
+     * unproven obligation reports at its own source location. */
+    uint64_t memo_fp = vc ? refine_vc_fingerprint(vc) : 0;
+    bool memo_proven = false;
+    bool memo_hit = vc && memo_lookup(vc, memo_fp, &memo_proven);
 
     if (!vc) {
         g_stats.unknown++;
@@ -393,13 +521,23 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
     }
 
     RefineDecision d = refine_unknown();
-    for (size_t i = 0; i < CHAIN_LEN; i++) {
-        g_stats.backend_calls++;
-        d = CHAIN[i](vc, a);
+    if (memo_hit) {
+        /* The chain is the expensive part and its answer depends only on the
+         * VC, so a confirmed hit skips it.  Only PROVED is carried across:
+         * `unknown` falls through to the refutation search below, which is
+         * cheap, bounded, and re-run per VC so any model it produces names
+         * THIS obligation's variables rather than the remembered one's. */
+        d = memo_proven ? refine_valid() : refine_unknown();
+    } else {
+        for (size_t i = 0; i < CHAIN_LEN; i++) {
+            g_stats.backend_calls++;
+            d = CHAIN[i](vc, a);
 #ifdef TUR_REFINE_Z3_ORACLE
-        if (CHAIN[i] != refine_z3_decide) d = oracle_crosscheck(vc, a, d, ob->loc);
+            if (CHAIN[i] != refine_z3_decide) d = oracle_crosscheck(vc, a, d, ob->loc);
 #endif
-        if (d.verdict != RT_UNKNOWN) break;
+            if (d.verdict != RT_UNKNOWN) break;
+        }
+        memo_insert(vc, memo_fp, d.verdict == RT_VALID);
     }
 
     /* Nothing proved it.  Before settling for "unknown", try to REFUTE it: a
@@ -458,9 +596,9 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
     if (stats_enabled()) {
         fprintf(stderr,
                 "refine: %u obligation(s): %u proven, %u refuted, %u unknown "
-                "(%u backend call(s))\n",
+                "(%u backend call(s), %u memo hit(s))\n",
                 g_stats.collected, g_stats.proven, g_stats.invalid,
-                g_stats.unknown, g_stats.backend_calls);
+                g_stats.unknown, g_stats.backend_calls, g_stats.memo_hits);
         if (g_stats.templates_tried)
             fprintf(stderr,
                     "refine: %u result refinement(s) inferred from %u template "

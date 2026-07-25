@@ -140,6 +140,29 @@ void vc_term_print(const RefineVC *vc, const VCTerm *t, char *buf, size_t cap);
 static inline bool vc_is_arith(const VCTerm *t) { return t && t->sort != VS_BOOL; }
 
 /* ------------------------------------------------------------------------- *
+ * Identity: fingerprint + structural equality (RT7)
+ * ------------------------------------------------------------------------- */
+
+/* A hash of the VC's MEANING, for use as a memo key.
+ *
+ * Computed over a canonical alpha-renaming: variables and uninterpreted
+ * function symbols are numbered by first occurrence in (hyps..., goal) rather
+ * than by their source names.  Validity does not depend on what a variable is
+ * called, so `x > 0 |- x + 1 > 0` and `n > 0 |- n + 1 > 0` are the same
+ * question and must land on the same key -- without renaming a memo would
+ * miss on every function that spells its parameter differently, which is
+ * most of them.
+ *
+ * A hash is not proof of equality.  Never reuse a decision on a fingerprint
+ * match alone; confirm with refine_vc_equal(). */
+uint64_t refine_vc_fingerprint(const RefineVC *vc);
+
+/* True when two VCs are the same question up to alpha-renaming.  Used to
+ * confirm a fingerprint hit, so a hash collision costs a wasted comparison
+ * rather than a wrong verdict. */
+bool refine_vc_equal(const RefineVC *a, const RefineVC *b);
+
+/* ------------------------------------------------------------------------- *
  * The solver seam
  * ------------------------------------------------------------------------- */
 
