@@ -102,6 +102,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
 
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
+    cb->gc_index = RC_GC_INDEX_NONE;   /* CG0: set by gc_register_block below */
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;

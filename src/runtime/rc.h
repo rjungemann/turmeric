@@ -78,12 +78,21 @@ struct RcControlBlock {
     /* Phase 10: Bacon-Rajan cycle collector fields */
     GcColor color;           /* GC color for cycle collection */
     bool may_contain_cycles;  /* Hint: true if this could be part of a cycle */
+    /* CG0: index of this block in the global gc_all_blocks registry, or
+     * RC_GC_INDEX_NONE when not registered.  Storing it here makes
+     * gc_unregister_block an O(1) swap-remove instead of an O(live-blocks)
+     * linear scan -- which matters because EVERY rc free unregisters, even
+     * with the collector disabled. */
+    uint32_t gc_index;
     /* EXG5: layout tag bytes -- reserved[0] is the high-level kind
      * (one of RCK_*), reserved[1] is the payload descriptor for
      * RCK_EXISTENTIAL blocks (one of RCEXP_*).  The remaining bytes
      * are still reserved for future use. */
     uint8_t reserved[6];
 };
+
+/* CG0: sentinel for RcControlBlock.gc_index -- block not in the registry. */
+#define RC_GC_INDEX_NONE ((uint32_t)0xFFFFFFFFu)
 
 /* EXG5-1: High-level layout tag for an RcControlBlock's value field.
  * Stored in cb->reserved[0].  The default (zero) is RCK_OPAQUE so

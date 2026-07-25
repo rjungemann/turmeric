@@ -9046,6 +9046,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase 10: Bacon-Rajan GC fields */
     buf_puts(out, "    uint8_t color;           /* GC color */\n");
     buf_puts(out, "    bool may_contain_cycles;  /* Hint for GC */\n");
+    buf_puts(out, "    uint32_t gc_index;        /* CG0: slot in gc_all_blocks, or RC_GC_INDEX_NONE */\n");
     buf_puts(out, "    uint8_t reserved[6];\n");
     buf_puts(out, "};\n\n");
     /* Phase 9: Deferred free queue to avoid deep recursion in rc_strong_decrement */
@@ -9066,18 +9067,36 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     /* Phase 10: GC globals and helper functions (needed before rc_cb_alloc) */
     buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
-    emit_rt_global(out, shared, "RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];\n", "RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY]");
-    emit_rt_global(out, shared, "uint32_t gc_all_blocks_count = 0;\n\n", "uint32_t gc_all_blocks_count");
+    buf_puts(out, "#define RC_GC_INDEX_NONE ((uint32_t)0xFFFFFFFFu)\n");
+    emit_rt_global(out, shared, "RcControlBlock **gc_all_blocks = NULL;\n", "RcControlBlock **gc_all_blocks");
+    emit_rt_global(out, shared, "uint32_t gc_all_blocks_count = 0;\n", "uint32_t gc_all_blocks_count");
+    emit_rt_global(out, shared, "uint32_t gc_all_blocks_capacity = 0;\n\n", "uint32_t gc_all_blocks_capacity");
+    /* CG0: growth helper shared by the registry, suspect buffer and grey queue.
+     * The old fixed 4096-entry arrays silently dropped everything past the cap,
+     * making the collector blind above 4096 live rc blocks. */
+    buf_puts(out, "static bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed) {\n");
+    buf_puts(out, "    if (*cap >= needed) return true;\n");
+    buf_puts(out, "    uint32_t ncap = *cap ? *cap : 256u;\n");
+    buf_puts(out, "    while (ncap < needed) {\n");
+    buf_puts(out, "        if (ncap > (0xFFFFFFFFu / 2u)) { ncap = needed; break; }\n");
+    buf_puts(out, "        ncap *= 2u;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    RcControlBlock **grown = (RcControlBlock **)realloc(*vec, (size_t)ncap * sizeof(RcControlBlock *));\n");
+    buf_puts(out, "    if (!grown) return false;\n");
+    buf_puts(out, "    *vec = grown; *cap = ncap; return true;\n");
+    buf_puts(out, "}\n\n");
     /* GC state must be declared early because gc_on_strong_decrement (called from
      * rc_strong_decrement) needs it.  The collector functions themselves are
      * defined later, after all RC helpers. */
     buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
     buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
     buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
-    emit_rt_global(out, shared, "RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];\n", "RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS]");
+    emit_rt_global(out, shared, "RcControlBlock **gc_suspect_roots = NULL;\n", "RcControlBlock **gc_suspect_roots");
     emit_rt_global(out, shared, "uint32_t gc_suspect_count = 0;\n", "uint32_t gc_suspect_count");
-    emit_rt_global(out, shared, "RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];\n", "RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS]");
+    emit_rt_global(out, shared, "uint32_t gc_suspect_capacity = 0;\n", "uint32_t gc_suspect_capacity");
+    emit_rt_global(out, shared, "RcControlBlock **gc_grey_queue = NULL;\n", "RcControlBlock **gc_grey_queue");
     emit_rt_global(out, shared, "uint32_t gc_grey_count = 0;\n", "uint32_t gc_grey_count");
+    emit_rt_global(out, shared, "uint32_t gc_grey_capacity = 0;\n", "uint32_t gc_grey_capacity");
     emit_rt_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
     emit_rt_global(out, shared, "bool gc_enabled = false;\n\n", "bool gc_enabled");
     buf_puts(out, "static void gc_collect(void);  /* Forward decl */\n\n");
@@ -9089,20 +9108,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return GC_WHITE;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static void gc_register_block(RcControlBlock *cb) {\n");
-    buf_puts(out, "    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;\n");
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    if (gc_all_blocks_count >= gc_all_blocks_capacity) {\n");
+    buf_puts(out, "        uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u : GC_GLOBAL_REGISTRY_CAPACITY;\n");
+    buf_puts(out, "        if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {\n");
+    buf_puts(out, "            cb->gc_index = RC_GC_INDEX_NONE;\n");
+    buf_puts(out, "            cb->color = GC_WHITE; cb->may_contain_cycles = true; return;\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    cb->gc_index = gc_all_blocks_count;\n");
     buf_puts(out, "    gc_all_blocks[gc_all_blocks_count++] = cb;\n");
     buf_puts(out, "    cb->color = GC_WHITE;\n");
     buf_puts(out, "    cb->may_contain_cycles = true;\n");
     buf_puts(out, "}\n\n");
+    /* CG0: O(1) swap-remove via the stored index -- this runs on every rc free,
+     * so the old linear scan was quadratic in a long-running program. */
     buf_puts(out, "static void gc_unregister_block(RcControlBlock *cb) {\n");
     buf_puts(out, "    if (!cb) return;\n");
-    buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
-    buf_puts(out, "        if (gc_all_blocks[i] == cb) {\n");
-    buf_puts(out, "            gc_all_blocks[i] = gc_all_blocks[gc_all_blocks_count - 1];\n");
-    buf_puts(out, "            gc_all_blocks_count--;\n");
-    buf_puts(out, "            break;\n");
-    buf_puts(out, "        }\n");
+    buf_puts(out, "    uint32_t idx = cb->gc_index;\n");
+    buf_puts(out, "    if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count || gc_all_blocks[idx] != cb) {\n");
+    buf_puts(out, "        cb->gc_index = RC_GC_INDEX_NONE; return;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    RcControlBlock *last = gc_all_blocks[gc_all_blocks_count - 1u];\n");
+    buf_puts(out, "    gc_all_blocks[idx] = last;\n");
+    buf_puts(out, "    if (last) last->gc_index = idx;\n");
+    buf_puts(out, "    gc_all_blocks_count--;\n");
+    buf_puts(out, "    cb->gc_index = RC_GC_INDEX_NONE;\n");
     buf_puts(out, "}\n\n");
     /* Phase 10: Suspect buffer management (before rc_strong_decrement) */
     buf_puts(out, "static void gc_add_suspect(RcControlBlock *cb) {\n");
@@ -9110,7 +9141,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
     buf_puts(out, "        if (gc_suspect_roots[i] == cb) return;\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    if (gc_suspect_count >= GC_MAX_SUSPECTS) return;\n");
+    buf_puts(out, "    if (gc_suspect_count >= gc_suspect_capacity) {\n");
+    buf_puts(out, "        if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    gc_suspect_roots[gc_suspect_count++] = cb;\n");
     buf_puts(out, "    cb->color = GC_PURPLE;\n");
     buf_puts(out, "    /* Threshold mode: auto-collect when buffer is full */\n");
@@ -9327,7 +9360,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    (void)ctx;\n");
     buf_puts(out, "    if (child && child->color != GC_BLACK) {\n");
     buf_puts(out, "        child->color = GC_BLACK;\n");
-    buf_puts(out, "        if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "        if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {\n");
     buf_puts(out, "            gc_grey_queue[gc_grey_count++] = child;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
@@ -9343,7 +9376,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        RcControlBlock *cb = gc_all_blocks[i];\n");
     buf_puts(out, "        if (cb->strong_count > 0) {\n");
     buf_puts(out, "            cb->color = GC_BLACK;\n");
-    buf_puts(out, "            if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "            if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {\n");
     buf_puts(out, "                gc_grey_queue[gc_grey_count++] = cb;\n");
     buf_puts(out, "            }\n");
     buf_puts(out, "        }\n");
@@ -9360,7 +9393,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;\n");
     buf_puts(out, "            if (inner && inner->color != GC_BLACK) {\n");
     buf_puts(out, "                inner->color = GC_BLACK;\n");
-    buf_puts(out, "                if (gc_grey_count < GC_MAX_SUSPECTS) {\n");
+    buf_puts(out, "                if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {\n");
     buf_puts(out, "                    gc_grey_queue[gc_grey_count++] = inner;\n");
     buf_puts(out, "                }\n");
     buf_puts(out, "            }\n");

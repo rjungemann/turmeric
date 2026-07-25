@@ -113,12 +113,18 @@ the integer.
 
 ## Related latent defects discovered alongside (same subsystem, GC-enabled only)
 
-1. **Registry overflow silently drops blocks.** `gc_register_block` is a no-op
-   once `gc_all_blocks_count >= 4096` (`gc.c:207-210`; the suspect and grey
-   arrays are likewise static 4096, `gc.c:22,28`). A program with >4096 live
-   `rc<T>` blocks has unregistered blocks that are invisible to the collector --
-   a correctness cliff, not just a capacity limit. Needs dynamic growth
-   (`gc-cycle-collection-plan.md` CG0).
+1. **Registry overflow silently drops blocks.** ~~`gc_register_block` is a no-op
+   once `gc_all_blocks_count >= 4096`~~ **FIXED 2026-07-25 (CG0).** The registry,
+   suspect buffer and grey queue all grow on demand now, and `gc_unregister_block`
+   became an O(1) swap-remove (it was a linear scan on every rc free). Fixed in
+   both `src/runtime/gc.c` and the emitted preamble in `emit_module.c`; guarded
+   by `tests/fixtures/gc-registry-growth`.
+
+   **Consequence for the Measured section above:** the 4096 cliff that made
+   leaked cycle blocks visible to LeakSanitizer is gone -- every block now stays
+   reachable from the registry, so LSan reports nothing. The heap-growth numbers
+   (192 B per cycle, `(gc!)` reclaiming nothing) still stand and remain the way
+   to measure this.
 
 2. **Trial deletion dangles live weak pointers.** When freeing a WHITE suspect
    with `weak_count > 0`, `gc_trial_deletion_phase` zeroes the weak count and

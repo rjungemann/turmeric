@@ -17,17 +17,39 @@
 
 /* ========== Global state ========== */
 
-/* Suspect roots buffer - global for v1 (per-thread in future) */
+/* Suspect roots buffer - global for v1 (per-thread in future).
+ * CG0: grown on demand. The old fixed 4096-entry arrays silently dropped
+ * everything past the cap, which made the collector blind to real garbage in
+ * any program with more than 4096 live rc blocks. */
 #define GC_SUSPECT_INITIAL_CAPACITY 256
-RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];
+RcControlBlock **gc_suspect_roots = NULL;
 uint32_t gc_suspect_count = 0;
-uint32_t gc_suspect_capacity = GC_SUSPECT_INITIAL_CAPACITY;
+uint32_t gc_suspect_capacity = 0;
 
 /* Work queues for the collector */
 #define GC_WORK_QUEUE_INITIAL_CAPACITY 256
-RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];
+RcControlBlock **gc_grey_queue = NULL;
 uint32_t gc_grey_count = 0;
-uint32_t gc_grey_capacity = GC_WORK_QUEUE_INITIAL_CAPACITY;
+uint32_t gc_grey_capacity = 0;
+
+/* CG0: grow a RcControlBlock* vector to hold at least `needed` entries.
+ * Returns false only on allocation failure, in which case the caller keeps the
+ * existing (smaller) buffer -- degrading to the old drop behavior rather than
+ * crashing, but only under genuine OOM. */
+static bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed) {
+    if (*cap >= needed) return true;
+    uint32_t ncap = *cap ? *cap : 256u;
+    while (ncap < needed) {
+        if (ncap > (0xFFFFFFFFu / 2u)) { ncap = needed; break; }
+        ncap *= 2u;
+    }
+    RcControlBlock **grown =
+        (RcControlBlock **)realloc(*vec, (size_t)ncap * sizeof(RcControlBlock *));
+    if (!grown) return false;
+    *vec = grown;
+    *cap = ncap;
+    return true;
+}
 
 /* GC state */
 GcMode gc_mode = GC_DISABLED;
@@ -40,12 +62,10 @@ uint64_t gc_objects_freed = 0;
 /* ========== Initialization ========== */
 
 void gc_init(void) {
-    if (gc_suspect_capacity < GC_SUSPECT_INITIAL_CAPACITY) {
-        gc_suspect_capacity = GC_SUSPECT_INITIAL_CAPACITY;
-    }
-    if (gc_grey_capacity < GC_WORK_QUEUE_INITIAL_CAPACITY) {
-        gc_grey_capacity = GC_WORK_QUEUE_INITIAL_CAPACITY;
-    }
+    gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity,
+                   GC_SUSPECT_INITIAL_CAPACITY);
+    gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity,
+                   GC_WORK_QUEUE_INITIAL_CAPACITY);
     gc_suspect_count = 0;
     gc_grey_count = 0;
     gc_collections = 0;
@@ -54,9 +74,17 @@ void gc_init(void) {
 }
 
 void gc_shutdown(void) {
-    /* In v1, just reset counters */
-    gc_suspect_count = 0;
-    gc_grey_count = 0;
+    /* CG0: release the grown vectors as well as resetting the counters. The
+     * registry itself is intentionally NOT freed here: live control blocks may
+     * still reference their slots via cb->gc_index. */
+    free(gc_suspect_roots);
+    gc_suspect_roots   = NULL;
+    gc_suspect_capacity = 0;
+    gc_suspect_count   = 0;
+    free(gc_grey_queue);
+    gc_grey_queue    = NULL;
+    gc_grey_capacity = 0;
+    gc_grey_count    = 0;
     gc_enabled = false;
 }
 
@@ -89,17 +117,18 @@ static bool gc_add_suspect(RcControlBlock *cb) {
         }
     }
 
-    /* Check if we need to grow the buffer */
-    if (gc_suspect_count >= gc_suspect_capacity) {
-        if (gc_suspect_capacity >= GC_MAX_SUSPECTS) {
-            /* Buffer full - force collection */
-            gc_collect();
-            /* After collection, try adding again */
-            return gc_add_suspect(cb);
-        }
-        /* Grow buffer - for v1 we use static array, so just trigger collection */
+    /* CG0: at the force-collection watermark, try to drain the buffer first;
+     * if collection cannot shrink it, GROW rather than drop the suspect (the
+     * old code silently discarded it, losing real garbage). */
+    if (gc_suspect_count >= GC_MAX_SUSPECTS) {
+        uint32_t before = gc_suspect_count;
         gc_collect();
-        return gc_add_suspect(cb);
+        if (gc_suspect_count < before) return gc_add_suspect(cb);
+    }
+    if (gc_suspect_count >= gc_suspect_capacity) {
+        if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity,
+                            gc_suspect_count + 1u))
+            return false;   /* OOM: cannot track this suspect */
     }
 
     /* Add to suspect buffer */
@@ -139,9 +168,11 @@ static void gc_enqueue_grey(RcControlBlock *cb) {
         }
     }
 
+    /* CG0: grow instead of silently skipping -- a dropped grey entry means the
+     * mark phase misses a subgraph and the collector frees something live. */
     if (gc_grey_count >= gc_grey_capacity) {
-        /* Queue full - for v1, just skip (shouldn't happen with proper sizing) */
-        return;
+        if (!gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u))
+            return;   /* OOM only */
     }
 
     gc_grey_queue[gc_grey_count++] = cb;
@@ -198,32 +229,52 @@ static RcControlBlock *gc_dequeue_grey(void) {
  * 4. All PURPLE (suspect) blocks that are still WHITE are garbage
  */
 
-/* Global registry of all RC control blocks - for v1 simplicity */
+/* Global registry of all RC control blocks.
+ * CG0: heap-allocated and grown on demand. The old fixed 4096-entry array made
+ * gc_register_block a silent no-op past the cap, so every block beyond 4096 was
+ * invisible to the collector -- a correctness cliff, not just a capacity limit
+ * (docs/reported/gc-strong-cycles-not-collected.md). */
 #define GC_GLOBAL_REGISTRY_INITIAL_CAPACITY 4096
-RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_INITIAL_CAPACITY];
+RcControlBlock **gc_all_blocks = NULL;
 uint32_t gc_all_blocks_count = 0;
+static uint32_t gc_all_blocks_capacity = 0;
 
 /* Register a newly allocated control block */
 void gc_register_block(RcControlBlock *cb) {
-    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_INITIAL_CAPACITY) {
-        return;
+    if (!cb) return;
+    if (gc_all_blocks_count >= gc_all_blocks_capacity) {
+        uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u
+                                               : GC_GLOBAL_REGISTRY_INITIAL_CAPACITY;
+        if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {
+            cb->gc_index = RC_GC_INDEX_NONE;   /* OOM: untracked */
+            gc_set_color(cb, GC_WHITE);
+            cb->may_contain_cycles = true;
+            return;
+        }
     }
+    cb->gc_index = gc_all_blocks_count;
     gc_all_blocks[gc_all_blocks_count++] = cb;
     gc_set_color(cb, GC_WHITE);
     cb->may_contain_cycles = true;  /* Default: assume it might contain cycles */
 }
 
-/* Unregister a control block (when freed) */
+/* Unregister a control block (when freed).
+ * CG0: O(1) swap-remove via the block's stored index. This runs on EVERY rc
+ * free -- including with the collector disabled -- so the old linear scan over
+ * all live blocks was quadratic in a long-running program. */
 void gc_unregister_block(RcControlBlock *cb) {
     if (!cb) return;
-
-    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
-        if (gc_all_blocks[i] == cb) {
-            gc_all_blocks[i] = gc_all_blocks[gc_all_blocks_count - 1];
-            gc_all_blocks_count--;
-            break;
-        }
+    uint32_t idx = cb->gc_index;
+    if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count ||
+        gc_all_blocks[idx] != cb) {
+        cb->gc_index = RC_GC_INDEX_NONE;
+        return;   /* not registered (or already removed) */
     }
+    RcControlBlock *last = gc_all_blocks[gc_all_blocks_count - 1u];
+    gc_all_blocks[idx] = last;
+    if (last) last->gc_index = idx;
+    gc_all_blocks_count--;
+    cb->gc_index = RC_GC_INDEX_NONE;
 }
 
 /* ========== The Bacon-Rajan Algorithm ========== */

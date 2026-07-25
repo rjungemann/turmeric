@@ -26,10 +26,16 @@ typedef enum {
 
 /* Configuration constants */
 #define GC_SUSPECT_THRESHOLD 128  /* Trigger collection when this many suspects */
-#define GC_MAX_SUSPECTS 4096     /* Maximum suspects before forced collection */
+/* CG0: this is now a "force a collection at this size" trigger, NOT a hard cap.
+ * The suspect buffer grows past it if a collection cannot drain it, because
+ * silently dropping suspects would make the collector miss real garbage. */
+#define GC_MAX_SUSPECTS 4096
 
-/* Suspect roots buffer - global for v1 (per-thread in future) */
-extern RcControlBlock *gc_suspect_roots[];
+/* Suspect roots buffer - global for v1 (per-thread in future).
+ * CG0: heap-allocated and grown on demand (was a fixed 4096-entry array whose
+ * overflow silently dropped blocks -- see
+ * docs/reported/gc-strong-cycles-not-collected.md). */
+extern RcControlBlock **gc_suspect_roots;
 extern uint32_t gc_suspect_count;
 extern uint32_t gc_suspect_capacity;
 

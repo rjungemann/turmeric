@@ -2487,6 +2487,7 @@ struct RcControlBlock {
     uint8_t value_type_kind;
     uint8_t color;           /* GC color */
     bool may_contain_cycles;  /* Hint for GC */
+    uint32_t gc_index;        /* CG0: slot in gc_all_blocks, or RC_GC_INDEX_NONE */
     uint8_t reserved[6];
 };
 
@@ -2507,18 +2508,34 @@ static void rc_free_queue_push(RcControlBlock *cb) {
 }
 
 #define GC_GLOBAL_REGISTRY_CAPACITY 4096
-static RcControlBlock *gc_all_blocks[GC_GLOBAL_REGISTRY_CAPACITY];
+#define RC_GC_INDEX_NONE ((uint32_t)0xFFFFFFFFu)
+static RcControlBlock **gc_all_blocks = NULL;
 static uint32_t gc_all_blocks_count = 0;
+static uint32_t gc_all_blocks_capacity = 0;
+
+static bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed) {
+    if (*cap >= needed) return true;
+    uint32_t ncap = *cap ? *cap : 256u;
+    while (ncap < needed) {
+        if (ncap > (0xFFFFFFFFu / 2u)) { ncap = needed; break; }
+        ncap *= 2u;
+    }
+    RcControlBlock **grown = (RcControlBlock **)realloc(*vec, (size_t)ncap * sizeof(RcControlBlock *));
+    if (!grown) return false;
+    *vec = grown; *cap = ncap; return true;
+}
 
 #define GC_SUSPECT_THRESHOLD 128
 #define GC_MAX_SUSPECTS 4096
 
 typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;
 
-static RcControlBlock *gc_suspect_roots[GC_MAX_SUSPECTS];
+static RcControlBlock **gc_suspect_roots = NULL;
 static uint32_t gc_suspect_count = 0;
-static RcControlBlock *gc_grey_queue[GC_MAX_SUSPECTS];
+static uint32_t gc_suspect_capacity = 0;
+static RcControlBlock **gc_grey_queue = NULL;
 static uint32_t gc_grey_count = 0;
+static uint32_t gc_grey_capacity = 0;
 static GcMode gc_mode = GC_DISABLED;
 static bool gc_enabled = false;
 
@@ -2534,7 +2551,15 @@ static GcColor gc_get_color(RcControlBlock *cb) {
 }
 
 static void gc_register_block(RcControlBlock *cb) {
-    if (!cb || gc_all_blocks_count >= GC_GLOBAL_REGISTRY_CAPACITY) return;
+    if (!cb) return;
+    if (gc_all_blocks_count >= gc_all_blocks_capacity) {
+        uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u : GC_GLOBAL_REGISTRY_CAPACITY;
+        if (!gc_vec_reserve(&gc_all_blocks, &gc_all_blocks_capacity, want)) {
+            cb->gc_index = RC_GC_INDEX_NONE;
+            cb->color = GC_WHITE; cb->may_contain_cycles = true; return;
+        }
+    }
+    cb->gc_index = gc_all_blocks_count;
     gc_all_blocks[gc_all_blocks_count++] = cb;
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
@@ -2542,13 +2567,15 @@ static void gc_register_block(RcControlBlock *cb) {
 
 static void gc_unregister_block(RcControlBlock *cb) {
     if (!cb) return;
-    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {
-        if (gc_all_blocks[i] == cb) {
-            gc_all_blocks[i] = gc_all_blocks[gc_all_blocks_count - 1];
-            gc_all_blocks_count--;
-            break;
-        }
+    uint32_t idx = cb->gc_index;
+    if (idx == RC_GC_INDEX_NONE || idx >= gc_all_blocks_count || gc_all_blocks[idx] != cb) {
+        cb->gc_index = RC_GC_INDEX_NONE; return;
     }
+    RcControlBlock *last = gc_all_blocks[gc_all_blocks_count - 1u];
+    gc_all_blocks[idx] = last;
+    if (last) last->gc_index = idx;
+    gc_all_blocks_count--;
+    cb->gc_index = RC_GC_INDEX_NONE;
 }
 
 static void gc_add_suspect(RcControlBlock *cb) {
@@ -2556,7 +2583,9 @@ static void gc_add_suspect(RcControlBlock *cb) {
     for (uint32_t i = 0; i < gc_suspect_count; i++) {
         if (gc_suspect_roots[i] == cb) return;
     }
-    if (gc_suspect_count >= GC_MAX_SUSPECTS) return;
+    if (gc_suspect_count >= gc_suspect_capacity) {
+        if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;
+    }
     gc_suspect_roots[gc_suspect_count++] = cb;
     cb->color = GC_PURPLE;
     /* Threshold mode: auto-collect when buffer is full */
@@ -2784,7 +2813,7 @@ static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {
     (void)ctx;
     if (child && child->color != GC_BLACK) {
         child->color = GC_BLACK;
-        if (gc_grey_count < GC_MAX_SUSPECTS) {
+        if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {
             gc_grey_queue[gc_grey_count++] = child;
         }
     }
@@ -2799,7 +2828,7 @@ static void gc_mark_phase(void) {
         RcControlBlock *cb = gc_all_blocks[i];
         if (cb->strong_count > 0) {
             cb->color = GC_BLACK;
-            if (gc_grey_count < GC_MAX_SUSPECTS) {
+            if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {
                 gc_grey_queue[gc_grey_count++] = cb;
             }
         }
@@ -2811,7 +2840,7 @@ static void gc_mark_phase(void) {
             RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
             if (inner && inner->color != GC_BLACK) {
                 inner->color = GC_BLACK;
-                if (gc_grey_count < GC_MAX_SUSPECTS) {
+                if (gc_grey_count < gc_grey_capacity || gc_vec_reserve(&gc_grey_queue, &gc_grey_capacity, gc_grey_count + 1u)) {
                     gc_grey_queue[gc_grey_count++] = inner;
                 }
             }

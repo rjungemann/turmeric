@@ -1,6 +1,7 @@
 # Cycle-Collecting GC -- Reaching Past Rust (CG0--CG8)
 
-> **Status:** Not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
+> **Status:** CG0 landed 2026-07-25 (dynamic buffers + registry, plus an O(1)
+> unregister); CG1-CG8 not started. The Bacon-Rajan *scaffold* exists (`src/runtime/gc.c`,
 > `src/runtime/gc.h`, colors + modes + suspect buffer + a global block registry
 > + `mark_phase`/`trial_deletion_phase`), but as wired it only reclaims the
 > **weak-zombie** case (strong->0 while weak>0). It cannot collect a live
@@ -32,7 +33,7 @@
 > rule, with `experiment_warn_if_used` wired at the elaboration site that lowers
 > the automatic-mode intrinsic. The manual `(gc!)` path stays ungated.
 >
-> **Last updated:** 2026-07-24
+> **Last updated:** 2026-07-25
 
 ---
 
@@ -72,8 +73,8 @@ Grounded in the source so the plan starts honest:
 
 - **Colors / modes / buffers.** `GcColor` = WHITE/GREY/BLACK/PURPLE (`rc.h:19-24`).
   `GcMode` = DISABLED/MANUAL/THRESHOLD (`gc.h:21-25`), default DISABLED
-  (`gc.c:33`). Suspect buffer, grey queue, and global block registry are all
-  **static 4096-entry arrays** (`gc.c:22,28,203`).
+  (`gc.c:33`). Suspect buffer, grey queue, and global block registry were all
+  static 4096-entry arrays; **CG0 replaced them with growable vectors.**
 - **Suspect entry is zombie-only.** `rc_strong_decrement` calls
   `gc_on_strong_decrement` only on strong->0 with weak>0 (`rc.c:180-184`), and
   that function again guards on `weak_count > 0` (`gc.c:369`). A strong cycle
@@ -86,7 +87,7 @@ Grounded in the source so the plan starts honest:
 - **Trial deletion is really "sweep zombies not reachable from strong roots"**
   (`gc.c:296-343`), not Bacon-Rajan trial deletion.
 - **Two latent bugs** (filed separately this session): a registry overflow past
-  4096 silently drops blocks (`gc.c:207-210`), and trial deletion force-frees a
+  4096 silently dropped blocks (**fixed by CG0**), and trial deletion force-frees a
   block with `weak_count > 0` by zeroing the weak count (`gc.c:335-340`),
   dangling any live `weak<T>` -- contradicting the zombie contract the rest of
   RC upholds.
@@ -98,13 +99,49 @@ collection *algorithm* is what CG1--CG3 replace.
 
 ## Phases
 
-### CG0 -- Dynamic buffers + registry (unblocks everything)
+### CG0 -- Dynamic buffers + registry (unblocks everything) [DONE 2026-07-25]
 
 Replace the three static 4096 arrays (`gc_all_blocks`, `gc_suspect_roots`,
 `gc_grey_queue`) with growable vectors. Fix the silent-drop cliff at
 `gc_register_block` (`gc.c:207`). This is a prerequisite: a real collector must
 see every rc block, and real programs exceed 4096 live blocks. Keep the static
 fast-path capacity as the initial allocation.
+
+**Landed.** All three vectors now grow on demand via a shared `gc_vec_reserve`
+helper; the only remaining failure mode is genuine OOM. Three silent-drop sites
+were fixed, not one:
+
+- `gc_register_block` -- blocks past 4096 were invisible to the collector.
+- `gc_add_suspect` -- suspects past the cap were discarded, losing real garbage.
+  `GC_MAX_SUSPECTS` is now a *force-a-collection* watermark rather than a hard
+  cap: collection is attempted first, and the buffer grows if it cannot drain.
+- the grey queue (three enqueue sites) -- a dropped grey entry makes the mark
+  phase miss a subgraph, which would let the collector free something **live**.
+  This was the most dangerous of the three.
+
+**Also fixed: `gc_unregister_block` was O(live blocks).** It linear-scanned the
+whole registry on every rc free -- and register/unregister run on *every* rc
+alloc/free even with the collector disabled, so making the registry unbounded
+would have turned that into O(N^2). Each `RcControlBlock` now stores its own
+registry slot (`gc_index`, sentinel `RC_GC_INDEX_NONE`), making unregister an
+O(1) swap-remove. This is a straight improvement over the pre-CG0 behavior.
+
+**Both copies of the GC had to change.** The compiler emits its *own* copy of
+the registry/suspect/grey machinery into every compiled program
+(`emit_module.c`), separate from `src/runtime/gc.c`. Both were updated in step,
+including the `RcControlBlock` layout (the new `gc_index` field), and all 140
+`expected.c` snapshots regenerated in the same change.
+
+Guarded by `tests/fixtures/gc-registry-growth`: 20000 simultaneously-live rc
+blocks with the collector enabled must yield a peak registry size of 20000
+(pre-CG0 it saturated at 4096).
+
+*Note for anyone re-running the earlier leak probe:* with the registry now
+unbounded, **LeakSanitizer no longer reports leaked cycle blocks at all** --
+every block stays reachable from the registry, so the 4096-cliff artifact that
+made leaks visible is gone. Measure cycle garbage with heap growth (or the
+registry count), not LSan. See the Measured section of
+`docs/reported/gc-strong-cycles-not-collected.md`.
 
 ### CG1 -- Candidate buffering (classic `PossibleRoot`)
 
