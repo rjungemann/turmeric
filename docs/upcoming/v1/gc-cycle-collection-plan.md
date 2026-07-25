@@ -507,6 +507,99 @@ AUTO link it, regenerating snapshots) remain. Step 3 is what makes them
 tractable: suppressing the emitted definitions entirely is now one more state
 on the same switch, rather than a second surgery on 500 lines of `buf_puts`.
 
+**Step 4 investigated 2026-07-25 -- it is not a build-system change, and the
+sequence needs revising again.**
+
+Adding the sources to the archive and flipping AUTO is two lines of CMake. But
+what it actually does is **swap which implementation every compiled program
+runs**: today compiled fixtures exercise the emitted copy exclusively and the
+interpreter exercises the runtime copy exclusively. Linking the archive moves
+1442 fixtures onto code they have never run. So the first thing Step 4 needs is
+an answer to "how far apart are they?", and the answer is: **far**.
+
+`tools/gc-copy-diff.py` (added here) extracts every top-level function from both
+copies, normalises away comments, `static`, brace style and line wrapping, and
+compares. Current state:
+
+| | count |
+|---|---|
+| identical after normalisation | 19 |
+| **divergent** | **23** |
+| emitted only | 4 (`rc_cb_alloc_kinded`, `rc_cb_alloc_struct`, `tur_rc_from_ref`, `tur_ref_from_rc`) |
+| runtime only | 12 (`gc_init`, `gc_shutdown`, `gc_possible_root`, `rc_cb_free`, the grey-queue and free-queue helpers, ...) |
+
+Run `tools/gc-copy-diff.py --diff` for the deltas, `--count` for the number
+alone. It is a *syntactic* comparison after normalisation -- it proves a
+difference exists, not that the difference matters. Triage of the 23:
+
+**Equivalent-but-rewritten (11)** -- no behavior change, would disappear if
+either side were reflowed to match: `gc_get_color`, `gc_set_color`,
+`gc_remove_suspect`, `gc_register_block` (the emitted copy redundantly re-zeroes
+`gc_collecting`/`gc_trial`, which `rc_cb_alloc_kinded` already did; the capacity
+constant differs in name only), `rc_upgrade`, `drop_ref_payload`,
+`drop_rc_payload`, `drop_weak_payload`, `default_rc_drop_fn` (name only:
+runtime calls it `default_drop_fn`), `__gc_mark_struct_child` (name only, plus
+accessor helpers), `gc_on_strong_decrement` (the runtime's extra
+enabled-guard and PURPLE set are both already done inside `gc_add_suspect`),
+`rc_strong_decrement` (emitted calls `gc_add_suspect`, runtime calls
+`gc_possible_root`, which is a two-line wrapper around `gc_add_suspect` with
+the same guards).
+
+**Unguarded coincidence (1)** -- `default_drop_fn_for_type`. The emitted copy
+hardcodes `case 8/9/10`; `rc.c` spells them `TY_REF`/`TY_RC`/`TY_WEAK`. They
+agree *today* (verified: 8, 9, 10) but nothing enforced it, and a TypeKind
+reorder would have silently given every `rc<T>`/`weak<T>` in a compiled program
+the wrong drop glue. Now fenced with a `_Static_assert` at the emission site,
+validated by flipping the expected ordinal.
+
+**Genuinely divergent behavior (8)** -- these are the real remaining work, and
+each needs a verdict on which copy is right before any archive link:
+
+| function | delta |
+|---|---|
+| `gc_enable` / `gc_disable` | **FIXED here** -- see below |
+| `gc_add_suspect` | runtime force-collects (recursively!) at `GC_MAX_SUSPECTS` from inside a decrement; emitted just grows. Emitted's is the safer contract -- no reentrancy out of a refcount drop |
+| `gc_mark_phase` | runtime's `gc_enqueue_grey` overwrites the caller's BLACK with GREY and dedups O(n); emitted keeps BLACK and appends. Each copy is internally consistent with its own `gc_trial_deletion_phase` -- they are two different algorithms, not one algorithm with a bug |
+| `gc_trial_deletion_phase` | substantially different sweeps; the runtime frees the block when `weak_count == 0`, the emitted copy never frees `cb` in this legacy path |
+| `rc_free_queue_push` | emitted: fixed 65536 array, `abort()` when full. runtime: dynamic, drains on full, then skips. Different data structures |
+| `rc_free_queue_drain` | follows from the above; emitted open-codes the existential-payload release the runtime delegates to `rc_cb_free` |
+| `rc_weak_decrement` | emitted open-codes the free; runtime calls `rc_cb_free` |
+| `gc_collect` / `gc_cycle_collect_phase` | runtime maintains `gc_collections` / `gc_objects_freed`; the emitted copy has no counters at all, so **compiled programs have no GC statistics**. Feeds CG6 |
+| `rc_cb_alloc` | signature differs: `int value_type_kind` vs `uint8_t value_type`. Harmless while the copies never link together; a genuine prototype mismatch the moment they do |
+
+**A real bug fell out of this, fixed here.** `gc_collect()` gates on *both*
+`gc_enabled` and `gc_mode`, and `gc_mode` starts at `GC_DISABLED`. The emitted
+copy's `gc_enable()` has always defaulted the mode to `GC_MANUAL`; the runtime
+copy set only the flag. Nothing else ever called `gc_set_mode`. So in the
+interpreter / libturi / embedder path, `(gc-enable!)` followed by `(gc!)`
+**collected nothing** -- `gc_enable()` lowers to the runtime function
+(`src/turi/eval.c`), `(gc!)` to `gc_force()` -> `gc_collect()`, which returned
+immediately. Confirmed directly: `gc_collections` stayed 0 after
+`gc_enable(); gc_collect();` and became 1 only after an explicit
+`gc_set_mode(GC_MANUAL)`.
+
+This is the fourth bug from this duplication, and the first to have been
+*silent on both sides* -- the compiled fixtures could not see it (they run the
+emitted copy) and nothing exercised the runtime copy's mode contract. Fixed by
+making the runtime match the emitted semantics, with
+`tests/turi/gc-runtime-copy-parity.c` (ctest `tur_gc_runtime_copy_parity`)
+pinning it; validated by reverting the fix and watching two assertions fail.
+
+**Revised remaining sequence:**
+
+- **4a. Reconcile the 8 behavioral deltas**, one verdict at a time, keeping
+  `tools/gc-copy-diff.py --count` monotonically decreasing. The cosmetic 11 can
+  be swept in whichever direction is convenient once the behavioral set is
+  empty (it costs a 140-snapshot regen, so batch it).
+- **4b. Then** add `rc.c`/`gc.c`/`rc_free_queue.c` to `TURT_RUNTIME_SOURCES`,
+  extend the DEDUP-3 switch with a third "declare only, archive supplies the
+  definitions" state, and make AUTO link it.
+- **5.** Regenerate the 140 snapshots; full suite as the gate.
+
+Doing 4b before 4a would swap all eight behavioral deltas into 1442 fixtures in
+a single commit, which is precisely the failure mode the DEDUP series exists to
+prevent.
+
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the
 `RCK_OPAQUE` blind spot -- these would assert the *documented* non-collection);

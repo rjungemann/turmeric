@@ -535,6 +535,27 @@ set_target_properties(tur_incremental_elab_diff PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# DEDUP-4 (gc-cycle-collection-plan): behavioral parity assertions on the
+# RUNTIME copy of the GC (src/runtime/{rc,gc,rc_free_queue}.c), pinning the
+# semantics the hand-written emitted copy has always had.  Compiled fixtures
+# only ever exercise the emitted copy, so divergence here is otherwise silent.
+# ---------------------------------------------------------------------------
+add_executable(tur_gc_runtime_copy_parity ${CMAKE_SOURCE_DIR}/tests/turi/gc-runtime-copy-parity.c)
+target_include_directories(tur_gc_runtime_copy_parity PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_gc_runtime_copy_parity PRIVATE libturi)
+target_compile_options(tur_gc_runtime_copy_parity PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_gc_runtime_copy_parity PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_gc_runtime_copy_parity PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # turi-interp-collections-libturi: Vec/Set/HAMT C-embedding parity harness
 # ---------------------------------------------------------------------------
 add_executable(tur_collections_embed ${CMAKE_SOURCE_DIR}/tests/turi/collections-embed.c)

@@ -636,11 +636,20 @@ void gc_force(void) {
 /* Enable cycle collection */
 void gc_enable(void) {
     gc_enabled = true;
+    /* DEDUP-4: gc_collect() gates on BOTH gc_enabled and gc_mode, and gc_mode
+     * starts at GC_DISABLED.  Setting only the flag left every collection a
+     * silent no-op for the interpreter/libturi path -- `(gc-enable!)` lowers to
+     * this function (src/turi/eval.c) and nothing else ever called
+     * gc_set_mode, so `(gc!)` returned without collecting.  The emitted copy in
+     * emit_module.c has always defaulted to GC_MANUAL here, which is why the
+     * compiled path collected and the interpreted path did not. */
+    if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;
 }
 
 /* Disable cycle collection */
 void gc_disable(void) {
     gc_enabled = false;
+    gc_mode = GC_DISABLED;   /* DEDUP-4: match the emitted copy */
 }
 
 /* Set GC mode */

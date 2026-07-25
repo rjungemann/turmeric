@@ -9374,6 +9374,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (inner) rc_weak_decrement(inner);\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
+    /* DEDUP-4: the emitted program cannot see TypeKind (it is the compiler's
+     * enum), so this switch hardcodes the ordinals.  src/runtime/rc.c's copy of
+     * the same function spells them TY_REF/TY_RC/TY_WEAK, which means a reorder
+     * of TypeKind would silently desync the two -- every rc<T>/weak<T> in a
+     * compiled program would get the wrong drop glue, with no diagnostic. Pin
+     * the assumption here, where the literals are written. */
+    _Static_assert(TY_REF == 8 && TY_RC == 9 && TY_WEAK == 10,
+                   "TypeKind reordered: the drop-glue ordinals emitted below "
+                   "(and src/runtime/rc.c's TY_* switch) no longer agree");
     buf_printf(out, "%sRcDropFn default_drop_fn_for_type(int value_type_kind) {\n", rcgc_helper);
     buf_puts(out, "    switch (value_type_kind) {\n");
     buf_puts(out, "        case 8: return drop_ref_payload;   /* TY_REF */\n");
