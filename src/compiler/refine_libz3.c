@@ -28,23 +28,24 @@
 
 #include <z3.h>
 
-/* One context per process; Z3_eval_smtlib2_string is self-contained per query
- * (each call carries its own declarations), so no push/pop bookkeeping is
- * needed on top of it. */
-static Z3_context g_z3_ctx;
-
+/* A FRESH context per query.
+ *
+ * The original code kept one context for the whole process, on the assumption
+ * that Z3_eval_smtlib2_string is self-contained because each call carries its
+ * own declarations.  It is not: assertions accumulate on the context across
+ * calls.  One self-contradictory query -- and a trivially-valid obligation is
+ * exactly that, since we assert the hypotheses AND the negated goal -- poisons
+ * the context, after which every later query returns `unsat` and the oracle
+ * cheerfully answers VALID to everything.
+ *
+ * As the chain tail that would prove false obligations; as the cross-check it
+ * would silently rubber-stamp the in-house stages, which is worse, because the
+ * whole point of the oracle is to disagree when we are wrong.  The bug was
+ * invisible until the scaffold was actually built and run against a real Z3.
+ *
+ * A fresh context per obligation is the obviously-correct fix; an oracle build
+ * is a development harness, so the allocation cost is irrelevant. */
 static void z3_err(Z3_context c, Z3_error_code e) { (void)c; (void)e; }
-
-static Z3_context z3_ctx(void) {
-    if (!g_z3_ctx) {
-        Z3_config cfg = Z3_mk_config();
-        Z3_set_param_value(cfg, "model", "true");
-        g_z3_ctx = Z3_mk_context(cfg);
-        Z3_del_config(cfg);
-        Z3_set_error_handler(g_z3_ctx, z3_err);
-    }
-    return g_z3_ctx;
-}
 
 RefineDecision refine_z3_decide(RefineVC *vc, Arena *a) {
     (void)a;
@@ -55,15 +56,36 @@ RefineDecision refine_z3_decide(RefineVC *vc, Arena *a) {
     buf_putc(&b, '\0');   /* Buf is not NUL-terminated; Z3 wants a C string */
     if (!b.data) { buf_free(&b); return refine_unknown(); }
 
-    Z3_context c = z3_ctx();
-    Z3_string res = Z3_eval_smtlib2_string(c, b.data);
-    buf_free(&b);
-    if (!res) return refine_unknown();
+    Z3_config cfg = Z3_mk_config();
+    Z3_set_param_value(cfg, "model", "true");
+    Z3_context c = Z3_mk_context(cfg);
+    Z3_del_config(cfg);
+    Z3_set_error_handler(c, z3_err);
 
-    /* `unsat` on the negated goal means the goal is entailed. */
-    if (strstr(res, "unsat")) return refine_valid();
-    if (strncmp(res, "sat", 3) == 0) return refine_invalid(NULL);
-    return refine_unknown();
+    Z3_string res = Z3_eval_smtlib2_string(c, b.data);
+    RefineDecision d = refine_unknown();
+    if (res) {
+        if (strstr(res, "unsat")) {
+            /* Sound in both directions: the VC abstracts nonlinear and measure
+             * terms to uninterpreted functions, and any model of the CONCRETE
+             * obligation is also a model of the abstraction, so unsat of the
+             * abstraction implies unsat of the concrete. */
+            d = refine_valid();
+        } else if (strncmp(res, "sat", 3) == 0) {
+            /* NOT sound in this direction once anything was abstracted.  A
+             * model that assigns an uninterpreted symbol some convenient value
+             * says nothing about the real function it stands for:
+             * `x>0, y>0 |- x*y>0` is TRUE, but its abstraction (with `x*y` an
+             * opaque symbol) is satisfiable, and reporting that as a
+             * counterexample would flag correct code as broken.  Only a VC
+             * with no abstracted symbols can be refuted this way -- the same
+             * rule refine_model_search already follows. */
+            d = (vc->n_ufuncs == 0) ? refine_invalid(NULL) : refine_unknown();
+        }
+    }
+    Z3_del_context(c);
+    buf_free(&b);
+    return d;
 }
 
 #else

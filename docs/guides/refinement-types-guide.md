@@ -426,6 +426,36 @@ there to read, and to paste into an external solver when you want a second
 opinion; the in-house stages consume the internal representation directly and
 never go through this text.
 
+### Cross-checking against Z3 (compiler developers)
+
+The compiler ships no solver dependency, but a development build can link a
+system Z3 as a correctness oracle: every obligation is decided by both, and a
+disagreement is reported as `TUR-I0379` and downgraded to unknown so the build
+stays sound. The option is off by default and Release and WASM builds refuse
+it outright, so it cannot reach a shipped artifact.
+
+```sh
+# any Z3 >= 4.12 that provides a CMake package config
+cmake -S . -B build-oracle -DCMAKE_BUILD_TYPE=Debug       -DTUR_REFINE_Z3_ORACLE=ON -DZ3_DIR=/path/to/lib/cmake/z3
+cmake --build build-oracle -j
+```
+
+An oracle build also produces `tur_refine_fuzz`, which generates random
+verification conditions and fails on any disagreement in either direction. It
+is deterministic; a failure prints the seed that reproduces it. Expect roughly
+13 VCs/second in a Debug build -- a fresh Z3 context per query is what costs,
+and it is what keeps the oracle honest.
+
+```sh
+TUR_FUZZ_SEED=42 TUR_FUZZ_ITERS=20000 ./build-oracle/tur_refine_fuzz
+```
+
+Note that Z3's `sat` is only a counterexample when the VC contains no
+uninterpreted symbols. Abstraction is sound in one direction only: `unsat` of
+an abstracted VC implies the concrete obligation holds, but a model that
+assigns an opaque symbol a convenient value proves nothing about the function
+it stands for.
+
 ---
 
 ## Limits

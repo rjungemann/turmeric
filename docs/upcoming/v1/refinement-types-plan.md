@@ -13,7 +13,8 @@
 > | RT1 constraint collector + env | done (incl. call-site crossings) | `refine_collect.{c,h}` |
 > | RT2 normalized VC + seam + SMT-LIB | done | `refine_vc.{c,h}`, `refine_smtlib.{c,h}` |
 > | RT3 discharge chain + diagnostics | done | `refine_discharge.{c,h}` |
-> | RT3 Z3 scaffold (dev-only) | done, unexercised | `refine_libz3.c`, `TUR_REFINE_Z3_ORACLE` |
+> | RT3 Z3 scaffold (dev-only) | done, EXERCISED against Z3 4.13 | `refine_libz3.c`, `TUR_REFINE_Z3_ORACLE` |
+> | RT3 differential fuzzing vs Z3 | done | `tests/unit/refine_fuzz.c` |
 > | S0 trivial | done | `refine_solver_s0.c` |
 > | S1 congruence closure (EUF) | done | `refine_solver_euf.c` |
 > | S2 linear arithmetic | done (Fourier-Motzkin, not simplex -- see below) | `refine_solver_arith.c` |
@@ -247,6 +248,79 @@
 > SOURCE writes it. A method binding carries its mangled instance symbol
 > (`__inst_Scaler_scale_hyby_int`), which is not something to put in front of a
 > user, so the crossing records the call form's head instead.
+>
+> ### Z3 oracle: actually built and run (2026-07-25)
+>
+> The scaffold had never been compiled. Building it against a real Z3 4.13
+> found three bugs, two of them in the scaffold itself and both of the kind
+> that only running it can reveal.
+>
+> **1. The oracle could not link at all.** `refine_libz3.c` is compiled into
+> `tur_core`, which is an OBJECT library, so a per-target `PRIVATE` link of
+> `z3::libz3` never reached the executables that embed `$<TARGET_OBJECTS:
+> tur_core>` -- every test harness failed with undefined `Z3_*` references.
+> Fixed with a directory-scoped `link_libraries`, which is exactly the
+> accommodation the Windows `ws2_32` block a few lines above already makes for
+> the same reason.
+>
+> **2. One Z3 context for the whole process silently poisoned every query.**
+> The code assumed `Z3_eval_smtlib2_string` is self-contained because each call
+> carries its own declarations. It is not -- assertions accumulate on the
+> context. A single self-contradictory query poisons it, and since we assert
+> the hypotheses AND the negated goal, a trivially-VALID obligation is exactly
+> such a query. After the first one, every later query returned `unsat` and the
+> oracle answered VALID to everything. As the chain tail that proves false
+> obligations; as the cross-check it rubber-stamps the in-house stages, which
+> is worse, because an oracle that never disagrees is not an oracle. Fixed with
+> a fresh context per query.
+>
+> **3. `sat` was read as INVALID even for an abstracted VC.** The VC replaces
+> nonlinear and measure terms with uninterpreted functions. Abstraction is
+> sound in ONE direction: `unsat` of the abstraction implies `unsat` of the
+> concrete obligation, so VALID transfers -- but a model that assigns an opaque
+> symbol some convenient value says nothing about the real function. Z3
+> correctly reports `sat` for the abstraction of `x>0, y>0 |- x*y>0`, which is
+> a TRUE obligation, and the scaffold turned that into `TUR-E0371` on correct
+> code. `sat` may only be read as INVALID when nothing was abstracted -- the
+> same rule `refine_model_search` already followed.
+>
+> ### Differential coverage: what the corpus could and could not establish
+>
+> Compiling the whole fixture corpus with `refined` forced on under the oracle
+> found zero disagreements -- but that is a much weaker statement than it
+> sounds, because almost no fixture contains a `#refine`: the first 400 fixture
+> files yield **3 obligations** between them. Fixture coverage is not
+> differential coverage.
+>
+> `tests/unit/refine_fuzz.c` is the harness that actually exercises the solver:
+> it generates random VCs in the supported fragment (linear integer arithmetic,
+> boolean structure, and uninterpreted applications in a quarter of them), runs
+> the in-house chain and Z3 on each, and fails on either direction of
+> disagreement -- in-house VALID where Z3 says INVALID (a proof that is not a
+> proof), or in-house INVALID where Z3 says VALID (a counterexample search
+> claiming a witness it does not have). It builds only in an oracle build and
+> is deterministic, so a failure reproduces from the printed seed.
+>
+> Results are also a fair completeness measurement, which nothing before this
+> provided: on 4000 VCs the chain agreed with Z3 on 3070 and was incomplete on
+> 159 (~5% of the VCs Z3 could decide). Those 159 cost a runtime check, which
+> is the designed outcome.
+>
+> ### Retirement criteria: still not met
+>
+> Two of the three criteria remain open, and the honest reading is that the
+> oracle has just started doing its job rather than finished:
+>
+> - *Bootstrap discharged* -- the in-house chain already decides every fixture
+>   the oracle does, so this one holds.
+> - *Oracle trust established* -- a soak window and the labelled SMT-LIB
+>   `QF_UF`/`QF_IDL`/`QF_LIA`/`QF_LRA` corpora are still not in the repo. The
+>   fuzz harness is a real start; a checked-in labelled corpus that runs
+>   WITHOUT Z3 present is what the criterion actually asks for.
+> - *No scaffold references in shippable code paths* -- re-verified: the
+>   default build's `tur` has zero `z3` symbols, zero `z3` in its link line,
+>   and no `TUR_REFINE_Z3_ORACLE` string; Release + oracle still fails
+>   configuration outright.
 >
 > ### Next slice
 >
