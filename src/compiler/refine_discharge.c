@@ -321,6 +321,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         g_stats.templates_tried++;
         const char *why = NULL;
         RefineVC *pvc = refine_vc_build(ob, a, &why);
+        ob->vc = pvc;   /* so a caller can follow up (e.g. ask for a witness) */
         if (!pvc) return false;
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;

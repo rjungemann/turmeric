@@ -42,7 +42,7 @@ static bool fn_result_kind_is_scalar_copy(TypeKind k) {
  * ------------------------------------------------------------------------- */
 
 /* Map a Turmeric type kind to the VC sort the solver reasons in. */
-static VCSort rt_sort_of_kind(TypeKind k) {
+VCSort rt_sort_of_kind(TypeKind k) {
     switch (k) {
         case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return VS_REAL;
         default: return VS_INT;
@@ -137,7 +137,7 @@ bool rt_contracts_emitted(void) {
  * by the elaborator because it is the only side that can look a name up in the
  * global scope; refine_collect.c reaches it through a function pointer so it
  * stays free of scope/binding knowledge. */
-static bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
+bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
     Elab *e = (Elab *)ud;
     if (!e || !name) return false;
     /* No flag test here on purpose.  A refinement only reaches
@@ -173,6 +173,9 @@ static bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
                  effect_row_is_empty(b->type.as.fn.effect_row));
     return true;
 }
+
+/* The resolver, for callers outside this file that build their own env. */
+RefineFnResolver rt_refine_resolver(Elab *e) { (void)e; return rt_resolve_fn; }
 
 /* Build the hypothesis environment visible at a function's return point. */
 static RefineEnv *rt_build_env(Elab *e, Binding **params, uint32_t n_params,

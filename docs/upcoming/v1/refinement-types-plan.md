@@ -361,17 +361,39 @@
 > not test the translation into it. `tests/fixtures/errors/refine-impure-not-
 > congruent` pins the behaviour where the bug actually lived.
 >
+> ### Class/instance refinement variance (landed 2026-07-25)
+>
+> Closes the hole the typeclass slice opened. An instance may accept MORE than
+> its class signature promises, never less -- the class signature is the
+> contract callers program against, so an over-strict instance would reject an
+> argument a generic caller was entitled to pass and find out at run time, in
+> its own entry check. `TUR-E0374`.
+>
+> The obligation is `class_pred(p) |- instance_pred(p)` over a fresh parameter:
+> an ordinary query through the existing seam, which is the payoff for having
+> built the seam. A class parameter with NO refinement promises nothing, so any
+> instance refinement on it is a strengthening -- unless the predicate is a
+> tautology, and asking the solver is exactly how to tell those apart rather
+> than special-casing it.
+>
+> Two implementation notes:
+>
+> - The class-signature predicates were being peeled and DISCARDED at three
+>   sites. Only one of the three is the branch a spaced `k : #refine{...}`
+>   annotation actually takes, and I patched the other two first -- every
+>   variance check then reported "the class places no refinement", including
+>   the legal direction. The test matrix (stronger / weaker / absent) is what
+>   caught it; a single negative fixture would have looked like a pass.
+> - The obligation is decided SILENTLY and the witness requested separately.
+>   The ordinary reporting path is wrong for it: its failure is a
+>   declaration-vs-declaration inconsistency with its own diagnostic, not a
+>   `TUR-E0371` about a value, and `runtime_guarded` would have swallowed the
+>   counterexample before the caller could see it.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
 >
-> - **Class/instance refinement variance** -- nothing checks that an instance's
->   parameter refinement is no stronger than its class signature's, so an
->   over-strict instance panics at its entry check on an argument a generic
->   caller was entitled to pass. (Open Question 6 in this plan proposed
->   rejecting refined method signatures outright; supporting them and leaving
->   variance unchecked is the softer landing, since the entry check catches the
->   case loudly.)
 > - **Dynamic typeclass dispatch** -- a dispatch with no statically-resolved
 >   instance is not checked; which method runs is unknown at the site.
 > - **Higher-order callees** -- a function-typed parameter carries no

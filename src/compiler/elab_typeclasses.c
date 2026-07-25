@@ -1,5 +1,8 @@
 /* elab_typeclasses.c -- typeclass declarations, instances, and method-call dispatch. */
 #include "elab_internal.h"
+#include "refine_discharge.h"     /* RT1: instance/class refinement variance */
+#include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
+#include "runtime/experiments.h" /* RT0: experiment_warn_if_used("refined") */
 #include "forms.h"
 #include "mangle.h"
 
@@ -717,12 +720,20 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * substitution site at elab_definstance consults this flag to leave
      * explicit-`:int` params alone instead of rewriting them to the class tyvar. */
     bool *param_explicit_type = NULL;
+    const Form **param_refine_preds = NULL;
+    const char **param_refine_vars  = NULL;
 
     if (n_params > 0) {
         param_names = (const Symbol **)arena_alloc(e->arena, n_params * sizeof(const Symbol *));
         param_types = (Type *)arena_alloc(e->arena, n_params * sizeof(Type));
         param_is_fn = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
         param_explicit_type = (bool *)arena_alloc(e->arena, n_params * sizeof(bool));
+        param_refine_preds = (const Form **)arena_alloc(e->arena, n_params * sizeof(Form *));
+        param_refine_vars  = (const char **)arena_alloc(e->arena, n_params * sizeof(char *));
+        for (uint8_t _i = 0; _i < n_params; _i++) {
+            param_refine_preds[_i] = NULL;
+            param_refine_vars[_i]  = NULL;
+        }
         for (uint32_t i = 0; i < n_params; i++) {
             param_is_fn[i] = false;
             param_explicit_type[i] = false;
@@ -858,7 +869,13 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[actual_p - 1] = *ft;
+                    /* CT0/RT1: a `k : #refine{...}` class parameter -- peel to
+                     * the base type and remember the predicate.  This is the
+                     * branch the spaced-colon form actually takes; the two
+                     * nested-vector sites below handle `[k : T]`. */
+                    param_types[actual_p - 1] = *rt_peel_contract(
+                        ft, &param_refine_preds[actual_p - 1],
+                        &param_refine_vars[actual_p - 1]);
                 }
             } else if (p->tag == F_VEC && p->as.list.len >= 2) {
                 /* [name : type] or [name :fn] nested vector syntax */
@@ -916,7 +933,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                       "unsupported type form in typeclass method parameter");
                             return NULL;
                         }
-                        param_types[actual_p] = *rt_peel_contract(ft, NULL, NULL);
+                        param_types[actual_p] = *rt_peel_contract(
+                            ft, &param_refine_preds[actual_p],
+                            &param_refine_vars[actual_p]);
                     }
                 } else if (type_f->tag == F_LIST || type_f->tag == F_VEC) {
                     /* Phase HRT3: allow forall/exists type forms as parameter types */
@@ -928,7 +947,9 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                                   "unsupported type form in typeclass method parameter");
                         return NULL;
                     }
-                    param_types[actual_p] = *rt_peel_contract(ft, NULL, NULL);
+                    param_types[actual_p] = *rt_peel_contract(
+                        ft, &param_refine_preds[actual_p],
+                        &param_refine_vars[actual_p]);
                 } else {
                     param_types[actual_p] = TYPE_INT; /* default */
                 }
@@ -1112,6 +1133,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->param_names = param_names;
     method->param_types = param_types;
     method->param_is_fn = param_is_fn;
+    method->param_refine_preds = param_refine_preds;
+    method->param_refine_vars  = param_refine_vars;
     method->param_explicit_type = param_explicit_type;
     method->n_params = n_params;
     method->return_type = return_type;
@@ -3815,6 +3838,81 @@ Expr *elab_definstance(Elab *e, const Form *call) {
          * it via c_export_name, the documented "emit this C name as-is" bypass. */
         method_binding->c_export_name = method_sym->name;
         method_binding->is_instance_method = true;   /* B6: internal export, CPS-eligible */
+
+        /* RT1 VARIANCE: an instance may accept MORE than its class signature
+         * promises, never less.  The class signature is the contract callers
+         * program against, so an instance that demands more would reject an
+         * argument a generic caller was entitled to pass -- and find out at
+         * run time, in the method's own entry check.
+         *
+         * The obligation is `class_pred(p) |- instance_pred(p)` over a fresh
+         * parameter `p`, which is an ordinary query through the same seam.  A
+         * class parameter with NO refinement promises nothing, so any instance
+         * refinement on it is a strengthening unless the predicate is a
+         * tautology -- and asking the solver is exactly how to tell those
+         * apart.  Reported only on a REFUTATION; an undecidable pair keeps the
+         * runtime check, as everywhere else. */
+        if (g_opt_refined && n_m_ct_preds > 0) {
+            for (uint32_t _ci = 0; _ci < n_m_ct_preds; _ci++) {
+                uint32_t _pi = m_ct_param_idx[_ci];
+                if (_pi >= n_method_params || !method_params[_pi] ||
+                    !method_params[_pi]->name) continue;
+                const char *pname = method_params[_pi]->name->name;
+
+                const Form *cls_pred = NULL;
+                const char *cls_var  = NULL;
+                if (tc->methods[i].param_refine_preds &&
+                    _pi < tc->methods[i].n_params) {
+                    cls_pred = tc->methods[i].param_refine_preds[_pi];
+                    cls_var  = tc->methods[i].param_refine_vars[_pi];
+                }
+                /* Identical predicates are the overwhelmingly common case
+                 * (an instance restating its class signature); skip the
+                 * solver entirely for them. */
+                if (cls_pred == m_ct_preds[_ci]) continue;
+
+                RefineEnv *venv = refine_env_new(e->arena);
+                refine_env_set_resolver(venv, rt_refine_resolver(e), e);
+                refine_env_declare(venv, pname,
+                                   rt_sort_of_kind(method_params[_pi]->type.kind));
+                if (cls_pred) refine_env_push(venv, cls_pred, cls_var, pname);
+
+                Form *subj = form_sym(e->arena, impl_form->span,
+                                      symtab_intern(e->st,
+                                          strslice(pname, (uint32_t)strlen(pname))));
+                char what[192];
+                snprintf(what, sizeof(what),
+                         "parameter '%s' of instance method '%s'", pname,
+                         tc->methods[i].name ? tc->methods[i].name->name : "?");
+                experiment_warn_if_used("refined");
+                RefineObligation *vob = refine_collect_obligation(
+                    &e->refine_obs, m_ct_preds[_ci], m_ct_vars[_ci], subj,
+                    rt_sort_of_kind(method_params[_pi]->type.kind),
+                    type_name(method_params[_pi]->type),
+                    impl_form->span, venv,
+                    arena_strdup(e->arena, what, strlen(what)), NULL);
+                if (!vob) continue;
+                /* Decide it silently, then ask separately for a witness.  The
+                 * ordinary reporting path is wrong for this obligation: its
+                 * failure is a declaration-vs-declaration inconsistency with
+                 * its own diagnostic, not a `TUR-E0371` about a value. */
+                vob->speculative = true;
+                bool ok = refine_discharge_one(vob, e->arena);
+                if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
+                    diag_emit_with_code(DIAG_ERROR, impl_form->span,
+                        TUR_E0374_REFINE_INSTANCE_STRONGER,
+                        "instance method '%s' demands more of parameter '%s' "
+                        "than the '%s' class signature promises",
+                        tc->methods[i].name ? tc->methods[i].name->name : "?",
+                        pname, tc->name ? tc->name->name : "?");
+                    if (!cls_pred)
+                        diag_emit(DIAG_NOTE, impl_form->span,
+                                  "the class signature places no refinement on "
+                                  "'%s', so callers may pass any value of its type",
+                                  pname);
+                }
+            }
+        }
         /* CT0/RT1: carry this method's contract parameters on its binding.  The
          * parameters are resolved in THIS pass but the body is elaborated in
          * pass 2, so the binding is the record that spans both -- and it is

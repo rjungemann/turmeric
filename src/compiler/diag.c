@@ -243,6 +243,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0371_REFINE_NOT_PROVED:         return "TUR-E0371";
         case TUR_W0372_REFINE_UNKNOWN:            return "TUR-W0372";
         case TUR_W0373_REFINE_NONLINEAR:          return "TUR-W0373";
+        case TUR_E0374_REFINE_INSTANCE_STRONGER:  return "TUR-E0374";
         case TUR_E0375_REFINE_EFFECTFUL:          return "TUR-E0375";
         case TUR_E0376_REFINE_TYPE_PARAM:         return "TUR-E0376";
         case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
@@ -389,6 +390,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0371") == 0) return TUR_E0371_REFINE_NOT_PROVED;
     if (strcmp(s, "TUR-W0372") == 0) return TUR_W0372_REFINE_UNKNOWN;
     if (strcmp(s, "TUR-W0373") == 0) return TUR_W0373_REFINE_NONLINEAR;
+    if (strcmp(s, "TUR-E0374") == 0) return TUR_E0374_REFINE_INSTANCE_STRONGER;
     if (strcmp(s, "TUR-E0375") == 0) return TUR_E0375_REFINE_EFFECTFUL;
     if (strcmp(s, "TUR-E0376") == 0) return TUR_E0376_REFINE_TYPE_PARAM;
     if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
@@ -1380,6 +1382,30 @@ static const DiagExplanation diag_explanations_[] = {
       "Multiplication by a LITERAL stays linear and is fully decided:\n"
       "  (* x 2)   ; linear -- decided\n"
       "  (* x y)   ; nonlinear -- uninterpreted\n",
+    },
+    { TUR_E0374_REFINE_INSTANCE_STRONGER,
+      "TUR-E0374: Instance method demands more than its class signature\n"
+      "\n"
+      "A typeclass method's parameter refinement in the CLASS signature is the\n"
+      "promise callers program against.  An instance may accept MORE than the\n"
+      "class promises, but it may not accept less: a caller that honours the\n"
+      "class contract would then be handed to an instance that rejects its\n"
+      "argument, and the method's entry check would panic on a value the\n"
+      "caller was entitled to pass.\n"
+      "\n"
+      "Example:\n"
+      "  (defclass Scaler [a]\n"
+      "    (scale-by [self : a, k : #refine{ v : int | (>= v 0) }] : int))\n"
+      "\n"
+      "  (definstance Scaler [int]\n"
+      "    (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int\n"
+      "      (* self k)))    ; error: rejects 0, which the class admits\n"
+      "\n"
+      "Either widen the instance to match the class, or narrow the class\n"
+      "signature so every caller knows the stronger requirement.\n"
+      "\n"
+      "Only reported when the compiler can PROVE the instance is stronger; an\n"
+      "undecidable pair is left to the runtime check.\n",
     },
     { TUR_E0151_RELEVANT_DROPPED,
       "TUR-E0151: Relevant value dropped without being used\n"

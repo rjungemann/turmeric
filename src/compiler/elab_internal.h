@@ -873,6 +873,11 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
 /* True when contract checks are being emitted for this build. */
 bool rt_contracts_emitted(void);
 
+/* RT1 helpers shared by the annotation sites (defn / fn / typeclass methods). */
+VCSort rt_sort_of_kind(TypeKind k);
+bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out);
+RefineFnResolver rt_refine_resolver(Elab *e);
+
 /* One pending call-site crossing: `call_form`'s arguments cross into
  * `callee`'s parameters.  Nothing is looked up here -- see the field comment
  * on Elab.refine_call_sites for why. */

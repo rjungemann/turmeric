@@ -238,6 +238,7 @@ typedef enum DiagCode {
     TUR_E0371_REFINE_NOT_PROVED,  /* counterexample found; predicate is not entailed */
     TUR_W0372_REFINE_UNKNOWN,     /* no backend decided it; runtime check kept */
     TUR_W0373_REFINE_NONLINEAR,   /* nonlinear subterm treated as uninterpreted */
+    TUR_E0374_REFINE_INSTANCE_STRONGER, /* instance method demands more than its class signature */
     TUR_E0375_REFINE_EFFECTFUL,   /* refinement predicate mentions effects */
     TUR_E0376_REFINE_TYPE_PARAM,  /* refinement on a type parameter (unsupported) */
     TUR_I0379_REFINE_ORACLE_MISMATCH, /* dev oracle: in-house stage disagreed with Z3 */

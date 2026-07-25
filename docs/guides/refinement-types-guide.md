@@ -167,6 +167,29 @@ resolution and are checked identically. A dispatch that stays dynamic -- no
 statically-selected instance -- is not checked, because which method runs is
 not known at the site; the method's own entry check still guards it.
 
+An instance may accept **more** than its class signature promises, but not
+less. The class signature is the contract callers program against, so an
+instance that demanded more would reject an argument a generic caller was
+entitled to pass:
+
+```turmeric
+(defclass Scaler [a]
+  (scale-by [self : a, k : #refine{ v : int | (>= v 0) }] : int))
+
+;; error[TUR-E0374]: rejects 0, which the class admits
+(definstance Scaler [int]
+  (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int ...))
+
+;; fine: accepts everything the class promises, and more
+(definstance Scaler [int]
+  (scale-by [self : int, k : int] : int ...))
+```
+
+A class parameter with no refinement promises nothing, so *any* instance
+refinement on it is a strengthening. The check is `class_pred |- instance_pred`
+through the same solver seam, and it reports only on a refutation -- an
+undecidable pair keeps the runtime check.
+
 What is *not* checked is a genuinely higher-order callee -- see
 [Limits](#limits).
 
@@ -494,11 +517,7 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **A dynamic typeclass dispatch is not checked.** When the instance is
   statically resolved the crossing is checked; when it is not, which method
   runs is unknown at the site, so only the method's own entry check applies.
-- **An instance may declare a stronger refinement than its class.** Nothing
-  verifies that an instance's parameter refinement is no stronger than the one
-  the class signature declares, so an over-strict instance will panic at its
-  entry check on an argument a generic caller was entitled to pass. Checking
-  that variance is separate work.
+
 - **Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,
   so they always see every callee's refinement. A function's own return

@@ -36,6 +36,13 @@ struct TypeClassMethod {
      * an explicit type annotation is present; NULL means no params had
      * explicit annotations (backwards-compatible default). */
     bool *param_explicit_type;
+    /* RT1: the refinement each parameter declares in the CLASS signature, or
+     * NULL.  An instance's own refinement is checked against this: the class
+     * signature is the promise callers program against, so an instance that
+     * demands MORE than the class does would reject an argument a generic
+     * caller was entitled to pass.  Arrays have n_params entries. */
+    const struct Form **param_refine_preds;
+    const char        **param_refine_vars;
     uint8_t n_params;
     Type return_type;             /* Return type */
     /* ER3: Effect-row annotation from the defclass method signature.
