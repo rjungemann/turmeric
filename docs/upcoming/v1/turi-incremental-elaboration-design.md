@@ -3,18 +3,19 @@
 > **Status:** LANDED (gated, default-off) as of 2026-07-24 -- TR2.0, TR2.2a
 > (incremental parse) and TR2.1 + TR2.2b (persistent elaboration session) are
 > all in. Enable per-env with `turi_env_set_incremental_elab(env, true)`.
-> Remaining: TR2.3 (drop `src_acc`), TR2.4 (scratch promotion in the REPL), and
-> flipping the gate on for real consumers.
+> TR2.3 (stop retaining the accumulated source per eval) landed 2026-07-25.
+> Remaining: TR2.4 (scratch promotion in the REPL) and flipping the gate on for
+> real consumers.
 >
-> **Headline result (N=800-turn session): 299.3 MB -> 3.6 MB (83x less retained
-> elaboration memory) and 1.54s -> 0.03s (51x faster).** Growth is now ~linear
-> where it was quadratic. Full suite: 2278 passed, 0 failed -- the shared
-> compiler path is unaffected (it passes `session = NULL`).
+> **Headline result (N=800-turn session): 296.9 MB -> 1.2 MB (247x less retained
+> memory) and 2.65s -> 0.02s (132x faster).** Growth is now exactly linear where
+> it was quadratic (400 turns: 0.6 MB; 800 turns: 1.2 MB). Full suite: 2278
+> passed, 0 failed -- the shared compiler path is unaffected (`session = NULL`).
 >
 > **Problem owner:** `docs/reported/turi-repl-quadratic-reparse.md` (CPU) and
 > TR0's measurement (memory: ~4.1 GB `eval_arenas` over a 3000-eval session).
 >
-> **Last updated:** 2026-07-24
+> **Last updated:** 2026-07-25
 
 ---
 
@@ -81,9 +82,9 @@ Turn the whole-program-fresh model into an incremental one:
   O(N), not O(N^2). Parse and elaborate are each O(new source) per eval.
 
 Net: the re-parse report's CPU cliff and TR0's memory cliff both fall out of the
-same change. `src_acc` loses its only real consumer (re-parse) and can be dropped
-(TR2.3), except the REPL `:type` command (`repl.c:344-350`), which re-points at
-the persistent environment.
+same change. (On `src_acc`: TR2.3 found the buffer itself is cheap and linear,
+and is what makes diagnostics span earlier turns -- what had to go was the
+per-eval *retained copy* of it. See TR2.3 below.)
 
 Note the arenas still are not *freed* (closures pin them) -- and that is fine.
 The goal is O(N) bounded, not incremental reclamation. Freeing an arena when its
@@ -247,8 +248,26 @@ is caught. (`def` redefinition still errors on both paths -- unchanged.)
   elaborator entry that elaborates only `[prior..nforms)` against the persistent
   env from TR2.1 and merges back. This is what takes retained memory from
   O(N^2) to O(N); the parse side is already done.
-- **TR2.3 -- drop `src_acc` re-accumulation.** Re-point `:type` at the persistent
-  env; stop accumulating source text.
+- **TR2.3 -- stop RETAINING the accumulated source per eval. [DONE 2026-07-25]**
+  The framing in the original sketch ("drop `src_acc`") turned out to be the
+  wrong target. `src_acc` itself is a single linear buffer (39 KB after 3000
+  evals) and it is what lets diagnostics render spans into earlier turns -- worth
+  keeping. The real cost was that each eval `arena_strdup`'d the *entire*
+  accumulated blob into its own per-eval arena: O(N) retained per eval, O(N^2)
+  over a session. Once elaboration went incremental this was the whole remaining
+  residue.
+
+  Fix: build the combined blob into an env-owned `src_combined` buffer that is
+  **reused** every eval, and point the `SourceFile` at it instead of at a fresh
+  arena copy. Safe because nothing holds a pointer into it past its own eval --
+  Forms copy their bytes (`form_str` arena_strdups) and the `SourceFile` is
+  re-registered each turn.
+
+  **Measured: N=800 turns 3.6 MB -> 1.2 MB, and growth is now exactly linear**
+  (400 turns 0.6 MB, 800 turns 1.2 MB -- 2x memory for 2x turns). Against the
+  default path at N=800: **296.9 MB -> 1.2 MB (247x less), 2.65s -> 0.02s.**
+
+  The REPL `:type` command still reads `src_acc` and needs no change.
 - **TR2.4 -- enable promotion in the REPL (the literal TR0 action).** Now that a
   long session is bounded, turn on `turi_env_set_scratch_promotion` in `repl.c`
   and ship it with the above.

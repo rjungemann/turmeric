@@ -193,6 +193,7 @@ TuriEnv *turi_env_new(void) {
     arena_init(&env->value_perm, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
+    buf_init(&env->src_combined);   /* TR2.3: reused per-eval source blob */
     env->caps = TURI_CAP_ALL;
     /* Gap 7: default to interpret mode (every turi_env_new caller is an
      * interpreter embedder; mirrors the g_interpret_mode = true above).  An
@@ -343,6 +344,7 @@ void turi_env_free(TuriEnv *env) {
         env->elab_session       = NULL;
         env->elab_session_forms = 0;
     }
+    buf_free(&env->src_combined);   /* TR2.3 */
     /* TR2: the accumulated-Form vector is malloc'd (the Forms themselves live
      * in eval_arenas, already freed above). */
     free(env->acc_forms);

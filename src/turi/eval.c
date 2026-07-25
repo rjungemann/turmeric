@@ -9966,14 +9966,26 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         }
     }
 
-    /* 1. Build combined source: all prior definitions + new source (sans #lang). */
-    Buf combined;
-    buf_init(&combined);
+    /* 1. Build combined source: all prior definitions + new source (sans #lang).
+     *
+     * TR2.3: this goes into an env-owned buffer that is REUSED every eval,
+     * rather than a fresh Buf copied into the per-eval arena. The old
+     * arena_strdup retained a full copy of the accumulated source in every eval
+     * arena -- O(N) per eval, O(N^2) over a session, which was the dominant
+     * residue once elaboration became incremental. Nothing holds a pointer into
+     * this buffer past its own eval (Forms copy their bytes; the SourceFile is
+     * re-registered each turn), so reusing it is safe. */
+    Buf *combined = &env->src_combined;
+    combined->len = 0;
     if (env->src_acc.len > 0) {
-        buf_write(&combined, env->src_acc.data, env->src_acc.len);
-        buf_putc(&combined, '\n');
+        buf_write(combined, env->src_acc.data, env->src_acc.len);
+        buf_putc(combined, '\n');
     }
-    buf_write(&combined, src_body, body_len);
+    buf_write(combined, src_body, body_len);
+    /* NUL-terminate for any consumer that expects a C string, without counting
+     * the terminator in the reported length. */
+    buf_putc(combined, '\0');
+    combined->len--;
 
     /* 2. Create a new per-call arena and link it into env. */
     ArenaNode *node = (ArenaNode *)malloc(sizeof(ArenaNode));
@@ -9982,10 +9994,9 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     env->eval_arenas = node;
     Arena *eval_arena = &node->arena;
 
-    /* 3. Copy the combined source into the arena so it survives this call. */
-    size_t src_len  = combined.len;
-    char  *src_copy = arena_strdup(eval_arena, combined.data, src_len);
-    buf_free(&combined);
+    /* 3. Point at the env-owned combined source (TR2.3: no per-eval copy). */
+    size_t      src_len  = combined->len;
+    const char *src_copy = combined->data;
 
     /* 4. Reset diagnostics; register the eval source file. */
     diag_reset();

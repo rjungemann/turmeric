@@ -183,6 +183,14 @@ typedef struct TuriEnv {
      * incrementally (counting newlines in the new text only) so resuming the
      * reader never rescans the prefix. 1-based; 0 means "not yet initialised". */
     uint32_t      acc_next_line;
+    /* TR2.3: scratch buffer holding "accumulated source + this turn's source",
+     * REUSED across evals. It is what the eval's SourceFile points at, so
+     * diagnostics still see the whole session text -- but unlike the old
+     * per-eval arena_strdup of the same blob it is not retained N times, which
+     * was the last O(N^2) term once elaboration went incremental. Nothing holds
+     * a pointer into it past its eval: Forms copy their bytes (form_str
+     * arena_strdups), and the SourceFile is re-registered every turn. */
+    Buf           src_combined;
     /* TR2.2b: persistent elaboration session (opaque ElabSession, elab.h). Holds
      * the accumulated scope / typeclass env / ADT+effect+module registries so a
      * new turn's forms elaborate against prior definitions WITHOUT re-elaborating
