@@ -1409,9 +1409,34 @@
 >   and `match` alike, by syntactic recovery rather than the condition stack
 >   this entry predicted. What is still not collected is a constructor tag or
 >   field selector, because those arrive with pattern BINDERS and a binder that
->   shadows an outer name is the unsound direction. Closing that needs the
->   crossing walk to alpha-rename, which needs something to rewrite -- and a
->   crossing has only a call form to leave alone. Not obviously worth it.
+>   shadows an outer name is the unsound direction.
+>
+>   **This entry used to say closing it "needs the crossing walk to
+>   alpha-rename". That was wrong, and measuring it corrected the estimate in
+>   both directions at once.** It is CHEAPER than recorded: the shadow guard
+>   already exists and already runs -- the `match` branch of
+>   `rt_collect_path_conds` walks a constructor pattern's binders, sets
+>   `shadowed`, and `rt_push_cs_path_conds` abandons the whole crossing. A
+>   binder that shadows nothing introduces a fresh name, and equating a fresh
+>   name to a selector term is a definition, which needs no renaming at all.
+>
+>   It is also worth LESS than recorded. Three shapes were measured; two of the
+>   three that look like they need it already prove:
+>
+>   | Shape | Today |
+>   |---|---|
+>   | Fact about the binder -- `(match b (Box a) (if (> a 200) (target a) 0))` | **proves** |
+>   | Tag-side -- which constructor was matched | **proves** |
+>   | Fact about the selector, goal about the binder -- `(if (> (.a b) 200) (match b (Box a) (target a)) 0)` | Unknown |
+>
+>   The first two already work because the condition and the goal mention the
+>   same symbol -- the binder -- so there is nothing for a field equation to
+>   connect. Only the third shape needs one, and it is the shape where the
+>   programmer wrote the test on `(.a b)` OUTSIDE the match instead of on `a`
+>   inside it. Moving the `if` into the arm proves it today.
+>
+>   **Still not now**, but for the honest reason: narrow demand, not blocked
+>   machinery. Revisit if a real program writes shape three.
 > - ~~**Widen the purity whitelist**~~ -- `match` and field reads landed. The
 >   third item, `while` over provably-local state, is **struck**: measuring it
 >   showed it is not a classifier case at all. A loop accumulator is Unknown
