@@ -985,6 +985,11 @@
 >
 > The ceiling is now the datatype theory, not the splitting.
 >
+> **Superseded the same day** -- arms carry hypotheses now; see below. The
+> "no correct fact to rename INTO" argument for declining a shadowing binder
+> no longer holds either (a binder now has one), but the split still declines,
+> because the rename would have to reach the synthesized selector facts too.
+>
 > ### `match` admitted to the purity whitelist (landed 2026-07-25)
 >
 > First of the three purity-whitelist widenings. `rt_classify_expr` now joins
@@ -1012,6 +1017,73 @@
 > Verified: suite 2315/0, solver unit 47/0, 400 fuzz cases across two seeds with
 > 0 soundness bugs.
 >
+> ### A datatype theory for match arms (landed 2026-07-25)
+>
+> This was the listed ceiling on match-arm proving, and it did not need what
+> the entry assumed it needed. Adding constructors and selectors to the VC term
+> language -- a new sort, new solver stages -- would have been the largest
+> change in the feature. It turns out an arm does not need a datatype SORT; it
+> needs a way to SAY what its selection implies, and equations over
+> uninterpreted functions already say it. S1's congruence closure decides them
+> as-is.
+>
+> So the theory is synthesized at the FORM level, before encoding. Four
+> hypothesis sources, each measured against the same program before and after:
+>
+> | Source | Shape | Before | After |
+> |---|---|---|---|
+> | Record field | `(= w (.width b))` | 0 proven, 1 unknown | 1 proven |
+> | Literal pattern | `(= n 0)` | 1 proven, 1 unknown | 2 proven |
+> | Guard | the guard verbatim | 0 proven, 1 unknown | 1 proven |
+> | Constructor tag | `(= (#dt/tag s) 2)` | 0 proven, 1 unknown | 1 proven |
+>
+> The field selector is the one with an everyday payoff: a getter can state a
+> postcondition about the field it returns. The tag's only standalone use is
+> **dead arms** -- two matches on one scrutinee pin its tag twice, the inner
+> arm's hypotheses go contradictory, and its obligation holds vacuously because
+> the arm cannot run. Narrow, but real, and measured rather than assumed.
+>
+> **The synthetic name must be unspellable.** `enc_measure` resolves a head
+> name to decide purity, so if `#dt/tag` resolved to a real PURE function the
+> hypothesis would assert something about THAT function -- false, and a false
+> hypothesis proves the goal. A leading `#` is reader dispatch, so no source
+> symbol can begin with one; the name resolves to nothing, which the encoder
+> reads as an abstract measure.
+>
+> **Two bugs found on the way, one mine and one not.**
+>
+> Mine: arm hypotheses must be scoped PER ARM, not per match. Sibling arms
+> assert different tags for the same scrutinee, so accumulating them puts
+> `tag(s) = 0` beside `tag(s) = 1` -- contradictory, proving every arm after the
+> first. This hazard did not exist while arms contributed nothing; the tag
+> created it. Caught before it landed, pinned by
+> `refine-match-arm-hyps-not-shared`.
+>
+> Not mine: arms are not fixed-width. `when` inserts a guard between a pattern
+> and its body, and the old code strided in pairs -- so `when` was read as a
+> pattern and the guard expression as a body. It failed safe (the misread arm
+> never proved) but meant no guarded match was ever split. Walking the arm list
+> is what fixes it, and it is why the guard row above went from 0 to 1.
+>
+> The fuzzer gained a `datatype` shape, and it immediately found a codegen
+> null-deref unrelated to refinements: a `match` on a non-ADT scrutinee whose
+> FIRST arm is a wildcard or bare binder reads `adt->name` through NULL, gate or
+> no gate. Filed as `docs/reported/match-int-scrutinee-guard-null-adt.md`; the
+> affected rungs are dropped from the generator with a pointer back to it. (My
+> first reading blamed `when`, which was wrong -- it is decided by arm 0's
+> pattern alone.)
+>
+> Negatives are pinned by INVERSION: `errors/refine-match-unsound-shapes` runs
+> under `--strict-refine`, where an unproven obligation is a hard error. If a
+> future change made a too-weak guard or a cross-scrutinee tag provable, that
+> fixture would start compiling and fail. A positive fixture cannot catch that
+> direction. `refine-match-datatype-theory` uses the same flag the other way, so
+> a regression in any of the four sources is a compile error rather than a
+> silently-kept check.
+>
+> Verified: suite 2319/0, solver unit 47/0, 400 fuzz cases across two seeds with
+> 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -1031,10 +1103,13 @@
 >   PURE only ever removes diagnostics. Note this is NOT the "purity from effect
 >   inference" item it replaces -- that one is struck as unworkable, per the
 >   finding above.
-> - **A datatype theory for the VC** -- constructors and field accessors, so a
->   `match` arm's PATTERN can be a hypothesis rather than contributing only its
->   value. Today `(match c (Circle r) (* r r) ...)` cannot use "c is a Circle
->   with radius r". This is the ceiling on match-arm proving.
+> - ~~**A datatype theory for the VC**~~ -- LANDED, see above, and without the
+>   new sort this entry assumed it needed. What remains of it is **constructor
+>   axioms**: `(.a (Box p q))` still does not reduce to `p`, so a value
+>   constructed and destructured in the same function gains nothing. That is a
+>   smaller and better-understood job than the entry it replaces -- one rewrite
+>   rule at the Form level, applied when a selector's argument is a literal
+>   constructor application.
 > - ~~**Whole-program entry-check elision**~~ -- MEASURED AND DECLINED, see
 >   below. It buys nothing measurable and carries the feature's largest
 >   soundness surface.

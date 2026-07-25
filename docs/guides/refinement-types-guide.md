@@ -366,6 +366,64 @@ measure).
 the encoder, and an instance body can do anything, so both `(m x)` and `(.m x)`
 get a distinct symbol per occurrence.
 
+### What a `match` arm knows
+
+A body that is a `match` is proved one arm at a time, and each arm is proved
+under everything its own selection implies. There are four sources:
+
+| Pattern | Hypothesis |
+|---|---|
+| `(Circle r)` | `(= (#dt/tag s) 2)` -- the constructor's discriminant |
+| `(Circle r)`, record field `radius` | `(= r (.radius s))` |
+| `0` | `(= s 0)` |
+| `(Pos n) when (> n 100)` | `(> n 100)` |
+
+That is enough for a getter to state a postcondition about the field it
+returns:
+
+```turmeric
+(defdata Box (Box [width : int height : int]))
+
+(defn get-width [b : Box] : #refine{ v : int | (= v (.width b)) }
+  (match b (Box w h) w))
+```
+
+`w` and `(.width b)` are the same value, and saying so is what discharges the
+obligation. Without the field hypothesis `w` is an unconstrained name and
+`(.width b)` an unrelated opaque term.
+
+**There is still no datatype sort in the VC.** These are ordinary equations
+over uninterpreted functions, which congruence closure already decides -- the
+theory is synthesized before encoding rather than built into the solver.
+`#dt/tag` is a total function from the datatype to its discriminant; a field
+selector is total too, taking some unspecified value off its own constructor,
+which is exactly what an uninterpreted symbol does. Both facts are true on the
+path being proved.
+
+The one thing the tag buys on its own is **dead arms**. Two matches on the same
+scrutinee pin its tag to two different constructors, and the inner arm's
+hypotheses become contradictory -- so its obligation holds vacuously, which is
+correct, because that arm cannot run:
+
+```turmeric
+(match s
+  (Pos n) (match s
+            (Pos m) 0
+            (Neg m) -1)   ; unreachable, and proved so
+  (Neg n) 0)
+```
+
+Two limits are worth knowing. A guard is a **necessary** condition for its arm,
+never a sufficient one -- an arm also requires every earlier arm to have failed,
+which is not asserted, so a guarded arm knows its guard and nothing about the
+arms above it. And there are no **constructor axioms**: `(.a (Box p q))` does
+not reduce to `p`, so a value that is constructed and immediately destructured
+in the same function gains nothing.
+
+Arm hypotheses are scoped to their own arm. Sibling arms assert different tags
+for the same scrutinee, so letting them accumulate would be a contradiction that
+proves everything -- `refine-match-arm-hyps-not-shared` pins that.
+
 The asymmetry is the point: a case the walk has not learned costs one runtime
 check, while a wrong purity guess elides a check that was protecting something.
 A name that resolves to no function at all is still treated as congruent: that
@@ -647,16 +705,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
   only sees refinements of functions already elaborated. Under mutual
   recursion, one direction may miss one. This can only lose a hypothesis, never
   add a false one.
-- **Path splitting covers `if` and `let`, not `match`.** A branching body is
+- **Path splitting covers `if`, `let`, and `match`.** A branching body is
   discharged per path -- `c |- pred[then/r]` and `(not c) |- pred[else/r]` --
   and a `let` contributes `x = v`. A `let` whose binding shadows a name in
   scope is alpha-renamed first, so the hypothesis relates a fresh name rather
   than asserting the contradiction `x = x - 1`. A body that rebinds the same
-  name a second time declines to split. `match` arms ARE split, but a
-  pattern contributes only its arm's value -- never a hypothesis, since the
-  solver has no datatype theory to express "this value is a `Green`". Arms
-  that each independently satisfy the goal discharge; arms that need to know
-  which constructor matched do not.
+  name a second time declines to split. A `match` arm contributes everything
+  its selection implies (see below); a pattern binder that shadows a name in
+  scope declines the split.
 - **No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)

@@ -731,6 +731,71 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
                            const Form *subject, TypeKind base_kind,
                            RefineEnv *env, Span loc, uint32_t depth);
 
+/* ------------------------------------------------------------------------- *
+ * A datatype theory for match arms.
+ *
+ * The VC term language has no constructors and no selectors, and it is not
+ * getting any: adding sorts and theory solvers for algebraic data would be a
+ * far larger change than what a match arm actually needs.  What it needs is a
+ * way to SAY "on this path the scrutinee is a Circle, and `r` is its radius",
+ * and that is expressible today -- as ordinary equations over UNINTERPRETED
+ * functions, which S1 already decides by congruence closure.
+ *
+ * So the theory is synthesized at the FORM level, before encoding:
+ *
+ *   (Circle r)  on scrutinee `s`   ==>   (= (#dt/tag s) 3)
+ *                                        (= r (.radius s))
+ *
+ * `#dt/tag` is a total function from the datatype to its discriminant, which is
+ * exactly what `CtorDef.tag` numbers.  A field selector is a total function too
+ * -- undefined-in-principle off its own constructor, but an uninterpreted
+ * symbol is free to take any value there, and this arm only ever asserts the
+ * case where it is defined.  Both facts are true on the path being proved, so
+ * asserting them is sound; the solver needs no new theory to use them, because
+ * congruence over an uninterpreted symbol is the whole of what they require.
+ *
+ * THE SYNTHETIC NAME MUST NOT BE SPELLABLE.  `enc_measure` resolves a head name
+ * to decide purity, and a name that resolves to a real PURE function would have
+ * `(= (#dt/tag s) 3)` assert something about THAT function -- a hypothesis that
+ * can be false, and a false hypothesis proves the goal and elides the check.
+ * A leading `#` is reader dispatch, so no source symbol can begin with one;
+ * the name therefore resolves to nothing, which the encoder reads as an
+ * abstract measure -- uninterpreted and congruent, which is what it is.
+ * ------------------------------------------------------------------------- */
+
+#define RT_DT_TAG_FN "#dt/tag"
+
+static Form *rt_form_call1(Elab *e, Span sp, const char *fn, const Form *arg) {
+    Form **k = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+    k[0] = form_sym(e->arena, sp,
+                    symtab_intern(e->st, strslice(fn, (uint32_t)strlen(fn))));
+    k[1] = (Form *)arg;
+    return form_list(e->arena, sp, k, 2);
+}
+
+static Form *rt_form_eq(Elab *e, Span sp, const Form *a, const Form *b) {
+    Form **k = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+    k[0] = form_sym(e->arena, sp, symtab_intern(e->st, strslice("=", 1)));
+    k[1] = (Form *)a;
+    k[2] = (Form *)b;
+    return form_list(e->arena, sp, k, 3);
+}
+
+/* True when `f` is exactly the symbol `name`. */
+static bool rt_sym_is(const Form *f, const char *name) {
+    return f && f->tag == F_SYM && f->as.sym &&
+           strcmp(f->as.sym->name, name) == 0;
+}
+
+/* The constructor a pattern names, or NULL when the pattern is not a
+ * constructor application (a literal, a wildcard, a bare binder). */
+static CtorDef *rt_pat_ctor(Elab *e, const Form *pat) {
+    if (!pat || pat->tag != F_LIST || pat->as.list.len == 0) return NULL;
+    const Form *h = pat->as.list.items[0];
+    if (h->tag != F_SYM || !h->as.sym) return NULL;
+    return elab_lookup_ctor(e, h->as.sym);
+}
+
 /* Copy `f`, renaming every FREE occurrence of `from` to `to`.
  *
  * Path splitting asserts `x = v` in the environment's single flat namespace,
@@ -873,44 +938,108 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
         return false;
     }
 
-    /* (match scrut pat1 e1 pat2 e2 ...) -- every arm, with NO hypothesis from
-     * the pattern.
+    /* (match scrut pat1 [when g1] e1 pat2 [when g2] e2 ...) -- every arm, under
+     * everything the arm's selection tells us.
      *
-     * The VC has no datatype theory: there are no constructors, no field
-     * accessors, nothing that could express "scrut is a Circle whose radius is
-     * r".  So unlike `if`, where the path condition is a first-class fact, a
-     * match arm contributes only its VALUE.  That is sound -- fewer hypotheses
-     * can only make a goal harder -- and it still discharges the common shape
-     * where every arm independently satisfies the predicate.
+     * Arms are NOT fixed-width: `when` inserts a guard between a pattern and
+     * its body, so the list is walked rather than strided in pairs.  Striding
+     * misreads a guarded match wholesale -- `when` becomes a pattern and the
+     * guard expression becomes a body -- which failed safe (the misread arm
+     * never proved) but meant no guarded match was ever split.
      *
-     * Pattern-bound names are declared unconstrained.  If one SHADOWS a name
-     * already in scope the split is declined: the encoder has a single flat
-     * namespace, so the arm's `r` would silently inherit an outer `r`'s
-     * hypotheses, which is the same class of bug as the shadowed `let` and
-     * would be unsound rather than merely imprecise. */
-    if (rt_head_is(subject, "match") && subject->as.list.len >= 4 &&
-        (subject->as.list.len % 2) == 0) {
+     * Four hypothesis sources, all true whenever the arm is the one that runs:
+     *
+     *   - the CONSTRUCTOR, as `(= (#dt/tag s) <tag>)`;
+     *   - each record FIELD bound by the pattern, as `(= b (.field s))`,
+     *     which is what lets a getter's postcondition mention the field it
+     *     returns;
+     *   - a LITERAL pattern, as `(= s <lit>)`;
+     *   - the GUARD, verbatim -- a necessary condition for the arm to fire.
+     *
+     * The guard is only a NECESSARY condition, never sufficient: an arm also
+     * requires every earlier arm to have failed, which is not asserted. That
+     * direction is the safe one (fewer hypotheses only make a goal harder).
+     *
+     * Pattern binders that SHADOW a name in scope still decline the split. The
+     * encoder has one flat namespace, so the arm's `r` would inherit an outer
+     * `r`'s hypotheses -- the same class of bug as the shadowed `let`, and
+     * unsound rather than imprecise.  Alpha-renaming would now be possible (a
+     * binder finally HAS a fact to rename into), but the rename would have to
+     * reach the synthesized selector facts as well, and declining costs only
+     * precision. */
+    if (rt_head_is(subject, "match") && subject->as.list.len >= 4) {
+        const Form *scrut  = subject->as.list.items[1];
+        const uint32_t len = subject->as.list.len;
         RefineHyp *saved_head  = env->head;
         uint32_t   saved_names = env->n_names;
         bool ok = true;
-        for (uint32_t i = 2; ok && i + 1 < subject->as.list.len; i += 2) {
-            const Form *pat = subject->as.list.items[i];
-            const Form *arm = subject->as.list.items[i + 1];
-            /* Declare the pattern's binders, declining on any shadow. */
+        uint32_t i = 2;
+        while (ok && i < len) {
+            const Form *pat = subject->as.list.items[i++];
+            const Form *guard = NULL;
+            if (i + 1 < len && rt_sym_is(subject->as.list.items[i], "when")) {
+                guard = subject->as.list.items[i + 1];
+                i += 2;
+            }
+            if (i >= len) { ok = false; break; }   /* malformed: no body */
+            const Form *arm = subject->as.list.items[i++];
+
+            /* PER-ARM SCOPE.  Each arm's facts must die with the arm: two arms
+             * of the same match assert different tags for the same scrutinee,
+             * so letting them accumulate would put `tag(s) = 0` and
+             * `tag(s) = 1` in one environment -- a contradiction, which proves
+             * every later arm's goal and elides its check.  The outer
+             * save/restore below is not enough; this is the one that matters. */
+            RefineHyp *arm_head  = env->head;
+            uint32_t   arm_names = env->n_names;
+
+            CtorDef *cd = rt_pat_ctor(e, pat);
+            if (cd)
+                refine_env_push(env,
+                                rt_form_eq(e, pat->span,
+                                           rt_form_call1(e, pat->span,
+                                                         RT_DT_TAG_FN, scrut),
+                                           form_int(e->arena, pat->span,
+                                                    (int64_t)cd->tag)),
+                                NULL, NULL);
+            else if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT))
+                refine_env_push(env, rt_form_eq(e, pat->span, scrut, pat),
+                                NULL, NULL);
+
+            /* Binders: declare, decline on shadow, and tie each to its field. */
             if (pat && (pat->tag == F_LIST || pat->tag == F_VEC)) {
                 for (uint32_t k = 1; ok && k < pat->as.list.len; k++) {
                     const Form *b = pat->as.list.items[k];
                     if (b->tag != F_SYM || !b->as.sym) continue;
-                    for (uint32_t _i = 0; _i < env->n_names; _i++)
-                        if (env->names[_i] &&
-                            strcmp(env->names[_i], b->as.sym->name) == 0)
+                    for (uint32_t j = 0; j < env->n_names; j++)
+                        if (env->names[j] &&
+                            strcmp(env->names[j], b->as.sym->name) == 0)
                             { ok = false; break; }
-                    if (ok) refine_env_declare(env, b->as.sym->name,
-                                               rt_sort_of_kind(base_kind));
+                    if (!ok) break;
+                    refine_env_declare(env, b->as.sym->name,
+                                       rt_sort_of_kind(base_kind));
+                    /* Only a record constructor has a field NAME to select
+                     * with; a positional variant has no accessor to speak of,
+                     * so its binder stays unconstrained as before. */
+                    uint32_t fi = k - 1;
+                    if (cd && cd->is_record && fi < cd->n_fields &&
+                        cd->fields[fi].name) {
+                        char acc[128];
+                        snprintf(acc, sizeof(acc), ".%s", cd->fields[fi].name);
+                        refine_env_push(env,
+                                        rt_form_eq(e, b->span, b,
+                                                   rt_form_call1(e, b->span,
+                                                                 acc, scrut)),
+                                        NULL, NULL);
+                    }
                 }
             }
+
+            if (ok && guard) refine_env_push(env, guard, NULL, NULL);
             if (ok) ok = rt_prove_paths(e, pred, var_name, arm, base_kind, env,
                                         loc, depth + 1);
+            env->head    = arm_head;
+            env->n_names = arm_names;
         }
         env->head    = saved_head;
         env->n_names = saved_names;

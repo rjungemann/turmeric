@@ -527,6 +527,55 @@ class Gen:
                 "(defn target [p : %s] : #refine{ r : %s | %s }\n  %s)"
                 % (self.ty, self.ty, pred, body))
 
+    def shape_datatype(self):
+        """`match` bodies, which now carry HYPOTHESES from the arm selection.
+
+        Every other shape's facts come from the goal's own arithmetic. These
+        come from the arm that was selected -- a literal pattern's `(= p 0)`, a
+        guard's condition verbatim, a constructor's tag, a record binder's
+        field. Each is a fact synthesized by the compiler rather than written
+        by the program, so each is a chance to assert something FALSE, and a
+        false hypothesis proves the goal and elides the check. Nothing else
+        here generates a `match` at all.
+
+        The constructor rungs are deliberately unprovable-but-generated: with
+        no constructor axioms in the VC, `(.a (FzBox p p))` does not reduce to
+        `p`, so they cover the hazard without expecting a proof. What they DO
+        exercise is arms accumulating hypotheses about one scrutinee.
+
+        Only int mode -- a float scrutinee cannot carry an integer literal
+        pattern, and the guard/tag rungs are where the risk lives anyway."""
+        if self.mode != "int":
+            return self.shape_branching()
+        z = self._zero()
+        body = self.rng.choice([
+            # literal patterns: `(= p <lit>)` is the fact each arm gets
+            "(match p 0 %s 1 %s _ p)" % (z, z),
+            "(match p 0 0 1 1 _ %s)" % z,
+            "(match p 0 (- p 1) 1 p _ %s)" % z,
+            # guards: a necessary condition for the arm, never a sufficient one.
+            # Every rung leads with a LITERAL arm: a match on a non-ADT
+            # scrutinee whose first arm is a wildcard or bare binder null-derefs
+            # in codegen, gate or no gate -- see
+            # docs/reported/match-int-scrutinee-guard-null-adt.md. Restore the
+            # leading-`_` rungs once that is fixed.
+            "(match p 0 %s _ when (>= p %s) p _ %s)" % (z, z, z),
+            "(match p 0 %s _ when (> p 100) p _ %s)" % (z, z),
+            "(match p 0 when (>= p %s) %s _ p)" % (z, z),
+            # constructor tag + record selector
+            "(let [b (FzBox p p)] (match b (FzBox x y) x))",
+            "(let [b (FzBox p p)] (match b (FzBox x y) (if (>= x %s) x %s)))" % (z, z),
+            # two matches on one scrutinee: the tag facts must agree or the
+            # inner arm is dead -- the one place a contradiction is CORRECT
+            "(match p 0 %s _ (match p 0 %s _ p))" % (z, z),
+        ])
+        pred = self.rng.choice(["(>= r %s)" % z, "(> r %s)" % z,
+                                "(<= r %s)" % z, "(>= r p)", "(= r p)"])
+        return (["p"],
+                "(defdata FzBox (FzBox [a : int b : int]))\n\n"
+                "(defn target [p : %s] : #refine{ r : %s | %s }\n  %s)"
+                % (self.ty, self.ty, pred, body))
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         r = self.rng.random()
@@ -542,10 +591,12 @@ class Gen:
             params, target = self.shape_propagate()
         elif r < 0.78:
             params, target = self.shape_typeclass()
-        elif r < 0.86:
+        elif r < 0.84:
             params, target = self.shape_congruence_method()
-        else:
+        elif r < 0.92:
             params, target = self.shape_branching()
+        else:
+            params, target = self.shape_datatype()
         lines.append(target)
         extra, extra_names = self.extra_targets()
         lines += extra

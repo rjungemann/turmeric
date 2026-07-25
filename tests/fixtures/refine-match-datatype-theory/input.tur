@@ -1,0 +1,62 @@
+;; A datatype theory for match arms -- all four hypothesis sources, in one
+;; file, under --strict-refine so that ANY regression is a compile error rather
+;; than a silently-kept runtime check. Each of these reported
+;; `0 proven, 1 unknown` before the theory existed.
+;;
+;; The theory is synthesized at the FORM level and encodes to ordinary
+;; equations over uninterpreted functions -- no new sort, no new solver stage.
+;; The VC still has no datatype sort; it does not need one to say "on this path
+;; the scrutinee is a Pos and `n` is its payload".
+
+(defdata Box (Box [width : int height : int]))
+(defdata Sign (Pos :int) (Neg :int) (Zero))
+
+;; (1) RECORD FIELD. The binder `w` is tied to the field it destructures, as
+;;     `(= w (.width b))`, so a getter can state a postcondition ABOUT the
+;;     field it returns. Without it `w` is an unconstrained fresh name and
+;;     `(.width b)` an unrelated opaque term.
+(defn get-width [b : Box] : #refine{ v : int | (= v (.width b)) }
+  (match b (Box w h) w))
+
+;; (2) LITERAL PATTERN. `(= n 0)` and `(= n 1)` are what make the first two
+;;     arms provable; the wildcard arm needs the parameter's own refinement.
+(defn pick [n : #refine{ n : int | (>= n 0) }]
+             : #refine{ r : int | (and (>= r 0) (<= r n)) }
+  (match n
+    0 0
+    1 1
+    _ 0))
+
+;; (3) GUARD. `when` inserts a third element into an arm, so arms are walked
+;;     rather than strided in pairs -- striding read `when` as a pattern and
+;;     the guard expression as a body, which failed safe but meant no guarded
+;;     match was ever split. The guard is a NECESSARY condition for the arm to
+;;     fire, which is exactly what makes it assertable.
+(defn positive-part [s : Sign] : #refine{ r : int | (>= r 0) }
+  (match s
+    (Pos n) when (> n 100) n
+    (Pos n)                0
+    (Neg n)                0
+    (Zero)                 0))
+
+;; (4) CONSTRUCTOR TAG. The inner (Neg m) and (Zero) arms cannot run: the outer
+;;     arm already fixed `(#dt/tag s)` to Pos's discriminant, and the inner
+;;     match on the SAME scrutinee fixes it to a different one. The two facts
+;;     are contradictory, so those arms' obligations hold vacuously -- which is
+;;     correct, because the arms are dead. This is the only thing the tag buys
+;;     on its own, and it is why the tag is worth carrying.
+(defn nested [s : Sign] : #refine{ r : int | (>= r 0) }
+  (match s
+    (Pos n) (match s
+              (Pos m) 200
+              (Neg m) -1
+              (Zero)  -1)
+    (Neg n) 0
+    (Zero)  0))
+
+(defn main [] : int
+  (println (get-width (Box 7 3)))
+  (println (pick 1))
+  (println (positive-part (Pos 5)))
+  (println (nested (Pos 5)))
+  0)
