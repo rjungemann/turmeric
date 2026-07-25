@@ -2771,6 +2771,55 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * differ, insert an EX_REINTERPRET. */
     TypeKind src_kind = inner->type.kind;
     TypeKind dst_kind = ascribed->kind;
+    /* collections-cannot-hold-rc-values item 2, ascription side.  The carrier
+     * rules added there run in elab_call.c, so they cover CALL arguments and
+     * results only -- `::` builds its EX_REINTERPRET here and walked straight
+     * past them.  That left the check trivially defeatable:
+     *
+     *     (vec-push! v (:: a :int))     ;; a : rc<S>
+     *
+     * type-checks, stores the bare control-block pointer in a slot nobody owns,
+     * and the program's refcounts are nonsense from that point on -- measured:
+     * `(rc/strong-count a)` printing garbage after the vec is freed.
+     *
+     * Two asymmetric rules, because the two directions are not equally bad:
+     *
+     *   OWNING -> anything is always rejected.  Erasing a counted handle to a
+     *   machine integer is exactly the `:int` type-erasure the codebase rules
+     *   out, and there is no shape where it is what the author meant.
+     *
+     *   anything -> OWNING is rejected EXCEPT for the literal 0.  That one form
+     *   is a null handle -- the only way to write an empty rc without inline-C
+     *   (see docs/reported/inline-c-rc-return-misses-carrier-bridge.md), and
+     *   what stdlib/rcchain.tur's `rcchain-nil` uses.  Any other integer
+     *   fabricates a control-block pointer out of arithmetic. */
+    {
+        bool src_owning = src_kind == TY_RC || src_kind == TY_WEAK ||
+                          src_kind == TY_REF || src_kind == TY_LREF;
+        bool dst_owning = dst_kind == TY_RC || dst_kind == TY_WEAK ||
+                          dst_kind == TY_REF || dst_kind == TY_LREF;
+        if (src_owning && src_kind != dst_kind) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "cannot reinterpret an owning value (%s) as %s: the "
+                      "handle is reference-counted, and erasing it to an "
+                      "unmanaged type leaves a pointer nobody owns. Pass the "
+                      "%s itself, or use rc/ptr for a borrowed raw pointer",
+                      typekind_to_string(src_kind),
+                      typekind_to_string(dst_kind),
+                      typekind_to_string(src_kind));
+            return NULL;
+        }
+        if (dst_owning && !src_owning &&
+            !(inner->kind == EX_INT_LIT && inner->as.i == 0)) {
+            diag_emit(DIAG_ERROR, call->span,
+                      "cannot reinterpret %s as an owning value (%s): only the "
+                      "literal 0 (a null handle) may be ascribed to a "
+                      "reference-counted type",
+                      typekind_to_string(src_kind),
+                      typekind_to_string(dst_kind));
+            return NULL;
+        }
+    }
     if (src_kind != dst_kind) {
         int src_size = type_size_bytes(src_kind);
         int dst_size = type_size_bytes(dst_kind);

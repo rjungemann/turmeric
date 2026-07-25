@@ -82,11 +82,9 @@ and is warning-clean:
 
 ## Related
 
-Worth noting while in this area: `(:: 0 rc<Chain>)` succeeds, but the
-carrier-crossing rules added for
-[collections-cannot-hold-rc-values](collections-cannot-hold-rc-values.md) item 2
-reject an `int`/`rc` reinterpret at *call* sites. So `::` is not routed through
-`call_wrap_reinterpret` and is not subject to the owning-value check. That is
-what makes the workaround above possible, and it is also a hole in that check
-worth closing deliberately rather than by accident -- an ascription can put an
-unowned control-block pointer somewhere the check was written to prevent.
+The `::` hole this workaround relied on has since been closed deliberately
+rather than left as an accident (see
+[collections-cannot-hold-rc-values](collections-cannot-hold-rc-values.md)
+item 2, ascription side). `::` now rejects **owning -> anything** outright, and
+allows **anything -> owning** only for the literal `0`. The workaround above is
+exactly that literal-0 form, so it survives on purpose rather than by oversight.

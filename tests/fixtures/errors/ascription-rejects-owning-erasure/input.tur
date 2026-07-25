@@ -1,0 +1,27 @@
+;; collections-cannot-hold-rc-values item 2, ascription side.
+;;
+;; The carrier rules that reject storing an owning value in a collection run in
+;; elab_call.c, so they cover CALL arguments and results.  `::` builds its own
+;; EX_REINTERPRET in elab_types.c and walked straight past them, which made the
+;; whole check one cast away from defeat:
+;;
+;;     (vec-push! v (:: a :int))
+;;
+;; That type-checked, stored the bare control-block pointer in a slot nobody
+;; owned, and the program's refcounts were nonsense afterwards -- measured, it
+;; printed garbage for a strong count that should have been 1.
+;;
+;; Erasing a counted handle to a machine integer is the `:int` type-erasure the
+;; codebase rules out, and there is no shape where it is what the author meant,
+;; so it is rejected outright.  The reverse direction keeps one exception: the
+;; literal 0 is a null handle, which is how stdlib/rcchain.tur writes an empty
+;; chain without inline-C.  Any other integer fabricates a control-block pointer
+;; out of arithmetic; that direction is pinned by the sibling fixture
+;; ascription-rejects-fabricated-handle.
+(defstruct S :move [tag : int])
+
+(defn main [] : int
+  (let [a (rc/of (make-struct S 1))
+        v (vec-new)]
+    (vec-push! v (:: a :int)))
+  0)

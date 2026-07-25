@@ -91,6 +91,36 @@ Roughly in increasing order of work:
 
    Pinned by `tests/fixtures/errors/collection-rejects-owning-element`.
 
+   ### Ascription side (closed 2026-07-25)
+
+   The rules above run in `elab_call.c`, so they covered call arguments and
+   results. `::` builds its own `EX_REINTERPRET` in `elab_types.c` and walked
+   straight past them, which left the whole check one cast from defeat:
+
+   ```turmeric
+   (vec-push! v (:: a :int))      ;; a : rc<S>
+   ```
+
+   That type-checked, stored the bare control-block pointer in a slot nobody
+   owned, and the refcounts were nonsense afterwards -- measured, a strong count
+   that should have read 1 printed garbage.
+
+   Two asymmetric rules now, because the directions are not equally bad:
+
+   - **owning -> anything: rejected.** Erasing a counted handle to a machine
+     integer is the `:int` type-erasure this codebase rules out, and there is no
+     shape where it is what the author meant.
+   - **anything -> owning: rejected except the literal `0`.** That one form is a
+     null handle, and it is the only way to write an empty `rc` without
+     inline-C (see
+     [inline-c-rc-return-misses-carrier-bridge.md](inline-c-rc-return-misses-carrier-bridge.md)) --
+     `stdlib/rcchain.tur`'s `rcchain-nil` is exactly it. Any other integer
+     fabricates a control-block pointer out of arithmetic.
+
+   Pinned by `tests/fixtures/errors/ascription-rejects-owning-erasure` and
+   `.../ascription-rejects-fabricated-handle`. The full suite passed unchanged,
+   so nothing in tree was relying on the hole.
+
 2. ~~**Box the element.**~~ **DONE 2026-07-25, for `vec`.** A `Vec[rc<T>]`
    now owns a strong reference per slot. `map`/`hamt` still rejects.
 
