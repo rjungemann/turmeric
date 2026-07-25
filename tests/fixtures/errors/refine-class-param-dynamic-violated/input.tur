@@ -9,11 +9,12 @@
 ;; Pinned by INVERSION: if the crossing is ever lost, this fixture stops
 ;; failing to compile.
 ;;
-;; It surfaces under --strict-refine rather than by default because a
-;; runtime-guarded obligation reports a counterexample only when the model is
-;; CLOSED, and the caller's own parameters make it open even when the goal does
-;; not mention them. That proxy is a separate, pre-existing defect --
-;; docs/reported/runtime-guarded-refutation-needs-closed-model.md.
+;; It surfaces by DEFAULT, with no --strict-refine. That took a second fix:
+;; a runtime-guarded obligation reports a counterexample only when the model is
+;; CLOSED, and closedness used to be measured by the VC's variable count rather
+;; than the goal's -- so the caller's own parameters (here, the abstract
+;; receiver) made every such model look open. See
+;; docs/archive/runtime-guarded-refutation-needs-closed-model.md.
 (defclass Scaler [a]
   (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
 

@@ -1,0 +1,44 @@
+;; The other half of reading closedness off the GOAL: what must NOT be
+;; reported.
+;;
+;; A runtime-guarded crossing errors only on a DEFINITE violation. Widening
+;; "definite" from "the model binds nothing" to "the goal mentions no variable"
+;; must not turn an argument that merely CANNOT BE PROVED into an error --
+;; that would reject working programs, which is the whole reason the crossing
+;; layer reports instead of eliding.
+;;
+;; Every call below keeps its runtime check and compiles clean.
+(defn safe-div [a : int b : #refine{ v : int | (not= v 0) }] : int (/ a b))
+
+;; The argument IS a parameter: the goal depends on it, so the counterexample
+;; is open -- "not for every n", which is not a defect at this call.
+(defn passes-param [n : int] : int
+  (safe-div 10 n))
+
+;; Derived from a parameter: still open.
+(defn derived [n : int] : int
+  (safe-div 10 (- n 1)))
+
+;; Discharged outright by a hypothesis -- proved, not merely unreported.
+(defn guarded [n : #refine{ v : int | (> v 0) }] : int
+  (safe-div 10 n))
+
+;; A definite violation on a path the hypotheses exclude stays unreported: the
+;; model search has to satisfy the path conditions, and `n > 0 AND n < 0` has
+;; no model. This is what keeps the widened rule from firing on dead branches.
+(defn unreachable [n : int] : int
+  (if (> n 0)
+    (if (< n 0) (safe-div 10 0) 1)
+    2))
+
+;; A satisfying literal in a parameterised caller: proved, no diagnostic.
+(defn satisfying [n : int] : int
+  (safe-div 10 2))
+
+(defn main [] : int
+  (println (passes-param 5))
+  (println (derived 3))
+  (println (guarded 4))
+  (println (unreachable 7))
+  (println (satisfying 1))
+  0)

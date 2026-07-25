@@ -1,0 +1,31 @@
+;; A DEFINITE refinement violation is an error regardless of what else is in
+;; scope at the call.
+;;
+;; A runtime-guarded crossing errors on a CLOSED counterexample -- the goal
+;; folded to false on the values written at the site -- and stays quiet on an
+;; open one, which only says "not for every input". That split is right. What
+;; was wrong is how closedness was measured: by the model's size, which counts
+;; every variable the VC declared, including the caller's own parameters
+;; whether or not the goal mentions them.
+;;
+;; So these two identical violations were reported differently -- the first was
+;; an error, the second was silent, purely because its caller takes an
+;; unrelated `n`. Closedness is now read off the GOAL.
+(defn safe-div [a : int b : #refine{ v : int | (not= v 0) }] : int (/ a b))
+
+(defn no-param [] : int
+  (safe-div 10 0))
+
+(defn with-param [n : int] : int
+  (safe-div 10 0))
+
+;; Still definite when the argument is a constant expression rather than a
+;; literal: the goal is variable-free either way.
+(defn folded [n : int] : int
+  (safe-div 10 (- 5 5)))
+
+(defn main [] : int
+  (println (no-param))
+  (println (with-param 1))
+  (println (folded 1))
+  0)

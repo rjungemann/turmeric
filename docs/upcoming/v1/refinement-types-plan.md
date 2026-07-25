@@ -1398,6 +1398,49 @@
 >
 > Candidates, roughly by value:
 >
+> ### Landed: closedness is a property of the goal, not of the model
+>
+> A runtime-guarded crossing errors on a DEFINITE violation and stays quiet on
+> a merely-unprovable one. That split is right; the measurement of it was not.
+> "Closed" was `model->n == 0`, which counts every variable the VC declared --
+> including the caller's own parameters, whether or not the goal mentions them.
+> So the identical violation was an error in a zero-parameter caller and silent
+> in a one-parameter one:
+>
+> ```turmeric
+> (defn a []        : int (safe-div 10 0))   ; was reported
+> (defn b [n : int] : int (safe-div 10 0))   ; was silent
+> ```
+>
+> Closedness is now read off the goal (`vc_term_is_ground` over the substituted
+> goal term). The change is monotone -- the old test is kept and the ground-goal
+> case added -- so it can only widen what is reported. The hypothesis half is
+> untouched and load-bearing: the model search still has to satisfy the
+> hypotheses, which is what keeps the widened rule off a branch the path
+> conditions exclude.
+>
+> `emit_model_note` had the same wart and went with it: it suppressed the
+> counterexample line in the closed case from the model's size, so the newly
+> reported cases printed `counterexample: n = -2` for a goal false regardless of
+> `n`. It now takes the same `closed` flag as `emit_predicate_note`.
+>
+> **This strengthened the previous slice for free.** A violating argument at a
+> dynamic typeclass dispatch now reports by DEFAULT rather than only under
+> `--strict-refine` -- the abstract receiver was exactly the unrelated parameter
+> that made those models look open. The fixture was moved off `--strict-refine`
+> to pin the stronger behaviour.
+>
+> Blast radius, measured rather than assumed: suite 2336 -> 2338 with two added
+> fixtures and ZERO pre-existing fixtures newly erroring, and the source-level
+> fuzzer returned counts identical to their recorded baselines across four seeds
+> and 800 cases (suspicious 4/5/4/13, 0 soundness bugs, 0 other BUG classes).
+> The accepted cost is that a violating call on a reachable-but-not-exercised
+> branch is now reported -- a latent bug, and already the standard applied to a
+> zero-parameter caller, so this makes the treatment consistent rather than
+> adopting a new posture. Seven positive/negative shapes checked by hand.
+>
+> Archived: [docs/archive/runtime-guarded-refutation-needs-closed-model.md](../../archive/runtime-guarded-refutation-needs-closed-model.md).
+>
 > ### Landed: class parameter inheritance, and reading B + a lint
 >
 > The design question the entry below was blocked on is answered: a class
@@ -1481,7 +1524,7 @@
 > open model, so the violation surfaces under `--strict-refine` rather than by
 > default. Independent of typeclasses; `(safe-div 10 0)` reports in a
 > zero-parameter caller and not in a one-parameter one. Filed as
-> [docs/reported/runtime-guarded-refutation-needs-closed-model.md](../../reported/runtime-guarded-refutation-needs-closed-model.md);
+> [docs/archive/runtime-guarded-refutation-needs-closed-model.md](../../archive/runtime-guarded-refutation-needs-closed-model.md);
 > not fixed here because it widens hard errors across every crossing, which is
 > its own decision.
 >

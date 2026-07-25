@@ -809,13 +809,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
   [docs/archive/class-param-refinement-not-demanded-of-callers.md](../archive/class-param-refinement-not-demanded-of-callers.md)
   for why that reading was chosen over making the class signature binding on
   callers.
-- **A definite violation is only reported when the goal's model is closed**,
-  and closedness is currently measured by the VC's variable count rather than
-  the goal's. A caller with any parameter in scope -- which includes every
-  caller of a dynamic dispatch, since the receiver is one -- has an open model,
-  so a literal violation like `(safe-div 10 0)` is reported there only under
-  `--strict-refine`. See
-  [docs/reported/runtime-guarded-refutation-needs-closed-model.md](../reported/runtime-guarded-refutation-needs-closed-model.md).
+- **An argument that cannot be PROVED is not an error; one that is DEFINITELY
+  wrong is.** A crossing reports `TUR-E0371` when the goal mentions no variable
+  and evaluates false -- `(safe-div 10 0)` -- because every execution reaching
+  that call violates it. When the goal depends on a variable, the
+  counterexample only says "not for every input", the runtime check is kept,
+  and nothing is reported unless `--strict-refine` is on. Note that closedness
+  is a property of the goal, not of what is in scope: an unrelated parameter on
+  the caller does not make a literal violation unreportable.
 
 - **Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,

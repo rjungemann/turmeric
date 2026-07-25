@@ -1,4 +1,4 @@
-# A definite refinement violation goes unreported when the caller has any parameter
+# A definite refinement violation goes unreported when the caller has any parameter (RESOLVED)
 
 **Severity:** medium -- a compile-time error that should fire does not. No
 soundness implication: the obligation is runtime-guarded, so the callee's entry
@@ -70,6 +70,64 @@ Two things to be careful about:
   every crossing rather than any one construct. It is a diagnostic behaviour
   change and deserves a suite run and a look at what newly errors before it
   lands, not a drive-by fix.
+
+## Resolution
+
+Closedness is now read off the GOAL rather than the model. `vc_term_is_ground`
+walks the (already substituted) goal term; a goal mentioning no variable is
+closed no matter what else the VC declared.
+
+The fix is monotone -- the old test is still accepted, the ground-goal case is
+added -- so it can only widen what is reported, never narrow it. The hypothesis
+half is untouched and load-bearing: `refine_model_search` still has to satisfy
+the hypotheses, which is what keeps the widened rule from firing on a branch
+the path conditions exclude (`n > 0 AND n < 0` has no model, so the
+`(safe-div 10 0)` inside it stays unreported).
+
+A second, smaller wart went with it. `emit_model_note` suppressed the
+counterexample line in the closed case -- correctly, since the one-line
+predicate note already says it -- but decided that from the model's size too,
+so the newly-reported cases printed `counterexample: n = -2` for a goal false
+regardless of `n`. It now takes the same `closed` flag as `emit_predicate_note`.
+
+### What it changed, measured
+
+Less than the report feared. The suite went 2336 -> 2338 with two added
+fixtures and **zero pre-existing fixtures newly erroring**, and the source-level
+fuzzer returned classification counts identical to their recorded baselines
+across four seeds and 800 cases (suspicious 4/5/4/13, 0 soundness bugs, 0 other
+BUG classes). The shape it targets is simply not one that working code
+contains -- which is the point, since a definite violation is a bug.
+
+It did strengthen the preceding slice for free: a violating argument at a
+dynamic typeclass dispatch now reports by DEFAULT rather than only under
+`--strict-refine`, because the abstract receiver was exactly the "unrelated
+parameter in scope" that made those models look open.
+`tests/fixtures/errors/refine-class-param-dynamic-violated` was moved off
+`--strict-refine` to pin that.
+
+### The accepted cost
+
+A violating call on a reachable-but-not-exercised branch is now reported:
+
+```turmeric
+(defn f [n : int] : int (if (> n 0) 1 (safe-div 10 0)))
+(defn main [] : int (println (f 5)) 0)   ; never takes the else branch
+```
+
+Gate-off runs clean; gate-on errors. That is a latent bug -- `(f 0)` aborts --
+and reporting it is the same standard already applied to a zero-parameter
+caller, so the change makes the treatment consistent rather than introducing a
+new posture. No fuzz case hit this shape.
+
+## Coverage
+
+- `tests/fixtures/errors/refine-definite-violation-param-caller` -- the report's
+  two callers, plus a constant-folded argument.
+- `tests/fixtures/refine-open-goal-not-reported` -- the half that matters more:
+  argument-is-a-parameter, derived-from-a-parameter, discharged-by-hypothesis,
+  definite-violation-on-an-excluded-path, and a satisfying literal. All compile
+  clean.
 
 ## Found
 

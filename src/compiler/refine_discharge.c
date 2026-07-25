@@ -97,10 +97,16 @@ static void describe(const RefineObligation *ob, char *buf, size_t cap) {
     snprintf(buf, cap, "%s", ob->what ? ob->what : "value");
 }
 
-static void emit_model_note(const RefineObligation *ob) {
+static void emit_model_note(const RefineObligation *ob, bool closed) {
     /* The closed case is handled by emit_predicate_note, which can say it in
      * one line ("... is false for the value given here") instead of two
-     * notes that repeat each other. */
+     * notes that repeat each other.
+     *
+     * `closed` is passed rather than re-derived from the model's size: a model
+     * can bind variables the GOAL never mentions -- the caller's own
+     * parameters -- and printing "counterexample: n = -2" for a goal that is
+     * false regardless of `n` points at the wrong thing entirely. */
+    if (closed) return;
     if (!ob->counterex || ob->counterex->n == 0) return;
     char buf[256]; size_t off = 0;
     for (uint32_t i = 0; i < ob->counterex->n && off + 1 < sizeof(buf); i++) {
@@ -287,6 +293,24 @@ static void render_form(const Form *f, char *buf, size_t cap) {
  * reads as claim -> witness -> remedy.  A CLOSED refutation gets the stronger
  * phrasing: the values are written right there, so this is not "not for every
  * input", it is "not for this one". */
+/* True when `t` mentions no variable, so it denotes the same value under every
+ * assignment.  Uninterpreted applications count as non-ground even though a
+ * model implies there are none (`refine_model_search` declines a VC carrying
+ * one) -- being asked about a term the caller has not screened is exactly when
+ * the conservative answer matters.
+ *
+ * The depth cap answers "not ground" on exhaustion, which is the pre-existing
+ * behaviour: it can only withhold an error, never invent one. */
+#define VC_GROUND_MAX_DEPTH 64
+static bool vc_term_is_ground(const VCTerm *t, uint32_t depth) {
+    if (!t) return true;
+    if (depth >= VC_GROUND_MAX_DEPTH) return false;
+    if (t->op == VC_VAR || t->op == VC_APP) return false;
+    for (uint32_t i = 0; i < t->n; i++)
+        if (!vc_term_is_ground(t->kids[i], depth + 1)) return false;
+    return true;
+}
+
 static void emit_predicate_note(const RefineObligation *ob, bool closed) {
     char pred[192];
     render_form(ob->predicate, pred, sizeof(pred));
@@ -567,8 +591,25 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
              * to false on the values written at the site -- is unconditionally
              * wrong and always an error.  An OPEN one only says "not for every
              * input", which for a runtime-guarded obligation is not itself a
-             * defect. */
-            bool closed = !d.model || d.model->n == 0;
+             * defect.
+             *
+             * Closedness is a property of the GOAL, not of the model.  The
+             * model binds every variable the VC declared, which includes the
+             * caller's own parameters whether or not the goal mentions them --
+             * so measuring it by `model->n` made the identical violation
+             * reportable in a zero-parameter caller and silent in a
+             * one-parameter one:
+             *
+             *   (defn a []        : int (safe-div 10 0))   ; was reported
+             *   (defn b [n : int] : int (safe-div 10 0))   ; was silent
+             *
+             * A variable-free goal that evaluates false is false for every
+             * assignment, so every execution reaching the call violates it.
+             * The model still matters: it witnesses that the HYPOTHESES are
+             * satisfiable, which is what rules out reporting a path the
+             * conditions have already excluded. */
+            bool closed = !d.model || d.model->n == 0 ||
+                          vc_term_is_ground(vc->goal, 0);
             if (ob->runtime_guarded && !closed && !g_strict_refine) {
                 g_stats.unknown++;
                 return false;
@@ -578,7 +619,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
                                 "refinement on %s cannot be proved statically", what);
             emit_predicate_note(ob, closed);
-            emit_model_note(ob);
+            emit_model_note(ob, closed);
             emit_hint(ob, vc, a);
             return false;
         }
