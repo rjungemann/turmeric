@@ -985,6 +985,33 @@
 >
 > The ceiling is now the datatype theory, not the splitting.
 >
+> ### `match` admitted to the purity whitelist (landed 2026-07-25)
+>
+> First of the three purity-whitelist widenings. `rt_classify_expr` now joins
+> over a `match`'s scrutinee and every arm instead of answering UNKNOWN
+> outright, so a measure written with a `match` is congruent. Measured on the
+> same program before and after: `0 proven, 1 unknown` -> `1 proven, 0 unknown`.
+>
+> Pattern binders are deliberately NOT walked -- they are introduced by the
+> pattern rather than evaluated, so an arm that reads one stays pure. Note this
+> is the opposite of the rule for path SPLITTING, where a pattern binder that
+> shadows an outer name declines the split; there the binder enters the VC's one
+> flat namespace, here it is only being classified.
+>
+> The join is what keeps it honest: one impure arm makes the whole form impure.
+> `refine-match-impure-arm` pins that with a counter in one arm -- had `match`
+> been classified PURE unconditionally, the program would print -1 and exit 0,
+> which is exactly the miscompile shape already pinned three times over.
+>
+> This widening cannot grow TUR-E0375. Congruence reads UNKNOWN as impure and
+> diagnostics read it as pure -- they are not negations -- so moving a form from
+> UNKNOWN to PURE adds proofs on one side and removes nothing but diagnostics on
+> the other. Both remaining widenings (immutable field reads, `while` over
+> provably-local state) inherit that argument.
+>
+> Verified: suite 2315/0, solver unit 47/0, 400 fuzz cases across two seeds with
+> 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -996,13 +1023,14 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - **Widen the purity whitelist.** `match`, immutable struct field reads, and
->   `while` over provably-local state are all genuinely pure and all currently
->   classified UNKNOWN. Each is a bounded addition to `rt_classify_expr` with a
->   fixture -- and each one widens congruence WITHOUT widening `TUR-E0375`,
->   since moving a form from UNKNOWN to PURE only ever removes diagnostics.
->   Note this is NOT the "purity from effect inference" item it replaces --
->   that one is struck as unworkable, per the finding above.
+> - **Widen the purity whitelist -- two of three left.** `match` landed (see
+>   above); immutable struct field reads and `while` over provably-local state
+>   are still genuinely pure and still classified UNKNOWN. Each is a bounded
+>   addition to `rt_classify_expr` with a fixture -- and each one widens
+>   congruence WITHOUT widening `TUR-E0375`, since moving a form from UNKNOWN to
+>   PURE only ever removes diagnostics. Note this is NOT the "purity from effect
+>   inference" item it replaces -- that one is struck as unworkable, per the
+>   finding above.
 > - **A datatype theory for the VC** -- constructors and field accessors, so a
 >   `match` arm's PATTERN can be a hypothesis rather than contributing only its
 >   value. Today `(match c (Circle r) (* r r) ...)` cannot use "c is a Circle
@@ -1035,7 +1063,7 @@
 > `-Xrefinements` flag; the retired `-X` surface does not come back for this.
 > See "Gating" below.
 >
-> **Last updated:** 2026-07-24
+> **Last updated:** 2026-07-25
 
 ---
 

@@ -390,6 +390,22 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
     case EX_RETURN:
         return rt_classify_expr(c, x->as.return_.value);
 
+    /* A `match` computes a value from its scrutinee and one arm; nothing about
+     * dispatching on a constructor is observable.  Pattern BINDINGS are not
+     * walked -- they are introduced by the pattern, not evaluated -- so an arm
+     * that merely reads them stays pure.  Widening the classifier here grows
+     * congruence (a measure written with a `match` is now usable as one) and
+     * cannot grow TUR-E0375, since moving a form from UNKNOWN to PURE only
+     * ever removes diagnostics. */
+    case EX_MATCH: {
+        RtPurity r = rt_classify_expr(c, x->as.match_.scrutinee);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            r = rt_p_join(r, rt_classify_expr(c, x->as.match_.arms[i].body));
+            r = rt_p_join(r, rt_classify_expr(c, x->as.match_.arms[i].guard));
+        }
+        return r;
+    }
+
     case EX_BUILTIN: {
         if (!x->as.builtin.spec) return RT_P_UNKNOWN;
         BuiltinShape sh = x->as.builtin.spec->shape;

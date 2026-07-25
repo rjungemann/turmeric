@@ -329,14 +329,22 @@ compiler decides that for itself by walking the callee's body:
 ```
 
 The walk is **default-deny**. It admits literals, reads of immutable bindings,
-`if` / `let` / `do` / `return`, the arithmetic, comparison, and logical
-builtins, and direct calls to functions that are themselves pure -- recursion
-included, so a recursive measure still gets congruence. Everything else is
-impure: inline C, `set!`, `perform`, dereferences, field reads, closures,
-indirect and rank-2-polymorphic calls, the `println` family, raw memory, and
-any callee whose body is not available (an `extern`, or a forward reference not
-yet elaborated). Without a purity proof each occurrence is a *distinct* opaque
-value and the proof does not go through.
+`if` / `let` / `do` / `return` / `match`, the arithmetic, comparison, and
+logical builtins, and direct calls to functions that are themselves pure --
+recursion included, so a recursive measure still gets congruence. Everything
+else is impure: inline C, `set!`, `perform`, dereferences, field reads,
+closures, indirect and rank-2-polymorphic calls, the `println` family, raw
+memory, and any callee whose body is not available (an `extern`, or a forward
+reference not yet elaborated). Without a purity proof each occurrence is a
+*distinct* opaque value and the proof does not go through.
+
+`match` is classified from its scrutinee and *every* arm, joined -- nothing
+about dispatching on a constructor is observable, but one impure arm makes the
+whole form impure. Pattern binders are not walked: they are introduced by the
+pattern rather than evaluated, so an arm that merely reads one stays pure. Both
+halves are pinned -- `refine-match-pure-congruent` (a `match`-bodied measure is
+congruent) and `refine-match-impure-arm` (one arm calling a counter is not, and
+the surviving check fires).
 
 A declared effect row is a **veto, not evidence**. `#fx{Log}` rules purity out;
 `#fx{}` on its own proves nothing, because the effect system tracks *algebraic*
@@ -659,8 +667,8 @@ Known and deliberate, in rough order of how likely you are to hit them:
   them, a release build drops them, and this feature elides the ones it can
   prove -- so an effectful predicate makes behaviour depend on whether its own
   contracts were compiled in. Reported only on PROVEN impurity: a predicate
-  calling a function whose body the purity walk does not model (a `match`, a
-  field read) is left alone, since a wrong "impure" would reject working code.
+  calling a function whose body the purity walk does not model (a field read, a
+  loop) is left alone, since a wrong "impure" would reject working code.
 - **Decisions are memoized within a compilation unit**, keyed by a fingerprint
   of the normalized VC under alpha-renaming, and every hit is confirmed by
   structural comparison before its verdict is reused. Repeating the same
@@ -668,11 +676,11 @@ Known and deliberate, in rough order of how likely you are to hit them:
   There is no cross-build cache.
 - **Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
-  a `match`, a struct field read, or a loop is enough. Its calls are then not
-  congruent and measure-style reasoning over it does not go through. This
-  costs completeness, never soundness. Widening the whitelist is the natural
-  next increment; the effect row cannot substitute for it, because an empty
-  row is not a purity claim.
+  a struct field read or a loop is still enough (`match` was, and no longer
+  is). Its calls are then not congruent and measure-style reasoning over it
+  does not go through. This costs completeness, never soundness. Widening the
+  whitelist further is the natural next increment; the effect row cannot
+  substitute for it, because an empty row is not a purity claim.
 
 Every one of these fails toward a runtime check, never toward a wrong answer.
 
