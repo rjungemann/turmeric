@@ -962,6 +962,29 @@
 > value is contingent on that unrelated limitation being lifted. Worth knowing
 > before anyone counts it as a win.
 >
+> ### `match`-arm splitting (landed 2026-07-25)
+>
+> Each arm's expression is proved against the goal, with the pattern
+> contributing NOTHING. Unlike `if`, where the path condition is a first-class
+> fact, a match arm cannot supply one: the VC has no datatype theory -- no
+> constructors, no field accessors -- so "c is a Green" is inexpressible.
+> Asserting nothing is sound (fewer hypotheses only make a goal harder) and
+> still discharges the common shape where every arm independently satisfies the
+> predicate.
+>
+> `(match c (Red) 0 (Green) 1 (Blue) 2)` against `(>= r 0)` proves; change one
+> arm to -1 and it stays unknown, keeps its check, and fires under both gates.
+>
+> Pattern binders are declared unconstrained, and a binder that SHADOWS a name
+> in scope declines the split. One flat namespace means the arm's `r` would
+> otherwise inherit an outer `r`'s hypotheses -- the same class of bug as the
+> shadowed `let`, and unsound rather than merely imprecise. Unlike `let`,
+> alpha-renaming is not enough here: a pattern binder's meaning comes from the
+> constructor position, which nothing in the VC models, so there is no correct
+> fact to rename INTO.
+>
+> The ceiling is now the datatype theory, not the splitting.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -980,8 +1003,10 @@
 >   since moving a form from UNKNOWN to PURE only ever removes diagnostics.
 >   Note this is NOT the "purity from effect inference" item it replaces --
 >   that one is struck as unworkable, per the finding above.
-> - **Split `match` arms**, the same shape as `if` but with pattern bindings.
->   Alpha-renaming (below) is the machinery it would reuse.
+> - **A datatype theory for the VC** -- constructors and field accessors, so a
+>   `match` arm's PATTERN can be a hypothesis rather than contributing only its
+>   value. Today `(match c (Circle r) (* r r) ...)` cannot use "c is a Circle
+>   with radius r". This is the ceiling on match-arm proving.
 > - ~~**Whole-program entry-check elision**~~ -- MEASURED AND DECLINED, see
 >   below. It buys nothing measurable and carries the feature's largest
 >   soundness surface.

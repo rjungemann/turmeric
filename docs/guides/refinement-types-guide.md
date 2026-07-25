@@ -644,7 +644,11 @@ Known and deliberate, in rough order of how likely you are to hit them:
   and a `let` contributes `x = v`. A `let` whose binding shadows a name in
   scope is alpha-renamed first, so the hypothesis relates a fresh name rather
   than asserting the contradiction `x = x - 1`. A body that rebinds the same
-  name a second time declines to split. `match` arms are not split yet.
+  name a second time declines to split. `match` arms ARE split, but a
+  pattern contributes only its arm's value -- never a hypothesis, since the
+  solver has no datatype theory to express "this value is a `Green`". Arms
+  that each independently satisfy the goal discharge; arms that need to know
+  which constructor matched do not.
 - **No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)

@@ -857,6 +857,50 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
         return false;
     }
 
+    /* (match scrut pat1 e1 pat2 e2 ...) -- every arm, with NO hypothesis from
+     * the pattern.
+     *
+     * The VC has no datatype theory: there are no constructors, no field
+     * accessors, nothing that could express "scrut is a Circle whose radius is
+     * r".  So unlike `if`, where the path condition is a first-class fact, a
+     * match arm contributes only its VALUE.  That is sound -- fewer hypotheses
+     * can only make a goal harder -- and it still discharges the common shape
+     * where every arm independently satisfies the predicate.
+     *
+     * Pattern-bound names are declared unconstrained.  If one SHADOWS a name
+     * already in scope the split is declined: the encoder has a single flat
+     * namespace, so the arm's `r` would silently inherit an outer `r`'s
+     * hypotheses, which is the same class of bug as the shadowed `let` and
+     * would be unsound rather than merely imprecise. */
+    if (rt_head_is(subject, "match") && subject->as.list.len >= 4 &&
+        (subject->as.list.len % 2) == 0) {
+        RefineHyp *saved_head  = env->head;
+        uint32_t   saved_names = env->n_names;
+        bool ok = true;
+        for (uint32_t i = 2; ok && i + 1 < subject->as.list.len; i += 2) {
+            const Form *pat = subject->as.list.items[i];
+            const Form *arm = subject->as.list.items[i + 1];
+            /* Declare the pattern's binders, declining on any shadow. */
+            if (pat && (pat->tag == F_LIST || pat->tag == F_VEC)) {
+                for (uint32_t k = 1; ok && k < pat->as.list.len; k++) {
+                    const Form *b = pat->as.list.items[k];
+                    if (b->tag != F_SYM || !b->as.sym) continue;
+                    for (uint32_t _i = 0; _i < env->n_names; _i++)
+                        if (env->names[_i] &&
+                            strcmp(env->names[_i], b->as.sym->name) == 0)
+                            { ok = false; break; }
+                    if (ok) refine_env_declare(env, b->as.sym->name,
+                                               rt_sort_of_kind(base_kind));
+                }
+            }
+            if (ok) ok = rt_prove_paths(e, pred, var_name, arm, base_kind, env,
+                                        loc, depth + 1);
+        }
+        env->head    = saved_head;
+        env->n_names = saved_names;
+        return ok;
+    }
+
     /* A leaf: an ordinary expression the encoder can substitute for `r`. */
     return rt_prove_silent(e, pred, var_name, subject, base_kind, env, loc);
 }
@@ -877,7 +921,8 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
      * and silently; failing costs one extra pass and changes nothing the user
      * sees, because the whole-body obligation below still runs and still
      * reports. */
-    if (subject && (rt_head_is(subject, "if") || rt_head_is(subject, "let")) &&
+    if (subject && (rt_head_is(subject, "if") || rt_head_is(subject, "let") ||
+                    rt_head_is(subject, "match")) &&
         rt_prove_paths(e, pred, var_name, subject, base_kind, env, loc, 0)) {
         refine_note_split_proven();
         return true;
