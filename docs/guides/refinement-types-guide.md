@@ -190,6 +190,33 @@ refinement on it is a strengthening. The check is `class_pred |- instance_pred`
 through the same solver seam, and it reports only on a refutation -- an
 undecidable pair keeps the runtime check.
 
+A method's **result** refinement varies the other way. A parameter refinement
+is something the method *demands*, so an instance may demand less. A result
+refinement is something it *delivers*, so an instance must deliver at least as
+much -- a caller programming against the class signature is relying on it:
+
+```turmeric
+(defclass Boxed [a]
+  (unbox [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+;; fine: no annotation, so the class's promise is INHERITED and checked
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : int (* self k)))
+
+;; fine: delivers more than the class promises
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : #refine{ r : int | (> r 0) } ...))
+
+;; error[TUR-E0374]: promises less about its result than the class does
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : #refine{ r : int | (>= r -5) } ...))
+```
+
+| position | obligation | an instance may... |
+|---|---|---|
+| parameter | `class_pred(p) \|- instance_pred(p)` | demand LESS (accept more) |
+| result | `instance_pred(r) \|- class_pred(r)` | deliver MORE (promise more) |
+
 What is *not* checked is a genuinely higher-order callee -- see
 [Limits](#limits).
 
@@ -580,8 +607,9 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **No branching-body path sensitivity.** The return obligation is taken against
   the function's tail expression. A body whose tail is a `let`, a `match`, or a
   call lands outside the encoder's fragment and answers unknown.
-- **No refinements on type parameters, typeclass method signatures, or
-  higher-order predicates.** These are rejected or fall through to runtime.
+- **No refinements on type parameters or higher-order predicates.** These are
+  rejected or fall through to runtime. (Typeclass method signatures *are*
+  supported now, on parameters and results alike -- see above.)
 - **Nonlinear arithmetic** is uninterpreted, as described above.
 - **Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --

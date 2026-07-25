@@ -861,6 +861,13 @@ static inline Type *rt_peel_contract(Type *ann, const Form **out_pred,
     return ann;
 }
 
+/* CT1: wrap a function body so its RESULT is checked against `pred`.  Shared by
+ * `defn` and typeclass instance methods; see elab_fns.c for why it is not
+ * hand-rolled per site. */
+Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
+                           const Form *pred, const char *var_name,
+                           const char *fail_msg, Span span);
+
 /* CT1: inject an entry check for each `{ v : T | pred }` parameter.  Shared by
  * `defn`, `fn`, and typeclass instance methods so a contract parameter is
  * enforced identically wherever it is written.  Must be called while the

@@ -44,7 +44,15 @@ struct TypeClassMethod {
     const struct Form **param_refine_preds;
     const char        **param_refine_vars;
     uint8_t n_params;
-    Type return_type;             /* Return type */
+    Type return_type;             /* Return type (contract PEELED to its base) */
+    /* RT1: the refinement the CLASS signature declares on the method's RESULT,
+     * or NULL.  Parameters and results vary in OPPOSITE directions: an instance
+     * may accept more than the class promises, but it must deliver at least as
+     * much.  So a class result refinement is inherited by an instance that does
+     * not restate one, and an instance that does restate one owes
+     * `instance_pred(r) |- class_pred(r)`. */
+    const struct Form  *return_refine_pred;
+    const char         *return_refine_var;
     /* ER3: Effect-row annotation from the defclass method signature.
      * NULL if not annotated; ERK_UNRESOLVED until PASS_EFFECT_ROW_INFER resolves it. */
     struct EffectRow *effect_row;

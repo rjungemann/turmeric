@@ -369,19 +369,67 @@ class Gen:
         ]
         return ["p0"], "\n\n".join(lines)
 
+    def shape_typeclass(self):
+        """Typeclass method dispatch and refinement variance.
+
+        Parameters and results vary in OPPOSITE directions, so both ladders are
+        generated: for a parameter an instance may demand LESS than the class
+        (legal) but not more (`TUR-E0374`); for a result it may deliver MORE
+        (legal) but not less. Both dispatch spellings -- dotted `(.m x k)` and
+        bare `(m x k)` -- resolve to the same instance method and must be
+        checked identically."""
+        z = self._zero()
+        # (class_pred, instance_pred, legal?) -- an instance demanding MORE of a
+        # parameter than the class promises is the illegal direction.
+        cp, ip = self.rng.choice([
+            ("(>= v %s)" % z, "(>= v %s)" % z),   # identical
+            ("(> v %s)" % z,  "(>= v %s)" % z),   # instance demands less: legal
+            ("(>= v %s)" % z, "(> v %s)" % z),    # instance demands more: E0374
+        ])
+        # Result ladder, the other way round: promising LESS than the class is
+        # the illegal direction.
+        use_ret = self.rng.random() < 0.6
+        c_rp, i_rp = self.rng.choice([
+            ("(>= r %s)" % z, None),              # instance inherits
+            ("(>= r %s)" % z, "(>= r %s)" % z),   # restated verbatim
+            ("(>= r %s)" % z, "(> r %s)" % z),    # delivers more: legal
+            ("(>= r %s)" % z, "(>= r -5)" if self.mode == "int"
+                              else "(>= r -5.5)"),  # delivers less: E0374
+        ])
+        cls_ret = (" : #refine{ r : %s | %s }" % (self.ty, c_rp)) if use_ret else " : %s" % self.ty
+        if use_ret and i_rp:
+            inst_ret = " : #refine{ r : %s | %s }" % (self.ty, i_rp)
+        else:
+            inst_ret = " : %s" % self.ty
+        body = self.rng.choice([
+            "(* self k)", "(+ self k)",
+            "(- self k)", "(+ (* self k) 1)" if self.mode == "int"
+                          else "(+ (* self k) 1.25)"])
+        call = self.rng.choice(["(.meth p0 %s)", "(meth p0 %s)"]) % self.lit()
+        lines = [
+            "(defclass Cls [a]\n  (meth [self : a, k : #refine{ v : %s | %s }]%s))"
+            % (self.ty, cp, cls_ret),
+            "(definstance Cls [%s]\n  (meth [self : %s, k : #refine{ v : %s | %s }]%s\n    %s))"
+            % (self.ty, self.ty, self.ty, ip, inst_ret, body),
+            "(defn target [p0 : %s] : %s\n  %s)" % (self.ty, self.ty, call),
+        ]
+        return ["p0"], "\n\n".join(lines)
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         r = self.rng.random()
-        if r < 0.24:
+        if r < 0.20:
             params, target = self.shape_random()
-        elif r < 0.50:
+        elif r < 0.42:
             params, target = self.shape_linear()
-        elif r < 0.70:
+        elif r < 0.60:
             params, target = self.shape_congruence()
-        elif r < 0.86:
+        elif r < 0.74:
             params, target = self.shape_param()
-        else:
+        elif r < 0.86:
             params, target = self.shape_propagate()
+        else:
+            params, target = self.shape_typeclass()
         lines.append(target)
         lines.append(self._main(params))
         return "\n\n".join(lines) + "\n"
@@ -498,6 +546,15 @@ SELF_TESTS = [
      "agree_rejected_early"),
     ("tests/fixtures/refine-proved/input.tur", "agree_clean"),
     ("tests/fixtures/refine-measure-euf/input.tur", "agree_clean"),
+    ("tests/fixtures/refine-class-result/input.tur", "agree_clean"),
+    # Runs CLEAN with the gate off -- its single call returns 7, which satisfies
+    # the instance's weaker promise -- and is rejected with the gate on, because
+    # E0374 is a declaration-vs-declaration inconsistency rather than a claim
+    # about the value this program produced. That is `SUSPICIOUS_over_refute` by
+    # definition, and pinning it here documents that the bucket holds legitimate
+    # DECLARATION errors too, not only universal value refutations.
+    ("tests/fixtures/errors/refine-instance-result-weaker/input.tur",
+     "SUSPICIOUS_over_refute"),
 ]
 
 

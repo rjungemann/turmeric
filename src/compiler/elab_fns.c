@@ -124,6 +124,66 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
     return body;
 }
 
+/* CT1: wrap `body` so its RESULT is checked against `pred`:
+ *
+ *   (let [<var> body] (tur-contract-check pred "<msg>") <var>)
+ *
+ * `var_name` is the name the predicate binds the result under -- the contract's
+ * own variable for a `: #refine{ r : T | p }` return, or NULL for `:post`,
+ * which uses `result`.  Returns `body` unchanged when there is nothing to do.
+ *
+ * Shared by `defn` and typeclass instance methods.  It lives in one place
+ * because the sibling peel (rt_peel_contract) had to be reached independently
+ * three times before it was centralised, and this is the same shape of trap:
+ * a second hand-rolled copy is a second place for a refinement to be accepted
+ * and silently not enforced. */
+Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
+                           const Form *pred, const char *var_name,
+                           const char *fail_msg, Span span) {
+    if (!check_fn || !body || !pred) return body;
+    const Symbol *bind_sym = e->sym_result;
+    if (var_name)
+        bind_sym = symtab_intern(e->st, strslice(var_name, (uint32_t)strlen(var_name)));
+
+    Binding *result_b = binding_new(e, bind_sym, body->type, false, false, span);
+    scope_add(e->scope, result_b);
+    Expr *pred_e = elab_form(e, (Form *)pred);
+    if (!pred_e) return body;
+
+    Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    args[0] = pred_e;
+    Expr *msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+    msg->as.s.p   = fail_msg;
+    msg->as.s.len = (uint32_t)strlen(fail_msg);
+    args[1] = msg;
+    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+    check->as.call_.fn_binding   = check_fn;
+    check->as.call_.args         = args;
+    check->as.call_.n_args       = 2;
+    check->as.call_.fn_expr      = NULL;
+    check->as.call_.dict_arg     = NULL;
+    check->as.call_.is_poly_call = false;
+    check->as.call_.poly_arg_mask = 0;
+
+    Expr *result_var = expr_new(e->arena, EX_VAR, body->type, span);
+    result_var->as.var.binding = result_b;
+    Expr **inner = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+    inner[0] = check;
+    inner[1] = result_var;
+    Expr *inner_do = expr_new(e->arena, EX_DO, body->type, span);
+    inner_do->as.do_.items = inner;
+    inner_do->as.do_.n = 2;
+
+    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
+    lb->binding = result_b;
+    lb->init = body;
+    Expr *let_e = expr_new(e->arena, EX_LET, body->type, span);
+    let_e->as.let_.bindings = lb;
+    let_e->as.let_.n = 1;
+    let_e->as.let_.body = inner_do;
+    return let_e;
+}
+
 /* True when contract checks are being emitted for this build.  `--no-contracts`
  * strips them, and a release build drops them unless --keep-contracts. */
 bool rt_contracts_emitted(void) {
@@ -3673,54 +3733,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 const Form *pred_form = ct_pass == 0 ? ct_post_form : ct_ret_pred;
                 if (!pred_form) continue;
                 if (ct_pass == 0 ? rt_post_proven : rt_ret_proven) continue;
-                const Symbol *bind_sym = e->sym_result;
-                if (ct_pass == 1 && ct_ret_var)
-                    bind_sym = symtab_intern(e->st,
-                                             strslice(ct_ret_var, (uint32_t)strlen(ct_ret_var)));
-                const char *fail_msg = ct_pass == 0 ? "Postcondition failed"
-                                                    : "Return contract violated";
-                /* Create the result binding for the return value */
-                Binding *result_b = binding_new(e, bind_sym, body->type, false, false, call->span);
-                /* Elaborate the predicate with the result name in scope */
-                scope_add(e->scope, result_b);
-                Expr *post_pred_e = elab_form(e, (Form *)pred_form);
-                /* Note: scope is already cleaned up below; we just need the expr */
-                if (post_pred_e) {
-                    /* Build (tur-contract-check post_pred "Postcondition failed") */
-                    Expr **post_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                    post_args[0] = post_pred_e;
-                    Expr *post_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                    post_msg->as.s.p = fail_msg;
-                    post_msg->as.s.len = (uint32_t)strlen(fail_msg);
-                    post_args[1] = post_msg;
-                    Expr *post_check = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                    post_check->as.call_.fn_binding = check_fn;
-                    post_check->as.call_.args = post_args;
-                    post_check->as.call_.n_args = 2;
-                    post_check->as.call_.fn_expr = NULL;
-                    post_check->as.call_.dict_arg = NULL;
-                    post_check->as.call_.is_poly_call = false;
-                    post_check->as.call_.poly_arg_mask = 0;
-                    /* result_var: reference to the result binding */
-                    Expr *result_var = expr_new(e->arena, EX_VAR, body->type, call->span);
-                    result_var->as.var.binding = result_b;
-                    /* do: (tur-contract-check ...) then result */
-                    Expr **inner_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                    inner_items[0] = post_check;
-                    inner_items[1] = result_var;
-                    Expr *inner_do = expr_new(e->arena, EX_DO, body->type, call->span);
-                    inner_do->as.do_.items = inner_items;
-                    inner_do->as.do_.n = 2;
-                    /* let binding: result = body */
-                    LetBinding *lb = (LetBinding *)arena_alloc(e->arena, sizeof(LetBinding));
-                    lb->binding = result_b;
-                    lb->init = body;
-                    Expr *let_e = expr_new(e->arena, EX_LET, body->type, call->span);
-                    let_e->as.let_.bindings = lb;
-                    let_e->as.let_.n = 1;
-                    let_e->as.let_.body = inner_do;
-                    body = let_e;
-                }
+                body = rt_wrap_return_check(
+                    e, body, check_fn, pred_form,
+                    ct_pass == 1 ? ct_ret_var : NULL,
+                    ct_pass == 0 ? "Postcondition failed"
+                                 : "Return contract violated",
+                    call->span);
             }
         }
     }

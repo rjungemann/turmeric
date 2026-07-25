@@ -501,6 +501,67 @@
 >
 > Registered as ctest `tur_refine_fuzz_src` at smoke size (60 cases, ~21s).
 >
+> ### Typeclass method RESULTS: two defects the fuzzer shape uncovered (2026-07-25)
+>
+> Extending the source fuzzer to typeclass dispatch surfaced two bugs before a
+> single generated case ran -- both found while hand-writing the prototype the
+> generator was going to be modelled on, and both in the CT layer, so both
+> present with the gate OFF.
+>
+> 1. **A `defclass` method result refinement was parsed, peeled, and dropped.**
+>    `(unbox [self : a, k : int] : #refine{ r : int | (>= r 0) })` type-checked,
+>    read like a guarantee, and produced no check anywhere. An instance
+>    returning `-9` printed `-9` and exited 0, where the identical predicate on
+>    a plain `defn` panicked. `TypeClassMethod` had `param_refine_preds` but no
+>    result equivalent, so there was nothing to carry the promise.
+>
+> 2. **A `definstance` method could not restate one.** The impl return
+>    annotation was only recognised as `F_KEYWORD` or an `F_TYPE_ANN` wrapping
+>    `F_SYM`/`F_KEYWORD`; an `F_CONTRACT_TYPE` payload fell through to the body
+>    and came back as *"type annotation ': type' is only valid after a parameter
+>    name or as a return type"*. So the check could not be written by hand
+>    either -- the class could promise something no instance was permitted to
+>    state.
+>
+> Fixed together: `TypeClassMethod` carries `return_refine_pred`/`_var`, the
+> impl parser accepts a contract return, and an impl that writes a plain return
+> type **inherits** the class's promise rather than silently discarding it.
+>
+> **Result variance runs OPPOSITE to parameter variance**, which is the part
+> worth stating explicitly because it is easy to get backwards:
+>
+> | position | obligation | an instance may... |
+> |---|---|---|
+> | parameter | `class_pred(p) \|- instance_pred(p)` | demand LESS (accept more) |
+> | result | `instance_pred(r) \|- class_pred(r)` | deliver MORE (promise more) |
+>
+> A parameter refinement is something the method DEMANDS; a result refinement
+> is something it DELIVERS. Both are `TUR-E0374` with distinct messages. Tested
+> across the full matrix in both positions -- weaker, stronger, identical,
+> absent -- because the earlier parameter-variance bug was one a single negative
+> fixture would have reported as a pass.
+>
+> The return-check construction was inline in `elab_defn`; it is now
+> `rt_wrap_return_check` in `elab_fns.c`, shared with the instance path. Same
+> reasoning as `rt_peel_contract`, which had to be reached independently three
+> times before it was centralised: a second hand-rolled copy is a second place
+> for a refinement to be accepted and quietly not enforced.
+>
+> Fixtures: `refine-class-result` (inherit + strengthen),
+> `errors/refine-instance-result-weaker` (the illegal direction).
+>
+> The generator shape landed alongside: both variance ladders, both dispatch
+> spellings (`.meth` and bare `meth`), int and float instances, ~15% of cases.
+> 900 cases across three seeds after the fixes: 0 soundness bugs, 0 other BUG
+> classes.
+>
+> One classification note worth keeping: `errors/refine-instance-result-weaker`
+> classifies as `SUSPICIOUS_over_refute`, not `agree_rejected_early` -- it runs
+> CLEAN with the gate off, because its single call returns a value that happens
+> to satisfy the weaker promise. E0374 is a declaration-vs-declaration
+> inconsistency, not a claim about the value the program produced. The bucket
+> holds legitimate DECLARATION errors as well as universal value refutations.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:

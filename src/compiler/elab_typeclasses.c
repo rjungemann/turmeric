@@ -972,6 +972,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
      * the method so effect_check_pass can enforce it against instance method bodies. */
     EffectRow *method_effect_row = NULL;
     Type return_type = TYPE_NIL;
+    const Form *return_refine_pred = NULL;   /* RT1: `: #refine{ r : T | q }` */
+    const char *return_refine_var  = NULL;
     uint32_t ret_idx = 2;   /* first element after params vector */
     if (method_form->as.list.len > ret_idx) {
         Form *maybe_row = method_form->as.list.items[ret_idx];
@@ -1101,7 +1103,14 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                           "unsupported return type form in typeclass method");
                 return NULL;
             }
-            return_type = *ft;
+            /* RT1: `: #refine{ r : T | q }` on a class method result.  Peel to
+             * the base type -- otherwise the contract type reaches codegen and
+             * the method does not compile -- and KEEP the predicate, which is
+             * the class's promise to callers.  Dropping it silently (which is
+             * what happened before) produced a class signature that read like a
+             * guarantee and enforced nothing. */
+            return_type = *rt_peel_contract(ft, &return_refine_pred,
+                                            &return_refine_var);
         } else if (ret_form->tag == F_LIST || ret_form->tag == F_VEC) {
             /* Phase HRT3: allow forall/exists type forms as return types.
              * Prereq 5: same as above -- pass class type params so a
@@ -1138,6 +1147,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     method->param_explicit_type = param_explicit_type;
     method->n_params = n_params;
     method->return_type = return_type;
+    method->return_refine_pred = return_refine_pred;
+    method->return_refine_var  = return_refine_var;
     method->effect_row = method_effect_row;  /* ER3: NULL if not annotated */
     method->default_fn_expr = NULL;          /* ER3: set by elab_defclass if body forms exist */
     return method;
@@ -3269,6 +3280,9 @@ Expr *elab_definstance(Elab *e, const Form *call) {
         Form *impl_params_form = impl_form->as.list.items[1];
         uint32_t impl_body_start = 2;
         Type return_type = tc->methods[i].return_type;  /* Default from typeclass */
+        /* RT1: the class's promise about this method's result, if any. */
+        const Form *m_class_ret_pred = tc->methods[i].return_refine_pred;
+        const char *m_class_ret_var  = tc->methods[i].return_refine_var;
         /* carrier-aware-return-unification Phase 3: did the class-decl return name
          * the class type variable (so the substitution below grounds it to this
          * instance's concrete type)?  Only then is the method a genuine
@@ -3345,6 +3359,13 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             arrow_return = true;
             return_type.as.fn.boxed = true;
         }
+        /* RT1: the refinement this impl promises about its RESULT.  Starts as
+         * the class's promise, which an impl that writes a plain return type
+         * INHERITS -- otherwise a class could declare a guarantee that no
+         * instance ever enforces. */
+        const Form *impl_ret_pred = m_class_ret_pred;
+        const char *impl_ret_var  = m_class_ret_var;
+        bool        impl_ret_pred_own = false;
         /* Check for return type annotation after params */
         if (impl_form->as.list.len >= 3) {
             Form *ret_or_body = impl_form->as.list.items[2];
@@ -3357,6 +3378,29 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                        (ret_or_body->as.list.items[0]->tag == F_SYM ||
                         ret_or_body->as.list.items[0]->tag == F_KEYWORD)) {
                 kw = ret_or_body->as.list.items[0]->as.sym;
+            }
+            /* RT1: `: #refine{ r : T | q }` on an impl result.  This branch did
+             * not exist, so the annotation fell through to the body and came
+             * back as "type annotation ': type' is only valid after a parameter
+             * name or as a return type" -- a class could declare a result
+             * refinement that an instance was syntactically forbidden to
+             * restate.  Peel to the base type and keep the predicate. */
+            if (!kw && ret_or_body->tag == F_TYPE_ANN &&
+                ret_or_body->as.list.len == 1 &&
+                ret_or_body->as.list.items[0]->tag == F_CONTRACT_TYPE) {
+                Type *ft = type_expr_from_form(e, ret_or_body->as.list.items[0],
+                                               NULL, NULL, NULL, 0);
+                if (ft) {
+                    ret_was_class_var = false;
+                    const Form *rp = NULL; const char *rv = NULL;
+                    return_type = *rt_peel_contract(ft, &rp, &rv);
+                    if (rp) {
+                        impl_ret_pred = rp;
+                        impl_ret_var  = rv;
+                        impl_ret_pred_own = true;
+                    }
+                    impl_body_start = 3;
+                }
             }
             if (kw) {
                 /* carrier-aware-return-unification Phase 3: an explicit instance
@@ -3913,6 +3957,54 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 }
             }
         }
+        /* RT1: RESULT variance, which runs the OPPOSITE way to parameters.
+         * A caller programming against the class signature relies on the
+         * result predicate, so an instance must deliver at least as much as
+         * the class promises: `instance_pred(r) |- class_pred(r)`.  (For
+         * parameters it is `class_pred(p) |- instance_pred(p)` -- the class is
+         * the hypothesis there and the goal here.)
+         *
+         * Only checked when the instance RESTATED a predicate.  An instance
+         * that writes a plain return type inherits the class's, which cannot
+         * be a weakening. */
+        if (g_opt_refined && impl_ret_pred_own && m_class_ret_pred &&
+            impl_ret_pred != m_class_ret_pred) {
+            const char *rvar = impl_ret_var ? impl_ret_var
+                             : (m_class_ret_var ? m_class_ret_var : "r");
+            RefineEnv *venv = refine_env_new(e->arena);
+            refine_env_set_resolver(venv, rt_refine_resolver(e), e);
+            refine_env_declare(venv, rvar, rt_sort_of_kind(return_type.kind));
+            refine_env_push(venv, impl_ret_pred, impl_ret_var, rvar);
+
+            Form *subj = form_sym(e->arena, impl_form->span,
+                                  symtab_intern(e->st,
+                                      strslice(rvar, (uint32_t)strlen(rvar))));
+            char what[192];
+            snprintf(what, sizeof(what), "the result of instance method '%s'",
+                     tc->methods[i].name ? tc->methods[i].name->name : "?");
+            experiment_warn_if_used("refined");
+            RefineObligation *vob = refine_collect_obligation(
+                &e->refine_obs, m_class_ret_pred, m_class_ret_var, subj,
+                rt_sort_of_kind(return_type.kind), type_name(return_type),
+                impl_form->span, venv,
+                arena_strdup(e->arena, what, strlen(what)), NULL);
+            if (vob) {
+                vob->speculative = true;
+                bool ok = refine_discharge_one(vob, e->arena);
+                if (!ok && vob->vc && refine_model_search(vob->vc, e->arena)) {
+                    diag_emit_with_code(DIAG_ERROR, impl_form->span,
+                        TUR_E0374_REFINE_INSTANCE_STRONGER,
+                        "instance method '%s' promises less about its result "
+                        "than the '%s' class signature does",
+                        tc->methods[i].name ? tc->methods[i].name->name : "?",
+                        tc->name ? tc->name->name : "?");
+                    diag_emit(DIAG_NOTE, impl_form->span,
+                              "a caller programming against the class signature "
+                              "relies on the class's result refinement, so an "
+                              "instance must deliver at least as much");
+                }
+            }
+        }
         /* CT0/RT1: carry this method's contract parameters on its binding.  The
          * parameters are resolved in THIS pass but the body is elaborated in
          * pass 2, so the binding is the record that spans both -- and it is
@@ -3938,6 +4030,12 @@ Expr *elab_definstance(Elab *e, const Form *call) {
             method_binding->refine_param_names = rn;
             method_binding->n_refine_params    = n_method_params;
         }
+        /* RT1/RT4: and the result refinement -- its own if it restated one, the
+         * class's otherwise.  The binding is the only record that reaches pass
+         * 2, where the body exists and the check can be injected; it is also
+         * what RT4 reads to propagate the result refinement to a caller. */
+        method_binding->refine_return_pred = impl_ret_pred;
+        method_binding->refine_return_var  = impl_ret_var;
         method_fd->binding = method_binding;
         method_fd->params = method_params;
         method_fd->n_params = n_method_params;
@@ -4071,6 +4169,25 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                     mp->method_params, mp->n_method_params,
                     mb->refine_param_preds, mb->refine_param_vars,
                     idx, n_idx, impl_form->span);
+            }
+        }
+
+        /* RT1: check this method's RESULT against the refinement it promises --
+         * its own if it restated one, otherwise the class's, which it inherits.
+         * Before this, a `defclass` result refinement produced no check
+         * anywhere: the identical predicate on a plain `defn` panicked, while a
+         * class method returning -9 under `: #refine{ r : int | (>= r 0) }`
+         * printed -9 and exited 0. */
+        {
+            const Binding *rb = mp->method_fd ? mp->method_fd->binding : NULL;
+            if (rb && rb->refine_return_pred && method_body &&
+                rt_contracts_emitted()) {
+                Binding *m_check_fn =
+                    scope_lookup(&e->global, e->sym_tur_contract_check);
+                method_body = rt_wrap_return_check(
+                    e, method_body, m_check_fn, rb->refine_return_pred,
+                    rb->refine_return_var, "Return contract violated",
+                    impl_form->span);
             }
         }
 
