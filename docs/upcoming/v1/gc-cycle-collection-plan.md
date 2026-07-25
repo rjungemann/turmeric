@@ -450,9 +450,27 @@ Validated by reintroducing the historical divergence (`value_type_kind` back to
 every GC field. That is exactly the CG1/CG4 failure mode, now caught at compile
 time.
 
-Steps 2-5 (standalone `rc.h`/`gc.h`, declare-vs-define split, lean-archive link)
-remain. They are now unblocked -- the ABI hazard that made them dangerous is
-fenced.
+**Step 2 landed 2026-07-25.** `rc.h` (and `gc.h`, which only includes it) are
+now **standalone**: they no longer pull in `types.h` (which transitively drags in
+`lifetimes.h` and the rest of the compiler's type system) or the unused
+`arena.h`. Verified concretely -- a translation unit that includes both compiles
+with `-I src/runtime` alone, no compiler headers on the path.
+
+What made this possible: DEDUP-1 had already narrowed the stored field to
+`uint8_t`, so the only remaining `TypeKind` uses were the three `rc_cb_alloc*`
+parameters, which are now plain `uint8_t` (the emitted copy always declared them
+`int`, so this also moves the two signatures closer). `TypeKind` has 64 members,
+comfortably inside a byte -- checked, since DEDUP-1's narrowing would otherwise
+have truncated silently.
+
+The `TY_REF`/`TY_RC`/`TY_WEAK` switch in `default_drop_fn_for_type` still needs
+the compiler's enum, so `types.h` moved into `rc.c`: the *header* is standalone,
+the *implementation* may use whatever it likes. That separation is the whole
+point -- a compiled program includes the header, never the .c.
+
+This removes the structural reason the emitted copy had to be hand-written.
+Steps 3-5 (declare-vs-define split for the 31 emitted `static` functions, adding
+`rc.c`/`gc.c` to the lean archive, making AUTO link it) remain.
 
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the

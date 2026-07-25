@@ -6,6 +6,11 @@
 
 #include <stddef.h>   /* offsetof, for the layout guard below */
 #include "rc.h"
+/* DEDUP-2: rc.h is standalone (a compiled program must be able to include
+ * it). The IMPLEMENTATION may still use the compiler's type definitions --
+ * default_drop_fn_for_type switches on TY_REF/TY_RC/TY_WEAK -- so the
+ * dependency lives here in the .c instead of leaking through the header. */
+#include "types.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,7 +62,7 @@ static void drop_weak_payload(void *value) {
     free(value);
 }
 
-static RcDropFn default_drop_fn_for_type(TypeKind value_type) {
+static RcDropFn default_drop_fn_for_type(uint8_t value_type) {
     switch (value_type) {
         case TY_REF:
             return drop_ref_payload;
@@ -74,7 +79,7 @@ static RcDropFn default_drop_fn_for_type(TypeKind value_type) {
  * The value storage comes right after the control block header.
  * Initializes strong_count to 1, weak_count to 0.
  */
-RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn drop_fn) {
+RcControlBlock *rc_cb_alloc(size_t value_size, uint8_t value_type, RcDropFn drop_fn) {
     return rc_cb_alloc_kinded(value_size, value_type, drop_fn,
                               RCK_OPAQUE, RCEXP_OPAQUE);
 }
@@ -84,7 +89,7 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
  * paths can recognise the block.  Existing callers continue to flow
  * through the older rc_cb_alloc entry point with implicit (RCK_OPAQUE,
  * RCEXP_OPAQUE). */
-RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
+RcControlBlock *rc_cb_alloc_kinded(size_t value_size, uint8_t value_type,
                                    RcDropFn drop_fn, uint8_t kind,
                                    uint8_t payload_kind) {
     size_t total_size = sizeof(RcControlBlock) + value_size;
@@ -118,7 +123,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
 
 /* DS3: as rc_cb_alloc_kinded with RCK_STRUCT + a walker function so the
  * cycle walker can enumerate the struct's rc-typed children. */
-RcControlBlock *rc_cb_alloc_struct(size_t value_size, TypeKind value_type,
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, uint8_t value_type,
                                    RcDropFn drop_fn, RcWalkFn walk_fn) {
     RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type, drop_fn,
                                             RCK_STRUCT, 0);

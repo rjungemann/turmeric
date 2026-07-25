@@ -11,9 +11,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>   /* size_t -- DEDUP-2: was arriving via types.h */
 
-#include "arena.h"
-#include "types.h"
+/* DEDUP-2: rc.h is deliberately STANDALONE -- it must be includable by a
+ * compiled Turmeric program, which has no access to the compiler's headers.
+ * It previously pulled in "types.h" (for the TypeKind enum) and "arena.h"
+ * (unused), and types.h transitively drags in lifetimes.h and the rest of the
+ * type system. That dependency is a large part of why the emitted copy of this
+ * struct had to be hand-written at all. The value-kind parameters below are
+ * plain fixed-width bytes now, matching the stored field (see DEDUP-1), so
+ * nothing here needs the compiler's type definitions. */
 
 /* Phase 10: GC color enum for Bacon-Rajan cycle collector */
 typedef enum {
@@ -147,7 +154,7 @@ struct RcControlBlock {
  * RCK_OPAQUE (cycle walker treats `value` as a scalar / bit pattern).
  * Returns pointer to the control block.
  */
-RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn drop_fn);
+RcControlBlock *rc_cb_alloc(size_t value_size, uint8_t value_type, RcDropFn drop_fn);
 
 /* EXG5-4: Allocate a control block with explicit layout tags.
  * `kind` is one of RCK_* and describes how the value field is laid out.
@@ -159,7 +166,7 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
  * Otherwise identical to rc_cb_alloc; the older entry point now just
  * calls this with (RCK_OPAQUE, RCEXP_OPAQUE).
  */
-RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
+RcControlBlock *rc_cb_alloc_kinded(size_t value_size, uint8_t value_type,
                                    RcDropFn drop_fn, uint8_t kind,
                                    uint8_t payload_kind);
 
@@ -167,7 +174,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
  * walker function.  Tags the block as RCK_STRUCT so the cycle walker
  * invokes `walk_fn` to enumerate rc-typed children.  `drop_fn` runs
  * normally on the final strong decrement. */
-RcControlBlock *rc_cb_alloc_struct(size_t value_size, TypeKind value_type,
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, uint8_t value_type,
                                    RcDropFn drop_fn, RcWalkFn walk_fn);
 
 /* Free a control block and its value.
