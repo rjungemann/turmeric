@@ -1,0 +1,42 @@
+; An inline-C body declared to return rc<T> now lowers to RcControlBlock *, not
+; the int64 carrier.
+;
+; It used to emit a base returning int64_t while every specialized consumer took
+; RcControlBlock *, so an ordinary two-line program produced -Wint-conversion in
+; the user's own build with nothing in their source to fix:
+;
+;   warning: passing argument 2 of 'chain_hycons' makes pointer from integer
+;            without a cast [-Wint-conversion]
+;   note: expected 'RcControlBlock *' but argument is of type 'int64_t'
+;
+; The return type is a pointer and the carrier holds exactly its bits, so this
+; is the same escape hatch typed_ptr / typed_struct / typed_cfnptr already had
+; in emit_fns.c -- rc was simply missing from the list, and from its mirror in
+; the forward-declaration emitter (which is what makes the two agree).
+;
+; `return 0;` in the body stays valid as a null pointer constant, which is the
+; shape that matters: a null rc is essentially the only reason to reach for an
+; inline-C body at an rc return.
+;
+; This fixture asserts refcounts rather than just "it compiles", because the
+; interesting failure mode of a wrong return lowering is a handle that survives
+; the type checker and then miscounts.
+(defstruct S :move [tag : int])
+(defstruct Chain :move [item : rc<S> next : rc<Chain>])
+
+(defn chain-nil [] : rc<Chain>
+  ```c
+  return 0;
+  ```)
+
+(defn chain-cons [item : rc<S> rest : rc<Chain>] : rc<Chain>
+  (rc/of (make-struct Chain item rest)))
+
+(defn main [] : int
+  (let [a (rc/of (make-struct S 1))]
+    (println (rc/strong-count a))                      ; 1
+    (let [c (chain-cons (rc/clone a) (chain-nil))]
+      (println (rc/strong-count a))                    ; 2 -- the link owns one
+      (println (rc/strong-count (.item c))))           ; 2 -- read back, same handle
+    (println (rc/strong-count a)))                     ; 1 -- the link is gone
+  0)

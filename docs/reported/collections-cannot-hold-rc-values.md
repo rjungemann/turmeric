@@ -111,10 +111,7 @@ Roughly in increasing order of work:
      integer is the `:int` type-erasure this codebase rules out, and there is no
      shape where it is what the author meant.
    - **anything -> owning: rejected except the literal `0`.** That one form is a
-     null handle, and it is the only way to write an empty `rc` without
-     inline-C (see
-     [inline-c-rc-return-misses-carrier-bridge.md](inline-c-rc-return-misses-carrier-bridge.md)) --
-     `stdlib/rcchain.tur`'s `rcchain-nil` is exactly it. Any other integer
+     null handle -- `stdlib/rcchain.tur`'s `rcchain-nil` is exactly it. Any other integer
      fabricates a control-block pointer out of arithmetic.
 
    Pinned by `tests/fixtures/errors/ascription-rejects-owning-erasure` and

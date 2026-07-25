@@ -3141,10 +3141,27 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 !type_uses_carrier_abi(rft_r) &&
                 !type_is_heap_adt(rft_r) &&
                 type_has_concrete_codegen_layout(&rft_r);
+            /* inline-c-rc-return-misses-carrier-bridge: an owning return
+             * (rc/weak/ref/lref) lowers to `RcControlBlock *` even from an
+             * inline-C body, for the same reason typed_ptr does -- it IS a
+             * pointer, and the carrier holds exactly its bits.  Without this the
+             * base came out `int64_t` while every specialized consumer took
+             * `RcControlBlock *`, so an ordinary
+             *
+             *     (chain-cons item (chain-nil))
+             *
+             * emitted a -Wint-conversion warning in the user's build with
+             * nothing in their source to fix.  `return 0;` in the body stays
+             * valid (a null pointer constant), which is the shape that matters:
+             * a null rc is the one thing an inline-C body is reached for here.  */
+            bool typed_rc = body_is_inline_c &&
+                (rft.kind == TY_RC || rft.kind == TY_WEAK ||
+                 rft.kind == TY_REF || rft.kind == TY_LREF);
             if (fn_ret_td && !body_is_inline_c) {
                 buf_puts(file, fn_ret_td);
             } else if (!body_is_inline_c || typed_ptr || typed_struct ||
-                       typed_cfnptr || typed_heap_spec || typed_byval_adt) {
+                       typed_cfnptr || typed_heap_spec || typed_byval_adt ||
+                       typed_rc) {
                 buf_puts(file, emit_type_c_name(ctx, typed_byval_adt ? rft_r : rft));
             } else {
                 buf_puts(file, "int64_t");

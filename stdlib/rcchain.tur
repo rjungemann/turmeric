@@ -46,12 +46,14 @@
 ;;; Returns:
 ;;;   An empty chain (a null rc handle, which the walker skips).
 ;;;
-;;; Deliberately NOT an inline-C `return 0;`: an inline-C body declared to
-;;; return rc<T> emits a base returning the int64 carrier, and a call feeding
-;;; that into an rc<T> parameter is emitted without a bridge cast -- correct on
-;;; a 64-bit target but a -Wint-conversion warning in every user build.  The
-;;; ascription form lowers identically and stays warning-clean.  See
-;;; docs/reported/inline-c-rc-return-misses-carrier-bridge.md.
+;;; An ascription rather than an inline-C `return 0;` -- both lower identically,
+;;; and the ascription keeps the module free of inline-C entirely, which is
+;;; the point worth making about it: a collection the cycle collector can trace
+;;; needs nothing below the language.
+;;;
+;;; (The inline-C form used to be actively worse: it emitted a base returning
+;;; the int64 carrier, so every call site warned.  Fixed and pinned by
+;;; tests/fixtures/inline-c-rc-return-typed; the choice here is now taste.)
 ;;;
 ;;; Example:
 ;;;   (rcchain-nil)  ; => empty chain

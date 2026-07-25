@@ -1,7 +1,7 @@
 # An inline-C body returning `rc<T>` produces `-Wint-conversion` at its call sites
 
 **Severity:** low (cosmetic in the generated C; correct on any 64-bit target)
-**Status:** open
+**Status:** RESOLVED 2026-07-25
 **Found by:** collections-cannot-hold-rc-values item 3, while writing
 `stdlib/rcchain.tur`
 
@@ -72,13 +72,28 @@ and is warning-clean:
 
 `stdlib/rcchain.tur` does exactly this, and says why at the definition.
 
-## Fix directions
+## Resolution
 
-1. Emit the carrier bridge at the call site when an argument's lowering
-   (carrier) differs from the parameter's (`RcControlBlock *`) -- the same
-   `emit_carrier_bridge` treatment other carrier boundaries already get.
-2. Or return-specialize an inline-C body whose declared return type is
-   concrete, so the base signature matches the declaration.
+Neither of the two directions first considered. The declaration was right all
+along and the emitter simply ignored it: `emit_fns.c` already carries a list of
+escape hatches -- `typed_ptr`, `typed_struct`, `typed_cfnptr`, `typed_heap_spec`,
+`typed_byval_adt` -- for declared return types that lower concretely *even from
+an inline-C body*. An owning return belongs in that list for exactly the reason
+`typed_ptr` does: it **is** a pointer, and the carrier holds precisely its bits.
+It was missing.
+
+Adding `typed_rc` (rc/weak/ref/lref) there, and to its mirror in the
+forward-declaration emitter in `emit_module.c` -- the two must agree or the
+prototype conflicts with the definition -- makes the base return
+`RcControlBlock *`, so no call site needs a bridge at all. `return 0;` in the
+body stays valid as a null pointer constant, which is the shape that matters:
+a null rc is essentially the only reason to reach for inline-C at an rc return.
+
+Pinned by `tests/fixtures/inline-c-rc-return-typed`, which asserts refcounts
+rather than just compilation -- the interesting failure mode of a wrong return
+lowering is a handle that survives the type checker and then miscounts. The
+suite passed unchanged with no snapshot churn: no inline-C body in tree declared
+an rc return, which is itself why this went unnoticed.
 
 ## Related
 

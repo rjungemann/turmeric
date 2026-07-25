@@ -2,10 +2,8 @@
 ;; ascribed TO a reference-counted type.
 ;;
 ;; One exception is allowed, and only one -- the literal 0, a null handle.  That
-;; is how stdlib/rcchain.tur writes an empty chain without reaching for inline-C
-;; (an inline-C body declared to return rc<T> emits a base returning the int64
-;; carrier, whose call sites then warn; see
-;; docs/reported/inline-c-rc-return-misses-carrier-bridge.md).
+;; is how stdlib/rcchain.tur writes an empty chain, which keeps that module free
+;; of inline-C entirely.
 ;;
 ;; Any other integer is a control-block pointer conjured out of arithmetic: the
 ;; first rc/clone or scope-exit drop through it writes to whatever that address

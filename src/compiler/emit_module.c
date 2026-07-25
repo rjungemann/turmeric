@@ -5433,11 +5433,18 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                     !type_uses_carrier_abi(rft_r) &&
                     !type_is_heap_adt(rft_r) &&
                     type_has_concrete_codegen_layout(&rft_r);
+                /* inline-c-rc-return-misses-carrier-bridge: mirror emit_fns.c --
+                 * an owning return lowers to RcControlBlock * even for inline-C
+                 * bodies, so the forward decl agrees with the definition. */
+                bool typed_rc = body_is_inline_c && rft &&
+                    (rft->kind == TY_RC || rft->kind == TY_WEAK ||
+                     rft->kind == TY_REF || rft->kind == TY_LREF);
                 if (fn_ret_td && !body_is_inline_c) {
                     buf_puts(out, fn_ret_td);
                 } else if (typed_byval_adt) {
                     buf_puts(out, type_c_name(rft_r));
-                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct || typed_cfnptr)) {
+                } else if (rft && (!body_is_inline_c || typed_ptr || typed_struct ||
+                                   typed_cfnptr || typed_rc)) {
                     buf_puts(out, type_c_name(*rft));
                 } else {
                     buf_puts(out, "int64_t");
