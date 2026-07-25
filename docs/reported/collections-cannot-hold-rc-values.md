@@ -225,20 +225,52 @@ so it is not struct-size growth (the struct does grow 8 bytes, which accounts
 for the separate 96 -> 112 direct-leak movement and is benign). Two extra
 objects survive to exit that did not before.
 
-Three hypotheses were tried and each disproved by measurement: that the
-"incoming map's stored ops win over the flag" precedence change caused it
-(removing it changed nothing); that some `Hamt` allocation site skipped the new
-field's initialisation (all of them route through `hamt_alloc_empty`); and that
-unconditionally assigning the thread-local hooks clobbered an enclosing
-operation's (restoring the original conditional install changed nothing). The
-cause is still unknown.
+#### What a second pass ruled out
+
+The cause is still unknown, but the search space is now much smaller. Four
+controls, each a clean full rebuild measured on the same fixture:
+
+| build | leaked |
+| --- | --- |
+| pristine | 528 B / **7** objects |
+| one unused global added to `hamt.c` | 528 B / **7** objects |
+| field added to `Hamt` but never used | 592 B / **7** objects |
+| the refactor | 856 B / **9** objects |
+
+- **Not "any change to `hamt.c`".** An inert global does not move the number.
+  The regression is caused by the refactor's content.
+- **Not struct layout.** Adding the field without using it moves *bytes* (+64 =
+  four maps x 16 B) but leaves the object count at 7. The separate 96 -> 112
+  direct-leak movement is this same benign growth.
+- **Not value-ownership semantics -- this is the big one.** Instrumenting
+  `val_retain_hook` / `val_release_hook` with counters shows they fire
+  **zero times** in this fixture, on both sides. Whatever the refactor breaks,
+  it is not the retain/release path it was written to change.
+- **The extra objects are HAMT collision NODES, not value boxes.** Their stacks
+  are `hamt_malloc <- tur_hamt_node_alloc <- collision_node_create <-
+  node_insert`, going 1 object -> 2, with a second group going 1 -> 2 alongside.
+  So the refactor is changing *node* lifetime.
+
+That combination points away from everything the change was about and toward
+`tur_hamt_free` being reached (or completing) differently -- it is the only
+touched site that governs node release. Two maps are built and neither is
+explicitly freed, so the pristine build must be freeing an intermediate map that
+the refactored build does not.
+
+One caveat on the method: a build instrumented with counters *plus* an
+`__attribute__((destructor))` also reported 9 objects while being semantically
+inert, so the destructor itself perturbs something. Use plain counters, or a
+`__attribute__((no_sanitize))`-free plain global, rather than an exit hook.
 
 Whoever picks this up: **bisect the edit mechanically rather than reasoning
-about it** -- the four changed sites are `hamt_alloc_empty`, the two
-`hamt_copy` inherits, `tur_hamt_free`'s release-op selection, and the `_o`
-wrappers -- and gate every step on the ASan number above, not on the suite. The
-suite is green on both sides of this bug, which is exactly why it went unnoticed
-for as long as it took to run the leak check.
+about it** -- three earlier hypotheses were each disproved by measurement (the
+ops-precedence change, an uninitialised field at some allocation site, and
+unconditional assignment of the thread-local hooks clobbering an enclosing
+op's). The four changed sites are `hamt_alloc_empty`, the two `hamt_copy`
+inherits, `tur_hamt_free`'s release-op selection, and the `_o` wrappers; start
+with `tur_hamt_free`. Gate every step on the object COUNT above, not on bytes
+and not on the suite -- the suite is green on both sides, which is why this took
+a leak check to see at all.
 
 Worth noting for its own sake: those 528 baseline bytes are a pre-existing leak.
 The fixtures never free their maps, and a persistent map that is never freed
