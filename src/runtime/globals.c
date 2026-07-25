@@ -233,6 +233,12 @@ bool g_opt_cps_tramp_resume = true;
  * docs/archive/cps-backend-owning-env-teardown-e3-plan.md. */
 bool g_opt_owning_cloneable_capture = true;
 
+/* CG5 (cycle-gc experiment): admit `(gc-auto!)` -- automatic, allocation-driven
+ * cycle collection.  Off by default; the collector's timing becomes implicit
+ * when it is on, which is exactly what the experiment gate exists for.  See
+ * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
+bool g_opt_cycle_gc = false;
+
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI is
  * unconditional; the enable bit and its codegen gates are gone.  See
  * docs/upcoming/closure-drop-glue-plan.md. */

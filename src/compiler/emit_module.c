@@ -6381,6 +6381,8 @@ static void emit_rcgc_prototypes(Buf *out) {
         "void gc_enable(void);\n"
         "void gc_disable(void);\n"
         "void gc_set_mode(GcMode mode);\n"
+        "void gc_auto(void);\n"
+        "void gc_on_alloc_checkpoint(void);\n"
         "bool gc_is_alive(RcControlBlock *cb);\n\n");
 }
 
@@ -9303,8 +9305,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * rc_strong_decrement) needs it.  The collector functions themselves are
      * defined later, after all RC helpers. */
     buf_puts(out, "#define GC_SUSPECT_THRESHOLD 128\n");
-    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n\n");
-    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;\n\n");
+    buf_puts(out, "#define GC_MAX_SUSPECTS 4096\n");
+    /* CG5: allocation-driven AUTO trigger.  Mirrors src/runtime/gc.h -- GC_AUTO
+     * is appended LAST so the pre-existing ordinals, which both copies encode,
+     * are unchanged. */
+    buf_puts(out, "#define GC_AUTO_ALLOC_INTERVAL 4096\n\n");
+    buf_puts(out, "typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD, GC_AUTO } GcMode;\n\n");
     emit_rcgc_global(out, shared, "RcControlBlock **gc_suspect_roots = NULL;\n", "RcControlBlock **gc_suspect_roots");
     emit_rcgc_global(out, shared, "uint32_t gc_suspect_count = 0;\n", "uint32_t gc_suspect_count");
     emit_rcgc_global(out, shared, "uint32_t gc_suspect_capacity = 0;\n", "uint32_t gc_suspect_capacity");
@@ -9312,8 +9318,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rcgc_global(out, shared, "uint32_t gc_grey_count = 0;\n", "uint32_t gc_grey_count");
     emit_rcgc_global(out, shared, "uint32_t gc_grey_capacity = 0;\n", "uint32_t gc_grey_capacity");
     emit_rcgc_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
-    emit_rcgc_global(out, shared, "bool gc_enabled = false;\n\n", "bool gc_enabled");
-    buf_printf(out, "%svoid gc_collect(void);  /* Forward decl */\n\n", rcgc_helper);
+    emit_rcgc_global(out, shared, "bool gc_enabled = false;\n", "bool gc_enabled");
+    /* CG5: AUTO-mode state (mirrors src/runtime/gc.c). */
+    emit_rcgc_global(out, shared, "uint32_t gc_allocs_since_collect = 0;\n", "uint32_t gc_allocs_since_collect");
+    emit_rcgc_global(out, shared, "bool gc_in_collection = false;\n\n", "bool gc_in_collection");
+    buf_printf(out, "%svoid gc_collect(void);  /* Forward decl */\n", rcgc_helper);
+    /* CG5: gc_register_block calls the checkpoint, which is defined further
+     * down next to gc_set_mode.  Without this the emitted C has an implicit
+     * declaration -- a hard error under -std=c99, and only latent because the
+     * default cc flags are laxer than the fixture compile. */
+    buf_printf(out, "%svoid gc_on_alloc_checkpoint(void);  /* Forward decl */\n\n", rcgc_helper);
     /* DEDUP-3: every module TU sees the prototypes; only the owner sees bodies.
      * Placed here because gc_set_mode's signature needs the GcMode typedef. */
     if (shared || g_rcgc_from_archive) emit_rcgc_prototypes(out);
@@ -9330,6 +9344,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */\n\n", rcgc_helper);
     buf_printf(out, "%svoid gc_register_block(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
+    /* CG5: the allocation checkpoint, BEFORE cb joins the registry.  A block is
+     * registered before its caller writes the payload, so collecting after the
+     * insert hands the walker uninitialised heap as a child pointer -- the
+     * first version of this segfaulted in gc_get_color.  See the matching
+     * comment in src/runtime/gc.c. */
+    buf_puts(out, "    gc_on_alloc_checkpoint();\n");
     buf_puts(out, "    cb->gc_buffered = false;\n");
     buf_puts(out, "    cb->gc_collecting = false;\n");
     buf_puts(out, "    cb->gc_trial = 0;\n");
@@ -9485,6 +9505,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
     buf_puts(out, "    cb->reserved[0] = kind;\n");
     buf_puts(out, "    cb->reserved[1] = payload_kind;\n");
+    /* CG5: under AUTO a later allocation can collect while this block is
+     * registered but unwritten; zeroing makes the walker see a NULL child
+     * instead of garbage.  Confined to AUTO so the always-on RC path keeps its
+     * malloc semantics. */
+    buf_puts(out, "    if (gc_mode == GC_AUTO && value_size) memset(cb->value, 0, value_size);\n");
     buf_puts(out, "    /* Register with GC; primitives (type_kind<=7) cannot form cycles */\n");
     buf_puts(out, "    gc_register_block(cb);\n");
     buf_puts(out, "    if (value_type_kind <= 7) cb->may_contain_cycles = false;\n");
@@ -9805,10 +9830,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "\n");
     buf_printf(out, "%svoid gc_collect(void) {\n", rcgc_helper);
     buf_puts(out, "    if (!gc_enabled || gc_mode == GC_DISABLED) return;\n");
+    /* CG5: drop glue may allocate, re-entering the checkpoint.  Refuse to nest
+     * rather than sweep a registry that is mid-collection. */
+    buf_puts(out, "    if (gc_in_collection) return;\n");
+    buf_puts(out, "    gc_in_collection = true;\n");
+    buf_puts(out, "    gc_allocs_since_collect = 0;\n");
     buf_puts(out, "    gc_cycle_collect_phase();\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
     buf_puts(out, "    gc_mark_phase();\n");
     buf_puts(out, "    gc_trial_deletion_phase();\n");
+    buf_puts(out, "    gc_in_collection = false;\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%svoid gc_force(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_collect();\n");
@@ -9824,6 +9855,24 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_printf(out, "%svoid gc_set_mode(GcMode mode) {\n", rcgc_helper);
     buf_puts(out, "    gc_mode = mode;\n");
+    buf_puts(out, "}\n\n");
+    /* CG5: automatic collection, mirroring src/runtime/gc.c.  The checkpoint is
+     * called from gc_register_block -- an ALLOCATION site, never the decrement
+     * path, because collecting out of rc_strong_decrement reenters the
+     * collector while a caller is mid-mutation (the DEDUP-4a lesson). */
+    buf_printf(out, "%svoid gc_auto(void) {\n", rcgc_helper);
+    buf_puts(out, "    gc_enabled = true;\n");
+    buf_puts(out, "    gc_mode = GC_AUTO;\n");
+    buf_puts(out, "    gc_allocs_since_collect = 0;\n");
+    buf_puts(out, "}\n\n");
+    buf_printf(out, "%svoid gc_on_alloc_checkpoint(void) {\n", rcgc_helper);
+    buf_puts(out, "    if (gc_mode != GC_AUTO || !gc_enabled) return;\n");
+    buf_puts(out, "    if (gc_in_collection) return;\n");
+    buf_puts(out, "    gc_allocs_since_collect++;\n");
+    buf_puts(out, "    bool by_candidates = gc_suspect_count >= GC_SUSPECT_THRESHOLD;\n");
+    buf_puts(out, "    bool by_allocations = gc_allocs_since_collect >= GC_AUTO_ALLOC_INTERVAL;\n");
+    buf_puts(out, "    if (!by_candidates && !by_allocations) return;\n");
+    buf_puts(out, "    gc_collect();\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%sbool gc_is_alive(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return false;\n");

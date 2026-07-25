@@ -23,6 +23,7 @@
 
 extern uint64_t gc_collections;
 extern uint64_t gc_objects_freed;
+extern uint32_t gc_all_blocks_count;
 
 static int failures = 0;
 
@@ -93,10 +94,18 @@ static void test_enable_preserves_explicit_mode(void) {
 #define TY_RC_KIND 9   /* TypeKind TY_RC; pinned by the _Static_assert in emit_module.c */
 
 static RcControlBlock *make_rc_cell(void) {
-    /* value_size 0 + an explicit heap cell, matching the codegen: the drop
-     * glue for TY_RC free()s the payload, so it must not be the inline
-     * (cb + 1) region. */
-    RcControlBlock *cb = rc_cb_alloc_kinded(0, TY_RC_KIND, NULL,
+    /* An explicit heap cell, matching the codegen: the drop glue for TY_RC
+     * free()s the payload, so it must not be the inline (cb + 1) region.
+     *
+     * CG5: allocate with a full-width payload anyway, even though rc_set_value
+     * immediately repoints `value` at the heap cell.  Between the two calls the
+     * block is already REGISTERED, so a collection triggered by any later
+     * allocation will walk it -- and with value_size 0 the walker's 8-byte read
+     * of the inline region runs off the end of the block.  A real payload width
+     * keeps that read in bounds, where AUTO's zeroing has made it a harmless
+     * NULL child.  This is a constraint on the C API, not on the codegen, which
+     * never repoints `value` after allocation. */
+    RcControlBlock *cb = rc_cb_alloc_kinded(sizeof(int64_t), TY_RC_KIND, NULL,
                                            RCK_EXISTENTIAL, RCEXP_RC);
     void *cell = calloc(1, sizeof(int64_t));
     rc_set_value(cb, cell, NULL);
@@ -215,6 +224,45 @@ static void test_decrement_never_collects(void) {
     gc_disable();
 }
 
+/* CG5: GC_AUTO must collect with no explicit gc_collect() call, and must not
+ * walk a half-built block while doing it.
+ *
+ * The second half is the regression. The checkpoint originally ran at the END
+ * of gc_register_block, i.e. after the new block joined the registry -- but
+ * rc_cb_alloc_kinded registers a block BEFORE its caller writes the payload, so
+ * the walker read uninitialised heap as a child pointer and segfaulted in
+ * gc_get_color. Two things fix it: the checkpoint moved ahead of the insert,
+ * and AUTO zeroes the payload at allocation so any other in-flight block walks
+ * as a NULL child. This allocates hard enough to fire many collections
+ * mid-construction; a crash here is that bug returning. */
+static void test_auto_collects_without_explicit_call(void) {
+    enum { CYCLES = 3000 };
+    gc_auto();
+    check(gc_mode == GC_AUTO && gc_enabled, "gc_auto-sets-auto-mode");
+
+    uint64_t collections_before = gc_collections;
+    uint32_t live_before = gc_all_blocks_count;
+
+    for (int i = 0; i < CYCLES; i++) {
+        RcControlBlock *a = make_rc_cell();
+        RcControlBlock *b = make_rc_cell();
+        *(int64_t *)a->value = (int64_t)(intptr_t)b;
+        rc_strong_increment(b);
+        *(int64_t *)b->value = (int64_t)(intptr_t)a;
+        rc_strong_increment(a);
+        rc_strong_decrement(a);
+        rc_strong_decrement(b);     /* garbage cycle, and no gc_collect() call */
+    }
+
+    check(gc_collections > collections_before, "auto-collects-with-no-explicit-call");
+    /* 3000 cycles == 6000 blocks. Without AUTO every one of them survives; with
+     * it the registry stays near its starting size. */
+    check(gc_all_blocks_count < live_before + (CYCLES * 2) / 4,
+          "auto-keeps-live-block-count-bounded");
+
+    gc_disable();
+}
+
 int main(void) {
     test_enable_implies_manual_mode();
     test_disable_stops_collection();
@@ -223,6 +271,7 @@ int main(void) {
     test_live_cycle_survives();
     test_cycle_with_weak_observer();
     test_decrement_never_collects();
+    test_auto_collects_without_explicit_call();
 
     if (failures) {
         printf("gc-runtime-copy-parity: %d failed\n", failures);

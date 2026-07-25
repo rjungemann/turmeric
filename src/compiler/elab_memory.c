@@ -1,5 +1,7 @@
 /* elab_memory.c -- ref/lref/deref/drop, rc and weak references, and GC primitives. */
 #include "elab_internal.h"
+#include "experiments.h"  /* CG5: experiment_warn_if_used("cycle-gc") */
+#include "globals.h"       /* CG5: g_opt_cycle_gc */
 
 /* Phase 5: ref — (ref expr)
  * Creates an owning reference to a heap-allocated value.
@@ -574,6 +576,42 @@ Expr *elab_gc_disable(Elab *e, const Form *call) {
     }
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice("gc_disable();", 13);
+    ic->return_type = TYPE_NIL;
+    ic->captures = NULL;
+    ic->n_captures = 0;
+    ic->val_exprs = NULL;
+    ic->n_val_exprs = 0;
+    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
+    out->as.inline_c_.inline_c = ic;
+    return out;
+}
+
+/* CG5: (gc-auto!) -- switch the collector to GC_AUTO, where collections run
+ * automatically at allocation checkpoints (see gc_on_alloc_checkpoint in
+ * src/runtime/gc.c).  Returns nil.
+ *
+ * Gated by the `cycle-gc` experiment: unlike (gc!) / (gc-enable!), which only
+ * collect when the program says so, this makes collection timing implicit, so
+ * pause behaviour changes without any call site showing it.  That is what
+ * --enable=<name> is for.  See
+ * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
+Expr *elab_gc_auto(Elab *e, const Form *call) {
+    if (call->as.list.len != 1) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(gc-auto!) takes no arguments");
+        return NULL;
+    }
+    if (!g_opt_cycle_gc) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "(gc-auto!) requires --enable=cycle-gc "
+                  "(automatic cycle collection is experimental; "
+                  "(gc!) and (gc-enable!) are always available)");
+        return NULL;
+    }
+    experiment_warn_if_used("cycle-gc");
+
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice("gc_auto();", 10);
     ic->return_type = TYPE_NIL;
     ic->captures = NULL;
     ic->n_captures = 0;

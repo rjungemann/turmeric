@@ -2577,8 +2577,9 @@ static bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed
 
 #define GC_SUSPECT_THRESHOLD 128
 #define GC_MAX_SUSPECTS 4096
+#define GC_AUTO_ALLOC_INTERVAL 4096
 
-typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD } GcMode;
+typedef enum { GC_DISABLED, GC_MANUAL, GC_THRESHOLD, GC_AUTO } GcMode;
 
 static RcControlBlock **gc_suspect_roots = NULL;
 static uint32_t gc_suspect_count = 0;
@@ -2588,8 +2589,11 @@ static uint32_t gc_grey_count = 0;
 static uint32_t gc_grey_capacity = 0;
 static GcMode gc_mode = GC_DISABLED;
 static bool gc_enabled = false;
+static uint32_t gc_allocs_since_collect = 0;
+static bool gc_in_collection = false;
 
 static void gc_collect(void);  /* Forward decl */
+static void gc_on_alloc_checkpoint(void);  /* Forward decl */
 
 static void gc_set_color(RcControlBlock *cb, GcColor color) {
     if (cb) cb->color = color;
@@ -2604,6 +2608,7 @@ static void gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */
 
 static void gc_register_block(RcControlBlock *cb) {
     if (!cb) return;
+    gc_on_alloc_checkpoint();
     cb->gc_buffered = false;
     cb->gc_collecting = false;
     cb->gc_trial = 0;
@@ -2744,6 +2749,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDro
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;
+    if (gc_mode == GC_AUTO && value_size) memset(cb->value, 0, value_size);
     /* Register with GC; primitives (type_kind<=7) cannot form cycles */
     gc_register_block(cb);
     if (value_type_kind <= 7) cb->may_contain_cycles = false;
@@ -3045,10 +3051,14 @@ static void gc_cycle_collect_phase(void) {
 
 static void gc_collect(void) {
     if (!gc_enabled || gc_mode == GC_DISABLED) return;
+    if (gc_in_collection) return;
+    gc_in_collection = true;
+    gc_allocs_since_collect = 0;
     gc_cycle_collect_phase();
     gc_grey_count = 0;
     gc_mark_phase();
     gc_trial_deletion_phase();
+    gc_in_collection = false;
 }
 
 static void gc_force(void) {
@@ -3068,6 +3078,22 @@ static void gc_disable(void) {
 
 static void gc_set_mode(GcMode mode) {
     gc_mode = mode;
+}
+
+static void gc_auto(void) {
+    gc_enabled = true;
+    gc_mode = GC_AUTO;
+    gc_allocs_since_collect = 0;
+}
+
+static void gc_on_alloc_checkpoint(void) {
+    if (gc_mode != GC_AUTO || !gc_enabled) return;
+    if (gc_in_collection) return;
+    gc_allocs_since_collect++;
+    bool by_candidates = gc_suspect_count >= GC_SUSPECT_THRESHOLD;
+    bool by_allocations = gc_allocs_since_collect >= GC_AUTO_ALLOC_INTERVAL;
+    if (!by_candidates && !by_allocations) return;
+    gc_collect();
 }
 
 static bool gc_is_alive(RcControlBlock *cb) {

@@ -21,7 +21,11 @@
 typedef enum {
     GC_DISABLED,   /* No cycle collection (default for v1) */
     GC_MANUAL,     /* Collection only when explicitly triggered */
-    GC_THRESHOLD   /* Collection when suspect buffer exceeds threshold */
+    GC_THRESHOLD,  /* Collection when suspect buffer exceeds threshold */
+    /* CG5: collection driven automatically from ALLOCATION checkpoints -- see
+     * gc_on_alloc_checkpoint.  Appended last so the existing ordinals, which
+     * the emitted copy of this enum also encodes, are unchanged. */
+    GC_AUTO
 } GcMode;
 
 /* Configuration constants */
@@ -33,6 +37,11 @@ typedef enum {
  * emit_module.c still defines the same constant, and the two must not drift
  * while both exist; a pressure-driven trigger belongs to CG5. */
 #define GC_MAX_SUSPECTS 4096
+
+/* CG5: allocations between AUTO collections.  The second half of the AUTO
+ * heuristic: a program that buffers few candidates but allocates heavily still
+ * gets swept, which a candidate-count trigger alone would miss entirely. */
+#define GC_AUTO_ALLOC_INTERVAL 4096
 
 /* Suspect roots buffer - global for v1 (per-thread in future).
  * CG0: heap-allocated and grown on demand (was a fixed 4096-entry array whose
@@ -80,6 +89,20 @@ void gc_disable(void);
 
 /* Set GC mode */
 void gc_set_mode(GcMode mode);
+
+/* CG5: enable collection in GC_AUTO mode -- what `(gc-auto!)` lowers to. */
+void gc_auto(void);
+
+/* CG5: the allocation checkpoint.  Called from gc_register_block, i.e. on every
+ * rc block allocation, and collects if GC_AUTO's heuristic says to.
+ *
+ * ALLOCATION is deliberately the only automatic trigger site.  The obvious
+ * alternative -- collecting when the candidate buffer grows, on the
+ * rc_strong_decrement path -- reenters the collector from inside a caller's
+ * refcount drop, re-marking and potentially freeing blocks mid-mutation.  That
+ * is what DEDUP-4a removed from gc_add_suspect and must not come back.  At an
+ * allocation site no caller is mid-mutation. */
+void gc_on_alloc_checkpoint(void);
 
 /* Check if the value referenced by a weak pointer is still alive
  * (strong count > 0 or reachable from strong roots) */

@@ -1776,6 +1776,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gc_force = intern_cstr(st, "gc!");
     e->sym_gc_enable = intern_cstr(st, "gc-enable!");
     e->sym_gc_disable = intern_cstr(st, "gc-disable!");
+    e->sym_gc_auto = intern_cstr(st, "gc-auto!");   /* CG5 */
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
     e->sym_quote = intern_cstr(st, "quote");

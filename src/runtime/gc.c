@@ -267,6 +267,22 @@ static uint32_t gc_all_blocks_capacity = 0;
 /* Register a newly allocated control block */
 void gc_register_block(RcControlBlock *cb) {
     if (!cb) return;
+
+    /* CG5: the allocation checkpoint, and it must run BEFORE `cb` joins the
+     * registry.
+     *
+     * A collection walks every registered block, and a block is registered by
+     * rc_cb_alloc_kinded *before its caller has written the payload*.  Running
+     * the checkpoint after the insert therefore hands the walker a block whose
+     * RCK_EXISTENTIAL payload is uninitialised heap: the first version of this
+     * did exactly that and segfaulted in gc_get_color on a garbage child
+     * pointer.  Checking in first leaves the half-built block invisible.
+     *
+     * That alone is not sufficient -- see the AUTO-mode payload zeroing in
+     * rc_cb_alloc_kinded, which covers blocks already registered whose callers
+     * have not finished filling them either. */
+    gc_on_alloc_checkpoint();
+
     cb->gc_buffered = false;   /* CG1: fresh block is not in the candidate buffer */
     if (gc_all_blocks_count >= gc_all_blocks_capacity) {
         uint32_t want = gc_all_blocks_capacity ? gc_all_blocks_count + 1u
@@ -612,10 +628,22 @@ static void gc_cycle_collect_phase(void) {
 }
 
 /* Main collection function */
+/* CG5 forward decls: the AUTO counters live below, next to gc_auto. */
+static void gc_collection_window_reset(void);
+static bool gc_collection_reentered(void);
+static void gc_collection_enter(void);
+static void gc_collection_leave(void);
+
 void gc_collect(void) {
     if (!gc_enabled || gc_mode == GC_DISABLED) {
         return;
     }
+    /* CG5: drop glue run during a collection may allocate, which re-enters the
+     * allocation checkpoint.  Refuse to nest rather than sweep a registry that
+     * is mid-collection. */
+    if (gc_collection_reentered()) return;
+    gc_collection_enter();
+    gc_collection_window_reset();
 
     gc_collections++;
 
@@ -629,6 +657,8 @@ void gc_collect(void) {
     /* Pre-existing zombie sweep (strong==0 with live weak refs). Unchanged. */
     gc_mark_phase();
     gc_trial_deletion_phase();
+
+    gc_collection_leave();
 }
 
 /* Called when strong count reaches 0 */
@@ -678,6 +708,48 @@ void gc_disable(void) {
 /* Set GC mode */
 void gc_set_mode(GcMode mode) {
     gc_mode = mode;
+}
+
+/* ========== CG5: automatic collection (GC_AUTO) ========== */
+
+/* Allocations since the last collection.  Reset by gc_on_alloc_checkpoint when
+ * it fires and by gc_collect, so an explicit `(gc!)` also restarts the window
+ * rather than leaving AUTO to fire again immediately after. */
+static uint32_t gc_allocs_since_collect = 0;
+
+/* Reentrancy guard.  A collection runs drop glue, and drop glue is arbitrary
+ * user code that may allocate -- which lands right back in
+ * gc_on_alloc_checkpoint.  Without this, freeing a large cycle could recurse
+ * into a fresh collection over a half-swept registry. */
+static bool gc_in_collection = false;
+
+static void gc_collection_window_reset(void) { gc_allocs_since_collect = 0; }
+static bool gc_collection_reentered(void)    { return gc_in_collection; }
+static void gc_collection_enter(void)        { gc_in_collection = true; }
+static void gc_collection_leave(void)        { gc_in_collection = false; }
+
+void gc_auto(void) {
+    gc_enabled = true;
+    gc_mode = GC_AUTO;
+    gc_allocs_since_collect = 0;
+}
+
+void gc_on_alloc_checkpoint(void) {
+    if (gc_mode != GC_AUTO || !gc_enabled) return;
+    if (gc_in_collection) return;
+
+    gc_allocs_since_collect++;
+
+    /* Two triggers, because either alone has a blind spot.  A candidate-count
+     * trigger misses a program that allocates heavily but buffers few
+     * candidates (nothing ever reaches the watermark); an allocation-count
+     * trigger alone makes a cycle-churning program wait out the full interval
+     * even while candidates pile up. */
+    bool by_candidates = gc_suspect_count >= GC_SUSPECT_THRESHOLD;
+    bool by_allocations = gc_allocs_since_collect >= GC_AUTO_ALLOC_INTERVAL;
+    if (!by_candidates && !by_allocations) return;
+
+    gc_collect();
 }
 
 /* Check if a weak pointer's target is still alive */

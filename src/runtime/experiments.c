@@ -140,6 +140,19 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * is crash- and leak-clean under the always-on ABI (forced-on suite verified
      * before graduation).  The name moves to GRADUATED[] below (a lingering
      * --enable is a TUR-W0063 no-op).  See docs/upcoming/closure-drop-glue-plan.md. */
+    /* CG5: automatic, allocation-driven cycle collection -- `(gc-auto!)`.
+     * Gated because it changes runtime TIMING rather than accepting new syntax:
+     * with it on, collections happen at allocation checkpoints the program
+     * never asked for, so pause behaviour becomes implicit.  Everything else in
+     * the collector (`(gc!)`, `(gc-enable!)`) already ships ungated. */
+    { "cycle-gc",
+      "automatic allocation-driven rc<T> cycle collection ((gc-auto!))",
+      "docs/upcoming/v1/gc-cycle-collection-followup-plan.md",
+      "0.30.8",                  /* introduced */
+      "0.34.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_cycle_gc },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

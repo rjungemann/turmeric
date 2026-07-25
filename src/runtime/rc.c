@@ -117,6 +117,18 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, uint8_t value_type,
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;
 
+    /* CG5: under GC_AUTO a collection can fire from any later allocation, and
+     * the walker traverses every registered block -- including ones whose
+     * caller has allocated but not yet written the payload.  Reading an
+     * uninitialised payload as a child pointer is a segfault (it was, before
+     * this).  Zeroing makes that window harmless: the walker sees a NULL child
+     * and skips it, which every walk callback already handles.
+     *
+     * Confined to AUTO so the always-on RC path keeps its malloc semantics: in
+     * every other mode collection only happens where the program asked for it,
+     * by which point the caller has finished writing. */
+    if (gc_mode == GC_AUTO && value_size) memset(cb->value, 0, value_size);
+
     gc_register_block(cb);
 
     return cb;

@@ -1853,6 +1853,7 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
+    if (name == e->sym_gc_auto)     return elab_gc_auto(e, call);
     /* Phase M0: Module system */
     if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);

@@ -36,10 +36,61 @@ reports the remaining textual divergence.
 
 ## Phases
 
-### CG5 -- Opt-in automatic trigger (`GC_AUTO`)
+### CG5 -- Opt-in automatic trigger (`GC_AUTO`) [DONE 2026-07-25]
 
-*Carried over unstarted. This is the "automatically run" half of the original
-"reach past Rust" goal, and the single biggest remaining gap.*
+**Landed.** `(gc-auto!)` switches the collector to `GC_AUTO`, where collections
+run at allocation checkpoints with no `(gc!)` anywhere in the program. Gated by
+`--enable=cycle-gc` -- the registry's first active row since the last
+graduation.
+
+Measured, 3000 garbage cycles built with no explicit collection call:
+
+| mode | collections | blocks freed | live blocks at exit |
+|---|---|---|---|
+| `GC_MANUAL` (`(gc-enable!)`) | 0 | 0 | 6000 |
+| `GC_AUTO` (`(gc-auto!)`) | 46 | 5888 | **112** |
+
+Two triggers, because either alone has a blind spot: the candidate buffer
+reaching `GC_SUSPECT_THRESHOLD`, **or** `GC_AUTO_ALLOC_INTERVAL` allocations
+since the last collection. A candidate-count trigger misses a program that
+allocates heavily but buffers few candidates; an allocation-count trigger alone
+makes a cycle-churning program wait out the full interval.
+
+**The checkpoint is at ALLOCATION, never on the decrement path** -- the DEDUP-4a
+constraint, honoured. At an allocation site no caller is mid-mutation.
+
+**A crash fell out of it, and it is the interesting part of this phase.**
+The first version put the checkpoint at the *end* of `gc_register_block`, which
+reads naturally: register the block, then consider collecting. But
+`rc_cb_alloc_kinded` registers a block **before its caller writes the payload**,
+so the walker read uninitialised heap as a child pointer and segfaulted in
+`gc_get_color` on `cb = 0x811`. Two fixes, both needed:
+
+1. The checkpoint moved **ahead of** the registry insert, so the block being
+   allocated right now is not walkable.
+2. `rc_cb_alloc_kinded` **zeroes the payload under `GC_AUTO`**, which covers the
+   other half: blocks already registered whose callers have not finished
+   writing them either. The walker then sees a NULL child, which every walk
+   callback already handles. Confined to AUTO so the always-on RC path keeps its
+   `malloc` semantics.
+
+This is worth remembering beyond CG5: **"registered" and "initialised" are not
+the same instant**, and anything that can traverse the registry asynchronously
+has to assume the gap exists. It is also a constraint on the C API rather than
+the codegen -- `rc_set_value` repointing `value` after allocation leaves the
+same window, so a block that will be repointed must still be allocated with a
+payload wide enough for its declared kind. The codegen never repoints.
+
+Pinned by `tests/fixtures/gc-auto-collects-without-gc-call` (end-to-end, no
+`(gc!)` in the program) and two assertions in the runtime parity battery, one of
+which allocates hard enough to fire many collections mid-construction -- a crash
+there is the bug returning.
+
+**Not done:** capping candidate-set size per collection. AUTO fires often enough
+that each collection sees a small set in practice, but that is an emergent
+property, not a bound. Pause time stays an open risk (below).
+
+*Original phase text:*
 
 Add a `GC_AUTO` mode that collects at allocation checkpoints on a heuristic:
 candidate-buffer high-water mark, **plus** an allocation-count/bytes counter so

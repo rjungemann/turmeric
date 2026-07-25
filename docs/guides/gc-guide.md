@@ -91,9 +91,19 @@ walker — cycles that route through them will not be reclaimed.
 - `GC_MANUAL` — collection runs only when user code calls `(gc!)`.
 - `GC_THRESHOLD` — collection runs when the suspect buffer reaches 128
   entries (forced at 4096).
+- `GC_AUTO` (CG5, experimental) -- collection runs at **allocation
+  checkpoints**, with no `(gc!)` call anywhere in the program. Two triggers:
+  the candidate buffer reaching `GC_SUSPECT_THRESHOLD`, or
+  `GC_AUTO_ALLOC_INTERVAL` allocations since the last collection. Behind
+  `--enable=cycle-gc`, because it makes collection *timing* implicit -- pause
+  behaviour changes without any call site showing it.
 
-There is no background thread, no time-based sweep, no allocation-count
-heuristic beyond the suspect threshold. User code drives collection.
+There is no background thread and no time-based sweep. Outside `GC_AUTO`, user
+code drives collection.
+
+Deliberately, the automatic trigger sits at allocation sites and **never** on
+the refcount-decrement path: collecting out of `rc_strong_decrement` reenters
+the collector while a caller is mid-mutation.
 
 Runtime knobs surface as three compiler intrinsics wired in
 `elab_memory.c`:
@@ -103,6 +113,7 @@ Runtime knobs surface as three compiler intrinsics wired in
 | `(gc!)`        | Force one collection cycle now  |
 | `(gc-enable!)` | Enable, defaulting the mode to `GC_MANUAL` |
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
+| `(gc-auto!)`   | Enable in `GC_AUTO` -- collect automatically (needs `--enable=cycle-gc`) |
 
 `(gc-enable!)` defaults to `GC_MANUAL`, not `GC_THRESHOLD` -- collection still
 happens only when you ask for it with `(gc!)`. Call `gc_set_mode(GC_THRESHOLD)`
@@ -116,10 +127,11 @@ survives it.
 > (in-cycle) edges on a scratch counter to find blocks referenced only from
 > within the candidate subgraph. Measured: 192 bytes per two-node cycle -> 0.
 >
-> Two caveats remain. The collector only sees what the walker sees, so a cycle
-> routed through an `RCK_OPAQUE` handle is still not reclaimed. And collection is
-> **driven by user code** -- `(gc!)`, or the suspect threshold under
-> `(gc-enable!)`; there is no automatic background trigger yet. Breaking cycles
+> One caveat remains: the collector only sees what the walker sees, so a cycle
+> routed through an `RCK_OPAQUE` handle is still not reclaimed. Collection is
+> driven by user code -- `(gc!)`, or the suspect threshold under
+> `(gc-enable!)` -- **unless** `(gc-auto!)` is in play, which collects at
+> allocation checkpoints on its own (CG5, `--enable=cycle-gc`). Breaking cycles
 > with `weak<T>`, as in Rust, remains valid and is still the only option with the
 > collector disabled (the default). See
 > `docs/archive/gc-cycle-collection-plan.md` (shipped) and

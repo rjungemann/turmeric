@@ -307,6 +307,7 @@ typedef struct Elab {
     const Symbol *sym_gc_force;    /* gc! */
     const Symbol *sym_gc_enable;   /* gc-enable! */
     const Symbol *sym_gc_disable;  /* gc-disable! */
+    const Symbol *sym_gc_auto;     /* gc-auto! (CG5, cycle-gc experiment) */
     /* Phase 6: Macro system */
     const Symbol *sym_defmacro;   /* defmacro */
     const Symbol *sym_quote;      /* quote */
@@ -1157,6 +1158,7 @@ Expr *elab_ref_pred(Elab *e, const Form *call);
 Expr *elab_gc_force(Elab *e, const Form *call);
 Expr *elab_gc_enable(Elab *e, const Form *call);
 Expr *elab_gc_disable(Elab *e, const Form *call);
+Expr *elab_gc_auto(Elab *e, const Form *call);
 
 /* elab_effects.c */
 Expr *elab_reset(Elab *e, const Form *call);
