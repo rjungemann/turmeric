@@ -663,6 +663,138 @@ static bool rt_pred_is_impure(Elab *e, const Form *f) {
     return false;
 }
 
+/* ------------------------------------------------------------------------- *
+ * RT4 branching bodies: prove a return obligation PER PATH.
+ *
+ * The obligation is `pred[body/r]`.  When the body is a single expression the
+ * encoder handles it directly, but `(if c t e)` is not an arithmetic term --
+ * there is no value to substitute -- so the whole obligation answered unknown
+ * and the check stayed.  That rules out most real function bodies.
+ *
+ * Splitting recovers them.  `(if c t e)` is discharged when BOTH
+ *
+ *     c  |- pred[t/r]        and        (not c) |- pred[e/r]
+ *
+ * hold, which is exactly the path-sensitive reading: on each path the value
+ * returned is that branch's, and the condition that selected it is a fact.
+ * `(let [x v] body)` adds `x = v` and recurses into the body, so a body that
+ * names its result still gets checked.
+ *
+ * Every sub-obligation is discharged SILENTLY.  A failure here is not a
+ * diagnostic -- it means this strategy did not work, and the caller falls back
+ * to the ordinary whole-body obligation, which reports in the ordinary place
+ * with the ordinary message.  So splitting can only ever prove MORE; it never
+ * changes what an unproven function looks like.
+ * ------------------------------------------------------------------------- */
+
+#define RT_PATH_MAX_DEPTH 8
+
+/* Discharge one path's obligation without reporting anything. */
+static bool rt_prove_silent(Elab *e, const Form *pred, const char *var_name,
+                            const Form *subject, TypeKind base_kind,
+                            RefineEnv *env, Span loc) {
+    if (!pred || !subject) return false;
+    RefineObligation *ob = refine_collect_obligation(
+        &e->refine_obs, pred, var_name, subject, rt_sort_of_kind(base_kind),
+        type_name(type_simple(base_kind, CK_COPY)), loc, env, "path", NULL);
+    if (!ob) return false;
+    ob->speculative = true;
+    ob->path_probe  = true;
+    return refine_discharge_one(ob, e->arena);
+}
+
+/* True when `f` is a list whose head is the symbol `name`. */
+static bool rt_head_is(const Form *f, const char *name) {
+    if (!f || f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *h = f->as.list.items[0];
+    if (h->tag != F_SYM || !h->as.sym) return false;
+    return strcmp(h->as.sym->name, name) == 0;
+}
+
+static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
+                           const Form *subject, TypeKind base_kind,
+                           RefineEnv *env, Span loc, uint32_t depth);
+
+/* Run `body` with `hyp` assumed.  The env's hypothesis list is a cons chain
+ * and its name table only ever grows, so a scope is saved and restored by
+ * rewinding both -- no copying. */
+static bool rt_prove_under(Elab *e, const Form *pred, const char *var_name,
+                           const Form *hyp, const Form *body,
+                           TypeKind base_kind, RefineEnv *env, Span loc,
+                           uint32_t depth) {
+    RefineHyp *saved_head  = env->head;
+    uint32_t   saved_names = env->n_names;
+    if (hyp) refine_env_push(env, hyp, NULL, NULL);
+    bool ok = rt_prove_paths(e, pred, var_name, body, base_kind, env, loc, depth + 1);
+    env->head    = saved_head;
+    env->n_names = saved_names;
+    return ok;
+}
+
+static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
+                           const Form *subject, TypeKind base_kind,
+                           RefineEnv *env, Span loc, uint32_t depth) {
+    if (!subject || depth >= RT_PATH_MAX_DEPTH) return false;
+
+    /* (if c t e) -- both arms, each under its own path condition.  A one-armed
+     * `if` has no value on the false path and is left alone. */
+    if (rt_head_is(subject, "if") && subject->as.list.len == 4) {
+        const Form *c = subject->as.list.items[1];
+        const Form *t = subject->as.list.items[2];
+        const Form *f = subject->as.list.items[3];
+        Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+        notk[0] = form_sym(e->arena, subject->span,
+                           symtab_intern(e->st, strslice("not", 3)));
+        notk[1] = (Form *)c;
+        Form *nc = form_list(e->arena, subject->span, notk, 2);
+        return rt_prove_under(e, pred, var_name, c,  t, base_kind, env, loc, depth) &&
+               rt_prove_under(e, pred, var_name, nc, f, base_kind, env, loc, depth);
+    }
+
+    /* (let [x v] body) -- one binding, one body form.  `x = v` is the fact the
+     * body's own obligation needs.  Wider shapes fall through rather than
+     * guess which binding the result depends on. */
+    if (rt_head_is(subject, "let") && subject->as.list.len == 3) {
+        const Form *binds = subject->as.list.items[1];
+        const Form *body  = subject->as.list.items[2];
+        if (binds && binds->tag == F_VEC && binds->as.list.len == 2 &&
+            binds->as.list.items[0]->tag == F_SYM) {
+            const Form *x = binds->as.list.items[0];
+            const Form *v = binds->as.list.items[1];
+            /* SHADOWING IS A CONTRADICTION HERE.  The hypothesis is `x = v` in
+             * the environment's single flat namespace, so rebinding a name
+             * that is already in scope asserts `x = <something mentioning x>`.
+             * `(let [x (- x 1)] x)` becomes `x = x - 1`, which is false for
+             * every x -- and a false hypothesis proves the goal, so the check
+             * gets elided and the function returns a value violating its own
+             * refinement.  That is a miscompile, and this shape is ordinary
+             * code, not a corner case.
+             *
+             * Declining to split is the fix: the whole-body obligation still
+             * runs and still answers unknown, exactly as before path
+             * splitting existed.  Alpha-renaming the binding would recover
+             * these bodies and is the natural follow-up. */
+            for (uint32_t _i = 0; _i < env->n_names; _i++)
+                if (env->names[_i] &&
+                    strcmp(env->names[_i], x->as.sym->name) == 0)
+                    return false;
+            refine_env_declare(env, x->as.sym->name, rt_sort_of_kind(base_kind));
+            Form **eqk = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+            eqk[0] = form_sym(e->arena, subject->span,
+                              symtab_intern(e->st, strslice("=", 1)));
+            eqk[1] = (Form *)x;
+            eqk[2] = (Form *)v;
+            Form *eq = form_list(e->arena, subject->span, eqk, 3);
+            return rt_prove_under(e, pred, var_name, eq, body, base_kind, env,
+                                  loc, depth);
+        }
+        return false;
+    }
+
+    /* A leaf: an ordinary expression the encoder can substitute for `r`. */
+    return rt_prove_silent(e, pred, var_name, subject, base_kind, env, loc);
+}
+
 static bool rt_return_obligation_proven(Elab *e, const Form *pred,
                                         const char *var_name,
                                         const Form *subject, TypeKind base_kind,
@@ -674,6 +806,17 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
      * gate off -- turning the experiment on should not invent an error. */
     if (rt_pred_is_impure(e, pred)) return false;
     experiment_warn_if_used("refined");
+
+    /* RT4: a branching body is proved per path when it can be.  Tried first
+     * and silently; failing costs one extra pass and changes nothing the user
+     * sees, because the whole-body obligation below still runs and still
+     * reports. */
+    if (subject && (rt_head_is(subject, "if") || rt_head_is(subject, "let")) &&
+        rt_prove_paths(e, pred, var_name, subject, base_kind, env, loc, 0)) {
+        refine_note_split_proven();
+        return true;
+    }
+
     RefineObligation *ob =
         refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
                                   rt_sort_of_kind(base_kind), type_name(type_simple(base_kind, CK_COPY)),

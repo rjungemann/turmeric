@@ -1,0 +1,21 @@
+;; SOUNDNESS REGRESSION for RT4 path splitting.
+;;
+;; Splitting a `(let [x v] body)` adds the hypothesis `x = v`. The environment
+;; has ONE flat namespace, so rebinding a name already in scope asserts
+;; `x = <something mentioning x>`: here `x = x - 1`, false for every x. A false
+;; hypothesis proves the goal, the check is elided, and `shadowed -5` returns
+;; -6 while declaring `(>= r 0)`.
+;;
+;; That is not a corner case -- shadowing a parameter in a `let` is ordinary
+;; code, and it was a live miscompile the moment path splitting landed.
+;;
+;; The fix is to decline to split when the bound name is already in scope. The
+;; whole-body obligation still runs and answers unknown, so the check survives
+;; and fires, which is what this fixture observes. Alpha-renaming the binding
+;; would recover these bodies and is the natural follow-up.
+(defn shadowed [x : int] : #refine{ r : int | (>= r 0) }
+  (let [x (- x 1)] x))
+
+(defn main [] : int
+  (println (shadowed -5))
+  0)

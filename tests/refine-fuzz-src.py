@@ -499,23 +499,53 @@ class Gen:
                           "\n  :pre " + pre if pre else "", body))
         return out, names
 
+    def shape_branching(self):
+        """Bodies that are `if` / `let`, which RT4 discharges PER PATH.
+
+        The `let` rungs deliberately include a binding that SHADOWS the
+        parameter.  Path splitting adds `x = v` to a single flat namespace, so
+        `(let [x (- x 1)] x)` asserts `x = x - 1` -- false for every x, and a
+        false hypothesis proves anything, eliding a check on a function that
+        really does return a violating value.  That was a live miscompile and
+        no other shape here can reach it: nothing else generates a binding
+        form at all."""
+        z = self._zero()
+        one = "1" if self.mode == "int" else "1.0"
+        body = self.rng.choice([
+            "(if (>= p %s) p %s)" % (z, z),
+            "(if (> p %s) p (- %s p))" % (z, z),
+            "(if (>= p %s) p (if (< p %s) (- %s p) %s))" % (z, z, z, z),
+            "(let [q (* p 2)] q)" if self.mode == "int" else "(let [q (* p 2.0)] q)",
+            "(let [q (+ p %s)] (if (>= q %s) q %s))" % (one, z, z),
+            # shadowing rungs
+            "(let [p (- p %s)] p)" % one,
+            "(let [p (+ p %s)] (if (>= p %s) p %s))" % (one, z, z),
+        ])
+        pred = self.rng.choice(["(>= r %s)" % z, "(> r %s)" % z,
+                                "(<= r %s)" % z, "(>= r p)"])
+        return (["p"],
+                "(defn target [p : %s] : #refine{ r : %s | %s }\n  %s)"
+                % (self.ty, self.ty, pred, body))
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         r = self.rng.random()
-        if r < 0.20:
+        if r < 0.17:
             params, target = self.shape_random()
-        elif r < 0.42:
+        elif r < 0.36:
             params, target = self.shape_linear()
-        elif r < 0.60:
+        elif r < 0.52:
             params, target = self.shape_congruence()
-        elif r < 0.74:
+        elif r < 0.64:
             params, target = self.shape_param()
-        elif r < 0.80:
+        elif r < 0.70:
             params, target = self.shape_propagate()
-        elif r < 0.90:
+        elif r < 0.78:
             params, target = self.shape_typeclass()
-        else:
+        elif r < 0.86:
             params, target = self.shape_congruence_method()
+        else:
+            params, target = self.shape_branching()
         lines.append(target)
         extra, extra_names = self.extra_targets()
         lines += extra

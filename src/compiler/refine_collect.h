@@ -134,6 +134,10 @@ typedef struct RefineObligation {
     /* A speculative probe (RT4 template inference): decide it, report nothing,
      * count nothing.  The caller only wants the verdict. */
     bool         speculative;
+    /* RT4 path splitting: a speculative probe for ONE PATH of a branching
+     * body.  Counted separately from RT4 template probes so the stats line
+     * still means what it says -- these are not inferred refinements. */
+    bool         path_probe;
     VCSort       base_sort;      /* sort of the refined base type T */
     const char  *base_type_name; /* T, for diagnostics */
     Span         loc;

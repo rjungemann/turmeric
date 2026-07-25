@@ -853,6 +853,49 @@
 > soundness surface in the feature. Worth doing when there is a real project
 > whose builds are measurably slowed by discharge -- and not before.
 >
+> ### RT4 branching bodies -- path splitting (landed 2026-07-25)
+>
+> `pred[body/r]` needs a value to substitute for `r`, and `(if c t e)` is not
+> one, so any function whose body branched answered unknown and kept its check.
+> That ruled out most real code. A branching body is now discharged PER PATH:
+>
+>     c |- pred[t/r]    and    (not c) |- pred[e/r]
+>
+> `(let [x v] body)` adds `x = v` and recurses. Nesting is handled to a depth
+> cap. Neither arm typically proves the goal alone -- in `(if (>= x 0) x 0)`
+> with goal `(>= r 0)`, `x` is not non-negative and `0` says nothing about `x`
+> -- so the path condition is doing the work.
+>
+> Splitting is tried FIRST and SILENTLY, and can only ever prove more: on
+> failure the ordinary whole-body obligation still runs and still reports in
+> the ordinary place, so an unproven function looks exactly as it did before.
+>
+> #### The hole it opened, and closed
+>
+> The hypothesis `x = v` lands in the environment's single flat namespace, so a
+> `let` that SHADOWS a name in scope asserts `x = <something mentioning x>`.
+> `(let [x (- x 1)] x)` becomes `x = x - 1` -- false for every x -- and a false
+> hypothesis proves the goal. `(defn shadowed [x : int] : #refine{ r | (>= r 0) }
+> (let [x (- x 1)] x))` returned -6 and exited 0 where the gate-off build
+> aborted. A live miscompile, on ordinary code, introduced by this slice.
+>
+> Fixed by declining to split when the bound name is already in scope; the
+> whole-body obligation then answers unknown and the check survives.
+> `refine-let-shadow-not-split` pins it. Alpha-renaming the binding would
+> recover those bodies and is now the follow-up item.
+>
+> I found that by reasoning about the flat namespace, NOT by fuzzing -- the
+> generator emitted no binding forms at all, so nothing it produced could reach
+> it. A `branching` shape now generates `if`/`let` bodies including shadowed
+> ones, and with the guard removed it reports the miscompile (1/200 at seed
+> 171, 0 on the fixed build). Two slices running, the fuzzer's gaps have been
+> about what it does not GENERATE rather than what it fails to check.
+>
+> Stats gained `proved by path splitting (N path probe(s))`. The split returns
+> before the ordinary obligation is built, so without explicit accounting a
+> branching body vanished from the summary entirely -- four refined functions
+> reported as one obligation.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -871,8 +914,10 @@
 >   since moving a form from UNKNOWN to PURE only ever removes diagnostics.
 >   Note this is NOT the "purity from effect inference" item it replaces --
 >   that one is struck as unworkable, per the finding above.
-> - **Branching-body propagation** -- RT4 is limited to single-expression
->   bodies; a path-sensitive join at merge points would cover `if`/`match`.
+> - **Alpha-rename let bindings in path splitting** -- a `let` that shadows a
+>   name in scope currently declines to split (the hypothesis `x = v` would be
+>   a contradiction in the flat namespace). Renaming the binding recovers those
+>   bodies. `match` arms are the same shape and would follow.
 > - **Whole-program entry-check elision** -- the piece that turns the call-site
 >   layer from a diagnostic into a code-size/perf win. Needs an
 >   exported/address-taken analysis before it can be sound.

@@ -346,6 +346,12 @@ typedef struct {
 static RefineMemoSlot g_memo[REFINE_MEMO_CAP];
 static uint32_t       g_memo_len;
 
+void refine_note_split_proven(void) {
+    g_stats.collected++;
+    g_stats.proven++;
+    g_stats.proven_by_path++;
+}
+
 void refine_memo_reset(void) {
     memset(g_memo, 0, sizeof(g_memo));
     g_memo_len = 0;
@@ -439,7 +445,8 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
      * did not; it reports nothing and is counted separately so the summary
      * still describes real obligations. */
     if (ob->speculative) {
-        g_stats.templates_tried++;
+        if (ob->path_probe) g_stats.path_probes++;
+        else                g_stats.templates_tried++;
         const char *why = NULL;
         RefineVC *pvc = refine_vc_build(ob, a, &why);
         ob->vc = pvc;   /* so a caller can follow up (e.g. ask for a witness) */
@@ -449,7 +456,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             RefineDecision pd = CHAIN[i](pvc, a);
             if (pd.verdict == RT_VALID) {
                 ob->proven = true;
-                g_stats.inferred++;
+                if (!ob->path_probe) g_stats.inferred++;
                 return true;
             }
             if (pd.verdict != RT_UNKNOWN) break;
@@ -599,6 +606,10 @@ void refine_discharge_all(RefineObligationVec *v, Arena *a) {
                 "(%u backend call(s), %u memo hit(s))\n",
                 g_stats.collected, g_stats.proven, g_stats.invalid,
                 g_stats.unknown, g_stats.backend_calls, g_stats.memo_hits);
+        if (g_stats.proven_by_path)
+            fprintf(stderr,
+                    "refine: %u proved by path splitting (%u path probe(s))\n",
+                    g_stats.proven_by_path, g_stats.path_probes);
         if (g_stats.templates_tried)
             fprintf(stderr,
                     "refine: %u result refinement(s) inferred from %u template "

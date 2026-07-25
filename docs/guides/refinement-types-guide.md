@@ -639,9 +639,12 @@ Known and deliberate, in rough order of how likely you are to hit them:
   only sees refinements of functions already elaborated. Under mutual
   recursion, one direction may miss one. This can only lose a hypothesis, never
   add a false one.
-- **No branching-body path sensitivity.** The return obligation is taken against
-  the function's tail expression. A body whose tail is a `let`, a `match`, or a
-  call lands outside the encoder's fragment and answers unknown.
+- **Path splitting covers `if` and `let`, not `match`.** A branching body is
+  discharged per path -- `c |- pred[then/r]` and `(not c) |- pred[else/r]` --
+  and a `let` contributes `x = v`. A `let` whose binding SHADOWS a name in
+  scope declines to split, because the hypothesis would be a contradiction in
+  the flat namespace; those bodies keep their runtime check. `match` arms are
+  not split yet.
 - **No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)
