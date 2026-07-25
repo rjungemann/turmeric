@@ -1398,8 +1398,40 @@
 >
 > Candidates, roughly by value:
 >
-> - **Dynamic typeclass dispatch** -- a dispatch with no statically-resolved
->   instance is not checked; which method runs is unknown at the site.
+> - **Dynamic typeclass dispatch** -- INVESTIGATED; the entry was mis-scoped.
+>   The gap is not specific to dynamic dispatch. The argument obligation is
+>   built from the resolved INSTANCE, and an instance may legally demand less
+>   (an unannotated instance parameter demands nothing at all), so a class
+>   parameter refinement is enforced only when some instance happens to restate
+>   it. The static case has the same hole as the dynamic one, and it is the more
+>   common way to write an instance.
+>
+>   Not a soundness hole: the method's own entry check is retained, and a
+>   genuinely dynamic two-instance dispatch passing a violating argument aborts
+>   identically with the gate off and on. What is lost is the compile-time
+>   error.
+>
+>   The fix is the dual of the result propagation that already ships: raise the
+>   obligation against the CLASS parameter predicate at a class-method call
+>   site, alongside the instance's. Sound by the same variance argument run
+>   backwards -- `TUR-E0374` guarantees no instance demands more than its class,
+>   so `class_pred` is the strongest demand true of every instance.
+>
+>   Blocked on a DESIGN question, not on machinery: is a class parameter
+>   refinement a contract callers must honour, or only an upper bound on what
+>   instances may demand? The first reading turns today's silent-and-correct
+>   lenient-instance programs into errors -- coherent, but a behaviour change
+>   that can reject existing code. The second reports only the dynamic case,
+>   which is conservative and false-positive-free.
+>
+>   Demand is low by measurement: 13 `defclass` methods carry a parameter
+>   refinement, all in fixtures and none in `stdlib/`; 49 files use `^Class`
+>   constrained generics; the intersection is **zero**.
+>
+>   Filed with repros:
+>   [docs/reported/class-param-refinement-not-demanded-of-callers.md](../../reported/class-param-refinement-not-demanded-of-callers.md).
+>   Guide corrected -- it previously showed `(.scale-by 3 0)` erroring without
+>   noting that only holds when the instance restates the predicate.
 > - **Higher-order callees** -- a function-typed parameter carries no
 >   refinements in its type, so neither its body nor its callers can check the
 >   eventual call. This needs refinements in function types, which the

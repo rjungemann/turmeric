@@ -152,20 +152,43 @@ a captured value's own refinement is in scope as a hypothesis inside the
 lambda body.
 
 A **typeclass method** is checked too, when the dispatch resolves to a known
-instance:
+instance -- and what is checked is **that instance's** parameter predicate, not
+the class's:
 
 ```turmeric
 (defclass Scaler [a]
   (scale-by [self : a, k : #refine{ v : int | (> v 0) }] : int))
+
+;; an instance that RESTATES the class demand
+(definstance Scaler [int]
+  (scale-by [self : int, k : #refine{ v : int | (> v 0) }] : int (* self k)))
 
 (.scale-by 3 4)   ; proved
 (.scale-by 3 0)   ; error[TUR-E0371] on argument 2 of 'scale-by'
 ```
 
 Both the dotted `(.m x ...)` and bare `(m x ...)` forms go through the same
-resolution and are checked identically. A dispatch that stays dynamic -- no
-statically-selected instance -- is not checked, because which method runs is
-not known at the site; the method's own entry check still guards it.
+resolution and are checked identically.
+
+Two consequences are easy to miss, and the instance above is written the way it
+is to make them visible. Because the obligation comes from the *instance*:
+
+- An instance that **demands less** -- `(scale-by [self : int, k : int] ...)`,
+  which is legal -- carries no parameter predicate, so `(.scale-by 3 0)`
+  raises nothing. Omitting the annotation entirely does *not* inherit the
+  class demand either; parameters differ from results here.
+- A dispatch that stays **dynamic** -- no statically-selected instance --
+  raises no argument obligation at all, because which method runs is not known
+  at the site.
+
+In both cases the method's own entry check still guards it, so nothing unsound
+follows; a violation is caught at runtime exactly as it is with the gate off.
+What does *not* happen is a compile-time error. A class parameter refinement is
+therefore an upper bound on what instances may demand (enforced by `TUR-E0374`
+below) rather than a demand on callers -- the mirror image of the result
+direction, where the class promise *is* enforced and propagated. Closing that
+asymmetry is recorded in
+[docs/reported/class-param-refinement-not-demanded-of-callers.md](../reported/class-param-refinement-not-demanded-of-callers.md).
 
 An instance may accept **more** than its class signature promises, but not
 less. The class signature is the contract callers program against, so an
@@ -748,9 +771,15 @@ Known and deliberate, in rough order of how likely you are to hit them:
   `apply2`. Passing a refined function as a value is legal and the callee's own
   entry checks still run -- only the static crossing is lost. Refinements in
   function *types* are outside the prototype.
-- **A dynamic typeclass dispatch is not checked.** When the instance is
-  statically resolved the crossing is checked; when it is not, which method
-  runs is unknown at the site, so only the method's own entry check applies.
+- **A class parameter refinement is never demanded of callers.** The argument
+  obligation comes from the resolved INSTANCE, so it exists only when that
+  instance restates the class predicate. An instance that demands less, or that
+  leaves the parameter unannotated, raises nothing -- and a dynamic dispatch,
+  where no instance is selected, raises nothing either. The method's own entry
+  check still applies in every case, so this costs a compile-time error, not
+  safety. It is the mirror image of the result direction, where the class
+  promise is enforced against each instance and propagated to callers. See
+  [docs/reported/class-param-refinement-not-demanded-of-callers.md](../reported/class-param-refinement-not-demanded-of-callers.md).
 
 - **Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,
