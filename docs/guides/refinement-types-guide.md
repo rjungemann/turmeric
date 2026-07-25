@@ -595,6 +595,16 @@ inputs while the program only exercises the arguments it happens to pass, so a
 sound refutation and a clean run coexist routinely. They are counted and saved
 for triage, never failed on.
 
+### wasm32
+
+The solver ships in the WebAssembly build, so it is checked there too --
+`bash tests/run-refine-wasm.sh` (ctest `tur_refine_wasm`) compiles every
+refine source under Emscripten with the real `tur_wasm` flags AND runs the
+solver's unit checks at 32-bit pointers under node. Compiling is the easy
+half; agreeing is the point, since S2 is Fourier-Motzkin over exact rationals
+with overflow guards and the hash-cons table keys off integer widths. The
+script skips cleanly when emcc is not installed.
+
 A fuzzer nobody has watched fail is a fuzzer that reports zero because it is
 broken. Two one-line sabotages are documented in the script header, both
 verified to be caught where the shipped build reports zero: breaking purity

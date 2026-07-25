@@ -24,7 +24,8 @@
 > | RT5b stdlib refinement aliases | done | `stdlib/refine.tur` |
 > | RT4 predicate propagation | done (+ declared-result propagation) | `elab_fns.c`, `refine_collect.c` |
 > | RT6 error message quality | done | `refine_discharge.c` |
-> | RT5a WASM confirm, RT7 caching | not started | -- |
+> | RT5a WASM confirm | done (compiles AND agrees at wasm32) | `tests/run-refine-wasm.sh` |
+> | RT7 caching | not started | -- |
 >
 > ### Deliberate deviations from the plan as written
 >
@@ -721,6 +722,55 @@
 > a rule one fixture already pins. `Gen.expr` grew a `pure_only` flag for
 > predicate generation; `skip_invalid` went from ~24/300 to ~2/300.
 >
+> ### RT5a -- the solver on wasm32 (landed 2026-07-25)
+>
+> Two questions, and only the second is interesting:
+>
+> 1. Do the refine sources COMPILE under Emscripten with the flags the real
+>    `tur_wasm` target uses? All ten, clean, including `-pedantic` -- which is
+>    load-bearing, since that is what caught the `__int128` the exact rational
+>    arithmetic originally used.
+> 2. Do they give the SAME ANSWERS at 32-bit pointers? **47 checks, 0 failures,
+>    run under node.** This is the half a compile check would have missed: S2 is
+>    Fourier-Motzkin over exact rationals with `__builtin_*_overflow` guards,
+>    and the hash-cons table, the constant folder and the model search all key
+>    off integer widths.
+>
+> The full `tur_wasm` module also builds and links with the refine sources in
+> it, with no refine-related warnings.
+>
+> `tests/run-refine-wasm.sh` makes both reproducible and skips cleanly when
+> emcc is absent; registered as ctest `tur_refine_wasm`.
+>
+> #### Two defects the build surfaced
+>
+> **The Z3 oracle guard did not actually guard WASM.** The top-level
+> `CMakeLists.txt` refuses `TUR_REFINE_Z3_ORACLE` when
+> `CMAKE_BUILD_TYPE STREQUAL "Release" OR EMSCRIPTEN`, and the comment beside
+> it claims "Release and WASM builds REFUSE the option, so there is
+> structurally no path by which Z3 reaches a shipped binary or the web
+> bundle". `EMSCRIPTEN` is only set when cross-compiling under the Emscripten
+> toolchain (`emcmake cmake`) -- and `tur_wasm` is a normal HOST configure that
+> shells out to `emcc` from an `add_custom_target`. So
+> `-DTUR_WASM=ON -DTUR_REFINE_Z3_ORACLE=ON` configured cleanly with the oracle
+> ENABLED.
+>
+> No Z3 actually reached the bundle: the custom target inherits neither
+> `target_compile_definitions` nor `link_libraries`, so `refine_libz3.c`
+> compiled to its stub branch. But that is safety by accident of the build's
+> shape, not the structural refusal the comment describes. The guard now also
+> tests `TUR_WASM`; verified in all three directions (wasm+oracle fails,
+> Release+oracle fails, plain wasm succeeds).
+>
+> **UB in the shipped web bundle, in unrelated code.** `promo_hash`
+> (`src/turi/eval.c:9392`) applies the 64-bit MurmurHash3 finalizer to a
+> `uintptr_t`, so at wasm32 it shifts a 32-bit value by 33. clang warns;
+> `turi/eval.c` is the interpreter, which IS the web REPL. Filed as
+> `docs/reported/wasm32-promo-hash-shift-ub.md` rather than fixed inline --
+> the one-line fix changes hash values and therefore promo-map iteration
+> order, which deserves its own suite run rather than riding along with an
+> unrelated slice. (`hamt.c` does the same shift on a `uint64_t` and is fine.)
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -747,8 +797,8 @@
 >
 > ---
 
-> **Status:** RT0--RT3 + S0--S3 + RT5b landed (see "Landed so far" above);
-> RT4/RT5a/RT6/RT7 not started. RT0 syntax/storage is largely covered by the
+> **Status:** RT0--RT6 + S0--S4 landed (see "Landed so far" above); RT7
+> (incremental discharge caching) is the only phase not started. RT0 syntax/storage is largely covered by the
 > existing Contract Types (CT0--CT4) infrastructure; the `#refine{var : T | p}`
 > reader is already shipped. The remaining work is the constraint-generation
 > and discharge pipeline (RT1--RT4), a stdlib layer of predicate-annotated
