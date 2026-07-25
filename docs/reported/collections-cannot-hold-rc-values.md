@@ -208,8 +208,8 @@ do exactly this (`m->key_ops.release`), and the value side hardcodes
 one value-box op. Making the value ops symmetric with the key ops is the
 enabling refactor, and it is behaviour-preserving for the existing bit-1 path.
 
-**Wrong claim 2 -- and this one sits in front of all of it:
-`map-assoc` cannot take a move-typed value at all.**
+**Wrong claim 2 -- and this one sat in front of all of it:
+`map-assoc` could not take a move-typed value at all. FIXED 2026-07-25.**
 
 ```
 stdlib/map.tur:495: error [TUR-E0201]: cannot copy unique value '__tur_mv__'
@@ -223,14 +223,29 @@ covering boxed values, `map-multiword-struct-value`, declares its struct
 `:copy`. Declaring the query's parameter `^borrow` does **not** relax it; the
 check fires on the second use at the call site, not inside the callee.
 
-`rc<T>` is move-only, so **every** rc value would hit this before reaching any
-of the HAMT work. Whoever takes this on should fix the double-use first --
-probably by having the emit-time query take a type witness that is not the value
-binding, the way `vec-empty-like__` threads one -- and should treat it as its own
-change with its own fixture, since it unblocks move-typed map values generally,
-not just rc ones.
+`rc<T>` is move-only, so **every** rc value would have hit this before reaching
+any of the HAMT work.
 
-Order of work, then: (a) let `map-assoc` accept a move-typed value; (b) make the
+**The fix, and the order of it is the whole trick.** The query is a pure *type*
+probe -- its body discards the argument -- so it now takes a **borrow**
+`(& v)`, and `emit_expr.c` peels that borrow at the **expression** level. Not
+the type level: `TY_REF_IMMUT` carries only the target's `TypeKind`, which would
+lose the `AdtDef` that `type_is_wide_byval_adt` needs, silently folding the flag
+to 0 and storing a wide value unboxed.
+
+A borrow alone was **not** enough, and this is the part worth not re-deriving:
+the move at the value's own argument position happens *first* in argument order,
+so the borrow was a genuine use-after-move and the checker was right to reject
+it. Binding the flag in the macro's `let`, before the value is handed over, is
+what makes the borrow precede the move. The flag is a compile-time constant with
+no side effects, so hoisting it changes no evaluation order that matters.
+
+Pinned by `tests/fixtures/map-move-typed-value`, which asserts both sides of the
+boxing decision -- a botched peel fails silently, folding to "narrow" and storing
+a wide value inline. Two snapshots regenerated for the extra binding.
+
+Order of work, then: ~~(a) let `map-assoc` accept a move-typed value~~ **(a)
+done**; (b) make the
 HAMT's value ops caller-supplied and stored, symmetric with the key ops;
 (c) thread bit 2 through `map.tur` passing `rc_strong_increment` /
 `rc_strong_decrement` from the emitted side; (d) register the map insert/read

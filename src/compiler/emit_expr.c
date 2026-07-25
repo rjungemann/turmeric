@@ -3374,7 +3374,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (fn_binding && fn_binding->name && fn_binding->name->name &&
                 strcmp(fn_binding->name->name, "tur-wide-byval?") == 0 &&
                 e->as.call_.n_args == 1) {
-                Type at = emit_resolve_type(ctx, e->as.call_.args[0]->type);
+                /* map-assoc-move-typed-value: the query is a pure TYPE probe --
+                 * its body discards the argument -- so callers hand it a BORROW
+                 * `(& v)` rather than the value, which keeps a move-typed value
+                 * usable at its real argument position.  Peel the borrow at the
+                 * EXPRESSION level, not the type level: TY_REF_IMMUT carries
+                 * only the target's TypeKind, which would lose the ADT def that
+                 * type_is_wide_byval_adt needs. */
+                const Expr *probe = e->as.call_.args[0];
+                if (probe && probe->kind == EX_BORROW_IMMUT &&
+                    probe->as.borrow_immut_.expr)
+                    probe = probe->as.borrow_immut_.expr;
+                Type at = emit_resolve_type(ctx, probe->type);
                 bool wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
                             type_is_wide_byval_adt(at);
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");

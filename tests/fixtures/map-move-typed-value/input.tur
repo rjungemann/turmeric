@@ -1,0 +1,42 @@
+;; collections-cannot-hold-rc-values, map side, step (a): map-assoc accepts a
+;; MOVE-TYPED value.
+;;
+;; It could not before.  The macro binds the value once but USES it twice --
+;; once at its real argument position, and once as the argument to the
+;; emit-time type query `tur-wide-byval?` that decides whether the value needs
+;; heap boxing -- and a move-typed binding may be used at most once:
+;;
+;;   stdlib/map.tur:495: error [TUR-E0201]: cannot copy unique value '__tur_mv__'
+;;
+;; The error pointed into stdlib rather than at the user's call site, and it
+;; went unnoticed because the one fixture covering boxed values
+;; (map-multiword-struct-value) declares its struct `:copy`.  Structs are
+;; move-typed by default, so this rejected the ordinary case.
+;;
+;; Two changes, and the order of them is the whole trick.  The query is a pure
+;; TYPE probe -- its body discards the argument -- so it now takes a BORROW
+;; `(& v)`, and the compiler peels that borrow at the EXPRESSION level (a
+;; TY_REF_IMMUT carries only the target's TypeKind, which would lose the ADT def
+;; the boxing predicate needs).  But a borrow alone was not enough: the move at
+;; the value's own argument position happens FIRST in argument order, so the
+;; borrow was a genuine use-after-move.  Binding the flag in the `let`, before
+;; the value is handed over, is what makes the borrow precede the move.
+;;
+;; This matters beyond structs: rc<T> is move-only, so every rc value would have
+;; hit this before reaching any of the map ownership work.
+;;
+;; The assertions cover both sides of the boxing decision, because the failure
+;; mode of a botched peel is silent -- the query would fold to 0 and a wide
+;; value would be stored unboxed rather than heap-boxed.
+(defstruct Wide :move [x : int y : int z : int])
+
+(defn main [] : int
+  ;; wide, move-typed value -> heap-boxed (flag bit 1 set)
+  (let [m (map-assoc (:: (map-new) (Map int Wide)) 1 (make-struct Wide 7 8 9))]
+    (println (.x (:: (map-get m 1) Wide)))     ; 7
+    (println (.z (:: (map-get m 1) Wide))))    ; 9
+
+  ;; narrow value -> stored inline (flag 0), the negative side of the same query
+  (let [n (map-assoc (:: (map-new) (Map int int)) 2 42)]
+    (println (:: (map-get n 2) int)))          ; 42
+  0)

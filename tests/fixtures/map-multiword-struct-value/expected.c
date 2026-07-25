@@ -4238,10 +4238,10 @@ static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
+static int64_t tur_wide_byval___spec__int64_t_const_void__(const void *);
 static tur_adt_Map__int__Point * map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(tur_adt_Map__int__Point *, int64_t, int64_t, int64_t, int64_t, int64_t);
 static tur_adt_Map__int__Point * tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(tur_adt_Map__int__Point *, const void *);
 static tur_adt_Map__int__Point * map_new__spec__tur_adt_Map__int__Point__();
-static int64_t tur_wide_byval___spec__int64_t_tur_adt_Point(tur_adt_Point);
 static void show_line__spec__void_tur_adt_Point(tur_adt_Point);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
@@ -9058,65 +9058,69 @@ int main(int argc, char **argv) {
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 tur_adt_Point _un_untur_unmv_un_un_1830 = __ps_244;
                 (void)_un_untur_unmv_un_un_1830;
-                tur_adt_Map__int__Point * __t245;
+                __auto_type __ps_245 = (INT64_C(1));
+                /* panic-return-signal: ret ctype unknown; no propagation here */
+                int64_t _un_untur_unmw_un_un_1831 = __ps_245;
+                (void)_un_untur_unmw_un_un_1831;
+                tur_adt_Map__int__Point * __t246;
                 {
-                    int64_t _un_untur_unmk_un_un_1831 = INT64_C(1);
-                    (void)_un_untur_unmk_un_un_1831;
-                    __auto_type __ps_246 = (ctor_Point(INT64_C(7), INT64_C(8)));
+                    int64_t _un_untur_unmk_un_un_1832 = INT64_C(1);
+                    (void)_un_untur_unmk_un_un_1832;
+                    __auto_type __ps_247 = (ctor_Point(INT64_C(7), INT64_C(8)));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    tur_adt_Point _un_untur_unmv_un_un_1832 = __ps_246;
-                    (void)_un_untur_unmv_un_un_1832;
-                    __auto_type __ps_247 = (map_new__spec__tur_adt_Map__int__Point__());
+                    tur_adt_Point _un_untur_unmv_un_un_1833 = __ps_247;
+                    (void)_un_untur_unmv_un_un_1833;
+                    __auto_type __ps_248 = (INT64_C(1));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __auto_type __ps_248 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(__ps_247, &_un_untur_unmk_un_un_1831));
+                    int64_t _un_untur_unmw_un_un_1834 = __ps_248;
+                    (void)_un_untur_unmw_un_un_1834;
+                    __auto_type __ps_249 = (map_new__spec__tur_adt_Map__int__Point__());
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __auto_type __ps_249 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1831));
+                    __auto_type __ps_250 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(__ps_249, &_un_untur_unmk_un_un_1832));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __auto_type __ps_250 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1831));
+                    __auto_type __ps_251 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1832));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    tur_adt_Point __t251 = _un_untur_unmv_un_un_1832;
-                    __auto_type __ps_252 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1831));
+                    __auto_type __ps_252 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1832));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __auto_type __ps_253 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1831));
+                    tur_adt_Point __t253 = _un_untur_unmv_un_un_1833;
+                    __auto_type __ps_254 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1832));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __auto_type __ps_254 = (INT64_C(1));
+                    __auto_type __ps_255 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1832));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __auto_type __ps_255 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_248, __ps_249, __ps_250, (int64_t)(intptr_t)tur_hamt_box_key((const void*)&__t251, sizeof(tur_adt_Point)), __ps_252, (__ps_253) + ((INT64_C(2)) * (__ps_254))));
+                    __auto_type __ps_256 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_250, __ps_251, __ps_252, (int64_t)(intptr_t)tur_hamt_box_key((const void*)&__t253, sizeof(tur_adt_Point)), __ps_254, (__ps_255) + ((INT64_C(2)) * (_un_untur_unmw_un_un_1834))));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    __t245 = __ps_255;
+                    __t246 = __ps_256;
                 }
-                __auto_type __ps_256 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(__t245, &_un_untur_unmk_un_un_1829));
+                __auto_type __ps_257 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(__t246, &_un_untur_unmk_un_un_1829));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_257 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1829));
+                __auto_type __ps_258 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1829));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_258 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1829));
+                __auto_type __ps_259 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1829));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                tur_adt_Point __t259 = _un_untur_unmv_un_un_1830;
-                __auto_type __ps_260 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1829));
+                tur_adt_Point __t260 = _un_untur_unmv_un_un_1830;
+                __auto_type __ps_261 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1829));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_261 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1829));
+                __auto_type __ps_262 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1829));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_262 = (INT64_C(1));
-                /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_263 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_256, __ps_257, __ps_258, (int64_t)(intptr_t)tur_hamt_box_key((const void*)&__t259, sizeof(tur_adt_Point)), __ps_260, (__ps_261) + ((INT64_C(2)) * (__ps_262))));
+                __auto_type __ps_263 = (map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(__ps_257, __ps_258, __ps_259, (int64_t)(intptr_t)tur_hamt_box_key((const void*)&__t260, sizeof(tur_adt_Point)), __ps_261, (__ps_262) + ((INT64_C(2)) * (_un_untur_unmw_un_un_1831))));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __t243 = __ps_263;
             }
-            tur_adt_Map__int__Point * m_1833 = __t243;
-            (void)m_1833;
+            tur_adt_Map__int__Point * m_1835 = __t243;
+            (void)m_1835;
             tur_adt_Point __t264;
             {
-                int64_t _un_untur_unmk_un_un_1834 = INT64_C(1);
-                (void)_un_untur_unmk_un_un_1834;
-                __auto_type __ps_265 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(m_1833, &_un_untur_unmk_un_un_1834));
+                int64_t _un_untur_unmk_un_un_1836 = INT64_C(1);
+                (void)_un_untur_unmk_un_un_1836;
+                __auto_type __ps_265 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(m_1835, &_un_untur_unmk_un_un_1836));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_266 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1834));
+                __auto_type __ps_266 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1836));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_267 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1834));
+                __auto_type __ps_267 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1836));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_268 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1834));
+                __auto_type __ps_268 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1836));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_269 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1834));
+                __auto_type __ps_269 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1836));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __auto_type __ps_270 = (map_hyget_hyeq_hyo((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(__ps_265))), __ps_266, __ps_267, __ps_268, __ps_269));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
@@ -9125,17 +9129,17 @@ int main(int argc, char **argv) {
             show_hyline((int64_t)(__t264).x);
             tur_adt_Point __t271;
             {
-                int64_t _un_untur_unmk_un_un_1835 = INT64_C(2);
-                (void)_un_untur_unmk_un_un_1835;
-                __auto_type __ps_272 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(m_1833, &_un_untur_unmk_un_un_1835));
+                int64_t _un_untur_unmk_un_un_1837 = INT64_C(2);
+                (void)_un_untur_unmk_un_un_1837;
+                __auto_type __ps_272 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(m_1835, &_un_untur_unmk_un_un_1837));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_273 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1835));
+                __auto_type __ps_273 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1837));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_274 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1835));
+                __auto_type __ps_274 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1837));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_275 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1835));
+                __auto_type __ps_275 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1837));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_276 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1835));
+                __auto_type __ps_276 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1837));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __auto_type __ps_277 = (map_hyget_hyeq_hyo((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(__ps_272))), __ps_273, __ps_274, __ps_275, __ps_276));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
@@ -9144,24 +9148,24 @@ int main(int argc, char **argv) {
             show_hyline((int64_t)(__t271).y);
             tur_adt_Point __t278;
             {
-                int64_t _un_untur_unmk_un_un_1836 = INT64_C(1);
-                (void)_un_untur_unmk_un_un_1836;
-                __auto_type __ps_279 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(m_1833, &_un_untur_unmk_un_un_1836));
+                int64_t _un_untur_unmk_un_un_1838 = INT64_C(1);
+                (void)_un_untur_unmk_un_un_1838;
+                __auto_type __ps_279 = (tur_map_kcheck__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___const_void__(m_1835, &_un_untur_unmk_un_un_1838));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_280 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1836));
+                __auto_type __ps_280 = (__inst_Hash_hash_int(_un_untur_unmk_un_un_1838));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_281 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1836));
+                __auto_type __ps_281 = (__inst_MapKey_mk_hybox_int(_un_untur_unmk_un_un_1838));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_282 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1836));
+                __auto_type __ps_282 = (__inst_MapKey_mk_hycmp_int(_un_untur_unmk_un_un_1838));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                __auto_type __ps_283 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1836));
+                __auto_type __ps_283 = (__inst_MapKey_mk_hyowned_qu_int(_un_untur_unmk_un_un_1838));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __auto_type __ps_284 = (map_hyget_hyeq_hyo((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(__ps_279))), __ps_280, __ps_281, __ps_282, __ps_283));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 __t278 = (*(tur_adt_Point *)(intptr_t)(__ps_284));
             }
             show_line__spec__void_tur_adt_Point(__t278);
-            map_hyfree((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(m_1833))));
+            map_hyfree((int64_t)(intptr_t)((int64_t)(intptr_t)((int64_t)(intptr_t)(m_1835))));
             int64_t __t285;
             __t285 = INT64_C(0);
             __t242 = __t285;
@@ -9194,6 +9198,10 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
   
 }
 
+static int64_t tur_wide_byval___spec__int64_t_const_void__(const void * x) {
+        return INT64_C(0);
+}
+
 static tur_adt_Map__int__Point * map_assoc_eq_o__spec__tur_adt_Map__int__Point___tur_adt_Map__int__Point___int64_t_int64_t_int64_t_int64_t_int64_t(tur_adt_Map__int__Point * m, int64_t h, int64_t key, int64_t val, int64_t keyeq, int64_t owned) {
         struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -9214,10 +9222,6 @@ static tur_adt_Map__int__Point * map_new__spec__tur_adt_Map__int__Point__() {
   m->hamt = tur_hamt_new();
   return (tur_adt_Map__int__Point *)(intptr_t)m;
   
-}
-
-static int64_t tur_wide_byval___spec__int64_t_tur_adt_Point(tur_adt_Point x) {
-        return INT64_C(0);
 }
 
 static void show_line__spec__void_tur_adt_Point(tur_adt_Point x) {
