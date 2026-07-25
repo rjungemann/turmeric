@@ -1,0 +1,44 @@
+; CG6 (gc-cycle-collection-followup-plan): the collector's counters must be
+; readable from Turmeric.  They have existed since Phase 10 but nothing surfaced
+; them, which is why "run the suite and see how much garbage accumulates" -- the
+; question this whole line of work started from -- was unanswerable.
+;
+; Four readers rather than one (gc-stats) record: every one of these is a plain
+; count, so :int is the honest type here, not an :int standing in for something
+; structured.
+;
+; The assertions are shape-based rather than exact numbers so the fixture does
+; not re-pin the collector's internals:
+;   collections  == 1   (exactly one (gc!) below)
+;   freed        >  0   (the cycles were reclaimed)
+;   live-blocks  == 0   (nothing survived)
+;   high-water   >  0   (candidates really were buffered)
+(defstruct S :move [next : rc<S>])
+
+(defn null-rc-s [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn build-cycle [] : int
+  (let [s1 (rc/of (make-struct S (null-rc-s)))
+        s2 (rc/of (make-struct S (rc/clone s1)))]
+    (set! (.next s1) (rc/clone s2))
+    0))
+
+(defn run [n : int] : int
+  (let [^mut i 0]
+    (while (< i n)
+      (build-cycle)
+      (set! i (+ i 1))))
+  0)
+
+(defn main [] : int
+  (gc-enable!)
+  (run 500)
+  (gc!)
+  (println (gc-collections))                        ; 1
+  (println (if (> (gc-objects-freed) 0) 1 0))       ; 1
+  (println (gc-live-blocks))                        ; 0
+  (println (if (> (gc-candidate-high-water) 0) 1 0)); 1
+  0)

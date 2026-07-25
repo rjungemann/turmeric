@@ -1,5 +1,6 @@
 /* elab_memory.c -- ref/lref/deref/drop, rc and weak references, and GC primitives. */
 #include "elab_internal.h"
+#include <string.h>     /* CG6: strlen for the stat readers */
 #include "experiments.h"  /* CG5: experiment_warn_if_used("cycle-gc") */
 #include "globals.h"       /* CG5: g_opt_cycle_gc */
 
@@ -620,4 +621,64 @@ Expr *elab_gc_auto(Elab *e, const Form *call) {
     Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, call->span);
     out->as.inline_c_.inline_c = ic;
     return out;
+}
+
+
+/* CG6: the four GC statistics readers.
+ *
+ * Four separate readers rather than one `(gc-stats)` returning a record: every
+ * one of these is a plain count, so `:int` is the honest type, not an `:int`
+ * standing in for something structured (see CLAUDE.md).  A record would have to
+ * be built and boxed by an inline-C body for no gain -- and callers that want
+ * one can define it in Turmeric over these.
+ *
+ * Ungated, unlike (gc-auto!): reading a counter changes no behaviour, and the
+ * whole point of CG6 is to make the collector's work visible -- including to
+ * someone deciding whether the experiment is worth enabling. */
+static Expr *elab_gc_stat_reader(Elab *e, const Form *call,
+                                 const char *form_name, const char *c_call) {
+    if (call->as.list.len != 1) {
+        diag_emit(DIAG_ERROR, call->span, "(%s) takes no arguments", form_name);
+        return NULL;
+    }
+    /* An EX_INLINE_C in VALUE position is spliced as a C expression, not as a
+     * statement block (emit_expr.c, case EX_INLINE_C) -- so `c_call` must be a
+     * bare expression.  Writing `return ...;` here produced
+     * `printf("%lld", (long long)(return ...;))`. */
+    InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    ic->code = strslice(c_call, (uint32_t)strlen(c_call));
+    ic->return_type = TYPE_INT;
+    ic->captures = NULL;
+    ic->n_captures = 0;
+    ic->val_exprs = NULL;
+    ic->n_val_exprs = 0;
+    Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_INT, call->span);
+    out->as.inline_c_.inline_c = ic;
+    return out;
+}
+
+/* (gc-collections) -- collections run so far. */
+Expr *elab_gc_collections(Elab *e, const Form *call) {
+    return elab_gc_stat_reader(e, call, "gc-collections",
+                               "(int64_t)gc_stat_collections()");
+}
+
+/* (gc-objects-freed) -- control blocks the collector has reclaimed. */
+Expr *elab_gc_objects_freed(Elab *e, const Form *call) {
+    return elab_gc_stat_reader(e, call, "gc-objects-freed",
+                               "(int64_t)gc_stat_objects_freed()");
+}
+
+/* (gc-live-blocks) -- rc blocks currently registered. */
+Expr *elab_gc_live_blocks(Elab *e, const Form *call) {
+    return elab_gc_stat_reader(e, call, "gc-live-blocks",
+                               "(int64_t)gc_stat_live_blocks()");
+}
+
+/* (gc-candidate-high-water) -- peak candidate-buffer occupancy.  The one that
+ * answers "is the collector keeping up?": gc_suspect_count is instantaneous and
+ * sits near zero right after any collection, so sampling it tells you little. */
+Expr *elab_gc_candidate_high_water(Elab *e, const Form *call) {
+    return elab_gc_stat_reader(e, call, "gc-candidate-high-water",
+                               "(int64_t)gc_stat_candidate_high_water()");
 }

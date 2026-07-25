@@ -1854,6 +1854,10 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
     if (name == e->sym_gc_auto)     return elab_gc_auto(e, call);
+    if (name == e->sym_gc_collections)   return elab_gc_collections(e, call);
+    if (name == e->sym_gc_objects_freed) return elab_gc_objects_freed(e, call);
+    if (name == e->sym_gc_live_blocks)   return elab_gc_live_blocks(e, call);
+    if (name == e->sym_gc_cand_hw)       return elab_gc_candidate_high_water(e, call);
     /* Phase M0: Module system */
     if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);

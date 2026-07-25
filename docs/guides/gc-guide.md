@@ -115,6 +115,27 @@ Runtime knobs surface as three compiler intrinsics wired in
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
 | `(gc-auto!)`   | Enable in `GC_AUTO` -- collect automatically (needs `--enable=cycle-gc`) |
 
+### Seeing what the collector did
+
+Four readers, all plain counts, plus a per-collection trace on stderr:
+
+| Form | Returns |
+|------|---------|
+| `(gc-collections)` | collections run so far |
+| `(gc-objects-freed)` | control blocks reclaimed |
+| `(gc-live-blocks)` | rc blocks currently registered |
+| `(gc-candidate-high-water)` | peak candidate-buffer occupancy |
+
+```sh
+TUR_GC_TRACE=1 ./my-program
+[gc] #1 mode=3 candidates=128 freed=128 live=128->0
+```
+
+The high-water is the one to watch: `gc-live-blocks` is instantaneous and sits
+near zero right after a collection, so it tells you little on its own. A
+high-water that stays at `GC_SUSPECT_THRESHOLD` means the collector is keeping
+up; one that climbs means it is not.
+
 `(gc-enable!)` defaults to `GC_MANUAL`, not `GC_THRESHOLD` -- collection still
 happens only when you ask for it with `(gc!)`. Call `gc_set_mode(GC_THRESHOLD)`
 for the suspect-count trigger; an explicit mode set before `(gc-enable!)`

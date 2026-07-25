@@ -2594,6 +2594,10 @@ static GcMode gc_mode = GC_DISABLED;
 static bool gc_enabled = false;
 static uint32_t gc_allocs_since_collect = 0;
 static bool gc_in_collection = false;
+static uint64_t gc_collections = 0;
+static uint64_t gc_objects_freed = 0;
+static uint64_t gc_candidate_high_water = 0;
+static int gc_trace_enabled = -1;
 
 static void gc_collect(void);  /* Forward decl */
 static void gc_on_alloc_checkpoint(void);  /* Forward decl */
@@ -2645,11 +2649,14 @@ static void gc_unregister_block(RcControlBlock *cb) {
 static void gc_add_suspect(RcControlBlock *cb) {
     if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;
     if (cb->gc_buffered) return;
+    if (!cb->may_contain_cycles) return;
     if (gc_suspect_count >= gc_suspect_capacity) {
         if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;
     }
     cb->gc_buffered = true;
     gc_suspect_roots[gc_suspect_count++] = cb;
+    if (gc_suspect_count > gc_candidate_high_water)
+        gc_candidate_high_water = gc_suspect_count;
     cb->color = GC_PURPLE;
     /* Threshold mode: auto-collect when buffer is full */
     if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {
@@ -3048,6 +3055,7 @@ static void gc_cycle_collect_phase(void) {
         cb->strong_count = 0;
         if (cb->weak_count > 0) { cb->gc_collecting = false; continue; }
         free(cb);
+        gc_objects_freed++;
     }
     gc_pending_count = 0;
 }
@@ -3057,10 +3065,25 @@ static void gc_collect(void) {
     if (gc_in_collection) return;
     gc_in_collection = true;
     gc_allocs_since_collect = 0;
+    gc_collections++;
+    uint32_t trace_candidates_in = gc_suspect_count;
+    uint32_t trace_live_in = gc_all_blocks_count;
+    uint64_t trace_freed_before = gc_objects_freed;
     gc_cycle_collect_phase();
     gc_grey_count = 0;
     gc_mark_phase();
     gc_trial_deletion_phase();
+    if (gc_trace_enabled < 0) {
+        const char *__tur_gct = getenv("TUR_GC_TRACE");
+        gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, "0") != 0) ? 1 : 0;
+    }
+    if (gc_trace_enabled == 1) {
+        fprintf(stderr, "[gc] #%llu mode=%d candidates=%u freed=%llu live=%u->%u\n",
+                (unsigned long long)gc_collections, (int)gc_mode,
+                trace_candidates_in,
+                (unsigned long long)(gc_objects_freed - trace_freed_before),
+                trace_live_in, gc_all_blocks_count);
+    }
     gc_in_collection = false;
 }
 
@@ -3082,6 +3105,11 @@ static void gc_disable(void) {
 static void gc_set_mode(GcMode mode) {
     gc_mode = mode;
 }
+
+static uint64_t gc_stat_collections(void) { return gc_collections; }
+static uint64_t gc_stat_objects_freed(void) { return gc_objects_freed; }
+static uint64_t gc_stat_live_blocks(void) { return (uint64_t)gc_all_blocks_count; }
+static uint64_t gc_stat_candidate_high_water(void) { return gc_candidate_high_water; }
 
 static void gc_auto(void) {
     gc_enabled = true;

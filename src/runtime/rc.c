@@ -131,6 +131,13 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, uint8_t value_type,
 
     gc_register_block(cb);
 
+    /* CG6: a scalar payload (TypeKind <= 7: int/float/bool/...) has no rc
+     * children, so it can never be a cycle ROOT.  Marking it lets
+     * gc_add_suspect skip it -- see the filter there.  The emitted copy has
+     * always set this; the runtime never did, which is half of why the field
+     * was dead. */
+    if (value_type < RC_VT_REF) cb->may_contain_cycles = false;
+
     return cb;
 }
 

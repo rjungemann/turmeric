@@ -1777,6 +1777,11 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_gc_enable = intern_cstr(st, "gc-enable!");
     e->sym_gc_disable = intern_cstr(st, "gc-disable!");
     e->sym_gc_auto = intern_cstr(st, "gc-auto!");   /* CG5 */
+    /* CG6 */
+    e->sym_gc_collections   = intern_cstr(st, "gc-collections");
+    e->sym_gc_objects_freed = intern_cstr(st, "gc-objects-freed");
+    e->sym_gc_live_blocks   = intern_cstr(st, "gc-live-blocks");
+    e->sym_gc_cand_hw       = intern_cstr(st, "gc-candidate-high-water");
     /* Phase 6 */
     e->sym_defmacro = intern_cstr(st, "defmacro");
     e->sym_quote = intern_cstr(st, "quote");

@@ -93,6 +93,29 @@ void gc_set_mode(GcMode mode);
 /* CG5: enable collection in GC_AUTO mode -- what `(gc-auto!)` lowers to. */
 void gc_auto(void);
 
+/* ------------------------------------------------------------------------- *
+ * CG6: observability.
+ *
+ * The counters have existed since Phase 10 but nothing surfaced them, so
+ * "run the suite and see how much garbage accumulates" was unanswerable.
+ * These are the four numbers `(gc-stats ...)` reads, plus TUR_GC_TRACE for a
+ * per-collection log.
+ *
+ * All four are plain counts, so `:int` on the Turmeric side is the honest type
+ * -- not a stand-in for something structured.
+ * ------------------------------------------------------------------------- */
+extern uint64_t gc_collections;         /* collections run */
+extern uint64_t gc_objects_freed;       /* control blocks reclaimed */
+extern uint64_t gc_candidate_high_water;/* peak candidate-buffer occupancy */
+
+/* Accessors, so the emitted intrinsics call a function rather than naming a
+ * global -- the globals are `static` in the emitted replica but external in the
+ * archive, and a call works for both. */
+uint64_t gc_stat_collections(void);
+uint64_t gc_stat_objects_freed(void);
+uint64_t gc_stat_live_blocks(void);
+uint64_t gc_stat_candidate_high_water(void);
+
 /* CG5: the allocation checkpoint.  Called from gc_register_block, i.e. on every
  * rc block allocation, and collects if GC_AUTO's heuristic says to.
  *

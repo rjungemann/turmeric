@@ -117,9 +117,65 @@ Pause time is the open risk: synchronous collection over a large candidate set
 stalls. The heuristic should cap candidate-set size per cycle. Incremental and
 generational refinements stay out of scope.
 
-### CG6 -- Observability
+### CG6 -- Observability [DONE 2026-07-25]
 
-*Carried over unstarted, and now with a second reason to exist.*
+**Landed.** Four reader intrinsics -- `(gc-collections)`, `(gc-objects-freed)`,
+`(gc-live-blocks)`, `(gc-candidate-high-water)` -- plus `TUR_GC_TRACE=1` for a
+line per collection on stderr:
+
+```
+[gc] #1 mode=3 candidates=128 freed=128 live=128->0
+```
+
+Four readers rather than one `(gc-stats)` record: each is a plain count, so
+`:int` is the honest type here, not an `:int` standing in for something
+structured. A record would have to be boxed by an inline-C body for no gain,
+and a caller who wants one can define it in Turmeric over these. They are
+**ungated**, unlike `(gc-auto!)` -- reading a counter changes no behaviour, and
+someone deciding whether the experiment is worth enabling needs the numbers.
+
+`gc_candidate_high_water` is new. It is the counter that answers "is the
+collector keeping up?": `gc_suspect_count` is instantaneous and sits near zero
+right after any collection, so sampling it tells you almost nothing.
+
+**This finally answers the question the whole line of work started from.**
+A cycle-churning program under `GC_AUTO`, 50,000 two-node cycles:
+
+| collections | blocks freed | live at exit | candidate high-water |
+|---|---|---|---|
+| 781 | 99,968 | **32** | **128** |
+
+The high-water pinning at exactly `GC_SUSPECT_THRESHOLD` (128) is the
+informative number: the candidate trigger is what fires for this shape, and the
+buffer never grows past it, so the collector is keeping up exactly. The
+allocation-interval trigger is the safety net for the other shape.
+
+**`may_contain_cycles` is resolved -- wired up, not deleted.** A block with no
+rc children cannot be a cycle *root*, so buffering it costs a slot plus a walk
+per collection for nothing. `gc_add_suspect` now skips those, and the runtime
+marks scalar payloads (`value_type < RC_VT_REF`) the way the emitted copy always
+did. Measured on 5000 scalar `rc<int>` clone/drop pairs: candidate occupancy
+**5000 -> 0**.
+
+Worth recording how that measurement went, because the first one was wrong. A
+probe written in Turmeric reported 0 either way, which read as "scalars never
+get buffered, the filter is pointless". That was **last-use elision deleting
+the clone/drop pair** -- the collector was never exercised. The C-level probe,
+where the clone/drop is real, showed 5000. The same mistake then recurred in the
+test: the first version asserted on the high-water mark, which is a running
+maximum over the process, so a late +1 could never move it. Instantaneous
+occupancy is the right instrument for "did this block get buffered".
+
+**The replica got the counters too.** It had none at all, so `(gc-collections)`
+would have reported real numbers on the archive path and zeroes on `--shared` /
+bare `emit-c`. A statistic that silently lies is worse than one that is absent,
+so rather than sequencing CG6 behind DEDUP-5 as this plan originally suggested,
+the counters, the high-water and the trace are mirrored into the emitted copy.
+
+Pinned by `tests/fixtures/gc-stats-observability` (shape assertions, so it does
+not re-pin collector internals) and three runtime parity assertions.
+
+*Original phase text:*
 
 A `gc-stats` intrinsic returning `gc_collections`, `gc_objects_freed`, live
 block count and candidate high-water; an optional `TUR_GC_TRACE` that logs each

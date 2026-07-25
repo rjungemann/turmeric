@@ -24,6 +24,7 @@
 extern uint64_t gc_collections;
 extern uint64_t gc_objects_freed;
 extern uint32_t gc_all_blocks_count;
+extern uint64_t gc_candidate_high_water;
 
 static int failures = 0;
 
@@ -263,6 +264,48 @@ static void test_auto_collects_without_explicit_call(void) {
     gc_disable();
 }
 
+/* CG6: a block that cannot hold rc children must never enter the candidate
+ * buffer -- it cannot be a cycle root, so a slot and a per-collection walk are
+ * spent on nothing.
+ *
+ * This is the assertion that gives `may_contain_cycles` a reason to exist: it
+ * was written by both copies of the collector and read by neither. Measuring it
+ * from Turmeric source first showed 0 either way and looked like "scalars never
+ * get buffered" -- that was last-use elision deleting the clone/drop pair, not
+ * the collector. At this level the clone/drop is real, and the count was 5000. */
+static void test_scalars_are_not_cycle_candidates(void) {
+    enum { N = 5000 };
+    gc_enable();
+    gc_collect();                        /* drain, so occupancy starts known */
+    uint32_t occupancy_before = gc_suspect_count;
+
+    for (int i = 0; i < N; i++) {
+        /* value_type 0 == a scalar (TypeKind < RC_VT_REF): no rc children. */
+        RcControlBlock *cb = rc_cb_alloc(sizeof(int64_t), 0, NULL);
+        rc_strong_increment(cb);   /* 1 -> 2, a clone */
+        rc_strong_decrement(cb);   /* 2 -> 1: this is the PossibleRoot edge */
+        rc_strong_decrement(cb);   /* 1 -> 0: freed */
+    }
+    check(gc_suspect_count == occupancy_before, "scalars-never-buffered-as-candidates");
+
+    /* The converse, so this cannot pass by the buffer simply being broken: a
+     * block that CAN hold rc children still gets buffered on the same edge.
+     *
+     * Measured on instantaneous occupancy, not the high-water mark: the
+     * high-water is a running maximum over the whole process, so by this point
+     * earlier tests have pushed it into the thousands and one more candidate
+     * could never move it.  (That mistake made this assertion fail the first
+     * time -- the collector was right, the instrument was wrong.) */
+    RcControlBlock *rich = make_rc_cell();
+    rc_strong_increment(rich);
+    rc_strong_decrement(rich);
+    check(rich->gc_buffered, "rc-capable-blocks-still-buffered");
+    check(gc_suspect_count == occupancy_before + 1, "buffer-grew-by-exactly-one");
+    rc_strong_decrement(rich);
+
+    gc_disable();
+}
+
 int main(void) {
     test_enable_implies_manual_mode();
     test_disable_stops_collection();
@@ -272,6 +315,7 @@ int main(void) {
     test_cycle_with_weak_observer();
     test_decrement_never_collects();
     test_auto_collects_without_explicit_call();
+    test_scalars_are_not_cycle_candidates();
 
     if (failures) {
         printf("gc-runtime-copy-parity: %d failed\n", failures);

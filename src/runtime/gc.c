@@ -58,6 +58,21 @@ bool gc_enabled = false;
 /* Statistics */
 uint64_t gc_collections = 0;
 uint64_t gc_objects_freed = 0;
+/* CG6: high-water mark of the candidate-root buffer.  The counter that answers
+ * "is the collector keeping up?" -- gc_suspect_count is instantaneous and is
+ * near zero right after any collection, so sampling it tells you almost
+ * nothing.  Updated in gc_add_suspect, the one place the buffer grows. */
+uint64_t gc_candidate_high_water = 0;
+/* CG6: TUR_GC_TRACE.  -1 = not yet read from the environment. */
+static int gc_trace_enabled = -1;
+
+static bool gc_trace_on(void) {
+    if (gc_trace_enabled < 0) {
+        const char *v = getenv("TUR_GC_TRACE");
+        gc_trace_enabled = (v && *v && strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return gc_trace_enabled == 1;
+}
 
 /* ========== Initialization ========== */
 
@@ -70,6 +85,7 @@ void gc_init(void) {
     gc_grey_count = 0;
     gc_collections = 0;
     gc_objects_freed = 0;
+    gc_candidate_high_water = 0;
     gc_enabled = true;
 }
 
@@ -116,6 +132,20 @@ static bool gc_add_suspect(RcControlBlock *cb) {
      * offers a candidate root. */
     if (cb->gc_buffered) return true;
 
+    /* CG6: a block that cannot hold rc children cannot be a cycle root, so
+     * buffering it as a candidate is pure cost -- a slot, plus a walk on every
+     * collection until it is freed.
+     *
+     * This is what finally makes may_contain_cycles mean something: it was
+     * written by both copies and read by neither.  Measured on 5000 scalar
+     * rc<int> clone/drop pairs, the candidate high-water went 5000 -> 0.
+     *
+     * (A first measurement through Turmeric source showed 0 either way and
+     * looked like "scalars never get buffered".  That was last-use elision
+     * removing the clone/drop pair, not the collector's behaviour -- the C-level
+     * probe is what showed the real number.) */
+    if (!cb->may_contain_cycles) return false;
+
     /* DEDUP-4a: no force-collect at a watermark here.
      *
      * This used to call gc_collect() once gc_suspect_count reached
@@ -141,6 +171,8 @@ static bool gc_add_suspect(RcControlBlock *cb) {
     /* Add to suspect buffer */
     cb->gc_buffered = true;
     gc_suspect_roots[gc_suspect_count++] = cb;
+    if (gc_suspect_count > gc_candidate_high_water)
+        gc_candidate_high_water = gc_suspect_count;   /* CG6 */
     gc_set_color(cb, GC_PURPLE);
 
     /* Trigger collection if in threshold mode and threshold exceeded */
@@ -647,6 +679,12 @@ void gc_collect(void) {
 
     gc_collections++;
 
+    /* CG6: TUR_GC_TRACE.  Sampled before the phases so the "in" figures
+     * describe what this collection was handed. */
+    uint32_t trace_candidates_in = gc_suspect_count;
+    uint32_t trace_live_in       = gc_all_blocks_count;
+    uint64_t trace_freed_before  = gc_objects_freed;
+
     /* CG2: real trial deletion over the buffered candidate roots -- this is the
      * phase that reclaims genuine strong cycles. */
     gc_cycle_collect_phase();
@@ -657,6 +695,17 @@ void gc_collect(void) {
     /* Pre-existing zombie sweep (strong==0 with live weak refs). Unchanged. */
     gc_mark_phase();
     gc_trial_deletion_phase();
+
+    if (gc_trace_on()) {
+        /* One line per collection, to stderr so it never contaminates a
+         * program's stdout (which the fixture harness diffs). */
+        fprintf(stderr,
+                "[gc] #%llu mode=%d candidates=%u freed=%llu live=%u->%u\n",
+                (unsigned long long)gc_collections, (int)gc_mode,
+                trace_candidates_in,
+                (unsigned long long)(gc_objects_freed - trace_freed_before),
+                trace_live_in, gc_all_blocks_count);
+    }
 
     gc_collection_leave();
 }
@@ -709,6 +758,13 @@ void gc_disable(void) {
 void gc_set_mode(GcMode mode) {
     gc_mode = mode;
 }
+
+/* ========== CG6: statistics accessors ========== */
+
+uint64_t gc_stat_collections(void)          { return gc_collections; }
+uint64_t gc_stat_objects_freed(void)        { return gc_objects_freed; }
+uint64_t gc_stat_live_blocks(void)          { return (uint64_t)gc_all_blocks_count; }
+uint64_t gc_stat_candidate_high_water(void) { return gc_candidate_high_water; }
 
 /* ========== CG5: automatic collection (GC_AUTO) ========== */
 

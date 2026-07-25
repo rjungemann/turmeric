@@ -6383,6 +6383,10 @@ static void emit_rcgc_prototypes(Buf *out) {
         "void gc_set_mode(GcMode mode);\n"
         "void gc_auto(void);\n"
         "void gc_on_alloc_checkpoint(void);\n"
+        "uint64_t gc_stat_collections(void);\n"
+        "uint64_t gc_stat_objects_freed(void);\n"
+        "uint64_t gc_stat_live_blocks(void);\n"
+        "uint64_t gc_stat_candidate_high_water(void);\n"
         "bool gc_is_alive(RcControlBlock *cb);\n\n");
 }
 
@@ -9321,7 +9325,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rcgc_global(out, shared, "bool gc_enabled = false;\n", "bool gc_enabled");
     /* CG5: AUTO-mode state (mirrors src/runtime/gc.c). */
     emit_rcgc_global(out, shared, "uint32_t gc_allocs_since_collect = 0;\n", "uint32_t gc_allocs_since_collect");
-    emit_rcgc_global(out, shared, "bool gc_in_collection = false;\n\n", "bool gc_in_collection");
+    emit_rcgc_global(out, shared, "bool gc_in_collection = false;\n", "bool gc_in_collection");
+    /* CG6: the replica had NO counters at all, so `(gc-stats ...)` would have
+     * reported zeroes on the --shared / bare-emit-c paths while reporting real
+     * numbers on the archive path -- a statistic that silently lies is worse
+     * than one that is absent.  Mirrors src/runtime/gc.c. */
+    emit_rcgc_global(out, shared, "uint64_t gc_collections = 0;\n", "uint64_t gc_collections");
+    emit_rcgc_global(out, shared, "uint64_t gc_objects_freed = 0;\n", "uint64_t gc_objects_freed");
+    emit_rcgc_global(out, shared, "uint64_t gc_candidate_high_water = 0;\n", "uint64_t gc_candidate_high_water");
+    emit_rcgc_global(out, shared, "int gc_trace_enabled = -1;\n\n", "int gc_trace_enabled");
     buf_printf(out, "%svoid gc_collect(void);  /* Forward decl */\n", rcgc_helper);
     /* CG5: gc_register_block calls the checkpoint, which is defined further
      * down next to gc_set_mode.  Without this the emitted C has an implicit
@@ -9389,11 +9401,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * would be quadratic now that every non-zero strong decrement offers a
      * candidate root. */
     buf_puts(out, "    if (cb->gc_buffered) return;\n");
+    /* CG6: a block with no rc children cannot be a cycle ROOT, so buffering it
+     * costs a slot plus a walk per collection for nothing.  This is what makes
+     * may_contain_cycles (written by both copies, read by neither) mean
+     * something.  Mirrors src/runtime/gc.c. */
+    buf_puts(out, "    if (!cb->may_contain_cycles) return;\n");
     buf_puts(out, "    if (gc_suspect_count >= gc_suspect_capacity) {\n");
     buf_puts(out, "        if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity, gc_suspect_count + 1u)) return;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    cb->gc_buffered = true;\n");
     buf_puts(out, "    gc_suspect_roots[gc_suspect_count++] = cb;\n");
+    buf_puts(out, "    if (gc_suspect_count > gc_candidate_high_water)\n");
+    buf_puts(out, "        gc_candidate_high_water = gc_suspect_count;\n");
     buf_puts(out, "    cb->color = GC_PURPLE;\n");
     buf_puts(out, "    /* Threshold mode: auto-collect when buffer is full */\n");
     buf_puts(out, "    if (gc_mode == GC_THRESHOLD && gc_suspect_count >= GC_SUSPECT_THRESHOLD) {\n");
@@ -9824,6 +9843,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        cb->strong_count = 0;\n");
     buf_puts(out, "        if (cb->weak_count > 0) { cb->gc_collecting = false; continue; }\n");
     buf_puts(out, "        free(cb);\n");
+    buf_puts(out, "        gc_objects_freed++;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    gc_pending_count = 0;\n");
     buf_puts(out, "}\n");
@@ -9835,10 +9855,27 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (gc_in_collection) return;\n");
     buf_puts(out, "    gc_in_collection = true;\n");
     buf_puts(out, "    gc_allocs_since_collect = 0;\n");
+    buf_puts(out, "    gc_collections++;\n");
+    /* CG6: sampled before the phases so the "in" figures describe what this
+     * collection was handed. */
+    buf_puts(out, "    uint32_t trace_candidates_in = gc_suspect_count;\n");
+    buf_puts(out, "    uint32_t trace_live_in = gc_all_blocks_count;\n");
+    buf_puts(out, "    uint64_t trace_freed_before = gc_objects_freed;\n");
     buf_puts(out, "    gc_cycle_collect_phase();\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
     buf_puts(out, "    gc_mark_phase();\n");
     buf_puts(out, "    gc_trial_deletion_phase();\n");
+    buf_puts(out, "    if (gc_trace_enabled < 0) {\n");
+    buf_puts(out, "        const char *__tur_gct = getenv(\"TUR_GC_TRACE\");\n");
+    buf_puts(out, "        gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, \"0\") != 0) ? 1 : 0;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (gc_trace_enabled == 1) {\n");
+    buf_puts(out, "        fprintf(stderr, \"[gc] #%llu mode=%d candidates=%u freed=%llu live=%u->%u\\n\",\n");
+    buf_puts(out, "                (unsigned long long)gc_collections, (int)gc_mode,\n");
+    buf_puts(out, "                trace_candidates_in,\n");
+    buf_puts(out, "                (unsigned long long)(gc_objects_freed - trace_freed_before),\n");
+    buf_puts(out, "                trace_live_in, gc_all_blocks_count);\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    gc_in_collection = false;\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%svoid gc_force(void) {\n", rcgc_helper);
@@ -9860,6 +9897,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * called from gc_register_block -- an ALLOCATION site, never the decrement
      * path, because collecting out of rc_strong_decrement reenters the
      * collector while a caller is mid-mutation (the DEDUP-4a lesson). */
+    buf_printf(out, "%suint64_t gc_stat_collections(void) { return gc_collections; }\n", rcgc_helper);
+    buf_printf(out, "%suint64_t gc_stat_objects_freed(void) { return gc_objects_freed; }\n", rcgc_helper);
+    buf_printf(out, "%suint64_t gc_stat_live_blocks(void) { return (uint64_t)gc_all_blocks_count; }\n", rcgc_helper);
+    buf_printf(out, "%suint64_t gc_stat_candidate_high_water(void) { return gc_candidate_high_water; }\n\n", rcgc_helper);
     buf_printf(out, "%svoid gc_auto(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_enabled = true;\n");
     buf_puts(out, "    gc_mode = GC_AUTO;\n");
