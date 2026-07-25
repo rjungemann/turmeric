@@ -20,6 +20,13 @@
 #   /tmp/emsdk/emsdk install latest && /tmp/emsdk/emsdk activate latest
 #   . /tmp/emsdk/emsdk_env.sh
 #
+# NOTE: this script deliberately does NOT build the `tur_wasm` cmake target.
+# That target has a POST_BUILD step copying the module into web/public/, which
+# are TRACKED files -- so running it to check that something compiles silently
+# restages the deployed web bundle, with whatever Emscripten version happens to
+# be installed. Compiling the translation units directly keeps verification
+# free of side effects. Build tur_wasm when you mean to deploy.
+#
 # See docs/upcoming/v1/refinement-types-plan.md (phase RT5a).
 
 set -uo pipefail
