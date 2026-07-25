@@ -469,8 +469,43 @@ the *implementation* may use whatever it likes. That separation is the whole
 point -- a compiled program includes the header, never the .c.
 
 This removes the structural reason the emitted copy had to be hand-written.
-Steps 3-5 (declare-vs-define split for the 31 emitted `static` functions, adding
-`rc.c`/`gc.c` to the lean archive, making AUTO link it) remain.
+
+**Step 3 landed 2026-07-25.** The emitted rc<T>/GC functions now use the same
+declare-vs-define split `emit_rt_global` has always used for state. Two new
+helpers (`emit_rt_defs_begin` / `emit_rt_defs_end`) bracket the five runs of
+definitions with `#ifdef TUR_RT_OWNER`, and `emit_rcgc_prototypes` emits the 48
+prototypes every module TU needs. Guard runs bracket *definitions only* --
+typedefs, the `RCK_*`/`RCEXP_*` `#define`s and the `emit_rt_global` state stay
+outside, because every TU has to see those.
+
+Linkage needed two prefixes rather than one, because the two families were
+never uniform: `rcgc_helper` (`shared ? "" : "static "`) for the internal
+helpers and `rcgc_api` (always `""`) for the `rc_*` / `tur_*_rc` API surface,
+which already had external linkage in single-file mode. Inside the owner guard
+both must be external so the other module TUs can reach them.
+
+Measured on a synthetic 3-module `--shared` spice (each module returning
+`rc<int>`):
+
+| | before | after |
+|---|---|---|
+| copies of each GC/RC function in the `.so` | 3 (`t`, one per module TU) | 1 (`T`) |
+| `.so` size | 35,680 B | 28,464 B (-20%) |
+
+Single-file mode is untouched by construction (no guard is emitted at all):
+**all 140 `expected.c` snapshots are byte-identical**, so this step needed no
+regen. Full suite green at 2283 passed, 0 failed.
+
+One incidental fix on the way: `tests/run-build-shared.sh`'s `nm | grep -q`
+symbol check was flaky *by construction* -- the script runs under
+`set -o pipefail`, and `grep -q` exiting on first match hands `nm` a SIGPIPE
+(141), failing the pipeline even on a match. It reproduced 4 runs in 5 once the
+`.so` layout shifted. Now captures `nm`'s output first.
+
+Steps 4-5 (adding `rc.c`/`gc.c`/`rc_free_queue.c` to the lean archive, making
+AUTO link it, regenerating snapshots) remain. Step 3 is what makes them
+tractable: suppressing the emitted definitions entirely is now one more state
+on the same switch, rather than a second surgery on 500 lines of `buf_puts`.
 
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the

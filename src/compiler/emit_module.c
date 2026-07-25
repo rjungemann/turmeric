@@ -6238,6 +6238,86 @@ static void emit_rt_global(Buf *out, bool shared,
                owner_body, extern_decl);
 }
 
+/* gc-cycle-collection-plan DEDUP-3: open/close the owner-TU guard around a run
+ * of rc<T>/GC runtime function DEFINITIONS.
+ *
+ * The same split emit_rt_global does for state, applied to code.  Shared mode
+ * used to replicate every rc/gc body into every module TU as `static`; now the
+ * single owner TU (tur_runtime.c, which #defines TUR_RT_OWNER) carries one
+ * externally-linked definition of each and every other TU sees only the
+ * prototype emitted by emit_rcgc_prototypes.  One instance of the collector per
+ * program instead of one per module -- and, for the later steps of the de-dup,
+ * a single switch that can suppress the emitted definitions entirely once the
+ * runtime archive supplies them.
+ *
+ * Single-file mode (`shared == false`) emits no guard at all, so its output is
+ * byte-identical to before this split.  Runs must bracket definitions ONLY:
+ * typedefs, `#define`s and emit_rt_global state stay outside, since every TU
+ * needs to see them. */
+static void emit_rt_defs_begin(Buf *out, bool shared) {
+    if (shared) buf_puts(out, "#ifdef TUR_RT_OWNER\n");
+}
+static void emit_rt_defs_end(Buf *out, bool shared) {
+    if (shared) buf_puts(out, "#endif /* TUR_RT_OWNER */\n");
+}
+
+/* DEDUP-3: prototypes for every rc<T>/GC runtime function, so a non-owner
+ * module TU can call into the owner's definitions.  Shared mode only -- in
+ * single-file mode the definitions themselves precede every use.  Emitted after
+ * the GcMode typedef, which gc_set_mode's signature needs. */
+static void emit_rcgc_prototypes(Buf *out) {
+    buf_puts(out,
+        "/* DEDUP-3: rc<T>/GC runtime prototypes -- definitions live in the\n"
+        " * TUR_RT_OWNER translation unit (tur_runtime.c). */\n"
+        "void gc_set_color(RcControlBlock *cb, GcColor color);\n"
+        "GcColor gc_get_color(RcControlBlock *cb);\n"
+        "void gc_register_block(RcControlBlock *cb);\n"
+        "void gc_unregister_block(RcControlBlock *cb);\n"
+        "void gc_add_suspect(RcControlBlock *cb);\n"
+        "void gc_remove_suspect(RcControlBlock *cb);\n"
+        "void gc_on_strong_decrement(RcControlBlock *cb);\n"
+        "uint32_t rc_free_queue_drain(void);\n"
+        "void rc_free_queue_push(RcControlBlock *cb);\n"
+        "void default_rc_drop_fn(void *value);\n"
+        "void drop_ref_payload(void *value);\n"
+        "void drop_rc_payload(void *value);\n"
+        "void drop_weak_payload(void *value);\n"
+        "RcDropFn default_drop_fn_for_type(int value_type_kind);\n"
+        "RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind);\n"
+        "RcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn);\n"
+        "RcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn);\n"
+        "uint64_t rc_strong_increment(RcControlBlock *cb);\n"
+        "bool rc_strong_decrement(RcControlBlock *cb);\n"
+        "uint64_t rc_weak_increment(RcControlBlock *cb);\n"
+        "bool rc_weak_decrement(RcControlBlock *cb);\n"
+        "uint64_t rc_strong_count(RcControlBlock *cb);\n"
+        "uint64_t rc_weak_count(RcControlBlock *cb);\n"
+        "bool rc_is_alive(RcControlBlock *cb);\n"
+        "RcControlBlock *rc_upgrade(RcControlBlock *cb);\n"
+        "void *rc_get_value(RcControlBlock *cb);\n"
+        "RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind);\n"
+        "void *tur_ref_from_rc(RcControlBlock *cb);\n"
+        "void __gc_mark_struct_child(RcControlBlock *child, void *ctx);\n"
+        "void gc_mark_phase(void);\n"
+        "void gc_trial_deletion_phase(void);\n"
+        "void gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx);\n"
+        "void gc_mark_gray_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_mark_gray(RcControlBlock *s);\n"
+        "void gc_scan_black_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_scan_black(RcControlBlock *s);\n"
+        "void gc_scan_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_scan(RcControlBlock *s);\n"
+        "void gc_collect_white_child(RcControlBlock *t, void *ctx);\n"
+        "void gc_collect_white(RcControlBlock *s);\n"
+        "void gc_cycle_collect_phase(void);\n"
+        "void gc_collect(void);\n"
+        "void gc_force(void);\n"
+        "void gc_enable(void);\n"
+        "void gc_disable(void);\n"
+        "void gc_set_mode(GcMode mode);\n"
+        "bool gc_is_alive(RcControlBlock *cb);\n\n");
+}
+
 /* Emit the inline C runtime preamble.  `shared == false`: single-file mode, one
  * self-contained TU (historical behavior, byte-identical).  `shared == true`:
  * the owner-TU design for separate compilation -- runtime functions are demoted
@@ -6693,6 +6773,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
     const char *rt_fn = shared ? "static " : "";
+    /* DEDUP-3: the rc<T>/GC block is the exception to rt_fn's replicate-as-static
+     * rule -- its definitions are emitted once, in the TUR_RT_OWNER TU (see
+     * emit_rt_defs_begin), so they must carry EXTERNAL linkage there for the
+     * other module TUs to reach them.  Two prefixes because the two families
+     * differ in single-file mode, which stays byte-identical: the internal
+     * helpers were `static`, the rc_ / tur_rc_ API surface never was. */
+    const char *rcgc_helper = shared ? "" : "static ";
+    const char *rcgc_api    = "";
     buf_puts(out, "/* generated by tur (phase 2) */\n");
     /* Feature-test macro: must precede every #include so glibc exposes POSIX
      * declarations (clock_gettime, nanosleep, ...) used by the emitted runtime
@@ -9105,11 +9193,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#define RC_FREE_QUEUE_CAPACITY 65536\n");
     emit_rt_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
     emit_rt_global(out, shared, "uint32_t rc_free_queue_count = 0;\n", "uint32_t rc_free_queue_count");
-    buf_puts(out, "static uint32_t rc_free_queue_drain(void);  /* Forward decl */\n");
-    buf_puts(out, "static void rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n");
-    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n", rt_fn);
-    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */\n", rt_fn);
-    buf_puts(out, "static void rc_free_queue_push(RcControlBlock *cb) {\n");
+    buf_printf(out, "%suint32_t rc_free_queue_drain(void);  /* Forward decl */\n", rcgc_helper);
+    buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n", rcgc_helper);
+    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n", rcgc_api);
+    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */\n", rcgc_api);
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     buf_puts(out, "    if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {\n");
     buf_puts(out, "        fprintf(stderr, \"rc_free_queue: full, aborting\\n\");\n");
@@ -9117,6 +9206,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    rc_free_queue[rc_free_queue_count++] = cb;\n");
     buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* Phase 10: GC globals and helper functions (needed before rc_cb_alloc) */
     buf_puts(out, "#define GC_GLOBAL_REGISTRY_CAPACITY 4096\n");
     buf_puts(out, "#define RC_GC_INDEX_NONE ((uint32_t)0xFFFFFFFFu)\n");
@@ -9126,7 +9216,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* CG0: growth helper shared by the registry, suspect buffer and grey queue.
      * The old fixed 4096-entry arrays silently dropped everything past the cap,
      * making the collector blind above 4096 live rc blocks. */
-    buf_puts(out, "static bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed) {\n");
+    if (shared) buf_puts(out, "bool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed);\n");
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%sbool gc_vec_reserve(RcControlBlock ***vec, uint32_t *cap, uint32_t needed) {\n", rcgc_helper);
     buf_puts(out, "    if (*cap >= needed) return true;\n");
     buf_puts(out, "    uint32_t ncap = *cap ? *cap : 256u;\n");
     buf_puts(out, "    while (ncap < needed) {\n");
@@ -9137,6 +9229,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!grown) return false;\n");
     buf_puts(out, "    *vec = grown; *cap = ncap; return true;\n");
     buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* GC state must be declared early because gc_on_strong_decrement (called from
      * rc_strong_decrement) needs it.  The collector functions themselves are
      * defined later, after all RC helpers. */
@@ -9151,18 +9244,22 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared, "uint32_t gc_grey_capacity = 0;\n", "uint32_t gc_grey_capacity");
     emit_rt_global(out, shared, "GcMode gc_mode = GC_DISABLED;\n", "GcMode gc_mode");
     emit_rt_global(out, shared, "bool gc_enabled = false;\n\n", "bool gc_enabled");
-    buf_puts(out, "static void gc_collect(void);  /* Forward decl */\n\n");
-    buf_puts(out, "static void gc_set_color(RcControlBlock *cb, GcColor color) {\n");
+    buf_printf(out, "%svoid gc_collect(void);  /* Forward decl */\n\n", rcgc_helper);
+    /* DEDUP-3: every module TU sees the prototypes; only the owner sees bodies.
+     * Placed here because gc_set_mode's signature needs the GcMode typedef. */
+    if (shared) emit_rcgc_prototypes(out);
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%svoid gc_set_color(RcControlBlock *cb, GcColor color) {\n", rcgc_helper);
     buf_puts(out, "    if (cb) cb->color = color;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static GcColor gc_get_color(RcControlBlock *cb) {\n");
+    buf_printf(out, "%sGcColor gc_get_color(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (cb) return cb->color;\n");
     buf_puts(out, "    return GC_WHITE;\n");
     buf_puts(out, "}\n\n");
     /* CG1: gc_unregister_block drops the block from the candidate buffer, but
      * gc_remove_suspect is emitted further down -- forward-declare it. */
-    buf_puts(out, "static void gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */\n\n");
-    buf_puts(out, "static void gc_register_block(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_remove_suspect(RcControlBlock *cb);  /* Forward decl */\n\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_register_block(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     buf_puts(out, "    cb->gc_buffered = false;\n");
     buf_puts(out, "    cb->gc_collecting = false;\n");
@@ -9181,7 +9278,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     /* CG0: O(1) swap-remove via the stored index -- this runs on every rc free,
      * so the old linear scan was quadratic in a long-running program. */
-    buf_puts(out, "static void gc_unregister_block(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_unregister_block(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     /* CG1 safety: a freed block must leave the candidate buffer, or the next
      * collection dereferences freed memory. */
@@ -9197,7 +9294,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    cb->gc_index = RC_GC_INDEX_NONE;\n");
     buf_puts(out, "}\n\n");
     /* Phase 10: Suspect buffer management (before rc_strong_decrement) */
-    buf_puts(out, "static void gc_add_suspect(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_add_suspect(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb || !gc_enabled || gc_mode == GC_DISABLED) return;\n");
     /* CG1: O(1) dedup via the classic `buffered` flag -- the old linear scan
      * would be quadratic now that every non-zero strong decrement offers a
@@ -9214,7 +9311,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        gc_collect();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_remove_suspect(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_remove_suspect(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb || !cb->gc_buffered) return;\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_suspect_count; i++) {\n");
     buf_puts(out, "        if (gc_suspect_roots[i] == cb) {\n");
@@ -9225,7 +9322,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    cb->gc_buffered = false;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_on_strong_decrement(RcControlBlock *cb) {\n");
+    buf_printf(out, "%svoid gc_on_strong_decrement(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     buf_puts(out, "    /* Zombie: strong reached 0 but weak refs still exist */\n");
     buf_puts(out, "    if (cb->weak_count > 0) {\n");
@@ -9233,7 +9330,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "\n/* Phase 9: Deferred free queue drain */\n");
-    buf_puts(out, "static uint32_t rc_free_queue_drain(void) {\n");
+    buf_printf(out, "%suint32_t rc_free_queue_drain(void) {\n", rcgc_helper);
     buf_puts(out, "    if (rc_free_queue_count == 0) return 0;\n");
     buf_puts(out, "    uint32_t freed = 0;\n");
     buf_puts(out, "    while (rc_free_queue_count > 0) {\n");
@@ -9256,28 +9353,28 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    return freed;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void default_rc_drop_fn(void *value) {\n");
+    buf_printf(out, "%svoid default_rc_drop_fn(void *value) {\n", rcgc_helper);
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void drop_ref_payload(void *value) {\n");
+    buf_printf(out, "%svoid drop_ref_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    void *inner = *((void **)value);\n");
     buf_puts(out, "    if (inner) free(inner);\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void drop_rc_payload(void *value) {\n");
+    buf_printf(out, "%svoid drop_rc_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    RcControlBlock *inner = *((RcControlBlock **)value);\n");
     buf_puts(out, "    if (inner) { rc_strong_decrement(inner); rc_free_queue_drain(); }\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void drop_weak_payload(void *value) {\n");
+    buf_printf(out, "%svoid drop_weak_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    RcControlBlock *inner = *((RcControlBlock **)value);\n");
     buf_puts(out, "    if (inner) rc_weak_decrement(inner);\n");
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static RcDropFn default_drop_fn_for_type(int value_type_kind) {\n");
+    buf_printf(out, "%sRcDropFn default_drop_fn_for_type(int value_type_kind) {\n", rcgc_helper);
     buf_puts(out, "    switch (value_type_kind) {\n");
     buf_puts(out, "        case 8: return drop_ref_payload;   /* TY_REF */\n");
     buf_puts(out, "        case 9: return drop_rc_payload;    /* TY_RC */\n");
@@ -9285,13 +9382,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        default: return default_rc_drop_fn;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* EXG5: layout-tag constants kept in sync with runtime/rc.h. */
     buf_puts(out, "#define RCK_OPAQUE       0\n");
     buf_puts(out, "#define RCK_EXISTENTIAL  1\n");
     buf_puts(out, "#define RCK_STRUCT       2\n");
     buf_puts(out, "#define RCEXP_OPAQUE     0\n");
     buf_puts(out, "#define RCEXP_RC         1\n");
-    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {\n", rt_fn);
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDropFn drop_fn, uint8_t kind, uint8_t payload_kind) {\n", rcgc_api);
     buf_puts(out, "    size_t total_size = sizeof(RcControlBlock) + value_size;\n");
     buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(total_size);\n");
     buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc: out of memory\\n\"); abort(); }\n");
@@ -9309,20 +9408,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (value_type_kind <= 7) cb->may_contain_cycles = false;\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sRcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *rc_cb_alloc(size_t value_size, int value_type_kind, RcDropFn drop_fn) {\n", rcgc_api);
     buf_puts(out, "    return rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_OPAQUE, RCEXP_OPAQUE);\n");
     buf_puts(out, "}\n\n");
     /* DS3: RCK_STRUCT variant -- attaches a walk_fn for the cycle collector. */
-    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *rc_cb_alloc_struct(size_t value_size, int value_type_kind, RcDropFn drop_fn, RcWalkFn walk_fn) {\n", rcgc_api);
     buf_puts(out, "    RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type_kind, drop_fn, RCK_STRUCT, 0);\n");
     buf_puts(out, "    cb->walk_fn = walk_fn;\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_strong_increment(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_strong_increment(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return ++cb->strong_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
     /* CG2: drop glue for a cycle member decrements children that are also being
      * freed -- fall through without freeing or buffering. */
@@ -9346,11 +9445,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (gc_mode != GC_DISABLED) gc_add_suspect(cb);\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_weak_increment(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_weak_increment(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return ++cb->weak_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sbool rc_weak_decrement(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    cb->weak_count--;\n");
     buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
@@ -9374,19 +9473,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    return false;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_strong_count(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_strong_count(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return cb->strong_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%suint64_t rc_weak_count(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%suint64_t rc_weak_count(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return cb->weak_count;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sbool rc_is_alive(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sbool rc_is_alive(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    return cb->strong_count > 0;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sRcControlBlock *rc_upgrade(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *rc_upgrade(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    if (cb->strong_count > 0) {\n");
     buf_puts(out, "        rc_strong_increment(cb);\n");
@@ -9394,11 +9493,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%svoid *rc_get_value(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%svoid *rc_get_value(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    return cb->value;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%sRcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {\n", rt_fn);
+    buf_printf(out, "%sRcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {\n", rcgc_api);
     buf_puts(out, "    if (!ref_value) return NULL;\n");
     buf_puts(out, "    RcControlBlock *cb = (RcControlBlock *)malloc(sizeof(RcControlBlock));\n");
     buf_puts(out, "    if (!cb) { fprintf(stderr, \"rc/from-ref: out of memory\\n\"); abort(); }\n");
@@ -9413,7 +9512,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    gc_register_block(cb);\n");
     buf_puts(out, "    return cb;\n");
     buf_puts(out, "}\n\n");
-    buf_printf(out, "%svoid *tur_ref_from_rc(RcControlBlock *cb) {\n", rt_fn);
+    buf_printf(out, "%svoid *tur_ref_from_rc(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    if (cb->strong_count != 1 || cb->weak_count != 0) {\n");
     buf_puts(out, "        fprintf(stderr, \"ref/from-rc requires unique rc (strong_count==1 and weak_count==0), got strong=%llu weak=%llu\\n\",\n");
@@ -9430,7 +9529,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase 10: Emit remaining GC runtime — mark + trial deletion phases */
     buf_puts(out, "/* gc (Bacon-Rajan cycle collector - trial deletion) - Phase 10 */\n");
     /* DS3: child-mark callback used by RCK_STRUCT walk_fns inside gc_mark_phase. */
-    buf_puts(out, "static void __gc_mark_struct_child(RcControlBlock *child, void *ctx) {\n");
+    buf_printf(out, "%svoid __gc_mark_struct_child(RcControlBlock *child, void *ctx) {\n", rcgc_helper);
     buf_puts(out, "    (void)ctx;\n");
     buf_puts(out, "    if (child && child->color != GC_BLACK) {\n");
     buf_puts(out, "        child->color = GC_BLACK;\n");
@@ -9439,7 +9538,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_mark_phase(void) {\n");
+    buf_printf(out, "%svoid gc_mark_phase(void) {\n", rcgc_helper);
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        gc_all_blocks[i]->color = GC_WHITE;\n");
     buf_puts(out, "    }\n");
@@ -9477,7 +9576,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
     /* Trial deletion: free zombie suspects not reachable from strong roots */
-    buf_puts(out, "static void gc_trial_deletion_phase(void) {\n");
+    buf_printf(out, "%svoid gc_trial_deletion_phase(void) {\n", rcgc_helper);
     buf_puts(out, "    uint32_t i = 0;\n");
     buf_puts(out, "    while (i < gc_suspect_count) {\n");
     buf_puts(out, "        RcControlBlock *cb = gc_suspect_roots[i];\n");
@@ -9503,6 +9602,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        gc_unregister_block(cb);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
     /* ===== CG2: real Bacon-Rajan trial deletion (mirrors src/runtime/gc.c) =====
      * Trial decrements land on a scratch counter, never the real strong_count;
      * the white set is freed only after the whole traversal; members are
@@ -9513,7 +9613,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared, "RcControlBlock **gc_cand_roots = NULL;\n", "RcControlBlock **gc_cand_roots");
     emit_rt_global(out, shared, "uint32_t gc_cand_count = 0;\n", "uint32_t gc_cand_count");
     emit_rt_global(out, shared, "uint32_t gc_cand_capacity = 0;\n\n", "uint32_t gc_cand_capacity");
-    buf_puts(out, "static void gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx) {\n");
+    emit_rt_defs_begin(out, shared);
+    buf_printf(out, "%svoid gc_each_child(RcControlBlock *cb, RcWalkChildFn fn, void *ctx) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb || !cb->value) return;\n");
     buf_puts(out, "    if (cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {\n");
     buf_puts(out, "        int64_t raw = *(const int64_t *)cb->value;\n");
@@ -9524,42 +9625,42 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_mark_gray(RcControlBlock *s);\n");
-    buf_puts(out, "static void gc_scan(RcControlBlock *s);\n");
-    buf_puts(out, "static void gc_scan_black(RcControlBlock *s);\n");
-    buf_puts(out, "static void gc_collect_white(RcControlBlock *s);\n");
+    buf_printf(out, "%svoid gc_mark_gray(RcControlBlock *s);\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_scan(RcControlBlock *s);\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_scan_black(RcControlBlock *s);\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_collect_white(RcControlBlock *s);\n", rcgc_helper);
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_mark_gray_child(RcControlBlock *t, void *ctx) {\n");
+    buf_printf(out, "%svoid gc_mark_gray_child(RcControlBlock *t, void *ctx) {\n", rcgc_helper);
     buf_puts(out, "    (void)ctx; if (!t) return;\n");
     buf_puts(out, "    if (t->gc_trial > 0) t->gc_trial--;\n");
     buf_puts(out, "    gc_mark_gray(t);\n");
     buf_puts(out, "}\n");
-    buf_puts(out, "static void gc_mark_gray(RcControlBlock *s) {\n");
+    buf_printf(out, "%svoid gc_mark_gray(RcControlBlock *s) {\n", rcgc_helper);
     buf_puts(out, "    if (!s || s->color == GC_GREY) return;\n");
     buf_puts(out, "    s->color = GC_GREY;\n");
     buf_puts(out, "    gc_each_child(s, gc_mark_gray_child, NULL);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_scan_black_child(RcControlBlock *t, void *ctx) {\n");
+    buf_printf(out, "%svoid gc_scan_black_child(RcControlBlock *t, void *ctx) {\n", rcgc_helper);
     buf_puts(out, "    (void)ctx; if (!t) return;\n");
     buf_puts(out, "    t->gc_trial++;\n");
     buf_puts(out, "    if (t->color != GC_BLACK) gc_scan_black(t);\n");
     buf_puts(out, "}\n");
-    buf_puts(out, "static void gc_scan_black(RcControlBlock *s) {\n");
+    buf_printf(out, "%svoid gc_scan_black(RcControlBlock *s) {\n", rcgc_helper);
     buf_puts(out, "    if (!s) return;\n");
     buf_puts(out, "    s->color = GC_BLACK;\n");
     buf_puts(out, "    gc_each_child(s, gc_scan_black_child, NULL);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_scan_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_scan(t); }\n");
-    buf_puts(out, "static void gc_scan(RcControlBlock *s) {\n");
+    buf_printf(out, "%svoid gc_scan_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_scan(t); }\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_scan(RcControlBlock *s) {\n", rcgc_helper);
     buf_puts(out, "    if (!s || s->color != GC_GREY) return;\n");
     buf_puts(out, "    if (s->gc_trial > 0) { gc_scan_black(s); }\n");
     buf_puts(out, "    else { s->color = GC_WHITE; gc_each_child(s, gc_scan_child, NULL); }\n");
     buf_puts(out, "}\n");
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_collect_white_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_collect_white(t); }\n");
-    buf_puts(out, "static void gc_collect_white(RcControlBlock *s) {\n");
+    buf_printf(out, "%svoid gc_collect_white_child(RcControlBlock *t, void *ctx) { (void)ctx; gc_collect_white(t); }\n", rcgc_helper);
+    buf_printf(out, "%svoid gc_collect_white(RcControlBlock *s) {\n", rcgc_helper);
     buf_puts(out, "    if (!s || s->color != GC_WHITE || s->gc_buffered) return;\n");
     buf_puts(out, "    s->color = GC_BLACK;\n");
     buf_puts(out, "    if (gc_pending_count >= gc_pending_capacity) {\n");
@@ -9569,7 +9670,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    gc_each_child(s, gc_collect_white_child, NULL);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_cycle_collect_phase(void) {\n");
+    buf_printf(out, "%svoid gc_cycle_collect_phase(void) {\n", rcgc_helper);
     buf_puts(out, "    if (gc_suspect_count == 0) return;\n");
     buf_puts(out, "    for (uint32_t i = 0; i < gc_all_blocks_count; i++) {\n");
     buf_puts(out, "        RcControlBlock *cb = gc_all_blocks[i];\n");
@@ -9620,33 +9721,34 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    gc_pending_count = 0;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "\n");
-    buf_puts(out, "static void gc_collect(void) {\n");
+    buf_printf(out, "%svoid gc_collect(void) {\n", rcgc_helper);
     buf_puts(out, "    if (!gc_enabled || gc_mode == GC_DISABLED) return;\n");
     buf_puts(out, "    gc_cycle_collect_phase();\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
     buf_puts(out, "    gc_mark_phase();\n");
     buf_puts(out, "    gc_trial_deletion_phase();\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_force(void) {\n");
+    buf_printf(out, "%svoid gc_force(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_collect();\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_enable(void) {\n");
+    buf_printf(out, "%svoid gc_enable(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_enabled = true;\n");
     buf_puts(out, "    /* Default to manual mode when enabled */\n");
     buf_puts(out, "    if (gc_mode == GC_DISABLED) gc_mode = GC_MANUAL;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_disable(void) {\n");
+    buf_printf(out, "%svoid gc_disable(void) {\n", rcgc_helper);
     buf_puts(out, "    gc_enabled = false;\n");
     buf_puts(out, "    gc_mode = GC_DISABLED;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static void gc_set_mode(GcMode mode) {\n");
+    buf_printf(out, "%svoid gc_set_mode(GcMode mode) {\n", rcgc_helper);
     buf_puts(out, "    gc_mode = mode;\n");
     buf_puts(out, "}\n\n");
-    buf_puts(out, "static bool gc_is_alive(RcControlBlock *cb) {\n");
+    buf_printf(out, "%sbool gc_is_alive(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return false;\n");
     buf_puts(out, "    if (cb->strong_count > 0) return true;\n");
     buf_puts(out, "    return (cb->color == GC_BLACK || cb->color == GC_GREY);\n");
     buf_puts(out, "}\n\n");
+    emit_rt_defs_end(out, shared);
 
     /* SS2: TurChannel -- synchronous rendezvous channel for session types. */
     buf_puts(out, "/* SS2: TurChannel -- synchronous rendezvous channel for session types */\n");
@@ -9861,9 +9963,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the
  * owner-TU design.  Wraps the full runtime preamble (shared mode: globals
- * owner-gated, functions demoted to static, all CPS machinery forced on) in an
- * include guard.  `program` is NULL -- shared mode forces every program-gated
- * block on so the header is feature-complete regardless of any single module. */
+ * owner-gated, most functions demoted to static, the rc<T>/GC family
+ * owner-gated too per DEDUP-3, all CPS machinery forced on) in an include
+ * guard.  `program` is NULL -- shared mode forces every program-gated block on
+ * so the header is feature-complete regardless of any single module. */
 void emit_shared_runtime_header(Buf *out) {
     /* Reset the per-TU codegen registries the preamble consults, mirroring the
      * setup emit_program does before its own preamble emission. */

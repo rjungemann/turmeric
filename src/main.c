@@ -4413,8 +4413,14 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * owner TU tur_runtime.c -- it alone #defines TUR_RT_OWNER, so it alone
      * defines the runtime's file-scope globals (one GC registry / free queue /
      * panic + scheduler state) while every module TU carries static replicas of
-     * the runtime functions that operate on those shared globals.  Linked into
-     * the output below; cleaned up alongside _main.c. */
+     * the runtime functions that operate on those shared globals.
+     *
+     * DEDUP-3 (gc-cycle-collection-plan): the rc<T>/GC family is no longer
+     * replicated -- its definitions sit inside the same TUR_RT_OWNER guard as
+     * the globals, so the owner TU carries the one externally-linked copy of
+     * the collector and the other module TUs see only prototypes.
+     *
+     * Linked into the output below; cleaned up alongside _main.c. */
     {
         Buf rt_h; buf_init(&rt_h);
         emit_shared_runtime_header(&rt_h);
