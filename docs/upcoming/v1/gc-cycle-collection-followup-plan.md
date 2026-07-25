@@ -1,6 +1,8 @@
 # Cycle-Collecting GC -- Follow-up (automatic collection, observability, last replica)
 
-**Status:** open. Successor to
+**Status:** open -- CG5, CG6, CG7 and DEDUP-5 are done; CG3's residue is closed
+as a compiler bug (filed, not linted); CG8 (graduation) is deliberately held
+until `cycle-gc` has baked to its 0.34.0 review point. Successor to
 [docs/archive/gc-cycle-collection-plan.md](../../archive/gc-cycle-collection-plan.md),
 which shipped CG0--CG4 and the DEDUP-1--4b de-duplication and is now archived.
 
@@ -356,7 +358,36 @@ Whatever happens, the three fences stay. As long as any replica exists,
 `tools/gc-copy-diff.py` is the drift alarm and the parity battery is the
 behavioural one.
 
-### CG3 (residue) -- Walker lint
+### CG3 (residue) -- Walker lint [RESOLVED 2026-07-25 -- do not write it]
+
+**The lint's target shape exists, and it is a compiler bug rather than a lint.**
+
+Before writing "warn when a `defstruct` with rc fields is boxed without a
+walker", the question was whether it could ever fire. It can, and what it would
+be warning about is a silent leak:
+
+| shape | boxed as | live blocks after `(gc!)` |
+|---|---|---|
+| by-value product with an `rc` field | `rc_cb_alloc_struct(..., drop_glue, walk_glue)` | 0 |
+| **multi-variant sum with an `rc` field** | `rc_cb_alloc(0, 19, NULL)` | **1** |
+
+`(rc/of v)` selects glue on `needs_drop_glue && adt_is_byvalue_product(adef)`.
+A sum satisfies the first half and fails the second, so it falls to the `else`
+branch with `drop_fn_name` still at its initial `"NULL"` -- no drop glue *and*
+no walker. The `rc` payload is never released (a leak with the collector off)
+and the walker cannot trace through the box (a blind spot with it on).
+`option<T>` and `result<T,E>` are multi-variant, so this is not an exotic
+corner.
+
+Filed as
+[docs/reported/rc-of-sum-type-drops-no-glue.md](../../reported/rc-of-sum-type-drops-no-glue.md).
+
+A lint is the wrong response: this is not a questionable-but-valid pattern for
+the user to reconsider, it is an ordinary program compiled into a leak. Emit
+glue for sums; the lint then has nothing to warn about. **This item is closed --
+do not implement the lint.**
+
+*Original item:*
 
 The one unstarted item from the original CG3: warn when a `defstruct` with `rc`
 fields is boxed without a walker. Low priority -- the audit found the by-value
@@ -369,7 +400,29 @@ routed only through a raw C handle is not collected, exactly as in Rust with
 `*mut`. Making collections walkable means teaching the walker about C-backed
 storage -- worth doing only if a real consumer needs it.
 
-### CG8 -- (Stretch) graduation toward default-on
+### CG8 -- (Stretch) graduation toward default-on [NOT YET -- deliberately]
+
+CG5--CG7 are done, which is the precondition this phase named. It is still too
+early: `cycle-gc` was introduced at **0.30.8**, the same day CG5 landed, and
+graduating an experiment on its introduction day defeats the point of having
+gated it. Its `expires_at` is **0.34.0**, and the release-cut skills surface
+that as a review point -- which is the right moment for this decision, with
+several releases of bake behind it.
+
+What graduation should weigh when it comes up:
+
+- **Pause time**, the one risk CG5 left open. AUTO caps nothing per collection;
+  it just fires often enough that the candidate set stays small in practice
+  (measured high-water 128 on a churning program). A default-on collector needs
+  that to be a bound, not an observation.
+- **The `rc_cb_alloc_kinded` payload zeroing** CG5 added under AUTO. Harmless
+  as an opt-in; as a default it is a cost on every rc allocation in the
+  language, and would want measuring against the alternative (a per-block
+  "under construction" flag).
+- **CG6's numbers on real programs**, not synthetic churn. The instrumentation
+  exists now; nothing has yet run a real workload through it.
+
+*Original phase text:*
 
 Only after CG5--CG7 are solid and measured: consider a default `GC_AUTO` behind
 a longer bake. This is where the `cycle-gc` experiment graduates or is shelved
