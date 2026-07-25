@@ -28,6 +28,13 @@
 /* Caps.  Every one of these, when hit, produces RT_UNKNOWN -> runtime check. */
 #define REFINE_MAX_CUBES        64
 #define REFINE_MAX_CUBE_LITS    64
+/* Recursion backstop for the DNF product expansion.  Each frame either splits
+ * one disjunction or flattens one conjunction, both of which strictly reduce
+ * the formula's remaining boolean structure -- so this should never be reached
+ * by a well-formed input.  It exists because the alternative to a cap on a
+ * recursive walk is a stack overflow, and a crashed compiler is worse than a
+ * kept runtime check. */
+#define REFINE_MAX_EXPAND_DEPTH 256
 #define REFINE_MAX_LA_VARS      32
 #define REFINE_MAX_LA_CONSTR    512
 #define REFINE_MAX_EUF_TERMS    512

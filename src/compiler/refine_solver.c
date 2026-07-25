@@ -43,6 +43,7 @@ typedef struct {
     Arena     *arena;
     VCCube    *cubes;
     uint32_t   n, cap;
+    uint32_t   depth;
     bool       overflow;
 } CubeAcc;
 
@@ -69,6 +70,36 @@ static void acc_push(CubeAcc *acc, VCTerm **lits, uint32_t n) {
 static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
                    VCTerm **conj, uint32_t n_conj) {
     if (acc->overflow) return;
+    if (acc->depth >= REFINE_MAX_EXPAND_DEPTH) { acc->overflow = true; return; }
+    acc->depth++;
+
+    /* FLATTEN conjunctions first, so the disjunction scan below sees every
+     * disjunct that is top-level in the FORMULA rather than top-level in this
+     * array.  A `(and A (or B C))` conjunct hides its `or` from a scan that
+     * only inspects `pending[i]->op`, and the collect step below used to
+     * handle that by re-entering with the same pending list -- which made the
+     * identical decision on the next call and recursed forever.  A three-line
+     * program with an ordinary disjunctive postcondition crashed the compiler
+     * with a stack overflow.
+     *
+     * Splicing the conjunction's children in place is what makes each frame
+     * PROGRESS: one boolean node is removed from the structure every time. */
+    for (uint32_t i = 0; i < n_pending; i++) {
+        if (pending[i]->op != VC_AND) continue;
+        VCTerm *t = pending[i];
+        uint32_t cap = n_pending - 1 + t->n;
+        if (cap > REFINE_MAX_CUBE_LITS * 4) { acc->overflow = true; acc->depth--; return; }
+        VCTerm **flat = (VCTerm **)arena_alloc(acc->arena,
+                                               (cap ? cap : 1) * sizeof(VCTerm *));
+        uint32_t m = 0;
+        for (uint32_t j = 0; j < n_pending; j++) {
+            if (j == i) for (uint32_t d = 0; d < t->n; d++) flat[m++] = t->kids[d];
+            else        flat[m++] = pending[j];
+        }
+        expand(acc, flat, m, conj, n_conj);
+        acc->depth--;
+        return;
+    }
 
     /* Find the first disjunction still to split on. */
     for (uint32_t i = 0; i < n_pending; i++) {
@@ -84,45 +115,38 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
             nxt[m] = t->kids[d];
             expand(acc, nxt, m + 1, conj, n_conj);
         }
+        acc->depth--;
         return;
     }
 
     /* No disjunctions left: everything pending is a literal (or a conjunction
      * already flattened by vc_mk).  Collect into one cube. */
-    uint32_t total = n_conj;
-    for (uint32_t i = 0; i < n_pending; i++)
-        total += (pending[i]->op == VC_AND) ? pending[i]->n : 1;
-    if (total > REFINE_MAX_CUBE_LITS) { acc->overflow = true; return; }
+    uint32_t total = n_conj + n_pending;
+    if (total > REFINE_MAX_CUBE_LITS) { acc->overflow = true; acc->depth--; return; }
 
     VCTerm **lits = (VCTerm **)arena_alloc(acc->arena, (total ? total : 1) * sizeof(VCTerm *));
     uint32_t k = 0;
     for (uint32_t i = 0; i < n_conj; i++) lits[k++] = conj[i];
     bool has_false = false;
     for (uint32_t i = 0; i < n_pending; i++) {
-        VCTerm *t = pending[i];
-        uint32_t kn = (t->op == VC_AND) ? t->n : 1;
-        for (uint32_t j = 0; j < kn; j++) {
-            VCTerm *x = (t->op == VC_AND) ? t->kids[j] : t;
-            if (x->op == VC_FALSE) { has_false = true; continue; }
-            if (x->op == VC_TRUE)  continue;
-            if (x->op == VC_OR || x->op == VC_AND) {
-                /* A nested boolean that survived flattening: re-enter. */
-                VCTerm **again = (VCTerm **)arena_alloc(acc->arena,
-                                                        (n_pending - i) * sizeof(VCTerm *));
-                uint32_t m2 = 0;
-                for (uint32_t q = i; q < n_pending; q++) again[m2++] = pending[q];
-                expand(acc, again, m2, lits, k);
-                return;
-            }
-            lits[k++] = x;
-        }
+        VCTerm *x = pending[i];
+        /* Both passes above ran to completion, so nothing here is an AND or an
+         * OR.  If that ever stops holding, bail to Unknown rather than record
+         * a boolean as though it were a literal -- a cube holding an
+         * unsatisfied OR would read as more constrained than it is, and a
+         * theory stage could then call it unsat and prove the goal. */
+        if (x->op == VC_AND || x->op == VC_OR) { acc->overflow = true; acc->depth--; return; }
+        if (x->op == VC_FALSE) { has_false = true; continue; }
+        if (x->op == VC_TRUE)  continue;
+        lits[k++] = x;
     }
     /* A cube containing `false` is already unsatisfiable, and validity needs
      * every cube to be unsatisfiable -- so dropping it is correct (recording
      * it as an empty cube would instead read as "no constraints", which is
      * satisfiable and would wrongly block the proof). */
-    if (has_false) return;
+    if (has_false) { acc->depth--; return; }
     acc_push(acc, lits, k);
+    acc->depth--;
 }
 
 bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out) {

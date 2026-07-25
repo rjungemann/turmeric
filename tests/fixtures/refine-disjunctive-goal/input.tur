@@ -1,0 +1,35 @@
+;; CRASH REGRESSION + a class of goals that was unreachable.
+;;
+;; `(or (and A B) C)` in a return refinement crashed the compiler with a stack
+;; overflow. Three lines was enough. The DNF product expansion scanned
+;; `pending` for a disjunction by looking at `pending[i]->op`, which cannot see
+;; an `or` nested inside an `and`; the collect step handled that by re-entering
+;; with the SAME pending list, so the next call made the identical decision and
+;; recursed until the stack ran out.
+;;
+;; The fix is to flatten conjunctions into `pending` before scanning, which
+;; makes every frame remove one boolean node -- progress, and therefore
+;; termination. A depth cap backstops it: reaching it yields Unknown and keeps
+;; the runtime check, because a crashed compiler is worse than a kept check.
+;;
+;; None of these obligations was "failing" before -- they were unreachable, so
+;; the fix also turns on disjunctive reasoning that had never run.
+(defn plain-or [x : #refine{ v : int | (> v 0) }] : #refine{ r : int | (or (> r 0) (< r -100)) }
+  x)
+
+;; a conjunction nested inside a disjunction -- the exact crashing shape
+(defn and-in-or [x : #refine{ v : int | (and (> v 2) (< v 9)) }]
+    : #refine{ r : int | (or (and (> r 1) (< r 10)) (= r 42)) }
+  x)
+
+;; and with the DISJUNCTION on the hypothesis side instead
+(defn or-hypothesis [x : int, y : int] : #refine{ r : int | (>= r 0) }
+  :pre (or (and (>= x 0) (= y 0)) (and (>= x 5) (= y 1)))
+  x)
+
+(defn main [] : int
+  (println (plain-or 1))
+  (println (and-in-or 3))
+  (println (or-hypothesis 7 1))
+  (println "refine-disjunctive-goal")
+  0)
