@@ -47,25 +47,60 @@ ALIASES = {
     "default_rc_drop_fn": "default_drop_fn",
 }
 
+# A definition's signature may wrap across lines (src/runtime/rc.c wraps at 80
+# columns; the emitted copy never does), so the header is matched against the
+# joined text from the candidate start line rather than that line alone.  An
+# earlier single-line-only version of this silently misfiled every wrapped
+# runtime definition as "emitted only" -- including rc_cb_alloc_kinded, which
+# very much exists in rc.c.
 FUNC_RE = re.compile(
     r"^(?:static\s+)?(?:inline\s+)?"
-    r"[A-Za-z_][A-Za-z0-9_ \*]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{\s*$"
+    r"[A-Za-z_][A-Za-z0-9_ \*]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*\{"
 )
+# Cheap pre-filter: a definition's first line always has an identifier followed
+# by `(` and no `;`, and never starts with a keyword that opens a statement.
+MAYBE_START_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_ \*]*\([^;]*$|^[A-Za-z_][A-Za-z0-9_ \*]*\([^;]*\)\s*\{")
+NOT_A_DEF = ("if", "for", "while", "switch", "return", "else", "do", "typedef")
 
 
 def funcs(path):
-    """Extract {name: source} for every top-level function definition."""
+    """Extract {name: source} for every top-level function definition.
+
+    Handles signatures that wrap across up to MAX_SIG_LINES source lines."""
+    MAX_SIG_LINES = 4
     lines = open(path).read().split("\n")
     out = {}
     i = 0
     while i < len(lines):
-        m = FUNC_RE.match(lines[i])
-        if not m:
+        line = lines[i]
+        if (not line or line[0].isspace() or line.lstrip().startswith(("#", "/", "*"))
+                or line.split("(")[0].strip().split(" ")[0] in NOT_A_DEF):
             i += 1
             continue
-        depth = lines[i].count("{") - lines[i].count("}")
-        body = [lines[i]]
-        j = i + 1
+        # Join up to MAX_SIG_LINES so a wrapped signature still matches, then
+        # find where the opening brace actually landed.
+        joined = ""
+        sig_end = None
+        for k in range(MAX_SIG_LINES):
+            if i + k >= len(lines):
+                break
+            joined = (joined + " " + lines[i + k]).strip() if joined else lines[i + k]
+            if FUNC_RE.match(joined):
+                sig_end = i + k
+                break
+            if ";" in joined or "}" in joined:
+                break
+        if sig_end is None:
+            i += 1
+            continue
+        m = FUNC_RE.match(joined)
+        depth = 0
+        body = []
+        j = i
+        while j <= sig_end:
+            body.append(lines[j])
+            depth += lines[j].count("{") - lines[j].count("}")
+            j += 1
         while j < len(lines) and depth > 0:
             depth += lines[j].count("{") - lines[j].count("}")
             body.append(lines[j])

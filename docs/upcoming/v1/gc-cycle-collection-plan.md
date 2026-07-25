@@ -600,6 +600,94 @@ Doing 4b before 4a would swap all eight behavioral deltas into 1442 fixtures in
 a single commit, which is precisely the failure mode the DEDUP series exists to
 prevent.
 
+**Step 4a landed 2026-07-25 -- and the triage above was wrong on its central
+point. Correcting it here.**
+
+The triage argued "adopt the emitted algorithm for `gc_mark_phase` /
+`gc_trial_deletion_phase`, because the runtime's has never run." The premise
+was right -- verified: nothing in the tree ever called `gc_init` or
+`gc_set_mode`, so with the `gc_enable` bug in place `gc_mode` was never
+anything but `GC_DISABLED` on that path. But the conclusion was an argument
+from absence of evidence, so the first thing 4a did was *generate* the
+evidence, and it went the other way.
+
+`tests/turi/gc-runtime-copy-parity.c` now runs a real behavioral battery
+against the runtime collector -- the first code ever to execute its mark and
+trial-deletion phases:
+
+| case | result |
+|---|---|
+| mutual `rc<T>` cycle, both external handles dropped | **collected** (`gc_objects_freed` +2) |
+| same cycle, one external root retained | **survives**, edge intact |
+| cycle member with a live `weak<T>` observer | **zombie** -- retained, `rc_is_alive` false, `rc_upgrade` NULL |
+
+The runtime's algorithm satisfies the entire contract the emitted copy does,
+including CG4's zombie discipline. It was never broken -- only unreachable.
+So there is nothing to adopt: the two are different implementations of the
+same contract, and since 4b's end state is "the archive supplies the
+definitions", the runtime copy is the survivor by construction.
+
+**That reframes 4a entirely.** It is not "make the two texts agree" -- it is
+"prove the runtime copy satisfies the contract compiled programs depend on."
+Re-triaging the eight deltas under that framing, seven need no code at all:
+
+| delta | resolution |
+|---|---|
+| `gc_mark_phase`, `gc_trial_deletion_phase` | **no change** -- both correct; battery above is the proof |
+| `rc_free_queue_push` / `_drain` | **no change** -- the runtime's dynamic, drain-then-skip queue is strictly better than the emitted copy's fixed 65536 array with `abort()` on overflow, and it is the survivor |
+| `rc_weak_decrement` | **no change** -- `rc_cb_free` factoring; the zombie-observer case above exercises it |
+| `rc_cb_alloc` / `rc_cb_alloc_kinded` signature | **no change** -- the runtime already uses `uint8_t`, matching the field width DEDUP-1 settled; the emitted `int` dies with the emitted copy |
+| GC stats counters | **no change** -- the runtime already has `gc_collections` / `gc_objects_freed`; the *surface* stays CG6's |
+| `gc_add_suspect` watermark force-collect | **FIXED, see below** |
+
+Only one needed changing, and it is the one that was a genuine judgment call
+rather than a matter of evidence: the runtime's `gc_add_suspect` called
+`gc_collect()` at `GC_MAX_SUSPECTS` and recursed -- **reentering the whole
+collector from inside `rc_strong_decrement`**, re-marking and potentially
+freeing blocks while a caller was mid-decrement. The emitted copy has never
+done this; it grows the buffer. Removed, per the emitted contract: a refcount
+drop must never make a collection-policy decision on its own, which also keeps
+it sane once `arc<T>` puts a second thread on these buffers.
+
+What that gives up is a bound on peak suspect-buffer size under `GC_MANUAL`.
+That bound belongs to CG5's automatic trigger -- "collect under memory
+pressure" is policy, and policy does not belong on the decrement path.
+`GC_MAX_SUSPECTS` is now unused by the collector; kept in `gc.h` only so it
+does not drift from the emitted copy's identical constant while both exist.
+
+Pinned by `decrement-past-watermark-never-collects` (pushes 5000 candidates,
+asserts `gc_collections` never moves and the buffer grows past 4096, then that
+one explicit collect still works). Validated by restoring the force-collect and
+watching three assertions fail.
+
+**Two smaller findings from the same pass:**
+
+- `rc_set_value` has been defined in `rc.c` since the beginning but was never
+  declared in `rc.h`, so every caller outside `rc.c` got an implicit
+  declaration. Declared now.
+- `may_contain_cycles` is **written but never read** -- by either copy. The
+  emitted copy's `if (value_type_kind <= 7) cb->may_contain_cycles = false;`
+  scalar optimisation is therefore inert, which is why it needed no porting.
+  Wiring it into `gc_add_suspect` as a real filter (keeping scalar `rc<int>`
+  out of the candidate machinery entirely) is a genuine optimisation, but it
+  changes what gets buffered and needs its own evidence -- CG5/CG6 material,
+  not 4a.
+
+`tools/gc-copy-diff.py` also had a real flaw, found while using it: `FUNC_RE`
+only matched single-line signatures, so every definition `rc.c` wraps at 80
+columns was misfiled as "emitted only" -- including `rc_cb_alloc_kinded`, which
+plainly exists in both. Fixed to join up to four lines when matching a header.
+Corrected census: **21 identical, 25 divergent, 2 emitted-only, 11
+runtime-only** (the two newly-visible divergences, `rc_cb_alloc_kinded` and
+`rc_cb_alloc_struct`, are the `int` vs `uint8_t` signature and the inert
+`may_contain_cycles` line).
+
+The count does not drop much from 4a, and that is the honest outcome: the
+remaining 25 are overwhelmingly *cosmetic* (brace style, accessor helpers,
+`default_rc_drop_fn` vs `default_drop_fn`), and they disappear when the emitted
+copy does -- not by being rewritten to match. **4a is complete.** 4b is next,
+and is now purely mechanical.
+
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the
 `RCK_OPAQUE` blind spot -- these would assert the *documented* non-collection);

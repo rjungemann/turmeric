@@ -116,14 +116,22 @@ static bool gc_add_suspect(RcControlBlock *cb) {
      * offers a candidate root. */
     if (cb->gc_buffered) return true;
 
-    /* CG0: at the force-collection watermark, try to drain the buffer first;
-     * if collection cannot shrink it, GROW rather than drop the suspect (the
-     * old code silently discarded it, losing real garbage). */
-    if (gc_suspect_count >= GC_MAX_SUSPECTS) {
-        uint32_t before = gc_suspect_count;
-        gc_collect();
-        if (gc_suspect_count < before) return gc_add_suspect(cb);
-    }
+    /* DEDUP-4a: no force-collect at a watermark here.
+     *
+     * This used to call gc_collect() once gc_suspect_count reached
+     * GC_MAX_SUSPECTS, and recurse.  But gc_add_suspect runs on the
+     * rc_strong_decrement path, so that reentered the whole collector from
+     * inside a refcount drop -- re-marking, re-sweeping and potentially
+     * freeing blocks while a caller was mid-decrement.  The emitted copy in
+     * emit_module.c has never done this; it simply grows the buffer, which is
+     * the contract we are standardising on (and the one that stays sane once
+     * arc<T> puts more than one thread on these buffers -- their
+     * thread-safety is separately out of scope, see the plan).
+     *
+     * The bound this gave up is peak suspect-buffer size under GC_MANUAL.
+     * That belongs to CG5's automatic trigger -- "collect when there is
+     * memory pressure" is a policy decision, not something a refcount
+     * decrement should make on its own. */
     if (gc_suspect_count >= gc_suspect_capacity) {
         if (!gc_vec_reserve(&gc_suspect_roots, &gc_suspect_capacity,
                             gc_suspect_count + 1u))

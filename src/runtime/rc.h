@@ -182,6 +182,16 @@ RcControlBlock *rc_cb_alloc_struct(size_t value_size, uint8_t value_type,
  */
 void rc_cb_free(RcControlBlock *cb);
 
+/* Retarget a block's payload and drop glue.  Used when the payload is a
+ * separately-allocated cell rather than the inline (cb + 1) region -- which is
+ * what the codegen emits for rc<T>, since the TY_RC drop glue free()s the
+ * payload.  Passing drop_fn == NULL re-derives it from the block's value type.
+ *
+ * DEDUP-4a: defined in rc.c since the beginning but never declared here, so
+ * every caller outside rc.c got an implicit declaration (and, under C99, a
+ * silently assumed int return). */
+void rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn);
+
 /* Increment the strong count. Returns the new count. */
 uint64_t rc_strong_increment(RcControlBlock *cb);
 

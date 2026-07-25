@@ -26,9 +26,12 @@ typedef enum {
 
 /* Configuration constants */
 #define GC_SUSPECT_THRESHOLD 128  /* Trigger collection when this many suspects */
-/* CG0: this is now a "force a collection at this size" trigger, NOT a hard cap.
- * The suspect buffer grows past it if a collection cannot drain it, because
- * silently dropping suspects would make the collector miss real garbage. */
+/* CG0 made this a "force a collection at this size" trigger rather than a hard
+ * cap.  DEDUP-4a then removed the force-collect entirely -- it reentered the
+ * collector from inside a refcount decrement (see gc_add_suspect) -- so this is
+ * now UNUSED by the collector itself.  Kept because the emitted copy in
+ * emit_module.c still defines the same constant, and the two must not drift
+ * while both exist; a pressure-driven trigger belongs to CG5. */
 #define GC_MAX_SUSPECTS 4096
 
 /* Suspect roots buffer - global for v1 (per-thread in future).
