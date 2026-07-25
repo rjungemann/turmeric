@@ -192,13 +192,23 @@ freed when the count hits zero) but the cycle collector cannot see through
 them. Wrap C handles in `defopaque` and give them a proper drop, not a
 walker, when they have no `rc<T>` children.
 
-In practice this blind spot is currently narrower than it sounds, for a reason
-nobody would want: a `vec` or `map` **cannot hold an `rc<T>` at all** today
-(`emit: invalid EX_REINTERPRET rc -> int`), so the "cycle through a collection"
-case is closed by rejection rather than by tracing --
-see [docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md).
+This blind spot used to be narrower than it sounds, for a reason nobody would
+want: a `vec` or `map` could not hold an `rc<T>` at all (`emit: invalid
+EX_REINTERPRET rc -> int`), so "cycle through a collection" was closed by
+rejection rather than by tracing.
+
+**As of 2026-07-25 a `Vec[rc<T>]` compiles and is refcount-correct** -- the Vec
+takes a strong reference per slot and releases it on free/overwrite/removal --
+so the blind spot is now open for real on the vec side: a cycle routed through a
+Vec's element buffer is RC-balanced but **not** reclaimed, because the Vec's
+buffer is an ordinary `malloc` block with no walker. `map`/`hamt` still rejects
+the shape outright, and `weak<T>` is rejected everywhere (there is no count to
+take). See
+[docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md);
+making the Vec walkable is item 3 there.
+
 A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
-spot. The gap reopens for real the moment collections accept `rc<T>`.
+spot.
 
 ---
 

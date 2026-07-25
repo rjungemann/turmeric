@@ -2946,6 +2946,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             TypeKind src_kind = e->as.reinterpret_.source_kind;
             TypeKind dst_kind = e->as.reinterpret_.target_kind;
+            /* collections-cannot-hold-rc-values item 2: an rc<T> crossing the
+             * int64 element carrier.  The bits are just the control-block
+             * pointer, so the crossing itself is a cast -- what matters is the
+             * count.  elab (own_carry_for_arg / own_carry_for_result) decided
+             * whether this crossing mints a reference or moves one; here we
+             * only stamp the increment it asked for.  The Vec releases its own
+             * count via bit 1 of the `owned` flag threaded by stdlib/vec.tur. */
+            if (src_kind == TY_RC || dst_kind == TY_RC) {
+                char *rc_inner = emit_value(ctx, body, e->as.reinterpret_.expr);
+                char *rc_tmp = fresh_tmp(ctx);
+                buf_printf(body, "RcControlBlock *%s = (RcControlBlock *)(intptr_t)(%s);\n",
+                           rc_tmp, rc_inner);
+                free(rc_inner);
+                if (e->as.reinterpret_.retain)
+                    buf_printf(body, "if (%s) { rc_strong_increment(%s); }\n", rc_tmp, rc_tmp);
+                Buf rc_out; buf_init(&rc_out);
+                if (dst_kind == TY_RC) buf_printf(&rc_out, "%s", rc_tmp);
+                else                   buf_printf(&rc_out, "(int64_t)(intptr_t)%s", rc_tmp);
+                free(rc_tmp);
+                buf_putc(&rc_out, '\0');
+                return rc_out.data;
+            }
             int src_size = reinterpret_kind_size_bytes(src_kind);
             int dst_size = reinterpret_kind_size_bytes(dst_kind);
             if (!reinterpret_kind_is_scalar(src_kind) || !reinterpret_kind_is_scalar(dst_kind) ||
@@ -3381,6 +3403,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            type_is_wide_byval_adt(at);
                 }
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
+            }
+
+            /* collections-cannot-hold-rc-values item 2: `(tur-vec-elem-rc? v)`
+             * is the refcount-side twin of tur-vec-elem-wide? -- it folds to 1
+             * when the monomorphized `(Vec A)` element type A is an rc<T>,
+             * whose slots hold a strong reference the Vec took at push time
+             * (own_carry_for_arg in elab_call.c) and must release on
+             * free/overwrite/removal.  Threaded as bit 1 of the `owned` flag,
+             * mirroring how map-assoc threads tur-wide-byval?.  The
+             * pure-Turmeric fallback body (returns 0) covers the interpreter,
+             * where rc values are not carrier-erased. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                strcmp(fn_binding->name->name, "tur-vec-elem-rc?") == 0 &&
+                e->as.call_.n_args == 1) {
+                Type vt = emit_resolve_type(ctx, e->as.call_.args[0]->type);
+                bool is_rc = false;
+                if (vt.kind == TY_APP && vt.as.app.arg)
+                    is_rc = emit_resolve_type(ctx, *vt.as.app.arg).kind == TY_RC;
+                return strdup(is_rc ? "INT64_C(1)" : "INT64_C(0)");
             }
 
             /* CM3 (van-laarhoven-consumer-mono-plan): rewrite a call to an

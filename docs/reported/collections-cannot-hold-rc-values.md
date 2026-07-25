@@ -91,10 +91,67 @@ Roughly in increasing order of work:
 
    Pinned by `tests/fixtures/errors/collection-rejects-owning-element`.
 
-2. **Box the element.** Store `rc<T>` elements as their control-block pointer
-   with the collection owning a strong reference -- taking a count on insert and
-   releasing on removal/teardown. This is the shape the existing
-   `RCK_EXISTENTIAL` / `RCEXP_RC` machinery already models.
+2. ~~**Box the element.**~~ **DONE 2026-07-25, for `vec`.** A `Vec[rc<T>]`
+   now owns a strong reference per slot. `map`/`hamt` still rejects.
+
+   The carrier crossing was never a representation problem -- an `rc<T>` *is* a
+   control-block pointer, so the bits fit an `int64_t` slot exactly. What was
+   missing was an owner for the count. So each crossing is now classified at
+   elaboration (`own_carry_for_arg` / `own_carry_for_result`,
+   `src/compiler/elab_call.c`) as one of three things:
+
+   | | meaning | sites |
+   |---|---|---|
+   | RETAIN | the crossing mints a new reference | `vec-push!`/`vec-set-o!` element, `vec-get` result |
+   | BORROW | an existing reference moves; nothing is minted | `tur-vec-homog__`/`vec-empty-like__` witnesses, `vec-pop!` result |
+   | REJECT | unaccounted -- diagnose | everything else, including `map`/`hamt` |
+
+   The release side reuses the pattern already in place for wide by-value
+   elements: `tur-vec-elem-rc?` is a new emit-time type query
+   (`src/compiler/emit_expr.c`) that folds to 1 when the monomorphized element
+   type is an `rc<T>`, and `vec-free` / `vec-set!` / `vec-drop-last!` thread it
+   as **bit 1** of the `owned` flag their `-o` helpers already took for boxes
+   (bit 0). So the release lands at exactly the three points a `Vec[Point]`
+   frees its element boxes.
+
+   **Both push shapes net +1**, which is the part worth knowing:
+
+   ```turmeric
+   (vec-push! v a)              ; BORROW: `a` keeps its count, the Vec takes its own
+   (vec-push! v (rc/clone a))   ; the clone already minted one; the Vec takes THAT
+   ```
+
+   Retaining on top of an `(rc/of ...)` / `(rc/clone ...)` argument would leave
+   the Vec holding two counts and releasing one, so those two forms are
+   recognised as minting (`own_arg_mints_reference`) and taken as-is. Every
+   other argument shape is treated as a borrow and retained -- the safe default
+   of the two, since a surplus retain leaks where a missing one double-frees.
+
+   A read hands the caller its **own** count rather than a borrow, so
+   `(vec-get v 0)` is safe to let-bind and drop while the Vec keeps its slot.
+   `vec-pop!` is the exception: it transfers the slot's count out, mirroring the
+   ownership-transfer note already on it for boxed elements.
+
+   Pinned by `tests/fixtures/rc-of-vec-element-ownership` (all assertions are
+   strong counts -- printing the elements back would pass with the counts
+   wrong), which produces identical output under `--interpret`, and by the
+   repointed `tests/fixtures/errors/collection-rejects-owning-element` for the
+   still-rejected `map`/`hamt` side.
+
+   **Fallout worth recording:** widening the rejection path to `hamt` exposed
+   two latent bugs. `elab_call.c` dereferenced `args[i]` after the carrier wrap
+   returned NULL (a segfault on the way to reporting an error it had already
+   reported), and `resolve_ctor_field` left `drop_inner_def` holding the arena's
+   0xbe poison on every field that was not a nested owning aggregate -- harmless
+   only for as long as the drop/walk glue emitter walked ctor 0 alone, which
+   stopped being true when the sum-type glue fix widened it to every ctor.
+
+   **Still open:** `map`/`hamt`, and `weak<T>` in any collection (there is no
+   count to take, so a weak slot would be a bare pointer nobody owns).
 3. **Make the collection walkable** so the cycle collector can trace through it
    (CG3 item 2). This is the part that closes the documented blind spot rather
-   than dodging it, and it is only worth doing once (2) exists.
+   than dodging it, and it is only worth doing once (2) exists -- which it now
+   does, for `vec`. Note that (2) *opened* the blind spot for real: a
+   `Vec[rc<T>]` compiles today, so a cycle can now genuinely route through a
+   collection buffer and go unreclaimed. The fixtures the gc-guide's blind-spot
+   section called for are finally writable, and now necessary.

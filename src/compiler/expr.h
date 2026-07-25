@@ -1060,7 +1060,13 @@ struct Expr {
         struct { Expr *tvar; Expr *old_val; Expr *new_val; } tvar_cas_; /* (TVar::cas tvar old new) */
         /* Phase N: numeric cast */
         struct { Expr *expr; TypeKind target_kind; } cast_;        /* (as T e) */
-        struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; } reinterpret_;
+        /* `retain` is meaningful only when one side is an owning kind (rc/weak/
+         * ref): true means crossing the carrier hands out a NEW strong
+         * reference (a collection taking ownership of a pushed element, or a
+         * read handing the caller its own count), false means the existing
+         * reference merely moves (a borrow, or a pop transferring the slot's
+         * count out).  See docs/reported/collections-cannot-hold-rc-values.md. */
+        struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; bool retain; } reinterpret_;
         /* Phase H §1: dictionary passing */
         struct {
             TypeClassInstance *instance;
