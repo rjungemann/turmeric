@@ -203,9 +203,25 @@ so the blind spot is now open for real on the vec side: a cycle routed through a
 Vec's element buffer is RC-balanced but **not** reclaimed, because the Vec's
 buffer is an ordinary `malloc` block with no walker. `map`/`hamt` still rejects
 the shape outright, and `weak<T>` is rejected everywhere (there is no count to
-take). See
-[docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md);
-making the Vec walkable is item 3 there.
+take).
+
+`tests/fixtures/gc-blind-spot-cycle-through-vec` measures exactly this. It
+builds the same two-reference cycle twice, differing only in the back-edge:
+
+| back-edge | result |
+| --- | --- |
+| `a --.peer--> b --.peer--> a` (rc fields) | freed, 0 live |
+| `n --.kids--> Vec --slot--> n` | 0 freed, 50 live |
+
+Emitting a walk loop for the field would *not* fix this, and is the trap worth
+naming: `gc_collect_white` frees the whole white set together and never releases
+references out of it, which is sound only when every path into a traced object
+is GC-visible. A `Vec` is shared by raw pointer with no count of its own, so
+tracing through it would let the sweep free a block a live `Vec` still points
+at -- a leak traded for a use-after-free. The container has to become
+GC-visible first. See
+[docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md)
+item 3 for the design.
 
 A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
 spot.
@@ -360,6 +376,13 @@ for bare `emit-c`, for a caller who links `libturt_runtime.a` themselves.
   routed through an `RCK_OPAQUE` block is invisible to the walker, and there is
   no automatic trigger -- user code drives collection via `(gc!)` or the
   suspect threshold.
+- A cycle routed through a `Vec[rc<T>]` element buffer is refcount-correct but
+  not reclaimed: the buffer is a plain `malloc` block with no walker, and it
+  cannot simply be given one (it is shared by raw pointer, so the collector
+  cannot know whether another holder exists). Measured by
+  `tests/fixtures/gc-blind-spot-cycle-through-vec`; the fix -- an rc-managed,
+  self-walking container -- is designed in
+  `docs/reported/collections-cannot-hold-rc-values.md` item 3.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.
 - The walker relies on per-block metadata registered at allocation. Runtime

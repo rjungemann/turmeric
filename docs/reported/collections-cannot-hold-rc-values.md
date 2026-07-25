@@ -1,7 +1,7 @@
 # `vec` and `map` cannot hold `rc<T>` at all
 
 **Severity:** medium (expressiveness hole; hard codegen error, not a miscompile)
-**Status:** open
+**Status:** open (items 1 and 2 done; item 3 measured and blocked on container ownership)
 **Found by:** CG7 (gc-cycle-collection-followup-plan), while trying to write the
 `RCK_OPAQUE` blind-spot fixtures
 
@@ -149,9 +149,62 @@ Roughly in increasing order of work:
    **Still open:** `map`/`hamt`, and `weak<T>` in any collection (there is no
    count to take, so a weak slot would be a bare pointer nobody owns).
 3. **Make the collection walkable** so the cycle collector can trace through it
-   (CG3 item 2). This is the part that closes the documented blind spot rather
-   than dodging it, and it is only worth doing once (2) exists -- which it now
-   does, for `vec`. Note that (2) *opened* the blind spot for real: a
-   `Vec[rc<T>]` compiles today, so a cycle can now genuinely route through a
-   collection buffer and go unreclaimed. The fixtures the gc-guide's blind-spot
-   section called for are finally writable, and now necessary.
+   (CG3 item 2). **Measured and blocked -- see below.** Item (2) opened the
+   blind spot for real: a `Vec[rc<T>]` compiles today, so a cycle can now
+   genuinely route through a collection buffer and go unreclaimed.
+
+   The fixtures the gc-guide's blind-spot section always called for are finally
+   writable, and `tests/fixtures/gc-blind-spot-cycle-through-vec` pins the cost.
+   It builds the *same* two-reference cycle twice, differing only in whether the
+   back-edge rides an rc field or a Vec slot:
+
+   ```
+   direct: a --.peer--> b --.peer--> a       -> freed, 0 live
+   vec:    n --.kids--> Vec --slot--> n      -> 0 freed, 50 live
+   ```
+
+   The refcounts are correct on both sides -- item (2) sees to that. What is
+   missing is **visibility**: a Vec's buffer is an ordinary malloc'd
+   `{ data, len, cap }` header with no `walk_fn`, so `gc_each_child` enumerates
+   nothing for the field and the collector never learns the edge exists.
+
+   ### Why the obvious fix is wrong
+
+   The tempting change is three lines in `emit_adt_byval_walk_glue`
+   (`src/compiler/emit_module.c`): when a ctor field's type is `(Vec rc<T>)`,
+   emit a loop reporting each slot as a child. **Do not do this.** The sweep in
+   `gc_collect_white` frees the entire white set together and never releases
+   references *out* of it -- correct only when every path into a traced object
+   is itself GC-visible. A `Vec` is shared by raw pointer, has no count of its
+   own, and is freed by hand, so the collector cannot tell whether a second
+   holder still points at the same buffer. Tracing through it would let the
+   sweep free a block a live `Vec` still references: a leak traded for a
+   use-after-free, which is the worse of the two.
+
+   ### What would actually work
+
+   The container has to become GC-visible before its contents can be traced.
+   Concretely, an rc-managed vector allocated through `rc_cb_alloc_struct`
+   (`src/runtime/rc.c:146`) with a `walk_fn` of its own. Every slot is already a
+   control-block pointer, so **one generic walker serves every element type** --
+   no per-monomorphization glue:
+
+   ```c
+   static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) {
+       struct { int64_t *data; int64_t len; int64_t cap; } *v = value;
+       for (int64_t i = 0; i < v->len; i++)
+           if (v->data[i]) cb((RcControlBlock *)(intptr_t)v->data[i], ctx);
+   }
+   ```
+
+   Its `drop_fn` releases each slot and frees the buffer, which is what makes
+   the ownership question answerable in the first place. Sketch of the work:
+   a new stdlib module holding the header layout and the two C hooks; the push
+   and read sinks registered in `own_carry_for_arg` / `own_carry_for_result`
+   alongside the `vec-*` entries; and the blind-spot fixture flipped from
+   "50 live" to "0 live" once it lands.
+
+   This does not retire the plain `Vec`. Manual, non-refcounted buffers stay the
+   right default for element types with no shared ownership -- the rc-managed
+   container is for the case that needs tracing, and its extra block per
+   container is the price of being traceable.
