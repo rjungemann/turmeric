@@ -759,14 +759,30 @@ Known and deliberate, in rough order of how likely you are to hit them:
   only sees refinements of functions already elaborated. Under mutual
   recursion, one direction may miss one. This can only lose a hypothesis, never
   add a false one.
-- **Path splitting covers `if`, `let`, and `match`.** A branching body is
+- **Path splitting covers `if`, `let`, `match`, and `do`.** A branching body is
   discharged per path -- `c |- pred[then/r]` and `(not c) |- pred[else/r]` --
   and a `let` contributes `x = v`. A `let` whose binding shadows a name in
   scope is alpha-renamed first, so the hypothesis relates a fresh name rather
   than asserting the contradiction `x = x - 1`. A body that rebinds the same
-  name a second time declines to split. A `match` arm contributes everything
-  its selection implies (see below); a pattern binder that shadows a name in
-  scope declines the split.
+  name a second time declines to split. A branching `let` VALUE splits too, so
+  `(let [m (if c a b)] ...)` gives the body `m = a` on one path and `m = b` on
+  the other rather than an unconstrained `m`. A `match` arm contributes
+  everything its selection implies (see below); a pattern binder that shadows a
+  name in scope declines the split. A `do` block is proved through its last
+  form, but only when the preceding statements contain no assignment -- an
+  assignment can stale a hypothesis about a parameter, and carrying that
+  hypothesis across it would prove a function that violates its own refinement.
+- **A call-site crossing does not see path conditions.** Crossings are resolved
+  after the whole unit, which is what lets them see every callee's refinement,
+  but it also means a call inside a branch is checked without the condition
+  that selected the branch. In
+  `(if (= n 0) 0 (+ 1 (f (- n 1))))` the recursive crossing needs `n - 1 >= 0`,
+  which follows from `n >= 0` and `n != 0` -- and the second fact is not
+  available at the crossing. The runtime check for it remains, so this costs a
+  diagnostic, never soundness.
+- **A `while` loop is not analysed.** An accumulator built by a loop is
+  Unknown regardless of what the loop does; there is no invariant inference and
+  none is planned for the prototype.
 - **No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)

@@ -1182,6 +1182,57 @@
 > Verified: suite 2324/0, solver unit 47/0, 400 fuzz cases across two seeds
 > with 0 soundness bugs.
 >
+> ### Branching `let` values and `do` blocks (landed 2026-07-25)
+>
+> Picked by sweeping eight ordinary refinement shapes rather than by working
+> down the next-slice list, which is how the equality goal turned up too.
+> `abs`, `max`, `clamp`, and `sum-preserves-sign` all proved; four did not:
+>
+> | Shape | Before |
+> |---|---|
+> | `(let [m (if (<= a b) a b)] m)` vs `(<= r a)` | unknown |
+> | `(do (println ...) (if ...))` | unknown |
+> | recursive `(f (- n 1))` under `(= n 0)` | crossing unknown |
+> | `while` accumulator | unknown |
+>
+> The first two are the same omission from two angles and both landed.
+>
+> **A branching `let` value** asserted `m = (if c a b)`, and an `if` is not a
+> term the encoder can build, so the hypothesis was dropped and `m` entered the
+> body unconstrained. The identical `if` written directly as the body proved --
+> a distinction nobody writing the code would expect to matter. Splitting the
+> value is the same rule as splitting the body, one level up.
+>
+> **A `do` block** is proved through its last form. Sound only while the
+> statements cannot stale a hypothesis already in the environment -- and those
+> hypotheses are about PARAMETERS, so an assignment is exactly what stales
+> them. A syntactic scan for `set!`/`swap!`/`reset!` in the statements declines
+> those. Deliberately over-broad: a name that merely looks like an assignment
+> costs precision, missing one costs soundness.
+>
+> That scan was **verified load-bearing** rather than assumed. Disabling it
+> makes `(do (set! x -5) x)` under a parameter refinement `x >= 0` report
+> `2 proven, 0 unknown` and the program then returns -5 with no check -- a
+> miscompile, pinned by `errors/refine-do-set-not-split`.
+>
+> **The other two are recorded, not fixed**, and both are in the guide's
+> limitations now:
+>
+> - **A call-site crossing does not see path conditions.** Crossings resolve
+>   after the whole unit, which is what lets them see every callee's
+>   refinement, but a call inside a branch is then checked without the
+>   condition that selected it -- so the canonical decreasing-argument
+>   recursion has an unprovable crossing. Fixing it means capturing the path
+>   condition at COLLECTION time, which needs a condition stack threaded
+>   through expression elaboration: a real change, not a slice, and the largest
+>   remaining proving gap.
+> - **`while` is not analysed at all**, which is the honest description of the
+>   remaining purity-whitelist item. It is not a classifier case; it needs loop
+>   invariants, which the prototype excludes.
+>
+> Verified: suite 2326/0, solver unit 47/0, 400 fuzz cases across two seeds
+> with 0 soundness bugs.
+>
 > ### Next slice
 >
 > Candidates, roughly by value:
@@ -1193,15 +1244,19 @@
 >   eventual call. This needs refinements in function types, which the
 >   prototype excludes; the callee's own entry checks still run, so only the
 >   static crossing is lost.
-> - **Widen the purity whitelist -- one of three left.** `match` and field
->   reads both landed (see above). What remains is `while` over provably-local
->   state, the least common of the three in refined code and the only one that
->   needs an actual analysis rather than a classifier case: "provably local"
->   means no escape of the loop variable, which nothing here computes today.
->   Widening still cannot grow `TUR-E0375`, since moving a form from UNKNOWN to
->   PURE only ever removes diagnostics. Note this is NOT the "purity from effect
->   inference" item it replaces -- that one is struck as unworkable, per the
->   finding above.
+> - **Path conditions for call-site crossings** -- NEW, and now the largest
+>   remaining proving gap. A crossing inside a branch is checked without the
+>   condition that selected the branch, so the canonical decreasing-argument
+>   recursion cannot discharge its own recursive call. Needs the path condition
+>   captured at COLLECTION time, which means a condition stack threaded through
+>   expression elaboration. Costs a diagnostic, never soundness -- the runtime
+>   check stays.
+> - ~~**Widen the purity whitelist**~~ -- `match` and field reads landed. The
+>   third item, `while` over provably-local state, is **struck**: measuring it
+>   showed it is not a classifier case at all. A loop accumulator is Unknown
+>   because there is no loop-invariant inference, not because `while` is
+>   classified impure, so widening the classifier would change nothing. Real
+>   support needs invariants, which the prototype excludes.
 > - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
 >   without the new sort this entry assumed it needed. Arm hypotheses and
 >   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What

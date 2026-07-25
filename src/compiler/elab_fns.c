@@ -784,6 +784,27 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
                            const Form *subject, TypeKind base_kind,
                            RefineEnv *env, Span loc, uint32_t depth);
 
+/* True when `f` contains an assignment anywhere.  Used to decide whether a
+ * statement can be stepped over: an assignment may stale a hypothesis already
+ * in the environment, and every other form cannot.  Deliberately syntactic and
+ * deliberately over-broad -- a name that merely LOOKS like an assignment costs
+ * precision, and missing one costs soundness. */
+#define RT_SET_SCAN_MAX_DEPTH 12
+
+static bool rt_form_mentions_set(const Form *f, uint32_t depth) {
+    if (!f) return false;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
+    if (f->tag == F_SYM && f->as.sym) {
+        const char *n = f->as.sym->name;
+        return strcmp(n, "set!") == 0 || strcmp(n, "swap!") == 0 ||
+               strcmp(n, "reset!") == 0;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_form_mentions_set(f->as.list.items[i], depth + 1)) return true;
+    return false;
+}
+
 /* ------------------------------------------------------------------------- *
  * A datatype theory for match arms.
  *
@@ -979,16 +1000,69 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
                 x = nx; body = nbody;
             }
             refine_env_declare(env, x->as.sym->name, rt_sort_of_kind(base_kind));
-            Form **eqk = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
-            eqk[0] = form_sym(e->arena, subject->span,
-                              symtab_intern(e->st, strslice("=", 1)));
-            eqk[1] = (Form *)x;
-            eqk[2] = (Form *)v;
-            Form *eq = form_list(e->arena, subject->span, eqk, 3);
-            return rt_prove_under(e, pred, var_name, eq, body, base_kind, env,
-                                  loc, depth);
+
+            /* A BRANCHING VALUE splits too.  `(let [m (if c a b)] ...)` used to
+             * assert `m = (if c a b)`, and an `if` is not a term the encoder
+             * can build -- so the hypothesis was dropped and `m` went into the
+             * body completely unconstrained.  `(let [m (if (<= a b) a b)] m)`
+             * against `(<= r a)` was Unknown while the identical `if` written
+             * directly as the body proved, which is a distinction no one
+             * writing the code would expect to matter.
+             *
+             * Splitting the VALUE is the same rule as splitting the body, one
+             * level up: on the true path `m = a`, on the false path `m = b`,
+             * and the branch condition is a fact on each. */
+            if (rt_head_is(v, "if") && v->as.list.len == 4 &&
+                depth + 1 < RT_PATH_MAX_DEPTH) {
+                const Form *c  = v->as.list.items[1];
+                const Form *vt = v->as.list.items[2];
+                const Form *vf = v->as.list.items[3];
+                Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+                notk[0] = form_sym(e->arena, v->span,
+                                   symtab_intern(e->st, strslice("not", 3)));
+                notk[1] = (Form *)c;
+                Form *nc = form_list(e->arena, v->span, notk, 2);
+
+                RefineHyp *br_head  = env->head;
+                uint32_t   br_names = env->n_names;
+                refine_env_push(env, c, NULL, NULL);
+                bool ok_t = rt_prove_under(e, pred, var_name,
+                                           rt_form_eq(e, v->span, x, vt),
+                                           body, base_kind, env, loc, depth + 1);
+                env->head = br_head; env->n_names = br_names;
+                if (!ok_t) return false;
+
+                refine_env_push(env, nc, NULL, NULL);
+                bool ok_f = rt_prove_under(e, pred, var_name,
+                                           rt_form_eq(e, v->span, x, vf),
+                                           body, base_kind, env, loc, depth + 1);
+                env->head = br_head; env->n_names = br_names;
+                return ok_f;
+            }
+
+            return rt_prove_under(e, pred, var_name,
+                                  rt_form_eq(e, subject->span, x, v),
+                                  body, base_kind, env, loc, depth);
         }
         return false;
+    }
+
+    /* (do s1 ... sn) -- the value is the LAST form; the rest are statements.
+     *
+     * Splitting on the last form is only sound while the statements cannot
+     * invalidate the hypotheses already in the environment. Those hypotheses
+     * are about parameters, so an assignment is exactly what would stale them:
+     * `(do (set! x 0) (if (>= x 0) x 0))` must not be proved using the
+     * parameter refinement that held BEFORE the assignment. A Form-level scan
+     * for any `set!` in the statements is conservative -- it declines some
+     * harmless writes to purely local state -- and cheap, which is the right
+     * trade for a rule whose failure mode is a miscompile. */
+    if (rt_head_is(subject, "do") && subject->as.list.len >= 2) {
+        for (uint32_t i = 1; i + 1 < subject->as.list.len; i++)
+            if (rt_form_mentions_set(subject->as.list.items[i], 0)) return false;
+        return rt_prove_paths(e, pred, var_name,
+                              subject->as.list.items[subject->as.list.len - 1],
+                              base_kind, env, loc, depth + 1);
     }
 
     /* (match scrut pat1 [when g1] e1 pat2 [when g2] e2 ...) -- every arm, under
@@ -1179,7 +1253,7 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
      * sees, because the whole-body obligation below still runs and still
      * reports. */
     if (subject && (rt_head_is(subject, "if") || rt_head_is(subject, "let") ||
-                    rt_head_is(subject, "match")) &&
+                    rt_head_is(subject, "match") || rt_head_is(subject, "do")) &&
         rt_prove_paths(e, pred, var_name, subject, base_kind, env, loc, 0)) {
         refine_note_split_proven();
         env->head = ax_head; env->n_names = ax_names;

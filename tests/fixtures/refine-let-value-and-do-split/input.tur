@@ -1,0 +1,27 @@
+;; Two more shapes the path splitter had been walking straight past. Both were
+;; `0 proven, 1 unknown`; under --strict-refine, losing either is a compile
+;; error.
+;;
+;; A BRANCHING LET VALUE. `(let [m (if c a b)] ...)` asserted `m = (if c a b)`,
+;; and an `if` is not a term the encoder can build -- so the hypothesis was
+;; dropped and `m` entered the body completely unconstrained. The identical
+;; `if` written directly as the body proved, which is a distinction nobody
+;; writing the code would expect to matter. Splitting the value is the same
+;; rule as splitting the body, one level up.
+(defn min-of [a : int b : int] : #refine{ r : int | (<= r a) }
+  (let [m (if (<= a b) a b)]
+    m))
+
+;; A `do` BLOCK. Its value is the last form; the rest are statements. Stepping
+;; over them is sound only while they cannot stale a hypothesis already in the
+;; environment -- see errors/refine-do-set-not-split for the half that must not
+;; be proved.
+(defn clamped [x : int] : #refine{ r : int | (>= r 0) }
+  (do
+    (println "checking")
+    (if (>= x 0) x 0)))
+
+(defn main [] : int
+  (println (min-of 1 2))
+  (println (clamped -1))
+  0)
