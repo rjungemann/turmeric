@@ -168,6 +168,32 @@ Roughly in increasing order of work:
    `{ data, len, cap }` header with no `walk_fn`, so `gc_each_child` enumerates
    nothing for the field and the collector never learns the edge exists.
 
+   ### The blind spot is narrower than "collections"
+
+   A third arm in the same fixture settles what the gap actually is. Build the
+   identical cycle through a **user-defined container of rc cells** --
+
+   ```turmeric
+   (defstruct Cell  :move [item : rc<CNode> next : rc<Cell>])
+   (defstruct CNode :move [kids : rc<Cell>])
+   ```
+
+   -- and the collector reclaims it completely: 0 live. That is a container by
+   any reasonable reading, and it needs no new machinery at all, because its
+   links are ordinary `rc` fields that the emitted walk glue already
+   enumerates.
+
+   So this is **not** a missing capability in the walker, and it is not
+   "collections" as a category. It is one specific thing: a flat malloc'd
+   buffer with no `walk_fn`. Two consequences worth separating:
+
+   - **For users, today:** if you need a collection of `rc<T>` the collector can
+     trace, build it from rc cells. It works now. The flat `Vec` is the case to
+     avoid, and only when the elements can form a cycle.
+   - **For the fix:** the walker side is already proven, so the remaining work is
+     entirely about making the container itself GC-visible -- which is what the
+     design below is.
+
    ### Why the obvious fix is wrong
 
    The tempting change is three lines in `emit_adt_byval_walk_glue`

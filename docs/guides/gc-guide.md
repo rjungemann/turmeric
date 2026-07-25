@@ -211,7 +211,15 @@ builds the same two-reference cycle twice, differing only in the back-edge:
 | back-edge | result |
 | --- | --- |
 | `a --.peer--> b --.peer--> a` (rc fields) | freed, 0 live |
+| `n --.kids--> Cell --.item--> n` (rc cells) | 0 live |
 | `n --.kids--> Vec --slot--> n` | 0 freed, 50 live |
+
+The middle row is the one that says what the gap is. A **user-defined container
+of rc cells is traced today**, with no new machinery -- its links are ordinary
+`rc` fields the walk glue already enumerates. So the blind spot is not
+"collections" as a category and not a missing capability in the walker; it is
+one specific thing, a flat `malloc`'d buffer with no `walk_fn`. **If you need a
+collection of `rc<T>` the collector can trace, build it out of rc cells.**
 
 Emitting a walk loop for the field would *not* fix this, and is the trap worth
 naming: `gc_collect_white` frees the whole white set together and never releases
