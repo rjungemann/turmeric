@@ -137,7 +137,7 @@ its weight" smell (an `rc<T>` that could have been by-value/borrow/persistent).
 
 A couple of fixtures exercising the WR1 surface: a parent/child structure made
 leak-free with `weak`, and an `upgrade`-after-drop returning none. These also
-seed the cycle-GC test corpus (`gc-cycle-collection-plan.md` CG7).
+seed the cycle-GC test corpus (`gc-cycle-collection-followup-plan.md` CG7).
 
 ---
 

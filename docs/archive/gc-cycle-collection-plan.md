@@ -1,5 +1,28 @@
 # Cycle-Collecting GC -- Reaching Past Rust (CG0--CG8)
 
+> **ARCHIVED 2026-07-25 -- superseded by
+> [docs/upcoming/v1/gc-cycle-collection-followup-plan.md](../upcoming/v1/gc-cycle-collection-followup-plan.md).**
+>
+> This plan shipped **CG0--CG4** (dynamic buffers and registry, candidate
+> buffering, real Bacon-Rajan trial deletion, walker audit plus the `:heap`
+> fix, weak/zombie handling) and the whole **DEDUP-1--4b** de-duplication,
+> which ends with compiled executables linking the maintained collector
+> instead of a hand-written replica of it.
+>
+> Five bugs were found and fixed along the way, all of them consequences of
+> the two GC copies drifting: CG1's double suspect-removal, CG3's `:heap`
+> mis-cast, CG4's weak force-free, `gc_enable` never setting `gc_mode` (which
+> made the collector a silent no-op for the interpreter and every embedder),
+> and `gc_enqueue_grey` downgrading a just-marked-reachable block.
+>
+> **Carried forward** to the follow-up plan: CG5 (automatic trigger), CG6
+> (observability), CG7's remaining corpus, CG8 (graduation), CG3's unwritten
+> walker lint, and a new DEDUP-5 for the replica that `--shared` and bare
+> `emit-c` still carry.
+>
+> Kept intact below as the paper trail -- the per-phase notes record what was
+> measured, what was wrong about the plan, and why.
+
 > **Status:** CG0 + CG1 + CG2 landed 2026-07-25. **`(gc!)` now reclaims live
 > strong `rc<T>` cycles** -- measured 192 bytes per cycle -> 0, with a
 > collector-off control still leaking, so the collector is demonstrably what

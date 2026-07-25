@@ -214,7 +214,8 @@ With TR0--TR3 data in hand, decide the durable architecture:
   roots (globals + live frames + control stack), sweep the unreachable. Handles
   cycles natively, compacts survivors over time, but is a larger build and must
   reuse the same walker discipline as the compiled-side cycle GC
-  (`gc-cycle-collection-plan.md`) to stay maintainable.
+  (`gc-cycle-collection-followup-plan.md`, and the archived
+  `gc-cycle-collection-plan.md`) to stay maintainable.
 
 Recommendation to evaluate: (a) for v1 (finish what's prototyped), with (b) as
 the post-v1 direction if `value_perm` growth proves real. Note the pleasing

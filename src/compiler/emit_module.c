@@ -6272,7 +6272,7 @@ static bool rt_global_from_archive(void) {
     return g_rcgc_from_archive;
 }
 
-/* gc-cycle-collection-plan DEDUP-3: open/close the owner-TU guard around a run
+/* DEDUP-3 (docs/archive/gc-cycle-collection-plan.md): open/close the owner-TU guard around a run
  * of rc<T>/GC runtime function DEFINITIONS.
  *
  * The same split emit_rt_global does for state, applied to code.  Shared mode

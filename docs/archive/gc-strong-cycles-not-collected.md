@@ -10,7 +10,7 @@ area: runtime (Bacon-Rajan cycle collector, src/runtime/gc.c)
 
 ## Resolution (2026-07-25)
 
-**Fixed by CG0 + CG1 + CG2** (`docs/upcoming/v1/gc-cycle-collection-plan.md`).
+**Fixed by CG0 + CG1 + CG2** (`docs/archive/gc-cycle-collection-plan.md`).
 Both root causes below are addressed: CG1 added the classic Bacon-Rajan
 PossibleRoot hook so a strong decrement that leaves the count > 0 buffers a
 candidate, and CG2 replaced the mark-sweep-from-strong-roots core with real
@@ -164,11 +164,11 @@ the integer.
    contract the rest of RC upholds (`rc.c:180-183`, where a strong->0 block with
    weak>0 is kept alive so `upgrade` can return none). Any live `weak<T>` to that
    block becomes a dangling pointer -> use-after-free on the next `upgrade`.
-   Needs the zombie discipline (`gc-cycle-collection-plan.md` CG4).
+   Needs the zombie discipline (`gc-cycle-collection-plan.md` CG4, since done).
 
 ## Fix directions
 
-The full remedy is spec'd in `docs/upcoming/v1/gc-cycle-collection-plan.md`:
+The full remedy is spec'd in `docs/archive/gc-cycle-collection-plan.md`:
 CG1 adds the possible-root buffering, CG2 replaces the mark phase with real
 trial-deletion (MarkGray/Scan/CollectWhite over the candidate set), CG0 fixes the
 registry cliff, CG4 fixes the weak dangling. Until then, the accurate user story

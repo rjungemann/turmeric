@@ -17,7 +17,7 @@ int emit_program(Buf *out, const Expr *program);
  * functions are file-local (static) replicas operating on that shared state. */
 void emit_shared_runtime_header(Buf *out);
 
-/* DEDUP-4b (gc-cycle-collection-plan): declare, rather than define, the
+/* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): declare, rather than define, the
  * rc<T>/GC runtime in the emitted preamble, because the program will link
  * libturt_runtime.a (which carries src/runtime/{rc,gc,rc_free_queue}.c).
  * Without this a compiled program runs a hand-written replica of the collector

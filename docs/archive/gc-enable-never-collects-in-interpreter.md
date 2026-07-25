@@ -107,6 +107,6 @@ Validated by reverting the fix and confirming
 ## Follow-up
 
 The underlying duplication is tracked in
-[docs/upcoming/v1/gc-cycle-collection-plan.md](../upcoming/v1/gc-cycle-collection-plan.md)
+[docs/archive/gc-cycle-collection-plan.md](gc-cycle-collection-plan.md)
 (the DEDUP series). `tools/gc-copy-diff.py` now reports the remaining
 divergence -- 23 functions at the time of this fix, 8 of them behavioral.

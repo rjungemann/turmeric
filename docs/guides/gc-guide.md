@@ -122,7 +122,8 @@ survives it.
 > `(gc-enable!)`; there is no automatic background trigger yet. Breaking cycles
 > with `weak<T>`, as in Rust, remains valid and is still the only option with the
 > collector disabled (the default). See
-> `docs/upcoming/v1/gc-cycle-collection-plan.md`.
+> `docs/archive/gc-cycle-collection-plan.md` (shipped) and
+> `docs/upcoming/v1/gc-cycle-collection-followup-plan.md` (remaining).
 
 ---
 

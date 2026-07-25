@@ -568,7 +568,7 @@ static bool g_no_abi_cache;
 enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2 };
 static int g_runtime_mode = TUR_RT_AUTO;
 
-/* DEDUP-4b (gc-cycle-collection-plan): resolve whether the emitted preamble
+/* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): resolve whether the emitted preamble
  * should DECLARE the rc<T>/GC runtime -- because libturt_runtime.a will supply
  * it -- instead of defining its own hand-written replica, and tell the emitter
  * before codegen runs.
@@ -4489,7 +4489,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * panic + scheduler state) while every module TU carries static replicas of
      * the runtime functions that operate on those shared globals.
      *
-     * DEDUP-3 (gc-cycle-collection-plan): the rc<T>/GC family is no longer
+     * DEDUP-3 (docs/archive/gc-cycle-collection-plan.md): the rc<T>/GC family is no longer
      * replicated -- its definitions sit inside the same TUR_RT_OWNER guard as
      * the globals, so the owner TU carries the one externally-linked copy of
      * the collector and the other module TUs see only prototypes.

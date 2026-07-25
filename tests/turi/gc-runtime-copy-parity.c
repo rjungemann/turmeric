@@ -1,4 +1,4 @@
-/* tests/turi/gc-runtime-copy-parity.c -- DEDUP-4 (gc-cycle-collection-plan).
+/* tests/turi/gc-runtime-copy-parity.c -- DEDUP-4 (docs/archive/gc-cycle-collection-plan.md).
  *
  * The GC exists twice: src/runtime/{rc,gc,rc_free_queue}.c (linked into the
  * interpreter, libturi and every embedder) and a hand-written copy emitted into
