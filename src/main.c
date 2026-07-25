@@ -569,25 +569,41 @@ enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2 };
 static int g_runtime_mode = TUR_RT_AUTO;
 
 /* DEDUP-4b (gc-cycle-collection-plan): resolve whether the emitted preamble
- * should DECLARE the rc<T>/GC runtime (because libturt_runtime.a will supply
- * it) instead of defining its own hand-written replica, and tell the emitter
+ * should DECLARE the rc<T>/GC runtime -- because libturt_runtime.a will supply
+ * it -- instead of defining its own hand-written replica, and tell the emitter
  * before codegen runs.
  *
- * Opt-in via TUR_RCGC_FROM_ARCHIVE=1 while the swap is being proven out: it
- * changes which implementation every compiled program runs, so it graduates to
- * a default only once the suite has been green on it (see the plan). Requires
- * an actual archive -- without one the program would link nothing at all, so a
- * failed probe silently keeps the emitted definitions.
+ * ON by default, but ONLY when `tur` is the one doing the linking.  A preamble
+ * that declares without defining is not self-contained C, and bare
+ * `tur emit-c` exists precisely to hand someone a translation unit they will
+ * build themselves -- so that path keeps the definitions (and its snapshots
+ * keep matching).  `tur build` / project builds control their own link line, so
+ * they take the archive.  g_emit_for_link is what distinguishes the two.
+ *
+ * Also requires an actual archive: without one the program would link nothing
+ * at all, so a failed probe silently keeps the emitted definitions.  That is
+ * what makes this safe to default -- a toolchain with no archive still builds,
+ * it just keeps running the replica.
+ *
+ * TUR_RCGC_FROM_ARCHIVE=0 forces the replica back (escape hatch if an archive
+ * link ever misbehaves); =1 forces the archive even for bare `emit-c`, for
+ * someone who links libturt_runtime.a from their own build system.
  *
  * Safe to call before the link step decides anything: locate_runtime_lib is a
  * pure filesystem probe with no side effects. */
 static int locate_runtime_lib(char *libdir, size_t dcap,
                               char *libname, size_t ncap);
 
+/* True while emitting C that `tur` itself will go on to compile and link. */
+static bool g_emit_for_link = false;
+
 static void resolve_rcgc_from_archive(void) {
     const char *opt = getenv("TUR_RCGC_FROM_ARCHIVE");
-    if (!opt || strcmp(opt, "1") != 0) { emit_set_rcgc_from_archive(false); return; }
-    if (g_runtime_mode == TUR_RT_SOURCE) { emit_set_rcgc_from_archive(false); return; }
+    bool forced_on = opt && strcmp(opt, "1") == 0;
+
+    if (opt && strcmp(opt, "0") == 0)     { emit_set_rcgc_from_archive(false); return; }
+    if (g_runtime_mode == TUR_RT_SOURCE)  { emit_set_rcgc_from_archive(false); return; }
+    if (!g_emit_for_link && !forced_on)   { emit_set_rcgc_from_archive(false); return; }
 
     char libdir[4096], libname[128];
     int found = locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname));
@@ -2003,6 +2019,17 @@ static int locate_runtime_lib(char *libdir, size_t dcap,
             snprintf(libdir, dcap, "%s", sd);
             return 1;
         }
+        /* DEDUP-4b: the INSTALLED layout -- <prefix>/bin/tur next to
+         * <prefix>/lib/libturt_runtime.a.  Without this probe the archive was
+         * only ever findable in a dev build tree, so an installed toolchain
+         * silently recompiled the runtime on every build and (since 4b) kept
+         * running the emitted GC replica.  Checked after the dev layout so a
+         * build tree still wins over a stale system install. */
+        snprintf(sd, sizeof(sd), "%s/../lib", d);
+        if (probe_runtime_lib_in(sd, libname, ncap)) {
+            snprintf(libdir, dcap, "%s", sd);
+            return 1;
+        }
     }
     char root[4096];
     resolve_turmeric_root(root, sizeof(root));
@@ -2276,6 +2303,9 @@ static int cmd_build(const char *input, const char *out_path,
                      const char *target,
                      const char **reader_macro_paths,
                      int n_reader_macro_paths) {
+    /* DEDUP-4b: `tur` links this output, so the rc<T>/GC runtime may come
+     * from the archive rather than being replicated into the preamble. */
+    g_emit_for_link = true;
     Buf csrc;
     buf_init(&csrc);
     /* used-attr-whole-program: this single-file/whole-program path inlines only
@@ -4082,6 +4112,21 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
                                  bool shared, const char *manifest_path,
                                  const char **inc, int n_inc,
                                  const char *build_dir) {
+    /* DEDUP-4b: an EXECUTABLE links here, so the rc<T>/GC runtime may come from
+     * the archive rather than being replicated into every module TU.
+     *
+     * A `--shared` build must not: the archive is never injected into a shared
+     * library's link line, so declaring-without-defining would leave the .so
+     * with undefined rc_cb_alloc / rc_cb_alloc_struct -- a shared object
+     * tolerates unresolved symbols at link time and only fails, or silently
+     * binds to whatever the host exports, at dlopen.  A .so stays
+     * self-contained on the DEDUP-3 owner-TU replica (already one instance per
+     * library), which is also the right shape: a dlopened .so carrying its own
+     * collector must not half-share one with its host.
+     *
+     * Caught by build-shared-rc-runtime in tests/run-build-project.sh, which
+     * asserts exactly one owning definition of gc_all_blocks in the .so. */
+    g_emit_for_link = !shared;
     /* build-output-directory-plan: every intermediate (.c/.h/_main.c/
      * tur_runtime.{c,h}) lands under `<build_dir>/obj/`; the final exe goes
      * to `<build_dir>/bin/<name>` and shared libs to `<build_dir>/lib/lib<name>.so`.

@@ -101,8 +101,13 @@ Runtime knobs surface as three compiler intrinsics wired in
 | Form           | Effect                          |
 |----------------|---------------------------------|
 | `(gc!)`        | Force one collection cycle now  |
-| `(gc-enable!)` | Switch to `GC_THRESHOLD`        |
+| `(gc-enable!)` | Enable, defaulting the mode to `GC_MANUAL` |
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
+
+`(gc-enable!)` defaults to `GC_MANUAL`, not `GC_THRESHOLD` -- collection still
+happens only when you ask for it with `(gc!)`. Call `gc_set_mode(GC_THRESHOLD)`
+for the suspect-count trigger; an explicit mode set before `(gc-enable!)`
+survives it.
 
 > **What a collection actually reclaims (updated 2026-07-25).** `(gc!)` now
 > reclaims **live strong `rc<T>` cycles** as well as weak-zombie blocks. The
@@ -276,6 +281,23 @@ For historical context:
   and GC sit on.
 
 ---
+
+## Which copy of the collector runs (updated 2026-07-25)
+
+The collector was written twice: `src/runtime/{rc,gc,rc_free_queue}.c`, and a
+hand-written replica emitted into every compiled program. Divergence between
+them produced five bugs, so the replica is being retired. As of DEDUP-4b:
+
+| build path | collector |
+|---|---|
+| `tur build` (executable) | **linked from `libturt_runtime.a`** -- the same code the interpreter runs |
+| `tur build --shared` (.so) | the emitted replica (a `.so` must stay self-contained) |
+| bare `tur emit-c` | the emitted replica (its output must be standalone C) |
+| no runtime archive locatable, or `--runtime=source` | the emitted replica |
+
+`TUR_RCGC_FROM_ARCHIVE=0` forces the replica back; `=1` takes the archive even
+for bare `emit-c`, for a caller who links `libturt_runtime.a` themselves.
+`tools/gc-copy-diff.py` reports what still differs between the two.
 
 ## Known gaps
 

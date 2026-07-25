@@ -803,19 +803,64 @@ traversal's own color, set by `gc_mark_gray`.
 This is the fifth bug from the duplication, and the first found by *running*
 one copy against the other's test suite rather than by reading.
 
-**What graduation to default still needs:**
+**4b graduated 2026-07-25 -- archive mode is the default for `tur build`.**
 
-- `libturt_runtime.a` is now **installed** alongside `libturi.a` (done here).
-  It had never been, which meant an installed SDK could not take the archive
-  path at all -- AUTO links only the lean archive, so installed toolchains were
-  silently recompiling the runtime on every build. That was a pre-existing
-  `--runtime=lib` limitation, not just a de-dup one.
-- Flip `resolve_rcgc_from_archive` from the env opt-in to AUTO's own probe.
-  The fallback is already safe: no archive found -> emitted definitions stay,
-  so a toolchain without the archive still builds.
-- Regenerate the 140 snapshots (step 5), in the same commit as the flip.
-- Consider physically eliding the `#if 0` text once the swap has baked; it is
-  ~500 lines of dead code in every generated `.c`.
+The flip is scoped by *who links*, which turned out to be the design decision
+that mattered and made step 5's snapshot regen unnecessary:
+
+| path | rc<T>/GC runtime | why |
+|---|---|---|
+| `tur build <file>`, `tur build <dir>` (executable) | **archive** | `tur` owns the link line |
+| `tur build --shared` (.so) | emitted (DEDUP-3 owner-TU) | see below |
+| bare `tur emit-c` | emitted | its whole contract is "here is a translation unit you will build yourself"; a declare-without-define preamble is not self-contained C |
+| no archive locatable | emitted | degrades safely -- a toolchain without the archive still builds |
+| `--runtime=source` | emitted | explicit opt-out |
+
+Because bare `emit-c` keeps its definitions, **all 140 snapshots stayed
+byte-identical** and step 5's regen never happened. Snapshots track `emit-c`,
+and `emit-c` is exactly the path that must not change.
+
+**`--shared` had to be excluded, and an existing test caught why.** The archive
+is never injected into a shared library's link line, so declaring without
+defining left the `.so` with undefined `rc_cb_alloc` / `rc_cb_alloc_struct` --
+and a shared object *tolerates* unresolved symbols at link time, so this does
+not fail the build. It fails at dlopen, or worse, silently binds to whatever
+the host exports. `build-shared-rc-runtime` in `run-build-project.sh` asserts
+exactly one owning definition of `gc_all_blocks` in the `.so` and reported 0.
+Excluding `--shared` restores the previous, correct shape: a `.so` stays
+self-contained on its owner-TU replica, which is also right on the merits --
+a dlopened library carrying its own collector must not half-share one with its
+host.
+
+`locate_runtime_lib` also grew an installed-layout probe
+(`<prefix>/bin/tur` -> `<prefix>/lib/libturt_runtime.a`), checked after the dev
+layout so a build tree still wins over a stale system install. Without it the
+new install rule was inert: the archive was only ever findable in a dev build
+tree, so an installed toolchain both recompiled the runtime on every build
+*and* kept running the emitted replica.
+
+Verified with the flip on by default:
+
+| | |
+|---|---|
+| `bash tests/run.sh` | 2283 passed, 0 failed |
+| 140 `expected.c` snapshots | byte-identical |
+| `run-build-project` / `run-build-shared` / `run-install` / `run-flags` | 27/0, 11/0, 29/0, 78/0 |
+| interpreter ctests (incl. `tur_gc_runtime_copy_parity`) | 6/6 |
+| executable links the runtime collector | confirmed via `nm` -- `gc_possible_root` and `rc_cb_free` exist **only** in the runtime copy |
+| `TUR_RCGC_FROM_ARCHIVE=0` | replica restored, program still correct |
+
+**The de-dup's goal is met for compiled executables: they now run the same
+collector the interpreter does.** What remains is cleanup rather than
+correctness:
+
+- The emitted copy is still *generated* (as `#if 0` text) for the archive path
+  -- ~500 dead lines in every such `.c`. Physically eliding it is a follow-up
+  once this has baked.
+- `--shared` and bare `emit-c` still carry a real replica, so
+  `tools/gc-copy-diff.py` stays meaningful and the two copies must still not
+  drift. The layout guard (DEDUP-1), the `RC_VT_*` fences (4b) and the parity
+  battery (4a) are what hold that line.
 
 **Still to do in CG7:** promote `exg5-exists-cycle` to a collection assertion;
 fixtures for cycles through `vec`/`map`/closure payloads (currently the
