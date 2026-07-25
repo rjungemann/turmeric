@@ -194,6 +194,25 @@ TuriEnv *turi_env_new(void) {
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
     buf_init(&env->src_combined);   /* TR2.3: reused per-eval source blob */
+    /* TR2: incremental parse + elaboration is ON by default. A long-lived env
+     * (REPL, notebook kernel, Trowel / Try Turmeric / Godot embeddings) is
+     * otherwise O(N^2) in retained memory and time over a session -- measured at
+     * ~1 GB and quadratic parse/elaborate over 1500 turns, versus ~2 MB and
+     * linear with this on. A single-eval embedder is unaffected: the first eval
+     * has no accumulated prefix, so it takes the whole-program path either way.
+     *
+     * Results are identical to the old path except for one intentional fix:
+     * redefining a top-level `defn` across turns now works instead of failing
+     * with "already defined by an auto-loaded stdlib module" (an artifact of the
+     * old path re-elaborating prior turns under stdlib_prefix). Guarded by the
+     * tur_incremental_elab_diff A/B harness.
+     *
+     * TUR_NO_INCREMENTAL_ELAB=1 restores the whole-program path, for bisecting a
+     * suspected incremental-path bug; turi_env_set_incremental_elab overrides. */
+    {
+        const char *off = getenv("TUR_NO_INCREMENTAL_ELAB");
+        env->incremental_elab = !(off && *off && strcmp(off, "0") != 0);
+    }
     env->caps = TURI_CAP_ALL;
     /* Gap 7: default to interpret mode (every turi_env_new caller is an
      * interpreter embedder; mirrors the g_interpret_mode = true above).  An

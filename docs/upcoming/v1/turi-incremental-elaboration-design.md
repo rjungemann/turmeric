@@ -1,19 +1,22 @@
 # Incremental Elaboration for the turi REPL -- Design (TR2 core)
 
-> **Status:** LANDED (gated, default-off) as of 2026-07-24 -- TR2.0, TR2.2a
-> (incremental parse) and TR2.1 + TR2.2b (persistent elaboration session) are
-> all in. Enable per-env with `turi_env_set_incremental_elab(env, true)`.
-> TR2.3 (stop retaining the accumulated source per eval) and TR2.4 (scratch
-> promotion in the REPL) landed 2026-07-25. **All TR2 sub-phases are now done.**
-> The one remaining step is a decision, not a build: flipping
-> `incremental_elab` on for the REPL and the embedding consumers. Until that
-> happens the REPL still grows ~1 GB over 1500 turns (see TR2.4's table) -- the
-> gate is where the win actually reaches users.
+> **Status:** SHIPPED, ON BY DEFAULT as of 2026-07-25. All TR2 sub-phases
+> (TR2.0, TR2.2a, TR2.1+TR2.2b, TR2.3, TR2.4) are landed, and the gate has been
+> flipped: `turi_env_new` enables incremental parse + elaboration for every env,
+> so the REPL and every embedder (Trowel, Try Turmeric, Godot) get it without a
+> code change. `TUR_NO_INCREMENTAL_ELAB=1`, or
+> `turi_env_set_incremental_elab(env, false)`, restores the whole-program path.
+> `tur repl` additionally enables scratch promotion (TR2.4).
 >
-> **Headline result (N=800-turn session): 296.9 MB -> 1.2 MB (247x less retained
-> memory) and 2.65s -> 0.02s (132x faster).** Growth is now exactly linear where
-> it was quadratic (400 turns: 0.6 MB; 800 turns: 1.2 MB). Full suite: 2278
-> passed, 0 failed -- the shared compiler path is unaffected (`session = NULL`).
+> **Headline result:** a long-lived session is now **linear instead of
+> quadratic** in both time and retained memory. Over 1500 transient-heavy turns
+> the interpreter went from ~1.1 GB retained (1045 MB `eval_arenas` + 52.9 MB
+> value pool) to **~2.2 MB**. At 800 turns: 296.9 MB -> 1.2 MB (247x) and
+> 2.65s -> 0.02s (132x).
+>
+> **Intentional behavior change:** redefining a top-level `defn` across turns now
+> works, instead of failing with the misleading "already defined by an
+> auto-loaded stdlib module". Approved as a fix.
 >
 > **Problem owner:** `docs/reported/turi-repl-quadratic-reparse.md` (CPU) and
 > TR0's measurement (memory: ~4.1 GB `eval_arenas` over a 3000-eval session).
@@ -296,6 +299,23 @@ is caught. (`def` redefinition still errors on both paths -- unchanged.)
   turns**, because `eval_arenas` is only bounded by the incremental gate. TR2.4 is
   necessary and not remotely sufficient; flipping `incremental_elab` on is what
   actually fixes the REPL.
+
+- **Gate flip -- ON by default. [DONE 2026-07-25]** `turi_env_new` now enables
+  `incremental_elab` for every env (`TUR_NO_INCREMENTAL_ELAB=1` or the setter
+  opts out), so embedders benefit with no code change on their side. The A/B
+  differential baseline was updated to explicitly opt OUT, or it would have been
+  comparing the incremental path against itself and proving nothing.
+
+  Flipping the default surfaced one real regression that only running it caught:
+  **`has_defmodule` is per-FILE state and was carrying across evals**, so the
+  second defmodule-wrapped module in the REPL's stdlib preload failed with "only
+  one defmodule is allowed per file" (the whole-program path had reset it at the
+  stdlib_prefix/file boundary). Fixed by resetting `has_defmodule`,
+  `current_module_name`, and `current_module` on session restore -- per-file
+  state resets, accumulated state (scope, typeclasses, registries) persists.
+  Pinned by `test_defmodule_across_evals`, which was itself validated by
+  reverting the fix and confirming it fails (incremental only) and passes again
+  once restored.
 
 ## Scoping call for the reader
 

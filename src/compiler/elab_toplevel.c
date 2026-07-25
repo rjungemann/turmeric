@@ -1442,6 +1442,17 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.st    = st;
         e.scope = &e.global;
         e.fn_entry_outer_scope = NULL;
+        /* Per-FILE state must NOT carry across calls: each incremental call is
+         * conceptually a new file (a REPL turn, or the next preloaded stdlib
+         * module). Without this reset, `has_defmodule` stays true after the
+         * first defmodule-wrapped file and every later one fails with "only one
+         * defmodule is allowed per file" -- which is exactly what the
+         * whole-program path avoided by resetting at the stdlib_prefix/file
+         * boundary. Accumulated state (scope, typeclasses, registries,
+         * loaded_modules) is what we deliberately keep. */
+        e.has_defmodule       = false;
+        e.current_module_name = NULL;
+        e.current_module      = NULL;
     } else {
         elab_init_state(&e, arena, st);
     }

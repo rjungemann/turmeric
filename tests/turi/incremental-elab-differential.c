@@ -49,9 +49,13 @@ enum { N_CONFIGS = (int)(sizeof(CONFIGS) / sizeof(CONFIGS[0])) };
  * above, comparing each turn's result. */
 static void diff_session(const char *name, const char *const *lines, int n) {
     for (int c = 0; c < N_CONFIGS; c++) {
-        TuriEnv *base = turi_env_new();            /* default: whole-blob path */
+        /* The incremental path is ON by default since 2026-07-25, so the
+         * baseline must explicitly opt OUT -- otherwise this harness would be
+         * comparing the incremental path against itself and prove nothing. */
+        TuriEnv *base = turi_env_new();
+        turi_env_set_incremental_elab(base, false);   /* whole-blob reference */
         TuriEnv *test = turi_env_new();
-        if (CONFIGS[c].incr)  turi_env_set_incremental_elab(test, true);
+        turi_env_set_incremental_elab(test, CONFIGS[c].incr);
         if (CONFIGS[c].promo) turi_env_set_scratch_promotion(test, true);
 
         int diverged = 0;
@@ -183,6 +187,7 @@ static const char *const S_REDEF[] = {
  * ------------------------------------------------------------------------- */
 static void test_known_divergence(void) {
     TuriEnv *base = turi_env_new();
+    turi_env_set_incremental_elab(base, false);   /* whole-blob reference */
     TuriEnv *incr = turi_env_new();
     turi_env_set_incremental_elab(incr, true);
 
@@ -222,6 +227,59 @@ static void test_known_divergence(void) {
     turi_env_free(incr);
 }
 
+/* ---------------------------------------------------------------------------
+ * REGRESSION: `has_defmodule` is per-FILE state and must not carry across evals.
+ *
+ * When the persistent elaboration session kept it, the SECOND defmodule-wrapped
+ * file loaded in a later eval failed with "only one defmodule is allowed per
+ * file" -- which broke `tur repl` startup (its stdlib preload loads several
+ * defmodule-wrapped modules) the moment the incremental gate was flipped on.
+ * The whole-program path avoided this by resetting at the file boundary.
+ *
+ * Two temp modules are written and `(load ...)`-ed from SEPARATE evals, which is
+ * the shape that regressed; results are compared against the whole-blob path.
+ * ------------------------------------------------------------------------- */
+static void test_defmodule_across_evals(void) {
+    static const char *P1 = "/tmp/tur_tr2_modA.tur";
+    static const char *P2 = "/tmp/tur_tr2_modB.tur";
+    FILE *f1 = fopen(P1, "w"), *f2 = fopen(P2, "w");
+    if (!f1 || !f2) {
+        fprintf(stderr, "FAIL [defmodule-across-evals]: cannot write temp modules\n");
+        failures++;
+        if (f1) fclose(f1);
+        if (f2) fclose(f2);
+        return;
+    }
+    fputs("(defmodule tur-tr2-mod-a)\n(defn tr2-a [x : int] : int (+ x 1))\n", f1);
+    fputs("(defmodule tur-tr2-mod-b)\n(defn tr2-b [x : int] : int (+ x 2))\n", f2);
+    fclose(f1);
+    fclose(f2);
+
+    char src1[256], src2[256];
+    snprintf(src1, sizeof src1, "(load \"%s\")\n", P1);
+    snprintf(src2, sizeof src2, "(load \"%s\")\n", P2);
+
+    for (int incr = 0; incr <= 1; incr++) {
+        TuriEnv *env = turi_env_new();
+        turi_env_set_incremental_elab(env, incr != 0);
+        TuriValue r1 = turi_eval(env, src1);
+        TuriValue r2 = turi_eval(env, src2);   /* the one that used to fail */
+        if (r1.tag == TURI_ERROR || r2.tag == TURI_ERROR) {
+            fprintf(stderr, "FAIL [defmodule-across-evals] incremental=%d: "
+                            "first=%s second=%s\n", incr,
+                    r1.tag == TURI_ERROR ? (r1.as_error ? r1.as_error : "ERR") : "ok",
+                    r2.tag == TURI_ERROR ? (r2.as_error ? r2.as_error : "ERR") : "ok");
+            failures++;
+        } else {
+            printf("PASS [defmodule-across-evals] incremental=%d: two "
+                   "defmodule files loaded from separate evals\n", incr);
+        }
+        turi_env_free(env);
+    }
+    remove(P1);
+    remove(P2);
+}
+
 #define SESSION(name, arr) diff_session(name, arr, (int)(sizeof(arr)/sizeof((arr)[0])))
 
 int main(void) {
@@ -231,11 +289,13 @@ int main(void) {
     SESSION("errors",         S_ERRORS);
     SESSION("redefinition",   S_REDEF);
     test_known_divergence();
+    test_defmodule_across_evals();
 
     /* Longer churn: many turns, to shake out offset/line drift that only shows
      * up once the accumulated prefix is large. */
     {
         TuriEnv *base = turi_env_new();
+        turi_env_set_incremental_elab(base, false);   /* whole-blob reference */
         TuriEnv *incr = turi_env_new();
         turi_env_set_incremental_elab(incr, true);
         turi_eval(base, "(defn g [x : int] : int (+ x 1))");

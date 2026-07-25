@@ -455,8 +455,10 @@ void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image);
  * is left intact rather than corrupted -- it simply does not shrink that cycle. */
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
 
-/* TR2 (turi-incremental-elaboration-design): opt into incremental parsing for a
- * long-lived env.  OFF by default, so the standard path is unchanged.
+/* TR2 (turi-incremental-elaboration-design): control incremental parsing +
+ * elaboration for a long-lived env.  ON by default since 2026-07-25 (set
+ * TUR_NO_INCREMENTAL_ELAB=1, or call this with false, to restore the
+ * whole-program path).
  *
  * When enabled, turi_eval parses only the newly appended source each turn and
  * reuses the Forms parsed by earlier evals, instead of re-parsing the entire
