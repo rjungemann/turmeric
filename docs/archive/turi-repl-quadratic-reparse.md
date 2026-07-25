@@ -1,11 +1,34 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-24
 area: interpreter (turi_eval accumulated-source re-parse + eval_arenas retention)
 ---
 
 # A long-lived turi env re-parses all prior source every eval (O(N^2) time and memory)
+
+> **RESOLVED 2026-07-25 by TR2** (incremental elaboration -- persistent
+> `ElabSession`, caller-slices-forms, offset-aware reader), which shipped and
+> was made the default in this same line of work. Re-measured against today's
+> tree:
+>
+> | evals | RSS growth | per eval |
+> |---|---|---|
+> | 500 | 17.6 MB | 35.9 KB |
+> | 1000 | 27.4 MB | 28.1 KB |
+> | 2000 | 45.7 MB | 23.4 KB |
+> | 4000 | 82.0 MB | 21.0 KB |
+>
+> **Linear, and the per-eval cost falls as the session grows** (a fixed startup
+> component amortising), which is the opposite of the quadratic signature. For
+> scale: the original measurement recorded ~4.1 GB of `eval_arenas` at 3000
+> evals; 4000 evals now cost 82 MB of RSS in total.
+>
+> One measurement note for anyone re-running this: `mallinfo2` is useless for it.
+> The probe links an ASan-instrumented `libturi`, and ASan replaces glibc's
+> allocator, so `mallinfo2` reports 0 growth at every size. RSS from
+> `/proc/self/statm` is allocator-independent. (The same trap is documented in
+> `tests/run-gc-leak-gate.sh`.)
 
 ## Summary
 

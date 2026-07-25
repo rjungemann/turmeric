@@ -157,7 +157,7 @@ TR0 measured this as the **dominant** long-lived-growth term by far: ~4.1 GB of
 `eval_arenas` (plus quadratic re-parse time) vs 158 MB for the value pool, even
 with promotion rewinding 100%. This is the phase that actually bounds a REPL. The
 CPU side of it (each eval re-parses the whole accumulated source, O(N^2)) is
-tracked as `docs/reported/turi-repl-quadratic-reparse.md` -- prefer parsing only
+tracked as `docs/archive/turi-repl-quadratic-reparse.md` -- prefer parsing only
 the new tail over merely reclaiming arenas, so the quadratic parse cost goes away
 too.
 
