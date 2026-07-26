@@ -71,10 +71,34 @@ gap C2 -- hard-blocking for that plan's RE1.
 > by fixing `with-frozen`'s body result to `int`. B2 should make the region a
 > first-class form (not a polymorphic HOF), or that bug must be fixed first.
 >
-> **Next:** B2 (region form + capability borrow as a language construct) then
-> B3 (the VC congruence-window link, behind `--enable=refined`, with the
-> `stateful` fuzzer sabotage). RE1's `errors/refine-stateful-mutation-invalidates`
-> stays the fixture to write before B3 touches the VC.
+> **B2 done 2026-07-26 -- the region FORM.** `ecs/freeze` now exports a
+> `with-frozen` *macro*: `(with-frozen cap body...)` runs `body` in a scope that
+> has borrowed the world's despawn cap, so no despawn is reachable inside it (a
+> compile error). Its entry borrows the capability -- not consumes it -- so the
+> cap is usable again after the region (verified: `tests/freeze-region-reuse.tur`
+> reads a world across a multi-statement region, returns a computed int, then
+> despawns after). The macro is sugar over the `with-frozen-fn` borrow
+> combinator; a region body evaluates to `int` (end a side-effect pass with a
+> trailing `0`).
+>
+> Why a macro over a HOF and not a first-class special form: the borrow-based
+> HOF is the right mechanism (borrow, not consume -- a consume cannot restore
+> the linear cap in place; `set!` on a consumed linear binding is itself a
+> `TUR-E0101`), but its *polymorphic* form crashes on a capturing body
+> (`docs/reported/poly-result-hof-capturing-closure-sigbus.md`), so the region
+> result is pinned to `int`. A first-class `(frozen w ...)` special form -- which
+> B3 could also key congruence off directly -- is the eventual shape; it is
+> deferred behind either that codegen fix or B3's elaborator work, whichever
+> lands first, rather than built twice.
+>
+> **Next: B3** -- the VC congruence-window link. Inside a `with-frozen` region,
+> a measure over the frozen world becomes congruent (its despawn history cannot
+> move), added as the third hypothesis-invalidation site alongside `set!` and
+> the `do`-split rule, behind `--enable=refined` and exercised with the
+> `stateful` fuzzer sabotage. **Write `errors/refine-stateful-mutation-invalidates`
+> first** -- it is the fixture that catches B3 being an escape hatch. B3 needs
+> the elaborator to recognize the region entry (the `^borrow (DespawnCap W)`),
+> which is why B2's region is a distinct, greppable construct.
 
 ## The problem
 
@@ -284,7 +308,10 @@ Only if RM-S0 says so. Three pieces, in order, each independently useful:
    remains an option if B2/B3 need mutation facts the cap cannot carry, but is
    not the starting point.
 2. **A region form** whose entry borrows the capability and whose body is a
-   congruence window.
+   congruence window. **[B2 DONE 2026-07-26 -- `ecs/freeze`'s `with-frozen`
+   macro; entry borrows the cap, body cannot despawn, cap reusable after.
+   Region result pinned to `int` pending the poly-HOF codegen fix; a
+   first-class `(frozen w ...)` special form is the eventual shape.]**
 3. **Hypothesis invalidation at region boundaries**, joining `set!` and the
    `do`-split rule as the third invalidation site. These three should be one
    shared predicate with one comment naming the failure mode -- `rt_peel_
