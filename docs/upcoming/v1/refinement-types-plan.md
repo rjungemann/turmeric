@@ -2783,13 +2783,41 @@ always sound.
    makes the oracle option unavailable rather than silently degrading. There is
    no version to *pin in a release*, because no release ships Z3.
 
-2. **Retirement timing vs. coverage confidence.** The scaffold is deleted once
-   S0--S3 meet the retirement criteria, but "oracle trust established" is a
-   judgement call on soak duration and corpus breadth. Open question: fix a
-   concrete bar (e.g. N clean days over the full SMT-LIB QF_UF/QF_IDL/QF_LIA/
-   QF_LRA corpora + M generated VCs) before deletion, versus deleting on the
-   bootstrap criterion alone and keeping the oracle option a bit longer as a
-   belt-and-suspenders dev aid.
+2. ~~**Retirement timing vs. coverage confidence.**~~ **ANSWERED: improve the
+   corpus before retiring Z3.** The scaffold is not deleted on the bootstrap
+   criterion alone. Deleting while the corpus still decides a small fraction of
+   what it is handed would remove the live oracle before the thing meant to
+   replace it has been shown to carry the load -- and the live oracle is
+   precisely what would catch that mistake.
+
+   What "improve" concretely means, in order of measured value against the
+   200-benchmark external sample:
+
+   | cause | was | now | status |
+   |---|---|---|---|
+   | `ite` / `xor` unsupported | 57 | 0 | **done** -- boolean `ite` is propositional structure, arithmetic `ite` lifts to a fresh variable with a top-level definition, `xor` expands directly |
+   | `let` / term nested deeper than the cap | 7 | 2 | **done** -- caps raised; both are C-stack recursion in `tr_term`, and no child crashed at the new depth |
+   | `ite` branches disagreeing on sort | -- | 4 | **mostly done** -- Int/Real mixing is legal SMT-LIB, so the literal side is coerced exactly as `/` does; this reader had been stricter than the language |
+   | `define-fun` unsupported | 16 | 16 | **open** -- needs macro expansion at read time, and is now the largest remaining cause |
+
+   Measured against the 200-benchmark external sample, over three rounds:
+
+   | | skipped | decided | soundness failures |
+   |---|---|---|---|
+   | before | 80 | 91 | 1 |
+   | after `ite`/`xor` | 43 | 128 | 0 |
+   | after sort coercion + caps | **22** | **139** | 0 |
+
+   "Decided" is proved + refuted + correctly-declined; 6 benchmarks carry no
+   `:status` and can never count. Over-budget rose from 22 to 33 across those
+   rounds, which is the expected shape: benchmarks that used to be rejected at
+   the reader now reach the solver, and some of them time out there instead.
+
+   The bar for deletion is that the corpus decides a large majority of what it
+   is handed AND has been clean across a soak window. "Decides" is the operative
+   word: a benchmark that is skipped or times out contributes nothing to trust,
+   which is why the runner counts and prints both rather than folding them into
+   a pass.
 
 3. **In-house solver arena discipline.** S1--S3 allocate union-find nodes,
    simplex tableaux, and equality-propagation queues per obligation. Decide

@@ -177,10 +177,10 @@ static bool sx_head_is(const Sx *s, const char *name) {
  * skipped as "too many let bindings" -- a corpus that parses nothing tests
  * nothing.  The term-depth cap stays modest because `tr_term` recurses on the C
  * stack, and a stack overflow in the child would be reported as a crash. */
-#define TR_MAX_LET_DEPTH  512
+#define TR_MAX_LET_DEPTH  4000
 #define TR_MAX_LET_BINDS  32768
 #define TR_MAX_LET_PARALLEL 4096
-#define TR_MAX_TERM_DEPTH 2000
+#define TR_MAX_TERM_DEPTH 6000
 #define TR_MAX_SORTS      256
 
 typedef struct { const char *name; VCTerm *val; } LetBind;
@@ -191,6 +191,7 @@ typedef struct {
     const char *err;                 /* non-NULL => skip the whole benchmark */
     LetBind   *lets;                 /* arena-allocated: too big for the stack */
     uint32_t   n_lets, cap_lets;
+    uint32_t   n_ite;                /* serial for fresh ite-lifting variables */
 } Tr;
 
 static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth);
@@ -365,11 +366,75 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
         }
         return acc;
     }
-    if (strcmp(op, "xor") == 0 || strcmp(op, "ite") == 0) {
-        /* No VC_ITE / VC_XOR: encoding them would mean inventing a translation
-         * this harness cannot verify, so the benchmark is skipped instead. */
-        t->err = "ite/xor not in the fragment";
-        return NULL;
+    if (strcmp(op, "xor") == 0) {
+        /* (xor a b) == (a or b) and not (a and b).  No VC_XOR needed. */
+        if (s->n < 3) { t->err = "xor needs two arguments"; return NULL; }
+        VCTerm *acc = tr_term(t, s->kids[1], depth + 1);
+        if (!acc) return NULL;
+        for (uint32_t i = 2; i < s->n; i++) {
+            VCTerm *b = tr_term(t, s->kids[i], depth + 1);
+            if (!b) return NULL;
+            acc = vc_mk2(t->vc, VC_AND,
+                         vc_mk2(t->vc, VC_OR, acc, b),
+                         vc_not(t->vc, vc_mk2(t->vc, VC_AND, acc, b)));
+        }
+        return acc;
+    }
+
+    if (strcmp(op, "ite") == 0) {
+        /* The VC has no VC_ITE, but it does not need one.
+         *
+         * A BOOLEAN ite is pure propositional structure:
+         *     (ite c p q)  ==  (c and p) or ((not c) and q)
+         *
+         * An ARITHMETIC ite is lifted to a fresh variable with a definition
+         * asserted at the top level:
+         *     (ite c a b)  ~>  t,  with  (c => t = a)  and  ((not c) => t = b)
+         *
+         * That is equisatisfiable, not merely sound-in-one-direction, and the
+         * polarity of the occurrence does not matter: the two implications
+         * DEFINE `t` uniquely given c, a and b, so every model of the original
+         * extends to exactly one model of the rewritten form and every model of
+         * the rewritten form restricts back. `t` is fresh per occurrence, which
+         * is what the freshness counter is for -- reusing a name across two
+         * distinct ite terms would silently equate them.
+         *
+         * Adding the definitions as hypotheses is safe here because the goal is
+         * `false`: the whole benchmark is one conjunction, so a definitional
+         * conjunct lands in the same place whether the ite sat under a
+         * negation, a disjunction, or nothing at all. */
+        if (s->n != 4) { t->err = "ite needs three arguments"; return NULL; }
+        VCTerm *c = tr_term(t, s->kids[1], depth + 1);
+        VCTerm *a = tr_term(t, s->kids[2], depth + 1);
+        VCTerm *b = tr_term(t, s->kids[3], depth + 1);
+        if (!c || !a || !b) return NULL;
+        if (c->sort != VS_BOOL) { t->err = "ite condition is not boolean"; return NULL; }
+
+        if (a->sort == VS_BOOL && b->sort == VS_BOOL)
+            return vc_mk2(t->vc, VC_OR,
+                          vc_mk2(t->vc, VC_AND, c, a),
+                          vc_mk2(t->vc, VC_AND, vc_not(t->vc, c), b));
+
+        /* Int/Real mixing is legal: a numeral in a Real context denotes a real,
+         * so `(ite c 1 2.5)` is well-typed SMT-LIB.  Coerce the literal side,
+         * exactly as `/` does -- rejecting the pair was this reader being
+         * stricter than the language. */
+        if (a->sort != b->sort) {
+            if (a->sort == VS_REAL) b = tr_as_real(t, b);
+            else if (b->sort == VS_REAL) a = tr_as_real(t, a);
+        }
+        if (a->sort != b->sort) { t->err = "ite branches disagree on sort"; return NULL; }
+
+        char name[32];
+        snprintf(name, sizeof(name), "#ite!%u", t->n_ite++);
+        uint32_t idx = vc_declare_var(t->vc, arena_strdup(t->arena, name,
+                                                          strlen(name)), a->sort);
+        VCTerm *fresh = vc_var_ref(t->vc, idx);
+        vc_add_hyp(t->vc, vc_mk2(t->vc, VC_IMPLIES, c,
+                                 vc_mk2(t->vc, VC_EQ, fresh, a)));
+        vc_add_hyp(t->vc, vc_mk2(t->vc, VC_IMPLIES, vc_not(t->vc, c),
+                                 vc_mk2(t->vc, VC_EQ, fresh, b)));
+        return fresh;
     }
     if (strcmp(op, "distinct") == 0) {
         if (s->n < 3) { t->err = "distinct needs two arguments"; return NULL; }
