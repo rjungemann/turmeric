@@ -323,13 +323,29 @@ expected and fails to elaborate.
 > macro expansion copies the body, so the crossing path walk missed it under
 > pointer identity; fixed with a source-span crossing match (`rt_form_ident`).
 >
-> **Remaining for RE1:** (a) the spice test runner has no `--enable=refined
-> --strict-refine` flag mechanism -- RE1 is the first refined ecs test, so the
-> fixtures are verified manually, not yet auto-run; (b) promotion from the
-> self-contained `GameWorld` facade to a shipped accessor module with an
-> encapsulated (private) state field -- the soundness argument needs the raw
-> world handle to not be extractable; (c) `for-each` bodies carrying the
-> refinement (item 2 below), the highest-value version, still deferred.
+> **Update 2026-07-26 -- (b) shipped, with a characterized encapsulation limit.**
+> The self-contained facade is now a real module, `ecs/refined-world`
+> (turmeric-spices, in `build.tur :exports`), and the refined accessor discharges
+> **cross-module**: an importer guards in its own `frozen` region and calls the
+> module's `rgworld-get-x!` -- **1 proven, runs -> 42**; the same read with no
+> region is `TUR-W0372`. `RGWorld` is an opaque affine handle, so a `frozen`
+> borrow locks out its `^unique ^mut` mutators (`TUR-E0200`). The soundness
+> caveat is real and documented: neither a `defstruct` field nor a `defopaque`
+> encapsulates against the `::` coercing cast -- `(:: w :int)` unwraps the handle
+> and `(:: int RGWorld)` reconstructs an alias, so a deliberate `::`/inline-C
+> bypass can despawn inside the region. That is the same trust boundary `#reads`
+> already carries (sound for ordinary code, not adversarial code); a hard
+> guarantee needs a language feature (module-private construction / a `::`-sealed
+> newtype). Filed as `docs/reported/frozen-region-aliasing-via-coercing-cast.md`.
+>
+> **Remaining for RE1:** (a) the spice test runner (`tur test`) has no per-test
+> `--strict-refine` flag mechanism and no expected-fail (negative) support, and
+> for a spice with flat `tests/*.tur` it does not descend into `tests/refined/`
+> or `tests/errors/` -- so the RE1 fixtures are verified manually, not yet
+> auto-run. Auto-running them needs a shared-harness feature (per-test flags +
+> expected-diagnostic negatives), tracked separately. (c) `for-each` bodies
+> carrying the refinement (item 2 below), the highest-value version, still
+> deferred.
 
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
