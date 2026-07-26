@@ -139,16 +139,31 @@ recently and should sit for a while first:
   parameters in scope. That is the change most likely to surprise someone, and
   it is exactly what graduation makes unconditional.
 
-### 4. The known exclusions are documented as permanent, not pending
+### 4. The known exclusions are documented as permanent, not pending -- DONE
 
 Graduating with `docs/reported/` entries open is fine; graduating while the
-guide describes gaps as temporary is not. These are design exclusions and the
-guide should say so plainly:
+guide describes gaps as temporary is not, because graduation is when those
+descriptions become promises to every user rather than to opt-in ones.
 
-- higher-order callees (needs refinements in function types);
-- a class parameter refinement not binding callers at a **static** site
-  (deliberate -- see the archived report);
-- nested datatype shape beyond one level.
+Every entry in the guide's **Limits** section now carries a tag, and the
+section opens with a legend saying what each means:
+
+| tag | count | meaning |
+|---|---|---|
+| **[by design]** | 8 | a deliberate decision, usually forced by soundness or the adoption philosophy; will not change |
+| **[incomplete]** | 3 | could be improved, nobody is working on it |
+| **[prototype]** | 2 | needs a design change this prototype excludes; not planned |
+| **[deferred]** | 1 | has a written plan and a trigger condition |
+
+The distinction that matters for graduation is **[prototype]** and **[by
+design]** against **[incomplete]**: the first two are promises that the
+behaviour is intended, the third is an admission that it could be better. Both
+are fine to ship; describing one as the other is not.
+
+The section also states plainly that none of the limits is a bug being worked
+around -- every one lands on the safe side of the one-directional invariant,
+where the worst outcome is an obligation that falls back to the runtime check
+it would have had anyway.
 
 ## Ordering
 

@@ -790,13 +790,27 @@ is the acceptance test for that work when it lands.
 
 ## Limits
 
-Known and deliberate, in rough order of how likely you are to hit them:
+Known and deliberate, in rough order of how likely you are to hit them.
 
-- **A callee's entry check is never elided.** See above -- the call-site layer
+Each carries a tag, because "not checked" covers two very different promises
+and the difference matters if you are deciding whether to depend on this:
+
+| tag | meaning |
+|---|---|
+| **[by design]** | A deliberate decision, usually forced by soundness or by the adoption philosophy. It will not change. |
+| **[prototype]** | Needs a design change this prototype excludes -- refinements in function types, refinements on type parameters. Not planned. |
+| **[incomplete]** | Could be improved, nobody is working on it. Safe: the effect is always an obligation that falls back to its runtime check, never a wrong answer. |
+| **[deferred]** | Has a written plan and a trigger condition; waiting on demand rather than on effort. |
+
+Nothing here is a bug being worked around. Every one of them lands on the safe
+side of the one-directional invariant: the worst outcome is an obligation the
+solver declines to prove, which keeps the runtime check it would have had
+anyway.
+
+- **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.
-- **Higher-order callees are not checked, and this is permanent for the
-  prototype.** A function-typed parameter carries no refinements in its type, so
+- **[prototype] Higher-order callees are not checked.** A function-typed parameter carries no refinements in its type, so
   `(defn apply2 [f : (fn [int int] int) ...])` cannot know what `f`'s arguments
   must satisfy, and neither can a call to `apply2`. Passing a refined function
   as a value is legal and the callee's own entry checks still run, so nothing
@@ -820,7 +834,7 @@ Known and deliberate, in rough order of how likely you are to hit them:
   Closing the gap needs refinements to be part of function types, with the
   contravariant subtyping check that implies -- a type-system change the
   prototype excludes.
-- **An instance that explicitly demands less is checked against its own,
+- **[by design] An instance that explicitly demands less is checked against its own,
   weaker, predicate at a statically-resolved site** -- deliberately, since it
   is the implementation that will actually run. `TUR-W0377` marks a call that
   depends on that leniency; it is a warning rather than an error because the
@@ -828,7 +842,7 @@ Known and deliberate, in rough order of how likely you are to hit them:
   [docs/archive/class-param-refinement-not-demanded-of-callers.md](../archive/class-param-refinement-not-demanded-of-callers.md)
   for why that reading was chosen over making the class signature binding on
   callers.
-- **An argument that cannot be PROVED is not an error; one that is DEFINITELY
+- **[by design] An argument that cannot be PROVED is not an error; one that is DEFINITELY
   wrong is.** A crossing reports `TUR-E0371` when the goal mentions no variable
   and evaluates false -- `(safe-div 10 0)` -- because every execution reaching
   that call violates it. When the goal depends on a variable, the
@@ -837,14 +851,14 @@ Known and deliberate, in rough order of how likely you are to hit them:
   is a property of the goal, not of what is in scope: an unrelated parameter on
   the caller does not make a literal violation unreportable.
 
-- **Result-refinement propagation is order-dependent for a function's OWN
+- **[incomplete] Result-refinement propagation is order-dependent for a function's OWN
   return obligation.** Call-site crossings are resolved after the whole unit,
   so they always see every callee's refinement. A function's own return
   obligation is decided inline (that is what lets its check be elided), so it
   only sees refinements of functions already elaborated. Under mutual
   recursion, one direction may miss one. This can only lose a hypothesis, never
   add a false one.
-- **Path splitting covers `if`, `let`, `match`, and `do`.** A branching body is
+- **[incomplete] Path splitting covers `if`, `let`, `match`, and `do`.** A branching body is
   discharged per path -- `c |- pred[then/r]` and `(not c) |- pred[else/r]` --
   and a `let` contributes `x = v`. A `let` whose binding shadows a name in
   scope is alpha-renamed first, so the hypothesis relates a fresh name rather
@@ -857,7 +871,7 @@ Known and deliberate, in rough order of how likely you are to hit them:
   form, but only when the preceding statements contain no assignment -- an
   assignment can stale a hypothesis about a parameter, and carrying that
   hypothesis across it would prove a function that violates its own refinement.
-- **A call-site crossing sees path conditions from `if`, `let`, and `match`.**
+- **[incomplete] A call-site crossing sees path conditions from `if`, `let`, and `match`.**
   A crossing is resolved after the whole unit, which is what lets it see every
   callee's refinement; the branches that had to be taken to reach it are
   recovered from the caller's body, so `(if (= n 0) 0 (+ 1 (f (- n 1))))`
@@ -872,23 +886,23 @@ Known and deliberate, in rough order of how likely you are to hit them:
   selector**, since those arrive with pattern binders; a `let` that binds a
   **function**, which is not an arithmetic fact; and a call reachable by more
   than one route, which a macro sharing a node can produce.
-- **A crossing under a shadowing binder is abandoned, not answered.** The
+- **[by design] A crossing under a shadowing binder is abandoned, not answered.** The
   encoder has one flat namespace, so an argument naming a shadowed variable
   would inherit the outer one's hypotheses -- `(let [x (- x x)] (sdiv 10 x))`
   under `x > 0` once "proved" `x != 0` of a value that is zero. Dropping the
   binding's equation is not enough, because the collision is in the name rather
   than the fact, so the whole crossing is skipped.
-- **A `while` loop is not analysed.** An accumulator built by a loop is
+- **[deferred] A `while` loop is not analysed.** An accumulator built by a loop is
   Unknown regardless of what the loop does. There is no invariant *inference*
   and none is planned -- inferring facts is the thing this design deliberately
   does not do. A user-written `:invariant`, which would be checking rather than
   inference, is a plausible future addition but is not in the prototype; see
   [docs/upcoming/hold/loop-invariants-plan.md](../upcoming/hold/loop-invariants-plan.md).
-- **No refinements on type parameters or higher-order predicates.** These are
+- **[prototype] No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)
-- **Nonlinear arithmetic** is uninterpreted, as described above.
-- **A predicate that calls an effectful function is rejected** (`TUR-E0375`),
+- **[by design] Nonlinear arithmetic** is uninterpreted, as described above.
+- **[by design] A predicate that calls an effectful function is rejected** (`TUR-E0375`),
   in all four positions: a refined parameter, `:pre`, `:post`, and a refined
   return. Whether a check runs depends on the build -- `--no-contracts` strips
   them, a release build drops them, and this feature elides the ones it can
@@ -896,12 +910,12 @@ Known and deliberate, in rough order of how likely you are to hit them:
   contracts were compiled in. Reported only on PROVEN impurity: a predicate
   calling a function whose body the purity walk does not model (a field read, a
   loop) is left alone, since a wrong "impure" would reject working code.
-- **Decisions are memoized within a compilation unit**, keyed by a fingerprint
+- **[by design] Decisions are memoized within a compilation unit**, keyed by a fingerprint
   of the normalized VC under alpha-renaming, and every hit is confirmed by
   structural comparison before its verdict is reused. Repeating the same
   refinement across many functions therefore costs one decision, not many.
   There is no cross-build cache.
-- **Purity is a syntactic whitelist, not an analysis.** A function whose body
+- **[by design] Purity is a syntactic whitelist, not an analysis.** A function whose body
   steps outside the admitted forms is impure even when it is in fact pure --
   a struct field read or a loop is still enough (`match` was, and no longer
   is). Its calls are then not congruent and measure-style reasoning over it
