@@ -198,7 +198,7 @@ it.
 
 | # | Gap | Needed for | Plan |
 |---|---|---|---|
-| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) |
+| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
 | C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md) |
 | C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md) |
 
@@ -206,6 +206,21 @@ it.
 encoding proves today. It is blocking on *whether anyone would write it*. An
 ECS whose accessor signatures read
 `#refine{ x : Entity | (= (alive-i w x) 1) }` is an ECS nobody adopts.
+
+> **C1 landed (RM-B1), and a purity caveat surfaced for RE1.** A `bool`-returning
+> function is now a first-class predicate atom, so `#refine{ x : Entity |
+> (alive? w x) }` type-checks and, when `alive?` is pure, discharges through
+> an `if`-guard. **But RE0's handle-unwrap helpers are inline-C** (`slot->int`,
+> `entity-index`, `entity-generation`, ...), and the purity walk is default-deny
+> on inline C -- so any predicate that unpacks a `Slot`/`Entity` (e.g.
+> `(in-bounds? n (slot->int x))`) is classified *impure*, gets a fresh symbol
+> per occurrence, and does **not** discharge as a congruent measure (verified:
+> `0 proven, 1 unknown`). This is the same wall as C2, reached one step earlier:
+> for RE1's accessor predicates to be congruent, the predicate must be a pure
+> function of values, which today means either (a) predicates that compare
+> handles/newtypes without unwrapping through inline C, or (b) making the RE0
+> unwrappers pure primitives the purity walk accepts. Fold this into the C2
+> design rather than treating C1 as sufficient on its own.
 
 **C2 is hard-blocking for RE1.** There is no encoding of a mutable-state
 predicate that discharges today, and there should not be one until the design
