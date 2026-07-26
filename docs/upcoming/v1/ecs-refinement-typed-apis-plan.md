@@ -234,7 +234,32 @@ phase RE0.
 
 ## Phasing
 
-### RE0 -- Real handle types at the ECS API surface (spice-side, unblocked)
+### RE0 -- Real handle types at the ECS API surface (spice-side, LANDED)
+
+> **Status 2026-07-25 -- landed** on the `turmeric-spices` branch
+> `claude/ecs-refinement-re0`. `ecs/entity` now carries `Slot` and
+> `Generation` newtypes beside `Entity` (with `slot->int` /
+> `generation->int` escape hatches and `slot-new` / `generation-new`
+> constructors); `ecs/sized-world` carries a `WorldState` newtype for the
+> control block and threads `Entity`/`Slot`/`Generation`/`WorldState`
+> through spawn/despawn/alive and the `sized-defworld` `state` field;
+> `ecs/world`'s `world-alloc-entity!` / `world-despawn!` are `Entity`-typed.
+> The negative fixture is `spices/ecs/tests/errors/slot-not-entity.tur`
+> (a `Slot` where an `Entity` is required -> `TUR-E0001`). No regressions
+> against the pre-existing v0.31.0 suite baseline (which carries ~23
+> unrelated failures from a `(Storage T)` associated-type regression --
+> the accessor/for-each validation surface -- so those were validated
+> against the passing `sized-world-*` tests instead).
+>
+> **Two sub-items intentionally deferred** (noted, not done): the
+> `defcomponent-accessors` / `sized-defcomponent-accessors` slot parameter
+> stays a bare `:int` storage index, and `for-each`'s slot binding stays
+> `:int` -- both because lifting them to `Slot` requires lifting the
+> int-keyed storage layer (`ecs/storage`, `ecs/sized-storage`) to `Slot`
+> too, which is out of RE0's three-module scope, and because every one of
+> their consumers is currently in the `(Storage T)`-broken set (so the
+> change is neither validatable nor "passes unchanged" today). Fold this
+> into the storage-side follow-up.
 
 Retire the `:int` stand-ins on the public surface of `ecs/entity`,
 `ecs/world`, and `ecs/sized-world`:
