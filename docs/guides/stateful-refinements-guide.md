@@ -207,13 +207,19 @@ instead depends on the mode:
 | mode | unproven `#reads` crossing |
 |---|---|
 | `--enable=refined --strict-refine` | **hard error** `TUR-W0372` -- the read must be provably guarded (this is the mode `tur-ecs` and any safety-critical use should compile under) |
-| `--enable=refined` (non-strict) | silently trusted -- the crossing is elided with **no diagnostic** (a known rough edge; see [`docs/reported`](../reported/)) |
+| `--enable=refined` (non-strict) | **warning** `TUR-W0372`: "no runtime fallback for an impure `#reads` measure -- the crossing must be proven (guard it inside a `frozen` region)". The crossing is trusted (elided), but you are told -- it is not silent |
+
+Both message variants say *no runtime fallback*, not "runtime check kept": a
+`#reads` crossing has no runtime contract to keep (unlike a pure refinement,
+which falls back to one when unproven). The distinction from the pure path is
+exactly this -- there is no safe fallback, so an unproven `#reads` crossing is
+always surfaced, never silently trusted.
 
 The practical rule: **compile `#reads`-bearing code under `--strict-refine`.**
 There the guarantee is real -- an unguarded stateful read is a compile error, not
-a trusted elision. The non-strict silent-trust is a diagnostic gap, not a change
-to the trust model: either way `#reads` is trusted and the accessor's own check
-is the runtime backstop.
+a trusted (warned) elision. Non-strict downgrades it to a warning so `refined`
+stays incrementally adoptable, but the accessor's own internal check remains the
+runtime backstop either way.
 
 > **On testing `#reads` soundness.** Because a `#reads` crossing carries no
 > runtime contract, the refinement *source fuzzer* (`tests/refine-fuzz-src.py`,

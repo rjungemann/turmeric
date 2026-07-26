@@ -1840,8 +1840,18 @@ void refine_resolve_call_sites(Elab *e) {
              * we cannot prove is the ordinary case, not news.  What still
              * errors is an argument that is DEFINITELY wrong -- a closed goal
              * that evaluates false -- which is `(safe-div 10 0)` becoming a
-             * compile-time failure instead of a runtime panic. */
-            ob->runtime_guarded = true;
+             * compile-time failure instead of a runtime panic.
+             *
+             * C2 / #reads exception: a `#reads`-measure predicate is impure, so
+             * the callee's entry check is TUR-E0375-unemittable and is
+             * suppressed (see rt_inject_param_checks) -- there is NO runtime
+             * backstop for this crossing.  Mark it proof-only so an unproven
+             * one is reported (a warning in non-strict, an error in strict)
+             * rather than silently trusted, and so its W0372 does not claim a
+             * runtime check was kept. */
+            bool reads_crossing = rt_pred_reads_measure(e, pred);
+            ob->runtime_guarded = !reads_crossing;
+            ob->reads_no_runtime = reads_crossing;
             bool inst_ok = refine_discharge_one(ob, e->arena);
 
             /* Reading B + lint: the obligation above is the resolved INSTANCE's,

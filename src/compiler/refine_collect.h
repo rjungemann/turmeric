@@ -152,6 +152,14 @@ typedef struct RefineObligation {
      * ordinary condition of code that has not been fully annotated yet.
      * Erroring on it would make `refined` impossible to adopt incrementally. */
     bool         runtime_guarded;
+    /* C2 / #reads: this crossing's callee refinement is a `#reads`-measure
+     * predicate, which is impure and therefore has NO runtime contract (the
+     * entry check is TUR-E0375-unemittable and is suppressed).  So there is no
+     * runtime backstop: an unproven such crossing must NOT be silently trusted
+     * in non-strict mode, and its diagnostic must not claim a "runtime check
+     * kept".  When set, runtime_guarded is false (the crossing is proof-only)
+     * and the W0372 text branches to the no-fallback wording. */
+    bool         reads_no_runtime;
     /* A speculative probe (RT4 template inference): decide it, report nothing,
      * count nothing.  The caller only wants the verdict. */
     bool         speculative;

@@ -520,8 +520,13 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
                                 TUR_W0372_REFINE_UNKNOWN,
                                 "refinement on %s could not be decided statically "
-                                "(%s); runtime check kept",
-                                what, reason ? reason : "outside the supported fragment");
+                                "(%s); %s",
+                                what, reason ? reason : "outside the supported fragment",
+                                ob->reads_no_runtime
+                                  ? "no runtime fallback for an impure #reads "
+                                    "measure -- the crossing must be proven (guard "
+                                    "it inside a `frozen` region)"
+                                  : "runtime check kept");
         return false;
     }
 
@@ -641,7 +646,12 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                 diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
                                     TUR_W0372_REFINE_UNKNOWN,
                                     "solver returned unknown for the refinement on %s; "
-                                    "runtime check kept", what);
+                                    "%s", what,
+                                    ob->reads_no_runtime
+                                      ? "no runtime fallback for an impure #reads "
+                                        "measure -- the crossing must be proven (guard "
+                                        "it inside a `frozen` region)"
+                                      : "runtime check kept");
                 emit_predicate_note(ob, false);
                 emit_hint(ob, vc, a);
             }

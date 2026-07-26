@@ -1,5 +1,20 @@
 # Unproven `#reads` crossing is silently trusted in non-strict mode; `W0372` text is wrong for `#reads`
 
+**RESOLVED 2026-07-26.** Both issues fixed together. A `#reads`-measure crossing
+now carries `RefineObligation.reads_no_runtime` (set in `elab_fns.c` where the
+crossing obligation is built, via `rt_pred_reads_measure`), which forces
+`runtime_guarded = false` -- so an unproven such crossing is **no longer
+suppressed** in non-strict mode: it emits a `TUR-W0372` **warning** (a hard error
+under `--strict-refine`, unchanged). Both `W0372` sites in `refine_discharge.c`
+now branch the trailing text on `reads_no_runtime`: instead of "runtime check
+kept" they read "no runtime fallback for an impure #reads measure -- the crossing
+must be proven (guard it inside a `frozen` region)". Regression coverage:
+`tests/fixtures/refine-stateful-nonstrict-warns` (non-strict: warns yet compiles
+and runs) plus the pinned message substrings added to
+`errors/refine-stateful-{shadow-despawn,no-region}/expected.diag`. Pure
+refinements are untouched (they keep `runtime_guarded = true` and their runtime
+fallback). Original report below.
+
 **Severity:** low (the safety-critical mode -- `--strict-refine` -- is correct; this
 is a diagnostic-quality gap in the non-strict mode and a stale message string).
 
