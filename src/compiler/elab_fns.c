@@ -626,6 +626,10 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
                         ? rt_sort_of_kind(b->type.as.fn.result_kind)
                         : VS_INT;
 
+    /* C2 / #reads: publish the read-frame param so the encoder can grant
+     * congruence when that argument is frozen at the call site. */
+    out->reads_param_plus1 = b->reads_param_plus1;
+
     /* PURITY, which decides whether two occurrences of this call may be
      * modelled as the same value.  See rt_binding_is_pure above: the declared
      * effect row is only a veto, the real evidence is a default-deny walk of
@@ -1379,6 +1383,39 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     cs->class_param_preds = NULL;
     cs->class_param_vars  = NULL;
     cs->n_class_params    = 0;
+    /* C2 / #reads: snapshot the borrows LIVE at this crossing.  The borrow
+     * checker's scope is authoritative about liveness right here (a `frozen`
+     * region's `(& w)` borrow is active); recovering it syntactically later
+     * would risk treating an already-ended borrow as live.  A binding borrowed
+     * here cannot be `^unique ^mut`-mutated (UT2) or `set!` (borrow-checked),
+     * so a `#reads`-it measure is a function of frozen state in this obligation. */
+    cs->frozen_names = NULL;
+    cs->n_frozen     = 0;
+    {
+        uint32_t nb = 0;
+        for (const Scope *s = e->scope; s; s = s->parent)
+            for (const ScopeBorrow *bo = s->borrows; bo; bo = bo->next)
+                if (bo->binding && bo->binding->name) nb++;
+        if (nb) {
+            const char **fn = (const char **)arena_alloc(e->arena, nb * sizeof(char *));
+            uint32_t k = 0;
+            for (const Scope *s = e->scope; s; s = s->parent)
+                for (const ScopeBorrow *bo = s->borrows; bo; bo = bo->next) {
+                    Binding *b = bo->binding;
+                    if (!b || !b->name) continue;
+                    /* Only publish a frozen name that STILL resolves to the
+                     * borrowed binding here.  If it has been SHADOWED by an
+                     * inner binding of the same spelling, the encoder's
+                     * name-based match would otherwise treat the (unfrozen)
+                     * shadow as frozen -- an unsoundness the shadow+despawn
+                     * fixture pins.  Comparing to scope_lookup's innermost
+                     * result closes it. */
+                    if (scope_lookup(e->scope, b->name) != b) continue;
+                    fn[k++] = b->name->name;
+                }
+            if (k) { cs->frozen_names = fn; cs->n_frozen = k; }
+        }
+    }
     cs->loc         = call_form->span;
     return e->n_refine_call_sites;
 }
@@ -1754,6 +1791,10 @@ void refine_resolve_call_sites(Elab *e) {
                 cs->loc, cs->env, what_owned, cs->caller_name);
             if (!ob) continue;
             refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+            /* C2 / #reads: carry this crossing's frozen (borrowed) bindings so
+             * the encoder can grant a `#reads w` measure congruence when w is
+             * one of them. */
+            refine_obligation_set_frozen(ob, cs->frozen_names, cs->n_frozen);
             /* The callee checks its own parameters on entry, so an argument
              * we cannot prove is the ordinary case, not news.  What still
              * errors is an argument that is DEFINITELY wrong -- a closed goal

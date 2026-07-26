@@ -75,6 +75,14 @@ typedef struct RefineFnInfo {
      * resolve to a function with a readable return type -- an abstract
      * measure, whose sort is decided by position instead. */
     VCSort       ret_sort;
+    /* C2 / #reads: 1-based index of the ^borrow parameter this measure reads
+     * the mutable state of (`#reads w`), or 0 for none.  When that argument at
+     * a call site is a value FROZEN in scope (a live borrow -- the `(& w)` a
+     * `frozen` region holds), the measure is a function of frozen state and its
+     * pure arguments, so the encoder may treat it as congruent even though its
+     * body is impure.  Sound only because the callee's own entry check is never
+     * elided; see docs/guides/stateful-refinements-guide.md. */
+    uint32_t     reads_param_plus1;
 } RefineFnInfo;
 
 /* Resolve a called name.  Returns false when the name does not resolve to a
@@ -125,6 +133,11 @@ typedef struct RefineObligation {
     const Form  *subject;        /* the form substituted for x (may be NULL) */
     RefineSubst *subst;          /* applied before var_name/subject */
     uint32_t     n_subst;
+    /* C2 / #reads: names borrowed (frozen) in scope at this obligation's site.
+     * A `#reads w` measure whose world argument is one of these is congruent
+     * here.  Carried from the crossing's borrow snapshot; NULL / 0 otherwise. */
+    const char **frozen_names;
+    uint32_t     n_frozen;
     /* True when a runtime check ELSEWHERE already guards this obligation.  Set
      * for call-site crossings: the callee validates its own parameters on
      * entry, so an argument we merely cannot prove is the normal state of
@@ -185,6 +198,12 @@ RefineObligation *refine_collect_obligation(RefineObligationVec *v,
  * `n` entries are copied into the obligation's arena. */
 void refine_obligation_set_subst(RefineObligation *ob, Arena *a,
                                  const RefineSubst *subst, uint32_t n);
+
+/* C2 / #reads: record the names frozen (borrowed) in scope at this obligation's
+ * site.  Shares the array by reference -- the caller owns arena-allocated,
+ * immutable storage (the crossing's snapshot). */
+void refine_obligation_set_frozen(RefineObligation *ob,
+                                  const char **frozen_names, uint32_t n);
 
 /* ------------------------------------------------------------------------- *
  * RT2 lowering: obligation -> normalized VC

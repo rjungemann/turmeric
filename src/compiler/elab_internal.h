@@ -916,6 +916,13 @@ typedef struct RefineCallSite {
     const Form   **class_param_preds;
     const char   **class_param_vars;
     uint32_t       n_class_params;
+    /* C2 / #reads: the names of the bindings that are BORROWED (frozen) in
+     * scope at this crossing -- captured from the borrow checker's scope at
+     * crossing-creation time, when it authoritatively knows what is live.  A
+     * `#reads w` measure is congruent here exactly when its world argument is
+     * one of these.  NULL / 0 when nothing is frozen. */
+    const char   **frozen_names;
+    uint32_t       n_frozen;
     Span           loc;
 } RefineCallSite;
 
