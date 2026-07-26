@@ -965,6 +965,16 @@ Hamt *tur_hamt_set(Hamt *m, uint64_t hash, void *key, void *val) {
     HamtNode *new_root = node_insert(m->root, hash, key, val, 0);
 
     if (new_root == m->root) {
+        /* Structurally unchanged, so the result IS the input map.  Hand back an
+         * OWNED reference: the documented contract is "returns a new HAMT; the
+         * original is unchanged", and callers free the result and the original
+         * independently.  Returning a bare alias made both handles free the one
+         * allocation -- the second tur_hamt_free then decremented ref_count
+         * through freed memory and, when the garbage landed on zero, freed it
+         * again.  (Our own temp base needs no retain: it is already a fresh
+         * ref_count=1 allocation and m_is_temp suppresses the free below, so
+         * ownership simply passes through.) */
+        if (!m_is_temp) tur_hamt_retain(m);
         return m;
     }
 
@@ -990,14 +1000,20 @@ Hamt *tur_hamt_del(Hamt *m, uint64_t hash, void *key) {
         return m;
     }
 
+    /* Both no-op paths below return the input map, so they must hand back an
+     * OWNED reference for the same reason tur_hamt_set's identity path does:
+     * the caller frees the result and the original independently, and a bare
+     * alias makes both frees land on one allocation.  This is what broke
+     * tests/fixtures/hamt-delete on macOS -- deleting an absent key produced
+     * m3 == m2, and freeing both double-freed the map. */
     if (!tur_hamt_has(m, hash, key)) {
-        return m;
+        return tur_hamt_retain(m);
     }
 
     HamtNode *new_root = node_delete(m->root, hash, key, 0);
 
     if (new_root == m->root) {
-        return m;
+        return tur_hamt_retain(m);
     }
 
     Hamt *new_map = hamt_alloc_empty();

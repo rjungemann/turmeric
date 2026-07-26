@@ -220,7 +220,8 @@
 
 (defmacro vec-drop-last! [v]
   `(let [__tur_dl__ ~v]
-     (vec-drop-last-o! __tur_dl__ (+ (tur-vec-elem-wide? __tur_dl__) (* 2 (tur-vec-elem-rc? __tur_dl__))))))
+     (vec-drop-last-o! __tur_dl__
+       (+ (tur-vec-elem-wide? __tur_dl__) (* 2 (tur-vec-elem-rc? __tur_dl__))))))
 ;;; vec-set-o! -- overwrite the element at index i, freeing the old box when
 ;;; `boxed`.
 ;;;
@@ -391,7 +392,9 @@
 ;;; Since: Phase TC1
 
 (defmacro vec-free [v]
-  `(let [__tur_fv__ ~v] (vec-free-o __tur_fv__ (+ (tur-vec-elem-wide? __tur_fv__) (* 2 (tur-vec-elem-rc? __tur_fv__))))))
+  `(let [__tur_fv__ ~v]
+     (vec-free-o __tur_fv__
+       (+ (tur-vec-elem-wide? __tur_fv__) (* 2 (tur-vec-elem-rc? __tur_fv__))))))
 ;;; vec-push-each__ -- internal helper for the vec-of macro.
 ;;;
 ;;; Expands a sequence of pushes onto `v` followed by `v` itself as the

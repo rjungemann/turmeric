@@ -1,0 +1,7 @@
+The fixture (load ...)s stdlib/rcchain.tur, whose `rcchain-empty?` is an
+inline-C body, so --interpret aborts with "inline-C not supported in
+interpreter mode" at the first emptiness check. run-turi.sh's mechanical
+inline-C carve-out only inspects the fixture's own input.tur, not the modules
+it loads, so the carve does not catch this one. The tail of the fixture also
+measures gc-objects-freed / gc-live-blocks, which are compiled-path
+observations. Compiled path is green (bash tests/run.sh).

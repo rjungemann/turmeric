@@ -22,9 +22,24 @@
 
 (defn heap-uordblks [] : int
   ```c
+  /* Bytes currently handed out by malloc.  Spelled per-platform: mallinfo2 is
+     glibc-only (macOS has no <malloc.h> and no struct mallinfo2), and the
+     Darwin equivalent is malloc_zone_statistics on the default zone.  Any
+     other libc has no portable query, so the probe reports 0 there and the
+     no-growth assertions below degrade to vacuously true -- CI covers glibc
+     and Darwin, which are the two that actually measure. */
+  #if defined(__APPLE__)
+  #include <malloc/malloc.h>
+  malloc_statistics_t ms;
+  malloc_zone_statistics(malloc_default_zone(), &ms);
+  return (int64_t)ms.size_in_use;
+  #elif defined(__GLIBC__)
   #include <malloc.h>
   struct mallinfo2 mi = mallinfo2();
   return (int64_t)mi.uordblks;
+  #else
+  return 0;
+  #endif
   ```)
 
 (defn build-cycle [] : int

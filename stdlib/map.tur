@@ -496,7 +496,6 @@
 
 
 (defn tur-wide-byval? [V] [x : V] : int 0)
-
 ;;; tur-rc-value? -- 1 if V is an rc<T>, else 0.  The refcount-side twin of
 ;;; tur-wide-byval?: the compiled backend folds it to a constant per
 ;;; monomorphization (emit_expr.c), and this pure-Turmeric fallback body returns

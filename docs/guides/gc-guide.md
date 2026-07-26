@@ -288,6 +288,35 @@ fails if a stdlib type annotation introduces `rc<...>` without an explicit
 API in `rc.tur` -- for the day shared ownership *is* wanted -- is
 `docs/upcoming/v1/stdlib-weak-ref-audit-plan.md`.
 
+### The one reviewed exception: `stdlib/rcchain.tur`
+
+`rcchain.tur` is the single opt-in module that *does* store `rc<T>` -- both
+fields of its `RcChain` link are one (`[item : rc<A> next : rc<RcChain>]`) --
+and it is exempt from the guard as a whole file, alongside `rc.tur` itself.
+
+The exemption is the review, not a waiver of it. A chain can absolutely form a
+cycle; the point is that this one is **reclaimed**. Every field is a plain `rc`,
+so the walk glue emitted for the struct already reports both the element and the
+spine as children and the collector traces straight through -- no `weak<T>` is
+needed to break anything, because nothing is stuck.
+`tests/fixtures/rcchain-cycle-is-collected` pins exactly that: fifty cycles
+routed through a chain, then `(gc!)`, then `gc-live-blocks` == 0.
+
+That is the module's entire reason to exist. A `(Vec rc<T>)` is
+refcount-correct but *invisible* to the collector -- a Vec's elements sit in an
+ordinary malloc'd buffer with no walk function, so a cycle through it is never
+reclaimed (measured at 0 freed / 50 live in
+`tests/fixtures/gc-blind-spot-cycle-through-vec`). The blind spot is the flat
+buffer specifically, not "collections", and an `RcChain` is what you reach for
+when the elements can cycle and the collector is on. The cost is the obvious
+one: O(n) indexing and one rc block per element.
+
+The exemption is file-level rather than per-line for a mechanical reason too: a
+trailing `;; rc-cycle-ok:` marker does not survive `tur fmt`, which moves the
+comment onto its own following line -- so a per-line marker would put this guard
+in permanent conflict with the `fmt-bootstrap-stdlib` check in
+`tests/run-fmt.sh`.
+
 ---
 
 ## The interpreter is different
