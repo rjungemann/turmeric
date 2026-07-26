@@ -1,0 +1,8 @@
+(set-logic QF_LIA)
+(set-info :status unsat)
+(define-fun dbl ((a Int)) Int (* 2 a))
+(define-fun quad ((a Int)) Int (dbl (dbl a)))
+(declare-fun x () Int)
+(assert (= x 2))
+(assert (not (= (quad x) 8)))
+(check-sat)

@@ -182,6 +182,8 @@ static bool sx_head_is(const Sx *s, const char *name) {
 #define TR_MAX_LET_PARALLEL 4096
 #define TR_MAX_TERM_DEPTH 6000
 #define TR_MAX_SORTS      256
+#define TR_MAX_DEFS       32768
+#define TR_MAX_DEF_DEPTH  64
 
 typedef struct { const char *name; VCTerm *val; } LetBind;
 
@@ -193,6 +195,28 @@ typedef struct {
     uint32_t   n_lets, cap_lets;
     uint32_t   n_ite;                /* serial for fresh ite-lifting variables */
 } Tr;
+
+/* `define-fun` is a MACRO, not a new uninterpreted symbol: SMT-LIB gives it a
+ * body, and `define-fun-rec` is the separate (and unsupported) form for
+ * recursion, so expansion terminates without a cycle check -- the depth bound
+ * below is belt-and-braces.
+ *
+ * Expansion reuses the `let` binding stack: parameters are pushed as bindings
+ * over the ALREADY-TRANSLATED argument terms, the body is translated, and the
+ * stack is rewound.  That gets correct scoping for free, including a parameter
+ * shadowing an outer name, and it means a macro argument is evaluated once
+ * rather than duplicated per occurrence in the body. */
+typedef struct { const char *name; const Sx *params; const Sx *body; } FunDef;
+static FunDef g_defs[TR_MAX_DEFS];
+static uint32_t g_n_defs;
+
+static const FunDef *tr_find_def(const char *name, uint32_t arity) {
+    for (uint32_t i = g_n_defs; i-- > 0; )                 /* last wins */
+        if (strcmp(g_defs[i].name, name) == 0 &&
+            g_defs[i].params->n == arity)
+            return &g_defs[i];
+    return NULL;
+}
 
 static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth);
 
@@ -301,6 +325,14 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
         for (uint32_t i = 0; i < t->vc->n_vars; i++)
             if (strcmp(t->vc->vars[i].name, a) == 0)
                 return vc_var_ref(t->vc, i);
+        /* A nullary `define-fun` -- a named constant. */
+        const FunDef *d0 = tr_find_def(a, 0);
+        if (d0) {
+            if (depth > TR_MAX_DEF_DEPTH * 20) {
+                t->err = "macro expansion too deep"; return NULL;
+            }
+            return tr_term(t, d0->body, depth + 1);
+        }
         t->err = "reference to an undeclared symbol";
         return NULL;
     }
@@ -476,6 +508,43 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
         return tr_fold(t, VC_SUB, s, depth);
     }
 
+    /* An application of a `define-fun` macro.  Checked before the
+     * uninterpreted-function path: a name is one or the other, never both. */
+    {
+        const FunDef *d = tr_find_def(op, s->n - 1);
+        if (d) {
+            if (depth > TR_MAX_DEF_DEPTH * 20) {
+                t->err = "macro expansion too deep"; return NULL;
+            }
+            uint32_t saved = t->n_lets;
+            /* Arguments translate in the CALLER's scope, before any parameter
+             * binding is pushed -- otherwise a parameter named like an
+             * argument's free variable would capture it. */
+            VCTerm **argv = (VCTerm **)arena_alloc(t->arena,
+                                (s->n ? s->n : 1) * sizeof(VCTerm *));
+            for (uint32_t i = 1; i < s->n; i++) {
+                argv[i] = tr_term(t, s->kids[i], depth + 1);
+                if (!argv[i]) return NULL;
+            }
+            for (uint32_t i = 0; i < d->params->n; i++) {
+                const Sx *pdecl = d->params->kids[i];
+                if (pdecl->kind != SX_LIST || pdecl->n != 2 ||
+                    pdecl->kids[0]->kind != SX_ATOM) {
+                    t->err = "malformed define-fun parameter"; return NULL;
+                }
+                if (t->n_lets >= t->cap_lets) {
+                    t->err = "macro binding overflow"; return NULL;
+                }
+                t->lets[t->n_lets].name = pdecl->kids[0]->atom;
+                t->lets[t->n_lets].val  = argv[i + 1];
+                t->n_lets++;
+            }
+            VCTerm *body = tr_term(t, d->body, depth + 1);
+            t->n_lets = saved;
+            return body;
+        }
+    }
+
     /* An application of a declared uninterpreted function. */
     for (uint32_t i = 0; i < t->vc->n_ufuncs; i++) {
         if (strcmp(t->vc->ufuncs[i].name, op) != 0) continue;
@@ -515,6 +584,7 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
 static const char *g_sorts[TR_MAX_SORTS];
 static uint32_t g_n_sorts;
 
+
 static bool tr_sort(const Sx *s, VCSort *out) {
     if (!s || s->kind != SX_ATOM) return false;
     if (strcmp(s->atom, "Int")  == 0) { *out = VS_INT;  return true; }
@@ -543,6 +613,7 @@ static void bench_load(Bench *b, const char *text, size_t len, Arena *a) {
     b->label = LBL_NONE;
 
     g_n_sorts = 0;                      /* sorts are per-benchmark */
+    g_n_defs  = 0;                      /* and so are macros */
     SxReader r = { text, text + len, a, NULL };
     RefineVC *vc = vc_new(a);
     b->vc = vc;
@@ -588,8 +659,34 @@ static void bench_load(Bench *b, const char *text, size_t len, Arena *a) {
             continue;
         }
 
+        if (sx_head_is(cmd, "define-fun")) {
+            /* (define-fun NAME ((p SORT)...) RETSORT body) */
+            VCSort ret;
+            if (cmd->n != 5 || cmd->kids[1]->kind != SX_ATOM ||
+                cmd->kids[2]->kind != SX_LIST || !tr_sort(cmd->kids[3], &ret)) {
+                b->skipped = true; b->skip_reason = "unsupported define-fun"; return;
+            }
+            const Sx *ps = cmd->kids[2];
+            for (uint32_t i = 0; i < ps->n; i++) {
+                VCSort psort;
+                if (ps->kids[i]->kind != SX_LIST || ps->kids[i]->n != 2 ||
+                    !tr_sort(ps->kids[i]->kids[1], &psort)) {
+                    b->skipped = true;
+                    b->skip_reason = "unsupported define-fun parameter sort";
+                    return;
+                }
+            }
+            if (g_n_defs >= TR_MAX_DEFS) {
+                b->skipped = true; b->skip_reason = "too many define-funs"; return;
+            }
+            g_defs[g_n_defs].name   = cmd->kids[1]->atom;
+            g_defs[g_n_defs].params = ps;
+            g_defs[g_n_defs].body   = cmd->kids[4];
+            g_n_defs++;
+            continue;
+        }
+
         if (sx_head_is(cmd, "push") || sx_head_is(cmd, "pop") ||
-            sx_head_is(cmd, "define-fun") ||
             sx_head_is(cmd, "define-sort") || sx_head_is(cmd, "assert-soft") ||
             sx_head_is(cmd, "minimize") || sx_head_is(cmd, "maximize")) {
             b->skipped = true; b->skip_reason = "unsupported command"; return;

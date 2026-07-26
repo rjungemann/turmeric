@@ -2795,23 +2795,27 @@ always sound.
 
    | cause | was | now | status |
    |---|---|---|---|
-   | `ite` / `xor` unsupported | 57 | 0 | **done** -- boolean `ite` is propositional structure, arithmetic `ite` lifts to a fresh variable with a top-level definition, `xor` expands directly |
-   | `let` / term nested deeper than the cap | 7 | 2 | **done** -- caps raised; both are C-stack recursion in `tr_term`, and no child crashed at the new depth |
-   | `ite` branches disagreeing on sort | -- | 4 | **mostly done** -- Int/Real mixing is legal SMT-LIB, so the literal side is coerced exactly as `/` does; this reader had been stricter than the language |
-   | `define-fun` unsupported | 16 | 16 | **open** -- needs macro expansion at read time, and is now the largest remaining cause |
+   | `ite` / `xor` unsupported | 57 | 0 | **done** -- boolean `ite` is propositional structure; arithmetic `ite` lifts to a fresh variable with a top-level definition; `xor` expands directly |
+   | `define-fun` unsupported | 16 | 0 | **done** -- macro expansion at read time, reusing the `let` binding stack so scoping and capture-avoidance come for free |
+   | `let` / term nesting past the cap | 7 | 2 | **done** -- caps raised; both are C-stack recursion in `tr_term`, and no child crashed at the new depth |
+   | `ite` branches disagreeing on sort | -- | 4 | **mostly done** -- Int/Real mixing is legal SMT-LIB, so the literal side is coerced as `/` does; the remaining four mix under a nested `ite` |
 
-   Measured against the 200-benchmark external sample, over three rounds:
+   Measured against the 200-benchmark external sample, over four rounds:
 
-   | | skipped | decided | soundness failures |
+   | round | skipped | decided | soundness failures |
    |---|---|---|---|
-   | before | 80 | 91 | 1 |
+   | before | 80 | 91 | **1** |
    | after `ite`/`xor` | 43 | 128 | 0 |
-   | after sort coercion + caps | **22** | **139** | 0 |
+   | after sort coercion + caps | 22 | 139 | 0 |
+   | after `define-fun` | **7** | **142** | 0 |
 
-   "Decided" is proved + refuted + correctly-declined; 6 benchmarks carry no
-   `:status` and can never count. Over-budget rose from 22 to 33 across those
-   rounds, which is the expected shape: benchmarks that used to be rejected at
-   the reader now reach the solver, and some of them time out there instead.
+   **The bottleneck has moved from the reader to the solver.** 193 of 200
+   benchmarks now parse; of the 189 carrying a `:status`, 142 are decided and
+   **40 exceed the time budget**. Further coverage is no longer a reading
+   problem -- it needs the chain to decide competition-grade problems faster, or
+   a larger budget, and neither is free. That is the honest state to take into
+   the retirement decision: the corpus now exercises the solver rather than the
+   parser.
 
    The bar for deletion is that the corpus decides a large majority of what it
    is handed AND has been clean across a soak window. "Decides" is the operative
