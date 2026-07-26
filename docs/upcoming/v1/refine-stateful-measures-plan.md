@@ -91,14 +91,22 @@ gap C2 -- hard-blocking for that plan's RE1.
 > deferred behind either that codegen fix or B3's elaborator work, whichever
 > lands first, rather than built twice.
 >
-> **Next: B3** -- the VC congruence-window link. Inside a `with-frozen` region,
-> a measure over the frozen world becomes congruent (its despawn history cannot
-> move), added as the third hypothesis-invalidation site alongside `set!` and
-> the `do`-split rule, behind `--enable=refined` and exercised with the
-> `stateful` fuzzer sabotage. **Write `errors/refine-stateful-mutation-invalidates`
-> first** -- it is the fixture that catches B3 being an escape hatch. B3 needs
-> the elaborator to recognize the region entry (the `^borrow (DespawnCap W)`),
-> which is why B2's region is a distinct, greppable construct.
+> **B3 spiked 2026-07-26 -- NOT shippable as one change; gated on prerequisites.**
+> The VC congruence-window link would, inside a region, give a world-measure over
+> the frozen world a stable (congruent) symbol. But three probes (see "B3 design
+> spike" below) show it would be *unsound today*: (1) the region is structurally
+> invisible to the encoder -- `with-frozen` is a macro over a HOF, so the body
+> elaborates as a separate function and the crossing never sees the region;
+> (2) nothing declares a measure to be a function of a world's despawn history;
+> (3) the aliasing hole is live -- a *second* `DespawnCap` can be minted and used
+> to despawn inside a frozen region (verified rc=0), so a region does not
+> actually guarantee "no despawn here". Plus a foundation caveat: this branch's
+> refine runtime-check emission looks broken (`errors/refine-impure-predicate`
+> runs clean when it should abort), and B3's safety rests on that check firing.
+> The one-line encoder hook is understood; it is the prerequisites that make it
+> sound, and they are the work. **Recommendation: do not ship the override; build
+> the prerequisites first (spike lists the sequence).** RE1 stays blocked on C2
+> until then.
 
 ## The problem
 
@@ -317,7 +325,74 @@ Only if RM-S0 says so. Three pieces, in order, each independently useful:
    shared predicate with one comment naming the failure mode -- `rt_peel_
    contract` had to be reached independently three times before it was
    centralised, and this is the same pattern arriving early enough to avoid
-   that.
+   that. **[B3 SPIKED 2026-07-26 -- not shippable yet; three soundness blockers
+   (region invisible to encoder, no declared world-measure relation, live
+   aliasing hole) + a broken-runtime-check foundation caveat. See the B3 design
+   spike below for the sound sequence.]**
+
+### B3 design spike (2026-07-26) -- what a sound implementation requires, and why it is not one change
+
+Three probes against `build/tur` v0.31.0, on top of the shipped B1/B2, plus a
+foundation caveat. All are reasons B3's congruence override **must not ship
+yet** -- each would elide a real check on trust, which is the miscompile this
+whole plan exists to prevent.
+
+**Blocker 1 -- the region is invisible to the encoder, structurally.** A
+stateful `alive?` (impure: reads state) guarding a `get-Pos!` crossing *inside*
+a `with-frozen` region still reports `0 proven, 1 unknown`. Not because the
+encoder ignores the region -- because it *cannot see it*. `with-frozen` is a
+macro over a HOF (B2), so its body is a **closure elaborated as a separate
+function**; the crossing's obligation is collected with no knowledge that the
+caller froze the world, and a guard in that closure cannot discharge an impure
+measure. B3 therefore needs the region body elaborated **inline, with the region
+fact in scope** -- a first-class `(frozen cap body...)` special form (the piece
+B2 deferred), not a HOF/closure. The existing `do`-split invalidation already
+works this way (`rt_form_mentions_set` scans inline statements, `elab_fns.c`);
+B3's congruence grant + region-exit invalidation belong on that same inline
+path. **The hard part is non-obvious:** giving an *inline* body a borrow SCOPE
+for the cap -- the HOF got that for free from its call frame.
+
+**Blocker 2 -- no declared "measure M is a function of world W's despawn
+history".** Inside a region that froze W, the encoder would give a world-measure
+over W a stable (congruent) symbol -- but it must *know* `alive?` is a
+world-measure over W. Nothing declares that today; `alive?` merely reads state.
+This is the read-side analogue of the write-side gate B1 built, and it must be
+declared and checked, never inferred (the parent plan's standing rule).
+
+**Blocker 3 -- cap uniqueness is a discipline, not a guarantee (the aliasing
+hole is live).** Verified: inside a `with-frozen dc` region you can `mint-despawn-cap`
+a **second** `DespawnCap<W>` and despawn with it -- rc=0, no error. The freeze
+only borrows the *one* cap it was handed; nothing makes despawn authority
+unique per world. So a region does **not** actually guarantee "no despawn
+here", and a B3 congruence grant on top of it would elide a use-after-despawn
+check. This is `errors/refine-stateful-aliased-mutation`, live. Until minting is
+structurally once-per-world (e.g. the cap is created only by the world
+constructor and never re-mintable), B3 cannot soundly elide.
+
+**Foundation caveat.** This branch carries 11 pre-existing refine failures,
+including `errors/refine-impure-predicate` -- an impure predicate that *should*
+abort at runtime currently runs clean, i.e. the kept-runtime-check emission
+looks broken here. B3's entire safety argument is "the runtime check still fires
+when a static proof is absent"; that must be true before B3's soundness can even
+be validated.
+
+**The one-line hook, once 1-3 hold:** in a recognized frozen region,
+`enc_measure` gives a world-measure over the frozen W a stable symbol instead of
+the impure fresh-per-occurrence one; region exit joins `set!` and `do`-split as
+the third invalidation site (one shared predicate, one comment, per item 3).
+That line turns `0 proven` into `1 proven` -- and, if 1-3 are wrong, silently
+elides a real check.
+
+**Recommendation.** B3 is a multi-slice compiler project sitting on prerequisites
+B1/B2 deliberately deferred plus a foundation bug -- not a single landable
+change. Sequence, each step independently checkable and none eliding a check on
+trust: (i) fix the pre-existing refine runtime-check failures (so soundness is
+observable at all); (ii) build the inline `(frozen ...)` region form with a real
+borrow scope; (iii) make despawn-cap minting structurally once-per-world;
+(iv) add the declared world-measure relation; (v) then, and only then, the
+scoped congruence grant + region-exit invalidation in `enc_measure`, behind
+`--enable=refined`, not landable until the `stateful` differential fuzzer
+sabotage is green.
 
 ## Acceptance (whichever candidate)
 
