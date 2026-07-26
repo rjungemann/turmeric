@@ -108,16 +108,23 @@ gap C2 -- hard-blocking for that plan's RE1.
 > the prerequisites first (spike lists the sequence).** RE1 stays blocked on C2
 > until then.
 >
-> **Cap-uniqueness investigation done 2026-07-26 (started per user request).**
-> Blocker 3 cannot be closed with a library value: minting a fresh `DespawnCap`
-> inside a region is unstoppable (verified rc=0), and substructural facts do not
-> cross the HOF/closure region boundary. Blockers 1 and 3 are the **same
-> problem** -- both need an *inline* `(frozen w ...)` region form -- and with one,
-> the separate cap becomes unnecessary: despawn declared `[^unique ^mut w]` is
-> uncallable inside a region that borrows `w` (the existing UT2 rule). So B1/B2's
-> cap is a stepping-stone to retire, and the highest-leverage next step is the
-> inline region form (new borrow-scope machinery), which discharges blockers 1
-> and 3 together. See "Cap-uniqueness investigation" in the spike.
+> **Cap-uniqueness investigation done 2026-07-26 -> sound `frozen` region LANDED
+> (started per user request).** Blocker 3 cannot be closed with a library value
+> (minting a fresh `DespawnCap` inside a region is unstoppable, verified rc=0),
+> and it is the *same problem* as blocker 1. The investigation converged on a
+> mechanism that needs **no compiler change and no capability at all**:
+> `(frozen w body...)` (an `ecs/freeze` macro) lowers to `(let [_ (& w)]
+> body...)` -- it holds an immutable borrow of the *owned* world `w` across the
+> body, so a despawn declared `[^unique ^mut w]` is statically rejected inside
+> (`TUR-E0200`, verified). This is **sound** (no cap to mint or alias; exclusive
+> access cannot be forged from a shared borrow) and the body is elaborated
+> **inline** (a `let` body, not a closure). So **blocker 3 is closed and blocker
+> 1's structural obstacle is gone** (the crossing now sits in the same scope as
+> the region borrow). B1/B2's `DespawnCap`/`with-frozen` are retired. Remaining
+> for B3: (2) a declared measure-over-`W` relation; the encoder logic to
+> *recognize* the region's `(& w)` borrow and grant congruence + region-exit
+> invalidation; and the foundation runtime-check fix. See "Cap-uniqueness
+> investigation" in the spike.
 
 ## The problem
 
@@ -327,10 +334,13 @@ Only if RM-S0 says so. Three pieces, in order, each independently useful:
    remains an option if B2/B3 need mutation facts the cap cannot carry, but is
    not the starting point.
 2. **A region form** whose entry borrows the capability and whose body is a
-   congruence window. **[B2 DONE 2026-07-26 -- `ecs/freeze`'s `with-frozen`
-   macro; entry borrows the cap, body cannot despawn, cap reusable after.
-   Region result pinned to `int` pending the poly-HOF codegen fix; a
-   first-class `(frozen w ...)` special form is the eventual shape.]**
+   congruence window. **[DONE 2026-07-26 -- reworked to the sound `frozen`
+   region: `(frozen w body...)` -> `(let [_ (& w)] body...)` holds an immutable
+   borrow of the owned world, so a `[^unique ^mut w]` despawn is `TUR-E0200`
+   inside. No capability, no minting/aliasing hole, no HOF (any result type),
+   body inline. Retires B1/B2's `DespawnCap`/`with-frozen`. This closed blocker
+   3 and blocker 1's structural obstacle together -- see the cap-uniqueness
+   investigation.]**
 3. **Hypothesis invalidation at region boundaries**, joining `set!` and the
    `do`-split rule as the third invalidation site. These three should be one
    shared predicate with one comment naming the failure mode -- `rt_peel_
@@ -394,16 +404,16 @@ the third invalidation site (one shared predicate, one comment, per item 3).
 That line turns `0 proven` into `1 proven` -- and, if 1-3 are wrong, silently
 elides a real check.
 
-**Recommendation.** B3 is a multi-slice compiler project sitting on prerequisites
-B1/B2 deliberately deferred plus a foundation bug -- not a single landable
-change. Sequence, each step independently checkable and none eliding a check on
-trust: (i) fix the pre-existing refine runtime-check failures (so soundness is
-observable at all); (ii) build the inline `(frozen ...)` region form with a real
-borrow scope -- which, per the cap-uniqueness finding below, **also closes
-blocker 3 and retires the separate cap**; (iii) add the declared world-measure
-relation; (iv) then, and only then, the scoped congruence grant + region-exit
-invalidation in `enc_measure`, behind `--enable=refined`, not landable until the
-`stateful` differential fuzzer sabotage is green.
+**Recommendation.** B3 is a multi-slice compiler project. Updated sequence after
+the cap-uniqueness investigation (below): **~~(ii) inline region form~~ DONE** --
+the sound `frozen` region landed with no compiler change and closed blockers 1
+and 3 together. Remaining, each step independently checkable and none eliding a
+check on trust: (i) fix the pre-existing refine runtime-check failures (so
+soundness is observable at all); (iii) add the declared world-measure relation;
+(iv) then, and only then, the scoped congruence grant + region-exit invalidation
+in `enc_measure` -- keyed off the region's live `(& w)` borrow -- behind
+`--enable=refined`, not landable until the `stateful` differential fuzzer
+sabotage is green.
 
 ### Cap-uniqueness investigation (2026-07-26) -- blockers 1 and 3 are one problem, and the cap should be retired
 
@@ -432,24 +442,34 @@ cause as blocker 1:
   from `^borrow` function parameters, so a borrow cannot be held live across
   inline statements today.
 
-**Consequence -- the design simplifies.** Blockers 1 and 3 collapse into a single
-prerequisite: an **inline** `(frozen w ...)` region form that (a) elaborates its
-body in-scope (fixes blocker 1) and (b) holds the world's borrow *live across the
-body*. Given (b), the separate `DespawnCap` is **unnecessary**: despawn declared
-`[^unique ^mut w : World ...]` is structurally uncallable inside a region that
-borrows `w` (the existing UT2 rule), with nothing to mint and no regress. That is
-simpler and sounder than B1/B2's cap -- the authority is the world's own
-exclusive access, which cannot be forged from a shared borrow. **B1/B2's
-`ecs/freeze` cap is therefore a stepping-stone to retire**, not the foundation to
-build B3 on.
+**Consequence -- the design simplifies, and it needed no compiler change.**
+Blockers 1 and 3 collapse into a single mechanism: an **inline** `(frozen w ...)`
+region form that (a) elaborates its body in-scope (fixes blocker 1) and (b) holds
+the world's borrow *live across the body*. And the existing borrow forms already
+give both: `(frozen w body...)` lowers to `(let [_ (& w)] body...)`. The `(& w)`
+registers an immutable scope borrow (`scope_add_borrow`) that stays active for
+the `let` body, and passing `w` as `^unique ^mut` while that borrow is live is
+`TUR-E0200` (`elab_call.c` UT2). So the separate `DespawnCap` is **unnecessary**:
+despawn declared `[^unique ^mut w : World ...]` is structurally uncallable inside
+the region, with nothing to mint and no regress. Sounder and simpler than B1/B2's
+cap -- the authority is the world's own exclusive access, which cannot be forged
+from a shared borrow.
 
-**What this needs from the compiler (the real work):** borrows are call-frame
-scoped today; an inline region form must synthesize a borrow scope for its body
-and make the UT2 check see that borrow as live across the body's statements.
-That is new substructural machinery, not just a parser addition -- and it is the
-single highest-leverage next step, because it discharges blockers 1 and 3 at
-once. Blocker 2 (the declared measure-over-`W` relation) and the foundation
-runtime-check fix remain independent.
+**LANDED 2026-07-26.** `ecs/freeze` now exports just `frozen`; the `DespawnCap`
+capability sketch is retired. Verified: `tests/frozen-region.tur` (multi-read
+region returns a value, despawn allowed after) and
+`tests/errors/frozen-despawn-in-region.tur` (despawn inside -> `TUR-E0200`). The
+gotcha: `w` must be an OWNED `^mut` local -- a `^borrow` parameter does *not*
+register a UT2-visible borrow (verified), so this works for a world the caller
+owns, not one borrowed from elsewhere. That is the correct shape anyway (the
+frame that despawns owns the world).
+
+**What remains for B3 (all independent of the region form now):** (2) the
+declared measure-over-`W` relation; the encoder logic to *recognize* the
+region's `(& w)` borrow and grant congruence to a measure over `w` inside +
+region-exit invalidation; and the foundation runtime-check fix. The region form
+is no longer a blocker -- it is a shipped, sound, greppable construct (`(& w)`
+in a `let`) that the encoder can key off.
 
 ## Acceptance (whichever candidate)
 
