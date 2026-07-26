@@ -61,15 +61,41 @@ cross-compile use-after-free. Adding `refine_discharge_reset()` at the top of
 `cmd_build` (src/main.c) fixes THAT channel and drops the crash rate (8/8 -> 7/8
 on one set), but a second corruption channel remains and is the primary cause.
 
-## Fix directions
+## Why ASan is silent (2026-07-27)
 
-Find the remaining process-global refine state that survives `cmd_build` and
-holds per-compile-arena pointers (candidates: any static cache in
-`refine_collect.c` / `refine_solver.c`, the VC/UF interning, or a global reused
-across the elaborator's per-file `Elab`). A reliable repro under a fresh ASan
-build with `ASAN_OPTIONS=detect_stack_use_after_return=1` and arena poisoning
-would localize it. Until then, do not compile multiple refined files in one
-process: run each refined test as its own `tur run`/`tur check` invocation.
+The compiler allocates through a bump `Arena` that ASan does not instrument at
+sub-allocation granularity. Two effects hide the corruption:
+
+- `arena_reset` "poisons" reclaimed bytes with a plain `memset(0xDE)` (Debug),
+  which reads back as still-valid garbage, not an ASan trap.
+- `arena_free` frees slabs via `malloc` free, so compile 2's `arena_init` often
+  gets the SAME addresses. A global still holding a compile-1 arena pointer then
+  aliases compile-2's VALID data -- ASan cannot flag it, and the eventual crash
+  is wherever that aliased memory is later misused, never where the stale
+  pointer lives. Hence: nondeterministic, backtrace-useless, ASan-silent.
+
+## Diagnosis status / fix directions
+
+- **One channel fixed:** `cmd_build` did not call `refine_discharge_reset()`; the
+  global refine memo (`g_memo`) kept VC pointers into the freed per-compile
+  arena. `cmd_build` now resets it (drops the crash rate, 8/8 -> 7/8 on one set).
+- **Searched, not yet found:** there is no obvious un-reset global module/import
+  cache (`elab_module.c`/`elab_toplevel.c`/`pkg.c` have none), and the only refine
+  globals are `g_stats`/`g_memo` (both reset). The remaining channel is
+  import-gated (the compiler-repo non-import 2-refined case never crashes) and
+  survives the memo reset, so it is a DIFFERENT process-global holding a
+  cross-compile arena pointer -- candidate areas: cross-module binding/`Elab`
+  resolution reachable from the refine crossing path, or VC/UF interning.
+- **The right next step is tooling, not more blind poking.** Build the
+  ASan-aware arena poisoning in
+  [`docs/upcoming/arena-debug-poisoning-plan.md`](../upcoming/arena-debug-poisoning-plan.md)
+  and run this repro under it: `__asan_poison_memory_region` on reset/free plus a
+  no-address-reuse debug mode turns the silent alias into a loud ASan report AT
+  the stale deref, whose backtrace names the offending global. Then reset/clear
+  it per `cmd_build` like the memo.
+
+Until fixed: do not compile multiple refined files in one process. Run each
+refined test as its own `tur run`/`tur check` invocation.
 
 ## Consequence
 

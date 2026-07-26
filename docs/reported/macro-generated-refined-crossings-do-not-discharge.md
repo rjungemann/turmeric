@@ -42,21 +42,30 @@ crossing is the USER's form and retains its source span --
 above are different: the crossing/guard are RECONSTRUCTED by the quasiquote
 template (`(get! ~w ~e)`, `(alive? ~w ~e)`), not spliced from the user.
 
-## Root cause (direction)
+## Root cause (traced)
 
 Two channels, both in the crossing path-condition collector (`elab_fns.c`):
 
-1. **Macro-generated CROSSING not matched** ("generates only the read" fails,
-   with a hand-written guard). `rt_push_cs_path_conds` finds the crossing in the
-   caller body via `rt_form_occurrences` using `rt_form_ident` (pointer OR
-   source `Span` + head + arity). A `~@body`-spliced user crossing keeps its
-   source span; a template-GENERATED crossing gets a synthesized/macro-def span
-   that differs between the registered `cs->call_form` and the captured
-   `cs->caller_body` copy, so occurrences is 0 and the guard is dropped.
+1. **Macro-generated CROSSING is absent from the caller body** ("generates only
+   the read" fails, with a hand-written guard). Instrumented, the generated
+   crossing reports `rt_form_occurrences(caller_body, call_form) == 0`
+   (`[push] call='get!' ... occ=0`) -- so `rt_push_cs_path_conds` declines before
+   collecting any guard. Zero, not a span mismatch: the `call_form` (the
+   post-expansion `(get! w e0)`) simply does not appear in `cs->caller_body` at
+   all. This is consistent with the caller body being the SOURCE defn body (the
+   macro call `(do-read w e0)` unexpanded): a `~@body`-spliced USER crossing IS
+   present in the source (inside the macro call's arguments, found by the
+   generic walk), but a template-GENERATED crossing exists only after expansion,
+   so the source walk never reaches it. `rt_form_ident`'s span fallback cannot
+   help -- there is no node to match. Fix candidates: walk the POST-expansion
+   body for path conditions (at the cost of re-exposing the copied-crossing case
+   `rt_form_ident` was added for), or expand macro calls encountered during the
+   path walk.
 2. **Macro-generated GUARD's measure not matched** ("generates only the guard"
-   fails, with a hand-written read). The generated guard's `alive?` may carry a
-   hygiene mark, so it does not match the refinement predicate's `alive?` by
-   name when the encoder tests congruence.
+   fails, with a hand-written read). Here the crossing IS in the source, so it is
+   found; the generated guard's `alive?` likely carries a hygiene mark, so it
+   does not match the refinement predicate's `alive?` by name when the encoder
+   tests congruence. (Not yet instrumented; the channel-1 evidence is direct.)
 
 ## Fix directions
 
