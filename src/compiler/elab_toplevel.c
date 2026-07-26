@@ -742,17 +742,17 @@ typedef struct {
 static const Symbol *load_path_key(SymbolTable *st, const char *path,
                                    const char *stdlib_dir) {
     char resolved[4096];
-    if (realpath(path, resolved) != NULL)
-        return intern_cstr(st, resolved);
-    /* A cwd-relative `stdlib/<rest>` load does not resolve via realpath() when
-     * the build runs from a directory other than the repo root -- e.g. the REPL
-     * builds a spice from the project's cwd (spice_loader.c).  Canonicalize it
-     * through the resolved stdlib dir (the same fallback the read side uses at
-     * the elab_read_file recovery below) so its dedup key matches the ABSOLUTE
-     * key the auto-load prefix seeded (load_path_key(sf->path) over the absolute
-     * stdlib path).  Without this, map.tur's `(load "stdlib/hamt.tur")` misses
-     * the already-auto-loaded hamt and re-splices it -- a
-     * "'tur_hamt_new' is already defined" collision that is purely cwd-dependent.
+    /* A `stdlib/<rest>` load MEANS "the stdlib's <rest>", which is the file the
+     * auto-load prefix already spliced from `stdlib_dir` (`resolve_stdlib_root`).
+     * Canonicalize it through `stdlib_dir` FIRST -- before the cwd-relative
+     * realpath below -- so its dedup key matches the auto-load seed regardless
+     * of where the build is invoked.  This is load-bearing when the two disagree:
+     * running from a checkout root makes `realpath("stdlib/hamt.tur")` succeed as
+     * the CWD copy while the auto-load resolved `stdlib_dir` to a *different*
+     * stdlib (e.g. an installed one on `TUR_STDLIB_DIR`), so the cwd key misses
+     * the seeded key and map.tur's `(load "stdlib/hamt.tur")` re-splices an
+     * already-auto-loaded hamt -- a "'tur_hamt_new' is already defined" collision
+     * that only reproduces off a checkout root and from a bare subprocess.
      * The stdlib dir already ends in ".../stdlib", so drop the leading
      * "stdlib/" component to avoid ".../stdlib/stdlib/...". */
     if (stdlib_dir && strncmp(path, "stdlib/", 7) == 0) {
@@ -761,6 +761,8 @@ static const Symbol *load_path_key(SymbolTable *st, const char *path,
         if (an > 0 && (size_t)an < sizeof(alt) && realpath(alt, resolved) != NULL)
             return intern_cstr(st, resolved);
     }
+    if (realpath(path, resolved) != NULL)
+        return intern_cstr(st, resolved);
     return intern_cstr(st, path);
 }
 
