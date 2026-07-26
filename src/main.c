@@ -2307,6 +2307,12 @@ static int cmd_build(const char *input, const char *out_path,
                      const char *target,
                      const char **reader_macro_paths,
                      int n_reader_macro_paths) {
+    /* RT3: reset per-compile refinement state, like the check/run/emit-c entry
+     * points. The memo caches VC pointers into the per-compile arena; a process
+     * that builds >1 file (`tur test`, LSP) otherwise keeps stale pointers and
+     * memo_lookup dereferences them on a fingerprint collision. Partial fix for
+     * the strict-refine multi-compile crash (see docs/reported). */
+    refine_discharge_reset();
     /* DEDUP-4b: `tur` links this output, so the rc<T>/GC runtime may come
      * from the archive rather than being replicated into the preamble. */
     g_emit_for_link = true;

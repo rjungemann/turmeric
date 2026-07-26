@@ -338,20 +338,44 @@ expected and fails to elaborate.
 > guarantee needs a language feature (module-private construction / a `::`-sealed
 > newtype). Filed as `docs/reported/frozen-region-aliasing-via-coercing-cast.md`.
 >
-> **Update 2026-07-26 -- (a) done: `tur test` gained the directives, RE1 tests
-> auto-run.** `tur test` now reads two leading-comment directives:
-> `;; tur-test-flags: --strict-refine` (a per-test strict compile, so an unproven
-> crossing is a hard error not a warning -- which ENFORCES the proof) and
-> `;; tur-test-expect-error: TUR-W0372` (the test must fail to compile and name
-> the diagnostic; the run phase is skipped). The four RE1 tests were made flat in
-> `spices/ecs/tests/` (so the CI's `tur test tests` picks them up without a
-> subdir-descent change) and carry the directives; `tur test` reports **4 passed,
-> 0 failed** -- the two positives enforce `1 proven`, the two negatives are
-> checked `TUR-W0372` expect-error tests. Compiler suite 2369/0.
+> **Update 2026-07-26 -- (a) tooling built, but auto-running BLOCKED by a
+> compiler bug; (c) pattern proven.**
 >
-> **Remaining for RE1:** (c) `for-each` bodies carrying the refinement (item 2
-> below), the highest-value version, still deferred -- it splices the refinement
-> into the loop expansion rather than a single accessor call.
+> **(a)** `tur test` gained two leading-comment directives --
+> `;; tur-test-flags: --strict-refine` (per-test strict compile, so an unproven
+> crossing is a hard error, which ENFORCES the proof) and
+> `;; tur-test-expect-error: TUR-W0372` (must fail to compile and name the
+> diagnostic; run phase skipped). The directive feature works and is general (a
+> reusable `tur test` improvement). BUT auto-running the *refined* tests through
+> it surfaced a serious pre-existing compiler bug: **compiling multiple refined
+> files in one process (`tur test <dir>`, LSP/worker) corrupts memory and
+> segfaults nondeterministically** (6-8/8 crashes; ASan-silent -> arena/stack, not
+> heap). A partial fix landed (`cmd_build` now calls `refine_discharge_reset()` --
+> the memo held stale per-compile-arena VC pointers), but a second channel
+> remains. Filed as `docs/reported/refined-multi-compile-memory-corruption.md`.
+> So the RE1 refined tests are kept in `spices/ecs/tests/refined/` (a subdir
+> `tur test tests` does not descend into) and verified **individually** (each
+> passes on its own `tur run`/`tur check`), NOT auto-run. Auto-running is blocked
+> until the corruption is fixed (then: run each via its own invocation, or move
+> them flat).
+>
+> **(c)** The `for-each` aliveness refinement is PROVEN. A refined LOOP whose
+> body's `rgworld-get-x!` discharges per-entity works today
+> (`tests/refined/refined-loop-alive.tur`: 1 proven, runs -> 40, correctly skips
+> a despawned entity). The mechanism: the `while`+`set!` form is blocked -- the
+> loop counter's `set!` trips the whole-body `mentions_set` decline in the
+> crossing path-cond collector (the C3-adjacent gap) -- so it uses the sound
+> shape that works: TAIL RECURSION (TCO'd; verified 5M calls) + a re-borrow of
+> `w` inside the recursive helper (so `alive?` is congruent there) + the `alive?`
+> guard. An ergonomic `for-each-alive` macro is NOT yet shippable: turmeric has
+> no `loop`/`recur` or self-recursive `let`-`fn`, and a macro cannot emit a
+> top-level recursive helper -- so the ergonomic while-based `for-each` needs the
+> compiler order-aware-`set!` fix (relax the whole-body `mentions_set` gate to
+> only decline on a `set!` that executes BEFORE the crossing on the path).
+>
+> **Remaining for RE1:** fix the refined-multi-compile corruption (unblocks
+> auto-running all refined tests); the order-aware-`set!` fix (unblocks the
+> ergonomic while-based `for-each-alive`).
 
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
