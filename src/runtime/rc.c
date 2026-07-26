@@ -215,11 +215,16 @@ void *tur_ref_from_rc(RcControlBlock *cb) {
 /* Free a control block and its value.
  * Called when both strong_count and weak_count reach 0.
  */
-void rc_cb_free(RcControlBlock *cb) {
-    if (!cb) return;
-
-    /* Unregister from GC tracking */
-    gc_unregister_block(cb);
+/* Run the block's value teardown exactly once and mark it done.
+ *
+ * Split out of rc_cb_free (which used to be the only caller) so the zombie
+ * transition in rc_strong_decrement can reach it too: a block whose strong
+ * count hits 0 while a weak<T> still observes it must release its VALUE
+ * immediately and keep only the control block alive.  Every caller nulls
+ * `value` afterwards, so a later rc_cb_free / gc sweep skips it rather than
+ * double-dropping -- the same discipline gc.c already uses (gc.c:476, 655). */
+static void rc_release_value(RcControlBlock *cb) {
+    if (!cb || !cb->value) return;
 
     /* F1-2-4: smart drop for RCK_EXISTENTIAL blocks whose payload is
      * itself an rc reference (RCEXP_RC).  The packed value's first 8
@@ -230,12 +235,11 @@ void rc_cb_free(RcControlBlock *cb) {
      * not leak when the outer existential is reclaimed.
      *
      * F1-2-5: the drop dispatch lives here rather than in
-     * tur_existential_drop because rc_cb_free is the single
-     * teardown entry point that is guaranteed to run once per
-     * block; the per-program drop hook in emit_module.c stays a
-     * no-op (preserving the original layout-free interface). */
-    if (cb->value && cb->reserved[0] == RCK_EXISTENTIAL &&
-            cb->reserved[1] == RCEXP_RC) {
+     * tur_existential_drop because this is the single value-teardown
+     * entry point that is guaranteed to run once per block; the
+     * per-program drop hook in emit_module.c stays a no-op (preserving
+     * the original layout-free interface). */
+    if (cb->reserved[0] == RCK_EXISTENTIAL && cb->reserved[1] == RCEXP_RC) {
         int64_t raw = *(const int64_t *)cb->value;
         RcControlBlock *inner = (RcControlBlock *)(intptr_t)raw;
         if (inner) {
@@ -243,10 +247,19 @@ void rc_cb_free(RcControlBlock *cb) {
         }
     }
 
-    /* Call the drop function on the value */
-    if (cb->value) {
-        cb->drop_fn(cb->value);
-    }
+    if (cb->drop_fn) cb->drop_fn(cb->value);
+    cb->value = NULL;
+}
+
+void rc_cb_free(RcControlBlock *cb) {
+    if (!cb) return;
+
+    /* Unregister from GC tracking */
+    gc_unregister_block(cb);
+
+    /* Call the drop function on the value (no-op if already released by the
+     * zombie transition in rc_strong_decrement, or by a gc sweep). */
+    rc_release_value(cb);
 
     /* Free the entire block (header + value) */
     free(cb);
@@ -325,11 +338,26 @@ bool rc_strong_decrement(RcControlBlock *cb) {
     if (cb->strong_count == 0) {
         /* Strong count reached 0 */
         if (cb->weak_count > 0) {
-            /* Zombie state: value is logically freed but memory still valid
-             * for weak pointers to check. Don't free yet. */
+            /* Zombie state: the VALUE dies now; only the control block lives
+             * on, so a weak observer can be told "gone" instead of dangling.
+             *
+             * stdlib-weak-ref-audit WR1: this used to skip the value teardown
+             * entirely and defer it to rc_weak_decrement, which deadlocks the
+             * one shape weak<T> exists for.  In Rust's parent/child break the
+             * surviving weak lives INSIDE the parent's own value (the child
+             * holds weak<Parent>, and the parent strongly owns the child), so
+             * "wait for the last weak before dropping the value" waits on a
+             * weak that only the value's own drop glue can release.  Neither
+             * ever runs: parent's value is never dropped, so its rc<Child> is
+             * never released, so the child's weak<Parent> is never dropped.
+             * Measured at 217 bytes leaked per parent/child pair, with the
+             * collector off and nothing for it to collect.  Dropping the value
+             * here -- exactly what Rust's Rc does at strong 0 -- is what makes
+             * the pattern reclaim promptly and completely. */
+            rc_release_value(cb);
             /* Phase 10: Notify GC for cycle collection */
             gc_on_strong_decrement(cb);
-            return false;  /* Value not yet freed */
+            return false;  /* Control block not yet freed */
         } else {
             /* Phase 9: Queue for deferred freeing to avoid deep recursion */
             rc_free_queue_push(cb);

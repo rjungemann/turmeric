@@ -1286,6 +1286,22 @@ static inline Type type_weak(TypeKind inner) {
     return t;
 }
 
+/* weak<ADT> with the ADT def carried alongside, the weak mirror of
+ * type_rc_adt.  A `weak<Name>` field over a user aggregate needs this for the
+ * same reason the rc form does: without the inner def the field's type is
+ * `weak<?>` while `(weak r)` over an `rc<Name>` produces `weak<ADT>`, so the
+ * back-edge of a parent/child graph -- the one shape weak<T> exists for --
+ * failed to type-check at the `set!`. */
+static inline Type type_weak_adt(struct AdtDef *def) {
+    Type t = {0};
+    t.kind = TY_WEAK;
+    t.copy_kind = CK_MOVE;
+    t.as.rc.inner = TY_ADT;
+    t.as.rc.adt_def = def;
+    t.n_lifetimes = 0;
+    return t;
+}
+
 /* Construct a function type from TypeKinds.  arity is unbounded (uint32_t); the
  * per-arg kind/flag arrays are allocated out of line from the global type arena
  * (tur_fn_args_alloc), so a function type can describe any number of parameters

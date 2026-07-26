@@ -284,9 +284,15 @@ cycle, and the collector cannot reclaim a live strong cycle today
 (see the Known gaps below). To keep the property from regressing silently, the
 `tur_stdlib_no_rc_cycles` ctest guard (`tests/check-stdlib-no-rc-cycles.sh`)
 fails if a stdlib type annotation introduces `rc<...>` without an explicit
-`rc-cycle-ok` review marker. The plan to surface a proper `weak<T>` escape-hatch
-API in `rc.tur` -- for the day shared ownership *is* wanted -- is
-`docs/upcoming/v1/stdlib-weak-ref-audit-plan.md`.
+`rc-cycle-ok` review marker.
+
+The escape hatch for the day shared ownership *is* wanted now exists in the
+library: [`stdlib/weak.tur`](../../stdlib/weak.tur) provides `rc/downgrade`,
+`weak/upgrade`, `weak/unwrap`, `weak/alive?`, and `weak/drop` -- Rust's
+`Rc::downgrade` / `Weak::upgrade` pairing, wrapping intrinsics that already
+existed. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself still uses
+none of it. For when to reach for which ownership strategy in the first place,
+see [ownership-guide.md](ownership-guide.md).
 
 ### The one reviewed exception: `stdlib/rcchain.tur`
 
