@@ -71,8 +71,59 @@ something consumes its result at a typed position, so erroring would break code
 that compiles today. The call-site error still fires for anyone who does consume
 it; the warning just puts the diagnosis at the cause.
 
-What remains is the underlying limitation itself, which is unchanged and still
-needs producer-side work to actually lift.
+### Lifting it for real -- measured, and a named next step
+
+"Producer-side work" was too vague to act on, so it was prototyped. **The route
+works**, and the machinery already exists; what is missing is one predicate.
+
+Two changes, both behind a temporary env gate:
+
+1. `elab_typeclasses.c`: commit the grounded `result_type` for a by-value
+   aggregate too.
+2. `emit_expr.c`: have `fn_body_tail_byvalue_carrier_type` report the aggregate
+   for a dispatch call whose callee `body_is_inline_c`, so the **existing**
+   carrier -> by-value deref bridge (`init_carrier_to_byval`, the CONV-S1 seam-4
+   path) fires at the binding.
+
+Result on the `Box` repro: correct output, via exactly the intended bridge --
+
+    tur_adt_Box__int m_1314 = (*(tur_adt_Box__int *)(intptr_t)(__ps_158));
+
+That works because a `(Box int)` argument is heap-spilled to reach the dict's
+int64 slot, so the carrier the inline-C body returns really is a pointer to the
+aggregate. Nothing new has to be generated: no wrapper, no re-specialized
+inline-C body, no second ABI.
+
+**Where the prototype is still wrong.** Suite: 2377 passed, 4 failed. One is this
+report's own warning fixture (the shape now works, so its downstream error
+disappears) and one is the benign `van-laarhoven-lens-wide-compose` typedef
+reorder. The other two are real:
+
+- `inline-c-struct-return-cstr-params` -- `error: aggregate value used where an
+  integer was expected`
+- `io-stdlib-roundtrip` -- same error
+
+Both fail the OPPOSITE way. The crude gate (`body_is_inline_c` + result is a
+non-`:heap` aggregate) also catches inline-C functions whose result genuinely
+returns BY VALUE, and the bridge then derefs something that was never a pointer.
+That is the hazard the existing comment in `fn_body_tail_byvalue_carrier_type`
+already names -- "a NON-parametric concrete record result (`Pos`) instead returns
+BY VALUE (typed_byval_adt fires), so it must NOT be treated as a carrier producer
+here -- otherwise the consume-side bridge double-derefs an aggregate (the
+typeclass-fundep-collect regression)".
+
+**So the one missing piece is a shared predicate.** The gate must ask the same
+question `emit_fns.c` asks when it decides an inline-C body's C return type --
+"does `typed_byval_adt` fire for this result?" -- instead of inferring it from
+the type's shape. Today that decision lives inline in the signature emitter and
+has no callable form; factoring it out and calling it from both places is the
+work. With that, the two regressions above should go, because both are cases
+where `typed_byval_adt` DOES fire and the gate would correctly decline.
+
+That is a contained, testable change -- not the open-ended audit the original
+fix direction 1 implied -- but it does touch the predicate that decides every
+inline-C return type, so it wants its own pass and its own fixtures rather than
+riding along here.
 
 The original report follows; its "Root cause" section is superseded by the above.
 
@@ -165,7 +216,10 @@ separately. A by-value aggregate result committed while the producer returns a
 carrier is the carrier-vs-by-value mismatch the surrounding comments attribute to
 several silent miscompiles (the Alternative `<|>` selection body reading as 0).
 
-## Fix directions
+## Fix directions -- SUPERSEDED, see "Lifting it for real" above
+
+Kept for the record; all three were tried or ruled out, and the live plan is the
+shared-`typed_byval_adt`-predicate step described in the Update.
 
 1. **Separate the two decisions.** Commit the grounded `result_type` regardless
    of the body, and keep `m7_byvalue_grounded` (which drives the by-value spec
@@ -173,12 +227,20 @@ several silent miscompiles (the Alternative `<|>` selection body reading as 0).
    entirely in whether any consumer infers *representation* from the call's
    result type -- the existing comments say some do, so this needs auditing
    rather than a one-line change.
+   -- Measured: insufficient on its own (`error: invalid initializer`); it needs
+   the consume-side deref bridge alongside it.
 2. **Or mint a by-value spec for inline-C bodies too**, where the body's declared
    C signature can be re-emitted at the specialized type. Probably only viable
    when the inline-C body is representation-agnostic.
+   -- Ruled out: an inline-C body is written against exactly one C signature.
+   Also unnecessary, since the existing carrier -> by-value bridge covers it.
 3. **Or extend the carrier-safe arm** case by case, as the pointer-family fix
    did, for each result shape whose by-value representation provably equals the
    carrier. Cheapest and safest per case; does not converge.
+   -- This is the route actually taken so far: pointer-family
+   (`docs/archive/hkt-fmap-result-is-not-droppable.md`) and `:heap`
+   (`tests/fixtures/hkt-inline-c-heap-result-type`). It has now run out of
+   carrier-width classes, which is why only the by-value aggregate remains.
 
 A fixture pair (the two `Box` bodies above, asserting the same grounded result
 type) would pin whichever route is taken.
