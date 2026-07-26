@@ -1,7 +1,8 @@
 ---
-status: open
+status: resolved
 severity: high
 discovered: 2026-07-26
+resolved: 2026-07-26
 area: compiler (HKT by-value instance bodies, emit)
 ---
 
@@ -24,6 +25,51 @@ while the dispatch consumer reads that value as the handle itself:
 Everything downstream then operates on a pointer-to-pointer as if it were a
 control block. No diagnostic, no warning -- it compiles clean and produces
 garbage.
+
+## Resolution (2026-07-26)
+
+Fixed via fix direction 1 -- stop boxing, in one place.
+
+The culprit is the `inst_method_carrier_spill` return path in
+`src/compiler/emit_fns.c`. It exists for a real reason: the dispatch dict's slot
+is a uniform `int64_t (*)(...)`, so an instance method returning a **by-value
+aggregate** has to spill it to the heap and hand back the pointer. It was firing
+for *any* carrier-ABI result, including one that is already carrier-width.
+
+The same double-box had already been found and fixed one branch earlier, for an
+`int64_t` spill type -- the comment there describes the `(Result _ E)` fmap
+returning 0 for 42, which is the identical failure. A pointer is carrier-width
+for exactly the same reason, so the guard now covers both:
+
+    bool spill_ty_is_ptr = struct_cty && strchr(struct_cty, '*') != NULL;
+    if (struct_cty && (strcmp(struct_cty, "int64_t") == 0 || spill_ty_is_ptr))
+        buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+
+The general pointer rule rather than an rc-specific one, because the very next
+branch already treats a TY_RC / TY_WEAK / TY_REF / TY_LREF body returned through
+the int64 carrier this exact way -- a bare `(int64_t)(intptr_t)` bridge. The
+spill was intercepting a case that was already handled correctly downstream.
+Suite: 2371 passed, 0 failed, zero snapshot churn.
+
+`stdlib/rc.tur`'s `Functor [rc]` is now ordinary Turmeric:
+
+    (definstance Functor [rc]
+      (fmap [container g] (rc/of (g (rc-payload container)))))
+
+The suspected root cause below was close but not exact: the disagreement is not
+between `m7_byvalue_grounded` and the collapsed result type, it is the spill
+firing on a width test it never made. The `rc_cb_alloc(0, 36, ...)` observation
+was a red herring -- 36 is the element tyvar's ordinal, which only means the
+block is conservatively marked `may_contain_cycles`; it is not part of this bug
+and is unchanged by the fix.
+
+Pinned by `tests/fixtures/hkt-instance-rc-construct-result`, which asserts values
+and counts rather than "it compiles" -- the broken form compiled clean with no
+warning. Verified to genuinely catch the regression: with the fix reverted it
+reports a garbage strong-count, a fold of 0, and 752768 bytes leaked over 5000
+iterations.
+
+The original report follows for the record.
 
 ## Repro
 

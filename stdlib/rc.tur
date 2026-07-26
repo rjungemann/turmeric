@@ -48,44 +48,17 @@
 ;;; Functor [rc] -- Functor instance for rc<T>.
 ;;;
 ;;; Since: Phase HKT H3
-;; The body stays inline-C.  The pure-Turmeric spelling
-;; `(fmap [container g] (rc/of (g (rc-payload container))))` type-checks and is
-;; obviously what this should be, but it MISCOMPILES: constructing a fresh rc as
-;; the result of a by-value-constructible HKT instance body heap-boxes the
-;; control-block pointer (`__tur_ret_p = malloc(...); *__tur_ret_p = cb;`) and
-;; the dispatch consumer reads that box as the handle itself, one indirection
-;; too many.  Measured: strong-count reads as garbage and the fold returns 0.
-;; See docs/reported/hkt-rc-construct-body-boxes-handle.md.
-;;
-;; Foldable's bodies below ARE pure Turmeric -- they only READ the receiver, so
-;; they never hit the construction path.
+;; Ordinary Turmeric: read the payload, apply g, wrap the result.  This spelling
+;; briefly shipped as inline-C because it MISCOMPILED -- a body that constructs
+;; an rc had its control-block pointer heap-boxed on the way out
+;; (`__tur_ret_p = malloc(...); *__tur_ret_p = cb;`) while the dispatch consumer
+;; read that cell as the handle, one indirection too many.  Fixed by not boxing
+;; a value that is already carrier-width; see
+;; docs/archive/hkt-rc-construct-body-boxes-handle.md and
+;; tests/fixtures/hkt-instance-rc-construct-result.
 
 (definstance Functor [rc]
-  (fmap [container fn]
-    ```c
-    /* rc<T> is an RcControlBlock * whose `value` points at the stored payload
-     * (an int64_t carrier in v1).  Read it, apply fn, and box the result in a
-     * fresh rc -- the same shape `rc/of` emits: rc_cb_alloc with a TY_INT (3)
-     * value type plus a separately malloc'd slot, which the block's default
-     * drop_fn frees.
-     *
-     * There is deliberately no clone/drop pair around the read.  The earlier
-     * version cloned the block only to read one field and dropped it again --
-     * a no-op with two refcount writes.  `container` is borrowed for the
-     * duration of the call, so its block cannot go away underneath us.
-     *
-     * Note: v1 assumes the payload is a plain int64_t carrier. */
-    RcControlBlock *cb = (RcControlBlock *)(intptr_t)container;
-    if (!cb || !cb->value) return 0;
-    int64_t value = *(int64_t *)rc_get_value(cb);
-    int64_t new_value = fn.fn(fn.env, value);
-    int64_t *slot = (int64_t *)malloc(sizeof(int64_t));
-    if (!slot) return 0;
-    *slot = new_value;
-    RcControlBlock *out = rc_cb_alloc(0, 3 /* TY_INT */, NULL);
-    out->value = slot;
-    return (int64_t)(intptr_t)out;
-    ```))
+  (fmap [container g] (rc/of (g (rc-payload container)))))
 ;;; SINCE: Phase HKT §6
 ;; Foldable class stub.  Unlike Functor/Clone (auto-loaded via
 ;; typeclass-functor.tur / typeclass-clone.tur), Foldable is not auto-loaded,

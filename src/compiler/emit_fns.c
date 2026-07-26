@@ -3891,8 +3891,30 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 if (body_cty && strcmp(body_cty, "int64_t") != 0)
                     struct_cty = body_cty;
             }
+            /* hkt-rc-construct-body-boxes-handle: the spill exists to pass a
+             * BY-VALUE aggregate through the dict's uniform `int64_t` slot.  A
+             * value that is already carrier-width needs no box, and boxing one
+             * anyway is a silent miscompile -- the consumer reads the
+             * pointer-to-value as the value.
+             *
+             * Two shapes qualify.  The int64 carrier itself was already handled
+             * (see below).  A POINTER is the other: an instance method whose
+             * result is a pointer-family handle -- `Functor [rc]`'s `(f b)`
+             * grounding to `rc<int>`, i.e. `RcControlBlock *` -- returns a
+             * pointer that fits the carrier exactly.  Boxing it emitted
+             * `RcControlBlock **__tur_ret_p = malloc(...)` and the dispatch
+             * consumer then cast that cell straight to `RcControlBlock *`, so
+             * `rc/strong-count` read a malloc header as a refcount and the value
+             * was never reachable (measured: garbage count, fold 0, 752768 bytes
+             * leaked over 5000 iterations).
+             *
+             * The next branch down already treats a TY_RC/TY_WEAK/TY_REF/TY_LREF
+             * body returned through the int64 carrier exactly this way -- a bare
+             * `(int64_t)(intptr_t)` bridge -- so this only stops the spill from
+             * intercepting a case that was already handled correctly downstream. */
+            bool spill_ty_is_ptr = struct_cty && strchr(struct_cty, '*') != NULL;
             if (struct_cty &&
-                strcmp(struct_cty, "int64_t") == 0) {
+                (strcmp(struct_cty, "int64_t") == 0 || spill_ty_is_ptr)) {
                 /* M7: the body already produced the carrier int64 handle --
                  * e.g. a partial-application `(Result _ E)` instance whose
                  * pure-Turmeric body lowered to the carrier `ok`/`err` (the
