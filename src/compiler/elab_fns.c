@@ -46,6 +46,12 @@ static bool fn_result_kind_is_scalar_copy(TypeKind k) {
 VCSort rt_sort_of_kind(TypeKind k) {
     switch (k) {
         case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return VS_REAL;
+        /* RM-B1: a bool-typed value is a proposition, not an integer. Before
+         * this arm every kind but the floats mapped to VS_INT, so a
+         * bool-returning measure declared an Int-sorted term where the VC
+         * builder demands a Bool -- the obligation never reached the solver.
+         * See refine-predicate-measures-plan.md. */
+        case TY_BOOL: return VS_BOOL;
         default: return VS_INT;
     }
 }
@@ -531,6 +537,9 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
         out->param_names = NULL;
         out->n_params    = 0;
         out->pure        = true;
+        /* RM-B1: a constructor yields its ADT/struct/opaque type, which is
+         * carrier-sorted (VS_INT).  It is never a proposition. */
+        out->ret_sort    = VS_INT;
         return true;
     }
 
@@ -566,6 +575,11 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
             out->param_names = NULL;
             out->n_params    = 0;
             out->pure        = false;
+            /* RM-B1: a method call's result sort is its declared return type,
+             * so a `bool`-returning class method reads as a predicate atom.
+             * `return_type` is peeled to its base kind, which is what
+             * `rt_sort_of_kind` wants. */
+            out->ret_sort    = rt_sort_of_kind(m->return_type.kind);
             /* RT4: the CLASS's result refinement propagates, even though which
              * instance runs is unknown here -- because it is the one promise
              * true of EVERY instance.  Result variance is what buys that: an
@@ -603,6 +617,14 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
     out->ret_var     = b->refine_return_var;
     out->param_names = b->refine_param_names;
     out->n_params    = b->n_refine_params;
+
+    /* RM-B1: a function binding carries its result kind on the fn type; map it
+     * to the VC sort so a measure declares its true result sort.  A binding
+     * that is not fn-typed (a plain value used as a nullary measure) has no
+     * arrow result to read -- fall back to the carrier sort. */
+    out->ret_sort = (b->type.kind == TY_FN)
+                        ? rt_sort_of_kind(b->type.as.fn.result_kind)
+                        : VS_INT;
 
     /* PURITY, which decides whether two occurrences of this call may be
      * modelled as the same value.  See rt_binding_is_pure above: the declared

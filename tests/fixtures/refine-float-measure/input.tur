@@ -1,0 +1,21 @@
+;; C1 / RM-B1 (refine-predicate-measures-plan): a float-returning measure is
+;; Real-sorted, not mis-declared Int.  The probe uses 3.25 -- a non-integer
+;; literal, per the repo float rule -- so a sort/truncation divergence between
+;; Int and Real would actually show rather than hide behind an integer-valued
+;; float.  Before RM-B1 `norm` was declared with an Int result and compared
+;; against a Real literal; it now declares Real and discharges through the
+;; if-guard at the call site.
+(defn norm [v : int] #fx{} : float
+  1.5)
+
+(defn use-it [v : int i : #refine{ x : int | (< (norm v) 3.25) }] : int
+  i)
+
+(defn caller [v : int] : int
+  (if (< (norm v) 3.25)
+    (use-it v 0)
+    0))
+
+(defn main [] : int
+  (println (caller 1))
+  0)

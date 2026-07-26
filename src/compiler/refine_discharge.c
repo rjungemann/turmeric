@@ -505,6 +505,17 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
 
     if (!vc) {
         g_stats.unknown++;
+        /* RM-B3: an obligation that fails to ENCODE never reaches the solver,
+         * yet reports as `unknown` at the CLI exactly like one the solver could
+         * not decide -- and for a runtime-guarded crossing the TUR-W0372 below
+         * is suppressed, so its reason reaches nobody.  Surface it under
+         * TUR_REFINE_STATS=1 (an encoding gap is a completeness note, not a
+         * diagnostic, so it is not printed by default).  This is what turns a
+         * fragment gap like the bool-measure sort bug into a one-line find
+         * instead of a source read. */
+        if (stats_enabled())
+            fprintf(stderr, "refine: dropped before solver -- %s (%s)\n",
+                    what, reason ? reason : "outside the supported fragment");
         if (g_strict_refine || !ob->runtime_guarded)
             diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
                                 TUR_W0372_REFINE_UNKNOWN,

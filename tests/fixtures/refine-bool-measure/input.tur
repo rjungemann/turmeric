@@ -1,0 +1,20 @@
+;; C1 / RM-B1 (refine-predicate-measures-plan): a bool-returning function is
+;; usable as a predicate atom.  Before RM-B1 a measure was always declared
+;; Int-sorted, so the VC builder rejected the goal ("predicate does not denote
+;; a proposition") and the obligation was dropped before the solver -- Unknown,
+;; which under --strict-refine is a hard error.  It now proves through the
+;; if-guard at the call site: the guard `(alive? w w)` is recovered as a path
+;; condition and discharges the crossing's identical `(alive? w x)`[x:=w].
+(defn alive? [w : int e : int] #fx{} : bool (= w e))
+
+(defn use-it [w : int e : #refine{ x : int | (alive? w x) }] : int
+  e)
+
+(defn caller [w : int] : int
+  (if (alive? w w)
+    (use-it w w)
+    0))
+
+(defn main [] : int
+  (println (caller 3))
+  0)

@@ -280,6 +280,12 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     RefineFnInfo info;
     bool pure = enc_callee_is_pure(E, head->as.sym->name, &info);
 
+    /* RM-B1: declare the measure with the sort of its callee's result rather
+     * than a hard-coded VS_INT.  `enc_callee_is_pure` fills `info.ret_sort`
+     * from the resolved callee's return type; an abstract (unresolved) measure
+     * leaves it at VS_INT, its historical default. */
+    VCSort rsort = info.ret_sort;
+
     uint32_t argc = f->as.list.len - 1;
     if (argc == 0) {
         /* A nullary call is an opaque constant.  When it is not known pure,
@@ -287,7 +293,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
          * makes `(- (tick) (tick))` unprovable again. */
         const char *nm = pure ? head->as.sym->name
                               : enc_fresh_name(E, head->as.sym->name);
-        uint32_t v = vc_declare_var(E->vc, nm, VS_INT);
+        uint32_t v = vc_declare_var(E->vc, nm, rsort);
         return vc_var_ref(E->vc, v);
     }
     VCTerm **args = (VCTerm **)arena_alloc(E->vc->arena, argc * sizeof(VCTerm *));
@@ -297,7 +303,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     }
     const char *fname = pure ? head->as.sym->name
                              : enc_fresh_name(E, head->as.sym->name);
-    uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, VS_INT,
+    uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, rsort,
                                    f, /*nonlinear=*/false);
     VCTerm *app = vc_app(E->vc, fn, args, argc);
 

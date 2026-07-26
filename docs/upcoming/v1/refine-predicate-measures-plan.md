@@ -6,11 +6,60 @@ description: A measure is always declared `VS_INT`, so a `bool`-returning functi
 
 # Boolean-Sorted Measures (`RM-B`)
 
-**Status:** not started. Scoped, measured, and small.
+**Status:** RM-B0, RM-B1, RM-B3 **landed** 2026-07-26 on the `refinements`
+branch. RM-B2 (position-determined sort for *abstract* measures) and the
+fuzzer-vocabulary extension are **deferred** -- see the status block below.
 **Depends on:** [refinement-types-plan.md](refinement-types-plan.md) (RT0--RT7,
 S0--S4, all landed).
 **Feeds:** [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md)
 gap C1.
+
+> **Status 2026-07-26 -- RM-B1 landed (the C1 fix).** A `bool`-returning
+> function is now usable as a predicate atom, and a `float`-returning measure
+> is Real-sorted instead of mis-declared Int. Implementation:
+> `RefineFnInfo` gained a `ret_sort` field (`refine_collect.h`);
+> `rt_sort_of_kind` gained its `TY_BOOL -> VS_BOOL` arm (`elab_fns.c`);
+> `rt_resolve_fn` populates `ret_sort` from the resolved callee's return type
+> (fn binding / class method / constructor); and `enc_measure`
+> (`refine_collect.c`) declares the measure with that sort rather than a
+> hard-coded `VS_INT`. RM-B3 prints the drop reason under `TUR_REFINE_STATS=1`
+> (`refine_discharge.c`).
+>
+> **Soundness held (the point of the plan):** the change widens only what can
+> be *spelled*, not what is *congruent*. An IMPURE `bool` measure still gets a
+> fresh symbol per occurrence -- verified adversarially: a guard/crossing pair
+> over an inline-C `flaky?` encodes as `flaky?#0` vs `flaky?#1`, stays
+> `0 proven, 1 unknown`, and errors under `--strict-refine`. A PURE `bool`
+> measure is congruent and discharges through an `if`-guard.
+>
+> Fixtures: `tests/fixtures/refine-bool-measure` and `refine-float-measure`
+> (both `--enable=refined --strict-refine`, so they compile+run *only because*
+> the obligation proves). Full suite unchanged at 11 pre-existing failures
+> (`2350 passed`, up 2 for the new fixtures); none of the 11 are related.
+>
+> **RM-B0 finding (float case):** it MIS-SORTS rather than rejects -- `(< (norm
+> v) 3.25)` declared `norm` with an Int result and compared it to a Real
+> literal, and reported `1 proven` on a mis-sorted VC. RM-B1's result-sort fix
+> corrects it (`norm` now `... Real`). A *separate*, pre-existing coarseness
+> remains and is out of C1 scope: `refine_smtlib.c` emits every ufunc ARGUMENT
+> sort as a blanket `has_real ? Real : Int`, so a mixed int/real domain is
+> approximated. It did not cause a wrong verdict here (the functions are
+> uninterpreted); worth a separate note if a domain-sort divergence ever bites.
+>
+> **RM-B2 deferred, with rationale.** Position-determined sort for *abstract*
+> (unresolved) measures is NOT needed for the C1-for-ECS driver -- every ECS
+> predicate (`alive?`, `in-bounds?`) resolves to a `defn` in the unit and is
+> covered by RM-B1. Deferring it is *strictly sound*: an abstract `bool`
+> measure stays Int-sorted, the goal-sort check rejects it, and the obligation
+> falls back to the runtime check exactly as today. Crucially, RM-B1 alone
+> introduces NO same-name-two-sorts scenario (a resolved name has one fixed
+> sort from its return type), so the congruence hazard this plan is careful
+> about is *created by* RM-B2's position inference, not by what shipped. Land
+> RM-B2 when an abstract bool measure is actually wanted; the design below
+> stands. The fuzzer-vocabulary extension is deferred alongside it -- and
+> separately, the source fuzzer's differential is currently vacuous on this
+> branch (every generated program is `skip_invalid`: it fails to compile even
+> gate-off), so adding bool helpers buys no signal until that skew is fixed.
 
 ## The bug
 
@@ -134,25 +183,25 @@ one is small and
 
 ## Phases
 
-### RM-B0 -- Establish the float case
+### RM-B0 -- Establish the float case  [DONE: mis-sorts; fixed by RM-B1]
 
 Write the two-line probe (`(< (norm v) 1.0)` with `norm : ... : float`) and
 record whether it rejects or mis-sorts. If it mis-sorts, file it and fix it
 here; if it rejects, it is the same completeness hole as the bool case and
 rides along.
 
-### RM-B1 -- Sort from the resolved callee
+### RM-B1 -- Sort from the resolved callee  [DONE]
 
 `RefineFnInfo` gains a result sort; `rt_sort_of_kind` gains its `TY_BOOL` arm;
 `enc_measure` consults both. Covers `alive?`, `norm`, and every other measure
 whose definition is in the unit.
 
-### RM-B2 -- Position-determined sort for abstract measures
+### RM-B2 -- Position-determined sort for abstract measures  [DEFERRED -- see status block]
 
 The two-pass declaration described above, with the same-name-two-sorts
 rejection.
 
-### RM-B3 -- Surface the drop reason
+### RM-B3 -- Surface the drop reason  [DONE]
 
 `refine_vc_build`'s `out_reason` strings are computed and, for this path,
 reach nobody -- an obligation that fails to *encode* is indistinguishable at
