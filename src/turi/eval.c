@@ -9387,8 +9387,12 @@ typedef struct {
 static void promo_map_init(PromoMap *m) { m->slots = NULL; m->cap = 0; m->count = 0; }
 static void promo_map_free(PromoMap *m) { free(m->slots); m->slots = NULL; m->cap = 0; m->count = 0; }
 
+/* MurmurHash3 64-bit finalizer. Mix at a fixed 64-bit width -- a `uintptr_t`
+   here would be 32 bits on wasm32, making `>> 33` an over-wide shift (UB) and
+   truncating the multiplier. On LP64 this is bit-identical to the pointer-width
+   form. */
 static uint32_t promo_hash(const void *p) {
-    uintptr_t x = (uintptr_t)p;
+    uint64_t x = (uint64_t)(uintptr_t)p;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     return (uint32_t)x;
 }
