@@ -608,12 +608,20 @@ fixtures do.
   rather than a decrement. Pinned by `tests/fixtures/set-bang-releases-old-rc`
   and `tests/set-bang-rc-release-check.sh`.
 
-The other two are left open -- they are separate from this plan's track.
+- [rc-free-queue-drain-is-quadratic.md](../../archive/rc-free-queue-drain-is-quadratic.md)
+  -- was **medium**, now **FIXED** (archived). `rc_free_queue_drain` memmoved
+  the whole queue per pop, in both copies; it dominated the payload-zeroing
+  measurement so completely that the memset was invisible until the queue was
+  taken out of the loop. Filed as a performance cliff, but the quadratic turned
+  out to be **masking a correctness bug**: drop glue calls the drain from inside
+  the drain, so a deep cascade recursed one stack frame per link and died with
+  an ASan stack-overflow at 200k depth -- in exactly the case the queue exists
+  to prevent. A reentrancy guard closes it. 378 ms -> 0.91 ms to free 65,000
+  blocks; 2M alloc/drop pairs 11,563 ms -> 70 ms. Pinned by
+  `tests/fixtures/rc-free-queue-deep-cascade`.
 
-- [rc-free-queue-drain-is-quadratic.md](../../reported/rc-free-queue-drain-is-quadratic.md)
-  -- medium. `rc_free_queue_drain` memmoves the whole queue per pop, in both
-  copies. It dominated the payload-zeroing measurement so completely that the
-  memset was invisible until the queue was taken out of the loop.
+The last one is left open -- it is separate from this plan's track.
+
 - [rc-scalar-default-glue-invalid-free.md](../../reported/rc-scalar-default-glue-invalid-free.md)
   -- medium. `rc_cb_alloc(size, <scalar>, NULL)` gets default drop glue that
   `free()`s its own inline payload. C-API-only; codegen does not take the path.

@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "rc_free_queue.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -429,6 +430,13 @@ bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
         /* Panic occurred - set up error result */
         global_panic_jmpbuf_valid = 0;
         tur_panic_in_progress = 0;  /* panic was caught; re-enable panics */
+        /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of
+         * the middle of rc_free_queue_drain, skipping the assignment that
+         * clears its in-drain flag.  Left set, every later drain would no-op
+         * and the deferred frees would pile up forever.  The queue's contents
+         * stay consistent (freed prefix / pending tail), so only the flag is
+         * reset and the next drain resumes from where this one stopped. */
+        rc_free_queue_reset_drain_state();
 
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
