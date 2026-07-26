@@ -1,13 +1,14 @@
 # The last 7 skips in the SMT-LIB corpus reader
 
-**Status:** **item 1 landed 2026-07-26** (logic-directed numeral typing in
-`tests/unit/refine_corpus.c`, regression pair
-`qf_lra_ite_int_numerals_{unsat,sat}.smt2` sealed z3+cvc5, committed corpus
-green at 122 benchmarks / 0 soundness failures). Item 2 (the three depth-cap
-skips) remains not started, per the recommendation below. The one open
-acceptance item is the post-fix sweep of the external sample -- run it where
-the `smt-lib-benchmarks` clone is available and update the tally in the
-corpus README with measured numbers. Feasibility notes at the bottom.
+**Status:** **item 1 landed 2026-07-26; all acceptance criteria met.**
+Logic-directed numeral typing in `tests/unit/refine_corpus.c`; regression
+pair `qf_lra_ite_int_numerals_{unsat,sat}.smt2` sealed z3+cvc5; committed
+corpus green at 122 benchmarks / 0 soundness failures. The external-sample
+sweep ran before and after on the same box: skips 7 -> 3, all four
+`spider_benchmarks` files parse (landing as "unsat, not proved" -- the
+predicted conversion), no new crashes; measured tally recorded in the corpus
+README. Item 2 (the three remaining depth-cap skips) stays not started, per
+the recommendation below. Feasibility notes at the bottom.
 
 `tests/unit/refine_corpus.c` replays labelled SMT-LIB benchmarks against the
 in-house chain with no solver linked (see

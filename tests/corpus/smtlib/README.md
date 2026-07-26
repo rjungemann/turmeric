@@ -241,17 +241,31 @@ asks "does a known-answer benchmark still get the known answer"; that one asks
 
 ### Reader coverage of the external sample
 
-Last measured sweep (before logic-directed numeral typing landed): **193 of
-200 parse**, 7 skips -- 4x "ite branches disagree on sort" (QF_LRA
-`spider_benchmarks`, integer-literal ite branches in a Real logic), 1x "let
-nested too deeply" and 1x "term nested too deeply" (QF_RDL), 1x "macro
-expansion too deep" (QF_UFLRA); 142 decided, 40 over budget, no crashes.
+Measured 2026-07-26, both sweeps on the same box, same clone, default 10s
+budget, before and after logic-directed numeral typing (numerals in
+`QF_LRA`/`QF_RDL`/`QF_UFLRA` are real-sorted, matching SMT-LIB; regression
+pair `qf_lra_ite_int_numerals_{unsat,sat}.smt2`):
 
-The numeral-typing change (numerals in `QF_LRA`/`QF_RDL`/`QF_UFLRA` are
-real-sorted, matching SMT-LIB) targets the four spider skips; the committed
-regression pair is `qf_lra_ite_int_numerals_{unsat,sat}.smt2`. The post-fix
-sweep has not been run yet -- rerun it where the external clone is available
-and replace these numbers with measured ones; do not project.
+|  | before | after |
+|---|---|---|
+| parse | 193 | **197** |
+| skipped | 7 | **3** |
+| unsat, proved | 6 | 6 |
+| unsat, not proved | 75 | 79 |
+| sat, correctly not proved | 70 | 70 |
+| over budget (10s) | 28 | 28 |
+| unlabelled | 14 | 14 |
+| crashes / soundness failures | 0 | 0 |
+
+The four QF_LRA `spider_benchmarks` skips ("ite branches disagree on sort")
+all parse after the change and land as "unsat, not proved" -- the reader's
+fault became ordinary solver incompleteness, exactly the conversion the plan
+predicted. The three remaining skips are the depth caps, one benchmark each:
+"let nested too deeply" and "term nested too deeply" (QF_RDL), "macro
+expansion too deep" (QF_UFLRA) -- see
+[docs/upcoming/v1/corpus-reader-tail-plan.md](../../../docs/upcoming/v1/corpus-reader-tail-plan.md),
+item 2, deliberately not chased. The over-budget and unlabelled counts are
+timing- and sample-dependent; re-measure rather than compare across machines.
 
 ## Running it
 
