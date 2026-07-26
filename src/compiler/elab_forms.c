@@ -1340,6 +1340,13 @@ Expr *elab_let(Elab *e, const Form *call) {
                 !binds[k].binding->is_moved &&
                 !is_binding_consumed(body, binds[k].binding)) {
                 n_rc_drops++;
+                /* set-bang-rc-release: this binding owns a continuous +1 from
+                 * its init to the auto-drop injected below, so every `(set! b v)`
+                 * in the body must release what it overwrites -- otherwise only
+                 * the FINAL value is ever released and each assignment leaks a
+                 * block.  Gated on exactly the auto-drop predicate above so the
+                 * two can never disagree: a hand-managed binding gets neither. */
+                elab_set_rc_release(e->arena, body, binds[k].binding);
             }
         }
 
@@ -2906,6 +2913,27 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         TypeKind vk = value->type.kind;
         if (vk == TY_RC || vk == TY_WEAK || vk == TY_EXISTS) {
             (void)binding_mark_moved(value->as.var.binding, value->span);
+        }
+    }
+
+    /* set-bang-rc-release: an rc field write RELEASES the field's previous
+     * pointer (see emit_set_field_stmt), so the incoming value has to carry its
+     * own +1 or the field ends up owning a reference nobody took.  The move-at-set
+     * above covers a bare variable, and `(rc/of ...)` / `(rc/clone ...)` carry one
+     * by construction -- but a bare rc FIELD READ carries nothing:
+     * `(set! (.next a) (.next b))` copied the word straight across, leaving
+     * `a.next` and `b.next` aliasing one block that BOTH would later release.
+     * Wrap it, exactly as the let-init and `(set! var ...)` paths do for the same
+     * borrow shape. */
+    if (expected_field.kind == TY_RC) {
+        Expr *inner = value;
+        while (inner && inner->kind == EX_ASCRIBE)
+            inner = inner->as.ascribe_.inner;
+        if (inner && inner->kind == EX_GET_FIELD && inner->type.kind == TY_RC) {
+            Expr *clone = expr_new(e->arena, EX_RC_CLONE, value->type, value->span);
+            clone->as.rc_clone_.expr = value;
+            clone->as.rc_clone_.elide = false;
+            value = clone;
         }
     }
 

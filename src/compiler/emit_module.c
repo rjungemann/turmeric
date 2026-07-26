@@ -7742,6 +7742,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    union { int64_t ok_val; void *ok_ptr; tur_panic_payload *err; } u;\n");
     buf_puts(out, "};\n\n");
     buf_puts(out, "typedef void (*tur_thunk_fn)(void *env, tur_result *out);\n\n");
+    /* rc-free-queue-drain-quadratic: the queue globals are emitted far below
+     * this point, so the unwind handlers reach the flag through a helper.  In
+     * ARCHIVE mode (rcgc_helper == "") the replica is elided and this resolves
+     * to the runtime's rc_free_queue_reset_drain_state in rc_free_queue.c --
+     * the same function, one copy. */
+    buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void);  /* Forward decl */\n", rcgc_helper);
     buf_puts(out, "static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;\n");
     buf_puts(out, "    if (setjmp(__node.buf) == 0) {\n");
@@ -7755,6 +7761,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
+    /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of the
+     * middle of rc_free_queue_drain, skipping the assignment that clears the
+     * in-drain flag.  Left set, every later drain would no-op and the deferred
+     * frees would pile up forever.  The queue stays consistent (freed prefix /
+     * pending tail), so only the flag is reset.  Mirrors the same reset in
+     * tur_catch_unwind in src/runtime/runtime.c -- this copy has its OWN
+     * rc_free_queue_draining global, so it needs its own reset.  The _box
+     * variants below use the tur_panicking return path (no longjmp), so the
+     * drain there always completes and they need nothing. */
+    buf_puts(out, "        rc_free_queue_reset_drain_state();\n");
     buf_puts(out, "        out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "        out->u.err = global_panic_payload;\n");
     buf_puts(out, "        global_panic_payload = NULL;\n");
@@ -7774,6 +7790,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_handler_chain = __node.parent;\n");
     buf_puts(out, "        tur_panic_in_progress = 0;\n");
+    /* rc-free-queue-drain-quadratic: the longjmp may have unwound out of the
+     * middle of rc_free_queue_drain, skipping the assignment that clears the
+     * in-drain flag.  Left set, every later drain would no-op and the deferred
+     * frees would pile up forever.  The queue stays consistent (freed prefix /
+     * pending tail), so only the flag is reset.  Mirrors the same reset in
+     * tur_catch_unwind in src/runtime/runtime.c -- this copy has its OWN
+     * rc_free_queue_draining global, so it needs its own reset.  The _box
+     * variants below use the tur_panicking return path (no longjmp), so the
+     * drain there always completes and they need nothing. */
+    buf_puts(out, "        rc_free_queue_reset_drain_state();\n");
     buf_puts(out, "        if (global_panic_payload && global_panic_payload->type_tag == expected_type) {\n");
     buf_puts(out, "            out->tag = TUR_RESULT_ERR;\n");
     buf_puts(out, "            out->u.err = global_panic_payload;\n");
@@ -9343,6 +9369,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#define RC_FREE_QUEUE_CAPACITY 65536\n");
     emit_rcgc_global(out, shared, "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];\n", "RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY]");
     emit_rcgc_global(out, shared, "uint32_t rc_free_queue_count = 0;\n", "uint32_t rc_free_queue_count");
+    /* rc-free-queue-drain-quadratic: cursor of the next block to free, and the
+     * reentrancy flag that makes a cursor safe.  The drain used to pop from the
+     * front and memmove the remainder down one slot per pop -- O(n^2), measured
+     * at 378 ms to free 65,000 blocks in the runtime copy.  Mirrors
+     * src/runtime/rc_free_queue.c; see there for the full reasoning. */
+    emit_rcgc_global(out, shared, "uint32_t rc_free_queue_head = 0;\n", "uint32_t rc_free_queue_head");
+    emit_rcgc_global(out, shared, "bool rc_free_queue_draining = false;\n", "bool rc_free_queue_draining");
     buf_printf(out, "%suint32_t rc_free_queue_drain(void);  /* Forward decl */\n", rcgc_helper);
     buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */\n", rcgc_helper);
     buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */\n", rcgc_api);
@@ -9351,8 +9384,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid rc_free_queue_push(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");
     buf_puts(out, "    if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {\n");
-    buf_puts(out, "        fprintf(stderr, \"rc_free_queue: full, aborting\\n\");\n");
-    buf_puts(out, "        abort();\n");
+    /* 1. Reclaim the drained prefix.  The cursor drain only advances `head`, so
+     *    `count` grows monotonically until the walk ends -- without this a long
+     *    drain would hit the cap and abort where the old front-popping drain
+     *    kept the count falling.  This memmove runs on overflow, not per block,
+     *    so the moved-pointer total stays linear. */
+    buf_puts(out, "        if (rc_free_queue_head > 0) {\n");
+    buf_puts(out, "            uint32_t __live = rc_free_queue_count - rc_free_queue_head;\n");
+    buf_puts(out, "            if (__live > 0) memmove(rc_free_queue, rc_free_queue + rc_free_queue_head,\n");
+    buf_puts(out, "                                    (size_t)__live * sizeof(RcControlBlock *));\n");
+    buf_puts(out, "            rc_free_queue_count = __live;\n");
+    buf_puts(out, "            rc_free_queue_head = 0;\n");
+    buf_puts(out, "        }\n");
+    /* 2. Outside a drain, freeing what is pending is the cheapest way to make
+     *    room and is what bounds the queue.  Never from inside one -- that is
+     *    the reentrancy the flag exists to prevent.  (The runtime copy has
+     *    always recovered this way; this copy used to abort outright, which is
+     *    the divergence being closed.) */
+    buf_puts(out, "        if (!rc_free_queue_draining && rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY)\n");
+    buf_puts(out, "            rc_free_queue_drain();\n");
+    /* 3. Still full: mid-drain, with drop glue pushing children faster than the
+     *    cursor consumes them.  This copy is a fixed array and cannot grow (the
+     *    runtime copy reallocs here), so abort remains the last resort. */
+    buf_puts(out, "        if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {\n");
+    buf_puts(out, "            fprintf(stderr, \"rc_free_queue: full, aborting\\n\");\n");
+    buf_puts(out, "            abort();\n");
+    buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    rc_free_queue[rc_free_queue_count++] = cb;\n");
     buf_puts(out, "}\n\n");
@@ -9518,12 +9575,25 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "\n/* Phase 9: Deferred free queue drain */\n");
     buf_printf(out, "%suint32_t rc_free_queue_drain(void) {\n", rcgc_helper);
     buf_puts(out, "    if (rc_free_queue_count == 0) return 0;\n");
+    /* Reentrancy: the struct-field drop glue this emitter generates calls
+     * rc_free_queue_drain() itself, and that glue runs from INSIDE this walk.
+     * A nested call does not double-free (it carries on from the shared
+     * cursor) -- what it does is add a C stack frame per link, defeating the
+     * whole reason this queue exists.  Measured on a 200,000-deep chain: ASan
+     * stack-overflow, on the pre-fix code too.  The quadratic memmove was what
+     * kept anyone from driving a cascade deep enough to hit it.  So this guard
+     * is load-bearing: the outer walk frees the children the glue queued, in
+     * the same pass, still FIFO. */
+    buf_puts(out, "    if (rc_free_queue_draining) return 0;\n");
+    buf_puts(out, "    rc_free_queue_draining = true;\n");
     buf_puts(out, "    uint32_t freed = 0;\n");
-    buf_puts(out, "    while (rc_free_queue_count > 0) {\n");
-    buf_puts(out, "        RcControlBlock *cb = rc_free_queue[0];\n");
-    buf_puts(out, "        memmove(rc_free_queue, rc_free_queue + 1,\n");
-    buf_puts(out, "                (rc_free_queue_count - 1) * sizeof(RcControlBlock *));\n");
-    buf_puts(out, "        rc_free_queue_count--;\n");
+    /* `head` and `count` are re-read every iteration and deliberately not
+     * cached: the drop glue below pushes children onto the back (growing
+     * `count`) and can compact the array (rewriting `head`).  FIFO order holds
+     * -- children queued by this pass are freed after everything already
+     * pending, in the same pass. */
+    buf_puts(out, "    while (rc_free_queue_head < rc_free_queue_count) {\n");
+    buf_puts(out, "        RcControlBlock *cb = rc_free_queue[rc_free_queue_head++];\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
     /* F1-2-4: smart drop dispatch for RCK_EXISTENTIAL blocks whose
      * payload is itself an rc reference (RCEXP_RC).  See rc_cb_free in
@@ -9537,7 +9607,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        freed++;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    rc_free_queue_count = 0;\n");
+    buf_puts(out, "    rc_free_queue_head = 0;\n");
+    buf_puts(out, "    rc_free_queue_draining = false;\n");
     buf_puts(out, "    return freed;\n");
+    buf_puts(out, "}\n\n");
+    /* rc-free-queue-drain-quadratic: clear the in-drain flag after a panic
+     * unwound THROUGH a drain, skipping the assignment above.  Left set, every
+     * later drain would no-op and the deferred frees would pile up forever.
+     * `head`/`count` still describe a consistent queue (freed prefix, pending
+     * tail), so the next drain resumes rather than re-freeing. */
+    buf_printf(out, "%svoid rc_free_queue_reset_drain_state(void) {\n", rcgc_helper);
+    buf_puts(out, "    rc_free_queue_draining = false;\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%svoid default_rc_drop_fn(void *value) {\n", rcgc_helper);
     buf_puts(out, "    free(value);\n");
@@ -9941,8 +10022,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    uint64_t trace_freed_before = gc_objects_freed;\n");
     buf_puts(out, "    gc_cycle_collect_phase();\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
-    buf_puts(out, "    gc_mark_phase();\n");
-    buf_puts(out, "    gc_trial_deletion_phase();\n");
+    /* PT2: the zombie sweep is skipped when the candidate buffer is empty.
+     * gc_cycle_collect_phase has just drained every candidate with
+     * strong_count > 0, so what remains IS the zombie set, and
+     * gc_trial_deletion_phase reads that buffer and nothing else -- with it
+     * empty the pair is a no-op that still costs gc_mark_phase a full walk of
+     * gc_all_blocks.  Nothing outside the collector reads the colors it
+     * leaves (gc_is_alive is the only consumer and has no callers; rc_upgrade
+     * tests strong_count), and the next collection resets every color and
+     * gc_trial from scratch.  See the runtime copy in src/runtime/gc.c for the
+     * measurements. */
+    buf_puts(out, "    if (gc_suspect_count > 0) {\n");
+    buf_puts(out, "        gc_mark_phase();\n");
+    buf_puts(out, "        gc_trial_deletion_phase();\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    if (gc_trace_enabled < 0) {\n");
     buf_puts(out, "        const char *__tur_gct = getenv(\"TUR_GC_TRACE\");\n");
     buf_puts(out, "        gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, \"0\") != 0) ? 1 : 0;\n");

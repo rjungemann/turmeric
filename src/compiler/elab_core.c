@@ -1388,6 +1388,158 @@ bool is_binding_consumed(const Expr *body, Binding *binding) {
     return false;
 }
 
+/* set-bang-rc-release (docs/reported/set-bang-does-not-release-old-rc-value.md).
+ *
+ * An rc-managed `^mut` binding owns exactly ONE strong reference for its whole
+ * lifetime: its init takes the +1 and the scope-exit auto-drop releases it.
+ * `(set! b v)` overwrote the binding without releasing what was there, so every
+ * assignment past the first leaked a block -- and the auto-drop only ever saw
+ * the FINAL value (its defer snapshots the variable where it is pushed, at the
+ * end of the do-block). Measured: 4000 rounds x 4 assignments leaked exactly
+ * 16000 blocks, none of them reclaimable by the cycle collector either, since
+ * they are acyclic with a positive strong count.
+ *
+ * Two things have to happen for the release to be sound, and this pass does the
+ * first while emit_set_stmt does the second:
+ *
+ *  1. `v` must genuinely carry a +1, because the release drops the binding's.
+ *     A fresh `(rc/of ...)` does, an explicit `(rc/clone x)` does, and a bare
+ *     `(set! b other)` does because the elaborator treats it as a MOVE (the
+ *     source binding's own auto-drop is suppressed).  A bare rc FIELD read does
+ *     NOT: `(set! h (.next h))` copies the word with no increment, so the
+ *     binding would release a reference it never acquired.  Those are wrapped
+ *     in EX_RC_CLONE here -- exactly the clone-on-read normalization the
+ *     let-binding init path already performs for the same borrow shape.
+ *
+ *  2. `v` must be fully evaluated BEFORE the old value is released, since it may
+ *     read the very binding being overwritten (`(set! h (.next h))` lowers to an
+ *     inline `h->value->next`, not a temp).  emit_set_stmt spills to a temp.
+ *
+ * Only ever called for a binding that qualifies for the scope-exit auto-drop.
+ * A binding whose ownership is hand-managed -- moved, or explicitly dropped via
+ * `(rc/drop b)` / `(drop! b)` / `ref/from-rc` -- gets no auto-drop, and must get
+ * no release here either, or the explicit disposal and this one double-free.
+ * Self-assignment `(set! b b)` marks the binding moved and so is excluded by
+ * that same gate, which matters: it lowers to `b = b` with no auto-drop at all,
+ * and a release would leave the binding dangling. */
+void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding) {
+    if (!body || !binding) return;
+
+    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }
+    uint32_t cap = 256;
+    int sp = 0;
+    stack[sp++] = body;
+
+    while (sp > 0) {
+        Expr *cur = (Expr *)stack[--sp];
+        if (!cur) continue;
+
+        /* `release_old` doubles as the already-processed marker, so a second
+         * pass over the same node (a re-elaborated body) cannot wrap the value
+         * in a SECOND EX_RC_CLONE -- which would take an increment nothing
+         * balances and turn this fix into a leak of its own. */
+        if (cur->kind == EX_SET && cur->as.set_.target == binding &&
+            !cur->as.set_.release_old) {
+            /* (1) normalize a borrow-shaped value to a real +1. */
+            Expr *v = cur->as.set_.value;
+            Expr *inner = v;
+            while (inner && inner->kind == EX_ASCRIBE)
+                inner = inner->as.ascribe_.inner;
+            if (inner && inner->kind == EX_GET_FIELD && inner->type.kind == TY_RC) {
+                Expr *clone = expr_new(arena, EX_RC_CLONE, v->type, v->span);
+                clone->as.rc_clone_.expr = v;
+                clone->as.rc_clone_.elide = false;
+                cur->as.set_.value = clone;
+            }
+            /* (2) tell codegen to release what is being overwritten. */
+            cur->as.set_.release_old = true;
+        }
+
+        /* Reserve for the widest child count this node can push -- a `do` block,
+         * call, builtin, struct literal or binding group is n-ary, so a fixed
+         * headroom would overflow the stack on a long body. */
+        uint32_t need = 4;
+        switch (cur->kind) {
+            case EX_DO:          need = cur->as.do_.n + 1u;             break;
+            case EX_CALL:        need = cur->as.call_.n_args + 1u;      break;
+            case EX_BUILTIN:     need = cur->as.builtin.n + 1u;         break;
+            case EX_MAKE_STRUCT: need = cur->as.make_struct_.n_fields + 1u; break;
+            case EX_LET:
+            case EX_LETREC:      need = cur->as.let_.n + 2u;            break;
+            default:                                                     break;
+        }
+        if ((uint32_t)sp + need > cap) {
+            while (cap < (uint32_t)sp + need) cap *= 2u;
+            const Expr **grown =
+                (const Expr **)realloc(stack, (size_t)cap * sizeof(const Expr *));
+            if (!grown) { fprintf(stderr, "tur: oom\n"); abort(); }
+            stack = grown;
+        }
+
+        switch (cur->kind) {
+            case EX_LET:
+            case EX_LETREC:
+                for (uint32_t i = cur->as.let_.n; i > 0; i--)
+                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                stack[sp++] = cur->as.let_.body;
+                break;
+            case EX_IF:
+                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
+                stack[sp++] = cur->as.if_.then_;
+                stack[sp++] = cur->as.if_.cond;
+                break;
+            case EX_DO:
+                for (uint32_t i = cur->as.do_.n; i > 0; i--)
+                    stack[sp++] = cur->as.do_.items[i-1];
+                break;
+            case EX_WHILE:
+                stack[sp++] = cur->as.while_.body;
+                stack[sp++] = cur->as.while_.cond;
+                break;
+            case EX_SET:       stack[sp++] = cur->as.set_.value;   break;
+            case EX_SET_DEREF:
+                stack[sp++] = cur->as.set_deref_.ref;
+                stack[sp++] = cur->as.set_deref_.value;
+                break;
+            case EX_SET_FIELD:
+                stack[sp++] = cur->as.set_field_.receiver;
+                stack[sp++] = cur->as.set_field_.value;
+                break;
+            case EX_GET_FIELD: stack[sp++] = cur->as.get_field_.struct_expr; break;
+            case EX_CALL:
+                for (uint32_t i = cur->as.call_.n_args; i > 0; i--)
+                    stack[sp++] = cur->as.call_.args[i-1];
+                break;
+            case EX_BUILTIN:
+                for (uint32_t i = cur->as.builtin.n; i > 0; i--)
+                    stack[sp++] = cur->as.builtin.args[i-1];
+                break;
+            case EX_MAKE_STRUCT:
+                for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
+                    stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                break;
+            case EX_DEFER:     stack[sp++] = cur->as.defer_.body;    break;
+            case EX_PANIC:     stack[sp++] = cur->as.panic_.payload; break;
+            case EX_RC_OF:     stack[sp++] = cur->as.rc_of_.expr;    break;
+            case EX_RC_DROP:   stack[sp++] = cur->as.rc_drop_.expr;  break;
+            case EX_RC_CLONE:  stack[sp++] = cur->as.rc_clone_.expr; break;
+            case EX_ASCRIBE:   stack[sp++] = cur->as.ascribe_.inner; break;
+            case EX_RETURN:
+                if (cur->as.return_.value) stack[sp++] = cur->as.return_.value;
+                break;
+            /* Deliberately NOT descending into EX_CLOSURE / EX_FN_DEF: a nested
+             * function body has its own frame and its own binding lifetimes, and
+             * a captured rc is reached through the closure env rather than this
+             * binding's slot. */
+            default:
+                break;
+        }
+    }
+
+    free(stack);
+}
+
 /* Field-level analog of is_binding_consumed: returns true when the body
  * explicitly drops a SPECIFIC owning field of a by-value struct/record local --
  * `(rc/drop (.f o))` for an rc field, `(drop! (.f o))` for a ref field, matched

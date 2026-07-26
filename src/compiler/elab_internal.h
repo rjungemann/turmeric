@@ -1087,6 +1087,11 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
+/* set-bang-rc-release: stamp every `(set! binding v)` in `body` so codegen
+ * releases the value being overwritten, normalizing borrow-shaped `v` to a
+ * genuine +1 first.  Call ONLY for a binding that owns a continuous reference
+ * (i.e. one that also qualifies for the scope-exit rc auto-drop). */
+void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding);
 bool is_field_consumed(const Expr *body, Binding *binding, uint32_t field_idx);
 bool is_field_consumed_in_handler(const Expr *body, Binding *binding, uint32_t field_idx);
 Binding *expr_closure_fn_binding(const Expr *expr);
