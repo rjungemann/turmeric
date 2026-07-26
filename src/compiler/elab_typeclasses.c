@@ -6696,6 +6696,18 @@ resolved_user_fallback:;
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
                 Type ptr_family_result;
                 bool ptr_family = m7_app_to_ptr_family(substituted, &ptr_family_result);
+                /* hkt-inline-c-instance-body-loses-result-type: a :heap ADT is
+                 * the third carrier-width result class, alongside the
+                 * int-carrier newtypes below and the pointer-family handles
+                 * above.  `(HBox int)` for a `:heap` parametric struct emits as
+                 * `tur_adt_HBox__int *` -- a pointer, so the by-value
+                 * representation IS the int64 carrier the method returns and
+                 * committing the precise type needs no by-value spec.  Unlike
+                 * the pointer-family case there is nothing to collapse: the
+                 * applied type is already the right one. */
+                bool heap_app = !ptr_family &&
+                    (type_is_heap_adt(substituted) ||
+                     type_is_heap_struct(substituted));
                 /* Only commit the by-value result type (and, below, the by-value
                  * element bindings) when the result fully grounds.  A residual
                  * free element tyvar -- the `ap` fat-closure-carrier case --
@@ -6726,7 +6738,7 @@ resolved_user_fallback:;
                         result_type = substituted;
                         m7_byvalue_grounded = true;
                     } else if (result_type.kind == TY_APP &&
-                               m7_result_is_int_carrier(substituted)) {
+                               (heap_app || m7_result_is_int_carrier(substituted))) {
                         /* method-result-functor-inference: the instance body
                          * delegates to a carrier helper (`(mk-box ...)`), so it
                          * is not by-value-constructible -- but the grounded

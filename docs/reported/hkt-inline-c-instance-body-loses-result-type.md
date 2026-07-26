@@ -1,11 +1,69 @@
 ---
 status: open
-severity: medium
+severity: low
 discovered: 2026-07-26
+updated: 2026-07-26
 area: compiler (HKT result typing, elab_typeclasses.c)
 ---
 
 # An HKT instance method with an inline-C body loses its result type
+
+## Update 2026-07-26 -- scope narrowed, root cause corrected
+
+**The `:heap` ADT case is fixed** (`tests/fixtures/hkt-inline-c-heap-result-type`).
+A `:heap` parametric ADT emits as `tur_adt_HBox__int *` -- a pointer, so it fits
+the int64 carrier exactly and its precise type can be committed with no by-value
+spec, the same argument the int-carrier-newtype and pointer-family arms already
+made. It was simply a third carrier-width class the test did not know about.
+
+**The diagnosis below is wrong about the mechanism, and I was wrong to call the
+gate a conflation.** It is not conflating "what type does this call have" with
+"which ABI does this dispatch use". It is asking a narrower and *correct*
+question -- "is this result already carrier-width?" -- and the answer drives both,
+legitimately. The bug was that the question was answered by an incomplete list of
+type classes, not that the wrong question was asked.
+
+Measured, not assumed. Fix direction 1 below ("commit the grounded result_type
+regardless of the body") was implemented behind a temporary env gate and run
+against the suite:
+
+- 2378 passed, 1 failed -- and that one failure was a pure REORDERING of two
+  `#ifndef`-guarded typedef blocks, semantically identical output. So the change
+  is nearly free in-tree, which is what tempted me toward it.
+- But on a by-value aggregate result it emits
+  `tur_adt_Box__int m_1314 = __ps_158;` against a carrier-returning inline-C
+  base: **`error: invalid initializer`**. Nothing in the suite covers that shape,
+  which is exactly why the suite looked clean.
+
+So fix direction 1 as written trades a confusing call-site type error for a cc
+error in generated C -- worse for a user, since the error no longer points at
+their source. It is not shippable.
+
+### What remains open
+
+Only the **by-value aggregate** result: a non-`:heap` parametric struct whose
+instance body is inline-C.
+
+    (defstruct Box [A] (val A))
+    (definstance Functor [Box] (fmap [container g] ```c return container; ```))
+
+still yields `(type-app ? ?)`. This one cannot be fixed by committing the type,
+because the producer genuinely returns the carrier while the consumer would read
+an aggregate. An inline-C body is written against exactly one C signature and
+cannot be re-specialized at the by-value type, so fix direction 2 does not apply
+either.
+
+Severity dropped to **low**: the remaining shape is narrow (parametric,
+non-`:heap`, non-opaque, inline-C-bodied), nothing in stdlib or the suite has
+one, and it fails loudly at the call site rather than miscompiling.
+
+The most valuable next step is probably fix direction 2's fallback -- **reject the
+shape with a real diagnostic at `definstance`** ("an inline-C instance body cannot
+return a by-value aggregate `(f b)`; make the ADT `:heap`, `defopaque`, or write
+the body in Turmeric"). That is strictly better than the current
+`got (type-app ? ?)` at a call site far from the cause.
+
+The original report follows; its "Root cause" section is superseded by the above.
 
 ## Summary
 
@@ -47,7 +105,7 @@ Now the same class, same container, same call -- only the body changes:
 
     error: expected cstr, got (type-app ? ?)          <-- lost
 
-## Root cause
+## Root cause -- SUPERSEDED, see Update
 
 `elab_typeclasses.c` computes the grounded result correctly in both cases -- the
 substitution yields `(type-app Box int)` either way. It is the commit gate that
