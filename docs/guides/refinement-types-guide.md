@@ -795,12 +795,31 @@ Known and deliberate, in rough order of how likely you are to hit them:
 - **A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.
-- **Higher-order callees are not checked.** A function-typed parameter carries
-  no refinements in its type, so `(defn apply2 [f : (fn [int int] int) ...])`
-  cannot know what `f`'s arguments must satisfy, and neither can a call to
-  `apply2`. Passing a refined function as a value is legal and the callee's own
-  entry checks still run -- only the static crossing is lost. Refinements in
-  function *types* are outside the prototype.
+- **Higher-order callees are not checked, and this is permanent for the
+  prototype.** A function-typed parameter carries no refinements in its type, so
+  `(defn apply2 [f : (fn [int int] int) ...])` cannot know what `f`'s arguments
+  must satisfy, and neither can a call to `apply2`. Passing a refined function
+  as a value is legal and the callee's own entry checks still run, so nothing
+  unsound follows -- only the static crossing is lost.
+
+  What *does* work, and is worth knowing before assuming the limit is wider
+  than it is: a direct call, a call through an alias of a global
+  (`(let [g safe-div] (g 10 0))`), and a call to a lambda with refined
+  parameters are all checked. The gap is specifically a value reached through a
+  function-typed parameter.
+
+  Writing the refinement into the function type is **rejected** with
+  `TUR-E0378`, not ignored:
+
+  ```turmeric
+  (defn apply2 [f : (fn [int #refine{ v : int | (not= v 0) }] int)] : int ...)
+  ;; error[TUR-E0378]: a refinement cannot be written on the parameter of a
+  ;; (fn ...) type; function types do not carry refinements
+  ```
+
+  Closing the gap needs refinements to be part of function types, with the
+  contravariant subtyping check that implies -- a type-system change the
+  prototype excludes.
 - **An instance that explicitly demands less is checked against its own,
   weaker, predicate at a statically-resolved site** -- deliberately, since it
   is the implementation that will actually run. `TUR-W0377` marks a call that

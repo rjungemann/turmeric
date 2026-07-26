@@ -247,6 +247,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_E0375_REFINE_EFFECTFUL:          return "TUR-E0375";
         case TUR_E0376_REFINE_TYPE_PARAM:         return "TUR-E0376";
         case TUR_W0377_REFINE_INSTANCE_LENIENCY:  return "TUR-W0377";
+        case TUR_E0378_REFINE_IN_FN_TYPE:         return "TUR-E0378";
         case TUR_I0379_REFINE_ORACLE_MISMATCH:    return "TUR-I0379";
         /* MS2: Multi-shot continuation capture analysis */
         case TUR_E0500_MULTISHOT_UNIQUE_CAPTURE:      return "TUR-E0500";
@@ -395,6 +396,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0375") == 0) return TUR_E0375_REFINE_EFFECTFUL;
     if (strcmp(s, "TUR-E0376") == 0) return TUR_E0376_REFINE_TYPE_PARAM;
     if (strcmp(s, "TUR-W0377") == 0) return TUR_W0377_REFINE_INSTANCE_LENIENCY;
+    if (strcmp(s, "TUR-E0378") == 0) return TUR_E0378_REFINE_IN_FN_TYPE;
     if (strcmp(s, "TUR-I0379") == 0) return TUR_I0379_REFINE_ORACLE_MISMATCH;
     /* MS2: Multi-shot continuation capture analysis */
     if (strcmp(s, "TUR-E0500") == 0) return TUR_E0500_MULTISHOT_UNIQUE_CAPTURE;
@@ -1368,6 +1370,28 @@ static const DiagExplanation diag_explanations_[] = {
       "missing hypothesis.  --strict-refine turns this into a hard error for\n"
       "builds that want every obligation discharged statically.\n",
     },
+    { TUR_E0378_REFINE_IN_FN_TYPE,
+      "TUR-E0378: Refinement written inside a function type\n"
+      "\n"
+      "A `(fn ...)` type cannot carry refinements on its parameters or its\n"
+      "result. Writing one there is rejected rather than ignored, because a\n"
+      "silently dropped refinement reads like a guarantee that is being\n"
+      "checked and is not.\n"
+      "\n"
+      "This is the known limit on HIGHER-ORDER checking. A function value with\n"
+      "refined parameters may be passed and called freely -- its own entry\n"
+      "checks still run, so nothing unsound follows -- but the refinement\n"
+      "cannot be seen through the function type, so neither the body that\n"
+      "calls it nor the caller that supplies it is checked statically:\n"
+      "\n"
+      "    (defn safe-div [a : int b : #refine{ v : int | (not= v 0) }] : int ...)\n"
+      "    (defn apply1 [f : (fn [int int] int) x : int] : int (f 10 x))\n"
+      "    (apply1 safe-div 0)   ; allowed; caught at run time, not compile time\n"
+      "\n"
+      "Closing that gap needs refinements to be part of function types, with\n"
+      "the contravariant subtyping check that implies. Until then, options are\n"
+      "to take the value at a named type with a `defn` wrapper that carries the\n"
+      "refinement, or to accept the runtime check.\n" },
     { TUR_W0377_REFINE_INSTANCE_LENIENCY,
       "TUR-W0377: Call relies on instance-specific leniency\n"
       "\n"

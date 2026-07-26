@@ -517,6 +517,38 @@ Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
  * deprecation warning; Phase 4 promotes it to a hard error.  Code stays as
  * TUR_D0001 so `tur explain TUR-D0001` and any tooling pinned on the code
  * keep working across the warning-to-error transition. */
+/* A `(fn ...)` type cannot carry refinements.  Rejecting is deliberate: the
+ * alternative is to PEEL and discard the predicate, which would accept the
+ * syntax and silently drop the guarantee -- the worst of the three options,
+ * because the annotation then reads like something that is being checked.
+ *
+ * Left unhandled entirely, the contract type survives into the signature and
+ * every use of the value fails with `expected { _ : ? | ... }, got int`, naming
+ * a type the programmer never wrote.  That is the fourth site to hit this;
+ * CT0's note on `rt_peel_contract` lists the first three.  This one is not a
+ * missing peel -- there is nowhere for the predicate to ride -- so it gets a
+ * diagnostic that says what is actually unsupported. */
+static void reject_fn_type_contract(Elab *e, Type *t, const Form *slot,
+                                    const char *what) {
+    (void)e;
+    if (!t || t->kind != TY_CONTRACT || !slot) return;
+    diag_emit_with_code(DIAG_ERROR, slot->span, TUR_E0378_REFINE_IN_FN_TYPE,
+                        "a refinement cannot be written on the %s of a "
+                        "(fn ...) type; function types do not carry "
+                        "refinements", what);
+    diag_emit(DIAG_NOTE, slot->span,
+              "a function value with refined parameters can still be passed "
+              "and called -- its own entry checks run -- but the refinement "
+              "is not visible through the function type, so the call is "
+              "checked at run time rather than statically");
+    /* Recover to the BASE type.  The compile already fails on the error above,
+     * so this cannot make a bad program compile; what it prevents is the
+     * cascade -- a surviving TY_CONTRACT makes every use of the value report
+     * `expected { _ : ? | ... }, got int`, which is the confusing message this
+     * diagnostic exists to replace, not to accompany. */
+    if (t->as.contract_.base_type) *t = *t->as.contract_.base_type;
+}
+
 static void reject_fn_type_colon(Elab *e, const Form *slot) {
     (void)e;
     if (!slot) return;
@@ -1355,6 +1387,8 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 reject_fn_type_colon(e, params_vec->as.list.items[pi2]);
                 Type *at = type_expr_from_form(e, params_vec->as.list.items[pi2],
                                                rec_name, type_params, type_param_kinds, n_type_params);
+                reject_fn_type_contract(e, at, params_vec->as.list.items[pi2],
+                                        "parameter");
                 fn_arg_full[pi2] = at;
                 /* Type variables map to the int64 carrier kind; use TY_INT so
                  * the fn's result_kind/arg_kinds stay consistent with the ->
@@ -1412,6 +1446,7 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             reject_fn_type_colon(e, form->as.list.items[idx]);
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
+            reject_fn_type_contract(e, ret_t, form->as.list.items[idx], "result");
             /* Type variables lower to the int64 carrier for the kind slot. */
             TypeKind ret_kind = ret_t ? (ret_t->kind == TY_TYVAR ? TY_INT : ret_t->kind)
                                       : TY_INT;
