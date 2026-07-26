@@ -6927,6 +6927,21 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
     buf_puts(out, "#pragma GCC diagnostic ignored \"-Wunused-but-set-variable\"\n");
+    /* DEDUP-5: define TUR_RT_LOCAL up here, ahead of every use.  `rcgc_helper`
+     * and `rcgc_api` expand to it in a --shared build, and the first thing they
+     * qualify is the rc_free_queue_reset_drain_state forward declaration in the
+     * catch-unwind block -- which is emitted well before the rc/GC section that
+     * used to carry this #define.  With the definition down there the generated
+     * runtime header opened with an unqualified `TUR_RT_LOCAL void ...;` and
+     * every split/shared build failed to compile.  See the rationale for the
+     * hidden visibility itself at the rc/GC block below. */
+    if (shared) {
+        buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+        buf_puts(out, "#  define TUR_RT_LOCAL __attribute__((visibility(\"hidden\")))\n");
+        buf_puts(out, "#else\n");
+        buf_puts(out, "#  define TUR_RT_LOCAL\n");
+        buf_puts(out, "#endif\n");
+    }
     /* Phase P3: HAMT lowering - include HAMT header when needed */
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
@@ -9286,13 +9301,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * be freed through the other -- cb->gc_index would index the wrong array.
      * Measured separate today, but only because the host's symbols happen not
      * to interpose; hidden visibility makes that structural instead of lucky. */
-    if (shared) {
-        buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
-        buf_puts(out, "#  define TUR_RT_LOCAL __attribute__((visibility(\"hidden\")))\n");
-        buf_puts(out, "#else\n");
-        buf_puts(out, "#  define TUR_RT_LOCAL\n");
-        buf_puts(out, "#endif\n");
-    }
+    /* TUR_RT_LOCAL itself is defined at the top of the preamble -- it qualifies
+     * declarations emitted earlier than this point. */
     buf_puts(out, "/* rc<T> + weak<T> reference counting - Phase 9 */\n");
     buf_puts(out, "/* Phase 10: GC color enum for Bacon-Rajan */\n");
     buf_puts(out, "typedef enum { GC_WHITE, GC_GREY, GC_BLACK, GC_PURPLE } GcColor;\n\n");

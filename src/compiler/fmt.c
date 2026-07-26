@@ -230,9 +230,12 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_puts(b, ": ");
             if (f->as.list.len > 0) fmt_form_flat(b, f->as.list.items[0]);
             break;
-        /* CT0: Contract type { var : T | pred } */
+        /* CT0: Contract type #refine{ var : T | pred }.  The tag is not
+         * optional: bare `{...}` reads as curly-infix now (read_contract_type
+         * is reachable only from read_refine_literal), so printing the brace
+         * body alone round-trips a refinement into an arithmetic form. */
         case F_CONTRACT_TYPE:
-            buf_puts(b, "{ ");
+            buf_puts(b, "#refine{ ");
             for (uint32_t _i = 0; _i < f->as.list.len; _i++) {
                 if (_i) buf_putc(b, ' ');
                 fmt_form_flat(b, f->as.list.items[_i]);
@@ -1093,15 +1096,50 @@ static void fmt_form(FmtState *s, const Form *f) {
  * ---------------------------------------------------------------------------
  */
 
+static uint32_t count_blank_lines(const char *src, uint32_t from_off,
+                                  uint32_t to_off, uint32_t max);
+
+/* Terminate the current line, then emit `blanks` empty lines. */
+static void fs_break_and_blank(FmtState *s, uint32_t blanks) {
+    if (s->col > 0) fs_putc(s, '\n');
+    for (uint32_t i = 0; i < blanks; i++) fs_putc(s, '\n');
+}
+
 /* Emit any ';' comments found in src[from_off .. to_off).
- * Comments are placed on their own lines.  Returns true if anything was emitted. */
-static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off) {
+ *
+ * Comments are placed on their own lines, and the gap's blank-line structure is
+ * reproduced around them rather than relocated: blank lines before the first
+ * comment and between successive comments are preserved as-is (capped at 2).
+ * `min_lead` is a floor on the blanks emitted before the first comment, for
+ * callers that want a comment forced away from whatever preceded it; every
+ * caller currently passes 0, because forcing a blank in front of a comment is
+ * what moved a docstring's separating blank to the wrong side of it.  Blank
+ * lines *after* the last comment are the caller's business -- see fmt_print,
+ * which keeps a `;;;` docstring flush against the definition it documents.
+ *
+ * `*out_end`, when non-NULL, receives the offset just past the last comment
+ * emitted (or `from_off` when the gap held none).
+ *
+ * Returns true if anything was emitted. */
+static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off,
+                                 uint32_t min_lead, uint32_t *out_end) {
     const char *src = s->opts.src;
+    if (out_end) *out_end = from_off;
     if (!src || from_off >= to_off) return false;
 
     const char *p   = src + from_off;
     const char *end = src + to_off;
     bool emitted = false;
+    uint32_t prev_end = from_off; /* offset just past the last comment emitted */
+
+    /* Break the line and emit the blanks that separated `prev_end` from the
+     * comment starting at `cstart`. */
+    #define EMIT_GAP_BLANKS(cstart)                                            \
+        do {                                                                   \
+            uint32_t _n = count_blank_lines(src, prev_end, (cstart), 2);       \
+            if (!emitted && _n < min_lead) _n = min_lead;                      \
+            fs_break_and_blank(s, _n);                                         \
+        } while (0)
 
     while (p < end) {
         if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') { p++; continue; }
@@ -1110,10 +1148,11 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
         if (*p == ';') {
             const char *line_end = p;
             while (line_end < end && *line_end != '\n') line_end++;
-            if (s->col > 0) fs_putc(s, '\n');
+            EMIT_GAP_BLANKS((uint32_t)(p - src));
             fs_write(s, p, (size_t)(line_end - p));
             emitted = true;
             p = line_end;
+            prev_end = (uint32_t)(p - src);
             continue;
         }
 
@@ -1123,9 +1162,10 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
             p += 2;
             while (p + 1 < end && !(p[0] == '|' && p[1] == '#')) p++;
             if (p + 1 < end) p += 2;
-            if (s->col > 0) fs_putc(s, '\n');
+            EMIT_GAP_BLANKS((uint32_t)(blk - src));
             fs_write(s, blk, (size_t)(p - blk));
             emitted = true;
+            prev_end = (uint32_t)(p - src);
             continue;
         }
 
@@ -1172,15 +1212,18 @@ static bool emit_comments_in_gap(FmtState *s, uint32_t from_off, uint32_t to_off
                     }
                 }
             }
-            if (s->col > 0) fs_putc(s, '\n');
+            EMIT_GAP_BLANKS((uint32_t)(blk - src));
             fs_write(s, blk, (size_t)(p - blk));
             emitted = true;
+            prev_end = (uint32_t)(p - src);
             continue;
         }
 
         /* Anything else is part of a form — stop */
         break;
     }
+    #undef EMIT_GAP_BLANKS
+    if (out_end) *out_end = prev_end;
     return emitted;
 }
 
@@ -1362,30 +1405,42 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
         if (i == 0) {
             /* Emit any leading comments before the first form */
             if (s.opts.src && f->span.off_start > 0) {
-                emit_comments_in_gap(&s, 0, f->span.off_start);
+                emit_comments_in_gap(&s, 0, f->span.off_start, 0, NULL);
                 if (s.col > 0) fs_putc(&s, '\n');
             }
         } else {
             uint32_t gap_start = prev_end;
             uint32_t gap_end   = f->span.off_start;
 
-            /* Emit comments in the gap */
-            bool had_comment = emit_comments_in_gap(&s, gap_start, gap_end);
+            /* Emit the gap's comments, reproducing the blank lines that led up
+             * to them exactly as the source had them. */
+            uint32_t comments_end = gap_start;
+            bool had_comment =
+                emit_comments_in_gap(&s, gap_start, gap_end, 0, &comments_end);
 
-            /* Determine how many blank lines to insert */
+            /* Determine how many blank lines to insert before the form. */
             uint32_t blanks = 0;
-            if (s.opts.src) {
-                blanks = count_blank_lines(s.opts.src, gap_start, gap_end, 2);
-            }
-            /* At least one blank line between top-level forms */
-            if (blanks == 0) blanks = 1;
-            /* One extra blank line after a comment section header (;;) */
-            if (had_comment && s.opts.src && gap_end > gap_start) {
-                /* already handled by preserving blanks */
+            if (had_comment) {
+                /* Preserve the source's blanks between the last comment and the
+                 * form -- exactly, with no minimum.  A `;;;` docstring block
+                 * must stay flush against the definition it documents: any
+                 * intervening blank resets the docstring buffer, so injecting
+                 * one here would silently detach every docstring in the file
+                 * from its `defn`/`deftype` (tools/gendocs.py and `(doc ...)`
+                 * both read the block immediately above the definition). */
+                if (s.opts.src) {
+                    blanks = count_blank_lines(s.opts.src, comments_end,
+                                               gap_end, 2);
+                }
+            } else {
+                if (s.opts.src) {
+                    blanks = count_blank_lines(s.opts.src, gap_start, gap_end, 2);
+                }
+                /* At least one blank line between adjacent top-level forms */
+                if (blanks == 0) blanks = 1;
             }
 
-            if (s.col > 0) fs_putc(&s, '\n');
-            for (uint32_t b = 0; b < blanks; b++) fs_putc(&s, '\n');
+            fs_break_and_blank(&s, blanks);
         }
 
         fmt_form(&s, f);
@@ -1394,7 +1449,7 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
 
     /* Trailing comments after the last form */
     if (s.opts.src && prev_end < (uint32_t)s.opts.src_len) {
-        emit_comments_in_gap(&s, prev_end, (uint32_t)s.opts.src_len);
+        emit_comments_in_gap(&s, prev_end, (uint32_t)s.opts.src_len, 0, NULL);
     }
 
     /* Ensure exactly one trailing newline */
