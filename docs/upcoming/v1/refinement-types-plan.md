@@ -1615,6 +1615,12 @@
 > - [corpus-reader-tail-plan.md](corpus-reader-tail-plan.md) -- the last 7
 >   skips in the SMT-LIB corpus reader, with a recommendation to do one of the
 >   two items and skip the other.
+> - [../hold/refined-dogfooding-plan.md](../hold/refined-dogfooding-plan.md) --
+>   on hold, waiting on a real program rather than on effort. It carries a
+>   tiered list of what such a program should contain, since coverage there is
+>   what makes the exercise worth running, and it is the only source of the
+>   compile-time figure graduation needs and the real-VC cross-check Z3
+>   retirement needs.
 >
 > Candidates, roughly by value:
 >

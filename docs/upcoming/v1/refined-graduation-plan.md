@@ -1,8 +1,19 @@
 # Graduating the `refined` experiment
 
-**Status:** not started. This is a decision plan, not a build plan -- the
-feature is implemented; what remains is deciding it is ready and removing the
-gate.
+**Status:** preconditions partly met; the flip itself is not started. The
+feature is implemented, so this is mostly a decision plan -- but two of the four
+preconditions are now closed and one prerequisite has been BUILT ahead of time.
+
+| precondition | state |
+|---|---|
+| 1. suite survives it | **measured** -- one fixture affected, and it is repurposed rather than deleted |
+| 2. cost is acceptable | partly -- measured on fixtures, **needs a real program** (see [the dogfooding plan](../hold/refined-dogfooding-plan.md)) |
+| 3. nothing still moving | **waiting** -- two semantics landed recently and should sit |
+| 4. exclusions documented as permanent | **DONE** -- every Limits entry tagged |
+
+| prerequisite | state |
+|---|---|
+| graduated-layer shim (`GRADUATED_LAYERS[]`) | **DONE and verified**, landed empty ahead of use |
 
 **Clock:** `refined` is `XF_LIFECYCLE_PROTOTYPE`, `introduced 0.31.0`,
 `expires_at 0.34.0`. `VERSION` is `0.30.8`, so the experiment has not shipped
@@ -236,12 +247,47 @@ a legitimate outcome and should not be treated as failure -- but it needs a
 reason recorded, because "we ran out of time" and "the semantics are not settled"
 call for different follow-ups.
 
+## The flip, as a sequence
+
+Everything below is one change set. Splitting it across commits ships an
+intermediate state in which the gate is half-removed.
+
+1. Add `"refined"` to `GRADUATED[]` (experiments) **and** to
+   `GRADUATED_LAYERS[]` (layers), then delete both its `EXPERIMENTS[]` row and
+   its `LANG_LAYERS[]` row.
+2. Delete the 15 `g_opt_refined` conditionals and the global itself; delete the
+   `experiment_warn_if_used("refined")` calls.
+3. Repurpose `refine-off-is-contracts-only` to pin `--no-contracts` and rename
+   it; add a fixture each for `--enable=refined` (`TUR-W0063`) and
+   `#lang turmeric refined` (`TUR-W0064`) still being accepted.
+4. Docs: the guide's status banner and "Turning it on" table, the `#lang` layer
+   table in the syntax guide, this plan's status, `CHANGELOG`.
+
 ## Acceptance criteria
 
-- `--enable=refined` and `#lang turmeric refined` both accepted as no-ops with
-  `TUR-W0063`, verified by a fixture each.
-- No `EXPERIMENTS[]` row, no `LANG_LAYERS[]` row, no `g_opt_refined`.
+- `--enable=refined` accepted as a no-op with `TUR-W0063`, and
+  `#lang turmeric refined` with `TUR-W0064` -- a fixture each. These are the
+  compatibility promise; without them graduation is a breaking change for
+  everyone who opted in.
+- No `EXPERIMENTS[]` row, no `LANG_LAYERS[]` row, no `g_opt_refined`, no
+  `experiment_warn_if_used("refined")`.
 - Suite green, corpus green, source-level fuzzer clean across at least two
   seeds.
-- A CHANGELOG entry that states the one user-visible consequence in a sentence:
-  a refinement violated on every execution reaching it is now a compile error.
+- **A dogfooding report exists** and its compile-time figure is on a real
+  program, not a fixture.
+- A CHANGELOG entry stating the one user-visible consequence in a sentence: a
+  refinement violated on every execution reaching it is now a compile error.
+
+## What would make me stop
+
+Worth writing down in advance, because the deadline creates pressure to
+proceed:
+
+- the dogfooding run produces `TUR-E0371` on code that is **correct** -- that is
+  a false positive going unconditional, and it is the one outcome that should
+  halt the flip outright;
+- compile time on a real program is materially worse than the fixture
+  measurement suggests (the fixtures say ~1.7x worst case; something like 3x
+  sustained would want investigating before it becomes everyone's cost);
+- `TUR-W0377` fires often and its advice reads as noise, which would mean the
+  class-parameter reading needs revisiting before it is frozen.
