@@ -53,7 +53,6 @@ import io
 import json
 import pathlib
 import random
-import shutil
 import sys
 import tarfile
 import urllib.request
@@ -115,12 +114,28 @@ def fetch(url, dest, expect_md5, expect_size):
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"    downloading {human(expect_size)} ...")
     try:
-        with urllib.request.urlopen(url) as r, open(dest, "wb") as out:
-            shutil.copyfileobj(r, out)
+        # `timeout` is per-socket-operation: a stalled connection raises
+        # instead of hanging silently forever. Progress is printed so a slow
+        # transfer is visibly moving, not mistaken for a hang.
+        with urllib.request.urlopen(url, timeout=60) as r, open(dest, "wb") as out:
+            got = 0
+            last = -1
+            for chunk in iter(lambda: r.read(1 << 20), b""):
+                out.write(chunk)
+                got += len(chunk)
+                pct = int(got * 100 / expect_size) if expect_size else 0
+                if pct != last:                   # one line, rewritten in place
+                    print(f"\r    {human(got)} / {human(expect_size)} "
+                          f"({pct}%)", end="", flush=True)
+                    last = pct
+            print()                               # end the progress line
     except Exception as exc:                      # noqa: BLE001 -- report and move on
-        print(f"    FAILED: {exc}")
-        print(f"    (if this is a 403, the host is blocked by an egress "
-              f"policy -- report it rather than routing around it)")
+        print(f"\n    FAILED: {exc}")
+        print(f"    (a timeout/stall here means the transfer stalled; rerun to "
+              f"resume from the verified cache. A 403 means the host is blocked "
+              f"by an egress policy -- report it rather than routing around it)")
+        if dest.exists():                         # partial file must not masquerade as cached
+            dest.unlink()
         return False
 
     got = md5_of(dest)
