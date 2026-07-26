@@ -7,8 +7,14 @@ corpus green at 122 benchmarks / 0 soundness failures. The external-sample
 sweep ran before and after on the same box: skips 7 -> 3, all four
 `spider_benchmarks` files parse (landing as "unsat, not proved" -- the
 predicted conversion), no new crashes; measured tally recorded in the corpus
-README. Item 2 (the three remaining depth-cap skips) stays not started, per
-the recommendation below. Feasibility notes at the bottom.
+README. Item 2 was **investigated with a measured probe 2026-07-26** -- see
+"Item 2 findings" in that section: the two QF_RDL caps are raisable with
+measured margin, the macro skip needs memoization (expansion is
+exponential), and the probe surfaced two live harness defects (a
+`linearize` stack overflow below the reader cap, and ASan crashes counting
+as "unlabelled" passes) now also tracked in
+`docs/reported/corpus-child-crashes-silent-under-asan.md`. No item-2 code
+has landed. Feasibility notes at the bottom.
 
 `tests/unit/refine_corpus.c` replays labelled SMT-LIB benchmarks against the
 in-house chain with no solver linked (see
@@ -83,6 +89,60 @@ Options, in increasing order of effort:
 - **Make `tr_term` iterative.** Removes the class entirely. Also removes the
   property that makes this reader reviewable in one sitting. Hard to justify for
   three benchmarks.
+
+### Item 2 findings (measured 2026-07-26)
+
+The deliberate probe ran (ASan Debug build, 8 MB stack -- the configuration
+the suite actually uses). The results reshape this item:
+
+**The three files, measured.** `tempo-width-5` nests to depth **4300**
+(cap 4000); `skdmxa-3x3-12` to **6857** (cap 6000) -- both just over, and
+both run clean with the caps lifted: they parse, translate, and then safely
+exceed the solver budget ("skip" would become "over budget", as this plan
+predicted). Translation stack is measured safe to **16,000** deep let
+chains under ASan. The macro benchmark is a different species entirely:
+the file is **flat** (max paren depth 2) with 18,209 nullary `define-fun`s
+whose reference chain is 6,187 deep and whose naive expansion is
+**>= 1e18 tree nodes** -- 18,055 of the defs reference more than one other
+def, so re-expanding per reference is exponential. No cap raise can ever
+admit this file; the only fix that works is translating each nullary def
+**once** at definition time (bodies are flat and reference only earlier
+defs, so memoized translation is linear and recursion depth collapses to
+the body's textual depth, ~2). Roughly 25 lines.
+
+**Two live defects found by the probe, present under the current caps:**
+
+1. **`linearize` overflows the stack far below the reader's term cap.**
+   A pure-arithmetic chain `(+ 1 (+ 1 ...))` crashes
+   `refine_solver_arith.c:179` at depth **1000** in the ASan build
+   (survives 750) -- the reader's 6000 cap is ~7x above the solver's real
+   capacity, so a legal, in-cap corpus file can crash the child today.
+   Cause: `LinExp` (~800 B: 32 exact-rational coefficients) is passed and
+   returned **by value**, several copies per frame, inflated by ASan
+   redzones to multi-KB frames. Fix direction: depth-bound `linearize`
+   using its existing `bad` escape (a `bad` constraint is dropped, which
+   only ever weakens a refutation -- sound by construction), bound ~500
+   with margin below the measured floor; ~10 lines. An iterative rewrite
+   or pass-by-pointer plumbing are larger alternatives.
+2. **In the ASan build, that crash is silently counted as a pass.** ASan
+   aborts with exit code 1, which collides with `OUT_UNLABELLED`, so the
+   forked child's stack overflow tallies as "unlabelled" -- not `CRASH!`.
+   The "a crash is loud" design holds only for signal deaths; sanitizer
+   deaths are laundered into a category that never fails the suite. Fix:
+   move the outcome enum to distinctive values (e.g. 40..46) and treat any
+   unexpected exit status as a crash; ~5 lines. This should land **first**
+   -- it is what makes defect 1 (and anything like it) visible.
+
+**Revised sequencing, if item 2 is picked up:** (1) exit-code fix, (2)
+`linearize` depth bound, (3) cap raises -- `TR_MAX_LET_DEPTH` 4000 -> 6000
+(covers 4300 with margin, keeps total depth under the term cap) and
+`TR_MAX_TERM_DEPTH` 6000 -> 8000 (covers 6857; translation is measured
+safe to 16k, and with the `linearize` bound in place the deeper window is
+no longer a crash window), (4) nullary-macro memoization. Expected yield:
+3 skips -> 0, all three likely "over budget", zero new decided -- **plus**
+the regression net's crash reporting becomes trustworthy again, which is
+the part with value beyond these three files and the part this plan could
+not have known to ask for.
 
 ## Why this is optional
 
@@ -198,18 +258,15 @@ regression pair (labels already sealed):
 
 and the `sat` twin with `(> x 1.5)`.
 
-### Item 2's "macro expansion too deep" is likely a misdiagnosis, not a cap
+### Item 2's "macro expansion too deep" -- superseded by measurement
 
-Both macro-depth checks compare **total term depth** against
-`TR_MAX_DEF_DEPTH * 20` (= 1280), which is well below `TR_MAX_TERM_DEPTH`
-(6000). So any macro application sitting below depth 1280 in an otherwise
-legal term skips as "macro expansion too deep" -- with **zero** nested
-macros. Since `define-fun-rec` is unsupported, genuine macro nesting is
-bounded by textual definition nesting and cannot run away; tracking macro
-expansion in its own counter (increment around the two expansion sites,
-~6 lines) would fire only on real nesting and probably un-skips the QF_UFLRA
-benchmark **without raising any stack-relevant cap**. Worth doing if item 1
-is picked up; it is the same kind of small, principled fix.
+(An earlier version of this note hypothesised that the macro-depth check
+merely conflated total term depth with macro nesting and a dedicated
+counter would un-skip the QF_UFLRA benchmark. The conflation is real --
+both checks compare total depth against `TR_MAX_DEF_DEPTH * 20` -- but the
+measured file has a genuine 6,187-deep reference chain and an exponential
+naive expansion, so a counter alone fixes nothing. See "Item 2 findings"
+above for the measured picture and the memoization fix that does work.)
 
 The two QF_RDL depth-cap skips are genuinely what the plan says. One
 observation that de-risks a measured raise: `sx_read` recurses on the C
