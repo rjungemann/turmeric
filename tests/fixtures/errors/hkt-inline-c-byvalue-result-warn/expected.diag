@@ -1,0 +1,4 @@
+warning [TUR-W0042]
+inline-C body for 'fmap' in instance Functor [Box]
+Write the body in Turmeric, or make 'Box' :heap or defopaque
+no typeclass method found for 'val'

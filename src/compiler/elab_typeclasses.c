@@ -4347,6 +4347,49 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                 (method_body && method_body->kind == EX_INLINE_C);
         }
 
+        /* hkt-inline-c-instance-body-loses-result-type (TUR-W0042): an inline-C
+         * body whose class result is an applied `(f b)` over a BY-VALUE
+         * aggregate head.  The dispatch site can only commit the grounded
+         * result type when the result is already carrier-width -- an int-carrier
+         * newtype, a pointer-family handle, or a :heap ADT.  A by-value
+         * aggregate is none of those, and an inline-C body cannot be
+         * re-specialized at the concrete type the way a Turmeric body can, so
+         * the call's result stays `(type-app ? ?)` and fails at whatever tries
+         * to use it -- a diagnostic with no connection to this definstance.
+         *
+         * Warn rather than reject: the instance is well-formed and works fine
+         * until something consumes its result at a typed position, so an error
+         * would break code that compiles today.  This just puts the diagnosis
+         * at the cause. */
+        if (method_body && method_body->kind == EX_INLINE_C &&
+            i < tc->n_methods && tc->methods[i].return_type.kind == TY_APP &&
+            n_type_args > 0) {
+            Type head = type_args[0];
+            while (head.kind == TY_APP && head.as.app.fn) head = *head.as.app.fn;
+            /* Carrier-width heads are fine: rc/weak/ref/lref are pointers, and
+             * an opaque or :heap ADT is a carrier word / pointer respectively. */
+            bool head_is_ptr_family =
+                head.kind == TY_RC || head.kind == TY_WEAK ||
+                head.kind == TY_REF || head.kind == TY_LREF;
+            const AdtDef *hdef = head.kind == TY_ADT ? head.as.adt_.def : NULL;
+            bool head_is_carrier_width =
+                head_is_ptr_family ||
+                (hdef && (hdef->is_heap || hdef->is_opaque));
+            /* Only a head we can actually classify: an unresolved or tyvar head
+             * says nothing, and warning on it would be noise. */
+            if (hdef && !head_is_carrier_width) {
+                diag_emit_with_code(
+                    DIAG_WARNING, call->span, TUR_W0042_HKT_INLINE_C_BYVAL_RESULT,
+                    "inline-C body for '%s' in instance %s [%s]: calls will lose "
+                    "the result type (it is an applied result over a by-value "
+                    "aggregate, which an inline-C body cannot return by value). "
+                    "Write the body in Turmeric, or make '%s' :heap or defopaque",
+                    tc->methods[i].name ? tc->methods[i].name->name : "?",
+                    tc_name->name, hdef->name ? hdef->name : "?",
+                    hdef->name ? hdef->name : "?");
+            }
+        }
+
         /* Arrow head: the method's declared return was the class variable (the
          * function arrow), flagged as a boxed-TY_FN placeholder in pass 1.  Now
          * that the body is elaborated, refine the result's full signature from

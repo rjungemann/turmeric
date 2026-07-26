@@ -124,6 +124,14 @@ typedef enum DiagCode {
      * bound is now MAX_FN_ARITY (64) -- but a lint nudge toward the arity style
      * guide (a defstruct options value or a `& rest :type` variadic). */
     TUR_W0041_HIGH_ARITY,
+    /* hkt-inline-c-instance-body-loses-result-type: an inline-C instance-method
+     * body whose class result is an applied `(f b)` over a BY-VALUE aggregate
+     * head.  The dispatch site cannot commit the grounded result type there --
+     * the inline-C body returns the int64 carrier and cannot be re-specialized
+     * at the by-value type -- so the call's result stays the def-less
+     * `(type-app ? ?)` and fails at whatever tries to use it.  Warned at the
+     * definstance, which is the cause, rather than only at the call site. */
+    TUR_W0042_HKT_INLINE_C_BYVAL_RESULT,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

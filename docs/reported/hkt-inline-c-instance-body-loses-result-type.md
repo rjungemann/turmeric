@@ -57,11 +57,22 @@ Severity dropped to **low**: the remaining shape is narrow (parametric,
 non-`:heap`, non-opaque, inline-C-bodied), nothing in stdlib or the suite has
 one, and it fails loudly at the call site rather than miscompiling.
 
-The most valuable next step is probably fix direction 2's fallback -- **reject the
-shape with a real diagnostic at `definstance`** ("an inline-C instance body cannot
-return a by-value aggregate `(f b)`; make the ADT `:heap`, `defopaque`, or write
-the body in Turmeric"). That is strictly better than the current
-`got (type-app ? ?)` at a call site far from the cause.
+**Done 2026-07-26: the diagnostic now exists** -- `TUR-W0042`, emitted at the
+`definstance` rather than at the call site, with the three fixes named
+(Turmeric body / `:heap` head / `defopaque` head) and `rc<T>`-family heads
+explicitly excluded. `tur explain TUR-W0042` carries the long form; the shape is
+also written up under "Known Limitations" in
+`docs/guides/hkt-guide.md`. Pinned by
+`tests/fixtures/errors/hkt-inline-c-byvalue-result-warn`.
+
+It is a **warning, not a rejection**, which is a deliberate departure from what
+this report originally proposed. The instance is well-formed and works fine until
+something consumes its result at a typed position, so erroring would break code
+that compiles today. The call-site error still fires for anyone who does consume
+it; the warning just puts the diagnosis at the cause.
+
+What remains is the underlying limitation itself, which is unchanged and still
+needs producer-side work to actually lift.
 
 The original report follows; its "Root cause" section is superseded by the above.
 
