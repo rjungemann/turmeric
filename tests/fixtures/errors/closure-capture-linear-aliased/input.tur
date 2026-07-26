@@ -1,0 +1,12 @@
+;; closure-capture-escapes-linearity: the aliasing shape.  Neither call site is
+;; locally suspicious -- f is called once and g is called once -- and only the
+;; fact that g IS f makes it a double consume.  Linearity on the closure is what
+;; connects them (TUR-E0101).
+(load "stdlib/serial.tur")
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (let [f (fn [] : void (bytes-free b))]
+      (let [g f]
+        (f)
+        (g))))
+  0)

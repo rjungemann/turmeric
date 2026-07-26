@@ -761,8 +761,18 @@ Expr *elab_let(Elab *e, const Form *call) {
             /* Upgrade copy_kind to CK_LINEAR on the binding's type */
             b->type.copy_kind = CK_LINEAR;
         }
-        /* UT0: Mark binding as unique if annotated with ^unique */
-        if (is_unique_ann) {
+        /* UT0: Mark binding as unique if annotated with ^unique.
+         *
+         * closure-capture-escapes-linearity: also when the initializer is a
+         * CLOSURE that inherited CK_UNIQUE from a captured unique value it
+         * consumes (elab_fns.c).  Deliberately narrower than the CK_LINEAR case
+         * above, which accepts any initializer type: CK_UNIQUE is carried by
+         * ordinary `ref<T>` values too, so inferring from it in general would
+         * silently make every `(let [r (ref 7)] ...)` unique -- a much larger
+         * behaviour change than this report calls for.  A TY_FN is the only
+         * shape that can pick up CK_UNIQUE the new way. */
+        if (is_unique_ann
+            || (init->type.kind == TY_FN && init->type.copy_kind == CK_UNIQUE)) {
             b->is_unique = true;
             b->type.copy_kind = CK_UNIQUE;
         }

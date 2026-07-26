@@ -153,6 +153,27 @@ typedef struct TuriEnv {
     Arena       sym_arena;       /* SymbolTable string storage — permanent */
     SymbolTable st;              /* Persistent symbol table */
     Buf         src_acc;         /* Accumulated prior source text */
+    /* The leading region of src_acc that a reader-type change must NOT discard:
+     * the stdlib preload every interpreter entry point evaluates into this same
+     * env before handing it to a user.  A `#lang` switch resets src_acc because
+     * prior input cannot be re-parsed under an incompatible reader -- but the
+     * preload is not user input, and dropping it took `hamt-of` (and the rest of
+     * the stdlib) with it, so the first collection literal after a switch failed
+     * as "unknown function or operator".
+     *
+     * Captured by turi_env_pin_prelude once the preload sequence has run;
+     * restored by turi_env_reset_to_prelude at every reader-switch site.  The
+     * accumulation counters are pinned alongside the length so the prelude comes
+     * back marked ALREADY-RUN rather than replayed: re-running it would re-execute
+     * `(load "stdlib/...")` forms whose module registration is deduped by the
+     * elaborator, which re-established the stdlib on a first switch and silently
+     * failed to on the second.  src_pin_len == 0 means nothing is pinned, which
+     * reproduces the historical "discard everything" behaviour. */
+    size_t      src_pin_len;
+    uint32_t    pin_toplevel;    /* prior_toplevel at pin time */
+    uint32_t    pin_prog_items;  /* prior_prog_items at pin time */
+    uint32_t    pin_acc_forms;   /* n_acc_forms at pin time */
+    uint32_t    pin_next_line;   /* acc_next_line at pin time */
     uint32_t    prior_toplevel;  /* Count of top-level PARSED forms from prior evals */
     /* Count of already-evaluated non-file-scope-def PROGRAM items from prior
      * evals. Distinct from prior_toplevel: a (load ...) form expands inline to
@@ -474,6 +495,24 @@ void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
  * reader-type change, a `define` rewrite), so correctness never depends on the
  * fast path applying.  Safe to toggle between top-level eval cycles. */
 void turi_env_set_incremental_elab(TuriEnv *env, bool enable);
+
+/* Pin everything accumulated in env->src_acc so far as the stdlib prelude, so a
+ * later reader-type change keeps it instead of emptying src_acc.  Call once,
+ * after the turi_env_preload_* sequence and before the env is handed to a user;
+ * all three interpreter entry points (native REPL, `--interpret`, WASM) do.
+ * Only reader-agnostic plain s-expressions may be pinned -- the pinned text is
+ * re-read under the NEW reader after a switch, a property src/main.c's file-eval
+ * pre-detect already relies on.  Idempotent; a second call re-pins at the
+ * current position. */
+void turi_env_pin_prelude(TuriEnv *env);
+
+/* Perform a reader-switch reset: drop accumulated USER source and the
+ * elaboration session built from it, rewinding to the pinned prelude (or to
+ * empty when nothing is pinned).  The caller sets env->reader_type itself --
+ * this only handles the accumulation state, which every switch site
+ * (turi_eval_impl, turi_eval_file, the REPL's `#lang` handler, and the WASM
+ * set-lang entry point) previously open-coded and had to keep in sync. */
+void turi_env_reset_to_prelude(TuriEnv *env);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

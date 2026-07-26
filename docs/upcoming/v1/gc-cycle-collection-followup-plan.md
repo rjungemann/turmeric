@@ -452,10 +452,12 @@ baseline."
   linearity checker entirely, and calling it twice double-frees (confirmed under
   ASan). `rc` is a vector -- `(rc/of closure)` is accepted where
   `(rc/of linear-value)` is rejected -- but the minimal repro needs no `rc`.
-  Filed as
-  [docs/reported/closure-capture-escapes-linearity.md](../../reported/closure-capture-escapes-linearity.md);
-  the fix is in the substructural checker, not the collector, so it does not
-  gate CG8.
+  **FIXED 2026-07-26** -- a closure that CONSUMES a captured linear/unique value
+  now inherits its `copy_kind`, so the double call is TUR-E0101, `(rc/of f)` is
+  TUR-E0103, and dropping it is TUR-E0100. Archived at
+  [docs/archive/closure-capture-escapes-linearity.md](../../archive/closure-capture-escapes-linearity.md).
+  The fix was in the substructural checker, not the collector, so it never gated
+  CG8.
 - **Two collectors in one process.** **VERIFIED 2026-07-26 -- sound, but for a
   different reason than this assumed.** Measured: the DEDUP-5 visibility
   hardening holds (0 exported `gc_*`/`rc_*` dynamic symbols), the registries are
@@ -467,8 +469,10 @@ baseline."
   inspection on the path *before* that guard (`gc_remove_suspect` clearing
   `gc_buffered` on a foreign block) has been hardened in both collector copies.
   Cross-boundary *cycles* remain uncollectable by either collector -- a leak, same
-  class as the `Vec`/HAMT blind spot. See
-  [docs/reported/two-collectors-dlopen-boundary.md](../../reported/two-collectors-dlopen-boundary.md).
+  class as the `Vec`/HAMT blind spot. Written up for users in
+  [docs/guides/gc-guide.md](../../guides/gc-guide.md) ("Two collectors in one
+  process") and archived at
+  [docs/archive/two-collectors-dlopen-boundary.md](../../archive/two-collectors-dlopen-boundary.md).
 
 ## Related plans
 
