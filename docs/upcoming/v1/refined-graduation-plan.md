@@ -59,11 +59,21 @@ Verified against the current tree; each item is small.
    breaks every file that opted in per-file, which is the population most likely
    to have adopted the feature deliberately.
 
-   **Work item, not just a decision:** add a graduated-layers list mirroring
-   `GRADUATED[]` in `experiments.c`, so a retired layer token warns and is
-   ignored for one minor line. `refined` would be its first entry; `stringed` is
-   the only other layer and is not graduating. Do this BEFORE deleting the row,
-   or the two changes have to land together.
+   **DONE (landed ahead of graduation).** `GRADUATED_LAYERS[]` and
+   `lang_layer_is_graduated()` now exist in `lang_layers.c`, mirroring
+   `GRADUATED[]` in `experiments.c`; the reader accepts and ignores a listed
+   token with a one-time `TUR-W0064`. The list is deliberately **empty** -- no
+   layer has graduated yet.
+
+   So step 3 is now two lines: add `"refined"` to `GRADUATED_LAYERS[]` and
+   delete the `LANG_LAYERS[]` row, in the same commit. The shim landing first
+   is the point: adding it afterwards would ship one release in which every
+   `#lang turmeric refined` file breaks.
+
+   Verified with a temporary entry before landing empty -- a graduated token
+   warned once and compiled on both the compiled and interpreter paths, an
+   unknown token still reported `TUR-E0330`, and the live `stringed` layer was
+   unaffected.
 4. **Retire `g_opt_refined`.** 15 call sites read it: `elab_fns.c` (9),
    `elab_typeclasses.c` (4), `elab_call.c` (1), `elab_toplevel.c` (1). Delete
    the conditionals rather than hard-coding the global to `true`, so a reader is

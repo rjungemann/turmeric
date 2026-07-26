@@ -4180,6 +4180,12 @@ ReaderType detect_lang_layered(const char *src, size_t len,
                 long idx = lang_layer_index(tok, tok_len);
                 if (idx >= 0) {
                     *out_layers = lang_layer_add(*out_layers, idx);
+                } else if (lang_layer_is_graduated(tok, tok_len)) {
+                    /* Accepted and ignored: the layer's behaviour is now
+                     * unconditional, so the token asks for something already
+                     * true.  Reporting it as unknown would break every file
+                     * that opted in per-file at the moment the feature stopped
+                     * being optional.  Warns once, inside the lookup. */
                 } else if (out_bad && *out_bad == NULL) {
                     *out_bad = tok;              /* first unknown token */
                     if (out_bad_len) *out_bad_len = tok_len;

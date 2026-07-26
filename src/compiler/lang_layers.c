@@ -12,6 +12,7 @@
  * one-off syntax convenience belongs in a `#use-reader-macros` file. */
 #include "lang_layers.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "diag.h"
@@ -78,6 +79,60 @@ static const LangLayerDescriptor LANG_LAYERS[] = {
       "static discharge of #refine{...} predicates (refinement types)",
       "v1" },
 };
+
+/* ------------------------------------------------------------------------- *
+ * Graduated layers.
+ *
+ * A `#lang` layer that graduates is DELETED from LANG_LAYERS[] -- CLAUDE.md is
+ * explicit that layers graduate to always-on rather than accumulating.  But a
+ * deleted row makes every file that still names the token fail outright with
+ * TUR-E0330, and that is a harsher landing than the same graduation gives a
+ * CLI flag: `--enable=<graduated>` is accepted as a no-op with TUR-W0063,
+ * because `GRADUATED[]` in experiments.c exists for exactly that.
+ *
+ * This is the layer-side equivalent.  A name listed here is accepted and
+ * ignored, with a one-time notice, so a file carrying `#lang turmeric <name>`
+ * keeps compiling across the graduation boundary.  Entries age out one minor
+ * line after graduation, matching the experiment convention -- the shim is a
+ * migration window, not a permanent alias.
+ *
+ * Deliberately empty today: no layer has graduated yet.  `refined` becomes the
+ * first entry when it does; `stringed` is the only other layer and is not
+ * graduating.  The list exists ahead of that because the shim has to land
+ * BEFORE or WITH the row deletion -- adding it afterwards would mean shipping
+ * one release in which the files break.  See
+ * docs/upcoming/v1/refined-graduation-plan.md.
+ *
+ * The mechanism was verified with a temporary entry before landing empty: a
+ * graduated token warned once and compiled (exit 0) on both the compiled and
+ * the interpreter path, a genuinely unknown token still reported TUR-E0330,
+ * and a live layer was unaffected.  Testing it that way rather than at
+ * graduation is the point -- an empty list exercises nothing, and graduation
+ * is the worst moment to find out the shim does not work.
+ * ------------------------------------------------------------------------- */
+static const char *const GRADUATED_LAYERS[] = {
+    NULL,
+};
+
+static bool g_layer_grad_warned = false;
+
+bool lang_layer_is_graduated(const char *name, size_t len) {
+    if (!name) return false;
+    for (size_t i = 0; GRADUATED_LAYERS[i]; i++) {
+        if (strlen(GRADUATED_LAYERS[i]) == len &&
+            memcmp(GRADUATED_LAYERS[i], name, len) == 0) {
+            if (!g_layer_grad_warned) {
+                g_layer_grad_warned = true;
+                fprintf(stderr,
+                        "warning [TUR-W0064]: #lang layer '%.*s' graduated and "
+                        "is now on by default; the token is no longer needed\n",
+                        (int)len, name);
+            }
+            return true;
+        }
+    }
+    return false;
+}
 
 size_t lang_layers_count(void) {
     return sizeof(LANG_LAYERS) / sizeof(LANG_LAYERS[0]);
