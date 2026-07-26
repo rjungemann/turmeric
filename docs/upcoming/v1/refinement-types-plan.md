@@ -1607,6 +1607,15 @@
 >
 > ### Next slice
 >
+> Two pieces of remaining work now have their own plans:
+>
+> - [refined-graduation-plan.md](refined-graduation-plan.md) -- the decision and
+>   the mechanical checklist for removing the gate. The clock (`expires_at`
+>   `0.34.0`) makes this the only item with a deadline.
+> - [corpus-reader-tail-plan.md](corpus-reader-tail-plan.md) -- the last 7
+>   skips in the SMT-LIB corpus reader, with a recommendation to do one of the
+>   two items and skip the other.
+>
 > Candidates, roughly by value:
 >
 > - **Dynamic typeclass dispatch** -- INVESTIGATED; the entry was mis-scoped.
