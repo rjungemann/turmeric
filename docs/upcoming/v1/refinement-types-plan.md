@@ -2817,6 +2817,27 @@ always sound.
    the retirement decision: the corpus now exercises the solver rather than the
    parser.
 
+   **Measured, and NOT acted on: the compiler has no wall-clock bound on the
+   solver, and does not need one.** Reading that 40 external benchmarks exceed a
+   3s budget invites the conclusion that a user's refinement could hang a build.
+   It cannot, and the reason is that the cost tracks input SIZE rather than
+   being a blowup a small predicate can trigger:
+
+   - over-budget benchmarks have a median size of 482KB against 28.6KB for
+     decided ones, and the SMALLEST that times out is 63KB;
+   - the structural bounds are real and they bite -- `REFINE_MAX_CUBES`,
+     `REFINE_MAX_CUBE_LITS`, `REFINE_MAX_LA_CONSTR`, `REFINE_MAX_LA_VARS`, and
+     `NO_MAX_ROUNDS` each degrade to `Unknown`, which is always safe;
+   - adversarial Turmeric programs stay fast: 400 disequalities in one predicate
+     (cube-expansion territory, where each disequality doubles the DNF) checks
+     in 196ms, and a 120-deep `let` chain feeding a refined callee in 684ms.
+
+   A wall-clock bound would therefore buy nothing a user can reach, while
+   introducing exactly the non-determinism a compiler should not have -- the
+   same program failing to prove on a loaded machine. Pinned by
+   `tests/fixtures/refine-cube-expansion-bounded`, which uses the suite's own
+   per-fixture timeout as the guard rather than asserting a duration.
+
    The bar for deletion is that the corpus decides a large majority of what it
    is handed AND has been clean across a soak window. "Decides" is the operative
    word: a benchmark that is skipped or times out contributes nothing to trust,
