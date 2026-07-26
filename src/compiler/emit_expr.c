@@ -1040,6 +1040,35 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
                 !type_has_concrete_codegen_layout(&sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
+            /* hkt-inline-c-instance-body-loses-result-type: a DISPATCH call to
+             * an inline-C instance method.  Its declared result is the CLASS's
+             * applied `(f b)`, which resolves abstractly here (c-name int64_t),
+             * so every recovery above misses it -- but the typer has already
+             * grounded the CALL's own result to the concrete `(Box int)`.
+             *
+             * Whether the consumer must bridge is exactly "did the callee return
+             * the carrier?", which is the question emit_fns.c answers when it
+             * emits the signature.  Ask it through the shared predicate rather
+             * than re-deriving it from the type's shape: guessing here reported
+             * a carrier for inline-C functions that genuinely return BY VALUE,
+             * and the consume-side bridge then deref'd a value that was never a
+             * pointer (`aggregate value used where an integer was expected`, on
+             * inline-c-struct-return-cstr-params and io-stdlib-roundtrip).
+             *
+             * The grounded type must itself have a concrete layout -- that is
+             * what the consumer will declare -- which is the mirror image of the
+             * branch above, where the DECLARED result deliberately has none. */
+            if (cb->type.as.fn.result_full_type->kind == TY_APP &&
+                !inline_c_returns_byvalue_adt(ctx, true,
+                                              cb->type.as.fn.result_full_type)) {
+                Type cr = emit_resolve_type(ctx, x->type);
+                if (cr.kind == TY_APP &&
+                    !type_uses_carrier_abi(cr) &&
+                    !type_is_heap_struct(cr) && !type_is_heap_adt(cr) &&
+                    type_app_is_concrete_adt(&cr) &&
+                    strcmp(emit_type_c_name(ctx, cr), "int64_t") != 0)
+                    return cr;
+            }
         }
         /* CONV-S1 seam 4 (bounded-wrapper struct return): the body tail is a
          * direct call to a concrete instance method whose by-value aggregate
@@ -2794,6 +2823,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * value would only add a value-preserving no-op cast, never a wrong one. */
     {
         const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
+        /* hkt-fmap-result-is-not-droppable: a carrier-dispatched typeclass method
+         * whose call-node result type was REFINED to a pointer-family handle.
+         *
+         * `__inst_Functor_fmap_T` returns the int64 carrier, but the call node's
+         * type is now the grounded `rc<int>` (elab_typeclasses.c collapses an
+         * applied HKT result `(f b)` over a pointer-family head so the result can
+         * be `rc/drop`ped).  `rc<int>` c-names to `RcControlBlock *`, so recording
+         * the temp as a concrete pointer hides the int64->pointer straddle from the
+         * binder-init bridge below and `RcControlBlock *m = __ps_N;` becomes a
+         * -Wint-conversion in the user's own build.
+         *
+         * Scoped to exactly that shape: the call node's type is a pointer-family
+         * handle AND the callee's own declared result is an applied HKT `(f b)`
+         * (TY_APP), which is what identifies the refinement.  Keying only on
+         * "callee c-names to int64_t" is far too broad -- a BY-VALUE SPECIALIZED
+         * callee (`vec_new__spec__tur_adt_Vec__int__`) really does return the
+         * concrete pointer while its generic signature still c-names to the
+         * carrier, and overriding there adds a redundant cast to every such site
+         * (140 fixtures of churn). */
+        if (rcty && e->kind == EX_CALL && e->as.call_.fn_binding &&
+            e->as.call_.fn_binding->type.kind == TY_FN &&
+            (e->type.kind == TY_RC || e->type.kind == TY_WEAK ||
+             e->type.kind == TY_REF || e->type.kind == TY_LREF)) {
+            const Binding *cb = e->as.call_.fn_binding;
+            const Type *cret = cb->type.as.fn.result_full_type;
+            if (cret && cret->kind == TY_APP) rcty = "int64_t";
+        }
         size_t rL = rcty ? strlen(rcty) : 0;
         bool recorded = false;
         if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0) {
@@ -6511,13 +6567,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * untouched; the RcControlBlock carrier slot is excluded. */
                     else if (rec_c) {
                         size_t rL = strlen(rec_c);
+                        /* hkt-foldable-rc-param: `RcControlBlock *` used to be
+                         * excluded here.  It has to be bridged like any other
+                         * concrete pointer now that an HKT instance body can hold
+                         * its receiver as a real `rc<a>` whose ABI slot is still
+                         * the int64 carrier -- `_un_unrc_hyvalue(ta)` with `ta`
+                         * declared `int64_t` is a -Wint-conversion otherwise.  The
+                         * `acty == "int64_t"` guard below already restricts this to
+                         * an arg that genuinely emits as the carrier, so an rc arg
+                         * that is already the pointer is untouched either way. */
                         bool rec_is_conc_ptr = rL >= 2 && rec_c[rL - 1] == '*' &&
-                            strcmp(rec_c, "void *") != 0 &&
-                            strncmp(rec_c, "RcControlBlock", 14) != 0;
+                            strcmp(rec_c, "void *") != 0;
                         const char *acty = emit_binding_repr_c_name(
                             ctx, emit_arg->type, emit_arg);
-                        if (rec_is_conc_ptr && acty &&
-                            strcmp(acty, "int64_t") == 0) {
+                        /* hkt-foldable-rc-param: emit_binding_repr_c_name only
+                         * models CARRIER-ABI types -- it returns the by-value
+                         * c-name immediately for anything else, so an `rc<a>`
+                         * binding reports `RcControlBlock *` and never reveals
+                         * that its parameter slot is really the int64 carrier.
+                         * emit_carrier_holds_ptr is the flag that does record
+                         * exactly that, so consult it as a second signal. */
+                        bool arg_slot_is_carrier =
+                            emit_arg->kind == EX_VAR && emit_arg->as.var.binding &&
+                            emit_arg->as.var.binding->emit_carrier_holds_ptr;
+                        if (rec_is_conc_ptr &&
+                            ((acty && strcmp(acty, "int64_t") == 0) ||
+                             arg_slot_is_carrier)) {
                             Buf _fb; buf_init(&_fb);
                             buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
                             buf_putc(&_fb, '\0');

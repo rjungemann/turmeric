@@ -5428,11 +5428,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                  * definition and the dict slot. */
                 Type rft_r = rft ? emit_resolve_type(ctx, *rft)
                                  : type_simple(TY_UNKNOWN, CK_COPY);
-                bool typed_byval_adt = body_is_inline_c && rft &&
-                    (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
-                    !type_uses_carrier_abi(rft_r) &&
-                    !type_is_heap_adt(rft_r) &&
-                    type_has_concrete_codegen_layout(&rft_r);
+                bool typed_byval_adt =
+                    inline_c_returns_byvalue_adt(ctx, body_is_inline_c, rft);
                 /* inline-c-rc-return-misses-carrier-bridge: mirror emit_fns.c --
                  * an owning return lowers to RcControlBlock * even for inline-C
                  * bodies, so the forward decl agrees with the definition. */
@@ -9716,6 +9713,24 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!cb) return 0;\n");
     buf_puts(out, "    return ++cb->strong_count;\n");
     buf_puts(out, "}\n\n");
+    /* Mirror of rc_release_value in src/runtime/rc.c: run the block's value
+     * teardown exactly once and mark it done by nulling `value`, so every later
+     * path (rc_weak_decrement, the free queue, a gc sweep) skips it instead of
+     * double-dropping.  The two copies must stay in step -- see the DEDUP-1
+     * layout guard note in rc.c. */
+    buf_printf(out, "%svoid rc_release_value(RcControlBlock *cb) {\n", rcgc_helper);
+    buf_puts(out, "    if (!cb || !cb->value) return;\n");
+    /* F1-2-4: an RCEXP_RC existential payload holds an inner RcControlBlock
+     * pointer in its first 8 bytes; release it before the value's own drop
+     * hook fires so the inner allocation does not leak. */
+    buf_puts(out, "    if (cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {\n");
+    buf_puts(out, "        int64_t __raw = *(const int64_t *)cb->value;\n");
+    buf_puts(out, "        RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;\n");
+    buf_puts(out, "        if (__inner) rc_strong_decrement(__inner);\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (cb->drop_fn) cb->drop_fn(cb->value);\n");
+    buf_puts(out, "    cb->value = NULL;\n");
+    buf_puts(out, "}\n\n");
     buf_printf(out, "%sbool rc_strong_decrement(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return false;\n");
     /* CG2: drop glue for a cycle member decrements children that are also being
@@ -9727,6 +9742,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    cb->strong_count--;\n");
     buf_puts(out, "    if (cb->strong_count == 0) {\n");
     buf_puts(out, "        if (cb->weak_count > 0) {\n");
+    /* stdlib-weak-ref-audit WR1: the VALUE dies at strong 0 (as Rust's Rc
+     * does); only the control block lives on so a weak observer is told
+     * "gone" rather than dangling.  Deferring the value teardown to
+     * rc_weak_decrement deadlocks the parent/child cycle break -- the
+     * surviving weak lives inside the parent's own value, which only the
+     * value's drop glue can release.  See the rc.c copy for the measurement. */
+    buf_puts(out, "            rc_release_value(cb);\n");
     buf_puts(out, "            gc_on_strong_decrement(cb);\n");
     buf_puts(out, "            return false;\n");
     buf_puts(out, "        } else {\n");
@@ -9749,20 +9771,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    cb->weak_count--;\n");
     buf_puts(out, "    if (cb->weak_count == 0 && cb->strong_count == 0) {\n");
     buf_puts(out, "        gc_unregister_block(cb);\n");
-    /* F1-2-4: same smart-drop dispatch as rc_free_queue_drain.  The
-     * weak path runs when the last weak ref is released after the
-     * value already reached zombie state; if the zombie's payload is
-     * an RCEXP_RC pointer, we still need to decrement the inner ref
-     * before freeing the outer block. */
-    buf_puts(out, "        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {\n");
-    buf_puts(out, "            int64_t __raw = *(const int64_t *)cb->value;\n");
-    buf_puts(out, "            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;\n");
-    buf_puts(out, "            if (__inner) rc_strong_decrement(__inner);\n");
-    buf_puts(out, "        }\n");
-    buf_puts(out, "        /* Free zombie value if GC did not already collect it */\n");
-    buf_puts(out, "        if (cb->value && cb->drop_fn) {\n");
-    buf_puts(out, "            cb->drop_fn(cb->value);\n");
-    buf_puts(out, "        }\n");
+    /* Release the value if nothing has yet -- normally the zombie transition
+     * in rc_strong_decrement already did, and rc_release_value is then a
+     * no-op.  This still covers a block that never went through that path. */
+    buf_puts(out, "        rc_release_value(cb);\n");
     buf_puts(out, "        free(cb);\n");
     buf_puts(out, "        return true;\n");
     buf_puts(out, "    }\n");

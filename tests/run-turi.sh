@@ -114,7 +114,21 @@ fixture_has_inline_c() {
     if   [ -f "$dir/input.tur" ]; then f="$dir/input.tur"
     elif [ -f "$dir/$(basename "$dir").tur" ]; then f="$dir/$(basename "$dir").tur"
     else return 1; fi
-    grep -q '```c' "$f" 2>/dev/null
+    grep -q '```c' "$f" 2>/dev/null && return 0
+    # The carve-out is about whether the PROGRAM contains inline-C, not whether
+    # that inline-C is spelled in the fixture file.  A fixture that reaches it
+    # through `(load "stdlib/<mod>.tur")` -- e.g. the rc/weak fixtures, whose
+    # inline-C lives in the loaded module -- is just as unrunnable under the
+    # tree-walking interpreter, but the own-file grep above says otherwise and
+    # the fixture then runs and fails on the first unsupported call.  Follow one
+    # level of `load`, which is all any fixture uses.
+    local loaded
+    while IFS= read -r loaded; do
+        [ -n "$loaded" ] || continue
+        [ -f "$loaded" ] || continue
+        grep -q '```c' "$loaded" 2>/dev/null && return 0
+    done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)
+    return 1
 }
 
 # W5 flip: a small set of fixtures carry a ```c block yet DO run correctly under

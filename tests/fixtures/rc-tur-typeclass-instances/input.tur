@@ -1,0 +1,47 @@
+; The fixture whose absence was the bug: nothing in the tree loaded
+; stdlib/rc.tur, so its C stage was never reached and three broken inline-C
+; bodies sat there indefinitely.
+;
+; `tur check stdlib/rc.tur` exited 0 the whole time -- the module type-checks
+; fine. Only cc failed, on two independent errors:
+;
+;   * Functor/fmap called tur_rc_of / tur_rc_clone / tur_rc_ptr / tur_rc_drop.
+;     Those four names exist NOWHERE in the tree -- not in src/runtime/rc.h,
+;     not in the emitted preamble. The real API is rc_cb_alloc / rc_get_value /
+;     rc_strong_increment / rc_strong_decrement.
+;
+;   * Foldable/foldl and foldr cast `fn` with
+;     (int64_t(*)(int64_t,int64_t))(intptr_t)fn. Under the TYPED Foldable
+;     signature `fn` is a tur_poly_fn_t STRUCT, so that is
+;     "aggregate value used where an integer was expected". A comment in the
+;     module claimed the cast was verified suite-byte-identical; no fixture
+;     loaded the module, so nothing had been verified.
+;
+; So this fixture asserts values, not just "it compiles" -- a wrong poly-fn
+; calling convention would compile and then read garbage for `init`/`value`.
+; See docs/archive/rc-tur-legacy-instances-do-not-compile.md.
+(load "stdlib/rc.tur")
+
+(defn dbl [x : int] : int (* x 2))
+(defn add [a : int b : int] : int (+ a b))
+(defn sub [a : int b : int] : int (- a b))
+
+(defn main [] : int
+  (let [r (rc/of 21)]
+    ;; An rc holds exactly one value, so a fold is one application of fn.
+    ;; Argument ORDER is what pins the 2-arg convention: foldl passes
+    ;; (init, value) and foldr passes (value, init), and `sub` is not
+    ;; commutative, so a swapped or garbage argument shows up in the output.
+    (println (:: (foldl r 100 add) int))     ; 100 + 21 = 121
+    (println (:: (foldr r 100 sub) int))     ; 21 - 100 = -79
+    (println (:: (foldl r 0 sub) int))       ; 0 - 21 = -21
+
+    ;; fmap builds a NEW rc around fn's result; the original is untouched.
+    (let [m (fmap r dbl)]
+      (println (:: (foldl m 0 add) int)))    ; 42
+
+    ;; fmap borrows its container. The old body cloned the block just to read
+    ;; one field and dropped it again, so this also pins that the pointless
+    ;; refcount round-trip is gone.
+    (println (rc/strong-count r)))           ; 1
+  0)

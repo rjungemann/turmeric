@@ -2800,6 +2800,17 @@ uint64_t rc_strong_increment(RcControlBlock *cb) {
     return ++cb->strong_count;
 }
 
+static void rc_release_value(RcControlBlock *cb) {
+    if (!cb || !cb->value) return;
+    if (cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
+        int64_t __raw = *(const int64_t *)cb->value;
+        RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
+        if (__inner) rc_strong_decrement(__inner);
+    }
+    if (cb->drop_fn) cb->drop_fn(cb->value);
+    cb->value = NULL;
+}
+
 bool rc_strong_decrement(RcControlBlock *cb) {
     if (!cb) return false;
     if (cb->gc_collecting) {
@@ -2809,6 +2820,7 @@ bool rc_strong_decrement(RcControlBlock *cb) {
     cb->strong_count--;
     if (cb->strong_count == 0) {
         if (cb->weak_count > 0) {
+            rc_release_value(cb);
             gc_on_strong_decrement(cb);
             return false;
         } else {
@@ -2830,15 +2842,7 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
         gc_unregister_block(cb);
-        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
-            int64_t __raw = *(const int64_t *)cb->value;
-            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
-            if (__inner) rc_strong_decrement(__inner);
-        }
-        /* Free zombie value if GC did not already collect it */
-        if (cb->value && cb->drop_fn) {
-            cb->drop_fn(cb->value);
-        }
+        rc_release_value(cb);
         free(cb);
         return true;
     }

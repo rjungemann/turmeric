@@ -1,0 +1,37 @@
+; stdlib-weak-ref-audit WR4: the stdlib/weak.tur surface (WR1), end to end.
+;
+; The two things a weak reference has to get right, and the counts that prove
+; it:
+;
+;   alive -- (weak/upgrade w) hands back a NEW strong handle, so the count goes
+;     up by one and comes back down when the caller drops it. A weak that
+;     silently shared the existing count would leave the count unchanged here
+;     and double-free at the drop.
+;
+;   dead -- once the last strong handle is gone, upgrade reports none rather
+;     than a dangling pointer. This is what makes weak observation safe rather
+;     than merely cheap: there is no way to read through a weak without first
+;     asking whether the value is still there.
+(load "stdlib/weak.tur")
+
+(defn main [] : int
+  ;; --- referent alive ------------------------------------------------------
+  (let [r (rc/of 42)]
+    (let [w (rc/downgrade r)]
+      (println (rc/strong-count r))         ; 1 -- a weak adds no strong count
+      (println (weak/alive? w))             ; true
+      (let [o (weak/upgrade w)]
+        (println (some? o))                 ; true
+        (let [s (weak/unwrap o)]
+          (println (rc/strong-count s))     ; 2 -- the upgrade minted one
+          (rc/drop s)))
+      (println (rc/strong-count r))         ; 1 -- and we handed it back
+      (weak/drop w)))
+
+  ;; --- referent gone -------------------------------------------------------
+  ;; r2 dies at the inner scope exit; w2 outlives it.
+  (let [w2 (let [r2 (rc/of 99)] (rc/downgrade r2))]
+    (println (weak/alive? w2))              ; false
+    (println (some? (weak/upgrade w2)))     ; false
+    (weak/drop w2))
+  0)
