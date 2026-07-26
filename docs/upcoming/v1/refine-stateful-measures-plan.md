@@ -6,11 +6,50 @@ description: A measure must be provably pure to be congruent, which makes every 
 
 # Refinements Over Mutable State (`RM-S`)
 
-**Status:** design open. This plan states the problem and two candidate
-answers; it does **not** pick one, and picking one is the first phase.
+**Status:** RM-S0 (dogfooding) **done 2026-07-26**; the A-vs-B decision is
+**awaiting sign-off** (RM-S1/RM-S2 do not start without it). This plan states
+the problem and two candidate answers; RM-S0 wrote both surfaces by hand in
+`tur-ecs`, ran the epoch one, and produced a recommendation -- see the status
+block below.
 **Depends on:** [refinement-types-plan.md](refinement-types-plan.md).
 **Feeds:** [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md)
 gap C2 -- hard-blocking for that plan's RE1.
+
+> **Status 2026-07-26 -- RM-S0 done, recommending Candidate B; decision open.**
+> Both surfaces were written and read in `tur-ecs` (full artifact:
+> `turmeric-spices/docs/ecs-rms0-stateful-refinement-dogfood.md`). RM-S0 was run
+> *after* C1/RM-B1 landed, so the epoch surface is now testable rather than
+> hypothetical. Empirical results (`TUR_REFINE_STATS=1 --enable=refined`):
+>
+> | case | result |
+> |---|---|
+> | A.1 epoch as a **pure struct field**, clean guard->read | **1 proven** |
+> | A.2 direct `set!` between guard and read | 1 unknown (sound invalidation) |
+> | A.3 epoch behind the **real `tur-ecs` inline-C handle** | 1 unknown (the wall) |
+>
+> **Reading:** the epoch surface does **not** read acceptably for `tur-ecs`, and
+> not because of call-site verbosity. It fails on two structural points a lint
+> cannot fix: (a) it does not discharge against the *shipped* world (A.3) -- the
+> state is shared heap behind a handle, so `world-epoch` is inline C and impure;
+> making it discharge means restructuring `sized-world.tur` into by-value
+> struct-field state and giving up the shared-world write-propagation the
+> scheduler relies on; and (b) its soundness rests on an **unenforced** bump
+> discipline (bad point 1), whose failure is an elided use-after-despawn check.
+>
+> Per this plan's own decision rule, that points to **Candidate B** (scoped
+> congruence windows via the linear caps `ecs/cap` already ships). B's failure
+> mode is "region smaller than it could be" (loses proofs, keeps checks --
+> sound); A's is "check elided that shouldn't be" (unsound). The counterweight
+> is size: B is a real language addition (declared mutation rows + region form +
+> a third hypothesis-invalidation site), staged as B1 (checked mutation rows,
+> no VC interaction) -> B2 (region form + cap borrow) -> B3 (the congruence-window
+> link, behind `--enable=refined`, fuzzed with the `stateful` sabotage). A-with-
+> a-lint is small but buys no working ECS aliveness proof here, so it is not a
+> cheaper win -- it is not a win.
+>
+> **Decision needed before RM-S1/RM-S2:** commit to building B (a multi-slice
+> compiler project), or defer C2 (and RE1) as too large for now. Not startable
+> without that call.
 
 ## The problem
 
@@ -175,7 +214,7 @@ anyone writes the annotations**.
 
 So RM-S0 is not an implementation phase.
 
-### RM-S0 -- Write both surfaces by hand, in `tur-ecs`, and read them
+### RM-S0 -- Write both surfaces by hand, in `tur-ecs`, and read them  [DONE 2026-07-26 -- recommends B; see status block + turmeric-spices/docs/ecs-rms0-stateful-refinement-dogfood.md]
 
 Take the accessor family from
 [the ECS plan's RE1](ecs-refinement-typed-apis-plan.md#re1----strict-aliveness-needs-c2-wants-c1)
