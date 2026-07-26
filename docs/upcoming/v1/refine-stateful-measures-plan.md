@@ -107,6 +107,17 @@ gap C2 -- hard-blocking for that plan's RE1.
 > sound, and they are the work. **Recommendation: do not ship the override; build
 > the prerequisites first (spike lists the sequence).** RE1 stays blocked on C2
 > until then.
+>
+> **Cap-uniqueness investigation done 2026-07-26 (started per user request).**
+> Blocker 3 cannot be closed with a library value: minting a fresh `DespawnCap`
+> inside a region is unstoppable (verified rc=0), and substructural facts do not
+> cross the HOF/closure region boundary. Blockers 1 and 3 are the **same
+> problem** -- both need an *inline* `(frozen w ...)` region form -- and with one,
+> the separate cap becomes unnecessary: despawn declared `[^unique ^mut w]` is
+> uncallable inside a region that borrows `w` (the existing UT2 rule). So B1/B2's
+> cap is a stepping-stone to retire, and the highest-leverage next step is the
+> inline region form (new borrow-scope machinery), which discharges blockers 1
+> and 3 together. See "Cap-uniqueness investigation" in the spike.
 
 ## The problem
 
@@ -388,11 +399,57 @@ B1/B2 deliberately deferred plus a foundation bug -- not a single landable
 change. Sequence, each step independently checkable and none eliding a check on
 trust: (i) fix the pre-existing refine runtime-check failures (so soundness is
 observable at all); (ii) build the inline `(frozen ...)` region form with a real
-borrow scope; (iii) make despawn-cap minting structurally once-per-world;
-(iv) add the declared world-measure relation; (v) then, and only then, the
-scoped congruence grant + region-exit invalidation in `enc_measure`, behind
-`--enable=refined`, not landable until the `stateful` differential fuzzer
-sabotage is green.
+borrow scope -- which, per the cap-uniqueness finding below, **also closes
+blocker 3 and retires the separate cap**; (iii) add the declared world-measure
+relation; (iv) then, and only then, the scoped congruence grant + region-exit
+invalidation in `enc_measure`, behind `--enable=refined`, not landable until the
+`stateful` differential fuzzer sabotage is green.
+
+### Cap-uniqueness investigation (2026-07-26) -- blockers 1 and 3 are one problem, and the cap should be retired
+
+Probing blocker 3 (make despawn authority unique) established, empirically, that
+it **cannot be enforced spice-side**, and *why* -- and the why is the same root
+cause as blocker 1:
+
+- **The minting regress is unclosable with a library value.** A fresh
+  `DespawnCap<W>` can be minted *inside* a `with-frozen` region and used to
+  despawn (verified: rc=0, no error). Minting is a function call; a plain
+  exported function cannot be made un-callable in a scope. Gating the minter on
+  a consumed token only moves the regress up a level (the token's source is
+  itself callable). Linearity forbids *duplicating* a value, not *creating* one,
+  so no linear cap is unique-by-construction.
+- **Substructural facts do not cross the HOF/closure region boundary.** B1/B2's
+  `with-frozen` is a HOF; its `^borrow` of the cap is not seen as active inside
+  the body closure. B1/B2's despawn-in-region rejection worked only because the
+  closure *captured the same linear value* and re-consuming it double-uses it --
+  not because the region was understood. A borrow held by the region is invisible
+  to the body, exactly as the crossing's obligation is (blocker 1).
+- **`^unique ^mut` is the real exclusive-access gate** (`elab_call.c:5312`
+  rejects a `^unique ^mut` argument "when active borrows exist") -- but bare
+  `^unique` does not reject a `^borrow` argument (verified rc=0), a call-scoped
+  borrow that has already ended does not count, and **there is no inline-borrow
+  mechanism**: a `^borrow` `let` binding is unbound (verified). Borrows come only
+  from `^borrow` function parameters, so a borrow cannot be held live across
+  inline statements today.
+
+**Consequence -- the design simplifies.** Blockers 1 and 3 collapse into a single
+prerequisite: an **inline** `(frozen w ...)` region form that (a) elaborates its
+body in-scope (fixes blocker 1) and (b) holds the world's borrow *live across the
+body*. Given (b), the separate `DespawnCap` is **unnecessary**: despawn declared
+`[^unique ^mut w : World ...]` is structurally uncallable inside a region that
+borrows `w` (the existing UT2 rule), with nothing to mint and no regress. That is
+simpler and sounder than B1/B2's cap -- the authority is the world's own
+exclusive access, which cannot be forged from a shared borrow. **B1/B2's
+`ecs/freeze` cap is therefore a stepping-stone to retire**, not the foundation to
+build B3 on.
+
+**What this needs from the compiler (the real work):** borrows are call-frame
+scoped today; an inline region form must synthesize a borrow scope for its body
+and make the UT2 check see that borrow as live across the body's statements.
+That is new substructural machinery, not just a parser addition -- and it is the
+single highest-leverage next step, because it discharges blockers 1 and 3 at
+once. Blocker 2 (the declared measure-over-`W` relation) and the foundation
+runtime-check fix remain independent.
 
 ## Acceptance (whichever candidate)
 
