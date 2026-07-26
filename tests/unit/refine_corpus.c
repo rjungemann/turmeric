@@ -47,6 +47,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "lsp/lsp_sym.h"
 #include "compiler/refine_solver.h"
@@ -166,16 +171,26 @@ static bool sx_head_is(const Sx *s, const char *name) {
  * SMT-LIB2 -> RefineVC, for the fragment the chain decides
  * ------------------------------------------------------------------------- */
 
-#define TR_MAX_LET_DEPTH 32
-#define TR_MAX_LET_BINDS 256
+/* Capacity, not policy.  These were first sized for hand-written benchmarks and
+ * were far too small for the real library: a single QF_UFLIA benchmark in the
+ * 2025 release carries a 287-deep `let` chain, and every one of those files
+ * skipped as "too many let bindings" -- a corpus that parses nothing tests
+ * nothing.  The term-depth cap stays modest because `tr_term` recurses on the C
+ * stack, and a stack overflow in the child would be reported as a crash. */
+#define TR_MAX_LET_DEPTH  512
+#define TR_MAX_LET_BINDS  32768
+#define TR_MAX_LET_PARALLEL 4096
+#define TR_MAX_TERM_DEPTH 2000
+#define TR_MAX_SORTS      256
 
 typedef struct { const char *name; VCTerm *val; } LetBind;
 
 typedef struct {
     RefineVC  *vc;
+    Arena     *arena;
     const char *err;                 /* non-NULL => skip the whole benchmark */
-    LetBind    lets[TR_MAX_LET_BINDS];
-    uint32_t   n_lets;
+    LetBind   *lets;                 /* arena-allocated: too big for the stack */
+    uint32_t   n_lets, cap_lets;
 } Tr;
 
 static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth);
@@ -239,7 +254,9 @@ static VCTerm *tr_chain(Tr *t, const char *op, const Sx *s, uint32_t depth) {
 
 static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
     if (t->err) return NULL;
-    if (depth > 400) { t->err = "term nested too deeply"; return NULL; }
+    if (depth > TR_MAX_TERM_DEPTH) {
+        t->err = "term nested too deeply"; return NULL;
+    }
 
     if (s->kind == SX_ATOM) {
         const char *a = s->atom;
@@ -274,8 +291,12 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
         uint32_t saved = t->n_lets;
         /* SMT-LIB `let` is PARALLEL: every value is evaluated in the outer
          * scope, so the bindings are pushed only after all are built. */
-        VCTerm *vals[32];
-        if (binds->n > 32) { t->err = "too many let bindings"; return NULL; }
+        if (binds->n > TR_MAX_LET_PARALLEL) {
+            t->err = "too many let bindings"; return NULL;
+        }
+        VCTerm **vals = (VCTerm **)arena_alloc(t->arena,
+                                               (binds->n ? binds->n : 1) *
+                                               sizeof(VCTerm *));
         for (uint32_t i = 0; i < binds->n; i++) {
             const Sx *b = binds->kids[i];
             if (b->kind != SX_LIST || b->n != 2 || b->kids[0]->kind != SX_ATOM) {
@@ -285,7 +306,7 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
             if (!vals[i]) return NULL;
         }
         for (uint32_t i = 0; i < binds->n; i++) {
-            if (t->n_lets >= TR_MAX_LET_BINDS) { t->err = "let overflow"; return NULL; }
+            if (t->n_lets >= t->cap_lets) { t->err = "let overflow"; return NULL; }
             t->lets[t->n_lets].name = binds->kids[i]->kids[0]->atom;
             t->lets[t->n_lets].val  = vals[i];
             t->n_lets++;
@@ -382,11 +403,33 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
     return NULL;
 }
 
+/* Uninterpreted sorts declared by the benchmark, e.g. `(declare-sort U 0)`.
+ * QF_UF is built on them -- every benchmark in the 2025 QF_UF release declares
+ * at least one -- so rejecting them meant rejecting the theory the EUF stage
+ * most directly targets.
+ *
+ * They are modelled as VS_INT, which is sound for the quantifier-free
+ * equality/UF fragment: a QF formula over an uninterpreted sort is
+ * EQUISATISFIABLE with the same formula over an infinite domain. A model over
+ * the uninterpreted sort injects into the integers, and a model over the
+ * integers restricts to a domain of the right size -- an uninterpreted sort
+ * carries no cardinality constraint that could distinguish them.
+ *
+ * The precondition is that no ARITHMETIC is applied to a sort-typed term. That
+ * holds for well-typed input (`(< a b)` on sort-U terms is a type error the
+ * benchmark's own logic forbids), and this reader does not type-check, so it is
+ * inherited rather than enforced. Only arity-0 sorts are accepted; a parametric
+ * sort is skipped rather than guessed at. */
+static const char *g_sorts[TR_MAX_SORTS];
+static uint32_t g_n_sorts;
+
 static bool tr_sort(const Sx *s, VCSort *out) {
     if (!s || s->kind != SX_ATOM) return false;
     if (strcmp(s->atom, "Int")  == 0) { *out = VS_INT;  return true; }
     if (strcmp(s->atom, "Real") == 0) { *out = VS_REAL; return true; }
     if (strcmp(s->atom, "Bool") == 0) { *out = VS_BOOL; return true; }
+    for (uint32_t i = 0; i < g_n_sorts; i++)
+        if (strcmp(g_sorts[i], s->atom) == 0) { *out = VS_INT; return true; }
     return false;
 }
 
@@ -407,10 +450,15 @@ static void bench_load(Bench *b, const char *text, size_t len, Arena *a) {
     memset(b, 0, sizeof(*b));
     b->label = LBL_NONE;
 
+    g_n_sorts = 0;                      /* sorts are per-benchmark */
     SxReader r = { text, text + len, a, NULL };
     RefineVC *vc = vc_new(a);
     b->vc = vc;
-    Tr t; memset(&t, 0, sizeof(t)); t.vc = vc;
+    Tr t; memset(&t, 0, sizeof(t));
+    t.vc = vc;
+    t.arena = a;
+    t.cap_lets = TR_MAX_LET_BINDS;
+    t.lets = (LetBind *)arena_alloc(a, t.cap_lets * sizeof(LetBind));
 
     for (;;) {
         Sx *cmd = sx_read(&r);
@@ -433,8 +481,23 @@ static void bench_load(Bench *b, const char *text, size_t len, Arena *a) {
             sx_head_is(cmd, "get-model") || sx_head_is(cmd, "get-info"))
             continue;
 
+        if (sx_head_is(cmd, "declare-sort")) {
+            /* (declare-sort NAME ARITY) -- arity 0 only. */
+            if (cmd->n != 3 || cmd->kids[1]->kind != SX_ATOM ||
+                !sx_is(cmd->kids[2], "0")) {
+                b->skipped = true;
+                b->skip_reason = "parametric or malformed declare-sort";
+                return;
+            }
+            if (g_n_sorts >= TR_MAX_SORTS) {
+                b->skipped = true; b->skip_reason = "too many sorts"; return;
+            }
+            g_sorts[g_n_sorts++] = cmd->kids[1]->atom;
+            continue;
+        }
+
         if (sx_head_is(cmd, "push") || sx_head_is(cmd, "pop") ||
-            sx_head_is(cmd, "define-fun") || sx_head_is(cmd, "declare-sort") ||
+            sx_head_is(cmd, "define-fun") ||
             sx_head_is(cmd, "define-sort") || sx_head_is(cmd, "assert-soft") ||
             sx_head_is(cmd, "minimize") || sx_head_is(cmd, "maximize")) {
             b->skipped = true; b->skip_reason = "unsupported command"; return;
@@ -515,7 +578,31 @@ static RefineVerdict run_chain(RefineVC *vc, Arena *a) {
 
 static int g_soundness_failures = 0;
 static int g_proved = 0, g_unproved = 0, g_skipped = 0, g_unlabelled = 0;
-static int g_sat_ok = 0, g_total = 0;
+static int g_sat_ok = 0, g_total = 0, g_over_budget = 0;
+
+/* Seconds any single benchmark may take.  The real SMT-LIB library is not
+ * small -- the 2025 QF_LIA release contains a benchmark of over a million
+ * lines -- and Fourier-Motzkin blows up combinatorially, so an unbounded run
+ * over external data does not terminate in any useful time.  A ctest target
+ * that can hang is worse than no target.
+ *
+ * Exceeding the budget is SAFE in both directions, which is what makes a
+ * timeout an acceptable answer rather than a hole: a soundness failure
+ * requires the chain to ANSWER `RT_VALID`, and a benchmark that never
+ * finished never answered.  It is exactly `RT_UNKNOWN` arrived at by a
+ * different route -- correct for a `sat` label, merely incomplete for `unsat`.
+ *
+ * Override with TUR_CORPUS_TIMEOUT (seconds; 0 disables the budget). */
+#define CORPUS_DEFAULT_TIMEOUT_S 10
+static int g_budget_s = CORPUS_DEFAULT_TIMEOUT_S;
+
+/* How a child reports which counter the parent should bump.  The child prints
+ * its own human-readable line -- it owns the skip reason and the label -- and
+ * the exit code carries only the classification. */
+enum {
+    OUT_SKIPPED = 0, OUT_UNLABELLED = 1, OUT_PROVED = 2,
+    OUT_UNPROVED = 3, OUT_SAT_OK = 4, OUT_SOUNDNESS = 5, OUT_ERROR = 6,
+};
 
 static char *slurp(const char *path, size_t *len_out) {
     FILE *f = fopen(path, "rb");
@@ -533,55 +620,127 @@ static char *slurp(const char *path, size_t *len_out) {
     return buf;
 }
 
-static void run_one(const char *path) {
+/* Decide one benchmark and print its line.  Runs in a CHILD process so a
+ * pathological input costs one benchmark rather than the whole run. */
+static int decide_one(const char *path) {
     size_t len = 0;
     char *text = slurp(path, &len);
-    if (!text) { printf("  ERROR   %s (unreadable)\n", path); g_soundness_failures++; return; }
+    if (!text) { printf("  ERROR   %s (unreadable)\n", path); return OUT_ERROR; }
 
     Arena arena;
     arena_init(&arena, 1 << 20);
     Arena *a = &arena;
     Bench b;
     bench_load(&b, text, len, a);
-    g_total++;
 
+    int outcome;
     if (b.skipped) {
-        g_skipped++;
         printf("  skip    %s (%s)\n", path, b.skip_reason ? b.skip_reason : "?");
-        arena_free(a); free(text);
-        return;
-    }
-    if (b.label == LBL_NONE || b.label == LBL_UNKNOWN) {
-        g_unlabelled++;
+        outcome = OUT_SKIPPED;
+    } else if (b.label == LBL_NONE || b.label == LBL_UNKNOWN) {
         printf("  unlab   %s (no :status claim)\n", path);
-        arena_free(a); free(text);
-        return;
-    }
-
-    RefineVerdict v = run_chain(b.vc, a);
-
-    if (b.label == LBL_SAT) {
-        /* The invariant: a satisfiable assertion set must never be proved
-         * contradictory.  RT_UNKNOWN and RT_INVALID are both correct here. */
-        if (v == RT_VALID) {
-            g_soundness_failures++;
-            printf("  SOUND!  %s -- labelled sat, chain answered VALID "
-                   "(claimed the constraints are contradictory)\n", path);
-        } else {
-            g_sat_ok++;
-            printf("  ok      %s (sat, not proved -- correct)\n", path);
-        }
+        outcome = OUT_UNLABELLED;
     } else {
-        if (v == RT_VALID) {
-            g_proved++;
+        RefineVerdict v = run_chain(b.vc, a);
+        if (b.label == LBL_SAT) {
+            /* The invariant: a satisfiable assertion set must never be proved
+             * contradictory.  RT_UNKNOWN and RT_INVALID are both correct. */
+            if (v == RT_VALID) {
+                printf("  SOUND!  %s -- labelled sat, chain answered VALID "
+                       "(claimed the constraints are contradictory)\n", path);
+                outcome = OUT_SOUNDNESS;
+            } else {
+                printf("  ok      %s (sat, not proved -- correct)\n", path);
+                outcome = OUT_SAT_OK;
+            }
+        } else if (v == RT_VALID) {
             printf("  ok      %s (unsat, proved)\n", path);
+            outcome = OUT_PROVED;
         } else {
-            g_unproved++;
-            printf("  weak    %s (unsat, not proved -- incomplete, not unsound)\n", path);
+            printf("  weak    %s (unsat, not proved -- incomplete, not unsound)\n",
+                   path);
+            outcome = OUT_UNPROVED;
         }
     }
     arena_free(a);
     free(text);
+    return outcome;
+}
+
+static void tally(int outcome) {
+    switch (outcome) {
+        case OUT_SKIPPED:    g_skipped++;            break;
+        case OUT_UNLABELLED: g_unlabelled++;         break;
+        case OUT_PROVED:     g_proved++;             break;
+        case OUT_UNPROVED:   g_unproved++;           break;
+        case OUT_SAT_OK:     g_sat_ok++;             break;
+        case OUT_SOUNDNESS:  g_soundness_failures++; break;
+        default:             g_soundness_failures++; break;   /* ERROR */
+    }
+}
+
+static void run_one(const char *path) {
+    g_total++;
+
+    if (g_budget_s <= 0) {                 /* budget disabled: run in-process */
+        tally(decide_one(path));
+        fflush(stdout);
+        return;
+    }
+
+    fflush(stdout);                        /* never duplicate buffered output */
+    pid_t pid = fork();
+    if (pid < 0) {                         /* cannot fork: fall back in-process */
+        tally(decide_one(path));
+        fflush(stdout);
+        return;
+    }
+    if (pid == 0) {
+        int outcome = decide_one(path);
+        fflush(stdout);
+        _exit(outcome);
+    }
+
+    /* Poll rather than alarm(): the parent must stay responsive and must not
+     * take a signal in the middle of its own bookkeeping. */
+    const long step_ns = 20L * 1000 * 1000;         /* 20ms */
+    long waited_ns = 0;
+    const long budget_ns = (long)g_budget_s * 1000L * 1000 * 1000;
+    for (;;) {
+        int status = 0;
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) {
+            if (WIFEXITED(status)) {
+                tally(WEXITSTATUS(status));
+            } else {
+                /* Killed by a signal it did not ask for -- a crash on this
+                 * input.  That is a defect worth failing on, not a skip. */
+                printf("  CRASH!  %s (child died on signal %d)\n",
+                       path, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+                g_soundness_failures++;
+            }
+            fflush(stdout);
+            return;
+        }
+        if (r < 0 && errno != EINTR) {
+            printf("  ERROR   %s (waitpid: %s)\n", path, strerror(errno));
+            g_soundness_failures++;
+            fflush(stdout);
+            return;
+        }
+        if (waited_ns >= budget_ns) {
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+            g_over_budget++;
+            printf("  budget  %s (exceeded %ds -- counts as undecided)\n",
+                   path, g_budget_s);
+            fflush(stdout);
+            return;
+        }
+        struct timespec ts = { 0, step_ns };
+        nanosleep(&ts, NULL);
+        waited_ns += step_ns;
+    }
 }
 
 static int cmp_str(const void *a, const void *b) {
@@ -626,7 +785,12 @@ static void run_dir(const char *dir) {
 
 int main(int argc, char **argv) {
     const char *dir = argc > 1 ? argv[1] : "tests/corpus/smtlib";
+    const char *budget = getenv("TUR_CORPUS_TIMEOUT");
+    if (budget && *budget) g_budget_s = atoi(budget);
     printf("refine_corpus: replaying %s against the in-house chain (no Z3)\n", dir);
+    if (g_budget_s > 0)
+        printf("  per-benchmark budget: %ds (TUR_CORPUS_TIMEOUT to change, "
+               "0 to disable)\n", g_budget_s);
     run_dir(dir);
 
     printf("\n  benchmarks              : %d\n", g_total);
@@ -634,6 +798,8 @@ int main(int argc, char **argv) {
     printf("  unsat, not proved       : %d  (incomplete, allowed)\n", g_unproved);
     printf("  sat, correctly not proved: %d\n", g_sat_ok);
     printf("  skipped (outside fragment): %d\n", g_skipped);
+    printf("  over budget (%ds)        : %d  (undecided, allowed)\n",
+           g_budget_s, g_over_budget);
     printf("  unlabelled              : %d\n", g_unlabelled);
     printf("  SOUNDNESS FAILURES      : %d\n", g_soundness_failures);
 
