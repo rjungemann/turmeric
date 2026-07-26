@@ -4928,6 +4928,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * remove the callee's guard. */
         const Form *rt_subject = (call->as.list.len > body_start)
                                ? call->as.list.items[call->as.list.len - 1] : NULL;
+        /* The caller body used to recover a crossing's path CONDITIONS must span
+         * the WHOLE body, not just the return subject (the last form).  A
+         * crossing in a NON-FINAL statement -- `(defn f [] : int (g (get! w e)) 0)`,
+         * or a `(println (frozen w (if (alive? w e) (get! w e) ...)))` statement
+         * followed by a trailing `0` -- is otherwise absent from `cs->caller_body`,
+         * so `rt_form_occurrences` reports 0, the guard is dropped, and the read
+         * fails to discharge.  Wrap a multi-form body in a synthetic `(do ...)`
+         * for that purpose; `rt_subject` stays the last form for the RETURN
+         * refinement.  A single-form body is unchanged. */
+        const Form *rt_caller_body = rt_subject;
+        if (call->as.list.len - body_start > 1) {
+            uint32_t nstmt = call->as.list.len - body_start;
+            Form **do_items = (Form **)arena_alloc(e->arena, (nstmt + 1) * sizeof(Form *));
+            do_items[0] = form_sym(e->arena, call->span,
+                                   symtab_intern(e->st, strslice("do", 2)));
+            for (uint32_t i = 0; i < nstmt; i++)
+                do_items[i + 1] = call->as.list.items[body_start + i];
+            rt_caller_body = form_list(e->arena, call->span, do_items, nstmt + 1);
+        }
         RefineEnv *rt_env = NULL;
         bool rt_ret_proven  = false;
         bool rt_post_proven = false;
@@ -4940,7 +4959,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * parameters still need declared sorts in the environment. */
             refine_fill_call_site_env(e, rt_cs_start, rt_env,
                                       name_f->as.sym ? name_f->as.sym->name : NULL,
-                                      rt_subject);
+                                      rt_caller_body);
             const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
             char rt_what[128];
             if (ct_ret_pred) {
