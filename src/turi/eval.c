@@ -9945,22 +9945,14 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             }
             /* Strip the directive from the source body. */
             if (detected != env->reader_type) {
-                /* Reader type is changing: discard accumulated source so that
-                 * prior input isn't re-parsed under an incompatible reader. */
-                env->src_acc.len       = 0;
-                env->prior_toplevel    = 0;
-                env->prior_prog_items  = 0;
-                env->reader_type       = detected;
-                /* TR2: accumulated forms belong to the OLD reader; drop them
-                 * along with the source they came from, and with them the
-                 * elaboration session built from those forms. */
-                env->n_acc_forms       = 0;
-                env->acc_next_line     = 0;
-                if (env->elab_session) {
-                    elab_session_free(env->elab_session);
-                    env->elab_session       = NULL;
-                    env->elab_session_forms = 0;
-                }
+                /* Reader type is changing: discard accumulated source (and the
+                 * forms and elaboration session built from it) so that prior
+                 * input isn't re-parsed under an incompatible reader.  The
+                 * pinned stdlib preload survives -- it is reader-agnostic, and
+                 * dropping it is what made the first `#map{}` after a `#lang`
+                 * switch fail as "unknown ... 'hamt-of'". */
+                turi_env_reset_to_prelude(env);
+                env->reader_type = detected;
             }
             /* Layers are additive and file-scoped; union them into the
              * session set so reader layers stay active across the eval blob. */
@@ -10373,17 +10365,8 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
      * will detect and apply it, overriding the extension-derived type). */
     ReaderType ext_type = reader_type_from_extension(path);
     if (ext_type != READER_TURMERIC && ext_type != env->reader_type) {
-        env->reader_type      = ext_type;
-        env->src_acc.len      = 0;
-        env->prior_toplevel   = 0;
-        env->prior_prog_items = 0;
-        env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
-        env->acc_next_line    = 0;
-        if (env->elab_session) {
-            elab_session_free(env->elab_session);
-            env->elab_session       = NULL;
-            env->elab_session_forms = 0;
-        }
+        turi_env_reset_to_prelude(env);
+        env->reader_type = ext_type;
     }
 
     TuriValue v = turi_eval(env, buf);
