@@ -10,8 +10,9 @@ yet and there are roughly three minor lines of runway. At the cut it graduates
 (row deleted, behaviour unconditional) or is shelved. `expires_at` is a hard
 contract, not a suggestion.
 
-**Prerequisite:** see [Ordering](#ordering) -- graduation and Z3 retirement are
-independent, and the order matters less than doing each deliberately.
+**Ordering:** corpus work, then gated dogfooding, then Z3 retirement, then
+graduation -- see [Ordering](#ordering) for why, and for the deadline that
+overrides it.
 
 ---
 
@@ -90,11 +91,14 @@ with the gate forced on:
 | `refine-off-is-contracts-only` | **1 diagnostic -- its premise is gate-off** |
 
 So the blast radius inside the tree is one fixture, and that one does not
-"break": its entire purpose is to pin what happens with the gate OFF. On
-graduation there is no gate to turn off, so the fixture is either deleted or
-rewritten to pin the `--no-contracts` behaviour instead. Decide deliberately;
-deleting a fixture that documents a real distinction is a loss even when the
-distinction stops being reachable.
+"break": its entire purpose is to pin what happens with the gate OFF.
+
+**DECIDED: repurpose it, do not delete it.** On graduation there is no gate to
+turn off, but the distinction the fixture documents does not disappear -- it
+moves to `--no-contracts`, which still strips the runtime half. Rewrite it to
+pin that, and rename it accordingly. A fixture that documents a real
+distinction is worth keeping even when the way you reach that distinction
+changes.
 
 ### 2. The cost is acceptable -- MEASURED, small but not zero
 
@@ -138,17 +142,66 @@ guide should say so plainly:
 
 ## Ordering
 
-Graduation and Z3 retirement are **independent**. Z3 is a dev-build oracle that
-no shipped artifact links, so graduating with the scaffold still present ships
-nothing extra, and retiring the scaffold while the gate remains changes nothing
-a user sees.
+**DECIDED: corpus work, then gated dogfooding, then Z3 retirement, then
+graduation.** Reasoning, including the argument that nearly reversed it.
 
-Doing Z3 retirement **first** is nonetheless the better order, for one reason:
-retirement is the decision that benefits from the oracle still being available
-to answer "did we break anything". Graduating first would put the feature in
-everyone's hands while its correctness net is still being dismantled. Neither
-is a hard dependency -- this is a preference, and the deadline on `refined`
-outranks it if the two ever conflict.
+Graduation and Z3 retirement are technically **independent**. Z3 is a dev-build
+oracle that no shipped artifact links, so graduating with the scaffold present
+ships nothing extra, and retiring the scaffold while the gate remains changes
+nothing a user sees. The order is therefore a judgement about where risk lands,
+not a dependency.
+
+The case for **graduating first** is stronger than it first appears, and worth
+stating properly: the oracle's marginal value is highest exactly when NOVEL VCs
+are arriving, and novel VCs arrive when real programs use the feature. Retiring
+the oracle just before real usage begins retires it at the moment before it
+would have been most useful.
+
+What defeats that argument is that **graduation is not the only way to get
+usage**. The feature can be dogfooded gated -- `--enable=refined` in a real
+project -- and that produces the same novel VCs while the oracle is still
+present to cross-check them, without putting every user on the feature at the
+same time as the net comes down. Two risks at once is the thing to avoid, and
+gated dogfooding avoids it while keeping the oracle's benefit.
+
+So the sequence is:
+
+1. **Corpus work** -- raise what the reader handles (see
+   [corpus-reader-tail-plan.md](corpus-reader-tail-plan.md)).
+2. **Gated dogfooding, with an oracle build available.** Build the dogfooded
+   project once under `-DTUR_REFINE_Z3_ORACLE=ON`; that is the cross-check on
+   VCs that real programs generate, which is the evidence retirement actually
+   needs and which no corpus can supply.
+3. **Retire Z3** once the corpus and the dogfooding are both clean.
+4. **Graduate** after that.
+
+**The deadline outranks this preference.** `expires_at` is `0.34.0`. If steps
+1--3 run long, graduation gets forced first; take that rather than let the
+experiment expire, and retire the oracle afterwards. The order is a preference;
+the deadline is a contract.
+
+### A caution on "200/200"
+
+The corpus target is easy to state in a way that cannot be met. The two numbers
+are different:
+
+| metric | now | ceiling | reachable by |
+|---|---|---|---|
+| **parsed** | 193 / 200 | 200 | reader work -- the 7 remaining skips |
+| **decided** | 142 / 200 | **189** | solver throughput, not reader work |
+
+11 benchmarks carry no `:status` at all, so they can never be decided -- 189 is
+the real ceiling, not 200. And the gap from 142 to 189 is **40 over-budget plus
+7 skipped**: overwhelmingly the solver, not the reader. Closing all 7 skips
+moves "decided" by a handful at best, because the benchmarks that defeat the
+reader are the large ones that then exceed the budget anyway.
+
+So "close to 200/200" is achievable for PARSED and is not achievable for
+DECIDED without a different project -- faster arithmetic, a real simplex,
+incremental EUF. **Retirement should be gated on parsed coverage plus a clean
+soundness record, not on a decided count**, because incompleteness was never
+what the corpus is defending against: `RT_UNKNOWN` is always safe, and a
+benchmark the chain declines to decide cannot break the invariant.
 
 ## Shelving, if it comes to that
 
