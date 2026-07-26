@@ -100,9 +100,10 @@ gap C2 -- hard-blocking for that plan's RE1.
 > (2) nothing declares a measure to be a function of a world's despawn history;
 > (3) the aliasing hole is live -- a *second* `DespawnCap` can be minted and used
 > to despawn inside a frozen region (verified rc=0), so a region does not
-> actually guarantee "no despawn here". Plus a foundation caveat: this branch's
-> refine runtime-check emission looks broken (`errors/refine-impure-predicate`
-> runs clean when it should abort), and B3's safety rests on that check firing.
+> actually guarantee "no despawn here". (An earlier "foundation caveat" that the
+> refine runtime-check emission was broken turned out to be a Release-`tur`
+> artifact -- contracts are stripped under NDEBUG; a Debug `tur` fires them and
+> the suite is 2360/1. No foundation fix needed.)
 > The one-line encoder hook is understood; it is the prerequisites that make it
 > sound, and they are the work. **Recommendation: do not ship the override; build
 > the prerequisites first (spike lists the sequence).** RE1 stays blocked on C2
@@ -121,10 +122,11 @@ gap C2 -- hard-blocking for that plan's RE1.
 > **inline** (a `let` body, not a closure). So **blocker 3 is closed and blocker
 > 1's structural obstacle is gone** (the crossing now sits in the same scope as
 > the region borrow). B1/B2's `DespawnCap`/`with-frozen` are retired. Remaining
-> for B3: (2) a declared measure-over-`W` relation; the encoder logic to
+> for B3: (2) a declared measure-over-`W` relation; and the encoder logic to
 > *recognize* the region's `(& w)` borrow and grant congruence + region-exit
-> invalidation; and the foundation runtime-check fix. See "Cap-uniqueness
-> investigation" in the spike.
+> invalidation. (The "foundation runtime-check fix" is off the list -- it was a
+> Release-`tur` artifact; a Debug `tur` fires the checks, suite 2360/1.) See
+> "Cap-uniqueness investigation" in the spike.
 
 ## The problem
 
@@ -390,12 +392,18 @@ check. This is `errors/refine-stateful-aliased-mutation`, live. Until minting is
 structurally once-per-world (e.g. the cap is created only by the world
 constructor and never re-mintable), B3 cannot soundly elide.
 
-**Foundation caveat.** This branch carries 11 pre-existing refine failures,
-including `errors/refine-impure-predicate` -- an impure predicate that *should*
-abort at runtime currently runs clean, i.e. the kept-runtime-check emission
-looks broken here. B3's entire safety argument is "the runtime check still fires
-when a static proof is absent"; that must be true before B3's soundness can even
-be validated.
+**Foundation caveat -- RESOLVED 2026-07-26, it was not real.** An earlier
+revision flagged "the kept-runtime-check emission looks broken" because ~10
+refine fixtures (impure-predicate, let-shadow, match-*, typeclass-*) ran clean
+when they should abort. Root cause: those runs used a **Release-built `tur`**,
+and `rt_contracts_emitted()` (`elab_fns.c`) strips every contract check under
+`#ifdef NDEBUG` unless `--keep-contracts`. Built Debug (CLAUDE.md's bootstrap
+default), the suite is **2360 passed, 1 failed** (only `gc-heap-struct-rc`,
+unrelated), and every `:pre`/`:post`/`#refine` runtime check fires. So B3's
+safety premise -- "the kept runtime check fires when a static proof is absent"
+-- **holds today**; there is no foundation to fix. (Lesson: validate
+contract/refine-*runtime* behaviour with a Debug `tur`; a Release `tur` is only
+valid for compile-time checks -- `--strict-refine` proving, TUR-E02xx, codegen.)
 
 **The one-line hook, once 1-3 hold:** in a recognized frozen region,
 `enc_measure` gives a world-measure over the frozen W a stable symbol instead of
@@ -405,15 +413,15 @@ That line turns `0 proven` into `1 proven` -- and, if 1-3 are wrong, silently
 elides a real check.
 
 **Recommendation.** B3 is a multi-slice compiler project. Updated sequence after
-the cap-uniqueness investigation (below): **~~(ii) inline region form~~ DONE** --
-the sound `frozen` region landed with no compiler change and closed blockers 1
-and 3 together. Remaining, each step independently checkable and none eliding a
-check on trust: (i) fix the pre-existing refine runtime-check failures (so
-soundness is observable at all); (iii) add the declared world-measure relation;
+the cap-uniqueness investigation (below) and the foundation re-check:
+**~~(ii) inline region form~~ DONE** (the sound `frozen` region, no compiler
+change, closed blockers 1 and 3 together) and **~~(i) foundation runtime-check
+fix~~ NOT NEEDED** (it was a Release-`tur` artifact; the runtime fallback fires
+under a Debug `tur`). Remaining: (iii) add the declared world-measure relation;
 (iv) then, and only then, the scoped congruence grant + region-exit invalidation
 in `enc_measure` -- keyed off the region's live `(& w)` borrow -- behind
 `--enable=refined`, not landable until the `stateful` differential fuzzer
-sabotage is green.
+sabotage is green (validate it with a **Debug** `tur`, per the foundation note).
 
 ### Cap-uniqueness investigation (2026-07-26) -- blockers 1 and 3 are one problem, and the cap should be retired
 
@@ -465,11 +473,12 @@ owns, not one borrowed from elsewhere. That is the correct shape anyway (the
 frame that despawns owns the world).
 
 **What remains for B3 (all independent of the region form now):** (2) the
-declared measure-over-`W` relation; the encoder logic to *recognize* the
+declared measure-over-`W` relation; and the encoder logic to *recognize* the
 region's `(& w)` borrow and grant congruence to a measure over `w` inside +
-region-exit invalidation; and the foundation runtime-check fix. The region form
-is no longer a blocker -- it is a shipped, sound, greppable construct (`(& w)`
-in a `let`) that the encoder can key off.
+region-exit invalidation. The region form is no longer a blocker -- it is a
+shipped, sound, greppable construct (`(& w)` in a `let`) that the encoder can key
+off. (The foundation runtime-check fix that previously appeared here is dropped:
+it was a Release-`tur` artifact -- see the resolved caveat above.)
 
 ## Acceptance (whichever candidate)
 
