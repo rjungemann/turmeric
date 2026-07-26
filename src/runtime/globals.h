@@ -215,6 +215,10 @@ extern bool g_opt_cps_tramp_resume;
  * codegen (emit_cps_ir.c). Gated by the `owning-cloneable-capture` experiment. */
 extern bool g_opt_owning_cloneable_capture;
 
+/* CG5: `(gc-auto!)` -- automatic allocation-driven cycle collection. Gated by
+ * the `cycle-gc` experiment; read by elab_gc_auto (elab_memory.c). */
+extern bool g_opt_cycle_gc;
+
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI
  * (env[-1] -> drop_glue_env_N, released via TUR_CLOSURE_DROP) is now
  * unconditional; the g_opt_closure_drop_glue enable bit and its codegen gates are

@@ -1369,6 +1369,35 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
         }
 }
 
+/* TR2: session lifecycle. A session is just a heap-allocated Elab whose state
+ * survives between calls; `arena`/`st` are re-pointed at each call's arena. The
+ * zeroed `arena` field marks a session that has not been initialised yet. */
+ElabSession *elab_session_new(void) {
+    Elab *s = (Elab *)calloc(1, sizeof(Elab));
+    return (ElabSession *)s;
+}
+
+void elab_session_free(ElabSession *session) {
+    Elab *e = (Elab *)session;
+    if (!e) return;
+    if (e->arena) {   /* initialised: tear down the same state the non-session
+                       * path frees at return */
+        scope_free(&e->global);
+        free(e->adt_defs);
+        free(e->forward_type_syms);
+        free(e->handled_effect_names);
+        free(e->pending_reset_nodes);
+        free(e->macros);
+        free(e->macro_expansion_stack);
+        free(e->loaded_modules);
+        free(e->dynvar_entries);
+        free(e->active_dynvar_bindings);
+        free((void *)e->load_expanded_paths);
+        free(e->file_scope_defs);
+    }
+    free(e);
+}
+
 Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         Form *const *forms, uint32_t nforms,
                         uint32_t stdlib_prefix,
@@ -1380,8 +1409,53 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
                         int n_include_dirs,
                         uint32_t *out_n_file_scope_defs,
                         struct ReaderMacroRegistry *user_macros) {
+    return elaborate_program_session(arena, st, forms, nforms, stdlib_prefix,
+                                     module_base_dir, separate_compilation,
+                                     sandboxed, out_tc_env, include_dirs,
+                                     n_include_dirs, out_n_file_scope_defs,
+                                     user_macros, /*session=*/NULL);
+}
+
+Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
+                        Form *const *forms, uint32_t nforms,
+                        uint32_t stdlib_prefix,
+                        const char *module_base_dir,
+                        bool separate_compilation,
+                        bool sandboxed,
+                        TypeClassEnv *out_tc_env,
+                        const char **include_dirs,
+                        int n_include_dirs,
+                        uint32_t *out_n_file_scope_defs,
+                        struct ReaderMacroRegistry *user_macros,
+                        ElabSession *session) {
     Elab e;
-    elab_init_state(&e, arena, st);
+    /* TR2: restore accumulated state from the session (a plain struct copy --
+     * every field is POD or a malloc'd/arena pointer). `scope` is the one
+     * self-referential field (it points at `global` inside the struct), so it
+     * is re-anchored after the copy; a session is only ever saved at top level,
+     * where scope == &global and no fn-entry scope is open. */
+    Elab *sess = (Elab *)session;
+    const bool sess_live = (sess && sess->arena != NULL);
+    if (sess_live) {
+        e = *sess;
+        e.arena = arena;
+        e.st    = st;
+        e.scope = &e.global;
+        e.fn_entry_outer_scope = NULL;
+        /* Per-FILE state must NOT carry across calls: each incremental call is
+         * conceptually a new file (a REPL turn, or the next preloaded stdlib
+         * module). Without this reset, `has_defmodule` stays true after the
+         * first defmodule-wrapped file and every later one fails with "only one
+         * defmodule is allowed per file" -- which is exactly what the
+         * whole-program path avoided by resetting at the stdlib_prefix/file
+         * boundary. Accumulated state (scope, typeclasses, registries,
+         * loaded_modules) is what we deliberately keep. */
+        e.has_defmodule       = false;
+        e.current_module_name = NULL;
+        e.current_module      = NULL;
+    } else {
+        elab_init_state(&e, arena, st);
+    }
     e.user_macros = user_macros;
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
     /* stdlib fallback: TUR_STDLIB_DIR env var, else "stdlib" */
@@ -1791,6 +1865,11 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
     if (rc != 0) {
+        /* TR2: with a session the state is owned by the caller -- save it back
+         * (so elab_session_free reclaims it exactly once) instead of freeing
+         * here. The caller must discard the session after any failure: partial
+         * definitions from this program may already have entered its scope. */
+        if (sess) { *sess = e; return NULL; }
         scope_free(&e.global);
         free(e.adt_defs);
         free(e.forward_type_syms);
@@ -1901,6 +1980,24 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         free(e.file_scope_defs);
     }
 
+    /* TR2: report the file-scope-def count before the session reset below
+     * clears it (the non-session path reads e.n_file_scope_defs at return). */
+    const uint32_t n_fsd_out = (uint32_t)e.n_file_scope_defs;
+    if (sess) {
+        /* Everything freed above this point must be cleared, or the saved
+         * session would carry dangling pointers into the next call.  These are
+         * all per-call working sets, not accumulated state. */
+        e.file_scope_defs   = NULL;
+        e.n_file_scope_defs = 0;
+        e.cap_file_scope_defs = 0;
+        e.bare_fat_specs   = NULL;
+        e.n_bare_fat_specs = 0;
+        e.cap_bare_fat_specs = 0;
+        e.bare_fat_lazy_bindings   = NULL;
+        e.n_bare_fat_lazy_bindings = 0;
+        e.cap_bare_fat_lazy_bindings = 0;
+    }
+
     /* Phase M6: Check for C symbol name collisions among exported bindings.
      * Two exported bindings from different modules collide when their mangled
      * C names are identical (e.g. module "my-lib" and "my_lib" both exporting
@@ -1982,17 +2079,24 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
         }
     }
 
-    scope_free(&e.global);
-    free(e.adt_defs);
-    free(e.forward_type_syms);
-    free(e.handled_effect_names);
-    free(e.pending_reset_nodes);
-    free(e.macros);
-    free(e.macro_expansion_stack);
-    free(e.loaded_modules); /* Phase M2 */
-    free(e.dynvar_entries);
-    free(e.active_dynvar_bindings);
-    free((void *)e.load_expanded_paths);
+    if (sess) {
+        /* TR2: the accumulated state IS the session -- hand it back instead of
+         * tearing it down, so the next call resolves against it. Ownership
+         * transfers to the caller (elab_session_free reclaims it). */
+        *sess = e;
+    } else {
+        scope_free(&e.global);
+        free(e.adt_defs);
+        free(e.forward_type_syms);
+        free(e.handled_effect_names);
+        free(e.pending_reset_nodes);
+        free(e.macros);
+        free(e.macro_expansion_stack);
+        free(e.loaded_modules); /* Phase M2 */
+        free(e.dynvar_entries);
+        free(e.active_dynvar_bindings);
+        free((void *)e.load_expanded_paths);
+    }
     if (rc != 0) return NULL;
 
     Expr *prog = expr_new(arena, EX_PROGRAM, TYPE_NIL,
@@ -2004,6 +2108,6 @@ Expr *elaborate_program(Arena *arena, SymbolTable *st,
     /* Tier 3: expose actual file-scope-def count so the interpreter can
      * distinguish them from (load ...)-expanded inline forms. */
     if (out_n_file_scope_defs)
-        *out_n_file_scope_defs = (uint32_t)e.n_file_scope_defs;
+        *out_n_file_scope_defs = n_fsd_out;
     return prog;
 }

@@ -324,6 +324,15 @@ struct Binding {
      * beyond bit 31 are left unset (conservative -- no free).  0 for non-fns and
      * fns with no non-retaining fn-param. */
     uint32_t            nonretain_param_mask;
+    /* catch-box-reader-confinement-whitelist: bit i set when parameter i is a
+     * POINTER-CARRYING SCALAR (cstr / ptr<void>) that the body provably does
+     * not retain -- every use of it is discarded or flows into another
+     * non-retaining sink.  This is what lets a caught-Result box be deep-freed
+     * at scope exit when its message was handed to a USER-DEFINED logger, not
+     * only to the hardcoded print family: the property is inferred from the
+     * callee's body rather than trusted from a name list.  Params beyond bit 31
+     * are left unset (conservative -- no free). */
+    uint32_t            nonretain_ptr_param_mask;
     /* closure-drop-glue S1c (fresh-closure-returning fn): true when this function
      * binding's body is a bare capturing EX_CLOSURE with only scalar (Copy)
      * captures and a scalar result -- so every call mallocs a FRESH, uniquely
@@ -1060,7 +1069,13 @@ struct Expr {
         struct { Expr *tvar; Expr *old_val; Expr *new_val; } tvar_cas_; /* (TVar::cas tvar old new) */
         /* Phase N: numeric cast */
         struct { Expr *expr; TypeKind target_kind; } cast_;        /* (as T e) */
-        struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; } reinterpret_;
+        /* `retain` is meaningful only when one side is an owning kind (rc/weak/
+         * ref): true means crossing the carrier hands out a NEW strong
+         * reference (a collection taking ownership of a pushed element, or a
+         * read handing the caller its own count), false means the existing
+         * reference merely moves (a borrow, or a pop transferring the slot's
+         * count out).  See docs/reported/collections-cannot-hold-rc-values.md. */
+        struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; bool retain; } reinterpret_;
         /* Phase H §1: dictionary passing */
         struct {
             TypeClassInstance *instance;

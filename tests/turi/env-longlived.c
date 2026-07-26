@@ -94,6 +94,15 @@ static void test_steady_state(void) {
     CHECK(env->value_perm.total_bytes == perm_after_warmup,
           "perm grew after warmup: %zu -> %zu",
           perm_after_warmup, env->value_perm.total_bytes);
+    /* TR0 instrumentation: plain transient churn must rewind every cycle with no
+     * declines (promo_* counters, turi-interp-incremental-reclamation-plan.md). */
+    CHECK(env->promo_rewinds >= 200,
+          "promotion did not rewind every churn cycle (rewinds=%llu)",
+          (unsigned long long)env->promo_rewinds);
+    CHECK(env->promo_decline_busy == 0 && env->promo_decline_unrelocatable == 0,
+          "unexpected promotion decline on plain churn (busy=%llu unreloc=%llu)",
+          (unsigned long long)env->promo_decline_busy,
+          (unsigned long long)env->promo_decline_unrelocatable);
     turi_env_free(env);
 
     /* Control: same loop, promotion OFF -> scratch grows without bound. */

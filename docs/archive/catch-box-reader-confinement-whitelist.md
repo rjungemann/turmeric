@@ -1,5 +1,5 @@
 ---
-status: open
+status: RESOLVED 2026-07-25
 severity: low
 discovered: 2026-07-23
 area: compiled backend (catch-unwind box escape analysis / deep-free confinement)
@@ -60,22 +60,58 @@ pure `(ok? r)` body lowers stackless, while the same shape with a
 `(println (pm r))` body falls back to native. The stackless path therefore only
 ever sees scalar-accessor bodies, which its strict check fully covers.
 
-## Fix directions
+## Resolution (2026-07-25)
 
-1. **Replace the whitelist with a non-retention contract (the principled
-   fix).** Give inline-C / stdlib sinks an explicit `#[borrow]`-style
-   "reads-arg, does not retain a pointer into it" annotation, and drive
-   `box_reader_result_void_sink` off that instead of a name list. `println`
-   etc. carry the contract in stdlib; any annotated user sink joins the
-   confinement set for free; the invariant is checked, not trusted. Mirrors the
-   existing `^borrow` / `nonretain_param_mask` machinery.
+Direction #1, but **inferred rather than annotated** -- no new syntax was
+needed. The confinement question ("is this value discarded, or handed only to
+something that will not retain it?") is already answered by `box_uses_confined`;
+applying that same walk to a *callee's own body*, at the point the defn is
+elaborated, answers "does this function retain that parameter?" for free.
 
-2. **Result-flow escape analysis on the reader temp (composes with #1).**
-   Rather than "is the parent a known sink?", ask "does the value the reader
-   produced escape this scope?" via the existing escape walk. Admits arbitrary
-   in-scope consumption, not just the sink shape. Residual hole is inline-C
-   laundering -- exactly what #1's annotation closes -- so #1 + #2 are the
-   complete story.
+- `Binding` gains `nonretain_ptr_param_mask`: bit i set when parameter i is a
+  pointer-carrying scalar (`cstr` / `ptr<void>`) whose every use in the body is
+  discarded or flows into another non-retaining sink. Inferred in
+  `elab_fns.c` beside the existing `nonretain_param_mask`, guarded by the same
+  `expr_subtree_has_inline_c` check -- load-bearing here too, since a C body can
+  stash the pointer where no AST walk can see it.
+- The result gate mirrors `catch_box_binding_reader_confined`: a parameter can
+  only be treated as non-retained when the function's own result cannot carry it
+  back out (non-pointer scalar or nil return).
+- The `EX_CALL` arm of `box_uses_confined` now consults that mask **per
+  argument**, not per call, so a two-parameter logger that retains one argument
+  and prints the other is handled precisely.
+
+The hardcoded list survives as the base case for compiler *builtins* (`println`
+and friends live in `builtins.c`, not stdlib, so there is no body to analyse).
+It is no longer the only path, which is what made it a footgun: a user-defined
+sink is now judged on what it does, not on whether someone remembered to add its
+name.
+
+Measured before and after on the motivating shape -- `(my-log (panic-msg r))`
+where `my-log` only prints -- via the emitted C: `tur_result_box_free` absent
+before, present after, matching `println`. The two negative cases stay refused:
+a sink that stores its argument into a struct field, and a sink with an inline-C
+body. Pinned by `tests/fixtures/catch-box-user-sink-confines`.
+
+Note the fixture asserts on program output rather than on the free. Whether the
+box is freed is invisible at runtime -- freeing is correct, not freeing is a
+bounded leak -- so the free/no-free decision is asserted at the codegen level in
+`expected.c`, and the fixture pins that all three sink shapes still compile and
+run correctly.
+
+Also fixed here: `catch_box_binding_reader_confined` carried an **unguarded
+leftover `fprintf(stderr, "[boxfree] ...")`**, which printed on every `tur
+build` / `tur emit-c` of a program with a let-bound caught box read through a
+reader. The suite never caught it because fixtures compare stdout. Found by
+reading the function this report points at.
+
+### Not done, and why
+
+Direction #2 (result-flow escape analysis on the reader temp) was not needed for
+the motivating case and is not obviously worth it now: with #1 inferred rather
+than annotated, the set of admitted sinks widened to "anything whose body does
+not retain", which covers the shapes that were leaking. Revisit if a real case
+turns up that #1 still rejects.
 
 ## Not worth it
 
@@ -85,8 +121,12 @@ ever sees scalar-accessor bodies, which its strict check fully covers.
   `catch_box_binding_reader_confined` -- rejects some safe struct-returning
   scopes, but the ROI is tiny.
 
-## Recommendation
+## Recommendation (historical)
 
 Not v1-blocking. Treat a request to **grow the sink list** as the trigger to do
 #1 properly rather than appending another trusted name -- the list is documented
 "known non-retaining" precisely so that trigger is visible.
+
+That trigger is now largely moot: the list only governs builtins, and user code
+is inferred. Adding a *retaining* builtin to it would still be a soundness bug,
+so the comment above it still matters.

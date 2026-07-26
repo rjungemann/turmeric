@@ -2,6 +2,7 @@
 #include "eval.h"   /* TURI_DEFAULT_SANDBOX_FUEL */
 #include "fiber.h"
 #include "reader_macros.h"  /* RM Q#5: session-scoped reader-macro registry */
+#include "elab.h"           /* TR2.2b: persistent ElabSession lifecycle */
 #include "spice_loader.h"   /* RP3: env owns the loaded TurSpiceImage */
 #include "collections_native.h"  /* Vec/Set/Map/HAMT native overrides */
 #include "string_native.h"        /* owned String type native overrides */
@@ -192,6 +193,26 @@ TuriEnv *turi_env_new(void) {
     arena_init(&env->value_perm, 0);
     symtab_init(&env->st, &env->sym_arena);
     buf_init(&env->src_acc);
+    buf_init(&env->src_combined);   /* TR2.3: reused per-eval source blob */
+    /* TR2: incremental parse + elaboration is ON by default. A long-lived env
+     * (REPL, notebook kernel, Trowel / Try Turmeric / Godot embeddings) is
+     * otherwise O(N^2) in retained memory and time over a session -- measured at
+     * ~1 GB and quadratic parse/elaborate over 1500 turns, versus ~2 MB and
+     * linear with this on. A single-eval embedder is unaffected: the first eval
+     * has no accumulated prefix, so it takes the whole-program path either way.
+     *
+     * Results are identical to the old path except for one intentional fix:
+     * redefining a top-level `defn` across turns now works instead of failing
+     * with "already defined by an auto-loaded stdlib module" (an artifact of the
+     * old path re-elaborating prior turns under stdlib_prefix). Guarded by the
+     * tur_incremental_elab_diff A/B harness.
+     *
+     * TUR_NO_INCREMENTAL_ELAB=1 restores the whole-program path, for bisecting a
+     * suspected incremental-path bug; turi_env_set_incremental_elab overrides. */
+    {
+        const char *off = getenv("TUR_NO_INCREMENTAL_ELAB");
+        env->incremental_elab = !(off && *off && strcmp(off, "0") != 0);
+    }
     env->caps = TURI_CAP_ALL;
     /* Gap 7: default to interpret mode (every turi_env_new caller is an
      * interpreter embedder; mirrors the g_interpret_mode = true above).  An
@@ -334,6 +355,21 @@ void turi_env_free(TuriEnv *env) {
     arena_free(&env->value_scratch);
     arena_free(&env->value_perm);
     turi_val_global_pool_free();
+
+    /* TR2.2b: the persistent elaboration session owns malloc'd scope/registry
+     * storage; free it before the vector below. */
+    if (env->elab_session) {
+        elab_session_free((ElabSession *)env->elab_session);
+        env->elab_session       = NULL;
+        env->elab_session_forms = 0;
+    }
+    buf_free(&env->src_combined);   /* TR2.3 */
+    /* TR2: the accumulated-Form vector is malloc'd (the Forms themselves live
+     * in eval_arenas, already freed above). */
+    free(env->acc_forms);
+    env->acc_forms     = NULL;
+    env->n_acc_forms   = 0;
+    env->cap_acc_forms = 0;
 
     /* Free global bindings */
     EnvBinding *b = env->globals;
@@ -494,6 +530,11 @@ void turi_env_set_interpret_mode(TuriEnv *env, bool interpret) {
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable) {
     if (!env) return;
     env->scratch_promotion = enable;
+}
+
+void turi_env_set_incremental_elab(TuriEnv *env, bool enable) {
+    if (!env) return;
+    env->incremental_elab = enable;
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

@@ -91,9 +91,19 @@ walker — cycles that route through them will not be reclaimed.
 - `GC_MANUAL` — collection runs only when user code calls `(gc!)`.
 - `GC_THRESHOLD` — collection runs when the suspect buffer reaches 128
   entries (forced at 4096).
+- `GC_AUTO` (CG5, experimental) -- collection runs at **allocation
+  checkpoints**, with no `(gc!)` call anywhere in the program. Two triggers:
+  the candidate buffer reaching `GC_SUSPECT_THRESHOLD`, or
+  `GC_AUTO_ALLOC_INTERVAL` allocations since the last collection. Behind
+  `--enable=cycle-gc`, because it makes collection *timing* implicit -- pause
+  behaviour changes without any call site showing it.
 
-There is no background thread, no time-based sweep, no allocation-count
-heuristic beyond the suspect threshold. User code drives collection.
+There is no background thread and no time-based sweep. Outside `GC_AUTO`, user
+code drives collection.
+
+Deliberately, the automatic trigger sits at allocation sites and **never** on
+the refcount-decrement path: collecting out of `rc_strong_decrement` reenters
+the collector while a caller is mid-mutation.
 
 Runtime knobs surface as three compiler intrinsics wired in
 `elab_memory.c`:
@@ -101,8 +111,52 @@ Runtime knobs surface as three compiler intrinsics wired in
 | Form           | Effect                          |
 |----------------|---------------------------------|
 | `(gc!)`        | Force one collection cycle now  |
-| `(gc-enable!)` | Switch to `GC_THRESHOLD`        |
+| `(gc-enable!)` | Enable, defaulting the mode to `GC_MANUAL` |
 | `(gc-disable!)`| Return to `GC_DISABLED`         |
+| `(gc-auto!)`   | Enable in `GC_AUTO` -- collect automatically (needs `--enable=cycle-gc`) |
+
+### Seeing what the collector did
+
+Four readers, all plain counts, plus a per-collection trace on stderr:
+
+| Form | Returns |
+|------|---------|
+| `(gc-collections)` | collections run so far |
+| `(gc-objects-freed)` | control blocks reclaimed |
+| `(gc-live-blocks)` | rc blocks currently registered |
+| `(gc-candidate-high-water)` | peak candidate-buffer occupancy |
+
+```sh
+TUR_GC_TRACE=1 ./my-program
+[gc] #1 mode=3 candidates=128 freed=128 live=128->0
+```
+
+The high-water is the one to watch: `gc-live-blocks` is instantaneous and sits
+near zero right after a collection, so it tells you little on its own. A
+high-water that stays at `GC_SUSPECT_THRESHOLD` means the collector is keeping
+up; one that climbs means it is not.
+
+`(gc-enable!)` defaults to `GC_MANUAL`, not `GC_THRESHOLD` -- collection still
+happens only when you ask for it with `(gc!)`. Call `gc_set_mode(GC_THRESHOLD)`
+for the suspect-count trigger; an explicit mode set before `(gc-enable!)`
+survives it.
+
+> **What a collection actually reclaims (updated 2026-07-25).** `(gc!)` now
+> reclaims **live strong `rc<T>` cycles** as well as weak-zombie blocks. The
+> collector runs real Bacon-Rajan trial deletion: a strong decrement that leaves
+> the count > 0 buffers a candidate root, and collection subtracts the internal
+> (in-cycle) edges on a scratch counter to find blocks referenced only from
+> within the candidate subgraph. Measured: 192 bytes per two-node cycle -> 0.
+>
+> One caveat remains: the collector only sees what the walker sees, so a cycle
+> routed through an `RCK_OPAQUE` handle is still not reclaimed. Collection is
+> driven by user code -- `(gc!)`, or the suspect threshold under
+> `(gc-enable!)` -- **unless** `(gc-auto!)` is in play, which collects at
+> allocation checkpoints on its own (CG5, `--enable=cycle-gc`). Breaking cycles
+> with `weak<T>`, as in Rust, remains valid and is still the only option with the
+> collector disabled (the default). See
+> `docs/archive/gc-cycle-collection-plan.md` (shipped) and
+> `docs/upcoming/v1/gc-cycle-collection-followup-plan.md` (remaining).
 
 ---
 
@@ -138,6 +192,102 @@ freed when the count hits zero) but the cycle collector cannot see through
 them. Wrap C handles in `defopaque` and give them a proper drop, not a
 walker, when they have no `rc<T>` children.
 
+This blind spot used to be narrower than it sounds, for a reason nobody would
+want: a `vec` or `map` could not hold an `rc<T>` at all (`emit: invalid
+EX_REINTERPRET rc -> int`), so "cycle through a collection" was closed by
+rejection rather than by tracing.
+
+**As of 2026-07-25 a `Vec[rc<T>]` compiles and is refcount-correct** -- the Vec
+takes a strong reference per slot and releases it on free/overwrite/removal --
+so the blind spot is now open for real on the vec side: a cycle routed through a
+Vec's element buffer is RC-balanced but **not** reclaimed, because the Vec's
+buffer is an ordinary `malloc` block with no walker.
+
+**As of 2026-07-26 a `Map[K rc<V>]` compiles too**, on the same terms: the map
+takes a strong reference on insert (`tests/fixtures/map-holds-rc-values`) and a
+read hands the caller its own. So the vec-side caveat now applies to maps as
+well -- HAMT nodes are plain `malloc` blocks with no walker, so a cycle routed
+through a map entry is RC-balanced and unreclaimed. `weak<T>` is still rejected
+everywhere (there is no count to take).
+
+`tests/fixtures/gc-blind-spot-cycle-through-vec` measures exactly this. It
+builds the same two-reference cycle twice, differing only in the back-edge:
+
+| back-edge | result |
+| --- | --- |
+| `a --.peer--> b --.peer--> a` (rc fields) | freed, 0 live |
+| `n --.kids--> Cell --.item--> n` (rc cells) | 0 live |
+| `n --.kids--> Vec --slot--> n` | 0 freed, 50 live |
+
+The middle row is the one that says what the gap is. A **user-defined container
+of rc cells is traced today**, with no new machinery -- its links are ordinary
+`rc` fields the walk glue already enumerates. So the blind spot is not
+"collections" as a category and not a missing capability in the walker; it is
+one specific thing, a flat `malloc`'d buffer with no `walk_fn`. **If you need a
+collection of `rc<T>` the collector can trace, build it out of rc cells.**
+`stdlib/rcchain.tur` is one, opt-in via `(load "stdlib/rcchain.tur")`:
+
+```turmeric
+(defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
+```
+
+Nothing in the compiler or runtime knows about it -- both fields are ordinary
+`rc`, so the walk glue traces them like any other. Pinned by
+`tests/fixtures/rcchain-cycle-is-collected`. O(n) to index and one rc block per
+element, so a `Vec` of handles that cannot cycle is still the better default.
+
+Emitting a walk loop for the field would *not* fix this, and is the trap worth
+naming: `gc_collect_white` frees the whole white set together and never releases
+references out of it, which is sound only when every path into a traced object
+is GC-visible. A `Vec` is shared by raw pointer with no count of its own, so
+tracing through it would let the sweep free a block a live `Vec` still points
+at -- a leak traded for a use-after-free. The container has to become
+GC-visible first. The same argument applies unchanged to a HAMT node. See
+[docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md)
+item 3 for the design.
+
+A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
+spot.
+
+---
+
+## Ownership across the stdlib
+
+Where does that leave the standard library? A 2026-07-24 audit of all ~138
+stdlib modules found that **stdlib builds no `rc<T>` cycles and uses `weak<T>`
+nowhere -- because it barely reaches for shared ownership at all.** `rc<T>`
+appears only in `stdlib/rc.tur` (the module that *defines* it) and the generated
+`stdlib/docstrings.tur`; no other module constructs, stores, or imports one. The
+library reaches its leak-free state by *sidestepping* shared mutable ownership,
+via three strategies:
+
+- **Persistent-immutable with structural sharing** -- `hamt`, `map`, `set`,
+  `list`, `string`. Every update returns a new root; sharing is refcounted at the
+  **C layer** (`tur_hamt_retain`, the string header's `rc` field), not via the
+  Turmeric `rc<T>` type. An immutable DAG has no mutable back-edges, so no cycle
+  can form.
+- **By-value / single-owner mutable storage** -- `vec`, `mutmap`, `grid`, `ref`,
+  `sized-*`. Each owns the one buffer it mutates; there are no shared handles and
+  no back-pointers written into shared nodes.
+- **Linear / affine opaque handles** -- `chan`, `future`, `taskgroup`, `mutex`,
+  `reactor`, `net`, ... are `defopaque ... :linear` / `:affine`. Single ownership
+  and exactly-once teardown are the deliberate alternative to refcounting.
+
+**Relative to Rust, the stdlib is already at or beyond the ideal.** Rust's rule
+is "use `Rc`/`Arc` only when ownership is genuinely shared, and break every cycle
+with `Weak`." The stdlib clears that bar by rarely needing shared ownership in
+the first place (Clojure/Haskell-style persistence plus linear types), so there
+are no cycles to break and `weak<T>` is unused.
+
+The one forward-looking caveat: a stored `rc<T>` field is what *would* enable a
+cycle, and the collector cannot reclaim a live strong cycle today
+(see the Known gaps below). To keep the property from regressing silently, the
+`tur_stdlib_no_rc_cycles` ctest guard (`tests/check-stdlib-no-rc-cycles.sh`)
+fails if a stdlib type annotation introduces `rc<...>` without an explicit
+`rc-cycle-ok` review marker. The plan to surface a proper `weak<T>` escape-hatch
+API in `rc.tur` -- for the day shared ownership *is* wanted -- is
+`docs/upcoming/v1/stdlib-weak-ref-audit-plan.md`.
+
 ---
 
 ## The interpreter is different
@@ -145,23 +295,35 @@ walker, when they have no `rc<T>` children.
 The tree-walking interpreter (`turi_eval`, `src/turi/eval.c`) makes
 deliberately different choices, and this trips people up.
 
-**Closures are never freed.** `eval.c:435-443` documents the reason:
-frames may be captured by closures that outlive their defining scope, and
-the interpreter does not try to figure out which. Process-lifetime is fine
-for the REPL and for compilation, which is what the interpreter is for.
+**Closures are never freed *individually*.** Frames, bindings, and closures
+are region-allocated from the env's value pool (`turi_val_alloc`,
+`value.c:16-18`; `eval_frame_new`/`eval_frame_free`, `eval.c:424-451`), and the
+per-object free is a deliberate no-op because a closure can capture a frame that
+outlives its defining scope and the interpreter does not track which. The whole
+pool is then reclaimed wholesale at `turi_env_free` (`env.c:334-336`) -- this is
+region memory reclaimed at teardown, **not** memory abandoned to the OS. The
+practical split: a short-lived process (fork-per-fixture, one-shot `tur build`)
+reclaims everything at exit; a **long-lived env** (a REPL/kernel that never tears
+down) grows the pool monotonically until teardown. That growth -- not a lost
+pointer -- is the real caveat; incremental reclamation via opt-in scratch
+promotion exists but is off by default (see
+`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`).
 
-**Collections (Vec/Set/Map) are never freed** unless user code calls
-`vec-free` / `set-free` / `map-free` explicitly. The natives in `main.c`
-`calloc` their backing storage and never register it for cleanup. See
-`docs/reported/interp-collections-never-freed.md` for the active report and
-`docs/upcoming/turi-interp-collections-libturi-plan.md` for the plan to
-move those natives into `libturi.a` where the embedder can wrap them.
+**Collections (Vec/Set/Map) backing buffers** are `calloc`/`malloc`'d outside
+the value pool and are **not** reclaimed on scope exit unless user code calls
+`vec-free` / `set-free` / `map-free`. They are, however, tracked at creation and
+swept at teardown (`env.c:320-327`), so they no longer leak past process exit --
+that historical bug is resolved (`docs/archive/history/interp-collections-never-freed.md`,
+`docs/archive/history/turi-interp-collections-libturi-plan.md`). Reclaiming them
+*mid-run* (drop-glue on scope exit) is still future work
+(`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`).
 
 **Consequence for `bash tests/run.sh`.** The compiler/codegen path is
 leak-clean and runs with LeakSanitizer enabled. The interpreter harnesses
-(`run-turi.sh`, `run-flags.sh`) default to `ASAN_OPTIONS=detect_leaks=0`
-because a genuine leak in the interpreter is expected. See
-`docs/asan-debug-leaks-plan.md`.
+(`run-turi.sh`, `run-flags.sh`) default to `ASAN_OPTIONS=detect_leaks=0` -- not
+because memory is abandoned, but because the interpreter deliberately does not
+free incrementally, so LSan on the interp path is noise rather than signal. See
+`docs/archive/history/asan-debug-leaks-plan.md`.
 
 ---
 
@@ -197,28 +359,60 @@ If you want to touch this code:
    `mark_phase` (242-293), `trial_deletion_phase` (296-343).
 4. `src/compiler/emit_expr.c` — where `rc_cb_alloc_*` calls are emitted
    (lines 5594-5656); this is how types acquire walkers.
-5. `src/turi/eval.c` — the interpreter's opposing policy (lines 435-443,
-   318-324) and why it is deliberate.
+5. `src/turi/eval.c` — the interpreter's opposing policy (region allocation +
+   no-op per-object free, lines 424-451) and why it is deliberate.
 
 For historical context:
 
 - `docs/archive/history/existential-gc-plan.md` — original EXG1 RC-for-existentials plan.
 - `docs/archive/existential-gc-followup-plan.md` — EXG4/5/6 (cross-scope
   ownership, cycle visibility, `:linear`), shipped 2026-05.
-- `docs/upcoming/end-to-end-monomorphization-plan.md` — the longer-term
+- `docs/archive/history/end-to-end-monomorphization-plan.md` — the longer-term
   ABI direction; the current hybrid carrier/by-value boxing is the seam RC
   and GC sit on.
 
 ---
 
+## Which copy of the collector runs (updated 2026-07-25)
+
+The collector was written twice: `src/runtime/{rc,gc,rc_free_queue}.c`, and a
+hand-written replica emitted into every compiled program. Divergence between
+them produced five bugs, so the replica is being retired. As of DEDUP-4b:
+
+| build path | collector |
+|---|---|
+| `tur build` (executable) | **linked from `libturt_runtime.a`** -- the same code the interpreter runs |
+| `tur build --shared` (.so) | the emitted replica, at **hidden visibility** -- a `.so` stays self-contained, and its collector is not exported, so a host that dlopens it cannot partially merge the two registries |
+| bare `tur emit-c` | the emitted replica (its output must be standalone C) |
+| no runtime archive locatable, or `--runtime=source` | the emitted replica |
+
+`TUR_RCGC_FROM_ARCHIVE=0` forces the replica back; `=1` takes the archive even
+for bare `emit-c`, for a caller who links `libturt_runtime.a` themselves.
+`tools/gc-copy-diff.py` reports what still differs between the two.
+
 ## Known gaps
 
-- Cycle collection is off by default. Programs that build cycles need to
-  call `(gc!)` explicitly, or opt into `GC_THRESHOLD` via `(gc-enable!)`.
+- Cycle collection is off by default. When enabled it now reclaims live strong
+  `rc<T>` cycles as well as weak-zombies (CG0--CG2, 2026-07-25; measured 192
+  bytes per cycle -> 0, archived at
+  `docs/archive/gc-strong-cycles-not-collected.md`). Remaining gaps: a cycle
+  routed through an `RCK_OPAQUE` block is invisible to the walker, and there is
+  no automatic trigger -- user code drives collection via `(gc!)` or the
+  suspect threshold.
+- A cycle routed through a `Vec[rc<T>]` element buffer or a `Map[K rc<V>]` entry
+  is refcount-correct but not reclaimed: both are plain `malloc` blocks with no
+  walker, and neither can simply be given one (each is shared by raw pointer, so
+  the collector cannot know whether another holder exists). Measured by
+  `tests/fixtures/gc-blind-spot-cycle-through-vec`; the fix -- an rc-managed,
+  self-walking container -- is designed in
+  `docs/reported/collections-cannot-hold-rc-values.md` item 3, and
+  `stdlib/rcchain.tur` is a working instance of it.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.
 - The walker relies on per-block metadata registered at allocation. Runtime
   type reflection is not available; a block with no `walk_fn` is opaque to
   the collector no matter what it actually points to.
-- Interpreter collections leak until the process exits. This is by design
-  today; the plan to fix it is `turi-interp-collections-libturi-plan.md`.
+- Interpreter memory is reclaimed at env teardown, but a long-lived env
+  (REPL/kernel) is not bounded incrementally -- the value pool and per-eval
+  arenas grow until teardown. The plan to bound it is
+  `docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`.

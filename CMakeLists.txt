@@ -205,6 +205,15 @@ add_test(
   COMMAND bash tests/check-sf-let-bind-inner-call.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# WR2 stdlib ownership guard: no stored rc<T> field may land in stdlib without an
+# explicit `rc-cycle-ok` review marker, since a live strong rc<T> cycle is not
+# reclaimable today. See docs/upcoming/v1/stdlib-weak-ref-audit-plan.md and the
+# "Ownership across the stdlib" section of docs/guides/gc-guide.md.
+add_test(
+  NAME tur_stdlib_no_rc_cycles
+  COMMAND bash tests/check-stdlib-no-rc-cycles.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests
@@ -308,6 +317,17 @@ add_test(
 add_test(
   NAME tur_hamt_del_lineage
   COMMAND bash tests/run-hamt-del-lineage.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# collections-cannot-hold-rc-values, map side, step (b): caller-supplied VALUE
+# ownership ops.  Value ownership used to be a bool selecting the hardcoded
+# boxed-value refcount, which an rc<T> value cannot use.  Compiles
+# tests/test_hamt_val_ops.c with ASan/UBSan (+LSan on Linux) and asserts the
+# caller's ops are the ones that run -- across structural sharing, and for
+# maps derived by a later set/del -- and that they balance exactly.
+add_test(
+  NAME tur_hamt_val_ops
+  COMMAND bash tests/run-hamt-val-ops.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
@@ -489,6 +509,35 @@ add_test(
   NAME tur_eval_basic
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# TR2.0: reader macros defined in one eval must stay usable across later evals
+# (pins the contract the incremental-elaboration change must preserve).
+add_test(
+  NAME tur_reader_macro_cross_eval
+  COMMAND "${CMAKE_BINARY_DIR}/tur_reader_macro_cross_eval"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_reader_macro_cross_eval PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
+# TR2: the incremental parse path must be result-identical to the default
+# whole-blob re-parse path (A/B differential over scripted eval sessions).
+add_test(
+  NAME tur_incremental_elab_diff
+  COMMAND "${CMAKE_BINARY_DIR}/tur_incremental_elab_diff"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_incremental_elab_diff PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
+# DEDUP-4: the runtime copy of the GC must behave like the emitted copy.
+add_test(
+  NAME tur_gc_runtime_copy_parity
+  COMMAND "${CMAKE_BINARY_DIR}/tur_gc_runtime_copy_parity"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_gc_runtime_copy_parity PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 # SB0: sandboxed environment test harness
 add_test(
@@ -707,6 +756,8 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_async_cancel tur_eval_async_error tur_eval_async_io
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_collections_embed tur_stdlib_natives_embed
+                     tur_reader_macro_cross_eval tur_incremental_elab_diff
+                     tur_gc_runtime_copy_parity
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur
 )

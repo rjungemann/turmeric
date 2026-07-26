@@ -165,6 +165,34 @@ static void repl_diag_sink(struct TuriEnv *env, int level, const char *code,
 }
 
 /* -------------------------------------------------------------------------
+ * TR2.4: per-env configuration for a freshly created REPL environment.
+ *
+ * The REPL is the canonical long-lived env: one TuriEnv serves the whole
+ * session and turi_env_free is only called on :reset / :run. Scratch promotion
+ * (turi-value-pool-scratch-promotion-plan) bounds the value pool for exactly
+ * that shape -- at each top-level boundary it promotes escaping values into the
+ * permanent pool and rewinds the scratch region, so per-turn transients do not
+ * accumulate for the life of the session. It stays OFF by default for embedders
+ * (the create/eval/free pattern needs no promotion), but the REPL always wants
+ * it, and with TR2.1-TR2.3 having bounded the elaboration and source terms the
+ * value pool is now the remaining unbounded one.
+ *
+ * The promotion walk is conservative: when a turn leaves live state it cannot
+ * prove safe to relocate (a suspended generator, a captured continuation), it
+ * simply declines to rewind that cycle rather than corrupting it. Measured at
+ * ~100% rewind on ordinary REPL input (TR0).
+ *
+ * TUR_NO_SCRATCH_PROMOTION=1 opts out, for bisecting a suspected promotion bug.
+ * ---------------------------------------------------------------------- */
+static void repl_configure_env(TuriEnv *env) {
+    if (!env) return;
+    turi_env_set_diag_sink(env, repl_diag_sink, env);
+    const char *off = getenv("TUR_NO_SCRATCH_PROMOTION");
+    if (!(off && *off && strcmp(off, "0") != 0))
+        turi_env_set_scratch_promotion(env, true);
+}
+
+/* -------------------------------------------------------------------------
  * Paren-balance counter — drives multi-line continuation
  * ---------------------------------------------------------------------- */
 
@@ -608,7 +636,7 @@ static void cmd_run(TuriEnv **env_io, const char *path) {
         *env_io = NULL;
         return;
     }
-    turi_env_set_diag_sink(env, repl_diag_sink, env);
+    repl_configure_env(env);   /* TR2.4 */
     repl_preload_stdlib_and_natives(env);
     *env_io = env;
 
@@ -988,7 +1016,7 @@ int turi_repl_run(bool watch_mode) {
         fprintf(stderr, "tur repl: failed to create eval environment\n");
         return 1;
     }
-    turi_env_set_diag_sink(env, repl_diag_sink, env);
+    repl_configure_env(env);   /* TR2.4: diag sink + scratch promotion */
 
     /* Preload the core macros (when/cond/for/and/or + assert!/require!/...) and
      * the typed-collection stdlib so the interactive prompt matches the
@@ -1128,7 +1156,7 @@ int turi_repl_run(bool watch_mode) {
                 turi_env_free(env);
                 env = turi_env_new();
                 if (env) {
-                    turi_env_set_diag_sink(env, repl_diag_sink, env);
+                    repl_configure_env(env);   /* TR2.4 */
                     repl_preload_stdlib_and_natives(env);
                 }
                 balance = 0;
@@ -1263,6 +1291,13 @@ int turi_repl_run(bool watch_mode) {
                     env->src_acc.len      = 0;   /* accumulated source may be incompatible */
                     env->prior_toplevel   = 0;
                     env->prior_prog_items = 0;
+                    env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
+                    env->acc_next_line    = 0;
+                    if (env->elab_session) {
+                        elab_session_free(env->elab_session);
+                        env->elab_session       = NULL;
+                        env->elab_session_forms = 0;
+                    }
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));

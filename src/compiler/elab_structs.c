@@ -1796,6 +1796,14 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         ctor->fields = n_fields > 0
             ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
             : NULL;
+        /* arena_alloc does not zero, and resolve_ctor_field writes
+         * `drop_inner_def` only on the nested-owning-aggregate branch -- so
+         * every other field kept the arena's 0xbe poison and the drop/walk glue
+         * emitter dereferenced it.  Latent for as long as the emitter only
+         * walked ctor 0; it surfaced when the sum-type glue fix widened that
+         * walk to every ctor.  Zero the whole array once rather than chase
+         * per-field defaults. */
+        if (ctor->fields) memset(ctor->fields, 0, n_fields * sizeof(CtorField));
         /* F6-1 (cross-plan-followups): stash the raw field-type forms so pattern
          * extraction at match time can recover the declared ADT/struct type. */
         ctor->field_forms = n_fields > 0
@@ -2584,6 +2592,14 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
         ctor->fields = n_fields > 0
             ? (CtorField *)arena_alloc(e->arena, n_fields * sizeof(CtorField))
             : NULL;
+        /* arena_alloc does not zero, and resolve_ctor_field writes
+         * `drop_inner_def` only on the nested-owning-aggregate branch -- so
+         * every other field kept the arena's 0xbe poison and the drop/walk glue
+         * emitter dereferenced it.  Latent for as long as the emitter only
+         * walked ctor 0; it surfaced when the sum-type glue fix widened that
+         * walk to every ctor.  Zero the whole array once rather than chase
+         * per-field defaults. */
+        if (ctor->fields) memset(ctor->fields, 0, n_fields * sizeof(CtorField));
         ctor->adt = def;
         ctor->tag = ci;
         ctor->result_type_form = return_type_form;

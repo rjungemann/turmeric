@@ -9806,9 +9806,50 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
 /* Promote everything that escapes this top-level eval (its result plus every
  * global) into value_perm, then rewind value_scratch.  A no-op unless promotion
  * is enabled; conservatively skips the rewind whenever safety cannot be proven. */
+/* TR2 (turi-incremental-elaboration-design): accumulated top-level Form vector.
+ *
+ * Holds every top-level Form parsed so far this session, in parse order, so a
+ * long-lived env can re-read only the newly appended source instead of
+ * re-parsing the whole accumulated blob each turn. The Forms live in the eval
+ * arenas that produced them (all retained), and are immutable after parse, so
+ * holding them across evals is sound. Storage is a plain malloc'd pointer
+ * vector, freed in turi_env_free. */
+static bool acc_forms_set(TuriEnv *env, Form **src, uint32_t n) {
+    if (n > env->cap_acc_forms) {
+        uint32_t ncap = env->cap_acc_forms ? env->cap_acc_forms : 16;
+        while (ncap < n) ncap *= 2;
+        Form **grown = (Form **)realloc(env->acc_forms, (size_t)ncap * sizeof(Form *));
+        if (!grown) return false;
+        env->acc_forms     = grown;
+        env->cap_acc_forms = ncap;
+    }
+    if (n && src != env->acc_forms)
+        memcpy(env->acc_forms, src, (size_t)n * sizeof(Form *));
+    env->n_acc_forms = n;
+    return true;
+}
+
+static bool acc_forms_append(TuriEnv *env, Form **src, uint32_t n) {
+    uint32_t base = env->n_acc_forms;
+    uint32_t total = base + n;
+    if (total < base) return false;               /* overflow guard */
+    if (total > env->cap_acc_forms) {
+        uint32_t ncap = env->cap_acc_forms ? env->cap_acc_forms : 16;
+        while (ncap < total) ncap *= 2;
+        Form **grown = (Form **)realloc(env->acc_forms, (size_t)ncap * sizeof(Form *));
+        if (!grown) return false;
+        env->acc_forms     = grown;
+        env->cap_acc_forms = ncap;
+    }
+    if (n) memcpy(env->acc_forms + base, src, (size_t)n * sizeof(Form *));
+    env->n_acc_forms = total;
+    return true;
+}
+
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
-    if (!promo_env_quiescent(env)) return;
+    env->promo_attempts++;   /* TR0: promotion attempted this eval boundary */
+    if (!promo_env_quiescent(env)) { env->promo_decline_busy++; return; }
 
     /* Pass 1: is the whole root set relocatable? */
     PromoMap seen;
@@ -9820,7 +9861,7 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
         }
     }
     promo_map_free(&seen);
-    if (!ok) return;   /* keep scratch intact this cycle */
+    if (!ok) { env->promo_decline_unrelocatable++; return; }   /* keep scratch intact this cycle */
 
     /* Pass 2: copy roots into perm, rewriting pointers (shared fwd table keeps
      * cross-root sharing and cycles consistent). */
@@ -9834,6 +9875,7 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
 
     /* Everything reachable now lives in value_perm; reclaim the scratch region. */
     arena_reset(&env->value_scratch);
+    env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 }
 
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
@@ -9905,6 +9947,16 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                 env->prior_toplevel    = 0;
                 env->prior_prog_items  = 0;
                 env->reader_type       = detected;
+                /* TR2: accumulated forms belong to the OLD reader; drop them
+                 * along with the source they came from, and with them the
+                 * elaboration session built from those forms. */
+                env->n_acc_forms       = 0;
+                env->acc_next_line     = 0;
+                if (env->elab_session) {
+                    elab_session_free(env->elab_session);
+                    env->elab_session       = NULL;
+                    env->elab_session_forms = 0;
+                }
             }
             /* Layers are additive and file-scoped; union them into the
              * session set so reader layers stay active across the eval blob. */
@@ -9914,14 +9966,26 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
         }
     }
 
-    /* 1. Build combined source: all prior definitions + new source (sans #lang). */
-    Buf combined;
-    buf_init(&combined);
+    /* 1. Build combined source: all prior definitions + new source (sans #lang).
+     *
+     * TR2.3: this goes into an env-owned buffer that is REUSED every eval,
+     * rather than a fresh Buf copied into the per-eval arena. The old
+     * arena_strdup retained a full copy of the accumulated source in every eval
+     * arena -- O(N) per eval, O(N^2) over a session, which was the dominant
+     * residue once elaboration became incremental. Nothing holds a pointer into
+     * this buffer past its own eval (Forms copy their bytes; the SourceFile is
+     * re-registered each turn), so reusing it is safe. */
+    Buf *combined = &env->src_combined;
+    combined->len = 0;
     if (env->src_acc.len > 0) {
-        buf_write(&combined, env->src_acc.data, env->src_acc.len);
-        buf_putc(&combined, '\n');
+        buf_write(combined, env->src_acc.data, env->src_acc.len);
+        buf_putc(combined, '\n');
     }
-    buf_write(&combined, src_body, body_len);
+    buf_write(combined, src_body, body_len);
+    /* NUL-terminate for any consumer that expects a C string, without counting
+     * the terminator in the reported length. */
+    buf_putc(combined, '\0');
+    combined->len--;
 
     /* 2. Create a new per-call arena and link it into env. */
     ArenaNode *node = (ArenaNode *)malloc(sizeof(ArenaNode));
@@ -9930,10 +9994,9 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     env->eval_arenas = node;
     Arena *eval_arena = &node->arena;
 
-    /* 3. Copy the combined source into the arena so it survives this call. */
-    size_t src_len  = combined.len;
-    char  *src_copy = arena_strdup(eval_arena, combined.data, src_len);
-    buf_free(&combined);
+    /* 3. Point at the env-owned combined source (TR2.3: no per-eval copy). */
+    size_t      src_len  = combined->len;
+    const char *src_copy = combined->data;
 
     /* 4. Reset diagnostics; register the eval source file. */
     diag_reset();
@@ -9957,12 +10020,57 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     diag_register_file(sfile);
 
     /* 5. Parse. RM Q#5: pass env->reader_macros so reader-macros defined
-     * in earlier eval calls remain visible. */
+     * in earlier eval calls remain visible.
+     *
+     * TR2: with incremental parsing enabled, re-read only the newly appended
+     * tail (offset `prefix_len` into the combined blob) and reuse the Forms
+     * earlier evals already parsed, instead of re-parsing everything each turn.
+     * `sfile` still carries the FULL blob, so spans stay absolute and
+     * diagnostics render exactly as on the default path. Any turn we cannot
+     * handle incrementally falls back to the whole-blob parse below, so
+     * correctness never depends on the fast path applying. */
+    const uint32_t acc_committed = env->n_acc_forms;  /* rollback point */
+    const uint32_t prefix_len =
+        (env->src_acc.len > 0) ? (uint32_t)env->src_acc.len + 1u : 0u;
+    const bool use_incremental =
+        env->incremental_elab &&
+        /* sweet-exp rewrites the whole buffer, so an offset in original
+         * coordinates is meaningless after transformation */
+        env->reader_type != READER_SWEET &&
+        prefix_len > 0 &&                       /* nothing accumulated yet */
+        prefix_len <= src_len &&
+        env->n_acc_forms == env->prior_toplevel; /* vector in sync with session */
+
     uint32_t  nforms = 0;
-    Form    **forms  = read_all_with_registry(eval_arena, &env->st, sfile,
-                                              env->reader_macros, &nforms);
-    if (!forms || diag_had_error()) {
-        return turi_error("parse error");
+    Form    **forms  = NULL;
+    if (use_incremental) {
+        uint32_t n_new = 0;
+        Form **new_forms =
+            read_all_with_registry_from(eval_arena, &env->st, sfile,
+                                        env->reader_macros, prefix_len,
+                                        env->acc_next_line ? env->acc_next_line : 1,
+                                        &n_new);
+        if (!new_forms || diag_had_error()) {
+            return turi_error("parse error");
+        }
+        if (!acc_forms_append(env, new_forms, n_new)) {
+            env->n_acc_forms = acc_committed;
+            return turi_error("out of memory");
+        }
+        forms  = env->acc_forms;
+        nforms = env->n_acc_forms;
+    } else {
+        forms = read_all_with_registry(eval_arena, &env->st, sfile,
+                                       env->reader_macros, &nforms);
+        if (!forms || diag_had_error()) {
+            return turi_error("parse error");
+        }
+        /* Whole-blob parse: the result already contains the prior forms
+         * (re-parsed), so it replaces the accumulated vector wholesale. */
+        if (!acc_forms_set(env, forms, nforms)) {
+            env->n_acc_forms = acc_committed;
+            return turi_error("out of memory");
+        }
     }
 
     /* 5b. REPL implicit-do: if the new turn's forms contain a top-level
@@ -10009,6 +10117,13 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             src_body = arena_strdup(eval_arena, wrapped_src.data, wrapped_src.len);
             body_len = wrapped_src.len;
             buf_free(&wrapped_src);
+            /* TR2: the wrap rewrote the new-turn forms into a single (do ...);
+             * keep the accumulated vector in sync with what is elaborated (and
+             * with the rewritten src_body that step 8 appends to src_acc). */
+            if (!acc_forms_set(env, forms, nforms)) {
+                env->n_acc_forms = acc_committed;
+                return turi_error("out of memory");
+            }
         }
     }
 
@@ -10027,9 +10142,26 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
     TypeClassEnv *tc_env_slot =
         (TypeClassEnv *)arena_alloc(eval_arena, sizeof(TypeClassEnv));
     memset(tc_env_slot, 0, sizeof(*tc_env_slot));
-    Expr *prog = elaborate_program(eval_arena, &env->st,
-                                   forms, nforms,
-                                   /*stdlib_prefix=*/prior,
+
+    /* TR2.2b: incremental elaboration. When the session already holds exactly
+     * the previously-accumulated forms, hand the elaborator ONLY this turn's
+     * new forms -- prior definitions resolve out of the session's accumulated
+     * scope instead of being re-elaborated (and re-allocated) every turn.
+     *
+     * Otherwise (no session yet, or one just discarded after a failure) fall
+     * back to elaborating the whole accumulated program, which both reproduces
+     * today's behavior exactly and rebuilds the session from scratch. */
+    if (env->incremental_elab && !env->elab_session) {
+        env->elab_session       = elab_session_new();
+        env->elab_session_forms = 0;
+    }
+    const bool use_incr_elab = env->elab_session && prior > 0 &&
+                               env->elab_session_forms == prior;
+    const uint32_t elab_from = use_incr_elab ? prior : 0;
+
+    Expr *prog = elaborate_program_session(eval_arena, &env->st,
+                                   forms + elab_from, nforms - elab_from,
+                                   /*stdlib_prefix=*/prior - elab_from,
                                    /*module_base_dir=*/mbase,
                                    /*separate_compilation=*/false,
                                    /*sandboxed=*/import_blocked,
@@ -10040,8 +10172,17 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
                                    /* RM transitive: REPL/eval reuses the
                                     * env-owned registry so module loads
                                     * see the same macros the entry did. */
-                                   env->reader_macros);
+                                   env->reader_macros,
+                                   env->elab_session);
     if (!prog || diag_had_error()) {
+        env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
+        /* A failed program may have left partial definitions in the session;
+         * discard it so the next turn rebuilds from the accumulated forms. */
+        if (env->elab_session) {
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
         return turi_error("elaboration error");
     }
 
@@ -10064,6 +10205,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * The full move/borrow checker is intentionally left to the elaborator
      * (which the interpreter already shares). */
     if (!lifetime_check_program(prog)) {
+        env->n_acc_forms = acc_committed;   /* TR2: uncommit this turn's forms */
+        if (env->elab_session) {            /* see the discard note above */
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
         return turi_error("elaboration error");
     }
 
@@ -10127,7 +10274,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * prior_prog non-fsd program items from earlier evals.  Skip exactly that
      * many; everything after is genuinely new (see prior_prog_items above --
      * parsed-form count is the wrong unit once (load ...) expands inline). */
-    uint32_t prior_prog = env->prior_prog_items;
+    /* TR2.2b: under incremental elaboration the program holds ONLY this turn's
+     * items, so none of them have run before -- the already-run prefix is zero.
+     * On the whole-program path the cumulative count applies, as before. */
+    uint32_t prior_prog = use_incr_elab ? 0u : env->prior_prog_items;
     EVAL_TOPLEVEL_RANGE(0, n_fsd);                   /* imported module bodies */
     EVAL_TOPLEVEL_RANGE(n_fsd + prior_prog, total);  /* new user forms         */
 eval_done:;
@@ -10140,18 +10290,48 @@ eval_done:;
         /* Append new source (without any leading #lang line) to accumulator */
         if (env->src_acc.len > 0) buf_putc(&env->src_acc, '\n');
         buf_write(&env->src_acc, src_body, body_len);
+        /* TR2: advance the incremental line cursor across the chunk just
+         * appended, counting newlines in the NEW text only (never rescanning
+         * the prefix, which would reintroduce an O(N) term per eval). The next
+         * chunk is separated by one '\n', hence the trailing +1. */
+        {
+            uint32_t start_line = env->acc_next_line ? env->acc_next_line : 1;
+            uint32_t nl = 0;
+            for (size_t i = 0; i < body_len; i++)
+                if (src_body[i] == '\n') nl++;
+            env->acc_next_line = start_line + nl + 1;
+        }
         env->prior_toplevel = nforms;  /* track parsed count, not total */
         /* Every non-fsd program item run this call is "accumulated" next time.
          * total = n_fsd + (all non-fsd items), so total - n_fsd is that count.
          * Keying the skip off this (not the parsed nforms) is what keeps a
          * re-expanded (load ...) from re-running earlier top-level forms. */
-        env->prior_prog_items = total - n_fsd;
+        /* TR2.2b: keep this CUMULATIVE across turns. The whole-program path
+         * elaborates everything, so (total - n_fsd) is already the running
+         * total; the incremental path only sees this turn's items, so add. */
+        if (use_incr_elab) env->prior_prog_items += (total - n_fsd);
+        else               env->prior_prog_items  = total - n_fsd;
+        /* The session has now absorbed every accumulated form. */
+        if (env->elab_session) env->elab_session_forms = nforms;
         /* SI4: persist TypeClassEnv for turi_try_show dispatch. */
         env->last_tc_env = tc_env_slot;
         /* SI4: extract type tag from the last new top-level expression. */
         if (out_type_tag && tag_cap > 0 && total > n_fsd + prior_prog) {
             Expr *last_expr = prog->as.program.items[total - 1];
             if (last_expr) extract_type_tag(last_expr->type, out_type_tag, tag_cap);
+        }
+    } else {
+        /* TR2: this turn's source is not appended to src_acc on failure, so its
+         * forms must not stay in the accumulated vector either -- otherwise the
+         * next turn's offset/count bookkeeping would disagree with src_acc. */
+        env->n_acc_forms = acc_committed;
+        /* TR2.2b: the session HAS absorbed this turn's definitions even though
+         * the turn failed at runtime, so it no longer matches the accumulated
+         * forms. Discard it; the next turn rebuilds from acc_forms. */
+        if (env->elab_session) {
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
         }
     }
 
@@ -10193,6 +10373,13 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path) {
         env->src_acc.len      = 0;
         env->prior_toplevel   = 0;
         env->prior_prog_items = 0;
+        env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
+        env->acc_next_line    = 0;
+        if (env->elab_session) {
+            elab_session_free(env->elab_session);
+            env->elab_session       = NULL;
+            env->elab_session_forms = 0;
+        }
     }
 
     TuriValue v = turi_eval(env, buf);

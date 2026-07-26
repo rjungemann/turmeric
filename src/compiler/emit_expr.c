@@ -2946,13 +2946,66 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             TypeKind src_kind = e->as.reinterpret_.source_kind;
             TypeKind dst_kind = e->as.reinterpret_.target_kind;
+            /* collections-cannot-hold-rc-values item 2: an rc<T> crossing the
+             * int64 element carrier.  The bits are just the control-block
+             * pointer, so the crossing itself is a cast -- what matters is the
+             * count.  elab (own_carry_for_arg / own_carry_for_result) decided
+             * whether this crossing mints a reference or moves one; here we
+             * only stamp the increment it asked for.  The Vec releases its own
+             * count via bit 1 of the `owned` flag threaded by stdlib/vec.tur. */
+            if (src_kind == TY_RC || dst_kind == TY_RC) {
+                char *rc_inner = emit_value(ctx, body, e->as.reinterpret_.expr);
+                char *rc_tmp = fresh_tmp(ctx);
+                buf_printf(body, "RcControlBlock *%s = (RcControlBlock *)(intptr_t)(%s);\n",
+                           rc_tmp, rc_inner);
+                free(rc_inner);
+                if (e->as.reinterpret_.retain)
+                    buf_printf(body, "if (%s) { rc_strong_increment(%s); }\n", rc_tmp, rc_tmp);
+                Buf rc_out; buf_init(&rc_out);
+                if (dst_kind == TY_RC) buf_printf(&rc_out, "%s", rc_tmp);
+                else                   buf_printf(&rc_out, "(int64_t)(intptr_t)%s", rc_tmp);
+                free(rc_tmp);
+                buf_putc(&rc_out, '\0');
+                return rc_out.data;
+            }
             int src_size = reinterpret_kind_size_bytes(src_kind);
             int dst_size = reinterpret_kind_size_bytes(dst_kind);
             if (!reinterpret_kind_is_scalar(src_kind) || !reinterpret_kind_is_scalar(dst_kind) ||
                 src_size <= 0 || dst_size <= 0) {
-                fprintf(stderr,
-                        "tur: emit: invalid EX_REINTERPRET %s -> %s\n",
-                        typekind_to_string(src_kind), typekind_to_string(dst_kind));
+                /* collections-cannot-hold-rc-values: the common way to reach
+                 * here is storing an owning value in a collection --
+                 * `(vec-of (rc/clone a))`, `(hamt-of :k some-rc)`.  Elements go
+                 * through an int64 carrier and rc/weak/ref have no
+                 * reinterpretation to it.  The bare "invalid EX_REINTERPRET
+                 * rc -> int" gave no hint that an ordinary program, not a
+                 * compiler invariant, was at fault.
+                 *
+                 * This is still an abort with no span: the emit layer has no
+                 * diagnostic channel (no diag_emit call exists in it), so a
+                 * proper span'd error has to be raised earlier.  vec-of is a
+                 * macro rather than a variadic defn, so the rest-arg check in
+                 * elab_call.c is not the right hook either -- finding the right
+                 * one is the open half of the report. */
+                bool owning_src = src_kind == TY_RC || src_kind == TY_WEAK ||
+                                  src_kind == TY_REF || src_kind == TY_LREF;
+                bool owning_dst = dst_kind == TY_RC || dst_kind == TY_WEAK ||
+                                  dst_kind == TY_REF || dst_kind == TY_LREF;
+                if (owning_src || owning_dst) {
+                    fprintf(stderr,
+                            "tur: cannot store an owning value (%s) through the "
+                            "int64 element carrier -- collections (vec, map/hamt) "
+                            "cannot hold %s today.\n"
+                            "  Store a plain handle instead, or keep the %s "
+                            "outside the collection.\n"
+                            "  See docs/reported/collections-cannot-hold-rc-values.md\n",
+                            typekind_to_string(owning_src ? src_kind : dst_kind),
+                            typekind_to_string(owning_src ? src_kind : dst_kind),
+                            typekind_to_string(owning_src ? src_kind : dst_kind));
+                } else {
+                    fprintf(stderr,
+                            "tur: emit: invalid EX_REINTERPRET %s -> %s\n",
+                            typekind_to_string(src_kind), typekind_to_string(dst_kind));
+                }
                 abort();
             }
 
@@ -3321,10 +3374,43 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (fn_binding && fn_binding->name && fn_binding->name->name &&
                 strcmp(fn_binding->name->name, "tur-wide-byval?") == 0 &&
                 e->as.call_.n_args == 1) {
-                Type at = emit_resolve_type(ctx, e->as.call_.args[0]->type);
+                /* map-assoc-move-typed-value: the query is a pure TYPE probe --
+                 * its body discards the argument -- so callers hand it a BORROW
+                 * `(& v)` rather than the value, which keeps a move-typed value
+                 * usable at its real argument position.  Peel the borrow at the
+                 * EXPRESSION level, not the type level: TY_REF_IMMUT carries
+                 * only the target's TypeKind, which would lose the ADT def that
+                 * type_is_wide_byval_adt needs. */
+                const Expr *probe = e->as.call_.args[0];
+                if (probe && probe->kind == EX_BORROW_IMMUT &&
+                    probe->as.borrow_immut_.expr)
+                    probe = probe->as.borrow_immut_.expr;
+                Type at = emit_resolve_type(ctx, probe->type);
                 bool wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
                             type_is_wide_byval_adt(at);
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
+            }
+
+            /* collections-cannot-hold-rc-values (map side, step c):
+             * `(tur-rc-value? x)` is the refcount-side twin of
+             * `tur-wide-byval?` -- it folds to 1 when the argument's
+             * monomorphized type is an rc<T>.  map-assoc threads it as bit 2 of
+             * the `owned` flag so the map takes a strong reference on insert and
+             * releases it when the entry dies.  Like tur-wide-byval? it is a
+             * pure TYPE probe taking a BORROW, so a move-typed rc value stays
+             * usable at its real argument position; the same expression-level
+             * peel applies, since TY_REF_IMMUT would erase the rc-ness we are
+             * asking about.  The pure-Turmeric fallback body (returns 0) covers
+             * the interpreter, where rc values are not carrier-erased. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                strcmp(fn_binding->name->name, "tur-rc-value?") == 0 &&
+                e->as.call_.n_args == 1) {
+                const Expr *probe = e->as.call_.args[0];
+                if (probe && probe->kind == EX_BORROW_IMMUT &&
+                    probe->as.borrow_immut_.expr)
+                    probe = probe->as.borrow_immut_.expr;
+                bool is_rc = emit_resolve_type(ctx, probe->type).kind == TY_RC;
+                return strdup(is_rc ? "INT64_C(1)" : "INT64_C(0)");
             }
 
             /* multiword-element boxing (Vec): `(tur-vec-elem-wide? v)` is the
@@ -3350,6 +3436,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            type_is_wide_byval_adt(at);
                 }
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
+            }
+
+            /* collections-cannot-hold-rc-values item 2: `(tur-vec-elem-rc? v)`
+             * is the refcount-side twin of tur-vec-elem-wide? -- it folds to 1
+             * when the monomorphized `(Vec A)` element type A is an rc<T>,
+             * whose slots hold a strong reference the Vec took at push time
+             * (own_carry_for_arg in elab_call.c) and must release on
+             * free/overwrite/removal.  Threaded as bit 1 of the `owned` flag,
+             * mirroring how map-assoc threads tur-wide-byval?.  The
+             * pure-Turmeric fallback body (returns 0) covers the interpreter,
+             * where rc values are not carrier-erased. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                strcmp(fn_binding->name->name, "tur-vec-elem-rc?") == 0 &&
+                e->as.call_.n_args == 1) {
+                Type vt = emit_resolve_type(ctx, e->as.call_.args[0]->type);
+                bool is_rc = false;
+                if (vt.kind == TY_APP && vt.as.app.arg)
+                    is_rc = emit_resolve_type(ctx, *vt.as.app.arg).kind == TY_RC;
+                return strdup(is_rc ? "INT64_C(1)" : "INT64_C(0)");
             }
 
             /* CM3 (van-laarhoven-consumer-mono-plan): rewrite a call to an
@@ -6809,14 +6914,55 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (rc/of x) - allocate control block, copy value into it */
             char *inner = emit_value(ctx, body, e->as.rc_of_.expr);
             char *inner_type_c = strdup(type_c_name(e->as.rc_of_.expr->type));
-            
-            /* Emit: allocate value separately, then attach it to rc control block. */
+
+            /* A `:heap` ADT is already represented as a POINTER to its payload
+             * (its ctor mallocs and returns `T *`), so boxing it the generic way
+             * -- malloc a cell and store the pointer in it -- leaves cb->value a
+             * `T **`. Every consumer (field read/write, walk glue, drop glue)
+             * casts cb->value straight to `T *`, so that extra indirection made
+             * them read the pointer cell as if it were the struct: `->next`
+             * yielded the struct pointer, which then reached
+             * rc_strong_decrement as a bogus control block (a crash once the
+             * collector touched fields past weak_count), the walker traced
+             * garbage, and drop glue freed the cell while leaking the struct.
+             *
+             * cb->value must point AT the payload, so for a heap ADT adopt the
+             * pointer the ctor already produced. See
+             * docs/reported/gc-heap-struct-rc-not-a-control-block.md. */
+            bool payload_is_heap_adt =
+                e->as.rc_of_.expr->type.kind == TY_ADT &&
+                e->as.rc_of_.expr->type.as.adt_.def &&
+                e->as.rc_of_.expr->type.as.adt_.def->is_heap;
+
+            /* rc-of-sum-type-drops-no-glue: a MULTI-VARIANT ADT is the same
+             * shape.  Its ctor mallocs the tag+union record and hands back a
+             * pointer as an int64 carrier, so wrapping that in another malloc'd
+             * cell leaves cb->value pointing at a cell that *holds* the pointer
+             * rather than at the record.  The drop glue then casts the cell,
+             * reads the pointer bits as `s->tag`, and matches no case -- so the
+             * owning fields were never released even once the glue existed.
+             * Adopt the ctor's pointer directly, exactly as the heap case does. */
+            bool payload_is_boxed_adt =
+                e->as.rc_of_.expr->type.kind == TY_ADT &&
+                e->as.rc_of_.expr->type.as.adt_.def &&
+                !e->as.rc_of_.expr->type.as.adt_.def->is_heap &&
+                !adt_is_byvalue_product(e->as.rc_of_.expr->type.as.adt_.def) &&
+                e->as.rc_of_.expr->type.as.adt_.def->needs_drop_glue;
+
             char *val_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
-                       inner_type_c, val_tmp, inner_type_c, inner_type_c);
-            indent_buf(body, ctx->indent);
-            buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+            if (payload_is_boxed_adt) {
+                buf_printf(body, "%s *%s = (%s *)(intptr_t)(%s);\n",
+                           inner_type_c, val_tmp, inner_type_c, inner);
+            } else if (payload_is_heap_adt) {
+                buf_printf(body, "%s %s = %s;\n", inner_type_c, val_tmp, inner);
+            } else {
+                /* Emit: allocate value separately, then attach it to rc control block. */
+                buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n",
+                           inner_type_c, val_tmp, inner_type_c, inner_type_c);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = %s;\n", val_tmp, inner);
+            }
 
             char *cb_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
@@ -6834,7 +6980,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * an `rc/of` over one with rc/ref/weak fields needs the same
                  * field-releasing drop/walk glue (keyed off the C type name). */
                 AdtDef *adef = e->as.rc_of_.expr->type.as.adt_.def;
-                if (adef && adef->needs_drop_glue && adt_is_byvalue_product(adef)) {
+                /* rc-of-sum-type-drops-no-glue: this used to also require
+                 * adt_is_byvalue_product(adef), so a MULTI-VARIANT ADT with an
+                 * owning field fell through to the else branch below with
+                 * drop_fn_name still at its initial "NULL" -- no drop glue and
+                 * no walker.  The rc payload was never released and the walker
+                 * could not trace through the box.  The glue emitter now
+                 * dispatches on the tag, so both shapes are covered. */
+                if (adef && adef->needs_drop_glue) {
                     char *mn = mangle_field_name(adef->name);
                     snprintf(dg_name_buf, sizeof(dg_name_buf), "drop_glue_tur_adt_%s", mn);
                     snprintf(wg_name_buf, sizeof(wg_name_buf), "walk_glue_tur_adt_%s", mn);

@@ -1,0 +1,57 @@
+;; collections-cannot-hold-rc-values item 2: a Vec[rc<T>] OWNS a strong
+;; reference per slot.
+;;
+;; Before this, the shape did not compile at all -- the element crossed into the
+;; Vec's int64 carrier through an EX_REINTERPRET that had no rc case, so
+;; `(vec-of (rc/clone a))` was a hard error.  Making it merely compile would have
+;; been worse than the error: the slot would hold a control-block pointer nobody
+;; owned, leaking or double-freeing depending on which side dropped it first.
+;;
+;; So the carrier crossing is accounted at both ends.  Elaboration
+;; (own_carry_for_arg / own_carry_for_result in elab_call.c) decides per sink
+;; whether a crossing MINTS a reference or MOVES one, and stdlib/vec.tur threads
+;; `tur-vec-elem-rc?` as bit 1 of the `owned` flag so the release lands at the
+;; same three points a Vec[Point] frees its element boxes.
+;;
+;; Every assertion below is a strong count, because that is the thing that has
+;; to balance -- printing the elements back would pass just as well with the
+;; counts wrong.
+(defstruct S :move [tag : int])
+
+(defn main [] : int
+  (let [a (rc/of (make-struct S 1))
+        b (rc/of (make-struct S 2))]
+    (println (rc/strong-count a))     ; 1 -- just the local
+
+    ;; push takes a count
+    (let [v (vec-of (rc/clone a))]
+      (println (rc/strong-count a))   ; 2 -- the Vec owns one
+
+      ;; a read hands the caller its OWN count, so the Vec's stays intact ...
+      (let [e (vec-get v 0)]
+        (println (rc/strong-count a)))  ; 3
+      ;; ... and it goes away with the read, not with the Vec
+      (println (rc/strong-count a))   ; 2
+
+      ;; overwriting a slot releases what was there and takes the new one
+      (vec-set! v 0 (rc/clone b))
+      (println (rc/strong-count a))   ; 1
+      (println (rc/strong-count b))   ; 2
+
+      ;; removing a slot releases it
+      (vec-drop-last! v)
+      (println (rc/strong-count b))   ; 1
+      (println (vec-len v))           ; 0
+
+      ;; and teardown releases whatever is still in the buffer.  Both push
+      ;; shapes land the same net +1: a bare `a` is a BORROW, so the push takes
+      ;; its own count on top of the one the local keeps; `(rc/clone b)` already
+      ;; minted a reference nobody tracks, so the push takes that one as-is
+      ;; rather than retaining on top of it (which would leak one).
+      (vec-push! v a)
+      (vec-push! v (rc/clone b))
+      (println (rc/strong-count a))   ; 2
+      (vec-free v))
+    (println (rc/strong-count a))     ; 1
+    (println (rc/strong-count b)))    ; 1
+  0)

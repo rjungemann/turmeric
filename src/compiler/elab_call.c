@@ -707,10 +707,128 @@ static bool call_reinterpret_kind_is_integral(TypeKind k) {
     }
 }
 
+/* collections-cannot-hold-rc-values item 2: an owning value (rc/weak/ref) has
+ * no bit-preserving reinterpretation to the int64 element carrier *as a value*
+ * -- but it does as a REFERENCE, provided somebody accounts for the count.  So
+ * the carrier crossing is allowed only at sinks that do account for it, and
+ * each such sink says which of the two accountings applies:
+ *
+ *   OWN_CARRY_RETAIN -- crossing mints a new strong reference.  Storing into a
+ *     collection (the collection now owns a count it will release on
+ *     free/overwrite/removal), or reading one back out (the caller gets its own
+ *     count to drop, leaving the collection's intact).
+ *   OWN_CARRY_BORROW -- crossing moves the existing reference and mints
+ *     nothing.  A compile-time witness the callee discards, or a removal that
+ *     transfers the slot's own count out to the caller.
+ *   OWN_CARRY_REJECT -- everything else.  Passing the pointer through
+ *     unaccounted would leak or double-free depending on which side drops it,
+ *     so this stays a diagnostic rather than a silent bit-cast.
+ */
+typedef enum {
+    OWN_CARRY_REJECT = 0,
+    OWN_CARRY_BORROW,
+    OWN_CARRY_RETAIN,
+} OwnCarry;
+
+static OwnCarry own_carry_for_arg(const char *fn, uint32_t idx) {
+    if (!fn) return OWN_CARRY_REJECT;
+    /* Stores: the slot keeps a strong reference the Vec releases later
+     * (stdlib/vec.tur threads bit 1 of the `owned` flag to do it). */
+    if (strcmp(fn, "vec-push!") == 0  && idx == 1) return OWN_CARRY_RETAIN;
+    if (strcmp(fn, "vec-set-o!") == 0 && idx == 2) return OWN_CARRY_RETAIN;
+    /* Type witnesses: the bodies discard the value, so no count changes.
+     * `(vec-of x y)` routes every element through tur-vec-homog__ before it
+     * ever reaches a push, so rejecting here would reject the literal form. */
+    if (strcmp(fn, "tur-vec-homog__") == 0)   return OWN_CARRY_BORROW;
+    if (strcmp(fn, "vec-empty-like__") == 0)  return OWN_CARRY_BORROW;
+    /* Map inserts, same contract as the Vec stores: the entry keeps a strong
+     * reference the map releases when it dies (stdlib/map.tur threads bit 2 of
+     * the `owned` flag, which routes the insert through tur_hamt_set_eq_vo with
+     * the emitted rc ops). */
+    if (strcmp(fn, "map-assoc-eq-o") == 0 && idx == 3) return OWN_CARRY_RETAIN;
+    return OWN_CARRY_REJECT;
+}
+
+/* An argument that MINTS its own reference hands that reference to the sink;
+ * retaining on top of it would leave the collection holding two counts and
+ * releasing one.  `(rc/of ...)` and `(rc/clone ...)` are the two forms that
+ * provably do this, and neither result is tracked by the caller (there is no
+ * binding to drop it), so the sink takes the fresh reference as-is.
+ *
+ * Everything else is treated as a BORROW and retained.  That is the safe
+ * default of the two: an unnecessary retain leaks, a missing one double-frees,
+ * and a bare `(vec-push! v a)` -- where `a` keeps its own count and drops it at
+ * scope exit -- is by far the common shape. */
+static bool own_arg_mints_reference(const Expr *a) {
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    return a && (a->kind == EX_RC_OF || a->kind == EX_RC_CLONE);
+}
+
+static OwnCarry own_carry_for_result(const char *fn) {
+    if (!fn) return OWN_CARRY_REJECT;
+    if (strcmp(fn, "vec-get") == 0)  return OWN_CARRY_RETAIN;
+    if (strcmp(fn, "vec-pop!") == 0) return OWN_CARRY_BORROW;
+    /* A map read hands the caller its own reference, like vec-get: the entry
+     * keeps the map's, so the value read out must be counted separately. */
+    if (strcmp(fn, "map-get-eq-o") == 0) return OWN_CARRY_RETAIN;
+    return OWN_CARRY_REJECT;
+}
+
+static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_kind,
+                                          Span span, OwnCarry carry);
+
 static Expr *call_wrap_reinterpret(Elab *e, Expr *inner, TypeKind target_kind, Span span) {
+    return call_wrap_reinterpret_owning(e, inner, target_kind, span, OWN_CARRY_REJECT);
+}
+
+static Expr *call_wrap_reinterpret_owning(Elab *e, Expr *inner, TypeKind target_kind,
+                                          Span span, OwnCarry carry) {
     if (!inner) return NULL;
     TypeKind source_kind = inner->type.kind;
     if (source_kind == target_kind) return inner;
+    /* Owning kinds are handled by the OwnCarry rules above, ahead of the
+     * size-based scalar reinterpretation (an rc is a control-block pointer, so
+     * the bits carry fine -- it is the count that needs a decision). */
+    bool owning_src = source_kind == TY_RC || source_kind == TY_WEAK ||
+                      source_kind == TY_REF || source_kind == TY_LREF;
+    bool owning_dst = target_kind == TY_RC || target_kind == TY_WEAK ||
+                      target_kind == TY_REF || target_kind == TY_LREF;
+    if (owning_src || owning_dst) {
+        if (carry == OWN_CARRY_REJECT) {
+            /* Historically this was a bare `tur: emit: invalid EX_REINTERPRET
+             * rc -> int` abort with no span, from deep in codegen, for an
+             * ordinary program like `(vec-of (rc/clone a))`.  This is the last
+             * point that still has a span, so the rejection belongs here.
+             * (The variadic rest-arg check is NOT the hook: `vec-of` is a macro
+             * expanding to `vec-push!` calls, so it never reaches that path.) */
+            diag_emit(DIAG_ERROR, span,
+                      "cannot store an owning value (%s) in a collection: elements "
+                      "go through an int64 carrier that cannot hold a reference the "
+                      "collection would have to own. Store a plain handle, or keep "
+                      "the value outside the collection",
+                      typekind_to_string(owning_src ? source_kind : target_kind));
+            return NULL;
+        }
+        /* Only rc<T> is refcount-accounted today.  A weak/ref crossing has no
+         * count to take, so it would be a bare pointer in a slot nobody owns --
+         * still the leak/double-free the diagnostic above describes. */
+        if ((owning_src && source_kind != TY_RC) ||
+            (owning_dst && target_kind != TY_RC)) {
+            diag_emit(DIAG_ERROR, span,
+                      "cannot store an owning value (%s) in a collection: only "
+                      "rc<T> elements are reference-counted through the int64 "
+                      "carrier. Store an rc<T>, a plain handle, or keep the "
+                      "value outside the collection",
+                      typekind_to_string(owning_src ? source_kind : target_kind));
+            return NULL;
+        }
+        Expr *own = expr_new(e->arena, EX_REINTERPRET, type_from_kind(target_kind), span);
+        own->as.reinterpret_.expr = inner;
+        own->as.reinterpret_.source_kind = source_kind;
+        own->as.reinterpret_.target_kind = target_kind;
+        own->as.reinterpret_.retain = (carry == OWN_CARRY_RETAIN);
+        return own;
+    }
     int src_size = type_size_bytes(source_kind);
     int dst_size = type_size_bytes(target_kind);
     if (src_size <= 0 || dst_size <= 0) return inner;
@@ -1853,6 +1971,11 @@ Expr *elab_call(Elab *e, Form *call) {
     if (name == e->sym_gc_force)    return elab_gc_force(e, call);
     if (name == e->sym_gc_enable)   return elab_gc_enable(e, call);
     if (name == e->sym_gc_disable)  return elab_gc_disable(e, call);
+    if (name == e->sym_gc_auto)     return elab_gc_auto(e, call);
+    if (name == e->sym_gc_collections)   return elab_gc_collections(e, call);
+    if (name == e->sym_gc_objects_freed) return elab_gc_objects_freed(e, call);
+    if (name == e->sym_gc_live_blocks)   return elab_gc_live_blocks(e, call);
+    if (name == e->sym_gc_cand_hw)       return elab_gc_candidate_high_water(e, call);
     /* Phase M0: Module system */
     if (name == e->sym_load)      return elab_load(e, call);
     if (name == e->sym_defmodule) return elab_defmodule(e, call);
@@ -4746,7 +4869,17 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             if ((expected_arg_kind == TY_TYVAR ||
                  (expected_full && expected_full->kind == TY_TYVAR)) &&
                 args[i]->type.kind != TY_INT) {
-                args[i] = call_wrap_reinterpret(e, args[i], TY_INT, args[i]->span);
+                OwnCarry carry = own_carry_for_arg(
+                    fn_binding->name ? fn_binding->name->name : NULL, fn_arg_idx_cast);
+                if (carry == OWN_CARRY_RETAIN && own_arg_mints_reference(args[i]))
+                    carry = OWN_CARRY_BORROW;
+                args[i] = call_wrap_reinterpret_owning(
+                    e, args[i], TY_INT, args[i]->span, carry);
+                /* The owning-carrier rules can reject (diagnostic already
+                 * emitted).  The rest of this loop dereferences args[i]
+                 * unconditionally, so bail rather than segfault on the way to
+                 * reporting an error we have already reported. */
+                if (!args[i]) return NULL;
             }
         }
 
@@ -5719,7 +5852,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         out->as.call_.n_abi_bindings = n_type_bindings;
     }
     if (wrap_generic_result) {
-        return call_wrap_reinterpret(e, out, result_type.kind, call->span);
+        return call_wrap_reinterpret_owning(
+            e, out, result_type.kind, call->span,
+            own_carry_for_result(fn_binding && fn_binding->name
+                                     ? fn_binding->name->name : NULL));
     }
     return out;
 }

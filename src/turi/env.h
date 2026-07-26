@@ -162,6 +162,45 @@ typedef struct TuriEnv {
      * shifts the boundary and previously-run top-level forms get evaluated
      * again (e.g. a prior (gen-next g) double-advances a suspended generator). */
     uint32_t    prior_prog_items;
+    /* TR2 (turi-incremental-elaboration-design): opt-in incremental parse.
+     * OFF by default -- the default path stays byte-identical (re-parse the
+     * whole accumulated blob every eval). When on, turi_eval re-reads only the
+     * newly appended source and reuses the prior evals' Forms, removing the
+     * O(N^2) re-parse that dominates a long-lived session (Trowel / Try
+     * Turmeric / Godot embeddings). Set via turi_env_set_incremental_elab. */
+    bool          incremental_elab;
+    /* Accumulated top-level Forms from all prior evals, in parse order. Each
+     * Form* lives in the eval arena that parsed it (all retained in
+     * eval_arenas) and is immutable after parse -- only forms.c constructors
+     * ever write Form fields -- so reuse across evals is sound. The vector
+     * itself is malloc/realloc'd, freed in turi_env_free. Committed only on a
+     * successful eval, mirroring src_acc; reset to 0 whenever src_acc resets
+     * (a reader-type change), since forms cannot mix across readers. */
+    struct Form **acc_forms;
+    uint32_t      n_acc_forms;
+    uint32_t      cap_acc_forms;
+    /* Line number at which the next appended source chunk begins, tracked
+     * incrementally (counting newlines in the new text only) so resuming the
+     * reader never rescans the prefix. 1-based; 0 means "not yet initialised". */
+    uint32_t      acc_next_line;
+    /* TR2.3: scratch buffer holding "accumulated source + this turn's source",
+     * REUSED across evals. It is what the eval's SourceFile points at, so
+     * diagnostics still see the whole session text -- but unlike the old
+     * per-eval arena_strdup of the same blob it is not retained N times, which
+     * was the last O(N^2) term once elaboration went incremental. Nothing holds
+     * a pointer into it past its eval: Forms copy their bytes (form_str
+     * arena_strdups), and the SourceFile is re-registered every turn. */
+    Buf           src_combined;
+    /* TR2.2b: persistent elaboration session (opaque ElabSession, elab.h). Holds
+     * the accumulated scope / typeclass env / ADT+effect+module registries so a
+     * new turn's forms elaborate against prior definitions WITHOUT re-elaborating
+     * them -- the O(N^2) retained-elaboration term. `elab_session_forms` is how
+     * many accumulated forms the session has already absorbed, so a turn hands
+     * the elaborator only acc_forms[elab_session_forms .. n_acc_forms).
+     * Discarded (and rebuilt by replaying all accumulated forms) after any
+     * failed elaboration, since a partial program may have entered its scope. */
+    struct Elab  *elab_session;
+    uint32_t      elab_session_forms;
     ArenaNode  *eval_arenas;     /* Linked list of per-call arenas (never freed) */
     /* turi-env-owned-value-arena-pool-plan: dedicated pools for TuriValue heap
      * payloads (closures, structs, captured frames/bindings, cons cells, ...),
@@ -187,6 +226,16 @@ typedef struct TuriEnv {
      * (create/eval/free) needs no promotion and the default path is unchanged.
      * Set via turi_env_set_scratch_promotion. */
     bool        scratch_promotion;
+    /* TR0 measurement (turi-interp-incremental-reclamation-plan.md): per-env
+     * scratch-promotion outcome tally, incremented once per top-level eval
+     * boundary while scratch_promotion is on. Quantifies how often the
+     * conservative walk actually rewinds vs declines, and why -- the signal
+     * that decides whether the TR1 carrier-relocation work is load-bearing.
+     * Zero-initialized (env is calloc'd); read directly by measurement harnesses. */
+    uint64_t    promo_attempts;               /* promotion entered (feature on) */
+    uint64_t    promo_rewinds;                /* reached arena_reset (scratch reclaimed) */
+    uint64_t    promo_decline_busy;           /* bailed: env not quiescent (live control flow) */
+    uint64_t    promo_decline_unrelocatable;  /* bailed: root set not relocatable (carrier/wscont) */
     EnvBinding *globals;         /* Global name→TuriValue map (linked list) */
     bool        sandboxed;       /* Deprecated alias: true when caps == TURI_CAP_NONE */
     TuriCaps    caps;            /* SB4: capability bitmask (TURI_CAP_ALL = unrestricted) */
@@ -405,6 +454,26 @@ void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image);
  * live continuations/generators/fibers, pending async work), that eval's scratch
  * is left intact rather than corrupted -- it simply does not shrink that cycle. */
 void turi_env_set_scratch_promotion(TuriEnv *env, bool enable);
+
+/* TR2 (turi-incremental-elaboration-design): control incremental parsing +
+ * elaboration for a long-lived env.  ON by default since 2026-07-25 (set
+ * TUR_NO_INCREMENTAL_ELAB=1, or call this with false, to restore the
+ * whole-program path).
+ *
+ * When enabled, turi_eval parses only the newly appended source each turn and
+ * reuses the Forms parsed by earlier evals, instead of re-parsing the entire
+ * accumulated session source every time (which is O(N^2) in both time and
+ * retained AST over a session -- see docs/reported/turi-repl-quadratic-reparse.md).
+ * The full accumulated blob is still handed to diagnostics, so spans and error
+ * snippets render exactly as before.
+ *
+ * Results are identical to the default path: the same forms array is elaborated
+ * either way, since parsed Forms are immutable and the reader-macro registry
+ * persists on the env.  The interpreter automatically falls back to a whole-blob
+ * re-parse for any turn it cannot handle incrementally (a sweet-exp reader, a
+ * reader-type change, a `define` rewrite), so correctness never depends on the
+ * fast path applying.  Safe to toggle between top-level eval cycles. */
+void turi_env_set_incremental_elab(TuriEnv *env, bool enable);
 
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);

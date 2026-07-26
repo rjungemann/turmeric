@@ -1,0 +1,39 @@
+; CG1 (gc-cycle-collection-plan): a strong rc<T> cycle must now register
+; CANDIDATE ROOTS in the suspect buffer.
+;
+; Pre-CG1 the only hook into the collector fired at strong->0 with weak>0 (the
+; zombie case). A self-sustaining cycle never reaches strong 0, so no cycle
+; member was ever buffered and the suspect count stayed 0 forever. CG1 adds the
+; classic Bacon-Rajan PossibleRoot edge: a strong decrement that leaves the
+; count > 0 buffers the block as a candidate.
+;
+; This asserts the buffering happens. It does NOT assert collection -- the mark
+; phase still treats every strong_count>0 block as a root, so candidates survive
+; until CG2 replaces it with real trial deletion.
+(defstruct S :move [next : rc<S>])
+
+(defn null-rc-s [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn suspect-count [] : int
+  ```c
+  extern uint32_t gc_suspect_count;
+  return (int64_t)gc_suspect_count;
+  ```)
+
+(defn build-cycle [] : int
+  (let [s1 (rc/of (make-struct S (null-rc-s)))
+        s2 (rc/of (make-struct S (rc/clone s1)))]
+    (set! (.next s1) (rc/clone s2))
+    0))
+
+(defn main [] : int
+  (gc-enable!)
+  (println (suspect-count))          ; 0 -- nothing buffered yet
+  (build-cycle)
+  ; leaving build-cycle dropped each node's external reference while its
+  ; in-cycle back-edge kept the count > 0: exactly the PossibleRoot edge.
+  (println (if (> (suspect-count) 0) 1 0))   ; 1 -- candidates buffered
+  0)

@@ -51,6 +51,27 @@
 
 (extern-c tur_hamt_del_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
 
+; collections-cannot-hold-rc-values (map side, step c): the _vo variants take
+; the value retain/release ops explicitly instead of hardcoding the boxed-value
+; refcount, so a map can own rc<T> values.  The ops must be EMITTED functions
+; (see __tur_rc_val_retain / __tur_rc_val_release in the preamble) -- hamt.c is
+; precompiled into the runtime archive and could only ever call the archive's
+; rc.c, which is the wrong collector in a build carrying its own replica.
+;
+; owned bit 2 selects them; bits 0/1 keep their meanings (boxed key / boxed
+; wide value).  Bits 1 and 2 are mutually exclusive: a value is either a
+; by-value box or an rc handle, never both.
+
+(extern-c tur_hamt_set_eq_vo
+  [m :ptr hash :int key :ptr val :ptr eq :ptr owned :int
+   val_retain :ptr val_release :ptr]
+  :ptr)
+
+(extern-c tur_hamt_del_eq_vo
+  [m :ptr hash :int key :ptr eq :ptr owned :int
+   val_retain :ptr val_release :ptr]
+  :ptr)
+
 (extern-c tur_hamt_has_eq_o
   [m :ptr hash :int key :ptr eq :ptr owned :int]
   :bool)

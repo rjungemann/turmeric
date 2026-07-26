@@ -434,10 +434,20 @@ endif()
 # Compile flags mirror the default `tur build` cc_flags (-O2 -std=c99
 # -fno-strict-aliasing) so the objects are ABI-identical to a bare-source
 # compile; no -Werror so a stray warning here never fails the archive build.
+# DEDUP-4b (gc-cycle-collection-plan): rc/gc/rc_free_queue join the archive so a
+# compiled program can LINK the one maintained copy of the reference counter and
+# cycle collector instead of carrying a hand-written replica of it in its
+# preamble.  Safe to add ahead of the emit-side switch: while the emitted copy
+# still defines these symbols itself, the linker simply never pulls these
+# members in (a static archive member is only extracted to resolve an undefined
+# symbol), so the archive grows but no existing link changes.
 set(TURT_RUNTIME_SOURCES
     runtime/hamt.c
     runtime/symbols.c
     runtime/tur_string.c
+    runtime/rc.c
+    runtime/gc.c
+    runtime/rc_free_queue.c
 )
 add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
 set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")
@@ -456,6 +466,17 @@ endif()
 include(GNUInstallDirs)
 
 install(TARGETS libturi
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT libturi
+)
+
+# DEDUP-4b: the lean runtime archive has to ship too.  `--runtime=lib` PREFERS
+# it over libturi.a (it is the non-sanitized one), and AUTO links only it -- so
+# leaving it out of the install set meant an installed SDK could never take the
+# archive path at all, silently recompiling the runtime sources on every build.
+# It also gates the rc<T>/GC de-dup: without this archive an installed toolchain
+# has nothing to link the collector from, and falls back to the emitted replica.
+install(TARGETS turt_runtime
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT libturi
 )
@@ -494,6 +515,64 @@ target_link_options(tur_eval_basic PRIVATE -pthread
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 set_target_properties(tur_eval_basic PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# TR2.0 (turi-incremental-elaboration-design): cross-eval reader-macro coverage
+# ---------------------------------------------------------------------------
+add_executable(tur_reader_macro_cross_eval ${CMAKE_SOURCE_DIR}/tests/turi/reader-macro-cross-eval.c)
+target_include_directories(tur_reader_macro_cross_eval PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_reader_macro_cross_eval PRIVATE libturi)
+target_compile_options(tur_reader_macro_cross_eval PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_reader_macro_cross_eval PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_reader_macro_cross_eval PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# TR2 (turi-incremental-elaboration-design): A/B differential -- the incremental
+# parse path must be result-identical to the default whole-blob path
+# ---------------------------------------------------------------------------
+add_executable(tur_incremental_elab_diff ${CMAKE_SOURCE_DIR}/tests/turi/incremental-elab-differential.c)
+target_include_directories(tur_incremental_elab_diff PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_incremental_elab_diff PRIVATE libturi)
+target_compile_options(tur_incremental_elab_diff PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_incremental_elab_diff PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_incremental_elab_diff PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# DEDUP-4 (gc-cycle-collection-plan): behavioral parity assertions on the
+# RUNTIME copy of the GC (src/runtime/{rc,gc,rc_free_queue}.c), pinning the
+# semantics the hand-written emitted copy has always had.  Compiled fixtures
+# only ever exercise the emitted copy, so divergence here is otherwise silent.
+# ---------------------------------------------------------------------------
+add_executable(tur_gc_runtime_copy_parity ${CMAKE_SOURCE_DIR}/tests/turi/gc-runtime-copy-parity.c)
+target_include_directories(tur_gc_runtime_copy_parity PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_gc_runtime_copy_parity PRIVATE libturi)
+target_compile_options(tur_gc_runtime_copy_parity PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_gc_runtime_copy_parity PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_gc_runtime_copy_parity PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 

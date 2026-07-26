@@ -4,7 +4,14 @@
  * (non-owning observation) as the v1 GC strategy.
  */
 
+#include <stddef.h>   /* offsetof, for the layout guard below */
 #include "rc.h"
+/* DEDUP-2 made rc.h standalone (a compiled program must be able to include it)
+ * by moving the compiler's types.h in here; DEDUP-4b removes it from here too.
+ * types.h is C11 and pulls in the whole type system, which kept this TU out of
+ * the C99 runtime archive.  The only thing it was needed for was the three
+ * TypeKind ordinals default_drop_fn_for_type switches on, which now live in
+ * rc.h as RC_VT_* and are asserted against the real enum by the compiler. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,13 +63,13 @@ static void drop_weak_payload(void *value) {
     free(value);
 }
 
-static RcDropFn default_drop_fn_for_type(TypeKind value_type) {
+static RcDropFn default_drop_fn_for_type(uint8_t value_type) {
     switch (value_type) {
-        case TY_REF:
+        case RC_VT_REF:
             return drop_ref_payload;
-        case TY_RC:
+        case RC_VT_RC:
             return drop_rc_payload;
-        case TY_WEAK:
+        case RC_VT_WEAK:
             return drop_weak_payload;
         default:
             return default_drop_fn;
@@ -73,7 +80,7 @@ static RcDropFn default_drop_fn_for_type(TypeKind value_type) {
  * The value storage comes right after the control block header.
  * Initializes strong_count to 1, weak_count to 0.
  */
-RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn drop_fn) {
+RcControlBlock *rc_cb_alloc(size_t value_size, uint8_t value_type, RcDropFn drop_fn) {
     return rc_cb_alloc_kinded(value_size, value_type, drop_fn,
                               RCK_OPAQUE, RCEXP_OPAQUE);
 }
@@ -83,7 +90,7 @@ RcControlBlock *rc_cb_alloc(size_t value_size, TypeKind value_type, RcDropFn dro
  * paths can recognise the block.  Existing callers continue to flow
  * through the older rc_cb_alloc entry point with implicit (RCK_OPAQUE,
  * RCEXP_OPAQUE). */
-RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
+RcControlBlock *rc_cb_alloc_kinded(size_t value_size, uint8_t value_type,
                                    RcDropFn drop_fn, uint8_t kind,
                                    uint8_t payload_kind) {
     size_t total_size = sizeof(RcControlBlock) + value_size;
@@ -102,23 +109,107 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, TypeKind value_type,
 
     cb->color = GC_WHITE;
     cb->may_contain_cycles = true;
+    cb->gc_index = RC_GC_INDEX_NONE;   /* CG0: set by gc_register_block below */
+    cb->gc_buffered = false;           /* CG1: not in the candidate buffer */
+    cb->gc_trial = 0;                  /* CG2: scratch, set per collection */
+    cb->gc_collecting = false;         /* CG2: not being collected */
     memset(cb->reserved, 0, sizeof(cb->reserved));
     cb->reserved[0] = kind;
     cb->reserved[1] = payload_kind;
 
+    /* CG5: under GC_AUTO a collection can fire from any later allocation, and
+     * the walker traverses every registered block -- including ones whose
+     * caller has allocated but not yet written the payload.  Reading an
+     * uninitialised payload as a child pointer is a segfault (it was, before
+     * this).  Zeroing makes that window harmless: the walker sees a NULL child
+     * and skips it, which every walk callback already handles.
+     *
+     * Confined to AUTO so the always-on RC path keeps its malloc semantics: in
+     * every other mode collection only happens where the program asked for it,
+     * by which point the caller has finished writing. */
+    if (gc_mode == GC_AUTO && value_size) memset(cb->value, 0, value_size);
+
     gc_register_block(cb);
+
+    /* CG6: a scalar payload (TypeKind <= 7: int/float/bool/...) has no rc
+     * children, so it can never be a cycle ROOT.  Marking it lets
+     * gc_add_suspect skip it -- see the filter there.  The emitted copy has
+     * always set this; the runtime never did, which is half of why the field
+     * was dead. */
+    if (value_type < RC_VT_REF) cb->may_contain_cycles = false;
 
     return cb;
 }
 
 /* DS3: as rc_cb_alloc_kinded with RCK_STRUCT + a walker function so the
  * cycle walker can enumerate the struct's rc-typed children. */
-RcControlBlock *rc_cb_alloc_struct(size_t value_size, TypeKind value_type,
+RcControlBlock *rc_cb_alloc_struct(size_t value_size, uint8_t value_type,
                                    RcDropFn drop_fn, RcWalkFn walk_fn) {
     RcControlBlock *cb = rc_cb_alloc_kinded(value_size, value_type, drop_fn,
                                             RCK_STRUCT, 0);
     cb->walk_fn = walk_fn;
     return cb;
+}
+
+/* DEDUP-4b: `(rc/from-ref r)` -- adopt an existing ref<T> payload into a fresh
+ * control block, taking ownership of it.  Unlike rc_cb_alloc* the value is NOT
+ * the inline (cb + 1) region: it is the caller's already-allocated payload, so
+ * the block is header-only and the drop glue is derived from the value type.
+ *
+ * Ported from the hand-written copy in emit_module.c, which is the only place
+ * it existed.  One difference, deliberate: that copy leaves gc_index,
+ * gc_buffered, gc_trial and gc_collecting to gc_register_block, which zeroes
+ * all four in the EMITTED collector but only the first two here (this runtime
+ * zeroes gc_trial/gc_collecting in rc_cb_alloc_kinded instead, which this path
+ * bypasses).  Initialising them explicitly is what keeps the port from handing
+ * the collector a block with a garbage trial count. */
+RcControlBlock *tur_rc_from_ref(void *ref_value, uint8_t value_type) {
+    if (!ref_value) return NULL;
+
+    RcControlBlock *cb = (RcControlBlock *)malloc(sizeof(RcControlBlock));
+    if (!cb) {
+        fprintf(stderr, "rc/from-ref: out of memory\n");
+        abort();
+    }
+
+    cb->strong_count = 1;
+    cb->weak_count = 0;
+    cb->value = ref_value;
+    cb->drop_fn = default_drop_fn_for_type(value_type);
+    cb->walk_fn = NULL;
+    cb->value_type_kind = value_type;
+
+    cb->color = GC_WHITE;
+    cb->may_contain_cycles = true;
+    cb->gc_index = RC_GC_INDEX_NONE;
+    cb->gc_buffered = false;
+    cb->gc_trial = 0;
+    cb->gc_collecting = false;
+    memset(cb->reserved, 0, sizeof(cb->reserved));
+
+    gc_register_block(cb);
+    return cb;
+}
+
+/* DEDUP-4b: `(ref/from-rc r)` -- the inverse.  Extracts the payload and
+ * destroys the control block, which is only sound when the rc is UNIQUE: any
+ * other strong owner would be left holding a freed block, and any weak
+ * observer would lose the liveness flag it polls.  Both are checked. */
+void *tur_ref_from_rc(RcControlBlock *cb) {
+    if (!cb) return NULL;
+    if (cb->strong_count != 1 || cb->weak_count != 0) {
+        fprintf(stderr,
+                "ref/from-rc requires unique rc (strong_count==1 and "
+                "weak_count==0), got strong=%llu weak=%llu\n",
+                (unsigned long long)cb->strong_count,
+                (unsigned long long)cb->weak_count);
+        abort();
+    }
+    void *value = cb->value;
+    cb->value = NULL;
+    gc_unregister_block(cb);
+    free(cb);
+    return value;
 }
 
 /* Free a control block and its value.
@@ -161,6 +252,52 @@ void rc_cb_free(RcControlBlock *cb) {
     free(cb);
 }
 
+/* ---------------------------------------------------------------------------
+ * DEDUP-1: RcControlBlock layout guard.
+ *
+ * This struct exists TWICE: here, and hand-written into every compiled program
+ * by the compiler (emit_module.c). The two copies must stay layout-compatible,
+ * because linking one against the other -- the end goal of de-duplicating them
+ * -- silently mis-reads every field past the first divergence otherwise.
+ *
+ * They HAD diverged: `value_type_kind` and `color` were enums here (4 bytes)
+ * and `uint8_t` in the emitted copy, shifting every GC field after them. Both
+ * are fixed-width now, and these assertions pin the widths and the field order
+ * so any future drift is a COMPILE error in whichever copy changed, instead of
+ * a runtime mis-read. Three bugs this session (CG1, CG3, CG4) came from these
+ * copies drifting apart; each was invisible to half the test suite.
+ *
+ * Deliberately no assertion on the total sizeof or on absolute offsets: those
+ * are padding-dependent and would break on a different ABI without indicating
+ * a real divergence. Field widths and relative order are what must match.
+ *
+ * Written with the typedef trick rather than _Static_assert because the emitted
+ * programs are compiled as C99, and both copies carry the identical text.
+ * --------------------------------------------------------------------------- */
+#define RC_LAYOUT_ASSERT(name, cond) typedef char rc_layout_##name[(cond) ? 1 : -1]
+
+RC_LAYOUT_ASSERT(strong_w,  sizeof(((RcControlBlock *)0)->strong_count)      == 8);
+RC_LAYOUT_ASSERT(weak_w,    sizeof(((RcControlBlock *)0)->weak_count)        == 8);
+RC_LAYOUT_ASSERT(vtk_w,     sizeof(((RcControlBlock *)0)->value_type_kind)   == 1);
+RC_LAYOUT_ASSERT(color_w,   sizeof(((RcControlBlock *)0)->color)             == 1);
+RC_LAYOUT_ASSERT(mcc_w,     sizeof(((RcControlBlock *)0)->may_contain_cycles) == 1);
+RC_LAYOUT_ASSERT(index_w,   sizeof(((RcControlBlock *)0)->gc_index)          == 4);
+RC_LAYOUT_ASSERT(buffered_w,sizeof(((RcControlBlock *)0)->gc_buffered)       == 1);
+RC_LAYOUT_ASSERT(trial_w,   sizeof(((RcControlBlock *)0)->gc_trial)          == 8);
+RC_LAYOUT_ASSERT(collect_w, sizeof(((RcControlBlock *)0)->gc_collecting)     == 1);
+RC_LAYOUT_ASSERT(ord_1, offsetof(RcControlBlock, strong_count)  < offsetof(RcControlBlock, weak_count));
+RC_LAYOUT_ASSERT(ord_2, offsetof(RcControlBlock, weak_count)    < offsetof(RcControlBlock, value));
+RC_LAYOUT_ASSERT(ord_3, offsetof(RcControlBlock, value)         < offsetof(RcControlBlock, drop_fn));
+RC_LAYOUT_ASSERT(ord_4, offsetof(RcControlBlock, drop_fn)       < offsetof(RcControlBlock, walk_fn));
+RC_LAYOUT_ASSERT(ord_5, offsetof(RcControlBlock, walk_fn)       < offsetof(RcControlBlock, value_type_kind));
+RC_LAYOUT_ASSERT(ord_6, offsetof(RcControlBlock, value_type_kind) < offsetof(RcControlBlock, color));
+RC_LAYOUT_ASSERT(ord_7, offsetof(RcControlBlock, color)         < offsetof(RcControlBlock, may_contain_cycles));
+RC_LAYOUT_ASSERT(ord_8, offsetof(RcControlBlock, may_contain_cycles) < offsetof(RcControlBlock, gc_index));
+RC_LAYOUT_ASSERT(ord_9, offsetof(RcControlBlock, gc_index)      < offsetof(RcControlBlock, gc_buffered));
+RC_LAYOUT_ASSERT(ord_10, offsetof(RcControlBlock, gc_buffered)  < offsetof(RcControlBlock, gc_trial));
+RC_LAYOUT_ASSERT(ord_11, offsetof(RcControlBlock, gc_trial)     < offsetof(RcControlBlock, gc_collecting));
+RC_LAYOUT_ASSERT(ord_12, offsetof(RcControlBlock, gc_collecting) < offsetof(RcControlBlock, reserved));
+
 /* Increment the strong count. Returns the new count. */
 uint64_t rc_strong_increment(RcControlBlock *cb) {
     if (!cb) return 0;
@@ -172,7 +309,17 @@ uint64_t rc_strong_increment(RcControlBlock *cb) {
  */
 bool rc_strong_decrement(RcControlBlock *cb) {
     if (!cb) return false;
-    
+
+    /* CG2: this block is part of a white set currently being freed. Its
+     * drop_fn is running and decrementing rc children that are themselves in
+     * that set, so the count must fall without triggering a free (double free)
+     * or a candidate buffering (dangling suspect). The collector frees every
+     * member itself once all drop_fns have run. */
+    if (cb->gc_collecting) {
+        if (cb->strong_count > 0) cb->strong_count--;
+        return false;
+    }
+
     cb->strong_count--;
     
     if (cb->strong_count == 0) {
@@ -190,6 +337,14 @@ bool rc_strong_decrement(RcControlBlock *cb) {
         }
     }
     
+    /* CG1: the count is still > 0. In classic Bacon-Rajan this is exactly the
+     * edge that reveals a possible cycle root -- dropping an external reference
+     * to a structure that keeps itself alive through its own back-edges. The
+     * pre-CG1 hook only fired at strong->0, which a self-sustaining cycle never
+     * reaches, so no cycle member was ever buffered. Gated on gc_mode so the
+     * default (collector off) path is a single global compare. */
+    if (gc_mode != GC_DISABLED) gc_possible_root(cb);
+
     return false;  /* Value not freed */
 }
 
