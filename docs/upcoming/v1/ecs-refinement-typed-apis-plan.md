@@ -338,14 +338,20 @@ expected and fails to elaborate.
 > guarantee needs a language feature (module-private construction / a `::`-sealed
 > newtype). Filed as `docs/reported/frozen-region-aliasing-via-coercing-cast.md`.
 >
-> **Remaining for RE1:** (a) the spice test runner (`tur test`) has no per-test
-> `--strict-refine` flag mechanism and no expected-fail (negative) support, and
-> for a spice with flat `tests/*.tur` it does not descend into `tests/refined/`
-> or `tests/errors/` -- so the RE1 fixtures are verified manually, not yet
-> auto-run. Auto-running them needs a shared-harness feature (per-test flags +
-> expected-diagnostic negatives), tracked separately. (c) `for-each` bodies
-> carrying the refinement (item 2 below), the highest-value version, still
-> deferred.
+> **Update 2026-07-26 -- (a) done: `tur test` gained the directives, RE1 tests
+> auto-run.** `tur test` now reads two leading-comment directives:
+> `;; tur-test-flags: --strict-refine` (a per-test strict compile, so an unproven
+> crossing is a hard error not a warning -- which ENFORCES the proof) and
+> `;; tur-test-expect-error: TUR-W0372` (the test must fail to compile and name
+> the diagnostic; the run phase is skipped). The four RE1 tests were made flat in
+> `spices/ecs/tests/` (so the CI's `tur test tests` picks them up without a
+> subdir-descent change) and carry the directives; `tur test` reports **4 passed,
+> 0 failed** -- the two positives enforce `1 proven`, the two negatives are
+> checked `TUR-W0372` expect-error tests. Compiler suite 2369/0.
+>
+> **Remaining for RE1:** (c) `for-each` bodies carrying the refinement (item 2
+> below), the highest-value version, still deferred -- it splices the refinement
+> into the loop expansion rather than a single accessor call.
 
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
