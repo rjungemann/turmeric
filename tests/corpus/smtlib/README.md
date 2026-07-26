@@ -205,6 +205,37 @@ since they would be a viable transport for vendored data:
 | crates.io (`smt2parser`, `smtlib`, `smtlib-lowlevel`, `easy-smt`) | 38 `.smt2` -- all **standard logic declarations**, not benchmarks |
 | `proxy.golang.org` | reachable, no module ships a corpus |
 
+## The external corpus (not vendored here)
+
+A 200-benchmark sample of the real library lives in its own repository:
+**<https://github.com/rjungemann/smt-lib-benchmarks>** (25 per logic, seed 1,
+from the 2025 release). It is deliberately NOT vendored into this tree.
+
+```sh
+git clone https://github.com/rjungemann/smt-lib-benchmarks /tmp/smtlib-bench
+TUR_CORPUS_TIMEOUT=3 ./build/tur_refine_corpus /tmp/smtlib-bench/smtlib-2025
+```
+
+Why it stays out, in order of weight:
+
+1. **It is 99 MB for 200 files** -- the real library is not small. One QF_LIA
+   benchmark in that sample is over a million lines. That does not belong in
+   the history of a compiler repo.
+2. **Much of it is not decided.** These are competition-grade problems; the
+   in-house chain answers `RT_UNKNOWN` on many and exceeds any sane time
+   budget on others. A committed regression should be things that are actually
+   decided, so a change in the answer means something. The committed corpus
+   here is chosen on exactly that basis.
+3. **Its value is as a SWEEP, not a gate.** Running it once found three real
+   defects in this harness -- no time budget, block-buffered output, and let
+   caps sized for hand-written input -- none of which the committed corpus
+   could ever have surfaced. That is what it is for: run it when the reader or
+   the solver changes, not on every build.
+
+The committed corpus and the external one answer different questions. This one
+asks "does a known-answer benchmark still get the known answer"; that one asks
+"does anything in the wild break us".
+
 ## Running it
 
 ```sh

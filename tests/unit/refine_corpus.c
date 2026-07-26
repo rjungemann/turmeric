@@ -238,6 +238,33 @@ static VCTerm *tr_fold(Tr *t, VCOp op, const Sx *s, uint32_t depth) {
     return acc;
 }
 
+/* SMT-LIB has TWO divisions and they are not interchangeable: `div` is integer
+ * division, `/` is REAL division.  The VC has one `VC_DIV`, whose constant
+ * folding is integer -- correct for the compiler, which only ever emits it from
+ * Turmeric's `/` on ints and rejects `(* x (/ 1 2))` outright rather than
+ * coercing (TUR-E0042).  Translating SMT-LIB `/` to that node folded `(/ 1 2)`
+ * to 0, which is how a satisfiable QF_LRA benchmark came back proved
+ * contradictory: `pi/2 > skoA > 0` became `0 > skoA > 0`.
+ *
+ * So `/` coerces integer literal operands to reals first.  Numerals in a Real
+ * context denote reals in SMT-LIB; it is only this reader that had been
+ * carrying them as integers. */
+static VCTerm *tr_as_real(Tr *t, VCTerm *x) {
+    if (x && x->op == VC_CONST_INT) return vc_real(t->vc, (double)x->as.i);
+    return x;
+}
+
+static VCTerm *tr_fold_real_div(Tr *t, const Sx *s, uint32_t depth) {
+    VCTerm *acc = tr_as_real(t, tr_term(t, s->kids[1], depth + 1));
+    if (!acc) return NULL;
+    for (uint32_t i = 2; i < s->n; i++) {
+        VCTerm *nx = tr_as_real(t, tr_term(t, s->kids[i], depth + 1));
+        if (!nx) return NULL;
+        acc = vc_mk2(t->vc, VC_DIV, acc, nx);
+    }
+    return acc;
+}
+
 /* A chained relation -- `(< a b c)` -- is the conjunction of adjacent pairs. */
 static VCTerm *tr_chain(Tr *t, const char *op, const Sx *s, uint32_t depth) {
     VCTerm *acc = NULL;
@@ -373,8 +400,8 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
     }
     if (strcmp(op, "+") == 0) return tr_fold(t, VC_ADD, s, depth);
     if (strcmp(op, "*") == 0) return tr_fold(t, VC_MUL, s, depth);
-    if (strcmp(op, "div") == 0 || strcmp(op, "/") == 0)
-        return tr_fold(t, VC_DIV, s, depth);
+    if (strcmp(op, "div") == 0) return tr_fold(t, VC_DIV, s, depth);
+    if (strcmp(op, "/")   == 0) return tr_fold_real_div(t, s, depth);
     if (strcmp(op, "mod") == 0) return tr_fold(t, VC_MOD, s, depth);
     if (strcmp(op, "-") == 0) {
         if (s->n == 2) {
