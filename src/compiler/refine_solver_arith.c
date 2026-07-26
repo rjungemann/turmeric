@@ -174,21 +174,35 @@ static LinExp lin_add(LinExp a, LinExp b) {
     return a;
 }
 
+/* Deepest arithmetic nesting linearize will walk before giving the whole
+ * constraint up as `bad` (dropped -- which only ever weakens a refutation,
+ * so the bound is sound by construction).  It exists because LinExp is
+ * passed and returned BY VALUE: with 32 exact-rational coefficients a frame
+ * carries several ~800-byte copies, and under ASan redzones the recursion
+ * measured dead between depth 750 and 1000 on an 8 MB stack -- far below
+ * the corpus reader's term-depth cap, which is what let a legal benchmark
+ * crash the child.  500 sits under the measured floor with margin; a real
+ * obligation deeper than this is FM blow-up bait anyway. */
+#define LA_MAX_LINEARIZE_DEPTH 500
+
 /* Linearize `t`.  Anything not built from +,-,unary-,literal, and
  * multiplication/division by a literal becomes an opaque variable. */
-static LinExp linearize(LaState *st, VCTerm *t) {
+static LinExp linearize(LaState *st, VCTerm *t, uint32_t depth) {
     LinExp e = lin_zero();
     if (!t) { e.bad = true; return e; }
+    if (depth > LA_MAX_LINEARIZE_DEPTH) { e.bad = true; return e; }
 
     switch (t->op) {
         case VC_CONST_INT:  e.konst = rat_of(t->as.i); return e;
         case VC_CONST_REAL: e.konst = rat_of_double(t->as.r);
                             if (e.konst.bad) e.bad = true;
                             return e;
-        case VC_ADD: return lin_add(linearize(st, t->kids[0]), linearize(st, t->kids[1]));
-        case VC_SUB: return lin_add(linearize(st, t->kids[0]),
-                                    lin_scale(linearize(st, t->kids[1]), rat_of(-1)));
-        case VC_NEG: return lin_scale(linearize(st, t->kids[0]), rat_of(-1));
+        case VC_ADD: return lin_add(linearize(st, t->kids[0], depth + 1),
+                                    linearize(st, t->kids[1], depth + 1));
+        case VC_SUB: return lin_add(linearize(st, t->kids[0], depth + 1),
+                                    lin_scale(linearize(st, t->kids[1], depth + 1),
+                                              rat_of(-1)));
+        case VC_NEG: return lin_scale(linearize(st, t->kids[0], depth + 1), rat_of(-1));
         case VC_MUL: {
             VCTerm *a = t->kids[0], *b = t->kids[1];
             VCTerm *lit = NULL, *other = NULL;
@@ -197,7 +211,7 @@ static LinExp linearize(LaState *st, VCTerm *t) {
             if (!lit) break;   /* nonlinear: fall through to opaque */
             Rat k = (lit->op == VC_CONST_INT) ? rat_of(lit->as.i) : rat_of_double(lit->as.r);
             if (k.bad) { e.bad = true; return e; }
-            return lin_scale(linearize(st, other), k);
+            return lin_scale(linearize(st, other, depth + 1), k);
         }
         case VC_DIV: {
             VCTerm *b = t->kids[1];
@@ -210,7 +224,7 @@ static LinExp linearize(LaState *st, VCTerm *t) {
              * integers.  Only treat it as exact division when the term is
              * real-sorted; otherwise it stays opaque. */
             if (t->sort != VS_REAL) break;
-            return lin_scale(linearize(st, t->kids[0]), inv);
+            return lin_scale(linearize(st, t->kids[0], depth + 1), inv);
         }
         default: break;
     }
@@ -273,7 +287,8 @@ LaState *la_new(RefineVC *vc, Arena *a) {
 
 /* lhs <(=) rhs  ==>  lhs - rhs <(=) 0 */
 bool la_assert_le(LaState *st, VCTerm *lhs, VCTerm *rhs, bool strict) {
-    LinExp e = lin_add(linearize(st, lhs), lin_scale(linearize(st, rhs), rat_of(-1)));
+    LinExp e = lin_add(linearize(st, lhs, 0),
+                       lin_scale(linearize(st, rhs, 0), rat_of(-1)));
     la_push(st, e, strict);
     return !e.bad;
 }

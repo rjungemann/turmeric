@@ -41,8 +41,11 @@ stage that legitimately decides more later must not break this corpus.
   the fragment: QF_UF congruence (including at arity 2 and through
   transitivity), QF_IDL negative-weight cycles, QF_LIA integer-gap and scaling,
   QF_LRA strictness over the reals where the integer version is unsat,
-  QF_UFLIA cases needing both theories to combine, and boolean structure
-  (`or`, `=>`, `distinct`, `let`).
+  QF_UFLIA cases needing both theories to combine, boolean structure
+  (`or`, `=>`, `distinct`, `let`), and reader/solver robustness shapes:
+  integer-literal ite branches in a Real logic, a 1500-deep nullary
+  `define-fun` chain, and a 1000-deep arithmetic term (the shape that used
+  to overflow `linearize`).
 - `generated/` -- **machine-generated**, labelled by Z3, curated to 10 per
   (theory, status) bucket so the set stays balanced and reviewable.
 - `unsupported_define_sort_skip.smt2` -- deliberately OUTSIDE the fragment
@@ -241,31 +244,41 @@ asks "does a known-answer benchmark still get the known answer"; that one asks
 
 ### Reader coverage of the external sample
 
-Measured 2026-07-26, both sweeps on the same box, same clone, default 10s
-budget, before and after logic-directed numeral typing (numerals in
+Measured 2026-07-26, all sweeps on the same box, same clone, default 10s
+budget. "After item 1" is logic-directed numeral typing (numerals in
 `QF_LRA`/`QF_RDL`/`QF_UFLRA` are real-sorted, matching SMT-LIB; regression
-pair `qf_lra_ite_int_numerals_{unsat,sat}.smt2`):
+pair `qf_lra_ite_int_numerals_{unsat,sat}.smt2`). "After item 2" adds the
+depth-cap raises (let 4000 -> 6000, term 6000 -> 8000, both measured
+against the actual overflow point), nullary `define-fun` memoization
+(regression pair `qf_lra_macro_chain_{unsat,sat}.smt2`), the `linearize`
+depth bound (regression `qf_lra_deep_arith_chain_sat.smt2`), and the
+distinctive child exit codes that make sanitizer crashes count as
+`CRASH!` rather than "unlabelled":
 
-|  | before | after |
-|---|---|---|
-| parse | 193 | **197** |
-| skipped | 7 | **3** |
-| unsat, proved | 6 | 6 |
-| unsat, not proved | 75 | 79 |
-| sat, correctly not proved | 70 | 70 |
-| over budget (10s) | 28 | 28 |
-| unlabelled | 14 | 14 |
-| crashes / soundness failures | 0 | 0 |
+|  | before | after item 1 | after item 2 |
+|---|---|---|---|
+| parse | 193 | 197 | **200** |
+| skipped | 7 | 3 | **0** |
+| unsat, proved | 6 | 6 | 6 |
+| unsat, not proved | 75 | 79 | 79 |
+| sat, correctly not proved | 70 | 70 | **72** |
+| over budget (10s) | 28 | 28 | 29 |
+| unlabelled | 14 | 14 | 14 |
+| crashes / soundness failures | 0 | 0 | 0 |
 
-The four QF_LRA `spider_benchmarks` skips ("ite branches disagree on sort")
-all parse after the change and land as "unsat, not proved" -- the reader's
-fault became ordinary solver incompleteness, exactly the conversion the plan
-predicted. The three remaining skips are the depth caps, one benchmark each:
-"let nested too deeply" and "term nested too deeply" (QF_RDL), "macro
-expansion too deep" (QF_UFLRA) -- see
-[docs/upcoming/v1/corpus-reader-tail-plan.md](../../../docs/upcoming/v1/corpus-reader-tail-plan.md),
-item 2, deliberately not chased. The over-budget and unlabelled counts are
-timing- and sample-dependent; re-measure rather than compare across machines.
+Item 1: the four QF_LRA `spider_benchmarks` skips ("ite branches disagree
+on sort") all parse and land as "unsat, not proved" -- the reader's fault
+became ordinary solver incompleteness. Item 2: the three depth/macro skips
+parse and land "over budget", and -- the part that is real coverage, not
+reclassification -- **three other CPAchecker benchmarks moved from "over
+budget" to decided**: they had been burning the whole budget re-expanding
+nullary macros exponentially, and finish inside it once each def is
+translated exactly once. (One QF_IDL sudoku benchmark drifted ok ->
+over-budget: it sits at the 10s line and moves with machine load, not with
+these changes.) The over-budget and unlabelled counts are timing- and
+sample-dependent; re-measure rather than compare across machines. Full
+measurements and fix rationale:
+[docs/upcoming/v1/corpus-reader-tail-plan.md](../../../docs/upcoming/v1/corpus-reader-tail-plan.md).
 
 ## Running it
 

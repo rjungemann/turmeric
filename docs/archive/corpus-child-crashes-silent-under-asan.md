@@ -1,11 +1,18 @@
 # Corpus child crashes are silent under ASan; linearize overflows below the reader cap
 
+**RESOLVED 2026-07-26**, same day as found: both fixes landed with the
+item-2 sequence of
+[docs/upcoming/v1/corpus-reader-tail-plan.md](../upcoming/v1/corpus-reader-tail-plan.md).
+Defect 1: the outcome enum moved to 40..46 and the parent classifies any
+unexpected exit status as `CRASH!` (verified end-to-end: a 256k-deep probe
+that ASan-kills the child in `sx_read` now reports `CRASH!` where it used
+to tally "unlabelled"). Defect 2: `linearize` is depth-bounded at
+`LA_MAX_LINEARIZE_DEPTH` (500) via its existing `bad`-constraint drop;
+committed regression `tests/corpus/smtlib/qf_lra_deep_arith_chain_sat.smt2`
+pins the exact shape that used to crash. Original report follows.
+
 **Severity:** medium (regression-net integrity, not compiler soundness).
-Found 2026-07-26 while probing item 2 of
-[docs/upcoming/v1/corpus-reader-tail-plan.md](../upcoming/v1/corpus-reader-tail-plan.md)
--- full measurements and fix directions live in that plan's "Item 2
-findings" section; this note exists so the defects are not lost if that
-plan is shelved.
+Found 2026-07-26 while probing item 2 of the corpus-reader-tail plan.
 
 Two compounding defects in `tur_refine_corpus` (`tests/unit/refine_corpus.c`):
 

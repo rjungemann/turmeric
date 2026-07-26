@@ -7,14 +7,19 @@ corpus green at 122 benchmarks / 0 soundness failures. The external-sample
 sweep ran before and after on the same box: skips 7 -> 3, all four
 `spider_benchmarks` files parse (landing as "unsat, not proved" -- the
 predicted conversion), no new crashes; measured tally recorded in the corpus
-README. Item 2 was **investigated with a measured probe 2026-07-26** -- see
-"Item 2 findings" in that section: the two QF_RDL caps are raisable with
-measured margin, the macro skip needs memoization (expansion is
-exponential), and the probe surfaced two live harness defects (a
-`linearize` stack overflow below the reader cap, and ASan crashes counting
-as "unlabelled" passes) now also tracked in
-`docs/reported/corpus-child-crashes-silent-under-asan.md`. No item-2 code
-has landed. Feasibility notes at the bottom.
+README. Item 2 **landed 2026-07-26** in the revised sequence produced by
+the measured probe (see "Item 2 findings"): distinctive child exit codes
+(sanitizer crashes now count as `CRASH!`, not "unlabelled" passes), a
+depth-bounded `linearize` (the solver-side stack overflow that sat BELOW
+the reader's caps -- sound via the existing bad-constraint drop), cap
+raises 4000 -> 6000 / 6000 -> 8000 against the measured limit, and
+translate-once nullary `define-fun` memoization. External sample: **200 of
+200 parse, 0 skips, 0 crashes**, and three CPAchecker benchmarks that used
+to burn the budget in exponential macro re-expansion now complete.
+Regressions committed: `qf_lra_macro_chain_{unsat,sat}.smt2`,
+`qf_lra_deep_arith_chain_sat.smt2`; the two harness defects are archived in
+`docs/archive/corpus-child-crashes-silent-under-asan.md`. This plan is
+**done**. Feasibility notes at the bottom.
 
 `tests/unit/refine_corpus.c` replays labelled SMT-LIB benchmarks against the
 in-house chain with no solver linked (see
@@ -133,16 +138,18 @@ the body's textual depth, ~2). Roughly 25 lines.
    unexpected exit status as a crash; ~5 lines. This should land **first**
    -- it is what makes defect 1 (and anything like it) visible.
 
-**Revised sequencing, if item 2 is picked up:** (1) exit-code fix, (2)
-`linearize` depth bound, (3) cap raises -- `TR_MAX_LET_DEPTH` 4000 -> 6000
-(covers 4300 with margin, keeps total depth under the term cap) and
-`TR_MAX_TERM_DEPTH` 6000 -> 8000 (covers 6857; translation is measured
-safe to 16k, and with the `linearize` bound in place the deeper window is
-no longer a crash window), (4) nullary-macro memoization. Expected yield:
-3 skips -> 0, all three likely "over budget", zero new decided -- **plus**
-the regression net's crash reporting becomes trustworthy again, which is
-the part with value beyond these three files and the part this plan could
-not have known to ask for.
+**Revised sequencing (landed 2026-07-26, in this order):** (1) exit-code
+fix, (2) `linearize` depth bound, (3) cap raises -- `TR_MAX_LET_DEPTH`
+4000 -> 6000 (covers 4300 with margin, keeps total depth under the term
+cap) and `TR_MAX_TERM_DEPTH` 6000 -> 8000 (covers 6857; translation is
+measured safe to 16k, and with the `linearize` bound in place the deeper
+window is no longer a crash window), (4) nullary-macro memoization.
+Measured yield: 3 skips -> 0 (all three "over budget", as expected), the
+crash classification verified end-to-end (a 256k-deep probe file now
+reports `CRASH!` where it used to tally "unlabelled"), and one thing the
+prediction missed on the good side: **three other CPAchecker benchmarks
+converted from "over budget" to decided**, because their budget had been
+going to exponential macro re-expansion rather than solving.
 
 ## Why this is optional
 

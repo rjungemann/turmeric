@@ -175,12 +175,17 @@ static bool sx_head_is(const Sx *s, const char *name) {
  * were far too small for the real library: a single QF_UFLIA benchmark in the
  * 2025 release carries a 287-deep `let` chain, and every one of those files
  * skipped as "too many let bindings" -- a corpus that parses nothing tests
- * nothing.  The term-depth cap stays modest because `tr_term` recurses on the C
- * stack, and a stack overflow in the child would be reported as a crash. */
-#define TR_MAX_LET_DEPTH  4000
+ * nothing.  The depth caps guard `tr_term`'s C-stack recursion; they were
+ * raised 4000 -> 6000 and 6000 -> 8000 against a MEASURED limit, not a
+ * guessed one: under the ASan Debug build on an 8 MB stack, translation
+ * survives 16,000-deep let chains, and the solver-side recursion that used
+ * to be the real weak link (`linearize`, which measured dead below depth
+ * 1000) is depth-bounded on its own now.  The two deepest benchmarks in the
+ * external 2025 sample nest to 4300 and 6857; both fit with margin. */
+#define TR_MAX_LET_DEPTH  6000
 #define TR_MAX_LET_BINDS  32768
 #define TR_MAX_LET_PARALLEL 4096
-#define TR_MAX_TERM_DEPTH 6000
+#define TR_MAX_TERM_DEPTH 8000
 #define TR_MAX_SORTS      256
 #define TR_MAX_DEFS       32768
 #define TR_MAX_DEF_DEPTH  64
@@ -206,8 +211,23 @@ typedef struct {
  * over the ALREADY-TRANSLATED argument terms, the body is translated, and the
  * stack is rewound.  That gets correct scoping for free, including a parameter
  * shadowing an outer name, and it means a macro argument is evaluated once
- * rather than duplicated per occurrence in the body. */
-typedef struct { const char *name; const Sx *params; const Sx *body; } FunDef;
+ * rather than duplicated per occurrence in the body.
+ *
+ * A NULLARY def is different: it has no parameters to bind, so its body is
+ * translated ONCE, at definition time, into `val` -- and every reference is
+ * then an O(1) lookup.  This is not an optimization but a feasibility
+ * matter: CPAchecker-style benchmarks carry tens of thousands of nullary
+ * defs where nearly every body references more than one earlier def
+ * (measured: 18,209 defs, longest chain 6,187, naive expansion >= 1e18
+ * tree nodes), so expanding per reference is exponential where memoized
+ * translation is linear.  SMT-LIB scopes definitions before use, so at
+ * definition time every referenced def is already translated; a
+ * self-reference (define-fun-rec territory) finds no binding and skips as
+ * an undeclared symbol.  The one visible change: a nullary def whose body
+ * is outside the fragment now skips the benchmark even if nothing ever
+ * references it -- conservative, and consistent with skip-whole-never-guess. */
+typedef struct { const char *name; const Sx *params; const Sx *body;
+                 VCTerm *val; } FunDef;
 static FunDef g_defs[TR_MAX_DEFS];
 static uint32_t g_n_defs;
 
@@ -328,14 +348,10 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
         for (uint32_t i = 0; i < t->vc->n_vars; i++)
             if (strcmp(t->vc->vars[i].name, a) == 0)
                 return vc_var_ref(t->vc, i);
-        /* A nullary `define-fun` -- a named constant. */
+        /* A nullary `define-fun` -- a named constant, translated once at
+         * definition time; a reference is a lookup, never an expansion. */
         const FunDef *d0 = tr_find_def(a, 0);
-        if (d0) {
-            if (depth > TR_MAX_DEF_DEPTH * 20) {
-                t->err = "macro expansion too deep"; return NULL;
-            }
-            return tr_term(t, d0->body, depth + 1);
-        }
+        if (d0 && d0->val) return d0->val;
         t->err = "reference to an undeclared symbol";
         return NULL;
     }
@@ -700,6 +716,20 @@ static void bench_load(Bench *b, const char *text, size_t len, Arena *a) {
             g_defs[g_n_defs].name   = cmd->kids[1]->atom;
             g_defs[g_n_defs].params = ps;
             g_defs[g_n_defs].body   = cmd->kids[4];
+            g_defs[g_n_defs].val    = NULL;
+            /* Nullary: translate the body NOW (see the FunDef comment).  The
+             * def is not yet registered, so a self-reference fails as an
+             * undeclared symbol rather than recursing. */
+            if (ps->n == 0) {
+                t.n_lets = 0;
+                VCTerm *v = tr_term(&t, cmd->kids[4], 0);
+                if (!v || t.err) {
+                    b->skipped = true;
+                    b->skip_reason = t.err ? t.err : "unparsable define-fun body";
+                    return;
+                }
+                g_defs[g_n_defs].val = v;
+            }
             g_n_defs++;
             continue;
         }
@@ -805,10 +835,17 @@ static int g_budget_s = CORPUS_DEFAULT_TIMEOUT_S;
 
 /* How a child reports which counter the parent should bump.  The child prints
  * its own human-readable line -- it owns the skip reason and the label -- and
- * the exit code carries only the classification. */
+ * the exit code carries only the classification.
+ *
+ * The values are DELIBERATELY not small integers.  A sanitizer-detected
+ * crash (ASan stack overflow, UBSan trap) exits the child with code 1, and
+ * when OUT_UNLABELLED was 1 that crash tallied as "unlabelled" -- a pass --
+ * quietly defeating the "a crash is loud" design for exactly the build the
+ * suite runs.  Any exit status outside this range is now classified by the
+ * parent as a crash. */
 enum {
-    OUT_SKIPPED = 0, OUT_UNLABELLED = 1, OUT_PROVED = 2,
-    OUT_UNPROVED = 3, OUT_SAT_OK = 4, OUT_SOUNDNESS = 5, OUT_ERROR = 6,
+    OUT_SKIPPED = 40, OUT_UNLABELLED = 41, OUT_PROVED = 42,
+    OUT_UNPROVED = 43, OUT_SAT_OK = 44, OUT_SOUNDNESS = 45, OUT_ERROR = 46,
 };
 
 static char *slurp(const char *path, size_t *len_out) {
@@ -917,8 +954,17 @@ static void run_one(const char *path) {
         int status = 0;
         pid_t r = waitpid(pid, &status, WNOHANG);
         if (r == pid) {
-            if (WIFEXITED(status)) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) >= OUT_SKIPPED &&
+                WEXITSTATUS(status) <= OUT_ERROR) {
                 tally(WEXITSTATUS(status));
+            } else if (WIFEXITED(status)) {
+                /* An exit code the child never sends deliberately -- the
+                 * sanitizer runtime aborting (ASan exits 1), a library
+                 * calling exit(), anything unexpected.  A crash on this
+                 * input, exactly like a signal death. */
+                printf("  CRASH!  %s (child exited with unexpected code %d)\n",
+                       path, WEXITSTATUS(status));
+                g_soundness_failures++;
             } else {
                 /* Killed by a signal it did not ask for -- a crash on this
                  * input.  That is a defect worth failing on, not a skip. */
