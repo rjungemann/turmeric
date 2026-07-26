@@ -573,18 +573,32 @@ blocker 2 and the grant land together (behind `--enable=refined`, gated on the
 
 ## Acceptance (whichever candidate)
 
-The fixtures are the same either way, and the **negative** ones are the point:
+The fixtures are the same either way, and the **negative** ones are the point.
+All the ones named below now exist and are green under a Debug `tur` (their
+diagnostics shifted with the move to the sound borrow-based `frozen` design --
+noted per fixture):
 
 - `refine-stateful-guard-discharges`: guard, then read, no mutation between.
-  Proves.
-- `errors/refine-stateful-mutation-invalidates`: guard, **mutate**, then read.
-  Must NOT prove. Write this one first. It is the fixture that catches the
-  design being implemented as an escape hatch, and neither candidate is
-  acceptable without it green.
-- `errors/refine-stateful-aliased-mutation`: the mutation happens through a
-  *second* handle to the same object. This is the aliasing question the
-  `rc<T>` / `ref<T>` decline already answers for field reads, and any new
-  congruence route has to answer it again rather than inherit the answer.
+  **Proves** (and now codegens/runs -> `42`; the entry-contract-suppression fix
+  is what let a `#reads`-refined accessor build at all). **[DONE]**
+- `errors/refine-stateful-mutation-invalidates`: guard, **mutate** (`set!` of
+  the frozen world's state), then read. Must NOT prove -- it is the fixture that
+  catches the design being implemented as an escape hatch. The mutation is the
+  third shared invalidation site (region exit / `set!` of `w` / do-split), so
+  the crossing goes unknown and `--strict-refine` makes it a hard error
+  (`TUR-W0372`). **[DONE 2026-07-26]**
+- `errors/refine-stateful-aliased-mutation`: the mutation reaches the world
+  through a *second* handle. This is the aliasing question the `rc<T>` /
+  `ref<T>` decline answers for field reads -- and the borrow-based region
+  **inherits** the answer rather than re-deriving it: while `(& w)` is live no
+  *mutating* handle to the frozen world (aliased or direct) can be acquired, so
+  the attempt is a structural `TUR-E0200` (borrow conflict), not a runtime hole.
+  Uniqueness is the aliasing answer. **[DONE 2026-07-26]**
+- Two supporting negatives added alongside: `errors/refine-stateful-no-region`
+  (no `(& w)` -> impure, never congruent) and `errors/refine-stateful-shadow-despawn`
+  (a shadowed inner `w` is not the frozen one), plus the positive
+  `refine-stateful-nonstrict-warns` (non-strict surfaces an unproven crossing as
+  a `TUR-W0372` warning rather than silently trusting it). **[DONE]**
 - Source-level differential fuzzing, with a `stateful` generator shape and a
   sabotage: make the invalidation a no-op and confirm the fuzzer reports
   soundness bugs where the shipped build reports zero. Per the parent plan's

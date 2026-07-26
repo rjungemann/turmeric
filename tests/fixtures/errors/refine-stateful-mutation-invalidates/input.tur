@@ -1,0 +1,30 @@
+;; C2 (#reads) negative -- the ESCAPE-HATCH guard; the plan's "write this one
+;; first". A `set!` that mutates the frozen world's state BETWEEN the guard and
+;; the read invalidates the congruence hypothesis -- the third shared
+;; invalidation site, alongside region exit and the do-split. The crossing must
+;; NOT prove: else the elided check would read state the guard no longer
+;; describes (a use-after-mutate). Under --strict-refine the unproven crossing is
+;; a hard error, which is the point.
+;;
+;; (If a future borrow-checker tightening rejects an in-region field `set!`
+;; outright, this becomes TUR-E0200 -- an even stronger, structural rejection --
+;; and the expected diagnostic should be updated to match.)
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int 0)
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__frz (& w)]                 ;; frozen region: alive? w is congruent here
+      (if (alive? w 0)                 ;; guard establishes the hypothesis
+        (do (set! (.n w) 9)            ;; MUTATE w between guard and read -- invalidates
+            (get-Pos! w 0))            ;; MUST NOT prove
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)
