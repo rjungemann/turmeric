@@ -574,14 +574,17 @@ The fixtures are the same either way, and the **negative** ones are the point:
   standing lesson -- both historical soundness bugs lived in the encoder, below
   the VC fuzzer's reach -- this is the only harness that covers this work.
 
-  **Status 2026-07-26 -- the source fuzzer is currently vacuous, tracked
-  separately.** `tests/refine-fuzz-src.py` classifies every case `skip_invalid`
-  because `tur` double-loads its stdlib when spawned via a subprocess (both
-  `check` and `run`, both build types) and rejects gate-off; a shell invocation
-  is clean. Filed at
-  [`refine-fuzzer-subprocess-stdlib-double-load.md`](../../reported/refine-fuzzer-subprocess-stdlib-double-load.md).
-  The `stateful` generator shape is blocked on that fix -- there is no point
-  adding a shape to a harness that skips every case.
+  **Status 2026-07-26 -- source fuzzer UNBLOCKED (double-load fixed); `stateful`
+  shape still owed.** The fuzzer was vacuous because `tur` double-loaded its
+  stdlib when spawned via a subprocess from a checkout root; fixed in
+  `load_path_key` (resolve a `stdlib/X` load via `stdlib_dir` first). The
+  self-test now passes and an n=120 run does real work (`skip_invalid` 2/120, 0
+  soundness bugs). Report archived at
+  [`refine-fuzzer-subprocess-stdlib-double-load.md`](../../archive/refine-fuzzer-subprocess-stdlib-double-load.md).
+  **Run it with a Debug `tur` and `TUR_STDLIB_DIR` unset** (Release strips
+  contracts so gate-off never aborts; a stale env stdlib is the wrong one). The
+  `stateful` generator shape (emit `#reads` measures + `frozen` regions +
+  mutations) is now the remaining gate item -- unblocked, not yet written.
 
   **Interim gate met by targeted sabotage.** The plan's *core* requirement --
   "make the frozen-check a no-op and confirm the negatives are caught" -- was

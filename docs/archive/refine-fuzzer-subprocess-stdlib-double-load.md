@@ -1,5 +1,17 @@
 # `tur` double-loads stdlib when spawned via a subprocess -> refine source fuzzer is vacuous
 
+**RESOLVED 2026-07-26.** Root cause was `load_path_key` (`elab_toplevel.c`)
+canonicalizing a `(load "stdlib/X")` via `realpath(path)` *before* the resolved
+`stdlib_dir`: from a checkout root the cwd-relative `stdlib/X` realpath'd to the
+CWD copy, while the auto-load prefix had resolved its stdlib to a *different*
+dir (a stale installed one on `TUR_STDLIB_DIR`, e.g. mise's) -- so the dedup keys
+disagreed and `map.tur`'s `(load "stdlib/hamt.tur")` re-spliced the already-
+auto-loaded hamt. Fixed by resolving a `stdlib/<rest>` load through `stdlib_dir`
+first. The fuzzer self-test now passes on a Debug `tur`. Two operational notes
+that were *not* bugs: the fuzzer needs a **Debug** `tur` (Release strips
+contracts under NDEBUG, so gate-off never aborts) and `TUR_STDLIB_DIR` unset (so
+the repo compiler uses the repo stdlib). Original report below.
+
 **Severity:** medium (blocks a test harness, not user programs; but any *programmatic*
 `tur` invocation is affected, not just the fuzzer).
 
