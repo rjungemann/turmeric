@@ -1517,11 +1517,45 @@ void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
 #define RT_CS_PATH_MAX_DEPTH 24
 #define RT_CS_PATH_MAX_HYPS  8
 
-/* Count pointer-identical occurrences of `target`, stopping at 2. */
+/* Crossing identity that survives macro expansion.
+ *
+ * Pointer equality is the fast path.  But a region written as a MACRO -- the
+ * shipped `ecs/freeze` `frozen`, or any macro that wraps a body with `~@body` --
+ * expands by quasiquote, which RECONSTRUCTS the body into fresh Form objects.
+ * So the crossing that gets elaborated and registered as `cs->call_form` is a
+ * different pointer than the crossing node reachable in `cs->caller_body` (the
+ * source defn body), and a pointer-only match reports 0 occurrences -- the guard
+ * on the path is then dropped and a perfectly good `(if (alive? w e) ...)` no
+ * longer discharges its read (see docs/reported/frozen-macro-breaks-refinement-
+ * guard-discharge.md).
+ *
+ * The copy preserves the source SPAN, so we fall back to matching a real
+ * source location plus the head symbol and arity.  This only ever RESCUES the
+ * "copied once" case: callers keep the `!= 1` ambiguity decline, so a span
+ * shared by more than one node (a macro that DUPLICATES a crossing) still bails,
+ * and a crossing genuinely absent from the body still matches nothing.  A span
+ * match is therefore never less conservative than pointer identity where it
+ * mattered -- it strictly recovers copies of the same source crossing, which
+ * carry the same guards on the same path. */
+static bool rt_form_ident(const Form *a, const Form *b) {
+    if (a == b) return true;
+    if (!a || !b || a->tag != b->tag) return false;
+    if (a->tag != F_LIST && a->tag != F_VEC) return false;   /* only call forms */
+    if (span_is_unknown(a->span) || span_is_unknown(b->span)) return false;
+    if (a->span.file_id  != b->span.file_id ||
+        a->span.off_start != b->span.off_start ||
+        a->span.off_end   != b->span.off_end) return false;
+    if (a->as.list.len != b->as.list.len || a->as.list.len == 0) return false;
+    const Form *ha = a->as.list.items[0], *hb = b->as.list.items[0];
+    if (!ha || !hb || ha->tag != F_SYM || hb->tag != F_SYM) return false;
+    return ha->as.sym == hb->as.sym;                          /* interned */
+}
+
+/* Count occurrences of `target` (pointer- or source-identical), stopping at 2. */
 static uint32_t rt_form_occurrences(const Form *node, const Form *target,
                                     uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return 0;
-    if (node == target) return 1;
+    if (rt_form_ident(node, target)) return 1;
     if (node->tag != F_LIST && node->tag != F_VEC) return 0;
     uint32_t n = 0;
     for (uint32_t i = 0; i < node->as.list.len && n < 2; i++)
@@ -1560,7 +1594,7 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                                   const Form *target, const Form **hyps,
                                   uint32_t *n, bool *shadowed, uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
-    if (node == target) return true;
+    if (rt_form_ident(node, target)) return true;
     if (node->tag != F_LIST && node->tag != F_VEC) return false;
 
     if (rt_head_is(node, "if") && node->as.list.len == 4) {

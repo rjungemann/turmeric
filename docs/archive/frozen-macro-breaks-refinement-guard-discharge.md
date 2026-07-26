@@ -1,5 +1,22 @@
 # A macro-wrapped region (`frozen`) breaks refinement guard-discharge; the inline `let`-borrow works
 
+**RESOLVED 2026-07-26 (fix direction 1).** Added `rt_form_ident` in
+`src/compiler/elab_fns.c`: crossing identity now falls back from pointer
+equality to source `Span` + head symbol + arity, used in both
+`rt_form_occurrences` and `rt_collect_path_conds`. A macro-copied crossing
+preserves its source span, so the guard on its path is recovered; the `!= 1`
+ambiguity decline is untouched, so a macro that DUPLICATES a crossing at one
+span still bails. The `ecs/freeze` `frozen` macro now discharges a
+`#reads`-guarded read (`1 proven`). Validated: macro proves, inline still
+proves, a macro region with NO guard and a macro region with a `set!` between
+guard and read both still reject (W0372), a crossing-duplicating macro where
+both reads are genuinely guarded proves both (correct), the four
+`errors/refine-stateful-*` negatives still reject, the source fuzzer reports 0
+soundness bugs, and the full suite is 2367/0. Regression guard:
+`tests/fixtures/refine-stateful-frozen-macro`. The second dependency below (the
+`GameWorld` facade with a `^unique ^mut` despawn) is an RE1 design step, tracked
+in the ecs-refinement plan -- not a compiler bug. Original report follows.
+
 **Severity:** medium (blocks the *ergonomic* `#reads` surface -- the shipped
 `ecs/freeze` `frozen` macro -- from composing with refinement congruence; the
 inline `(let [_ (& w)] ...)` form is a sound, working substitute, so it is a

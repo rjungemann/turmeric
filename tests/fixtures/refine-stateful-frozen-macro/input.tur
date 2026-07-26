@@ -1,0 +1,33 @@
+;; A macro-wrapped `frozen` region composes with #reads guard-discharge. The
+;; guard `(alive? w e)` must be recovered across a MACRO expansion -- which
+;; COPIES the body (quasiquote), so the elaborated crossing is a different Form
+;; object than the source node the path walk sees. Before the span-based
+;; crossing match (rt_form_ident), this was `0 proven, 1 unknown` (a hard
+;; TUR-W0372 under --strict-refine) while the identical inline
+;; `(let [_ (& w)] ...)` proved. Regression guard for
+;; docs/archive/frozen-macro-breaks-refinement-guard-discharge.md.
+;;
+;; Under --strict-refine this compiles (and prints 42) ONLY because the crossing
+;; discharges; if the guard were lost the strict build would fail with W0372.
+(defmacro with-frozen [w & body]
+  `(let [__wf (& ~w)] ~@body))
+
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+(defn run [] : int
+  (let [^mut w (World 42)]
+    (with-frozen w
+      (if (alive? w 0)
+        (get-Pos! w 0)
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)
