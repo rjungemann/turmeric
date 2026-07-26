@@ -364,18 +364,27 @@ expected and fails to elaborate.
 > (`tests/refined/refined-loop-alive.tur`: 1 proven, runs -> 40, correctly skips
 > a despawned entity). The mechanism: the `while`+`set!` form is blocked -- the
 > loop counter's `set!` trips the whole-body `mentions_set` decline in the
-> crossing path-cond collector (the C3-adjacent gap) -- so it uses the sound
-> shape that works: TAIL RECURSION (TCO'd; verified 5M calls) + a re-borrow of
-> `w` inside the recursive helper (so `alive?` is congruent there) + the `alive?`
-> guard. An ergonomic `for-each-alive` macro is NOT yet shippable: turmeric has
-> no `loop`/`recur` or self-recursive `let`-`fn`, and a macro cannot emit a
-> top-level recursive helper -- so the ergonomic while-based `for-each` needs the
-> compiler order-aware-`set!` fix (relax the whole-body `mentions_set` gate to
-> only decline on a `set!` that executes BEFORE the crossing on the path).
+> crossing path-cond collector (the C3-adjacent gap) -- so it uses TAIL RECURSION
+> (TCO'd; verified 5M calls) + a re-borrow of `w` inside the recursive helper (so
+> `alive?` is congruent there) + the `alive?` guard.
+>
+> **Correction (2026-07-27):** an earlier note here claimed "turmeric has no
+> `loop`/`recur` or self-recursive `let`-`fn`, and a macro cannot emit a
+> top-level recursive helper." That was WRONG (bad probing -- I used a plain
+> `let`, not `letrec`). Verified: **named-let (`(let go [...] ...)`) and `letrec`
+> both work** (local recursion exists; a hand-written named-let refined loop
+> discharges, `1 proven`), and **a macro CAN emit a top-level `defn`**. Only
+> `(loop [...] (recur ...))` is genuinely absent, and named-let covers it. So the
+> recursive form does NOT need the order-aware-`set!` fix at all. What actually
+> blocks an ergonomic `for-each-alive` MACRO is a different bug: a macro that
+> *generates* a refined guard/crossing (via the quasiquote template, not `~@body`
+> splicing the user's forms) does not discharge -- spurious `TUR-W0372`. Filed as
+> `docs/reported/macro-generated-refined-crossings-do-not-discharge.md`.
 >
 > **Remaining for RE1:** fix the refined-multi-compile corruption (unblocks
-> auto-running all refined tests); the order-aware-`set!` fix (unblocks the
-> ergonomic while-based `for-each-alive`).
+> auto-running all refined tests); fix macro-generated refined-crossing discharge
+> (unblocks an ergonomic `for-each-alive` macro). The while-based `for-each`
+> order-aware-`set!` fix is optional -- the recursive form already works.
 
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
