@@ -4,6 +4,43 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.31.0] -- 2026-07-25
+
+### Added
+
+- **Refinement types (experimental)**: predicate-refined types behind
+  `--enable=refined` (or `#lang turmeric refined`). Ships RT0-RT7 -- refined
+  parameters/results, call-site and let/match path-condition crossings,
+  typeclass method result-refinement enforcement (TUR-E0374/E0375), and a
+  three-valued purity classifier. Backed by an in-house SMT solver plus an
+  optional Z3/cvc5 oracle, a source-level fuzzer, and a labelled SMT-LIB
+  corpus replayed against the chain. Runs on wasm32.
+- **Cycle-collecting GC (experimental)**: a Bacon-Rajan trial-deletion
+  collector behind `--enable=cycle-gc` reclaims strong `rc<T>` reference
+  cycles via `(gc!)` / `(gc-auto!)`.
+- **`rc<T>` in collections**: `Vec`, `Map`, and `HAMT` can own `rc<T>`
+  elements, with caller-supplied value ownership; adds `stdlib/rcchain.tur`,
+  a collection the cycle collector can trace.
+
+### Changed
+
+- **turi REPL incremental elaboration**: persistent elaboration/parsing
+  session takes long-lived envs from O(N^2) to ~O(N); the incremental path is
+  now ON by default.
+- **Single runtime GC**: compiled executables link the runtime collector
+  instead of replicating it per module, reconciling the two `RcControlBlock`
+  layouts and guarding against future drift.
+
+### Fixed
+
+- **Refinement codegen defects**: fix two codegen bugs in `match` on a
+  non-ADT scrutinee, `rc/of` over a multi-variant ADT (released/traced
+  nothing), `rc<T>` over a `:heap` defstruct, and a compiler stack overflow
+  on a disjunctive refinement goal.
+- **Web REPL**: invoke top-level `main` so Run shows output (not
+  `#<fn main>`), unstick the service-worker cache so the REPL loads the
+  current wasm, and add a "Force update" command.
+
 ## [0.30.8] -- 2026-07-24
 
 ### Fixed

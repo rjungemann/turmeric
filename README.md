@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.30.8` -- interpreter (`--interpret`) parity fixes for closure capture and multishot continuations, plus async catch-unwind, nested effect-handler, and macOS build fixes.
+**Latest release:** `v0.31.0` -- experimental refinement types (`--enable=refined`) with an in-house SMT solver, an experimental cycle-collecting GC (`--enable=cycle-gc`), `rc<T>`-owning collections, and an O(N) incremental turi REPL.
 
 ## What
 
