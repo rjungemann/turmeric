@@ -522,14 +522,21 @@ What graduation should weigh when it comes up:
   | acyclic chains | 31 | **0** | **16000** |
 
   The collector is doing its job -- every cycle reclaimed, 60 blocks live at
-  exit. The entire 16000-block residue is `set!` on an `^mut` binding holding
+  exit. The entire 16000-block residue was `set!` on an `^mut` binding holding
   `rc<T>` never releasing the overwritten value: 4000 rounds x 4 assignments,
-  exactly. Acyclic and `strong_count > 0`, so no collector can reclaim it.
-  Filed as
-  [docs/reported/set-bang-does-not-release-old-rc-value.md](../../reported/set-bang-does-not-release-old-rc-value.md).
-  **Graduation should not read that live-block growth as a collector problem.**
-  A second real-workload run is worth doing once that leak is fixed, since it
-  currently masks whatever the collector's own steady-state residue is.
+  exactly. Acyclic and `strong_count > 0`, so no collector could reclaim it.
+  **Since FIXED** -- archived at
+  [docs/archive/set-bang-does-not-release-old-rc-value.md](../../archive/set-bang-does-not-release-old-rc-value.md).
+  Re-measured after the fix, same workload:
+
+  | half of the workload | collections | freed | live at exit |
+  |---|---|---|---|
+  | acyclic chains | 4 | 0 | **0** (was 16000) |
+  | full mixed workload | 63 | 7938 | **62** (was 16050) |
+
+  So the collector's own steady-state residue on this shape is ~60 blocks, and
+  it is no longer masked by an unrelated refcount leak. That is the number
+  graduation should weigh.
 
 *Original phase text:*
 
@@ -589,13 +596,20 @@ baseline."
 
 Three defects surfaced while measuring the above. None is in the collector; all
 three were hit *because* the measurements drove the rc path harder than the
-fixtures do. Left open rather than fixed here -- they are separate from this
-plan's track.
+fixtures do.
 
-- [set-bang-does-not-release-old-rc-value.md](../../reported/set-bang-does-not-release-old-rc-value.md)
-  -- **high.** `set!` on an `^mut` binding holding `rc<T>` never releases the
-  overwritten value. Acyclic, so no collector can reclaim it. This is the whole
-  of the residue in CG8's real-workload run above.
+- [set-bang-does-not-release-old-rc-value.md](../../archive/set-bang-does-not-release-old-rc-value.md)
+  -- was **high**, now **FIXED** (archived). `set!` on an `^mut` binding holding
+  `rc<T>` never released the overwritten value. Acyclic, so no collector could
+  reclaim it -- it was the whole of the residue in CG8's real-workload run
+  above. Investigating it turned up two further defects on the same seam (a
+  missing `rc_strong_increment` on rc field-read values, and a read-after-release
+  ordering bug in the field write), so the fix is an ownership normalization
+  rather than a decrement. Pinned by `tests/fixtures/set-bang-releases-old-rc`
+  and `tests/set-bang-rc-release-check.sh`.
+
+The other two are left open -- they are separate from this plan's track.
+
 - [rc-free-queue-drain-is-quadratic.md](../../reported/rc-free-queue-drain-is-quadratic.md)
   -- medium. `rc_free_queue_drain` memmoves the whole queue per pop, in both
   copies. It dominated the payload-zeroing measurement so completely that the
