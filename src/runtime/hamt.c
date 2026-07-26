@@ -343,14 +343,6 @@ tur_hamt_key_ops tur_hamt_box_key_ops(void) {
     return ops;
 }
 
-/* The default value ownership: a boxed multi-word value is a tur_hamt_box_key
- * box, so its ops are the box refcount.  Passing these to the _vo entry points
- * reproduces the hardcoded behavior of the _eq_o wrappers exactly. */
-tur_hamt_val_ops tur_hamt_box_val_ops(void) {
-    tur_hamt_val_ops ops = { tur_hamt_box_retain, tur_hamt_box_release };
-    return ops;
-}
-
 bool tur_hamt_box_key_eq(int64_t a, int64_t b) {
     void *pa = (void *)(intptr_t)a;
     void *pb = (void *)(intptr_t)b;
@@ -1208,25 +1200,38 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key,
     return r;
 }
 
-/* Flag-driven convenience wrappers (WKC3 + multi-word-value boxing).  `owned` is
- * a BITMASK: bit 0 selects boxed-KEY ownership (the standard tur_hamt_box_key
- * ops), bit 1 selects boxed-VALUE ownership.  A plain `owned == 0` is the
- * un-owned _eq path, and a legacy `owned == 1` (key only) is unchanged, so this
- * is backward-compatible.  Value ownership installs the box refcount as the
- * thread-local value hooks for the duration of the mutating op (set/del) so
- * structural copies retain and dropped entries release the value box; the flag
- * is stamped on the resulting map for tur_hamt_free.  get/has are read-only (no
- * node copy/free), so they never touch value lifetime. */
+/* Flag-driven wrappers (WKC3 + multi-word-value boxing + rc<T> values).
+ * `owned` is a BITMASK:
+ *
+ *   bit 0 -- boxed-KEY ownership (the standard tur_hamt_box_key ops).
+ *   bit 1 -- the value is a heap BOX the map owns.
+ *   bit 2 -- the value is an rc<T> handle the map owns.
+ *
+ * Bits 1 and 2 both mean "the map owns its values" and differ only in which
+ * ops do the owning; they are mutually exclusive (a value is either a by-value
+ * box or an rc handle, never both).  `owned == 0` is the un-owned _eq path and
+ * a legacy `owned == 1` (key only) is unchanged, so this stays
+ * backward-compatible.
+ *
+ * Value ownership installs the caller's ops as the thread-local value hooks for
+ * the duration of the mutating op (set/del) so structural copies retain and
+ * dropped entries release, and stamps them on the resulting map for a later
+ * tur_hamt_free.  get/has are read-only (no node copy/free), so they never
+ * touch value lifetime.
+ *
+ * The _eq_o wrappers hardcode the box refcount and so must only ever be handed
+ * bit 1; a bit-2 caller goes through _vo with its own ops. */
 Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val,
                          tur_hamt_keyeq_fn eq, int64_t owned,
-                         tur_hamt_val_ops vops) {
+                         void (*val_retain)(void *), void (*val_release)(void *)) {
+    tur_hamt_val_ops vops = { val_retain, val_release };
     void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
-    if (owned & 2) { g_hamt_val_retain = vops.retain;
+    if (owned & 6) { g_hamt_val_retain = vops.retain;
                      g_hamt_val_release = vops.release; }
     Hamt *r = (owned & 1)
         ? tur_hamt_set_eq_owned(m, hash, key, val, eq, tur_hamt_box_key_ops())
         : tur_hamt_set_eq(m, hash, key, val, eq);
-    if (r && (owned & 2)) {
+    if (r && (owned & 6)) {
         r->val_owned = true;
         r->val_ops   = vops;
     }
@@ -1237,19 +1242,20 @@ Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val,
 Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
     return tur_hamt_set_eq_vo(m, hash, key, val, eq, owned,
-                              tur_hamt_box_val_ops());
+                              tur_hamt_box_retain, tur_hamt_box_release);
 }
 
 Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key,
                          tur_hamt_keyeq_fn eq, int64_t owned,
-                         tur_hamt_val_ops vops) {
+                         void (*val_retain)(void *), void (*val_release)(void *)) {
+    tur_hamt_val_ops vops = { val_retain, val_release };
     void (*svr)(void *) = g_hamt_val_retain, (*svl)(void *) = g_hamt_val_release;
-    if (owned & 2) { g_hamt_val_retain = vops.retain;
+    if (owned & 6) { g_hamt_val_retain = vops.retain;
                      g_hamt_val_release = vops.release; }
     Hamt *r = (owned & 1)
         ? tur_hamt_del_eq_owned(m, hash, key, eq, tur_hamt_box_key_ops())
         : tur_hamt_del_eq(m, hash, key, eq);
-    if (r && (owned & 2)) {
+    if (r && (owned & 6)) {
         r->val_owned = true;
         r->val_ops   = vops;
     }
@@ -1259,7 +1265,8 @@ Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key,
 
 Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key,
                         tur_hamt_keyeq_fn eq, int64_t owned) {
-    return tur_hamt_del_eq_vo(m, hash, key, eq, owned, tur_hamt_box_val_ops());
+    return tur_hamt_del_eq_vo(m, hash, key, eq, owned,
+                              tur_hamt_box_retain, tur_hamt_box_release);
 }
 
 bool tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key,

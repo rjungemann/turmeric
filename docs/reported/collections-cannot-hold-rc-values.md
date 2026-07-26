@@ -330,13 +330,63 @@ Pinned by `tests/fixtures/map-move-typed-value`, which asserts both sides of the
 boxing decision -- a botched peel fails silently, folding to "narrow" and storing
 a wide value inline. Two snapshots regenerated for the extra binding.
 
-Order of work, then: ~~(a) let `map-assoc` accept a move-typed value~~ **(a)
-done**; ~~(b) make the HAMT's value ops caller-supplied and stored, symmetric
-with the key ops~~ **(b) done 2026-07-26, see above**; (c) thread bit 2 through
-`map.tur` passing `rc_strong_increment` / `rc_strong_decrement` from the emitted
-side -- the runtime half is now in place, so this is the step that first puts a
-non-box op through `_vo`; (d) register the map insert/read sinks in
-`own_carry_for_arg` / `own_carry_for_result` alongside the `vec-*` entries.
+Order of work, then: ~~(a) let `map-assoc` accept a move-typed value~~;
+~~(b) make the HAMT's value ops caller-supplied and stored, symmetric with the
+key ops~~; ~~(c) thread bit 2 through `map.tur` passing the rc ops from the
+emitted side~~; ~~(d) register the map insert/read sinks in `own_carry_for_arg`
+/ `own_carry_for_result` alongside the `vec-*` entries~~. **All four done
+2026-07-26.**
+
+#### (c) + (d): a Map can hold rc<T> values
+
+`(map-assoc m k some-rc)` used to be a hard error -- "cannot store an owning
+value (rc) in a collection". It now works, taking a strong reference on insert
+and handing the caller its own reference on read. `tests/fixtures/map-holds-rc-values`:
+
+```
+(rc/of 41) -> 1                          ; just the local
+(map-assoc m 1 (rc/clone a)) -> 2        ; the map owns one
+(map-get m 1) -> 3                       ; the read minted the caller one
+  ... scope exit -> 2
+(map-assoc m1 1 (rc/clone b)) -> a stays 2, b is 2
+```
+
+Three pieces:
+
+- **`tur-rc-value?`** (`emit_expr.c`) folds to 1 at emit time when the value's
+  monomorphized type is `rc<T>`, giving bit 2 of the `owned` flag. Like
+  `tur-wide-byval?` it takes a **borrow**, so probing the type does not consume
+  the move-typed value -- the same ordering trick step (a) needed.
+- **Emitted rc shims.** `__tur_rc_val_retain` / `__tur_rc_val_release` are
+  emitted into the program's preamble, adapting `rc_strong_increment` (returns
+  `uint64_t`) and `rc_strong_decrement` (returns `bool`) to the `void (*)(void *)`
+  the HAMT wants -- casting the function pointers instead would be UB. They are
+  emitted rather than living in `hamt.c` for the reason above: `hamt.c` could
+  only ever call the archive's collector.
+- **Sink registration** (`elab_call.c`): `map-assoc-eq-o` arg 3 is
+  `OWN_CARRY_RETAIN`, `map-get-eq-o`'s result likewise. The carrier bridge mints
+  the reference, exactly as for `vec-push!`, so `map.tur`'s inline-C stores the
+  incoming reference without retaining again -- one mint per insert, in one
+  place.
+
+Both rc/GC linkage modes were checked and agree: default archive mode, and
+`TUR_RCGC_FROM_ARCHIVE=0 --runtime=source` (the emitted replica). That agreement
+is the whole point of emitting the shims.
+
+**The persistent-overwrite case is the one to be careful about.** Writing key 1
+in `m2` must NOT release the value `m1` still holds -- a naive "release the value
+being replaced" passes a non-persistent test and corrupts this one. The fixture
+asserts it explicitly.
+
+**What is still not exercised: the release path from Turmeric.** The runtime half
+is wired (`tur_hamt_free` releases through the stored ops, covered by
+`tur_hamt_val_ops`), but Turmeric has no `map-free`, so no map version is ever
+dropped and no release ever runs in a compiled program. `map-dissoc` does not
+thread the value bits at all, so a removal does not release either -- which is
+*correct* for a persistent map (the older version still holds the entry) but
+means the map's strong reference outlives the program. This is the same
+"a persistent map that is never freed leaks by design" baseline recorded above,
+now with rc references in it rather than just nodes.
 
 3. **Make the collection walkable** so the cycle collector can trace through it
    (CG3 item 2). **Measured and blocked -- see below.** Item (2) opened the

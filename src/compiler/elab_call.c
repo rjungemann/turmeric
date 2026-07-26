@@ -741,6 +741,11 @@ static OwnCarry own_carry_for_arg(const char *fn, uint32_t idx) {
      * ever reaches a push, so rejecting here would reject the literal form. */
     if (strcmp(fn, "tur-vec-homog__") == 0)   return OWN_CARRY_BORROW;
     if (strcmp(fn, "vec-empty-like__") == 0)  return OWN_CARRY_BORROW;
+    /* Map inserts, same contract as the Vec stores: the entry keeps a strong
+     * reference the map releases when it dies (stdlib/map.tur threads bit 2 of
+     * the `owned` flag, which routes the insert through tur_hamt_set_eq_vo with
+     * the emitted rc ops). */
+    if (strcmp(fn, "map-assoc-eq-o") == 0 && idx == 3) return OWN_CARRY_RETAIN;
     return OWN_CARRY_REJECT;
 }
 
@@ -763,6 +768,9 @@ static OwnCarry own_carry_for_result(const char *fn) {
     if (!fn) return OWN_CARRY_REJECT;
     if (strcmp(fn, "vec-get") == 0)  return OWN_CARRY_RETAIN;
     if (strcmp(fn, "vec-pop!") == 0) return OWN_CARRY_BORROW;
+    /* A map read hands the caller its own reference, like vec-get: the entry
+     * keeps the map's, so the value read out must be counted separately. */
+    if (strcmp(fn, "map-get-eq-o") == 0) return OWN_CARRY_RETAIN;
     return OWN_CARRY_REJECT;
 }
 

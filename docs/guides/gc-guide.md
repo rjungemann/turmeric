@@ -201,9 +201,14 @@ rejection rather than by tracing.
 takes a strong reference per slot and releases it on free/overwrite/removal --
 so the blind spot is now open for real on the vec side: a cycle routed through a
 Vec's element buffer is RC-balanced but **not** reclaimed, because the Vec's
-buffer is an ordinary `malloc` block with no walker. `map`/`hamt` still rejects
-the shape outright, and `weak<T>` is rejected everywhere (there is no count to
-take).
+buffer is an ordinary `malloc` block with no walker.
+
+**As of 2026-07-26 a `Map[K rc<V>]` compiles too**, on the same terms: the map
+takes a strong reference on insert (`tests/fixtures/map-holds-rc-values`) and a
+read hands the caller its own. So the vec-side caveat now applies to maps as
+well -- HAMT nodes are plain `malloc` blocks with no walker, so a cycle routed
+through a map entry is RC-balanced and unreclaimed. `weak<T>` is still rejected
+everywhere (there is no count to take).
 
 `tests/fixtures/gc-blind-spot-cycle-through-vec` measures exactly this. It
 builds the same two-reference cycle twice, differing only in the back-edge:
@@ -237,7 +242,7 @@ references out of it, which is sound only when every path into a traced object
 is GC-visible. A `Vec` is shared by raw pointer with no count of its own, so
 tracing through it would let the sweep free a block a live `Vec` still points
 at -- a leak traded for a use-after-free. The container has to become
-GC-visible first. See
+GC-visible first. The same argument applies unchanged to a HAMT node. See
 [docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md)
 item 3 for the design.
 
@@ -394,13 +399,14 @@ for bare `emit-c`, for a caller who links `libturt_runtime.a` themselves.
   routed through an `RCK_OPAQUE` block is invisible to the walker, and there is
   no automatic trigger -- user code drives collection via `(gc!)` or the
   suspect threshold.
-- A cycle routed through a `Vec[rc<T>]` element buffer is refcount-correct but
-  not reclaimed: the buffer is a plain `malloc` block with no walker, and it
-  cannot simply be given one (it is shared by raw pointer, so the collector
-  cannot know whether another holder exists). Measured by
+- A cycle routed through a `Vec[rc<T>]` element buffer or a `Map[K rc<V>]` entry
+  is refcount-correct but not reclaimed: both are plain `malloc` blocks with no
+  walker, and neither can simply be given one (each is shared by raw pointer, so
+  the collector cannot know whether another holder exists). Measured by
   `tests/fixtures/gc-blind-spot-cycle-through-vec`; the fix -- an rc-managed,
   self-walking container -- is designed in
-  `docs/reported/collections-cannot-hold-rc-values.md` item 3.
+  `docs/reported/collections-cannot-hold-rc-values.md` item 3, and
+  `stdlib/rcchain.tur` is a working instance of it.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.
 - The walker relies on per-block metadata registered at allocation. Runtime

@@ -9997,6 +9997,33 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     emit_rt_defs_end(out, shared);
 
+    /* collections-cannot-hold-rc-values (map side, step c): value-ownership
+     * shims for a collection holding rc<T> elements.
+     *
+     * A collection that owns rc<T> values needs `void (*)(void *)` ops to hand
+     * the HAMT (tur_hamt_val_ops), but rc_strong_increment returns uint64_t and
+     * rc_strong_decrement returns bool -- calling either through a mismatched
+     * function-pointer type is UB, so they cannot simply be cast.  These adapt
+     * the signature.
+     *
+     * They are emitted HERE, into the program, rather than living in hamt.c,
+     * and that placement is the whole point: hamt.c is precompiled into
+     * libturt_runtime.a, so an rc call written inside it would always bind the
+     * archive's rc.c -- wrong under TUR_RCGC_FROM_ARCHIVE=0 and --shared, where
+     * the program carries its own emitted replica and the two would be separate
+     * collectors operating on the same blocks.  Emitted, they bind to whichever
+     * copy this program actually uses.  (Same reason stdlib/vec.tur does its
+     * rc release from inline-C.)
+     *
+     * `static` so every TU gets its own copy and no owner guard is needed. */
+    buf_puts(out, "/* rc<T> value-ownership shims for collections (see tur_hamt_val_ops). */\n");
+    buf_puts(out, "static void __tur_rc_val_retain(void *__v) __attribute__((unused));\n");
+    buf_puts(out, "static void __tur_rc_val_retain(void *__v) {\n");
+    buf_puts(out, "    if (__v) rc_strong_increment((RcControlBlock *)__v);\n}\n");
+    buf_puts(out, "static void __tur_rc_val_release(void *__v) __attribute__((unused));\n");
+    buf_puts(out, "static void __tur_rc_val_release(void *__v) {\n");
+    buf_puts(out, "    if (__v) rc_strong_decrement((RcControlBlock *)__v);\n}\n\n");
+
     /* SS2: TurChannel -- synchronous rendezvous channel for session types. */
     buf_puts(out, "/* SS2: TurChannel -- synchronous rendezvous channel for session types */\n");
     buf_puts(out, "#ifndef NDEBUG\n");

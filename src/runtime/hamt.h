@@ -209,9 +209,6 @@ void  tur_hamt_box_release(void *boxed_key);
 /* Convenience: the standard ops vector for tur_hamt_box_key-allocated keys. */
 tur_hamt_key_ops tur_hamt_box_key_ops(void);
 
-/* Default value ownership (the box refcount); see tur_hamt_box_val_ops. */
-tur_hamt_val_ops tur_hamt_box_val_ops(void);
-
 /* Generic content comparator for two tur_hamt_box_key-allocated payloads.  Reads
  * each payload's byte length from its box header and compares the bytes, so a
  * SINGLE comparator serves every multi-word by-value key type (struct/ADT) --
@@ -248,9 +245,11 @@ void *tur_hamt_get_eq_owned(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn
  * program can declare them via (extern-c ...) without a by-value ops struct.
  * `owned` is int64_t so the extern-c `:int` prototype matches exactly. */
 Hamt *tur_hamt_set_eq_o(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, int64_t owned);
-Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, int64_t owned, tur_hamt_val_ops vops);
+Hamt *tur_hamt_set_eq_vo(Hamt *m, uint64_t hash, void *key, void *val, tur_hamt_keyeq_fn eq, int64_t owned,
+                         void (*val_retain)(void *), void (*val_release)(void *));
 Hamt *tur_hamt_del_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
-Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned, tur_hamt_val_ops vops);
+Hamt *tur_hamt_del_eq_vo(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned,
+                         void (*val_retain)(void *), void (*val_release)(void *));
 bool  tur_hamt_has_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
 void *tur_hamt_get_eq_o(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq, int64_t owned);
 

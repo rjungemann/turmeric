@@ -1,0 +1,13 @@
+rc<T> value ownership in a Map is a compiled-path property. Two of its three
+pieces exist only in the compiled backend: `tur-rc-value?` folds to bit 2 at
+EMIT time (emit_expr.c) and its pure-Turmeric fallback body returns 0 for the
+interpreter, and the retain/release ops are shims EMITTED into the program
+(__tur_rc_val_retain / __tur_rc_val_release) so they bind to that program's
+copy of the collector. Under --interpret the flag folds to 0, the map never
+takes a reference, and the strong-count assertions read one lower.
+
+The interpreter does not carrier-erase rc values in the first place, so there
+is nothing for it to get wrong here -- this is a gap in what the fixture can
+observe, not an interpreter defect.
+
+Compiled path is green (bash tests/run.sh).

@@ -3391,6 +3391,28 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
             }
 
+            /* collections-cannot-hold-rc-values (map side, step c):
+             * `(tur-rc-value? x)` is the refcount-side twin of
+             * `tur-wide-byval?` -- it folds to 1 when the argument's
+             * monomorphized type is an rc<T>.  map-assoc threads it as bit 2 of
+             * the `owned` flag so the map takes a strong reference on insert and
+             * releases it when the entry dies.  Like tur-wide-byval? it is a
+             * pure TYPE probe taking a BORROW, so a move-typed rc value stays
+             * usable at its real argument position; the same expression-level
+             * peel applies, since TY_REF_IMMUT would erase the rc-ness we are
+             * asking about.  The pure-Turmeric fallback body (returns 0) covers
+             * the interpreter, where rc values are not carrier-erased. */
+            if (fn_binding && fn_binding->name && fn_binding->name->name &&
+                strcmp(fn_binding->name->name, "tur-rc-value?") == 0 &&
+                e->as.call_.n_args == 1) {
+                const Expr *probe = e->as.call_.args[0];
+                if (probe && probe->kind == EX_BORROW_IMMUT &&
+                    probe->as.borrow_immut_.expr)
+                    probe = probe->as.borrow_immut_.expr;
+                bool is_rc = emit_resolve_type(ctx, probe->type).kind == TY_RC;
+                return strdup(is_rc ? "INT64_C(1)" : "INT64_C(0)");
+            }
+
             /* multiword-element boxing (Vec): `(tur-vec-elem-wide? v)` is the
              * ELEMENT-side twin of `tur-wide-byval?` -- it folds to 1 when the
              * argument's monomorphized `(Vec A)` element type A is a wide (> 8
