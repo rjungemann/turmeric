@@ -251,6 +251,35 @@
         (builder/push-cstr! b "}")
         (builder/finish b)))))
 ;; ---------------------------------------------------------------------------
+;; Show [Sym] -- interned runtime symbols (:Sym).
+;;
+;; A keyword literal (`:a`) is an interned :Sym, so a Sym-keyed collection --
+;; `#map{:a 1}`, `#set{:x :y}` -- renders each key through Show[Sym].  Without
+;; this instance the map/set show loop had no Show for the key type and the
+;; interpreter fell through to the raw carrier integer (`#map{32696212 1}`
+;; instead of `#map{:a 1}`); see docs/reported/map-show-keyword-key-raw-int.md.
+;;
+;; The instance lives here (Show's own module) rather than in sym.tur because
+;; the Show class is defined here and sym.tur loads before it -- an instance in
+;; sym.tur could not name Show.  sym.tur is loaded below for `sym->str`; the
+;; body is ordinary Turmeric (no inline-C) so the tree-walking interpreter --
+;; which is the reported path -- can execute it via the sym->str native.
+;; ---------------------------------------------------------------------------
+(load "stdlib/sym.tur")
+;;; Show [Sym] -- render an interned symbol as an owned ":name" String.
+;;;
+;;; Example:
+;;;   (show :hello)  ; => String ":hello"
+
+(definstance Show [Sym]
+  (show [x]
+    : String
+    (let [b (builder/new)]
+      (do
+        (builder/push-cstr! b ":")
+        (builder/push-cstr! b (sym->str x))
+        (builder/finish b)))))
+;; ---------------------------------------------------------------------------
 ;; Convenience wrappers + a compatibility alias.
 ;; ---------------------------------------------------------------------------
 ;;; show-string-fputs -- internal: write a cstr to stdout with no newline.
