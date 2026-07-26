@@ -3995,6 +3995,20 @@ static TuriValue native_show_cstr_str(TuriEnv *env, TuriValue *a, uint32_t n, vo
     return show_str_of_cstr((n > 0 && a[0].tag == TURI_CSTR) ? json_arg_cstr(a[0]) : "");
 }
 
+/* show-string-fputs: write a cstr to stdout with no trailing newline.
+ *
+ * stdlib/typeclass-show.tur spells this as an inline-C `fputs`, which the
+ * tree-walker cannot execute -- so `print-show` (the only caller) aborted the
+ * whole program under `--interpret` even though `show` / `show-line` interpret
+ * fine.  Overriding it natively keeps `print-show` on the interpreted path. */
+static TuriValue native_show_string_fputs(TuriEnv *env, TuriValue *a,
+                                          uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    const char *s = (n > 0) ? json_arg_cstr(a[0]) : NULL;
+    if (s) fputs(s, stdout);
+    return turi_nil();
+}
+
 void wk_register_typeclass_natives(TuriEnv *env) {
     /* Show typeclass instances -- return owned String (stage 4/5).  Signed
      * fixed-width types carry as int64 in the interpreter, so they share the
@@ -4020,6 +4034,9 @@ void wk_register_typeclass_natives(TuriEnv *env) {
      * call bare show-int/show-float and expect a cstr. */
     turi_env_register_native(env, "show-float", native_show_float_fn, NULL);
     turi_env_register_native(env, "show-int",   native_show_int,      NULL);
+    /* print-show's output helper -- inline-C in the stdlib, native here. */
+    turi_env_register_native(env, "show-string-fputs",
+                             native_show_string_fputs, NULL);
 }
 
 /* Native implementation of tur-contract-check (bool * cstr -> void).
