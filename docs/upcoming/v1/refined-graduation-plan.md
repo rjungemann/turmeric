@@ -40,13 +40,29 @@ Verified against the current tree; each item is small.
    rather than the hard `TUR-E0310` an unknown name gets. Entries age out one
    minor line after graduation, matching `cps-effects` and friends.
 3. **Delete the `#lang turmeric refined` layer row** in
-   `src/compiler/lang_layers.c`. `CLAUDE.md` is explicit that a semantic layer
-   must point at an `EXPERIMENTS[]` row and that graduation deletes the layer
-   rather than letting layers accumulate. A file that still says
-   `#lang turmeric refined` then needs the same accept-as-no-op treatment, or
-   the graduation note has to tell people to drop the token -- **decide which,
-   because silently erroring on a `#lang` line is a worse break than on a CLI
-   flag.**
+   `src/compiler/lang_layers.c` -- but **NOT before building a soft landing for
+   it, which does not currently exist.** `CLAUDE.md` is explicit that a semantic
+   layer must point at an `EXPERIMENTS[]` row and that graduation deletes the
+   layer rather than letting layers accumulate. Deleting the row today has a
+   sharper consequence than the CLI flag does:
+
+   | reference after graduation | result |
+   |---|---|
+   | `--enable=refined` | `TUR-W0063`, compiles fine |
+   | `:experiments [:refined]` in `build.tur` | `TUR-W0063`, compiles fine |
+   | `#lang turmeric refined` | **`TUR-E0330` hard error, the file stops compiling** |
+
+   Verified: an unrecognised layer token is `TUR-E0330: unknown #lang layer`,
+   and `lang_layers.c` has **no `GRADUATED[]` equivalent** -- the soft-landing
+   path exists for experiments and not for layers. So graduation as written
+   breaks every file that opted in per-file, which is the population most likely
+   to have adopted the feature deliberately.
+
+   **Work item, not just a decision:** add a graduated-layers list mirroring
+   `GRADUATED[]` in `experiments.c`, so a retired layer token warns and is
+   ignored for one minor line. `refined` would be its first entry; `stringed` is
+   the only other layer and is not graduating. Do this BEFORE deleting the row,
+   or the two changes have to land together.
 4. **Retire `g_opt_refined`.** 15 call sites read it: `elab_fns.c` (9),
    `elab_typeclasses.c` (4), `elab_call.c` (1), `elab_toplevel.c` (1). Delete
    the conditionals rather than hard-coding the global to `true`, so a reader is
