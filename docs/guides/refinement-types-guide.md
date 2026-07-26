@@ -478,6 +478,14 @@ Note this does not make `width-of` and `.width` interchangeable: they are two
 different uninterpreted symbols and nothing unfolds one into the other.
 Congruence is about repeated occurrences of the *same* call.
 
+**A measure about mutable state can be made congruent *within a scope where the
+state cannot change*** -- a predicate like `alive?` or `open?` that reads a
+generation counter or a socket flag is impure and gets a fresh symbol per
+occurrence by the rule above, but a `frozen` region plus a `#reads` annotation
+recovers congruence for it, soundly, without eliding the callee's kept entry
+check. That is a separate, in-flight feature; see the
+[Stateful Refinements guide](stateful-refinements-guide.md).
+
 ### What a `match` arm knows
 
 A body that is a `match` is proved one arm at a time, and each arm is proved

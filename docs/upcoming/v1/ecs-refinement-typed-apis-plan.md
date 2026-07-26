@@ -198,7 +198,7 @@ it.
 
 | # | Gap | Needed for | Plan |
 |---|---|---|---|
-| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) |
+| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
 | C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md) |
 | C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../hold/loop-invariants-plan.md) |
 
@@ -206,6 +206,21 @@ it.
 encoding proves today. It is blocking on *whether anyone would write it*. An
 ECS whose accessor signatures read
 `#refine{ x : Entity | (= (alive-i w x) 1) }` is an ECS nobody adopts.
+
+> **C1 landed (RM-B1), and a purity caveat surfaced for RE1.** A `bool`-returning
+> function is now a first-class predicate atom, so `#refine{ x : Entity |
+> (alive? w x) }` type-checks and, when `alive?` is pure, discharges through
+> an `if`-guard. **But RE0's handle-unwrap helpers are inline-C** (`slot->int`,
+> `entity-index`, `entity-generation`, ...), and the purity walk is default-deny
+> on inline C -- so any predicate that unpacks a `Slot`/`Entity` (e.g.
+> `(in-bounds? n (slot->int x))`) is classified *impure*, gets a fresh symbol
+> per occurrence, and does **not** discharge as a congruent measure (verified:
+> `0 proven, 1 unknown`). This is the same wall as C2, reached one step earlier:
+> for RE1's accessor predicates to be congruent, the predicate must be a pure
+> function of values, which today means either (a) predicates that compare
+> handles/newtypes without unwrapping through inline C, or (b) making the RE0
+> unwrappers pure primitives the purity walk accepts. Fold this into the C2
+> design rather than treating C1 as sufficient on its own.
 
 **C2 is hard-blocking for RE1.** There is no encoding of a mutable-state
 predicate that discharges today, and there should not be one until the design
@@ -234,7 +249,32 @@ phase RE0.
 
 ## Phasing
 
-### RE0 -- Real handle types at the ECS API surface (spice-side, unblocked)
+### RE0 -- Real handle types at the ECS API surface (spice-side, LANDED)
+
+> **Status 2026-07-25 -- landed** on the `turmeric-spices` branch
+> `claude/ecs-refinement-re0`. `ecs/entity` now carries `Slot` and
+> `Generation` newtypes beside `Entity` (with `slot->int` /
+> `generation->int` escape hatches and `slot-new` / `generation-new`
+> constructors); `ecs/sized-world` carries a `WorldState` newtype for the
+> control block and threads `Entity`/`Slot`/`Generation`/`WorldState`
+> through spawn/despawn/alive and the `sized-defworld` `state` field;
+> `ecs/world`'s `world-alloc-entity!` / `world-despawn!` are `Entity`-typed.
+> The negative fixture is `spices/ecs/tests/errors/slot-not-entity.tur`
+> (a `Slot` where an `Entity` is required -> `TUR-E0001`). No regressions
+> against the pre-existing v0.31.0 suite baseline (which carries ~23
+> unrelated failures from a `(Storage T)` associated-type regression --
+> the accessor/for-each validation surface -- so those were validated
+> against the passing `sized-world-*` tests instead).
+>
+> **Two sub-items intentionally deferred** (noted, not done): the
+> `defcomponent-accessors` / `sized-defcomponent-accessors` slot parameter
+> stays a bare `:int` storage index, and `for-each`'s slot binding stays
+> `:int` -- both because lifting them to `Slot` requires lifting the
+> int-keyed storage layer (`ecs/storage`, `ecs/sized-storage`) to `Slot`
+> too, which is out of RE0's three-module scope, and because every one of
+> their consumers is currently in the `(Storage T)`-broken set (so the
+> change is neither validatable nor "passes unchanged" today). Fold this
+> into the storage-side follow-up.
 
 Retire the `:int` stand-ins on the public surface of `ecs/entity`,
 `ecs/world`, and `ecs/sized-world`:
