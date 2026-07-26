@@ -208,74 +208,91 @@ do exactly this (`m->key_ops.release`), and the value side hardcodes
 one value-box op. Making the value ops symmetric with the key ops is the
 enabling refactor.
 
-**Attempted 2026-07-25 and reverted -- read this before trying again.** The
-refactor looks purely structural (`bool val_owned` -> a stored
-`tur_hamt_val_ops`, with `hamt_alloc_empty` / `hamt_copy` / `tur_hamt_free` /
-the `_o` wrappers updated to match) and the full suite passes with it. It is
-**not** behaviour-preserving. Measured under ASan+LSan on
-`tests/fixtures/map-move-typed-value`:
+**DONE 2026-07-26.** Two earlier attempts at this were written and reverted
+after a leak-count regression, and the notes they left behind said the refactor
+was "not behaviour-preserving" and told the next reader to start at
+`tur_hamt_free`. **Both of those conclusions were wrong.** The refactor is
+behaviour-preserving; `tur_hamt_free` is innocent. What was actually wrong was
+the earlier attempts' code, and -- just as much -- the measurement harness.
 
-| | leaked |
+#### The harness was the confound
+
+The first two passes rebuilt `tur` between measurements, because `hamt.c` is
+compiled into the compiler. That put a full rebuild inside every experiment,
+and a rebuild moves the number on its own (an earlier control had already shown
+an `__attribute__((destructor))` shifting 7 objects to 9 while being
+semantically inert). Building the probe with `--runtime=source` removes the
+confound entirely: `src/runtime/hamt.c` is compiled straight into the test
+program, so a `hamt.c` edit is measured with **no `tur` rebuild at all**.
+
+```sh
+TUR_CC_FLAGS="-O1 -std=c99 -w -fno-strict-aliasing -g -fsanitize=address" \
+  ./build/tur build --runtime=source \
+  tests/fixtures/map-move-typed-value/input.tur -o /tmp/probe
+ASAN_OPTIONS=detect_leaks=1 /tmp/probe
+```
+
+Stable across repeat runs, which the earlier harness was not. (Its absolute
+numbers differ from the 528/7 recorded below -- different flags -- so compare
+within a harness, never across.)
+
+#### The bisect
+
+Three slices, each measured on its own:
+
+| slice | leaked |
 | --- | --- |
-| baseline | 528 bytes in 7 allocations |
-| after the refactor | 856 bytes in 9 allocations |
+| pristine | 824 B / **9** objects |
+| B1 -- add `val_ops` to `Hamt`, populate it, consume nothing | 888 B / **9** |
+| B2 -- flip `tur_hamt_free` to read `m->val_ops.release` | 888 B / **9** |
+| B3 -- caller-supplied ops installed via the new `_vo` entry points | 888 B / **9** |
 
-Deterministic across runs, and two allocation groups doubled in *object count*,
-so it is not struct-size growth (the struct does grow 8 bytes, which accounts
-for the separate 96 -> 112 direct-leak movement and is benign). Two extra
-objects survive to exit that did not before.
+The count never moves. The +64 bytes is four maps x 16 B of new field -- the
+same benign struct growth an earlier control had already isolated.
 
-#### What a second pass ruled out
+**B2 is the one that matters**: `tur_hamt_free` was the single site the previous
+note named as the prime suspect, and flipping it alone changes nothing.
 
-The cause is still unknown, but the search space is now much smaller. Four
-controls, each a clean full rebuild measured on the same fixture:
+#### Shape of the landed change
 
-| build | leaked |
-| --- | --- |
-| pristine | 528 B / **7** objects |
-| one unused global added to `hamt.c` | 528 B / **7** objects |
-| field added to `Hamt` but never used | 592 B / **7** objects |
-| the refactor | 856 B / **9** objects |
+`_eq_o`'s signature is untouched, so nothing on the emitted side or in the
+fixture snapshots moves. The ops-taking entry points are additive:
 
-- **Not "any change to `hamt.c`".** An inert global does not move the number.
-  The regression is caused by the refactor's content.
-- **Not struct layout.** Adding the field without using it moves *bytes* (+64 =
-  four maps x 16 B) but leaves the object count at 7. The separate 96 -> 112
-  direct-leak movement is this same benign growth.
-- **Not value-ownership semantics -- this is the big one.** Instrumenting
-  `val_retain_hook` / `val_release_hook` with counters shows they fire
-  **zero times** in this fixture, on both sides. Whatever the refactor breaks,
-  it is not the retain/release path it was written to change.
-- **The extra objects are HAMT collision NODES, not value boxes.** Their stacks
-  are `hamt_malloc <- tur_hamt_node_alloc <- collision_node_create <-
-  node_insert`, going 1 object -> 2, with a second group going 1 -> 2 alongside.
-  So the refactor is changing *node* lifetime.
+- `tur_hamt_val_ops { retain, release }` in `hamt.h`, mirroring
+  `tur_hamt_key_ops` minus the comparator.
+- `tur_hamt_set_eq_vo` / `tur_hamt_del_eq_vo` take the ops, install them as the
+  thread-local value hooks for the duration of the op, and stamp them on the
+  resulting map.
+- `tur_hamt_set_eq_o` / `_del_eq_o` are now one-line wrappers passing
+  `tur_hamt_box_val_ops()`, which is exactly what they hardcoded before.
+- `tur_hamt_free` and both `hamt_copy` inherit sites read the stored ops.
 
-That combination points away from everything the change was about and toward
-`tur_hamt_free` being reached (or completing) differently -- it is the only
-touched site that governs node release. Two maps are built and neither is
-explicitly freed, so the pristine build must be freeing an intermediate map that
-the refactored build does not.
+#### Inertness had to be proved, not assumed
 
-One caveat on the method: a build instrumented with counters *plus* an
-`__attribute__((destructor))` also reported 9 objects while being semantically
-inert, so the destructor itself perturbs something. Use plain counters, or a
-`__attribute__((no_sanitize))`-free plain global, rather than an exit hook.
+A bisect that only ever reports "no change" is equally consistent with the new
+path being dead code. `tests/test_hamt_val_ops.c` (ctest target
+`tur_hamt_val_ops`, via `tests/run-hamt-val-ops.sh`) closes that hole under
+ASan/UBSan/LSan: it passes ops over plain stack storage, so if the boxed-value
+refcount were still hardcoded it would be handed a non-box pointer and ASan
+would fire on the spot. It asserts the caller's ops run and balance across
+distinct-hash inserts, collision-chain copies (where the retain side actually
+fires -- 28 retains / 36 releases), and maps derived by a later `set`/`del`;
+that `owned == 0` leaves value lifetime untouched; and that legacy `_eq_o`
+still frees boxed values through the box refcount.
 
-Whoever picks this up: **bisect the edit mechanically rather than reasoning
-about it** -- three earlier hypotheses were each disproved by measurement (the
-ops-precedence change, an uninitialised field at some allocation site, and
-unconditional assignment of the thread-local hooks clobbering an enclosing
-op's). The four changed sites are `hamt_alloc_empty`, the two `hamt_copy`
-inherits, `tur_hamt_free`'s release-op selection, and the `_o` wrappers; start
-with `tur_hamt_free`. Gate every step on the object COUNT above, not on bytes
-and not on the suite -- the suite is green on both sides, which is why this took
-a leak check to see at all.
+#### A pre-existing leak found on the way
 
-Worth noting for its own sake: those 528 baseline bytes are a pre-existing leak.
-The fixtures never free their maps, and a persistent map that is never freed
-leaks by design -- so the number is a *baseline to hold*, not a target to
-reach.
+Writing that test surfaced an unrelated bug: `tur_hamt_set(NULL, ...)` allocated
+an empty base map to read `count`/`key_ops` off and never freed it, so every
+insert into a NULL base leaked a 64-byte root. Fixed in the same change (the
+temp is freed before returning, except on the `return m` path where the temp
+*is* the returned map). It does not move the fixture number, because `map-new`
+hands in a real map rather than NULL -- it needed a caller that passes NULL to
+show up at all.
+
+Worth noting for its own sake: the baseline bytes are a pre-existing leak. The
+fixtures never free their maps, and a persistent map that is never freed leaks
+by design -- so the number is a *baseline to hold*, not a target to reach.
 
 **Wrong claim 2 -- and this one sat in front of all of it:
 `map-assoc` could not take a move-typed value at all. FIXED 2026-07-25.**
@@ -314,12 +331,12 @@ boxing decision -- a botched peel fails silently, folding to "narrow" and storin
 a wide value inline. Two snapshots regenerated for the extra binding.
 
 Order of work, then: ~~(a) let `map-assoc` accept a move-typed value~~ **(a)
-done**; (b) -- attempted and reverted, see above -- make the
-HAMT's value ops caller-supplied and stored, symmetric with the key ops;
-(c) thread bit 2 through `map.tur` passing `rc_strong_increment` /
-`rc_strong_decrement` from the emitted side; (d) register the map insert/read
-sinks in `own_carry_for_arg` / `own_carry_for_result` alongside the `vec-*`
-entries.
+done**; ~~(b) make the HAMT's value ops caller-supplied and stored, symmetric
+with the key ops~~ **(b) done 2026-07-26, see above**; (c) thread bit 2 through
+`map.tur` passing `rc_strong_increment` / `rc_strong_decrement` from the emitted
+side -- the runtime half is now in place, so this is the step that first puts a
+non-box op through `_vo`; (d) register the map insert/read sinks in
+`own_carry_for_arg` / `own_carry_for_result` alongside the `vec-*` entries.
 
 3. **Make the collection walkable** so the cycle collector can trace through it
    (CG3 item 2). **Measured and blocked -- see below.** Item (2) opened the

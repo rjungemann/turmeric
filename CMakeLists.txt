@@ -319,6 +319,17 @@ add_test(
   COMMAND bash tests/run-hamt-del-lineage.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# collections-cannot-hold-rc-values, map side, step (b): caller-supplied VALUE
+# ownership ops.  Value ownership used to be a bool selecting the hardcoded
+# boxed-value refcount, which an rc<T> value cannot use.  Compiles
+# tests/test_hamt_val_ops.c with ASan/UBSan (+LSan on Linux) and asserts the
+# caller's ops are the ones that run -- across structural sharing, and for
+# maps derived by a later set/del -- and that they balance exactly.
+add_test(
+  NAME tur_hamt_val_ops
+  COMMAND bash tests/run-hamt-val-ops.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # RP0: `tur build --shared <dir>` produces a dlopen-able shared library.
 # The script builds tests/fixtures/build-shared-smoke as a .so and runs a
 # hand-written C harness that dlsyms the exported defn and calls it.
