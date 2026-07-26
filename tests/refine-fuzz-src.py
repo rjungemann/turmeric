@@ -102,6 +102,15 @@ CMP_OPS = ["<", "<=", ">", ">=", "=", "not="]
 #   pure_rec        1      yes       recursive -- exercises the cycle rule
 #   impure_c        1      NO        declares #fx{} and counts up in inline C
 #   impure_c0       0      NO        nullary counter (the original repro shape)
+#
+# RM-B: bool-returning helpers live in their own pool, because they are the
+# only ones that can appear as a predicate ATOM rather than inside an
+# arithmetic expression.  The same liar/honest split applies -- a `bool`
+# measure over a `#fx{}` helper that toggles is exactly the trap the `int`
+# ones set, reached through the sort the encoder used to be unable to spell.
+#
+#   pure_bool       1      yes       an honest comparison
+#   impure_bool_c   1      NO        declares #fx{} and toggles in inline C
 
 
 class Gen:
@@ -109,6 +118,7 @@ class Gen:
         self.rng = rng
         self.mode = mode            # "int" or "float"
         self.helpers = []           # list of (name, kind, arity)
+        self.bool_helpers = []      # RM-B: bool-returning, usable as an atom
 
     # -- type-dependent leaves ------------------------------------------------
 
@@ -188,6 +198,45 @@ class Gen:
                 self.helpers.append((name, kind, 0, False))
         return lines
 
+    def gen_bool_helpers(self, n):
+        """RM-B: emit n bool-returning helpers, half of them liars.
+
+        A bool measure is declared VS_BOOL now, which means congruence closure
+        relates two occurrences of `(b p0)` -- and that is only valid when `b`
+        really is pure.  The toggling inline-C variant makes `(or (b p0) (not
+        (b p0)))` FALSE at runtime, so a compiler that grants congruence on the
+        strength of the `#fx{}` annotation elides a check that would have
+        fired.  Same sabotage as the int helpers, new sort.
+
+        A liar reaching PREDICATE position is normally stopped one layer
+        earlier, by TUR-E0375 (both gates reject it, so the case lands in
+        skip_invalid).  That is the point: the property being fuzzed is that
+        E0375 and the congruence denial TOGETHER keep it sound.  If E0375 ever
+        stopped firing, these cases would flow through to the encoder and the
+        soundness check would have to catch them."""
+        lines = []
+        for i in range(n):
+            name = "b%d" % i
+            if self.rng.random() < 0.5:
+                lines.append("(defn %s [a : %s] #fx{} : bool\n  (%s a %s))"
+                             % (name, self.ty, self.rng.choice([">", ">=", "<", "<="]),
+                                self.lit()))
+                self.bool_helpers.append((name, "pure_bool", 1, True))
+            else:
+                lines.append(
+                    "(defn %s [a : %s] #fx{} : bool\n"
+                    "  ```c\n  static int64_t n = 0;\n"
+                    "  (void)a;\n  n++;\n  return n %% 2 == 0;\n  ```)"
+                    % (name, self.ty))
+                self.bool_helpers.append((name, "impure_bool_c", 1, False))
+        return lines
+
+    def bool_atom(self, scope):
+        """A bool-measure application, usable wherever a proposition is."""
+        name, _kind, arity, _pure = self.rng.choice(self.bool_helpers)
+        args = " ".join(self.expr(1, scope, pure_only=True) for _ in range(arity))
+        return "(%s%s%s)" % (name, " " if args else "", args)
+
     # -- expressions ----------------------------------------------------------
 
     def expr(self, depth, scope, pure_only=False):
@@ -228,6 +277,10 @@ class Gen:
                                self.expr(1, scope, pure_only=True))
 
     def pred(self, depth, scope):
+        # RM-B: a bool-returning measure IS a proposition, so it belongs in the
+        # atom position alongside a comparison rather than under one.
+        if self.bool_helpers and self.rng.random() < 0.15:
+            return self.bool_atom(scope)
         if depth <= 0 or self.rng.random() < 0.55:
             return self.atom(scope)
         r = self.rng.random()
@@ -328,10 +381,36 @@ class Gen:
         ]
         return [], "\n\n".join(lines)
 
+    def shape_congruence_bool(self):
+        """RM-B: the congruence trap, spelled with a BOOL measure.
+
+        `(or (b p0) (not (b p0)))` is a tautology exactly when the two
+        occurrences of `(b p0)` denote the same value -- i.e. exactly when `b`
+        is pure.  Half the bool helpers toggle, so half of these are false at
+        runtime, and a compiler that grants congruence on the `#fx{}`
+        annotation alone elides the check that would have caught it.
+
+        The int shape puts its trap in the SUBJECT (`(- (h p) (h p))`); this
+        one puts it in the PREDICATE, which is the only place a bool measure
+        can appear and therefore a path the int shapes never exercise."""
+        name, _kind, arity, truly_pure = self.rng.choice(self.bool_helpers)
+        params = ["p0"] if arity >= 1 else []
+        call = "(%s%s)" % (name, " p0" * arity)
+        ret_pred = self.rng.choice([
+            "(or %s (not %s))" % (call, call),
+            "(=> %s %s)" % (call, call),
+            "(= %s %s)" % (call, call),
+        ])
+        _ = truly_pure   # ground truth the compiler must work out for itself
+        return params, self._target(params, ret_pred, None, "p0" if params
+                                    else self._zero())
+
     def shape_congruence(self):
         """The bug shape.  Two occurrences of the SAME call, subtracted, with a
         refinement that holds iff the callee is genuinely pure.  Half the
         helpers available here are liars."""
+        if self.bool_helpers and self.rng.random() < 0.35:
+            return self.shape_congruence_bool()
         name, _kind, arity, truly_pure = self.rng.choice(self.helpers)
         params = ["p0"] if arity >= 1 else []
         # Every argument is `p0`, so the two occurrences are textually and
@@ -592,6 +671,7 @@ class Gen:
 
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
+        lines += self.gen_bool_helpers(self.rng.randint(1, 2))
         r = self.rng.random()
         if r < 0.17:
             params, target = self.shape_random()

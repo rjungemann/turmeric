@@ -898,10 +898,16 @@ typedef struct RefineCallSite {
     uint32_t       arg_offset;   /* index of the first argument in call_form */
     RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */
     const char    *caller_name;
-    /* The caller's whole body form, back-filled alongside `env`.  The crossing
+    /* The caller's whole body, back-filled alongside `env`.  The crossing
      * needs it to recover its own PATH CONDITIONS: `call_form` is a pointer
      * into this tree, so walking down to it collects every branch that had to
-     * be taken to reach the call. */
+     * be taken to reach the call.
+     *
+     * WHOLE is load-bearing: a multi-form body arrives as a synthetic
+     * `(do ...)` (see rt_whole_body).  This used to be the defn's LAST body
+     * form, which is the return obligation's subject and not the same thing --
+     * a call in any earlier form was then never found by the walk and lost
+     * every condition guarding it. */
     const Form    *caller_body;
     /* RT1: when this crossing is a STATICALLY-resolved typeclass dispatch whose
      * instance demands LESS than its class, the class's own parameter

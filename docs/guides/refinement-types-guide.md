@@ -354,13 +354,14 @@ equality and uninterpreted functions.
 ```
 pred ::= (= e e) | (not= e e) | (< e e) | (<= e e) | (> e e) | (>= e e)
        | (and pred ...) | (or pred ...) | (not pred) | (=> pred pred)
-       | (measure e ...)          ; a named measure -> an uninterpreted function
+       | (measure e ...)          ; a bool-returning measure IS a proposition
        | true | false
 
 expr ::= <int literal> | <float literal>
        | <the refinement's bound variable>
        | <any parameter in scope>
        | (+ e e) | (- e e) | (* e <literal>) | (/ e <literal>) | (mod e <literal>)
+       | (measure e ...)          ; an int/float-returning measure is a value
 ```
 
 Two rules keep this on the cheap side of the solver cliff. They are rules, not
@@ -371,6 +372,40 @@ recognise -- `len`, `size-of`, your own helper -- becomes an opaque symbol that
 congruence closure reasons about but never unfolds. This is what makes the
 equality theory tractable, and it is why `(= (size-of v) n)` above is usable as
 a hypothesis without the solver knowing anything about `size-of`'s body.
+
+**A measure is sorted by its return type.** `:bool` denotes a *proposition*,
+`:float` a real, everything else an integer -- so the domain predicate you
+actually want to write works as written:
+
+```turmeric
+(defn alive? [w : int e : int] #fx{} : bool (= w e))
+
+(defn use-it [w : int e : #refine{ x : int | (alive? w x) }] : int e)
+
+(defn guarded [w : int e : int] : int
+  (if (alive? w e) (use-it w e) 0))      ; the guard IS the proof
+```
+
+Before this, every measure was declared integer-sorted. A `bool`-returning one
+was then rejected as "does not denote a proposition" and silently fell to
+unknown, which pushed people to the `(= (alive-i w x) 1)` spelling -- the exact
+`:int` stand-in `CLAUDE.md` forbids. A `float`-returning one was worse than
+incomplete: it was *mis*-sorted, and integer tightening (`e < 4` implies
+`e <= 3`, valid only over the integers) turned an unprovable goal into a proved
+one and elided a check that should have fired. `refine-bool-measure`,
+`refine-float-measure`, and `errors/refine-float-measure-not-tightened` pin all
+three.
+
+An **abstract** measure -- a name that resolves to no function at all -- has no
+return type to read, so its *position* decides: a proposition where the grammar
+requires one (the goal itself, or an operand of `and`/`or`/`not`/`=>`), a value
+everywhere else. Equality is neutral, since `(= (alive? w x) (alive? w y))` is
+as legitimate as `(= (len v) n)`. A name genuinely used at *both* sorts in one
+verification condition is rejected outright rather than resolved by guessing:
+one symbol meaning two things across a hypothesis and a goal is how a
+congruence bug is written. The obligation falls to unknown with a stated
+reason, and the runtime check is kept -- see
+`errors/refine-measure-sort-conflict`.
 
 **A measure must be provably pure.** Congruence -- treating two occurrences of
 `(size-of v)` as the same value -- is only valid for a pure function, and the
@@ -711,6 +746,22 @@ there to read, and to paste into an external solver when you want a second
 opinion; the in-house stages consume the internal representation directly and
 never go through this text.
 
+An obligation reported `unknown` may never have reached a backend at all: if it
+escapes the supported fragment there is no VC to dump, and `TUR_REFINE_DUMP=1`
+prints nothing for it. Stats names those separately, with the reason:
+
+```sh
+TUR_REFINE_STATS=1 tur check --enable=refined main.tur
+# refine: not encoded (measure 'ready' is used both as a proposition and as a
+#         value): the return value of 'f'
+```
+
+This is a note about the *fragment*, not a defect in your program -- which is
+why it rides on the stats switch rather than being a diagnostic. A call-site
+crossing is `runtime_guarded`, so it does not warn by default at all; without
+this line an obligation the encoder dropped and one the solver could not decide
+were indistinguishable.
+
 ### Cross-checking against Z3 (compiler developers)
 
 The compiler ships no solver dependency, but a development build can link a
@@ -877,7 +928,12 @@ anyway.
   recovered from the caller's body, so `(if (= n 0) 0 (+ 1 (f (- n 1))))`
   discharges its recursive crossing from `n >= 0` and `n != 0` together. A
   `let` contributes `x = v`, a `match` arm contributes a literal pattern's
-  equation and its guard.
+  equation and its guard. The caller's **whole** body is searched, so a call in
+  any body form keeps its guards -- not only one in the form the function
+  returns. That distinction was a real gap: `caller_body` used to be the last
+  body form, which is the return obligation's subject and not the body, so a
+  zero-parameter caller like `main` had the walk searching its trailing `0` for
+  the call and every guard was lost.
 
   Four things are deliberately left out, and all four cost a diagnostic rather
   than soundness -- the callee's own entry check always remains:

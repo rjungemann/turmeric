@@ -1,0 +1,34 @@
+;; RM-B0/RM-B1: a FLOAT-RETURNING measure is Real-sorted.
+;;
+;; This was not merely a completeness hole.  `enc_measure` declared every
+;; measure `VS_INT`, so `norm` came out Int-sorted and was then compared
+;; against Real literals -- and S2 tightens a STRICT bound on an all-integer
+;; expression (`e < 4` becomes `e <= 3`).  Under that tightening
+;; `(< (norm v) 4.0) |- (<= (norm v) 3.0)` "proved", the return check was
+;; elided, and a program whose `norm` really was 3.75 returned a value
+;; violating its own declared refinement with no panic.  See the sibling
+;; negative fixture errors/refine-float-measure-not-tightened.
+;;
+;; Here the sort is right, so ordinary linear REAL arithmetic decides it:
+;; from `norm(v) < 3.25`, `norm(v) - 1.5 < 1.75`.  The literals deliberately
+;; carry non-zero fractional parts -- an integral 3.0/4.0 pair cannot tell a
+;; correctly-sorted proof from a truncating one.
+(defn norm [v : float] #fx{} : float
+  (* v 0.5))
+
+(defn headroom [v : #refine{ x : float | (< (norm x) 3.25) }]
+              : #refine{ r : float | (< r 1.75) }
+  (- (norm v) 1.5))
+
+;; The branch condition IS the callee's precondition, so the crossing
+;; discharges rather than leaning on `headroom`'s entry check.
+(defn guarded [v : float] : float
+  (if (< (norm v) 3.25)
+    (headroom v)
+    0.25))
+
+(defn main [] : int
+  (println (guarded 5.5))
+  (println (guarded 9.5))
+  (println "refine-float-measure")
+  0)
