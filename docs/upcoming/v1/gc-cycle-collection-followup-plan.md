@@ -444,10 +444,18 @@ baseline."
   stalls; the heuristic must cap candidate-set size per cycle.
 - **`RCK_OPAQUE` blind spot is permanent** without runtime type reflection --
   and that is fine (documented, matches Rust). The CG3 lint keeps it visible.
-- **Interaction with the substructural path** (`^linear` / `^unique`): those
-  values are single-owner and cannot form rc cycles, so they are orthogonal --
-  but confirm no double-drop when a linear value is captured behind an `rc`.
-  Still unverified.
+- **Interaction with the substructural path** (`^linear` / `^unique`):
+  **VERIFIED 2026-07-26 -- and it was not safe.** Those values are single-owner
+  and cannot form rc cycles, so they are orthogonal to *cycle collection* as
+  expected. But the double-drop this asked about is real, and broader than the
+  `rc` framing: a closure that consumes a captured linear value escapes the
+  linearity checker entirely, and calling it twice double-frees (confirmed under
+  ASan). `rc` is a vector -- `(rc/of closure)` is accepted where
+  `(rc/of linear-value)` is rejected -- but the minimal repro needs no `rc`.
+  Filed as
+  [docs/reported/closure-capture-escapes-linearity.md](../../reported/closure-capture-escapes-linearity.md);
+  the fix is in the substructural checker, not the collector, so it does not
+  gate CG8.
 - **Two collectors in one process.** A Turmeric host that dlopens a Turmeric
   `.so` has two independent collectors with separate registries. Believed fine
   today because values do not cross the boundary; DEDUP-5 item 2 should confirm
