@@ -456,10 +456,19 @@ baseline."
   [docs/reported/closure-capture-escapes-linearity.md](../../reported/closure-capture-escapes-linearity.md);
   the fix is in the substructural checker, not the collector, so it does not
   gate CG8.
-- **Two collectors in one process.** A Turmeric host that dlopens a Turmeric
-  `.so` has two independent collectors with separate registries. Believed fine
-  today because values do not cross the boundary; DEDUP-5 item 2 should confirm
-  rather than assume it.
+- **Two collectors in one process.** **VERIFIED 2026-07-26 -- sound, but for a
+  different reason than this assumed.** Measured: the DEDUP-5 visibility
+  hardening holds (0 exported `gc_*`/`rc_*` dynamic symbols), the registries are
+  genuinely separate, a foreign block reads correctly, and releasing one does not
+  corrupt the host registry. The safety does **not** come from "values do not
+  cross the boundary" -- that premise is unenforced, and a `.so` can export a
+  `defn` returning `rc<T>` today. It comes from `gc_unregister_block` validating
+  `gc_all_blocks[idx] != cb` before mutating its array. One hazard found by
+  inspection on the path *before* that guard (`gc_remove_suspect` clearing
+  `gc_buffered` on a foreign block) has been hardened in both collector copies.
+  Cross-boundary *cycles* remain uncollectable by either collector -- a leak, same
+  class as the `Vec`/HAMT blind spot. See
+  [docs/reported/two-collectors-dlopen-boundary.md](../../reported/two-collectors-dlopen-boundary.md).
 
 ## Related plans
 

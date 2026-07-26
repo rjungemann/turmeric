@@ -9500,10 +9500,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        if (gc_suspect_roots[i] == cb) {\n");
     buf_puts(out, "            gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];\n");
     buf_puts(out, "            gc_suspect_count--;\n");
+    /* Clear only on a real hit -- see the note in src/runtime/gc.c: with two
+     * collectors in one process, clearing the flag for a block this collector
+     * never buffered desynchronizes the one that did. */
+    buf_puts(out, "            cb->gc_buffered = false;\n");
     buf_puts(out, "            break;\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    cb->gc_buffered = false;\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%svoid gc_on_strong_decrement(RcControlBlock *cb) {\n", rcgc_helper);
     buf_puts(out, "    if (!cb) return;\n");

@@ -192,10 +192,22 @@ static void gc_remove_suspect(RcControlBlock *cb) {
             /* Swap with last element and shrink */
             gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
             gc_suspect_count--;
+            /* Clear the flag only when THIS collector actually held it.  A
+             * process with two collectors (a Turmeric host that dlopens a
+             * Turmeric .so) can call this on a block the OTHER collector
+             * buffered: the scan above finds nothing, and clearing the flag
+             * anyway would desynchronize the owner -- its gc_suspect_roots
+             * would keep a pointer to a block about to be freed, while its own
+             * gc_remove_suspect early-returns on the cleared flag and never
+             * removes it.  Its next collection would then read freed memory,
+             * which is the very failure the gc_unregister_block call site was
+             * added to prevent.  Leaving a stale `true` on an owned-but-absent
+             * block is harmless by comparison: it only costs a later rescan
+             * that finds nothing. */
+            cb->gc_buffered = false;
             break;
         }
     }
-    cb->gc_buffered = false;
 }
 
 /* ========== Work queue management ========== */

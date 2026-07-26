@@ -2676,10 +2676,10 @@ static void gc_remove_suspect(RcControlBlock *cb) {
         if (gc_suspect_roots[i] == cb) {
             gc_suspect_roots[i] = gc_suspect_roots[gc_suspect_count - 1];
             gc_suspect_count--;
+            cb->gc_buffered = false;
             break;
         }
     }
-    cb->gc_buffered = false;
 }
 
 static void gc_on_strong_decrement(RcControlBlock *cb) {
