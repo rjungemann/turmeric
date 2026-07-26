@@ -28,12 +28,14 @@
 ;;; module is stocked toolbox, not current need; see
 ;;; docs/guides/ownership-guide.md for when reaching for it is the right call.
 ;;;
-;;; It is a separate module rather than part of stdlib/rc.tur because rc.tur
-;;; does not currently compile: its legacy Functor/Foldable instances call
-;;; tur_rc_of / tur_rc_clone / tur_rc_ptr / tur_rc_drop, which exist nowhere in
-;;; the tree, so `(load "stdlib/rc.tur")` fails at the C stage.  See
-;;; docs/reported/rc-tur-legacy-instances-do-not-compile.md.  An API in a module
-;;; that cannot be loaded is not an API.
+;;; It is a separate module rather than part of stdlib/rc.tur, deliberately.
+;;; Originally it had to be: rc.tur did not compile at all, so an API placed
+;;; there would have been unusable (fixed 2026-07-26, see
+;;; docs/archive/rc-tur-legacy-instances-do-not-compile.md).  It stays separate
+;;; now because the split is the better shape -- reaching for a weak reference
+;;; should not drag in rc.tur's Functor/Foldable/Clone instances and the
+;;; typeclass surface behind them.  Same reasoning as stdlib/rcchain.tur: one
+;;; opt-in module, one job.
 ;;;
 ;;; Since: stdlib-weak-ref-audit WR1
 ;; Weak references over rc<T>.

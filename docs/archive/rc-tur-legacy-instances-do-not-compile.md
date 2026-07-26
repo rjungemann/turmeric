@@ -1,11 +1,68 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-26
+resolved: 2026-07-26
 area: stdlib (stdlib/rc.tur typeclass instances)
 ---
 
 # `(load "stdlib/rc.tur")` does not compile
+
+## Resolution (2026-07-26)
+
+Fixed via fix directions 1 and 2, plus 3 for the one body that was beyond
+repair. `(load "stdlib/rc.tur")` compiles and the instances compute correct
+results.
+
+- **`Functor [rc]` / `fmap`** -- rewritten against the real API: `rc_get_value`
+  to read the payload, then `rc_cb_alloc(0, 3 /* TY_INT */, NULL)` plus a
+  malloc'd slot to box the result, mirroring exactly what `rc/of` emits. The
+  clone/drop pair around the read is gone: it cloned the block only to read one
+  field and drop it again -- a no-op with two refcount writes -- and `container`
+  is borrowed for the call, so the block cannot go away underneath it.
+
+- **`Foldable [rc]` / `foldl` + `foldr`** -- the `tur_poly_fn_t` misuse is fixed
+  by calling the 2-arg convention the compiler itself emits for a typed 2-arg
+  `fn` parameter:
+
+      ((int64_t (*)(void *, int64_t, int64_t))fn.fn)(fn.env, init, value)
+
+  Cast the `fn` slot to a signature taking `env` first, then the arguments. It
+  is **not** curried, which is what fix direction 2 above guessed wrong.
+  Determined empirically from the codegen for
+  `(defn apply2 [f : (fn [int int] int) a : int b : int] : int (f a b))`, which
+  emits precisely this shape. So no compiler change was needed here, and the
+  TY_APP-vs-TY_RC unification gap turned out not to be a prerequisite -- it
+  remains open as a separate cleanup, filed as
+  `docs/reported/hkt-fmap-result-is-not-droppable.md`, which would let these
+  bodies drop their inline-C entirely.
+
+- **`__functor_rc_fmap`** -- deleted (fix direction 3). Nothing referenced it,
+  and its untyped params made `container` an `:int`, so it could not be passed an
+  actual `rc<T>` at all (`expected int, got rc<int>`) -- the CLAUDE.md
+  :int-stand-in defect in its purest form. `Functor [rc]` supersedes it.
+
+- **`Clone [rc]`** -- untouched. It already used the real `rc_strong_increment`
+  and was never part of this defect.
+
+**The root cause was the missing fixture**, so that is the durable part of the
+fix: `tests/fixtures/rc-tur-typeclass-instances` loads the module and asserts
+values rather than just "it compiles". It folds with the non-commutative `sub`
+in both directions, so a swapped or garbage argument from a wrong poly-fn
+convention shows up in the output instead of silently passing.
+
+`stdlib/weak.tur` (WR1) stays a separate module rather than folding back in --
+now by choice rather than necessity. Reaching for a weak reference should not
+drag in rc.tur's Functor/Foldable/Clone instances and the typeclass surface
+behind them; same shape as `rcchain.tur`.
+
+Two adjacent defects found while fixing this and filed separately:
+`docs/reported/hkt-fmap-result-is-not-droppable.md` (an `fmap` over an `rc`
+returns `(type-app ? ?)`, so its result cannot be `rc/drop`ped) and
+`docs/reported/c-keyword-function-names-not-mangled.md` (a Turmeric function
+named `double` emits an unmangled C identifier).
+
+The original report follows for the record.
 
 ## Summary
 

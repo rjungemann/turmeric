@@ -199,9 +199,14 @@ it went unnoticed -- no fixture loads `rc.tur`. Verified pre-existing on a clean
 tree at `f4493704`.
 
 So WR1 landed as `stdlib/weak.tur`. An API in a module nobody can load is not an
-API. Filed as `docs/reported/rc-tur-legacy-instances-do-not-compile.md`; if that
-is fixed, `weak.tur` can be folded back in (or kept separate on purpose -- it is
-a clean opt-in module either way, same shape as `rcchain.tur`).
+API.
+
+**Followed up 2026-07-26:** `rc.tur` is fixed and now compiles
+(`docs/archive/rc-tur-legacy-instances-do-not-compile.md`), pinned by
+`tests/fixtures/rc-tur-typeclass-instances`. `weak.tur` stays a separate module
+by choice rather than necessity: reaching for a weak reference should not drag in
+rc.tur's Functor/Foldable/Clone instances and the typeclass surface behind them.
+Same shape as `rcchain.tur` -- one opt-in module, one job.
 
 ### 2. A `weak<Name>` struct field did not resolve its inner type
 
