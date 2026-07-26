@@ -66,6 +66,10 @@ VCSort rt_sort_of_kind(TypeKind k) {
  * inner scope is still current -- the predicate is elaborated in it. */
 static bool rt_expr_definitely_impure(const Expr *x);
 
+/* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
+ * Defined after rt_resolve_fn; forward-declared here for rt_inject_param_checks. */
+static bool rt_pred_reads_measure(Elab *e, const Form *f);
+
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
  * Checks are conditional on the build: `--no-contracts` strips them, a release
@@ -101,6 +105,17 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
         if (ct_preds[ci] == NULL) continue;
         uint32_t pi = ct_idx[ci];
         if (pi >= n_params || !params[pi]) continue;
+        /* C2 (#reads): a param whose refinement is a `#reads`-annotated measure
+         * is statically checked at its CROSSINGS, never at runtime.  The measure
+         * is impure by construction (that is why it needs the grant at all), so a
+         * runtime entry contract for it is impossible -- it would be TUR-E0375,
+         * "predicate has side effects" -- and would in any case defeat the
+         * trusted-congruence grant.  Suppress the entry-check injection here; the
+         * caller-side crossing obligation is the enforcement point (proven ->
+         * elided; unknown -> a kept impure check that is itself E0375, so a caller
+         * that cannot discharge the crossing still fails to compile).  The grant's
+         * soundness is pinned by tests/fixtures/errors/refine-stateful-*. */
+        if (rt_pred_reads_measure(e, ct_preds[ci])) continue;
         const char *var_nm = ct_vars[ci];
 
         /* Bind the contract's own variable name as an alias for the parameter,
@@ -756,6 +771,32 @@ static bool rt_pred_is_impure(Elab *e, const Form *f) {
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
         if (rt_pred_is_impure(e, f->as.list.items[i])) return true;
+    return false;
+}
+
+/* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
+ *
+ * Mirrors rt_pred_is_impure, but keys on the reads grant rather than impurity:
+ * a measure declared `#reads w` resolves to a RefineFnInfo with a non-zero
+ * reads_param_plus1.  rt_inject_param_checks uses this to skip the (impossible)
+ * runtime entry contract for such a param -- see the comment at its call site.
+ *
+ * The recursive walk matches a `#reads` measure anywhere in a compound
+ * predicate (e.g. `(and (alive? w x) ...)`): the entry contract must be
+ * suppressed as a whole, since the impure sub-term alone makes it unemittable. */
+static bool rt_pred_reads_measure(Elab *e, const Form *f) {
+    if (!f) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && head->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (rt_resolve_fn(e, head->as.sym->name, &info) &&
+            info.reads_param_plus1 != 0)
+            return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_reads_measure(e, f->as.list.items[i])) return true;
     return false;
 }
 

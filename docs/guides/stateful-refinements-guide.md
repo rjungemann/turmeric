@@ -1,13 +1,15 @@
 # Stateful Refinements -- frozen regions and `#reads`
 
-> **Status: in-flight.** The `frozen` region form ships today in the `tur-ecs`
-> spice (`ecs/freeze`). The `#reads` annotation and the congruence grant it
-> enables are **specified here and not yet implemented** -- this guide is their
-> spec as much as their manual. They are gated behind `--enable=refined` and
-> tracked in
+> **Status: implemented, experimental.** The `frozen` region form ships today in
+> the `tur-ecs` spice (`ecs/freeze`). The `#reads` annotation and the congruence
+> grant it enables are **implemented behind `--enable=refined`** (still
+> experimental -- emits `TUR-W0060`, breaking changes possible) and are tracked
+> in
 > [`docs/upcoming/v1/refine-stateful-measures-plan.md`](../upcoming/v1/refine-stateful-measures-plan.md).
-> Read the [Refinement Types guide](refinement-types-guide.md) first; this one
-> assumes it.
+> A `#reads`-refined accessor now proves its guarded crossings *and* codegens
+> (see [Codegen and enforcement](#codegen-and-enforcement) -- this required
+> suppressing an impure entry contract). Read the
+> [Refinement Types guide](refinement-types-guide.md) first; this one assumes it.
 
 ## The gap this fills
 
@@ -83,12 +85,13 @@ region body is a plain `let` body -- any result type, and elaborated *inline*
 > same shape freezes a file handle, a buffer, a lock, or a transaction, given a
 > mutator declared `^unique ^mut`.
 
-## Piece 2 -- `#reads w` (specified, in-flight)
+## Piece 2 -- `#reads w` (implemented, experimental)
 
 The region proves the state is frozen, but the encoder still does not know that
 `alive?` *depends on* that state -- `alive?`'s body is inline C, opaque to the
-purity walk, so it is simply "impure" and gets a fresh symbol per occurrence,
-region or no region (verified: still `0 proven, 1 unknown` inside `frozen`).
+purity walk, so without `#reads` it is simply "impure" and gets a fresh symbol
+per occurrence, region or no region (a bare impure guard inside `frozen` still
+reports `0 proven, 1 unknown`).
 
 `#reads w` supplies the missing fact. It annotates a measure with the borrowed
 argument whose mutable state it reads:
@@ -146,13 +149,27 @@ A guarded stateful read has *two* checks:
 | check | who | elided by a proof? |
 |---|---|---|
 | the **crossing** at `(get-Pos! w e)` -- verifies `(alive? w e)` at the call site | the caller | **yes** |
-| `get-Pos!`'s **own entry check** -- the `gens[idx]` compare before it reads | the callee | **no, ever** |
+| `get-Pos!`'s **own internal check** -- the `gens[idx]` compare it writes in its body before it reads | the callee | **no, ever** |
 
 A congruence proof from `#reads` + `frozen` elides only the *crossing* check.
 So a **wrong** `#reads w` -- a measure that secretly reads other mutable state
 -- costs a **missed compile-time lint**: an unguarded read that should have
 warned `TUR-W0372` compiles clean. It can **never** cause a use-after-free: the
-callee's entry check still runs and aborts on a dead handle at runtime.
+callee's own internal check still runs and aborts on a dead handle at runtime.
+
+> **The backstop is the accessor's *own* check, not an auto-generated contract.**
+> Read the second row carefully: it is `get-Pos!`'s hand-written `gens[idx]`
+> aliveness compare -- ordinary code in the body -- **not** a runtime contract
+> synthesized from the `#refine{ x | (alive? w x) }` parameter. That refinement
+> *contract* would be impure (`alive?` is impure -- the whole premise), and an
+> impure runtime contract is unemittable (`TUR-E0375`, "predicate has side
+> effects"); the compiler **suppresses** it (see [Codegen and
+> enforcement](#codegen-and-enforcement)). So a `#reads`-refined accessor gets
+> its safety backstop **only** from the check it writes itself. A minimal
+> accessor whose body is `(.n w)` with no internal guard -- like the
+> `refine-stateful-guard-discharges` test fixture -- demonstrates the
+> *congruence proof*, not a runtime safety net; a real accessor keeps its own
+> bounds/aliveness check.
 
 That is exactly the asymmetry the refinement design is built on -- *the cost of a
 wrong claim is a **kept** check, not an elided one* -- reached by declining to
@@ -164,6 +181,49 @@ The corollary is a rule of thumb: **do not use `#reads` to elide the safety
 check itself.** Its whole soundness argument is that the kept entry check is the
 backstop. A design that elided the entry check on the strength of a `#reads`
 proof would be unsound, and is out of scope by construction.
+
+## Codegen and enforcement
+
+Two consequences of the measure being impure shape how a `#reads`-refined
+function compiles and how its crossings are enforced.
+
+**The entry contract is suppressed (it is unemittable).** An ordinary
+`#refine{ x | p }` parameter injects a runtime *entry contract* -- a
+`(tur-contract-check p ...)` at the top of the callee. For a `#reads` measure
+`p = (alive? w x)` is impure, and an impure contract predicate is a hard error
+(`TUR-E0375`: "contract predicate has side effects; predicates must be pure"),
+because whether the check is compiled in becomes observable. So the injector
+detects a `#reads`-measure predicate and **skips** the entry contract entirely
+(`rt_pred_reads_measure` in `src/compiler/elab_fns.c`). This is what lets a
+`#reads`-refined accessor `build`/`run` at all; the safety backstop is the
+accessor's own internal check (previous section), and non-`#reads` impure
+predicates still get `TUR-E0375` -- the suppression is scoped to the grant.
+
+**Enforcement of the crossing lives at compile time, under `--strict-refine`.**
+Because there is no runtime contract for a `#reads` crossing, an *unproven* one
+cannot fall back to a runtime check the way a pure refinement does. What happens
+instead depends on the mode:
+
+| mode | unproven `#reads` crossing |
+|---|---|
+| `--enable=refined --strict-refine` | **hard error** `TUR-W0372` -- the read must be provably guarded (this is the mode `tur-ecs` and any safety-critical use should compile under) |
+| `--enable=refined` (non-strict) | silently trusted -- the crossing is elided with **no diagnostic** (a known rough edge; see [`docs/reported`](../reported/)) |
+
+The practical rule: **compile `#reads`-bearing code under `--strict-refine`.**
+There the guarantee is real -- an unguarded stateful read is a compile error, not
+a trusted elision. The non-strict silent-trust is a diagnostic gap, not a change
+to the trust model: either way `#reads` is trusted and the accessor's own check
+is the runtime backstop.
+
+> **On testing `#reads` soundness.** Because a `#reads` crossing carries no
+> runtime contract, the refinement *source fuzzer* (`tests/refine-fuzz-src.py`,
+> whose `stateful` shape generates exactly this code) cannot exercise `#reads`
+> *soundness*: its differential is "a check that fired with the gate off must not
+> vanish with it on", and there is no gate-off check here to vanish. The fuzzer's
+> `stateful` shape is **correctness** coverage (a codegen divergence or crash is
+> caught); soundness is pinned by the `errors/refine-stateful-*` fixtures under
+> `--strict-refine` plus a frozen-check sabotage, both compile-time. This is a
+> structural property of a trusted, impure measure, not a coverage hole.
 
 ## Where this generalizes
 
