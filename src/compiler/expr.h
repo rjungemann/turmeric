@@ -285,6 +285,15 @@ struct Binding {
     const char        **refine_param_vars;
     const char        **refine_param_names;
     uint32_t            n_refine_params;
+    /* C2 / #reads: 1-based index of the ^borrow parameter whose mutable state
+     * this function's body reads (a `#reads w` annotation), or 0 for none.
+     * 1-based so a memset-zeroed Binding defaults to "no #reads" -- do NOT
+     * switch to a 0-based index without auditing every Binding allocation.
+     * The refinement encoder reads this to grant a measure congruence inside a
+     * frozen region; see docs/guides/stateful-refinements-guide.md. Stamped on
+     * the same forward-declared Binding as the refine_* fields, so it is
+     * visible to call sites elaborated before the defn. */
+    uint32_t            reads_param_plus1;
     /* RT4: the refinement this function's RESULT satisfies -- either declared
      * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
      * appearing inside a predicate or an argument asserts it about the value

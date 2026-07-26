@@ -3776,6 +3776,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     EffectRow *declared_effect_row_defn = NULL;
     bool defn_has_construct_attr = false;
     bool defn_has_byval_attr = false;
+    /* C2 / #reads: captured here, stamped onto the binding alongside the
+     * refine_* metadata below.  1-based; 0 = no #reads annotation. */
+    uint32_t reads_param_plus1_defn = 0;
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
@@ -3803,6 +3806,39 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
             body_start++;  /* skip past the effect row map */
+        }
+    }
+    /* C2 / #reads <sym>: a read-frame annotation at the same signature position
+     * as #fx{...} (and, when both are present, after it).  Resolve the named
+     * symbol to a parameter index and record it on the binding; the refinement
+     * encoder consults it to grant congruence inside a frozen region.  Inert
+     * until that grant lands. */
+    if (call->as.list.len >= body_start + 1) {
+        Form *maybe_reads = call->as.list.items[body_start];
+        if (maybe_reads->tag == F_LIST &&
+            maybe_reads->fx_prov == (uint8_t)PROV_READS) {
+            const Form *psym = (maybe_reads->as.list.len == 2)
+                                   ? maybe_reads->as.list.items[1] : NULL;
+            if (!psym || psym->tag != F_SYM || !psym->as.sym) {
+                diag_emit(DIAG_ERROR, maybe_reads->span,
+                          "#reads must name a parameter: `#reads <param>`");
+            } else {
+                uint32_t found = 0;
+                for (uint32_t pi = 0; pi < n_params; pi++) {
+                    if (params[pi] && params[pi]->name == psym->as.sym) {
+                        found = pi + 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    diag_emit(DIAG_ERROR, psym->span,
+                              "#reads names '%s', which is not a parameter of this function",
+                              psym->as.sym->name);
+                } else {
+                    reads_param_plus1_defn = found;
+                }
+            }
+            body_start++;  /* skip past the #reads annotation */
         }
     }
     bool fn_declared_unsafe =
@@ -5295,6 +5331,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         b->refine_param_names = rn;
         b->n_refine_params    = n_params;
     }
+    /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
+     * refinements, so this must not sit inside the block above. */
+    b->reads_param_plus1 = reads_param_plus1_defn;
     if (g_opt_refined) {
         /* A declared return refinement wins -- but only when something
          * actually enforces it (see rt_ret_guaranteed).  An INFERRED one is
