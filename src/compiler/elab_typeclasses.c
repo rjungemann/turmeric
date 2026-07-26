@@ -2071,6 +2071,51 @@ static bool m7_result_is_int_carrier(Type t) {
     return false;
 }
 
+/* hkt-fmap-result-is-not-droppable: collapse an applied HKT result whose head is
+ * a POINTER-FAMILY builtin type constructor -- `(type-app rc<?> int)` -- down to
+ * the concrete `rc<int>` the rest of the compiler recognizes.
+ *
+ * An instance over the built-in `rc` constructor (stdlib/rc.tur's `Functor [rc]`)
+ * gets its result substituted correctly to `(type-app rc<?> int)`, but nothing
+ * consumed that shape: `rc/drop` and friends test for TY_RC, so the fmap result
+ * could not be released and every `(fmap r f)` leaked a control block plus a
+ * payload slot.  The head substitution builds a TY_APP because that is what an
+ * HKT class result `(f b)` is; `rc<T>` is not spelled as a TY_APP anywhere else,
+ * so the two representations have to be reconciled here.
+ *
+ * Sound to commit WITHOUT minting a by-value spec, for exactly the reason the
+ * opaque-newtype arm beside it is: an rc/weak is an `RcControlBlock *` and a ref
+ * is a plain pointer, so the by-value representation IS the int64 carrier the
+ * method returns -- 8 bytes, same bits, no aggregate layout to misread.  (The
+ * emitter already relies on this: TY_RC sits in emit_fns.c's typed-pointer
+ * return escape-hatch list, pinned by tests/fixtures/inline-c-rc-return-typed.)
+ *
+ * Returns false for any other head, leaving the neighbouring arms untouched. */
+static bool m7_app_to_ptr_family(Type t, Type *out) {
+    if (t.kind != TY_APP || !t.as.app.fn || !t.as.app.arg) return false;
+    TypeKind head = t.as.app.fn->kind;
+    if (head != TY_RC && head != TY_WEAK && head != TY_REF && head != TY_LREF)
+        return false;
+    const Type *arg = t.as.app.arg;
+    /* An aggregate element carries its def so field access through the handle
+     * still resolves, mirroring type_rc_adt on the struct-field path. */
+    if (head == TY_RC && arg->kind == TY_ADT && arg->as.adt_.def) {
+        *out = type_rc_adt(arg->as.adt_.def);
+        return true;
+    }
+    if (head == TY_WEAK && arg->kind == TY_ADT && arg->as.adt_.def) {
+        *out = type_weak_adt(arg->as.adt_.def);
+        return true;
+    }
+    switch (head) {
+        case TY_RC:   *out = type_rc(arg->kind);   return true;
+        case TY_WEAK: *out = type_weak(arg->kind); return true;
+        case TY_REF:  *out = type_ref(arg->kind);  return true;
+        case TY_LREF: *out = type_lref(arg->kind); return true;
+        default:      return false;
+    }
+}
+
 /* Parse a single instance-head argument form into a Type.  A primitive type
  * keyword (`int`, `cstr`, ...) or a known struct/ADT name resolves to its
  * concrete type; any other bare name is treated as a head *type variable*
@@ -6632,6 +6677,8 @@ resolved_user_fallback:;
             if (m7_nb > 0) {
                 Type substituted = elab_subst_class_tyvars(
                     e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
+                Type ptr_family_result;
+                bool ptr_family = m7_app_to_ptr_family(substituted, &ptr_family_result);
                 /* Only commit the by-value result type (and, below, the by-value
                  * element bindings) when the result fully grounds.  A residual
                  * free element tyvar -- the `ap` fat-closure-carrier case --
@@ -6639,7 +6686,26 @@ resolved_user_fallback:;
                  * uniform carrier ABI instead of emitting a broken half-by-value
                  * spec with a dangling carrier-base dict reference. */
                 if (!m7_type_has_free_tyvar(substituted)) {
-                    if (m7_body_byvalue_ok) {
+                    if (ptr_family && result_type.kind == TY_APP) {
+                        /* hkt-fmap-result-is-not-droppable: a pointer-family head
+                         * (`(type-app rc<?> int)`) collapses to the concrete
+                         * `rc<int>`, so `(rc/drop (fmap r f))` type-checks instead
+                         * of failing on the def-less `(type-app ? ?)` shell.
+                         *
+                         * Checked BEFORE m7_body_byvalue_ok, not after: committing
+                         * the TY_APP form for a pure-Turmeric body would leave the
+                         * same un-droppable shape, and the by-value spec is not
+                         * wanted here anyway -- an rc IS the carrier, so the
+                         * uniform carrier dispatch is already the right ABI.
+                         * m7_byvalue_grounded deliberately stays false, exactly as
+                         * in the int-carrier-newtype arm below.
+                         *
+                         * Same `result_type.kind == TY_APP` guard as that arm: only
+                         * REFINE the def-less carrier shell, never clobber an
+                         * instance that overrode the class result with a concrete
+                         * scalar (typeclass-instance-float-return). */
+                        result_type = ptr_family_result;
+                    } else if (m7_body_byvalue_ok) {
                         result_type = substituted;
                         m7_byvalue_grounded = true;
                     } else if (result_type.kind == TY_APP &&

@@ -2794,6 +2794,33 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * value would only add a value-preserving no-op cast, never a wrong one. */
     {
         const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
+        /* hkt-fmap-result-is-not-droppable: a carrier-dispatched typeclass method
+         * whose call-node result type was REFINED to a pointer-family handle.
+         *
+         * `__inst_Functor_fmap_T` returns the int64 carrier, but the call node's
+         * type is now the grounded `rc<int>` (elab_typeclasses.c collapses an
+         * applied HKT result `(f b)` over a pointer-family head so the result can
+         * be `rc/drop`ped).  `rc<int>` c-names to `RcControlBlock *`, so recording
+         * the temp as a concrete pointer hides the int64->pointer straddle from the
+         * binder-init bridge below and `RcControlBlock *m = __ps_N;` becomes a
+         * -Wint-conversion in the user's own build.
+         *
+         * Scoped to exactly that shape: the call node's type is a pointer-family
+         * handle AND the callee's own declared result is an applied HKT `(f b)`
+         * (TY_APP), which is what identifies the refinement.  Keying only on
+         * "callee c-names to int64_t" is far too broad -- a BY-VALUE SPECIALIZED
+         * callee (`vec_new__spec__tur_adt_Vec__int__`) really does return the
+         * concrete pointer while its generic signature still c-names to the
+         * carrier, and overriding there adds a redundant cast to every such site
+         * (140 fixtures of churn). */
+        if (rcty && e->kind == EX_CALL && e->as.call_.fn_binding &&
+            e->as.call_.fn_binding->type.kind == TY_FN &&
+            (e->type.kind == TY_RC || e->type.kind == TY_WEAK ||
+             e->type.kind == TY_REF || e->type.kind == TY_LREF)) {
+            const Binding *cb = e->as.call_.fn_binding;
+            const Type *cret = cb->type.as.fn.result_full_type;
+            if (cret && cret->kind == TY_APP) rcty = "int64_t";
+        }
         size_t rL = rcty ? strlen(rcty) : 0;
         bool recorded = false;
         if (rcty && rL >= 1 && rcty[rL - 1] == '*' && strcmp(rcty, "void *") != 0) {
