@@ -1394,9 +1394,6 @@
 > `SUSPICIOUS_over_refute` cases were inspected -- none is a var-binder-guard
 > shape.
 >
-> ### Next slice
->
-> Candidates, roughly by value:
 >
 > ### Landed: a labelled SMT-LIB corpus, replayed without Z3
 >
@@ -1607,6 +1604,10 @@
 > soundness bugs. Fixtures `refine-class-param-dynamic-dispatch` (proofs pinned
 > under `--strict-refine`) and `errors/refine-class-param-dynamic-violated`
 > (pinned by inversion).
+>
+> ### Next slice
+>
+> Candidates, roughly by value:
 >
 > - **Dynamic typeclass dispatch** -- INVESTIGATED; the entry was mis-scoped.
 >   The gap is not specific to dynamic dispatch. The argument obligation is
