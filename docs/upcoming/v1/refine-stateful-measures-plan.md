@@ -472,13 +472,87 @@ register a UT2-visible borrow (verified), so this works for a world the caller
 owns, not one borrowed from elsewhere. That is the correct shape anyway (the
 frame that despawns owns the world).
 
-**What remains for B3 (all independent of the region form now):** (2) the
-declared measure-over-`W` relation; and the encoder logic to *recognize* the
-region's `(& w)` borrow and grant congruence to a measure over `w` inside +
-region-exit invalidation. The region form is no longer a blocker -- it is a
-shipped, sound, greppable construct (`(& w)` in a `let`) that the encoder can key
-off. (The foundation runtime-check fix that previously appeared here is dropped:
-it was a Release-`tur` artifact -- see the resolved caveat above.)
+**What remains for B3:** (2) the declared measure-over-`W` relation -- **designed
+2026-07-26** as a *trusted* `#reads w` annotation, sound because B3 elides only
+the crossing check, never the accessor's kept entry check (see "Blocker 2
+design"); pending sign-off, as it departs from the literal "no trusted attribute"
+line. And the encoder logic to *recognize* the region's `(& w)` borrow and grant
+a `#reads w` measure a stable symbol inside + region-exit invalidation -- which
+lands *with* blocker 2 (the annotation is inert without it). The region form is
+no longer a blocker -- it is a shipped, sound, greppable construct (`(& w)` in a
+`let`) the encoder keys off. (The foundation runtime-check fix that previously
+appeared here is dropped: it was a Release-`tur` artifact.)
+
+### Blocker 2 design (2026-07-26) -- the declared measure-over-`W` relation, and why a *trusted* one is sound here
+
+Grounding (verified): even inside the *inline* `frozen` region -- body visible
+to the encoder, `w` borrowed live -- an impure `alive?` guard still reports
+`0 proven, 1 unknown`. The region alone does nothing; `alive?` reads state
+through inline C, so the encoder gives it a fresh symbol per occurrence
+(impure), and the guard's `alive?(w,e)` and the crossing's are unrelated terms.
+To discharge, the encoder must give `alive?` a **stable** symbol inside the
+region -- and it may do so soundly *iff* `alive?` is a function of `w`'s (now
+frozen) despawn-state and its pure arguments, nothing else. That "nothing else"
+is the declaration blocker 2 supplies.
+
+**The obstacle that made this look impossible.** For `tur-ecs`'s real world,
+`alive?` reads a `malloc`'d control block through inline C -- opaque. The
+compiler cannot *check* that it reads only `w`'s despawn-state (it cannot see
+into inline C), and this plan's stated rule forbids a **trusted** purity/measure
+attribute: "the cost of a wrong purity claim is an elided check." A pure-Turmeric
+world-measure (reading struct fields) is already congruent (RM-S0 case A.1) and
+needs none of this; the whole difficulty is the *impure-handle* measure, and it
+seemed to force either an uncheckable trusted claim or the world-state
+rearchitecture RM-S0 flagged.
+
+**The resolution -- the plan's own objection does not apply if B3 keeps the
+safety check.** The plan forbids a trusted attribute *because it elides a check*.
+But B3 need not elide the check that matters. There are **two** checks in an
+RE1-style guarded read:
+
+- the **crossing** check at `(get-Pos! w e)` -- verifies `(alive? w e)` at the
+  call site; this is what a proof elides;
+- `get-Pos!`'s **own entry check** -- the `gens[idx]` aliveness compare inside
+  the accessor, which RE1 states is *always emitted* ("the refinement's value
+  here is the compile error, not the elision"; whole-program entry-check elision
+  measured at zero benefit).
+
+So B3's congruence proof elides only the crossing check; the accessor's entry
+check is never elided. A **wrong** `#reads w` declaration therefore causes a
+*missed compile-time lint* (an unguarded read compiles clean when it should warn
+`TUR-W0372`), never a use-after-despawn: the kept entry check aborts at runtime
+on a dead handle. That is exactly the asymmetry the plan wants -- the cost of a
+wrong claim is a *kept* check, not an elided one -- reached by not eliding the
+safety check rather than by refusing the declaration.
+
+**Proposed shape.**
+
+- A measure that reads mutable state declares the world argument it reads:
+  `(defn alive? [^borrow w : World e : Entity] #reads w : bool ...)`. `#reads w`
+  names a `^borrow` parameter; it is a promise, not a checked fact, and it is
+  sound only in the non-eliding regime above.
+- The encoder's congruence rule gains one arm: a call `(m ... w ...)` whose
+  callee declares `#reads w` is given a **stable** symbol (congruent) when a
+  live borrow of `w` is in scope (the `(frozen w ...)` region's `(& w)`), and a
+  fresh symbol otherwise. Region exit / a `set!` of `w` / the `do`-split rule
+  invalidate, as the third shared invalidation site.
+- Pure-Turmeric measures need no `#reads` and are unaffected -- they are already
+  congruent.
+
+**Why not checked-structural instead.** A `#reads w` that the purity walk could
+verify would require the measure to read `w` only through the borrowed argument
+and touch no other mutable state -- unverifiable for an inline-C body, which is
+every real ECS measure. Checked-structural works only once world state is
+Turmeric-visible (the RM-S0 rearchitecture). The trusted-but-non-eliding route
+delivers the feature against the *shipped* `tur-ecs` today, at the cost of a
+weaker guarantee (a wrong declaration loses a lint, not memory safety).
+
+**Decision this needs.** This is a deliberate, documented *departure* from the
+plan's literal "no trusted-purity attribute" line -- justified by keeping the
+safety check -- and it should be signed off before building. It is also
+inseparable from the congruence grant: `#reads` with no encoder arm is inert, so
+blocker 2 and the grant land together (behind `--enable=refined`, gated on the
+`stateful` differential fuzzer -- run on a Debug `tur`, per the foundation note).
 
 ## Acceptance (whichever candidate)
 
