@@ -3068,8 +3068,10 @@ static void gc_collect(void) {
     uint64_t trace_freed_before = gc_objects_freed;
     gc_cycle_collect_phase();
     gc_grey_count = 0;
-    gc_mark_phase();
-    gc_trial_deletion_phase();
+    if (gc_suspect_count > 0) {
+        gc_mark_phase();
+        gc_trial_deletion_phase();
+    }
     if (gc_trace_enabled < 0) {
         const char *__tur_gct = getenv("TUR_GC_TRACE");
         gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, "0") != 0) ? 1 : 0;

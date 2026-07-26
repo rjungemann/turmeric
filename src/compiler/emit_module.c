@@ -9941,8 +9941,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    uint64_t trace_freed_before = gc_objects_freed;\n");
     buf_puts(out, "    gc_cycle_collect_phase();\n");
     buf_puts(out, "    gc_grey_count = 0;\n");
-    buf_puts(out, "    gc_mark_phase();\n");
-    buf_puts(out, "    gc_trial_deletion_phase();\n");
+    /* PT2: the zombie sweep is skipped when the candidate buffer is empty.
+     * gc_cycle_collect_phase has just drained every candidate with
+     * strong_count > 0, so what remains IS the zombie set, and
+     * gc_trial_deletion_phase reads that buffer and nothing else -- with it
+     * empty the pair is a no-op that still costs gc_mark_phase a full walk of
+     * gc_all_blocks.  Nothing outside the collector reads the colors it
+     * leaves (gc_is_alive is the only consumer and has no callers; rc_upgrade
+     * tests strong_count), and the next collection resets every color and
+     * gc_trial from scratch.  See the runtime copy in src/runtime/gc.c for the
+     * measurements. */
+    buf_puts(out, "    if (gc_suspect_count > 0) {\n");
+    buf_puts(out, "        gc_mark_phase();\n");
+    buf_puts(out, "        gc_trial_deletion_phase();\n");
+    buf_puts(out, "    }\n");
     buf_puts(out, "    if (gc_trace_enabled < 0) {\n");
     buf_puts(out, "        const char *__tur_gct = getenv(\"TUR_GC_TRACE\");\n");
     buf_puts(out, "        gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, \"0\") != 0) ? 1 : 0;\n");
