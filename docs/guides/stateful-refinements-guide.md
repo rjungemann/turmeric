@@ -281,7 +281,7 @@ feature.
 | a pure-Turmeric predicate over struct fields | congruence | nothing -- already congruent |
 | an impure (inline-C) predicate over a mutable value | congruence *in a scope where it can't change* | `frozen` + `#reads` |
 | to stop a mutation for a scope | a compile error on the mutator | declare the mutator `^unique ^mut`; wrap the scope in `frozen` |
-| to elide the *safety* check on a stateful read | -- | not supported, by design; the entry check is the backstop |
+| to elide the *safety* check on a stateful read | -- | not supported, by design; the accessor's own internal check is the backstop |
 
 ## See also
 
