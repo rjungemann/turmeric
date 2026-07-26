@@ -3688,7 +3688,24 @@ Expr *elab_definstance(Elab *e, const Form *call) {
                          * method body sees; lower the ABI/signature type to the
                          * int64 carrier for applied/parametric types, matching the
                          * dispatch ABI used for concrete instances elsewhere. */
-                        if (elab_param_type.kind == TY_APP) {
+                        /* hkt-foldable-rc-param: an instance over a pointer-family
+                         * builtin sees its receiver as the applied `(t a)` ->
+                         * `(type-app rc<?> tyvar 'a')`, which unifies with nothing
+                         * -- so an instance body could not pass its own receiver to
+                         * anything typed `rc<A>` ("expected rc<?>, got (type-app
+                         * rc<?> tyvar 'a')") and had to reach for inline-C.
+                         * Collapse it to the concrete `rc<a>` the rest of the
+                         * compiler recognizes, the parameter-side mirror of the
+                         * result-side collapse in the dispatch path.
+                         *
+                         * The ABI/signature type stays TYPE_INT: this changes only
+                         * what the BODY sees, never the dict's uniform carrier
+                         * calling convention. */
+                        Type ptr_family_param;
+                        if (m7_app_to_ptr_family(elab_param_type, &ptr_family_param)) {
+                            elab_param_type = ptr_family_param;
+                            param_type = TYPE_INT;
+                        } else if (elab_param_type.kind == TY_APP) {
                             param_type = TYPE_INT;
                         } else {
                             param_type = elab_param_type;

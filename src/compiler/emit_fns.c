@@ -3374,8 +3374,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                      * capture field as `tur_adt_Point *`.  Flag the param so the
                      * closure-capture site bridges int64->pointer (field reads
                      * already bridge via the heap-ADT-recv path). */
-                    if (fd->n_dict_clone > 0 && btc &&
-                        strcmp(btc, "int64_t") != 0 &&
+                    /* hkt-foldable-rc-param: the dict-clone gate used to be the
+                     * only way in.  The flag's meaning -- "carrier signature slot,
+                     * pointer-shaped binding type" -- holds for any such param, and
+                     * an HKT instance method over a pointer-family builtin is now
+                     * one: its receiver's elaborated type is `rc<a>`
+                     * (`RcControlBlock *`) while its dict-ABI slot stays int64_t.
+                     * Every consumer of the flag reacts by adding a value-preserving
+                     * int64->pointer bridge, which is correct wherever the flag's
+                     * meaning holds, so widening it can only remove straddles. */
+                    if (btc && strcmp(btc, "int64_t") != 0 &&
                         strchr(btc, '*') != NULL)
                         fd->params[i]->emit_carrier_holds_ptr = true;
                 }

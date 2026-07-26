@@ -6538,13 +6538,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * untouched; the RcControlBlock carrier slot is excluded. */
                     else if (rec_c) {
                         size_t rL = strlen(rec_c);
+                        /* hkt-foldable-rc-param: `RcControlBlock *` used to be
+                         * excluded here.  It has to be bridged like any other
+                         * concrete pointer now that an HKT instance body can hold
+                         * its receiver as a real `rc<a>` whose ABI slot is still
+                         * the int64 carrier -- `_un_unrc_hyvalue(ta)` with `ta`
+                         * declared `int64_t` is a -Wint-conversion otherwise.  The
+                         * `acty == "int64_t"` guard below already restricts this to
+                         * an arg that genuinely emits as the carrier, so an rc arg
+                         * that is already the pointer is untouched either way. */
                         bool rec_is_conc_ptr = rL >= 2 && rec_c[rL - 1] == '*' &&
-                            strcmp(rec_c, "void *") != 0 &&
-                            strncmp(rec_c, "RcControlBlock", 14) != 0;
+                            strcmp(rec_c, "void *") != 0;
                         const char *acty = emit_binding_repr_c_name(
                             ctx, emit_arg->type, emit_arg);
-                        if (rec_is_conc_ptr && acty &&
-                            strcmp(acty, "int64_t") == 0) {
+                        /* hkt-foldable-rc-param: emit_binding_repr_c_name only
+                         * models CARRIER-ABI types -- it returns the by-value
+                         * c-name immediately for anything else, so an `rc<a>`
+                         * binding reports `RcControlBlock *` and never reveals
+                         * that its parameter slot is really the int64 carrier.
+                         * emit_carrier_holds_ptr is the flag that does record
+                         * exactly that, so consult it as a second signal. */
+                        bool arg_slot_is_carrier =
+                            emit_arg->kind == EX_VAR && emit_arg->as.var.binding &&
+                            emit_arg->as.var.binding->emit_carrier_holds_ptr;
+                        if (rec_is_conc_ptr &&
+                            ((acty && strcmp(acty, "int64_t") == 0) ||
+                             arg_slot_is_carrier)) {
                             Buf _fb; buf_init(&_fb);
                             buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
                             buf_putc(&_fb, '\0');
