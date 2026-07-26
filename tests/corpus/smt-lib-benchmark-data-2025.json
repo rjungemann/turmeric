@@ -1,0 +1,1957 @@
+{
+  "access": {
+    "embargo": {
+      "active": false,
+      "reason": null
+    },
+    "files": "public",
+    "record": "public",
+    "status": "open"
+  },
+  "created": "2025-08-04T22:39:35.072682+00:00",
+  "custom_fields": {},
+  "deletion_status": {
+    "is_deleted": false,
+    "status": "P"
+  },
+  "files": {
+    "count": 90,
+    "enabled": true,
+    "entries": {
+      "ABV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:33e1f303fdf6380ceb33cc1c6356ffcd",
+        "ext": "zst",
+        "id": "25597fa2-dcce-4f48-8758-f14d5b247098",
+        "key": "ABV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/ABV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/ABV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1219567,
+        "storage_class": "L"
+      },
+      "ABVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:ce31eb72cbd83f2b5bfe8c4156846f38",
+        "ext": "zst",
+        "id": "6bd1a29f-9964-4080-8566-b6f2a978b88d",
+        "key": "ABVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/ABVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/ABVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 17458,
+        "storage_class": "L"
+      },
+      "ABVFPLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:f8aac051ea4254af2eb69247604fec28",
+        "ext": "zst",
+        "id": "4642a515-da8f-454b-b110-cbad8b35d2e5",
+        "key": "ABVFPLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/ABVFPLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/ABVFPLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 14500,
+        "storage_class": "L"
+      },
+      "ALIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:f4679558c5c1b2a00333cefc45b4ba80",
+        "ext": "zst",
+        "id": "eda945ae-c5fc-4988-9153-3329b21419ed",
+        "key": "ALIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/ALIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/ALIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 935493,
+        "storage_class": "L"
+      },
+      "ANIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:a9c2db4a277d72b183569c4359eb1895",
+        "ext": "zst",
+        "id": "fdfe0241-de91-43e1-be4e-c0223af3266e",
+        "key": "ANIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/ANIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/ANIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 70194,
+        "storage_class": "L"
+      },
+      "AUFBV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:2229a06d746e4360bdfa8635d157ae5d",
+        "ext": "zst",
+        "id": "123945fd-5b85-4909-8561-52aa1ac159a5",
+        "key": "AUFBV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFBV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFBV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 255752420,
+        "storage_class": "L"
+      },
+      "AUFBVDTLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:93cf75cbe73ad5d0f52581d1e0fbc046",
+        "ext": "zst",
+        "id": "21d46432-5d11-492f-a624-314f0d22678d",
+        "key": "AUFBVDTLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFBVDTLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFBVDTLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 533308,
+        "storage_class": "L"
+      },
+      "AUFBVDTNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:fee10169e516756e964480217a44e7c8",
+        "ext": "zst",
+        "id": "56d8d7a9-3368-4e86-84dd-e211a2004bf8",
+        "key": "AUFBVDTNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFBVDTNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFBVDTNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 239685,
+        "storage_class": "L"
+      },
+      "AUFBVDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:a9ccc8b2bde26efecc7ef96198e03321",
+        "ext": "zst",
+        "id": "453916f1-c987-48f9-87dd-a7a39f1fbff6",
+        "key": "AUFBVDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFBVDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFBVDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 15775559,
+        "storage_class": "L"
+      },
+      "AUFBVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:8e0496af14b37dea797ddeeafc7cd4a2",
+        "ext": "zst",
+        "id": "02f787f3-f578-4fc2-9878-afff89199498",
+        "key": "AUFBVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFBVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFBVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3324372,
+        "storage_class": "L"
+      },
+      "AUFBVFPDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:7291e7816058d7f0b50d909673dab678",
+        "ext": "zst",
+        "id": "a5210a8d-e413-4107-b8c8-eff040880ea8",
+        "key": "AUFBVFPDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFBVFPDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFBVFPDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 35363,
+        "storage_class": "L"
+      },
+      "AUFDTLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:8dc7ce95835c14d706c133f03947d833",
+        "ext": "zst",
+        "id": "e52b0e83-bf70-4d52-915d-88c841b8dd5c",
+        "key": "AUFDTLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFDTLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFDTLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 7732043,
+        "storage_class": "L"
+      },
+      "AUFDTLIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:e9f6400ef642f7a865eda8bb9976242d",
+        "ext": "zst",
+        "id": "1887bd59-274c-4a3b-8820-650baa769199",
+        "key": "AUFDTLIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFDTLIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFDTLIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3237200,
+        "storage_class": "L"
+      },
+      "AUFDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:f7861c06140f6c260316d314ef4ff055",
+        "ext": "zst",
+        "id": "a809a159-452a-4530-99b5-64066e2e7be4",
+        "key": "AUFDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1060192,
+        "storage_class": "L"
+      },
+      "AUFFPDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:abd31ac79b4c6ee9adc010617eade4e7",
+        "ext": "zst",
+        "id": "b37d63cf-2dfb-43ae-a391-bdec85c070c3",
+        "key": "AUFFPDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFFPDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFFPDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 102550,
+        "storage_class": "L"
+      },
+      "AUFLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:2424c2761c04ededf70717375c01d913",
+        "ext": "zst",
+        "id": "d1053782-a78f-437c-aa41-c7449b90ed2a",
+        "key": "AUFLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 9987717,
+        "storage_class": "L"
+      },
+      "AUFLIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:f29eadd5427e391d694e336028e282bc",
+        "ext": "zst",
+        "id": "307daa73-b7e0-4413-ae63-6a93da361e2d",
+        "key": "AUFLIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFLIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFLIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1712094,
+        "storage_class": "L"
+      },
+      "AUFNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:250855ebe5e8b250307c386f370ce079",
+        "ext": "zst",
+        "id": "5d573829-4e9d-4e5d-99a6-1df432e3dffd",
+        "key": "AUFNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1118,
+        "storage_class": "L"
+      },
+      "AUFNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:59fa2c06ce9509e1273008738b5608f3",
+        "ext": "zst",
+        "id": "36ce444b-255e-4743-8d71-3b39617e4359",
+        "key": "AUFNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/AUFNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/AUFNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 2553316,
+        "storage_class": "L"
+      },
+      "BV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:11d221202754c594a0e34696f108adb0",
+        "ext": "zst",
+        "id": "536909c8-ddff-4b6e-86fa-ad0ea6ce6a64",
+        "key": "BV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/BV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/BV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 106990951,
+        "storage_class": "L"
+      },
+      "BVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:afcd3f8b2d27fa6a3ffb96b991bf74d0",
+        "ext": "zst",
+        "id": "c5b9c8b8-ea4c-47c7-9414-652f24049057",
+        "key": "BVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/BVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/BVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 45346,
+        "storage_class": "L"
+      },
+      "BVFPLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:254c1f8e2dc21b27d95a4e29a653cc41",
+        "ext": "zst",
+        "id": "4feca4a8-8b79-442a-b27c-6a53dd091588",
+        "key": "BVFPLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/BVFPLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/BVFPLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 41313,
+        "storage_class": "L"
+      },
+      "FP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:937f439b712fb00ed90f92d8f418ef40",
+        "ext": "zst",
+        "id": "e717e9e1-784b-4d66-b903-2172b3f725ca",
+        "key": "FP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/FP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/FP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 153148,
+        "storage_class": "L"
+      },
+      "FPLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:193d481f51275e246be855a6fc40108d",
+        "ext": "zst",
+        "id": "a99a11c9-5f96-4e78-a967-3572df22fb90",
+        "key": "FPLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/FPLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/FPLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 6163,
+        "storage_class": "L"
+      },
+      "LIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:29b056562bb1b4162762415d42417864",
+        "ext": "zst",
+        "id": "b3c9c2a9-acb1-4997-81a3-877cf88df1a6",
+        "key": "LIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/LIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/LIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 266135,
+        "storage_class": "L"
+      },
+      "LRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:44ac20ef5f179fc2610188c73b2f8bb8",
+        "ext": "zst",
+        "id": "f2903ae2-d646-4340-9a71-5bdd402934c0",
+        "key": "LRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/LRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/LRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 4034586,
+        "storage_class": "L"
+      },
+      "NIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:e06b1bc2b3df5a51d57c838fc3570058",
+        "ext": "zst",
+        "id": "1b42e4ad-df8e-4ea9-a7f2-c02999647e57",
+        "key": "NIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/NIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/NIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 44156,
+        "storage_class": "L"
+      },
+      "NRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:07011f51333098ab9f77e09bf537f9ea",
+        "ext": "zst",
+        "id": "4259bc39-0653-4010-8279-4ea7c233b352",
+        "key": "NRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/NRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/NRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 732383,
+        "storage_class": "L"
+      },
+      "QF_ABV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:ea239b30bbcc7a7f1042b2a98e38351a",
+        "ext": "zst",
+        "id": "d10dd9bf-b927-4b55-96e8-7b4a75c169eb",
+        "key": "QF_ABV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_ABV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_ABV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 138845256,
+        "storage_class": "L"
+      },
+      "QF_ABVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:3037092cba402348cb8a937bca8b726c",
+        "ext": "zst",
+        "id": "80b6e8bf-ed1a-45c4-98b5-a9fa23e867df",
+        "key": "QF_ABVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_ABVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_ABVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 2210035,
+        "storage_class": "L"
+      },
+      "QF_ABVFPLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:3e03a8a55a4fb7b6bb2ec6cb27c019d5",
+        "ext": "zst",
+        "id": "556a2e7c-ea0e-42c5-a2c0-bc16410dbd59",
+        "key": "QF_ABVFPLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_ABVFPLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_ABVFPLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 88298,
+        "storage_class": "L"
+      },
+      "QF_ALIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:021412d77210ebb2f38f3fd4be6082f0",
+        "ext": "zst",
+        "id": "40035f41-4cbf-4cee-bff6-6e6b3f575fcb",
+        "key": "QF_ALIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_ALIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_ALIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 488570,
+        "storage_class": "L"
+      },
+      "QF_ANIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:9eec3530889cb06081e62ddaa240fe0d",
+        "ext": "zst",
+        "id": "58a5dc23-28bd-47f1-8926-5e48e7cb1624",
+        "key": "QF_ANIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_ANIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_ANIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1619802,
+        "storage_class": "L"
+      },
+      "QF_AUFBV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:ea411cc9f28e6df7bd8ba70d2320bf49",
+        "ext": "zst",
+        "id": "4842b059-c398-4ed1-b5f1-6210bd434329",
+        "key": "QF_AUFBV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_AUFBV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_AUFBV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1185055,
+        "storage_class": "L"
+      },
+      "QF_AUFBVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:f5a6ef69a5aadd0cfa01d64cda859361",
+        "ext": "zst",
+        "id": "d56fc0cb-e36f-41ad-8f1f-281cd7a5c337",
+        "key": "QF_AUFBVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_AUFBVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_AUFBVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3625,
+        "storage_class": "L"
+      },
+      "QF_AUFLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:22a9b737169ec8f6922249fb4cbec14e",
+        "ext": "zst",
+        "id": "a8ad8a49-ec97-469c-9063-dc9f47365e52",
+        "key": "QF_AUFLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_AUFLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_AUFLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 409484,
+        "storage_class": "L"
+      },
+      "QF_AUFNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:9f6dfb4ff89b08a352be92f6ba9be897",
+        "ext": "zst",
+        "id": "e7665779-ad9f-496d-afcb-37753b7909b2",
+        "key": "QF_AUFNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_AUFNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_AUFNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 214109,
+        "storage_class": "L"
+      },
+      "QF_AX.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:f54995be7d764e350b47785f3ba8b675",
+        "ext": "zst",
+        "id": "97a66c52-3cfd-429e-8b6d-c9de0aff7c2a",
+        "key": "QF_AX.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_AX.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_AX.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 130431,
+        "storage_class": "L"
+      },
+      "QF_BV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:9bb268ced812a004edfd9876aea025bb",
+        "ext": "zst",
+        "id": "a292534f-1f46-4b34-b184-00cc416ced0e",
+        "key": "QF_BV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_BV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_BV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1732883333,
+        "storage_class": "L"
+      },
+      "QF_BVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:75e1d63fdd2dea8d95b46691130b0e35",
+        "ext": "zst",
+        "id": "5eb1e563-3360-49ca-ab5e-62f621832bc5",
+        "key": "QF_BVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_BVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_BVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1030765,
+        "storage_class": "L"
+      },
+      "QF_BVFPLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:fa7f8dbcdf12af3de7f00da6d6e186a2",
+        "ext": "zst",
+        "id": "76058b7f-0a92-4b23-a803-fc707f92f701",
+        "key": "QF_BVFPLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_BVFPLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_BVFPLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 36782,
+        "storage_class": "L"
+      },
+      "QF_DT.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:d7b141091ac26f42391bd59f19f8beb0",
+        "ext": "zst",
+        "id": "371674d1-cc8d-44d5-b090-9e7cbe0fb40f",
+        "key": "QF_DT.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_DT.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_DT.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 43824532,
+        "storage_class": "L"
+      },
+      "QF_FP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:b7f9786b5317d7be8a185c861088f504",
+        "ext": "zst",
+        "id": "a1c9ba09-8088-477d-9f88-1274bf362e5b",
+        "key": "QF_FP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_FP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_FP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 7524054,
+        "storage_class": "L"
+      },
+      "QF_FPLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:545602bc82e43dbfb3279ddeb609a21e",
+        "ext": "zst",
+        "id": "c1e602e7-ecca-4c5b-8341-24273764c69e",
+        "key": "QF_FPLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_FPLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_FPLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 19897,
+        "storage_class": "L"
+      },
+      "QF_IDL.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:6184ac582caed208c956da2bc38e22fe",
+        "ext": "zst",
+        "id": "3dcbf3e4-d8c4-42fd-93a8-780e70ca73f9",
+        "key": "QF_IDL.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_IDL.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_IDL.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 427426902,
+        "storage_class": "L"
+      },
+      "QF_LIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:6b78b5c578394cf7a72b22087279f34f",
+        "ext": "zst",
+        "id": "1313312d-dc6a-4236-95d3-65151604183c",
+        "key": "QF_LIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_LIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_LIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 687461035,
+        "storage_class": "L"
+      },
+      "QF_LIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:d322598a56f101cf2c737c6d8de60726",
+        "ext": "zst",
+        "id": "2b431a96-fc2b-4e2d-b1bf-1455beeee436",
+        "key": "QF_LIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_LIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_LIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 172799,
+        "storage_class": "L"
+      },
+      "QF_LRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:20d2d2e032fa8f7c9ea741e08f59ece1",
+        "ext": "zst",
+        "id": "99b14b3b-ec26-4667-ab88-69897b754f1d",
+        "key": "QF_LRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_LRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_LRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 181483353,
+        "storage_class": "L"
+      },
+      "QF_NIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:6a3ae3b7eb10688070c44922ccd940aa",
+        "ext": "zst",
+        "id": "0e1328fa-4149-4008-ac87-e28945ae5e80",
+        "key": "QF_NIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_NIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_NIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 191228625,
+        "storage_class": "L"
+      },
+      "QF_NIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:0b4f07674e6ecd0c04ecdedd2b29c404",
+        "ext": "zst",
+        "id": "13fcdf20-a789-43be-9ae9-6319c915311e",
+        "key": "QF_NIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_NIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_NIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 102308,
+        "storage_class": "L"
+      },
+      "QF_NRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:85a04fcea6dd10fb4c505703cac46e2c",
+        "ext": "zst",
+        "id": "c337c009-3041-4c7f-87de-3380953e79a7",
+        "key": "QF_NRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_NRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_NRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 210801606,
+        "storage_class": "L"
+      },
+      "QF_RDL.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:2bad7e2f095d04c49460a9d09b2e981a",
+        "ext": "zst",
+        "id": "86859108-cffe-4044-b2f1-fa157e4bb5d8",
+        "key": "QF_RDL.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_RDL.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_RDL.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 10005034,
+        "storage_class": "L"
+      },
+      "QF_S.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:22c3c79ddd6bbcb2be5a9cae8b3ffdcf",
+        "ext": "zst",
+        "id": "c134604c-b71d-4910-8fdc-f577af745130",
+        "key": "QF_S.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_S.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_S.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3945287,
+        "storage_class": "L"
+      },
+      "QF_SLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:faa6d8dd5ba361b0429429e0e19306ea",
+        "ext": "zst",
+        "id": "986b5c3f-1663-4138-a1b1-6e811fe29acf",
+        "key": "QF_SLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_SLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_SLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 31924163,
+        "storage_class": "L"
+      },
+      "QF_SNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:a7819cc9271a89cb9501b42fa47877b6",
+        "ext": "zst",
+        "id": "60eb76c8-f830-4770-8ed7-3a5e0c84a217",
+        "key": "QF_SNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_SNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_SNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3171,
+        "storage_class": "L"
+      },
+      "QF_UF.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:e185bc80a80116bcfea116df190f87d2",
+        "ext": "zst",
+        "id": "fd0042fb-a27a-46f9-a989-00e433875c48",
+        "key": "QF_UF.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UF.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UF.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 54182823,
+        "storage_class": "L"
+      },
+      "QF_UFBV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:50e844ddb7e156c605cc06877e9c1164",
+        "ext": "zst",
+        "id": "cc868c0f-a3da-4cea-907e-cba1f7fae26e",
+        "key": "QF_UFBV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFBV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFBV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 105518505,
+        "storage_class": "L"
+      },
+      "QF_UFBVDT.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:2ec9da3a9134f5fc612b514a76ef8a4f",
+        "ext": "zst",
+        "id": "9776c005-a053-4a22-8d76-bedb24ccf54f",
+        "key": "QF_UFBVDT.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFBVDT.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFBVDT.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 2426449,
+        "storage_class": "L"
+      },
+      "QF_UFDT.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:751b32312ae0dab0d7f89f5006a77ae6",
+        "ext": "zst",
+        "id": "73fcace5-e2d8-4118-bdf4-144b2526775e",
+        "key": "QF_UFDT.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFDT.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFDT.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 21682816,
+        "storage_class": "L"
+      },
+      "QF_UFDTLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:d9960c9a335a77ee80d0f5c13d76d2ca",
+        "ext": "zst",
+        "id": "a3f92617-f549-4744-8951-6da9e4c3f7cc",
+        "key": "QF_UFDTLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFDTLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFDTLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3638790,
+        "storage_class": "L"
+      },
+      "QF_UFDTLIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:0f515f15f3856b4aeeb3e7898f5230a6",
+        "ext": "zst",
+        "id": "c79d72ce-06c1-499e-b68a-fc10a9784cbe",
+        "key": "QF_UFDTLIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFDTLIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFDTLIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 20202,
+        "storage_class": "L"
+      },
+      "QF_UFDTNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:0372e5f2bb39b896d19c95ffedc18db1",
+        "ext": "zst",
+        "id": "55959140-e6eb-4bad-ad11-ed87f1c7c6d6",
+        "key": "QF_UFDTNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFDTNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFDTNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 2863121,
+        "storage_class": "L"
+      },
+      "QF_UFFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:c39b683eeff9c0f476853f1327b7ade7",
+        "ext": "zst",
+        "id": "cfe4b03e-e44c-4730-968a-67a80a63258f",
+        "key": "QF_UFFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 673,
+        "storage_class": "L"
+      },
+      "QF_UFFPDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:5e2c21fa3b9c0f2d96ed8fbc2dc47024",
+        "ext": "zst",
+        "id": "a68d92c7-5346-4c4d-9a76-93a8f14e1dfb",
+        "key": "QF_UFFPDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFFPDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFFPDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 19086,
+        "storage_class": "L"
+      },
+      "QF_UFIDL.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:66f9c4cd3d85fed5115774f8177d673a",
+        "ext": "zst",
+        "id": "b0d6a181-5050-483f-ae14-30f71bc2f0a6",
+        "key": "QF_UFIDL.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFIDL.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFIDL.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 35602795,
+        "storage_class": "L"
+      },
+      "QF_UFLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:b249e93c33bc333196acb36ad7d524d4",
+        "ext": "zst",
+        "id": "c9ace24e-0e35-4c6d-8d64-1203127dd240",
+        "key": "QF_UFLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 18861334,
+        "storage_class": "L"
+      },
+      "QF_UFLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:c2e4f57f584e5b7ad820c054c8d14c68",
+        "ext": "zst",
+        "id": "e2e1b527-8e83-4b25-a8ef-488270a3e14a",
+        "key": "QF_UFLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 162321601,
+        "storage_class": "L"
+      },
+      "QF_UFNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:8d9857ca626d9bc25a4412b522426c15",
+        "ext": "zst",
+        "id": "c5205c24-8eff-4e53-b59f-a06d50bcc560",
+        "key": "QF_UFNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 34278337,
+        "storage_class": "L"
+      },
+      "QF_UFNRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:09fe5fea2c7e83a7dcacd49d78e09893",
+        "ext": "zst",
+        "id": "7e808cd8-3c4a-4d38-87e3-189171fb7d04",
+        "key": "QF_UFNRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/QF_UFNRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/QF_UFNRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 20745,
+        "storage_class": "L"
+      },
+      "README.md": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:1136295e92b62455aa7b9bb9fd2a59ab",
+        "ext": "md",
+        "id": "9e4f0308-cdab-4df3-ac90-010178107d1c",
+        "key": "README.md",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/README.md/content",
+          "self": "https://zenodo.org/api/records/16740866/files/README.md"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 9112,
+        "storage_class": "L"
+      },
+      "UF.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:df86e8d8dcfdd7777e2fab94ed4a5d5f",
+        "ext": "zst",
+        "id": "47233ee5-4576-44dd-8792-69b4c6d1cb6a",
+        "key": "UF.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UF.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UF.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 51586187,
+        "storage_class": "L"
+      },
+      "UFBV.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:74ff1f272d23a3406c5e3dd9fe805321",
+        "ext": "zst",
+        "id": "9987539e-558c-4591-95b5-e7e8c488045d",
+        "key": "UFBV.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBV.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBV.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1708384,
+        "storage_class": "L"
+      },
+      "UFBVDT.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:a2eecb6243962f4443b6ffbd5ecdf9f3",
+        "ext": "zst",
+        "id": "4f2d1443-f708-47e2-a4e6-7f0502e1997b",
+        "key": "UFBVDT.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVDT.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVDT.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 13275,
+        "storage_class": "L"
+      },
+      "UFBVDTLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:83a453c4d76f29816d03914f9429bf3f",
+        "ext": "zst",
+        "id": "ae89e487-75cb-4d3f-9daf-61acac1dfe04",
+        "key": "UFBVDTLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVDTLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVDTLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 15784,
+        "storage_class": "L"
+      },
+      "UFBVDTNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:46e8e7ef8097829d32cb856fb4b751ee",
+        "ext": "zst",
+        "id": "76337b87-6901-4bc1-b2a7-9535de126668",
+        "key": "UFBVDTNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVDTNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVDTNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1150108,
+        "storage_class": "L"
+      },
+      "UFBVDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:fdce572741a64373d930f068bc2143d6",
+        "ext": "zst",
+        "id": "f9a996da-13ef-4b62-aac1-093606845ba2",
+        "key": "UFBVDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 701145,
+        "storage_class": "L"
+      },
+      "UFBVFP.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:3ca2fdaab5d47270f208a725c641a6d8",
+        "ext": "zst",
+        "id": "99cf0811-6292-4a3b-a1d2-5d164d30661f",
+        "key": "UFBVFP.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVFP.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVFP.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 9510,
+        "storage_class": "L"
+      },
+      "UFBVFPDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:4edbe37f90dcb2c062fb673783239a1e",
+        "ext": "zst",
+        "id": "fd3cb296-daed-4e1e-ba9b-ed3b58d0e866",
+        "key": "UFBVFPDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVFPDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVFPDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 26732,
+        "storage_class": "L"
+      },
+      "UFBVLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:284cf5aac1b88c0e6304cf30e4c2f733",
+        "ext": "zst",
+        "id": "fe3bdd94-8cf3-4819-b0d3-601c718bcb19",
+        "key": "UFBVLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFBVLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFBVLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 4626966,
+        "storage_class": "L"
+      },
+      "UFDT.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:bbfb17f9e21ffd84aa81c01c4a71b889",
+        "ext": "zst",
+        "id": "4d6e2978-43d4-4363-bd19-0cdc20505061",
+        "key": "UFDT.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFDT.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFDT.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 37815863,
+        "storage_class": "L"
+      },
+      "UFDTLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:d12c96f40d576f3222bf90b31bf3256a",
+        "ext": "zst",
+        "id": "2709aed8-5cfe-4dfe-8cb4-00bcde5acbde",
+        "key": "UFDTLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFDTLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFDTLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 43887781,
+        "storage_class": "L"
+      },
+      "UFDTLIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:33d643bf7de0b2af342ded4631f740dc",
+        "ext": "zst",
+        "id": "3b27157d-89f0-49f4-87bb-78067cc9c35e",
+        "key": "UFDTLIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFDTLIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFDTLIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 8523105,
+        "storage_class": "L"
+      },
+      "UFDTNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:d013ecdd6ee30fb1e4e042eab1c7ae49",
+        "ext": "zst",
+        "id": "a61fd561-c17c-4ead-b999-39834dabf014",
+        "key": "UFDTNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFDTNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFDTNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 74466728,
+        "storage_class": "L"
+      },
+      "UFDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:09ece3f22e518b89b6df521ff26d2094",
+        "ext": "zst",
+        "id": "d6b341aa-64bf-4a0a-9489-261b8fb67d94",
+        "key": "UFDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 3623033,
+        "storage_class": "L"
+      },
+      "UFFPDTNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:5a572459293260ed463de8d42f872c57",
+        "ext": "zst",
+        "id": "30902200-c8f8-48c1-bbf2-b3ec987a639a",
+        "key": "UFFPDTNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFFPDTNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFFPDTNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 300476,
+        "storage_class": "L"
+      },
+      "UFIDL.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:71a2c10c1f335c3e60aeba36a76e2faf",
+        "ext": "zst",
+        "id": "c3c2aaaa-9a63-4698-8d4c-cae8e6673ad7",
+        "key": "UFIDL.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFIDL.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFIDL.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 67612,
+        "storage_class": "L"
+      },
+      "UFLIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:5d097a241b73663e7e2827dca143f07b",
+        "ext": "zst",
+        "id": "48732df0-f319-4663-bbc0-84016d5e1364",
+        "key": "UFLIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFLIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFLIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 47019596,
+        "storage_class": "L"
+      },
+      "UFLRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:eb0d28bd85a3309701b07d12f7a9fdba",
+        "ext": "zst",
+        "id": "b59346a8-3265-4749-b83c-76d29682382f",
+        "key": "UFLRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFLRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFLRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 1519,
+        "storage_class": "L"
+      },
+      "UFNIA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:42c0232d01ec60d33135a9801e66d3d4",
+        "ext": "zst",
+        "id": "c48be1b3-4ee2-4ca9-b92e-bdfebd166e90",
+        "key": "UFNIA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFNIA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFNIA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 81514709,
+        "storage_class": "L"
+      },
+      "UFNIRA.tar.zst": {
+        "access": {
+          "hidden": false
+        },
+        "checksum": "md5:8142d38373a5fb63e43880f9901b0d47",
+        "ext": "zst",
+        "id": "92e65bf5-def2-47bc-afeb-ca491972ea30",
+        "key": "UFNIRA.tar.zst",
+        "links": {
+          "content": "https://zenodo.org/api/records/16740866/files/UFNIRA.tar.zst/content",
+          "self": "https://zenodo.org/api/records/16740866/files/UFNIRA.tar.zst"
+        },
+        "metadata": {},
+        "mimetype": "application/octet-stream",
+        "size": 15863,
+        "storage_class": "L"
+      }
+    },
+    "order": [],
+    "total_bytes": 4890207406
+  },
+  "id": "16740866",
+  "is_draft": false,
+  "is_published": true,
+  "links": {
+    "access": "https://zenodo.org/api/records/16740866/access",
+    "access_grants": "https://zenodo.org/api/records/16740866/access/grants",
+    "access_links": "https://zenodo.org/api/records/16740866/access/links",
+    "access_request": "https://zenodo.org/api/records/16740866/access/request",
+    "access_users": "https://zenodo.org/api/records/16740866/access/users",
+    "archive": "https://zenodo.org/api/records/16740866/files-archive",
+    "archive_media": "https://zenodo.org/api/records/16740866/media-files-archive",
+    "communities": "https://zenodo.org/api/records/16740866/communities",
+    "communities-suggestions": "https://zenodo.org/api/records/16740866/communities-suggestions",
+    "doi": "https://doi.org/10.5281/zenodo.16740866",
+    "draft": "https://zenodo.org/api/records/16740866/draft",
+    "file_modification": "https://zenodo.org/api/records/16740866/file-modification",
+    "files": "https://zenodo.org/api/records/16740866/files",
+    "latest": "https://zenodo.org/api/records/16740866/versions/latest",
+    "latest_html": "https://zenodo.org/records/16740866/latest",
+    "media_files": "https://zenodo.org/api/records/16740866/media-files",
+    "parent": "https://zenodo.org/api/records/15493089",
+    "parent_doi": "https://doi.org/10.5281/zenodo.15493089",
+    "parent_doi_html": "https://zenodo.org/doi/10.5281/zenodo.15493089",
+    "parent_html": "https://zenodo.org/records/15493089",
+    "preview_html": "https://zenodo.org/records/16740866?preview=1",
+    "quota_increase": "https://zenodo.org/api/records/16740866/quota-increase",
+    "request_deletion": "https://zenodo.org/api/records/16740866/request-deletion",
+    "requests": "https://zenodo.org/api/records/16740866/requests",
+    "reserve_doi": "https://zenodo.org/api/records/16740866/draft/pids/doi",
+    "self": "https://zenodo.org/api/records/16740866",
+    "self_doi": "https://doi.org/10.5281/zenodo.16740866",
+    "self_doi_html": "https://zenodo.org/doi/10.5281/zenodo.16740866",
+    "self_html": "https://zenodo.org/records/16740866",
+    "self_iiif_manifest": "https://zenodo.org/api/iiif/record:16740866/manifest",
+    "self_iiif_sequence": "https://zenodo.org/api/iiif/record:16740866/sequence/default",
+    "versions": "https://zenodo.org/api/records/16740866/versions"
+  },
+  "media_files": {
+    "count": 0,
+    "enabled": false,
+    "entries": {},
+    "order": [],
+    "total_bytes": 0
+  },
+  "metadata": {
+    "creators": [
+      {
+        "affiliations": [
+          {
+            "id": "00f54p054",
+            "identifiers": [
+              {
+                "identifier": "00f54p054",
+                "scheme": "ror"
+              },
+              {
+                "identifier": "grid.168010.e",
+                "scheme": "grid"
+              },
+              {
+                "identifier": "0000 0004 1936 8956",
+                "scheme": "isni"
+              }
+            ],
+            "name": "Stanford University"
+          }
+        ],
+        "person_or_org": {
+          "family_name": "Preiner",
+          "given_name": "Mathias",
+          "identifiers": [
+            {
+              "identifier": "0000-0002-7142-6258",
+              "scheme": "orcid"
+            }
+          ],
+          "name": "Preiner, Mathias",
+          "type": "personal"
+        },
+        "role": {
+          "id": "datacurator",
+          "title": {
+            "de": "DatenkuratorIn",
+            "en": "Data curator"
+          }
+        }
+      },
+      {
+        "affiliations": [
+          {
+            "id": "036jqmy94",
+            "identifiers": [
+              {
+                "identifier": "036jqmy94",
+                "scheme": "ror"
+              },
+              {
+                "identifier": "grid.214572.7",
+                "scheme": "grid"
+              },
+              {
+                "identifier": "0000 0004 1936 8294",
+                "scheme": "isni"
+              }
+            ],
+            "name": "University of Iowa"
+          }
+        ],
+        "person_or_org": {
+          "family_name": "Schurr",
+          "given_name": "Hans-J\u00f6rg",
+          "identifiers": [
+            {
+              "identifier": "0000-0002-0829-5056",
+              "scheme": "orcid"
+            }
+          ],
+          "name": "Schurr, Hans-J\u00f6rg",
+          "type": "personal"
+        },
+        "role": {
+          "id": "datacurator",
+          "title": {
+            "de": "DatenkuratorIn",
+            "en": "Data curator"
+          }
+        }
+      },
+      {
+        "affiliations": [
+          {
+            "id": "00f54p054",
+            "identifiers": [
+              {
+                "identifier": "00f54p054",
+                "scheme": "ror"
+              },
+              {
+                "identifier": "grid.168010.e",
+                "scheme": "grid"
+              },
+              {
+                "identifier": "0000 0004 1936 8956",
+                "scheme": "isni"
+              }
+            ],
+            "name": "Stanford University"
+          }
+        ],
+        "person_or_org": {
+          "family_name": "Barrett",
+          "given_name": "Clark",
+          "identifiers": [
+            {
+              "identifier": "0000-0002-9522-3084",
+              "scheme": "orcid"
+            }
+          ],
+          "name": "Barrett, Clark",
+          "type": "personal"
+        },
+        "role": {
+          "id": "datacurator",
+          "title": {
+            "de": "DatenkuratorIn",
+            "en": "Data curator"
+          }
+        }
+      },
+      {
+        "affiliations": [
+          {
+            "id": "00afp2z80",
+            "identifiers": [
+              {
+                "identifier": "00afp2z80",
+                "scheme": "ror"
+              },
+              {
+                "identifier": "grid.4861.b",
+                "scheme": "grid"
+              },
+              {
+                "identifier": "0000 0001 0805 7253",
+                "scheme": "isni"
+              }
+            ],
+            "name": "University of Li\u00e8ge"
+          }
+        ],
+        "person_or_org": {
+          "family_name": "Fontaine",
+          "given_name": "Pascal",
+          "identifiers": [
+            {
+              "identifier": "0000-0003-4700-6031",
+              "scheme": "orcid"
+            }
+          ],
+          "name": "Fontaine, Pascal",
+          "type": "personal"
+        },
+        "role": {
+          "id": "datacurator",
+          "title": {
+            "de": "DatenkuratorIn",
+            "en": "Data curator"
+          }
+        }
+      },
+      {
+        "affiliations": [
+          {
+            "name": "Stanford University"
+          }
+        ],
+        "person_or_org": {
+          "family_name": "Niemetz",
+          "given_name": "Aina",
+          "identifiers": [
+            {
+              "identifier": "0000-0003-2600-5283",
+              "scheme": "orcid"
+            }
+          ],
+          "name": "Niemetz, Aina",
+          "type": "personal"
+        },
+        "role": {
+          "id": "datacurator",
+          "title": {
+            "de": "DatenkuratorIn",
+            "en": "Data curator"
+          }
+        }
+      },
+      {
+        "affiliations": [
+          {
+            "id": "036jqmy94",
+            "identifiers": [
+              {
+                "identifier": "036jqmy94",
+                "scheme": "ror"
+              },
+              {
+                "identifier": "grid.214572.7",
+                "scheme": "grid"
+              },
+              {
+                "identifier": "0000 0004 1936 8294",
+                "scheme": "isni"
+              }
+            ],
+            "name": "University of Iowa"
+          }
+        ],
+        "person_or_org": {
+          "family_name": "Tinelli",
+          "given_name": "Cesare",
+          "identifiers": [
+            {
+              "identifier": "0000-0002-6726-775X",
+              "scheme": "orcid"
+            }
+          ],
+          "name": "Tinelli, Cesare",
+          "type": "personal"
+        },
+        "role": {
+          "id": "datacurator",
+          "title": {
+            "de": "DatenkuratorIn",
+            "en": "Data curator"
+          }
+        }
+      }
+    ],
+    "description": "<p>This is the SMT-LIB benchmark library: a large library of input problems, or benchmarks, written in the SMT-LIB language. More information about the SMT-LIB initiative can be found at <a href=\"https://smt-lib.org\">https://smt-lib.org</a>. The contributor and licence of each benchmark is indicated in the metadata fields of each benchmark file.</p>\n<p>This collection contains the&nbsp;<strong>non-incremental benchmarks</strong>.</p>\n<p>Benchmarks are grouped by logic and compressed with the <code>zstd</code> compression algorithm using the <code>tar --zstd</code>. SMT-LIB benchmarks usually have a very high compression rate, be aware of the required disk space when uncompressing the archives. You can find the size of each archive in compressed and uncompressed form in the following list.</p>",
+    "publication_date": "2025-08-04",
+    "publisher": "Zenodo",
+    "resource_type": {
+      "id": "dataset",
+      "title": {
+        "de": "Datensatz",
+        "en": "Dataset"
+      }
+    },
+    "rights": [
+      {
+        "description": {
+          "en": "The Creative Commons Attribution license allows re-distribution and re-use of a licensed work on the condition that the creator is appropriately credited."
+        },
+        "icon": "cc-by-icon",
+        "id": "cc-by-4.0",
+        "props": {
+          "scheme": "spdx",
+          "url": "https://creativecommons.org/licenses/by/4.0/legalcode"
+        },
+        "title": {
+          "en": "Creative Commons Attribution 4.0 International"
+        }
+      }
+    ],
+    "title": "SMT-LIB release 2025 (non-incremental benchmarks)",
+    "version": "2025.08.04"
+  },
+  "parent": {
+    "access": {
+      "owned_by": {
+        "user": "185017"
+      },
+      "settings": {
+        "accept_conditions_text": null,
+        "allow_guest_requests": false,
+        "allow_user_requests": false,
+        "secret_link_expiration": 0
+      }
+    },
+    "communities": {
+      "default": "b9867c67-083d-4835-88f5-c80c7a73b455",
+      "entries": [
+        {
+          "access": {
+            "member_policy": "open",
+            "members_visibility": "public",
+            "record_submission_policy": "open",
+            "review_policy": "closed",
+            "visibility": "public"
+          },
+          "children": {
+            "allow": false
+          },
+          "created": "2024-02-01T20:01:59.939366+00:00",
+          "custom_fields": {},
+          "deletion_status": {
+            "is_deleted": false,
+            "status": "P"
+          },
+          "id": "b9867c67-083d-4835-88f5-c80c7a73b455",
+          "links": {},
+          "metadata": {
+            "description": "SMT-LIB is an international initiative aimed at facilitating research and development in Satisfiability Modulo Theories (SMT).",
+            "title": "SMT-LIB",
+            "type": {
+              "id": "organization"
+            },
+            "website": "https://smt-lib.org"
+          },
+          "revision_id": 4,
+          "slug": "smt-lib",
+          "updated": "2024-04-24T20:25:26.347291+00:00"
+        }
+      ],
+      "ids": [
+        "b9867c67-083d-4835-88f5-c80c7a73b455"
+      ]
+    },
+    "id": "15493089",
+    "pids": {
+      "doi": {
+        "client": "datacite",
+        "identifier": "10.5281/zenodo.15493089",
+        "provider": "datacite"
+      }
+    }
+  },
+  "pids": {
+    "doi": {
+      "client": "datacite",
+      "identifier": "10.5281/zenodo.16740866",
+      "provider": "datacite"
+    },
+    "oai": {
+      "identifier": "oai:zenodo.org:16740866",
+      "provider": "oai"
+    }
+  },
+  "revision_id": 4,
+  "stats": {
+    "all_versions": {
+      "data_volume": 2589016245644.0,
+      "downloads": 25918,
+      "unique_downloads": 22559,
+      "unique_views": 2467,
+      "views": 2807
+    },
+    "this_version": {
+      "data_volume": 1696934791558.0,
+      "downloads": 16994,
+      "unique_downloads": 14456,
+      "unique_views": 1640,
+      "views": 1914
+    }
+  },
+  "status": "published",
+  "swh": {},
+  "updated": "2025-08-04T22:39:40.065866+00:00",
+  "versions": {
+    "index": 2,
+    "is_latest": true
+  }
+}

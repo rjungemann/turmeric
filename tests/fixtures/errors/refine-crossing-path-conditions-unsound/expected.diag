@@ -1,0 +1,4 @@
+TUR-E0371
+argument 2 of 'sdiv' in 'unguarded'
+argument 2 of 'sdiv' in 'wrong-branch'
+argument 2 of 'sdiv' in 'after-assignment'

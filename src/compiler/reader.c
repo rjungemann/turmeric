@@ -3963,6 +3963,13 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
      * = *file`, and layers are orthogonal to the base reader. */
     lang_layers_apply_readers(file->lang_layers, reg, arena, st);
 
+    /* L4: a SEMANTIC layer turns on its backing experiment for this file --
+     * `#lang turmeric refined` is exactly `--enable=refined`, scoped here.
+     * A manifest that scoped :experiments without it is a hard error; the
+     * diagnostic is already emitted, and the caller sees it via
+     * diag_had_error(). */
+    (void)lang_layers_apply_semantic(file->lang_layers, file->path);
+
     switch (file->reader_type) {
         case READER_TURMERIC:
             /* Standard s-expression syntax only */
@@ -4173,6 +4180,12 @@ ReaderType detect_lang_layered(const char *src, size_t len,
                 long idx = lang_layer_index(tok, tok_len);
                 if (idx >= 0) {
                     *out_layers = lang_layer_add(*out_layers, idx);
+                } else if (lang_layer_is_graduated(tok, tok_len)) {
+                    /* Accepted and ignored: the layer's behaviour is now
+                     * unconditional, so the token asks for something already
+                     * true.  Reporting it as unknown would break every file
+                     * that opted in per-file at the moment the feature stopped
+                     * being optional.  Warns once, inside the lookup. */
                 } else if (out_bad && *out_bad == NULL) {
                     *out_bad = tok;              /* first unknown token */
                     if (out_bad_len) *out_bad_len = tok_len;

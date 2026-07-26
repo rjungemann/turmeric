@@ -1,0 +1,40 @@
+;; A typeclass method's RESULT refinement, in both places it can be written.
+;;
+;; Two defects sat here until this fixture. A `defclass` method could declare
+;; `: #refine{ r : T | q }` and the predicate was parsed, peeled, and then
+;; DROPPED -- the class signature read like a guarantee and enforced nothing,
+;; while the identical predicate on a plain `defn` panicked. And a `definstance`
+;; method could not restate one at all: the annotation fell through to the body
+;; and came back as "type annotation ': type' is only valid after a parameter
+;; name or as a return type", so there was no way to write the check by hand
+;; either.
+;;
+;; Now the class's promise is INHERITED by an instance that writes a plain
+;; return type, and an instance may restate it (or strengthen it).
+;;
+;; Results and parameters vary in OPPOSITE directions. A parameter refinement
+;; is something the method DEMANDS, so an instance may demand less. A result
+;; refinement is something it DELIVERS, so an instance must deliver at least as
+;; much -- see errors/refine-instance-result-weaker for the other side.
+(defclass Boxed [a]
+  (unbox [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+;; inherits the class's promise -- no annotation, still checked
+(definstance Boxed [int]
+  (unbox [self : int, k : int] : int
+    (* self k)))
+
+(defclass Scaled [a]
+  (scaled [self : a, k : int] : #refine{ r : int | (>= r 0) }))
+
+;; restates it, strengthened: delivers MORE than the class promises, which is
+;; the legal direction
+(definstance Scaled [int]
+  (scaled [self : int, k : int] : #refine{ r : int | (> r 0) }
+    (+ (* self k) 1)))
+
+(defn main [] : int
+  (println (.unbox 3 4))
+  (println (.scaled 3 4))
+  (println "refine-class-result")
+  0)

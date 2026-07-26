@@ -1,0 +1,10 @@
+; x >= 1.5 and y >= 2.5 force x+y >= 4.0.
+(set-logic QF_LRA)
+(set-info :status unsat)
+(declare-fun x () Real)
+(declare-fun y () Real)
+(assert (>= x 1.5))
+(assert (>= y 2.5))
+(assert (< (+ x y) 4.0))
+(check-sat)
+(exit)

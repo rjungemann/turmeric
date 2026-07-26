@@ -3225,14 +3225,17 @@ Expr *elab_match(Elab *e, const Form *call) {
                     return NULL;
                 }
 
-                /* Optional when-guard */
-                if (guard_raw) {
-                    lit_arms[ai].guard = elab_form(e, guard_raw);
-                    if (!lit_arms[ai].guard) return NULL;
-                }
-
-                /* Elaborate body; for is_var, introduce the binding in a new scope */
+                /* Elaborate the guard and the body in the arm's scope: a var
+                 * pattern's binder must be visible to its own when-guard, not
+                 * just to the body.  The ADT path already does this (it keeps
+                 * the arm scope live across both); the scalar path used to
+                 * elaborate the guard before the binding existed, so
+                 * `(match p x when (> x 2) x _ 0)` failed with "unbound symbol
+                 * 'x'".  Wildcard/literal patterns bind nothing, so for them
+                 * the two orders are equivalent. */
                 Expr *body;
+                Expr *guard = NULL;
+                bool arm_ok = true;
                 bool _s_lit = e->in_match_arm; e->in_match_arm = true;
                 if (pat->is_var && pat->var_sym) {
                     Binding *vb = binding_new(e, pat->var_sym, scrutinee->type,
@@ -3243,14 +3246,30 @@ Expr *elab_match(Elab *e, const Form *call) {
                     Scope *saved_sc = e->scope;
                     e->scope = &arm_sc;
                     scope_add(&arm_sc, vb);
-                    body = elab_form(e, body_form);
+                    if (guard_raw) {
+                        guard = elab_form(e, guard_raw);
+                        if (!guard) arm_ok = false;
+                    }
+                    body = arm_ok ? elab_form(e, body_form) : NULL;
                     e->scope = saved_sc;
                     scope_free(&arm_sc);
                 } else {
-                    body = elab_form(e, body_form);
+                    if (guard_raw) {
+                        guard = elab_form(e, guard_raw);
+                        if (!guard) arm_ok = false;
+                    }
+                    body = arm_ok ? elab_form(e, body_form) : NULL;
                 }
                 e->in_match_arm = _s_lit;
-                if (!body) return NULL;
+                if (!arm_ok || !body) return NULL;
+                /* Parity with the ADT path: a when-guard must be a bool. */
+                if (guard && guard->type.kind != TY_BOOL) {
+                    diag_emit(DIAG_ERROR, guard_raw->span,
+                              "match: when-guard must have type bool, got %s",
+                              typekind_to_string(guard->type.kind));
+                    return NULL;
+                }
+                lit_arms[ai].guard = guard;
                 lit_arms[ai].body = body;
                 if (lit_result.kind == TY_UNKNOWN) lit_result = body->type;
             }

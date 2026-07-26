@@ -1,0 +1,10 @@
+; Modus ponens: p, and p implies x > 0, contradicts x <= 0.
+(set-logic QF_LIA)
+(set-info :status unsat)
+(declare-fun p () Bool)
+(declare-fun x () Int)
+(assert p)
+(assert (=> p (> x 0)))
+(assert (<= x 0))
+(check-sat)
+(exit)

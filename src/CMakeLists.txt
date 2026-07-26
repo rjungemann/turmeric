@@ -17,6 +17,16 @@ if(WIN32)
     link_libraries(ws2_32)
 endif()
 
+# RT3: the dev-only refinement oracle needs the same treatment for exactly the
+# same reason. refine_libz3.c is compiled into tur_core, and EVERY executable
+# that embeds $<TARGET_OBJECTS:tur_core> -- not just `tur` -- then carries an
+# unresolved Z3_* reference. Per-target PRIVATE links on an OBJECT library do
+# not propagate to objects-embedding consumers, so the first oracle build
+# failed to link the whole test-harness fleet. Directory scope covers them all.
+if(TUR_REFINE_Z3_ORACLE)
+    link_libraries(z3::libz3)
+endif()
+
 # ---------------------------------------------------------------------------
 # Feature-test macro: macOS gates the POSIX-XSI ucontext_t (used by
 # TuriEnv::sched_ctx for the async scheduler) behind _XOPEN_SOURCE.
@@ -178,6 +188,20 @@ set(TUR_CORE_SOURCES
     compiler/reader.c
     compiler/reader_macros.c
     compiler/lang_layers.c
+    # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
+    # types.  refine_libz3.c is a DEV-ONLY scaffold -- it compiles to nothing
+    # unless TUR_REFINE_Z3_ORACLE is defined, and that option refuses Release
+    # and WASM builds, so no shipped artifact can ever link Z3.
+    compiler/refine_vc.c
+    compiler/refine_collect.c
+    compiler/refine_smtlib.c
+    compiler/refine_discharge.c
+    compiler/refine_solver.c
+    compiler/refine_solver_s0.c
+    compiler/refine_solver_euf.c
+    compiler/refine_solver_arith.c
+    compiler/refine_solver_no.c
+    compiler/refine_libz3.c
     compiler/symbols.c
     compiler/typeclass.c
     compiler/types.c
@@ -344,6 +368,14 @@ file(READ "${CMAKE_SOURCE_DIR}/VERSION" _TUR_VERSION_RAW)
 string(STRIP "${_TUR_VERSION_RAW}" _TUR_VERSION_STR)
 target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
 
+# RT3: the dev-only refinement oracle.  OFF by default and refused for Release
+# and WASM in the top-level CMakeLists, so this never reaches a shipped build.
+# The LINK is directory-scoped above (an OBJECT library cannot propagate it);
+# only the compile definition belongs on the target.
+if(TUR_REFINE_Z3_ORACLE)
+    target_compile_definitions(tur_core PRIVATE TUR_REFINE_Z3_ORACLE=1)
+endif()
+
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
 # ---------------------------------------------------------------------------
@@ -387,6 +419,7 @@ endif()
 
 # E2: inject version into tur executable (main.c reads TUR_VERSION)
 target_compile_definitions(tur PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
+
 
 # Ensure the compiler binary ends up at build/tur (same path the test scripts
 # and games expect).
@@ -712,6 +745,94 @@ endif()
 set_target_properties(tur_ffi_dispatch_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+# ---------------------------------------------------------------------------
+# RT2/S0--S3: refinement normalized-VC + decision-procedure unit test
+# (docs/upcoming/v1/refinement-types-plan.md).  Exercises hash-consing,
+# constant folding, each in-house stage, the cube expansion, the bounded
+# counterexample search, and the SMT-LIB serializer -- including the
+# "must NOT prove" direction, which is where the soundness invariant lives.
+# ---------------------------------------------------------------------------
+add_executable(tur_refine_solver
+    ${CMAKE_SOURCE_DIR}/tests/unit/refine_solver.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_refine_solver PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_refine_solver PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_refine_solver PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_refine_solver PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_refine_solver PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_refine_solver PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_refine_solver PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# Z3 retirement: replay a LABELLED SMT-LIB2 corpus against the in-house chain,
+# with no solver dependency of its own.  The oracle in refine_libz3.c is a live
+# cross-check that only exists on a dev build with a system Z3; what has to
+# survive its deletion is a corpus whose labels are DATA in the repo.  This
+# target is that regression, so it is built unconditionally -- exactly the
+# builds that have no Z3 are the ones it must run in.
+# See tests/unit/refine_corpus.c and tests/corpus/smtlib/README.md.
+# ---------------------------------------------------------------------------
+add_executable(tur_refine_corpus
+    ${CMAKE_SOURCE_DIR}/tests/unit/refine_corpus.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_refine_corpus PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_refine_corpus PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_refine_corpus PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_refine_corpus PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_refine_corpus PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_refine_corpus PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_refine_corpus PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# RT3: differential fuzzing of the in-house refinement solver against Z3.
+# Built only in an oracle build -- it links Z3, which no shipped build does.
+# See the file header for why fixture coverage is not differential coverage.
+# ---------------------------------------------------------------------------
+if(TUR_REFINE_Z3_ORACLE)
+    add_executable(tur_refine_fuzz
+        ${CMAKE_SOURCE_DIR}/tests/unit/refine_fuzz.c
+        $<TARGET_OBJECTS:tur_core>
+    )
+    target_include_directories(tur_refine_fuzz PRIVATE ${TUR_INCLUDE_DIRS})
+    target_compile_options(tur_refine_fuzz PRIVATE
+        -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+        $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    )
+    target_compile_definitions(tur_refine_fuzz PRIVATE TUR_REFINE_Z3_ORACLE=1)
+    target_link_options(tur_refine_fuzz PRIVATE -pthread
+        $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+    )
+    target_link_libraries(tur_refine_fuzz PRIVATE m)
+    if(HAVE_EDITLINE)
+        target_link_libraries(tur_refine_fuzz PRIVATE ${LIBEDIT_LIB})
+        target_compile_definitions(tur_refine_fuzz PRIVATE TURI_HAVE_EDITLINE=1)
+    endif()
+    set_target_properties(tur_refine_fuzz PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
 
 # ---------------------------------------------------------------------------
 # UC-2: user-level experiments file reader unit test

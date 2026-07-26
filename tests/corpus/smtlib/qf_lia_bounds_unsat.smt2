@@ -1,0 +1,10 @@
+; 0 <= i and i < n and n <= 0 leaves no room for i.
+(set-logic QF_LIA)
+(set-info :status unsat)
+(declare-fun i () Int)
+(declare-fun n () Int)
+(assert (<= 0 i))
+(assert (< i n))
+(assert (<= n 0))
+(check-sat)
+(exit)

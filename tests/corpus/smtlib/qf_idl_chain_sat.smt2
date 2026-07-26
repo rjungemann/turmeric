@@ -1,0 +1,11 @@
+; The same chain with a non-negative closing edge is satisfiable.
+(set-logic QF_IDL)
+(set-info :status sat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun c () Int)
+(assert (<= (- a b) (- 1)))
+(assert (<= (- b c) (- 1)))
+(assert (<= (- c a) 3))
+(check-sat)
+(exit)

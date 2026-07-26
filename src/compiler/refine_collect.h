@@ -1,0 +1,192 @@
+#ifndef TUR_REFINE_COLLECT_H
+#define TUR_REFINE_COLLECT_H
+
+/* refine_collect.h -- RT1: the constraint collector.
+ *
+ * Each point where a value crosses INTO a `#refine{ x : T | p }` type is a
+ * proof obligation: prove `p[subject/x]` under the hypotheses in scope.  This
+ * module owns the obligation record, the hypothesis environment, and the
+ * Form -> normalized-VC encoder that RT2 consumes.
+ *
+ * Crossing points collected today:
+ *   - a `defn` whose RETURN type is a contract type (subject = the body form)
+ *   - a `defn` `:post` predicate            (subject = the body form, var `result`)
+ *   - a CALL-SITE argument crossing into a contract-typed parameter (subject =
+ *     the argument form; the callee's other parameter names are substituted by
+ *     the arguments in their slots, so a predicate mentioning a sibling
+ *     parameter is checked against real values)
+ *
+ * Hypotheses come from:
+ *   - each parameter declared with a contract type (`v` renamed to the param)
+ *   - the function's `:pre` predicate
+ *
+ * See docs/upcoming/v1/refinement-types-plan.md (phase RT1). */
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "forms.h"
+#include "refine_vc.h"
+#include "runtime/arena.h"
+
+/* ------------------------------------------------------------------------- *
+ * Hypothesis environment
+ * ------------------------------------------------------------------------- */
+
+/* One known-true fact.  `pred` is the predicate as written; `bound_var` is the
+ * `v` of `#refine{ v : T | p }` and `subject_name` is the in-scope name it
+ * stands for, so the encoder renames without rewriting the Form tree.  A
+ * `:pre` predicate has `bound_var == NULL` (nothing to rename). */
+typedef struct RefineHyp {
+    const Form       *pred;
+    const char       *bound_var;
+    const char       *subject_name;
+    struct RefineHyp *next;
+} RefineHyp;
+
+/* What the encoder needs to know about a CALLED function to make use of its
+ * result.  A call inside a predicate or an argument is encoded as an opaque
+ * (uninterpreted) application either way -- but when the callee declares a
+ * return refinement, that refinement is a fact about the value the call
+ * produces, and asserting it turns `(twice (double-pos p))` from unknown into
+ * provable. */
+typedef struct RefineFnInfo {
+    const Form  *ret_pred;     /* the q of `: #refine{ r : T | q }`, or NULL */
+    const char  *ret_var;      /* the r */
+    const char **param_names;  /* so q may mention the callee's parameters */
+    uint32_t     n_params;
+    /* Whether two occurrences of this call may be treated as THE SAME VALUE.
+     *
+     * Encoding a call as an uninterpreted function makes its occurrences
+     * congruent -- `f(a)` equals `f(a)` -- which is the whole point for a
+     * measure like `len`, and which is FALSE for anything effectful.  With it
+     * assumed, `(- (tick) (tick))` where `tick` counts up encodes as `t - t`,
+     * the solver proves `t - t >= 0`, and the runtime check that would have
+     * caught the real value of -1 is elided.  That is a miscompile, and it is
+     * the one thing turning the experiment on must never do.
+     *
+     * So congruence is opt-in: only a callee that is KNOWN pure gets it. */
+    bool         pure;
+} RefineFnInfo;
+
+/* Resolve a called name.  Returns false when the name does not resolve to a
+ * function at all -- an abstract measure, which the language treats as an
+ * uninterpreted (and therefore congruent) mathematical function.  Supplied by
+ * the elaborator, which owns the scope; NULL disables both result propagation
+ * and purity discrimination, so every call falls back to the safe
+ * fresh-per-occurrence encoding. */
+typedef bool (*RefineFnResolver)(void *ud, const char *name, RefineFnInfo *out);
+
+typedef struct RefineEnv {
+    Arena       *arena;
+    RefineHyp   *head;
+    /* Declared sorts for in-scope names (from parameter types).  A name with
+     * no entry defaults to VS_INT. */
+    const char **names;
+    VCSort      *sorts;
+    uint32_t     n_names, cap_names;
+    /* Return-refinement lookup for calls appearing in encoded expressions. */
+    RefineFnResolver resolve_fn;
+    void            *resolve_ud;
+} RefineEnv;
+
+RefineEnv *refine_env_new(Arena *a);
+void refine_env_declare(RefineEnv *env, const char *name, VCSort sort);
+void refine_env_set_resolver(RefineEnv *env, RefineFnResolver fn, void *ud);
+void refine_env_push(RefineEnv *env, const Form *pred,
+                     const char *bound_var, const char *subject_name);
+VCSort refine_env_sort_of(const RefineEnv *env, const char *name);
+
+/* ------------------------------------------------------------------------- *
+ * Obligation record
+ * ------------------------------------------------------------------------- */
+
+/* An extra name -> expression substitution applied while encoding a goal.
+ * Call-site crossings use these to replace the CALLEE's parameter names with
+ * the caller's argument expressions, so a predicate that mentions a sibling
+ * parameter (`[n : int, i : #refine{ j : int | (< j n) }]`) is checked against
+ * the actual arguments rather than against free variables. */
+typedef struct RefineSubst {
+    const char *name;
+    const Form *form;
+} RefineSubst;
+
+typedef struct RefineObligation {
+    const Form  *predicate;      /* the p in #refine{ x : T | p } */
+    const char  *var_name;       /* the x */
+    const Form  *subject;        /* the form substituted for x (may be NULL) */
+    RefineSubst *subst;          /* applied before var_name/subject */
+    uint32_t     n_subst;
+    /* True when a runtime check ELSEWHERE already guards this obligation.  Set
+     * for call-site crossings: the callee validates its own parameters on
+     * entry, so an argument we merely cannot prove is the normal state of
+     * affairs, not news.  Such an obligation reports only when it is
+     * DEFINITELY wrong -- a closed goal that evaluates false, `(safe-div 10 0)`
+     * -- or when --strict-refine asks for a fully-discharged build.
+     *
+     * The distinction is who owes the proof.  A function's own return
+     * refinement is a claim it makes about itself, so an open counterexample
+     * means the claim is false: that is an error.  A call-site crossing is
+     * about a value flowing in, and "not proven for every input" is the
+     * ordinary condition of code that has not been fully annotated yet.
+     * Erroring on it would make `refined` impossible to adopt incrementally. */
+    bool         runtime_guarded;
+    /* A speculative probe (RT4 template inference): decide it, report nothing,
+     * count nothing.  The caller only wants the verdict. */
+    bool         speculative;
+    /* RT4 path splitting: a speculative probe for ONE PATH of a branching
+     * body.  Counted separately from RT4 template probes so the stats line
+     * still means what it says -- these are not inferred refinements. */
+    bool         path_probe;
+    VCSort       base_sort;      /* sort of the refined base type T */
+    const char  *base_type_name; /* T, for diagnostics */
+    Span         loc;
+    RefineEnv   *env;            /* in-scope hypotheses at the crossing */
+    const char  *what;           /* "return value", "postcondition", ... */
+    const char  *fn_name;
+
+    RefineVC    *vc;             /* RT2: filled by the discharge pass */
+    bool         discharged;     /* RT3: a verdict was reached */
+    bool         proven;         /* RT3: a backend returned RT_VALID */
+    RefineModel *counterex;      /* RT3: model when a backend said RT_INVALID */
+} RefineObligation;
+
+typedef struct RefineObligationVec {
+    RefineObligation **obs;
+    uint32_t           n, cap;
+    Arena             *arena;
+} RefineObligationVec;
+
+void refine_obligations_init(RefineObligationVec *v, Arena *a);
+
+/* Record one crossing.  Returns the obligation so a caller that wants an
+ * immediate verdict (to elide the runtime check it is about to inject) can
+ * hand it straight to refine_discharge_one. */
+RefineObligation *refine_collect_obligation(RefineObligationVec *v,
+                                            const Form *predicate,
+                                            const char *var_name,
+                                            const Form *subject,
+                                            VCSort base_sort,
+                                            const char *base_type_name,
+                                            Span loc,
+                                            RefineEnv *env,
+                                            const char *what,
+                                            const char *fn_name);
+
+/* Attach the sibling-parameter substitutions a call-site crossing needs.
+ * `n` entries are copied into the obligation's arena. */
+void refine_obligation_set_subst(RefineObligation *ob, Arena *a,
+                                 const RefineSubst *subst, uint32_t n);
+
+/* ------------------------------------------------------------------------- *
+ * RT2 lowering: obligation -> normalized VC
+ * ------------------------------------------------------------------------- */
+
+/* Build the normalized VC for `ob` (hypotheses from its env, goal from its
+ * predicate with `var_name` substituted by `subject`).  Returns NULL when the
+ * obligation escapes the supported predicate fragment -- the caller then
+ * treats it as RT_UNKNOWN, which is always sound.  `*out_reason` (optional)
+ * is set to a short human-readable cause. */
+RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reason);
+
+#endif /* TUR_REFINE_COLLECT_H */

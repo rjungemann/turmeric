@@ -1,0 +1,30 @@
+;; RT3/S1+S3: a NAMED MEASURE is an uninterpreted function.  `size-of` is
+;; never unfolded by the solver -- congruence closure reasons about it as an
+;; opaque symbol, which is the language rule that keeps the fragment cheap.
+;;
+;; Hypotheses: size-of(v) = n, 0 <= i, i < n.
+;; Goal:       i < size-of(v).
+;; Neither arithmetic nor equality alone gets there: LA cannot see that
+;; `size-of(v)` and `n` denote the same value, and EUF cannot do the ordering.
+;; The combination does.
+;;
+;; Congruence -- treating the two occurrences of `(size-of v)` as the same
+;; value -- is only valid for a PURE function, and purity here is EARNED, not
+;; declared: the compiler walks `size-of`'s body against a default-deny
+;; whitelist (literals, immutable reads, if/let/do, arithmetic builtins, calls
+;; to functions already known pure) and `(* v 2)` clears it.  The `#fx{}` is a
+;; veto only -- a non-empty declared row rules purity out, an empty one proves
+;; nothing on its own (the effect system does not infer anything from `set!`,
+;; mutable globals, or inline C).  Anything the walk does not recognise stays
+;; impure, so a missed case costs one runtime check and never a wrong proof.
+(defn size-of [v : int] #fx{} : int
+  (* v 2))
+
+(defn index-ok [v : int, n : int, i : int] : #refine{ r : int | (< r (size-of v)) }
+  :pre (and (= (size-of v) n) (>= i 0) (< i n))
+  i)
+
+(defn main [] : int
+  (println (index-ok 4 8 3))
+  (println "refine-measure-euf")
+  0)

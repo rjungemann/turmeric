@@ -1,0 +1,31 @@
+;; SOUNDNESS REGRESSION FIXTURE -- the second half of the congruence hole.
+;;
+;; The first fix made congruence opt-in on the DECLARED EFFECT ROW: a callee
+;; got it only when it declared `#fx{}`.  That closed one door and left
+;; another open, because an empty effect row is not a statement about purity.
+;; The effect system tracks algebraic effects -- `perform` and handlers -- and
+;; infers nothing from `set!`, from a mutable global, or from inline C.
+;; effect_check.c says so where it suppresses W0031 for `#fx{Unsafe}` bodies
+;; containing inline C: "the effect system does not infer Unsafe from it".
+;;
+;; So `tick` below declares a genuinely EMPTY row and still counts up on every
+;; call.  Under the row-only rule it was accepted as pure, the two `(tick)`s
+;; collapsed to one term `t`, the solver proved `t - t >= 0`, and the runtime
+;; check that would have caught the real answer of -1 was elided.  The gate-off
+;; build aborted on the contract; the gate-on build printed -1 and exited 0.
+;;
+;; Purity is now decided by a default-deny walk of the callee's body.  An
+;; inline-C block is not on the whitelist, so `tick` is impure, each occurrence
+;; is a distinct opaque value, and the obligation is refuted.
+(defn tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn always-nonneg [] : #refine{ r : int | (>= r 0) }
+  (- (tick) (tick)))
+
+(defn main [] : int
+  (println (always-nonneg))
+  0)

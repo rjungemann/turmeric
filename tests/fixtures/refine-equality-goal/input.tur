@@ -1,0 +1,22 @@
+;; An EQUALITY goal needs the negated equality to be split.
+;;
+;; The obligation is discharged by refuting `hyps AND (not goal)`, so a goal
+;; `(= r x)` puts `r != x` in the formula -- and S2 skipped a negated VC_EQ
+;; outright, because one linear constraint cannot express a disequality. That
+;; made every equality goal needing any arithmetic Unknown, which is a lot of
+;; them: `(= r <expr>)` is the most natural postcondition there is.
+;;
+;; `a != b` over a totally ordered sort is `a < b OR b < a`, and written that
+;; way S2 decides it. Both of these reported `0 proven, 1 unknown` before.
+;; Under --strict-refine so a regression is a compile error.
+
+(defn identity-ish [x : int] : #refine{ r : int | (= r x) }
+  (- (+ x 1) 1))
+
+(defn succ [x : int] : #refine{ r : int | (= r (+ x 1)) }
+  (+ 1 x))
+
+(defn main [] : int
+  (println (identity-ish 7))
+  (println (succ 7))
+  0)

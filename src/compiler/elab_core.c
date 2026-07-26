@@ -1615,6 +1615,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->scope = &e->global;
     e->next_id = 0;
     e->next_gensym_id = 0;  /* Phase 6 */
+    /* RT1: refinement obligation vector (empty unless `refined` is on). */
+    refine_obligations_init(&e->refine_obs, arena);
     /* Transitive-RM: driver overrides this via elaborate_program's
      * user_macros param when there's a shared registry to thread into
      * module loaders. */

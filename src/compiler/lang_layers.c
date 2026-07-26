@@ -12,10 +12,14 @@
  * one-off syntax convenience belongs in a `#use-reader-macros` file. */
 #include "lang_layers.h"
 
+#include <stdio.h>
 #include <string.h>
 
+#include "diag.h"
 #include "forms.h"
 #include "reader_macros.h"
+#include "runtime/experiments.h"
+#include "runtime/globals.h"
 
 /* ------------------------------------------------------------------------- *
  * Reader-layer hooks.
@@ -61,11 +65,74 @@ static const LangLayerDescriptor LANG_LAYERS[] = {
       NULL,                        /* reader layer: no experiment */
       "#s\"...\" owned-String literal (string/from-cstr)",
       "v1" },
-    /* Semantic layers (LAYER_SEMANTIC + `experiment`) land here once their
-     * backing EXPERIMENTS[] row exists.  `refined` (#lang turmeric refined ==
-     * --enable=refined scoped to one file) rides the refinement-types work;
-     * see docs/upcoming/lang-layers-plan.md phase L4. */
+    /* RT0 (refinement-types-plan): the semantic layer for static refinement
+     * discharge.  `#lang turmeric refined` is EXACTLY `--enable=refined`
+     * scoped to one file -- the `experiment` field below is the only enable
+     * path, never a second parallel one, so the experiment's lifecycle
+     * (TUR-W0060/W0061) and expires_at govern both spellings.  A project
+     * manifest that disables the experiment makes such a file a hard error
+     * (see lang_layers_apply_semantic), never a silent ignore. */
+    { "refined",
+      LAYER_SEMANTIC,
+      NULL,                        /* semantic layer: no reader hook */
+      "refined",                   /* EXPERIMENTS[] row */
+      "static discharge of #refine{...} predicates (refinement types)",
+      "v1" },
 };
+
+/* ------------------------------------------------------------------------- *
+ * Graduated layers.
+ *
+ * A `#lang` layer that graduates is DELETED from LANG_LAYERS[] -- CLAUDE.md is
+ * explicit that layers graduate to always-on rather than accumulating.  But a
+ * deleted row makes every file that still names the token fail outright with
+ * TUR-E0330, and that is a harsher landing than the same graduation gives a
+ * CLI flag: `--enable=<graduated>` is accepted as a no-op with TUR-W0063,
+ * because `GRADUATED[]` in experiments.c exists for exactly that.
+ *
+ * This is the layer-side equivalent.  A name listed here is accepted and
+ * ignored, with a one-time notice, so a file carrying `#lang turmeric <name>`
+ * keeps compiling across the graduation boundary.  Entries age out one minor
+ * line after graduation, matching the experiment convention -- the shim is a
+ * migration window, not a permanent alias.
+ *
+ * Deliberately empty today: no layer has graduated yet.  `refined` becomes the
+ * first entry when it does; `stringed` is the only other layer and is not
+ * graduating.  The list exists ahead of that because the shim has to land
+ * BEFORE or WITH the row deletion -- adding it afterwards would mean shipping
+ * one release in which the files break.  See
+ * docs/upcoming/v1/refined-graduation-plan.md.
+ *
+ * The mechanism was verified with a temporary entry before landing empty: a
+ * graduated token warned once and compiled (exit 0) on both the compiled and
+ * the interpreter path, a genuinely unknown token still reported TUR-E0330,
+ * and a live layer was unaffected.  Testing it that way rather than at
+ * graduation is the point -- an empty list exercises nothing, and graduation
+ * is the worst moment to find out the shim does not work.
+ * ------------------------------------------------------------------------- */
+static const char *const GRADUATED_LAYERS[] = {
+    NULL,
+};
+
+static bool g_layer_grad_warned = false;
+
+bool lang_layer_is_graduated(const char *name, size_t len) {
+    if (!name) return false;
+    for (size_t i = 0; GRADUATED_LAYERS[i]; i++) {
+        if (strlen(GRADUATED_LAYERS[i]) == len &&
+            memcmp(GRADUATED_LAYERS[i], name, len) == 0) {
+            if (!g_layer_grad_warned) {
+                g_layer_grad_warned = true;
+                fprintf(stderr,
+                        "warning [TUR-W0064]: #lang layer '%.*s' graduated and "
+                        "is now on by default; the token is no longer needed\n",
+                        (int)len, name);
+            }
+            return true;
+        }
+    }
+    return false;
+}
 
 size_t lang_layers_count(void) {
     return sizeof(LANG_LAYERS) / sizeof(LANG_LAYERS[0]);
@@ -86,6 +153,35 @@ long lang_layer_index(const char *name, size_t len) {
         }
     }
     return -1;
+}
+
+bool lang_layers_apply_semantic(LangLayerSet set, const char *path) {
+    if (!set) return true;
+    bool ok = true;
+    size_t n = lang_layers_count();
+    for (size_t i = 0; i < n; i++) {
+        if (!lang_layer_is_set(set, (long)i)) continue;
+        const LangLayerDescriptor *d = &LANG_LAYERS[i];
+        if (d->kind != LAYER_SEMANTIC || !d->experiment) continue;
+        if (experiment_is_enabled(d->experiment)) continue;
+        /* A project that scoped its own :experiments list and left this one
+         * out has said no.  Honour that loudly -- silently ignoring a `#lang`
+         * layer would compile the file under different semantics than it
+         * asked for. */
+        if (g_manifest_experiments_scoped) {
+            diag_emit(DIAG_ERROR, SPAN_UNKNOWN,
+                      "%s requires `#lang` layer '%s', which is disabled by the "
+                      "project manifest (add :%s to :experiments in build.tur, "
+                      "or drop the layer from the #lang line)",
+                      path ? path : "this file", d->name, d->experiment);
+            ok = false;
+            continue;
+        }
+        /* Otherwise the layer IS the enable, scoped to this file: exactly
+         * --enable=<experiment>, at CLI precedence. */
+        experiment_enable(d->experiment, XF_SRC_CLI);
+    }
+    return ok;
 }
 
 void lang_layers_apply_readers(LangLayerSet set,

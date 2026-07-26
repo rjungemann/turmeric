@@ -1,0 +1,20 @@
+;; RT1: an argument that is DEFINITELY wrong at this call site.
+;;
+;; `(safe-div 10 0)` has a closed goal -- every term is a literal, so the
+;; predicate `(not= 0 0)` evaluates to false outright.  That is not "we could
+;; not prove it", it is "this is wrong", and it fails the build instead of
+;; panicking at runtime.
+;;
+;; The contrast matters: an argument whose value is not known statically (see
+;; the refine-call-site fixture) is NOT an error by default -- the callee still
+;; checks on entry, and erroring on every unproven argument would make the
+;; experiment impossible to adopt incrementally.  --strict-refine opts into
+;; that stricter reading.
+(load "stdlib/refine.tur")
+
+(defn safe-div [n : int, d : NonZero] : int
+  (/ n d))
+
+(defn main [] : int
+  (println (safe-div 10 0))
+  0)

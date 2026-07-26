@@ -1,0 +1,13 @@
+;; The other side of the equality split: a FALSE equality goal is now REFUTED
+;; with a counterexample, not answered Unknown.
+;;
+;; Before the split this was Unknown -- the solver could not use `r != x` at
+;; all, so it could neither prove nor disprove the goal, and the violation
+;; showed up only as a runtime panic. Turning it into TUR-E0371 at compile time
+;; is the diagnostic half of the same change.
+(defn off-by-one [x : int] : #refine{ r : int | (= r x) }
+  (+ x 1))
+
+(defn main [] : int
+  (println (off-by-one 7))
+  0)

@@ -1,0 +1,11 @@
+; A negative-weight cycle: a-b<=-1, b-c<=-1, c-a<=-1 sums to 0<=-3.
+(set-logic QF_IDL)
+(set-info :status unsat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun c () Int)
+(assert (<= (- a b) (- 1)))
+(assert (<= (- b c) (- 1)))
+(assert (<= (- c a) (- 1)))
+(check-sat)
+(exit)

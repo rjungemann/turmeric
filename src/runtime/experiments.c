@@ -153,6 +153,22 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_cycle_gc },
+    /* RT0 (docs/upcoming/v1/refinement-types-plan.md): static discharge of
+     * `#refine{ x : T | p }` predicates.  The predicate already has a runtime
+     * contract meaning, so the discharger is allowed to answer Unknown on any
+     * obligation and stay sound -- it simply falls back to the runtime check
+     * it would have had anyway.  That is what makes an incrementally
+     * hand-rolled, dependency-free solver a shippable prototype rather than a
+     * broken one.  Surfaced per-file as the `refined` LANG_LAYERS[] semantic
+     * layer (`#lang turmeric refined` == --enable=refined scoped to one
+     * file) -- one enable path, not two. */
+    { "refined",
+      "static discharge of #refine{...} predicates (refinement types)",
+      "docs/upcoming/v1/refinement-types-plan.md",
+      "0.31.0",                  /* introduced */
+      "0.34.0",                  /* expires_at (soft deadline; review at cut) */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_refined },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

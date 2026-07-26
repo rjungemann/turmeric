@@ -1,0 +1,14 @@
+;; RT6 message quality, shape 3: nothing can help.  The hypotheses already pin
+;; `x < 0` while the goal needs `x > 0`, so every candidate strong enough to
+;; discharge the goal CONTRADICTS what is known.
+;;
+;; The search rejects those explicitly.  Without that guard a contradictory
+;; candidate would "discharge" the goal by ex falso and we would cheerfully
+;; suggest constraining x to be both negative and positive.  No help line is
+;; better than a nonsense one.
+(defn impossible [x : #refine{ v : int | (< v 0) }] : #refine{ r : int | (> r 0) }
+  x)
+
+(defn main [] : int
+  (println (impossible -1))
+  0)

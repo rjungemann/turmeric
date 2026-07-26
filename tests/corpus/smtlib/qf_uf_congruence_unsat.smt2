@@ -1,0 +1,10 @@
+; Congruence: a = b forces f(a) = f(b).
+(set-logic QF_UF)
+(set-info :status unsat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun f (Int) Int)
+(assert (= a b))
+(assert (not (= (f a) (f b))))
+(check-sat)
+(exit)

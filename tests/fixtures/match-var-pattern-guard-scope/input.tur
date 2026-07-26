@@ -1,0 +1,102 @@
+;; A var pattern's binder must be in scope for its own `when` guard.
+;;
+;; On the scalar (non-ADT) match path the guard used to be elaborated BEFORE
+;; the arm scope was created, so the pattern's binding did not exist yet and
+;;
+;;     (match p x when (> x 2) x _ 0)
+;;
+;; failed to compile with "unbound symbol 'x'". The ADT path never had the
+;; problem -- it keeps the arm scope live across the guard, which is exactly
+;; what the scalar path now does too. Wildcard and literal patterns bind
+;; nothing, so for them the two orders were always equivalent, which is why
+;; only the binder-plus-guard combination was affected.
+;;
+;; This is an ELABORATION defect; it never reached lowering. The two codegen
+;; defects in the same construct are covered by
+;; tests/fixtures/match-scalar-wildcard-and-guard.
+
+;; The reported repro: guard passes, and guard fails through to the next arm.
+(defn basic [p : int] : int
+  (match p
+    x when (> x 2) x
+    _              0))
+
+;; The binder is used on BOTH sides -- in the guard and in the body.
+(defn both-sides [p : int] : int
+  (match p
+    x when (> (* x 2) 6) (+ x 1)
+    _                    0))
+
+;; Two guarded var arms in sequence: each arm's binder is its own.
+(defn two-guarded [p : int] : int
+  (match p
+    x when (> x 10) 2
+    y when (> y 2)  1
+    _               0))
+
+;; A literal arm ahead of a guarded var arm.
+(defn literal-first [p : int] : int
+  (match p
+    0 100
+    x when (> x 2) x
+    _              0))
+
+;; The arm binder shadows an outer parameter of the same name.
+(defn shadowing [x : int] : int
+  (match (+ x 1)
+    x when (> x 5) x
+    _              0))
+
+;; Nested match where the inner arm binder shadows the outer arm binder.
+(defn nested-shadow [p : int] : int
+  (match p
+    a when (> a 1) (match (+ a 10)
+                     a when (> a 20) a
+                     _               5)
+    _              0))
+
+;; A guarded var arm with no following arm at all.
+(defn guard-only-arm [p : int] : int
+  (match p
+    x when (> x 2) x))
+
+;; The guard may call an ordinary function with the binder.
+(defn big? [n : int] : bool (> n 2))
+
+(defn guard-calls-fn [p : int] : int
+  (match p
+    x when (big? x) x
+    _               0))
+
+;; A float scrutinee -- a non-zero fractional part on both sides of the guard,
+;; so a truncating binder would show up as a wrong answer rather than a tie.
+(defn float-guard [p : float] : int
+  (match p
+    x when (> x 2.5) 1
+    _                0))
+
+;; A cstr scrutinee: the binder must be bound at the scrutinee's type, not
+;; silently defaulted, so the arm body can return it as a cstr.
+(defn cstr-guard [p : cstr] : cstr
+  (match p
+    "hi" "greeting"
+    x when (> 1 0) x
+    _              "other"))
+
+(defn main [] : int
+  (println (basic 7))
+  (println (basic 1))
+  (println (both-sides 5))
+  (println (two-guarded 5))
+  (println (literal-first 0))
+  (println (shadowing 9))
+  (println (nested-shadow 2))
+  (println (nested-shadow 15))
+  (println (guard-only-arm 7))
+  (println (guard-calls-fn 7))
+  (println (guard-calls-fn 1))
+  (println (float-guard 7.1))
+  (println (float-guard 1.5))
+  (println (cstr-guard "hi"))
+  (println (cstr-guard "zz"))
+  0)

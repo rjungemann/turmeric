@@ -1,0 +1,38 @@
+;; RT4: a refined function's RESULT carries its refinement to the next
+;; obligation, so refined code composes instead of going opaque at every call.
+;;
+;; A call is encoded as an uninterpreted term either way -- but when the callee
+;; has a return refinement, that predicate is a fact about the value this call
+;; produced, and asserting it is what turns `(twice (double-pos p))` from
+;; unknown into proved.
+;;
+;; Two sources of that refinement:
+;;   - DECLARED: written as `: #refine{ r : int | (> r 0) }`.  Sound to assume
+;;     because it is either proved statically or enforced by the runtime check
+;;     that would otherwise have panicked.
+;;   - INFERRED: RT4 tries a small fixed vocabulary of shapes against the body
+;;     and keeps the first a backend proves.  This is not general refinement
+;;     inference -- there is no search over a recursive constraint system, just
+;;     a handful of guesses that are individually checked.
+(load "stdlib/refine.tur")
+
+(defn twice [y : Pos] : int
+  (* y 2))
+
+(defn double-pos [x : Pos] : #refine{ r : int | (> r 0) }
+  (* x 2))          ; declared
+
+(defn inc-pos [x : Pos] : int
+  (+ x 1))          ; no annotation -- (> result 0) is inferred
+
+(defn use-declared [p : Pos] : int
+  (twice (double-pos p)))
+
+(defn use-inferred [p : Pos] : int
+  (twice (inc-pos p)))
+
+(defn main [] : int
+  (println (use-declared 3))
+  (println (use-inferred 3))
+  (println "refine-result-propagation")
+  0)

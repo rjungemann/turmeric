@@ -1,0 +1,12 @@
+; a=b, b=c, then f(a)=f(c) by transitivity plus congruence.
+(set-logic QF_UF)
+(set-info :status unsat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun c () Int)
+(declare-fun f (Int) Int)
+(assert (= a b))
+(assert (= b c))
+(assert (not (= (f a) (f c))))
+(check-sat)
+(exit)

@@ -1,0 +1,7 @@
+(set-logic QF_LIA)
+(set-info :status sat)
+(define-fun mymax ((a Int) (b Int)) Int (ite (< a b) b a))
+(declare-fun x () Int)
+(assert (= x 3))
+(assert (= (mymax x 7) 7))
+(check-sat)

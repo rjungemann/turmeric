@@ -1,0 +1,2 @@
+a refinement cannot be written on the parameter of a (fn ...) type
+a refinement cannot be written on the result of a (fn ...) type

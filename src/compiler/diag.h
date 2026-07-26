@@ -227,6 +227,24 @@ typedef enum DiagCode {
     TUR_E0310_UNKNOWN_EXPERIMENT,
     TUR_W0060_EXPERIMENTAL_PROTOTYPE,
     TUR_W0061_EXPERIMENTAL_BETA,
+    /* RT3 (refinement-types-plan): static discharge of `#refine{...}`
+     * predicates.  Only ever emitted under the `refined` experiment
+     * (--enable=refined / `#lang turmeric refined`).  E0371/W0372 are the two
+     * verdict-carrying codes: the runtime contract check survives in both
+     * cases, so neither is a miscompile -- W0372 is "we could not prove it",
+     * E0371 is "we found a counterexample".  Under --strict-refine both are
+     * hard errors. */
+    TUR_E0370_REFINE_ILL_TYPED,   /* refinement predicate is ill-typed */
+    TUR_E0371_REFINE_NOT_PROVED,  /* counterexample found; predicate is not entailed */
+    TUR_W0372_REFINE_UNKNOWN,     /* no backend decided it; runtime check kept */
+    TUR_W0373_REFINE_NONLINEAR,   /* nonlinear subterm treated as uninterpreted */
+    TUR_E0374_REFINE_INSTANCE_STRONGER, /* instance method demands more than its class signature */
+    TUR_E0375_REFINE_EFFECTFUL,   /* refinement predicate mentions effects */
+    TUR_E0376_REFINE_TYPE_PARAM,  /* refinement on a type parameter (unsupported) */
+    TUR_W0377_REFINE_INSTANCE_LENIENCY, /* call allowed only because the resolved
+                                         * instance demands less than its class */
+    TUR_E0378_REFINE_IN_FN_TYPE,  /* refinement written inside a (fn ...) type */
+    TUR_I0379_REFINE_ORACLE_MISMATCH, /* dev oracle: in-house stage disagreed with Z3 */
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */

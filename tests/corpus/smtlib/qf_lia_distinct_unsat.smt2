@@ -1,0 +1,12 @@
+; Three pairwise-distinct integers cannot all sit in [0,1].
+(set-logic QF_LIA)
+(set-info :status unsat)
+(declare-fun p () Int)
+(declare-fun q () Int)
+(declare-fun r () Int)
+(assert (distinct p q r))
+(assert (and (<= 0 p) (<= p 1)))
+(assert (and (<= 0 q) (<= q 1)))
+(assert (and (<= 0 r) (<= r 1)))
+(check-sat)
+(exit)

@@ -1,0 +1,63 @@
+;; Path conditions for call-site crossings.
+;;
+;; A crossing is collected during elaboration and discharged after the whole
+;; unit -- which is what lets it see every callee's refinement, and is why the
+;; deferral is load-bearing. The cost was that a call inside a branch was
+;; checked WITHOUT the condition that selected the branch. Both of these were
+;; unknown; under --strict-refine, losing either is a compile error.
+;;
+;; The conditions are recovered syntactically: `call_form` is a pointer into
+;; the caller's body, so walking the body down to that exact node collects
+;; every branch entered on the way. No condition stack is threaded through
+;; expression elaboration.
+
+(defn sdiv [n : int d : #refine{ d : int | (not= d 0) }] : int
+  (/ n d))
+
+;; The guard is what makes the argument legal, and now the compiler agrees.
+(defn safe-quotient [x : int] : int
+  (if (= x 0)
+    0
+    (sdiv 10 x)))
+
+;; The canonical decreasing-argument recursion: `n - 1 >= 0` follows from
+;; `n >= 0` (in the environment) AND `n != 0` (the branch), and only the first
+;; of those was available before.
+(defn countdown [n : #refine{ n : int | (>= n 0) }] : int
+  (if (= n 0)
+    0
+    (+ 1 (countdown (- n 1)))))
+
+;; A `let` on the path contributes `y = x + 1`, which with `x > 0` is what
+;; makes `y != 0` provable. A call inside the BINDING's value gets no such
+;; fact -- it runs before the binding exists.
+(defn via-binding [x : #refine{ x : int | (> x 0) }] : int
+  (let [y (+ x 1)]
+    (sdiv 10 y)))
+
+;; A `match` arm contributes a literal pattern's equation and its guard.
+;; Constructor tags and field selectors are deliberately NOT collected here:
+;; they arrive with pattern BINDERS, and a binder shadowing an outer name would
+;; inherit its hypotheses in this flat namespace.
+(defn via-literal-arm [x : int] : int
+  (match x
+    5 (sdiv 10 x)
+    _ 0))
+
+;; The guard is on an ADT scrutinee: a guarded WILDCARD arm over a non-ADT
+;; scrutinee emits invalid C, unrelated to refinements -- see
+;; docs/reported/match-int-scrutinee-guard-null-adt.md.
+(defdata Val (Num [v : int]))
+
+(defn via-guard [t : Val] : int
+  (match t
+    (Num v) when (not= v 0) (sdiv 10 v)
+    (Num v)                 0))
+
+(defn main [] : int
+  (println (safe-quotient 5))
+  (println (countdown 3))
+  (println (via-binding 3))
+  (println (via-literal-arm 5))
+  (println (via-guard (Num 5)))
+  0)

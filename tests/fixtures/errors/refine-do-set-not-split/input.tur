@@ -1,0 +1,28 @@
+;; SOUNDNESS, inverted -- both must stay UNPROVEN, and --strict-refine makes an
+;; unproven obligation a hard error, so a regression makes this fixture start
+;; COMPILING and fail.
+;;
+;;   staled -- stepping over a `do` statement carries the environment's
+;;   hypotheses across it, and those hypotheses are about PARAMETERS. An
+;;   assignment is exactly what stales them: the parameter refinement says
+;;   `x >= 0`, the statement makes it -5, and using the old fact would prove
+;;   `(>= r 0)` of a function that returns -5. Verified load-bearing --
+;;   disabling the assignment scan makes this report `2 proven, 0 unknown` and
+;;   the program then returns -5 with no check.
+;;
+;;   wrong-bound -- splitting a branching `let` value gives the body `m = a` on
+;;   one path and `m = b` on the other, which bounds `m` by `a` but not
+;;   STRICTLY. `(< r a)` is false when a == b.
+(defn staled [^mut x : #refine{ x : int | (>= x 0) }] : #refine{ r : int | (>= r 0) }
+  (do
+    (set! x -5)
+    x))
+
+(defn wrong-bound [a : int b : int] : #refine{ r : int | (< r a) }
+  (let [m (if (<= a b) a b)]
+    m))
+
+(defn main [] : int
+  (println (staled 3))
+  (println (wrong-bound 1 2))
+  0)

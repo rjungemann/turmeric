@@ -1,0 +1,9 @@
+;; RT3: the return refinement is REFUTED -- the bounded counterexample search
+;; finds an actual x for which the predicate fails, so this is TUR-E0371 with
+;; a model, not a vague "unknown".
+(defn wrong [x : int] : #refine{ r : int | (> r 0) }
+  x)
+
+(defn main [] : int
+  (println (wrong 5))
+  0)

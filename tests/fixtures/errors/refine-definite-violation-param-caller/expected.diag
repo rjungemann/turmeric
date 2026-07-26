@@ -1,0 +1,2 @@
+refinement on argument 2 of 'safe-div' in 'with-param' cannot be proved statically
+refinement on argument 2 of 'safe-div' in 'folded' cannot be proved statically

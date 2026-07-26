@@ -2362,6 +2362,15 @@ Expr *elab_call(Elab *e, Form *call) {
         fn_binding = fn_binding->source_binding;
     }
 
+    /* RT1 (refinement-types-plan): a direct call to a user function is a
+     * crossing into whatever refinements its parameters declare.  Record it
+     * here -- one place, keyed on the source form, before any of the dozen
+     * downstream call-construction paths -- and resolve it after the whole
+     * unit is elaborated, when every callee's predicates are known regardless
+     * of definition order.  A no-op unless `refined` is on. */
+    if (g_opt_refined && fn_binding && fn_binding->type.kind == TY_FN)
+        (void)refine_note_call_site(e, fn_binding, call, 1);
+
     /* Phase RT: return-type-directed dispatch for a typeclass method whose
      * dispatch variable appears only in its return type (e.g. (default-of),
      * (schema-of)).  Such methods cannot be resolved from arguments; the

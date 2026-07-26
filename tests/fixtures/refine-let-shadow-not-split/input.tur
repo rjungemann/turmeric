@@ -1,0 +1,28 @@
+;; SOUNDNESS REGRESSION for RT4 path splitting.
+;;
+;; Splitting a `(let [x v] body)` adds the hypothesis `x = v`. The environment
+;; has ONE flat namespace, so rebinding a name already in scope asserts
+;; `x = <something mentioning x>`: here `x = x - 1`, false for every x. A false
+;; hypothesis proves the goal, the check is elided, and `shadowed -5` returns
+;; -6 while declaring `(>= r 0)`.
+;;
+;; That is not a corner case -- shadowing a parameter in a `let` is ordinary
+;; code, and it was a live miscompile the moment path splitting landed.
+;;
+;; The binding is now ALPHA-RENAMED: the hypothesis becomes `x~0 = x - 1` over
+;; a fresh name and the goal becomes `x~0 >= 0`, which is genuinely unprovable
+;; -- as it should be, since -5 really does produce -6. So the check survives
+;; and fires, and it does so because the obligation is honestly undischarged
+;; rather than because splitting was skipped.
+;;
+;; The name is deliberate in both directions: with the rename the obligation is
+;; correct-and-unprovable, and without it the obligation is a CONTRADICTION
+;; (`x = x - 1`) that proves anything. Same observed behaviour here, opposite
+;; reasons -- which is why this fixture watches the runtime abort rather than a
+;; diagnostic.
+(defn shadowed [x : int] : #refine{ r : int | (>= r 0) }
+  (let [x (- x 1)] x))
+
+(defn main [] : int
+  (println (shadowed -5))
+  0)

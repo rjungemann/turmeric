@@ -1,0 +1,31 @@
+;; RT4 path splitting over `match` arms.
+;;
+;; Unlike `if`, a match arm contributes only its VALUE -- never a hypothesis.
+;; The VC has no datatype theory: no constructors, no field accessors, nothing
+;; that could express "c is a Green". So the split proves each arm's expression
+;; against the goal with the pattern contributing nothing.
+;;
+;; That is sound (fewer hypotheses can only make a goal harder) and it still
+;; discharges the common shape below, where every arm independently satisfies
+;; the predicate. `bad-rank` is the other half: one arm returns -1, so the
+;; obligation stays unknown, the check survives, and it fires -- under both
+;; gates, at the same place.
+;;
+;; Pattern-bound names are declared unconstrained, and a binder that SHADOWS a
+;; name in scope declines the split entirely. The encoder has one flat
+;; namespace, so an arm's `r` would otherwise silently inherit an outer `r`'s
+;; hypotheses -- the same class of bug as the shadowed `let`, and unsound
+;; rather than merely imprecise.
+(defdata Color :copy (Red) (Green) (Blue))
+
+(defn rank [c : Color] : #refine{ r : int | (>= r 0) }
+  (match c (Red) 0 (Green) 1 (Blue) 2))
+
+(defn width [c : Color] : #refine{ r : int | (and (>= r 1) (<= r 3)) }
+  (match c (Red) 1 (Green) 2 (Blue) 3))
+
+(defn main [] : int
+  (println (rank (Blue)))
+  (println (width (Red)))
+  (println "refine-match-arms")
+  0)

@@ -63,6 +63,13 @@ const LangLayerDescriptor *lang_layer_at(size_t i);
  * the token is not a registered layer. */
 long lang_layer_index(const char *name, size_t len);
 
+/* True when `name` is a layer that GRADUATED -- deleted from LANG_LAYERS[]
+ * because its behaviour became unconditional.  The token is then accepted and
+ * ignored rather than reported as unknown (TUR-E0330), so a file that opted in
+ * per-file keeps compiling across the boundary.  Warns once, TUR-W0064.
+ * Mirrors GRADUATED[] in experiments.c, which does this for `--enable`. */
+bool lang_layer_is_graduated(const char *name, size_t len);
+
 /* Fold a single layer (by index) into `set`.  The bit position is the
  * table index, so a set stays valid only against this build's table. */
 static inline LangLayerSet lang_layer_add(LangLayerSet set, long idx) {
@@ -79,5 +86,12 @@ static inline bool lang_layer_is_set(LangLayerSet set, long idx) {
 void lang_layers_apply_readers(LangLayerSet set,
                                struct ReaderMacroRegistry *reg,
                                Arena *arena, SymbolTable *st);
+
+/* Apply every enabled SEMANTIC layer: turn on its backing experiment (the
+ * layer IS the enable, scoped to one file -- there is no parallel enable
+ * path).  A project manifest that scoped its own `:experiments` list and left
+ * the experiment out makes this a hard error instead; returns false in that
+ * case, having emitted the diagnostic.  `path` is used in the message only. */
+bool lang_layers_apply_semantic(LangLayerSet set, const char *path);
 
 #endif /* TUR_LANG_LAYERS_H */

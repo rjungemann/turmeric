@@ -268,6 +268,48 @@ struct Binding {
      * type its arguments pin -- the constraint is checked abstractly in the
      * body but must be re-checked when the defn is instantiated. */
     const ConstraintSet *fn_constraints;
+    /* RT1 (refinement-types-plan): the defn's per-parameter refinement
+     * predicates, for the CALL-SITE crossing check.  All four arrays have
+     * `n_refine_params` entries -- one per declared parameter, in order -- and
+     * a parameter with no refinement has a NULL `refine_param_preds` slot.
+     * `refine_param_names` is kept because a predicate may mention a SIBLING
+     * parameter (`[n : int, i : #refine{ j : int | (< j n) }]`), which the call
+     * site must replace with the corresponding argument.
+     *
+     * Stamped by elab_defn onto the binding -- which for a top-level defn is
+     * the same object pass 1 forward-declared -- and read by the deferred
+     * resolution pass that runs after ALL elaboration.  Deferring is what makes
+     * the check order-independent: a call to a function defined later in the
+     * file is checked exactly like a call to one defined earlier. */
+    const struct Form **refine_param_preds;
+    const char        **refine_param_vars;
+    const char        **refine_param_names;
+    uint32_t            n_refine_params;
+    /* RT4: the refinement this function's RESULT satisfies -- either declared
+     * (`: #refine{ r : T | q }`) or inferred by template propagation.  A call
+     * appearing inside a predicate or an argument asserts it about the value
+     * that call produced, so a refined result can discharge the next
+     * obligation instead of being an opaque term. */
+    const struct Form  *refine_return_pred;
+    const char         *refine_return_var;
+    /* RT1: for a typeclass INSTANCE method that restated its own result
+     * refinement, the CLASS's promise -- checked in addition to its own, and
+     * only when `instance_pred |- class_pred` was not actually PROVED.
+     *
+     * This is what makes it sound to hand a dispatch site the class's result
+     * refinement without knowing which instance runs. The variance check
+     * reports only on a refutation, so an undecidable pair would otherwise
+     * leave the class promise enforced by nothing while callers relied on it.
+     * NULL whenever the instance inherited the class's predicate (its own
+     * check already IS the class's) or the variance obligation discharged. */
+    const struct Form  *refine_class_ret_pred;
+    const char         *refine_class_ret_var;
+    /* RT4 purity memo, for the congruence question "may two occurrences of
+     * this call be modelled as the SAME value?".  0 = not yet computed,
+     * 1 = pure, 2 = impure.  Computed by rt_binding_is_pure (elab_fns.c) with
+     * a default-deny walk of the body; see the comment there for why the
+     * declared effect row is not sufficient evidence on its own. */
+    uint8_t             refine_purity;
     /* MB1 (constrained-hkt-forall-mode-b-plan): for a top-level `defn` binding,
      * the FnDef it defines -- lets make_dict_clone reach the original body/params
      * from the binding without scanning file-scope defs (user defns are not yet

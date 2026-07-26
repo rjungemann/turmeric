@@ -1,0 +1,37 @@
+;; SOUNDNESS FIXTURE -- widening `match` to PURE must not swallow an impure arm.
+;;
+;; Its sibling refine-match-pure-congruent pins the gain: a `match`-bodied
+;; measure is now congruent. This pins the boundary. `rank` differs from that
+;; fixture by ONE arm, which calls a function holding a static counter, so two
+;; occurrences of `(rank c)` genuinely can return different values and
+;; `(- (rank c) (rank c))` genuinely can be negative.
+;;
+;; The classifier joins over the scrutinee and every arm, so one impure arm
+;; makes the whole `match` impure and the callee non-congruent. The obligation
+;; stays unknown, the runtime check survives, and it fires. This is the same
+;; shape as the three congruence miscompiles already pinned under errors/ and
+;; refine-typeclass-not-congruent -- had the join been dropped, or had `match`
+;; been classified PURE unconditionally, this program would print -1 and exit 0.
+;;
+;; A runtime fixture rather than an error fixture: `tick` is opaque, so there is
+;; no closed counterexample to refute statically. The build succeeds with
+;; W0372 and the kept check is what aborts -- which is the behaviour worth
+;; pinning, because the bug would have been a missing abort, not a missing
+;; diagnostic.
+(defdata Color :copy (Red) (Green) (Blue))
+
+(defn tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn rank [c : Color] : int
+  (match c (Red) 0 (Green) (tick) (Blue) 2))
+
+(defn probe [c : Color] : #refine{ r : int | (>= r 0) }
+  (- (rank c) (rank c)))
+
+(defn main [] : int
+  (println (probe (Green)))
+  0)

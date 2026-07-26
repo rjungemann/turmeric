@@ -1,0 +1,11 @@
+; Needs BOTH theories: arithmetic gives a = b, EUF then gives f(a) = f(b).
+(set-logic QF_UFLIA)
+(set-info :status unsat)
+(declare-fun a () Int)
+(declare-fun b () Int)
+(declare-fun f (Int) Int)
+(assert (<= a b))
+(assert (<= b a))
+(assert (not (= (f a) (f b))))
+(check-sat)
+(exit)

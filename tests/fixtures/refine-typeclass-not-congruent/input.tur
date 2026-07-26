@@ -1,0 +1,53 @@
+;; SOUNDNESS REGRESSION FIXTURE -- congruence through the typeclass door.
+;;
+;; This is the third instance of one bug. Twice before, two occurrences of a
+;; call were modelled as the SAME value when the callee was not pure, so
+;; `(- (f) (f))` encoded as `t - t`, the solver proved `t - t >= 0`, and the
+;; runtime check that would have caught -1 was elided. The first two doors were
+;; an unannotated function and a lying `#fx{}`; both are pinned by sibling
+;; fixtures under errors/.
+;;
+;; The third door was the ABSTRACT MEASURE rule. A name that resolves to no
+;; function at all is an uninterpreted mathematical function, which the
+;; language defines as congruent -- correct for a genuine measure, and reached
+;; by accident for a typeclass method, because a method has no global binding
+;; under its bare name. `rt_resolve_fn` returned false, the encoder read
+;; "abstract measure", and an instance method wired to a counter got congruence
+;; for free. Gate off aborted; gate on printed -1 and exited 0.
+;;
+;; A method is code that runs. It is now reported as a known callee with no
+;; purity, so each occurrence gets its own symbol, the obligation goes unknown,
+;; and the runtime check stays.
+;;
+;; Unlike its two siblings this is a RUNTIME fixture, not an error fixture:
+;; nothing here is statically refutable (the method's result is opaque, so
+;; there is no closed counterexample), so the build succeeds with W0372 and the
+;; kept check is what fires. That is the behaviour worth pinning -- the bug was
+;; never a missing diagnostic, it was a missing abort.
+(defn raw-tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defclass Ticker [a]
+  (tickm [self : a] : int))
+
+(definstance Ticker [int]
+  (tickm [self : int] : int
+    (raw-tick)))
+
+(defn probe [] : #refine{ r : int | (>= r 0) }
+  (- (tickm 1) (tickm 1)))
+
+
+;; Both dispatch spellings, because fixing only the bare form left the dotted
+;; one congruent -- the encoder sees `.tickm` there, which does not match the
+;; method's own name. The fuzzer caught that two seeds after the first fix.
+(defn probe-dotted [] : #refine{ r : int | (>= r 0) }
+  (- (.tickm 1) (.tickm 1)))
+
+(defn main [] : int
+  (println (probe-dotted))
+  (println (probe))
+  0)

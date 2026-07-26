@@ -1,0 +1,7 @@
+(set-logic QF_LIA)
+(set-info :status unsat)
+(define-fun lim () Int 10)
+(declare-fun x () Int)
+(assert (> x lim))
+(assert (< x 5))
+(check-sat)

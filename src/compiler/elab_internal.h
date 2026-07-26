@@ -19,6 +19,7 @@
 #include "types.h"
 #include "effect.h"    /* Phase 19 */
 #include "globals.h"   /* ET4: g_effect_types_enabled */
+#include "refine_collect.h" /* RT1: refinement proof obligations */
 /* Phase U5: External declarations for global unsafe linting configuration */
 extern uint32_t g_unsafe_max_lines;
 extern bool g_unsafe_warn_nested;
@@ -814,7 +815,138 @@ typedef struct Elab {
      * rewritten call through; elab_call reads-and-clears it at entry so a nested
      * user `(Name ...)` during arg elaboration is still rejected. */
     bool              make_struct_ctor_rewrite;
+    /* RT1 (refinement-types-plan): proof obligations collected from
+     * `#refine{...}` crossings during this compilation unit.  Only populated
+     * when the `refined` experiment is on; the discharge pass (RT3) decides
+     * each one and the runtime contract check is elided exactly for those a
+     * backend proved. */
+    RefineObligationVec refine_obs;
+    /* RT1 call-site crossings, recorded during elaboration and RESOLVED AFTER
+     * IT (refine_resolve_call_sites, elab_toplevel.c).  Deferral is what makes
+     * the check independent of definition order: at the moment `(safe-div 10 0)`
+     * is elaborated, `safe-div`'s parameter predicates may not be stamped yet
+     * (the binding is a pass-1 forward declaration), but by the end of the unit
+     * they always are -- and it is the SAME Binding object, because elab_defn
+     * reuses the forward declaration rather than replacing it. */
+    struct RefineCallSite *refine_call_sites;
+    uint32_t               n_refine_call_sites;
+    uint32_t               cap_refine_call_sites;
+    /* Open-addressed (callee, call_form) -> index+1 set, so deduplicating a
+     * re-elaborated call site stays O(1) instead of rescanning every crossing
+     * recorded so far -- which would make an opted-in build quadratic in its
+     * call count. */
+    uint32_t              *refine_cs_htab;
+    uint32_t               refine_cs_htab_cap;
 } Elab;
+
+/* CT0: a contract type in ANNOTATION position contributes its BASE type to the
+ * signature; the predicate rides separately, as an entry check and (under
+ * `refined`) as a hypothesis.  EVERY site that resolves a parameter or return
+ * annotation must peel it -- leaving a TY_CONTRACT in a signature makes every
+ * use of that value fail to type with `expected { _ : ? | ... }`.
+ *
+ * That defect reached three sites independently before this helper existed:
+ * `defn` return types, `fn` parameters, and typeclass instance-method
+ * parameters.  If you are adding a fourth annotation site, call this.
+ *
+ * `*out_pred` / `*out_var` receive the predicate and its bound variable when
+ * one was peeled; both are left untouched otherwise. */
+static inline Type *rt_peel_contract(Type *ann, const Form **out_pred,
+                                     const char **out_var) {
+    if (ann && ann->kind == TY_CONTRACT && ann->as.contract_.base_type) {
+        if (out_pred) *out_pred = ann->as.contract_.predicate;
+        if (out_var)  *out_var  = ann->as.contract_.var_name;
+        return ann->as.contract_.base_type;
+    }
+    return ann;
+}
+
+/* CT1: wrap a function body so its RESULT is checked against `pred`.  Shared by
+ * `defn` and typeclass instance methods; see elab_fns.c for why it is not
+ * hand-rolled per site. */
+Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
+                           const Form *pred, const char *var_name,
+                           const char *fail_msg, Span span);
+
+/* CT1: inject an entry check for each `{ v : T | pred }` parameter.  Shared by
+ * `defn`, `fn`, and typeclass instance methods so a contract parameter is
+ * enforced identically wherever it is written.  Must be called while the
+ * function's own scope is current -- the predicate is elaborated in it. */
+Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
+                             Binding **params, uint32_t n_params,
+                             const Form **ct_preds, const char **ct_vars,
+                             const uint32_t *ct_idx, uint32_t n_ct, Span span);
+
+/* True when contract checks are being emitted for this build. */
+bool rt_contracts_emitted(void);
+
+/* RT1 helpers shared by the annotation sites (defn / fn / typeclass methods). */
+VCSort rt_sort_of_kind(TypeKind k);
+bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out);
+RefineFnResolver rt_refine_resolver(Elab *e);
+
+/* One pending call-site crossing: `call_form`'s arguments cross into
+ * `callee`'s parameters.  Nothing is looked up here -- see the field comment
+ * on Elab.refine_call_sites for why. */
+typedef struct RefineCallSite {
+    const Binding *callee;
+    /* The callee's name AS WRITTEN at this site.  A typeclass method's binding
+     * carries its mangled C symbol (`__inst_Scaler_scale_hyby_int`), which is
+     * not something to put in a diagnostic; the source form's head is. */
+    const char    *callee_display;
+    const Form    *call_form;    /* the whole `(f a b)` form */
+    uint32_t       arg_offset;   /* index of the first argument in call_form */
+    RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */
+    const char    *caller_name;
+    /* The caller's whole body form, back-filled alongside `env`.  The crossing
+     * needs it to recover its own PATH CONDITIONS: `call_form` is a pointer
+     * into this tree, so walking down to it collects every branch that had to
+     * be taken to reach the call. */
+    const Form    *caller_body;
+    /* RT1: when this crossing is a STATICALLY-resolved typeclass dispatch whose
+     * instance demands LESS than its class, the class's own parameter
+     * predicates.  The obligation is still the instance's -- the resolved
+     * instance is the more precise contract, and the argument is genuinely
+     * acceptable to it -- but an argument the CLASS rejects is relying on that
+     * instance's private leniency, which is not part of the interface and
+     * evaporates the moment dispatch goes dynamic or a stricter instance
+     * appears.  That is TUR-W0377.  NULL for every other crossing, and for a
+     * dispatch whose instance restates its class predicate (nothing to
+     * disagree about). */
+    const Form   **class_param_preds;
+    const char   **class_param_vars;
+    uint32_t       n_class_params;
+    Span           loc;
+} RefineCallSite;
+
+/* Record a crossing (deduplicated on (callee, call_form)).  No-op unless the
+ * `refined` experiment is on.  Returns the index it was stored at (or the
+ * current count when deduplicated), so elab_defn can back-fill the caller's
+ * hypotheses over the range its body produced. */
+uint32_t refine_note_call_site(Elab *e, const Binding *callee,
+                               const Form *call_form, uint32_t arg_offset);
+
+/* Attach the CLASS signature's parameter predicates to an already-recorded
+ * crossing, so a statically-resolved dispatch whose instance demands less can
+ * be linted (TUR-W0377) without changing what it is obliged to prove. */
+void refine_note_call_site_class_preds(Elab *e, const Binding *callee,
+                                       const Form *call_form,
+                                       const Form **preds, const char **vars,
+                                       uint32_t n_params);
+
+/* Attach `env` / `caller` to every crossing recorded at or after `from` that
+ * does not already have one.  Called by elab_defn once its body is elaborated
+ * and its hypothesis environment is built.  Back-filling rather than keeping a
+ * mutable "current env" on Elab is deliberate: elab_defn has many early-error
+ * returns, and a stale environment left behind by one of them would hand a
+ * later crossing hypotheses that do not hold there -- which is exactly the
+ * direction the soundness invariant forbids. */
+void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
+                               const char *caller, const Form *body);
+
+/* Resolve and discharge every recorded crossing.  Runs once, after all
+ * elaboration, from elaborate_program. */
+void refine_resolve_call_sites(Elab *e);
 
 /* GF1: per-gen elaboration state (stack-allocated, linked by parent pointer) */
 typedef struct GenContext {
