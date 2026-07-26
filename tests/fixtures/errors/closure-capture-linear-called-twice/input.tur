@@ -1,0 +1,10 @@
+;; closure-capture-escapes-linearity: a closure that CONSUMES a captured
+;; ^linear value is itself linear, so invoking it twice is a use-after-consume
+;; (TUR-E0101).  Before the fix this was accepted and double-freed at runtime.
+(load "stdlib/serial.tur")
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (let [f (fn [] : void (bytes-free b))]
+      (f)
+      (f)))
+  0)

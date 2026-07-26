@@ -898,10 +898,16 @@ typedef struct RefineCallSite {
     uint32_t       arg_offset;   /* index of the first argument in call_form */
     RefineEnv     *env;          /* the caller's hypotheses (may be NULL) */
     const char    *caller_name;
-    /* The caller's whole body form, back-filled alongside `env`.  The crossing
+    /* The caller's whole body, back-filled alongside `env`.  The crossing
      * needs it to recover its own PATH CONDITIONS: `call_form` is a pointer
      * into this tree, so walking down to it collects every branch that had to
-     * be taken to reach the call. */
+     * be taken to reach the call.
+     *
+     * WHOLE is load-bearing: a multi-form body arrives as a synthetic
+     * `(do ...)` (see rt_whole_body).  This used to be the defn's LAST body
+     * form, which is the return obligation's subject and not the same thing --
+     * a call in any earlier form was then never found by the walk and lost
+     * every condition guarding it. */
     const Form    *caller_body;
     /* RT1: when this crossing is a STATICALLY-resolved typeclass dispatch whose
      * instance demands LESS than its class, the class's own parameter
@@ -1081,6 +1087,11 @@ uint32_t linear_state_snapshot_bindings(const Scope *scope,
 bool *linear_state_capture_current(Binding **bindings, uint32_t n);
 void linear_state_restore(Binding **bindings, const bool *states, uint32_t n);
 bool is_binding_consumed(const Expr *body, Binding *binding);
+/* set-bang-rc-release: stamp every `(set! binding v)` in `body` so codegen
+ * releases the value being overwritten, normalizing borrow-shaped `v` to a
+ * genuine +1 first.  Call ONLY for a binding that owns a continuous reference
+ * (i.e. one that also qualifies for the scope-exit rc auto-drop). */
+void elab_set_rc_release(Arena *arena, Expr *body, Binding *binding);
 bool is_field_consumed(const Expr *body, Binding *binding, uint32_t field_idx);
 bool is_field_consumed_in_handler(const Expr *body, Binding *binding, uint32_t field_idx);
 Binding *expr_closure_fn_binding(const Expr *expr);

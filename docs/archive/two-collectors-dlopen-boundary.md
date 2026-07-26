@@ -2,8 +2,9 @@
 
 **Severity:** low-medium (no reproduced corruption; one hazard found by
 inspection and hardened, one unenforced premise)
-**Status:** headline claim VERIFIED; residual item 2 fixed; item 1 (unenforced
-premise) left open as a documentation matter
+**Status:** RESOLVED (2026-07-26). Headline claim VERIFIED; residual item 2
+fixed; item 1 (the unenforced premise) now written up for users -- see
+[Resolution of item 1](#resolution-of-item-1).
 **Found by:** the "Two collectors in one process" open question in
 [docs/upcoming/v1/gc-cycle-collection-followup-plan.md](../upcoming/v1/gc-cycle-collection-followup-plan.md)
 ("Believed fine today because values do not cross the boundary; DEDUP-5 item 2
@@ -180,3 +181,45 @@ before mutating its array. The `gc_remove_suspect` gap is now closed in
 both copies. What remains is documentation: the "values do not cross" premise
 should be dropped from the safety argument, since it is unenforced and is not
 what makes the thing safe.
+
+## Resolution of item 1
+
+The plan doc (`gc-cycle-collection-followup-plan.md`) had already been corrected
+in the same pass that filed this -- it states outright that the safety does not
+come from the premise. The **user-facing** guide had not. Its collector-copy
+table made only a visibility claim ("its collector is not exported, so a host
+that dlopens it cannot partially merge the two registries"), which is true but is
+not the safety argument, and said nothing about values crossing, about what
+actually guards the registry, or about the cycle leak.
+
+Added a "Two collectors in one process" section to
+[docs/guides/gc-guide.md](../guides/gc-guide.md) covering, in the order a reader
+needs them:
+
+- the premise is **not** what makes it safe, with the `defn`-returning-`rc<T>`
+  counterexample and the note that the manifest types the export as `:any`, so
+  the boundary is untyped in both directions;
+- the actual guard -- `gc_unregister_block` validating `gc_all_blocks[idx] != cb`
+  before mutating;
+- the two supporting properties (no exported collector symbols, separate
+  registries), phrased as things you can check rather than claims;
+- cross-boundary cycles being uncollectable, and that enabling the collector on
+  both sides does not cover it;
+- the `gc_possible_root` archive-only asymmetry, which links fine in a `--shared`
+  build and fails at `dlopen`.
+
+### Re-verified before writing, not copied forward
+
+Every measurement the guide now states was re-run against the current tree, since
+a doc that asserts stale numbers is worse than one that says nothing.
+`tur build --shared tests/fixtures/build-shared-smoke`:
+
+| claim | measured |
+| --- | --- |
+| exported `gc_*`/`rc_*` dynamic symbols | **0** |
+| exported module symbols | **2** |
+| `gc_possible_root` in the `.so` | **absent** |
+| `gc_possible_root` in `libturt_runtime.a` | **present** |
+
+The last two together are the archive-only asymmetry, confirmed rather than
+assumed.

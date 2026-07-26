@@ -1,7 +1,9 @@
 # A closure that consumes a captured `^linear` / `^unique` value escapes the checker
 
 **Severity:** high (memory-unsafe -- a confirmed double-free, not a rejection gap)
-**Status:** open
+**Status:** RESOLVED (2026-07-26). Implemented as the report's own fix direction
+-- the narrow "consumes, not merely captures" rule. All seven rows of the scope
+table below now behave; see [Resolution](#resolution).
 **Found by:** the "confirm no double-drop when a linear value is captured behind
 an `rc`" open question in
 [docs/upcoming/v1/gc-cycle-collection-followup-plan.md](../upcoming/v1/gc-cycle-collection-followup-plan.md)
@@ -145,3 +147,114 @@ the body with the capture in scope.
   `TUR_CC_FLAGS="-fsanitize=address" tur build --runtime=source`.
 - Related: the `^multishot` capture rule (TUR-E0500) is the nearest existing
   precedent and should stay as-is -- it is correct for its case.
+
+## Resolution
+
+The fix direction above, implemented as written: **a closure that consumes a
+captured linear/unique value is itself linear/unique.** No new diagnostic; every
+bad shape falls out of checks that already existed.
+
+### Detecting "consumes"
+
+Cheaper than the report anticipated, because of a detail of how the bug worked.
+Elaborating the closure body already marks the OUTER binding consumed -- at the
+point the closure is *built*, not where it is called, which is exactly why
+`(f) (f)` slipped through. So the body's effect is readable by comparing the
+enclosing bindings' substructural state before and after body elaboration; no
+separate "does this body consume x" analysis is needed.
+
+`elab_fn` snapshots every enclosing linear/unique binding before the body
+(`FnCaptureLinSnap`, arena-allocated -- elab_fn has many early returns between
+the snapshot and its use, and the compiler path is leak-checked), then intersects
+"transitioned during this body" with the existing `collect_free_vars` capture
+list.
+
+### Three fn types, not one
+
+The mark had to be restated three times, which is the one thing that made this
+fiddly. `elab_fn` builds the lambda's type, then -- on the capturing path, the
+only path that can carry an inherited obligation -- rebuilds it twice: once as
+the env-prepended thunk type, once as the `EX_CLOSURE` value type. Both come from
+a fresh `type_fn()`, which zero-inits `copy_kind`, so setting it only on the first
+was silently discarded before any binding saw it. The `EX_CLOSURE` type is the one
+a `let` actually binds.
+
+### Calls have to discharge the obligation
+
+Marking the closure linear was not enough: a call in head position does not go
+through the general var-use path in `elab_toplevel.c`, so nothing ever consumed
+the closure and a *called* closure was reported as dropped (E0100). Added
+`call_consume_linear_callable` at the `elab_call_fn` choke point. Continuations
+are excluded -- `(k v)` on a `TY_CONT`/`is_continuation` binding is application
+sugar with its own consume-and-check in `elab_call_fn_inner`, and running both
+consumes here then reports a spurious use-after-consume there.
+
+### One narrowing the report did not call for
+
+The `^unique` half needed `let` to infer uniqueness from the initializer's type,
+which it previously did only from an explicit `^unique` annotation. That
+inference is scoped to `TY_FN` initializers rather than written the way the
+CK_LINEAR branch beside it is (any type): `ref<T>` also carries CK_UNIQUE, so a
+general rule would silently make every `(let [r (ref 7)] ...)` unique -- a much
+bigger behaviour change than this report asks for. A closure is the only shape
+that can acquire CK_UNIQUE the new way.
+
+### Results
+
+Every row of the scope table above:
+
+| shape | before | now |
+| --- | --- | --- |
+| closure captures `b`, called twice | accepted -> double-free | **TUR-E0101** |
+| closure captures `b`, aliased (`g = f`), each called once | accepted | **TUR-E0101** |
+| closure captures a `^unique` value, called twice | accepted | **TUR-E0201** |
+| closure capturing `b`, then `(rc/of closure)` | accepted | **TUR-E0103** |
+| ditto, `^unique` | accepted | **TUR-E0202** |
+| closure capturing `b`, never called | accepted | **TUR-E0100** |
+| closure only *reads* `b`, called twice | accepted | accepted (unchanged) |
+
+### Blast radius: zero
+
+The report measured 73 fixtures / 78 captures at risk under a blanket rule, and
+predicted the narrow rule would cut that to a handful. It cut it to **none** --
+`bash tests/run.sh` is **2365 passed, 0 failed** with the six new fixtures
+included and no existing fixture touched. The read-only-capture control is the
+one that pins this.
+
+### Coverage
+
+- `tests/fixtures/errors/closure-capture-linear-called-twice` -- E0101, the
+  minimal repro.
+- `tests/fixtures/errors/closure-capture-linear-aliased` -- E0101 via the
+  aliasing shape the report called the nastiest.
+- `tests/fixtures/errors/closure-capture-linear-in-rc` -- E0103.
+- `tests/fixtures/errors/closure-capture-linear-dropped` -- E0100.
+- `tests/fixtures/errors/closure-capture-unique-called-twice` -- E0201.
+- `tests/fixtures/closure-capture-linear-read-only` -- the negative control: a
+  read-only capture called twice still runs, printing `8` twice.
+
+The report declined to add fixtures because one pinning correct behaviour would
+have been a standing red. That reason is gone.
+
+### Known limitation, pre-existing and not introduced here
+
+A consuming call inside a loop is still accepted:
+
+```turmeric
+(while (< i 3) (f))          ;; accepted
+(while (< i 3) (bytes-free b))  ;; also accepted -- same, without the closure
+```
+
+Linear checking is flow- but not iteration-sensitive, so one syntactic
+consumption site reads as one consumption. This affects direct code identically,
+which is the point: after this change the closure form is no longer *weaker* than
+writing the consumption out by hand, which is what the report was about. Closing
+the loop case is a separate piece of work on the checker itself.
+
+### Verification
+
+`bash tests/run.sh` **2365 passed, 0 failed**. The turi-interpreter suite is
+1803 passed / 1 failed (`refine-off-is-contracts-only`), unchanged from base.
+Two `cps-tramp-resume-*` failures seen in a combined `ctest` run were CPU
+contention from 14 targets in parallel, not regressions -- both pass standalone
+and the turi harness run on its own is clean.

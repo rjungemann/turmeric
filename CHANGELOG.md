@@ -4,6 +4,35 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.31.1] -- 2026-07-26
+
+### Added
+
+- **`Show [Sym]`**: add a Show instance for runtime symbols, and close
+  deeper sym-show display gaps.
+
+### Changed
+
+- **Cycle-GC pause bounds**: bound linearization, add measured caps,
+  memoize macro expansion, and make the `rc<T>` free-queue drain linear
+  (no per-link recursion) so large cycles collect without a stack overflow.
+
+### Fixed
+
+- **`set!` rc<T> leak**: `set!` now releases the `rc<T>` value it
+  overwrites and normalizes what it stores.
+- **Cycle-GC pause time**: fix the collector's real pause-time term (a
+  quadratic over the candidate set, not the candidate set itself).
+- **Refinement types**: cross the caller's whole body at a call site,
+  sort measures by return type, type SMT-LIB corpus numerals by the
+  declared logic, and round-trip refined syntax correctly through `fmt`.
+- **Linearity**: a closure that captures and consumes a linear value is
+  now itself linear.
+- **`#lang` reader switch**: keep the preloaded stdlib across a reader
+  switch.
+- **wasm32**: mix `promo_hash` at a fixed 64 bits so wasm32 no longer
+  shifts past the hash width.
+
 ## [0.31.0] -- 2026-07-25
 
 ### Added

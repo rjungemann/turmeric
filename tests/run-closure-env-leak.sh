@@ -36,7 +36,16 @@ C_OUT="$WORK/prog.c"
 BIN="$WORK/prog"
 
 # Emit C for the fixture.
-if ! "$TUR" emit-c "$FIXTURE" > "$C_OUT" 2>"$WORK/emit.err"; then
+#
+# TUR_RCGC_FROM_ARCHIVE=1 suppresses the emitted rc/GC replica so the real
+# runtime sources below supply that half instead (the DEDUP-3 "archive" state).
+# The two cannot be mixed: the replica exports rc_cb_alloc / rc_strong_decrement
+# with external linkage, so linking rc.c alongside it is a duplicate-symbol
+# error -- while its rc_free_queue half is `static`, leaving runtime.c's
+# rc_free_queue_reset_drain_state() call in tur_catch_unwind unresolvable.
+# Which copy backs the allocator is immaterial to this gate; the closure-env
+# free being asserted is emitted either way.
+if ! TUR_RCGC_FROM_ARCHIVE=1 "$TUR" emit-c "$FIXTURE" > "$C_OUT" 2>"$WORK/emit.err"; then
     echo "FAIL closure-env-leak -- emit-c failed"
     sed 's/^/    /' "$WORK/emit.err"
     exit 1
@@ -46,7 +55,9 @@ fi
 # is unsupported and ASan aborts at startup, so probe and skip cleanly.
 if ! "$CC" -g -O0 -fno-strict-aliasing -fsanitize=address,undefined \
         -Isrc/runtime -o "$BIN" "$C_OUT" \
-        src/runtime/hamt.c src/runtime/runtime.c -lpthread 2>"$WORK/cc.err"; then
+        src/runtime/hamt.c src/runtime/runtime.c src/runtime/rc.c \
+        src/runtime/gc.c src/runtime/rc_free_queue.c src/runtime/tur_string.c \
+        src/runtime/symbols.c -lpthread 2>"$WORK/cc.err"; then
     echo "FAIL closure-env-leak -- C compile failed"
     sed 's/^/    /' "$WORK/cc.err"
     exit 1

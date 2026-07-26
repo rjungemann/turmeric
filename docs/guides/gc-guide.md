@@ -284,9 +284,15 @@ cycle, and the collector cannot reclaim a live strong cycle today
 (see the Known gaps below). To keep the property from regressing silently, the
 `tur_stdlib_no_rc_cycles` ctest guard (`tests/check-stdlib-no-rc-cycles.sh`)
 fails if a stdlib type annotation introduces `rc<...>` without an explicit
-`rc-cycle-ok` review marker. The plan to surface a proper `weak<T>` escape-hatch
-API in `rc.tur` -- for the day shared ownership *is* wanted -- is
-`docs/upcoming/v1/stdlib-weak-ref-audit-plan.md`.
+`rc-cycle-ok` review marker.
+
+The escape hatch for the day shared ownership *is* wanted now exists in the
+library: [`stdlib/weak.tur`](../../stdlib/weak.tur) provides `rc/downgrade`,
+`weak/upgrade`, `weak/unwrap`, `weak/alive?`, and `weak/drop` -- Rust's
+`Rc::downgrade` / `Weak::upgrade` pairing, wrapping intrinsics that already
+existed. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself still uses
+none of it. For when to reach for which ownership strategy in the first place,
+see [ownership-guide.md](ownership-guide.md).
 
 ### The one reviewed exception: `stdlib/rcchain.tur`
 
@@ -418,6 +424,59 @@ them produced five bugs, so the replica is being retired. As of DEDUP-4b:
 `TUR_RCGC_FROM_ARCHIVE=0` forces the replica back; `=1` takes the archive even
 for bare `emit-c`, for a caller who links `libturt_runtime.a` themselves.
 `tools/gc-copy-diff.py` reports what still differs between the two.
+
+### Two collectors in one process (a host that `dlopen`s a Turmeric `.so`)
+
+Per the table above, a Turmeric host and a Turmeric `.so` each run their own
+collector with their own registry. That is sound -- but it is worth being precise
+about *why*, because the obvious reason is wrong and leaning on it will mislead
+you.
+
+**It is not because values stay on their own side of the boundary.** Nothing
+enforces that. A module can export a `defn` returning `rc<T>` today, and it
+builds and links cleanly:
+
+```turmeric
+(defmodule rcmod
+  (export make-rc)
+  (defn make-rc [x : int] : rc<int> (rc/of x)))
+```
+
+The manifest types that export as `:any`, so the boundary is untyped in both
+directions and a host has no way to know it received something refcounted.
+
+**It is because `gc_unregister_block` validates the back-reference before
+mutating its array.** A block carries a `gc_index` into the registry that owns
+it; a foreign block's index points into the *other* registry, so the
+`gc_all_blocks[idx] != cb` identity check fails and the function bails instead of
+corrupting anything. That guard is what does the work.
+
+Two supporting properties, both live-checkable rather than asserted:
+
+- The `.so`'s collector is not exported, so there is no interposition surface.
+  On `tests/fixtures/build-shared-smoke`: **0** exported `gc_*`/`rc_*` dynamic
+  symbols, 2 exported module symbols.
+- The registries really are separate -- a host's `gc_stat_live_blocks()` stays at
+  0 after the `.so` allocates an rc.
+
+**Cross-boundary cycles are uncollectable by either collector.** `gc_mark_phase`
+iterates one registry, and each holds only its own blocks, so a cycle with nodes
+on both sides can never be fully traced. The result is a leak, not corruption --
+the same class as the `Vec`/HAMT blind spot below. Enabling the collector on both
+sides does not cover it.
+
+**Sharp edge for inline-C against the runtime:** `gc_possible_root` exists only in
+the archive. The replica inlines the same Bacon-Rajan edge into
+`rc_strong_decrement` rather than factoring it out, so inline-C that calls
+`gc_possible_root` by name compiles *and links* in a `--shared` build (a shared
+object tolerates undefined symbols at link time) and fails only at `dlopen`:
+
+```
+dlopen: librc2.so: undefined symbol: gc_possible_root
+```
+
+Behaviourally the two are identical; only the symbol is missing. Verified above:
+the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 
 ## Known gaps
 

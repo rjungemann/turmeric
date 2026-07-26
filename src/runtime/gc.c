@@ -215,12 +215,33 @@ static void gc_remove_suspect(RcControlBlock *cb) {
 static void gc_enqueue_grey(RcControlBlock *cb) {
     if (!cb) return;
 
-    /* Check if already in queue */
-    for (uint32_t i = 0; i < gc_grey_count; i++) {
-        if (gc_grey_queue[i] == cb) {
-            return;
-        }
-    }
+    /* PT1: NO linear "already queued?" scan here -- the COLOR is the dedup.
+     *
+     * Every call site colors the block GC_BLACK before enqueuing and refuses to
+     * enqueue a block that is already GC_BLACK (gc_mark_phase's strong-root
+     * sweep visits each registry slot exactly once; gc_mark_struct_child and
+     * the RCEXP_RC walker both guard on `color != GC_BLACK`).  A duplicate can
+     * therefore never be offered, so the scan never found one -- it was pure
+     * overhead, and quadratic overhead at that: gc_mark_phase enqueues EVERY
+     * strong-rooted block, so an O(queue) scan per enqueue made a collection
+     * O(live_blocks^2).
+     *
+     * Measured, 512 candidates against a growing live heap (one collection):
+     *
+     *      live blocks |  with scan  |  without
+     *      ------------+-------------+----------
+     *           8,512  |     14.2 ms |   0.17 ms
+     *          32,512  |    177.7 ms |   1.14 ms
+     *         128,512  |   2977.5 ms |  11.11 ms
+     *
+     * Three seconds of stall on a heap that is not especially large, on a
+     * collection that freed 512 blocks.  This was the pause-time risk the plan
+     * carried as "cap the candidate set" -- the candidate set was never the
+     * term that mattered (128 -> 16384 candidates moved the same collection
+     * only 0.78 ms -> 2.16 ms).
+     *
+     * DEDUP note: the emitted replica in emit_module.c has NEVER had this scan.
+     * This brings the runtime copy in line with it rather than the reverse. */
 
     /* CG0: grow instead of silently skipping -- a dropped grey entry means the
      * mark phase misses a subgraph and the collector frees something live. */
@@ -704,9 +725,45 @@ void gc_collect(void) {
     /* Clear grey queue */
     gc_grey_count = 0;
 
-    /* Pre-existing zombie sweep (strong==0 with live weak refs). Unchanged. */
-    gc_mark_phase();
-    gc_trial_deletion_phase();
+    /* Pre-existing zombie sweep (strong==0 with live weak refs).
+     *
+     * PT2: skipped outright when the candidate buffer is empty.  This is what
+     * takes the remaining O(live_blocks) term off the common path.
+     *
+     * gc_cycle_collect_phase has just DRAINED every candidate with
+     * strong_count > 0, so whatever is left in gc_suspect_roots is exactly the
+     * zombie set -- and gc_trial_deletion_phase iterates that buffer and
+     * nothing else.  With the buffer empty it is a no-op by construction, which
+     * leaves gc_mark_phase's whole-registry walk existing only to produce
+     * colors for it to read.
+     *
+     * No RUNTIME consumer reads the colors this skips.  gc_is_alive is the only
+     * reader of the color field outside the collector and it has no callers in
+     * the tree; the liveness path that actually runs (rc_is_alive, rc_upgrade)
+     * tests strong_count and never the color.  The next collection
+     * re-establishes everything it needs regardless: gc_mark_phase resets every
+     * color to WHITE before marking, gc_cycle_collect_phase reseeds gc_trial
+     * from strong_count for every block, and a candidate is re-colored
+     * GC_PURPLE by gc_add_suspect when it is (re-)buffered.
+     *
+     * The colors ARE observable to inline C, though, and one fixture reads them
+     * as a white-box probe of the walker: tests/fixtures/exg5-walker-rc-payload
+     * asserts that gc_mark_phase colors an existential's inner rc BLACK.  That
+     * program buffers no candidates at all, so this skip left it reading WHITE.
+     * The walker itself is unchanged -- what changed is whether a program with
+     * nothing to sweep runs one -- so the fixture now leaves a real zombie
+     * (strong_count 0, weak_count 1) in the buffer first, restoring the
+     * precondition its assertion was always assuming.
+     *
+     * Measured, 256 garbage cycles against a 256k-block live heap: the
+     * collection spent 34.0 ms of its 37.3 ms in gc_mark_phase and 0.000 ms in
+     * gc_trial_deletion_phase.  Skipping the pair when there are no zombies
+     * makes a collection cost scale with the garbage being collected rather
+     * than with the size of the live heap it is sitting in. */
+    if (gc_suspect_count > 0) {
+        gc_mark_phase();
+        gc_trial_deletion_phase();
+    }
 
     if (gc_trace_on()) {
         /* One line per collection, to stderr so it never contaminates a

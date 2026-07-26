@@ -6,60 +6,14 @@ description: A measure is always declared `VS_INT`, so a `bool`-returning functi
 
 # Boolean-Sorted Measures (`RM-B`)
 
-**Status:** RM-B0, RM-B1, RM-B3 **landed** 2026-07-26 on the `refinements`
-branch. RM-B2 (position-determined sort for *abstract* measures) and the
-fuzzer-vocabulary extension are **deferred** -- see the status block below.
+**Status:** LANDED (RM-B0..RM-B3). RM-B0 came back worse than the plan
+assumed -- the float case **mis-sorts**, and the mis-sort is a soundness bug,
+not a completeness hole. Written up in
+[docs/archive/refine-float-measure-missort.md](../../archive/refine-float-measure-missort.md).
 **Depends on:** [refinement-types-plan.md](refinement-types-plan.md) (RT0--RT7,
 S0--S4, all landed).
 **Feeds:** [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md)
 gap C1.
-
-> **Status 2026-07-26 -- RM-B1 landed (the C1 fix).** A `bool`-returning
-> function is now usable as a predicate atom, and a `float`-returning measure
-> is Real-sorted instead of mis-declared Int. Implementation:
-> `RefineFnInfo` gained a `ret_sort` field (`refine_collect.h`);
-> `rt_sort_of_kind` gained its `TY_BOOL -> VS_BOOL` arm (`elab_fns.c`);
-> `rt_resolve_fn` populates `ret_sort` from the resolved callee's return type
-> (fn binding / class method / constructor); and `enc_measure`
-> (`refine_collect.c`) declares the measure with that sort rather than a
-> hard-coded `VS_INT`. RM-B3 prints the drop reason under `TUR_REFINE_STATS=1`
-> (`refine_discharge.c`).
->
-> **Soundness held (the point of the plan):** the change widens only what can
-> be *spelled*, not what is *congruent*. An IMPURE `bool` measure still gets a
-> fresh symbol per occurrence -- verified adversarially: a guard/crossing pair
-> over an inline-C `flaky?` encodes as `flaky?#0` vs `flaky?#1`, stays
-> `0 proven, 1 unknown`, and errors under `--strict-refine`. A PURE `bool`
-> measure is congruent and discharges through an `if`-guard.
->
-> Fixtures: `tests/fixtures/refine-bool-measure` and `refine-float-measure`
-> (both `--enable=refined --strict-refine`, so they compile+run *only because*
-> the obligation proves). Full suite unchanged at 11 pre-existing failures
-> (`2350 passed`, up 2 for the new fixtures); none of the 11 are related.
->
-> **RM-B0 finding (float case):** it MIS-SORTS rather than rejects -- `(< (norm
-> v) 3.25)` declared `norm` with an Int result and compared it to a Real
-> literal, and reported `1 proven` on a mis-sorted VC. RM-B1's result-sort fix
-> corrects it (`norm` now `... Real`). A *separate*, pre-existing coarseness
-> remains and is out of C1 scope: `refine_smtlib.c` emits every ufunc ARGUMENT
-> sort as a blanket `has_real ? Real : Int`, so a mixed int/real domain is
-> approximated. It did not cause a wrong verdict here (the functions are
-> uninterpreted); worth a separate note if a domain-sort divergence ever bites.
->
-> **RM-B2 deferred, with rationale.** Position-determined sort for *abstract*
-> (unresolved) measures is NOT needed for the C1-for-ECS driver -- every ECS
-> predicate (`alive?`, `in-bounds?`) resolves to a `defn` in the unit and is
-> covered by RM-B1. Deferring it is *strictly sound*: an abstract `bool`
-> measure stays Int-sorted, the goal-sort check rejects it, and the obligation
-> falls back to the runtime check exactly as today. Crucially, RM-B1 alone
-> introduces NO same-name-two-sorts scenario (a resolved name has one fixed
-> sort from its return type), so the congruence hazard this plan is careful
-> about is *created by* RM-B2's position inference, not by what shipped. Land
-> RM-B2 when an abstract bool measure is actually wanted; the design below
-> stands. The fuzzer-vocabulary extension is deferred alongside it -- and
-> separately, the source fuzzer's differential is currently vacuous on this
-> branch (every generated program is `skip_invalid`: it fails to compile even
-> gate-off), so adding bool helpers buys no signal until that skew is fixed.
 
 ## The bug
 
@@ -141,13 +95,22 @@ Four cases, and only the third is interesting:
 | resolves, returns `:float` | `VS_REAL` | **new, and a latent bug of its own** -- a float-returning measure is currently declared `Int` |
 | does not resolve (abstract measure) | ? | see below |
 
-### The float case is a second defect
+### The float case is a second defect -- and it MIS-SORTS
 
 `(< (norm v) 1.0)` today declares `norm` as `Int`-sorted and then compares it
 to a `Real` literal. Whether that produces a mis-sorted VC or a rejection is
 not established; it should be checked before this lands, because if it
 mis-sorts rather than rejects, that is a soundness question rather than a
 completeness one and it changes the priority of this plan.
+
+**RM-B0 answer: it mis-sorts, and it is unsound.** `refine_solver_arith.c`
+tightens a strict bound when every variable is integer-sorted (`e < 0` becomes
+`e <= -1`) -- valid over the integers, false over the reals. With `norm`
+wrongly declared `Int`, `(< (norm v) 4.0) |- (<= (norm v) 3.0)` *proved*, the
+return check was elided, and a program whose `norm` was `3.75` returned a value
+violating its own refinement with no panic. Full write-up and repro in
+[docs/archive/refine-float-measure-missort.md](../../archive/refine-float-measure-missort.md);
+pinned by `tests/fixtures/errors/refine-float-measure-not-tightened`.
 
 ### An abstract measure has no return type to read
 
@@ -183,25 +146,58 @@ one is small and
 
 ## Phases
 
-### RM-B0 -- Establish the float case  [DONE: mis-sorts; fixed by RM-B1]
+### RM-B0 -- Establish the float case -- DONE
 
-Write the two-line probe (`(< (norm v) 1.0)` with `norm : ... : float`) and
-record whether it rejects or mis-sorts. If it mis-sorts, file it and fix it
-here; if it rejects, it is the same completeness hole as the bool case and
-rides along.
+It mis-sorts, and the mis-sort is unsound. See above and the archived report.
 
-### RM-B1 -- Sort from the resolved callee  [DONE]
+### RM-B1 -- Sort from the resolved callee -- DONE
 
 `RefineFnInfo` gains a result sort; `rt_sort_of_kind` gains its `TY_BOOL` arm;
 `enc_measure` consults both. Covers `alive?`, `norm`, and every other measure
 whose definition is in the unit.
 
-### RM-B2 -- Position-determined sort for abstract measures  [DEFERRED -- see status block]
+`ret_sort` is filled at all three of `rt_resolve_fn`'s exits -- data
+constructor (`VS_INT`, an aggregate handle), typeclass method (the class
+signature's `return_type`, the one promise true of every instance), and
+ordinary binding (`b->type.as.fn.result_kind`, which is the declared return
+type already peeled to its base, so a `: #refine{ r : float | q }` return is a
+Real and `q` still travels separately in `ret_pred`). `VS_INT` is `VCSort`'s
+zero value, so a resolver that never sets the field behaves exactly as before.
+
+### RM-B2 -- Position-determined sort for abstract measures -- DONE
 
 The two-pass declaration described above, with the same-name-two-sorts
 rejection.
 
-### RM-B3 -- Surface the drop reason  [DONE]
+One correction to the design as written: positions are **three**-valued, not
+two. `=` demands neither sort of its operands -- `(= (alive? w x) (alive? w y))`
+is as legitimate as `(= (len v) n)` -- so equality operands are NEUTRAL and
+`enc_cmp` enforces only that the two *sides* agree. Treating them as value
+positions would have made that ordinary predicate a sort conflict. The
+value-demanding positions are arithmetic and the strict/non-strict orderings;
+the proposition-demanding ones are `and`/`or`/`not`/`=>` and the goal; a
+measure's own arguments demand nothing (an abstract measure has no parameter
+types to read).
+
+The subject's position comes from `ob->base_sort`, which is what lets the
+prescan see a *call-site* conflict: a callee's `p` and a caller's `p` are one
+symbol in the encoder's flat namespace, and they need not be the same function.
+
+Only an **unresolved** name can conflict, and the rejection is scoped to that.
+A resolved measure has exactly one sort no matter where it appears, so a
+resolved measure in the wrong kind of position is a local error, handled
+locally by the operand guards below -- which drop just that hypothesis rather
+than the whole VC. Nuking the VC there would trade a sound imprecision for a
+strictly worse one.
+
+Landing this also required operand-sort **guards** in the encoder itself.
+`vc_mk` will happily build `(+ <bool> 1)` with an arithmetic sort, or an `and`
+node over integer kids -- it computes the result sort without checking the
+operands. Those now fail the encode (`enc_want_value` / `enc_want_prop`), which
+is what keeps a propagated return refinement that misuses a name from
+manufacturing a mis-sorted hypothesis rather than simply not being asserted.
+
+### RM-B3 -- Surface the drop reason -- DONE
 
 `refine_vc_build`'s `out_reason` strings are computed and, for this path,
 reach nobody -- an obligation that fails to *encode* is indistinguishable at
@@ -215,20 +211,46 @@ read, and it will pay off again for the next fragment gap.
 ## Acceptance
 
 - `tests/fixtures/refine-bool-measure`: the `alive?` program above, proving
-  through an `if` guard at a call site. `1 proven, 0 unknown`.
+  through an `if` guard at a call site. `1 proven, 0 unknown`. **Done.**
 - `tests/fixtures/refine-float-measure`: a `float`-returning measure compared
   against `3.25` -- **not** `3.0`, per the repo's float rule, since an
   integer-valued float literal cannot show a sort/truncation divergence.
+  **Done.**
+- `tests/fixtures/errors/refine-float-measure-not-tightened`: **added, and it is
+  the one that matters.** RM-B0 turned this plan into a soundness fix, so the
+  mis-sort needs its own regression guard -- the `3.0`/`4.0` pair whose
+  *integrality* is what armed the tightening. The positive float fixture alone
+  would not have caught it: with `3.25` the tightening never fires, so that
+  program proved correctly both before and after.
 - `tests/fixtures/errors/refine-measure-sort-conflict`: one name used at both
   `Bool` and `Int` positions; Unknown with a stated reason, check retained,
-  no crash.
+  no crash. **Done.** Worth recording what the fixture taught: the two-sorts
+  case is essentially unreachable from *well-typed* source, because the
+  language's own type checker rejects `(< (ready? r) 3)` and `(and (level r)
+  ...)` first. It is reachable exactly where the type checker cannot see it --
+  an abstract measure with no declaration, or two different functions sharing a
+  name in the encoder's flat namespace. That is the hazard, and it is why the
+  rule rejects rather than resolves.
 - `tests/refine-fuzz-src.py`: the generator's predicate vocabulary gains
   `bool`-returning helpers. The `congruence` shape is where they belong -- a
   `bool` measure over a lying `#fx{}` helper is the same trap as the `int` one
-  and should be caught by the same sabotage.
+  and should be caught by the same sabotage. **Done**, with one finding: a liar
+  in *predicate* position is stopped a layer earlier by `TUR-E0375` (both gates
+  reject it, so the case lands in `skip_invalid`). That is the correct
+  behaviour and the shape is still worth generating -- the property it fuzzes
+  is that E0375 and the congruence denial *together* keep it sound, so if
+  either stopped firing these cases would reach the encoder.
 - Run the full source fuzzer at n>=400 across two seeds. This touches the
   **encoder**, which is where both historical soundness bugs lived and which
-  the VC-level fuzzer is structurally blind to.
+  the VC-level fuzzer is structurally blind to. **Done:**
+
+  ```
+  n=400 seed=1 mode=both -> 0 SOUNDNESS, 0 other BUG, 9 suspicious (report-only)
+  n=400 seed=2 mode=both -> 0 SOUNDNESS, 0 other BUG, 17 suspicious (report-only)
+  ```
+
+  `bash tests/run.sh` is green at 2369 passed / 0 failed with the four
+  fixtures above added.
 
 ## Effort
 
@@ -240,3 +262,14 @@ The reason it is worth writing down rather than just doing: RM-B2's
 same-name-two-sorts case is a congruence hazard, and this feature's history
 says congruence hazards get written by the person who was sure there wasn't
 one.
+
+**Retrospect.** The estimate held -- but the value of the plan turned out to be
+RM-B0, the phase that looked like a formality. "Write the two-line probe and
+record whether it rejects or mis-sorts" found a live soundness bug in a feature
+whose two previous soundness bugs were both in this same file, and the bug was
+sitting one character away from the completeness hole the plan was actually
+about (`VS_INT` in `vc_declare_ufunc`). Neither the fixture suite nor the
+source fuzzer had reached it, because no shape ever put a float-returning
+*measure* inside a predicate. Worth generalising: when a plan says "check X
+before this lands, because the answer changes the priority", that check is the
+highest-value phase in it, not the cheapest.

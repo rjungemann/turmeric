@@ -537,6 +537,22 @@ bool fn_body_tail_is_carrier_producer(const struct Expr *e);
  * emit_expr.c. */
 bool fn_body_tail_emits_byvalue_carrier_abi(struct EmitCtx *ctx, const struct Expr *e);
 Type fn_body_tail_byvalue_carrier_type(struct EmitCtx *ctx, const struct Expr *e);
+/* CONV-S1 seam 4: does an inline-C body with declared result `rft` return that
+ * result BY VALUE (the concrete aggregate) rather than through the int64
+ * carrier?  This is the single question that decides an inline-C function's C
+ * return type, so it must be asked the same way everywhere:
+ *
+ *   - emit_fns.c   -- emits the definition's signature
+ *   - emit_module.c-- emits the matching forward declaration
+ *   - emit_expr.c  -- decides whether a CONSUMER must bridge carrier->by-value
+ *
+ * The first two had hand-duplicated copies that had to be kept in lockstep; the
+ * third inferred it from the type's shape and got it wrong for a by-value
+ * result, deref-ing a value that was never a pointer.  Defined in emit_fns.c.
+ * `rft` is the declared (unresolved) result type; pass body_is_inline_c so
+ * callers that already computed it do not re-derive it. */
+bool inline_c_returns_byvalue_adt(struct EmitCtx *ctx, bool body_is_inline_c,
+                                  const Type *rft);
 /* B3 part 2: per-effect integer tag (memoized by symbol) used by the DK backend
  * (dk_perform / dk_handler tags).  Defined in emit_cps_ir.c; called from
  * emit_effects.c to stamp a first-class handler entry's DK case tag. */

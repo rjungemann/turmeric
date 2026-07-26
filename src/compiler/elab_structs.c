@@ -143,27 +143,39 @@ Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     return NULL;
 }
 
-/* CONV-S1 (slice 5): the rc<Name> inner-def resolver for a record-variant field.
- * When a record-variant field is annotated `rc<Name>` and `Name` resolves to an
- * in-scope struct or single-variant record ADT, build the inner-carrying rc Type
- * (`type_rc_struct` / `type_rc_adt`) so field access through the rc receiver can
- * auto-deref to the named field -- exactly the surface a `defstruct` rc<Struct>
- * field already exposes (DS3 / slice 2), now reached by the lowered struct path.
- * Returns NULL (the field stays a bare rc carrier) when `tname` is not an
- * `rc<...>` over a known aggregate, so a scalar inner (`rc<int>`) or an unknown
- * name is unaffected. */
+/* CONV-S1 (slice 5): the rc<Name> / weak<Name> inner-def resolver for a
+ * record-variant field.  When a record-variant field is annotated `rc<Name>` and
+ * `Name` resolves to an in-scope struct or single-variant record ADT, build the
+ * inner-carrying rc Type (`type_rc_struct` / `type_rc_adt`) so field access
+ * through the rc receiver can auto-deref to the named field -- exactly the
+ * surface a `defstruct` rc<Struct> field already exposes (DS3 / slice 2), now
+ * reached by the lowered struct path.  Returns NULL (the field stays a bare
+ * carrier) when `tname` is not an `rc<...>` / `weak<...>` over a known
+ * aggregate, so a scalar inner (`rc<int>`) or an unknown name is unaffected.
+ *
+ * stdlib-weak-ref-audit WR1: `weak<Name>` resolves the same way.  It used not
+ * to, and the omission bit exactly the shape weak<T> exists for -- the
+ * back-edge of a parent/child graph.  `(weak parent)` over an `rc<Node>` yields
+ * `weak<ADT>`, while an unresolved `[parent : weak<Node>]` field stayed
+ * `weak<?>`, so `(set! (.parent child) (weak parent))` failed to type-check with
+ * "value type weak<<adt>> does not match field type weak<?>" and the canonical
+ * cycle break was not expressible at all. */
 static Type *adt_rc_inner_full_type(Elab *e, const char *tname, uint32_t tlen) {
-    if (tlen <= 4 || memcmp(tname, "rc<", 3) != 0 || tname[tlen - 1] != '>') {
-        return NULL;
-    }
-    const char *inner_name = tname + 3;
-    uint32_t inner_len = tlen - 4;  /* strip "rc<" and ">" */
+    TypeKind family;
+    uint32_t prefix_len;
+    if (tlen > 4 && memcmp(tname, "rc<", 3) == 0)          { family = TY_RC;   prefix_len = 3; }
+    else if (tlen > 6 && memcmp(tname, "weak<", 5) == 0)   { family = TY_WEAK; prefix_len = 5; }
+    else return NULL;
+    if (tname[tlen - 1] != '>') return NULL;
+    const char *inner_name = tname + prefix_len;
+    uint32_t inner_len = tlen - prefix_len - 1;  /* strip the prefix and '>' */
     const Symbol *sym = symtab_intern(e->st, strslice(inner_name, inner_len));
     Binding *tb = scope_lookup_type_def(e->scope, sym);
     if (!tb) return NULL;
     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
     if (tb->type.kind == TY_ADT) {
-        *t = type_rc_adt(tb->type.as.adt_.def);
+        *t = (family == TY_WEAK) ? type_weak_adt(tb->type.as.adt_.def)
+                                 : type_rc_adt(tb->type.as.adt_.def);
         return t;
     }
     return NULL;
@@ -1321,17 +1333,23 @@ static bool resolve_ctor_field(Elab *e, AdtDef *def, CtorDef *ctor, uint32_t fi,
     uint32_t tlen = ft_form->as.sym->len;
     TypeKind fkind, finner;
     parse_struct_field_type(tname, tlen, &fkind, &finner);
-    if (fkind == TY_RC && finner == TY_UNKNOWN) {
+    if ((fkind == TY_RC || fkind == TY_WEAK) && finner == TY_UNKNOWN) {
         /* CONV-S1 (slice 5): rc<Name> over a user struct / record ADT -- carry
          * the inner def on the field's full_type so receivers of the rc field
          * auto-deref through it (mirrors DS3's lookup_rc_inner_struct_def on the
          * struct path).  The field still stores as the TY_RC carrier (the
          * inline-byval gate rejects a TY_RC full_type), so layout is unchanged;
-         * only field-access resolution gains the inner layout. */
+         * only field-access resolution gains the inner layout.
+         *
+         * stdlib-weak-ref-audit WR1: weak<Name> takes the same path, so a
+         * `[parent : weak<Node>]` back-edge agrees with the `weak<ADT>` that
+         * `(weak r)` produces.  TY_WEAK is the same carrier as TY_RC
+         * (RcControlBlock *), so this is likewise layout-neutral. */
         Type *rc_full = adt_rc_inner_full_type(e, tname, tlen);
         if (rc_full) {
             ctor->fields[fi].full_type = rc_full;
-            finner = (rc_full->kind == TY_RC) ? rc_full->as.rc.inner : finner;
+            finner = (rc_full->kind == TY_RC || rc_full->kind == TY_WEAK)
+                         ? rc_full->as.rc.inner : finner;
         }
     }
     if (fkind == TY_UNKNOWN) {

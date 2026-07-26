@@ -208,6 +208,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Compiler Internals
 
 - **[compiler-internals.md](compiler-internals.md)** -- End-to-end walkthrough of the `tur` compiler pipeline and source layout in `src/`, aimed at contributors
+- **[gc-guide.md](gc-guide.md)** -- How memory is managed -- reference counting, the Bacon-Rajan cycle collector, arenas, and what is (and isn't) GC-managed
+- **[ownership-guide.md](ownership-guide.md)** -- Which ownership strategy to reach for -- persistent-immutable, single-owner mutable, linear/affine handles, `rc<T>` for genuine sharing, and `weak<T>` to break the resulting cycles
 - **[name-mangling-guide.md](name-mangling-guide.md)** -- How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies
 - **[type-erasure-guide.md](type-erasure-guide.md)** -- Snapshot of where the `tur` compiler collapses higher-level types down to `int64_t` at the C boundary, and the three mechanisms it uses
 - **[typeclass-internals-guide.md](typeclass-internals-guide.md)** -- How `definstance` lowers to a C dictionary struct + singleton, how method-field C types are resolved, and the closure-handle convention

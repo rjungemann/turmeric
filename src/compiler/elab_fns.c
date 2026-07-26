@@ -16,6 +16,15 @@ bool expr_subtree_has_inline_c(const Expr *e);
 bool ptr_param_is_nonretaining(const Expr *body, const Binding *p,
                                bool result_cannot_carry);
 
+/* closure-capture-escapes-linearity: one enclosing linear/unique binding's
+ * substructural state, recorded before a lambda body is elaborated so the body's
+ * effect on it can be read off afterwards.  See the snapshot in elab_fn. */
+typedef struct FnCaptureLinSnap {
+    Binding *binding;
+    bool     was_consumed;   /* is_linear_consumed before the body */
+    bool     was_moved;      /* is_moved before the body */
+} FnCaptureLinSnap;
+
 /* closure-drop-glue S1c: a scalar Copy type kind -- safe to hold in / bare-free
  * around a closure env (no owning teardown, no aliasing of the env).  Excludes
  * rc/ref/weak (owning), structs/ADTs/tyvars (aggregate/opaque), and fn/cont. */
@@ -42,15 +51,15 @@ static bool fn_result_kind_is_scalar_copy(TypeKind k) {
  * body the check would have guarded.
  * ------------------------------------------------------------------------- */
 
-/* Map a Turmeric type kind to the VC sort the solver reasons in. */
+/* Map a Turmeric type kind to the VC sort the solver reasons in.
+ *
+ * RM-B1: `:bool` denotes a PROPOSITION, not the integer 0/1.  Without this arm
+ * a bool-returning function could not be used as a predicate atom at all --
+ * `(alive? w x)` encoded Int-sorted and refine_vc_build dropped the whole
+ * obligation as "does not denote a proposition". */
 VCSort rt_sort_of_kind(TypeKind k) {
     switch (k) {
         case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: return VS_REAL;
-        /* RM-B1: a bool-typed value is a proposition, not an integer. Before
-         * this arm every kind but the floats mapped to VS_INT, so a
-         * bool-returning measure declared an Int-sorted term where the VC
-         * builder demands a Bool -- the obligation never reached the solver.
-         * See refine-predicate-measures-plan.md. */
         case TY_BOOL: return VS_BOOL;
         default: return VS_INT;
     }
@@ -537,8 +546,8 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
         out->param_names = NULL;
         out->n_params    = 0;
         out->pure        = true;
-        /* RM-B1: a constructor yields its ADT/struct/opaque type, which is
-         * carrier-sorted (VS_INT).  It is never a proposition. */
+        /* A constructor yields an aggregate handle -- an opaque Int term, the
+         * only thing the predicate language can say about it. */
         out->ret_sort    = VS_INT;
         return true;
     }
@@ -575,10 +584,8 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
             out->param_names = NULL;
             out->n_params    = 0;
             out->pure        = false;
-            /* RM-B1: a method call's result sort is its declared return type,
-             * so a `bool`-returning class method reads as a predicate atom.
-             * `return_type` is peeled to its base kind, which is what
-             * `rt_sort_of_kind` wants. */
+            /* RM-B1: the class signature's declared result type is the one
+             * promise true of every instance, so its sort is the dispatch's. */
             out->ret_sort    = rt_sort_of_kind(m->return_type.kind);
             /* RT4: the CLASS's result refinement propagates, even though which
              * instance runs is unknown here -- because it is the one promise
@@ -618,13 +625,13 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
     out->param_names = b->refine_param_names;
     out->n_params    = b->n_refine_params;
 
-    /* RM-B1: a function binding carries its result kind on the fn type; map it
-     * to the VC sort so a measure declares its true result sort.  A binding
-     * that is not fn-typed (a plain value used as a nullary measure) has no
-     * arrow result to read -- fall back to the carrier sort. */
-    out->ret_sort = (b->type.kind == TY_FN)
-                        ? rt_sort_of_kind(b->type.as.fn.result_kind)
-                        : VS_INT;
+    /* RM-B1: the sort the measure symbol is declared at.  `result_kind` is the
+     * declared return type PEELED to its base, which is exactly what the VC
+     * reasons over -- a `: #refine{ r : float | q }` return is a Real, and the
+     * `q` is carried separately in ret_pred.  A non-fn binding (a `def` used as
+     * a nullary measure) answers from its own type. */
+    out->ret_sort = rt_sort_of_kind(b->type.kind == TY_FN ? b->type.as.fn.result_kind
+                                                          : b->type.kind);
 
     /* PURITY, which decides whether two occurrences of this call may be
      * modelled as the same value.  See rt_binding_is_pure above: the declared
@@ -1599,6 +1606,42 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                                   n, shadowed, depth + 1))
             return true;
     return false;
+}
+
+/* The caller's WHOLE body, as one form the path walk can descend.
+ *
+ * `caller_body` used to be the defn's LAST body form -- correct for its other
+ * job (the return obligation's subject) and wrong here.  A crossing in any
+ * earlier form was then invisible to `rt_collect_path_conds`, which walks down
+ * to `call_form` and gives up when it does not find it, so the call was
+ * checked without the branch that guards it.  A zero-parameter caller showed
+ * it plainly: `main`'s last form is the literal `0`, and the walk searched `0`
+ * for the call.  See
+ * docs/archive/refine-callsite-path-conds-lost-multi-form-body.md.
+ *
+ * A single-form body is passed through unwrapped, so the common case allocates
+ * nothing and the resulting tree is byte-identical to before.  A multi-form
+ * body is wrapped in a synthetic `(do ...)`: `do` is not one of the three
+ * heads the walk treats specially, so it falls to the generic descent, which
+ * is exactly the "a later body form is not guarded by an earlier one"
+ * semantics wanted here.
+ *
+ * Widening also widens the two vetoes in rt_push_cs_path_conds, in the safe
+ * direction both times: a `set!` anywhere in the body now declines every
+ * crossing in it (it used to be checked only against the last form, so an
+ * assignment in an earlier form could invalidate a condition unnoticed), and
+ * a `call_form` node reachable from two body forms now counts as ambiguous
+ * rather than unique. */
+static const Form *rt_whole_body(Elab *e, const Form *call, uint32_t body_start) {
+    if (!call || call->as.list.len <= body_start) return NULL;
+    uint32_t nb = call->as.list.len - body_start;
+    if (nb == 1) return call->as.list.items[body_start];
+    Form **items = (Form **)arena_alloc(e->arena, (nb + 1) * sizeof(Form *));
+    items[0] = form_sym(e->arena, call->span,
+                        symtab_intern(e->st, strslice("do", 2)));
+    for (uint32_t i = 0; i < nb; i++)
+        items[i + 1] = call->as.list.items[body_start + i];
+    return form_list(e->arena, call->span, items, nb + 1);
 }
 
 /* Push this crossing's path conditions onto `cs->env`, returning the saved
@@ -4778,7 +4821,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * parameters still need declared sorts in the environment. */
             refine_fill_call_site_env(e, rt_cs_start, rt_env,
                                       name_f->as.sym ? name_f->as.sym->name : NULL,
-                                      rt_subject);
+                                      rt_whole_body(e, call, body_start));
             const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
             char rt_what[128];
             if (ct_ret_pred) {
@@ -6162,6 +6205,43 @@ Expr *elab_fn(Elab *e, const Form *call) {
 
     Expr *body = e_nil(e, call->span);
     uint32_t n_body = call->as.list.len - body_start;
+
+    /* closure-capture-escapes-linearity: snapshot the substructural state of
+     * every enclosing linear/unique binding BEFORE the body runs.
+     *
+     * Elaborating the body marks an OUTER binding consumed at the point the
+     * closure is built, not where it is called, so `(f) (f)` on a closure that
+     * frees a captured `^linear` was two consumptions the checker never saw --
+     * a real double-free.  Comparing this snapshot against the state after the
+     * body identifies exactly which captures the body CONSUMES (as opposed to
+     * merely reads), which is the distinction the fix turns on: a read-only
+     * capture is safe at any arity and must stay accepted.
+     *
+     * Arena-allocated rather than malloc'd on purpose -- elab_fn has many early
+     * returns between here and the use site below, and the compiler path is
+     * leak-checked. */
+    uint32_t n_lin_snap = 0;
+    for (const Scope *cur = e->scope; cur; cur = cur->parent)
+        for (uint32_t i = 0; i < cur->n; i++)
+            if (cur->bindings[i]->is_linear || cur->bindings[i]->is_unique)
+                n_lin_snap++;
+    FnCaptureLinSnap *lin_snap =
+        (FnCaptureLinSnap *)arena_alloc(e->arena,
+                                        (n_lin_snap ? n_lin_snap : 1)
+                                            * sizeof(FnCaptureLinSnap));
+    {
+        uint32_t k = 0;
+        for (const Scope *cur = e->scope; cur; cur = cur->parent)
+            for (uint32_t i = 0; i < cur->n; i++) {
+                Binding *b = cur->bindings[i];
+                if (!b->is_linear && !b->is_unique) continue;
+                lin_snap[k].binding       = b;
+                lin_snap[k].was_consumed  = b->is_linear_consumed;
+                lin_snap[k].was_moved     = b->is_moved;
+                k++;
+            }
+    }
+
     e->fn_body_depth++;
     if (fn_declared_unsafe) e->unsafe_depth++;
     /* Propagate the lambda's declared return type onto the expected-type
@@ -6262,6 +6342,39 @@ Expr *elab_fn(Elab *e, const Form *call) {
     Binding **captures = collect_free_vars(body, params, n_params,
                                            letrec_self_group, n_letrec_self_group,
                                            &n_captures);
+
+    /* closure-capture-escapes-linearity: a closure that CONSUMES a captured
+     * linear/unique value is itself linear/unique.
+     *
+     * Consuming the capture once per call means the closure carries exactly the
+     * obligation the captured value had, so inheriting its copy_kind makes every
+     * bad shape fall out of checks that already exist, with no new diagnostic:
+     * calling it twice is TUR-E0101 use-after-consume, `(rc/of f)` is TUR-E0103,
+     * and dropping it unused is TUR-E0100 (correct -- the captured resource would
+     * never be released).  The unique case lands on TUR-E0201/E0202 the same way.
+     *
+     * CONSUMES, not merely captures.  A closure that only READS a captured linear
+     * value is safe at any arity; a blanket capture-based rule (the shape
+     * TUR-E0500 uses for ^multishot handlers, where N invocations are
+     * definitional) would reject a large amount of working code -- 73 fixtures
+     * carry captures, and the httpd middleware closures that dominate that list
+     * are read-only. */
+    bool capture_consumes_linear = false;
+    bool capture_consumes_unique = false;
+    for (uint32_t ci = 0; ci < n_captures && !(capture_consumes_linear
+                                               && capture_consumes_unique); ci++) {
+        Binding *cb = captures[ci];
+        if (!cb->is_linear && !cb->is_unique) continue;
+        for (uint32_t si = 0; si < n_lin_snap; si++) {
+            if (lin_snap[si].binding != cb) continue;
+            /* Transitioned during THIS body: the body is what consumed it. */
+            if (cb->is_linear && cb->is_linear_consumed && !lin_snap[si].was_consumed)
+                capture_consumes_linear = true;
+            if (cb->is_unique && cb->is_moved && !lin_snap[si].was_moved)
+                capture_consumes_unique = true;
+            break;
+        }
+    }
 
     /* Pop scope */
     e->scope = inner.parent;
@@ -6395,6 +6508,15 @@ Expr *elab_fn(Elab *e, const Form *call) {
             }
         }
     }
+
+    /* closure-capture-escapes-linearity: stamp the inherited obligation onto the
+     * closure's own type.  A `let` binding whose initializer type carries
+     * CK_LINEAR is already marked linear (elab_forms.c), so this is all it takes
+     * for the existing use-after-consume / rc-wrap / dropped checks to start
+     * seeing the closure.  Linear wins over unique when a body consumes both --
+     * it is the stricter obligation. */
+    if (capture_consumes_linear)      fn_type.copy_kind = CK_LINEAR;
+    else if (capture_consumes_unique) fn_type.copy_kind = CK_UNIQUE;
 
     /* Check if we're at top level */
     bool at_top_level = (e->scope == &e->global);
@@ -6567,6 +6689,11 @@ Expr *elab_fn(Elab *e, const Form *call) {
             FN_ARG_SET(new_fn_type.as.fn, i + 1, FA_FAT, FN_ARG_FLAG(b->type.as.fn, i, FA_FAT));
         }
         new_fn_type.as.fn.result_fat = b->type.as.fn.result_fat;
+        /* closure-capture-escapes-linearity: carry the inherited obligation onto
+         * the env-prepended thunk type.  type_fn() zero-inits copy_kind, and this
+         * is the CAPTURING path -- the only one that can have inherited one -- so
+         * without this the mark set above is dropped before any binding sees it. */
+        new_fn_type.copy_kind = b->type.copy_kind;
         b->type = new_fn_type;
         fd->binding->type = new_fn_type;
         fn_def_expr->type = new_fn_type;
@@ -6678,6 +6805,14 @@ Expr *elab_fn(Elab *e, const Form *call) {
         if (return_fn_type) {
             clo_ty.as.fn.result_full_type = return_fn_type;
         }
+        /* closure-capture-escapes-linearity: the closure VALUE is what a `let`
+         * binds and what every downstream substructural check inspects, so the
+         * inherited obligation has to reach this type -- the thunk types above
+         * are internal.  This is the last of the three fn types elab_fn builds
+         * on the capturing path; all three are freshly type_fn()'d, so the mark
+         * has to be restated at each. */
+        if (capture_consumes_linear)      clo_ty.copy_kind = CK_LINEAR;
+        else if (capture_consumes_unique) clo_ty.copy_kind = CK_UNIQUE;
         Expr *closure_expr = expr_new(e->arena, EX_CLOSURE, clo_ty, call->span);
         closure_expr->as.closure_.closure = closure;
 

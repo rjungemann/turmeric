@@ -67,13 +67,18 @@ typedef struct RefineFnInfo {
      *
      * So congruence is opt-in: only a callee that is KNOWN pure gets it. */
     bool         pure;
-    /* RM-B1: the VC sort of the callee's RESULT, from its declared return
-     * type (`rt_sort_of_kind`).  A measure is declared with this sort rather
-     * than a hard-coded VS_INT, so a `bool`-returning function can be used as
-     * a predicate atom and a `float`-returning one is Real-sorted rather than
-     * mis-declared Int.  Defaults to VS_INT (0) when the callee does not
-     * resolve to a function with a readable return type -- an abstract
-     * measure, whose sort is decided by position instead. */
+    /* RM-B1: the VC sort the callee's RETURN TYPE denotes.
+     *
+     * A measure used to be declared VS_INT unconditionally, which made a
+     * `bool`-returning function unusable as a predicate atom (the goal came
+     * back Int-sorted and `refine_vc_build` rejected it) and -- worse -- made a
+     * `float`-returning one MIS-sorted: `(< (norm v) 4.0)` declared `norm` as
+     * Int, and S2's integer tightening turned `norm(v) < 4` into
+     * `norm(v) <= 3`, "proving" a goal that is false at norm(v) = 3.5 and
+     * eliding the runtime check that would have caught it.
+     *
+     * VS_INT is the zero value, so a resolver that never touches this field
+     * keeps the old behaviour. */
     VCSort       ret_sort;
 } RefineFnInfo;
 

@@ -129,6 +129,25 @@ int type_eq(Type a, Type b) {
     }
     /* Phase 9: rc<T> and weak<T> */
     if (a.kind == TY_RC || a.kind == TY_WEAK) {
+        /* stdlib-weak-ref-audit WR1: an rc/weak inner is a bare TypeKind, not a
+         * full Type, so `rc<A>` over a type parameter lowers to
+         * `type_rc(TY_TYVAR)` with the variable's NAME already erased.  Two
+         * distinct tyvars (`rc<A>` vs `rc<B>`) were therefore already equal
+         * here; what was not, and should be, is a tyvar inner against a
+         * concrete one.  Without it every polymorphic rc/weak function returned
+         * an un-instantiable `rc<tyvar>`:
+         *
+         *   (defn rc/downgrade [A] [^borrow r : rc<A>] : weak<A> (weak r))
+         *   (set! (.parent child) (rc/downgrade parent))
+         *   ; error: value type weak<tyvar> does not match field type weak<<adt>>
+         *
+         * so a generic wrapper over `weak` could not install the back-edge that
+         * weak<T> exists for, and callers had to use the raw intrinsic instead.
+         * Since the name is erased there is no binding to check against; the
+         * tyvar is an unrefined pointee on an identical carrier
+         * (RcControlBlock *), so it unifies with any concrete inner.  Two
+         * CONCRETE inners are still compared strictly. */
+        if (a.as.rc.inner == TY_TYVAR || b.as.rc.inner == TY_TYVAR) return 1;
         return a.as.rc.inner == b.as.rc.inner;
     }
     /* Phase 12: Borrow types */
