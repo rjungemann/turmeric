@@ -1,0 +1,29 @@
+;; RM-B2: one name, two sorts -- rejected, never guessed.
+;;
+;; `ready` resolves to no function at all, which the predicate language calls
+;; an ABSTRACT measure: an uninterpreted mathematical function with no
+;; declaration to read a sort from.  Position decides instead -- Bool where a
+;; proposition is required, Int everywhere else -- and here the two positions
+;; disagree: `:pre` uses it as a proposition, the return refinement uses it as
+;; a number.
+;;
+;; Picking one would declare a symbol that means one thing in the hypotheses
+;; and another in the goal.  The hash-cons table keys off the declaration, so
+;; those are two symbols that PRINT the same, which is precisely how a
+;; congruence bug gets written.  Rejecting is the correct answer: the
+;; obligation falls to Unknown with a stated reason and the runtime check the
+;; predicate would have had anyway is kept.  --strict-refine turns that
+;; Unknown into an error, which is what makes this fixture negative.
+;;
+;; The second diagnostic ("unknown function or operator 'ready'") is the
+;; ordinary language rule and is expected: a check the compiler keeps must be
+;; a check it can EVALUATE, and a measure with no definition cannot back one.
+;; The two rejections are independent -- the refinement layer must not depend
+;; on the elaborator having caught this.
+(defn f [v : int] : #refine{ r : int | (< (ready r) 3) }
+  :pre (ready v)
+  v)
+
+(defn main [] : int
+  (println (f 1))
+  0)

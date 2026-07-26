@@ -505,6 +505,16 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
 
     if (!vc) {
         g_stats.unknown++;
+        /* RM-B3: an obligation that fails to ENCODE and one the solver could
+         * not decide both report as `unknown`, and for a runtime-guarded
+         * crossing neither reports at all -- so the reason, which is computed
+         * either way, reached nobody.  That is what turned a two-line
+         * completeness hole into a source read.  Not a diagnostic: an encoding
+         * failure is a note about the supported fragment, not a defect in the
+         * user's program, so it rides on the stats switch. */
+        if (stats_enabled())
+            fprintf(stderr, "refine: not encoded (%s): %s\n",
+                    reason ? reason : "outside the supported fragment", what);
         if (g_strict_refine || !ob->runtime_guarded)
             diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING, ob->loc,
                                 TUR_W0372_REFINE_UNKNOWN,

@@ -1,0 +1,33 @@
+;; RM-B1: a BOOL-RETURNING function is a predicate atom.
+;;
+;; Every domain predicate a user actually wants to write is bool-returning --
+;; `(alive? w e)`, `(in-bounds? v i)`, `(open? conn)` -- and the encoder used
+;; to declare every measure `Int` unconditionally.  The goal then came back
+;; Int-sorted, `refine_vc_build` rejected it as "does not denote a
+;; proposition", and the whole obligation fell to Unknown with a reason
+;; nothing printed.  The workaround was to return `:int` and compare against
+;; 1, which is exactly the `:int` stand-in CLAUDE.md forbids.
+;;
+;; The sort now comes from the callee's declared return type, so `alive?` is
+;; declared Bool and the `if` guard's path condition is literally the goal.
+;; S0 discharges it and the entry check for the crossing is not needed.
+(defn alive? [w : int e : int] #fx{} : bool
+  (= w e))
+
+(defn use-it [w : int e : #refine{ x : int | (alive? w x) }] : int
+  e)
+
+;; The guard is what makes the argument legal, and the compiler now agrees:
+;; hypothesis `alive?(w, e)`, goal `alive?(w, e)`.  Congruence is what closes
+;; it, and congruence is EARNED -- `alive?` clears the default-deny purity
+;; walk, so the two occurrences may be the same value.
+(defn guarded [w : int e : int] : int
+  (if (alive? w e)
+    (use-it w e)
+    0))
+
+(defn main [] : int
+  (println (guarded 3 3))
+  (println (guarded 3 4))
+  (println "refine-bool-measure")
+  0)

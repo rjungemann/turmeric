@@ -1,0 +1,26 @@
+;; RM-B0: the regression guard for the float-measure MIS-SORT.
+;;
+;; `norm` returns float.  With the measure declared VS_INT (as every measure
+;; once was), S2 sees an all-integer strict bound and tightens it:
+;; `norm(v) < 4` becomes `norm(v) <= 3`, which is exactly the goal -- so this
+;; program compiled with the return check ELIDED and then returned 7.5, whose
+;; norm is 3.75, in plain violation of its own refinement.  No panic, no
+;; diagnostic.
+;;
+;; The integral literals are deliberate here, and are the one place the repo's
+;; "lead with a fractional literal" rule is inverted on purpose: integrality
+;; of the CONSTANT is what arms the tightening, and 3.75 is the fractional
+;; value that then breaks it.
+;;
+;; With `norm` Real-sorted the tightening does not apply, the obligation is
+;; honestly unknown, and --strict-refine says so.
+(defn norm [v : float] #fx{} : float
+  (* v 0.5))
+
+(defn tighten [v : float] : #refine{ r : float | (<= (norm r) 3.0) }
+  :pre (< (norm v) 4.0)
+  v)
+
+(defn main [] : int
+  (println (tighten 7.5))
+  0)
