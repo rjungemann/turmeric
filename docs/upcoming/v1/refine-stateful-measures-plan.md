@@ -574,12 +574,38 @@ The fixtures are the same either way, and the **negative** ones are the point:
   standing lesson -- both historical soundness bugs lived in the encoder, below
   the VC fuzzer's reach -- this is the only harness that covers this work.
 
+### Documentation (landing task -- do NOT skip)
+
+The guide [`stateful-refinements-guide.md`](../../guides/stateful-refinements-guide.md)
+was written *ahead* of the implementation and is explicitly marked **in-flight /
+spec**. When `#reads` + the congruence grant land, **update that guide in the
+same PR**:
+
+- flip its status banner from "in-flight / not yet implemented" to shipped, with
+  the graduation state of the `refined` experiment;
+- replace "specified here and not yet implemented" / "verified: still `0 proven,
+  1 unknown`" hedges with the real behaviour and the passing fixture names;
+- confirm every `#reads` code sample compiles and every claimed diagnostic
+  (`TUR-E0200`, `TUR-W0372`) matches what the build emits;
+- move it out of the "trusted now (step 1)" framing only if step 2/3 also
+  landed -- otherwise keep the trajectory section honest;
+- add it to the shipped-guides index `docs/guides/README.md` (it is deliberately
+  left out while in-flight).
+
+Treat a green `stateful` fuzzer and this guide update as jointly gating the
+feature's landing. A shipped `#reads` with a stale spec-mode guide is a
+regression in its own right.
+
 ## What this plan will not do
 
-- **No trusted-purity attribute.** No `#[pure]`, no `:measure`, no way for a
-  user to assert congruence the compiler cannot check. The cost of a wrong
-  purity claim is an elided check; the cost of declining is a kept one. The
-  asymmetry is the whole design.
+- **No trusted-purity attribute that elides a check.** No `#[pure]`, no
+  `:measure` that removes a runtime guard on trust. The cost of a wrong purity
+  claim must never be an *elided* check. **Reconciled 2026-07-26:** `#reads w`
+  (blocker 2) *is* a trusted attribute, but it does not violate this line,
+  because B3 elides only the call-site crossing check, never the callee's kept
+  entry check -- a wrong `#reads` costs a missed lint, not an elided safety
+  check. The invariant is "no trusted claim elides a *safety* check", and
+  `#reads` honours it. See "Blocker 2 design".
 - **No heap model.** Nothing here adds a memory theory to the VC. Both
   candidates work by making the state question disappear before encoding --
   A by turning it into an argument, B by proving it cannot change.
