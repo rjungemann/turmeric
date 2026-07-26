@@ -145,10 +145,16 @@ Entities are 64-bit handles packing (generation, index):
 (world-despawn! (.gens w) e)   ; bumps the generation; dense data not cleared
 ```
 
-Aliveness is a runtime check (`gens[index] == handle's generation`).
-This is the v1 surface; a refinement-typed strict-aliveness API
-(`entity-alive!`) is gated on the refinement-types work, see the
-plan's "Deferred to v2" section.
+Aliveness is a runtime check (`gens[index] == handle's generation`) --
+but note **who runs it**. `sized-alive?` performs the comparison for
+sized worlds; the unsized world exposes no aliveness predicate at all,
+and the `defcomponent-accessors` reads do not consult `gens`. A handle
+whose slot has been despawned reads the old bits. Compare generations
+yourself when a handle may have outlived its entity.
+
+A strict-aliveness API that makes use-after-despawn a *compile* error
+is planned against the now-shipped refinement types; see
+[docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md).
 
 ## Queries: `for-each` (imperative)
 
@@ -296,8 +302,9 @@ raylib is on the cmake-deps path.
   I1-I6; see
   [docs/guides/substructural-types-guide.md](substructural-types-guide.md)
   for the underlying cap machinery.
-- **Aliveness**: runtime, via generation comparison on every
-  storage access.
+- **Aliveness**: runtime, via generation comparison -- performed by
+  `sized-alive?` on sized worlds, and **not** performed by the unsized
+  `defcomponent-accessors` read path.
 
 ## Cross-world systems
 
@@ -720,8 +727,10 @@ intended sweet spot.
 ## Where to look next
 
 - `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the
-  refinement-typed roadmap (entity-alive!, refinement-typed world
-  bounds) gated on refinement types landing.
+  refinement-typed roadmap (strict aliveness, bounded slot indices),
+  rewritten now that refinement types have landed.
+- `docs/upcoming/v1/ecs-component-set-bounds-plan.md` -- the structural
+  "any world with `Pos` and `Vel`" bound, split out of the above.
 - `../guides/hkt-guide.md` -- the variadic-HKT-rows mechanism behind
   the row-typed `Query` value.
 - `../guides/substructural-types-guide.md` -- the substructural
