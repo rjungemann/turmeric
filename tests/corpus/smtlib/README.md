@@ -45,10 +45,13 @@ stage that legitimately decides more later must not break this corpus.
   (`or`, `=>`, `distinct`, `let`).
 - `generated/` -- **machine-generated**, labelled by Z3, curated to 10 per
   (theory, status) bucket so the set stays balanced and reviewable.
-- `unsupported_ite_skip.smt2` -- deliberately OUTSIDE the fragment. The reader
-  must skip it whole rather than guess a translation; its presence keeps that
-  path exercised, so a reader that silently mis-parsed would not report a pass
-  for work it did not do.
+- `unsupported_define_sort_skip.smt2` -- deliberately OUTSIDE the fragment
+  (`define-sort` is an unsupported command). The reader must skip it whole
+  rather than guess a translation; its presence keeps that path exercised, so
+  a reader that silently mis-parsed would not report a pass for work it did
+  not do. This role used to belong to `unsupported_ite_skip.smt2`, until ite
+  lifting brought ite inside the fragment -- that file lives on as
+  `qf_lia_ite_lifted_unsat.smt2`, pinning the lifting instead.
 
 ## Provenance of the labels
 
@@ -235,6 +238,20 @@ Why it stays out, in order of weight:
 The committed corpus and the external one answer different questions. This one
 asks "does a known-answer benchmark still get the known answer"; that one asks
 "does anything in the wild break us".
+
+### Reader coverage of the external sample
+
+Last measured sweep (before logic-directed numeral typing landed): **193 of
+200 parse**, 7 skips -- 4x "ite branches disagree on sort" (QF_LRA
+`spider_benchmarks`, integer-literal ite branches in a Real logic), 1x "let
+nested too deeply" and 1x "term nested too deeply" (QF_RDL), 1x "macro
+expansion too deep" (QF_UFLRA); 142 decided, 40 over budget, no crashes.
+
+The numeral-typing change (numerals in `QF_LRA`/`QF_RDL`/`QF_UFLRA` are
+real-sorted, matching SMT-LIB) targets the four spider skips; the committed
+regression pair is `qf_lra_ite_int_numerals_{unsat,sat}.smt2`. The post-fix
+sweep has not been run yet -- rerun it where the external clone is available
+and replace these numbers with measured ones; do not project.
 
 ## Running it
 

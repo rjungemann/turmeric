@@ -194,6 +194,7 @@ typedef struct {
     LetBind   *lets;                 /* arena-allocated: too big for the stack */
     uint32_t   n_lets, cap_lets;
     uint32_t   n_ite;                /* serial for fresh ite-lifting variables */
+    bool       reals_only;           /* pure-Real logic: numerals denote reals */
 } Tr;
 
 /* `define-fun` is a MACRO, not a new uninterpreted symbol: SMT-LIB gives it a
@@ -315,7 +316,9 @@ static VCTerm *tr_term(Tr *t, const Sx *s, uint32_t depth) {
         if (strcmp(a, "true")  == 0) return vc_bool(t->vc, true);
         if (strcmp(a, "false") == 0) return vc_bool(t->vc, false);
         int64_t iv; double dv;
-        if (tr_numeral(a, &iv)) return vc_int(t->vc, iv);
+        if (tr_numeral(a, &iv))
+            return t->reals_only ? vc_real(t->vc, (double)iv)
+                                 : vc_int(t->vc, iv);
         if (tr_decimal(a, &dv)) return vc_real(t->vc, dv);
         /* innermost let binding wins */
         for (uint32_t i = t->n_lets; i-- > 0; )
@@ -639,7 +642,22 @@ static void bench_load(Bench *b, const char *text, size_t len, Arena *a) {
             }
             continue;
         }
-        if (sx_head_is(cmd, "set-logic") || sx_head_is(cmd, "set-option") ||
+        if (sx_head_is(cmd, "set-logic")) {
+            /* In a pure-Real logic there are no Int-sorted terms: numerals
+             * denote reals (SMT-LIB 2.6, Reals theory declaration).  Typing
+             * them by the logic -- rather than carrying them as ints and
+             * coercing at the sites that know about it -- is what lets a
+             * lifted ite variable come out real-sorted, which no post-hoc
+             * literal rewrite (tr_as_real) can fix. */
+            if (cmd->n == 2 && cmd->kids[1]->kind == SX_ATOM) {
+                const char *lg = cmd->kids[1]->atom;
+                t.reals_only = strcmp(lg, "QF_LRA")   == 0 ||
+                               strcmp(lg, "QF_RDL")   == 0 ||
+                               strcmp(lg, "QF_UFLRA") == 0;
+            }
+            continue;
+        }
+        if (sx_head_is(cmd, "set-option") ||
             sx_head_is(cmd, "check-sat") || sx_head_is(cmd, "exit") ||
             sx_head_is(cmd, "get-model") || sx_head_is(cmd, "get-info"))
             continue;
