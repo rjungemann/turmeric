@@ -1608,6 +1608,42 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
     return false;
 }
 
+/* The caller's WHOLE body, as one form the path walk can descend.
+ *
+ * `caller_body` used to be the defn's LAST body form -- correct for its other
+ * job (the return obligation's subject) and wrong here.  A crossing in any
+ * earlier form was then invisible to `rt_collect_path_conds`, which walks down
+ * to `call_form` and gives up when it does not find it, so the call was
+ * checked without the branch that guards it.  A zero-parameter caller showed
+ * it plainly: `main`'s last form is the literal `0`, and the walk searched `0`
+ * for the call.  See
+ * docs/archive/refine-callsite-path-conds-lost-multi-form-body.md.
+ *
+ * A single-form body is passed through unwrapped, so the common case allocates
+ * nothing and the resulting tree is byte-identical to before.  A multi-form
+ * body is wrapped in a synthetic `(do ...)`: `do` is not one of the three
+ * heads the walk treats specially, so it falls to the generic descent, which
+ * is exactly the "a later body form is not guarded by an earlier one"
+ * semantics wanted here.
+ *
+ * Widening also widens the two vetoes in rt_push_cs_path_conds, in the safe
+ * direction both times: a `set!` anywhere in the body now declines every
+ * crossing in it (it used to be checked only against the last form, so an
+ * assignment in an earlier form could invalidate a condition unnoticed), and
+ * a `call_form` node reachable from two body forms now counts as ambiguous
+ * rather than unique. */
+static const Form *rt_whole_body(Elab *e, const Form *call, uint32_t body_start) {
+    if (!call || call->as.list.len <= body_start) return NULL;
+    uint32_t nb = call->as.list.len - body_start;
+    if (nb == 1) return call->as.list.items[body_start];
+    Form **items = (Form **)arena_alloc(e->arena, (nb + 1) * sizeof(Form *));
+    items[0] = form_sym(e->arena, call->span,
+                        symtab_intern(e->st, strslice("do", 2)));
+    for (uint32_t i = 0; i < nb; i++)
+        items[i + 1] = call->as.list.items[body_start + i];
+    return form_list(e->arena, call->span, items, nb + 1);
+}
+
 /* Push this crossing's path conditions onto `cs->env`, returning the saved
  * head so the caller can rewind.  Declines -- pushing nothing -- when the body
  * assigns anywhere, since a condition mentioning a reassigned name may no
@@ -4785,7 +4821,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
              * parameters still need declared sorts in the environment. */
             refine_fill_call_site_env(e, rt_cs_start, rt_env,
                                       name_f->as.sym ? name_f->as.sym->name : NULL,
-                                      rt_subject);
+                                      rt_whole_body(e, call, body_start));
             const char *rt_fn = name_f->as.sym ? name_f->as.sym->name : "?";
             char rt_what[128];
             if (ct_ret_pred) {

@@ -928,7 +928,12 @@ anyway.
   recovered from the caller's body, so `(if (= n 0) 0 (+ 1 (f (- n 1))))`
   discharges its recursive crossing from `n >= 0` and `n != 0` together. A
   `let` contributes `x = v`, a `match` arm contributes a literal pattern's
-  equation and its guard.
+  equation and its guard. The caller's **whole** body is searched, so a call in
+  any body form keeps its guards -- not only one in the form the function
+  returns. That distinction was a real gap: `caller_body` used to be the last
+  body form, which is the return obligation's subject and not the body, so a
+  zero-parameter caller like `main` had the walk searching its trailing `0` for
+  the call and every guard was lost.
 
   Four things are deliberately left out, and all four cost a diagnostic rather
   than soundness -- the callee's own entry check always remains:
