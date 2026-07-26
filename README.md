@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.31.0` -- experimental refinement types (`--enable=refined`) with an in-house SMT solver, an experimental cycle-collecting GC (`--enable=cycle-gc`), `rc<T>`-owning collections, and an O(N) incremental turi REPL.
+**Latest release:** `v0.31.1` -- follow-up fixes to the cycle-collecting GC (bounded pause times, a linear `rc<T>` free-queue drain) and experimental refinement types, plus a `set!` `rc<T>` leak fix and a wasm32 hash-width fix.
 
 ## What
 
