@@ -1674,24 +1674,33 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         }
     }
 
-    /* Parse each constructor */
-    for (uint32_t ci = 0; ci < n_ctors; ci++) {
+    /* Parse each constructor.
+     * `ci` is declared outside the loop so the `data_ctor_parse_error`
+     * bail-out below can truncate `def->n_ctors` to the number of slots we
+     * actually filled (every error path bails before `def->ctors[ci]` is
+     * assigned, so `ci` is exactly the populated-slot count) -- the same
+     * guard defgadt's ctor loop carries.  Without it, the pre-registered
+     * binding advertises n_ctors slots whose pointers were never written
+     * (arena memory is NOT zeroed), and later field-access elaboration in
+     * the same failing compile dereferences the junk. */
+    uint32_t ci = 0;
+    for (; ci < n_ctors; ci++) {
         Form *ctor_form = call->as.list.items[ctors_start_idx + ci];
         if (ctor_form->tag != F_LIST) {
             diag_emit(DIAG_ERROR, ctor_form->span,
                       "defdata: constructor must be a list form (Ctor :T1 :T2 ...)");
-            return NULL;
+            goto data_ctor_parse_error;
         }
         if (ctor_form->as.list.len < 1) {
             diag_emit(DIAG_ERROR, ctor_form->span,
                       "defdata: constructor form cannot be empty");
-            return NULL;
+            goto data_ctor_parse_error;
         }
         Form *ctor_name_form = ctor_form->as.list.items[0];
         if (ctor_name_form->tag != F_SYM) {
             diag_emit(DIAG_ERROR, ctor_name_form->span,
                       "defdata: constructor name must be a symbol");
-            return NULL;
+            goto data_ctor_parse_error;
         }
         const Symbol *ctor_name = ctor_name_form->as.sym;
 
@@ -1726,7 +1735,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                 diag_emit(DIAG_ERROR, rec_vec->span,
                           "defdata: record-style variant '%s' field list cannot be empty",
                           ctor_name->name);
-                return NULL;
+                goto data_ctor_parse_error;
             }
             /* Walk name/type pairs with a cursor rather than fixed `fi*2`
              * indexing: structdef-retirement slice 5 A1 -- a `fn`-typed field may
@@ -1749,13 +1758,13 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                     diag_emit(DIAG_ERROR, name_f->span,
                               "defdata: record-style variant '%s' expected a field "
                               "name symbol", ctor_name->name);
-                    return NULL;
+                    goto data_ctor_parse_error;
                 }
                 if (ci >= n_items) {
                     diag_emit(DIAG_ERROR, rec_vec->span,
                               "defdata: record-style variant '%s' field list must be "
                               "[name : type ...] pairs", ctor_name->name);
-                    return NULL;
+                    goto data_ctor_parse_error;
                 }
                 Form *type_f = rec_vec->as.list.items[ci++];
                 /* Unwrap `: T` (F_TYPE_ANN) to the bare type form. */
@@ -1814,7 +1823,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
         for (uint32_t fi = 0; fi < n_fields; fi++) {
             if (!resolve_ctor_field(e, def, ctor, fi, field_type_forms[fi],
                                     tp_syms, n_type_params, is_record)) {
-                return NULL;
+                goto data_ctor_parse_error;
             }
             ctor->fields[fi].name = rec_field_names ? rec_field_names[fi]->name : NULL;
 
@@ -1859,7 +1868,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                                         "cannot copy linear field '%s' -- "
                                         "linear values cannot appear in :copy structs",
                                         ctor->fields[fi].name);
-                    return NULL;
+                    goto data_ctor_parse_error;
                 }
                 const char *fdesc = ctor->fields[fi].name;
                 if (fdesc) {
@@ -1873,7 +1882,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                               "field %u of variant '%s'",
                               def->name, fi, ctor->name);
                 }
-                return NULL;
+                goto data_ctor_parse_error;
             }
         }
 
@@ -1933,6 +1942,17 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     out->as.defdata_.def = def;
     out->as.defdata_.binding = adt_binding;
     return out;
+
+data_ctor_parse_error:
+    /* A constructor failed to parse after the AdtDef was pre-registered in
+     * scope.  The slots `[ci, n_ctors)` were never written -- and arena
+     * memory is NOT zeroed, so they hold junk, not NULL -- while `def->
+     * n_ctors` advertises the full declared count.  Later field-access /
+     * match elaboration in the same (already failing) compile would then
+     * dereference the junk (the ecs sized-* suite crash).  Truncate to the
+     * slots actually filled, mirroring defgadt's ctor_parse_error. */
+    def->n_ctors = ci;
+    return NULL;
 }
 
 /* Phase G2: Look up a type parameter name in the current skolem environment.

@@ -1,7 +1,11 @@
 # Arena debug-poisoning -- make ASan-invisible arena use-after-free diagnosable
 
-**Status:** proposed. Motivated by
-`docs/reported/refined-multi-compile-memory-corruption.md` (a nondeterministic,
+**Status:** EXECUTED (2026-07-26). AP1 (ASan poison/unpoison), AP2 (freed-slab
+quarantine), and AP4 (`TUR_DEBUG_ARENA_GUARD=1` mmap/mprotect guard mode) are
+all landed in `src/runtime/arena.c`, and the motivating bug is root-caused and
+FIXED -- see the Outcome section at the end. The infrastructure stays for the
+next bug of this class. Motivated by
+`docs/archive/refined-multi-compile-memory-corruption.md` (a nondeterministic,
 ASan-silent crash when one process compiles more than one refined file), but the
 capability is general: it turns the whole class of "stale pointer into a
 reset-or-freed arena" bugs from silent corruption into a loud ASan/SIGSEGV report
@@ -31,9 +35,11 @@ sub-allocations inside it. Two consequences make an arena use-after-free silent:
    VALID data -- reads/writes corrupt compile 2 nondeterministically, and ASan
    cannot flag it because the memory is legitimately allocated (to compile 2).
 
-That is exactly the shape of the refined multi-compile crash: a process-global
-(the refine memo was one such; `cmd_build` now resets it, but a second channel
-remains) holds an arena pointer across `cmd_build` calls. The crash site is
+That is exactly the shape the refined multi-compile crash APPEARED to have: a
+process-global (the refine memo was one such; `cmd_build` now resets it)
+holding an arena pointer across `cmd_build` calls. (The second channel turned
+out to be an uninitialized arena read instead -- see Outcome -- but the
+tooling below is what disambiguated the two.) The crash site is
 wherever the aliased memory is later misused -- never where the stale pointer
 lives -- so a backtrace of the SIGSEGV is useless, and it reproduces only
 sometimes. `arena_reset`'s own comment already ASPIRES to "crash loudly under
@@ -101,11 +107,64 @@ reclaimed arena bytes trap on access AT THE DEREF:
 - Not a production feature. This is Debug/ASan diagnostic infrastructure; the
   gate keeps it out of Release entirely.
 
+## Outcome (2026-07-26): plan executed; bug found and fixed
+
+How it actually played out is worth recording, because the tool that cracked
+the case was NOT the one the plan led with:
+
+- **AP1+AP2 landed** in `src/runtime/arena.c` (`TUR_DEBUG_ARENA_POISON`,
+  default ON in a Debug+ASan build, `=0` to opt out; quarantined slabs are
+  chained off a global so LSan sees them as reachable). But an ASan build
+  (Homebrew clang, since Apple clang's ASan runtime deadlocks on this macOS)
+  turned out not to reproduce the crash AT ALL, poison on or off -- ASan's own
+  allocator (delayed reuse + partial `malloc_fill`) perturbs heap contents
+  enough to hide the bug. So the "run the repro under ASan poisoning" step
+  could never fire.
+- **AP4 landed** (`TUR_DEBUG_ARENA_GUARD=1`: per-slab `mmap`,
+  `mprotect(PROT_NONE)` on `arena_free`, mappings never recycled) and was run
+  against the deterministic (8/8 SIGSEGV) plain-Debug repro
+  (`tur test` over `turmeric-spices/spices/ecs/tests/refined/`). Result: the
+  repro went CLEAN under guard mode -- no fault anywhere. That was the tell:
+  a stale pointer into a freed arena would HAVE to fault on a PROT_NONE page,
+  so the bug was never a use-after-free. What guard mode changed was that
+  fresh `mmap` slabs are ZERO-filled while recycled malloc slabs carry old
+  heap junk -- i.e. the crash was an **uninitialized read** of arena memory.
+- **Root cause:** `parse_typeclass_method` (`elab_typeclasses.c`) initialized
+  every `TypeClassMethod` field EXCEPT the RT1 memo slot
+  `refine_class_binding`; `arena_alloc` does not zero. In a fresh process the
+  first compile's slabs come from zero pages (reads NULL, works); later
+  in-process compiles get recycled slabs holding the previous compile's bytes
+  (source text!), so `rt_class_method_refine_binding`'s
+  `if (m->refine_class_binding) return m->refine_class_binding;` returned a
+  garbage pointer that `refine_note_call_site` dereferenced. Explains every
+  symptom: multi-compile-in-one-process only, nondeterministic, ASan-silent.
+- **Fix:** `memset(method, 0, sizeof *method)` after the alloc (covers any
+  future field too). Repro: 8/8 SIGSEGV -> 0/20 failures; the report's minimal
+  2-file repro 0/10; refine fixture subset green under a Debug tur
+  (2369 checks).
+
+Lesson for next time: when the guard mode makes a "use-after-free" go clean
+instead of loud, suspect an uninitialized arena read -- the zero-page behavior
+of fresh mappings is itself a diagnostic. (An MSan build would catch this class
+directly, but MSan needs all deps instrumented; the guard mode's clean-run
+signal is the cheap substitute.)
+
+The same clean-under-guard signal immediately caught a SECOND bug of the class
+the same day: `tur test` over the full ecs spice suite still segfaulted (both
+plain and, with a garbage pointer, after a first NULL-guard) but ran clean
+under `TUR_DEBUG_ARENA_GUARD=1`. Root cause: `elab_defdata`'s ctor loop
+`return NULL`ed mid-build on an unresolvable field type, leaving the
+pre-registered AdtDef advertising `n_ctors` slots whose pointer array was
+never written (non-zeroed arena junk); later field-access elaboration in the
+same failing compile dereferenced it. Fixed by mirroring defgadt's existing
+`ctor_parse_error` truncation (`def->n_ctors = ci`) -- defgadt had this exact
+bug and fix before (`docs/archive/`), defdata never got it.
+
 ## References
 
-- `docs/reported/refined-multi-compile-memory-corruption.md` -- the bug this
-  unblocks (and the partial fix already landed: `cmd_build` now calls
-  `refine_discharge_reset()`).
+- `docs/archive/refined-multi-compile-memory-corruption.md` -- the bug this
+  plan was built for, now resolved (and the partial fix that preceded it:
+  `cmd_build` now calls `refine_discharge_reset()`).
 - `src/runtime/arena.c` / `src/runtime/arena.h` -- `arena_reset`
   (`ARENA_POISON` memset today), `arena_free`, `arena_alloc`, `arena_owns`.
 - `docs/upcoming/hold/turi-value-pool-scratch-promotion-plan.md` (if present) --

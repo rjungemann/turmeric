@@ -359,6 +359,17 @@ expected and fails to elaborate.
 > until the corruption is fixed (then: run each via its own invocation, or move
 > them flat).
 >
+> **Update 2026-07-26 (later) -- corruption FIXED; (a) fully unblocked.** The
+> second channel was root-caused via the executed
+> `docs/upcoming/arena-debug-poisoning-plan.md` (the AP4 guard mode's clean run
+> disproved the UAF theory): `parse_typeclass_method` left the RT1 memo field
+> `TypeClassMethod.refine_class_binding` UNINITIALIZED in non-zeroed arena
+> memory, so the second in-process compile read recycled-slab junk as a
+> `Binding*`. Fixed by zeroing the struct. The `tur test tests/refined` repro
+> went 8/8 SIGSEGV -> 0/20 failures, so the refined tests now auto-run via
+> `tur test` (moved flat into `spices/ecs/tests/`). Resolved report:
+> `docs/archive/refined-multi-compile-memory-corruption.md`.
+>
 > **(c)** The `for-each` aliveness refinement is PROVEN. A refined LOOP whose
 > body's `rgworld-get-x!` discharges per-entity works today
 > (`tests/refined/refined-loop-alive.tur`: 1 proven, runs -> 40, correctly skips

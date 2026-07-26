@@ -1,5 +1,21 @@
 # Compiling multiple refined files in one process corrupts memory (nondeterministic SIGSEGV)
 
+**RESOLVED (2026-07-26).** Root cause: NOT an arena use-after-free after all --
+`parse_typeclass_method` (`src/compiler/elab_typeclasses.c`) never initialized
+the RT1 memo field `TypeClassMethod.refine_class_binding`, and `arena_alloc`
+does not zero. A fresh process's first compile reads the field from zero
+OS pages (NULL -> works); later in-process compiles read recycled malloc slab
+junk (the previous compile's bytes), so `rt_class_method_refine_binding`'s
+memo check returned a garbage `Binding*` that `refine_note_call_site`
+dereferenced. Fixed by zeroing the struct after allocation. Found by executing
+`docs/upcoming/arena-debug-poisoning-plan.md`: the AP4 guard mode
+(`TUR_DEBUG_ARENA_GUARD=1`, mmap + PROT_NONE on free) made the deterministic
+8/8 repro go CLEAN -- impossible for a real UAF, and exactly what an
+uninitialized read does when fresh mappings are zero-filled. Validated: spices
+`ecs/tests/refined` repro 0/20 failures (was 8/8 SIGSEGV), the minimal 2-file
+repro below 0/10, refine fixtures green under a Debug tur. The RE1 refined ecs
+tests can now auto-run via `tur test`.
+
 **Severity:** high (blocks auto-running refined tests via `tur test`, and any
 multi-file in-process refined compile -- LSP/worker). Nondeterministic, so it can
 also flake CI. Individual `tur check`/`run`/`emit-c` (one file per process) are

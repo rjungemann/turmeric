@@ -1138,6 +1138,13 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
     if (out_body_start) *out_body_start = body_start_idx;
 
     TypeClassMethod *method = (TypeClassMethod *)arena_alloc(e->arena, sizeof(TypeClassMethod));
+    /* arena_alloc does not zero.  Zero the whole struct before the field
+     * assignments so any member NOT set below (refine_class_binding was the
+     * one that bit: the RT1 memo slot read junk from a recycled slab and a
+     * later dynamic dispatch dereferenced it -- the refined multi-compile
+     * SIGSEGV) -- and any field added later -- starts NULL instead of
+     * whatever the recycled slab held. */
+    memset(method, 0, sizeof(*method));
     method->name = name;
     method->param_names = param_names;
     method->param_types = param_types;
@@ -5463,10 +5470,15 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                  * of the tagged union (the value's tag proves the variant), the
                  * same member path a match field-bind uses. */
                 const CtorDef *ctor = NULL;
+                /* A defdata that failed mid-elaboration (e.g. an unresolvable
+                 * constructor field type) can leave n_ctors set with NULL
+                 * ctors entries; guard so the error path degrades to "field
+                 * not found" instead of a NULL-deref SIGSEGV. */
                 if (adt_is_flat_product(adt) && adt->n_ctors == 1 &&
-                    adt->ctors[0]->is_record) {
+                    adt->ctors && adt->ctors[0] && adt->ctors[0]->is_record) {
                     ctor = adt->ctors[0];
-                } else if (adt_is_narrowed_to_record_variant(*adt_base)) {
+                } else if (adt_is_narrowed_to_record_variant(*adt_base) &&
+                           adt->ctors) {
                     ctor = adt->ctors[adt_base->as.adt_.narrowed_ctor_idx];
                 }
                 if (ctor) {

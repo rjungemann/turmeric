@@ -2,6 +2,7 @@
 
 build/
 build2/
+build-asan/
 build-debug/
 build-norel/
 build-oracle/
