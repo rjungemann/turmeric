@@ -1009,6 +1009,30 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
     /* Direct scope lookup */
     Binding *b = scope_lookup(e->scope, sym);
     if (b) {
+        /* The `tur/` namespace is implicitly imported everywhere, so a binding
+         * defined in a `tur/` module is globally visible regardless of its
+         * (export ...) list.  The M7 promotion sweep (elab_toplevel.c) normally
+         * establishes that by rewriting every `tur/`-module binding's
+         * defining_module_name to NULL -- but that sweep fires exactly once, at
+         * the stdlib/user boundary.  On the interpreter's incremental
+         * re-elaboration (TR2, now the default) the accumulated stdlib prefix
+         * grows across evals, so the boundary -- and thus the promotion -- can
+         * land after a form that already needed the binding.  The visible
+         * symptom is a macro-expanded call to a module-private stdlib helper:
+         * `(assert! ...)` expands to `tur-contract-check`, which is private to
+         * tur/contract, and every contract/sized/existential fixture failed
+         * with "symbol 'tur-contract-check' is private to module 'tur/contract'"
+         * under --interpret while passing on the whole-program path.
+         *
+         * Honour the implicit `tur/` import directly at lookup time so
+         * visibility no longer depends on the sweep having already run.  This
+         * is the binding-side counterpart of the identical rule in
+         * elab_lookup_macro (elab_core.c), added for the same reason. */
+        if (b->defining_module_name != NULL
+            && b->defining_module_name->len >= 4
+            && memcmp(b->defining_module_name->name, "tur/", 4) == 0) {
+            /* visible: implicitly-imported stdlib namespace */
+        } else
         /* Visibility: private symbol accessed from outside its module */
         if (b->defining_module_name != NULL
             && e->current_module_name != b->defining_module_name

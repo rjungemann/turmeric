@@ -50,7 +50,6 @@
   :ptr)
 
 (extern-c tur_hamt_del_eq_o [m :ptr hash :int key :ptr eq :ptr owned :int] :ptr)
-
 ; collections-cannot-hold-rc-values (map side, step c): the _vo variants take
 ; the value retain/release ops explicitly instead of hardcoding the boxed-value
 ; refcount, so a map can own rc<T> values.  The ops must be EMITTED functions
@@ -62,14 +61,41 @@
 ; wide value).  Bits 1 and 2 are mutually exclusive: a value is either a
 ; by-value box or an rc handle, never both.
 
+
 (extern-c tur_hamt_set_eq_vo
-  [m :ptr hash :int key :ptr val :ptr eq :ptr owned :int
-   val_retain :ptr val_release :ptr]
+  [m
+   :ptr
+   hash
+   :int
+   key
+   :ptr
+   val
+   :ptr
+   eq
+   :ptr
+   owned
+   :int
+   val_retain
+   :ptr
+   val_release
+   :ptr]
   :ptr)
 
 (extern-c tur_hamt_del_eq_vo
-  [m :ptr hash :int key :ptr eq :ptr owned :int
-   val_retain :ptr val_release :ptr]
+  [m
+   :ptr
+   hash
+   :int
+   key
+   :ptr
+   eq
+   :ptr
+   owned
+   :int
+   val_retain
+   :ptr
+   val_release
+   :ptr]
   :ptr)
 
 (extern-c tur_hamt_has_eq_o

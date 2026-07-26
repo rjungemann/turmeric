@@ -1,0 +1,7 @@
+Every assertion here is an rc/strong-count around a `(Vec rc<S>)` push, and
+Vec element ownership is an emit-time feature: elaboration classifies each
+carrier crossing RETAIN/BORROW/REJECT and codegen threads `tur-vec-elem-rc?`
+into the `owned` flag of the -o helpers (commit "Let a Vec own its rc<T>
+elements"). The tree-walking interpreter has no emit phase and does not mint
+the reference, so `vec-push!` leaves the count at 1 where the compiled path
+reports 2. Compiled path is green (bash tests/run.sh).

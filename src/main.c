@@ -6084,6 +6084,18 @@ static int cmd_eval_h(const char *path, bool use_color,
      * preloaded stdlib registers no reader macros and the user file is parsed
      * in a single pass (no self-replay of its own `reader-macros/define`). */
     env->reader_macros->strict = true;
+    /* Debug sessions (`tur dap`) need real per-file span provenance: the DAP
+     * server resolves each frame's source from diag_file_path(span.file_id)
+     * and matches breakpoints by that file's basename.  The TR2 incremental
+     * elaboration path re-attributes spans to the accumulated `<eval>` source
+     * blob rather than the originating file, so frames come back with no
+     * `source` object and file-scoped breakpoints stop matching -- the
+     * observable symptom was a post-stepOut frame reported as `?:19` followed
+     * by a conditional breakpoint that never fired.  A debug session loads one
+     * program once, so the incremental win (a long-lived REPL amortising a
+     * growing prefix) does not apply here and opting out costs nothing.
+     * See docs/reported/incremental-elab-loses-span-file-provenance.md. */
+    if (debug) turi_env_set_incremental_elab(env, false);
     /* Pre-detect the user file's #lang so the prelude loads under the SAME
      * reader.  Otherwise the user file's `#lang sweet-exp` (etc.) flips
      * env->reader_type mid-stream, and turi_eval_impl discards the accumulated

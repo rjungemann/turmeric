@@ -31,7 +31,6 @@
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
 ;; Cycle-collector-visible chain of rc<A>.
-
 ;;; RcChain -- one link: an element and the rest of the chain.
 ;;;
 ;;; Both fields are `rc`, which is what makes the link traceable: the walk glue
@@ -40,7 +39,6 @@
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
 (defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
-
 ;;; rcchain-nil -- the empty chain.
 ;;;
 ;;; Returns:
@@ -59,9 +57,8 @@
 ;;;   (rcchain-nil)  ; => empty chain
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
-(defn rcchain-nil [] : rc<RcChain>
-  (:: 0 rc<RcChain>))
 
+(defn rcchain-nil [] : rc<RcChain> (:: 0 rc<RcChain>))
 ;;; rcchain-empty? -- 1 if the chain has no links.
 ;;;
 ;;; Parameters:
@@ -74,11 +71,11 @@
 ;;;   (rcchain-empty? (rcchain-nil))  ; => 1
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
+
 (defn rcchain-empty? [^borrow c : rc<RcChain>] : int
   ```c
   return (intptr_t)c == 0 ? 1 : 0;
   ```)
-
 ;;; rcchain-cons -- prepend an element to a chain.
 ;;;
 ;;; The new link takes ownership of both arguments, which is what keeps the
@@ -96,9 +93,11 @@
 ;;;   (rcchain-cons (rc/clone x) (rcchain-nil))
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
-(defn rcchain-cons [A] [item : rc<A> rest : rc<RcChain>] : rc<RcChain>
-  (rc/of (make-struct RcChain item rest)))
 
+(defn rcchain-cons [A]
+  [item : rc<A> rest : rc<RcChain>]
+  : rc<RcChain>
+  (rc/of (make-struct RcChain item rest)))
 ;;; rcchain-head -- the element at the front of a chain.
 ;;;
 ;;; Undefined on an empty chain -- test with rcchain-empty? first.
@@ -113,9 +112,8 @@
 ;;;   (rcchain-head (rcchain-cons (rc/clone x) (rcchain-nil)))
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
-(defn rcchain-head [A] [^borrow c : rc<RcChain>] : rc<A>
-  (.item c))
 
+(defn rcchain-head [A] [^borrow c : rc<RcChain>] : rc<A> (.item c))
 ;;; rcchain-next -- the rest of a chain, past its front link.
 ;;;
 ;;; Parameters:
@@ -128,5 +126,5 @@
 ;;;   (rcchain-next (rcchain-cons (rc/clone x) (rcchain-nil)))  ; => empty
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
-(defn rcchain-next [^borrow c : rc<RcChain>] : rc<RcChain>
-  (.next c))
+
+(defn rcchain-next [^borrow c : rc<RcChain>] : rc<RcChain> (.next c))
