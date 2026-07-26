@@ -1,7 +1,14 @@
 # `vec` and `map` cannot hold `rc<T>` at all
 
 **Severity:** medium (expressiveness hole; hard codegen error, not a miscompile)
-**Status:** open (items 1 and 2 done; item 3 measured and blocked on container ownership)
+**Status:** open, but narrowed to one thing. Items 1 and 2 are done for `vec`
+and, as of 2026-07-26, for `map` as well (the map plan (a)--(d) below). What
+remains is item 3 alone: making the container itself GC-visible so a cycle
+routed through a `Vec` buffer or a HAMT node is *reclaimed*, not merely
+refcount-correct. There is a working answer for users today -- build the
+container out of rc cells (`stdlib/rcchain.tur`), which the walker already
+traces with no new machinery -- so this is a performance/completeness gap, not
+an expressiveness one.
 **Found by:** CG7 (gc-cycle-collection-followup-plan), while trying to write the
 `RCK_OPAQUE` blind-spot fixtures
 
