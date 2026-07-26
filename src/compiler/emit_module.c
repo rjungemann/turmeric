@@ -5428,11 +5428,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                  * definition and the dict slot. */
                 Type rft_r = rft ? emit_resolve_type(ctx, *rft)
                                  : type_simple(TY_UNKNOWN, CK_COPY);
-                bool typed_byval_adt = body_is_inline_c && rft &&
-                    (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
-                    !type_uses_carrier_abi(rft_r) &&
-                    !type_is_heap_adt(rft_r) &&
-                    type_has_concrete_codegen_layout(&rft_r);
+                bool typed_byval_adt =
+                    inline_c_returns_byvalue_adt(ctx, body_is_inline_c, rft);
                 /* inline-c-rc-return-misses-carrier-bridge: mirror emit_fns.c --
                  * an owning return lowers to RcControlBlock * even for inline-C
                  * bodies, so the forward decl agrees with the definition. */

@@ -1,12 +1,66 @@
 ---
-status: open
+status: resolved
 severity: low
 discovered: 2026-07-26
-updated: 2026-07-26
+resolved: 2026-07-26
 area: compiler (HKT result typing, elab_typeclasses.c)
 ---
 
 # An HKT instance method with an inline-C body loses its result type
+
+## Resolution (2026-07-26)
+
+**Fully fixed.** All four result classes now keep their type; there is no
+remaining shape that loses it.
+
+The plan recorded below (a shared `typed_byval_adt` predicate) was the right one
+and it worked. Three changes:
+
+1. **`inline_c_returns_byvalue_adt`** factored out of the two hand-duplicated
+   copies in `emit_fns.c` (the definition signature) and `emit_module.c` (the
+   forward-decl mirror), declared in `emit_internal.h`. Pure refactor, verified
+   behaviour-neutral on its own (2381 passed, 0 failed) before anything was
+   built on it. It also removes a lockstep-drift hazard the two copies had.
+
+2. **`elab_typeclasses.c`** commits the grounded result for a by-value aggregate
+   too, recognized with `type_app_is_concrete_adt` -- the same predicate the
+   by-value HKT spec machinery already uses. `m7_byvalue_grounded` stays false:
+   the producer keeps the carrier and no by-value spec is minted.
+
+3. **`emit_expr.c`**'s `fn_body_tail_byvalue_carrier_type` reports the grounded
+   aggregate for an inline-C-bodied dispatch call, **gated on the shared
+   predicate**, so the pre-existing carrier -> by-value deref bridge fires:
+
+       tur_adt_Box__int m = (*(tur_adt_Box__int *)(intptr_t)(__ps_N));
+
+The producer never had to change. A `(Box int)` argument is already heap-spilled
+to reach the dict's int64 slot, so the carrier the inline-C body returns really
+is a pointer to the aggregate -- no wrapper, no re-specialized body, no second
+ABI. Only the consumer adapts.
+
+**The shared predicate is what made it safe.** The earlier prototype guessed
+"does the callee return the carrier?" from the type's shape and reported a
+carrier for inline-C functions that genuinely return BY VALUE; the bridge then
+deref'd a value that was never a pointer, breaking
+`inline-c-struct-return-cstr-params` and `io-stdlib-roundtrip` with `aggregate
+value used where an integer was expected`. Asking `emit_fns.c`'s own question
+instead fixed both, exactly as predicted.
+
+### TUR-W0042 removed
+
+The diagnostic added a few hours earlier warned that this shape "will lose the
+result type". It now works, so the warning was a false alarm and has been
+deleted -- code, explanation, guide entry, and its error fixture, which is
+replaced by `tests/fixtures/hkt-inline-c-byvalue-result-type` asserting the shape
+compiles and computes correctly (a real body applying `g`, a field read, and a
+typed parameter). The "Known Limitations" entry in `docs/guides/hkt-guide.md` is
+gone for the same reason.
+
+Suite: 2381 passed, 0 failed. One snapshot regenerated
+(`van-laarhoven-lens-wide-compose`) -- verified a pure REORDERING of two
+`#ifndef`-guarded typedef blocks, byte-identical content on both sides.
+
+The original report and the narrowing update follow for the record.
 
 ## Update 2026-07-26 -- scope narrowed, root cause corrected
 

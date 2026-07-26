@@ -236,6 +236,30 @@ static char *emit_fat_return_value(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     return emit_value(ctx, body, e);
 }
 
+/* CONV-S1 seam 4: the single question that decides an inline-C function's C
+ * return type -- does it return its declared aggregate BY VALUE, or through the
+ * int64 carrier?  Under the defstruct-as-defadt lowering a by-value
+ * record/product result (`Pos` -> `tur_adt_Pos`) is a concrete aggregate, so an
+ * inline-C body returns it by value (`Pos r; return r;`) and the C signature
+ * must say so, matching the dict slot.  A parametric ADT-app with no single C
+ * layout, a :heap ADT (a pointer), and a carrier-ABI ADT (a multi-variant sum
+ * returned as the int64 handle) all stay on the carrier.
+ *
+ * Factored out of two hand-duplicated copies (the definition signature here and
+ * the forward-decl mirror in emit_module.c) so they cannot drift, and so the
+ * CONSUMER side can ask the same question instead of guessing from the type's
+ * shape -- see fn_body_tail_byvalue_carrier_type in emit_expr.c.  Declared in
+ * emit_internal.h. */
+bool inline_c_returns_byvalue_adt(EmitCtx *ctx, bool body_is_inline_c,
+                                  const Type *rft) {
+    if (!body_is_inline_c || !rft) return false;
+    Type rft_r = emit_resolve_type(ctx, *rft);
+    return (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
+           !type_uses_carrier_abi(rft_r) &&
+           !type_is_heap_adt(rft_r) &&
+           type_has_concrete_codegen_layout(&rft_r);
+}
+
 /* M5 straddle (root cause C of m5-suite-residual-6-failures): true when every
  * tail leaf of `e` is a call that emits an int64 carrier value -- a
  * #{Construct} helper (some/ok/err/none) or a typeclass-method impl
@@ -3136,11 +3160,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * with a concrete codegen layout.  Carrier-ABI ADTs (multi-variant
              * sums returned as the int64 handle) are excluded and stay int64. */
             Type rft_r = emit_resolve_type(ctx, rft);
-            bool typed_byval_adt = body_is_inline_c &&
-                (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
-                !type_uses_carrier_abi(rft_r) &&
-                !type_is_heap_adt(rft_r) &&
-                type_has_concrete_codegen_layout(&rft_r);
+            bool typed_byval_adt =
+                inline_c_returns_byvalue_adt(ctx, body_is_inline_c, &rft);
             /* inline-c-rc-return-misses-carrier-bridge: an owning return
              * (rc/weak/ref/lref) lowers to `RcControlBlock *` even from an
              * inline-C body, for the same reason typed_ptr does -- it IS a

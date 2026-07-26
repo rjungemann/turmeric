@@ -1,0 +1,52 @@
+; The last shape that lost its HKT result type: an inline-C instance body whose
+; class result is an applied `(f b)` over a BY-VALUE aggregate head.
+;
+; `Box` is parametric, non-:heap and non-opaque, so `(Box int)` is
+; `tur_adt_Box__int` -- wider than a carrier word. The dispatch dict's slot is a
+; uniform `int64_t (*)(...)`, so the method returns the carrier. A pure-Turmeric
+; body is re-emitted at the concrete type (a by-value spec), which is what made
+; the precise result type safe to commit; an inline-C body is written against
+; exactly one C signature and cannot be re-specialized. So the result used to be
+; dropped, and calls came back as the def-less `(type-app ? ?)`:
+;
+;   error: no typeclass method found for 'val'
+;   error [TUR-E0001]: expected cstr, got (type-app ? ?)
+;
+; The producer does not need to change. The argument is already heap-spilled to
+; reach the int64 slot, so the carrier the body returns IS a pointer to the
+; aggregate -- the CONSUMER can deref it, through the carrier -> by-value bridge
+; that already existed for inline-C plain defns:
+;
+;   tur_adt_Box__int m = (*(tur_adt_Box__int *)(intptr_t)(__ps_N));
+;
+; What made that safe to switch on is asking emit_fns.c's own question --
+; `inline_c_returns_byvalue_adt`, does this body return the aggregate by value or
+; the carrier? -- instead of guessing from the type's shape. Guessing reported a
+; carrier for bodies that genuinely return by value, and the bridge then deref'd
+; something that was never a pointer (inline-c-struct-return-cstr-params and
+; io-stdlib-roundtrip both failed that way).
+(defstruct Box [A] (val A))
+
+;; A real body, not an identity: read the spilled carrier, apply g, spill a
+;; fresh result. This is the shape that forces inline-C in the first place.
+(definstance Functor [Box]
+  (fmap [container g]
+    ```c
+    typedef struct { int64_t val; } BoxI;
+    BoxI *in  = (BoxI *)(intptr_t)container;
+    BoxI *out = (BoxI *)malloc(sizeof(BoxI));
+    out->val = g.fn(g.env, in->val);
+    return (int64_t)(intptr_t)out;
+    ```))
+
+(defn dbl [x : int] : int (* x 2))
+
+;; A typed consumer: only accepts the result if its type really grounded.
+(defn take-box [b : (Box int)] : int (.val b))
+
+(defn main [] : int
+  (let [b (:: (make-struct Box :val 21) (Box int))]
+    (let [m (fmap b dbl)]
+      (println (.val m))          ; 42 -- g was applied, read through the type
+      (println (take-box m))))    ; 42 -- and it satisfies a typed parameter
+  0)

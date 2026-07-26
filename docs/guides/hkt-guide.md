@@ -727,43 +727,6 @@ and `free-run`.
 
 2. **`defkind`**: Currently parsed and ignored. Future versions may use it for documentation generation and kind inference.
 
-3. **An inline-C instance body cannot carry a by-value result type**
-   (`TUR-W0042`). A method whose class result is an applied `(f b)` returns the
-   dict's uniform `int64_t` carrier. A pure-Turmeric body gets re-emitted at the
-   concrete type when needed -- a by-value spec -- which is what makes the
-   precise result type safe to hand back. An inline-C body is written against
-   exactly one C signature and cannot be re-specialized, so when `(f b)` grounds
-   to a **by-value aggregate** the result type is dropped: calls come back as the
-   def-less `(type-app ? ?)`, and the failure surfaces wherever the result is
-   used rather than at the instance.
-
-   ```turmeric
-   (defstruct Box [A] (val A))          ; parametric, not :heap, not opaque
-                                        ; -> (Box int) is a by-value aggregate
-
-   (definstance Functor [Box]           ; warning [TUR-W0042]
-     (fmap [container g]
-       ```c
-       return container;
-       ```))
-
-   (defn use [b : (Box int)] : int
-     (.val (fmap b dbl)))               ; error: no typeclass method found for 'val'
-   ```
-
-   Any one of these makes it well-typed, because each gives the result a
-   carrier-width representation:
-
-   | Change | Why it works |
-   |---|---|
-   | Write the body in Turmeric | The by-value spec is minted, so the exact type is safe |
-   | `(defstruct Box :heap [A] ...)` | A heap ADT is a pointer, which *is* the carrier |
-   | `defopaque` head | Rides the int64 carrier directly |
-
-   An `rc<T>` / `weak<T>` / `ref<T>` head is already carrier-width and never
-   warns -- that is why `stdlib/rc.tur`'s instances may use inline-C freely.
-   Run `tur explain TUR-W0042` for the full note.
-
 ## See also
 
 - [gadts-guide.md](gadts-guide.md) -- GADTs, `defgadt`, and equality witnesses

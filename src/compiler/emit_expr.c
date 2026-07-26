@@ -1040,6 +1040,35 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
                 !type_has_concrete_codegen_layout(&sr) &&
                 strcmp(emit_type_c_name(ctx, sr), "int64_t") != 0)
                 return sr;
+            /* hkt-inline-c-instance-body-loses-result-type: a DISPATCH call to
+             * an inline-C instance method.  Its declared result is the CLASS's
+             * applied `(f b)`, which resolves abstractly here (c-name int64_t),
+             * so every recovery above misses it -- but the typer has already
+             * grounded the CALL's own result to the concrete `(Box int)`.
+             *
+             * Whether the consumer must bridge is exactly "did the callee return
+             * the carrier?", which is the question emit_fns.c answers when it
+             * emits the signature.  Ask it through the shared predicate rather
+             * than re-deriving it from the type's shape: guessing here reported
+             * a carrier for inline-C functions that genuinely return BY VALUE,
+             * and the consume-side bridge then deref'd a value that was never a
+             * pointer (`aggregate value used where an integer was expected`, on
+             * inline-c-struct-return-cstr-params and io-stdlib-roundtrip).
+             *
+             * The grounded type must itself have a concrete layout -- that is
+             * what the consumer will declare -- which is the mirror image of the
+             * branch above, where the DECLARED result deliberately has none. */
+            if (cb->type.as.fn.result_full_type->kind == TY_APP &&
+                !inline_c_returns_byvalue_adt(ctx, true,
+                                              cb->type.as.fn.result_full_type)) {
+                Type cr = emit_resolve_type(ctx, x->type);
+                if (cr.kind == TY_APP &&
+                    !type_uses_carrier_abi(cr) &&
+                    !type_is_heap_struct(cr) && !type_is_heap_adt(cr) &&
+                    type_app_is_concrete_adt(&cr) &&
+                    strcmp(emit_type_c_name(ctx, cr), "int64_t") != 0)
+                    return cr;
+            }
         }
         /* CONV-S1 seam 4 (bounded-wrapper struct return): the body tail is a
          * direct call to a concrete instance method whose by-value aggregate

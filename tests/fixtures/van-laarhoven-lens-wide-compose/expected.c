@@ -3787,24 +3787,6 @@ typedef struct tur_adt_Const__int__int {
 #ifndef TUR_FN_tur_adt_Const__int__int
 #define TUR_FN_tur_adt_Const__int__int
 #endif
-#ifndef TUR_TY_tur_adt_Option__Zipper__struct
-#define TUR_TY_tur_adt_Option__Zipper__struct
-typedef struct tur_adt_Option__Zipper__struct {
-    bool is_some;
-    int64_t value;
-} tur_adt_Option__Zipper__struct;
-#endif
-
-#ifndef TUR_FN_tur_adt_Option__Zipper__struct
-#define TUR_FN_tur_adt_Option__Zipper__struct
-static int64_t ctor_Option__Zipper__struct(bool _0, int64_t _1) {
-    tur_adt_Option__Zipper__struct *__r = (tur_adt_Option__Zipper__struct *)malloc(sizeof(tur_adt_Option__Zipper__struct));
-    __r->is_some = _0;
-    __r->value = _1;
-    return (int64_t)(intptr_t)__r;
-}
-
-#endif
 #ifndef TUR_TY_tur_adt_Identity__Point
 #define TUR_TY_tur_adt_Identity__Point
 typedef struct tur_adt_Identity__Point {
@@ -3820,6 +3802,24 @@ static tur_adt_Identity__Point ctor_Identity__Point(tur_adt_Point * _0, int64_t 
     __r.wrapped = _0;
     __r.tag = _1;
     return __r;
+}
+
+#endif
+#ifndef TUR_TY_tur_adt_Option__Zipper__struct
+#define TUR_TY_tur_adt_Option__Zipper__struct
+typedef struct tur_adt_Option__Zipper__struct {
+    bool is_some;
+    int64_t value;
+} tur_adt_Option__Zipper__struct;
+#endif
+
+#ifndef TUR_FN_tur_adt_Option__Zipper__struct
+#define TUR_FN_tur_adt_Option__Zipper__struct
+static int64_t ctor_Option__Zipper__struct(bool _0, int64_t _1) {
+    tur_adt_Option__Zipper__struct *__r = (tur_adt_Option__Zipper__struct *)malloc(sizeof(tur_adt_Option__Zipper__struct));
+    __r->is_some = _0;
+    __r->value = _1;
+    return (int64_t)(intptr_t)__r;
 }
 
 #endif

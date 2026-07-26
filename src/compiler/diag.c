@@ -207,7 +207,6 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0039_METHOD_DEFN_CLASH:          return "TUR-W0039";
         case TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH: return "TUR-W0040";
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
-        case TUR_W0042_HKT_INLINE_C_BYVAL_RESULT:  return "TUR-W0042";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -357,7 +356,6 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
     if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
-    if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_HKT_INLINE_C_BYVAL_RESULT;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -1394,38 +1392,6 @@ static const DiagExplanation diag_explanations_[] = {
       "the contravariant subtyping check that implies. Until then, options are\n"
       "to take the value at a named type with a `defn` wrapper that carries the\n"
       "refinement, or to accept the runtime check.\n" },
-    { TUR_W0042_HKT_INLINE_C_BYVAL_RESULT,
-      "TUR-W0042: Inline-C instance body cannot carry a by-value result type\n"
-      "\n"
-      "This instance method has an inline-C body, and the class declares its\n"
-      "result as an applied `(f b)` over a head whose applications are BY-VALUE\n"
-      "aggregates. Calls to it lose their result type: it comes back as the\n"
-      "def-less `(type-app ? ?)`, so a field read, a typed parameter, or any\n"
-      "other use of the result fails at the CALL site, far from the cause.\n"
-      "\n"
-      "Why it cannot simply be typed: the dispatch dict's slot is a uniform\n"
-      "`int64_t (*)(...)`, so the method returns the int64 carrier. A pure\n"
-      "Turmeric body is re-emitted at the concrete type when needed (a by-value\n"
-      "spec), which makes the precise result type safe to commit. An inline-C\n"
-      "body is written against exactly one C signature and cannot be\n"
-      "re-specialized, so committing the type would have the consumer read an\n"
-      "aggregate off a carrier word -- `error: invalid initializer`.\n"
-      "\n"
-      "Three fixes, in rough order of preference:\n"
-      "\n"
-      "  1. Write the body in Turmeric. Then the by-value spec is minted and the\n"
-      "     result type is exact.\n"
-      "  2. Make the head pointer-represented -- `(defstruct Box :heap [A] ...)`.\n"
-      "     A heap ADT is a pointer, which IS the carrier, so the result type\n"
-      "     commits with no spec.\n"
-      "  3. Make the head an opaque newtype (`defopaque`), which rides the int64\n"
-      "     carrier for the same reason.\n"
-      "\n"
-      "A `rc<T>` / `weak<T>` / `ref<T>` head is already fine and never warns.\n"
-      "\n"
-      "This is a warning, not an error: the instance itself is well-formed and\n"
-      "usable as long as nothing consumes its result at a typed position. See\n"
-      "docs/reported/hkt-inline-c-instance-body-loses-result-type.md.\n" },
     { TUR_W0377_REFINE_INSTANCE_LENIENCY,
       "TUR-W0377: Call relies on instance-specific leniency\n"
       "\n"
