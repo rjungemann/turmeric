@@ -47,9 +47,34 @@ gap C2 -- hard-blocking for that plan's RE1.
 > a-lint is small but buys no working ECS aliveness proof here, so it is not a
 > cheaper win -- it is not a win.
 >
-> **Decision needed before RM-S1/RM-S2:** commit to building B (a multi-slice
-> compiler project), or defer C2 (and RE1) as too large for now. Not startable
-> without that call.
+> **Decision (2026-07-26): build Candidate B, staged.** RM-S1 (epoch + lint)
+> is not pursued.
+>
+> **B1 done 2026-07-26 -- and it needs no new compiler row.** RM-S0's follow-up
+> probing established that the "a mutator is uncallable inside a frozen region"
+> property is *already* expressible with the shipped substructural machinery --
+> a `:linear` capability, the same mechanism `defsystem` uses. So B1 ships
+> spice-side as `ecs/freeze` (`turmeric-spices/spices/ecs/src/ecs/freeze.tur`):
+> a `:linear` `DespawnCap<W>` gates a despawn, and `with-frozen` borrows the cap
+> for a region so any cap-gated despawn inside the body fails to elaborate
+> (`TUR-E0101`, a compile error). Verified: `tests/freeze-region.tur` (positive)
+> and `tests/errors/freeze-despawn-in-region.tur` (negative). This is a
+> *refinement of this plan's RM-S2 item 1*: the mutation gate is "declared and
+> checked" as the plan demands, but realized as a linear cap rather than a new
+> effect row -- lower risk, reuses proven machinery, and gives B3 a concrete
+> type-level fact (cap frozen in this scope) to key congruence off. Two caveats,
+> both carried into B2: (a) non-forgeability is a usage discipline at B1 (mint
+> the cap once at world construction; do not re-mint mid-frame) -- B2's region
+> *form* makes it structural; (b) the ergonomic region HOF hit a codegen bug
+> (`docs/reported/poly-result-hof-capturing-closure-sigbus.md`: a capturing
+> closure through a HOF with a *type-variable result* SIGBUSes), worked around
+> by fixing `with-frozen`'s body result to `int`. B2 should make the region a
+> first-class form (not a polymorphic HOF), or that bug must be fixed first.
+>
+> **Next:** B2 (region form + capability borrow as a language construct) then
+> B3 (the VC congruence-window link, behind `--enable=refined`, with the
+> `stateful` fuzzer sabotage). RE1's `errors/refine-stateful-mutation-invalidates`
+> stays the fixture to write before B3 touches the VC.
 
 ## The problem
 
@@ -231,7 +256,7 @@ If the epoch version reads acceptably, Candidate B's cost is hard to justify
 and the answer is A-with-a-lint. If it does not, B is the only one worth
 building.
 
-### RM-S1 -- (A) Epoch discipline + a lint that makes forgetting loud
+### RM-S1 -- (A) Epoch discipline + a lint that makes forgetting loud  [NOT PURSUED -- RM-S0 chose B]
 
 Only if RM-S0 says so. The minimum viable version is not the epoch itself --
 that is library code today -- but a diagnostic: a function that mutates a
@@ -247,12 +272,17 @@ at is the thing this feature has spent its whole history refusing.
 
 Only if RM-S0 says so. Three pieces, in order, each independently useful:
 
-1. **A declared relation between a function and the state it mutates.** Likely
-   spelled as an extension of the effect row -- but note the parent plan's
-   finding that *the effect row was never evidence*: `#fx{}` infers nothing
-   from `set!`, a mutable global, or inline C. So this is a new row, not a
-   reinterpretation of the existing one, and it must be **declared and
-   checked**, never inferred-and-trusted.
+1. **A declared relation between a function and the state it mutates.**
+   **[B1 DONE 2026-07-26 -- realized as a linear capability, not an effect
+   row.]** Likely spelled as an extension of the effect row -- **but B1 found
+   the shipped `:linear` capability machinery already delivers a "declared and
+   checked" mutation gate** (`ecs/freeze`'s `DespawnCap<W>` + `with-frozen`;
+   despawn inside a frozen region is `TUR-E0101` at compile time). That
+   satisfies this item without a new row, and keeps the parent plan's rule --
+   the gate is *declared* (a `^linear` cap in the signature) and *checked* (the
+   linearity checker), never inferred from `set!`/inline C. A new effect row
+   remains an option if B2/B3 need mutation facts the cap cannot carry, but is
+   not the starting point.
 2. **A region form** whose entry borrows the capability and whose body is a
    congruence window.
 3. **Hypothesis invalidation at region boundaries**, joining `set!` and the
