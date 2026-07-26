@@ -303,6 +303,34 @@ expected and fails to elaborate.
 
 ### RE1 -- Strict aliveness (needs C2, wants C1)
 
+> **Status 2026-07-26 -- pattern PROVEN end-to-end; two compiler deps found +
+> fixed; harness/module integration remains.** C2 landed (`#reads` + the sound
+> `frozen` region), so RE1 is unblocked. The aliveness-refined accessor works
+> against the real `ecs/freeze` region: `alive?` reads liveness through an opaque
+> handle (a malloc'd `gens` array -- `sized-alive?`'s shape, so genuinely impure
+> and `#reads`-carrying), `despawn!` is `^unique ^mut` (locked out in the region,
+> `TUR-E0200`), and a guarded `(frozen w (if (alive? w e) (get-x! w e) ...))`
+> reports **refine: 1 proven** and runs; the same read with NO region is
+> **1 unknown -> TUR-W0372** (so `#reads`+`frozen` is load-bearing). Fixtures:
+> `turmeric-spices/spices/ecs/tests/refined/alive-frozen.tur` (positive) and
+> `.../tests/errors/refined-alive-no-region.tur` (negative); dogfood write-up
+> `turmeric-spices/docs/ecs-re1-refined-aliveness.md`.
+>
+> Getting here required two compiler fixes (both landed, validated, suite 2367/0):
+> (1) a `#reads`-refined param could not codegen -- the impure entry contract was
+> `TUR-E0375`; now suppressed (the accessor keeps its own internal check as the
+> backstop). (2) the `frozen` *macro* did not compose with guard-discharge --
+> macro expansion copies the body, so the crossing path walk missed it under
+> pointer identity; fixed with a source-span crossing match (`rt_form_ident`).
+>
+> **Remaining for RE1:** (a) the spice test runner has no `--enable=refined
+> --strict-refine` flag mechanism -- RE1 is the first refined ecs test, so the
+> fixtures are verified manually, not yet auto-run; (b) promotion from the
+> self-contained `GameWorld` facade to a shipped accessor module with an
+> encapsulated (private) state field -- the soundness argument needs the raw
+> world handle to not be extractable; (c) `for-each` bodies carrying the
+> refinement (item 2 below), the highest-value version, still deferred.
+
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
 
