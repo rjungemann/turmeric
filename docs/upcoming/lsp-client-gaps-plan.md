@@ -49,7 +49,7 @@ is exactly what §6 declined to schedule.
 | §4 Only `contentChanges[0]` read | Done -- last change wins |
 | §4 Hardcoded `/tmp` | Done -- `tur_temp_dir()` |
 | §5 OSC 133 markers | Done -- `TUR_SHELL_INTEGRATION=1`, plus C/D markers |
-| §5 `getcwd()` resolves symlinks | Done -- `pwd -L` semantics, inode-checked |
+| §5 `getcwd()` resolves symlinks | Done -- `pwd -L` semantics, inode-checked (see the verification note below) |
 | §5 No region/string eval | Done -- `:load-string "<src>"` |
 | §5 `TUR_STDLIB_DIR` leak | Partly -- invalid values rejected; a stale-but-valid one still wins |
 
@@ -381,6 +381,20 @@ being changed; the repros are pinned in
   `cd` would go to the symlink's parent. That was out of scope here — the
   report was about what gets reported, and reporting is now truthful in both
   cases. Documented in the guide rather than silently changed.
+
+  **Verification basis.** Exercised on Linux by
+  `tests/turi/repl-host-integration.sh`, including the `..`-across-a-symlink
+  case, a `$PWD` pointing at a directory that does not exist, and all three
+  `TMPDIR` shapes (unset, with and without a trailing slash). The mechanism is
+  platform-independent — `$PWD` versus `getcwd()`, arbitrated by a
+  `(device, inode)` comparison — but it has **not been run on macOS**, which is
+  the platform whose `/var` → `/private/var` symlink motivated the item. A
+  consumer report against `8f341d32e` saw these cases red on macOS; that was
+  the harness's trailing-slash `TMPDIR` handling, fixed in `45962aec` (the
+  failing set matched the harness signature, not the product one — a product
+  genuinely reporting physical paths fails a *different* set, including the
+  `check_absent` leak case that report showed passing). Re-confirmation on real
+  macOS hardware is still wanted.
 - **No way to evaluate a region or a string.** To run a selection, Trowel
   writes a scratch file and sends `(load "…")` (`run_buffer.cpp:45`
   **(trowel)**). A `:load-string` style meta-command would remove the
