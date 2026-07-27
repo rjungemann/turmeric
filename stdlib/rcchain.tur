@@ -97,9 +97,7 @@
 ;;;
 ;;; Since: collections-cannot-hold-rc-values item 3
 
-(defn rcchain-cons [A]
-  [item : rc<A> rest : rc<RcChain>]
-  : rc<RcChain>
+(defn rcchain-cons [A] [item : rc<A> rest : rc<RcChain>] : rc<RcChain>
   (rc/of (make-struct RcChain item rest)))
 ;;; rcchain-head -- the element at the front of a chain.
 ;;;

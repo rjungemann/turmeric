@@ -63,9 +63,7 @@
 ;;;
 ;;; Since: Phase CA1
 
-(defn >>> [A B C]
-  [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)]
-  : ptr<void>
+(defn >>> [A B C] [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)] : ptr<void>
   (let [fv f
         gv g]
     (fn [x : A] : C (gv (fv x)))))

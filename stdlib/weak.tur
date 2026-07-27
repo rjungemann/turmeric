@@ -94,9 +94,7 @@
 ;;;
 ;;; Since: stdlib-weak-ref-audit WR1
 
-(defn weak/upgrade [A]
-  [^borrow w : weak<A>]
-  : (Option rc<A>)
+(defn weak/upgrade [A] [^borrow w : weak<A>] : (Option rc<A>)
   ```c
   RcControlBlock *cb = rc_upgrade(w);
   return cb ? tur_some_ptr(cb) : tur_none();
@@ -143,9 +141,7 @@
 ;;;
 ;;; Since: stdlib-weak-ref-audit WR1
 
-(defn weak/alive? [A]
-  [^borrow w : weak<A>]
-  : bool
+(defn weak/alive? [A] [^borrow w : weak<A>] : bool
   ```c
   return w != NULL && rc_strong_count(w) > 0;
   ```)
@@ -175,9 +171,7 @@
 ;;;
 ;;; Since: stdlib-weak-ref-audit WR1
 
-(defn weak/drop [A]
-  [w : weak<A>]
-  : void
+(defn weak/drop [A] [w : weak<A>] : void
   ```c
   if (w) rc_weak_decrement(w);
   ```)

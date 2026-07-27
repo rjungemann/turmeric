@@ -493,6 +493,52 @@ static void fmt_param_vec(FmtState *s, const Form *vec) {
     }
 }
 
+/* Index of the parameter vector in a defn/defmacro form.
+ *
+ * A defn may carry a type-parameter vector, and optionally a class-constraint
+ * vector, ahead of its parameters:
+ *
+ *   (defn name [params] :ret body)                          -> 2
+ *   (defn name [A B] [params] :ret body)                    -> 3
+ *   (defn name [A] [(Class A) ...] [params] :ret body)       -> 4
+ *
+ * This mirrors the elaborator's detection in elab_fns.c
+ * (`elab_defn`, the name_idx + 1 / + 2 / + 3 checks) *exactly*, and must keep
+ * doing so. The two-consecutive-vectors test is genuinely ambiguous in the
+ * language -- `(defn f [x] [1 2 3])` reads as a type-parameterized defn, not
+ * as one returning a vector literal -- so a formatter that disambiguated it
+ * differently would silently reprint code as something that means something
+ * else. Agreeing with the elaborator is the only safe rule, whatever one
+ * thinks of the ambiguity itself.
+ *
+ * Getting this wrong is what kept `stdlib/rcvec.tur` un-self-formatted: with
+ * params assumed at index 2, the real parameter vector and the return
+ * annotation of a `(defn f [A] [params] : ret ...)` fell past the header and
+ * were laid out as body forms, one per line. */
+static uint32_t defn_params_index(const Form *f) {
+    uint32_t n = f->as.list.len;
+    Form *const *it = f->as.list.items;
+
+    if (!(n > 3 && it[2]->tag == F_VEC && it[3]->tag == F_VEC))
+        return 2;                     /* no type-parameter vector */
+
+    /* items[2] is the type-parameter vector; params are at 3 unless a
+     * constraint vector sits between them. A constraint vector is non-empty
+     * and every element is `(ClassName TyVar ...)`. */
+    if (n > 4 && it[4]->tag == F_VEC) {
+        const Form *maybe = it[3];
+        bool looks_like_constraints = (maybe->as.list.len > 0);
+        for (uint32_t i = 0; looks_like_constraints && i < maybe->as.list.len; i++) {
+            const Form *cf = maybe->as.list.items[i];
+            if (cf->tag != F_LIST || cf->as.list.len < 1 ||
+                cf->as.list.items[0]->tag != F_SYM)
+                looks_like_constraints = false;
+        }
+        if (looks_like_constraints) return 4;
+    }
+    return 3;
+}
+
 /* (defn name [params] :ret\n  body...) */
 static void fmt_defn(FmtState *s, const Form *f) {
     uint32_t n = f->as.list.len;
@@ -501,14 +547,17 @@ static void fmt_defn(FmtState *s, const Form *f) {
 
     fs_putc(s, '(');
 
-    /* Header items: defn/defmacro, name, params, optional :ret keyword or type annotation */
-    uint32_t header_end = 3;
-    if (n > 3 && (f->as.list.items[3]->tag == F_KEYWORD
-               || f->as.list.items[3]->tag == F_TYPE_ANN)) header_end = 4;
+    /* Header items: defn/defmacro, name, any type-parameter and constraint
+     * vectors, params, optional :ret keyword or type annotation */
+    uint32_t params_idx = defn_params_index(f);
+    uint32_t header_end = params_idx + 1;
+    if (n > header_end && (f->as.list.items[header_end]->tag == F_KEYWORD
+                        || f->as.list.items[header_end]->tag == F_TYPE_ANN))
+        header_end++;
 
     for (uint32_t i = 0; i < header_end && i < n; i++) {
         if (i) fs_putc(s, ' ');
-        if (i == 2 && f->as.list.items[i]->tag == F_VEC)
+        if (i == params_idx && f->as.list.items[i]->tag == F_VEC)
             fmt_param_vec(s, f->as.list.items[i]);
         else
             fmt_form(s, f->as.list.items[i]);

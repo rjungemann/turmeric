@@ -132,9 +132,7 @@
 ;;;
 ;;; Since: Phase G4 (carrier<->concrete ABI crossing audit)
 
-(defn tlength [A]
-  [xs : (Cons A)]
-  : int
+(defn tlength [A] [xs : (Cons A)] : int
   (if (= (:: xs :int) 0) 0 (+ 1 (tlength (:: (.tail xs) (Cons A))))))
 ;;; list-length -- count the number of elements in a typed list.
 ;;;
@@ -208,10 +206,7 @@
 ;;;
 ;;; Since: Phase TCE (typed-collection-eq-consumers)
 
-(defn cons-eq-go [A]
-  [(Eq A)]
-  [c1 : (Cons A) c2 : (Cons A)]
-  : bool
+(defn cons-eq-go [A] [(Eq A)] [c1 : (Cons A) c2 : (Cons A)] : bool
   (if (eq? (.head c1) (.head c2))
     (let [t1 (.tail c1)
           t2 (.tail c2)]

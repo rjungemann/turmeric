@@ -3656,9 +3656,7 @@
 ;;;        docs/upcoming/variadic-rest-closure-cast-plan.md.
 ;;;        Returns `Handler` since automatic R3a (closure-drop-glue).
 
-(defn compose-middleware-of [A]
-  [^fat base :int ^borrow & mws :A]
-  :Handler
+(defn compose-middleware-of [A] [^fat base :int ^borrow & mws :A] :Handler
   (let [composed (httpd-mw-fold base mws)]
     (httpd-mw-free-spine mws)
     (:: composed :Handler)))
