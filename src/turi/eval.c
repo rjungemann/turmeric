@@ -2351,6 +2351,23 @@ static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, v
  * ---------------------------------------------------------------------- */
 typedef struct TuriTVar { int64_t value; uint64_t version; } TuriTVar;
 
+/* TR3: a TVar cell is malloc'd and tracked as a collection box, NOT allocated
+ * from value_scratch.  Its handle escapes as an opaque int carrier that the
+ * promotion walk cannot see, so a scratch-resident cell surviving an eval
+ * boundary dangled the moment a promotion rewind reset the pool (the REPL
+ * runs promotion by default) -- `(def t (tvar-new 0))` then a later
+ * `atomically` read was a use-after-reset.  As a tracked box the cell
+ * survives rewinds, is swept once no live value references its handle, and
+ * its stored value joins the sweep's conservative mark (a TVar holding a vec
+ * handle keeps that vec alive).  The stored value is a bare carrier with no
+ * tag, so the enumeration is complete for handle-shaped references. */
+static void tvar_buf_destroy(void *box) { free(box); }
+static bool tvar_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
+    TuriTVar *tv = (TuriTVar *)box;
+    mark(turi_int(tv->value), ctx);
+    return true;
+}
+
 typedef struct TuriStmTx {
     TuriTVar **w_tv;     /* write-set TVars */
     int64_t   *w_val;    /* parallel buffered values */
@@ -9170,8 +9187,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_TVAR_NEW: {
         TuriValue init = eval_expr(env, frame, e->as.tvar_new_.init);
         if (turi_is_error(init) || env_signaled(env)) return init;
-        /* Escaping payload: the tvar is returned as an int carrier; pool-owned. */
-        TuriTVar *tv = (TuriTVar *)turi_val_calloc(env, sizeof(TuriTVar));
+        /* Escaping payload: the tvar is returned as an opaque int carrier, so
+         * it must NOT live in the rewindable scratch pool -- see the TR3 note
+         * at tvar_buf_destroy.  malloc + track: teardown (or the sweep, once
+         * unreachable) reclaims it. */
+        TuriTVar *tv = (TuriTVar *)calloc(1, sizeof(TuriTVar));
+        if (!tv) return turi_error("tvar-new: out of memory");
+        turi_env_track_collection(env, tv, tvar_buf_destroy, tvar_buf_scan);
         tv->value   = init.as_int;
         tv->version = 1;
         return turi_int((int64_t)(intptr_t)tv);
@@ -9807,6 +9829,208 @@ static TuriValue promo_copy(TuriEnv *env, TuriValue v, PromoMap *fwd) {
     }
 }
 
+/* ---- TR3: eval-boundary collection sweep ----------------------------------
+ *
+ * Runs only immediately after a successful promotion rewind, which is the
+ * moment the live value graph is provably exactly what is reachable from the
+ * (already promoted) eval result plus the globals -- the same invariant the
+ * rewind itself stakes scratch safety on.  Collection handles are opaque
+ * TURI_INT carriers the promotion walk passes through untouched, so tracked
+ * boxes (Vec / Set / Map wrappers, TVar cells) accumulate until teardown even
+ * though promotion has zeroed the value pool.  This pass bounds them:
+ *
+ *   mark:  walk the live graph the way promo_copy does (frames, struct
+ *          fields, unstarted generators, ws continuations), treating every
+ *          TURI_INT as a candidate box address; a hit marks the box and
+ *          queues its own contents (via the box's scan callback) for the
+ *          same treatment, transitively -- a vec-of-vecs or a struct held
+ *          in a vec cell keeps what it references alive.
+ *   sweep: any live box the mark never reached is unreachable garbage; run
+ *          its destroy and recycle the tracking node.  BUT if any *marked*
+ *          box could not enumerate its contents completely (a non-empty
+ *          Set/Map's entries are untyped, so a struct-valued entry hiding a
+ *          handle cannot be ruled out), the whole cycle is mark-only and
+ *          nothing is freed: leak-on-doubt, never free-on-doubt.
+ *
+ * False positives (an ordinary int that happens to equal a box address) only
+ * keep a dead box alive one more cycle -- safe by construction.  THROW /
+ * FUTURE / REF values cannot be live here (the quiescent gate + promo_check
+ * exclude them), the same envelope promotion relies on. */
+
+typedef struct {
+    TuriEnv      *env;
+    PromoMap     *boxmap;    /* box address -> TuriCollBuf* (live boxes only) */
+    TuriCollBuf **wl;        /* queue of newly-marked boxes awaiting a scan */
+    size_t        wl_len, wl_cap;
+    bool          complete;  /* no marked box hid entries from the mark */
+} CollMark;
+
+static void collmark_value(TuriEnv *env, TuriValue v, PromoMap *seen, CollMark *mc);
+
+static void collmark_candidate(CollMark *mc, int64_t x) {
+    if (!x) return;
+    TuriCollBuf *node =
+        (TuriCollBuf *)promo_map_get(mc->boxmap, (const void *)(intptr_t)x);
+    if (!node || node->marked) return;
+    node->marked = true;
+    if (mc->wl_len == mc->wl_cap) {
+        size_t ncap = mc->wl_cap ? mc->wl_cap * 2 : 32;
+        TuriCollBuf **nwl =
+            (TuriCollBuf **)realloc(mc->wl, ncap * sizeof(*nwl));
+        if (!nwl) { mc->complete = false; return; }   /* mark-only on OOM */
+        mc->wl = nwl;
+        mc->wl_cap = ncap;
+    }
+    mc->wl[mc->wl_len++] = node;
+}
+
+static void collmark_bindings(TuriEnv *env, EvalBinding *b, PromoMap *seen,
+                              CollMark *mc) {
+    for (; b; b = b->next) collmark_value(env, b->value, seen, mc);
+}
+
+static void collmark_frame(TuriEnv *env, EvalFrame *f, PromoMap *seen,
+                           CollMark *mc) {
+    for (; f; f = f->parent) {
+        if (promo_map_get(seen, f)) return;
+        promo_map_put(seen, f, f);
+        collmark_bindings(env, f->bindings, seen, mc);
+        /* tyvars carry types only -- no values to mark. */
+    }
+}
+
+static void collmark_wscont(TuriEnv *env, TuriWsCont *wc, PromoMap *seen,
+                            CollMark *mc) {
+    if (!wc || promo_map_get(seen, wc)) return;
+    promo_map_put(seen, wc, wc);
+    collmark_frame(env, wc->handler_frame, seen, mc);
+    for (size_t i = 0; wc->frames && i < wc->n_frames; i++) {
+        collmark_frame(env, wc->frames[i].frame, seen, mc);
+        collmark_value(env, wc->frames[i].last, seen, mc);
+        if (wc->frames[i].aux) {
+            /* Only an argument accumulator's live prefix holds values --
+             * mirrors promo_copy_wscont / promo_wscont_aux_cap exactly. */
+            size_t cap = promo_wscont_aux_cap(&wc->frames[i]);
+            TuriValue *acc = (TuriValue *)wc->frames[i].aux;
+            for (uint32_t j = 0; j < wc->frames[i].index && j < cap; j++)
+                collmark_value(env, acc[j], seen, mc);
+        }
+    }
+}
+
+static void collmark_value(TuriEnv *env, TuriValue v, PromoMap *seen,
+                           CollMark *mc) {
+    switch (v.tag) {
+    case TURI_INT:
+        collmark_candidate(mc, v.as_int);
+        return;
+    case TURI_CLOSURE: {
+        TuriClosure *cl = v.as_closure;
+        if (!cl || promo_map_get(seen, cl)) return;
+        promo_map_put(seen, cl, cl);
+        collmark_frame(env, cl->captured, seen, mc);
+        return;
+    }
+    case TURI_STRUCT: {
+        TuriStruct *s = v.as_struct;
+        if (!s || promo_map_get(seen, s)) return;
+        promo_map_put(seen, s, s);
+        for (uint32_t i = 0; s->fields && i < s->n_fields; i++)
+            collmark_value(env, s->fields[i], seen, mc);
+        return;
+    }
+    case TURI_GEN: {
+        TuriGen *g = v.as_gen;
+        if (!g || promo_map_get(seen, g)) return;
+        promo_map_put(seen, g, g);
+        collmark_frame(env, g->frame, seen, mc);
+        collmark_value(env, g->error_val, seen, mc);
+        return;
+    }
+    case TURI_EFFECT_CONT: {
+        TuriEffectCont *c = v.as_cont;
+        if (!c || promo_map_get(seen, c)) return;
+        promo_map_put(seen, c, c);
+        collmark_wscont(env, c->ws, seen, mc);
+        return;
+    }
+    default:
+        /* NIL/BOOL/FLOAT/CSTR/ERROR/STRUCT_TYPE/HANDLER/REJECTION carry no
+         * collection handles. */
+        return;
+    }
+}
+
+/* Adapter so a box's scan callback re-enters the marker (TuriCollBufMarkFn). */
+typedef struct { PromoMap *seen; CollMark *mc; } CollMarkFnCtx;
+static void collmark_markfn(TuriValue v, void *ctx) {
+    CollMarkFnCtx *c = (CollMarkFnCtx *)ctx;
+    collmark_value(c->mc->env, v, c->seen, c->mc);
+}
+
+static void collsweep_after_rewind(TuriEnv *env, TuriValue result) {
+    if (!env->coll_bufs) return;
+
+    PromoMap boxmap;
+    promo_map_init(&boxmap);
+    bool any_live = false;
+    for (TuriCollBuf *n = env->coll_bufs; n; n = n->next) {
+        n->marked = false;
+        if (n->box) { promo_map_put(&boxmap, n->box, n); any_live = true; }
+    }
+
+    CollMark mc = { env, &boxmap, NULL, 0, 0, true };
+    if (any_live) {
+        PromoMap seen;
+        promo_map_init(&seen);
+        collmark_value(env, result, &seen, &mc);
+        for (EnvBinding *b = env->globals; b; b = b->next)
+            collmark_value(env, b->value, &seen, &mc);
+        /* Drain: scans may mark further boxes, growing the queue mid-loop. */
+        CollMarkFnCtx fnctx = { &seen, &mc };
+        for (size_t i = 0; i < mc.wl_len; i++) {
+            TuriCollBuf *n = mc.wl[i];
+            if (!n->scan || !n->scan(n->box, collmark_markfn, &fnctx))
+                mc.complete = false;
+        }
+        promo_map_free(&seen);
+    }
+    promo_map_free(&boxmap);
+    free(mc.wl);
+
+    if (any_live && mc.complete) {
+        env->collsweep_runs++;
+        for (TuriCollBuf **pp = &env->coll_bufs; *pp; ) {
+            TuriCollBuf *n = *pp;
+            if (n->box && !n->marked) {
+                n->destroy(n->box);
+                n->box = NULL;
+                env->collsweep_freed++;
+            }
+            if (!n->box) {   /* swept now, or tombstoned by an explicit free */
+                *pp = n->next;
+                n->next = env->coll_bufs_free;
+                env->coll_bufs_free = n;
+            } else {
+                pp = &n->next;
+            }
+        }
+    } else {
+        if (any_live) env->collsweep_markonly++;
+        /* Mark-only cycle: free nothing, but still recycle tombstones. */
+        for (TuriCollBuf **pp = &env->coll_bufs; *pp; ) {
+            TuriCollBuf *n = *pp;
+            if (!n->box) {
+                *pp = n->next;
+                n->next = env->coll_bufs_free;
+                env->coll_bufs_free = n;
+            } else {
+                pp = &n->next;
+            }
+        }
+    }
+}
+
 /* Promote everything that escapes this top-level eval (its result plus every
  * global) into value_perm, then rewind value_scratch.  A no-op unless promotion
  * is enabled; conservatively skips the rewind whenever safety cannot be proven. */
@@ -9880,6 +10104,10 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     /* Everything reachable now lives in value_perm; reclaim the scratch region. */
     arena_reset(&env->value_scratch);
     env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
+
+    /* TR3: with the live graph now provably rooted at result+globals, sweep
+     * tracked collection boxes nothing references any more. */
+    collsweep_after_rewind(env, *result);
 }
 
 static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,

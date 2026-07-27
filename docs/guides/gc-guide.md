@@ -359,20 +359,30 @@ outlives its defining scope and the interpreter does not track which. The whole
 pool is then reclaimed wholesale at `turi_env_free` (`env.c:334-336`) -- this is
 region memory reclaimed at teardown, **not** memory abandoned to the OS. The
 practical split: a short-lived process (fork-per-fixture, one-shot `tur build`)
-reclaims everything at exit; a **long-lived env** (a REPL/kernel that never tears
-down) grows the pool monotonically until teardown. That growth -- not a lost
-pointer -- is the real caveat; incremental reclamation via opt-in scratch
-promotion exists but is off by default (see
-`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`).
+reclaims everything at exit; a **long-lived env** is bounded by two mechanisms
+that are now on for the REPL. Incremental parse + elaboration is the default
+for every env (`TUR_NO_INCREMENTAL_ELAB=1` opts out), so `eval_arenas` and
+re-parse cost are linear instead of quadratic; the REPL additionally enables
+scratch promotion, which deep-copies each eval boundary's escaping values into
+a permanent pool and rewinds the scratch pool (measured over 1500
+transient-heavy turns: ~1.1 GB retained -> ~2.2 MB). Embedders using the bare
+create/eval/free pattern need neither and get the old behavior with
+promotion off. See `docs/upcoming/v1/turi-incremental-elaboration-design.md`
+and `docs/archive/turi-interp-incremental-reclamation-plan.md`.
 
 **Collections (Vec/Set/Map) backing buffers** are `calloc`/`malloc`'d outside
-the value pool and are **not** reclaimed on scope exit unless user code calls
-`vec-free` / `set-free` / `map-free`. They are, however, tracked at creation and
-swept at teardown (`env.c:320-327`), so they no longer leak past process exit --
-that historical bug is resolved (`docs/archive/history/interp-collections-never-freed.md`,
-`docs/archive/history/turi-interp-collections-libturi-plan.md`). Reclaiming them
-*mid-run* (drop-glue on scope exit) is still future work
-(`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`).
+the value pool. They are tracked at creation and swept at teardown
+(`docs/archive/history/interp-collections-never-freed.md`), and -- with scratch
+promotion on, i.e. in the REPL -- **also reclaimed mid-run** (TR3): right
+after each promotion rewind, a conservative mark over the live value graph
+frees every tracked buffer nothing references any more (measured: 5000
+dropped transient vecs -> 0 live tracked boxes, where teardown-only retained
+all 5000). The sweep is leak-on-doubt: a live *non-empty* Set/Map's entries
+are untyped carriers, so any cycle that reaches one frees nothing rather than
+risk freeing a buffer a hidden reference still uses. TVar cells ride the same
+tracking, which is also what keeps a TVar valid across rewinds. Explicit
+`vec-free` / `set-free` / `map-free` remain available and remain the only
+mid-run reclamation for envs without promotion.
 
 **Consequence for `bash tests/run.sh`.** The compiler/codegen path is
 leak-clean and runs with LeakSanitizer enabled. The interpreter harnesses
@@ -524,4 +534,4 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 - Interpreter memory is reclaimed at env teardown, but a long-lived env
   (REPL/kernel) is not bounded incrementally -- the value pool and per-eval
   arenas grow until teardown. The plan to bound it is
-  `docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`.
+  `docs/archive/turi-interp-incremental-reclamation-plan.md`.

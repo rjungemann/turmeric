@@ -636,8 +636,9 @@ fixtures do.
 - [stdlib-weak-ref-audit-plan.md](../../archive/stdlib-weak-ref-audit-plan.md)
   -- COMPLETE (WR0--WR4 landed 2026-07-26) and archived; its cycle inventory
   seeded CG7's corpus.
-- [turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)
-  -- TR3/TR5 outstanding, plus flipping TR2's landed incremental elaboration
-  (and scratch promotion) on by default in the REPL; TR1 is demand-driven.
+- [turi-interp-incremental-reclamation-plan.md](../../archive/turi-interp-incremental-reclamation-plan.md)
+  -- COMPLETE (2026-07-27) and archived: incremental elaboration default-on,
+  scratch promotion in the REPL, and the TR3 eval-boundary collection sweep;
+  only TR1 (carrier relocation) stays shelved as demand-driven.
 - [docs/guides/gc-guide.md](../../guides/gc-guide.md) -- user-facing behaviour,
   including which copy of the collector each build path runs.
