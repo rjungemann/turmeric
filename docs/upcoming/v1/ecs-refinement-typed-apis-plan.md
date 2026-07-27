@@ -286,6 +286,20 @@ phase RE0.
 > accessor/for-each consumers are validatable again, and the two deferred
 > `Slot`-typing sub-items are unblocked whenever the storage-side follow-up
 > is picked up.
+>
+> **Update 2026-07-26 (later) -- both deferred sub-items DONE; RE0 fully
+> complete.** Every public storage index (`dense-*`, `sparse-*`, `tag-*`,
+> and the sized trios), the `StorageOps` class methods, the accessor
+> emitters' slot parameter, and `for-each`/`sized-for-each`'s binder are
+> `Slot`-typed; `defmirror` and `sized-defworld-copy-into`'s generated loops
+> follow. Inline-C bodies were unchanged (same int64 carrier) -- the lift is
+> signatures + `(slot-new ...)` at the honest int-to-slot boundaries. A raw
+> int where a `Slot` is expected is `TUR-E0001`
+> (`tests/errors/int-not-slot.tur`); the guide's canonical for-each body
+> pattern (binder straight into storage/accessors) is now correct BY TYPE.
+> Suite 66/66 before and after (turmeric-spices `830e911`). RE1's refined
+> signatures were already `Entity`-typed, so nothing there needed rewriting
+> -- the sequencing (types before more refinements) held.
 
 Retire the `:int` stand-ins on the public surface of `ecs/entity`,
 `ecs/world`, and `ecs/sized-world`:
