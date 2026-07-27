@@ -660,6 +660,132 @@ def test_lsp_client_gaps() -> None:
         os.unlink(path)
 
 
+def test_lsp_unprimed_completion() -> None:
+    """Completion in a document that has NEVER parsed.
+
+    Retention (§2.1) rescues a document that used to parse. It does nothing
+    for one that never has, and the pre-existing gap-coverage test cannot see
+    that: it issues a request between the didOpen and the breaking edit, which
+    forces an analysis and primes the index. Every case here is deliberately
+    unprimed -- no request lands before the buffer is broken.
+
+    See docs/reported/lsp-symbol-retention-never-primes.md.
+    """
+    print("--- LSP completion without a primed index ---")
+
+    GOOD = "(defn zorkle [a :int] :int a)\n"
+    # `zorkle` rather than a plain name on purpose: a symbol that collides with
+    # an auto-loaded stdlib name makes the file fail to compile, which would
+    # silently turn a passing assertion into a vacuous one.
+    BROKEN_TAIL = "\n(smoke\n"
+
+    def completion_items(srv, uri, line, char):
+        r = srv.call("textDocument/completion", {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": char},
+        })
+        res = r["result"] if r and r.get("result") else {}
+        return res.get("items", []) if isinstance(res, dict) else []
+
+    # -- opened good, edited broken before any analysis ran ------------------
+    path = make_tempfile(GOOD)
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+        srv.call("initialize", {"processId": None, "rootUri": None,
+                                "capabilities": {}})
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur",
+                             "version": 1, "text": GOOD},
+        }, notification=True)
+        # NO request here -- that is the whole point.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": GOOD + BROKEN_TAIL}],
+        }, notification=True)
+
+        items = completion_items(srv, uri, 2, 0)
+        check(len(items) > 0,
+              f"lsp unprimed: broken before first analysis still completes "
+              f"(got {len(items)} items)")
+
+        # Once it parses, the document's own definitions take over and rank
+        # ahead of the stdlib -- the fallback must not displace them.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 3},
+            "contentChanges": [{"text": GOOD}],
+        }, notification=True)
+        labels = [i.get("label") for i in completion_items(srv, uri, 1, 0)]
+        check(labels and labels[0] == "zorkle",
+              f"lsp unprimed: own symbols return and rank first once it parses "
+              f"(got {labels[:3]})")
+
+        # And retention still works from there.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 4},
+            "contentChanges": [{"text": GOOD + BROKEN_TAIL}],
+        }, notification=True)
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        names = {s.get("name") for s in (r["result"] if r and r.get("result") else [])
+                 if isinstance(s, dict)}
+        check("zorkle" in names,
+              f"lsp unprimed: retention still applies after a later break "
+              f"(got {names})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+    # -- opened already broken: never parsed, nothing of its own to retain ---
+    path = make_tempfile(GOOD + BROKEN_TAIL)
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+        srv.call("initialize", {"processId": None, "rootUri": None,
+                                "capabilities": {}})
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur", "version": 1,
+                             "text": GOOD + BROKEN_TAIL},
+        }, notification=True)
+
+        items = completion_items(srv, uri, 2, 0)
+        labels = [i.get("label") for i in items]
+        check(len(items) > 0,
+              f"lsp never-parsed: completion falls back to the stdlib "
+              f"(got {len(items)} items)")
+        # The fallback is the stdlib surface only. A document symbol appearing
+        # here would mean the cache had been filled from some other document's
+        # analysis, which would leak one file's definitions into another's
+        # completions.
+        check("zorkle" not in labels,
+              f"lsp never-parsed: fallback carries no document-local symbols "
+              f"(got {labels[:4]})")
+        # Real completion, not a raw dump: the prefix still filters.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": GOOD + BROKEN_TAIL + "vec-new\n"}],
+        }, notification=True)
+        pf = [i.get("label") for i in completion_items(srv, uri, 3, 4)]
+        check(pf and all(l.lower().startswith("vec-") for l in pf),
+              f"lsp never-parsed: prefix still filters the fallback (got {pf[:4]})")
+
+        # Diagnostics for the real document must be unaffected -- the stdlib
+        # harvest runs its own compile and must not leak into them.
+        diags = [d for p in srv.diagnostics for d in p.get("diagnostics", [])]
+        check(len(diags) > 0,
+              "lsp never-parsed: the document's own diagnostics still publish")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+
 def test_lsp_unsaved_buffer() -> None:
     """A document with no filesystem path still gets language support.
 
@@ -711,6 +837,7 @@ def main() -> int:
     test_lsp()
     test_lsp_encoding_and_deferred_analysis()
     test_lsp_client_gaps()
+    test_lsp_unprimed_completion()
     test_lsp_unsaved_buffer()
     print(f"\nResults: {PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1

@@ -94,10 +94,20 @@ static void send_notification(int fd_out, const char *method,
  * Symbol search helper
  * --------------------------------------------------------------------- */
 
+static void doc_symbol_view(const LspDoc *doc,
+                            const LspSymbol **out, int *count);
+
+/* Looks through the document's own index, falling back to the stdlib surface
+ * for a document that has never parsed -- so hover, go-to-definition, and
+ * signature help over a stdlib name keep working in a file the user is still
+ * getting to compile. */
 static const LspSymbol *find_symbol(const LspDoc *doc, const char *name) {
-    for (int i = 0; i < doc->symbol_count; i++) {
-        if (strcmp(doc->symbols[i].name, name) == 0)
-            return &doc->symbols[i];
+    const LspSymbol *syms;
+    int              count;
+    doc_symbol_view(doc, &syms, &count);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(syms[i].name, name) == 0)
+            return &syms[i];
     }
     return NULL;
 }
@@ -204,6 +214,127 @@ static size_t unescape_json(const char *src, size_t src_len, char *dst) {
 
 #define LSP_SYM_CAP 2048
 
+/* -------------------------------------------------------------------------
+ * Stdlib symbol cache
+ *
+ * Retaining the last good index (below) rescues a document that *used* to
+ * parse. It does nothing for one that never has -- a file opened with a
+ * syntax error already in it -- because there is no earlier revision to fall
+ * back on. That is the case a user is least equipped to get out of unaided,
+ * since completion is exactly what would help them fix the error.
+ *
+ * The stdlib is the honest answer there. Turmeric auto-loads it, so every
+ * stdlib symbol genuinely *is* in scope for the broken file; this is not a
+ * guess at what the document might contain, which is the part that cannot be
+ * known while it does not parse. It is document-independent, so one
+ * process-wide copy taken from the first successful analysis serves every
+ * document that needs it.
+ *
+ * Membership is decided by path prefix against TUR_STDLIB_DIR rather than
+ * "any symbol not from this document". The looser test would also sweep in
+ * the first document's *imports* and then offer them to an unrelated file
+ * that never imported them.
+ * --------------------------------------------------------------------- */
+
+static LspSymbol *stdlib_syms_      = NULL;
+static int        stdlib_sym_count_ = 0;
+
+/* Set by resolve_stdlib_root() in main.c before any subcommand runs. NULL if
+ * the stdlib could not be located, which disables the cache rather than
+ * guessing. */
+static const char *stdlib_root(void) {
+    static const char *root = NULL;
+    static int         tried = 0;
+    if (!tried) {
+        tried = 1;
+        root = getenv("TUR_STDLIB_DIR");
+        if (root && !*root) root = NULL;
+    }
+    return root;
+}
+
+static void stdlib_cache_fill(const LspSymbol *syms, int count) {
+    const char *root = stdlib_root();
+    if (stdlib_syms_ || !root || count <= 0) return;
+
+    size_t rlen = strlen(root);
+    int    n    = 0;
+    for (int i = 0; i < count; i++) {
+        if (syms[i].name[0] && strncmp(syms[i].file_path, root, rlen) == 0) n++;
+    }
+    if (n == 0) return;
+
+    stdlib_syms_ = calloc((size_t)n, sizeof(LspSymbol));
+    if (!stdlib_syms_) return;
+    for (int i = 0, o = 0; i < count && o < n; i++) {
+        if (syms[i].name[0] && strncmp(syms[i].file_path, root, rlen) == 0)
+            stdlib_syms_[o++] = syms[i];
+    }
+    stdlib_sym_count_ = n;
+}
+
+static void stdlib_cache_free(void) {
+    free(stdlib_syms_);
+    stdlib_syms_      = NULL;
+    stdlib_sym_count_ = 0;
+}
+
+/* Harvest the stdlib surface by analyzing an empty buffer.
+ *
+ * Piggy-backing on a real document's successful analysis is not enough: the
+ * case that needs the fallback most is a server whose *only* open document is
+ * the broken one, where no successful analysis ever happens to harvest from.
+ * An empty file compiles -- the stdlib is auto-loaded, so it alone yields the
+ * whole surface -- which makes this self-sufficient.
+ *
+ * Costs one compile, once per process, and only ever on the first request
+ * that actually needs the fallback. A session where every document parses
+ * never pays it. */
+static void stdlib_cache_prime(void) {
+    static int attempted = 0;
+    if (stdlib_syms_ || attempted) return;
+    attempted = 1;
+    if (!stdlib_root()) return;
+
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s/tur_lsp_std_XXXXXX.tur",
+             tur_temp_dir());
+    int fd = mkstemps(tmp_path, 4);
+    if (fd < 0) return;
+    close(fd);   /* empty file is the point */
+
+    LspSymbol *syms  = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
+    int        count = 0;
+    if (syms) {
+        /* Collect into a scratch diagnostic region so nothing from this
+         * synthetic compile can reach the client as a diagnostic about a
+         * document it owns. */
+        diag_reset();
+        diag_lsp_begin();
+        tur_collect_symbols(tmp_path, syms, LSP_SYM_CAP, &count);
+        diag_lsp_end();
+        stdlib_cache_fill(syms, count);
+        free(syms);
+    }
+    unlink(tmp_path);
+}
+
+/* The symbols to answer a request from: the document's own index when it has
+ * ever had one, the cached stdlib surface when it has not. */
+static void doc_symbol_view(const LspDoc *doc,
+                            const LspSymbol **out, int *count) {
+    if (!doc->ever_analyzed) {
+        stdlib_cache_prime();   /* no-op once attempted */
+        if (stdlib_syms_) {
+            *out   = stdlib_syms_;
+            *count = stdlib_sym_count_;
+            return;
+        }
+    }
+    *out   = doc->symbols;
+    *count = doc->symbol_count;
+}
+
 static void run_doc_analysis(LspDoc *doc, int fd_out) {
     /* 1. Scan docstrings from source text */
     LspDocTable dtable;
@@ -265,11 +396,31 @@ static void run_doc_analysis(LspDoc *doc, int fd_out) {
             strncpy(sym->file_path, doc->path, sizeof(sym->file_path) - 1);
     }
 
-    if (rc == 0 || fresh_count > 0 || !doc->symbols) {
+    /* A result is usable when the compile succeeded, or when it failed late
+     * enough to still have collected symbols (a type error after a clean
+     * parse). Either way it describes the current text, so it is adopted and
+     * is not stale. */
+    int usable = (rc == 0 || fresh_count > 0);
+
+    if (usable) {
         lsp_doc_free_symbols(doc);
         doc->symbols       = fresh;
         doc->symbol_cap    = LSP_SYM_CAP;
         doc->symbol_count  = fresh_count;
+        doc->symbols_stale = 0;
+        doc->ever_analyzed = 1;
+        stdlib_cache_fill(fresh, fresh_count);
+    } else if (!doc->ever_analyzed) {
+        /* Nothing to retain -- this text has never parsed. Adopt the empty
+         * result rather than leaving symbols NULL, and leave ever_analyzed
+         * clear so doc_symbol_view() serves the stdlib surface instead of an
+         * empty list. Testing `doc->symbols` here (as this once did) set the
+         * pointer non-NULL on the first failure and made every later failure
+         * retain the emptiness forever. */
+        lsp_doc_free_symbols(doc);
+        doc->symbols       = fresh;
+        doc->symbol_cap    = LSP_SYM_CAP;
+        doc->symbol_count  = 0;
         doc->symbols_stale = 0;
     } else {
         free(fresh);
@@ -1249,10 +1400,14 @@ static void on_completion(const char *id_raw, size_t id_len,
      * entries in front of the buffer's own definitions -- the symbols the user
      * is most likely reaching for were the ones that got dropped. Two passes
      * fix the ordering without needing a full sort. */
-    if (!in_import && doc->symbols) {
+    const LspSymbol *syms;
+    int              sym_count;
+    doc_symbol_view(doc, &syms, &sym_count);
+
+    if (!in_import && syms) {
         for (int pass = 0; pass < 2; pass++) {
-            for (int i = 0; i < doc->symbol_count; i++) {
-                const LspSymbol *sym = &doc->symbols[i];
+            for (int i = 0; i < sym_count; i++) {
+                const LspSymbol *sym = &syms[i];
                 if (!sym->name[0]) continue;
 
                 int local = (sym->file_path[0] == '\0' ||
@@ -1337,6 +1492,7 @@ void lsp_server_run(int fd_in, int fd_out) {
         } else if (strcmp(method, "exit") == 0) {
             free(msg);
             queue_free();
+            stdlib_cache_free();
             lsp_docs_free();
             _exit(shutdown_ ? 0 : 1);
         } else if (strcmp(method, "textDocument/didOpen") == 0 && params_raw) {
@@ -1394,5 +1550,6 @@ void lsp_server_run(int fd_in, int fd_out) {
     }
 
     queue_free();
+    stdlib_cache_free();
     lsp_docs_free();
 }

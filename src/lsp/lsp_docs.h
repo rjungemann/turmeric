@@ -50,6 +50,17 @@ typedef struct LspDoc {
      * unbalanced -- so serving a slightly stale index beats serving nothing,
      * which is what completion did before. */
     int        symbols_stale;
+    /* Some revision of this text has produced a real symbol index, so there is
+     * something worth retaining when a later one does not.
+     *
+     * Distinct from `symbols != NULL`, which is what the retention check used
+     * to test and which cannot tell "analyzed, and genuinely has no symbols"
+     * from "never successfully analyzed". The first analysis of a file that
+     * does not parse adopted its own empty result under that test, and every
+     * later failure then faithfully retained the emptiness -- so a file opened
+     * with a syntax error already in it had completion dead until the error
+     * was fixed unaided. */
+    int        ever_analyzed;
     /* Text changed since the last analysis. Analysis is deferred until the
      * client stops typing (or asks a question that needs symbols) so a burst
      * of keystrokes costs one compile, not one per character. */

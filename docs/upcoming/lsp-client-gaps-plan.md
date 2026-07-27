@@ -131,6 +131,15 @@ file leaves completion at 200 items instead of dropping it to zero.
 (2) is still open, and is the better long-term answer. Retention goes stale
 across a rename or a large paste; error-tolerant parsing would not.
 
+**Follow-up landed: retention now primes.** A consumer review found that
+retention only helped a document that had *already* parsed once -- a file
+opened with a syntax error already in it had nothing to retain and completion
+stayed empty, which is when it is wanted most. `LspDoc.ever_analyzed` fixes
+the priming, and a lazily-built stdlib symbol cache backs the never-parsed
+case. Details and measurements in
+[docs/archive/lsp-symbol-retention-never-primes.md](../archive/lsp-symbol-retention-never-primes.md);
+coverage in `test_lsp_unprimed_completion`.
+
 ### 2.2 Returns nothing at offset 0
 
 Completion at `{"line": 0, "character": 0}` returns an empty array while the
