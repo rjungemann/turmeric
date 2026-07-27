@@ -70,6 +70,9 @@ not codegen, so `tests/fixtures/*/expected.c` is unaffected.
 
 ## Related
 
-`tests/run-fmt.sh` additionally fails to run its idempotence check at all on
-macOS/BSD -- see
-[fmt-idempotence-head-z-silently-skips-on-bsd.md](fmt-idempotence-head-z-silently-skips-on-bsd.md).
+`tests/run-fmt.sh` additionally failed to run its idempotence check at all on
+macOS/BSD -- fixed, see
+[../archive/fmt-idempotence-head-z-silently-skips-on-bsd.md](../archive/fmt-idempotence-head-z-silently-skips-on-bsd.md).
+That fix also added a "checked at least one file" guard to *this* test, so a
+future break in the stdlib enumeration fails here rather than passing
+vacuously.
