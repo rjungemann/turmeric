@@ -240,11 +240,33 @@ static void set_buf_destroy(void *box) {
     tur_hamt_free((Hamt *)s[0]);
     free(s);
 }
+/* TR3: enumerate a Set/Map's entries for the eval-boundary sweep.  Keys and
+ * values are pointer-encoded int64 carriers with no per-entry tag, so each is
+ * visited as a bare candidate int -- that catches a directly-stored handle
+ * (a map of vecs), but CANNOT rule out a struct-valued entry holding a handle
+ * in a field.  A non-empty map therefore reports its enumeration incomplete
+ * (return false), which makes the sweep mark-only for that cycle: nothing is
+ * freed on the strength of a scan that might have missed a reference. */
+static bool set_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
+    void **s = (void **)box;
+    Hamt *h = (Hamt *)s[0];
+    if (!h || tur_hamt_count(h) == 0) return true;
+    HamtIter it;
+    tur_hamt_iter_init(&it, h);
+    uint64_t hash;
+    void *k, *val;
+    while (tur_hamt_iter_next(&it, &hash, &k, &val)) {
+        mark(turi_int((int64_t)(intptr_t)k), ctx);
+        mark(turi_int((int64_t)(intptr_t)val), ctx);
+    }
+    tur_hamt_iter_free(&it);
+    return false;
+}
 static TuriValue set_wrap_tracked(TuriEnv *env, Hamt *h) {
     void **s = (void **)malloc(2 * sizeof(void *));
     if (!s) return turi_nil();
     s[0] = (void *)h;
-    s[1] = (void *)turi_env_track_collection(env, s, set_buf_destroy);
+    s[1] = (void *)turi_env_track_collection(env, s, set_buf_destroy, set_buf_scan);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)s; return v;
 }
 /* Wrap a HAMT that a persistent op derived from `src`.  tur_hamt_set/del (and
@@ -967,11 +989,26 @@ static void vec_buf_destroy(void *box) {
     free((void *)(intptr_t)v[0]);   /* the growable data buffer */
     free(v);
 }
+/* TR3: enumerate a Vec's cells for the eval-boundary sweep's conservative
+ * mark.  vec_retag_cell types each cell from the vec's recorded element tag,
+ * so a struct-tagged cell surfaces as a real TURI_STRUCT the marker can walk
+ * into (a struct element may hold another collection's handle in a field) and
+ * everything else surfaces as the carrier int candidate it is.  Every cell is
+ * visited, so the enumeration is complete: return true. */
+static bool vec_buf_scan(void *box, TuriCollBufMarkFn mark, void *ctx) {
+    int64_t *v = (int64_t *)box;
+    int64_t *data = (int64_t *)(intptr_t)v[0];
+    if (!data) return true;
+    for (int64_t i = 0; i < v[1]; i++)
+        mark(vec_retag_cell(v, data[i]), ctx);
+    return true;
+}
 static TuriValue native_vec_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
     int64_t *v = (int64_t *)calloc(4, sizeof(int64_t));
     if (!v) return turi_nil();
-    v[3] = (int64_t)(intptr_t)turi_env_track_collection(env, v, vec_buf_destroy);
+    v[3] = (int64_t)(intptr_t)turi_env_track_collection(env, v, vec_buf_destroy,
+                                                        vec_buf_scan);
     TuriValue r = {0}; r.tag = TURI_INT; r.as_int = (int64_t)(intptr_t)v; return r;
 }
 static TuriValue native_vec_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {

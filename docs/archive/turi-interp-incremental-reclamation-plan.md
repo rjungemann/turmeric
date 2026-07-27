@@ -1,5 +1,19 @@
 # Interpreter Incremental Reclamation -- Bounding a Long-Lived turi Env (TR0--TR5)
 
+> **Status: COMPLETE (2026-07-27) except TR1, which is shelved as
+> demand-driven.** A long-lived REPL env is now bounded on every axis this
+> plan named: `eval_arenas`/`src_acc` via default-on incremental parse +
+> elaboration (TR2, see `turi-incremental-elaboration-design.md` -- 1500
+> transient-heavy turns: ~1.1 GB -> ~2.2 MB), `value_scratch` via scratch
+> promotion (on in the REPL, TR2.4), and dropped collection buffers via the
+> TR3 eval-boundary sweep (5000 transient vecs: 0 live tracked boxes, was
+> 5000). TR4's model decision is recorded below; TR5's tests and doc
+> corrections are in. TR1 (carrier relocation) measured out as not
+> load-bearing for ordinary use and stays parked until an embedder that holds
+> suspended generators/continuations across evals actually needs it.
+>
+> Original header follows.
+>
 > **Status:** Not started as an umbrella, but it sits on substantial landed
 > groundwork. Env teardown is already leak-clean (the env-owned value pool,
 > Phase 1, shipped). What is *not* solved is **incremental** reclamation: a
@@ -139,7 +153,7 @@ above.
 > TR2 lands -- on its own it changes REPL timing (a promotion walk per line) for
 > a memory win that TR2's eval-arena growth would still swamp. Ship them together.
 
-### TR1 -- Complete carrier relocation (revive the hard-tail plan) [DEPRIORITIZED -- see TR0]
+### TR1 -- Complete carrier relocation (revive the hard-tail plan) [SHELVED -- demand-driven]
 
 Note (TR0, 2026-07-24): measured 0 declines on ordinary REPL input -- this phase
 only benefits embeddings that keep suspended generators/continuations live across
@@ -165,8 +179,12 @@ Promotion resets `value_scratch` but never touches `eval_arenas` or `src_acc`
 (`env.h:165`, `eval.c:9920-9924`), so AST/elaboration memory and source text
 still grow per line.
 
-**Status: LANDED (TR2.0 + TR2.2a + TR2.1/TR2.2b, 2026-07-24), gated default-off
-via `turi_env_set_incremental_elab`.** A long-lived env now parses AND elaborates
+**Status: LANDED (TR2.0 + TR2.2a + TR2.1/TR2.2b, 2026-07-24) -- and since
+2026-07-25 the gate is FLIPPED: `turi_env_new` enables incremental parse +
+elaboration for every env (`TUR_NO_INCREMENTAL_ELAB=1` opts out), TR2.3 and
+TR2.4 are landed, and the REPL runs scratch promotion. See
+`turi-incremental-elaboration-design.md` for the full record; the paragraph
+below predates the flip.** A long-lived env now parses AND elaborates
 only each turn's new forms, resolving prior definitions out of a persistent
 elaboration session. **N=800 turns: 299.3 MB -> 3.6 MB (83x less) and 1.54s ->
 0.03s (51x faster)**; growth is ~linear where it was quadratic. The shared
@@ -193,7 +211,51 @@ change to a fragile subsystem and remains v1-non-blocking (one-shot builds never
 hit it); the scoping call is whether a long-lived REPL/kernel is a real v1 use
 case.
 
-### TR3 -- Collection drop-glue (reclaim mid-run, not just at teardown)
+### TR3 -- Collection drop-glue (reclaim mid-run, not just at teardown) [DONE 2026-07-27]
+
+**Landed, as an eval-boundary sweep rather than the scope-exit drop sketched
+below -- because the sketch had no trigger point.** Elaboration injects no
+drop for a plain `(Vec int)` local (Vec is manually freed in the language
+model), so `EX_RC_DROP` never fires for the shapes that leak. What does exist
+is a moment when liveness is *provable*: immediately after a successful
+scratch-promotion rewind, the live value graph is exactly what is reachable
+from the eval result + globals -- the same invariant the rewind itself stakes
+scratch safety on. `collsweep_after_rewind` (`eval.c`) runs there:
+
+- **Mark:** walk the live graph the way `promo_copy` does (frames, struct
+  fields, unstarted generators, ws continuations), treating every `TURI_INT`
+  as a candidate tracked-box address; a hit marks the box and transitively
+  scans its own contents via a per-box `scan` callback
+  (`TuriCollBufScanFn`) -- a vec-of-vecs, a struct held in a vec cell, or a
+  vec held only by a TVar all stay alive.
+- **Sweep:** unmarked tracked boxes are destroyed and their tracking nodes
+  recycled (`coll_bufs_free`), so node count is bounded by peak simultaneous
+  collections. **Leak-on-doubt:** a marked box whose scan cannot enumerate
+  completely (a non-empty Set/Map -- entries are untyped carriers, so a
+  struct-valued entry hiding a handle cannot be ruled out) makes the whole
+  cycle mark-only; nothing is freed. False positives (an int equal to a box
+  address) only delay a free. `collsweep_runs/_markonly/_freed` counters
+  mirror the promo_* instrumentation.
+
+**Measured (5000 transient-vec evals, one env):** promotion off -- 5000 live
+tracked boxes at the end (the old teardown-only bound); promotion on -- **0
+live, 5000 sweeps, 5000 freed, 0 mark-only**.
+
+**A live bug fell out of the analysis: TVar cells were `value_scratch`
+allocations.** A TVar handle escapes as an opaque int carrier the promotion
+walk cannot see, so the first rewind after `(def t (tvar/new 0))` poisoned
+the cell under the REPL's defaults and a later `atomically` read was a
+use-after-reset. TVar cells are now malloc'd and tracked as one-value boxes:
+they survive rewinds, are swept when unreachable, and their stored value
+joins the mark (a TVar holding a vec handle keeps that vec alive). See
+`docs/archive/tvar-cell-dangled-across-promotion-rewind.md`.
+
+Pinned by `test_collection_sweep` in `tests/turi/env-longlived.c`: bounded
+churn, four liveness shapes (global vec / struct field / vec-in-vec /
+TVar-held vec) read back correctly across 50 sweeps under ASan, TVar
+survival, and the mark-only gate under a live non-empty set.
+
+*Original phase text:*
 
 Implement "fix direction 2" from `interp-collections-never-freed`: teach the
 rc-drop path (`EX_RC_DROP` / `turi_rc_drop_value`) to recognize `:heap`
@@ -202,7 +264,23 @@ the aliasing care the compiled RC path takes (a Vec handle is a shared mutable
 pointer -- do not free while aliased). Turns collection memory from
 teardown-bounded (constant in N) into scope-bounded (near-zero steady state).
 
-### TR4 -- Choose the long-term model: complete copying-promotion vs tracing sweep
+### TR4 -- Choose the long-term model: complete copying-promotion vs tracing sweep [DECIDED 2026-07-27: (a)]
+
+**Decision: (a) copying-promotion, for v1 and until evidence says otherwise.**
+The scoping question this plan deferred ("is a long-lived REPL a real v1 use
+case?") was answered yes, and the measurements settle the architecture: the
+copying-promotion model, extended by incremental elaboration (TR2) and the
+TR3 collection sweep, bounds every growth term that has actually been
+observed. What (a) concedes -- `value_perm` is never compacted, so a session
+with heavy genuinely-immortal-global churn still grows slowly -- has not
+shown up in any measured workload (perm reaches a fixed point once the live
+global set is stable, pinned by `test_steady_state`). (b), the tracing
+mark-sweep over the pool, remains the post-v1 direction if `value_perm`
+growth ever proves real; note the TR3 sweep already built the first piece of
+it (a conservative tracing mark over the live value graph), so (b) would be
+an extension, not a restart.
+
+*Original phase text:*
 
 With TR0--TR3 data in hand, decide the durable architecture:
 
@@ -223,7 +301,18 @@ symmetry -- both the interpreter reclamation and the compiled-side cycle
 collector are "tracing over a walker-described object graph," and should share
 vocabulary even if not code.
 
-### TR5 -- Tests + honest docs
+### TR5 -- Tests + honest docs [DONE 2026-07-27]
+
+- `tur_env_longlived` asserts bounded steady state (scratch rewound to zero
+  each cycle, perm at a fixed point, promotion-off control still grows) and
+  now carries `test_collection_sweep` for the TR3 bound (see TR3 above).
+- `docs/guides/gc-guide.md`'s interpreter section is corrected: incremental
+  elaboration is described as the default, scratch promotion as the REPL's
+  configuration with the measured numbers, and the collections paragraph now
+  documents mid-run reclamation and its leak-on-doubt gate instead of calling
+  it future work.
+
+*Original phase text:*
 
 - Extend `tur_env_longlived` to assert bounded steady state across thousands of
   evals with promotion + TR1--TR3 on, and a promotion-off control that still

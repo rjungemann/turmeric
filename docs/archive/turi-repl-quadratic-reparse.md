@@ -41,7 +41,7 @@ session degrades quadratically in both. Execution correctly skips already-run
 forms; **parsing and arena retention do not.**
 
 This surfaced while measuring TR0 of
-`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md`: with scratch
+`docs/archive/turi-interp-incremental-reclamation-plan.md`: with scratch
 promotion rewinding 100% (value pool steady at 0), a 3000-eval session still grew
 `eval_arenas` to **~4.1 GB across 3001 nodes** while `src_acc` grew linearly
 (0.1 -> 39 KB). The AST-retention term dominated everything else (the value pool
@@ -77,7 +77,7 @@ In `turi_eval_impl` (`src/turi/eval.c`), every call:
 So per eval N the work is O(size of accumulated source through N); summed over the
 session that is O(N^2) in both parse time and retained arena bytes. The retained
 memory overlaps the concern already captured in
-`docs/upcoming/v1/turi-interp-incremental-reclamation-plan.md` TR2; **the CPU
+`docs/archive/turi-interp-incremental-reclamation-plan.md` TR2; **the CPU
 re-parse is the distinct, additional defect this report records.**
 
 ## Measured (2026-07-24)

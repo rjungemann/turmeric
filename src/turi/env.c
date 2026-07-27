@@ -516,11 +516,20 @@ void turi_env_register_native_ex(TuriEnv *env, const char *name,
  * scratch-allocated node would be poisoned by arena_reset while still linked.
  * value_perm is present and freed at turi_env_free on every path. */
 TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
-                                       TuriCollBufFreeFn destroy) {
+                                       TuriCollBufFreeFn destroy,
+                                       TuriCollBufScanFn scan) {
     if (!env || !box || !destroy) return NULL;
-    TuriCollBuf *node = (TuriCollBuf *)turi_val_perm_alloc(env, sizeof(TuriCollBuf));
+    /* TR3: reuse a node the sweep recycled before growing the perm pool. */
+    TuriCollBuf *node = env->coll_bufs_free;
+    if (node) {
+        env->coll_bufs_free = node->next;
+    } else {
+        node = (TuriCollBuf *)turi_val_perm_alloc(env, sizeof(TuriCollBuf));
+    }
     node->box     = box;
     node->destroy = destroy;
+    node->scan    = scan;
+    node->marked  = false;
     node->next    = env->coll_bufs;
     env->coll_bufs = node;
     return node;

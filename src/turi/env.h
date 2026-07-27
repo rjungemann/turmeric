@@ -102,9 +102,32 @@ typedef struct TuriCoroStack {
  * the node refcounts (correct now that the delete path retains pulled-up
  * siblings -- docs/archive/history/hamt-delete-sibling-refcount-report.md). */
 typedef void (*TuriCollBufFreeFn)(void *box);
+
+/* TR3 (turi-interp-incremental-reclamation): the eval-boundary sweep.
+ *
+ * With scratch promotion on, a successful rewind proves the live value graph
+ * is exactly what is reachable from the eval result + globals.  The sweep
+ * then conservatively marks every tracked box whose address appears as an
+ * int64 carrier anywhere in that graph (or inside another marked box) and
+ * frees the rest -- bounding a long-lived env's collection memory at the
+ * eval boundary instead of at teardown.
+ *
+ * `mark` hands one contained value to the marker (typed where the box knows
+ * the element tag, a bare turi_int carrier otherwise).  `scan` enumerates a
+ * box's contents through it and returns true only if the enumeration was
+ * COMPLETE -- i.e. no entry could be hiding a reference the marker cannot
+ * see (a Set/Map's untyped entries cannot rule out a struct-valued entry
+ * holding a handle, so its scan returns false when non-empty).  Any marked
+ * box with an incomplete scan makes the whole cycle mark-only: nothing is
+ * freed, matching the plan's leak-on-doubt rule. */
+typedef void (*TuriCollBufMarkFn)(TuriValue v, void *ctx);
+typedef bool (*TuriCollBufScanFn)(void *box, TuriCollBufMarkFn mark, void *ctx);
+
 typedef struct TuriCollBuf {
     void                *box;      /* wrapper allocation; NULL once freed/tombstoned */
     TuriCollBufFreeFn    destroy;  /* frees box (and any heap buffer it owns) */
+    TuriCollBufScanFn    scan;     /* enumerate contained values; NULL = opaque */
+    bool                 marked;   /* per-sweep scratch bit */
     struct TuriCollBuf  *next;
 } TuriCollBuf;
 
@@ -315,6 +338,18 @@ typedef struct TuriEnv {
      * (currently Vec), tracked so turi_env_free reclaims the ones the program
      * never freed. */
     TuriCollBuf   *coll_bufs;
+    /* TR3: recycled tracking nodes.  The eval-boundary sweep unlinks freed
+     * AND tombstoned (explicitly vec-free'd) nodes here, and
+     * turi_env_track_collection reuses them -- so node count is bounded by
+     * peak simultaneous collections, not total ever created.  Nodes are
+     * perm-pool allocations, so there is nothing to free(). */
+    TuriCollBuf   *coll_bufs_free;
+    /* TR3 observability, mirroring the promo_* counters: sweeps that ran a
+     * free phase, sweeps declined as mark-only (an incomplete scan on a live
+     * box), and total boxes freed by sweeps. */
+    uint64_t       collsweep_runs;
+    uint64_t       collsweep_markonly;
+    uint64_t       collsweep_freed;
     /* All allocated futures (linked list for bulk free in turi_env_free) */
     TuriFuture *all_futures;
     /* Pipe fds for the built-in test I/O pipe (S7.7 tests) */
@@ -439,7 +474,8 @@ TuriCoroStack *turi_env_track_coro_stack(TuriEnv *env, void *base, size_t size);
  * can tombstone it in O(1) via turi_env_untrack_collection.  Returns NULL
  * (buffer untracked, no crash) when env or box is NULL. */
 TuriCollBuf *turi_env_track_collection(TuriEnv *env, void *box,
-                                       TuriCollBufFreeFn destroy);
+                                       TuriCollBufFreeFn destroy,
+                                       TuriCollBufScanFn scan);
 
 /* interp-collections-never-freed: tombstone a tracking node whose buffer is
  * about to be freed explicitly, so the turi_env_free teardown walk skips it and
