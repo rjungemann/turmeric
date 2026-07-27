@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/check-stdlib-no-rc-cycles.sh -- WR2 regression guard for the stdlib
-# ownership audit (docs/upcoming/v1/stdlib-weak-ref-audit-plan.md).
+# ownership audit (docs/archive/stdlib-weak-ref-audit-plan.md).
 #
 # Finding of the 2026-07-24 audit: the stdlib builds NO rc<T> cycles and needs
 # weak<T> nowhere, because it avoids shared mutable ownership almost entirely --

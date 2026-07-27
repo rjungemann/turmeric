@@ -628,9 +628,11 @@ The last one is left open -- it is separate from this plan's track.
 
 ## Related plans
 
-- [stdlib-weak-ref-audit-plan.md](stdlib-weak-ref-audit-plan.md) -- WR1/WR3/WR4
-  outstanding; its cycle inventory seeds CG7's corpus.
+- [stdlib-weak-ref-audit-plan.md](../../archive/stdlib-weak-ref-audit-plan.md)
+  -- COMPLETE (WR0--WR4 landed 2026-07-26) and archived; its cycle inventory
+  seeded CG7's corpus.
 - [turi-interp-incremental-reclamation-plan.md](turi-interp-incremental-reclamation-plan.md)
-  -- TR1/TR3/TR5 outstanding.
+  -- TR3/TR5 outstanding, plus flipping TR2's landed incremental elaboration
+  (and scratch promotion) on by default in the REPL; TR1 is demand-driven.
 - [docs/guides/gc-guide.md](../../guides/gc-guide.md) -- user-facing behaviour,
   including which copy of the collector each build path runs.

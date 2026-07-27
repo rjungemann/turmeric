@@ -180,5 +180,5 @@ Not v1-blocking (dormant, opt-in, no in-tree trigger). The trigger to act is any
 move to advertise or default-on automatic cycle collection: at that point CG0/CG1/
 CG2/CG4 must land together, since each alone leaves the collector unsound or
 ineffective. In the meantime, the highest-value cheap fix is the doc correction
-(`docs/reported/gc-guide-stale-and-misleading.md`) so no one relies on the
+(`docs/archive/gc-guide-stale-and-misleading.md`) so no one relies on the
 non-working remedy.

@@ -386,7 +386,7 @@ expected and fails to elaborate.
 >
 > **Update 2026-07-26 (later) -- corruption FIXED; (a) fully unblocked.** The
 > second channel was root-caused via the executed
-> `docs/upcoming/arena-debug-poisoning-plan.md` (the AP4 guard mode's clean run
+> `docs/archive/arena-debug-poisoning-plan.md` (the AP4 guard mode's clean run
 > disproved the UAF theory): `parse_typeclass_method` left the RT1 memo field
 > `TypeClassMethod.refine_class_binding` UNINITIALIZED in non-zeroed arena
 > memory, so the second in-process compile read recycled-slab junk as a
