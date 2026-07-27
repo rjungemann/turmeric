@@ -7,9 +7,14 @@ preconditions are now closed and one prerequisite has been BUILT ahead of time.
 | precondition | state |
 |---|---|
 | 1. suite survives it | **measured** -- one fixture affected, and it is repurposed rather than deleted |
-| 2. cost is acceptable | partly -- measured on fixtures, **needs a real program** (see [the dogfooding plan](../hold/refined-dogfooding-plan.md)) |
-| 3. nothing still moving | **waiting** -- two semantics landed recently and should sit |
+| 2. cost is acceptable | **MEASURED on a real program (2026-07-26)** -- tur-ecs, ~5400 lines / 22 modules / 66 tests: **1.004x** on unannotated code, worst per-file delta +1ms, zero `TUR-E0371`, all obligations behave as designed; see [refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md) |
+| 3. nothing still moving | **waiting** -- two semantics landed recently and should sit (and 2026-07-26 added more movement: macro-expansion path walk, `#reads` entry-contract suppression -- restart the sit clock) |
 | 4. exclusions documented as permanent | **DONE** -- every Limits entry tagged |
+
+**Z3 retirement input (banked 2026-07-26):** the oracle build (system Z3
+4.15.4) re-checked every VC the tur-ecs corpus generates -- verdicts identical
+to the in-house chain, zero `TUR-I0379`. Real-program oracle agreement is on
+file in the dogfood report; the scaffold can be retired on schedule.
 
 | prerequisite | state |
 |---|---|

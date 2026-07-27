@@ -1,6 +1,14 @@
 # Dogfooding `refined` on a real program
 
-**Status:** placeholder. Waiting on a program to exist, not on effort.
+**Status: EXECUTED 2026-07-26 on tur-ecs.** The program this was waiting for
+came to exist: `spices/ecs` (~5400 lines, 22 modules, 66/66-green suite)
+carrying the RE1 refined surface. Results -- 1.004x cost on unannotated code,
+zero `TUR-E0371`, Z3 oracle agreement on every real VC, tier coverage with
+honest skips -- are in
+[`../v1/refined-dogfood-ecs-report.md`](../v1/refined-dogfood-ecs-report.md),
+which follows this plan's report format. The tier checklist below is kept as
+written; per-item outcomes (covered / absence-result / skipped-no-natural-
+site, including the stdlib-alias mismatch finding) live in the report.
 
 **Why it is on hold and not in flight:** everything measured so far comes from
 fixtures, and fixtures are written by the same person who wrote the checker.
