@@ -493,6 +493,25 @@ Probe 6 says this is Unknown inside a `while` today, which is where every real
 call site lives. With a written `:invariant` on the `for-each` expansion's loop
 it becomes an ordinary path-splitting obligation.
 
+> **Probe update 2026-07-26 -- the RECURSION shape discharges bounds TODAY,
+> no C3.** A bounds-refined accessor (`#refine{ x | (and (>= x 0) (< x 8)) }`)
+> called from a tail-recursive loop proves under `--strict-refine`: the upper
+> bound comes from the loop guard `(< i 8)` as an ordinary path condition, and
+> the lower bound rides a refined parameter (`i : #refine{ x | (>= x 0) }`)
+> inductively -- the recursive crossing proves `i+1 >= 0` from `i >= 0`, the
+> canonical decreasing-argument shape path conditions already handle. Negative
+> controls both reject (an off-by-one guard `(< i 9)`; a dropped lower-bound
+> refinement). A sized capacity is a type-level constant, so the whole proof
+> lives in the PURE fragment -- no `#reads`, no trust. So C3 gates only the
+> `while` lowering: RE1 (c)'s `for-each-alive!` pattern (a macro generating
+> the named-let loop) carries over directly, and RE2's remaining gate is the
+> PROFILE alone. The `#reads`/`#writes` trajectory still matters here for two
+> follow-ons: checked write-frames would replace the coarse whole-body `set!`
+> decline (unblocking the `while` form), and `frozen` + `#reads` extends
+> bounds elimination to RESIZABLE storage, where `(in-bounds? buf i)` reads
+> mutable capacity (see stateful-refinements-guide.md "Where this
+> generalizes").
+
 Deliberately sequenced last: it is the only phase whose payoff is measured in
 nanoseconds, and the parent plan's benchmarking section is a standing warning
 that this class of win tends to evaporate under `cc -O2`, which already proves
