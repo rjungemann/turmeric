@@ -275,6 +275,17 @@ phase RE0.
 > their consumers is currently in the `(Storage T)`-broken set (so the
 > change is neither validatable nor "passes unchanged" today). Fold this
 > into the storage-side follow-up.
+>
+> **Update 2026-07-26 -- the `(Storage T)` skew is FIXED and the deferral's
+> stated blocker is gone.** `struct_field_type_from_form` was missing the
+> assoc-type-projection dispatch (`(Storage Pos)` -> spurious TUR-E0012) and
+> the SZ8 Size-literal placeholder (`(SizedDense (Static 8) Pos)`); both now
+> mirror `type_expr_from_form` (fixture: `defstruct-assoc-sized-fields`).
+> With the spice tests' legacy by-value box triples also retired
+> (`defworld-box-helpers`), the ecs suite is **66/66 green** -- so the
+> accessor/for-each consumers are validatable again, and the two deferred
+> `Slot`-typing sub-items are unblocked whenever the storage-side follow-up
+> is picked up.
 
 Retire the `:int` stand-ins on the public surface of `ecs/entity`,
 `ecs/world`, and `ecs/sized-world`:
