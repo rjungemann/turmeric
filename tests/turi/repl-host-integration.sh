@@ -78,6 +78,13 @@ check_absent "TUR_NO_SHELL_INTEGRATION wins over TUR_SHELL_INTEGRATION" \
 # ---------------------------------------------------------------------------
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/repl_host_XXXXXX")"
+# Collapse duplicate slashes without resolving symlinks. macOS sets TMPDIR
+# with a trailing slash, so the mktemp template yields ".../T//repl_host_x";
+# bash canonicalizes that away when it sets $PWD, and every path assertion
+# below compares against $PWD, so the raw form would never match. `cd` + the
+# `pwd` builtin is logical, so this tidies the string and nothing else --
+# resolving here would defeat the very thing these cases test.
+TMPROOT="$(cd "$TMPROOT" && pwd)"
 REAL="$TMPROOT/real"
 LINK="$TMPROOT/link"
 mkdir -p "$REAL/nested"
