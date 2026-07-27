@@ -9,6 +9,8 @@
 #include "diag.h"
 #include "platform_fs.h"  /* mkstemps() on Windows */
 
+#include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +58,24 @@ static void send_response(int fd_out, const char *id_raw, size_t id_len,
     buf_free(&b);
 }
 
+/* A request must always be answered. Dropping one leaves a conforming client
+ * waiting forever on an id that will never come back. */
+static void send_error(int fd_out, const char *id_raw, size_t id_len,
+                       int code, const char *message) {
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (id_raw && id_len > 0)
+        buf_write(&b, id_raw, id_len);
+    else
+        buf_puts(&b, "null");
+    buf_printf(&b, ",\"error\":{\"code\":%d,\"message\":", code);
+    json_str(&b, message);
+    buf_puts(&b, "}}");
+    lsp_write_message(fd_out, b.data, b.len);
+    buf_free(&b);
+}
+
 static void send_notification(int fd_out, const char *method,
                               const char *params_json) {
     Buf b;
@@ -85,22 +105,96 @@ static const LspSymbol *find_symbol(const LspDoc *doc, const char *name) {
  * Compile + publish diagnostics + collect symbols
  * --------------------------------------------------------------------- */
 
-/* Unescape a JSON-escaped string in-place; writes into dst and returns len. */
+/* Parse exactly 4 hex digits; returns the value, or -1 if they aren't hex. */
+static int hex4(const char *s) {
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        int d;
+        char c = s[i];
+        if      (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else return -1;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+/* Encode one Unicode scalar as UTF-8. Returns bytes written (1..4). */
+static size_t utf8_encode(unsigned int cp, char *dst) {
+    if (cp < 0x80u) {
+        dst[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800u) {
+        dst[0] = (char)(0xC0u | (cp >> 6));
+        dst[1] = (char)(0x80u | (cp & 0x3Fu));
+        return 2;
+    }
+    if (cp < 0x10000u) {
+        dst[0] = (char)(0xE0u | (cp >> 12));
+        dst[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        dst[2] = (char)(0x80u | (cp & 0x3Fu));
+        return 3;
+    }
+    dst[0] = (char)(0xF0u | (cp >> 18));
+    dst[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+    dst[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+    dst[3] = (char)(0x80u | (cp & 0x3Fu));
+    return 4;
+}
+
+/* Decode a JSON string body into `dst`, which must have room for src_len + 1
+ * bytes. That bound always holds: every escape shrinks (\uXXXX is 6 input
+ * bytes for at most 3 output bytes; a surrogate pair is 12 for 4).
+ *
+ * \uXXXX must be decoded, not passed through. Dropping the backslash and
+ * emitting the literal "u00e9" would corrupt the text *and* shift every byte
+ * offset after it, so every diagnostic and hover position later in the file
+ * would land on the wrong character. */
 static size_t unescape_json(const char *src, size_t src_len, char *dst) {
     size_t di = 0;
-    for (size_t si = 0; si < src_len && di < src_len; si++) {
-        if (src[si] == '\\' && si + 1 < src_len) {
-            si++;
-            switch (src[si]) {
-                case '"':  dst[di++] = '"';  break;
-                case '\\': dst[di++] = '\\'; break;
-                case 'n':  dst[di++] = '\n'; break;
-                case 'r':  dst[di++] = '\r'; break;
-                case 't':  dst[di++] = '\t'; break;
-                default:   dst[di++] = src[si]; break;
-            }
-        } else {
+    for (size_t si = 0; si < src_len; si++) {
+        if (src[si] != '\\' || si + 1 >= src_len) {
             dst[di++] = src[si];
+            continue;
+        }
+        si++;
+        switch (src[si]) {
+            case '"':  dst[di++] = '"';  break;
+            case '\\': dst[di++] = '\\'; break;
+            case '/':  dst[di++] = '/';  break;
+            case 'b':  dst[di++] = '\b'; break;
+            case 'f':  dst[di++] = '\f'; break;
+            case 'n':  dst[di++] = '\n'; break;
+            case 'r':  dst[di++] = '\r'; break;
+            case 't':  dst[di++] = '\t'; break;
+            case 'u': {
+                if (si + 4 >= src_len) { dst[di++] = src[si]; break; }
+                int hi = hex4(src + si + 1);
+                if (hi < 0) { dst[di++] = src[si]; break; }
+                si += 4;
+                unsigned int cp = (unsigned int)hi;
+                /* A high surrogate is only meaningful paired with the low one
+                 * that follows; together they encode a non-BMP scalar. */
+                if (cp >= 0xD800u && cp <= 0xDBFFu) {
+                    if (si + 6 < src_len && src[si + 1] == '\\' && src[si + 2] == 'u') {
+                        int lo = hex4(src + si + 3);
+                        if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                            cp = 0x10000u + ((cp - 0xD800u) << 10)
+                               + ((unsigned int)lo - 0xDC00u);
+                            si += 6;
+                        }
+                    }
+                }
+                /* An unpaired surrogate is not a legal scalar; substituting
+                 * U+FFFD keeps the output valid UTF-8 rather than emitting a
+                 * byte sequence the compiler would choke on. */
+                if (cp >= 0xD800u && cp <= 0xDFFFu) cp = 0xFFFDu;
+                di += utf8_encode(cp, dst + di);
+                break;
+            }
+            default: dst[di++] = src[si]; break;
         }
     }
     dst[di] = '\0';
@@ -176,6 +270,42 @@ static void run_doc_analysis(LspDoc *doc, int fd_out) {
     lsp_doc_table_free(&dtable);
 }
 
+/* Analyze every document whose text changed since it was last looked at, and
+ * publish its diagnostics.
+ *
+ * Analysis is deferred rather than run inline from didOpen/didChange because
+ * run_doc_analysis writes the buffer to a temp file and runs a full compile on
+ * this thread. Doing that per keystroke made a fast typist queue one compile
+ * per character, and since there is no $/cancelRequest, every hover and
+ * completion behind them waited too. */
+static void flush_one_dirty(LspDoc *doc, void *ctx) {
+    if (!doc->dirty) return;
+    doc->dirty = 0;
+    run_doc_analysis(doc, *(int *)ctx);
+}
+
+static void lsp_flush_dirty(int fd_out) {
+    lsp_docs_iterate_mut(flush_one_dirty, &fd_out);
+}
+
+/* Wait up to timeout_ms for another message to show up on fd_in.
+ * Returns 1 if input is pending, 0 on timeout.
+ *
+ * Safe only because lsp_read_message reads straight from the fd with no
+ * userspace buffer of its own — otherwise a buffered message could be sitting
+ * in memory while poll() reported the fd quiet. */
+static int input_pending(int fd_in, int timeout_ms) {
+    struct pollfd pfd = { .fd = fd_in, .events = POLLIN, .revents = 0 };
+    for (;;) {
+        int n = poll(&pfd, 1, timeout_ms);
+        if (n < 0 && errno == EINTR) continue;  /* not a timeout; keep waiting */
+        return n > 0;
+    }
+}
+
+/* How long the client must go quiet before a changed document is analyzed. */
+#define LSP_ANALYSIS_DEBOUNCE_MS 200
+
 /* -------------------------------------------------------------------------
  * Request / notification handlers
  * --------------------------------------------------------------------- */
@@ -186,6 +316,12 @@ static bool shutdown_    = false;
 static void on_initialize(const char *id_raw, size_t id_len, int fd_out) {
     send_response(fd_out, id_raw, id_len,
         "{\"capabilities\":{"
+          /* LSP 3.17 positionEncoding. `character` offsets here have always
+           * been byte offsets (see lsp_word_at_pos in lsp_util.c), not the
+           * UTF-16 code units the spec defaults to. Declaring utf-8 makes that
+           * the negotiated truth instead of a silent mismatch that only shows
+           * up on lines containing non-ASCII. */
+          "\"positionEncoding\":\"utf-8\","
           "\"textDocumentSync\":1,"
           "\"hoverProvider\":true,"
           "\"definitionProvider\":true,"
@@ -222,10 +358,9 @@ static void on_did_open(const char *params, size_t params_len, int fd_out) {
         text_len = unescape_json(text_raw, text_raw_len, text);
     }
 
-    LspDoc *doc = lsp_doc_open(uri, strlen(uri),
-                               text ? text : "", text_len);
+    lsp_doc_open(uri, strlen(uri), text ? text : "", text_len);
     free(text);
-    run_doc_analysis(doc, fd_out);
+    (void)fd_out;  /* analysis is deferred; see lsp_flush_dirty */
 }
 
 static void on_did_change(const char *params, size_t params_len, int fd_out) {
@@ -256,9 +391,7 @@ static void on_did_change(const char *params, size_t params_len, int fd_out) {
 
     lsp_doc_change(uri, strlen(uri), text, text_len);
     free(text);
-
-    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
-    if (doc) run_doc_analysis(doc, fd_out);
+    (void)fd_out;  /* analysis is deferred; see lsp_flush_dirty */
 }
 
 static void on_did_close(const char *params, size_t params_len) {
@@ -723,8 +856,18 @@ static void on_completion(const char *id_raw, size_t id_len,
 void lsp_server_run(int fd_in, int fd_out) {
     lsp_docs_init();
 
-    char *msg;
-    while ((msg = lsp_read_message(fd_in)) != NULL) {
+    for (;;) {
+        /* Nothing new arrived while a document was waiting to be analyzed —
+         * the client has stopped typing, so do the work now. */
+        if (lsp_docs_any_dirty() &&
+            !input_pending(fd_in, LSP_ANALYSIS_DEBOUNCE_MS)) {
+            lsp_flush_dirty(fd_out);
+            continue;
+        }
+
+        char *msg = lsp_read_message(fd_in);
+        if (!msg) break;
+
         size_t method_len;
         const char *method_raw = lsp_json_str(msg, "method", &method_len);
         if (!method_raw) { free(msg); continue; }
@@ -756,26 +899,32 @@ void lsp_server_run(int fd_in, int fd_out) {
             on_did_change(params_raw, params_len, fd_out);
         } else if (strcmp(method, "textDocument/didClose") == 0 && params_raw) {
             on_did_close(params_raw, params_len);
-        } else if (strcmp(method, "textDocument/hover") == 0 && params_raw) {
-            on_hover(id_raw, id_len, params_raw, fd_out);
-        } else if (strcmp(method, "textDocument/definition") == 0 && params_raw) {
-            on_definition(id_raw, id_len, params_raw, fd_out);
-        } else if (strcmp(method, "textDocument/documentSymbol") == 0 && params_raw) {
-            on_document_symbol(id_raw, id_len, params_raw, fd_out);
-        } else if (strcmp(method, "workspace/symbol") == 0 && params_raw) {
-            on_workspace_symbol(id_raw, id_len, params_raw, fd_out);
-        } else if (strcmp(method, "textDocument/completion") == 0 && params_raw) {
-            on_completion(id_raw, id_len, params_raw, fd_out);
+        } else if (strcmp(method, "textDocument/hover") == 0 ||
+                   strcmp(method, "textDocument/definition") == 0 ||
+                   strcmp(method, "textDocument/documentSymbol") == 0 ||
+                   strcmp(method, "workspace/symbol") == 0 ||
+                   strcmp(method, "textDocument/completion") == 0) {
+            /* These all read doc->symbols, so any pending edit has to be
+             * analyzed first — otherwise the answer describes the buffer as it
+             * was before the user's last keystroke. This is what keeps the
+             * debounce invisible to correctness: it delays work, never skips
+             * it. */
+            lsp_flush_dirty(fd_out);
+            if (!params_raw) {
+                send_error(fd_out, id_raw, id_len, -32602, "Invalid params");
+            } else if (strcmp(method, "textDocument/hover") == 0) {
+                on_hover(id_raw, id_len, params_raw, fd_out);
+            } else if (strcmp(method, "textDocument/definition") == 0) {
+                on_definition(id_raw, id_len, params_raw, fd_out);
+            } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
+                on_document_symbol(id_raw, id_len, params_raw, fd_out);
+            } else if (strcmp(method, "workspace/symbol") == 0) {
+                on_workspace_symbol(id_raw, id_len, params_raw, fd_out);
+            } else {
+                on_completion(id_raw, id_len, params_raw, fd_out);
+            }
         } else if (id_raw) {
-            /* Unknown request: return method-not-found */
-            Buf resp;
-            buf_init(&resp);
-            buf_printf(&resp,
-                "{\"jsonrpc\":\"2.0\",\"id\":%.*s"
-                ",\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}",
-                (int)id_len, id_raw);
-            lsp_write_message(fd_out, resp.data, resp.len);
-            buf_free(&resp);
+            send_error(fd_out, id_raw, id_len, -32601, "Method not found");
         }
 
         free(msg);

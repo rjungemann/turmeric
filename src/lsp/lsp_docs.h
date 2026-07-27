@@ -44,6 +44,10 @@ typedef struct LspDoc {
     LspSymbol *symbols;
     int        symbol_count;
     int        symbol_cap;
+    /* Text changed since the last analysis. Analysis is deferred until the
+     * client stops typing (or asks a question that needs symbols) so a burst
+     * of keystrokes costs one compile, not one per character. */
+    int        dirty;
 } LspDoc;
 
 void    lsp_docs_init(void);
@@ -62,6 +66,13 @@ LspDoc *lsp_doc_get(const char *uri, size_t uri_len);
 
 /* Iterate every open document (read-only callback). */
 void    lsp_docs_iterate(void (*cb)(const LspDoc *doc, void *ctx), void *ctx);
+
+/* Same, but the callback may mutate the document — used to run deferred
+ * analysis over whatever is dirty. */
+void    lsp_docs_iterate_mut(void (*cb)(LspDoc *doc, void *ctx), void *ctx);
+
+/* True if any open document is awaiting analysis. */
+int     lsp_docs_any_dirty(void);
 
 /* Free and zero the symbol array on doc. */
 void    lsp_doc_free_symbols(LspDoc *doc);

@@ -376,6 +376,68 @@ def test_lsp() -> None:
         os.unlink(good_path)
 
 
+def test_lsp_encoding_and_deferred_analysis() -> None:
+    """positionEncoding, \\uXXXX decoding, and deferred (debounced) analysis."""
+    print("--- LSP encoding / deferred analysis ---")
+
+    # json.dumps defaults to ensure_ascii=True, so the accented character below
+    # goes out on the wire as a \\u00e9 escape — exactly the path under test.
+    src = '(def a "é") (def later 2)\n'
+    # `later` sits at byte 18 once the escape is decoded (e-acute is 2 UTF-8
+    # bytes). Passing the escape through as the 5 literal chars "u00e9" would
+    # report 21, and every position after it would be wrong by 3.
+    expected_col = src.encode("utf-8").index(b"later")
+
+    path = make_tempfile("(def a 1)\n")
+    uri = "file://" + path
+    try:
+        srv = Server([TUR, "lsp"], transport="lsp")
+        r = srv.call("initialize", {
+            "processId": None, "rootUri": None, "capabilities": {},
+        })
+        caps = r["result"]["capabilities"] if r else {}
+        check(caps.get("positionEncoding") == "utf-8",
+              f"lsp init: positionEncoding is utf-8 (got {caps.get('positionEncoding')!r})")
+
+        srv.call("initialized", {}, notification=True)
+        srv.call("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "tur",
+                             "version": 1, "text": src},
+        }, notification=True)
+
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        symbols = r["result"] if r and r.get("result") else []
+        later = next((s for s in symbols
+                      if isinstance(s, dict) and s.get("name") == "later"), None)
+        check(later is not None,
+              f"lsp uXXXX: 'later' found (got {[s.get('name') for s in symbols]})")
+        if later:
+            col = later["selectionRange"]["start"]["character"]
+            check(col == expected_col,
+                  f"lsp uXXXX: escape decoded, 'later' at {expected_col} (got {col})")
+
+        # Analysis is deferred until the client goes quiet, but a request that
+        # reads symbols must flush it first — otherwise the answer would
+        # describe the buffer as it was before the edit.
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": "(def freshly-added 7)\n"}],
+        }, notification=True)
+        r = srv.call("textDocument/documentSymbol", {"textDocument": {"uri": uri}})
+        names = {s.get("name") for s in (r["result"] if r and r.get("result") else [])
+                 if isinstance(s, dict)}
+        check("freshly-added" in names,
+              f"lsp deferred analysis: request flushes pending edit (got {names})")
+        check("later" not in names,
+              f"lsp deferred analysis: stale symbols dropped (got {names})")
+
+        srv.call("shutdown", {})
+        srv.call("exit", {}, notification=True)
+        srv.close()
+    finally:
+        os.unlink(path)
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -386,6 +448,7 @@ def main() -> int:
         return 0
     test_mcp()
     test_lsp()
+    test_lsp_encoding_and_deferred_analysis()
     print(f"\nResults: {PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

@@ -25,11 +25,31 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 | Workspace symbols (`workspace/symbol`) | Supported (open documents only) |
 | Hover documentation | Supported |
 | Go-to-definition | Supported |
-| Completion | Not yet supported |
+| Completion (`textDocument/completion`) | Supported |
+| Signature help / formatting / semantic tokens | Not supported |
 
 When you open or edit a `.tur` file, the server compiles it in check-only mode
 and publishes any parse or type errors back to the editor as diagnostics
 (red underlines, error panel entries, etc.).
+
+Two behaviours worth knowing about:
+
+- **Analysis is debounced.** Compiling is not free and runs on the same thread
+  that serves requests, so a changed file is not analyzed until the editor has
+  been quiet for ~200ms. Requests that need symbols (hover, completion,
+  definition, document symbols) force any pending analysis to run first, so
+  this delays diagnostics slightly but never returns a stale answer.
+- **Positions are byte offsets.** The server advertises
+  `"positionEncoding": "utf-8"` (LSP 3.17), so `character` in a `Position`
+  counts UTF-8 bytes rather than the UTF-16 code units the specification
+  defaults to. Clients that honour the negotiated encoding need no special
+  handling; a client that assumes UTF-16 regardless will be off on lines
+  containing non-ASCII.
+
+Completion is driven by the symbols the last successful compile produced. A
+buffer that does not parse — for example one with an unclosed paren, which is
+the normal state mid-keystroke — yields no symbols, and therefore no
+completions.
 
 ## Editor configuration
 
@@ -160,8 +180,10 @@ extension:
 }
 ```
 
-Native VS Code LSP support (using `vscode-languageclient` inside the Turmeric
-extension) is planned for a future phase.
+The bundled extension in `vscode-syntax-ext/` already speaks LSP natively via
+`vscode-languageclient`, spawning `tur lsp` over stdio; the `turmeric.serverPath`
+setting overrides which `tur` it uses. The multi-lsp recipe above is only needed
+if you would rather drive the server yourself.
 
 ### Emacs (eglot)
 
