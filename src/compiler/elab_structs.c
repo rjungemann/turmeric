@@ -344,6 +344,21 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
         if (head == e->sym_lref || head == e->sym_borrow_mut) {
             return type_expr_from_form(e, form, NULL, type_params, type_param_kinds, n_type_params);
         }
+        /* assoc-types: `(Storage Pos)` where the head is an ASSOCIATED TYPE
+         * member of some registered typeclass is a type-level projection, not
+         * a type application.  type_expr_from_form has the resolver (it
+         * matches the instance and substitutes the bound type); the generic
+         * app loop below would instead apply the kind-* head and emit a
+         * spurious TUR-E0012 -- which is exactly what broke `defworld`'s
+         * `(Storage ~Comp)` fields when defstruct lowered onto this path.
+         * Guarded on the head actually being a declared associated type, so
+         * an ordinary constructor application is never intercepted. */
+        {
+            uint8_t assoc_idx;
+            if (typeclass_env_find_assoc_type(&e->typeclass_env, head, &assoc_idx))
+                return type_expr_from_form(e, form, NULL, type_params,
+                                           type_param_kinds, n_type_params);
+        }
         bool has_pipe = false, has_amp = false;
         for (uint32_t i = 0; i < form->as.list.len; i++) {
             Form *item = form->as.list.items[i];
@@ -358,8 +373,32 @@ static Type *struct_field_type_from_form(Elab *e, const Form *form,
                                                 type_params, type_param_kinds, n_type_params);
         if (!cur) return NULL;
         for (uint32_t i = 1; i < form->as.list.len; i++) {
-            Type *arg = struct_field_type_from_form(e, form->as.list.items[i],
-                                                    type_params, type_param_kinds, n_type_params);
+            Form *arg_form = form->as.list.items[i];
+            Type *arg = NULL;
+            /* SZ8 non-GADT: a Size GADT literal (Static N)/(Add s s)/(Mul s s)
+             * in a type-app argument slot lowers to a placeholder TY_INT --
+             * the size information is recovered from the retained field Form
+             * by size_term_from_form.  Mirrors type_expr_from_form's app loop;
+             * without it a sized phantom index like `(SizedDense (Static 8)
+             * Pos)` in a lowered defstruct/defdata field recursed into
+             * `(Static 8)` as a type application and died on the integer
+             * literal ("unsupported type expression form"). */
+            if (arg_form->tag == F_LIST && arg_form->as.list.len >= 1 &&
+                    arg_form->as.list.items[0]->tag == F_SYM) {
+                const char *op = arg_form->as.list.items[0]->as.sym->name;
+                bool is_size_op = (strcmp(op, "Static") == 0 ||
+                                   strcmp(op, "Add")    == 0 ||
+                                   strcmp(op, "Mul")    == 0);
+                if (is_size_op &&
+                        size_term_from_form(e->arena, arg_form, NULL, NULL) != NULL) {
+                    Type *ph = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *ph = type_from_kind(TY_INT);
+                    arg = ph;
+                }
+            }
+            if (!arg)
+                arg = struct_field_type_from_form(e, arg_form,
+                                                  type_params, type_param_kinds, n_type_params);
             if (!arg) return NULL;
             Type *next = (Type *)arena_alloc(e->arena, sizeof(Type));
             *next = type_app(e->arena, *cur, *arg, form->span);
