@@ -56,8 +56,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-new [K V]
-  []
+(defn map-new [K V] []
   #fx{}
   : (Map K V)
   ```c
@@ -76,8 +75,7 @@
 (defn map-empty-for [^Hash K ^MapKey K V] [k :K v :V] : (Map K V) (map-new))
 ;;; map-hamt -- internal accessor for the HAMT backing store.
 
-(defn map-hamt [K V]
-  [m (Map K V)]
+(defn map-hamt [K V] [m (Map K V)]
   #fx{}
   :ptr<void>
   ```c
@@ -86,8 +84,7 @@
   ```)
 ;;; map-wrap -- internal constructor from a HAMT pointer.
 
-(defn map-wrap [K V]
-  [h :ptr<void>]
+(defn map-wrap [K V] [h :ptr<void>]
   #fx{}
   : (Map K V)
   ```c
@@ -108,9 +105,8 @@
 ;;; comparator and ownership flag.
 
 
-(defn map-assoc-eq-o [K V]
-  [m (Map K V) h :int key :int val :V keyeq owned :int]
-  : (Map K V)
+(defn map-assoc-eq-o [K V] [m (Map K V) h :int key :int val :V keyeq owned :int] : (Map K
+                                                                                     V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt;
@@ -135,9 +131,7 @@
   ```)
 ;;; map-get-eq-o -- raw lookup: explicit hash, boxed carrier key, comparator.
 
-(defn map-get-eq-o [K V]
-  [m (Map K V) h :int key :int keyeq owned :int]
-  :V
+(defn map-get-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] :V
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq_o(map->hamt, (uint64_t)h,
@@ -146,9 +140,7 @@
   ```)
 ;;; map-has-eq-o? -- raw existence test: explicit hash, boxed carrier key.
 
-(defn map-has-eq-o? [K V]
-  [m (Map K V) h :int key :int keyeq owned :int]
-  :bool
+(defn map-has-eq-o? [K V] [m (Map K V) h :int key :int keyeq owned :int] :bool
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -156,9 +148,8 @@
   ```)
 ;;; map-dissoc-eq-o -- raw removal: explicit hash, boxed carrier key, comparator.
 
-(defn map-dissoc-eq-o [K V]
-  [m (Map K V) h :int key :int keyeq owned :int]
-  : (Map K V)
+(defn map-dissoc-eq-o [K V] [m (Map K V) h :int key :int keyeq owned :int] : (Map K
+                                                                               V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq_o(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -199,9 +190,11 @@
 ;;; Since: TCE4
 
 
-(defn map-assoc-eq [K V]
-  [m (Map K V) h :int key :K val :V keyeq : (c-fn [K K] bool)]
-  : (Map K V)
+(defn map-assoc-eq [K V] [m (Map K V)
+                          h :int
+                          key :K
+                          val :V
+                          keyeq : (c-fn [K K] bool)] : (Map K V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_set_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -227,9 +220,7 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-get-eq [K V]
-  [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)]
-  :V
+(defn map-get-eq [K V] [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)] :V
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   return (int64_t)(intptr_t)tur_hamt_get_eq(map->hamt, (uint64_t)h,
@@ -252,9 +243,7 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-has-eq? [K V]
-  [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)]
-  :bool
+(defn map-has-eq? [K V] [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)] :bool
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   return tur_hamt_has_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -276,9 +265,8 @@
 ;;;
 ;;; Since: TCE4
 
-(defn map-dissoc-eq [K V]
-  [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)]
-  : (Map K V)
+(defn map-dissoc-eq [K V] [m (Map K V) h :int key :K keyeq : (c-fn [K K] bool)] : (Map K
+                                                                                    V)
   ```c
   struct { void *hamt; } *map = (void *)(intptr_t)m;
   void *new_hamt = tur_hamt_del_eq(map->hamt, (uint64_t)h, (void *)(intptr_t)key,
@@ -598,8 +586,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-count [K V]
-  [m (Map K V)]
+(defn map-count [K V] [m (Map K V)]
   #fx{}
   :int
   ```c
@@ -620,8 +607,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-merge [K V]
-  [a (Map K V) b (Map K V)]
+(defn map-merge [K V] [a (Map K V) b (Map K V)]
   #fx{}
   : (Map K V)
   ```c
@@ -642,8 +628,7 @@
 ;;;
 ;;; Since: Phase TM0
 
-(defn map-free [K V]
-  [m (Map K V)]
+(defn map-free [K V] [m (Map K V)]
   #fx{}
   :void
   ```c
@@ -714,9 +699,7 @@
 ;;;
 ;;; Since: Phase TM0 (typed surface: TMS3)
 
-(defn map-eq? [K V]
-  [m1 (Map K V) m2 (Map K V) ^fat val-cmp]
-  :bool
+(defn map-eq? [K V] [m1 (Map K V) m2 (Map K V) ^fat val-cmp] :bool
   (map-eq-raw? m1 m2 val-cmp))
 ;;; map-eq-raw-k? -- like map-eq-raw? but compares keys with an explicit
 ;;; carrier comparator (tur_hamt_get_eq) instead of identity.  Threading the
@@ -756,9 +739,7 @@
 ;;; (mk-cmp (make-struct K 0 ...)) -- so keys equal by content but stored under
 ;;; distinct pointers/boxes compare equal.
 
-(defn map-eq-k? [K V]
-  [m1 (Map K V) m2 (Map K V) keyeq ^fat val-cmp]
-  :bool
+(defn map-eq-k? [K V] [m1 (Map K V) m2 (Map K V) keyeq ^fat val-cmp] :bool
   (map-eq-raw-k? m1 m2 keyeq val-cmp))
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
 ;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
@@ -787,8 +768,7 @@
 ;;; pure-Turmeric `map-eq-loop` body can compare V-typed values directly.
 
 
-(defn map-iter-cur-val-as [V]
-  [iter : ptr<void>]
+(defn map-iter-cur-val-as [V] [iter : ptr<void>]
   #fx{}
   : V
   ```c return (int64_t)(intptr_t)tur_hamt_iter_cur_val((void*)(intptr_t)iter); ```)
@@ -799,8 +779,10 @@
 ;;; the key is present, so the result is always a live value.
 
 
-(defn map-get-dynamic-as [V]
-  [m : ptr<void> hash : int key : ptr<void> keyeq : ptr<void>]
+(defn map-get-dynamic-as [V] [m : ptr<void>
+                              hash : int
+                              key : ptr<void>
+                              keyeq : ptr<void>]
   #fx{}
   : V
   ```c return (int64_t)(intptr_t)tur_hamt_get_dynamic((void*)(intptr_t)m, hash, (void*)(intptr_t)key, (void*)(intptr_t)keyeq); ```)
@@ -828,17 +810,10 @@
 ;;; Since: Phase TCO-Eq-MapSet
 
 
-(defn map-eq-loop [K V]
-  [iter
-   : ptr<void>
-   m2-hamt
-   : ptr<void>
-   keyeq
-   : ptr<void>
-   ^fat
-   val-cmp
-   : (fn [V V] bool)]
-  : bool
+(defn map-eq-loop [K V] [iter : ptr<void>
+                         m2-hamt : ptr<void>
+                         keyeq : ptr<void>
+                         ^fat val-cmp : (fn [V V] bool)] : bool
   (if (hamt/iter-advance! iter)
     (let [h (hamt/iter-cur-hash iter)
           k (hamt/iter-cur-key iter)]
@@ -857,9 +832,9 @@
 ;;; Since: Phase TCO-Eq-MapSet
 
 
-(defn map-eq-driver [K V]
-  [m1 (Map K V) m2 (Map K V) ^fat val-cmp : (fn [V V] bool)]
-  : bool
+(defn map-eq-driver [K V] [m1 (Map K V)
+                           m2 (Map K V)
+                           ^fat val-cmp : (fn [V V] bool)] : bool
   (let [iter   (hamt/iter-alloc (map-hamt m1))
         keyeq  (hamt/keyeq (map-hamt m1))
         result (map-eq-loop iter (map-hamt m2) keyeq val-cmp)]

@@ -121,6 +121,17 @@ add_test(
   COMMAND bash tests/run.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# tests/run.sh and tests/run-turi.sh each fan out across every core on their
+# own (JOBS defaults to nproc). Under `ctest -jN` they are therefore not N
+# tests sharing a machine but N x nproc processes on it, and both harnesses
+# impose per-fixture timeouts (10s compiled, 15s interpreted) that a
+# 4x-oversubscribed box blows straight through. The result is a batch of
+# timeout FAILs that look like product bugs and are not reproducible in
+# isolation.
+#
+# RUN_SERIAL tells ctest to give these two the machine to themselves, which is
+# what they already assume.
+set_tests_properties(tur_tests PROPERTIES RUN_SERIAL TRUE)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh
@@ -541,6 +552,10 @@ add_test(
   COMMAND bash tests/run-turi.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Self-parallelizing across nproc, like tur_tests above -- see the note there.
+# This is the target a consumer reported failing under `ctest -j4` and passing
+# in isolation.
+set_tests_properties(turi_fixture_tests PROPERTIES RUN_SERIAL TRUE)
 # Phase S0: tur repl / libturi smoke tests
 add_test(
   NAME tur_repl_tests
@@ -552,6 +567,19 @@ add_test(
   NAME tur_repl_smoke
   COMMAND bash tests/turi/repl-smoke.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The REPL surface a GUI host drives: OSC 133 busy/idle markers, the logical
+# working directory, :load-string, and TUR_STDLIB_DIR validation.
+add_test(
+  NAME tur_repl_host_integration
+  COMMAND bash tests/turi/repl-host-integration.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The tree-walking interpreter never frees its closures/registered natives
+# (process-lifetime by design), so leak detection is off here as it is for the
+# other REPL-driving harnesses.
+set_tests_properties(tur_repl_host_integration PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 # Eval-mode unknown-call diagnostic: an unbound call head under --interpret must
 # warn (TUR-W0040) at elaboration time rather than silently deferring to runtime.

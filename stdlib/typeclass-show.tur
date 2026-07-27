@@ -161,9 +161,7 @@
 ;; ---------------------------------------------------------------------------
 ;;; vec-show-loop -- push "e0 e1 ..." element reprs into the builder.
 
-(defn vec-show-loop [^Show A]
-  [v : (Vec A) i : int len : int b : StringBuilder]
-  : StringBuilder
+(defn vec-show-loop [^Show A] [v : (Vec A) i : int len : int b : StringBuilder] : StringBuilder
   (if (= i len)
     b
     (do
@@ -188,9 +186,10 @@
         (builder/finish b)))))
 ;;; set-show-loop -- push the space-separated element reprs into b.
 
-(defn set-show-loop [^Show A]
-  [s : (Set A) iter : ptr<void> first : bool b : StringBuilder]
-  : StringBuilder
+(defn set-show-loop [^Show A] [s : (Set A)
+                               iter : ptr<void>
+                               first : bool
+                               b : StringBuilder] : StringBuilder
   (if (hamt/iter-advance! iter)
     (do
       (when (not first) (builder/push-cstr! b " "))
@@ -217,9 +216,10 @@
         (builder/finish b)))))
 ;;; map-show-loop -- push the space-separated "k v" reprs into b.
 
-(defn map-show-loop [^Show K ^Show V]
-  [m : (Map K V) iter : ptr<void> first : bool b : StringBuilder]
-  : StringBuilder
+(defn map-show-loop [^Show K ^Show V] [m : (Map K V)
+                                       iter : ptr<void>
+                                       first : bool
+                                       b : StringBuilder] : StringBuilder
   (if (hamt/iter-advance! iter)
     (do
       (when (not first) (builder/push-cstr! b " "))
@@ -299,9 +299,7 @@
 ;;;
 ;;; Since: v2 (show-owned-result-plan)
 
-(defn print-show [^Show a]
-  [x : a]
-  : void
+(defn print-show [^Show a] [x : a] : void
   (let [s (show x)]
     (do (show-string-fputs (string/to-cstr s)) (string/release s))))
 ;;; show-line -- render x via Show and print it with a trailing newline.
@@ -313,7 +311,5 @@
 ;;;
 ;;; Since: v2 (show-owned-result-plan)
 
-(defn show-line [^Show a]
-  [x : a]
-  : void
+(defn show-line [^Show a] [x : a] : void
   (let [s (show x)] (do (println (string/to-cstr s)) (string/release s))))

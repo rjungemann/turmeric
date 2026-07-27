@@ -59,9 +59,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-of [A]
-  [x : A xs : int]
-  : (NonEmpty A)
+(defn ne-of [A] [x : A xs : int] : (NonEmpty A)
   (:: (tcons (:: x :int) xs) :NonEmpty))
 ;;; ne-singleton -- build a one-element NonEmpty.
 ;;;
@@ -159,9 +157,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-from? [A]
-  [xs : (List A)]
-  : (Option (NonEmpty A))
+(defn ne-from? [A] [xs : (List A)] : (Option (NonEmpty A))
   ;; By-value (Option (NonEmpty A)): the typed (List A) argument is the witness
   ;; that pins A, so downstream ne-head resolves the element type concretely
   ;; instead of leaving a bare tyvar.  No carrier round-trip.
@@ -183,9 +179,7 @@
 ;;;
 ;;; Since: R1
 
-(defn ne-unwrap [A]
-  [o : (Option (NonEmpty A))]
-  : (NonEmpty A)
+(defn ne-unwrap [A] [o : (Option (NonEmpty A))] : (NonEmpty A)
   ;; By-value (Option (NonEmpty A)): read .value directly (it is the NonEmpty
   ;; payload).  none-case returns the zero NonEmpty -- callers gate on some?.
   (if (some? o) (.value o) (:: 0 (NonEmpty A))))
@@ -277,9 +271,7 @@
 ;;;
 ;;; Since: R2
 
-(defn vec-get-checked [A]
-  [v : (Vec A) b : BoundedIdx]
-  : A
+(defn vec-get-checked [A] [v : (Vec A) b : BoundedIdx] : A
   (vec-get v (bidx->int b)))
 ;;; slice-get-checked -- index a Slice with a proven-in-range BoundedIdx (total).
 ;;;

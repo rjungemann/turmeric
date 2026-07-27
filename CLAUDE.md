@@ -341,6 +341,40 @@ The built compiler lands at `./build/tur`.
 - The expected result is `summary: 1442 passed, 0 failed` (the exact count
   shifts as fixtures are added/removed -- treat it as "~1440", not a hard gate).
 
+### Overlapping runs cause false FAILURES, not just slowness -- READ THIS TOO
+
+The point above is about wall-clock. The same overlap also produces **failures
+that look exactly like product bugs**, and they are the more expensive trap
+because the failure text never mentions timing. Two distinct causes, both
+observed:
+
+- **A rebuild landing mid-run.** Fixtures exec `./build/tur` directly out of
+  the build tree, so a concurrent `cmake --build` swaps the compiler underneath
+  the suite. During the link window the file exists but is not yet executable,
+  and everything dispatched in that window dies with `Permission denied` --
+  which `tests/run.sh` reports as `build failed`. A batch of those reads as a
+  compiler regression. It has also been seen as
+  `FAIL rp6-watch-with-help -- expected help output to mention 'tur repl'`,
+  where `./build/tur repl --help` prints the expected text perfectly well when
+  run by hand a moment later.
+
+  `tests/run.sh` now stamps the binary at startup and re-checks at the end,
+  printing a `WARNING: ... changed while this run was in progress` and exiting
+  2 if anything failed. Other harnesses do not, so recognize the shape:
+  **assertions that pass when you run them directly were probably never really
+  run.**
+
+- **`ctest -jN` oversubscribing the box.** `tests/run.sh` and
+  `tests/run-turi.sh` each fan out across `nproc` internally, so `-j4` is not
+  four tests sharing a machine but `4 x nproc` processes on it. Their
+  per-fixture timeouts (10s compiled, 15s interpreted) then expire on work that
+  would otherwise finish comfortably. Both targets are marked `RUN_SERIAL` so
+  ctest gives them the machine, which is what they already assumed.
+
+The rule of thumb: **before diagnosing a test failure, check whether anything
+else was building or testing at the same time.** If it was, re-run alone before
+believing the result. Do not launch a build and a suite concurrently.
+
 Release build:
 
 ```sh

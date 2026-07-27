@@ -214,9 +214,7 @@
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
 
-(defn sized-buf-new [n]
-  [k : int]
-  : (SizedBuf n)
+(defn sized-buf-new [n] [k : int] : (SizedBuf n)
   (:: (unsafe (__sized-buf-new-raw k)) :SizedBuf))
 ;;; sized-buf-new-zeroed -- allocate a heap (SizedBuf n), all elements zero.
 ;;;
@@ -231,9 +229,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-new-zeroed [n]
-  [k : int]
-  : (SizedBuf n)
+(defn sized-buf-new-zeroed [n] [k : int] : (SizedBuf n)
   (:: (unsafe (__sized-buf-new-zeroed-raw k)) :SizedBuf))
 ;;; sized-buf-free -- free a heap-allocated (SizedBuf n) and its data.
 ;;;
@@ -251,9 +247,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-free [n]
-  [b : (SizedBuf n)]
-  : nil
+(defn sized-buf-free [n] [b : (SizedBuf n)] : nil
   (unsafe (__sized-buf-free-raw (:: b :int))))
 ;; ===== Accessors =====
 ;;; sized-buf-len -- return the element count of a (SizedBuf n).
@@ -271,9 +265,7 @@
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
 
-(defn sized-buf-len [n]
-  [b : (SizedBuf n)]
-  : int
+(defn sized-buf-len [n] [b : (SizedBuf n)] : int
   (unsafe (__sized-buf-len-raw (:: b :int))))
 ;;; sized-buf-get -- bounds-checked element read; aborts on out-of-range index.
 ;;;
@@ -289,9 +281,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-get [n]
-  [b : (SizedBuf n) i : int]
-  : int
+(defn sized-buf-get [n] [b : (SizedBuf n) i : int] : int
   (unsafe (__sized-buf-get-raw (:: b :int) i)))
 ;;; sized-buf-set! -- bounds-checked element write; aborts on out-of-range index.
 ;;;
@@ -311,9 +301,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-set! [n]
-  [b : (SizedBuf n) i : int v : int]
-  : (SizedBuf n)
+(defn sized-buf-set! [n] [b : (SizedBuf n) i : int v : int] : (SizedBuf n)
   (:: (unsafe (__sized-buf-set!-raw (:: b :int) i v)) :SizedBuf))
 ;; ===== Bulk operations =====
 ;;; sized-buf-fill! -- set every element to v; returns the same buffer.
@@ -331,9 +319,7 @@
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
 
-(defn sized-buf-fill! [n]
-  [b : (SizedBuf n) v : int]
-  : (SizedBuf n)
+(defn sized-buf-fill! [n] [b : (SizedBuf n) v : int] : (SizedBuf n)
   (:: (unsafe (__sized-buf-fill!-raw (:: b :int) v)) :SizedBuf))
 ;;; sized-buf-copy! -- copy all elements from src into dst via memcpy.
 ;;;
@@ -354,9 +340,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-copy! [n]
-  [dst : (SizedBuf n) src : (SizedBuf n)]
-  : (SizedBuf n)
+(defn sized-buf-copy! [n] [dst : (SizedBuf n) src : (SizedBuf n)] : (SizedBuf n)
   (:: (unsafe (__sized-buf-copy!-raw (:: dst :int) (:: src :int))) :SizedBuf))
 ;;; sized-buf-sum -- sum all elements of a (SizedBuf n).
 ;;;
@@ -371,9 +355,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-sum [n]
-  [b : (SizedBuf n)]
-  : int
+(defn sized-buf-sum [n] [b : (SizedBuf n)] : int
   (unsafe (__sized-buf-sum-raw (:: b :int))))
 ;;; sized-buf-min -- minimum element of a non-empty (SizedBuf n); aborts if empty.
 ;;;
@@ -388,9 +370,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-min [n]
-  [b : (SizedBuf n)]
-  : int
+(defn sized-buf-min [n] [b : (SizedBuf n)] : int
   (unsafe (__sized-buf-min-raw (:: b :int))))
 ;;; sized-buf-max -- maximum element of a non-empty (SizedBuf n); aborts if empty.
 ;;;
@@ -405,9 +385,7 @@
 ;;;
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
-(defn sized-buf-max [n]
-  [b : (SizedBuf n)]
-  : int
+(defn sized-buf-max [n] [b : (SizedBuf n)] : int
   (unsafe (__sized-buf-max-raw (:: b :int))))
 ;; ===== Size integration =====
 ;;; sized-buf-size -- return the runtime length of a (SizedBuf n) as a Size expression.
@@ -534,7 +512,5 @@
 ;;; Since: Phase SZ2; (SizedBuf n) lift Phase SZ8/P3
 
 
-(defn sized-buf-from-sized-vec [n]
-  [v : int]
-  : (SizedBuf n)
+(defn sized-buf-from-sized-vec [n] [v : int] : (SizedBuf n)
   (:: (unsafe (__sized-buf-from-sized-vec-raw v)) :SizedBuf))

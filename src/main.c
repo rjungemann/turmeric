@@ -253,13 +253,39 @@ static const char *resolve_stdlib_root(void) {
     }
     g_stdlib_root_state = 2;  /* assume not-found until we succeed */
 
+    /* TUR_STDLIB_DIR is honored, but no longer taken on faith.
+     *
+     * It is an ordinary environment variable, so it is inherited by anything
+     * a tur process spawns and it outlives the install that set it. A stale
+     * value therefore points a freshly built `tur` at a stdlib that has moved
+     * or been deleted, and taking it verbatim meant the failure surfaced much
+     * later as a wall of `load: cannot open .../macros.tur` errors with
+     * nothing naming the variable that caused them.
+     *
+     * macros.tur is the anchor, matching the walk-up probe below: it is the
+     * first file every preload touches, so if it is missing nothing else will
+     * resolve either. A directory that fails the check is reported once and
+     * then ignored, letting the walk-up find the stdlib shipped beside this
+     * binary -- which is nearly always what the user actually wanted. */
     const char *env = getenv("TUR_STDLIB_DIR");
     if (env && *env) {
         size_t n = strlen(env);
         if (n < sizeof(g_stdlib_root)) {
-            memcpy(g_stdlib_root, env, n + 1);
-            g_stdlib_root_state = 1;
-            return g_stdlib_root;
+            char probe[4096];
+            int pn = snprintf(probe, sizeof(probe), "%s/macros.tur", env);
+            if (pn > 0 && (size_t)pn < sizeof(probe) && access(probe, R_OK) == 0) {
+                memcpy(g_stdlib_root, env, n + 1);
+                g_stdlib_root_state = 1;
+                return g_stdlib_root;
+            }
+            fprintf(stderr,
+                    "tur: ignoring TUR_STDLIB_DIR=%s "
+                    "(no readable macros.tur there); "
+                    "falling back to the stdlib beside the binary\n", env);
+            /* Drop it so every downstream reader -- elab_toplevel.c, the REPL
+             * preload, lsp_lite.c -- agrees with the value resolved below
+             * instead of re-reading the bad one out of the environment. */
+            unsetenv("TUR_STDLIB_DIR");
         }
     }
 
@@ -5808,59 +5834,14 @@ static bool fmt_is_tur_file(const char *name) {
 
 
 /* Core: read src, parse, format, return formatted Buf.
- * Returns 0 on success with *out populated, -1 on error. */
+ * Returns 0 on success with *out populated, -1 on error.
+ *
+ * The pipeline itself lives in fmt.c so the LSP's textDocument/formatting
+ * handler -- which is linked into tur_core, not into main.c -- can reach the
+ * same code instead of shelling out to this binary. */
 static int fmt_format_source(const char *path_label, const char *src, size_t len,
                               ReaderType rtype, Buf *out) {
-    /* Reset BEFORE registering: diag_reset() clears the file registry, so
-     * registering first (as this used to) wiped this file's entry and left
-     * any format-time parse-error diagnostic without a source snippet
-     * (files_[0] == NULL -> "<unknown>"). */
-    diag_reset();
-
-    SourceFile file = {0};
-    file.path        = path_label;
-    file.src         = src;
-    file.len         = len;
-    file.file_id     = 0;
-    file.reader_type = rtype;
-    diag_register_file(&file);
-
-    Arena arena;
-    arena_init(&arena, 0);
-    SymbolTable st;
-    symtab_init(&st, &arena);
-
-    ReaderMacroRegistry rmreg;
-    reader_macros_init(&rmreg, &arena);
-    rmreg.strict = true;
-    /* Keep `(reader-macros/define ...)` directives in the form stream so the
-     * formatter emits them -- stripping them (the compiler default) would make
-     * `tur fmt` silently delete the definition. */
-    rmreg.keep_define_forms = true;
-
-    uint32_t nforms = 0;
-    Form **forms = read_all_with_registry(&arena, &st, &file, &rmreg, &nforms);
-
-    int rc = 0;
-    if (!forms || diag_had_error()) {
-        rc = -1;
-    } else {
-        FmtOptions opts = {0};
-        opts.indent_width = 2;
-        opts.line_width   = 80;
-        opts.src          = src;
-        opts.src_len      = len;
-        buf_init(out);
-        if (fmt_print(out, forms, nforms, opts) != 0) {
-            fprintf(stderr, "tur fmt: internal error formatting %s\n", path_label);
-            buf_free(out);
-            rc = -1;
-        }
-    }
-
-    symtab_free(&st);
-    arena_free(&arena);
-    return rc;
+    return fmt_format_buffer(path_label, src, len, rtype, out);
 }
 
 typedef enum {

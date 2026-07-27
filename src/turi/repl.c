@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>   /* stat() -- logical-cwd identity check */
 #include <unistd.h>
 
 /* libedit readline-compatible API (ships with macOS and most Linux distros).
@@ -225,7 +226,7 @@ static int paren_balance(const char *s) {
 /* Known REPL meta-commands for colon-prefix completion. */
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
-    ":type", ":doc", ":reload", ":run", ":reset", ":explain",
+    ":type", ":doc", ":reload", ":load-string", ":run", ":reset", ":explain",
     ":cd", ":pwd",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
@@ -268,15 +269,153 @@ static char *tur_completion_generator(const char *text, int state) {
  * Shell-integration markers (OSC 133 semantic prompts, OSC 7 cwd reports).
  *
  * A host terminal (e.g. Trowel, iTerm2, WezTerm) uses these to track idle
- * vs. busy state without pattern-matching the prompt string. Enabled when
- * stdout is a TTY; opt out with TUR_NO_SHELL_INTEGRATION=1.
+ * vs. busy state without pattern-matching the prompt string.
+ *
+ * Enabled automatically when stdout is a TTY. Two env vars override that:
+ *
+ *   TUR_NO_SHELL_INTEGRATION=1  force off (a TTY that garbles the escapes)
+ *   TUR_SHELL_INTEGRATION=1     force on  (stdout is a pipe, not a TTY)
+ *
+ * The force-on switch is the one that matters. A GUI host that drives the
+ * REPL over pipes rather than a pty is exactly the consumer these markers
+ * exist for, and it was the one consumer that could not get them: with no
+ * marker ever arriving, a host has nothing to distinguish "evaluating" from
+ * "waiting at the prompt" and has to latch busy forever as the safe default.
+ * TUR_NO_SHELL_INTEGRATION still wins if both are set -- an explicit "off"
+ * should never be overridden by an explicit "on".
  * ---------------------------------------------------------------------- */
 static bool g_shell_integration = false;
 
+/* A: prompt is about to be written -- the REPL is idle, awaiting input. */
 static void repl_emit_prompt_marker(void) {
     if (!g_shell_integration) return;
     fputs("\x1b]133;A\x07", stdout);
     fflush(stdout);
+}
+
+/* C: input accepted, evaluation starting -- the REPL is busy.
+ * D;<status>: evaluation finished, with 0 = ok and 1 = the form errored.
+ *
+ * A alone marks the idle edge but nothing marks the busy one, so a host
+ * could see that a prompt had been written but not that work had started or
+ * when it ended. C/D close that loop: A -> idle, C -> busy, D -> done.
+ *
+ * B (end of prompt / start of the typed command) is deliberately not
+ * emitted. Placing it correctly means writing it between the prompt string
+ * and the user's keystrokes, which is inside editline's own output -- it
+ * would have to be embedded in the prompt behind \1..\2 non-printing guards
+ * that libedit does not reliably honor, risking a visibly corrupted prompt
+ * in a real terminal. B only serves command extraction, which no host here
+ * needs (they send input programmatically); busy/idle needs A/C/D. */
+static void repl_emit_exec_marker(void) {
+    if (!g_shell_integration) return;
+    fputs("\x1b]133;C\x07", stdout);
+    fflush(stdout);
+}
+
+static void repl_emit_done_marker(int status) {
+    if (!g_shell_integration) return;
+    printf("\x1b]133;D;%d\x07", status);
+    fflush(stdout);
+}
+
+/* -------------------------------------------------------------------------
+ * Logical working directory (`pwd -L` semantics)
+ *
+ * getcwd(3) always answers with symlinks resolved. A host that launched us
+ * in /tmp/project (itself a symlink, as /tmp is on macOS) therefore gets
+ * told /private/tmp/project, which never string-matches the path it holds --
+ * so a host comparing the two naively concludes the REPL is somewhere else
+ * entirely and has to canonicalize both sides to recover.
+ *
+ * Shells solved this long ago: `pwd -L` reports $PWD when $PWD still names
+ * the current directory, and only falls back to the resolved answer when it
+ * does not. Same rule here, with the same safety check -- the candidate is
+ * accepted only if it stats to the same (device, inode) as `.`, so we can
+ * never report a path that is not this directory.
+ * ---------------------------------------------------------------------- */
+
+/* True if `path` names the directory we are actually in. */
+static bool path_is_cwd(const char *path) {
+    struct stat a, b;
+    if (!path || path[0] != '/') return false;
+    if (stat(path, &a) != 0 || stat(".", &b) != 0) return false;
+    return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+}
+
+/* Collapse "." and ".." components textually, the way a shell resolves them
+ * against the logical path. Writes into `out` (which may not alias `in`).
+ * Purely lexical -- popping ".." is wrong when the popped component was a
+ * symlink, which is exactly what the path_is_cwd() check downstream catches. */
+static void path_normalize(const char *in, char *out, size_t cap) {
+    /* Component start offsets into `out`, for popping on "..". */
+    size_t starts[PATH_MAX / 2];
+    size_t depth = 0, o = 0;
+
+    if (cap == 0) return;
+    out[o++] = '/';
+
+    for (const char *p = in; *p; ) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        const char *seg = p;
+        while (*p && *p != '/') p++;
+        size_t seglen = (size_t)(p - seg);
+
+        if (seglen == 1 && seg[0] == '.') continue;
+        if (seglen == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (depth > 0) o = starts[--depth];   /* pop */
+            if (o == 0) o = 1;                    /* never above root */
+            continue;
+        }
+        if (depth >= sizeof(starts) / sizeof(starts[0])) return; /* absurd */
+        if (o + seglen + 1 >= cap) return;                       /* too long */
+        starts[depth++] = o;
+        if (o > 1) out[o++] = '/';
+        memcpy(out + o, seg, seglen);
+        o += seglen;
+    }
+    out[o ? o : 1] = '\0';
+    if (o == 0) { out[0] = '/'; out[1] = '\0'; }
+}
+
+/* The working directory as the host would spell it: $PWD when it still names
+ * this directory, otherwise getcwd(). Returns `out`, or NULL on failure. */
+static char *repl_logical_cwd(char *out, size_t cap) {
+    const char *pwd = getenv("PWD");
+    if (pwd && pwd[0] == '/' && strlen(pwd) < cap) {
+        char norm[PATH_MAX];
+        path_normalize(pwd, norm, sizeof norm);
+        if (path_is_cwd(norm) && strlen(norm) < cap) {
+            memcpy(out, norm, strlen(norm) + 1);
+            return out;
+        }
+    }
+    return getcwd(out, cap);
+}
+
+/* Keep $PWD logical across `:cd` so the next report does not silently fall
+ * back to the resolved path. Called after a successful chdir(); `target` is
+ * the argument as the user wrote it. */
+static void repl_update_logical_pwd(const char *target) {
+    char cand[PATH_MAX];
+    char norm[PATH_MAX];
+
+    if (target[0] == '/') {
+        if (strlen(target) >= sizeof cand) return;
+        memcpy(cand, target, strlen(target) + 1);
+    } else {
+        const char *pwd = getenv("PWD");
+        if (!pwd || pwd[0] != '/') return;
+        if (snprintf(cand, sizeof cand, "%s/%s", pwd, target) >= (int)sizeof cand)
+            return;
+    }
+    path_normalize(cand, norm, sizeof norm);
+    /* Only adopt it if it really is where we landed. A ".." that crossed a
+     * symlink normalizes to the wrong place; leaving $PWD alone makes
+     * repl_logical_cwd fall back to getcwd(), which is always correct. */
+    if (path_is_cwd(norm)) setenv("PWD", norm, 1);
+    else                   unsetenv("PWD");
 }
 
 /* Report the current working directory as OSC 7, the de-facto standard
@@ -290,7 +429,7 @@ static void repl_emit_cwd_marker(void) {
     char cwd[PATH_MAX];
 
     if (!g_shell_integration) return;
-    if (!getcwd(cwd, sizeof cwd)) return;
+    if (!repl_logical_cwd(cwd, sizeof cwd)) return;
 
     fputs("\x1b]7;file://", stdout);
     for (const unsigned char *p = (const unsigned char *)cwd; *p; p++) {
@@ -648,6 +787,57 @@ static void repl_preload_stdlib_and_natives(TuriEnv *env) {
 }
 
 /* -------------------------------------------------------------------------
+ * :load-string "<src>"  -- evaluate source handed over directly.
+ *
+ * The prompt is line-oriented, so a host wanting to run a multi-line
+ * selection had no way to say so: it wrote the region to a scratch file and
+ * sent `(load "...")`, paying a disk round-trip (and leaving temp files
+ * behind) for something the evaluator can already do from memory --
+ * turi_eval_file is itself just read-file plus turi_eval.
+ *
+ * The argument is one double-quoted literal with C-style escapes, so an
+ * arbitrary region collapses onto the single line the prompt reads: newlines
+ * travel as \n. That is trivial for a host to produce and unambiguous to
+ * parse, which a bare unquoted tail would not be.
+ * ---------------------------------------------------------------------- */
+
+/* Decode the quoted literal starting at *pp (which must point at the opening
+ * quote). Returns a malloc'd string and advances *pp past the closing quote,
+ * or NULL if the literal is unterminated. */
+static char *unquote_literal(const char **pp) {
+    const char *p = *pp;
+    if (*p != '"') return NULL;
+    p++;
+
+    size_t cap = strlen(p) + 1;
+    char  *out = (char *)malloc(cap);
+    size_t o = 0;
+    if (!out) return NULL;
+
+    while (*p && *p != '"') {
+        if (*p == '\\' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'n':  out[o++] = '\n'; break;
+                case 't':  out[o++] = '\t'; break;
+                case 'r':  out[o++] = '\r'; break;
+                case '0':  out[o++] = '\0'; break;
+                case '"':  out[o++] = '"';  break;
+                case '\\': out[o++] = '\\'; break;
+                default:   out[o++] = *p;   break;
+            }
+            p++;
+        } else {
+            out[o++] = *p++;
+        }
+    }
+    if (*p != '"') { free(out); return NULL; }  /* unterminated */
+    out[o] = '\0';
+    *pp = p + 1;
+    return out;
+}
+
+/* -------------------------------------------------------------------------
  * :run <file>  -- DrRacket-style "press Run" semantic.
  *
  * Resets the env (mirrors :reset) and then loads the file, so re-pressing
@@ -773,6 +963,7 @@ static void print_help(void) {
         "  :type <expr>        print inferred type without evaluating\n"
         "  :doc  <sym>         print documentation for a symbol or builtin\n"
         "  :reload <file>      evaluate a .tur file into the current session\n"
+        "  :load-string \"<src>\"  evaluate source directly (\\n for newlines)\n"
         "  :run <file>         reset session, load file, auto-invoke (main)\n"
         "  :reset              clear session and start fresh\n"
         "  :pwd                print the working directory\n"
@@ -1016,8 +1207,10 @@ static bool check_tutorial_step(TuriEnv *env, const char *input) {
 int turi_repl_run(bool watch_mode) {
     bool use_color = isatty(STDOUT_FILENO) && isatty(STDERR_FILENO);
     const char *no_shell_integ = getenv("TUR_NO_SHELL_INTEGRATION");
-    g_shell_integration = isatty(STDOUT_FILENO)
-        && (!no_shell_integ || strcmp(no_shell_integ, "1") != 0);
+    const char *yes_shell_integ = getenv("TUR_SHELL_INTEGRATION");
+    bool force_off = no_shell_integ  && strcmp(no_shell_integ,  "1") == 0;
+    bool force_on  = yes_shell_integ && strcmp(yes_shell_integ, "1") == 0;
+    g_shell_integration = !force_off && (force_on || isatty(STDOUT_FILENO));
 
     /* Tell the host where we start, so it does not have to assume the cwd it
      * launched us with is still current. */
@@ -1208,10 +1401,10 @@ int turi_repl_run(bool watch_mode) {
                 free(line);
                 continue;
             }
-            /* :pwd — print the working directory. */
+            /* :pwd — print the working directory, as the host spells it. */
             if (strcmp(line, ":pwd") == 0) {
                 char cwd[PATH_MAX];
-                if (getcwd(cwd, sizeof cwd)) printf("%s\n", cwd);
+                if (repl_logical_cwd(cwd, sizeof cwd)) printf("%s\n", cwd);
                 else printf(":pwd failed: %s\n", strerror(errno));
                 free(line);
                 continue;
@@ -1231,7 +1424,8 @@ int turi_repl_run(bool watch_mode) {
                     printf(":cd %s: %s\n", arg, strerror(errno));
                 } else {
                     char cwd[PATH_MAX];
-                    if (getcwd(cwd, sizeof cwd)) printf("%s\n", cwd);
+                    repl_update_logical_pwd(arg);
+                    if (repl_logical_cwd(cwd, sizeof cwd)) printf("%s\n", cwd);
                     repl_emit_cwd_marker();
                 }
                 free(line);
@@ -1256,6 +1450,36 @@ int turi_repl_run(bool watch_mode) {
                 cmd_explain(env, arg);
                 free(line);
                 continue;
+            }
+            if (strncmp(line, ":load-string", 12) == 0 &&
+                (line[12] == ' ' || line[12] == '\0')) {
+                const char *arg = (line[12] == ' ') ? line + 13 : "";
+                while (*arg == ' ') arg++;
+                if (*arg != '"') {
+                    printf(":load-string requires a quoted source string, "
+                           "e.g. :load-string \"(defn f [] 1)\\n(f)\"\n");
+                    free(line);
+                    continue;
+                }
+                char *src = unquote_literal(&arg);
+                if (!src) {
+                    printf(":load-string: unterminated string literal\n");
+                    free(line);
+                    continue;
+                }
+                /* Route through the normal evaluation path rather than
+                 * calling turi_eval directly, so a region gets the same
+                 * Show-instance display, `_` binding, and error reporting an
+                 * interactively typed form does. */
+                multi.len = 0;
+                buf_puts(&multi, src);
+                buf_putc(&multi, '\0');
+                free(src);
+                free(line);
+                line = NULL;
+                balance = 0;
+                in_sweet_form = false;
+                goto repl_do_eval;
             }
             if (strncmp(line, ":reload", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) {
                 const char *path = (line[7] == ' ') ? line + 8 : "";
@@ -1430,6 +1654,8 @@ int turi_repl_run(bool watch_mode) {
 
             g_last_diag_code[0] = '\0';
 
+            repl_emit_exec_marker();   /* busy from here until the D below */
+
             char     type_tag[64] = {0};
             TuriValue result = turi_eval_typed(env, multi.data,
                                                type_tag, sizeof(type_tag));
@@ -1485,6 +1711,8 @@ int turi_repl_run(bool watch_mode) {
                 }
             }
             fflush(stdout);
+
+            repl_emit_done_marker(turi_is_error(result) ? 1 : 0);
 
             multi.len = 0;
         }

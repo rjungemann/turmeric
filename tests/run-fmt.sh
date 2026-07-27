@@ -270,12 +270,18 @@ fi
 # ---------------------------------------------------------------------------
 NAME="fmt-bootstrap-stdlib"
 BOOTSTRAP_DIRTY=""
+BOOTSTRAP_SEEN=0
 while IFS= read -r -d '' f; do
+    BOOTSTRAP_SEEN=$((BOOTSTRAP_SEEN + 1))
     if ! "$TUR" fmt --check "$f" > /dev/null 2>&1; then
         BOOTSTRAP_DIRTY="$BOOTSTRAP_DIRTY $f"
     fi
 done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0)
-if [ -z "$BOOTSTRAP_DIRTY" ]; then
+# Same guard as FT8 below: this check also passes by default, so an
+# enumeration that yields nothing would report success having tested nothing.
+if [ "$BOOTSTRAP_SEEN" -eq 0 ]; then
+    fail "$NAME" "no files checked -- stdlib enumeration produced nothing"
+elif [ -z "$BOOTSTRAP_DIRTY" ]; then
     pass "$NAME"
 else
     fail "$NAME" "stdlib is not self-formatted:$BOOTSTRAP_DIRTY"
@@ -286,7 +292,16 @@ fi
 # ---------------------------------------------------------------------------
 NAME="fmt-idempotence-stdlib"
 IDEMPOTENT_FAIL=0
+IDEMPOTENT_SEEN=0
+# The sample is bounded inside the loop rather than with `head -z`. `-z` is a
+# GNU coreutils extension that BSD/macOS head does not have, and the way it
+# failed was invisible: head errored, the pipeline produced nothing, the loop
+# body never ran, IDEMPOTENT_FAIL stayed 0, and this reported PASS while
+# checking zero files. Formatter idempotence had no coverage on macOS at all
+# and the summary line said everything was fine.
 while IFS= read -r -d '' f; do
+    [ "$IDEMPOTENT_SEEN" -ge 20 ] && break
+    IDEMPOTENT_SEEN=$((IDEMPOTENT_SEEN + 1))
     PASS1=$("$TUR" fmt --stdout "$f" 2>/dev/null)
     PASS2=$(printf '%s\n' "$PASS1" | "$TUR" fmt --stdin 2>/dev/null)
     if [ "$PASS1" != "$PASS2" ]; then
@@ -294,8 +309,12 @@ while IFS= read -r -d '' f; do
         IDEMPOTENT_FAIL=1
         break
     fi
-done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0 | head -z -n 20)
-if [ "$IDEMPOTENT_FAIL" -eq 0 ]; then
+done < <(find stdlib -name '*.tur' -not -name 'docstrings.tur' -print0)
+# Checking nothing is a failure, not a pass. Without this the next portability
+# break in the file enumeration would go silent exactly as `head -z` did.
+if [ "$IDEMPOTENT_SEEN" -eq 0 ]; then
+    fail "$NAME" "no files checked -- stdlib enumeration produced nothing"
+elif [ "$IDEMPOTENT_FAIL" -eq 0 ]; then
     pass "$NAME"
 fi
 

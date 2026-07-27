@@ -52,8 +52,7 @@
 ;; because the handle is a shared pointer, never a by-value header copy.
 
 
-(defn vec-new [A]
-  []
+(defn vec-new [A] []
   #fx{}
   : (Vec A)
   ```c
@@ -76,8 +75,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-len [A]
-  [v : (Vec A)]
+(defn vec-len [A] [v : (Vec A)]
   #fx{}
   : int
   ```c
@@ -98,8 +96,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-get [A]
-  [v : (Vec A) i :int]
+(defn vec-get [A] [v : (Vec A) i :int]
   #fx{}
   :A
   ```c
@@ -120,8 +117,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-push! [A]
-  [v : (Vec A) val :A]
+(defn vec-push! [A] [v : (Vec A) val :A]
   #fx{}
   :nil
   ```c
@@ -159,8 +155,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-pop! [A]
-  [v : (Vec A)]
+(defn vec-pop! [A] [v : (Vec A)]
   #fx{}
   :A
   ```c
@@ -184,8 +179,7 @@
 ;;;
 ;;; Since: multiword-element-box-lifecycle
 
-(defn vec-drop-last-o! [A]
-  [v : (Vec A) owned : int]
+(defn vec-drop-last-o! [A] [v : (Vec A) owned : int]
   #fx{}
   :void
   ```c
@@ -248,8 +242,7 @@
 ;;;
 ;;; Since: multiword-element-box-lifecycle
 
-(defn vec-set-o! [A]
-  [v : (Vec A) i :int val :A owned :int]
+(defn vec-set-o! [A] [v : (Vec A) i :int val :A owned :int]
   #fx{}
   :void
   ```c
@@ -349,8 +342,7 @@
 ;;;
 ;;; Since: multiword-element-box-lifecycle
 
-(defn vec-free-o [A]
-  [v : (Vec A) owned : int]
+(defn vec-free-o [A] [v : (Vec A) owned : int]
   #fx{}
   : void
   ```c
@@ -558,9 +550,7 @@
 ;; and derefs through the carrier in the (element-agnostic) base.
 
 
-(defn vec-get-byval [A]
-  [v : (Vec A) i : int]
-  : A
+(defn vec-get-byval [A] [v : (Vec A) i : int] : A
   (:: (vec-data-get-checked__ (.data v) i (.len v)) A))
 ;;; vec-eq-loop -- pure-Turmeric element-wise Vec[A] comparison (TCO'd index loop).
 ;;;
@@ -596,9 +586,7 @@
 ;;;
 ;;; Since: Phase M4c (TCO-in-ABI-specs)
 
-(defn vec-eq-loop [^Eq A]
-  [x : (Vec A) y : (Vec A) i : int len : int]
-  : bool
+(defn vec-eq-loop [^Eq A] [x : (Vec A) y : (Vec A) i : int len : int] : bool
   (if (= i len)
     true
     (if (eq? (:: (vec-get x i) A) (:: (vec-get y i) A))

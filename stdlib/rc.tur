@@ -28,9 +28,7 @@
 ;;;     (println (rc-payload r)))  ; => 7
 ;;;
 ;;; Since: Phase HKT S6
-(defn rc-payload [A]
-  [^borrow r : rc<A>]
-  : A
+(defn rc-payload [A] [^borrow r : rc<A>] : A
   ```c
   if (!r || !r->value) return 0;
   return *(int64_t *)rc_get_value(r);

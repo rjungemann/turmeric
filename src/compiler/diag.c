@@ -2364,12 +2364,18 @@ static void lsp_build_array(Buf *b) {
     for (size_t i = 0; i < lsp_entry_count_; i++) {
         const DiagLspEntry *e = &lsp_entries_[i];
         int sev = (e->level <= DIAG_HELP) ? lsp_severity[e->level] : 3;
+        /* A zero-width range paints nothing: the squiggle has no characters to
+         * sit under, so the diagnostic is invisible in the editor even though
+         * it is present in the response. Every client had to widen these by
+         * hand; widen once here instead. */
+        unsigned col_end = e->col_end0 > e->col_start0 ? e->col_end0
+                                                       : e->col_start0 + 1;
         if (i > 0) buf_putc(b, ',');
         buf_printf(b,
             "{\"severity\":%d"
             ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
                        ",\"end\":{\"line\":%u,\"character\":%u}}",
-            sev, e->line0, e->col_start0, e->line0, e->col_end0);
+            sev, e->line0, e->col_start0, e->line0, col_end);
         buf_puts(b, ",\"message\":");
         json_escape_string(b, e->message);
         const char *code_str = diag_code_to_string(e->code);

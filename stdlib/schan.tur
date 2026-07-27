@@ -71,9 +71,7 @@
   ;;;   (:: (schan-new 4) (SChan (SSend int SClose)))  ; => SChan<SSend int SClose>
   ;;;
   ;;; Since: S1
-  (defn schan-new [P]
-    [cap : int]
-    : (SChan P)
+  (defn schan-new [P] [cap : int] : (SChan P)
     ```c
     typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -102,9 +100,7 @@
   ;;;   (let [c2 (schan-send c 42)] ...)  ; c : SChan<SSend int R> => c2 : SChan<R>
   ;;;
   ;;; Since: S1
-  (defn schan-send [T R]
-    [c : (SChan (SSend T R)) v : T]
-    : (SChan R)
+  (defn schan-send [T R] [c : (SChan (SSend T R)) v : T] : (SChan R)
     ```c
     typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;
@@ -150,9 +146,7 @@
   ;;;     ...)
   ;;;
   ;;; Since: S1
-  (defn schan-recv [T R]
-    [c : (SChan (SRecv T R)) cell : ptr<void>]
-    : (SChan R)
+  (defn schan-recv [T R] [c : (SChan (SRecv T R)) cell : ptr<void>] : (SChan R)
     ```c
     typedef struct {
         pthread_mutex_t lock; pthread_cond_t not_full; pthread_cond_t not_empty;

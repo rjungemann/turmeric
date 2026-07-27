@@ -245,9 +245,13 @@ char *lsp_uri_to_path(const char *uri, char *dest, size_t dest_cap) {
 void lsp_doc_free_symbols(LspDoc *doc) {
     if (!doc) return;
     free(doc->symbols);
-    doc->symbols      = NULL;
-    doc->symbol_count = 0;
-    doc->symbol_cap   = 0;
+    doc->symbols       = NULL;
+    doc->symbol_count  = 0;
+    doc->symbol_cap    = 0;
+    doc->symbols_stale = 0;
+    /* ever_analyzed is deliberately NOT cleared: this is called to swap one
+     * index for another, and the fact that an analysis once succeeded is a
+     * property of the document, not of the array being replaced. */
 }
 
 static LspDoc *make_doc(const char *uri, size_t uri_len,
