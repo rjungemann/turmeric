@@ -2,6 +2,47 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.32.2] -- 2026-07-27
+
+### Added
+
+- **LSP: formatting, signatureHelp, and `$/cancelRequest`**: `tur lsp` now
+  answers `textDocument/formatting`, `textDocument/signatureHelp`, and
+  `$/cancelRequest` -- the largest protocol gaps found by building a real
+  editor client (Trowel) against the server.
+- **REPL: `:load-string` and richer shell-integration markers**:
+  `:load-string "<src>"` evaluates a literal without a disk round-trip; OSC
+  133 `C`/`D` now bracket evaluation so a host can distinguish idle/busy/done,
+  and `TUR_SHELL_INTEGRATION=1` forces markers on when driving the REPL over
+  a pipe.
+
+### Fixed
+
+- **LSP completion no longer goes blank while typing**: the symbol index is
+  retained across a failing compile and primed even for a file that has
+  never parsed, so an unbalanced paren -- the normal state mid-edit -- no
+  longer drops completion to zero.
+- **LSP hover, diagnostics, and sync papercuts**: hover honors
+  `hover.contentFormat`, zero-width diagnostic ranges are widened
+  server-side, `didChange` reads the last (not first) content-change entry,
+  and the analysis temp file no longer hardcodes `/tmp` (which broke on
+  Windows).
+- **`\uXXXX` JSON escapes decoded correctly** in LSP messages, including
+  surrogate pairs -- previously the backslash was dropped, corrupting text
+  and shifting every later diagnostic's byte offset.
+- **REPL working-directory reporting uses `pwd -L` semantics**: a
+  symlink-resolved `getcwd()` no longer disagrees with a host's own path
+  tracking (e.g. `/tmp/demo` vs `/private/tmp/demo` on macOS).
+- **`tur fmt` no longer mangles a `defn` with a type-parameter vector**;
+  stdlib reformatted to match.
+- **`build.tur` manifests with map values no longer error** during parsing.
+
+### Changed
+
+- **LSP analysis is debounced and negotiates `positionEncoding: utf-8`**,
+  cutting redundant compiles on rapid edits and making the byte-offset
+  contract explicit instead of a silent mismatch with the LSP default.
+
 ## [0.32.1] -- 2026-07-27
 
 ### Added
