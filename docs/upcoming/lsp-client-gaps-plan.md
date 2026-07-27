@@ -311,9 +311,10 @@ because a per-window `rootUri` currently buys nothing.
   *Resolved* in `lsp_build_array` (`src/compiler/diag.c`): an end column not
   greater than the start column is bumped by one. Widening once at the source
   beats every client doing it.
-- **Hover returns fenced markdown** even when the client advertises only
-  `plaintext` in `hover.contentFormat`. Trowel strips the fences
-  (`editor_view.cpp:382` **(trowel)**).
+- **Hover ignores `hover.contentFormat`.** The client capability is never read
+  anywhere in `src/lsp/`; markdown with ``` fences is always returned. A client
+  whose tooltip surface is plain text — Scintilla call tips, for instance —
+  must strip them (`editor_view.cpp:382` **(trowel)**).
 
   *Resolved.* `on_initialize` reads
   `capabilities.textDocument.hover.contentFormat` and records whether markdown
@@ -374,7 +375,8 @@ being changed; the repros are pinned in
   that only serves command extraction.
 - **The REPL reports `getcwd()`**, which resolves symlinks (`/private/var/…` on
   macOS) while the client's own path does not, so naive comparison never
-  matches. Trowel compares canonically (`repl_session.cpp:52` **(trowel)**).
+  matches. Trowel compares canonically (`repl_session.cpp:52` **(trowel)**, on
+  its unmerged `repl-cwd-indicator` branch).
 
   *Done*, with `pwd -L` semantics: `$PWD` is reported when it still names the
   current directory, `getcwd()` otherwise. The safety check is a
