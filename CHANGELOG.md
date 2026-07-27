@@ -4,6 +4,43 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+## [0.32.0] -- 2026-07-26
+
+### Added
+
+- **`#reads` stateful refinements (experimental)**: extend `--enable=refined`
+  with a stateful surface -- `#reads` annotations on parameters (parsed,
+  congruence-granted at call sites, and backed by codegen), the frozen-region
+  form realized as a linear mutation cap, and boolean-sorted measures in
+  refinement predicates. Macro templates can emit `#reads` annotations and
+  `#refine` contract types.
+- **`tur test` directives**: per-test flags and expected-error negative
+  tests, so refined/negative fixtures run under plain `tur test`.
+- **Arena debug diagnostics**: debug-poisoning and guard diagnostics that
+  surface uninitialized-arena reads early.
+
+### Changed
+
+- **Inline-C HKT instances return real results**: the by-value HKT result
+  limitation is lifted -- an inline-C `definstance` body can return a
+  carrier-width or `:heap` ADT result without heap-boxing, `stdlib/rc.tur`
+  compiles again, and TUR-W0042 diagnoses the remaining unsupported shape
+  at the `definstance`.
+
+### Fixed
+
+- **Refinement guard discharge**: crossing guards are now collected from the
+  whole function body (not just the return form) and from inside macro
+  expansions, so macro-generated guards and frozen-region crossings
+  discharge; unproven `#reads` crossings surface in non-strict mode; the
+  refine memo resets per compile (fixes multi-compile corruption).
+- **defstruct/ADT field elaboration**: fields resolve assoc-type projections
+  and Size literals, fixing the `(Storage T)` compiler skew.
+- **Arena crashes**: two uninitialized-arena-read crashes.
+- **Stdlib load dedup**: `(load "stdlib/X")` resolves via the stdlib dir
+  first, so it no longer double-loads against the auto-loaded stdlib.
+- **Weak refs**: execute the stdlib weak-ref audit (WR1, WR3, WR4).
+
 ## [0.31.1] -- 2026-07-26
 
 ### Added

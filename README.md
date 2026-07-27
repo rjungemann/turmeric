@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.31.1` -- follow-up fixes to the cycle-collecting GC (bounded pause times, a linear `rc<T>` free-queue drain) and experimental refinement types, plus a `set!` `rc<T>` leak fix and a wasm32 hash-width fix.
+**Latest release:** `v0.32.0` -- experimental `#reads` stateful refinements (frozen regions, congruence grants, codegen-backed params), inline-C HKT instances can return by-value results, and a batch of refinement guard-discharge fixes.
 
 ## What
 
