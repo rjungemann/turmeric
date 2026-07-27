@@ -40,6 +40,21 @@ export XDG_CONFIG_HOME="$_TUR_EMPTY_XDG"
 TUR="${TUR:-./build/tur}"
 [ -x "$TUR" ] || { echo "tests: $TUR not built; run 'make' first" >&2; exit 2; }
 
+# Identity of the binary under test, re-checked at the end of the run.
+#
+# Fixtures exec $TUR directly out of the build tree, so a rebuild that lands
+# mid-run swaps the compiler underneath the suite. During the link window the
+# file exists but is not yet executable, and every fixture dispatched in that
+# window dies with `Permission denied` -- which this harness reports as
+# "build failed". A batch of those reads as a compiler regression and costs a
+# full investigation before the cause (a concurrent `cmake --build`) turns up.
+#
+# `ls -ln` rather than stat(1): the -c/-f format flags are GNU/BSD-specific,
+# while the size and mtime columns of `ls -ln` are portable enough to compare
+# as an opaque string. A relink that somehow preserved both would slip through;
+# that is not a case worth more machinery.
+TUR_STAMP_START="$(ls -ln "$TUR" 2>/dev/null)"
+
 # A handful of fixtures write to a literal "/tmp/..." from inline-C fopen. On
 # POSIX that always exists; a compiled Windows binary resolves "/tmp" against the
 # current drive (C:\tmp), which is not present by default. Create it so those
@@ -819,6 +834,26 @@ RESULT_COUNT=$(find "$RESULTS_DIR" -maxdepth 1 -name '*.result' 2>/dev/null | wc
 : "${RESULT_COUNT:=0}"
 
 echo
+
+# Did the compiler change underneath us? See TUR_STAMP_START above. Reported
+# before the tallies so it is the first thing read, since it invalidates them.
+TUR_STAMP_END="$(ls -ln "$TUR" 2>/dev/null)"
+if [ "$TUR_STAMP_START" != "$TUR_STAMP_END" ]; then
+    echo "WARNING: $TUR changed while this run was in progress."
+    echo "  before: $TUR_STAMP_START"
+    echo "  after:  $TUR_STAMP_END"
+    echo "  Something rebuilt the compiler mid-run (a concurrent 'cmake --build',"
+    echo "  most likely). Fixtures exec this binary directly, so any failure"
+    echo "  above -- especially a batch of 'build failed' -- is an artifact of"
+    echo "  the swap, not a result. Re-run with nothing else building."
+    if [ $FAIL -ne 0 ]; then
+        # Same principle as the completeness guard: a run that cannot be
+        # trusted is not a pass and not an ordinary failure.
+        echo "  $FAIL failure(s) recorded -- THIS IS NOT A VALID RUN."
+        exit 2
+    fi
+fi
+
 if [ "$_INTERRUPTED" -ne 0 ] \
    || [ "$HAPPY_XARGS_RC" -ne 0 ] \
    || [ "$ERROR_XARGS_RC" -ne 0 ] \
