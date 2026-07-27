@@ -87,7 +87,9 @@ the same instant**, and anything that can traverse the registry asynchronously
 has to assume the gap exists. It is also a constraint on the C API rather than
 the codegen -- `rc_set_value` repointing `value` after allocation leaves the
 same window, so a block that will be repointed must still be allocated with a
-payload wide enough for its declared kind. The codegen never repoints.
+payload wide enough for its declared kind. The codegen repoints only via
+`rc_set_value`, in the allocation-free window right after `rc_cb_alloc`, where
+no AUTO checkpoint can fire.
 
 Pinned by `tests/fixtures/gc-auto-collects-without-gc-call` (end-to-end, no
 `(gc!)` in the program) and two assertions in the runtime parity battery, one of
@@ -620,11 +622,14 @@ fixtures do.
   blocks; 2M alloc/drop pairs 11,563 ms -> 70 ms. Pinned by
   `tests/fixtures/rc-free-queue-deep-cascade`.
 
-The last one is left open -- it is separate from this plan's track.
-
-- [rc-scalar-default-glue-invalid-free.md](../../reported/rc-scalar-default-glue-invalid-free.md)
-  -- medium. `rc_cb_alloc(size, <scalar>, NULL)` gets default drop glue that
-  `free()`s its own inline payload. C-API-only; codegen does not take the path.
+- [rc-scalar-default-glue-invalid-free.md](../../archive/rc-scalar-default-glue-invalid-free.md)
+  -- was **medium**, now **FIXED** (archived). `rc_cb_alloc(size, <scalar>,
+  NULL)` got default drop glue that `free()`d its own inline payload. Scalars
+  now default to a no-op inline glue; the fix flushed out that "C-API-only" was
+  wrong -- `EX_RC_OF` repointed `cb->value` by raw assignment and relied on the
+  defaulted `free()`, and now repoints through `rc_set_value` (added to the
+  emitted replica). Pinned by `test_scalar_default_glue_drop` in the runtime
+  parity battery.
 
 ## Related plans
 

@@ -20,6 +20,7 @@
 
 #include "rc.h"
 #include "gc.h"
+#include "rc_free_queue.h"
 
 extern uint64_t gc_collections;
 extern uint64_t gc_objects_freed;
@@ -104,8 +105,9 @@ static RcControlBlock *make_rc_cell(void) {
      * allocation will walk it -- and with value_size 0 the walker's 8-byte read
      * of the inline region runs off the end of the block.  A real payload width
      * keeps that read in bounds, where AUTO's zeroing has made it a harmless
-     * NULL child.  This is a constraint on the C API, not on the codegen, which
-     * never repoints `value` after allocation. */
+     * NULL child.  This is a constraint on the C API more than on the codegen:
+     * EX_RC_OF repoints via rc_set_value too, but always in the allocation-free
+     * window right after rc_cb_alloc, where no AUTO checkpoint can fire. */
     RcControlBlock *cb = rc_cb_alloc_kinded(sizeof(int64_t), TY_RC_KIND, NULL,
                                            RCK_EXISTENTIAL, RCEXP_RC);
     void *cell = calloc(1, sizeof(int64_t));
@@ -306,6 +308,41 @@ static void test_scalars_are_not_cycle_candidates(void) {
     gc_disable();
 }
 
+/* rc-scalar-default-glue-invalid-free: rc_cb_alloc(size, <scalar>, NULL) used
+ * to default to a drop glue that free()d the INLINE (cb + 1) payload -- an
+ * interior pointer, so the first drain after a decrement-to-zero was a glibc
+ * SIGABRT / ASan bad-free.  The scalar loop above allocates exactly this shape
+ * but never drains, which is why the battery never tripped it.  Drain here:
+ * surviving the drain IS the inline assertion (under ASan the old glue is a
+ * hard bad-free report).  The two companions pin the separate-payload shapes
+ * that must KEEP free()-ing -- rc_set_value and tur_rc_from_ref -- where a
+ * regression to a no-op glue shows up as an LSan leak, not a crash. */
+static void test_scalar_default_glue_drop(void) {
+    gc_disable();                        /* the report's repro: collector OFF */
+
+    /* Inline scalar payload, defaulted glue: must NOT free(cb + 1). */
+    RcControlBlock *cb = rc_cb_alloc(sizeof(int64_t), 0, NULL);
+    *(int64_t *)cb->value = 7;
+    rc_strong_decrement(cb);
+    rc_free_queue_drain();
+    check(1, "scalar-inline-default-glue-survives-drain");
+
+    /* Repointed payload (rc_set_value, NULL glue): the separate cell must
+     * still be freed by the re-derived default glue. */
+    RcControlBlock *rp = rc_cb_alloc(sizeof(int64_t), 0, NULL);
+    rc_set_value(rp, malloc(sizeof(int64_t)), NULL);
+    rc_strong_decrement(rp);
+    rc_free_queue_drain();
+    check(1, "scalar-set-value-payload-still-freed");
+
+    /* Adopted payload (tur_rc_from_ref): header-only block, separate payload,
+     * likewise still freed. */
+    RcControlBlock *ad = tur_rc_from_ref(malloc(sizeof(int64_t)), 0);
+    rc_strong_decrement(ad);
+    rc_free_queue_drain();
+    check(1, "scalar-from-ref-payload-still-freed");
+}
+
 int main(void) {
     test_enable_implies_manual_mode();
     test_disable_stops_collection();
@@ -316,6 +353,7 @@ int main(void) {
     test_decrement_never_collects();
     test_auto_collects_without_explicit_call();
     test_scalars_are_not_cycle_candidates();
+    test_scalar_default_glue_drop();
 
     if (failures) {
         printf("gc-runtime-copy-parity: %d failed\n", failures);

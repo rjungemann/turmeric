@@ -2733,6 +2733,10 @@ static void default_rc_drop_fn(void *value) {
     free(value);
 }
 
+static void inline_scalar_drop_fn(void *value) {
+    (void)value;
+}
+
 static void drop_ref_payload(void *value) {
     if (!value) return;
     void *inner = *((void **)value);
@@ -2763,6 +2767,15 @@ static RcDropFn default_drop_fn_for_type(int value_type_kind) {
     }
 }
 
+static RcDropFn inline_default_drop_fn_for_type(int value_type_kind) {
+    switch (value_type_kind) {
+        case 8: return drop_ref_payload;   /* TY_REF */
+        case 9: return drop_rc_payload;    /* TY_RC */
+        case 10: return drop_weak_payload; /* TY_WEAK */
+        default: return inline_scalar_drop_fn;
+    }
+}
+
 #define RCK_OPAQUE       0
 #define RCK_EXISTENTIAL  1
 #define RCK_STRUCT       2
@@ -2775,7 +2788,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, int value_type_kind, RcDro
     cb->strong_count = 1;
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);
-    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);
+    cb->drop_fn = drop_fn ? drop_fn : inline_default_drop_fn_for_type(value_type_kind);
     cb->walk_fn = NULL;
     cb->value_type_kind = value_type_kind;
     memset(cb->reserved, 0, sizeof(cb->reserved));
@@ -2879,6 +2892,12 @@ RcControlBlock *rc_upgrade(RcControlBlock *cb) {
 void *rc_get_value(RcControlBlock *cb) {
     if (!cb) return NULL;
     return cb->value;
+}
+
+void rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn) {
+    if (!cb) return;
+    cb->value = value;
+    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(cb->value_type_kind);
 }
 
 RcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {

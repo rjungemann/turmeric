@@ -7080,7 +7080,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                            cb_tmp, e->as.rc_of_.expr->type.kind, drop_fn_name);
             }
             indent_buf(body, ctx->indent);
-            buf_printf(body, "%s->value = %s;\n", cb_tmp, val_tmp);
+            /* rc-scalar-default-glue-invalid-free: repoint through rc_set_value
+             * rather than assigning cb->value directly.  With no explicit glue
+             * (drop_fn_name == "NULL") it re-derives the defaulted drop glue
+             * for a payload that is now a SEPARATE allocation -- rc_cb_alloc's
+             * own default assumes the inline (cb + 1) payload and must not
+             * free(), so a raw assignment would keep that no-op glue and leak
+             * the cell on every drop.  An explicit struct drop glue is passed
+             * through unchanged, exactly as the alloc installed it. */
+            buf_printf(body, "rc_set_value(%s, %s, %s);\n", cb_tmp, val_tmp, drop_fn_name);
 
             free(inner);
             free(inner_type_c);

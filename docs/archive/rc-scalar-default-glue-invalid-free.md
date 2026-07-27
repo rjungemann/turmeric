@@ -1,5 +1,39 @@
 # `rc_cb_alloc` with a scalar type and no drop_fn invalid-frees its own payload
 
+**RESOLVED 2026-07-26.** The `rc_cb_alloc*` entry points now default scalar
+payloads to a no-op glue (`inline_scalar_drop_fn`) -- the inline `(cb + 1)`
+payload is part of the header's own allocation, so `free(cb)` in `rc_cb_free`
+reclaims it and there is nothing separate to free. The separate-payload entry
+points (`rc_set_value`, `tur_rc_from_ref`) keep the `free()`-ing default.
+Mirrored in the emitted replica (`emit_module.c`); `inline_scalar_drop_fn` and
+`rc_set_value` are byte-identical between the copies per `gc-copy-diff.py`.
+
+**The "worth checking first" caveat below was the whole fix.** A caller relying
+on the defaulted `free()` for a repointed payload did exist, and it was the
+CODEGEN: `EX_RC_OF` allocated with `rc_cb_alloc(0, <kind>, NULL)` and then
+repointed `cb->value` at a separately malloc'd cell by RAW ASSIGNMENT -- so the
+"codegen does not take this path" claim below was wrong, and the narrow
+scalar-no-op fix alone turned `hkt-fmap-rc-result-droppable` /
+`hkt-instance-rc-construct-result` red at +160000 leaked bytes -- every fmap's
+payload cell stranded. `EX_RC_OF` now repoints through
+`rc_set_value(cb, val, <glue>)`, passing the alloc's explicit struct drop glue
+through unchanged: a bare `NULL` there re-derives the free-capable default, but
+it also CLOBBERS an explicit struct drop glue, which an intermediate draft
+learned from five more red rc fixtures (`weak-breaks-parent-child-cycle`
+leaked ~1 MB when its parent/child glue was stomped). `rc_set_value` is added
+to the emitted replica and the prototype block, since generated code now calls
+it on every replica path.
+
+Pinned by `test_scalar_default_glue_drop` in
+`tests/turi/gc-runtime-copy-parity.c`: the report's repro shape drained (the
+old glue is an ASan bad-free there), plus the two separate-payload shapes that
+must KEEP freeing. Suite: 2397 passed, 0 failed. Verified on both rc/GC
+linkage modes (archive and `TUR_RCGC_FROM_ARCHIVE=0` replica).
+
+The original report follows.
+
+---
+
 **Severity:** medium -- crashes (`free(): invalid pointer`, SIGABRT) on the plain
 RC path with the collector disabled. Reachable only from the C API, not from
 codegen'd Turmeric today, so it is a latent footgun on the embedder/interop
