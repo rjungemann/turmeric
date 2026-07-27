@@ -33,7 +33,9 @@
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
 
+#include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -224,6 +226,7 @@ static int paren_balance(const char *s) {
 static const char *const k_meta_cmds[] = {
     ":help", ":quit", ":q",
     ":type", ":doc", ":reload", ":run", ":reset", ":explain",
+    ":cd", ":pwd",
     ":tutorial", ":next", ":prev", ":hint", ":skip",
     ":quit-tutorial", ":tutorial-progress",
     NULL
@@ -262,7 +265,7 @@ static char *tur_completion_generator(const char *text, int state) {
 #endif /* TURI_HAVE_EDITLINE */
 
 /* -------------------------------------------------------------------------
- * Shell-integration markers (OSC 133 semantic prompts).
+ * Shell-integration markers (OSC 133 semantic prompts, OSC 7 cwd reports).
  *
  * A host terminal (e.g. Trowel, iTerm2, WezTerm) uses these to track idle
  * vs. busy state without pattern-matching the prompt string. Enabled when
@@ -273,6 +276,32 @@ static bool g_shell_integration = false;
 static void repl_emit_prompt_marker(void) {
     if (!g_shell_integration) return;
     fputs("\x1b]133;A\x07", stdout);
+    fflush(stdout);
+}
+
+/* Report the current working directory as OSC 7, the de-facto standard
+ * `file://<host>/<path>` notification.  A host that tracks it can keep its
+ * own "REPL is rooted here" display honest across `:cd` without having to
+ * restart the process or scrape output.
+ *
+ * Path characters outside the unreserved set are percent-encoded, so a
+ * directory containing spaces or `#` survives the round trip. */
+static void repl_emit_cwd_marker(void) {
+    char cwd[PATH_MAX];
+
+    if (!g_shell_integration) return;
+    if (!getcwd(cwd, sizeof cwd)) return;
+
+    fputs("\x1b]7;file://", stdout);
+    for (const unsigned char *p = (const unsigned char *)cwd; *p; p++) {
+        if (isalnum(*p) || *p == '/' || *p == '-' || *p == '.' ||
+            *p == '_' || *p == '~') {
+            fputc((int)*p, stdout);
+        } else {
+            printf("%%%02X", *p);
+        }
+    }
+    fputs("\x07", stdout);
     fflush(stdout);
 }
 
@@ -746,6 +775,8 @@ static void print_help(void) {
         "  :reload <file>      evaluate a .tur file into the current session\n"
         "  :run <file>         reset session, load file, auto-invoke (main)\n"
         "  :reset              clear session and start fresh\n"
+        "  :pwd                print the working directory\n"
+        "  :cd [dir]           change the working directory (bare :cd goes home)\n"
         "  :explain [code]     explain the most recent error, or a TUR-E#### code\n"
         "\n"
         "Tutorial commands:\n"
@@ -988,6 +1019,10 @@ int turi_repl_run(bool watch_mode) {
     g_shell_integration = isatty(STDOUT_FILENO)
         && (!no_shell_integ || strcmp(no_shell_integ, "1") != 0);
 
+    /* Tell the host where we start, so it does not have to assume the cwd it
+     * launched us with is still current. */
+    repl_emit_cwd_marker();
+
     turi_init(use_color);
     
     /* Initialize tutorial system */
@@ -1170,6 +1205,35 @@ int turi_repl_run(bool watch_mode) {
                 g_completion_env = env;
 #endif
                 printf(";; session cleared\n");
+                free(line);
+                continue;
+            }
+            /* :pwd — print the working directory. */
+            if (strcmp(line, ":pwd") == 0) {
+                char cwd[PATH_MAX];
+                if (getcwd(cwd, sizeof cwd)) printf("%s\n", cwd);
+                else printf(":pwd failed: %s\n", strerror(errno));
+                free(line);
+                continue;
+            }
+            /* :cd [dir] — change the working directory, bare :cd goes home.
+             * Unlike a host-side "set directory" this moves the *running*
+             * process, so session state survives. Hosts tracking the cwd are
+             * told via OSC 7. */
+            if (strncmp(line, ":cd", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+                const char *arg = (line[3] == ' ') ? line + 4 : "";
+                while (*arg == ' ') arg++;
+                if (!*arg) {
+                    const char *home = getenv("HOME");
+                    arg = (home && *home) ? home : "/";
+                }
+                if (chdir(arg) != 0) {
+                    printf(":cd %s: %s\n", arg, strerror(errno));
+                } else {
+                    char cwd[PATH_MAX];
+                    if (getcwd(cwd, sizeof cwd)) printf("%s\n", cwd);
+                    repl_emit_cwd_marker();
+                }
                 free(line);
                 continue;
             }

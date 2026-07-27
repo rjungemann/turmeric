@@ -85,11 +85,37 @@ Meta-commands:
   :type <expr>        print inferred type without evaluating
   :doc  <sym>         print documentation for a symbol or builtin
   :reload <file>      evaluate a .tur file into the current session
+  :pwd                print the working directory
+  :cd [dir]           change the working directory (bare :cd goes home)
 ```
 
 ### `:quit` / `:q`
 
 Exits the REPL.  Equivalent to `Ctrl-D`.
+
+### `:pwd` and `:cd [dir]`
+
+`:pwd` prints the working directory; `:cd` changes it, resolving relative
+paths against the current one.  Bare `:cd` goes to `$HOME`.
+
+```
+> :pwd
+/Users/you/projects/demo
+> :cd src
+/Users/you/projects/demo/src
+> :cd /nope
+:cd /nope: No such file or directory
+```
+
+This moves the **running** process, so everything you have defined stays
+in scope -- relative paths in a later `:reload` or `(load ...)` simply
+resolve against the new directory.
+
+When shell integration is active (stdout is a TTY and
+`TUR_NO_SHELL_INTEGRATION` is not `1`), a successful `:cd` also emits an
+OSC 7 `file://` report, the same notification terminals use to track the
+working directory.  A host editor can follow along without restarting the
+REPL or scraping its output.
 
 ### `:type <expr>`
 

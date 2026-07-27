@@ -4,6 +4,17 @@ All notable changes to Turmeric are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **REPL `:cd` and `:pwd`**: `:pwd` prints the working directory and `:cd
+  [dir]` changes it (bare `:cd` goes to `$HOME`). This moves the *running*
+  process, so definitions and session state survive -- unlike a host-side
+  "set directory", which can only restart the REPL. A successful `:cd` also
+  emits an OSC 7 `file://` report when shell integration is active, alongside
+  the existing OSC 133 prompt markers, so a host editor can track the working
+  directory without restarting or scraping output; the initial directory is
+  reported at startup for the same reason.
+
 ## [0.32.0] -- 2026-07-26
 
 ### Added
