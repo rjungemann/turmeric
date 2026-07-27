@@ -8,7 +8,7 @@ OS pages (NULL -> works); later in-process compiles read recycled malloc slab
 junk (the previous compile's bytes), so `rt_class_method_refine_binding`'s
 memo check returned a garbage `Binding*` that `refine_note_call_site`
 dereferenced. Fixed by zeroing the struct after allocation. Found by executing
-`docs/upcoming/arena-debug-poisoning-plan.md`: the AP4 guard mode
+`docs/archive/arena-debug-poisoning-plan.md`: the AP4 guard mode
 (`TUR_DEBUG_ARENA_GUARD=1`, mmap + PROT_NONE on free) made the deterministic
 8/8 repro go CLEAN -- impossible for a real UAF, and exactly what an
 uninitialized read does when fresh mappings are zero-filled. Validated: spices
@@ -104,7 +104,7 @@ sub-allocation granularity. Two effects hide the corruption:
   resolution reachable from the refine crossing path, or VC/UF interning.
 - **The right next step is tooling, not more blind poking.** Build the
   ASan-aware arena poisoning in
-  [`docs/upcoming/arena-debug-poisoning-plan.md`](../upcoming/arena-debug-poisoning-plan.md)
+  [`docs/archive/arena-debug-poisoning-plan.md`](arena-debug-poisoning-plan.md)
   and run this repro under it: `__asan_poison_memory_region` on reset/free plus a
   no-address-reuse debug mode turns the silent alias into a loud ASan report AT
   the stale deref, whose backtrace names the offending global. Then reset/clear

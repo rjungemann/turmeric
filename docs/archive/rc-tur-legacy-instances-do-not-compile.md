@@ -95,7 +95,7 @@ user-visible the moment anyone tries to use the `Functor` / `Foldable` / `Clone`
 instances the module advertises, or loads it for any other reason.
 
 It is also why the WR1 `weak<T>` API from
-`docs/upcoming/v1/stdlib-weak-ref-audit-plan.md` landed in a new
+`docs/archive/stdlib-weak-ref-audit-plan.md` landed in a new
 `stdlib/weak.tur` rather than in `rc.tur` as the plan text says: an API in a
 module that cannot be loaded is not an API.
 
@@ -156,5 +156,5 @@ separate deliberately -- it is a clean opt-in module either way).
 
 ## Related
 
-- `docs/upcoming/v1/stdlib-weak-ref-audit-plan.md` (WR1)
+- `docs/archive/stdlib-weak-ref-audit-plan.md` (WR1)
 - `docs/guides/ownership-guide.md`

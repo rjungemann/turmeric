@@ -167,6 +167,6 @@ bug and fix before (`docs/archive/`), defdata never got it.
   `cmd_build` now calls `refine_discharge_reset()`).
 - `src/runtime/arena.c` / `src/runtime/arena.h` -- `arena_reset`
   (`ARENA_POISON` memset today), `arena_free`, `arena_alloc`, `arena_owns`.
-- `docs/upcoming/hold/turi-value-pool-scratch-promotion-plan.md` (if present) --
+- `docs/archive/history/turi-value-pool-scratch-promotion-plan.md` --
   the scratch/permanent split whose reset the `0xDE` poison already serves;
   this plan strengthens that same reset for ASan.

@@ -231,8 +231,10 @@ vocabulary even if not code.
 - Correct `docs/guides/gc-guide.md`: replace "the interpreter leaks its closures
   by design" framing with the accurate "region-allocated, reclaimed at teardown;
   incremental reclamation via scratch promotion (opt-in)" story, and note the
-  long-lived-env caveat explicitly. (Tracked in
-  `docs/reported/gc-guide-stale-and-misleading.md`.)
+  long-lived-env caveat explicitly. (Was tracked in
+  `docs/archive/gc-guide-stale-and-misleading.md`, since resolved -- verify the
+  guide's current text still carries the long-lived-env caveat before closing
+  this item.)
 
 ---
 
