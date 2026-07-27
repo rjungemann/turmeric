@@ -441,6 +441,20 @@ expected and fails to elaborate.
 > `tests/fixtures/errors/refine-macrogen-*`). Shipped to the ecs spice as
 > `ecs/refined-world`'s `for-each-alive!`.
 
+> **Update 2026-07-26 -- the promotion is SHIPPED: `ecs/sized-refined`.** The
+> accessor family below now exists against the REAL sized-world stack, emitted
+> per world/component: `(sized-defworld-refined W)` -> `<W>-alive?` (`#reads`)
+> + `<W>-despawn!` (`^unique ^mut`); `(sized-defcomponent-accessor-refined W
+> C)` -> the cap-gated `get-<C>!` with the refined entity parameter -- the
+> exact signature in the code block below; `(for-each-alive W w n e body)` for
+> the per-entity-proven iteration. Getting there took one more compiler fix:
+> macro TEMPLATES could not emit `#reads` (fx_prov dropped by both template
+> copiers) or substitute into a `#refine{...}` predicate (F_CONTRACT_TYPE
+> returned as-is) -- fixed in `elab_macros.c`, pinned by
+> `tests/fixtures/refine-template-emitters`. Acceptance: spawn/despawn/read
+> proves + runs, no-region is `TUR-W0372`, in-region despawn is `TUR-E0200`,
+> for-each proves per-entity (spices `tests/refined-stack-*`, suite 70/70).
+
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
 

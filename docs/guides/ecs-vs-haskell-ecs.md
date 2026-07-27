@@ -336,13 +336,14 @@ region, which is what makes trusting the guard sound. The
 its entity with `(rgworld-alive? w x)`, a guarded read in a `frozen`
 region proves, and the `for-each-alive!` macro generates loop + borrow +
 guard so a per-entity body read discharges. Under `--strict-refine` an
-unproven read is a hard error. Honest scope notes: it is the
-single-column facade (the full `defworld`/`defcomponent` family is
-roadmap --
-[`docs/upcoming/v1/ecs-refinement-typed-apis-plan.md`](../upcoming/v1/ecs-refinement-typed-apis-plan.md));
-the guarantee is against ordinary code, not a deliberate `::`-cast /
-inline-C bypass (the same trust boundary `#reads` itself carries); and
-the forgiving default API stays -- that remains the sound choice when
+unproven read is a hard error. The same family ships for the real sized
+stack via `ecs/sized-refined` (`sized-defworld-refined` /
+`sized-defcomponent-accessor-refined` / `for-each-alive`), emitted per
+world/component beside the unchanged forgiving accessors. Honest scope
+notes: the guarantee is against ordinary code, not a deliberate
+`::`-cast / inline-C bypass (the same trust boundary `#reads` itself
+carries); and the forgiving default API stays -- that remains the sound
+choice when
 the prover can't.
 
 ### Dense-storage length matching

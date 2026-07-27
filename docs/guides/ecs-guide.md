@@ -161,9 +161,13 @@ proven -- a guard inside a `frozen` region (which locks out
 `^unique ^mut` despawn, `TUR-E0200`), or the `for-each-alive!` macro,
 which generates the loop, the frozen borrow, and the guard so the body's
 read discharges per-entity. Under `--strict-refine` an unproven read is
-a hard error (`TUR-W0372`). The surface today is the single-column
-refined-world facade; wiring it through the full
-`defworld`/`defcomponent` accessor family is roadmap -- see
+a hard error (`TUR-W0372`). The same surface ships for the REAL sized
+stack via `ecs/sized-refined`: `(sized-defworld-refined GameWorld)`
+emits `GameWorld-alive?` (`#reads`) + `GameWorld-despawn!`
+(`^unique ^mut`), `(sized-defcomponent-accessor-refined GameWorld Pos)`
+emits the cap-gated `get-Pos!` with the refined entity parameter, and
+`(for-each-alive GameWorld w n e body)` iterates with per-entity proofs
+-- all opt-in beside the unchanged forgiving family. See
 [docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md).
 
 ## Queries: `for-each` (imperative)
