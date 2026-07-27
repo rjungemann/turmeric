@@ -48,7 +48,10 @@ is exactly what §6 declined to schedule.
 | §4 Hover ignores `contentFormat` | Done |
 | §4 Only `contentChanges[0]` read | Done -- last change wins |
 | §4 Hardcoded `/tmp` | Done -- `tur_temp_dir()` |
-| §5 REPL / prompt-marker items | Out of scope for this plan (unchanged) |
+| §5 OSC 133 markers | Done -- `TUR_SHELL_INTEGRATION=1`, plus C/D markers |
+| §5 `getcwd()` resolves symlinks | Done -- `pwd -L` semantics, inode-checked |
+| §5 No region/string eval | Done -- `:load-string "<src>"` |
+| §5 `TUR_STDLIB_DIR` leak | Partly -- invalid values rejected; a stale-but-valid one still wins |
 
 Where the work landed:
 
@@ -61,6 +64,10 @@ Where the work landed:
 - `src/compiler/diag.c` -- zero-width range widening
 - `tests/lsp/mcp_lsp_test.py` -- `test_lsp_client_gaps`,
   `test_lsp_unsaved_buffer`
+- `src/turi/repl.c` -- OSC 133 C/D markers, logical cwd, `:load-string` (§5)
+- `src/main.c` -- `TUR_STDLIB_DIR` validation (§5)
+- `tests/turi/repl-host-integration.sh` -- §5 coverage (ctest target
+  `tur_repl_host_integration`)
 
 The release-and-version-bump caveat above still applies: Trowel sees none of
 this until a Turmeric release ships and `TROWEL_TURMERIC_VERSION` moves.
@@ -327,19 +334,87 @@ because a per-window `rootUri` currently buys nothing.
 
 Found the same way — a real client hitting real behavior.
 
+All four are now **done**. Every one reproduced exactly as described before
+being changed; the repros are pinned in
+`tests/turi/repl-host-integration.sh` (ctest target
+`tur_repl_host_integration`).
+
 - **OSC 133;A prompt markers** are absent from older `tur` and when not on a
   tty, leaving a client unable to tell busy from idle. Trowel latches "busy"
   forever as the safe default (`repl_session.h:63` **(trowel)**).
+
+  *Done.* Two separate problems were tangled here. The first is reach:
+  `TUR_SHELL_INTEGRATION=1` now forces markers on when stdout is not a tty,
+  which is the GUI-host case — driving the REPL over pipes rather than a pty
+  was the one configuration that could never get them.
+  `TUR_NO_SHELL_INTEGRATION` still wins if both are set, and the default over
+  a pipe stays off so a redirect nobody asked for is not corrupted with
+  escapes.
+
+  The second is that `A` alone is not enough to latch on. `A` marks the idle
+  edge but nothing marked the busy one, so a host could see that a prompt had
+  been written but not when work started or ended. `133;C` (evaluation
+  starting) and `133;D;<status>` (finished, `0`/`1`) now bracket the eval, so
+  the cycle is A → idle, C → busy, D → done, with the status distinguishing a
+  failed form without parsing stderr.
+
+  `133;B` is deliberately not emitted; the reasoning is in the guide and in a
+  comment at the emit site. Placing it correctly means writing it inside
+  editline's own output, behind `\1..\2` guards libedit does not reliably
+  honor — a visibly corrupted prompt is a worse outcome than an absent marker
+  that only serves command extraction.
 - **The REPL reports `getcwd()`**, which resolves symlinks (`/private/var/…` on
   macOS) while the client's own path does not, so naive comparison never
   matches. Trowel compares canonically (`repl_session.cpp:52` **(trowel)**).
+
+  *Done*, with `pwd -L` semantics: `$PWD` is reported when it still names the
+  current directory, `getcwd()` otherwise. The safety check is a
+  `(device, inode)` comparison against `.`, so a stale or hostile `$PWD` can
+  never make the REPL claim a path that is not this directory — verified with
+  a `$PWD` pointing somewhere that does not exist. `:cd` maintains `$PWD`
+  itself, normalizing `.`/`..` textually, and drops it when the normalized
+  result fails the identity check (a `..` that crossed a symlink), which
+  falls the report back to `getcwd()`.
+
+  One divergence worth knowing: `:cd` still moves *physically*, so `:cd ..`
+  from a symlinked directory lands in the real parent where a shell's logical
+  `cd` would go to the symlink's parent. That was out of scope here — the
+  report was about what gets reported, and reporting is now truthful in both
+  cases. Documented in the guide rather than silently changed.
 - **No way to evaluate a region or a string.** To run a selection, Trowel
   writes a scratch file and sends `(load "…")` (`run_buffer.cpp:45`
   **(trowel)**). A `:load-string` style meta-command would remove the
   round-trip through disk.
+
+  *Done.* `:load-string "<src>"` takes one double-quoted literal with C-style
+  escapes, so an arbitrary multi-line region collapses onto the single line
+  the prompt reads. Cheap to implement because `turi_eval_file` is already
+  just read-file plus `turi_eval` — the file was never doing any work.
+
+  It routes through the same `repl_do_eval` path an interactively typed form
+  takes rather than calling `turi_eval` directly, so Show-instance rendering,
+  the `_` binding, and error reporting are identical instead of being a second
+  approximation that drifts.
 - **`TUR_STDLIB_DIR` leaks from the ambient environment** and can pair a new
   `tur` with an old stdlib. Both of Trowel's subprocess launchers defensively
   pin it to the `stdlib/` sitting next to the resolved binary.
+
+  *Done, partially — read the limit.* `resolve_stdlib_root` now checks that
+  `$TUR_STDLIB_DIR/macros.tur` is readable (the same anchor the walk-up probe
+  uses) before honoring it. A directory that fails is reported in one line
+  naming the variable, then unset so every downstream reader agrees with the
+  resolved value, and the walk-up finds the stdlib beside the binary.
+
+  That fixes the loud half: previously a stale value was taken verbatim and
+  the first sign of trouble was a wall of `load: cannot open .../macros.tur`
+  with nothing pointing at the cause.
+
+  It does **not** fix the quiet half. A `TUR_STDLIB_DIR` pointing at an older
+  but *intact* stdlib still passes the check and is still honored — correctly,
+  since an explicit override has to remain an override. Detecting that would
+  need a version marker in the stdlib tree to compare against the binary,
+  which does not exist today. Until it does, a host that cares must keep
+  pinning the variable itself, exactly as Trowel does.
 
 ---
 
@@ -365,10 +440,13 @@ All six are done. What remains open, and deliberately so:
 - **§2.1 proposal (2), error-tolerant parsing** — retention covers the
   day-to-day case; recovery at the next top-level form is the better answer
   when someone wants to spend the time.
-- **§5** — REPL prompt markers, `getcwd()` symlink resolution, region eval, and
-  `TUR_STDLIB_DIR` leakage. Same origin, but not the language server; they want
-  their own pass.
+- **§5's stale-but-valid `TUR_STDLIB_DIR`** — needs a version marker in the
+  stdlib tree to detect; see the note in §5. Everything else in §5 is done.
+- **Logical `:cd`** — `:cd` moves physically while reporting truthfully. Making
+  the move itself logical (shell `cd` semantics) is a behavior change nobody
+  has asked for; noted in the REPL guide.
 
 Coverage lives in `tests/lsp/mcp_lsp_test.py`
 (`test_lsp_client_gaps`, `test_lsp_unsaved_buffer`), run by
-`tests/lsp/run-mcp-lsp.sh`.
+`tests/lsp/run-mcp-lsp.sh`, and in `tests/turi/repl-host-integration.sh`
+(ctest target `tur_repl_host_integration`) for §5.

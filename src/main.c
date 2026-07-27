@@ -253,13 +253,39 @@ static const char *resolve_stdlib_root(void) {
     }
     g_stdlib_root_state = 2;  /* assume not-found until we succeed */
 
+    /* TUR_STDLIB_DIR is honored, but no longer taken on faith.
+     *
+     * It is an ordinary environment variable, so it is inherited by anything
+     * a tur process spawns and it outlives the install that set it. A stale
+     * value therefore points a freshly built `tur` at a stdlib that has moved
+     * or been deleted, and taking it verbatim meant the failure surfaced much
+     * later as a wall of `load: cannot open .../macros.tur` errors with
+     * nothing naming the variable that caused them.
+     *
+     * macros.tur is the anchor, matching the walk-up probe below: it is the
+     * first file every preload touches, so if it is missing nothing else will
+     * resolve either. A directory that fails the check is reported once and
+     * then ignored, letting the walk-up find the stdlib shipped beside this
+     * binary -- which is nearly always what the user actually wanted. */
     const char *env = getenv("TUR_STDLIB_DIR");
     if (env && *env) {
         size_t n = strlen(env);
         if (n < sizeof(g_stdlib_root)) {
-            memcpy(g_stdlib_root, env, n + 1);
-            g_stdlib_root_state = 1;
-            return g_stdlib_root;
+            char probe[4096];
+            int pn = snprintf(probe, sizeof(probe), "%s/macros.tur", env);
+            if (pn > 0 && (size_t)pn < sizeof(probe) && access(probe, R_OK) == 0) {
+                memcpy(g_stdlib_root, env, n + 1);
+                g_stdlib_root_state = 1;
+                return g_stdlib_root;
+            }
+            fprintf(stderr,
+                    "tur: ignoring TUR_STDLIB_DIR=%s "
+                    "(no readable macros.tur there); "
+                    "falling back to the stdlib beside the binary\n", env);
+            /* Drop it so every downstream reader -- elab_toplevel.c, the REPL
+             * preload, lsp_lite.c -- agrees with the value resolved below
+             * instead of re-reading the bad one out of the environment. */
+            unsetenv("TUR_STDLIB_DIR");
         }
     }
 

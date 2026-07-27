@@ -553,6 +553,19 @@ add_test(
   COMMAND bash tests/turi/repl-smoke.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The REPL surface a GUI host drives: OSC 133 busy/idle markers, the logical
+# working directory, :load-string, and TUR_STDLIB_DIR validation.
+add_test(
+  NAME tur_repl_host_integration
+  COMMAND bash tests/turi/repl-host-integration.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The tree-walking interpreter never frees its closures/registered natives
+# (process-lifetime by design), so leak detection is off here as it is for the
+# other REPL-driving harnesses.
+set_tests_properties(tur_repl_host_integration PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # Eval-mode unknown-call diagnostic: an unbound call head under --interpret must
 # warn (TUR-W0040) at elaboration time rather than silently deferring to runtime.
 add_test(
