@@ -2,6 +2,6 @@
 ;; sibling spice via :spices :path.  Exercises the cross-spice auto-add.
 (defpackage spice-resolver-deps
   :modules [app/main]
-  :spices #fx{
-    "spice-resolver-dep" #fx{:path "../spice-resolver-dep"}
+  :spices #map{
+    "spice-resolver-dep" #map{:path "../spice-resolver-dep"}
   })

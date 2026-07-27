@@ -206,10 +206,10 @@ Derive usage mirrors json exactly:
   exact tag pinned during MP0:
 
   ```turmeric
-  :cmake-deps #fx{
-    "mpack" #fx{:url     "https://github.com/ludocode/mpack"
-             :ref     "v1.1.1"                     ;; confirm at MP0
-             :options #fx{:BUILD_SHARED_LIBS "OFF"}}
+  :cmake-deps #map{
+    "mpack" #map{:url     "https://github.com/ludocode/mpack"
+                 :ref     "v1.1.1"                     ;; confirm at MP0
+                 :options #map{:BUILD_SHARED_LIBS "OFF"}}
   }
   ```
 

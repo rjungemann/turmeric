@@ -187,12 +187,12 @@ Canonical req/rep round trip:
   off (exact tag pinned during NG0; the v1.10.x line is current):
 
   ```turmeric
-  :cmake-deps #fx{
-    "nng" #fx{:url     "https://github.com/nanomsg/nng"
-           :ref     "v1.10.1"                    ;; confirm at NG0
-           :targets ["nng"]
-           :options #fx{:BUILD_SHARED_LIBS "OFF"  :NNG_TESTS "OFF"
-                     :NNG_TOOLS "OFF"          :NNG_ENABLE_TLS "OFF"}}
+  :cmake-deps #map{
+    "nng" #map{:url     "https://github.com/nanomsg/nng"
+               :ref     "v1.10.1"                    ;; confirm at NG0
+               :targets ["nng"]
+               :options #map{:BUILD_SHARED_LIBS "OFF"  :NNG_TESTS "OFF"
+                             :NNG_TOOLS "OFF"         :NNG_ENABLE_TLS "OFF"}}
   }
   ```
 

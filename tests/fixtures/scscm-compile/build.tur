@@ -2,6 +2,6 @@
   :name        "scscm-compile-test"
   :version     "0.1.0"
   :description "Fixture: round-trip tests for the scscm spice compile API."
-  :spices #fx{
-    "tur-scscm" #fx{:path "../../../../turmeric-spices/spices/scscm"}
+  :spices #map{
+    "tur-scscm" #map{:path "../../../../turmeric-spices/spices/scscm"}
   })

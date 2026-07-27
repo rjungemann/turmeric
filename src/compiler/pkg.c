@@ -120,7 +120,7 @@ static bool mkdirp(const char *path) {
 /* Get a value from an F_MAP by keyword name (without colon).
  * Returns NULL if not found. */
 static const Form *map_get_kw(const Form *map, const char *kw) {
-    if (!map || map->tag != F_MAP) return NULL;
+    if (!map || (map->tag != F_MAP && map->tag != F_MAP_LITERAL)) return NULL;
     const FormList *fl = &map->as.list;
     for (uint32_t i = 0; i + 1 < fl->len; i += 2) {
         const Form *key = fl->items[i];
@@ -145,6 +145,42 @@ static void report_non_map(const Form *got, const char *what) {
               "build.tur: %s must be a map%s", what, hint);
 }
 
+/* Reject an effect-row literal sitting in a manifest slot that means "map".
+ *
+ * The reader gives `#{...}`, `#fx{...}`, and `@{...}` all the same F_MAP tag
+ * and distinguishes them only by `fx_prov`, so a slot that checks the tag
+ * alone silently accepts an effect row as a map.  `parse_exports` has guarded
+ * against this since exports-map-syntax-tighten-plan; this helper is that
+ * plan's follow-up audit, shared by every other map-shaped manifest slot.
+ *
+ * `alt` names an additional accepted shape (e.g. "a vector of source paths")
+ * or is NULL.  Returns true when `f` is an effect row -- a diagnostic has
+ * been emitted and the caller should bail. */
+static bool reject_fx_row(const Form *f, const char *what, const char *alt) {
+    if (!f || f->tag != F_MAP) return false;
+    const char *spelling =
+        (f->fx_prov == (uint8_t)PROV_FX_EXPLICIT)  ? "#fx{...}" :
+        (f->fx_prov == (uint8_t)PROV_FX_AT_LEGACY) ? "@{...}"   : NULL;
+    if (!spelling) return false;
+    diag_emit(DIAG_ERROR, f->span,
+              "TUR-E0620: build.tur: %s expects a map (`#{...}` or "
+              "`#map{...}`)%s%s; got an effect-row literal (`%s`).  Effect "
+              "rows are the spelling used in function type annotations "
+              "(e.g. `#fx{Net}`), not manifest maps.",
+              what, alt ? " or " : "", alt ? alt : "", spelling);
+    return true;
+}
+
+/* True when `f` is usable as a manifest map -- `#{...}` (F_MAP, non-effect
+ * provenance) or `#map{...}` (F_MAP_LITERAL).  Emits the appropriate
+ * diagnostic and returns false otherwise. */
+static bool expect_map(const Form *f, const char *what) {
+    if (reject_fx_row(f, what, NULL)) return false;
+    if (f && (f->tag == F_MAP || f->tag == F_MAP_LITERAL)) return true;
+    report_non_map(f, what);
+    return false;
+}
+
 /* Extract a string from an F_STR form, or NULL. */
 static char *form_str_dup(const Form *f) {
     if (!f || f->tag != F_STR) return NULL;
@@ -160,10 +196,7 @@ static bool form_bool_val(const Form *f) {
 /* Parse the :spices map: #{"name" #{:url "..." :ref "..."} ...} */
 static bool parse_spices(const Form *map, PkgManifest *m) {
     if (!map) return true; /* missing keyword is OK */
-    if (map->tag != F_MAP) {
-        report_non_map(map, ":spices");
-        return false;
-    }
+    if (!expect_map(map, ":spices")) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     m->spices = (PkgSpice *)malloc(cap * sizeof(PkgSpice));
@@ -175,10 +208,7 @@ static bool parse_spices(const Form *map, PkgManifest *m) {
         const Form *val = fl->items[i + 1];
         if (key->tag != F_STR) continue;
         if (!val) continue;
-        if (val->tag != F_MAP) {
-            report_non_map(val, "entry in :spices");
-            continue;
-        }
+        if (!expect_map(val, "entry in :spices")) continue;
 
         if (m->n_spices >= cap) {
             cap *= 2;
@@ -208,10 +238,7 @@ static bool parse_cmake_opts(const Form *map,
     *out_opts = NULL;
     *out_n    = 0;
     if (!map) return true;
-    if (map->tag != F_MAP) {
-        report_non_map(map, ":options");
-        return false;
-    }
+    if (!expect_map(map, ":options")) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     *out_opts = (PkgCmakeOpt *)malloc(cap * sizeof(PkgCmakeOpt));
@@ -237,10 +264,7 @@ static bool parse_cmake_opts(const Form *map,
 /* Parse the :cmake-deps map */
 static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
     if (!map) return true; /* missing keyword is OK */
-    if (map->tag != F_MAP) {
-        report_non_map(map, ":cmake-deps");
-        return false;
-    }
+    if (!expect_map(map, ":cmake-deps")) return false;
     const FormList *fl = &map->as.list;
     int cap = 4;
     m->cmake_deps = (PkgCmakeDep *)malloc(cap * sizeof(PkgCmakeDep));
@@ -252,10 +276,7 @@ static bool parse_cmake_deps(const Form *map, PkgManifest *m) {
         const Form *val = fl->items[i + 1];
         if (key->tag != F_STR) continue;
         if (!val) continue;
-        if (val->tag != F_MAP) {
-            report_non_map(val, "entry in :cmake-deps");
-            continue;
-        }
+        if (!expect_map(val, "entry in :cmake-deps")) continue;
 
         if (m->n_cmake_deps >= cap) {
             cap *= 2;
@@ -421,7 +442,9 @@ static bool parse_c_path_vec(const Form *f, const char *manifest_dir,
  * `#fx{...}` (an effect-row literal) is REJECTED here with TUR-E0620.  The
  * reader tags all three of `#{...}`, `#fx{...}`, and (implicitly) `#map{...}`
  * with related F_MAP-family shapes, but effect rows are never a valid
- * `:exports` value.  See docs/upcoming/exports-map-syntax-tighten-plan.md.
+ * `:exports` value.  See docs/archive/exports-map-syntax-tighten-plan.md;
+ * the shared reject_fx_row()/expect_map() helpers extend the same guard to
+ * every other map-shaped manifest slot.
  *
  * Storing the keys lets the build driver validate declared exports against
  * on-disk sources and lets `tur emit-cmake` enumerate the modules. */
@@ -430,26 +453,8 @@ static bool parse_exports(const Form *f, char ***out, int *n_out) {
     *n_out = 0;
     if (!f) return true;
 
-    /* Reject `#fx{...}` -- an effect-row literal masquerading as a map. */
-    if (f->tag == F_MAP && f->fx_prov == (uint8_t)PROV_FX_EXPLICIT) {
-        diag_emit(DIAG_ERROR, f->span,
-                  "TUR-E0620: `:exports` expects a map literal (`#map{...}`) or "
-                  "a vector of source paths; got an effect-row literal "
-                  "(`#fx{...}`).  Effect rows are the spelling used in function "
-                  "type annotations, not exported-module maps.  Rewrite as "
-                  "`:exports #map{ \"mod/name\" [sym ...] ... }`.");
-        return false;
-    }
-    /* Also reject `@{...}` -- another effect-row spelling in the same trap. */
-    if (f->tag == F_MAP && f->fx_prov == (uint8_t)PROV_FX_AT_LEGACY) {
-        diag_emit(DIAG_ERROR, f->span,
-                  "TUR-E0620: `:exports` expects a map literal (`#map{...}`) or "
-                  "a vector of source paths; got an effect-row literal "
-                  "(`@{...}`).  Effect rows are the spelling used in function "
-                  "type annotations, not exported-module maps.  Rewrite as "
-                  "`:exports #map{ \"mod/name\" [sym ...] ... }`.");
-        return false;
-    }
+    /* Reject `#fx{...}` / `@{...}` -- effect rows masquerading as a map. */
+    if (reject_fx_row(f, ":exports", "a vector of source paths")) return false;
 
     if (f->tag != F_MAP && f->tag != F_MAP_LITERAL)
         return parse_str_vec(f, out, n_out);
@@ -650,10 +655,7 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
         } else if (strcmp(kw, "bin") == 0) {
             /* GS-M1: :bin #{ "tur-foo" "src/main.tur" ... } */
             if (!vf) continue;
-            if (vf->tag != F_MAP) {
-                report_non_map(vf, ":bin");
-                continue;
-            }
+            if (!expect_map(vf, ":bin")) continue;
             const FormList *bfl = &vf->as.list;
             int cap = (int)(bfl->len / 2 + 1);
             out->bin_names = (char **)malloc(cap * sizeof(char *));
@@ -684,7 +686,7 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
                 out->n_bins++;
             }
         } else if (strcmp(kw, "build-opts") == 0) {
-            if (vf && vf->tag == F_MAP) {
+            if (vf && expect_map(vf, ":build-opts")) {
                 const Form *cf = map_get_kw(vf, "c-flags");
                 const Form *lf = map_get_kw(vf, "link-libs");
                 const Form *nf = map_get_kw(vf, "no-stdlib");
@@ -703,8 +705,6 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
                                  &out->c_sources,  &out->n_c_sources);
                 parse_c_path_vec(if_, mdir, ":c-includes", false,
                                  &out->c_includes, &out->n_c_includes);
-            } else if (vf) {
-                report_non_map(vf, ":build-opts");
             }
         }
     }

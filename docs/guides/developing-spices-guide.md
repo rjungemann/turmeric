@@ -588,7 +588,7 @@ Add two keys under `:build-opts`:
 ```turmeric
 (defpackage tur-signal
   :name "tur-signal"
-  :build-opts #fx{
+  :build-opts #map{
     :c-includes ["c/kissfft"]            ;; -I dirs (manifest-relative)
     :c-sources  ["c/kissfft/kiss_fft.c"  ;; .c files compiled + linked
                  "c/kissfft/kiss_fftr.c"

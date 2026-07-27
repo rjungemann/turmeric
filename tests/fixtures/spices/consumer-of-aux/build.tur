@@ -3,6 +3,6 @@
 ;; link line so the inline-C call to vendor_value() resolves.
 (defpackage consumer-of-aux
   :name "consumer-of-aux"
-  :spices #fx{
-    "aux-c-vendor" #fx{:path "../aux-c-vendor"}
+  :spices #map{
+    "aux-c-vendor" #map{:path "../aux-c-vendor"}
   })

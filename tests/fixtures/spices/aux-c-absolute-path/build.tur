@@ -2,6 +2,6 @@
 ;; is rejected -- vendored sources must be manifest-relative. DIAG_ERROR.
 (defpackage aux-c-absolute-path
   :name "aux-c-absolute-path"
-  :build-opts #fx{
+  :build-opts #map{
     :c-sources ["/etc/hosts.c"]
   })

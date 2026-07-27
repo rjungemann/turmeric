@@ -2,6 +2,6 @@
 ;; exist on disk. Must produce a parse-time DIAG_ERROR, not a segfault.
 (defpackage aux-c-missing-source
   :name "aux-c-missing-source"
-  :build-opts #fx{
+  :build-opts #map{
     :c-sources ["c/does-not-exist.c"]
   })

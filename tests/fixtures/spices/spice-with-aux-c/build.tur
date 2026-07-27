@@ -4,7 +4,7 @@
 ;; :c-includes -I injection and the :c-sources compile + link.
 (defpackage spice-with-aux-c
   :name "spice-with-aux-c"
-  :build-opts #fx{
+  :build-opts #map{
     :c-includes ["c/inc"]
     :c-sources  ["c/answer.c"]
   })

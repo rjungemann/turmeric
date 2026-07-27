@@ -1,7 +1,7 @@
 (defpackage spice-b
   :name    "spice-b"
   :version "0.1.0"
-  :cmake-deps #fx{
-    "fakelib" #fx{:url "https://example.invalid/fakelib.git"
+  :cmake-deps #map{
+    "fakelib" #map{:url "https://example.invalid/fakelib.git"
                 :ref "v2.0.0"}
   })

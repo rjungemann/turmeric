@@ -934,6 +934,67 @@ else
     fail "build-project-exports-map-form-accepted" "rc=$mapform_rc out=$mapform_out"
 fi
 
+# exports-map-syntax-tighten-plan follow-up audit: the same effect-row trap
+# applies to every OTHER map-shaped manifest slot, not just `:exports`.  Those
+# slots checked only the F_MAP tag, so `:cmake-deps #fx{...}` parsed cleanly
+# and CMake generation proceeded off an effect-row literal.  parse_* now routes
+# through expect_map(), so each slot rejects an effect row with TUR-E0620.
+for slot_case in \
+    'spices|:spices #fx{ "dep" #fx{:url "https://example.invalid/d" :ref "v1"} }' \
+    'spices-entry|:spices #map{ "dep" #fx{:url "https://example.invalid/d" :ref "v1"} }' \
+    'cmake-deps|:cmake-deps #fx{ "nng" #map{:url "https://example.invalid/n" :ref "v1"} }' \
+    'cmake-deps-entry|:cmake-deps #map{ "nng" #fx{:url "https://example.invalid/n" :ref "v1"} }' \
+    'cmake-options|:cmake-deps #map{ "nng" #map{:url "https://example.invalid/n" :ref "v1" :options #fx{:BUILD_SHARED_LIBS "OFF"}} }' \
+    'build-opts|:build-opts #fx{ :c-flags ["-DFOO=1"] }' \
+    'bin|:bin #fx{ "tur-fxt" "src/app/main.tur" }' \
+; do
+    slot_name=${slot_case%%|*}
+    slot_body=${slot_case#*|}
+    SLOTDIR="$WORK/manifest-fx-row-$slot_name"
+    mkdir -p "$SLOTDIR/src/app"
+    cat > "$SLOTDIR/build.tur" <<EOF
+(defpackage tur-fx-row-$slot_name
+  :name    "tur-fx-row-$slot_name"
+  :version "0.1.0"
+  $slot_body
+  :exports #map{ "app/main" ["main"] })
+EOF
+    cat > "$SLOTDIR/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+    slot_out=$(cd "$WORK" && "$TUR" build "$SLOTDIR" -o "$WORK/fxslotbin" 2>&1)
+    slot_rc=$?
+    if [ $slot_rc -ne 0 ] && echo "$slot_out" | grep -q "TUR-E0620"; then
+        pass "build-project-manifest-fx-row-rejected-$slot_name"
+    else
+        fail "build-project-manifest-fx-row-rejected-$slot_name" \
+             "rc=$slot_rc out=$slot_out"
+    fi
+done
+
+# ...and the positive half of the same audit: `#map{...}` is now accepted at
+# those slots too (they previously took only the bare `#{...}` spelling, so
+# the diagnostic's suggested rewrite would itself have been an error).
+MAPSLOT="$WORK/manifest-map-slots"
+mkdir -p "$MAPSLOT/src/app"
+cat > "$MAPSLOT/build.tur" <<'EOF'
+(defpackage tur-map-slots
+  :name    "tur-map-slots"
+  :version "0.1.0"
+  :build-opts #map{ :c-flags ["-DTUR_MAP_SLOT_TEST=1"] }
+  :exports #map{ "app/main" ["main"] })
+EOF
+cat > "$MAPSLOT/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+mapslot_out=$(cd "$WORK" && "$TUR" build "$MAPSLOT" -o "$WORK/mapslotbin" 2>&1)
+mapslot_rc=$?
+if [ $mapslot_rc -eq 0 ] && [ -x "$WORK/mapslotbin" ]; then
+    pass "build-project-manifest-map-slots-accepted"
+else
+    fail "build-project-manifest-map-slots-accepted" "rc=$mapslot_rc out=$mapslot_out"
+fi
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

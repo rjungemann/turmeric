@@ -1,6 +1,6 @@
 (defpackage spice-a
   :name    "spice-a"
   :version "0.1.0"
-  :spices #fx{
-    "spice-b" #fx{:path "../spice-b"}
+  :spices #map{
+    "spice-b" #map{:path "../spice-b"}
   })
