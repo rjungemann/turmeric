@@ -23,9 +23,21 @@
 /* Phase 9: Include deferred free queue to avoid deep recursion */
 #include "rc_free_queue.h"
 
-/* Default drop function: just call free() on the value */
+/* Default drop function: just call free() on the value.  Correct only for a
+ * payload that is its own allocation (tur_rc_from_ref, rc_set_value) -- see
+ * inline_scalar_drop_fn for the inline case. */
 static void default_drop_fn(void *value) {
     free(value);
+}
+
+/* Default drop for a SCALAR payload allocated inline by rc_cb_alloc*: the
+ * value lives at (cb + 1), inside the header's own malloc block, so there is
+ * nothing separate to free -- rc_cb_free's free(cb) reclaims it.  free(value)
+ * here hands free() an interior pointer (glibc SIGABRT / ASan bad-free).
+ * A block repointed at a separate allocation via rc_set_value gets its glue
+ * re-derived there, so it never keeps this no-op. */
+static void inline_scalar_drop_fn(void *value) {
+    (void)value;
 }
 
 /* Drop hook for ref<T> payloads stored in rc<ref<T>>.
@@ -76,6 +88,23 @@ static RcDropFn default_drop_fn_for_type(uint8_t value_type) {
     }
 }
 
+/* As default_drop_fn_for_type, but for the rc_cb_alloc* entry points, whose
+ * scalar payload is inline rather than a separate allocation.  The three
+ * non-scalar glues stay: their payload cell is always separately allocated
+ * (installed via rc_set_value), so their free(value) is correct. */
+static RcDropFn inline_default_drop_fn_for_type(uint8_t value_type) {
+    switch (value_type) {
+        case RC_VT_REF:
+            return drop_ref_payload;
+        case RC_VT_RC:
+            return drop_rc_payload;
+        case RC_VT_WEAK:
+            return drop_weak_payload;
+        default:
+            return inline_scalar_drop_fn;
+    }
+}
+
 /* Allocate a control block with space for a value of size `value_size`.
  * The value storage comes right after the control block header.
  * Initializes strong_count to 1, weak_count to 0.
@@ -103,7 +132,7 @@ RcControlBlock *rc_cb_alloc_kinded(size_t value_size, uint8_t value_type,
     cb->strong_count = 1;
     cb->weak_count = 0;
     cb->value = (void *)(cb + 1);
-    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type);
+    cb->drop_fn = drop_fn ? drop_fn : inline_default_drop_fn_for_type(value_type);
     cb->walk_fn = NULL;
     cb->value_type_kind = value_type;
 

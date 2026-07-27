@@ -6405,10 +6405,12 @@ static void emit_rcgc_prototypes(Buf *out) {
         "uint32_t rc_free_queue_drain(void);\n"
         "void rc_free_queue_push(RcControlBlock *cb);\n"
         "void default_rc_drop_fn(void *value);\n"
+        "void inline_scalar_drop_fn(void *value);\n"
         "void drop_ref_payload(void *value);\n"
         "void drop_rc_payload(void *value);\n"
         "void drop_weak_payload(void *value);\n"
         "RcDropFn default_drop_fn_for_type(int value_type_kind);\n"
+        "RcDropFn inline_default_drop_fn_for_type(int value_type_kind);\n"
         "uint64_t rc_strong_increment(RcControlBlock *cb);\n"
         "bool rc_strong_decrement(RcControlBlock *cb);\n"
         "uint64_t rc_weak_increment(RcControlBlock *cb);\n"
@@ -6418,6 +6420,7 @@ static void emit_rcgc_prototypes(Buf *out) {
         "bool rc_is_alive(RcControlBlock *cb);\n"
         "RcControlBlock *rc_upgrade(RcControlBlock *cb);\n"
         "void *rc_get_value(RcControlBlock *cb);\n"
+        "void rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn);\n"
         "void *tur_ref_from_rc(RcControlBlock *cb);\n"
         "void __gc_mark_struct_child(RcControlBlock *child, void *ctx);\n"
         "void gc_mark_phase(void);\n"
@@ -9630,6 +9633,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid default_rc_drop_fn(void *value) {\n", rcgc_helper);
     buf_puts(out, "    free(value);\n");
     buf_puts(out, "}\n\n");
+    /* Mirror of inline_scalar_drop_fn in src/runtime/rc.c: a scalar payload
+     * allocated by rc_cb_alloc* lives inline at (cb + 1), so free(value) would
+     * hand free() an interior pointer.  free(cb) in rc_cb_free reclaims it.
+     * Separate-payload blocks (tur_rc_from_ref) keep default_rc_drop_fn. */
+    buf_printf(out, "%svoid inline_scalar_drop_fn(void *value) {\n", rcgc_helper);
+    buf_puts(out, "    (void)value;\n");
+    buf_puts(out, "}\n\n");
     buf_printf(out, "%svoid drop_ref_payload(void *value) {\n", rcgc_helper);
     buf_puts(out, "    if (!value) return;\n");
     buf_puts(out, "    void *inner = *((void **)value);\n");
@@ -9669,6 +9679,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        default: return default_rc_drop_fn;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n\n");
+    /* Mirror of inline_default_drop_fn_for_type in src/runtime/rc.c: the
+     * defaulting used by the rc_cb_alloc* entry points, whose scalar payload
+     * is inline.  The three non-scalar glues stay -- their payload cell is
+     * always a separate allocation, so their free(value) is correct. */
+    buf_printf(out, "%sRcDropFn inline_default_drop_fn_for_type(int value_type_kind) {\n", rcgc_helper);
+    buf_puts(out, "    switch (value_type_kind) {\n");
+    buf_puts(out, "        case 8: return drop_ref_payload;   /* TY_REF */\n");
+    buf_puts(out, "        case 9: return drop_rc_payload;    /* TY_RC */\n");
+    buf_puts(out, "        case 10: return drop_weak_payload; /* TY_WEAK */\n");
+    buf_puts(out, "        default: return inline_scalar_drop_fn;\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "}\n\n");
     emit_rt_defs_end(out, shared);
     /* EXG5: layout-tag constants kept in sync with runtime/rc.h. */
     buf_puts(out, "#define RCK_OPAQUE       0\n");
@@ -9684,7 +9706,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    cb->strong_count = 1;\n");
     buf_puts(out, "    cb->weak_count = 0;\n");
     buf_puts(out, "    cb->value = (void *)(cb + 1);\n");
-    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(value_type_kind);\n");
+    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : inline_default_drop_fn_for_type(value_type_kind);\n");
     buf_puts(out, "    cb->walk_fn = NULL;\n");
     buf_puts(out, "    cb->value_type_kind = value_type_kind;\n");
     buf_puts(out, "    memset(cb->reserved, 0, sizeof(cb->reserved));\n");
@@ -9803,6 +9825,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid *rc_get_value(RcControlBlock *cb) {\n", rcgc_api);
     buf_puts(out, "    if (!cb) return NULL;\n");
     buf_puts(out, "    return cb->value;\n");
+    buf_puts(out, "}\n\n");
+    /* Mirror of rc_set_value in src/runtime/rc.c: repoint the payload at a
+     * separate allocation and re-derive the default glue for it -- the
+     * rc_cb_alloc default assumes an inline payload and must not free().
+     * EX_RC_OF emits calls to this, so the replica needs the definition. */
+    buf_printf(out, "%svoid rc_set_value(RcControlBlock *cb, void *value, RcDropFn drop_fn) {\n", rcgc_api);
+    buf_puts(out, "    if (!cb) return;\n");
+    buf_puts(out, "    cb->value = value;\n");
+    buf_puts(out, "    cb->drop_fn = drop_fn ? drop_fn : default_drop_fn_for_type(cb->value_type_kind);\n");
     buf_puts(out, "}\n\n");
     buf_printf(out, "%sRcControlBlock *tur_rc_from_ref(void *ref_value, int value_type_kind) {\n", rcgc_api);
     buf_puts(out, "    if (!ref_value) return NULL;\n");
