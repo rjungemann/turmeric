@@ -448,7 +448,7 @@ state cannot change*** -- a predicate like `alive?` or `open?` that reads a
 generation counter or a socket flag is impure and gets a fresh symbol per
 occurrence by the rule above, but a `frozen` region plus a `#reads` annotation
 recovers congruence for it, soundly, without eliding the callee's kept entry
-check. That is a separate, in-flight feature; see the
+check. That is a separate feature (implemented, experimental); see the
 [Stateful Refinements guide](stateful-refinements-guide.md).
 
 ### What a `match` arm knows

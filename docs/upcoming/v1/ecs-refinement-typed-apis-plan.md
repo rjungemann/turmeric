@@ -487,14 +487,23 @@ nanoseconds, and the parent plan's benchmarking section is a standing warning
 that this class of win tends to evaporate under `cc -O2`, which already proves
 locally-derived bounds for free. **RE2 does not start without a profile.**
 
-### RE3 -- Documentation
+### RE3 -- Documentation (DONE 2026-07-26)
 
-- Fix the two false statements in the table above.
+- Fix the two false statements in the table above. *(Landed with the plan
+  rewrite.)*
 - `ecs-guide.md`: replace the "gated on the refinement-types work" pointer with
-  what actually ships.
+  what actually ships. *(Done: the Entities section and the runtime-checks
+  bullet now describe `ecs/refined-world` + `for-each-alive!` under
+  `--enable=refined`, with the facade-vs-full-stack scope note.)*
 - `ecs-vs-haskell-ecs.md`: the aliveness row gains a compile-time entry
   alongside the runtime default; the polymorphism row is **not** touched (see
-  below).
+  below). *(Done: row, "still runtime-checked" section -- the "open design
+  question" text replaced with the shipped `#reads` + `frozen` answer and its
+  trust-boundary caveat -- and the honest-scorecard bullet.)*
+- Also landed in the same pass: `stateful-refinements-guide.md` gained the
+  "Macros compose" section (splicing vs generating macros both discharge;
+  `for-each-alive!` as the shipped consumer), and
+  `refinement-types-guide.md`'s pointer to it no longer says "in-flight".
 
 ---
 
