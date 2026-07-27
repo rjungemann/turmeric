@@ -261,8 +261,11 @@ both are worth knowing.
 about a mutable resource, congruent in a scope where that resource is frozen."
 The same `frozen` + `#reads` pair covers an open file (`(open? conn)`), a
 resizable buffer (`(in-bounds? buf i)` -- the bounds-elimination case
-[`loop-invariants-plan`](../upcoming/hold/loop-invariants-plan.md) wants), a held
-lock, a session in a state, a row inside a transaction. `ecs/freeze` lives in
+[`loop-invariants-plan`](../upcoming/hold/loop-invariants-plan.md) wants;
+probed working 2026-07-26 and pinned by
+`tests/fixtures/refine-stateful-resizable-bounds`: the guard proves inside the
+region, `grow!` is `TUR-E0200` there, and without the region the read is
+`TUR-W0372`), a held lock, a session in a state, a row inside a transaction. `ecs/freeze` lives in
 the ECS spice only because the ECS is the first program that demanded it.
 
 The concept has a well-established name outside Turmeric: a **`reads` clause**,
@@ -299,7 +302,12 @@ semantics break:
    bounds work.
 
 Treat today's `#reads` as step 1 of that path, not as a finished `reads`-clause
-feature.
+feature. Step 2 now has a written plan --
+[`checked-write-frames-plan.md`](../upcoming/checked-write-frames-plan.md):
+`#writes` declarations, a checked tier for pure-Turmeric bodies, and
+frame-aware hypothesis invalidation replacing the coarse whole-body `set!`
+decline (the binding constraint on side-effecting `for-each-alive!` bodies
+and `while`-lowered loops).
 
 ## Quick reference
 

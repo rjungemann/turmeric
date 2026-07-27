@@ -334,7 +334,10 @@ Only if RM-S0 says so. Three pieces, in order, each independently useful:
    the gate is *declared* (a `^linear` cap in the signature) and *checked* (the
    linearity checker), never inferred from `set!`/inline C. A new effect row
    remains an option if B2/B3 need mutation facts the cap cannot carry, but is
-   not the starting point.
+   not the starting point. **[Update 2026-07-26: that option is now planned --
+   `docs/upcoming/checked-write-frames-plan.md` (`#writes` + a checked tier +
+   frame-aware hypothesis invalidation), motivated by two post-RE1 demand
+   signals rather than by B2/B3.]**
 2. **A region form** whose entry borrows the capability and whose body is a
    congruence window. **[DONE 2026-07-26 -- reworked to the sound `frozen`
    region: `(frozen w body...)` -> `(let [_ (& w)] body...)` holds an immutable
