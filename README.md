@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.0` -- experimental `#reads` stateful refinements (frozen regions, congruence grants, codegen-backed params), inline-C HKT instances can return by-value results, and a batch of refinement guard-discharge fixes.
+**Latest release:** `v0.32.1` -- REPL `:cd`/`:pwd` with OSC 7 cwd reporting, a new `stdlib/rcvec` traceable `rc` container, and eval-boundary collection sweeping that bounds long-lived interpreter sessions.
 
 ## What
 

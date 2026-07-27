@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.32.1] -- 2026-07-27
 
 ### Added
 
@@ -14,6 +14,30 @@ All notable changes to Turmeric are documented here.
   the existing OSC 133 prompt markers, so a host editor can track the working
   directory without restarting or scraping output; the initial directory is
   reported at startup for the same reason.
+- **`stdlib/rcvec`**: a flat vector of `rc<A>` that the cycle collector can
+  trace. A plain `Vec[rc<T>]` is refcount-correct but invisible to the
+  collector, so a cycle through a slot strands; an `RcVec` carries its own
+  walk/drop hooks, so cycles through it are reclaimed.
+
+### Changed
+
+- **Long-lived interpreter sessions bound their memory**: tracked collection
+  buffers (Vec/Set/Map wrappers, TVar cells) are swept at the eval boundary
+  right after a successful scratch-promotion rewind, instead of accumulating
+  until teardown. Measured over 5000 transient-vec evals: 5000 tracked boxes
+  retained before, 0 live after.
+
+### Fixed
+
+- **`rc` scalar default drop glue no longer frees its inline payload**: a
+  decrement-to-zero on a scalar `rc` allocated with default glue freed an
+  interior pointer, aborting under ASan. Scalars now default to a no-op
+  inline drop; the separate-payload entry points keep the freeing default.
+- **TVar cells survive promotion rewinds**: cells were scratch allocations
+  that promotion could not see, so the first rewind after
+  `(def t (tvar/new 0))` poisoned the cell -- a live use-after-reset in the
+  REPL. Cells are now tracked boxes that survive rewinds and sweep when
+  unreachable.
 
 ## [0.32.0] -- 2026-07-26
 
