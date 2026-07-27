@@ -7,6 +7,7 @@
 
 #include "buf.h"
 #include "diag.h"
+#include "fmt.h"          /* fmt_format_buffer() for textDocument/formatting */
 #include "platform_fs.h"  /* mkstemps() on Windows */
 
 #include <errno.h>
@@ -209,9 +210,15 @@ static void run_doc_analysis(LspDoc *doc, int fd_out) {
     lsp_doc_table_init(&dtable);
     lsp_scan_docs(doc->text, doc->text_len, &dtable);
 
-    /* 2. Write source to a temp file */
-    char tmp_path[256];
-    snprintf(tmp_path, sizeof(tmp_path), "/tmp/tur_lsp_XXXXXX.tur");
+    /* 2. Write source to a temp file.
+     *
+     * The directory comes from tur_temp_dir() rather than a literal "/tmp":
+     * on Windows a leading slash means "root of the current drive", so the
+     * hardcoded path resolved to a C:\tmp that does not exist and every
+     * analysis silently produced nothing. */
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s/tur_lsp_XXXXXX.tur",
+             tur_temp_dir());
     int tmp_fd = mkstemps(tmp_path, 4);
     if (tmp_fd < 0) {
         lsp_doc_table_free(&dtable);
@@ -227,29 +234,46 @@ static void run_doc_analysis(LspDoc *doc, int fd_out) {
     }
     close(tmp_fd);
 
-    /* 3. Allocate symbol buffer */
-    lsp_doc_free_symbols(doc);
-    doc->symbols      = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
-    doc->symbol_cap   = LSP_SYM_CAP;
-    doc->symbol_count = 0;
+    /* 3. Collect into a scratch buffer, not straight into the document.
+     *
+     * A buffer that does not parse yields no symbols, and *not parsing is the
+     * normal state while typing*: the moment the user types `(` or `(foo`, the
+     * form is unbalanced. Overwriting the index at that point took completion,
+     * hover, and go-to-definition from 200 answers to zero -- precisely when
+     * they are wanted. So the new set is adopted only if it has something in
+     * it (or the compile genuinely succeeded, which is what makes an
+     * emptied-out file report empty rather than stay stale), and otherwise the
+     * previous one is kept and flagged. */
+    LspSymbol *fresh       = calloc((size_t)LSP_SYM_CAP, sizeof(LspSymbol));
+    int        fresh_count = 0;
 
     /* 4. Run the compiler: collect symbols + gather diagnostics */
     diag_reset();
     diag_init(false);
     diag_lsp_begin();
-    tur_collect_symbols(tmp_path, doc->symbols, doc->symbol_cap,
-                        &doc->symbol_count);
+    int rc = tur_collect_symbols(tmp_path, fresh, LSP_SYM_CAP, &fresh_count);
     diag_lsp_remap_path(tmp_path, doc->path);
 
     /* 5. Populate docstrings and fix up file paths */
-    for (int i = 0; i < doc->symbol_count; i++) {
-        LspSymbol *sym = &doc->symbols[i];
+    for (int i = 0; i < fresh_count; i++) {
+        LspSymbol *sym = &fresh[i];
         /* Fill docstring from the re-scanner */
         lsp_scan_docs_lookup(&dtable, sym->name,
                              sym->doc, sizeof(sym->doc));
         /* Remap temp file path to the real document path */
         if (strcmp(sym->file_path, tmp_path) == 0)
             strncpy(sym->file_path, doc->path, sizeof(sym->file_path) - 1);
+    }
+
+    if (rc == 0 || fresh_count > 0 || !doc->symbols) {
+        lsp_doc_free_symbols(doc);
+        doc->symbols       = fresh;
+        doc->symbol_cap    = LSP_SYM_CAP;
+        doc->symbol_count  = fresh_count;
+        doc->symbols_stale = 0;
+    } else {
+        free(fresh);
+        doc->symbols_stale = 1;
     }
 
     unlink(tmp_path);
@@ -307,13 +331,155 @@ static int input_pending(int fd_in, int timeout_ms) {
 #define LSP_ANALYSIS_DEBOUNCE_MS 200
 
 /* -------------------------------------------------------------------------
+ * Message queue + $/cancelRequest
+ *
+ * The server is single-threaded and synchronous: a request is read, answered,
+ * and only then is the next one read. That leaves no window in which a cancel
+ * can arrive -- which is why there was no $/cancelRequest at all, and why the
+ * one client that needed it grew request timeouts and a generation counter to
+ * throw away replies for buffers that had already moved on.
+ *
+ * The window is opened here rather than by threading the server. The
+ * expensive step is the analysis flush, so after flushing (and before doing
+ * the per-request work) whatever the client sent meanwhile is drained off the
+ * fd into a queue. Cancels found in that drain apply immediately; every other
+ * message stays queued in order and is handled on the following iterations.
+ * A cancel for a request whose answer is already on the wire is a no-op, which
+ * is exactly what the spec asks for.
+ * --------------------------------------------------------------------- */
+
+typedef struct {
+    char **items;
+    size_t head, count, cap;
+} MsgQueue;
+
+static MsgQueue queue_ = {0};
+
+static void queue_push(char *msg) {
+    if (queue_.head + queue_.count == queue_.cap) {
+        if (queue_.head > 0) {
+            memmove(queue_.items, queue_.items + queue_.head,
+                    queue_.count * sizeof(char *));
+            queue_.head = 0;
+        } else {
+            queue_.cap = queue_.cap ? queue_.cap * 2 : 16;
+            queue_.items = realloc(queue_.items, queue_.cap * sizeof(char *));
+        }
+    }
+    queue_.items[queue_.head + queue_.count] = msg;
+    queue_.count++;
+}
+
+static char *queue_pop(void) {
+    if (queue_.count == 0) return NULL;
+    char *m = queue_.items[queue_.head++];
+    queue_.count--;
+    if (queue_.count == 0) queue_.head = 0;
+    return m;
+}
+
+static void queue_free(void) {
+    while (queue_.count > 0) free(queue_pop());
+    free(queue_.items);
+    queue_.items = NULL;
+    queue_.cap = queue_.head = queue_.count = 0;
+}
+
+/* Ids the client has asked us to abandon. Small and bounded: a cancel is only
+ * ever consulted once, immediately after it is recorded, so old entries can be
+ * evicted without losing anything a client would notice. */
+#define LSP_CANCEL_MAX 64
+static char cancelled_[LSP_CANCEL_MAX][40];
+static int  cancelled_n_ = 0;
+
+static void cancel_record(const char *id_raw, size_t id_len) {
+    if (!id_raw || id_len == 0 || id_len >= sizeof(cancelled_[0])) return;
+    if (cancelled_n_ == LSP_CANCEL_MAX) {
+        memmove(cancelled_, cancelled_ + 1,
+                (size_t)(LSP_CANCEL_MAX - 1) * sizeof(cancelled_[0]));
+        cancelled_n_--;
+    }
+    memcpy(cancelled_[cancelled_n_], id_raw, id_len);
+    cancelled_[cancelled_n_][id_len] = '\0';
+    cancelled_n_++;
+}
+
+/* True (and forgets the id) if this request was cancelled while we worked. */
+static bool cancel_take(const char *id_raw, size_t id_len) {
+    if (!id_raw || id_len == 0) return false;
+    for (int i = 0; i < cancelled_n_; i++) {
+        if (strlen(cancelled_[i]) == id_len &&
+            memcmp(cancelled_[i], id_raw, id_len) == 0) {
+            memmove(cancelled_ + i, cancelled_ + i + 1,
+                    (size_t)(cancelled_n_ - i - 1) * sizeof(cancelled_[0]));
+            cancelled_n_--;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Pull everything the client has already sent off the fd without blocking,
+ * recording cancels and queueing the rest. Bounded so a client that never
+ * stops talking cannot keep us in here forever. */
+static void drain_pending(int fd_in) {
+    for (int i = 0; i < 64 && input_pending(fd_in, 0); i++) {
+        char *msg = lsp_read_message(fd_in);
+        if (!msg) return;
+
+        size_t mlen;
+        const char *m = lsp_json_str(msg, "method", &mlen);
+        if (m && mlen == strlen("$/cancelRequest") &&
+            memcmp(m, "$/cancelRequest", mlen) == 0) {
+            size_t plen;
+            const char *p = lsp_json_raw(msg, "params", &plen);
+            size_t cid_len = 0;
+            const char *cid = p ? lsp_json_raw(p, "id", &cid_len) : NULL;
+            cancel_record(cid, cid_len);
+            free(msg);
+            continue;
+        }
+        queue_push(msg);
+    }
+}
+
+/* -------------------------------------------------------------------------
  * Request / notification handlers
  * --------------------------------------------------------------------- */
 
 static bool initialized_ = false;
 static bool shutdown_    = false;
 
-static void on_initialize(const char *id_raw, size_t id_len, int fd_out) {
+/* Does the client accept markdown in hover contents? Answering "yes"
+ * unconditionally meant a plaintext-only client rendered the literal ``` fences
+ * and had to strip them itself. */
+static bool hover_markdown_ = true;
+
+static void on_initialize(const char *id_raw, size_t id_len,
+                          const char *params, int fd_out) {
+    /* capabilities.textDocument.hover.contentFormat is an ordered array of
+     * MarkupKind, most-preferred first. Absent means the 3.17 default, which
+     * includes markdown. */
+    hover_markdown_ = true;
+    if (params) {
+        size_t caps_len, td_len, hov_len, fmt_len;
+        const char *caps = lsp_json_raw(params, "capabilities", &caps_len);
+        const char *td   = caps ? lsp_json_raw(caps, "textDocument", &td_len) : NULL;
+        const char *hov  = td   ? lsp_json_raw(td, "hover", &hov_len) : NULL;
+        const char *fmt  = hov  ? lsp_json_raw(hov, "contentFormat", &fmt_len) : NULL;
+        if (fmt) {
+            /* A raw array slice; a substring test is enough to tell the two
+             * legal MarkupKind values apart. */
+            hover_markdown_ = false;
+            for (size_t i = 0; i + 8 <= fmt_len; i++) {
+                if (memcmp(fmt + i, "markdown", 8) == 0) {
+                    hover_markdown_ = true;
+                    break;
+                }
+            }
+        }
+    }
+
     send_response(fd_out, id_raw, id_len,
         "{\"capabilities\":{"
           /* LSP 3.17 positionEncoding. `character` offsets here have always
@@ -327,8 +493,18 @@ static void on_initialize(const char *id_raw, size_t id_len, int fd_out) {
           "\"definitionProvider\":true,"
           "\"documentSymbolProvider\":true,"
           "\"workspaceSymbolProvider\":true,"
+          "\"documentFormattingProvider\":true,"
+          "\"signatureHelpProvider\":{"
+            "\"triggerCharacters\":[\"(\"],"
+            "\"retriggerCharacters\":[\" \"]"
+          "},"
+          /* Space was advertised as a completion trigger, which in a lisp
+           * fires on nearly every keystroke and forced a full analysis behind
+           * each one. Both known clients declined to honor it. Advertise only
+           * what is actually affordable; a client that wants completion
+           * elsewhere sends an explicit `invoked` request. */
           "\"completionProvider\":{"
-            "\"triggerCharacters\":[\"(\",\" \"]"
+            "\"triggerCharacters\":[\"(\"]"
           "}"
         "}}");
     initialized_ = true;
@@ -376,14 +552,37 @@ static void on_did_change(const char *params, size_t params_len, int fd_out) {
     const char *cc_arr = lsp_json_raw(params, "contentChanges", &cc_len);
     if (!cc_arr) return;
 
-    const char *p = cc_arr;
+    /* textDocumentSync is Full (1), so every element carries the whole
+     * document and the last one wins. Reading only element 0 -- which is what
+     * this did -- silently dropped the rest of a batched notification. A
+     * client that ignores the negotiated sync kind and sends ranged changes
+     * still gets the wrong answer, but it gets the *last* wrong answer rather
+     * than the first, which is at least self-consistent. */
+    const char *p    = cc_arr;
+    const char *last = NULL;
+    const char *cc_end = cc_arr + cc_len;
     while (*p && *p != '[') p++;
     if (*p == '[') p++;
-    while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') p++;
-    if (*p != '{') return;
+    for (;;) {
+        while (p < cc_end && (*p == ' ' || *p == '\n' || *p == '\r' ||
+                              *p == '\t' || *p == ',')) p++;
+        if (p >= cc_end || *p != '{') break;
+        last = p;
+        /* Skip this object, honoring nesting and quoted braces. */
+        int depth = 0;
+        while (p < cc_end) {
+            if (*p == '"') {
+                p++;
+                while (p < cc_end && *p != '"') { if (*p == '\\') p++; p++; }
+            } else if (*p == '{') depth++;
+            else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+            p++;
+        }
+    }
+    if (!last) return;
 
     size_t text_raw_len;
-    const char *text_raw = lsp_json_str(p, "text", &text_raw_len);
+    const char *text_raw = lsp_json_str(last, "text", &text_raw_len);
     if (!text_raw) return;
 
     char *text = malloc(text_raw_len + 1);
@@ -448,18 +647,24 @@ static void on_hover(const char *id_raw, size_t id_len,
 
     Buf result;
     buf_init(&result);
-    buf_puts(&result, "{\"contents\":{\"kind\":\"markdown\",\"value\":");
+    buf_puts(&result, "{\"contents\":{\"kind\":");
+    buf_puts(&result, hover_markdown_ ? "\"markdown\"" : "\"plaintext\"");
+    buf_puts(&result, ",\"value\":");
 
-    /* Build markdown: ```\n(name : type)\n```\n\ndocstring */
+    /* Build markdown: ```\n(name : type)\n```\n\ndocstring
+     * A plaintext-only client gets the same text without the fences -- sending
+     * them anyway just made the client strip them back out. */
     Buf md;
     buf_init(&md);
-    buf_puts(&md, "```\n(");
+    if (hover_markdown_) buf_puts(&md, "```\n");
+    buf_putc(&md, '(');
     buf_puts(&md, sym->name);
     if (sym->type_str[0]) {
         buf_puts(&md, " : ");
         buf_puts(&md, sym->type_str);
     }
-    buf_puts(&md, ")\n```");
+    buf_putc(&md, ')');
+    if (hover_markdown_) buf_puts(&md, "\n```");
     if (sym->doc[0]) {
         buf_puts(&md, "\n\n");
         buf_puts(&md, sym->doc);
@@ -696,6 +901,217 @@ static void on_workspace_symbol(const char *id_raw, size_t id_len,
 }
 
 /* -------------------------------------------------------------------------
+ * textDocument/formatting
+ *
+ * `tur fmt` already existed and worked; it was simply not reachable over LSP,
+ * so both known clients shelled out to the binary -- one of them with a
+ * blocking subprocess call that could freeze the editor for seconds. Wiring
+ * the in-process formatter to a handler removes that stall and deletes the
+ * duplicated client code.
+ * --------------------------------------------------------------------- */
+
+static void on_formatting(const char *id_raw, size_t id_len,
+                          const char *params, int fd_out) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc || !doc->text) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    /* FormattingOptions.tabSize / insertSpaces are deliberately ignored: the
+     * formatter is not configurable (2-space indent, 80 columns), and honoring
+     * the request halfway would produce output `tur fmt --check` then rejects.
+     * One formatter, one answer. */
+
+    /* Collect rather than print: a parse error here belongs in the response,
+     * not on the server's stderr where it becomes editor log noise. Diagnostics
+     * for the buffer come from run_doc_analysis on its own schedule. */
+    diag_lsp_begin();
+    Buf out;
+    int rc = fmt_format_buffer(doc->path, doc->text, doc->text_len,
+                               reader_type_from_extension(doc->path), &out);
+    diag_lsp_end();
+
+    if (rc != 0) {
+        /* Unformattable (almost always mid-edit unbalanced parens). Returning
+         * null is the spec's "no edits", which leaves the buffer untouched --
+         * the right answer, and better than a hard error the editor surfaces
+         * as a popup on every save. */
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    /* One full-document TextEdit. The end position is the last line and its
+     * length in bytes -- positionEncoding is utf-8, so no transcoding. */
+    int    end_line = 0;
+    size_t line_start = 0;
+    for (size_t i = 0; i < doc->text_len; i++) {
+        if (doc->text[i] == '\n') { end_line++; line_start = i + 1; }
+    }
+    int end_char = (int)(doc->text_len - line_start);
+
+    Buf result;
+    buf_init(&result);
+    buf_printf(&result,
+        "[{\"range\":{\"start\":{\"line\":0,\"character\":0},"
+                    "\"end\":{\"line\":%d,\"character\":%d}},\"newText\":",
+        end_line, end_char);
+    buf_putc(&out, '\0');
+    json_str(&result, out.data);
+    buf_puts(&result, "}]");
+    buf_putc(&result, '\0');
+
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
+    buf_free(&out);
+}
+
+/* -------------------------------------------------------------------------
+ * textDocument/signatureHelp
+ * --------------------------------------------------------------------- */
+
+/* Split the parameter list out of a rendered function type.
+ *
+ * type_str looks like "(fn [int int] : int)". The bracketed run is the
+ * parameter types in order; everything else is the return type. Parameter
+ * *names* are not carried on LspSymbol, so the labels are the types --
+ * which is what a caller needs to know at the point of the call anyway. */
+static int signature_params(const char *type_str, Buf *out_labels) {
+    const char *lb = strchr(type_str, '[');
+    if (!lb) return 0;
+    /* Find the matching ']' by depth, not the first one: a parameter can
+     * itself be a function type, as in "(fn [(fn [int] : int) int] : int)",
+     * and strchr would stop inside it. */
+    const char *rb = NULL;
+    int d = 0;
+    for (const char *q = lb; *q; q++) {
+        if (*q == '[' || *q == '(') d++;
+        else if (*q == ']' || *q == ')') {
+            if (--d == 0) { rb = q; break; }
+        }
+    }
+    if (!rb || *rb != ']') return 0;
+
+    int count = 0;
+    const char *p = lb + 1;
+    while (p < rb) {
+        while (p < rb && (*p == ' ' || *p == '\t')) p++;
+        if (p >= rb) break;
+        const char *tok = p;
+        int depth = 0;
+        while (p < rb) {
+            char c = *p;
+            if (c == '(' || c == '[') depth++;
+            else if (c == ')' || c == ']') depth--;
+            else if (depth == 0 && (c == ' ' || c == '\t')) break;
+            p++;
+        }
+        if (p == tok) break;
+        if (count > 0) buf_putc(out_labels, ',');
+        buf_puts(out_labels, "{\"label\":");
+        Buf lbl;
+        buf_init(&lbl);
+        buf_write(&lbl, tok, (size_t)(p - tok));
+        buf_putc(&lbl, '\0');
+        json_str(out_labels, lbl.data);
+        buf_free(&lbl);
+        buf_putc(out_labels, '}');
+        count++;
+    }
+    return count;
+}
+
+static void on_signature_help(const char *id_raw, size_t id_len,
+                              const char *params, int fd_out) {
+    size_t td_len;
+    const char *td = lsp_json_raw(params, "textDocument", &td_len);
+    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    char uri[1024];
+    if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    size_t pos_len;
+    const char *pos = lsp_json_raw(params, "position", &pos_len);
+    if (!pos) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    int line_0 = (int)lsp_json_int(pos, "line");
+    int char_0 = (int)lsp_json_int(pos, "character");
+
+    LspDoc *doc = lsp_doc_get(uri, strlen(uri));
+    if (!doc || !doc->symbols) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    size_t cursor = lsp_offset_at_pos(doc->text, doc->text_len,
+                                      line_0 + 1, char_0 + 1);
+    char callee[128];
+    int  active = 0;
+    if (!lsp_enclosing_call(doc->text, doc->text_len, cursor,
+                            callee, sizeof(callee), &active)) {
+        send_response(fd_out, id_raw, id_len, "null");
+        return;
+    }
+
+    const LspSymbol *sym = find_symbol(doc, callee);
+    if (!sym) { send_response(fd_out, id_raw, id_len, "null"); return; }
+
+    Buf plabels;
+    buf_init(&plabels);
+    int nparams = signature_params(sym->type_str, &plabels);
+    buf_putc(&plabels, '\0');
+
+    /* Clamp rather than drop: a variadic or over-applied call still wants the
+     * signature shown, just with no parameter highlighted past the end. */
+    if (nparams > 0 && active >= nparams) active = nparams - 1;
+    if (active < 0) active = 0;
+
+    Buf label;
+    buf_init(&label);
+    buf_putc(&label, '(');
+    buf_puts(&label, sym->name);
+    if (sym->type_str[0]) {
+        buf_puts(&label, " : ");
+        buf_puts(&label, sym->type_str);
+    }
+    buf_putc(&label, ')');
+    buf_putc(&label, '\0');
+
+    Buf result;
+    buf_init(&result);
+    buf_puts(&result, "{\"signatures\":[{\"label\":");
+    json_str(&result, label.data);
+    if (sym->doc[0]) {
+        buf_puts(&result, ",\"documentation\":{\"kind\":\"markdown\",\"value\":");
+        json_str(&result, sym->doc);
+        buf_puts(&result, "}");
+    }
+    buf_puts(&result, ",\"parameters\":[");
+    buf_puts(&result, plabels.data);
+    buf_printf(&result, "],\"activeParameter\":%d}],", active);
+    buf_printf(&result, "\"activeSignature\":0,\"activeParameter\":%d}", active);
+    buf_putc(&result, '\0');
+
+    send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&result);
+    buf_free(&label);
+    buf_free(&plabels);
+}
+
+/* -------------------------------------------------------------------------
  * LD4: textDocument/completion
  * --------------------------------------------------------------------- */
 
@@ -718,134 +1134,156 @@ static const char *stdlib_modules[] = {
     NULL
 };
 
+/* Case-insensitive "does `name` start with `prefix`". */
+static int ci_starts_with(const char *name, const char *prefix, size_t plen) {
+    for (size_t j = 0; j < plen; j++) {
+        char a = name[j], b = prefix[j];
+        if (!a) return 0;
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (b >= 'A' && b <= 'Z') b += 32;
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/* How many completion items one response will carry. The cap exists to keep
+ * the payload bounded, not to rank -- see the two-pass emit below for why
+ * that distinction matters. */
+#define LSP_COMPLETION_MAX 200
+
+static void emit_completion_item(Buf *result, const LspSymbol *sym, int *emitted) {
+    /* kind: 3 = Function (type starts with "(fn"), 6 = Variable */
+    int kind = (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+
+    if (*emitted > 0) buf_putc(result, ',');
+    buf_puts(result, "{\"label\":");
+    json_str(result, sym->name);
+    buf_printf(result, ",\"kind\":%d", kind);
+    if (sym->type_str[0]) {
+        buf_puts(result, ",\"detail\":");
+        json_str(result, sym->type_str);
+    }
+    if (sym->doc[0]) {
+        buf_puts(result,
+            ",\"documentation\":{\"kind\":\"markdown\",\"value\":");
+        json_str(result, sym->doc);
+        buf_puts(result, "}");
+    }
+    buf_putc(result, '}');
+    (*emitted)++;
+}
+
 static void on_completion(const char *id_raw, size_t id_len,
                           const char *params, int fd_out) {
+    static const char *const EMPTY_LIST =
+        "{\"isIncomplete\":false,\"items\":[]}";
+
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+    if (!td) { send_response(fd_out, id_raw, id_len, EMPTY_LIST); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, "[]");
+        send_response(fd_out, id_raw, id_len, EMPTY_LIST);
         return;
     }
 
     size_t pos_len;
     const char *pos = lsp_json_raw(params, "position", &pos_len);
-    if (!pos) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+    if (!pos) { send_response(fd_out, id_raw, id_len, EMPTY_LIST); return; }
 
     int line_0 = (int)lsp_json_int(pos, "line");
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
-    if (!doc) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+    if (!doc) { send_response(fd_out, id_raw, id_len, EMPTY_LIST); return; }
 
-    /* Extract partial word at cursor */
+    /* The prefix is what has been typed *before* the cursor. Reading the word
+     * *at* the cursor (which is what lsp_word_at_pos does, stepping right when
+     * the cursor is not on an identifier character) made a request at the very
+     * start of `(defn foo ...)` come back with the prefix "defn" and filter
+     * every candidate away. */
     char prefix[128] = {0};
-    lsp_word_at_pos(doc->text, doc->text_len,
-                    line_0 + 1, char_0 + 1, prefix, sizeof(prefix));
-    size_t prefix_len = strlen(prefix);
+    size_t prefix_len = lsp_prefix_at_pos(doc->text, doc->text_len,
+                                          line_0 + 1, char_0 + 1,
+                                          prefix, sizeof(prefix));
 
-    /* Check if cursor is inside an (import ...) form for module completion */
+    size_t cursor_off = lsp_offset_at_pos(doc->text, doc->text_len,
+                                          line_0 + 1, char_0 + 1);
+
+    /* Check if cursor is inside an (import ...) form for module completion. */
     int in_import = 0;
-    if (doc->text && doc->text_len > 0) {
-        /* Walk backward from cursor to detect (import */
-        const char *p = doc->text;
-        const char *end = doc->text;
-        /* Find cursor byte offset */
-        int cur_line = 1;
-        while (p < doc->text + doc->text_len && cur_line < line_0 + 1) {
-            if (*p == '\n') cur_line++;
-            p++;
-        }
-        int cur_col = 1;
-        while (p < doc->text + doc->text_len && *p != '\n' && cur_col < char_0 + 1) {
-            p++;
-            cur_col++;
-        }
-        end = p;
-        /* Scan back up to 64 chars for "(import" */
-        const char *scan = end > doc->text + 64 ? end - 64 : doc->text;
-        for (; scan < end - 7; scan++) {
-            if (strncmp(scan, "(import", 7) == 0) {
-                in_import = 1;
-                break;
-            }
+    if (doc->text && cursor_off >= 7) {
+        size_t lo = cursor_off > 64 ? cursor_off - 64 : 0;
+        for (size_t s = cursor_off - 7; ; s--) {
+            if (memcmp(doc->text + s, "(import", 7) == 0) { in_import = 1; break; }
+            if (s == lo) break;
         }
     }
 
     Buf result;
     buf_init(&result);
-    buf_puts(&result, "[");
+    Buf items;
+    buf_init(&items);
 
-    int emitted = 0;
+    int emitted   = 0;
+    int truncated = 0;
 
     /* Import path completions */
     if (in_import) {
         for (int i = 0; stdlib_modules[i]; i++) {
             const char *mod = stdlib_modules[i];
-            if (prefix_len > 0) {
-                /* Case-insensitive prefix match */
-                int match = 1;
-                for (size_t j = 0; j < prefix_len; j++) {
-                    char a = prefix[j], b = mod[j];
-                    if (a >= 'A' && a <= 'Z') a += 32;
-                    if (b >= 'A' && b <= 'Z') b += 32;
-                    if (a != b) { match = 0; break; }
-                }
-                if (!match) continue;
-            }
-            if (emitted > 0) buf_putc(&result, ',');
-            buf_puts(&result, "{\"label\":");
-            json_str(&result, mod);
-            buf_puts(&result, ",\"kind\":9}");
+            if (prefix_len > 0 && !ci_starts_with(mod, prefix, prefix_len))
+                continue;
+            if (emitted > 0) buf_putc(&items, ',');
+            buf_puts(&items, "{\"label\":");
+            json_str(&items, mod);
+            buf_puts(&items, ",\"kind\":9}");
             emitted++;
         }
     }
 
-    /* Symbol completions (cap at 200) */
+    /* Symbol completions, document-local first.
+     *
+     * The cap used to truncate in raw collection order, which put ~200 stdlib
+     * entries in front of the buffer's own definitions -- the symbols the user
+     * is most likely reaching for were the ones that got dropped. Two passes
+     * fix the ordering without needing a full sort. */
     if (!in_import && doc->symbols) {
-        for (int i = 0; i < doc->symbol_count && emitted < 200; i++) {
-            const LspSymbol *sym = &doc->symbols[i];
-            if (!sym->name[0]) continue;
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < doc->symbol_count; i++) {
+                const LspSymbol *sym = &doc->symbols[i];
+                if (!sym->name[0]) continue;
 
-            /* Prefix filter */
-            if (prefix_len > 0) {
-                int match = 1;
-                for (size_t j = 0; j < prefix_len; j++) {
-                    char a = prefix[j], b = sym->name[j];
-                    if (a >= 'A' && a <= 'Z') a += 32;
-                    if (b >= 'A' && b <= 'Z') b += 32;
-                    if (a != b) { match = 0; break; }
-                }
-                if (!match) continue;
-            }
+                int local = (sym->file_path[0] == '\0' ||
+                             strcmp(sym->file_path, doc->path) == 0);
+                if ((pass == 0) != (local != 0)) continue;
 
-            /* kind: 3 = Function (type starts with "(fn"), 6 = Variable */
-            int kind = (strncmp(sym->type_str, "(fn", 3) == 0) ? 3 : 6;
+                if (prefix_len > 0 &&
+                    !ci_starts_with(sym->name, prefix, prefix_len))
+                    continue;
 
-            if (emitted > 0) buf_putc(&result, ',');
-            buf_puts(&result, "{\"label\":");
-            json_str(&result, sym->name);
-            buf_printf(&result, ",\"kind\":%d", kind);
-            if (sym->type_str[0]) {
-                buf_puts(&result, ",\"detail\":");
-                json_str(&result, sym->type_str);
+                if (emitted >= LSP_COMPLETION_MAX) { truncated = 1; break; }
+                emit_completion_item(&items, sym, &emitted);
             }
-            if (sym->doc[0]) {
-                buf_puts(&result,
-                    ",\"documentation\":{\"kind\":\"markdown\",\"value\":");
-                json_str(&result, sym->doc);
-                buf_puts(&result, "}");
-            }
-            buf_putc(&result, '}');
-            emitted++;
+            if (truncated) break;
         }
     }
 
-    buf_puts(&result, "]");
+    buf_putc(&items, '\0');
+
+    /* A CompletionList rather than a bare CompletionItem[]. Both are legal,
+     * but the asymmetry forced every client to carry a both-shapes branch, and
+     * only the list shape can say `isIncomplete` -- which is how the client
+     * learns to re-query as the prefix narrows instead of showing a silently
+     * truncated menu. */
+    buf_printf(&result, "{\"isIncomplete\":%s,\"items\":[",
+               truncated ? "true" : "false");
+    buf_puts(&result, items.data);
+    buf_puts(&result, "]}");
     buf_putc(&result, '\0'); /* NUL-terminate for strlen in send_response */
     send_response(fd_out, id_raw, id_len, result.data);
+    buf_free(&items);
     buf_free(&result);
 }
 
@@ -858,14 +1296,16 @@ void lsp_server_run(int fd_in, int fd_out) {
 
     for (;;) {
         /* Nothing new arrived while a document was waiting to be analyzed —
-         * the client has stopped typing, so do the work now. */
-        if (lsp_docs_any_dirty() &&
+         * the client has stopped typing, so do the work now. A non-empty queue
+         * means messages are already in hand, which is the opposite of quiet. */
+        if (queue_.count == 0 && lsp_docs_any_dirty() &&
             !input_pending(fd_in, LSP_ANALYSIS_DEBOUNCE_MS)) {
             lsp_flush_dirty(fd_out);
             continue;
         }
 
-        char *msg = lsp_read_message(fd_in);
+        char *msg = queue_pop();
+        if (!msg) msg = lsp_read_message(fd_in);
         if (!msg) break;
 
         size_t method_len;
@@ -884,13 +1324,19 @@ void lsp_server_run(int fd_in, int fd_out) {
         const char *params_raw = lsp_json_raw(msg, "params", &params_len);
 
         if (strcmp(method, "initialize") == 0) {
-            on_initialize(id_raw, id_len, fd_out);
+            on_initialize(id_raw, id_len, params_raw, fd_out);
         } else if (strcmp(method, "initialized") == 0) {
             /* no-op */
+        } else if (strcmp(method, "$/cancelRequest") == 0) {
+            /* Arrived on the main path rather than in a drain -- the request
+             * it names is already answered, so there is nothing to abandon.
+             * Recording it anyway would strand the id and reject a later
+             * request that reuses the number. */
         } else if (strcmp(method, "shutdown") == 0) {
             on_shutdown(id_raw, id_len, fd_out);
         } else if (strcmp(method, "exit") == 0) {
             free(msg);
+            queue_free();
             lsp_docs_free();
             _exit(shutdown_ ? 0 : 1);
         } else if (strcmp(method, "textDocument/didOpen") == 0 && params_raw) {
@@ -899,10 +1345,19 @@ void lsp_server_run(int fd_in, int fd_out) {
             on_did_change(params_raw, params_len, fd_out);
         } else if (strcmp(method, "textDocument/didClose") == 0 && params_raw) {
             on_did_close(params_raw, params_len);
+        } else if (strcmp(method, "textDocument/formatting") == 0) {
+            /* Formatting reads doc->text, not doc->symbols, so it does not
+             * need the analysis flush -- and skipping it keeps save-time
+             * formatting off the slow path. */
+            if (!params_raw)
+                send_error(fd_out, id_raw, id_len, -32602, "Invalid params");
+            else
+                on_formatting(id_raw, id_len, params_raw, fd_out);
         } else if (strcmp(method, "textDocument/hover") == 0 ||
                    strcmp(method, "textDocument/definition") == 0 ||
                    strcmp(method, "textDocument/documentSymbol") == 0 ||
                    strcmp(method, "workspace/symbol") == 0 ||
+                   strcmp(method, "textDocument/signatureHelp") == 0 ||
                    strcmp(method, "textDocument/completion") == 0) {
             /* These all read doc->symbols, so any pending edit has to be
              * analyzed first — otherwise the answer describes the buffer as it
@@ -910,7 +1365,13 @@ void lsp_server_run(int fd_in, int fd_out) {
              * debounce invisible to correctness: it delays work, never skips
              * it. */
             lsp_flush_dirty(fd_out);
-            if (!params_raw) {
+            /* The flush is the one step slow enough for the client to change
+             * its mind during. Read what it sent meanwhile before committing
+             * to the rest of the work. */
+            drain_pending(fd_in);
+            if (cancel_take(id_raw, id_len)) {
+                send_error(fd_out, id_raw, id_len, -32800, "Request cancelled");
+            } else if (!params_raw) {
                 send_error(fd_out, id_raw, id_len, -32602, "Invalid params");
             } else if (strcmp(method, "textDocument/hover") == 0) {
                 on_hover(id_raw, id_len, params_raw, fd_out);
@@ -920,6 +1381,8 @@ void lsp_server_run(int fd_in, int fd_out) {
                 on_document_symbol(id_raw, id_len, params_raw, fd_out);
             } else if (strcmp(method, "workspace/symbol") == 0) {
                 on_workspace_symbol(id_raw, id_len, params_raw, fd_out);
+            } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
+                on_signature_help(id_raw, id_len, params_raw, fd_out);
             } else {
                 on_completion(id_raw, id_len, params_raw, fd_out);
             }
@@ -930,5 +1393,6 @@ void lsp_server_run(int fd_in, int fd_out) {
         free(msg);
     }
 
+    queue_free();
     lsp_docs_free();
 }

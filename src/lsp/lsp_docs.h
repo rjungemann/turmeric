@@ -44,6 +44,12 @@ typedef struct LspDoc {
     LspSymbol *symbols;
     int        symbol_count;
     int        symbol_cap;
+    /* The symbol index is from an earlier revision of the text because the
+     * current one did not get far enough to yield any. Not parsing is the
+     * normal state while typing -- the moment the user types `(` the buffer is
+     * unbalanced -- so serving a slightly stale index beats serving nothing,
+     * which is what completion did before. */
+    int        symbols_stale;
     /* Text changed since the last analysis. Analysis is deferred until the
      * client stops typing (or asks a question that needs symbols) so a burst
      * of keystrokes costs one compile, not one per character. */

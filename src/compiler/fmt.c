@@ -1459,3 +1459,66 @@ int fmt_print(Buf *buf, Form **forms, uint32_t count, FmtOptions opts) {
 
     return 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * Whole-buffer entry point
+ * ---------------------------------------------------------------------------
+ */
+
+#include "arena.h"
+#include "reader.h"
+#include "reader_macros.h"
+#include "symbols.h"
+
+int fmt_format_buffer(const char *path_label, const char *src, size_t len,
+                      ReaderType rtype, Buf *out) {
+    /* Reset BEFORE registering: diag_reset() clears the file registry, so
+     * registering first (as this used to) wiped this file's entry and left
+     * any format-time parse-error diagnostic without a source snippet
+     * (files_[0] == NULL -> "<unknown>"). */
+    diag_reset();
+
+    SourceFile file = {0};
+    file.path        = path_label;
+    file.src         = src;
+    file.len         = len;
+    file.file_id     = 0;
+    file.reader_type = rtype;
+    diag_register_file(&file);
+
+    Arena arena;
+    arena_init(&arena, 0);
+    SymbolTable st;
+    symtab_init(&st, &arena);
+
+    ReaderMacroRegistry rmreg;
+    reader_macros_init(&rmreg, &arena);
+    rmreg.strict = true;
+    /* Keep `(reader-macros/define ...)` directives in the form stream so the
+     * formatter emits them -- stripping them (the compiler default) would make
+     * `tur fmt` silently delete the definition. */
+    rmreg.keep_define_forms = true;
+
+    uint32_t nforms = 0;
+    Form **forms = read_all_with_registry(&arena, &st, &file, &rmreg, &nforms);
+
+    int rc = 0;
+    if (!forms || diag_had_error()) {
+        rc = -1;
+    } else {
+        FmtOptions opts = {0};
+        opts.indent_width = 2;
+        opts.line_width   = 80;
+        opts.src          = src;
+        opts.src_len      = len;
+        buf_init(out);
+        if (fmt_print(out, forms, nforms, opts) != 0) {
+            buf_free(out);
+            rc = -1;
+        }
+    }
+
+    symtab_free(&st);
+    arena_free(&arena);
+    return rc;
+}

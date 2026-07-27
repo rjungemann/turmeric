@@ -1,6 +1,6 @@
 # LSP Client Gaps Plan
 
-> **Status:** Draft Plan
+> **Status:** Executed -- everything scheduled in §6 has landed
 > **Last Updated:** 2026-07-27
 > **Type:** Tooling / `tur lsp`
 
@@ -23,6 +23,47 @@ A first tranche has already landed on the `lsp-phase2` branch (commit
 prebuilt toolchain, so every fix here needs a Turmeric release plus a bump of
 `TROWEL_TURMERIC_VERSION` and its three per-arch SHA-256s before a user sees
 it.
+
+---
+
+## 0. Status after execution
+
+Everything in §6's ordered list is implemented, plus all of §4. What is left
+is exactly what §6 declined to schedule.
+
+| Gap | State |
+|---|---|
+| §2.1 Completion needs a successful compile | Done -- last-good symbol index retained |
+| §2.2 Nothing at offset 0 | Done -- prefix now scans left only |
+| §2.3 Bare `CompletionItem[]` | Done -- emits a `CompletionList` |
+| §2.4 Unaffordable space trigger | Done -- triggers are `["("]` |
+| §2.5 Cap truncates local symbols | Done -- document-local emitted first, `isIncomplete` set |
+| §3.1 No `$/cancelRequest` | Done -- honoured across the analysis flush |
+| §3.2 No `textDocument/formatting` | Done -- in-process, shared with `tur fmt` |
+| §3.3 No `textDocument/signatureHelp` | Done |
+| §3.4 No semantic tokens | Not scheduled (unchanged) |
+| §3.5 `workspace/symbol` is open-documents-only | Not scheduled (unchanged) |
+| §4 Analysis is path-based | Not a server gap -- see the note in §4 |
+| §4 Zero-width diagnostic ranges | Done -- widened in `diag_lsp_flush_array` |
+| §4 Hover ignores `contentFormat` | Done |
+| §4 Only `contentChanges[0]` read | Done -- last change wins |
+| §4 Hardcoded `/tmp` | Done -- `tur_temp_dir()` |
+| §5 REPL / prompt-marker items | Out of scope for this plan (unchanged) |
+
+Where the work landed:
+
+- `src/lsp/lsp.c` -- handlers, capabilities, cancel queue, symbol retention
+- `src/lsp/lsp_util.c` -- `lsp_offset_at_pos`, `lsp_prefix_at_pos`,
+  `lsp_enclosing_call`
+- `src/lsp/lsp_docs.{c,h}` -- `LspDoc.symbols_stale`
+- `src/compiler/fmt.c` -- `fmt_format_buffer`, the shared format pipeline
+  (moved out of `main.c` so `tur_core`, which carries the LSP, can link it)
+- `src/compiler/diag.c` -- zero-width range widening
+- `tests/lsp/mcp_lsp_test.py` -- `test_lsp_client_gaps`,
+  `test_lsp_unsaved_buffer`
+
+The release-and-version-bump caveat above still applies: Trowel sees none of
+this until a Turmeric release ships and `TROWEL_TURMERIC_VERSION` moves.
 
 ---
 
@@ -70,6 +111,19 @@ No client can work around this. Proposals, cheapest first:
 
 (1) is a small change with most of the benefit and should land first.
 
+**Landed: (1).** `run_doc_analysis` collects into a scratch buffer and adopts
+it only when the compile succeeded or produced at least one symbol; otherwise
+the previous index stays in place and `LspDoc.symbols_stale` is set. The
+"succeeded" half of that condition matters — without it, deleting every
+definition from a file would leave its symbols visible forever, because an
+empty result is indistinguishable from a failed one by count alone.
+
+The verification case from above now holds: appending `\n(smoke` to a valid
+file leaves completion at 200 items instead of dropping it to zero.
+
+(2) is still open, and is the better long-term answer. Retention goes stale
+across a rename or a large paste; error-tolerant parsing would not.
+
 ### 2.2 Returns nothing at offset 0
 
 Completion at `{"line": 0, "character": 0}` returns an empty array while the
@@ -77,11 +131,27 @@ same document at the end of the buffer returns 200 items. A client that
 requests completions immediately after opening a file — the obvious thing to
 do — gets nothing and cannot tell that from "no matches".
 
+**Landed.** The cause turned out to be the prefix extraction, not the position
+handling. `on_completion` derived its prefix from `lsp_word_at_pos`, which is
+built for hover and *steps right* when the cursor is not on an identifier
+character. At offset 0 of `(defn foo ...)` that yielded the prefix `"defn"`,
+which filtered every candidate away — an empty list that looked like "no
+symbols" but was really "no symbol starts with defn". The same bug fired
+anywhere the cursor sat just before a word.
+
+Completion now uses `lsp_prefix_at_pos`, which only ever scans left. At offset
+0 that is the empty string, meaning "offer everything".
+
 ### 2.3 Returns a bare `CompletionItem[]`, not a `CompletionList`
 
 Legal per the specification, but the asymmetry means every client needs the
 both-shapes branch that Trowel carries at `lsp_manager.cpp:347` **(trowel)**.
 Worth emitting a `CompletionList` for uniformity.
+
+**Landed.** `{"isIncomplete": bool, "items": [...]}`. Uniformity was the stated
+reason, but the list shape also carries `isIncomplete`, which is the only way
+to tell a client that the cap truncated the result and it should re-query as
+the prefix narrows — see §2.5.
 
 ### 2.4 Advertises a space trigger character that is too expensive to honor
 
@@ -92,12 +162,26 @@ compile. Trowel honors `(` only and binds the rest to an explicit key
 less costly, but the advertised trigger set should still match what is actually
 affordable.
 
+**Landed.** `triggerCharacters` is `["("]`. A space is still a perfectly good
+*retrigger* for signature help, where the work is a symbol lookup rather than a
+compile, so `signatureHelpProvider` advertises it there.
+
 ### 2.5 Capped at 200 items, in document order
 
 Clients that present a sorted list must sort and dedupe themselves
 (`editor_view.cpp:368` **(trowel)**). Prefix-filtering server-side would be
 more useful than a raw cap, which currently truncates the buffer's *own*
 symbols behind 200 stdlib entries.
+
+**Landed.** Prefix filtering was already there; what it lacked was a working
+prefix (§2.2), so in practice the cap was doing all the work. With that fixed,
+items are emitted in two passes — document-local symbols, then everything else
+— so the buffer's own definitions are never the ones the cap drops. When it
+does truncate, `isIncomplete` says so.
+
+A full server-side sort is still not done: two passes give the ranking that
+matters at a fraction of the cost, and a client that wants strict alphabetical
+order can still sort a bounded 200-item list cheaply.
 
 ---
 
@@ -111,6 +195,20 @@ timeouts, a single-in-flight cap, and a per-document generation counter that
 drops replies which arrive after the buffer moved on (`lsp_client.h:57`
 **(trowel)**). Debouncing reduced the exposure but did not remove it.
 
+**Landed**, without restructuring the request loop — which is what made this
+the largest item on the list. The observation that avoids the restructure:
+being single-threaded is what leaves no window for a cancel, and the one step
+long enough to matter is the analysis flush. So after flushing, and *before*
+committing to the per-request work, the server drains whatever the client sent
+meanwhile off the fd into a queue. Cancels found there apply immediately;
+everything else stays queued in order and is served on the following
+iterations. A cancelled request is answered `-32800`; a cancel for a request
+already on the wire is a no-op, exactly as the spec asks.
+
+This is narrower than true cancellation — a request that is slow for some
+reason *other* than the flush still cannot be abandoned — but it covers the
+case the timeouts were built for.
+
 ### 3.2 No `textDocument/formatting`
 
 `tur format` exists and works; it is simply not reachable over LSP. Both known
@@ -123,11 +221,40 @@ clients therefore shell out to it:
 Wiring the existing formatter to a `textDocument/formatting` handler removes a
 real UI stall and deletes duplicated client code.
 
+**Landed.** One wrinkle worth recording: the format pipeline lived in
+`main.c`, and the LSP is compiled into the `tur_core` object library, which
+`main.c` is not part of — a handler calling into it would not link (and every
+unit test that links `tur_core` would have needed another stub). So
+`fmt_format_source`'s body moved to `src/compiler/fmt.c` as
+`fmt_format_buffer`, and `main.c` now delegates to it. One implementation,
+reachable from both, and `tur fmt` and the LSP cannot drift apart.
+
+The handler returns a single full-document `TextEdit` and deliberately ignores
+`FormattingOptions`; an unparseable buffer returns `null` ("no edits") rather
+than an error, since a save-time format on a half-typed buffer should not
+raise a popup.
+
 ### 3.3 No `textDocument/signatureHelp`
 
 No argument hints while typing a call. The calltip logic already exists,
 unwired, in `src/cli/lsp_lite.c` (`calltip` method) — this is mostly a matter
 of exposing what is already written.
+
+**Landed**, though not by reusing `lsp_lite.c`. That path answers "first line
+of the docstring for this name", which is a calltip but not signature help: it
+carries no parameter list and no notion of which argument the cursor is in,
+and it reads a different symbol source than the LSP's own index.
+
+What the handler needs instead is the enclosing call, which
+`lsp_enclosing_call` computes by scanning forward from the start of the buffer
+— string- and comment-aware — keeping a stack of open `(` forms. Forward is
+what makes quoting work: a `(` inside a string or a `;` comment must not open
+a frame, and a backward scan cannot know that without re-reading the file
+anyway. Parameter labels come from the bracketed run in the symbol's rendered
+type (`(fn [int int] : int)`); `LspSymbol` does not carry parameter *names*,
+so the labels are types. `activeParameter` accounts for whether the cursor sits
+at the end of the argument being typed or after the whitespace that follows it,
+which is the difference between `(f 1|` (argument 0) and `(f 1 |` (argument 1).
 
 ### 3.4 No semantic tokens
 
@@ -151,16 +278,48 @@ because a per-window `rootUri` currently buys nothing.
   file and remaps diagnostics back, so a document needs a real filesystem path.
   Trowel therefore gives unsaved buffers no language support at all
   (`lsp_manager.cpp:76` **(trowel)**) — a visible gap for a new file.
+
+  *Resolved as a non-gap.* Measured directly: an `untitled:` URI with no
+  filesystem path gets symbols, diagnostics, completion, and formatting like
+  any other document, because the temp file is what the compiler actually
+  reads — the document's own path is only ever used to remap results back.
+  `doc->path` for an untitled URI is a harmless non-path string. The
+  restriction is client-side, and `test_lsp_unsaved_buffer` pins the server
+  behaviour so it stays that way. What genuinely does not work for an unsaved
+  buffer is a relative `(import ./sibling)`, since the temp file has no
+  sibling — a separate problem, and one that affects saved files opened
+  outside their project too.
 - **Zero-width diagnostic ranges.** Some diagnostics report `start == end`,
   which paints nothing; clients must widen them to stay visible.
+
+  *Resolved* in `lsp_build_array` (`src/compiler/diag.c`): an end column not
+  greater than the start column is bumped by one. Widening once at the source
+  beats every client doing it.
 - **Hover returns fenced markdown** even when the client advertises only
   `plaintext` in `hover.contentFormat`. Trowel strips the fences
   (`editor_view.cpp:382` **(trowel)**).
+
+  *Resolved.* `on_initialize` reads
+  `capabilities.textDocument.hover.contentFormat` and records whether markdown
+  is acceptable; `on_hover` emits the fences and the matching `kind` only when
+  it is. An absent capability keeps the 3.17 default of markdown.
 - **Full-document sync only** (`textDocumentSync: 1`). `on_did_change` reads
   only `contentChanges[0].text` and would silently mishandle ranges if a client
   sent them. Lower priority now that analysis is debounced.
+
+  *Partly resolved.* `on_did_change` now walks to the **last** change object
+  rather than the first, so a batched notification is no longer silently
+  truncated to its first element. Sync is still Full-only; a client that
+  ignores the negotiated kind and sends ranged edits is still wrong, but it is
+  now wrong about the newest edit rather than the oldest.
 - **Analysis writes to hardcoded `/tmp`.** Fine on Unix, wrong on Windows, and
   it means one temp file per analysis.
+
+  *Resolved.* The directory now comes from `tur_temp_dir()`
+  (`src/platform_fs.h`), which already existed for exactly this reason: on
+  Windows a leading `/` means "root of the current drive", so `/tmp/...`
+  resolved to a `C:\tmp` that does not exist and every analysis silently
+  produced nothing. Still one temp file per analysis — that part is unchanged.
 
 ---
 
@@ -184,7 +343,7 @@ Found the same way — a real client hitting real behavior.
 
 ---
 
-## 6. Suggested order
+## 6. Suggested order — all executed
 
 1. **Retain last-good symbols** (§2.1) — small, and fixes the most damaging
    day-to-day behavior.
@@ -198,3 +357,18 @@ Found the same way — a real client hitting real behavior.
 
 Semantic tokens (§3.4) and workspace-wide symbols (§3.5) are larger features
 rather than gap-filling, and are deliberately left unscheduled.
+
+All six are done. What remains open, and deliberately so:
+
+- **§3.4 semantic tokens** and **§3.5 workspace-wide symbols** — unscheduled
+  as stated above.
+- **§2.1 proposal (2), error-tolerant parsing** — retention covers the
+  day-to-day case; recovery at the next top-level form is the better answer
+  when someone wants to spend the time.
+- **§5** — REPL prompt markers, `getcwd()` symlink resolution, region eval, and
+  `TUR_STDLIB_DIR` leakage. Same origin, but not the language server; they want
+  their own pass.
+
+Coverage lives in `tests/lsp/mcp_lsp_test.py`
+(`test_lsp_client_gaps`, `test_lsp_unsaved_buffer`), run by
+`tests/lsp/run-mcp-lsp.sh`.
