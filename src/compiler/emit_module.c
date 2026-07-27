@@ -10142,6 +10142,38 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static void __tur_rc_val_release(void *__v) {\n");
     buf_puts(out, "    if (__v) rc_strong_decrement((RcControlBlock *)__v);\n}\n\n");
 
+    /* collections-cannot-hold-rc-values item 3: the GC hooks for
+     * stdlib/rcvec.tur, a flat vector of rc<A> the cycle collector can trace
+     * through.  The { data, len, cap } header is the INLINE payload of an
+     * RCK_STRUCT block (rc_cb_alloc_struct), so unlike a plain Vec the
+     * container itself is GC-visible: the walk hook reports each slot as a
+     * child (one generic walker serves every element type -- a slot is always
+     * an RcControlBlock *), and the drop hook releases each slot and frees the
+     * buffer.  The header itself is never freed here -- it lives inside the
+     * control block's own allocation, which rc_cb_free reclaims.
+     *
+     * Emitted here rather than compiled into the runtime archive for the same
+     * reason as the shims above: the drop hook decrements refcounts, and must
+     * bind to whichever collector copy this program actually runs. */
+    buf_puts(out, "/* stdlib/rcvec.tur: GC-visible flat vector of rc<A> (walk + drop hooks). */\n");
+    buf_puts(out, "typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_rcvec_t;\n");
+    buf_puts(out, "static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) {\n");
+    buf_puts(out, "    tur_rcvec_t *v = (tur_rcvec_t *)value;\n");
+    buf_puts(out, "    if (!v || !v->data) return;\n");
+    buf_puts(out, "    for (int64_t i = 0; i < v->len; i++)\n");
+    buf_puts(out, "        if (v->data[i]) cb((RcControlBlock *)(intptr_t)v->data[i], ctx);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_rcvec_drop(void *value) __attribute__((unused));\n");
+    buf_puts(out, "static void tur_rcvec_drop(void *value) {\n");
+    buf_puts(out, "    tur_rcvec_t *v = (tur_rcvec_t *)value;\n");
+    buf_puts(out, "    if (!v) return;\n");
+    buf_puts(out, "    for (int64_t i = 0; i < v->len; i++)\n");
+    buf_puts(out, "        if (v->data[i]) rc_strong_decrement((RcControlBlock *)(intptr_t)v->data[i]);\n");
+    buf_puts(out, "    free(v->data);\n");
+    buf_puts(out, "    v->data = NULL; v->len = 0; v->cap = 0;\n");
+    buf_puts(out, "}\n\n");
+
     /* SS2: TurChannel -- synchronous rendezvous channel for session types. */
     buf_puts(out, "/* SS2: TurChannel -- synchronous rendezvous channel for session types */\n");
     buf_puts(out, "#ifndef NDEBUG\n");

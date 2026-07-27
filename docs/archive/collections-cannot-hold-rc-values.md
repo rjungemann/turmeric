@@ -1,5 +1,34 @@
 # `vec` and `map` cannot hold `rc<T>` at all
 
+**RESOLVED 2026-07-26.** Item 3 -- the last open piece -- landed as
+**`stdlib/rcvec.tur`**, the GC-visible flat vector this report's design
+section sketched, built exactly as sketched: an `rc<RcVec>` handle whose
+control block is allocated through `rc_cb_alloc_struct` with its own walk and
+drop hooks (`tur_rcvec_walk` / `tur_rcvec_drop`), emitted into every program's
+preamble beside the map rc shims so they bind to whichever collector copy the
+program runs. Every slot is an rc control-block pointer, so the one generic
+walker serves every element type -- no per-monomorphization glue. Ownership is
+borrow-and-retain on `rcvec-push!` and mint-for-caller on `rcvec-get`, pinned
+by strong-count assertions in `tests/fixtures/rcvec-holds-rc-values`; the
+headline assertion, the same 50-cycle shape the vec arm of
+`gc-blind-spot-cycle-through-vec` strands at 50 live, is reclaimed to **0
+live** in `tests/fixtures/rcvec-cycle-is-collected` (also a control fixture in
+`tests/run-gc-leak-gate.sh`, so the drop hook is ASan-checked with the
+collector on and off).
+
+What deliberately stays as-is:
+
+- The **plain `Vec` / `Map` stay untraceable**, by design -- the "why the
+  obvious fix is wrong" section below still holds: an unowned buffer cannot be
+  traced safely. Their fixture arms keep pinning that cost.
+- `weak<T>` in any collection stays rejected (no count to take).
+- The Map release path from Turmeric (no `map-free`) remains the recorded
+  persistent-map baseline, unchanged by this.
+
+The original report follows.
+
+---
+
 **Severity:** medium (expressiveness hole; hard codegen error, not a miscompile)
 **Status:** open, but narrowed to one thing. Items 1 and 2 are done for `vec`
 and, as of 2026-07-26, for `map` as well (the map plan (a)--(d) below). What

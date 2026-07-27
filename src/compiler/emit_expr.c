@@ -3053,7 +3053,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             "cannot hold %s today.\n"
                             "  Store a plain handle instead, or keep the %s "
                             "outside the collection.\n"
-                            "  See docs/reported/collections-cannot-hold-rc-values.md\n",
+                            "  See docs/archive/collections-cannot-hold-rc-values.md\n",
                             typekind_to_string(owning_src ? src_kind : dst_kind),
                             typekind_to_string(owning_src ? src_kind : dst_kind),
                             typekind_to_string(owning_src ? src_kind : dst_kind));

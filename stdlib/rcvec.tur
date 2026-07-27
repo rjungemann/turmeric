@@ -1,0 +1,163 @@
+;;; tur/rcvec -- a flat vector of rc<A> the cycle collector can trace through.
+;;;
+;;; Opt-in: load it when you need one.
+;;;
+;;;   (load "stdlib/rcvec.tur")
+;;;
+;;; This is the O(1) sibling of stdlib/rcchain.tur, and the actual fix for the
+;;; flat-buffer blind spot that module works around.  A plain `(Vec rc<T>)` is
+;;; refcount-correct but INVISIBLE to the cycle collector: its elements live in
+;;; an ordinary malloc'd { data, len, cap } buffer with no walk_fn, so a cycle
+;;; routed through the buffer is never reclaimed (measured:
+;;; tests/fixtures/gc-blind-spot-cycle-through-vec, 0 freed / 50 live).  Nor
+;;; can the walker simply be taught to look inside a plain Vec -- the buffer is
+;;; shared by raw pointer and freed by hand, so the collector cannot know
+;;; whether another holder still points at it, and tracing through it would
+;;; trade the leak for a use-after-free.
+;;;
+;;; An RcVec closes the gap by making the CONTAINER itself GC-visible.  The
+;;; handle is an ordinary rc<RcVec>: its control block carries a walk hook that
+;;; reports every slot as a child (each slot IS an rc control-block pointer, so
+;;; one generic walker serves every element type), and a drop hook that
+;;; releases each slot and frees the buffer.  Both hooks are emitted into the
+;;; program's preamble (tur_rcvec_walk / tur_rcvec_drop in emit_module.c), so
+;;; they bind to whichever collector copy the program runs -- the same
+;;; discipline as the map/vec rc shims.
+;;;
+;;; Ownership is uniform and count-honest:
+;;;
+;;;   - `rcvec-push!` BORROWS its element and the vector takes its OWN strong
+;;;     reference -- your handle stays yours.  `(rcvec-push! v a)` nets +1.
+;;;   - `rcvec-get` mints the CALLER a new strong reference -- safe to let-bind
+;;;     and drop while the vector keeps its slot.
+;;;   - dropping the last rc<RcVec> handle releases every slot and the buffer.
+;;;
+;;; The trade against rcchain: O(1) indexing and one buffer, against one extra
+;;; walk/drop hook pair in every program (emitted unconditionally, dead when
+;;; unused).  The trade against a plain Vec: one rc block for the container and
+;;; a retain per push.  A `Vec` of handles that cannot form a cycle is still
+;;; the better default; reach for RcVec when they can AND the collector is on.
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+;; Cycle-collector-visible flat vector of rc<A>.
+;;; RcVec -- opaque marker type for the container.
+;;;
+;;; The name exists so handles can be typed rc<RcVec>; the REAL payload behind
+;;; a handle is the C-side tur_rcvec_t { data, len, cap } header, laid out and
+;;; managed entirely by the emitted hooks.  Never `make-struct` one -- go
+;;; through `rcvec-new`.
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+(defstruct RcVec :move [managed-by-c : int])
+;;; rcvec-new -- allocate a fresh, empty rc vector.
+;;;
+;;; The returned handle is a normal rc<RcVec>: clone it to share, and the last
+;;; drop releases every element reference and the buffer.  The control block is
+;;; allocated with the rcvec walk/drop hooks attached, which is what makes a
+;;; cycle routed through the vector collectable.
+;;;
+;;; Returns:
+;;;   A new empty vector, owned by the caller.
+;;;
+;;; Example:
+;;;   (let [v (rcvec-new)]
+;;;     (println (rcvec-len v)))   ; => 0
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+(defn rcvec-new [] : rc<RcVec>
+  ```c
+  /* 19 == TY_ADT, the same value-type ordinal the codegen passes when boxing
+   * a user aggregate (see the rc_cb_alloc(0, 19, NULL) shape recorded in
+   * gc-cycle-collection-followup-plan).  Anything <= 7 would be filtered as a
+   * scalar that "cannot contain cycles"; 8/9/10 carry ref/rc/weak drop-glue
+   * defaulting.  The explicit hooks make the ordinal glue-inert here. */
+  RcControlBlock *cb = rc_cb_alloc_struct(sizeof(tur_rcvec_t), 19,
+                                          tur_rcvec_drop, tur_rcvec_walk);
+  tur_rcvec_t *v = (tur_rcvec_t *)cb->value;
+  v->data = NULL;
+  v->len = 0;
+  v->cap = 0;
+  return cb;
+  ```)
+;;; rcvec-len -- the number of elements in the vector.
+;;;
+;;; Parameters:
+;;;   v -- the vector (borrowed)
+;;;
+;;; Returns:
+;;;   The element count.
+;;;
+;;; Example:
+;;;   (rcvec-len (rcvec-new))  ; => 0
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+(defn rcvec-len [^borrow v : rc<RcVec>] : int
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)(intptr_t)v;
+  if (!cb || !cb->value) return 0;
+  return ((tur_rcvec_t *)cb->value)->len;
+  ```)
+;;; rcvec-push! -- append an element to the vector.
+;;;
+;;; The element is BORROWED and the vector takes its own strong reference, so
+;;; the caller's handle stays live and owned by the caller: `(rcvec-push! v a)`
+;;; leaves `a` usable and nets the element +1.  Do NOT pass `(rc/clone a)` --
+;;; the clone would be an extra count nothing releases.
+;;;
+;;; Parameters:
+;;;   v    -- the vector (borrowed)
+;;;   item -- the element to append (borrowed; the vector retains its own)
+;;;
+;;; Returns:
+;;;   Nothing.
+;;;
+;;; Example:
+;;;   (rcvec-push! v a)
+;;;   (println (rc/strong-count a))   ; caller's 1 + the vector's 1 = 2
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+(defn rcvec-push! [A] [^borrow v : rc<RcVec> ^borrow item : rc<A>] : void
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)(intptr_t)v;
+  RcControlBlock *e  = (RcControlBlock *)(intptr_t)item;
+  if (!cb || !cb->value) return;
+  tur_rcvec_t *vec = (tur_rcvec_t *)cb->value;
+  if (vec->len == vec->cap) {
+      int64_t ncap = vec->cap ? vec->cap * 2 : 8;
+      int64_t *nd = (int64_t *)realloc(vec->data, (size_t)ncap * sizeof(int64_t));
+      if (!nd) { fprintf(stderr, "rcvec-push!: out of memory\n"); abort(); }
+      vec->data = nd;
+      vec->cap = ncap;
+  }
+  if (e) rc_strong_increment(e);
+  vec->data[vec->len++] = (int64_t)(intptr_t)e;
+  ```)
+;;; rcvec-get -- the element at index i, as the caller's own reference.
+;;;
+;;; The returned handle is a NEW strong reference minted for the caller --
+;;; let-bind it and let scope exit release it (or `rc/drop` it) while the
+;;; vector keeps its slot.  Out-of-range reads return a null handle, which is
+;;; inert (`rc/drop` on it is a no-op) but must not be dereferenced.
+;;;
+;;; Parameters:
+;;;   v -- the vector (borrowed)
+;;;   i -- zero-based index
+;;;
+;;; Returns:
+;;;   A new strong reference to the element, or a null handle out of range.
+;;;
+;;; Example:
+;;;   (let [e (rcvec-get v 0)]
+;;;     (println (rc/strong-count e)))   ; slot's + caller's counts
+;;;
+;;; Since: collections-cannot-hold-rc-values item 3
+(defn rcvec-get [A] [^borrow v : rc<RcVec> i : int] : rc<A>
+  ```c
+  RcControlBlock *cb = (RcControlBlock *)(intptr_t)v;
+  if (!cb || !cb->value) return 0;
+  tur_rcvec_t *vec = (tur_rcvec_t *)cb->value;
+  if (i < 0 || i >= vec->len) return 0;
+  RcControlBlock *e = (RcControlBlock *)(intptr_t)vec->data[i];
+  if (e) rc_strong_increment(e);
+  return e;
+  ```)

@@ -34,8 +34,11 @@
 ; shared by raw pointer and freed by hand, so the collector cannot tell whether
 ; some other holder still points at the same buffer.  Tracing through it would
 ; let the sweep free a block a live Vec still references -- trading a leak for a
-; use-after-free.  Making the container itself GC-visible is the actual fix; see
-; docs/reported/collections-cannot-hold-rc-values.md.
+; use-after-free.  Making the container itself GC-visible is the actual fix,
+; now shipped as stdlib/rcvec.tur -- tests/fixtures/rcvec-cycle-is-collected
+; reclaims this exact shape to 0 live.  The plain-Vec arm here keeps pinning
+; what the UNOWNED buffer costs; see
+; docs/archive/collections-cannot-hold-rc-values.md.
 (defstruct D :move [peer : rc<D>])
 (defstruct Cell  :move [item : rc<CNode> next : rc<Cell>])
 (defstruct CNode :move [kids : rc<Cell>])

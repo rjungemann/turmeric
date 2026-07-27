@@ -68,7 +68,7 @@ fi
 # So the control runs only on fixtures whose output comes from the CG6 counters,
 # which are real regardless of which allocator is underneath.
 ASAN_ONLY_FIXTURES="gc-collects-strong-cycle"
-CONTROL_FIXTURES="exg5-exists-cycle gc-stats-observability"
+CONTROL_FIXTURES="exg5-exists-cycle gc-stats-observability rcvec-cycle-is-collected"
 
 # TUR_CC_FLAGS REPLACES the default compiler flags rather than appending, so the
 # defaults are restated here -- dropping -std=c99 alone is enough to fail the
