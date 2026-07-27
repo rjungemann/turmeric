@@ -1133,7 +1133,7 @@ struct Expr {
          * reference (a collection taking ownership of a pushed element, or a
          * read handing the caller its own count), false means the existing
          * reference merely moves (a borrow, or a pop transferring the slot's
-         * count out).  See docs/reported/collections-cannot-hold-rc-values.md. */
+         * count out).  See docs/archive/collections-cannot-hold-rc-values.md. */
         struct { Expr *expr; TypeKind source_kind; TypeKind target_kind; bool retain; } reinterpret_;
         /* Phase H §1: dictionary passing */
         struct {

@@ -23,7 +23,10 @@
 ;;; The trade is the obvious one.  A chain is O(n) to index and costs one rc
 ;;; block per element, where a Vec is O(1) and costs one buffer.  Reach for this
 ;;; only when the elements can form a cycle AND the collector is on; a `Vec` of
-;;; handles that cannot cycle is still the better default.
+;;; handles that cannot cycle is still the better default.  For O(1) indexing
+;;; with the same traceability, see stdlib/rcvec.tur -- a flat buffer whose
+;;; container is itself GC-visible via emitted walk/drop hooks; this module
+;;; remains the zero-C-hook alternative.
 ;;;
 ;;; Accessors take their chain `^borrow`, so a chain can be walked repeatedly
 ;;; without being consumed -- `rc<T>` is move-only, and a by-value parameter

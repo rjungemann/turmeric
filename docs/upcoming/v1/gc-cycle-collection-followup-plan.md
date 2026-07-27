@@ -234,7 +234,7 @@ inside the closure body that nothing dropped.)
 
 That is a better outcome than the fixtures would have been, but it comes with a
 real expressiveness hole, filed as
-[docs/reported/collections-cannot-hold-rc-values.md](../../reported/collections-cannot-hold-rc-values.md).
+[docs/archive/collections-cannot-hold-rc-values.md](../../archive/collections-cannot-hold-rc-values.md).
 The blind spot documented in the GC guide reopens the moment collections accept
 `rc<T>`, and the fixtures become writable and necessary at the same instant.
 

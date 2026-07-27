@@ -51,10 +51,18 @@ hits=""
 # so the marker would never stay on the annotation's line and this guard would
 # fight fmt-bootstrap-stdlib (tests/run-fmt.sh) forever.
 #
+# rcvec.tur is exempt as a FILE for the same reason as rcchain.tur: it is the
+# flat-buffer sibling of that reviewed case -- a GC-visible container whose
+# walk hook lets the collector reclaim a cycle routed through it (pinned by
+# tests/fixtures/rcvec-cycle-is-collected), so there is nothing for a weak<T>
+# to break. Its rc<...> hits are borrowed parameters and a minted return, not
+# stored fields; the stored references live behind the C-side header the
+# emitted hooks manage.
+#
 # Every stdlib .tur except the rc primitive itself and generated docstrings.
 while IFS= read -r f; do
     case "$f" in
-        stdlib/rc.tur|stdlib/rcchain.tur|stdlib/weak.tur|stdlib/docstrings.tur) continue ;;
+        stdlib/rc.tur|stdlib/rcchain.tur|stdlib/rcvec.tur|stdlib/weak.tur|stdlib/docstrings.tur) continue ;;
     esac
     # Type annotations of the form `: rc<...>` (a stored rc), skipping comment /
     # docstring lines (first non-blank char is `;`) and lines a reviewer has

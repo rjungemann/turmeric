@@ -3190,6 +3190,25 @@ static void __tur_rc_val_release(void *__v) {
     if (__v) rc_strong_decrement((RcControlBlock *)__v);
 }
 
+/* stdlib/rcvec.tur: GC-visible flat vector of rc<A> (walk + drop hooks). */
+typedef struct { int64_t *data; int64_t len; int64_t cap; } tur_rcvec_t;
+static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) __attribute__((unused));
+static void tur_rcvec_walk(void *value, RcWalkChildFn cb, void *ctx) {
+    tur_rcvec_t *v = (tur_rcvec_t *)value;
+    if (!v || !v->data) return;
+    for (int64_t i = 0; i < v->len; i++)
+        if (v->data[i]) cb((RcControlBlock *)(intptr_t)v->data[i], ctx);
+}
+static void tur_rcvec_drop(void *value) __attribute__((unused));
+static void tur_rcvec_drop(void *value) {
+    tur_rcvec_t *v = (tur_rcvec_t *)value;
+    if (!v) return;
+    for (int64_t i = 0; i < v->len; i++)
+        if (v->data[i]) rc_strong_decrement((RcControlBlock *)(intptr_t)v->data[i]);
+    free(v->data);
+    v->data = NULL; v->len = 0; v->cap = 0;
+}
+
 /* SS2: TurChannel -- synchronous rendezvous channel for session types */
 #ifndef NDEBUG
 #  define TUR_DBGPROTO(s) (s)

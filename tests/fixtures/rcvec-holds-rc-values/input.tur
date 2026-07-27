@@ -1,0 +1,35 @@
+; collections-cannot-hold-rc-values item 3: stdlib/rcvec.tur ownership counts.
+;
+; Every assertion here is a strong count, deliberately -- printing elements
+; back would pass with the counts wrong (the lesson recorded by
+; rc-of-vec-element-ownership).  The contract under test:
+;
+;   - rcvec-push! BORROWS its element and the vector retains its OWN
+;     reference: the caller's handle stays live, net +1.
+;   - rcvec-get mints the CALLER a new strong reference, released by ordinary
+;     scope exit while the vector keeps its slot.
+;   - dropping the last rc<RcVec> handle releases every slot: the element
+;     count returns to the caller's 1.
+;   - an out-of-range rcvec-get is a null handle: inert to drop.
+(load "stdlib/rcvec.tur")
+
+(defstruct S :move [tag : int])
+
+(defn main [] : int
+  (let [a (rc/of (make-struct S 7))]
+    (println (rc/strong-count a))            ; 1 -- just the local
+    (let [v (rcvec-new)]
+      (println (rcvec-len v))                ; 0
+      (rcvec-push! v a)
+      (println (rc/strong-count a))          ; 2 -- the vector owns one
+      (println (rcvec-len v))                ; 1
+      (rcvec-push! v a)
+      (println (rc/strong-count a))          ; 3 -- one per slot
+      (println (rcvec-len v))                ; 2
+      (let [e (rcvec-get v 0)]
+        (println (rc/strong-count a)))       ; 4 -- the read minted one
+      (println (rc/strong-count a))          ; 3 -- scope exit released it
+      (let [miss (rcvec-get v 99)]
+        (println (rc/strong-count a))))      ; 3 -- out of range: null, no count
+    (println (rc/strong-count a)))           ; 1 -- vector dropped, slots released
+  0)

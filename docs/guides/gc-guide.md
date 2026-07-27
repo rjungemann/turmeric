@@ -224,27 +224,45 @@ of rc cells is traced today**, with no new machinery -- its links are ordinary
 `rc` fields the walk glue already enumerates. So the blind spot is not
 "collections" as a category and not a missing capability in the walker; it is
 one specific thing, a flat `malloc`'d buffer with no `walk_fn`. **If you need a
-collection of `rc<T>` the collector can trace, build it out of rc cells.**
-`stdlib/rcchain.tur` is one, opt-in via `(load "stdlib/rcchain.tur")`:
+collection of `rc<T>` the collector can trace, stdlib has two**, both opt-in:
 
-```turmeric
-(defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
-```
+- `stdlib/rcchain.tur` -- a chain of rc cells, pure Turmeric:
 
-Nothing in the compiler or runtime knows about it -- both fields are ordinary
-`rc`, so the walk glue traces them like any other. Pinned by
-`tests/fixtures/rcchain-cycle-is-collected`. O(n) to index and one rc block per
-element, so a `Vec` of handles that cannot cycle is still the better default.
+  ```turmeric
+  (defstruct RcChain :move [A] [item : rc<A> next : rc<RcChain>])
+  ```
 
-Emitting a walk loop for the field would *not* fix this, and is the trap worth
-naming: `gc_collect_white` frees the whole white set together and never releases
-references out of it, which is sound only when every path into a traced object
-is GC-visible. A `Vec` is shared by raw pointer with no count of its own, so
-tracing through it would let the sweep free a block a live `Vec` still points
-at -- a leak traded for a use-after-free. The container has to become
-GC-visible first. The same argument applies unchanged to a HAMT node. See
-[docs/reported/collections-cannot-hold-rc-values.md](../reported/collections-cannot-hold-rc-values.md)
-item 3 for the design.
+  Nothing in the compiler or runtime knows about it -- both fields are ordinary
+  `rc`, so the walk glue traces them like any other. Pinned by
+  `tests/fixtures/rcchain-cycle-is-collected`. O(n) to index and one rc block
+  per element.
+
+- `stdlib/rcvec.tur` -- the **flat buffer, traced**. An `rc<RcVec>` handle's
+  control block carries its own walk and drop hooks (`tur_rcvec_walk` /
+  `tur_rcvec_drop`, emitted into every program's preamble), so the container
+  itself is GC-visible and every slot -- an rc control-block pointer -- is
+  reported as a child. O(1) indexing, one buffer, one retain per push
+  (`rcvec-push!` borrows its element and the vector takes its own reference;
+  `rcvec-get` mints the caller a new one). Pinned by
+  `tests/fixtures/rcvec-cycle-is-collected` (the same 50-cycle shape the vec
+  arm strands: reclaimed, 0 live) and `rcvec-holds-rc-values` (the counts).
+
+A `Vec` of handles that cannot cycle is still the better default -- the plain
+table above is the price only when the elements can form a cycle and the
+collector is on.
+
+Emitting a walk loop for the *plain* Vec's field would *not* fix this, and is
+the trap worth naming: `gc_collect_white` frees the whole white set together and
+never releases references out of it, which is sound only when every path into a
+traced object is GC-visible. A plain `Vec` is shared by raw pointer with no
+count of its own, so tracing through it would let the sweep free a block a live
+`Vec` still points at -- a leak traded for a use-after-free. The container has
+to become GC-visible first, which is exactly what `RcVec` is: the buffer's
+owner is an rc block, so the collector always knows whether the buffer is still
+held. The same argument applies unchanged to a HAMT node, which is why a cycle
+through a `Map` entry remains unreclaimed. See
+[docs/archive/collections-cannot-hold-rc-values.md](../archive/collections-cannot-hold-rc-values.md)
+for the full design history.
 
 A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
 spot.
@@ -294,28 +312,31 @@ existed. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself still uses
 none of it. For when to reach for which ownership strategy in the first place,
 see [ownership-guide.md](ownership-guide.md).
 
-### The one reviewed exception: `stdlib/rcchain.tur`
+### The reviewed exceptions: `stdlib/rcchain.tur` and `stdlib/rcvec.tur`
 
-`rcchain.tur` is the single opt-in module that *does* store `rc<T>` -- both
-fields of its `RcChain` link are one (`[item : rc<A> next : rc<RcChain>]`) --
-and it is exempt from the guard as a whole file, alongside `rc.tur` itself.
+`rcchain.tur` and `rcvec.tur` are the opt-in modules that *do* store `rc<T>`
+-- both fields of an `RcChain` link are one (`[item : rc<A> next :
+rc<RcChain>]`), and an `RcVec`'s buffer holds one per slot -- and both are
+exempt from the guard as whole files, alongside `rc.tur` itself.
 
-The exemption is the review, not a waiver of it. A chain can absolutely form a
-cycle; the point is that this one is **reclaimed**. Every field is a plain `rc`,
-so the walk glue emitted for the struct already reports both the element and the
-spine as children and the collector traces straight through -- no `weak<T>` is
-needed to break anything, because nothing is stuck.
-`tests/fixtures/rcchain-cycle-is-collected` pins exactly that: fifty cycles
-routed through a chain, then `(gc!)`, then `gc-live-blocks` == 0.
+The exemption is the review, not a waiver of it. These containers can
+absolutely form a cycle; the point is that theirs are **reclaimed**. A chain's
+fields are plain `rc`, so the emitted walk glue reports both the element and
+the spine as children; an rcvec's control block carries its own walk hook that
+reports every slot. Either way the collector traces straight through -- no
+`weak<T>` is needed to break anything, because nothing is stuck.
+`tests/fixtures/rcchain-cycle-is-collected` and
+`tests/fixtures/rcvec-cycle-is-collected` pin exactly that: fifty cycles
+routed through each container, then `(gc!)`, then `gc-live-blocks` == 0.
 
-That is the module's entire reason to exist. A `(Vec rc<T>)` is
-refcount-correct but *invisible* to the collector -- a Vec's elements sit in an
+That is these modules' entire reason to exist. A plain `(Vec rc<T>)` is
+refcount-correct but *invisible* to the collector -- its elements sit in an
 ordinary malloc'd buffer with no walk function, so a cycle through it is never
 reclaimed (measured at 0 freed / 50 live in
-`tests/fixtures/gc-blind-spot-cycle-through-vec`). The blind spot is the flat
-buffer specifically, not "collections", and an `RcChain` is what you reach for
-when the elements can cycle and the collector is on. The cost is the obvious
-one: O(n) indexing and one rc block per element.
+`tests/fixtures/gc-blind-spot-cycle-through-vec`). The blind spot is the
+unowned flat buffer specifically, not "collections". Reach for `RcVec` (O(1),
+flat) or `RcChain` (no C hooks at all) when the elements can cycle and the
+collector is on.
 
 The exemption is file-level rather than per-line for a mechanical reason too: a
 trailing `;; rc-cycle-ok:` marker does not survive `tur fmt`, which moves the
@@ -493,7 +514,7 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
   the collector cannot know whether another holder exists). Measured by
   `tests/fixtures/gc-blind-spot-cycle-through-vec`; the fix -- an rc-managed,
   self-walking container -- is designed in
-  `docs/reported/collections-cannot-hold-rc-values.md` item 3, and
+  `docs/archive/collections-cannot-hold-rc-values.md` item 3, and
   `stdlib/rcchain.tur` is a working instance of it.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.
