@@ -1,0 +1,10 @@
+;; closure-capture-escapes-linearity: the ^unique half.  A closure that consumes
+;; a captured unique value inherits CK_UNIQUE, so a second invocation is a second
+;; use of a use-at-most-once value (TUR-E0201).
+(defn triple [n : int] : int (* n 3))
+(defn main [] : int
+  (let [^unique u 14]
+    (let [f (fn [] : int (consume u triple))]
+      (f)
+      (f)))
+  0)

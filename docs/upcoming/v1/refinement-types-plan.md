@@ -771,6 +771,12 @@
 > order, which deserves its own suite run rather than riding along with an
 > unrelated slice. (`hamt.c` does the same shift on a `uint64_t` and is fine.)
 >
+> **FIXED 2026-07-26**, archived at
+> [docs/archive/wasm32-promo-hash-shift-ub.md](../../archive/wasm32-promo-hash-shift-ub.md).
+> The deferral reason above turned out not to apply: on LP64 the rewrite is
+> bit-identical (the cast is a no-op widening), so native hash values do not
+> move at all, and the promo map is a seen-set nothing iterates for output.
+>
 > ### RT7 -- measured first, then half-built on purpose (2026-07-25)
 >
 > **A crash came out before any caching did.** The benchmark written to make

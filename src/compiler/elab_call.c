@@ -5876,7 +5876,49 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
 /* Phase 2 wrapper: elaborate the call, then apply the closure-drop-glue S1
  * borrowed-closure hoist to the result (a no-op unless the call passes an inline
  * capturing closure to a `^borrow` fn-param). */
+/* closure-capture-escapes-linearity: invoking a linear callable CONSUMES it.
+ *
+ * A call in head position does not go through the general var-use path in
+ * elab_toplevel.c, which is what marks a linear binding consumed and rejects the
+ * second use.  Without this, a closure that inherited linearity from a consumed
+ * capture was reported as *dropped* (TUR-E0100) even when it was called -- the
+ * mark reached the binding but nothing ever discharged it.
+ *
+ * Continuations are excluded: `(k v)` on a TY_CONT / is_continuation binding is
+ * application sugar with its own consume-and-check in elab_call_fn_inner, and
+ * running both would consume here and then report a spurious use-after-consume
+ * there. */
+static bool call_consume_linear_callable(Binding *fn_binding, const Form *call) {
+    if (!fn_binding) return true;
+    if (fn_binding->is_continuation || fn_binding->type.kind == TY_CONT) return true;
+    if (fn_binding->is_unique) {
+        /* The unique half: a second invocation is a second use of a
+         * use-at-most-once value, which is E0201 (same code the general var-use
+         * path raises for `(f)` in non-head position). */
+        if (fn_binding->is_moved) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                                TUR_E0201_UNIQUE_COPY,
+                                "cannot copy unique value '%s' -- "
+                                "unique values may be used at most once",
+                                fn_binding->name->name);
+            return false;
+        }
+        fn_binding->is_moved = true;
+    }
+    if (!fn_binding->is_linear) return true;
+    if (fn_binding->is_linear_consumed) {
+        diag_emit_with_code(DIAG_ERROR, call->span,
+                            TUR_E0101_LINEAR_USE_AFTER_CONSUME,
+                            "linear value '%s' used after being consumed",
+                            fn_binding->name->name);
+        return false;
+    }
+    fn_binding->is_linear_consumed = true;
+    return true;
+}
+
 static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
+    if (!call_consume_linear_callable(fn_binding, call)) return NULL;
     Expr *r = elab_call_fn_inner(e, call, fn_binding);
     return r ? hoist_borrowed_closure_args(e, r, call->span) : r;
 }

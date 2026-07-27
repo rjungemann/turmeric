@@ -1,8 +1,10 @@
 # Cycle-Collecting GC -- Follow-up (automatic collection, observability, last replica)
 
-**Status:** open -- CG5, CG6, CG7 and DEDUP-5 are done; CG3's residue is closed
-as a compiler bug (filed, not linted); CG8 (graduation) is deliberately held
-until `cycle-gc` has baked to its 0.34.0 review point. Successor to
+**Status:** open -- CG5, CG6, CG7, DEDUP-5 and PT1/PT2 (pause time) are done;
+CG3's residue is closed as a compiler bug (filed, not linted); CG8
+(graduation) is deliberately held until `cycle-gc` has baked to its 0.34.0
+review point, and two of the three things it said to weigh are now measured.
+Successor to
 [docs/archive/gc-cycle-collection-plan.md](../../archive/gc-cycle-collection-plan.md),
 which shipped CG0--CG4 and the DEDUP-1--4b de-duplication and is now archived.
 
@@ -28,7 +30,11 @@ CG7's corpus and CG8's graduation sit on top of those.
 
 Five bugs came out of the duplication (CG1 double suspect-removal, CG3 `:heap`
 mis-cast, CG4 weak force-free, the `gc_enable` mode gap, and the
-`gc_enqueue_grey` colour downgrade). Three fences now hold that line and must
+`gc_enqueue_grey` colour downgrade) -- **six** counting PT1, where the runtime
+copy carried a redundant dedup scan the emitted copy never had and paid for it
+with a quadratic. Note the direction: every earlier divergence made the runtime
+copy *wrong*, this one made it *slow*, which is why nothing behavioural caught
+it. Three fences now hold that line and must
 survive everything below: the `RcControlBlock` layout guard (DEDUP-1), the
 `RC_VT_*` / `TypeKind` `_Static_assert` pair (DEDUP-4b), and
 `tests/turi/gc-runtime-copy-parity.c` (DEDUP-4a). `tools/gc-copy-diff.py`
@@ -88,9 +94,9 @@ Pinned by `tests/fixtures/gc-auto-collects-without-gc-call` (end-to-end, no
 which allocates hard enough to fire many collections mid-construction -- a crash
 there is the bug returning.
 
-**Not done:** capping candidate-set size per collection. AUTO fires often enough
-that each collection sees a small set in practice, but that is an emergent
-property, not a bound. Pause time stays an open risk (below).
+**Not done, and now superseded:** capping candidate-set size per collection.
+That cap was never the pause-time fix -- see PT1/PT2 below, where the actual
+term was measured and removed. Left uncapped deliberately.
 
 *Original phase text:*
 
@@ -404,6 +410,74 @@ routed only through a raw C handle is not collected, exactly as in Rust with
 `*mut`. Making collections walkable means teaching the walker about C-backed
 storage -- worth doing only if a real consumer needs it.
 
+### PT1/PT2 -- Pause time [DONE 2026-07-26]
+
+**Landed, and the premise this plan carried for three phases was wrong.**
+
+CG5 left "cap candidate-set size per collection" as the pause-time fix, and the
+risks list repeated it. Before writing the cap, the two variables were
+separated and measured -- one collection, `GC_MANUAL`, timed directly:
+
+| held fixed | swept | pause |
+|---|---|---|
+| live heap 2,000 | candidates 128 -> 16,384 | 0.78 ms -> 2.16 ms |
+| candidates 512 | live heap 1,512 -> 128,512 | 0.22 ms -> **2977 ms** |
+
+Capping candidates would have done essentially nothing. A collection's cost was
+**quadratic in the live heap**, and a 128k-block heap stalled for three seconds
+on a collection that freed 512 blocks.
+
+**PT1 -- the quadratic.** `gc_enqueue_grey` did a linear "already queued?" scan
+of the grey queue on every enqueue, and `gc_mark_phase` enqueues *every*
+strong-rooted block -- so an O(queue) scan per enqueue over O(live) enqueues.
+The scan could never fire: every call site colours a block `GC_BLACK` before
+enqueuing and refuses to enqueue one already black, so a duplicate is never
+offered. The colour was always the dedup. Removed.
+
+The emitted replica in `emit_module.c` has **never** had that scan, so this was
+a live DEDUP divergence in which the runtime copy was the slow one -- the fix
+brings the runtime in line with the emitted copy, not the reverse.
+
+| live blocks | with scan | without |
+|---|---|---|
+| 8,512 | 14.2 ms | 0.17 ms |
+| 32,512 | 177.7 ms | 1.14 ms |
+| 128,512 | **2977.5 ms** | **11.11 ms** |
+
+**PT2 -- the remaining whole-heap walk.** With PT1 in, a phase breakdown showed
+where the rest went: at 256k live blocks a collection spent **34.0 ms in
+`gc_mark_phase` and 0.000 ms in `gc_trial_deletion_phase`**. That pair is the
+zombie sweep, and `gc_trial_deletion_phase` reads the candidate buffer and
+nothing else -- while `gc_cycle_collect_phase` has just *drained* every
+candidate with `strong_count > 0`, so what remains is exactly the zombie set.
+With no zombies the sweep is a no-op that still walks the whole registry to
+produce colours for it to read. `gc_collect` now skips the pair when that drain
+leaves the buffer empty, in both copies.
+
+| | 128k live, 512 candidates | 256k live |
+|---|---|---|
+| before | 2977 ms | -- |
+| PT1 | 11.1 ms | 37.3 ms |
+| PT1+PT2 | **2.09 ms** | **4.28 ms** |
+
+**PT2 has one visible consequence, and a fixture caught it.** The claim "nothing
+reads those colours" is true of the *runtime* -- `gc_is_alive` is the only
+reader outside the collector and has no callers; `rc_is_alive`/`rc_upgrade` test
+`strong_count`. But colours are observable to inline C, and
+`tests/fixtures/exg5-walker-rc-payload` reads one as a white-box probe of the
+EXG5 walker. That program buffers no candidates at all (its `rc<int>` is scalar,
+so `gc_add_suspect` filters it), so the skip left it reading WHITE and the
+fixture went red. The walker is unchanged; what changed is whether a program
+with nothing to sweep runs one. The fixture now leaves a real zombie
+(`strong_count 0`, `weak_count 1`) in the buffer first, which restores the
+precondition its assertion was always assuming.
+
+**Still O(live), and left that way:** `gc_cycle_collect_phase` reseeds
+`cb->gc_trial` over the whole registry (3.26 ms of the 4.28 ms above). Linear,
+not quadratic, and removing it needs lazy per-block seeding behind an epoch
+stamp -- a new field, in a struct pinned by the DEDUP-1 layout guard, in both
+copies. Not worth it at these numbers; the note is here if it ever is.
+
 ### CG8 -- (Stretch) graduation toward default-on [NOT YET -- deliberately]
 
 CG5--CG7 are done, which is the precondition this phase named. It is still too
@@ -415,16 +489,54 @@ several releases of bake behind it.
 
 What graduation should weigh when it comes up:
 
-- **Pause time**, the one risk CG5 left open. AUTO caps nothing per collection;
-  it just fires often enough that the candidate set stays small in practice
-  (measured high-water 128 on a churning program). A default-on collector needs
-  that to be a bound, not an observation.
-- **The `rc_cb_alloc_kinded` payload zeroing** CG5 added under AUTO. Harmless
-  as an opt-in; as a default it is a cost on every rc allocation in the
-  language, and would want measuring against the alternative (a per-block
-  "under construction" flag).
-- **CG6's numbers on real programs**, not synthetic churn. The instrumentation
-  exists now; nothing has yet run a real workload through it.
+- **Pause time** -- **measured and fixed, see PT1/PT2 above.** No longer the
+  open risk it was: the quadratic is gone and a collection no longer walks the
+  live heap when there is nothing to sweep. What remains is one linear
+  whole-registry pass (the `gc_trial` reseed), still uncapped. That is a real
+  number to weigh at graduation rather than an unknown.
+- **The `rc_cb_alloc_kinded` payload zeroing** CG5 added under AUTO --
+  **measured.** 1M allocations, alloc path only, best-of-5:
+
+  | payload | with zeroing | without | delta |
+  |---|---|---|---|
+  | 8 B | 101.0 ms | 88.3 ms | +12.7 ns/alloc |
+  | 24 B | 102.0 ms | 93.7 ms | +8.4 ns/alloc |
+  | 64 B | 117.8 ms | 111.5 ms | +6.2 ns/alloc |
+  | 256 B | 216.2 ms | 211.8 ms | +4.4 ns/alloc |
+
+  ~10% of the rc allocation path. The informative part is that the delta
+  *shrinks* as the payload grows: this is fixed overhead, not memset bytes. So
+  the alternative CG8 named -- a per-block "under construction" flag -- would
+  trade one fixed per-allocation cost for another (a byte write at alloc, a
+  branch per walk visit) and is not obviously a win. Worth re-measuring against
+  a real implementation before assuming it helps.
+- **CG6's numbers on real programs** -- **first real-shape run done, and it
+  found a leak that is not the collector's.** A workload with program shape
+  rather than synthetic churn (parent/child back-references at uneven fanout,
+  mixed with acyclic chains and long-lived data), 4000 rounds under `GC_AUTO`
+  with no `(gc!)`:
+
+  | half of the workload | collections | freed | live at exit |
+  |---|---|---|---|
+  | cyclic families | 63 | 7940 | **60** |
+  | acyclic chains | 31 | **0** | **16000** |
+
+  The collector is doing its job -- every cycle reclaimed, 60 blocks live at
+  exit. The entire 16000-block residue was `set!` on an `^mut` binding holding
+  `rc<T>` never releasing the overwritten value: 4000 rounds x 4 assignments,
+  exactly. Acyclic and `strong_count > 0`, so no collector could reclaim it.
+  **Since FIXED** -- archived at
+  [docs/archive/set-bang-does-not-release-old-rc-value.md](../../archive/set-bang-does-not-release-old-rc-value.md).
+  Re-measured after the fix, same workload:
+
+  | half of the workload | collections | freed | live at exit |
+  |---|---|---|---|
+  | acyclic chains | 4 | 0 | **0** (was 16000) |
+  | full mixed workload | 63 | 7938 | **62** (was 16050) |
+
+  So the collector's own steady-state residue on this shape is ~60 blocks, and
+  it is no longer masked by an unrelated refcount leak. That is the number
+  graduation should weigh.
 
 *Original phase text:*
 
@@ -440,8 +552,14 @@ baseline."
 
 ## Risks / open questions
 
-- **Pause time** (CG5). Synchronous collection over a large candidate set
-  stalls; the heuristic must cap candidate-set size per cycle.
+- ~~**Pause time** (CG5). Synchronous collection over a large candidate set
+  stalls; the heuristic must cap candidate-set size per cycle.~~
+  **RESOLVED 2026-07-26 -- and the diagnosis was wrong.** The candidate set was
+  never the term that mattered (128 -> 16,384 candidates moved one collection
+  0.78 ms -> 2.16 ms). Cost was quadratic in the *live heap*: 2977 ms at 128k
+  blocks, from a redundant linear dedup scan in `gc_enqueue_grey`. See PT1/PT2
+  -- now 2.09 ms on the same shape, with no cap on candidates anywhere. One
+  linear whole-registry pass remains, documented there.
 - **`RCK_OPAQUE` blind spot is permanent** without runtime type reflection --
   and that is fine (documented, matches Rust). The CG3 lint keeps it visible.
 - **Interaction with the substructural path** (`^linear` / `^unique`):
@@ -452,10 +570,12 @@ baseline."
   linearity checker entirely, and calling it twice double-frees (confirmed under
   ASan). `rc` is a vector -- `(rc/of closure)` is accepted where
   `(rc/of linear-value)` is rejected -- but the minimal repro needs no `rc`.
-  Filed as
-  [docs/reported/closure-capture-escapes-linearity.md](../../reported/closure-capture-escapes-linearity.md);
-  the fix is in the substructural checker, not the collector, so it does not
-  gate CG8.
+  **FIXED 2026-07-26** -- a closure that CONSUMES a captured linear/unique value
+  now inherits its `copy_kind`, so the double call is TUR-E0101, `(rc/of f)` is
+  TUR-E0103, and dropping it is TUR-E0100. Archived at
+  [docs/archive/closure-capture-escapes-linearity.md](../../archive/closure-capture-escapes-linearity.md).
+  The fix was in the substructural checker, not the collector, so it never gated
+  CG8.
 - **Two collectors in one process.** **VERIFIED 2026-07-26 -- sound, but for a
   different reason than this assumed.** Measured: the DEDUP-5 visibility
   hardening holds (0 exported `gc_*`/`rc_*` dynamic symbols), the registries are
@@ -467,8 +587,44 @@ baseline."
   inspection on the path *before* that guard (`gc_remove_suspect` clearing
   `gc_buffered` on a foreign block) has been hardened in both collector copies.
   Cross-boundary *cycles* remain uncollectable by either collector -- a leak, same
-  class as the `Vec`/HAMT blind spot. See
-  [docs/reported/two-collectors-dlopen-boundary.md](../../reported/two-collectors-dlopen-boundary.md).
+  class as the `Vec`/HAMT blind spot. Written up for users in
+  [docs/guides/gc-guide.md](../../guides/gc-guide.md) ("Two collectors in one
+  process") and archived at
+  [docs/archive/two-collectors-dlopen-boundary.md](../../archive/two-collectors-dlopen-boundary.md).
+
+## Filed on the way (not collector bugs)
+
+Three defects surfaced while measuring the above. None is in the collector; all
+three were hit *because* the measurements drove the rc path harder than the
+fixtures do.
+
+- [set-bang-does-not-release-old-rc-value.md](../../archive/set-bang-does-not-release-old-rc-value.md)
+  -- was **high**, now **FIXED** (archived). `set!` on an `^mut` binding holding
+  `rc<T>` never released the overwritten value. Acyclic, so no collector could
+  reclaim it -- it was the whole of the residue in CG8's real-workload run
+  above. Investigating it turned up two further defects on the same seam (a
+  missing `rc_strong_increment` on rc field-read values, and a read-after-release
+  ordering bug in the field write), so the fix is an ownership normalization
+  rather than a decrement. Pinned by `tests/fixtures/set-bang-releases-old-rc`
+  and `tests/set-bang-rc-release-check.sh`.
+
+- [rc-free-queue-drain-is-quadratic.md](../../archive/rc-free-queue-drain-is-quadratic.md)
+  -- was **medium**, now **FIXED** (archived). `rc_free_queue_drain` memmoved
+  the whole queue per pop, in both copies; it dominated the payload-zeroing
+  measurement so completely that the memset was invisible until the queue was
+  taken out of the loop. Filed as a performance cliff, but the quadratic turned
+  out to be **masking a correctness bug**: drop glue calls the drain from inside
+  the drain, so a deep cascade recursed one stack frame per link and died with
+  an ASan stack-overflow at 200k depth -- in exactly the case the queue exists
+  to prevent. A reentrancy guard closes it. 378 ms -> 0.91 ms to free 65,000
+  blocks; 2M alloc/drop pairs 11,563 ms -> 70 ms. Pinned by
+  `tests/fixtures/rc-free-queue-deep-cascade`.
+
+The last one is left open -- it is separate from this plan's track.
+
+- [rc-scalar-default-glue-invalid-free.md](../../reported/rc-scalar-default-glue-invalid-free.md)
+  -- medium. `rc_cb_alloc(size, <scalar>, NULL)` gets default drop glue that
+  `free()`s its own inline payload. C-API-only; codegen does not take the path.
 
 ## Related plans
 

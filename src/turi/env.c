@@ -414,8 +414,16 @@ void turi_env_free(TuriEnv *env) {
 void turi_env_reset(TuriEnv *env) {
     if (!env) return;
 
-    /* Drop accumulated REPL/eval source so the next turi_eval starts fresh. */
+    /* Drop accumulated REPL/eval source so the next turi_eval starts fresh.
+     * The prelude pin goes with it -- this reset drops the preloaded stdlib
+     * along with everything else, so there is nothing left to pin; a caller
+     * that re-preloads calls turi_env_pin_prelude again. */
     env->src_acc.len      = 0;
+    env->src_pin_len      = 0;
+    env->pin_toplevel     = 0;
+    env->pin_prog_items   = 0;
+    env->pin_acc_forms    = 0;
+    env->pin_next_line    = 0;
     env->prior_toplevel   = 0;
     env->prior_prog_items = 0;
 
@@ -535,6 +543,53 @@ void turi_env_set_scratch_promotion(TuriEnv *env, bool enable) {
 void turi_env_set_incremental_elab(TuriEnv *env, bool enable) {
     if (!env) return;
     env->incremental_elab = enable;
+}
+
+void turi_env_pin_prelude(TuriEnv *env) {
+    if (!env) return;
+    env->src_pin_len     = env->src_acc.len;
+    env->pin_toplevel    = env->prior_toplevel;
+    env->pin_prog_items  = env->prior_prog_items;
+    env->pin_acc_forms   = env->n_acc_forms;
+    env->pin_next_line   = env->acc_next_line;
+}
+
+void turi_env_reset_to_prelude(TuriEnv *env) {
+    if (!env) return;
+
+    /* Clamp: a caller that shortened src_acc by other means (turi_env_reset)
+     * must not leave the pin pointing past the end of the buffer. */
+    size_t pin = (env->src_pin_len < env->src_acc.len) ? env->src_pin_len
+                                                       : env->src_acc.len;
+    env->src_acc.len = pin;
+
+    if (pin == 0) {
+        /* Nothing pinned -- the historical full discard. */
+        env->prior_toplevel   = 0;
+        env->prior_prog_items = 0;
+        env->n_acc_forms      = 0;
+        env->acc_next_line    = 0;
+    } else {
+        /* Rewind to the pin.  The counters come back too, so the prelude is
+         * marked already-run: its definitions are still bound in env->globals
+         * from the original load, and replaying the `(load ...)` forms would
+         * hit the elaborator's loaded_modules dedup and register nothing. */
+        env->prior_toplevel   = env->pin_toplevel;
+        env->prior_prog_items = env->pin_prog_items;
+        env->n_acc_forms      = env->pin_acc_forms;
+        env->acc_next_line    = env->pin_next_line;
+    }
+
+    /* TR2: the elaboration session was built from forms read under the OLD
+     * reader; drop it either way.  It is rebuilt by replaying the retained
+     * accumulated forms, which for the pinned region is a re-elaboration, not a
+     * re-evaluation -- prior_prog_items above is what keeps the program items
+     * from running a second time. */
+    if (env->elab_session) {
+        elab_session_free(env->elab_session);
+        env->elab_session       = NULL;
+        env->elab_session_forms = 0;
+    }
 }
 
 void turi_env_set_shared_spice_image(TuriEnv *env, struct TurSpiceImage *image) {

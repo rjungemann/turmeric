@@ -42,10 +42,19 @@ cd "$(dirname "$0")/.."
 status=0
 hits=""
 
+# weak.tur is exempt as a FILE for the same reason as rcchain.tur: it is not a
+# module that stores an rc, it is the module that provides the cycle BREAK this
+# tripwire exists to ask for. Its two hits are a borrowed `rc<A>` parameter
+# (rc/downgrade) and an `rc<A>` return (weak/unwrap) -- neither is a stored
+# field, so neither can close a cycle. A per-line marker cannot work here
+# either: `tur fmt` moves a trailing `;;` comment onto its own following line,
+# so the marker would never stay on the annotation's line and this guard would
+# fight fmt-bootstrap-stdlib (tests/run-fmt.sh) forever.
+#
 # Every stdlib .tur except the rc primitive itself and generated docstrings.
 while IFS= read -r f; do
     case "$f" in
-        stdlib/rc.tur|stdlib/rcchain.tur|stdlib/docstrings.tur) continue ;;
+        stdlib/rc.tur|stdlib/rcchain.tur|stdlib/weak.tur|stdlib/docstrings.tur) continue ;;
     esac
     # Type annotations of the form `: rc<...>` (a stored rc), skipping comment /
     # docstring lines (first non-blank char is `;`) and lines a reviewer has

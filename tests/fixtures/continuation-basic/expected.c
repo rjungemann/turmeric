@@ -829,6 +829,7 @@ struct tur_result {
 
 typedef void (*tur_thunk_fn)(void *env, tur_result *out);
 
+static void rc_free_queue_reset_drain_state(void);  /* Forward decl */
 static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
     tur_handler_node __node; __node.parent = tur_handler_chain; tur_handler_chain = &__node;
     if (setjmp(__node.buf) == 0) {
@@ -842,6 +843,7 @@ static bool tur_catch_unwind(tur_thunk_fn thunk, void *env, tur_result *out) {
     } else {
         tur_handler_chain = __node.parent;
         tur_panic_in_progress = 0;
+        rc_free_queue_reset_drain_state();
         out->tag = TUR_RESULT_ERR;
         out->u.err = global_panic_payload;
         global_panic_payload = NULL;
@@ -862,6 +864,7 @@ static bool tur_catch_panic_of(int expected_type, tur_thunk_fn thunk, void *env,
     } else {
         tur_handler_chain = __node.parent;
         tur_panic_in_progress = 0;
+        rc_free_queue_reset_drain_state();
         if (global_panic_payload && global_panic_payload->type_tag == expected_type) {
             out->tag = TUR_RESULT_ERR;
             out->u.err = global_panic_payload;
@@ -2553,6 +2556,8 @@ RC_LAYOUT_ASSERT(ord_12, offsetof(RcControlBlock, gc_collecting) < offsetof(RcCo
 #define RC_FREE_QUEUE_CAPACITY 65536
 static RcControlBlock *rc_free_queue[RC_FREE_QUEUE_CAPACITY];
 static uint32_t rc_free_queue_count = 0;
+static uint32_t rc_free_queue_head = 0;
+static bool rc_free_queue_draining = false;
 static uint32_t rc_free_queue_drain(void);  /* Forward decl */
 static void rc_free_queue_push(RcControlBlock *cb);  /* Forward decl */
 bool rc_strong_decrement(RcControlBlock *cb);  /* Forward decl */
@@ -2560,8 +2565,19 @@ bool rc_weak_decrement(RcControlBlock *cb);    /* Forward decl */
 static void rc_free_queue_push(RcControlBlock *cb) {
     if (!cb) return;
     if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {
-        fprintf(stderr, "rc_free_queue: full, aborting\n");
-        abort();
+        if (rc_free_queue_head > 0) {
+            uint32_t __live = rc_free_queue_count - rc_free_queue_head;
+            if (__live > 0) memmove(rc_free_queue, rc_free_queue + rc_free_queue_head,
+                                    (size_t)__live * sizeof(RcControlBlock *));
+            rc_free_queue_count = __live;
+            rc_free_queue_head = 0;
+        }
+        if (!rc_free_queue_draining && rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY)
+            rc_free_queue_drain();
+        if (rc_free_queue_count >= RC_FREE_QUEUE_CAPACITY) {
+            fprintf(stderr, "rc_free_queue: full, aborting\n");
+            abort();
+        }
     }
     rc_free_queue[rc_free_queue_count++] = cb;
 }
@@ -2694,12 +2710,11 @@ static void gc_on_strong_decrement(RcControlBlock *cb) {
 /* Phase 9: Deferred free queue drain */
 static uint32_t rc_free_queue_drain(void) {
     if (rc_free_queue_count == 0) return 0;
+    if (rc_free_queue_draining) return 0;
+    rc_free_queue_draining = true;
     uint32_t freed = 0;
-    while (rc_free_queue_count > 0) {
-        RcControlBlock *cb = rc_free_queue[0];
-        memmove(rc_free_queue, rc_free_queue + 1,
-                (rc_free_queue_count - 1) * sizeof(RcControlBlock *));
-        rc_free_queue_count--;
+    while (rc_free_queue_head < rc_free_queue_count) {
+        RcControlBlock *cb = rc_free_queue[rc_free_queue_head++];
         gc_unregister_block(cb);
         if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
             int64_t __raw = *(const int64_t *)cb->value;
@@ -2710,7 +2725,14 @@ static uint32_t rc_free_queue_drain(void) {
         free(cb);
         freed++;
     }
+    rc_free_queue_count = 0;
+    rc_free_queue_head = 0;
+    rc_free_queue_draining = false;
     return freed;
+}
+
+static void rc_free_queue_reset_drain_state(void) {
+    rc_free_queue_draining = false;
 }
 
 static void default_rc_drop_fn(void *value) {
@@ -2787,6 +2809,17 @@ uint64_t rc_strong_increment(RcControlBlock *cb) {
     return ++cb->strong_count;
 }
 
+static void rc_release_value(RcControlBlock *cb) {
+    if (!cb || !cb->value) return;
+    if (cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
+        int64_t __raw = *(const int64_t *)cb->value;
+        RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
+        if (__inner) rc_strong_decrement(__inner);
+    }
+    if (cb->drop_fn) cb->drop_fn(cb->value);
+    cb->value = NULL;
+}
+
 bool rc_strong_decrement(RcControlBlock *cb) {
     if (!cb) return false;
     if (cb->gc_collecting) {
@@ -2796,6 +2829,7 @@ bool rc_strong_decrement(RcControlBlock *cb) {
     cb->strong_count--;
     if (cb->strong_count == 0) {
         if (cb->weak_count > 0) {
+            rc_release_value(cb);
             gc_on_strong_decrement(cb);
             return false;
         } else {
@@ -2817,15 +2851,7 @@ bool rc_weak_decrement(RcControlBlock *cb) {
     cb->weak_count--;
     if (cb->weak_count == 0 && cb->strong_count == 0) {
         gc_unregister_block(cb);
-        if (cb->value && cb->reserved[0] == 1 /* RCK_EXISTENTIAL */ && cb->reserved[1] == 1 /* RCEXP_RC */) {
-            int64_t __raw = *(const int64_t *)cb->value;
-            RcControlBlock *__inner = (RcControlBlock *)(intptr_t)__raw;
-            if (__inner) rc_strong_decrement(__inner);
-        }
-        /* Free zombie value if GC did not already collect it */
-        if (cb->value && cb->drop_fn) {
-            cb->drop_fn(cb->value);
-        }
+        rc_release_value(cb);
         free(cb);
         return true;
     }
@@ -3077,8 +3103,10 @@ static void gc_collect(void) {
     uint64_t trace_freed_before = gc_objects_freed;
     gc_cycle_collect_phase();
     gc_grey_count = 0;
-    gc_mark_phase();
-    gc_trial_deletion_phase();
+    if (gc_suspect_count > 0) {
+        gc_mark_phase();
+        gc_trial_deletion_phase();
+    }
     if (gc_trace_enabled < 0) {
         const char *__tur_gct = getenv("TUR_GC_TRACE");
         gc_trace_enabled = (__tur_gct && *__tur_gct && strcmp(__tur_gct, "0") != 0) ? 1 : 0;

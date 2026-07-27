@@ -236,6 +236,30 @@ static char *emit_fat_return_value(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     return emit_value(ctx, body, e);
 }
 
+/* CONV-S1 seam 4: the single question that decides an inline-C function's C
+ * return type -- does it return its declared aggregate BY VALUE, or through the
+ * int64 carrier?  Under the defstruct-as-defadt lowering a by-value
+ * record/product result (`Pos` -> `tur_adt_Pos`) is a concrete aggregate, so an
+ * inline-C body returns it by value (`Pos r; return r;`) and the C signature
+ * must say so, matching the dict slot.  A parametric ADT-app with no single C
+ * layout, a :heap ADT (a pointer), and a carrier-ABI ADT (a multi-variant sum
+ * returned as the int64 handle) all stay on the carrier.
+ *
+ * Factored out of two hand-duplicated copies (the definition signature here and
+ * the forward-decl mirror in emit_module.c) so they cannot drift, and so the
+ * CONSUMER side can ask the same question instead of guessing from the type's
+ * shape -- see fn_body_tail_byvalue_carrier_type in emit_expr.c.  Declared in
+ * emit_internal.h. */
+bool inline_c_returns_byvalue_adt(EmitCtx *ctx, bool body_is_inline_c,
+                                  const Type *rft) {
+    if (!body_is_inline_c || !rft) return false;
+    Type rft_r = emit_resolve_type(ctx, *rft);
+    return (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
+           !type_uses_carrier_abi(rft_r) &&
+           !type_is_heap_adt(rft_r) &&
+           type_has_concrete_codegen_layout(&rft_r);
+}
+
 /* M5 straddle (root cause C of m5-suite-residual-6-failures): true when every
  * tail leaf of `e` is a call that emits an int64 carrier value -- a
  * #{Construct} helper (some/ok/err/none) or a typeclass-method impl
@@ -3136,11 +3160,8 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * with a concrete codegen layout.  Carrier-ABI ADTs (multi-variant
              * sums returned as the int64 handle) are excluded and stay int64. */
             Type rft_r = emit_resolve_type(ctx, rft);
-            bool typed_byval_adt = body_is_inline_c &&
-                (rft_r.kind == TY_ADT || rft_r.kind == TY_APP) &&
-                !type_uses_carrier_abi(rft_r) &&
-                !type_is_heap_adt(rft_r) &&
-                type_has_concrete_codegen_layout(&rft_r);
+            bool typed_byval_adt =
+                inline_c_returns_byvalue_adt(ctx, body_is_inline_c, &rft);
             /* inline-c-rc-return-misses-carrier-bridge: an owning return
              * (rc/weak/ref/lref) lowers to `RcControlBlock *` even from an
              * inline-C body, for the same reason typed_ptr does -- it IS a
@@ -3374,8 +3395,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                      * capture field as `tur_adt_Point *`.  Flag the param so the
                      * closure-capture site bridges int64->pointer (field reads
                      * already bridge via the heap-ADT-recv path). */
-                    if (fd->n_dict_clone > 0 && btc &&
-                        strcmp(btc, "int64_t") != 0 &&
+                    /* hkt-foldable-rc-param: the dict-clone gate used to be the
+                     * only way in.  The flag's meaning -- "carrier signature slot,
+                     * pointer-shaped binding type" -- holds for any such param, and
+                     * an HKT instance method over a pointer-family builtin is now
+                     * one: its receiver's elaborated type is `rc<a>`
+                     * (`RcControlBlock *`) while its dict-ABI slot stays int64_t.
+                     * Every consumer of the flag reacts by adding a value-preserving
+                     * int64->pointer bridge, which is correct wherever the flag's
+                     * meaning holds, so widening it can only remove straddles. */
+                    if (btc && strcmp(btc, "int64_t") != 0 &&
                         strchr(btc, '*') != NULL)
                         fd->params[i]->emit_carrier_holds_ptr = true;
                 }
@@ -3883,8 +3912,30 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 if (body_cty && strcmp(body_cty, "int64_t") != 0)
                     struct_cty = body_cty;
             }
+            /* hkt-rc-construct-body-boxes-handle: the spill exists to pass a
+             * BY-VALUE aggregate through the dict's uniform `int64_t` slot.  A
+             * value that is already carrier-width needs no box, and boxing one
+             * anyway is a silent miscompile -- the consumer reads the
+             * pointer-to-value as the value.
+             *
+             * Two shapes qualify.  The int64 carrier itself was already handled
+             * (see below).  A POINTER is the other: an instance method whose
+             * result is a pointer-family handle -- `Functor [rc]`'s `(f b)`
+             * grounding to `rc<int>`, i.e. `RcControlBlock *` -- returns a
+             * pointer that fits the carrier exactly.  Boxing it emitted
+             * `RcControlBlock **__tur_ret_p = malloc(...)` and the dispatch
+             * consumer then cast that cell straight to `RcControlBlock *`, so
+             * `rc/strong-count` read a malloc header as a refcount and the value
+             * was never reachable (measured: garbage count, fold 0, 752768 bytes
+             * leaked over 5000 iterations).
+             *
+             * The next branch down already treats a TY_RC/TY_WEAK/TY_REF/TY_LREF
+             * body returned through the int64 carrier exactly this way -- a bare
+             * `(int64_t)(intptr_t)` bridge -- so this only stops the spill from
+             * intercepting a case that was already handled correctly downstream. */
+            bool spill_ty_is_ptr = struct_cty && strchr(struct_cty, '*') != NULL;
             if (struct_cty &&
-                strcmp(struct_cty, "int64_t") == 0) {
+                (strcmp(struct_cty, "int64_t") == 0 || spill_ty_is_ptr)) {
                 /* M7: the body already produced the carrier int64 handle --
                  * e.g. a partial-application `(Result _ E)` instance whose
                  * pure-Turmeric body lowered to the carrier `ok`/`err` (the

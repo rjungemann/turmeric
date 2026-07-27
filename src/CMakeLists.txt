@@ -552,6 +552,25 @@ set_target_properties(tur_eval_basic PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# web-repl-lang-switch-drops-stdlib: a `#lang` switch must keep the pinned
+# stdlib preload (turi_env_pin_prelude) instead of emptying src_acc.
+# ---------------------------------------------------------------------------
+add_executable(tur_lang_switch_prelude ${CMAKE_SOURCE_DIR}/tests/turi/lang-switch-prelude.c)
+target_include_directories(tur_lang_switch_prelude PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_lang_switch_prelude PRIVATE libturi)
+target_compile_options(tur_lang_switch_prelude PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_lang_switch_prelude PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_lang_switch_prelude PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # TR2.0 (turi-incremental-elaboration-design): cross-eval reader-macro coverage
 # ---------------------------------------------------------------------------
 add_executable(tur_reader_macro_cross_eval ${CMAKE_SOURCE_DIR}/tests/turi/reader-macro-cross-eval.c)

@@ -138,10 +138,32 @@ typedef struct EncSubst {
 } EncSubst;
 
 #define ENC_MAX_PROPAGATE 4
+#define ENC_MAX_MEASURES  32
+
+/* RM-B2: the sort ONE measure name is declared at, for the whole VC.
+ *
+ * A symbol that is Int in a hypothesis and Bool in the goal is two symbols
+ * that print the same, which is how a congruence bug gets written.  So the
+ * sort of every occurrence of a name is settled BEFORE any of them is
+ * declared, and a name genuinely used at both sorts rejects the VC instead of
+ * guessing (Unknown is always sound -- the runtime check survives). */
+typedef struct EncMeasure {
+    const char *name;
+    VCSort      sort;
+    bool        resolved;   /* sort came from the callee's declared return type */
+    bool        seen_bool;  /* occurred where a PROPOSITION is required */
+    bool        seen_val;   /* occurred where a VALUE is required */
+} EncMeasure;
+
+typedef struct EncSorts {
+    EncMeasure m[ENC_MAX_MEASURES];
+    uint32_t   n;
+} EncSorts;
 
 typedef struct Enc {
     RefineVC        *vc;
     const RefineEnv *env;
+    const EncSorts  *sorts;  /* RM-B2: name -> sort, resolved once per VC */
     EncSubst         subst[ENC_MAX_SUBST];
     uint32_t         n_subst;
     const char      *fail;   /* set on the first unsupported construct */
@@ -205,6 +227,53 @@ static bool sym_is(const Form *f, const char *s) {
            strcmp(f->as.sym->name, s) == 0;
 }
 
+/* What a list head denotes, and therefore what its operands are.  Shared by the
+ * encoder and the RM-B2 prescan so the two can never disagree about which
+ * positions are propositions. */
+typedef enum EncHead {
+    EH_MEASURE = 0,  /* unrecognised head: a named measure          */
+    EH_ARITH,        /* + - * / mod       -- value operands         */
+    EH_ORD,          /* < <= > >=         -- value operands         */
+    EH_EQ,           /* = == not= != <>   -- sort-polymorphic       */
+    EH_LOGIC,        /* and or not => ... -- proposition operands   */
+} EncHead;
+
+/* Which sort a head DEMANDS of its operands.  `=` demands neither: two
+ * propositions may be compared for equality just as two numbers may, and
+ * enc_cmp is what enforces that the two SIDES agree.  Treating an equality
+ * operand as a value would make the perfectly ordinary
+ * `(= (alive? w x) (alive? w y))` a sort conflict. */
+typedef enum EncPos {
+    POS_NEUTRAL = 0,  /* either sort is admissible here */
+    POS_VALUE,        /* a number is required           */
+    POS_PROP,         /* a proposition is required      */
+} EncPos;
+
+static EncHead enc_head_kind(const Form *h) {
+    if (sym_is(h, "+") || sym_is(h, "-") || sym_is(h, "*") ||
+        sym_is(h, "/") || sym_is(h, "mod")) return EH_ARITH;
+    if (sym_is(h, "<") || sym_is(h, "<=") || sym_is(h, ">") ||
+        sym_is(h, ">=")) return EH_ORD;
+    if (sym_is(h, "=") || sym_is(h, "==") || sym_is(h, "not=") ||
+        sym_is(h, "!=") || sym_is(h, "<>")) return EH_EQ;
+    if (sym_is(h, "and") || sym_is(h, "or") || sym_is(h, "not") ||
+        sym_is(h, "=>")  || sym_is(h, "implies")) return EH_LOGIC;
+    return EH_MEASURE;
+}
+
+/* The sort every occurrence of `name` is declared at.  The prescan table is
+ * authoritative; a name it never saw (a propagated return refinement is
+ * encoded after the prescan ran) falls back to the callee's own sort, and
+ * vc_declare_ufunc keys on the name, so a symbol still gets exactly one sort
+ * either way. */
+static VCSort enc_name_sort(const Enc *E, const char *name, VCSort fallback) {
+    if (E->sorts) {
+        for (uint32_t i = 0; i < E->sorts->n; i++)
+            if (strcmp(E->sorts->m[i].name, name) == 0) return E->sorts->m[i].sort;
+    }
+    return fallback;
+}
+
 static VCTerm *enc_lookup(Enc *E, const char *name) {
     for (uint32_t i = 0; i < E->n_subst; i++)
         if (strcmp(E->subst[i].name, name) == 0) return E->subst[i].term;
@@ -229,6 +298,25 @@ static VCTerm *enc_nonlinear(Enc *E, const char *base, const Form *src,
     return vc_app(E->vc, fn, args, 2);
 }
 
+/* RM-B2: a proposition is not a number.  vc_mk would happily build
+ * `(+ <bool> 1)` with an arith sort and hand a backend a term whose kid it
+ * cannot interpret, so reject instead -- Unknown keeps the runtime check. */
+static bool enc_want_value(Enc *E, const VCTerm *t) {
+    if (t && t->sort == VS_BOOL) {
+        E->fail = "arithmetic operand is a proposition, not a number";
+        return false;
+    }
+    return t != NULL;
+}
+
+static bool enc_want_prop(Enc *E, const VCTerm *t) {
+    if (t && t->sort != VS_BOOL) {
+        E->fail = "logical operand does not denote a proposition";
+        return false;
+    }
+    return t != NULL;
+}
+
 static VCTerm *enc_binary_arith(Enc *E, VCOp op, const Form *f,
                                 VCTerm *a, VCTerm *b) {
     if (op == VC_MUL && !is_const_term(a) && !is_const_term(b))
@@ -249,14 +337,14 @@ static VCTerm *enc_nary_arith(Enc *E, VCOp op, const Form *f) {
     /* (- x) is negation. */
     if (op == VC_SUB && n == 2) {
         VCTerm *a = enc(E, f->as.list.items[1]);
-        if (!a) return NULL;
+        if (!enc_want_value(E, a)) return NULL;
         return vc_mk1(E->vc, VC_NEG, a);
     }
     VCTerm *acc = enc(E, f->as.list.items[1]);
-    if (!acc) return NULL;
+    if (!enc_want_value(E, acc)) return NULL;
     for (uint32_t i = 2; i < n; i++) {
         VCTerm *b = enc(E, f->as.list.items[i]);
-        if (!b) return NULL;
+        if (!enc_want_value(E, b)) return NULL;
         acc = enc_binary_arith(E, op, f, acc, b);
         if (!acc) return NULL;
     }
@@ -273,6 +361,15 @@ static VCTerm *enc_cmp(Enc *E, VCOp op, bool swap, const Form *f) {
     for (uint32_t i = 2; i < n; i++) {
         VCTerm *cur = enc(E, f->as.list.items[i]);
         if (!cur) return NULL;
+        /* An ORDERING over propositions is meaningless; an EQUALITY between
+         * them is not, but only when both sides are propositions.  A mixed
+         * pair is a sort error the encoder must not paper over. */
+        if (op != VC_EQ) {
+            if (!enc_want_value(E, prev) || !enc_want_value(E, cur)) return NULL;
+        } else if ((prev->sort == VS_BOOL) != (cur->sort == VS_BOOL)) {
+            E->fail = "equality compares a proposition with a number";
+            return NULL;
+        }
         VCTerm *atom = swap ? vc_mk2(E->vc, op, cur, prev)
                             : vc_mk2(E->vc, op, prev, cur);
         acc = acc ? vc_mk2(E->vc, VC_AND, acc, atom) : atom;
@@ -285,10 +382,10 @@ static VCTerm *enc_nary_bool(Enc *E, VCOp op, const Form *f) {
     uint32_t n = f->as.list.len;
     if (n < 2) return vc_bool(E->vc, op == VC_AND);
     VCTerm *acc = enc(E, f->as.list.items[1]);
-    if (!acc) return NULL;
+    if (!enc_want_prop(E, acc)) return NULL;
     for (uint32_t i = 2; i < n; i++) {
         VCTerm *b = enc(E, f->as.list.items[i]);
-        if (!b) return NULL;
+        if (!enc_want_prop(E, b)) return NULL;
         acc = vc_mk2(E->vc, op, acc, b);
     }
     return acc;
@@ -345,11 +442,10 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
         enc_reads_arg_frozen(E, f, info.reads_param_plus1))
         pure = true;
 
-    /* RM-B1: declare the measure with the sort of its callee's result rather
-     * than a hard-coded VS_INT.  `enc_callee_is_pure` fills `info.ret_sort`
-     * from the resolved callee's return type; an abstract (unresolved) measure
-     * leaves it at VS_INT, its historical default. */
-    VCSort rsort = info.ret_sort;
+    /* RM-B1/RM-B2: the sort this measure symbol is declared at.  Settled once
+     * per VC by the prescan (which consults the same resolver), so every
+     * occurrence of a name agrees. */
+    VCSort msort = enc_name_sort(E, head->as.sym->name, info.ret_sort);
 
     uint32_t argc = f->as.list.len - 1;
     if (argc == 0) {
@@ -358,7 +454,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
          * makes `(- (tick) (tick))` unprovable again. */
         const char *nm = pure ? head->as.sym->name
                               : enc_fresh_name(E, head->as.sym->name);
-        uint32_t v = vc_declare_var(E->vc, nm, rsort);
+        uint32_t v = vc_declare_var(E->vc, nm, msort);
         return vc_var_ref(E->vc, v);
     }
     VCTerm **args = (VCTerm **)arena_alloc(E->vc->arena, argc * sizeof(VCTerm *));
@@ -368,7 +464,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     }
     const char *fname = pure ? head->as.sym->name
                              : enc_fresh_name(E, head->as.sym->name);
-    uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, rsort,
+    uint32_t fn = vc_declare_ufunc(E->vc, fname, argc, msort,
                                    f, /*nonlinear=*/false);
     VCTerm *app = vc_app(E->vc, fn, args, argc);
 
@@ -392,7 +488,7 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
         if (!cycling && E->n_propagating < ENC_MAX_PROPAGATE &&
             info.ret_pred && info.ret_var) {
             Enc E2; memset(&E2, 0, sizeof(E2));
-            E2.vc = E->vc; E2.env = E->env;
+            E2.vc = E->vc; E2.env = E->env; E2.sorts = E->sorts;
             for (uint32_t i = 0; i < E->n_propagating; i++)
                 E2.propagating[E2.n_propagating++] = E->propagating[i];
             E2.propagating[E2.n_propagating++] = nm;
@@ -464,13 +560,15 @@ static VCTerm *enc(Enc *E, const Form *f) {
             else if (sym_is(h, "not")) {
                 if (f->as.list.len != 2) { E->fail = "not takes one operand"; break; }
                 VCTerm *a = enc(E, f->as.list.items[1]);
-                r = a ? vc_not(E->vc, a) : NULL;
+                r = enc_want_prop(E, a) ? vc_not(E->vc, a) : NULL;
             }
             else if (sym_is(h, "=>") || sym_is(h, "implies")) {
                 if (f->as.list.len != 3) { E->fail = "=> takes two operands"; break; }
                 VCTerm *a = enc(E, f->as.list.items[1]);
-                VCTerm *b = a ? enc(E, f->as.list.items[2]) : NULL;
-                r = b ? vc_mk2(E->vc, VC_IMPLIES, a, b) : NULL;
+                if (!enc_want_prop(E, a)) break;
+                VCTerm *b = enc(E, f->as.list.items[2]);
+                if (!enc_want_prop(E, b)) break;
+                r = vc_mk2(E->vc, VC_IMPLIES, a, b);
             }
             else r = enc_measure(E, f);
             break;
@@ -482,6 +580,90 @@ static VCTerm *enc(Enc *E, const Form *f) {
     }
     E->depth--;
     return E->fail ? NULL : r;
+}
+
+/* ------------------------------------------------------------------------- *
+ * RM-B2: measure sort prescan
+ *
+ * Runs over every Form the VC will encode, BEFORE any symbol is declared, and
+ * answers one question per measure name: Int, Real, or Bool?
+ *
+ *   - the name resolves to a function  -> its declared return type decides
+ *     (RM-B1; this is what makes `(alive? w x)` a proposition and stops a
+ *     float-returning `norm` from being declared Int and then integer-tightened)
+ *   - the name resolves to nothing     -> it is an ABSTRACT measure with no
+ *     declaration to read, so POSITION decides: Bool where the predicate
+ *     grammar requires a proposition (the goal itself, or an operand of
+ *     and/or/not/=>), Int everywhere else.
+ *
+ * A name used at BOTH sorts rejects the VC.  Picking one would declare a
+ * symbol that means different things in the hypotheses and in the goal, which
+ * is precisely how a congruence bug is written; the runtime check still covers
+ * the obligation either way.
+ * ------------------------------------------------------------------------- */
+
+static void presort_note(EncSorts *S, const RefineEnv *env,
+                         const char *name, EncPos pos) {
+    EncMeasure *m = NULL;
+    for (uint32_t i = 0; i < S->n; i++)
+        if (strcmp(S->m[i].name, name) == 0) { m = &S->m[i]; break; }
+    if (!m) {
+        /* Table full: leave the name out.  enc_name_sort then falls back to the
+         * callee's own sort, which is still ONE sort per name. */
+        if (S->n == ENC_MAX_MEASURES) return;
+        m = &S->m[S->n++];
+        memset(m, 0, sizeof(*m));
+        m->name = name;
+        m->sort = VS_INT;
+        RefineFnInfo info; memset(&info, 0, sizeof(info));
+        if (env && env->resolve_fn && env->resolve_fn(env->resolve_ud, name, &info)) {
+            m->resolved = true;
+            m->sort     = info.ret_sort;
+        }
+    }
+    if (pos == POS_PROP)       m->seen_bool = true;
+    else if (pos == POS_VALUE) m->seen_val  = true;
+}
+
+static void presort_walk(EncSorts *S, const RefineEnv *env, const Form *f,
+                         EncPos pos, uint32_t depth) {
+    if (!f || depth > ENC_MAX_DEPTH) return;
+    if (f->tag != F_LIST || f->as.list.len == 0) return;
+    const Form *h = f->as.list.items[0];
+    EncHead k = enc_head_kind(h);
+    if (k == EH_MEASURE) {
+        if ((h->tag == F_SYM || h->tag == F_KEYWORD) && h->as.sym)
+            presort_note(S, env, h->as.sym->name, pos);
+        /* A measure's own arity and parameter types are not known here (an
+         * abstract measure has none), so its ARGUMENTS demand nothing. */
+        for (uint32_t i = 1; i < f->as.list.len; i++)
+            presort_walk(S, env, f->as.list.items[i], POS_NEUTRAL, depth + 1);
+        return;
+    }
+    EncPos kid = (k == EH_LOGIC) ? POS_PROP
+               : (k == EH_EQ)    ? POS_NEUTRAL
+                                 : POS_VALUE;
+    for (uint32_t i = 1; i < f->as.list.len; i++)
+        presort_walk(S, env, f->as.list.items[i], kid, depth + 1);
+}
+
+/* Settle every unresolved name's sort and report the first name that cannot
+ * have one.  Returns NULL when the table is consistent.
+ *
+ * Only an UNRESOLVED name can conflict: a resolved one has exactly one sort,
+ * its callee's, whatever positions it turns up in.  A resolved measure used in
+ * the wrong kind of position is a local error and is handled locally, by the
+ * enc_want_value / enc_want_prop guards -- which drop just that hypothesis
+ * (sound: fewer hypotheses only make a goal harder) instead of discarding the
+ * whole VC. */
+static const char *presort_finish(EncSorts *S) {
+    for (uint32_t i = 0; i < S->n; i++) {
+        EncMeasure *m = &S->m[i];
+        if (m->resolved) continue;
+        m->sort = m->seen_bool ? VS_BOOL : VS_INT;
+        if (m->seen_bool && m->seen_val) return m->name;
+    }
+    return NULL;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -504,10 +686,34 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
             vc_declare_var(vc, ob->env->names[i], ob->env->sorts[i]);
     }
 
+    /* --- RM-B2: settle every measure's sort before declaring any symbol --- */
+    EncSorts sorts; memset(&sorts, 0, sizeof(sorts));
+    for (RefineHyp *h = ob->env ? ob->env->head : NULL; h; h = h->next)
+        presort_walk(&sorts, ob->env, h->pred, POS_PROP, 0);
+    /* A sibling substitution stands in for a CALLEE parameter whose type this
+     * side does not have, so it demands nothing.  The subject does: it stands
+     * in for the refinement's bound variable, whose sort is the base type's. */
+    for (uint32_t i = 0; i < ob->n_subst; i++)
+        presort_walk(&sorts, ob->env, ob->subst[i].form, POS_NEUTRAL, 0);
+    presort_walk(&sorts, ob->env, ob->subject,
+                 ob->base_sort == VS_BOOL ? POS_PROP : POS_VALUE, 0);
+    presort_walk(&sorts, ob->env, ob->predicate, POS_PROP, 0);
+    const char *clash = presort_finish(&sorts);
+    if (clash) {
+        if (out_reason) {
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "measure '%s' is used both as a proposition and as a value",
+                     clash);
+            *out_reason = arena_strdup(a, buf, strlen(buf));
+        }
+        return NULL;
+    }
+
     /* --- hypotheses ------------------------------------------------------ */
     for (RefineHyp *h = ob->env ? ob->env->head : NULL; h; h = h->next) {
         Enc E; memset(&E, 0, sizeof(E));
-        E.vc = vc; E.env = ob->env;
+        E.vc = vc; E.env = ob->env; E.sorts = &sorts;
         /* C2 / #reads: a hypothesis (a recovered guard) is written in the
          * CALLER's names, so it needs the frozen set but NOT the callee-param
          * subst. */
@@ -528,7 +734,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
 
     /* --- goal ------------------------------------------------------------ */
     Enc E; memset(&E, 0, sizeof(E));
-    E.vc = vc; E.env = ob->env;
+    E.vc = vc; E.env = ob->env; E.sorts = &sorts;
     /* C2 / #reads: the goal predicate is written in the CALLEE's parameter
      * names, so it needs both the frozen set and the callee-param subst to
      * resolve a `#reads` world argument back to the caller expression. */
@@ -542,7 +748,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     for (uint32_t i = 0; i < ob->n_subst && E.n_subst < ENC_MAX_SUBST; i++) {
         if (!ob->subst[i].name || !ob->subst[i].form) continue;
         Enc E2; memset(&E2, 0, sizeof(E2));
-        E2.vc = vc; E2.env = ob->env;
+        E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts;
         VCTerm *t = enc(&E2, ob->subst[i].form);
         if (!t) continue;   /* un-encodable argument: leave the name free */
         E.subst[E.n_subst].name = ob->subst[i].name;
@@ -551,7 +757,7 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     }
     if (ob->var_name && ob->subject) {
         Enc E2; memset(&E2, 0, sizeof(E2));
-        E2.vc = vc; E2.env = ob->env;
+        E2.vc = vc; E2.env = ob->env; E2.sorts = &sorts;
         VCTerm *subj = enc(&E2, ob->subject);
         if (!subj) {
             if (out_reason) *out_reason = E2.fail ? E2.fail : "subject expression is outside the supported fragment";

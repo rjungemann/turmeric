@@ -610,6 +610,10 @@ static void repl_preload_stdlib_and_natives(TuriEnv *env) {
     turi_env_preload_native_stubs(env);
     turi_env_preload_collections(env, stdlib_root);
     turi_env_preload_typeclasses(env, stdlib_root);
+    /* Pin everything the preload just accumulated so a `#lang` switch at the
+     * prompt truncates back to here instead of emptying src_acc and taking the
+     * stdlib with it (web-repl-lang-switch-drops-stdlib). */
+    turi_env_pin_prelude(env);
     turi_env_register_interpreter_natives(env);
     tur_ffi_register_reload_native(env);
 }
@@ -1288,16 +1292,11 @@ int turi_repl_run(bool watch_mode) {
                 } else if (rt != env->reader_type || layers != env->lang_layers) {
                     env->reader_type      = rt;
                     env->lang_layers      = layers;
-                    env->src_acc.len      = 0;   /* accumulated source may be incompatible */
-                    env->prior_toplevel   = 0;
-                    env->prior_prog_items = 0;
-                    env->n_acc_forms      = 0;   /* TR2: forms belong to the old reader */
-                    env->acc_next_line    = 0;
-                    if (env->elab_session) {
-                        elab_session_free(env->elab_session);
-                        env->elab_session       = NULL;
-                        env->elab_session_forms = 0;
-                    }
+                    /* Accumulated USER source may be incompatible with the new
+                     * reader, but the pinned stdlib preload is not: rewind to
+                     * the pin rather than emptying, or the next collection
+                     * literal fails as "unknown ... 'hamt-of'". */
+                    turi_env_reset_to_prelude(env);
                     printf("; reader set to %s (session reset)\n", reader_type_name(rt));
                 } else {
                     printf("; reader already set to %s\n", reader_type_name(rt));

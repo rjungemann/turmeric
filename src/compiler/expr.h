@@ -962,7 +962,15 @@ struct Expr {
         struct { Expr *cond; Expr *then_; Expr *else_or_null; }            if_;
         struct { Expr **items; uint32_t n; }                               do_;
         struct { Expr *cond; Expr *body; }                                 while_;
-        struct { Binding *target; Expr *value; }                           set_;
+        /* set-bang-rc-release: `release_old` is stamped by elab_set_rc_release
+         * when `target` is an rc-managed binding that owns a continuous +1 from
+         * its init to its scope-exit auto-drop.  Overwriting such a binding must
+         * release the value being overwritten, or every assignment leaks one rc
+         * block.  Deliberately NOT set for a binding whose ownership is
+         * hand-managed (moved, or explicitly dropped/consumed somewhere in the
+         * body) -- there the auto-drop is suppressed too, and releasing here
+         * would double-free.  See emit_set_stmt for the ordering. */
+        struct { Binding *target; Expr *value; bool release_old; }          set_;
         struct { Binding *binding; Expr *init; }                           def_;
         struct { const BuiltinSpec *spec; Expr **args; uint32_t n; }       builtin;
 

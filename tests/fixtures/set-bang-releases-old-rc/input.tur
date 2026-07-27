@@ -1,0 +1,83 @@
+; set-bang-rc-release (docs/reported/set-bang-does-not-release-old-rc-value.md):
+; an rc-managed `^mut` binding owns exactly ONE strong reference for its whole
+; lifetime -- its init takes the +1, its scope-exit auto-drop releases it.
+; `(set! b v)` used to overwrite the binding without releasing what was there,
+; so every assignment past the first leaked a block: the auto-drop's defer
+; snapshots the variable where it is pushed (end of the do-block), so only the
+; FINAL value was ever released.
+;
+; The leak is acyclic with a positive strong count, so the cycle collector
+; cannot reclaim it either -- this is exactly the case refcounting alone is
+; supposed to handle.  Measured before the fix: 4000 rounds x 4 assignments
+; leaked exactly 16000 blocks.
+;
+; Each case prints live rc blocks after the binding's scope has closed.
+; 0 means every reference was accounted for.
+(defstruct Node :move [next : rc<Node>])
+
+(defn null-rc-node [] : ptr<void>
+  ```c
+  return NULL;
+  ```)
+
+(defn live [] : int
+  ```c
+  extern uint32_t gc_all_blocks_count;
+  return (int64_t)gc_all_blocks_count;
+  ```)
+
+(defn fresh [] : rc<Node>
+  (rc/of (make-struct Node (null-rc-node))))
+
+; Repeated assignment of freshly allocated values -- the reported shape.
+(defn loop-fresh [] : int
+  (let [^mut h (fresh)
+        ^mut i 0]
+    (while (< i 20)
+      (set! h (fresh))
+      (set! i (+ i 1))))
+  0)
+
+; The new value READS the binding being overwritten.  The clone's +1 must be
+; taken while the old value is still alive, so the release drops it to the
+; count the new structure holds rather than to zero.
+(defn reads-old [] : int
+  (let [^mut h (fresh)
+        ^mut i 0]
+    (while (< i 20)
+      (set! h (rc/of (make-struct Node (rc/clone h))))
+      (set! i (+ i 1))))
+  0)
+
+; A bare rc FIELD read carries no +1 of its own.  Without clone-on-read the
+; binding would release a reference it never acquired.
+(defn field-read-walk [] : int
+  (let [tail (fresh)
+        head (rc/of (make-struct Node (rc/clone tail)))]
+    (let [^mut h (rc/clone head)]
+      (set! h (.next h))))
+  0)
+
+; Field <- field read: both fields would otherwise alias one block that BOTH
+; later release.
+(defn field-from-field [] : int
+  (let [a (rc/of (make-struct Node (fresh)))
+        b (rc/of (make-struct Node (fresh)))]
+    (set! (.next a) (.next b)))
+  0)
+
+; Field <- read of the SAME field: the value must be materialized before the
+; old pointer is released, or the read is a use-after-free.
+(defn field-from-self [] : int
+  (let [a (rc/of (make-struct Node (fresh)))]
+    (set! (.next a) (.next a)))
+  0)
+
+(defn main [] : int
+  (gc-enable!)
+  (loop-fresh)       (println (live))
+  (reads-old)        (println (live))
+  (field-read-walk)  (println (live))
+  (field-from-field) (println (live))
+  (field-from-self)  (println (live))
+  0)

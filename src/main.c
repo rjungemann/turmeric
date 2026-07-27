@@ -6346,6 +6346,10 @@ static int cmd_eval_h(const char *path, bool use_color,
         TuriValue sv = turi_eval(env, load_form);
         (void)sv;
     }
+    /* Pin the accumulated preload (prelude + json/schema above) so an inline
+     * `#lang` directive in the evaluated program truncates src_acc back to here
+     * rather than emptying it (web-repl-lang-switch-drops-stdlib). */
+    turi_env_pin_prelude(env);
     /* Register the full interpreter native override set (stdlib inline-C
      * shims, contracts, safe/typeclass/comonad/mutex/future/bytes/taskgroup/
      * chan/backtrack/proc-fs/serial/sym/seq/json/schema).  Relocated into

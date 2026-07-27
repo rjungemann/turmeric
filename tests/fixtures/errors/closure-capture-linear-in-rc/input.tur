@@ -1,0 +1,10 @@
+;; closure-capture-escapes-linearity: rc is a vector, not the cause -- but it is
+;; the ergonomic one, since shared ownership of the closure gives several call
+;; sites.  (rc/of linear-value) was already rejected; the closure now is too
+;; (TUR-E0103).
+(load "stdlib/serial.tur")
+(defn main [] : int
+  (let [b (bytes-alloc 8)]
+    (let [f (fn [] : void (bytes-free b))]
+      (rc/of f)))
+  0)
