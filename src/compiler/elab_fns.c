@@ -857,9 +857,16 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
  * in the environment, and every other form cannot.  Deliberately syntactic and
  * deliberately over-broad -- a name that merely LOOKS like an assignment costs
  * precision, and missing one costs soundness. */
-#define RT_SET_SCAN_MAX_DEPTH 12
+/* 24, matching RT_CS_PATH_MAX_DEPTH: the scan is linear in nodes either way,
+ * and a macro EXPANSION is legitimately deeper than the source that spells it
+ * -- a 12 limit made rt_form_mentions_set return its conservative "too deep,
+ * assume assignment" answer on a clean for-each expansion, spuriously
+ * declining every crossing in the caller. */
+#define RT_SET_SCAN_MAX_DEPTH 24
 
-static bool rt_form_mentions_set(const Form *f, uint32_t depth) {
+static const Form *rt_macro_expansion(const Elab *e, const Form *call);
+
+static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
     if (!f) return false;
     if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
     if (f->tag == F_SYM && f->as.sym) {
@@ -868,8 +875,19 @@ static bool rt_form_mentions_set(const Form *f, uint32_t depth) {
                strcmp(n, "reset!") == 0;
     }
     if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    /* A macro call scans as its EXPANSION: the source spelling shows no
+     * `set!`, but the code that runs is the expansion, and an assignment
+     * hidden in a template must decline exactly like a written one.  The hop
+     * does NOT consume depth -- it is a lateral move to fresh nodes, not
+     * structural nesting, and cannot cycle (an expansion's nodes are newly
+     * constructed; only spliced ARGUMENTS are reused, and a call form cannot
+     * be its own argument). */
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_mentions_set(e, mx, depth);
+    }
     for (uint32_t i = 0; i < f->as.list.len; i++)
-        if (rt_form_mentions_set(f->as.list.items[i], depth + 1)) return true;
+        if (rt_form_mentions_set(e, f->as.list.items[i], depth + 1)) return true;
     return false;
 }
 
@@ -1127,7 +1145,7 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
      * trade for a rule whose failure mode is a miscompile. */
     if (rt_head_is(subject, "do") && subject->as.list.len >= 2) {
         for (uint32_t i = 1; i + 1 < subject->as.list.len; i++)
-            if (rt_form_mentions_set(subject->as.list.items[i], 0)) return false;
+            if (rt_form_mentions_set(e, subject->as.list.items[i], 0)) return false;
         return rt_prove_paths(e, pred, var_name,
                               subject->as.list.items[subject->as.list.len - 1],
                               base_kind, env, loc, depth + 1);
@@ -1461,6 +1479,44 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     return e->n_refine_call_sites;
 }
 
+void refine_note_macro_expansion(Elab *e, const Form *call,
+                                 const Form *expansion) {
+    if (!g_opt_refined || !e || !call || !expansion) return;
+    for (uint32_t i = 0; i < e->n_refine_mexps; i++) {
+        if (e->refine_mexp_calls[i] == call) {
+            e->refine_mexp_bodies[i] = expansion;   /* latest re-elaboration */
+            return;
+        }
+    }
+    if (e->n_refine_mexps == e->cap_refine_mexps) {
+        uint32_t ncap = e->cap_refine_mexps ? e->cap_refine_mexps * 2 : 16;
+        const Form **nc = (const Form **)arena_alloc(e->arena,
+                                                     ncap * sizeof(Form *));
+        const Form **nb = (const Form **)arena_alloc(e->arena,
+                                                     ncap * sizeof(Form *));
+        if (e->n_refine_mexps) {
+            memcpy(nc, e->refine_mexp_calls, e->n_refine_mexps * sizeof(Form *));
+            memcpy(nb, e->refine_mexp_bodies, e->n_refine_mexps * sizeof(Form *));
+        }
+        e->refine_mexp_calls  = nc;
+        e->refine_mexp_bodies = nb;
+        e->cap_refine_mexps   = ncap;
+    }
+    e->refine_mexp_calls[e->n_refine_mexps]  = call;
+    e->refine_mexp_bodies[e->n_refine_mexps] = expansion;
+    e->n_refine_mexps++;
+}
+
+/* The expansion recorded for a macro-call form, or NULL.  Linear scan: the
+ * table only holds macro calls seen in refined units, and the path walks that
+ * consult it are already bounded (RT_CS_PATH_MAX_DEPTH). */
+static const Form *rt_macro_expansion(const Elab *e, const Form *call) {
+    if (!e || !call || call->tag != F_LIST) return NULL;
+    for (uint32_t i = 0; i < e->n_refine_mexps; i++)
+        if (e->refine_mexp_calls[i] == call) return e->refine_mexp_bodies[i];
+    return NULL;
+}
+
 /* Keyed on (callee, call_form) rather than on the index refine_note_call_site
  * returns: that function yields the CURRENT count when it deduplicates, which
  * names the last crossing recorded rather than the matching one.  Attaching the
@@ -1551,15 +1607,25 @@ static bool rt_form_ident(const Form *a, const Form *b) {
     return ha->as.sym == hb->as.sym;                          /* interned */
 }
 
-/* Count occurrences of `target` (pointer- or source-identical), stopping at 2. */
-static uint32_t rt_form_occurrences(const Form *node, const Form *target,
-                                    uint32_t depth) {
+/* Count occurrences of `target` (pointer- or source-identical), stopping at 2.
+ *
+ * A macro call counts as its recorded EXPANSION, not its raw arguments: the
+ * expansion is the code that elaborated (so a template-GENERATED crossing is
+ * only reachable there), and a `~body`-spliced argument appears in BOTH the
+ * call form and the expansion -- walking both would double-count one crossing
+ * and trip the `!= 1` ambiguity decline. */
+static uint32_t rt_form_occurrences(const Elab *e, const Form *node,
+                                    const Form *target, uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return 0;
     if (rt_form_ident(node, target)) return 1;
     if (node->tag != F_LIST && node->tag != F_VEC) return 0;
+    {
+        const Form *mx = rt_macro_expansion(e, node);
+        if (mx) return rt_form_occurrences(e, mx, target, depth);  /* lateral hop */
+    }
     uint32_t n = 0;
     for (uint32_t i = 0; i < node->as.list.len && n < 2; i++)
-        n += rt_form_occurrences(node->as.list.items[i], target, depth + 1);
+        n += rt_form_occurrences(e, node->as.list.items[i], target, depth + 1);
     return n;
 }
 
@@ -1596,6 +1662,17 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
     if (rt_form_ident(node, target)) return true;
     if (node->tag != F_LIST && node->tag != F_VEC) return false;
+
+    /* A macro call walks as its recorded EXPANSION (mirrors
+     * rt_form_occurrences): a guard or crossing the template GENERATED --
+     * e.g. `(if (alive? ~w ~e) (get! ~w ~e) -1)` -- exists only there, and
+     * an `if` in the expansion contributes its condition exactly like a
+     * written one. */
+    {
+        const Form *mx = rt_macro_expansion(e, node);
+        if (mx) return rt_collect_path_conds(e, env, mx, target, hyps, n,
+                                             shadowed, depth);   /* lateral hop */
+    }
 
     if (rt_head_is(node, "if") && node->as.list.len == 4) {
         const Form *c = node->as.list.items[1];
@@ -1724,8 +1801,8 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     RefineHyp *saved = cs->env ? cs->env->head : NULL;
     *skip = false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
-    if (rt_form_mentions_set(cs->caller_body, 0)) return saved;
-    if (rt_form_occurrences(cs->caller_body, cs->call_form, 0) != 1) return saved;
+    if (rt_form_mentions_set(e, cs->caller_body, 0)) return saved;
+    if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
     uint32_t n = 0;

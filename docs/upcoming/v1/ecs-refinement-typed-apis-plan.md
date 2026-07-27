@@ -396,6 +396,25 @@ expected and fails to elaborate.
 > auto-running all refined tests); fix macro-generated refined-crossing discharge
 > (unblocks an ergonomic `for-each-alive` macro). The while-based `for-each`
 > order-aware-`set!` fix is optional -- the recursive form already works.
+>
+> **Update 2026-07-26 (later) -- BOTH remaining blockers fixed; RE1 complete.**
+> The corruption was an uninitialized `refine_class_binding` memo field (see the
+> earlier update); the macro-generated-crossing bug is fixed by recording each
+> macro call's expansion (`refine_note_macro_expansion`) and letting the
+> crossing path walk traverse INTO expansions -- `rt_form_occurrences` /
+> `rt_collect_path_conds` / `rt_form_mentions_set` walk a macro call AS its
+> expansion (resolved report:
+> `docs/archive/macro-generated-refined-crossings-do-not-discharge.md`). The
+> set!-scan depth also rose 12 -> 24 (an expansion is legitimately deeper than
+> the source spelling it; the old limit's conservative "too deep, assume
+> assignment" answer spuriously declined clean for-each expansions). The
+> ergonomic **`for-each-alive` macro now proves**: one macro generates the
+> recursive loop + frozen re-borrow + aliveness guard, the user's refined read
+> is spliced as the body, and the crossing discharges per-entity
+> (`tests/fixtures/refine-macrogen-foreach`; the three report shapes + nesting
+> in `tests/fixtures/refine-macrogen-crossings`; adversarial negatives in
+> `tests/fixtures/errors/refine-macrogen-*`). Shipped to the ecs spice as
+> `ecs/refined-world`'s `for-each-alive!`.
 
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:

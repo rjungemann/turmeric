@@ -1,5 +1,24 @@
 # Macro-generated refined guards/crossings do not discharge (only `~@body`-spliced user forms do)
 
+**RESOLVED (2026-07-26).** Fixed by recording each macro call's expansion
+(`refine_note_macro_expansion`, called from the macro dispatch in
+`elab_call.c`; table on `Elab.refine_mexp_*`) and letting the crossing path
+walk traverse INTO expansions: `rt_form_occurrences` and
+`rt_collect_path_conds` walk a macro call AS its recorded expansion (not its
+raw arguments -- walking both would double-count a `~body`-spliced crossing),
+and `rt_form_mentions_set` scans expansions so a template-hidden `set!`
+declines like a written one. That fixes BOTH channels at once: the generated
+crossing is reachable (channel 1), and the generated guard is collected
+verbatim from the expansion so congruence matches (channel 2 -- there was no
+hygiene mark; the template's `alive?` is the same interned symbol). All three
+report shapes plus a nested macro-in-macro chain now prove
+(`tests/fixtures/refine-macrogen-crossings`); adversarial negatives stay
+rejected (no guard, wrong entity, inverted guard, no frozen region, `set!`
+hidden in the expansion -- `tests/fixtures/errors/refine-macrogen-*` -- and a
+same-form-spliced-twice ambiguity still declines via the `!= 1` guard). Full
+fixture suite green (2372), differential fuzzer 0 soundness bugs. This
+unblocks the ergonomic `for-each-alive` macro (RE1 (c)).
+
 **Severity:** medium (blocks any macro that GENERATES a refined guarded read --
 an ergonomic `for-each-alive`, accessor-generating macros, etc.; the hand-written
 form and `~@body`-splicing macros are fine). Not a soundness hole -- the failure

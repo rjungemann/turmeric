@@ -2330,6 +2330,10 @@ Expr *elab_call(Elab *e, Form *call) {
         }
         e->macro_expansion_stack[e->n_macro_expansion_stack++] =
             macro->defining_module_name;
+        /* refine: link the call form to the expansion elaboration is about to
+         * walk, so the crossing path walk can traverse macro-GENERATED
+         * guards/crossings (see rt_macro_expansion in elab_fns.c). */
+        refine_note_macro_expansion(e, call, expanded);
         Expr *out = elab_form(e, expanded);
         e->macro_expansion_module = saved_expansion;
         if (e->n_macro_expansion_stack > 0) e->n_macro_expansion_stack--;

@@ -1,0 +1,64 @@
+;; Macro-GENERATED refined guards/crossings discharge. Unlike a ~@body-spliced
+;; user form (which sits in the source as a macro-call argument), a quasiquote
+;; template that CONSTRUCTS the guard and/or the crossing -- `(if (alive? ~w ~e)
+;; (get! ~w ~e) -1)` -- produces forms that exist only post-expansion, so the
+;; source caller-body walk could never reach them (occurrences == 0, guard
+;; dropped, spurious TUR-W0372). Fixed by recording each macro call's expansion
+;; (refine_note_macro_expansion) and letting the crossing path walk traverse
+;; INTO it. Regression guard for
+;; docs/archive/macro-generated-refined-crossings-do-not-discharge.md.
+;;
+;; All three shapes from that report, plus a nested macro-in-macro chain.
+;; Under --strict-refine this compiles (and prints 42 43 44 45) ONLY if every
+;; generated crossing discharges.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn get! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int
+  (.n w))
+
+;; Shape 1: macro generates BOTH the guard and the read.
+(defmacro guarded-read [w e]
+  `(if (alive? ~w ~e) (get! ~w ~e) -1))
+
+;; Shape 2: macro generates ONLY the read; the guard is hand-written.
+(defmacro do-read [w e]
+  `(get! ~w ~e))
+
+;; Shape 3: macro generates ONLY the guard; the read is the user's form.
+(defmacro do-guard [w e body]
+  `(if (alive? ~w ~e) ~body -1))
+
+;; Nested: a macro whose expansion calls another macro.
+(defmacro guarded-nested [w e]
+  `(if (alive? ~w ~e) (do-read ~w ~e) -1))
+
+(defn shape1 [] : int
+  (let [^mut w (World 42)]
+    (let [__f (& w)]
+      (guarded-read w 0))))
+
+(defn shape2 [] : int
+  (let [^mut w (World 43)]
+    (let [__f (& w)]
+      (if (alive? w 0) (do-read w 0) -1))))
+
+(defn shape3 [] : int
+  (let [^mut w (World 44)]
+    (let [__f (& w)]
+      (do-guard w 0 (get! w 0)))))
+
+(defn shape4 [] : int
+  (let [^mut w (World 45)]
+    (let [__f (& w)]
+      (guarded-nested w 0))))
+
+(defn main [] : int
+  (println (shape1))
+  (println (shape2))
+  (println (shape3))
+  (println (shape4))
+  0)
