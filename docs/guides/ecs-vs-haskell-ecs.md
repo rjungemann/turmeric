@@ -34,7 +34,7 @@ load-bearing prereqs that closed in 2026-06-11 see
 | **Storage choice** (dense vs sparse vs tag) | Type-family `Storage c` -- resolved at compile time, but the user can lie via orphan instances | Associated type, same caveat | Per-component; macro registers, accessor type bakes it in. No orphan-instance surface |
 | **Typeclass coherence** | Open instances; orphans are a maintenance hazard | Open instances | Coherent -- one `Component T` instance per `T`, enforced by the elaborator |
 | **Polymorphic-system bound** ("any world with `Pos` and `Vel`") | `Has w Pos, Has w Vel => …` constraint, solved by GHC | Same | `(HasPos W) (HasVel W) => …` Turmeric class constraint -- shipped via `defcomponent-class` / `definstance` |
-| **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits) |
+| **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness on the `ecs/refined-world` facade (`--enable=refined`): a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
 | **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check (lifts when the spice wires `SizedVec<n, T>` -- SZ6+ shipped, spice wiring still TODO) |
 | **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](../upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
@@ -311,8 +311,9 @@ here's where tur-ecs still trusts runtime checks.
 
 A dead-entity handle's generation mismatches the slot's current
 generation, and `sized-alive?` is the runtime u32 compare that says so.
-apecs and aztecs do the same thing the same way -- nobody ships
-compile-time alive-set proofs.
+apecs and aztecs do the same thing the same way -- neither ships
+compile-time alive-set proofs, and tur-ecs's *default* path doesn't
+either.
 
 Two honesty notes the earlier version of this section got wrong. The
 reads are **not** `option`-returning: `defcomponent-accessors` emits a
@@ -321,18 +322,29 @@ world the comparison is not performed anywhere on the read path -- a
 stale handle reads stale bits. Sized worlds have `sized-alive?`;
 unsized worlds leave the check to you.
 
-A compile-time version is now partly reachable. Refinement types
-shipped behind `--enable=refined`
-([`refinement-types-guide.md`](refinement-types-guide.md)), and a
-call guarded by `(if (alive? w e) ...)` already discharges a callee's
-aliveness refinement -- *when the predicate is provably pure*, which
-`sized-alive?` is not, because it reads mutable world state through
-inline C. Closing that is the open design question in
-[`docs/upcoming/v1/refine-stateful-measures-plan.md`](../upcoming/v1/refine-stateful-measures-plan.md);
-the surface it feeds is
-[`docs/upcoming/v1/ecs-refinement-typed-apis-plan.md`](../upcoming/v1/ecs-refinement-typed-apis-plan.md).
-The forgiving default API stays either way -- that's the sound choice
-when the prover can't.
+A compile-time version now **ships as an opt-in surface** (2026-07-26).
+Refinement types live behind `--enable=refined`
+([`refinement-types-guide.md`](refinement-types-guide.md)), and the
+impure-measure question -- `alive?` reads mutable world state through
+inline C, which is exactly what congruence must refuse in general -- was
+answered by `#reads` + `frozen` regions
+([`docs/upcoming/v1/refine-stateful-measures-plan.md`](../upcoming/v1/refine-stateful-measures-plan.md)):
+a `#reads w` measure is congruent while `w` is immutably borrowed, and
+the borrow makes `^unique ^mut` despawn a compile error inside the
+region, which is what makes trusting the guard sound. The
+`ecs/refined-world` module puts that to work: `rgworld-get-x!` refines
+its entity with `(rgworld-alive? w x)`, a guarded read in a `frozen`
+region proves, and the `for-each-alive!` macro generates loop + borrow +
+guard so a per-entity body read discharges. Under `--strict-refine` an
+unproven read is a hard error. The same family ships for the real sized
+stack via `ecs/sized-refined` (`sized-defworld-refined` /
+`sized-defcomponent-accessor-refined` / `for-each-alive`), emitted per
+world/component beside the unchanged forgiving accessors. Honest scope
+notes: the guarantee is against ordinary code, not a deliberate
+`::`-cast / inline-C bypass (the same trust boundary `#reads` itself
+carries); and the forgiving default API stays -- that remains the sound
+choice when
+the prover can't.
 
 ### Dense-storage length matching
 
@@ -434,12 +446,14 @@ If you take only one thing from this guide, take this:
 - **Component membership and write-set enforcement** are the rows
   where tur-ecs is unambiguously better than apecs and aztecs in v1.
   The cap-gating ships as of 2026-06-11; this is not a future claim.
-- **Aliveness** is the row where everyone is the same and runtime-checked,
-  and where the compile-time upgrade is on the roadmap for all three
-  (Haskell's `liquid-haskell` is the analog; nobody ships it as default).
-  tur-ecs is arguably a step *behind* here: the unsized read path skips
-  the generation compare entirely, where apecs and aztecs return a
-  `Maybe`.
+- **Aliveness** is the row where the *defaults* are the same and
+  runtime-checked everywhere (Haskell's `liquid-haskell` is the analog;
+  nobody ships it as default). tur-ecs now has an opt-in compile-time
+  surface here -- the experimental `ecs/refined-world` facade, where an
+  unproven read fails to compile -- which neither Haskell library
+  offers. On the default path tur-ecs is still arguably a step
+  *behind*: the unsized read skips the generation compare entirely,
+  where apecs and aztecs return a `Maybe`.
 - **Query composition** is the row where aztecs is genuinely ahead of
   tur-ecs for code that treats queries as first-class data.
 - **Convenience for tiny one-off games** is the row where apecs's

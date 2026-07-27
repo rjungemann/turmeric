@@ -2307,6 +2307,12 @@ static int cmd_build(const char *input, const char *out_path,
                      const char *target,
                      const char **reader_macro_paths,
                      int n_reader_macro_paths) {
+    /* RT3: reset per-compile refinement state, like the check/run/emit-c entry
+     * points. The memo caches VC pointers into the per-compile arena; a process
+     * that builds >1 file (`tur test`, LSP) otherwise keeps stale pointers and
+     * memo_lookup dereferences them on a fingerprint collision. Partial fix for
+     * the strict-refine multi-compile crash (see docs/reported). */
+    refine_discharge_reset();
     /* DEDUP-4b: `tur` links this output, so the rc<T>/GC runtime may come
      * from the archive rather than being replicated into the preamble. */
     g_emit_for_link = true;
@@ -3774,6 +3780,49 @@ static int cmd_run(int argc, char **argv) {
 #undef RUN_ENTRY
 }
 
+/* Per-test directives, read from a test file's leading comment lines:
+ *
+ *   ;; tur-test-flags: --strict-refine     -- extra compile flags for THIS test
+ *   ;; tur-test-expect-error: TUR-W0372    -- this test must FAIL to compile and
+ *                                             its diagnostics must contain this
+ *                                             text; the run phase is skipped.
+ *
+ * A file with no directive behaves exactly as before.  This is what lets a
+ * refined ecs test enforce its proof (`--strict-refine`, so an unproven crossing
+ * is a hard error, not a warning) and lets an expected-fail negative be a real
+ * test rather than documentation.  `--enable=refined` needs no flag here: the
+ * file's `#lang turmeric refined` line enables it for that compile. */
+typedef struct TestDirectives {
+    bool strict_refine;
+    char expect_error[128];   /* empty => not an expect-error test */
+} TestDirectives;
+
+static void parse_test_directives(const char *path, TestDirectives *out) {
+    out->strict_refine = false;
+    out->expect_error[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[512];
+    int scanned = 0;
+    while (scanned < 40 && fgets(line, sizeof(line), f)) {
+        scanned++;
+        const char *d;
+        if ((d = strstr(line, "tur-test-flags:")) != NULL) {
+            if (strstr(d, "--strict-refine")) out->strict_refine = true;
+        }
+        if ((d = strstr(line, "tur-test-expect-error:")) != NULL) {
+            d += strlen("tur-test-expect-error:");
+            while (*d == ' ' || *d == '\t') d++;
+            size_t k = 0;
+            while (*d && *d != '\n' && *d != '\r' && k + 1 < sizeof(out->expect_error))
+                out->expect_error[k++] = *d++;
+            while (k > 0 && (out->expect_error[k-1] == ' ' || out->expect_error[k-1] == '\t')) k--;
+            out->expect_error[k] = '\0';
+        }
+    }
+    fclose(f);
+}
+
 static int cmd_test(const char *dir) {
     int n_files = 0;
     char **tur_files = collect_tur_files(dir, &n_files);
@@ -3826,12 +3875,78 @@ static int cmd_test(const char *dir) {
         close(fd);
         tur_exe_path(out_path, sizeof(out_path));
 
+        TestDirectives td;
+        parse_test_directives(tur_files[i], &td);
+        bool prev_strict = g_strict_refine;
+        if (td.strict_refine) g_strict_refine = true;
+        bool expect_fail = td.expect_error[0] != '\0';
+
+        /* For an expect-error test, capture stderr so we can confirm the
+         * front-end emitted the named diagnostic (not some unrelated failure). */
+        int stderr_bak = -1;
+        char cap_path[512] = {0};
+        if (expect_fail) {
+            snprintf(cap_path, sizeof(cap_path), "%s/tur-test-err-XXXXXX", tur_temp_dir());
+            int cfd = mkstemp(cap_path);
+            if (cfd >= 0) {
+                fflush(stderr);
+                stderr_bak = dup(fileno(stderr));
+                dup2(cfd, fileno(stderr));
+                close(cfd);
+            } else {
+                cap_path[0] = '\0';
+            }
+        }
+
         int rm_n = 0;
         char **rm_p = discover_manifest_reader_macros(tur_files[i], &rm_n);
         int build_rc = cmd_build(tur_files[i], out_path,
                                   spice_inc_dirs, n_spice_inc_dirs, NULL,
                                   (const char **)rm_p, rm_n);
         free_reader_macro_paths(rm_p, rm_n);
+
+        if (expect_fail && stderr_bak >= 0) {
+            fflush(stderr);
+            dup2(stderr_bak, fileno(stderr));
+            close(stderr_bak);
+        }
+        g_strict_refine = prev_strict;
+
+        if (expect_fail) {
+            /* Pass iff the build FAILED and the captured diagnostics name the
+             * expected error -- so a negative test cannot pass on an unrelated
+             * compile error. The run phase is skipped. */
+            char *cap = NULL;
+            bool found = false;
+            if (cap_path[0]) {
+                FILE *cf = fopen(cap_path, "r");
+                if (cf) {
+                    cap = (char *)malloc(65536);
+                    size_t got = cap ? fread(cap, 1, 65535, cf) : 0;
+                    if (cap) cap[got] = '\0';
+                    fclose(cf);
+                }
+                unlink(cap_path);
+            }
+            if (cap) found = strstr(cap, td.expect_error) != NULL;
+            unlink(out_path);
+            if (build_rc != 0 && found) {
+                passed++;
+                putchar('.');
+            } else {
+                failed_files[failed++] = tur_files[i];
+                putchar('F');
+                fprintf(stderr,
+                        "\nEXPECT-ERROR %s: wanted diagnostic '%s' with a failed "
+                        "build; got build_rc=%d, diagnostic %s\n",
+                        tur_files[i], td.expect_error, build_rc,
+                        found ? "found" : "NOT found");
+                if (cap && !found && cap[0]) fprintf(stderr, "%s\n", cap);
+            }
+            free(cap);
+            continue;
+        }
+
         int run_rc = 1;
         if (build_rc == 0) {
             /* Quoted: the temp dir is user-controlled (TMP/TMPDIR) and may
@@ -7549,6 +7664,13 @@ static int usage_test(void) {
     fprintf(stderr,
         "usage:\n"
         "  tur test <dir>   run all .tur test files in a directory\n"
+        "\n"
+        "Each test compiles and runs; it passes iff both succeed (exit 0).\n"
+        "A test file may carry directives in its leading comment lines:\n"
+        "  ;; tur-test-flags: --strict-refine   extra compile flags for this test\n"
+        "  ;; tur-test-expect-error: TUR-W0372  this test must FAIL to compile and\n"
+        "                                       its diagnostics must contain the\n"
+        "                                       text; the run phase is skipped\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;

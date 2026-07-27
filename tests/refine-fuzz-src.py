@@ -669,6 +669,60 @@ class Gen:
                 "(defn target [p : %s] : #refine{ r : %s | %s }\n  %s)"
                 % (self.ty, self.ty, pred, body))
 
+    def shape_stateful(self):
+        """C2 (#reads): a measure congruent inside a `frozen` region.
+
+        Emits a `FzWorld`, an impure `#reads w` aliveness measure (inline-C, so
+        the purity walk denies it -- congruence comes ONLY from the `#reads`
+        grant), and a reader whose entity parameter carries a
+        `#refine{ x | (fz-alive? w x) }` crossing. `target` guards the read with
+        the measure inside a `(let [_ (& w)] ...)` frozen region, so the
+        crossing DISCHARGES from the guard and gate-on elides it.
+
+        What this shape does and does NOT test:
+
+          * DOES: that a #reads program compiles and RUNS identically under both
+            gates. Before the entry-check-suppression fix an impure #refine
+            param was TUR-E0375 at its definition and could not codegen at all;
+            this shape is the end-to-end regression guard for that path. A
+            codegen divergence (gate-on returns a different value) or a crash on
+            one gate is caught here as output-divergence / a gate-on abort.
+
+          * Does NOT: exercise the soundness differential. A #reads measure is
+            impure by construction, so gate-off carries NO runtime check for it
+            (the entry contract is unemittable and is suppressed) -- there is no
+            gate-off abort for a gate-on elision to contradict. #reads soundness
+            is therefore a COMPILE-TIME property (a wrong crossing proof is a
+            missed static error, never a runtime miscompile) and is pinned by
+            tests/fixtures/errors/refine-stateful-* under --strict-refine plus
+            the targeted frozen-check sabotage in the plan, not by this harness.
+
+        int mode only (the world field and entity id are integers)."""
+        if self.mode != "int":
+            return self.shape_random()
+        # fz-alive?(w, e) := e >= thr -- deterministic, a pure READ, but written
+        # in inline-C so the purity walk denies it and #reads is what grants
+        # congruence. A negative entity id takes the guard's else branch.
+        thr = self.rng.choice([0, 1, -1])
+        nval = self.rng.choice([1, 7, 42])
+        defs = (
+            "(defstruct FzWorld [n : int])\n\n"
+            "(defn fz-alive? [^borrow w : FzWorld e : int] #reads w : bool\n"
+            "  ```c\n"
+            "  (void)w; return e >= %d;\n"
+            "  ```)\n\n"
+            "(defn fz-read! [^borrow w : FzWorld e : #refine{ x : int | (fz-alive? w x) }] : int\n"
+            "  (.n w))\n\n"
+            "(defn target [p : int] : int\n"
+            "  (let [^mut w (FzWorld %d)]\n"
+            "    (let [__frz (& w)]\n"
+            "      (if (fz-alive? w p)\n"
+            "        (fz-read! w p)\n"
+            "        -1))))"
+            % (thr, nval)
+        )
+        return (["p"], defs)
+
     def program(self):
         lines = self.gen_helpers(self.rng.randint(1, 3))
         lines += self.gen_bool_helpers(self.rng.randint(1, 2))
@@ -687,10 +741,12 @@ class Gen:
             params, target = self.shape_typeclass()
         elif r < 0.84:
             params, target = self.shape_congruence_method()
-        elif r < 0.92:
+        elif r < 0.90:
             params, target = self.shape_branching()
-        else:
+        elif r < 0.95:
             params, target = self.shape_datatype()
+        else:
+            params, target = self.shape_stateful()
         lines.append(target)
         extra, extra_names = self.extra_targets()
         lines += extra

@@ -948,6 +948,30 @@ static Form *read_fx_row(Reader *r) {
     return m;
 }
 
+/* C2 / #reads: `#reads <sym>` names a ^borrow parameter whose mutable state a
+ * measure reads.  It sits at the effect-row position of a defn signature and is
+ * consumed by elab_defn.  Returns `(reads <sym>)` stamped PROV_READS so the
+ * signature walk distinguishes it from a body expression.  A read-frame is not
+ * an effect row; see docs/guides/stateful-refinements-guide.md. */
+static Form *read_reads_annot(Reader *r) {
+    uint32_t start_line = r->line;
+    uint32_t start_col  = r->col;
+    size_t   start_off  = r->pos;
+    advance(r); advance(r); advance(r);   /* '#' 'r' 'e' */
+    advance(r); advance(r); advance(r);   /* 'a' 'd' 's' */
+    skip_ws_and_comments(r);
+    Form *param = read_symbol_or_minus(r);   /* the parameter name */
+    if (!param) return NULL;                 /* error already emitted */
+    Span span = span_from_to(r, start_line, start_col, start_off, r->pos);
+    Form *head = form_sym(r->arena, span, symtab_intern(r->st, strslice("reads", 5)));
+    Form **items = (Form **)arena_alloc(r->arena, 2 * sizeof(Form *));
+    items[0] = head;
+    items[1] = param;
+    Form *lst = form_list(r->arena, span, items, 2);
+    lst->fx_prov = (uint8_t)PROV_READS;
+    return lst;
+}
+
 static Form *read_set(Reader *r) {
     advance(r); /* consume '#' */
     advance(r); /* consume 's' */
@@ -2946,6 +2970,15 @@ static Form *read_form(Reader *r) {
      * `#s(`, `#json...`) start with `#fx{`, so this prefix is unambiguous. */
     if (c == '#' && peek2(r) == 'f' && peek3(r) == 'x' && peek_at(r, 3) == '{') {
         return read_fx_row(r);
+    }
+    /* C2 / #reads: `#reads <sym>` read-frame annotation.  Checked here, before
+     * try_read_data_literal (which claims `#<ident>{` shapes), and unambiguous:
+     * `#reads` is followed by whitespace/a symbol, not `{`, and no other reader
+     * literal spells `#reads`.  is_sym_cont(peek_at(6)) guards against a longer
+     * identifier like `#readsx`. */
+    if (c == '#' && peek2(r) == 'r' && peek3(r) == 'e' && peek_at(r, 3) == 'a' &&
+        peek_at(r, 4) == 'd' && peek_at(r, 5) == 's' && !is_sym_cont(peek_at(r, 6))) {
+        return read_reads_annot(r);
     }
     if (c == '#' && peek2(r) == '{') {
         return read_map(r);

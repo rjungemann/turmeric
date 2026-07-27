@@ -334,7 +334,10 @@ Only if RM-S0 says so. Three pieces, in order, each independently useful:
    the gate is *declared* (a `^linear` cap in the signature) and *checked* (the
    linearity checker), never inferred from `set!`/inline C. A new effect row
    remains an option if B2/B3 need mutation facts the cap cannot carry, but is
-   not the starting point.
+   not the starting point. **[Update 2026-07-26: that option is now planned --
+   `docs/upcoming/checked-write-frames-plan.md` (`#writes` + a checked tier +
+   frame-aware hypothesis invalidation), motivated by two post-RE1 demand
+   signals rather than by B2/B3.]**
 2. **A region form** whose entry borrows the capability and whose body is a
    congruence window. **[DONE 2026-07-26 -- reworked to the sound `frozen`
    region: `(frozen w body...)` -> `(let [_ (& w)] body...)` holds an immutable
@@ -525,6 +528,23 @@ on a dead handle. That is exactly the asymmetry the plan wants -- the cost of a
 wrong claim is a *kept* check, not an elided one -- reached by not eliding the
 safety check rather than by refusing the declaration.
 
+> **Correction (2026-07-26) -- which "entry check" is the backstop.** Building
+> the codegen path made the two-checks story above precise, and one word of it
+> was loose. The backstop is **the accessor's own internal defensive check**
+> (the hand-written `gens[idx]` aliveness compare in `get-Pos!`'s body -- plain
+> code that always runs), **not** an auto-generated runtime contract for the
+> `#refine{ x | (alive? w x) }` param. That refinement *contract* is impure by
+> construction (`alive?` is impure -- that is the whole premise), and an impure
+> runtime contract is `TUR-E0375` ("predicate has side effects"): it is
+> **unemittable**, so the entry-check injector must and now does **suppress** it
+> for a `#reads`-measure predicate (`rt_pred_reads_measure` in `elab_fns.c`).
+> The soundness argument is unchanged -- the accessor's internal check is the
+> kept safety guard -- but the mechanism is "the accessor writes its own check",
+> not "the refinement layer emits one for it". A minimal accessor with no
+> internal check (like the `refine-stateful-guard-discharges` fixture's `(.n w)`)
+> is a congruence proof, **not** a safety demonstration; a real `tur-ecs`
+> accessor carries its own bounds/aliveness check as the backstop.
+
 **Proposed shape.**
 
 - A measure that reads mutable state declares the world argument it reads:
@@ -556,23 +576,90 @@ blocker 2 and the grant land together (behind `--enable=refined`, gated on the
 
 ## Acceptance (whichever candidate)
 
-The fixtures are the same either way, and the **negative** ones are the point:
+The fixtures are the same either way, and the **negative** ones are the point.
+All the ones named below now exist and are green under a Debug `tur` (their
+diagnostics shifted with the move to the sound borrow-based `frozen` design --
+noted per fixture):
 
 - `refine-stateful-guard-discharges`: guard, then read, no mutation between.
-  Proves.
-- `errors/refine-stateful-mutation-invalidates`: guard, **mutate**, then read.
-  Must NOT prove. Write this one first. It is the fixture that catches the
-  design being implemented as an escape hatch, and neither candidate is
-  acceptable without it green.
-- `errors/refine-stateful-aliased-mutation`: the mutation happens through a
-  *second* handle to the same object. This is the aliasing question the
-  `rc<T>` / `ref<T>` decline already answers for field reads, and any new
-  congruence route has to answer it again rather than inherit the answer.
+  **Proves** (and now codegens/runs -> `42`; the entry-contract-suppression fix
+  is what let a `#reads`-refined accessor build at all). **[DONE]**
+- `errors/refine-stateful-mutation-invalidates`: guard, **mutate** (`set!` of
+  the frozen world's state), then read. Must NOT prove -- it is the fixture that
+  catches the design being implemented as an escape hatch. The mutation is the
+  third shared invalidation site (region exit / `set!` of `w` / do-split), so
+  the crossing goes unknown and `--strict-refine` makes it a hard error
+  (`TUR-W0372`). **[DONE 2026-07-26]**
+- `errors/refine-stateful-aliased-mutation`: the mutation reaches the world
+  through a *second* handle. This is the aliasing question the `rc<T>` /
+  `ref<T>` decline answers for field reads -- and the borrow-based region
+  **inherits** the answer rather than re-deriving it: while `(& w)` is live no
+  *mutating* handle to the frozen world (aliased or direct) can be acquired, so
+  the attempt is a structural `TUR-E0200` (borrow conflict), not a runtime hole.
+  Uniqueness is the aliasing answer. **[DONE 2026-07-26]**
+- Two supporting negatives added alongside: `errors/refine-stateful-no-region`
+  (no `(& w)` -> impure, never congruent) and `errors/refine-stateful-shadow-despawn`
+  (a shadowed inner `w` is not the frozen one), plus the positive
+  `refine-stateful-nonstrict-warns` (non-strict surfaces an unproven crossing as
+  a `TUR-W0372` warning rather than silently trusting it). **[DONE]**
 - Source-level differential fuzzing, with a `stateful` generator shape and a
   sabotage: make the invalidation a no-op and confirm the fuzzer reports
   soundness bugs where the shipped build reports zero. Per the parent plan's
   standing lesson -- both historical soundness bugs lived in the encoder, below
   the VC fuzzer's reach -- this is the only harness that covers this work.
+
+  **Status 2026-07-26 -- source fuzzer UNBLOCKED (double-load fixed); `stateful`
+  shape SHIPPED; a codegen blocker found and fixed along the way.** The fuzzer
+  was vacuous because `tur` double-loaded its stdlib when spawned via a
+  subprocess from a checkout root; fixed in `load_path_key` (resolve a
+  `stdlib/X` load via `stdlib_dir` first). Report archived at
+  [`refine-fuzzer-subprocess-stdlib-double-load.md`](../../archive/refine-fuzzer-subprocess-stdlib-double-load.md).
+  **Run it with a Debug `tur` and `TUR_STDLIB_DIR` unset** (Release strips
+  contracts so gate-off never aborts; a stale env stdlib is the wrong one).
+
+  Writing the `stateful` shape surfaced a **codegen blocker that had to be fixed
+  first**: a `#refine{ x | (m w x) }` param whose measure `m` is a `#reads`
+  measure is *impure by construction*, and `rt_inject_param_checks`
+  (`elab_fns.c`) unconditionally injected a runtime **entry contract** for every
+  refined param -- an impure predicate there is `TUR-E0375` ("predicate has side
+  effects"). So *no* `#reads`-refined function could `emit-c`/`build`/`run` at
+  all: the whole feature was `check`-only, and `refine-stateful-guard-discharges`
+  (which asserts `stdout: 42`) was silently red under the harness's `emit-c`
+  path. Fixed by teaching the entry-check injector to **suppress** the contract
+  for a `#reads`-measure predicate (`rt_pred_reads_measure`), since that check is
+  unemittable and, per Blocker 2, is not the safety backstop anyway (the accessor
+  keeps its *own* internal check). Non-`#reads` impure predicates still get
+  E0375 (protection intact); the `errors/` negatives still reject under
+  `--strict-refine`; `guard-discharges` now runs and prints `42` on both gates.
+
+  The `stateful` shape (a `FzWorld`, an impure `#reads w` measure, a reader with
+  a `#refine{ x | (fz-alive? w x) }` crossing, and a `frozen`-region guarded
+  read) now lands in `tests/refine-fuzz-src.py` and classifies `agree_clean`
+  (self-test PASS; n=150 both-mode and n=400 int-mode runs: **0 soundness bugs,
+  0 other BUG classes**).
+
+  **What the runtime fuzzer does and does NOT gate for `#reads`.** The shape is
+  *correctness/crash* coverage (a codegen divergence between gates, or a crash on
+  one gate, is caught). It is **not** a soundness gate, and cannot be: a `#reads`
+  measure is impure, so gate-off carries **no** runtime contract for the crossing
+  (the entry contract is suppressed as above) -- there is no gate-off abort for a
+  gate-on elision to contradict. `#reads` soundness is a **compile-time** property
+  (a wrong crossing proof is a missed static error, never a runtime miscompile),
+  gated by the `errors/refine-stateful-*` fixtures under `--strict-refine` plus
+  the targeted frozen-check sabotage below. This is a structural property of a
+  *trusted, impure* measure, not a fuzzer limitation to be engineered around.
+
+  **Interim gate met by targeted sabotage.** The plan's *core* requirement --
+  "make the frozen-check a no-op and confirm the negatives are caught" -- was
+  run directly: env-gating `enc_reads_arg_frozen` to always-true made
+  `errors/refine-stateful-shadow-despawn` and `errors/refine-stateful-no-region`
+  **wrongly prove** (compile clean under `--strict-refine`, no `TUR-W0372`),
+  i.e. those `errors/` fixtures FAIL under the sabotaged build and PASS under the
+  shipped one -- exactly "soundness bugs reported where the shipped build reports
+  zero". The sabotage hook was removed before commit (a soundness backdoor must
+  not ship). This is narrower than the fuzzer (it exercises the shapes I thought
+  to write, not random ones), so the source-fuzzer `stateful` shape is still
+  owed once the double-load is fixed.
 
 ### Documentation (landing task -- do NOT skip)
 

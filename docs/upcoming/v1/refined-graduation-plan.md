@@ -7,23 +7,91 @@ preconditions are now closed and one prerequisite has been BUILT ahead of time.
 | precondition | state |
 |---|---|
 | 1. suite survives it | **measured** -- one fixture affected, and it is repurposed rather than deleted |
-| 2. cost is acceptable | partly -- measured on fixtures, **needs a real program** (see [the dogfooding plan](../hold/refined-dogfooding-plan.md)) |
-| 3. nothing still moving | **waiting** -- two semantics landed recently and should sit |
+| 2. cost is acceptable | **MEASURED on a real program (2026-07-26)** -- tur-ecs, ~5400 lines / 22 modules / 66 tests: **1.004x** on unannotated code, worst per-file delta +1ms, zero `TUR-E0371`, all obligations behave as designed; see [refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md) |
+| 3. nothing still moving | **waiting** -- sit clock RESTARTED 2026-07-26 (macro-expansion path walk, `#reads` entry-contract suppression, template-emitter fixes); see the decision review below for the sit-through-0.32.x recommendation |
 | 4. exclusions documented as permanent | **DONE** -- every Limits entry tagged |
+
+**Z3 retirement input (banked 2026-07-26):** the oracle build (system Z3
+4.15.4) re-checked every VC the tur-ecs corpus generates -- verdicts identical
+to the in-house chain, zero `TUR-I0379`. Real-program oracle agreement is on
+file in the dogfood report; the scaffold can be retired on schedule.
 
 | prerequisite | state |
 |---|---|
 | graduated-layer shim (`GRADUATED_LAYERS[]`) | **DONE and verified**, landed empty ahead of use |
 
 **Clock:** `refined` is `XF_LIFECYCLE_PROTOTYPE`, `introduced 0.31.0`,
-`expires_at 0.34.0`. `VERSION` is `0.30.8`, so the experiment has not shipped
-yet and there are roughly three minor lines of runway. At the cut it graduates
-(row deleted, behaviour unconditional) or is shelved. `expires_at` is a hard
-contract, not a suggestion.
+`expires_at 0.34.0`. `VERSION` is `0.31.0` (released), so the experiment is
+shipping and there are roughly three minor lines of runway. At the cut it
+graduates (row deleted, behaviour unconditional) or is shelved. `expires_at`
+is a hard contract, not a suggestion.
 
 **Ordering:** corpus work, then gated dogfooding, then Z3 retirement, then
 graduation -- see [Ordering](#ordering) for why, and for the deadline that
 overrides it.
+
+---
+
+## Decision review 2026-07-26 -- where the flip stands
+
+The ordering's first two steps are done and the third is GO; what remains is
+the sit clock and the flip itself.
+
+**Ordering progress.**
+
+| step | state |
+|---|---|
+| 1. corpus | **clean** -- in-tree corpus 119/119 parsed, 0 soundness failures, 0 over-budget; the external 200-sample reader tail (193 parsed) is `corpus-reader-tail-plan.md`, which declares itself optional |
+| 2. gated dogfooding + oracle build | **DONE** -- [refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md); oracle re-run at head over all 12 refined ecs tests (including the `ecs/sized-refined` promotion surface, which generates novel crossing shapes): verdicts identical, zero `TUR-I0379` |
+| 3. Z3 retirement | **GO** -- both gates it was waiting on are clean. Execute as its own change set during the sit window, before the flip |
+| 4. graduation | waiting on the sit clock (below) |
+
+**The stop-list, scored against the dogfood run.** None of the three
+would-stop conditions fired: zero `TUR-E0371` anywhere (so none on correct
+code); cost on a real program is 1.004x against the 1.7x fixture worst case
+(the fear inverted); `TUR-W0377` fired zero times (no noise signal). Nothing
+in the evidence argues for shelving.
+
+**The sit clock (precondition 3) restarted 2026-07-26.** That day landed:
+the `#reads` entry-contract suppression, the macro-expansion crossing path
+walk (`refine_note_macro_expansion` + the set!-scan depth change), and the
+template-emitter fixes (`#reads`/`#refine` through macro copiers). All are
+completeness-direction changes (more discharges, never fewer checks), but
+they are semantics, and graduation freezes them. Let them sit through at
+least one minor line with the ecs surface exercising them.
+
+**Adjudicated: the `::` trust boundary does NOT gate graduation.** Raised
+deliberately here because graduating makes the stateful slice's story
+permanent. What graduates includes `#reads`/`frozen` (they ride the same
+gate), and their guarantee can be stepped around by a deliberate `::`-cast /
+inline C
+(`docs/reported/frozen-region-aliasing-via-coercing-cast.md`). Decision:
+ship it as a documented-permanent limit, do not block on sealing. Reasons:
+(a) the failure mode under a deliberately false declaration is the
+forgiving DEFAULT semantics (a stale in-bounds read) wearing a proven badge
+-- no elision, no new unsafety, because an impure measure's entry contract
+was never emittable and compile-time rejection remains intact for ordinary
+code; (b) the boundary is now a tagged **[by design]** entry in the guide's
+Limits section (added with this review -- precondition 4 stays whole); (c)
+`::`-sealed newtypes / module-private construction is an independent
+language feature, and holding the experiment hostage to it serves neither.
+The report stays open on its own merits.
+
+**Scope statement.** Graduating `refined` graduates the pure core AND the
+stateful slice as implemented (trusted tier, step 1 of the
+`checked-write-frames-plan.md` trajectory). The alternative -- splitting
+`#reads` into a second experiment so the core graduates alone -- is
+rejected: it would mint a second enable path (what the `#lang` layer rules
+forbid), and the slice is load-bearing for the flagship consumer (the ecs
+strict-aliveness family is built on it, and the dogfood report's
+annotation-burden finding was that stateful measures are what real code
+reaches for first).
+
+**Recommended timeline.** Sit through the 0.32.x line (with the denser
+`ecs/sized-refined` corpus as the soak vehicle -- a second dogfood
+measurement round there is cheap and would refresh the cost figure);
+execute Z3 retirement during the sit; flip in 0.33.x, comfortably inside
+the `expires_at 0.34.0` contract rather than at the wire.
 
 ---
 

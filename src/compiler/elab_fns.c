@@ -75,6 +75,10 @@ VCSort rt_sort_of_kind(TypeKind k) {
  * inner scope is still current -- the predicate is elaborated in it. */
 static bool rt_expr_definitely_impure(const Expr *x);
 
+/* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
+ * Defined after rt_resolve_fn; forward-declared here for rt_inject_param_checks. */
+static bool rt_pred_reads_measure(Elab *e, const Form *f);
+
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
  * Checks are conditional on the build: `--no-contracts` strips them, a release
@@ -110,6 +114,17 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
         if (ct_preds[ci] == NULL) continue;
         uint32_t pi = ct_idx[ci];
         if (pi >= n_params || !params[pi]) continue;
+        /* C2 (#reads): a param whose refinement is a `#reads`-annotated measure
+         * is statically checked at its CROSSINGS, never at runtime.  The measure
+         * is impure by construction (that is why it needs the grant at all), so a
+         * runtime entry contract for it is impossible -- it would be TUR-E0375,
+         * "predicate has side effects" -- and would in any case defeat the
+         * trusted-congruence grant.  Suppress the entry-check injection here; the
+         * caller-side crossing obligation is the enforcement point (proven ->
+         * elided; unknown -> a kept impure check that is itself E0375, so a caller
+         * that cannot discharge the crossing still fails to compile).  The grant's
+         * soundness is pinned by tests/fixtures/errors/refine-stateful-*. */
+        if (rt_pred_reads_measure(e, ct_preds[ci])) continue;
         const char *var_nm = ct_vars[ci];
 
         /* Bind the contract's own variable name as an alias for the parameter,
@@ -633,6 +648,10 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
     out->ret_sort = rt_sort_of_kind(b->type.kind == TY_FN ? b->type.as.fn.result_kind
                                                           : b->type.kind);
 
+    /* C2 / #reads: publish the read-frame param so the encoder can grant
+     * congruence when that argument is frozen at the call site. */
+    out->reads_param_plus1 = b->reads_param_plus1;
+
     /* PURITY, which decides whether two occurrences of this call may be
      * modelled as the same value.  See rt_binding_is_pure above: the declared
      * effect row is only a veto, the real evidence is a default-deny walk of
@@ -762,6 +781,32 @@ static bool rt_pred_is_impure(Elab *e, const Form *f) {
     return false;
 }
 
+/* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
+ *
+ * Mirrors rt_pred_is_impure, but keys on the reads grant rather than impurity:
+ * a measure declared `#reads w` resolves to a RefineFnInfo with a non-zero
+ * reads_param_plus1.  rt_inject_param_checks uses this to skip the (impossible)
+ * runtime entry contract for such a param -- see the comment at its call site.
+ *
+ * The recursive walk matches a `#reads` measure anywhere in a compound
+ * predicate (e.g. `(and (alive? w x) ...)`): the entry contract must be
+ * suppressed as a whole, since the impure sub-term alone makes it unemittable. */
+static bool rt_pred_reads_measure(Elab *e, const Form *f) {
+    if (!f) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *head = f->as.list.items[0];
+    if (head->tag == F_SYM && head->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (rt_resolve_fn(e, head->as.sym->name, &info) &&
+            info.reads_param_plus1 != 0)
+            return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_reads_measure(e, f->as.list.items[i])) return true;
+    return false;
+}
+
 /* ------------------------------------------------------------------------- *
  * RT4 branching bodies: prove a return obligation PER PATH.
  *
@@ -819,9 +864,16 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
  * in the environment, and every other form cannot.  Deliberately syntactic and
  * deliberately over-broad -- a name that merely LOOKS like an assignment costs
  * precision, and missing one costs soundness. */
-#define RT_SET_SCAN_MAX_DEPTH 12
+/* 24, matching RT_CS_PATH_MAX_DEPTH: the scan is linear in nodes either way,
+ * and a macro EXPANSION is legitimately deeper than the source that spells it
+ * -- a 12 limit made rt_form_mentions_set return its conservative "too deep,
+ * assume assignment" answer on a clean for-each expansion, spuriously
+ * declining every crossing in the caller. */
+#define RT_SET_SCAN_MAX_DEPTH 24
 
-static bool rt_form_mentions_set(const Form *f, uint32_t depth) {
+static const Form *rt_macro_expansion(const Elab *e, const Form *call);
+
+static bool rt_form_mentions_set(const Elab *e, const Form *f, uint32_t depth) {
     if (!f) return false;
     if (depth >= RT_SET_SCAN_MAX_DEPTH) return true;   /* too deep to vouch for */
     if (f->tag == F_SYM && f->as.sym) {
@@ -830,8 +882,19 @@ static bool rt_form_mentions_set(const Form *f, uint32_t depth) {
                strcmp(n, "reset!") == 0;
     }
     if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    /* A macro call scans as its EXPANSION: the source spelling shows no
+     * `set!`, but the code that runs is the expansion, and an assignment
+     * hidden in a template must decline exactly like a written one.  The hop
+     * does NOT consume depth -- it is a lateral move to fresh nodes, not
+     * structural nesting, and cannot cycle (an expansion's nodes are newly
+     * constructed; only spliced ARGUMENTS are reused, and a call form cannot
+     * be its own argument). */
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx) return rt_form_mentions_set(e, mx, depth);
+    }
     for (uint32_t i = 0; i < f->as.list.len; i++)
-        if (rt_form_mentions_set(f->as.list.items[i], depth + 1)) return true;
+        if (rt_form_mentions_set(e, f->as.list.items[i], depth + 1)) return true;
     return false;
 }
 
@@ -1089,7 +1152,7 @@ static bool rt_prove_paths(Elab *e, const Form *pred, const char *var_name,
      * trade for a rule whose failure mode is a miscompile. */
     if (rt_head_is(subject, "do") && subject->as.list.len >= 2) {
         for (uint32_t i = 1; i + 1 < subject->as.list.len; i++)
-            if (rt_form_mentions_set(subject->as.list.items[i], 0)) return false;
+            if (rt_form_mentions_set(e, subject->as.list.items[i], 0)) return false;
         return rt_prove_paths(e, pred, var_name,
                               subject->as.list.items[subject->as.list.len - 1],
                               base_kind, env, loc, depth + 1);
@@ -1386,8 +1449,79 @@ uint32_t refine_note_call_site(Elab *e, const Binding *callee,
     cs->class_param_preds = NULL;
     cs->class_param_vars  = NULL;
     cs->n_class_params    = 0;
+    /* C2 / #reads: snapshot the borrows LIVE at this crossing.  The borrow
+     * checker's scope is authoritative about liveness right here (a `frozen`
+     * region's `(& w)` borrow is active); recovering it syntactically later
+     * would risk treating an already-ended borrow as live.  A binding borrowed
+     * here cannot be `^unique ^mut`-mutated (UT2) or `set!` (borrow-checked),
+     * so a `#reads`-it measure is a function of frozen state in this obligation. */
+    cs->frozen_names = NULL;
+    cs->n_frozen     = 0;
+    {
+        uint32_t nb = 0;
+        for (const Scope *s = e->scope; s; s = s->parent)
+            for (const ScopeBorrow *bo = s->borrows; bo; bo = bo->next)
+                if (bo->binding && bo->binding->name) nb++;
+        if (nb) {
+            const char **fn = (const char **)arena_alloc(e->arena, nb * sizeof(char *));
+            uint32_t k = 0;
+            for (const Scope *s = e->scope; s; s = s->parent)
+                for (const ScopeBorrow *bo = s->borrows; bo; bo = bo->next) {
+                    Binding *b = bo->binding;
+                    if (!b || !b->name) continue;
+                    /* Only publish a frozen name that STILL resolves to the
+                     * borrowed binding here.  If it has been SHADOWED by an
+                     * inner binding of the same spelling, the encoder's
+                     * name-based match would otherwise treat the (unfrozen)
+                     * shadow as frozen -- an unsoundness the shadow+despawn
+                     * fixture pins.  Comparing to scope_lookup's innermost
+                     * result closes it. */
+                    if (scope_lookup(e->scope, b->name) != b) continue;
+                    fn[k++] = b->name->name;
+                }
+            if (k) { cs->frozen_names = fn; cs->n_frozen = k; }
+        }
+    }
     cs->loc         = call_form->span;
     return e->n_refine_call_sites;
+}
+
+void refine_note_macro_expansion(Elab *e, const Form *call,
+                                 const Form *expansion) {
+    if (!g_opt_refined || !e || !call || !expansion) return;
+    for (uint32_t i = 0; i < e->n_refine_mexps; i++) {
+        if (e->refine_mexp_calls[i] == call) {
+            e->refine_mexp_bodies[i] = expansion;   /* latest re-elaboration */
+            return;
+        }
+    }
+    if (e->n_refine_mexps == e->cap_refine_mexps) {
+        uint32_t ncap = e->cap_refine_mexps ? e->cap_refine_mexps * 2 : 16;
+        const Form **nc = (const Form **)arena_alloc(e->arena,
+                                                     ncap * sizeof(Form *));
+        const Form **nb = (const Form **)arena_alloc(e->arena,
+                                                     ncap * sizeof(Form *));
+        if (e->n_refine_mexps) {
+            memcpy(nc, e->refine_mexp_calls, e->n_refine_mexps * sizeof(Form *));
+            memcpy(nb, e->refine_mexp_bodies, e->n_refine_mexps * sizeof(Form *));
+        }
+        e->refine_mexp_calls  = nc;
+        e->refine_mexp_bodies = nb;
+        e->cap_refine_mexps   = ncap;
+    }
+    e->refine_mexp_calls[e->n_refine_mexps]  = call;
+    e->refine_mexp_bodies[e->n_refine_mexps] = expansion;
+    e->n_refine_mexps++;
+}
+
+/* The expansion recorded for a macro-call form, or NULL.  Linear scan: the
+ * table only holds macro calls seen in refined units, and the path walks that
+ * consult it are already bounded (RT_CS_PATH_MAX_DEPTH). */
+static const Form *rt_macro_expansion(const Elab *e, const Form *call) {
+    if (!e || !call || call->tag != F_LIST) return NULL;
+    for (uint32_t i = 0; i < e->n_refine_mexps; i++)
+        if (e->refine_mexp_calls[i] == call) return e->refine_mexp_bodies[i];
+    return NULL;
 }
 
 /* Keyed on (callee, call_form) rather than on the index refine_note_call_site
@@ -1446,15 +1580,59 @@ void refine_fill_call_site_env(Elab *e, uint32_t from, RefineEnv *env,
 #define RT_CS_PATH_MAX_DEPTH 24
 #define RT_CS_PATH_MAX_HYPS  8
 
-/* Count pointer-identical occurrences of `target`, stopping at 2. */
-static uint32_t rt_form_occurrences(const Form *node, const Form *target,
-                                    uint32_t depth) {
+/* Crossing identity that survives macro expansion.
+ *
+ * Pointer equality is the fast path.  But a region written as a MACRO -- the
+ * shipped `ecs/freeze` `frozen`, or any macro that wraps a body with `~@body` --
+ * expands by quasiquote, which RECONSTRUCTS the body into fresh Form objects.
+ * So the crossing that gets elaborated and registered as `cs->call_form` is a
+ * different pointer than the crossing node reachable in `cs->caller_body` (the
+ * source defn body), and a pointer-only match reports 0 occurrences -- the guard
+ * on the path is then dropped and a perfectly good `(if (alive? w e) ...)` no
+ * longer discharges its read (see docs/reported/frozen-macro-breaks-refinement-
+ * guard-discharge.md).
+ *
+ * The copy preserves the source SPAN, so we fall back to matching a real
+ * source location plus the head symbol and arity.  This only ever RESCUES the
+ * "copied once" case: callers keep the `!= 1` ambiguity decline, so a span
+ * shared by more than one node (a macro that DUPLICATES a crossing) still bails,
+ * and a crossing genuinely absent from the body still matches nothing.  A span
+ * match is therefore never less conservative than pointer identity where it
+ * mattered -- it strictly recovers copies of the same source crossing, which
+ * carry the same guards on the same path. */
+static bool rt_form_ident(const Form *a, const Form *b) {
+    if (a == b) return true;
+    if (!a || !b || a->tag != b->tag) return false;
+    if (a->tag != F_LIST && a->tag != F_VEC) return false;   /* only call forms */
+    if (span_is_unknown(a->span) || span_is_unknown(b->span)) return false;
+    if (a->span.file_id  != b->span.file_id ||
+        a->span.off_start != b->span.off_start ||
+        a->span.off_end   != b->span.off_end) return false;
+    if (a->as.list.len != b->as.list.len || a->as.list.len == 0) return false;
+    const Form *ha = a->as.list.items[0], *hb = b->as.list.items[0];
+    if (!ha || !hb || ha->tag != F_SYM || hb->tag != F_SYM) return false;
+    return ha->as.sym == hb->as.sym;                          /* interned */
+}
+
+/* Count occurrences of `target` (pointer- or source-identical), stopping at 2.
+ *
+ * A macro call counts as its recorded EXPANSION, not its raw arguments: the
+ * expansion is the code that elaborated (so a template-GENERATED crossing is
+ * only reachable there), and a `~body`-spliced argument appears in BOTH the
+ * call form and the expansion -- walking both would double-count one crossing
+ * and trip the `!= 1` ambiguity decline. */
+static uint32_t rt_form_occurrences(const Elab *e, const Form *node,
+                                    const Form *target, uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return 0;
-    if (node == target) return 1;
+    if (rt_form_ident(node, target)) return 1;
     if (node->tag != F_LIST && node->tag != F_VEC) return 0;
+    {
+        const Form *mx = rt_macro_expansion(e, node);
+        if (mx) return rt_form_occurrences(e, mx, target, depth);  /* lateral hop */
+    }
     uint32_t n = 0;
     for (uint32_t i = 0; i < node->as.list.len && n < 2; i++)
-        n += rt_form_occurrences(node->as.list.items[i], target, depth + 1);
+        n += rt_form_occurrences(e, node->as.list.items[i], target, depth + 1);
     return n;
 }
 
@@ -1489,8 +1667,19 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                                   const Form *target, const Form **hyps,
                                   uint32_t *n, bool *shadowed, uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
-    if (node == target) return true;
+    if (rt_form_ident(node, target)) return true;
     if (node->tag != F_LIST && node->tag != F_VEC) return false;
+
+    /* A macro call walks as its recorded EXPANSION (mirrors
+     * rt_form_occurrences): a guard or crossing the template GENERATED --
+     * e.g. `(if (alive? ~w ~e) (get! ~w ~e) -1)` -- exists only there, and
+     * an `if` in the expansion contributes its condition exactly like a
+     * written one. */
+    {
+        const Form *mx = rt_macro_expansion(e, node);
+        if (mx) return rt_collect_path_conds(e, env, mx, target, hyps, n,
+                                             shadowed, depth);   /* lateral hop */
+    }
 
     if (rt_head_is(node, "if") && node->as.list.len == 4) {
         const Form *c = node->as.list.items[1];
@@ -1655,8 +1844,8 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     RefineHyp *saved = cs->env ? cs->env->head : NULL;
     *skip = false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
-    if (rt_form_mentions_set(cs->caller_body, 0)) return saved;
-    if (rt_form_occurrences(cs->caller_body, cs->call_form, 0) != 1) return saved;
+    if (rt_form_mentions_set(e, cs->caller_body, 0)) return saved;
+    if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
     uint32_t n = 0;
@@ -1797,12 +1986,26 @@ void refine_resolve_call_sites(Elab *e) {
                 cs->loc, cs->env, what_owned, cs->caller_name);
             if (!ob) continue;
             refine_obligation_set_subst(ob, e->arena, subst, n_subst);
+            /* C2 / #reads: carry this crossing's frozen (borrowed) bindings so
+             * the encoder can grant a `#reads w` measure congruence when w is
+             * one of them. */
+            refine_obligation_set_frozen(ob, cs->frozen_names, cs->n_frozen);
             /* The callee checks its own parameters on entry, so an argument
              * we cannot prove is the ordinary case, not news.  What still
              * errors is an argument that is DEFINITELY wrong -- a closed goal
              * that evaluates false -- which is `(safe-div 10 0)` becoming a
-             * compile-time failure instead of a runtime panic. */
-            ob->runtime_guarded = true;
+             * compile-time failure instead of a runtime panic.
+             *
+             * C2 / #reads exception: a `#reads`-measure predicate is impure, so
+             * the callee's entry check is TUR-E0375-unemittable and is
+             * suppressed (see rt_inject_param_checks) -- there is NO runtime
+             * backstop for this crossing.  Mark it proof-only so an unproven
+             * one is reported (a warning in non-strict, an error in strict)
+             * rather than silently trusted, and so its W0372 does not claim a
+             * runtime check was kept. */
+            bool reads_crossing = rt_pred_reads_measure(e, pred);
+            ob->runtime_guarded = !reads_crossing;
+            ob->reads_no_runtime = reads_crossing;
             bool inst_ok = refine_discharge_one(ob, e->arena);
 
             /* Reading B + lint: the obligation above is the resolved INSTANCE's,
@@ -3819,6 +4022,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     EffectRow *declared_effect_row_defn = NULL;
     bool defn_has_construct_attr = false;
     bool defn_has_byval_attr = false;
+    /* C2 / #reads: captured here, stamped onto the binding alongside the
+     * refine_* metadata below.  1-based; 0 = no #reads annotation. */
+    uint32_t reads_param_plus1_defn = 0;
     if (call->as.list.len >= body_start + 1) {
         Form *maybe_row = call->as.list.items[body_start];
         if (maybe_row->tag == F_MAP) {
@@ -3846,6 +4052,39 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
             declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
             body_start++;  /* skip past the effect row map */
+        }
+    }
+    /* C2 / #reads <sym>: a read-frame annotation at the same signature position
+     * as #fx{...} (and, when both are present, after it).  Resolve the named
+     * symbol to a parameter index and record it on the binding; the refinement
+     * encoder consults it to grant congruence inside a frozen region.  Inert
+     * until that grant lands. */
+    if (call->as.list.len >= body_start + 1) {
+        Form *maybe_reads = call->as.list.items[body_start];
+        if (maybe_reads->tag == F_LIST &&
+            maybe_reads->fx_prov == (uint8_t)PROV_READS) {
+            const Form *psym = (maybe_reads->as.list.len == 2)
+                                   ? maybe_reads->as.list.items[1] : NULL;
+            if (!psym || psym->tag != F_SYM || !psym->as.sym) {
+                diag_emit(DIAG_ERROR, maybe_reads->span,
+                          "#reads must name a parameter: `#reads <param>`");
+            } else {
+                uint32_t found = 0;
+                for (uint32_t pi = 0; pi < n_params; pi++) {
+                    if (params[pi] && params[pi]->name == psym->as.sym) {
+                        found = pi + 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    diag_emit(DIAG_ERROR, psym->span,
+                              "#reads names '%s', which is not a parameter of this function",
+                              psym->as.sym->name);
+                } else {
+                    reads_param_plus1_defn = found;
+                }
+            }
+            body_start++;  /* skip past the #reads annotation */
         }
     }
     bool fn_declared_unsafe =
@@ -4809,6 +5048,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * remove the callee's guard. */
         const Form *rt_subject = (call->as.list.len > body_start)
                                ? call->as.list.items[call->as.list.len - 1] : NULL;
+        /* Path-condition recovery uses the WHOLE body (rt_whole_body below),
+         * not just the return subject -- both sides of the 2026-07-26 merge
+         * implemented that fix; main's helper form is kept. */
         RefineEnv *rt_env = NULL;
         bool rt_ret_proven  = false;
         bool rt_post_proven = false;
@@ -5338,6 +5580,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
         b->refine_param_names = rn;
         b->n_refine_params    = n_params;
     }
+    /* C2 / #reads: unconditional -- a `#reads` measure need not carry param
+     * refinements, so this must not sit inside the block above. */
+    b->reads_param_plus1 = reads_param_plus1_defn;
     if (g_opt_refined) {
         /* A declared return refinement wins -- but only when something
          * actually enforces it (see rt_ret_guaranteed).  An INFERRED one is

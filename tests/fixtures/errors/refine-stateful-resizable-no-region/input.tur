@@ -1,0 +1,36 @@
+;; Negative for the resizable-bounds pattern: the same guarded read with NO
+;; frozen region. `in-bounds?` is an impure #reads measure, so outside a
+;; region it is not congruent and the crossing must stay TUR-W0372 (a hard
+;; error under --strict-refine) -- the region is load-bearing, not inert.
+(defopaque Buf :int)
+
+(defn buf-new [cap : int] #fx{} : Buf
+  ```c
+  int64_t* b = (int64_t*)malloc((2 + cap) * sizeof(int64_t));
+  b[0] = cap;
+  for (int64_t i = 0; i < cap; i++) b[2 + i] = i * 10;
+  return (int64_t)(intptr_t)b;
+  ```)
+
+(defn grow! [^unique ^mut b : Buf ncap : int] : int
+  ```c
+  (void)b; (void)ncap; return 0;
+  ```)
+
+(defn in-bounds? [^borrow b : Buf i : int] #reads b : bool
+  ```c
+  int64_t* p = (int64_t*)(intptr_t)b;
+  return i >= 0 && i < p[0];
+  ```)
+
+(defn buf-get [^borrow b : Buf
+               i : #refine{ x : int | (in-bounds? b x) }] : int
+  ```c
+  int64_t* p = (int64_t*)(intptr_t)b;
+  return p[2 + i];
+  ```)
+
+(defn main [] : int
+  (let [^mut b (buf-new 4)]
+    (println (if (in-bounds? b 2) (buf-get b 2) -1)))
+  0)

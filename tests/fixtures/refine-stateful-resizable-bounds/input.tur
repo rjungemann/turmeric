@@ -1,0 +1,41 @@
+;; Bounds elimination on a RESIZABLE buffer via frozen + #reads -- the
+;; "Where this generalizes" case from stateful-refinements-guide.md,
+;; probed working 2026-07-26. Capacity is mutable state read through
+;; inline C, so `in-bounds?` is impure and carries `#reads b`; the borrow
+;; makes it congruent (and locks out `grow!`, the resize mutator, via
+;; TUR-E0200), so the guard discharges the accessor's bounds refinement.
+;; Under --strict-refine this compiles (prints 20) ONLY because it proves.
+(defopaque Buf :int)
+
+(defn buf-new [cap : int] #fx{} : Buf
+  ```c
+  int64_t* b = (int64_t*)malloc((2 + cap) * sizeof(int64_t));
+  b[0] = cap;
+  for (int64_t i = 0; i < cap; i++) b[2 + i] = i * 10;
+  return (int64_t)(intptr_t)b;
+  ```)
+
+;; grow! takes the buffer exclusively -- uncallable inside a frozen region.
+(defn grow! [^unique ^mut b : Buf ncap : int] : int
+  ```c
+  (void)b; (void)ncap; return 0;
+  ```)
+
+(defn in-bounds? [^borrow b : Buf i : int] #reads b : bool
+  ```c
+  int64_t* p = (int64_t*)(intptr_t)b;
+  return i >= 0 && i < p[0];
+  ```)
+
+(defn buf-get [^borrow b : Buf
+               i : #refine{ x : int | (in-bounds? b x) }] : int
+  ```c
+  int64_t* p = (int64_t*)(intptr_t)b;
+  return p[2 + i];
+  ```)
+
+(defn main [] : int
+  (let [^mut b (buf-new 4)]
+    (let [__f (& b)]
+      (println (if (in-bounds? b 2) (buf-get b 2) -1))))
+  0)

@@ -1,0 +1,34 @@
+;; C2 (#reads) negative -- the ALIASING question. The plan asks whether the new
+;; congruence route answers aliasing the way the rc<T>/ref<T> decline already
+;; does for field reads: can a mutation reach the world through a SECOND handle
+;; while it is frozen? Under the sound borrow-based `frozen` region the answer is
+;; structural. Reads alias freely -- the guard and the read both borrow `w` and
+;; coexist with the region's `(& w)` -- but while that borrow is live w's
+;; exclusive-mutable access cannot be re-acquired, so NO mutating handle to the
+;; frozen world (aliased or direct) can exist. An attempt to obtain one -- here a
+;; despawn that needs `^unique ^mut w` -- is a compile error (TUR-E0200), not a
+;; runtime hole. Uniqueness IS the aliasing answer; the congruence route inherits
+;; it rather than having to re-derive it.
+(defstruct World [n : int])
+
+(defn alive? [^borrow w : World e : int] #reads w : bool
+  ```c
+  (void)w; (void)e; return 1;
+  ```)
+(defn despawn! [^unique ^mut w : World] : nil
+  ```c
+  (void)w;
+  ```)
+(defn get-Pos! [^borrow w : World e : #refine{ x : int | (alive? w x) }] : int 0)
+
+(defn run [] : int
+  (let [^mut w (World 7)]
+    (let [__frz (& w)]                 ;; frozen: the only handle that may coexist with reads
+      (if (alive? w 0)                 ;; a read alias -- fine
+        (do (despawn! w)               ;; a MUTATING handle to the frozen w -- rejected
+            (get-Pos! w 0))
+        -1))))
+
+(defn main [] : int
+  (println (run))
+  0)

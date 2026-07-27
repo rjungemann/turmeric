@@ -1,0 +1,31 @@
+;; Macro templates can emit the full stateful-refinement surface (the ecs
+;; sized-refined promotion shape): a `#reads w` annotation survives template
+;; substitution/reconstruction (fx_prov is preserved through
+;; substitute_params and ct_eval_quasiquote -- previously dropped, so the
+;; expanded defn elaborated `(reads w)` as a body call), and a
+;; `#refine{ x : T | (~pred w x) }` contract type substitutes computed
+;; unquotes in its predicate (F_CONTRACT_TYPE was returned as-is by both
+;; copiers -- "unbound symbol" at the call site).  Under --strict-refine
+;; this compiles (and prints 7) ONLY because the emitted measure + guard
+;; discharge the emitted accessor's refinement inside the frozen region.
+(defstruct World [n : int])
+
+(defmacro def-refined-surface [world-name]
+  (let [alive (str->sym (str-append (symbol-name world-name) "-alive?"))
+        get!  (str->sym (str-append "get-" (symbol-name world-name) "!"))]
+    `(do
+       (defn ~alive [^borrow w : ~world-name e : int] #reads w : bool
+         ```c
+         (void)w; return e != 1;
+         ```)
+       (defn ~get! [^borrow w : ~world-name
+                    e : #refine{ x : int | (~alive w x) }] : int
+         (+ (.n w) e)))))
+
+(def-refined-surface World)
+
+(defn main [] : int
+  (let [^mut w (World 7)]
+    (let [__f (& w)]
+      (println (if (World-alive? w 0) (get-World! w 0) -1))))
+  0)

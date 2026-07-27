@@ -153,7 +153,21 @@ whose slot has been despawned reads the old bits. Compare generations
 yourself when a handle may have outlived its entity.
 
 A strict-aliveness API that makes use-after-despawn a *compile* error
-is planned against the now-shipped refinement types; see
+**ships as an opt-in surface** (2026-07-26, behind `--enable=refined` /
+`#lang turmeric refined`): the `ecs/refined-world` module's accessor
+`rgworld-get-x!` refines its entity parameter with the impure `#reads`
+measure `rgworld-alive?`, and the read compiles only where aliveness is
+proven -- a guard inside a `frozen` region (which locks out
+`^unique ^mut` despawn, `TUR-E0200`), or the `for-each-alive!` macro,
+which generates the loop, the frozen borrow, and the guard so the body's
+read discharges per-entity. Under `--strict-refine` an unproven read is
+a hard error (`TUR-W0372`). The same surface ships for the REAL sized
+stack via `ecs/sized-refined`: `(sized-defworld-refined GameWorld)`
+emits `GameWorld-alive?` (`#reads`) + `GameWorld-despawn!`
+(`^unique ^mut`), `(sized-defcomponent-accessor-refined GameWorld Pos)`
+emits the cap-gated `get-Pos!` with the refined entity parameter, and
+`(for-each-alive GameWorld w n e body)` iterates with per-entity proofs
+-- all opt-in beside the unchanged forgiving family. See
 [docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md).
 
 ## Queries: `for-each` (imperative)
@@ -302,9 +316,11 @@ raylib is on the cmake-deps path.
   I1-I6; see
   [docs/guides/substructural-types-guide.md](substructural-types-guide.md)
   for the underlying cap machinery.
-- **Aliveness**: runtime, via generation comparison -- performed by
-  `sized-alive?` on sized worlds, and **not** performed by the unsized
-  `defcomponent-accessors` read path.
+- **Aliveness**: runtime by default, via generation comparison --
+  performed by `sized-alive?` on sized worlds, and **not** performed by
+  the unsized `defcomponent-accessors` read path. Opt-in compile-time
+  strict aliveness ships on the `ecs/refined-world` facade under
+  `--enable=refined` (see "Entities" above).
 
 ## Cross-world systems
 
@@ -727,14 +743,16 @@ intended sweet spot.
 ## Where to look next
 
 - `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the
-  refinement-typed roadmap (strict aliveness, bounded slot indices),
-  rewritten now that refinement types have landed.
+  refinement-typed roadmap: strict aliveness (RE1, shipped 2026-07-26
+  as `ecs/refined-world` + `for-each-alive!`), bounded slot indices
+  (RE2, gated on loop invariants and a profile).
 - `docs/upcoming/v1/ecs-component-set-bounds-plan.md` -- the structural
   "any world with `Pos` and `Vel`" bound, split out of the above.
 - `../guides/hkt-guide.md` -- the variadic-HKT-rows mechanism behind
   the row-typed `Query` value.
 - `../guides/substructural-types-guide.md` -- the substructural
-  capability machinery that backs the planned `:writes` enforcement.
+  capability machinery that backs the shipped `:writes` enforcement
+  and the `frozen` region's borrow semantics.
 - `../../turmeric-spices/spices/ecs/README.md` -- the ECS spice
   release notes and known limitations.
 - `../../turmeric-spices/spices/ecs-raylib/README.md` -- the raylib

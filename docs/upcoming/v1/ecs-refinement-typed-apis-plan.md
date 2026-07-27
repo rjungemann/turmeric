@@ -275,6 +275,31 @@ phase RE0.
 > their consumers is currently in the `(Storage T)`-broken set (so the
 > change is neither validatable nor "passes unchanged" today). Fold this
 > into the storage-side follow-up.
+>
+> **Update 2026-07-26 -- the `(Storage T)` skew is FIXED and the deferral's
+> stated blocker is gone.** `struct_field_type_from_form` was missing the
+> assoc-type-projection dispatch (`(Storage Pos)` -> spurious TUR-E0012) and
+> the SZ8 Size-literal placeholder (`(SizedDense (Static 8) Pos)`); both now
+> mirror `type_expr_from_form` (fixture: `defstruct-assoc-sized-fields`).
+> With the spice tests' legacy by-value box triples also retired
+> (`defworld-box-helpers`), the ecs suite is **66/66 green** -- so the
+> accessor/for-each consumers are validatable again, and the two deferred
+> `Slot`-typing sub-items are unblocked whenever the storage-side follow-up
+> is picked up.
+>
+> **Update 2026-07-26 (later) -- both deferred sub-items DONE; RE0 fully
+> complete.** Every public storage index (`dense-*`, `sparse-*`, `tag-*`,
+> and the sized trios), the `StorageOps` class methods, the accessor
+> emitters' slot parameter, and `for-each`/`sized-for-each`'s binder are
+> `Slot`-typed; `defmirror` and `sized-defworld-copy-into`'s generated loops
+> follow. Inline-C bodies were unchanged (same int64 carrier) -- the lift is
+> signatures + `(slot-new ...)` at the honest int-to-slot boundaries. A raw
+> int where a `Slot` is expected is `TUR-E0001`
+> (`tests/errors/int-not-slot.tur`); the guide's canonical for-each body
+> pattern (binder straight into storage/accessors) is now correct BY TYPE.
+> Suite 66/66 before and after (turmeric-spices `830e911`). RE1's refined
+> signatures were already `Entity`-typed, so nothing there needed rewriting
+> -- the sequencing (types before more refinements) held.
 
 Retire the `:int` stand-ins on the public surface of `ecs/entity`,
 `ecs/world`, and `ecs/sized-world`:
@@ -302,6 +327,133 @@ fixture under `spices/ecs/tests/errors/` passes a `Slot` where an `Entity` is
 expected and fails to elaborate.
 
 ### RE1 -- Strict aliveness (needs C2, wants C1)
+
+> **Status 2026-07-26 -- pattern PROVEN end-to-end; two compiler deps found +
+> fixed; harness/module integration remains.** C2 landed (`#reads` + the sound
+> `frozen` region), so RE1 is unblocked. The aliveness-refined accessor works
+> against the real `ecs/freeze` region: `alive?` reads liveness through an opaque
+> handle (a malloc'd `gens` array -- `sized-alive?`'s shape, so genuinely impure
+> and `#reads`-carrying), `despawn!` is `^unique ^mut` (locked out in the region,
+> `TUR-E0200`), and a guarded `(frozen w (if (alive? w e) (get-x! w e) ...))`
+> reports **refine: 1 proven** and runs; the same read with NO region is
+> **1 unknown -> TUR-W0372** (so `#reads`+`frozen` is load-bearing). Fixtures:
+> `turmeric-spices/spices/ecs/tests/refined/alive-frozen.tur` (positive) and
+> `.../tests/errors/refined-alive-no-region.tur` (negative); dogfood write-up
+> `turmeric-spices/docs/ecs-re1-refined-aliveness.md`.
+>
+> Getting here required two compiler fixes (both landed, validated, suite 2367/0):
+> (1) a `#reads`-refined param could not codegen -- the impure entry contract was
+> `TUR-E0375`; now suppressed (the accessor keeps its own internal check as the
+> backstop). (2) the `frozen` *macro* did not compose with guard-discharge --
+> macro expansion copies the body, so the crossing path walk missed it under
+> pointer identity; fixed with a source-span crossing match (`rt_form_ident`).
+>
+> **Update 2026-07-26 -- (b) shipped, with a characterized encapsulation limit.**
+> The self-contained facade is now a real module, `ecs/refined-world`
+> (turmeric-spices, in `build.tur :exports`), and the refined accessor discharges
+> **cross-module**: an importer guards in its own `frozen` region and calls the
+> module's `rgworld-get-x!` -- **1 proven, runs -> 42**; the same read with no
+> region is `TUR-W0372`. `RGWorld` is an opaque affine handle, so a `frozen`
+> borrow locks out its `^unique ^mut` mutators (`TUR-E0200`). The soundness
+> caveat is real and documented: neither a `defstruct` field nor a `defopaque`
+> encapsulates against the `::` coercing cast -- `(:: w :int)` unwraps the handle
+> and `(:: int RGWorld)` reconstructs an alias, so a deliberate `::`/inline-C
+> bypass can despawn inside the region. That is the same trust boundary `#reads`
+> already carries (sound for ordinary code, not adversarial code); a hard
+> guarantee needs a language feature (module-private construction / a `::`-sealed
+> newtype). Filed as `docs/reported/frozen-region-aliasing-via-coercing-cast.md`.
+>
+> **Update 2026-07-26 -- (a) tooling built, but auto-running BLOCKED by a
+> compiler bug; (c) pattern proven.**
+>
+> **(a)** `tur test` gained two leading-comment directives --
+> `;; tur-test-flags: --strict-refine` (per-test strict compile, so an unproven
+> crossing is a hard error, which ENFORCES the proof) and
+> `;; tur-test-expect-error: TUR-W0372` (must fail to compile and name the
+> diagnostic; run phase skipped). The directive feature works and is general (a
+> reusable `tur test` improvement). BUT auto-running the *refined* tests through
+> it surfaced a serious pre-existing compiler bug: **compiling multiple refined
+> files in one process (`tur test <dir>`, LSP/worker) corrupts memory and
+> segfaults nondeterministically** (6-8/8 crashes; ASan-silent -> arena/stack, not
+> heap). A partial fix landed (`cmd_build` now calls `refine_discharge_reset()` --
+> the memo held stale per-compile-arena VC pointers), but a second channel
+> remains. Filed as `docs/reported/refined-multi-compile-memory-corruption.md`.
+> So the RE1 refined tests are kept in `spices/ecs/tests/refined/` (a subdir
+> `tur test tests` does not descend into) and verified **individually** (each
+> passes on its own `tur run`/`tur check`), NOT auto-run. Auto-running is blocked
+> until the corruption is fixed (then: run each via its own invocation, or move
+> them flat).
+>
+> **Update 2026-07-26 (later) -- corruption FIXED; (a) fully unblocked.** The
+> second channel was root-caused via the executed
+> `docs/upcoming/arena-debug-poisoning-plan.md` (the AP4 guard mode's clean run
+> disproved the UAF theory): `parse_typeclass_method` left the RT1 memo field
+> `TypeClassMethod.refine_class_binding` UNINITIALIZED in non-zeroed arena
+> memory, so the second in-process compile read recycled-slab junk as a
+> `Binding*`. Fixed by zeroing the struct. The `tur test tests/refined` repro
+> went 8/8 SIGSEGV -> 0/20 failures, so the refined tests now auto-run via
+> `tur test` (moved flat into `spices/ecs/tests/`). Resolved report:
+> `docs/archive/refined-multi-compile-memory-corruption.md`.
+>
+> **(c)** The `for-each` aliveness refinement is PROVEN. A refined LOOP whose
+> body's `rgworld-get-x!` discharges per-entity works today
+> (`tests/refined/refined-loop-alive.tur`: 1 proven, runs -> 40, correctly skips
+> a despawned entity). The mechanism: the `while`+`set!` form is blocked -- the
+> loop counter's `set!` trips the whole-body `mentions_set` decline in the
+> crossing path-cond collector (the C3-adjacent gap) -- so it uses TAIL RECURSION
+> (TCO'd; verified 5M calls) + a re-borrow of `w` inside the recursive helper (so
+> `alive?` is congruent there) + the `alive?` guard.
+>
+> **Correction (2026-07-27):** an earlier note here claimed "turmeric has no
+> `loop`/`recur` or self-recursive `let`-`fn`, and a macro cannot emit a
+> top-level recursive helper." That was WRONG (bad probing -- I used a plain
+> `let`, not `letrec`). Verified: **named-let (`(let go [...] ...)`) and `letrec`
+> both work** (local recursion exists; a hand-written named-let refined loop
+> discharges, `1 proven`), and **a macro CAN emit a top-level `defn`**. Only
+> `(loop [...] (recur ...))` is genuinely absent, and named-let covers it. So the
+> recursive form does NOT need the order-aware-`set!` fix at all. What actually
+> blocks an ergonomic `for-each-alive` MACRO is a different bug: a macro that
+> *generates* a refined guard/crossing (via the quasiquote template, not `~@body`
+> splicing the user's forms) does not discharge -- spurious `TUR-W0372`. Filed as
+> `docs/reported/macro-generated-refined-crossings-do-not-discharge.md`.
+>
+> **Remaining for RE1:** fix the refined-multi-compile corruption (unblocks
+> auto-running all refined tests); fix macro-generated refined-crossing discharge
+> (unblocks an ergonomic `for-each-alive` macro). The while-based `for-each`
+> order-aware-`set!` fix is optional -- the recursive form already works.
+>
+> **Update 2026-07-26 (later) -- BOTH remaining blockers fixed; RE1 complete.**
+> The corruption was an uninitialized `refine_class_binding` memo field (see the
+> earlier update); the macro-generated-crossing bug is fixed by recording each
+> macro call's expansion (`refine_note_macro_expansion`) and letting the
+> crossing path walk traverse INTO expansions -- `rt_form_occurrences` /
+> `rt_collect_path_conds` / `rt_form_mentions_set` walk a macro call AS its
+> expansion (resolved report:
+> `docs/archive/macro-generated-refined-crossings-do-not-discharge.md`). The
+> set!-scan depth also rose 12 -> 24 (an expansion is legitimately deeper than
+> the source spelling it; the old limit's conservative "too deep, assume
+> assignment" answer spuriously declined clean for-each expansions). The
+> ergonomic **`for-each-alive` macro now proves**: one macro generates the
+> recursive loop + frozen re-borrow + aliveness guard, the user's refined read
+> is spliced as the body, and the crossing discharges per-entity
+> (`tests/fixtures/refine-macrogen-foreach`; the three report shapes + nesting
+> in `tests/fixtures/refine-macrogen-crossings`; adversarial negatives in
+> `tests/fixtures/errors/refine-macrogen-*`). Shipped to the ecs spice as
+> `ecs/refined-world`'s `for-each-alive!`.
+
+> **Update 2026-07-26 -- the promotion is SHIPPED: `ecs/sized-refined`.** The
+> accessor family below now exists against the REAL sized-world stack, emitted
+> per world/component: `(sized-defworld-refined W)` -> `<W>-alive?` (`#reads`)
+> + `<W>-despawn!` (`^unique ^mut`); `(sized-defcomponent-accessor-refined W
+> C)` -> the cap-gated `get-<C>!` with the refined entity parameter -- the
+> exact signature in the code block below; `(for-each-alive W w n e body)` for
+> the per-entity-proven iteration. Getting there took one more compiler fix:
+> macro TEMPLATES could not emit `#reads` (fx_prov dropped by both template
+> copiers) or substitute into a `#refine{...}` predicate (F_CONTRACT_TYPE
+> returned as-is) -- fixed in `elab_macros.c`, pinned by
+> `tests/fixtures/refine-template-emitters`. Acceptance: spawn/despawn/read
+> proves + runs, no-region is `TUR-W0372`, in-region despawn is `TUR-E0200`,
+> for-each proves per-entity (spices `tests/refined-stack-*`, suite 70/70).
 
 Add an opt-in accessor family that will not compile against a handle whose
 aliveness has not been established:
@@ -369,19 +521,47 @@ Probe 6 says this is Unknown inside a `while` today, which is where every real
 call site lives. With a written `:invariant` on the `for-each` expansion's loop
 it becomes an ordinary path-splitting obligation.
 
+> **Probe update 2026-07-26 -- the RECURSION shape discharges bounds TODAY,
+> no C3.** A bounds-refined accessor (`#refine{ x | (and (>= x 0) (< x 8)) }`)
+> called from a tail-recursive loop proves under `--strict-refine`: the upper
+> bound comes from the loop guard `(< i 8)` as an ordinary path condition, and
+> the lower bound rides a refined parameter (`i : #refine{ x | (>= x 0) }`)
+> inductively -- the recursive crossing proves `i+1 >= 0` from `i >= 0`, the
+> canonical decreasing-argument shape path conditions already handle. Negative
+> controls both reject (an off-by-one guard `(< i 9)`; a dropped lower-bound
+> refinement). A sized capacity is a type-level constant, so the whole proof
+> lives in the PURE fragment -- no `#reads`, no trust. So C3 gates only the
+> `while` lowering: RE1 (c)'s `for-each-alive!` pattern (a macro generating
+> the named-let loop) carries over directly, and RE2's remaining gate is the
+> PROFILE alone. The `#reads`/`#writes` trajectory still matters here for two
+> follow-ons: checked write-frames would replace the coarse whole-body `set!`
+> decline (unblocking the `while` form), and `frozen` + `#reads` extends
+> bounds elimination to RESIZABLE storage, where `(in-bounds? buf i)` reads
+> mutable capacity (see stateful-refinements-guide.md "Where this
+> generalizes").
+
 Deliberately sequenced last: it is the only phase whose payoff is measured in
 nanoseconds, and the parent plan's benchmarking section is a standing warning
 that this class of win tends to evaporate under `cc -O2`, which already proves
 locally-derived bounds for free. **RE2 does not start without a profile.**
 
-### RE3 -- Documentation
+### RE3 -- Documentation (DONE 2026-07-26)
 
-- Fix the two false statements in the table above.
+- Fix the two false statements in the table above. *(Landed with the plan
+  rewrite.)*
 - `ecs-guide.md`: replace the "gated on the refinement-types work" pointer with
-  what actually ships.
+  what actually ships. *(Done: the Entities section and the runtime-checks
+  bullet now describe `ecs/refined-world` + `for-each-alive!` under
+  `--enable=refined`, with the facade-vs-full-stack scope note.)*
 - `ecs-vs-haskell-ecs.md`: the aliveness row gains a compile-time entry
   alongside the runtime default; the polymorphism row is **not** touched (see
-  below).
+  below). *(Done: row, "still runtime-checked" section -- the "open design
+  question" text replaced with the shipped `#reads` + `frozen` answer and its
+  trust-boundary caveat -- and the honest-scorecard bullet.)*
+- Also landed in the same pass: `stateful-refinements-guide.md` gained the
+  "Macros compose" section (splicing vs generating macros both discharge;
+  `for-each-alive!` as the shipped consumer), and
+  `refinement-types-guide.md`'s pointer to it no longer says "in-flight".
 
 ---
 

@@ -118,6 +118,13 @@ void refine_obligation_set_subst(RefineObligation *ob, Arena *a,
     ob->n_subst = n;
 }
 
+void refine_obligation_set_frozen(RefineObligation *ob,
+                                  const char **frozen_names, uint32_t n) {
+    if (!ob || !frozen_names || n == 0) return;
+    ob->frozen_names = frozen_names;   /* shared by reference -- immutable */
+    ob->n_frozen     = n;
+}
+
 /* ------------------------------------------------------------------------- *
  * Form -> VCTerm encoder
  * ------------------------------------------------------------------------- */
@@ -165,7 +172,53 @@ typedef struct Enc {
      * refinement that mentions its own function cannot recurse forever. */
     const char      *propagating[ENC_MAX_PROPAGATE];
     uint32_t         n_propagating;
+    /* C2 / #reads: names frozen (borrowed) at this obligation's site.  A
+     * `#reads w` measure whose world argument is one of these is treated as
+     * congruent (stable symbol) even though its body is impure.  Shared by
+     * reference from the obligation; NULL / 0 when nothing is frozen. */
+    const char *const *frozen_names;
+    uint32_t          n_frozen;
+    /* C2 / #reads: the obligation's callee-param -> caller-arg substitution, so
+     * a measure argument written in a CALLEE parameter name (the goal
+     * predicate) resolves to the caller expression before the frozen check --
+     * which is what keeps a shadowed binder from a false "frozen".  Set only on
+     * the GOAL enc, where this subst applies; NULL on hypothesis encs, whose
+     * names are already the caller's. */
+    const RefineSubst *ob_subst;
+    uint32_t           n_ob_subst;
 } Enc;
+
+/* C2 / #reads: is `name` frozen (borrowed) at this obligation's site? */
+static bool enc_name_is_frozen(const Enc *E, const char *name) {
+    if (!E || !name || !E->frozen_names) return false;
+    for (uint32_t i = 0; i < E->n_frozen; i++)
+        if (E->frozen_names[i] && strcmp(E->frozen_names[i], name) == 0)
+            return true;
+    return false;
+}
+
+/* C2 / #reads: does the `reads`-param argument of measure `f` name a value that
+ * is frozen at this site?  `reads_plus1` is 1-based (0 = not a #reads measure).
+ * The argument is resolved through the obligation's callee-param subst first --
+ * so a goal-predicate argument in a callee parameter name is checked against
+ * the actual caller expression, and a shadowed binder cannot masquerade as the
+ * frozen one -- then matched by name against the frozen set. */
+static bool enc_reads_arg_frozen(const Enc *E, const Form *f, uint32_t reads_plus1) {
+    if (!E || reads_plus1 == 0 || E->n_frozen == 0) return false;
+    uint32_t p = reads_plus1 - 1;                 /* 0-based param index */
+    if (!f || f->tag != F_LIST || (uint32_t)(p + 1) >= f->as.list.len) return false;
+    const Form *arg = f->as.list.items[p + 1];    /* items[0] is the head */
+    if (!arg || arg->tag != F_SYM || !arg->as.sym) return false;
+    const char *nm = arg->as.sym->name;
+    for (uint32_t i = 0; i < E->n_ob_subst; i++) {
+        if (E->ob_subst[i].name && strcmp(E->ob_subst[i].name, nm) == 0) {
+            const Form *tgt = E->ob_subst[i].form;
+            nm = (tgt && tgt->tag == F_SYM && tgt->as.sym) ? tgt->as.sym->name : NULL;
+            break;
+        }
+    }
+    return nm && enc_name_is_frozen(E, nm);
+}
 
 static VCTerm *enc(Enc *E, const Form *f);
 
@@ -376,6 +429,18 @@ static VCTerm *enc_measure(Enc *E, const Form *f) {
     }
     RefineFnInfo info;
     bool pure = enc_callee_is_pure(E, head->as.sym->name, &info);
+
+    /* C2 / #reads: a measure declared `#reads w` is congruent when its world
+     * argument is FROZEN at this site -- a live borrow (the `(& w)` a `frozen`
+     * region holds) proves the state it reads cannot change here, so two
+     * occurrences denote one value.  This grants congruence to an otherwise
+     * impure measure, and it is sound ONLY because the callee's own entry check
+     * is never elided (this proof elides the caller-side crossing check, not
+     * the safety check) -- see docs/guides/stateful-refinements-guide.md.  It
+     * never turns a proof INTO impurity, so it cannot lose an existing one. */
+    if (!pure && info.reads_param_plus1 != 0 &&
+        enc_reads_arg_frozen(E, f, info.reads_param_plus1))
+        pure = true;
 
     /* RM-B1/RM-B2: the sort this measure symbol is declared at.  Settled once
      * per VC by the prescan (which consults the same resolver), so every
@@ -649,6 +714,10 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     for (RefineHyp *h = ob->env ? ob->env->head : NULL; h; h = h->next) {
         Enc E; memset(&E, 0, sizeof(E));
         E.vc = vc; E.env = ob->env; E.sorts = &sorts;
+        /* C2 / #reads: a hypothesis (a recovered guard) is written in the
+         * CALLER's names, so it needs the frozen set but NOT the callee-param
+         * subst. */
+        E.frozen_names = ob->frozen_names; E.n_frozen = ob->n_frozen;
         if (h->bound_var && h->subject_name) {
             uint32_t v = vc_declare_var(vc, h->subject_name,
                                         refine_env_sort_of(ob->env, h->subject_name));
@@ -666,6 +735,11 @@ RefineVC *refine_vc_build(RefineObligation *ob, Arena *a, const char **out_reaso
     /* --- goal ------------------------------------------------------------ */
     Enc E; memset(&E, 0, sizeof(E));
     E.vc = vc; E.env = ob->env; E.sorts = &sorts;
+    /* C2 / #reads: the goal predicate is written in the CALLEE's parameter
+     * names, so it needs both the frozen set and the callee-param subst to
+     * resolve a `#reads` world argument back to the caller expression. */
+    E.frozen_names = ob->frozen_names; E.n_frozen = ob->n_frozen;
+    E.ob_subst = ob->subst; E.n_ob_subst = ob->n_subst;
     /* Sibling substitutions first (a call-site crossing replaces every callee
      * parameter name with the caller's argument), then the refinement's own
      * bound variable.  Encoding each substituted form BEFORE the map is
