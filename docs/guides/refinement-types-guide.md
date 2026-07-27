@@ -930,8 +930,24 @@ anyway.
   does not go through. This costs completeness, never soundness. Widening the
   whitelist further is the natural next increment; the effect row cannot
   substitute for it, because an empty row is not a purity claim.
+- **[by design] The `#reads` stateful slice is TRUSTED, not checked -- and its region
+  guarantee is against ordinary code, not adversarial code.** `#reads w` is a
+  declared promise the purity walk cannot verify for an inline-C body, and a
+  `frozen` region's mutator lockout can be stepped around by a deliberate
+  `::`-cast or inline C (an opaque carrier handle is reconstructable). The
+  worst adversarial outcome is the forgiving default semantics -- a stale read
+  of in-bounds memory -- wearing a proven badge; never an elided check (an
+  impure measure's entry contract is unemittable, so compile-time rejection
+  was always the enforcement, and that remains intact for ordinary code). A
+  hard guarantee needs module-private construction / a `::`-sealed newtype --
+  an independent language feature, tracked in
+  `docs/reported/frozen-region-aliasing-via-coercing-cast.md`. See the
+  [Stateful Refinements guide](stateful-refinements-guide.md).
 
-Every one of these fails toward a runtime check, never toward a wrong answer.
+Every one of these fails toward a runtime check, never toward a wrong answer
+-- except the trusted `#reads` slice, which fails toward the forgiving
+default semantics under a deliberately false declaration, as its entry above
+states.
 
 ---
 

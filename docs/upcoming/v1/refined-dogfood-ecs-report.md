@@ -48,6 +48,18 @@ positive aliveness/loop/module/foreach tests), 4 unknown BY DESIGN (the
 negative tests). 0 refuted, 0 dropped-before-solver. Memo hits 0 (per-file
 processes; the memo is per-process and this corpus gives it nothing to reuse).
 
+## Second round (same day, denser corpus)
+
+After the RE1 promotion landed (`ecs/sized-refined`; corpus now 70 files, 12
+refined, including macro-EMITTED refined accessors and two more intentional
+negatives): plain-corpus ratio **1.015** on / **1.012** strict; `TUR-E0371`
+still zero everywhere; `TUR-W0372` exactly the five intentional negatives;
+`TUR-W0377` still zero. The added surface did not move the cost or produce a
+false positive. (Procedural note for the record: the first re-run used a
+stale Release binary predating the template-emitter fixes and silently
+mis-scored the new negative -- rebuild before measuring; the figures above
+are from the rebuilt binary.)
+
 ## The Z3 oracle cross-check (retirement evidence -- run while it still exists)
 
 Oracle build: `-DTUR_REFINE_Z3_ORACLE=ON` against system Z3 4.15.4 (links
@@ -56,6 +68,11 @@ under the oracle: **verdicts identical to the in-house chain (4 proven / 4
 unknown), zero `TUR-I0379`** -- no VC where the in-house stage claimed
 `RT_VALID` and Z3 disagreed. This is the "real VCs, not corpus VCs" evidence
 the Z3 retirement decision asked for, banked before the scaffold is deleted.
+
+Extended the same day: oracle rebuilt at head and re-run over all 12 refined
+files including the `ecs/sized-refined` promotion surface (macro-emitted
+measures + refined accessors -- novel crossing shapes the first run
+predates): still zero `TUR-I0379`.
 
 ## Tier coverage (what the program supplied naturally; forced nothing)
 
