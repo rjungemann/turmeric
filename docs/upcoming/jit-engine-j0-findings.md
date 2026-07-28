@@ -10,11 +10,11 @@ Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 **MIR works. Proceed to J1.** The `reader -> passes -> emit C -> c2mir ->
 MIR-gen -> call` pipeline runs real Turmeric programs in process with no `cc`
 subprocess and no disk artifacts, and it does so on 89% of a fixture-corpus
-sample without any change to the compiler. (**Amended -- see 8.2 and 8.4.**
-The claim was unreproducible when written because the harness was never
-committed. With the harness tracked, 89% reproduces on Linux under eager
-generation; macOS measures 78% on a comparable sample, and that gap is still
-unexplained. Both numbers need a subset shim.)
+sample without any change to the compiler. (**Amended -- see 8.2, 8.4, 8.4.2.**
+Both that 89% and the macOS 78% are stride-sampling artifacts of the same
+distribution: the full 1,680-fixture corpus on Linux under eager generation is
+**84.8%**, and stride-10 subsamples of it span 78.6%-89.3%. Quote 84.8%. All
+of these need a subset shim.)
 
 Two things the plan did not anticipate, both actionable:
 
@@ -43,7 +43,8 @@ section 8.1.** MIR handles Apple Silicon correctly and the gate passes. But
 | `tools/jit-spike/normalize-c11-subset.py` | Scaffolding that rewrites emitted C into c2mir's subset. Every rule in it is an S1 item; it is deleted when S1 lands. |
 | `tools/jit-spike/subset-shim.h` | Prepended to every TU. Covers three c2mir gaps the normalizer misses (`__thread`, the GCC atomic builtins, `__ATOMIC_*`). A finding, not a fix -- see 8.2. |
 | `tools/jit-spike/run-spike.sh` | The J0 exit-criteria set. |
-| `tools/jit-spike/sweep-fixtures.sh` | Indicative corpus sample (not J3). |
+| `tools/jit-spike/sweep-fixtures.sh` | Stride sample, for quick iteration only. **Do not quote its output** -- see 8.4.2. |
+| `tools/jit-spike/sweep-full.sh` | Full-corpus sweep, no sampling. The script that produced 84.8%; use this whenever a number will be quoted. |
 
 ```sh
 cmake -S . -B build-jit -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
@@ -216,13 +217,22 @@ Zero crashes and zero hangs. This is an *indicative* number, not J3: the sample
 excludes flag-driven and stderr-contract fixtures, and it runs against the
 normalizer rather than a subset-clean emitter.
 
+**Superseded by 8.4.2 -- do not quote this table.** This sample happens to be
+the luckiest of the ten possible stride offsets. The full 1,680-fixture corpus
+gives **1,424 (84.8%)**, and the failure mix is materially different from what
+168 fixtures showed: 193 `__auto_type` residues rather than 13, and four
+unresolved-import classes this sample never touched. 8.4.3 has the real
+breakdown.
+
 ## 6. Recommendations for J1
 
 1. **S1 first, and scope it to three things**: stop emitting `__auto_type`,
    emit `((T)0)` instead of `(T){0}`, emit `_Thread_local` instead of
-   `__thread`. That deletes `normalize-c11-subset.py` and takes corpus coverage
-   from 89% to ~97% on its own. Expect a full fixture-snapshot regen in the
-   same PR.
+   `__thread`. `__auto_type` alone is 193 of the 256 full-corpus failures
+   (8.4.3) -- 11.5% of the whole fixture set -- so this single fix is worth
+   more than everything else in this list combined. That deletes
+   `normalize-c11-subset.py` and should take coverage from 84.8% to ~96%.
+   Expect a full fixture-snapshot regen in the same PR.
 2. **Emit an explicit `__tur_static_init()`** called from `main` rather than
    relying on `__attribute__((constructor))`. This is a correctness fix for the
    JIT and a legibility win for the `cc` path.
@@ -233,8 +243,9 @@ normalizer rather than a subset-clean emitter.
 5. ~~**Default to lazy generation** (`MIR_set_lazy_gen_interface`).~~
    **WITHDRAWN -- see 8.1 and 8.4.** Lazy generation has two independent
    defects at this pin: it is not re-entrant (8.1), and it miscompiles pthread
-   entry functions even single-threaded (8.4). Generate eagerly, and revisit
-   only with a lock and a fix for 8.4.
+   entry functions even single-threaded (8.4.1). Full-corpus cost is 17
+   fixtures, 16 of them session-types (8.4.4). Generate eagerly, and revisit
+   only with a lock and a fix for the codegen bug.
 6. ~~**Verify arm64 macOS MAP_JIT** before the `EXPERIMENTS[]` row lands.~~
    **Done, 2026-07-27 -- gate closed, see 8.1.** Replaced by three new items:
    (a) move the atomic builtins into the host runtime instead of emitting them
@@ -244,7 +255,17 @@ normalizer rather than a subset-clean emitter.
    Silicon the JIT is at parity with `cc` without it (8.3).
 7. The plan's step-6 fallback-to-`cc` is confirmed necessary and sufficient for
    user inline-C. Do not add the `:jit` reader-conditional key from 1.4 -- the
-   3 failures in the sample are one stdlib construct, not a pattern.
+   31 full-corpus failures in this class are a handful of stdlib constructs,
+   not a pattern needing new syntax.
+8. **Register `atexit` and the `__builtin_*` family via `MIR_load_external`**
+   (8.4.3). `atexit` is not in the dynamic symbol table, so `dlsym` cannot
+   reach it and every `module-defer-*` program fails to link. This is S4 work
+   and is cheap.
+9. **J3 must run the whole corpus, or shuffle with a seed -- never stride.**
+   `tests/fixtures/` is alphabetical, so stride sampling draws correlated
+   clusters and its output swings 10.7 points by offset alone (8.4.2). That
+   variance is what produced both the 89% and the 78% in this document. A full
+   Linux run is ~9 minutes on 4 cores; there is no reason to sample at all.
 
 ## 7. Risks, revisited
 
@@ -414,9 +435,7 @@ Two refinements to 8.2 while the record is being set straight:
   as one.
 
 The 89% -> 78% gap is therefore **not** explained by the reconstruction or by
-the shim. On this sample lazy-vs-eager accounts for exactly 2 fixtures; the
-remaining ~16 are platform, sample composition (166 vs 168 fixtures), or
-toolchain. Worth a direct A/B before either number is quoted in J1 planning.
+the shim. Section 8.4.2 runs the A/B and closes it.
 
 ### 8.4.1 A second lazy-generation defect -- single-threaded
 
@@ -443,6 +462,125 @@ against lazy's 23 ms, so the honest Linux JIT figure is ~215 ms, not ~115 ms
 -- which narrows the Linux win over `tur build` (415 ms) from ~3.6x to ~1.9x
 and moves it toward 8.3's macOS finding rather than away from it.
 
+### 8.4.2 A/B: both published numbers are sampling artifacts
+
+The 89%-vs-78% gap needed a direct A/B, so the sampling variable was removed
+outright: **every eligible fixture, not a stride sample.** Linux, eager, same
+shim and normalizer, 1,680 fixtures.
+
+**Full corpus, eager: 1,424 / 1,680 = 84.8%.** (Lazy: 83.8% -- see 8.4.4.)
+
+Then the same stride-10 scheme `sweep-fixtures.sh` uses was replayed against
+those full results, once per starting offset:
+
+| offset | pass | parse | wrong output | abort | crash | unresolved |
+|---|---|---|---|---|---|---|
+| 0 | 143 (85.1%) | 23 | 0 | 0 | 0 | 2 |
+| 1 | 146 (86.9%) | 21 | 0 | 0 | 0 | 1 |
+| 2 | 145 (86.3%) | 21 | 1 | 0 | 0 | 1 |
+| 3 | 141 (83.9%) | 25 | 0 | 0 | 1 | 1 |
+| 4 | 143 (85.1%) | 24 | 0 | 0 | 0 | 1 |
+| **5** | **132 (78.6%)** | 30 | 0 | 0 | 1 | 5 |
+| 6 | 143 (85.1%) | 20 | 1 | 0 | 0 | 4 |
+| 7 | 138 (82.1%) | 25 | 1 | 1 | 0 | 3 |
+| 8 | 143 (85.1%) | 22 | 0 | 0 | 0 | 3 |
+| **9** | **150 (89.3%)** | 16 | 1 | 0 | 0 | 1 |
+| **full** | **1424 (84.8%)** | 227 | 4 | 1 | 2 | 22 |
+
+**The spread is 78.6% to 89.3% -- 10.7 points -- on one platform, one
+harness, one binary, one generation mode.** The original Linux sample landed
+on offset 9, the single luckiest of the ten. The macOS 78% sits at offset 5,
+essentially the unluckiest. The reported category profile matches too: macOS
+saw 34 parse failures / 2 wrong output / 1 abort out of 166; offsets 5 and 7
+give 30/0/1 and 25/1/1 out of 168.
+
+So **the gap needs no platform explanation and there is no evidence for one.**
+Both numbers are the same ~85% distribution sampled at different offsets. Two
+consequences:
+
+- **89% was optimistic and should stop being quoted.** The honest Linux eager
+  figure is **84.8%**, and section 0 and section 5 are amended accordingly.
+  The macOS 78% is equally an artifact; a full-corpus macOS run would be
+  expected near 85% too, and is the one measurement still worth taking.
+- **The sampling scheme itself is the defect, and J3 must not inherit it.**
+  `tests/fixtures/` is alphabetical, so consecutive entries are near-duplicates
+  by construction -- every `httpd-*` adjacent, every `dynvar-*` adjacent, every
+  `cps-backend-*` adjacent. Stride sampling therefore draws strongly correlated
+  clusters, and the effective sample size is far below 168. J3 should run the
+  whole corpus (this took ~9 minutes on 4 cores) or use a seeded shuffle;
+  `sweep-fixtures.sh` keeps the stride only for quick iteration and its output
+  should not be quoted as a coverage figure.
+
+One residual, stated as the open question it is: macOS's 34 parse failures
+exceeds every Linux offset (max 30). If that survives a full-corpus macOS run
+it is a real but second-order excess of roughly 4-9 fixtures, and the natural
+suspect is c2mir on Apple SDK headers rather than anything in generated code --
+`tur emit-c` output is host-independent (verified: zero `__APPLE__`/`__MACH__`
+in the emitted text, the only platform split is `_WIN32`, and no host-
+conditional emission exists in `src/compiler/emit_*`).
+
+### 8.4.3 What the full corpus found that the sample missed
+
+Running everything surfaced five failure classes no 168-fixture sample
+contained, all of them concrete J1 work:
+
+| Class | Count | Reading |
+|---|---|---|
+| `__auto_type` residue (parse) | 193 | The dominant failure mode, 11.5% of the corpus on its own. Confirms S1 item 1 is the highest-value fix. |
+| GNU constructs in user inline-C (parse) | 31 | Step-6 fallback-to-`cc`, by design. |
+| `unresolved import: tur_reactor_new` | 10 | S2 boundary -- the harness links 9 runtime TUs and not the reactor. Sizing data for the real symbol table. |
+| `unresolved import: atexit` | 3 | **New and load-bearing.** All three are `module-defer-*`. Verified directly: from a `-rdynamic` executable, `dlsym(RTLD_DEFAULT, "atexit")` returns NULL while `printf`, `malloc`, and `abort` all resolve -- glibc ships `atexit` in `libc_nonshared.a`, statically linked into each executable and never exported. J1 must register it explicitly via `MIR_load_external`, exactly as c2m already does for `abort`. This is S4 work, not S2. |
+| `unresolved import: __builtin_*` | 7 | `pow` x4, `strlen`, `popcount`, `memcpy`. All from **inline C**, not from generated code: `stdlib/math.tur:93` calls `__builtin_pow` (which is why 4 unrelated fixtures trip it), and three fixtures use `__builtin_strlen`/`popcount`/`memcpy` directly. c2mir implements no GCC builtins, so each is emitted as an ordinary external call and then fails to resolve. Cheapest fix is a small `MIR_load_external` table mapping the common builtins to their libc equivalents; `stdlib/math.tur` should arguably just call `pow` instead. |
+| `initialization of incomplete type variable` | 3 | c2mir checker limitation, all on fat-closure readback fixtures. |
+
+Two crashes (`gc-registry-growth`, `stm-stress`) are the shim's own documented
+hazard rather than a MIR defect: both are concurrency fixtures, and the shim
+lowers atomics to plain memory ops. That is the predicted corruption, observed.
+
+The four wrong-output fixtures are `dynvar-log-level`, `dynvar-nested`,
+`dynvar-thread-locale`, and `self-recursive-carrier-struct-return`. Three of
+four being `dynvar-*` confirms 3.1's `__attribute__((cleanup))` finding
+generalizes to the whole dynamic-variable feature rather than being one
+fixture's quirk.
+
+One classification caveat: `any-cast-mismatch-panic` is counted as an abort,
+but the fixture is *supposed* to panic. The sweep treats any signal as a
+failure, so the true pass count is marginally higher than 1,424.
+
+### 8.4.4 Eager vs lazy, full corpus
+
+The other axis on which the two published runs differed: my original harness
+defaulted to eager, the reconstruction defaults to lazy, and
+`sweep-fixtures.sh` never passes `--eager` -- so **the macOS 78% was measured
+lazily and the Linux 89% eagerly.** Both modes were run over the full corpus:
+
+| Mode | Pass | Rate |
+|---|---|---|
+| eager (`MIR_set_gen_interface`) | 1,424 / 1,680 | **84.8%** |
+| lazy (`MIR_set_lazy_gen_interface`) | 1,407 / 1,680 | **83.8%** |
+
+17 fixtures regress under lazy; **zero improve**. The regressions are not
+scattered -- 16 of 17 are the session-types feature:
+
+```
+session-calc-rpc  session-choose-left  session-choose-right  session-effects
+session-mp-calc  session-mp-delegated  session-mp-effects  session-mp-handshake
+session-mp-ping  session-mp-three-role  session-project-basic
+session-project-choice  session-send  session-stm  session-timeout-ok
+defstruct-field-session-role        (+ gc-heap-struct-rc)
+```
+
+with three distinct symptoms: `undeclared reg N of func
+tur_session_thread_wrapper` (11), SIGSEGV (4), and `undeclared func reg
+U0_fat@1` / `i_25` (2). Every one of them spawns a pthread. That is the same
+root as 8.1's Apple Silicon assertion and as 8.4.1's single-threaded repro,
+now with the blast radius measured: **lazy generation is unusable for any
+program that spawns.**
+
+So the mode difference contributes ~1 point corpus-wide -- real, but an order
+of magnitude smaller than the 10.7 points sampling contributes. It does not
+explain the macOS gap either; sampling already accounts for all of it.
+
 ### 8.5 Reproducing
 
 ```sh
@@ -455,3 +593,11 @@ bash tools/jit-spike/sweep-fixtures.sh       # indicative corpus sample
 `run-spike.sh` and `sweep-fixtures.sh` now pass `--shim
 tools/jit-spike/subset-shim.h`; override with `SHIM=` to measure the raw
 unshimmed subset gap (every fixture fails).
+
+For any figure that will be quoted, use the full sweep instead of the stride
+sample (8.4.2), which also prints the stride spread so the drift stays visible:
+
+```sh
+bash tools/jit-spike/sweep-full.sh              # eager; ~9 min on 4 cores
+GENMODE= bash tools/jit-spike/sweep-full.sh     # lazy
+```
