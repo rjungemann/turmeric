@@ -10,9 +10,11 @@ Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 **MIR works. Proceed to J1.** The `reader -> passes -> emit C -> c2mir ->
 MIR-gen -> call` pipeline runs real Turmeric programs in process with no `cc`
 subprocess and no disk artifacts, and it does so on 89% of a fixture-corpus
-sample without any change to the compiler. (**Superseded -- see 8.2.** That
-89% is not reproducible from the committed artifacts; the first reproducible
-number is 78%, and it needs a subset shim.)
+sample without any change to the compiler. (**Amended -- see 8.2 and 8.4.**
+The claim was unreproducible when written because the harness was never
+committed. With the harness tracked, 89% reproduces on Linux under eager
+generation; macOS measures 78% on a comparable sample, and that gap is still
+unexplained. Both numbers need a subset shim.)
 
 Two things the plan did not anticipate, both actionable:
 
@@ -228,7 +230,11 @@ normalizer rather than a subset-clean emitter.
    edges, or make dynamic variables a documented `cc`-only feature under
    `tur jit` (step-6 fallback with a TUR-W).
 4. **Promote S2 ahead of J2**, per section 4.3.
-5. **Default to lazy generation** (`MIR_set_lazy_gen_interface`).
+5. ~~**Default to lazy generation** (`MIR_set_lazy_gen_interface`).~~
+   **WITHDRAWN -- see 8.1 and 8.4.** Lazy generation has two independent
+   defects at this pin: it is not re-entrant (8.1), and it miscompiles pthread
+   entry functions even single-threaded (8.4). Generate eagerly, and revisit
+   only with a lock and a fix for 8.4.
 6. ~~**Verify arm64 macOS MAP_JIT** before the `EXPERIMENTS[]` row lands.~~
    **Done, 2026-07-27 -- gate closed, see 8.1.** Replaced by three new items:
    (a) move the atomic builtins into the host runtime instead of emitting them
@@ -374,7 +380,70 @@ measurable reason to ship a JIT on macOS at all. S2 should be re-scoped as J1
 work and its projected win re-measured on both platforms before the
 `EXPERIMENTS[]` row is written.
 
-### 8.4 Reproducing
+### 8.4 Re-measured on Linux with the committed reconstruction
+
+Added 2026-07-28, same x86-64 Linux container as sections 0-7, running the
+artifacts as committed in `2bb8c8b6` (reconstruction + `subset-shim.h`), same
+168-fixture sample:
+
+| Harness | Generation | Sample result |
+|---|---|---|
+| reconstruction (`2bb8c8b6`) | eager (`--eager`) | **150 / 168 (89%)** |
+| reconstruction (`2bb8c8b6`) | lazy (its default) | 148 / 168 (88%) |
+| original (recovered from the working tree) | eager (its default) | 150 / 168 (89%) |
+
+The eager row reproduces section 5 exactly -- same count, same failure
+breakdown (13 unresolved `__auto_type`, 3 GNU range initializers in user
+inline-C, 1 unresolved `tur_reactor_new`, 1 `dynvar-nested` mismatch). So
+**8.2's "treat 89% as unverified" was correct about the commit and is now
+stale about the artifacts**: with the harness actually tracked, the number
+reproduces from a clean checkout. What was unverifiable was never the
+measurement, it was the missing file -- and that is on the original commit.
+
+Two refinements to 8.2 while the record is being set straight:
+
+- The reconstruction is behaviourally equivalent to the original on this
+  sample. The two atomics the shim omits relative to the original prologue
+  (`__atomic_exchange_n`, `__atomic_thread_fence`/`__sync_synchronize`) are
+  not reached by any sampled fixture.
+- Section 3.2's table did list `__thread` and `__atomic_*`/`__ATOMIC_*` as
+  subset gaps with fixes. What was wrong was section 7's *summary*, which
+  said the costly gaps were elsewhere; the shim header's reading of that as
+  "the atomics half was missed" overstates it, but the correction stands --
+  ~17 atomic builtins per program is not a footnote, and section 7 filed it
+  as one.
+
+The 89% -> 78% gap is therefore **not** explained by the reconstruction or by
+the shim. On this sample lazy-vs-eager accounts for exactly 2 fixtures; the
+remaining ~16 are platform, sample composition (166 vs 168 fixtures), or
+toolchain. Worth a direct A/B before either number is quoted in J1 planning.
+
+### 8.4.1 A second lazy-generation defect -- single-threaded
+
+Isolated while chasing the delta above, and distinct from 8.1's re-entrancy
+race: lazy generation miscompiles pthread entry functions with **no
+concurrency involved at all**.
+
+```
+$ tur-jit-spike -O 2 session-project-basic.subset.c            # lazy (default)
+undeclared reg 21 of func tur_session_thread_wrapper
+$ tur-jit-spike -O 2 --eager session-project-basic.subset.c    # eager
+42
+```
+
+Reproduces on `session-project-basic` and `defstruct-field-session-project`,
+on Linux, at both `-O0` and `-O2`, on both harnesses. `undeclared reg N of
+func` is a MIR-gen internal error, not a c2mir parse failure, so this is a bug
+at the pin rather than a subset gap of ours.
+
+Taken with 8.1, lazy generation now has two independent defects and no longer
+has a defensible default. Section 6 recommendation 5 is withdrawn. Note the
+cost: eager generation is what section 4.1 measured at 125 ms of link+gen
+against lazy's 23 ms, so the honest Linux JIT figure is ~215 ms, not ~115 ms
+-- which narrows the Linux win over `tur build` (415 ms) from ~3.6x to ~1.9x
+and moves it toward 8.3's macOS finding rather than away from it.
+
+### 8.5 Reproducing
 
 ```sh
 cmake -S . -B build-jit -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
