@@ -22,6 +22,9 @@ OUT="${OUT:-$ROOT/build-jit/spike-work}"
 REPEAT="${REPEAT:-5}"
 OPT="${OPT:-2}"
 NORMALIZE="$ROOT/tools/jit-spike/normalize-c11-subset.py"
+# Prepended to every TU.  Papers over three c2mir subset gaps the normalizer
+# does not handle; read the header, it documents each one as an open finding.
+SHIM="${SHIM:-$ROOT/tools/jit-spike/subset-shim.h}"
 
 # The J0 exit-criteria set from the plan: a hello-grade program, a HAMT-using
 # program, and an effects/CPS program.  `tests/fixtures/hello` carries only an
@@ -56,7 +59,7 @@ for name in "${fixtures[@]}"; do
     2> "$OUT/$name.norm.err"
   norm_rc=$?
 
-  "$SPIKE" -I src -I src/runtime -O "$OPT" --repeat "$REPEAT" \
+  "$SPIKE" -I src -I src/runtime -O "$OPT" --repeat "$REPEAT" --shim "$SHIM" \
     "$OUT/$name.subset.c" > "$OUT/$name.stdout" 2> "$OUT/$name.spike.err"
   rc=$?
 

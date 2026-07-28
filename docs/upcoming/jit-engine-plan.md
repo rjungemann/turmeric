@@ -11,7 +11,13 @@ into the sections below: c2mir silently discards `__attribute__((constructor))`
 and `((cleanup))` (a correctness hazard the plan did not anticipate, section
 4.1 below), and the fixed runtime preamble -- not the user's program -- is 76%
 of compile time, which promotes S2 from optional hygiene to a J2 prerequisite.
-The arm64 macOS MAP_JIT gate is still open: the spike ran on Linux only.
+The arm64 macOS MAP_JIT gate is now CLOSED (2026-07-27, Apple M2): MIR handles
+Apple Silicon W^X correctly and needed no changes. That run also corrected the
+Linux write-up on two points -- c2mir supports neither `__thread` nor the GCC
+atomic builtins, both of which every emitted program uses, and on an M2 the JIT
+is at parity with simply shelling out to `cc`, which makes S2 the whole
+justification for the feature rather than a J2 prerequisite. See section 8 of
+the findings doc.
 
 ## 0. Summary
 
@@ -244,21 +250,31 @@ useful even if the JIT slips.
 
 ## 5. Phases
 
-- **J0 -- spike (timeboxed). DONE on x86-64 Linux (2026-07-28); arm64 macOS
-  still outstanding.** MIR is vendored via `FetchContent` pinned to
+- **J0 -- spike (timeboxed). DONE on x86-64 Linux (2026-07-28) and arm64 macOS
+  (2026-07-27).** MIR is vendored via `FetchContent` pinned to
   `a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c` behind `-DTUR_JIT_SPIKE=ON`
   (`cmake/mir.cmake`), and the harness lives in `tools/jit-spike/`.
   `arith` (standing in for `hello`, whose fixture dir carries no input file),
   `hamt-basic`, and `cps-backend-effect` all run correctly in process; latency
-  is recorded in the findings doc. **The MAP_JIT/exec-mem verification on
-  arm64 macOS did not happen** -- the spike ran in a Linux container -- so the
-  plan's "if the M1 exec path is broken, stop and re-evaluate" gate is still
-  open and must be closed before the `EXPERIMENTS[]` row lands.
+  is recorded in the findings doc. The MAP_JIT/exec-mem verification on arm64
+  macOS was done separately on an Apple M2 and **passes** -- the plan's "if the
+  M1 exec path is broken, stop and re-evaluate" gate is closed (findings 8.1).
+  Two J0 caveats carry into J1: the original harness was never committed
+  (`.gitignore` had no `tools/` negation) so the Linux 89% figure is not
+  reproducible and the committed reconstruction measures 78% with a subset
+  shim (findings 8.2); and the latency argument does not hold on Apple Silicon
+  without S2 (findings 8.3).
 - **J1 -- `tur jit <file>`.** Sections 3.1-3.2. Fallback-to-cc wired.
   `EXPERIMENTS[]` row lands here. Do S1 + S1b first (they delete the spike's
   normalizer and close the attribute hazard), and default to
   `MIR_set_lazy_gen_interface` -- J0 measured lazy generation at 23 ms of
-  link+gen against 125 ms eager, for the same output.
+  link+gen against 125 ms eager, for the same output. **Lazy generation is not
+  re-entrant**: two threads entering the same not-yet-generated function trip a
+  MIR assertion (`_MIR_duplicate_func_insns`), so J1 must serialize generation
+  or fall back to eager for programs that can `spawn` (findings 8.1). J1 should
+  also stop emitting `__thread` and the GCC atomic builtins into the TU -- the
+  atomics belong in the host runtime, resolved by address like `hamt.c`
+  (findings 8.2).
 - **J2 -- REPL/watch integration.** Section 3.3. **Requires S2** -- without
   it every `(reload)` recompiles the identical 3,847-line preamble.
 - **J3 -- parity + perf.** Run the fixture corpus under `tur jit`

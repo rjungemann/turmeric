@@ -20,6 +20,7 @@ SPIKE="${SPIKE:-$ROOT/build-jit/tools/jit-spike/tur-jit-spike}"
 OUT="${OUT:-$ROOT/build-jit/spike-sweep}"
 OPT="${OPT:-2}"
 NORMALIZE="$ROOT/tools/jit-spike/normalize-c11-subset.py"
+SHIM="${SHIM:-$ROOT/tools/jit-spike/subset-shim.h}"
 SAMPLE="${1:-200}"
 
 [ -x "$TUR" ]   || { echo "no tur at $TUR"; exit 1; }
@@ -51,7 +52,7 @@ for dir in tests/fixtures/*/; do
 
   stdin_file=/dev/null
   [ -f "$dir/input.stdin" ] && stdin_file="$dir/input.stdin"
-  timeout 60 "$SPIKE" -I src -I src/runtime -O "$OPT" --quiet \
+  timeout 60 "$SPIKE" -I src -I src/runtime -O "$OPT" --quiet --shim "$SHIM" \
       "$OUT/$name.subset.c" < "$stdin_file" \
       > "$OUT/$name.stdout" 2> "$OUT/$name.err"
   rc=$?

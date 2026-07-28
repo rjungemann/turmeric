@@ -1,6 +1,8 @@
 # JIT Engine -- Phase J0 spike results
 
-Status: J0 COMPLETE on x86-64 Linux, 2026-07-28.
+Status: J0 COMPLETE on x86-64 Linux (2026-07-28) and arm64 macOS (2026-07-27).
+Sections 0-7 are the original Linux write-up; **section 8 corrects three of
+their claims** -- read it first.
 Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 
 ## 0. Verdict
@@ -8,7 +10,9 @@ Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 **MIR works. Proceed to J1.** The `reader -> passes -> emit C -> c2mir ->
 MIR-gen -> call` pipeline runs real Turmeric programs in process with no `cc`
 subprocess and no disk artifacts, and it does so on 89% of a fixture-corpus
-sample without any change to the compiler.
+sample without any change to the compiler. (**Superseded -- see 8.2.** That
+89% is not reproducible from the committed artifacts; the first reproducible
+number is 78%, and it needs a subset shim.)
 
 Two things the plan did not anticipate, both actionable:
 
@@ -24,15 +28,18 @@ Two things the plan did not anticipate, both actionable:
 
 Not verified here: **arm64 macOS / MAP_JIT**. This container is x86-64 Linux
 only, so the plan's "if the M1 exec path is broken, stop and re-evaluate" gate
-is still open. Nothing else in J0 depends on it.
+is still open. Nothing else in J0 depends on it. (**Closed 2026-07-27 -- see
+section 8.1.** MIR handles Apple Silicon correctly and the gate passes. But
+8.3 finds the latency case inverts there.)
 
 ## 1. What was built
 
 | Path | What it is |
 |---|---|
 | `cmake/mir.cmake` | MIR vendored via `FetchContent`, pinned to `a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c` (post-v1.0.0). Inert unless `-DTUR_JIT_SPIKE=ON`. |
-| `tools/jit-spike/tur-jit-spike.c` | The harness: C text in, `c2mir_compile` -> `MIR_gen` -> call `main`, with per-phase timing. |
+| `tools/jit-spike/tur-jit-spike.c` | The harness: C text in, `c2mir_compile` -> `MIR_gen` -> call `main`, with per-phase timing. **The original was never committed (see 8.2); this is a reconstruction.** |
 | `tools/jit-spike/normalize-c11-subset.py` | Scaffolding that rewrites emitted C into c2mir's subset. Every rule in it is an S1 item; it is deleted when S1 lands. |
+| `tools/jit-spike/subset-shim.h` | Prepended to every TU. Covers three c2mir gaps the normalizer misses (`__thread`, the GCC atomic builtins, `__ATOMIC_*`). A finding, not a fix -- see 8.2. |
 | `tools/jit-spike/run-spike.sh` | The J0 exit-criteria set. |
 | `tools/jit-spike/sweep-fixtures.sh` | Indicative corpus sample (not J3). |
 
@@ -222,8 +229,13 @@ normalizer rather than a subset-clean emitter.
    `tur jit` (step-6 fallback with a TUR-W).
 4. **Promote S2 ahead of J2**, per section 4.3.
 5. **Default to lazy generation** (`MIR_set_lazy_gen_interface`).
-6. **Verify arm64 macOS MAP_JIT** before the `EXPERIMENTS[]` row lands. It is
-   the one plan gate J0 could not close.
+6. ~~**Verify arm64 macOS MAP_JIT** before the `EXPERIMENTS[]` row lands.~~
+   **Done, 2026-07-27 -- gate closed, see 8.1.** Replaced by three new items:
+   (a) move the atomic builtins into the host runtime instead of emitting them
+   as text, and emit `_Thread_local` rather than `__thread` (8.2); (b) make
+   generation safe under concurrent first-call before defaulting to lazy, per
+   recommendation 5 (8.1); (c) re-scope S2 into J1 and re-measure -- on Apple
+   Silicon the JIT is at parity with `cc` without it (8.3).
 7. The plan's step-6 fallback-to-`cc` is confirmed necessary and sufficient for
    user inline-C. Do not add the `:jit` reader-conditional key from 1.4 -- the
    3 failures in the sample are one stdlib construct, not a pattern.
@@ -237,7 +249,13 @@ The plan flagged three MIR risks up front. After J0:
 - **C11 minus atomics/VLAs/complex** -- accurate but incomplete. The costly
   gaps were `__auto_type`, scalar compound literals, and silently discarded
   attributes; no VLA or `_Complex` use was found in generated output at all.
-- **Apple Silicon MAP_JIT** -- still unverified. Open gate.
+  (**Wrong -- see 8.2.** The atomics half of this risk was real and was missed:
+  every emitted program uses ~17 GCC atomic builtins, which c2mir does not
+  support at all. `__thread` is a second unsupported construct in every
+  program.)
+- **Apple Silicon MAP_JIT** -- **verified 2026-07-27; gate closed** (8.1). MIR
+  needed no changes. The residual Apple Silicon concern is not W^X but that the
+  latency argument for the whole feature does not hold there without S2 (8.3).
 
 One risk the plan did not list, now the top one: **c2mir fails silently on
 constructs it merely ignores.** A parse error is cheap -- it names a line. A
@@ -245,3 +263,126 @@ dropped `constructor` attribute cost a SIGSEGV with no diagnostic, and a
 dropped `cleanup` produces a plausible wrong answer. J3's parity sweep is
 therefore not optional polish; it is the only mechanism that would catch the
 next attribute we start emitting.
+
+## 8. arm64 macOS (Apple Silicon) -- gate CLOSED, with corrections
+
+Added 2026-07-27 on an Apple M2 (macOS 27.0.0, Apple clang), MIR at the same
+`a8ab7c31` pin. This section closes the one gate J0 left open, and corrects
+three things sections 0-7 got wrong. **Read 8.2 before trusting any number in
+sections 2-5.**
+
+### 8.1 The MAP_JIT gate is closed -- MIR is fine on Apple Silicon
+
+MIR's `mir-code-alloc-default.c` already does the whole Apple Silicon dance
+under `defined(__APPLE__) && defined(__aarch64__)`: `mmap(..., MAP_JIT)`,
+`pthread_jit_write_protect_np()` around writes, and `sys_icache_invalidate()`
+before execution. Nothing had to be added.
+
+All three J0 exit-criteria fixtures (`arith`, `hamt-basic`,
+`cps-backend-effect`) pass byte-for-byte against `expected.stdout`. A
+166-fixture evenly spaced sample: **129 pass (78%)**, 34 parse failures, 2
+wrong output, 1 abort. No failure in the sweep was attributable to code
+allocation, W^X, or instruction-cache coherency.
+
+W^X was probed directly, since per-thread write protection is *the* Apple
+Silicon JIT hazard:
+
+| Probe | Result |
+|---|---|
+| Codegen triggered on a **non-main thread** | pass -- per-thread W^X handled |
+| **Eager** gen, JIT'd code then run from 4 threads | pass |
+| **Lazy** gen, 4 threads racing the same first call | **MIR assertion** in `_MIR_duplicate_func_insns` (`mir.c:2749`) |
+
+The third row is **not** a MAP_JIT bug and is not arm64-specific: MIR's lazy
+stub generation is not re-entrant, so two threads entering the same
+not-yet-generated function race. It matters for us specifically because
+recommendation 5 in section 6 is "default to lazy generation" and Turmeric has
+`spawn`, fibers, and a work-stealing scheduler. **J1 must either serialize
+generation behind a lock or generate eagerly for any program that can spawn.**
+
+Unrelated but worth deleting: `cmake/mir.cmake` defines `MIR_PARALLEL_GEN`, but
+at pin `a8ab7c31` that macro appears only in MIR's own `CMakeLists.txt` and is
+read by no source file. It is a no-op.
+
+### 8.2 CORRECTION: the harness was never committed, and the subset gaps are worse than reported
+
+`tools/jit-spike/tur-jit-spike.c` -- the file section 1 lists as "the harness"
+-- **was never tracked by git.** `.gitignore` carries a blanket `*.c` / `*.h`
+with negations for `src/`, `tests/`, `examples/`, and `docs/`, but none for
+`tools/`, so `git add` skipped it silently and the J0 commit shipped a
+`CMakeLists.txt` whose only `add_executable` source did not exist. The branch
+could not be built by anyone. Fixed here by adding `!tools/**/*.c` and
+`!tools/**/*.h` and committing a **reconstruction** of the harness.
+
+That matters beyond the inconvenience, because the reconstruction does not
+reproduce section 5's results, and the reason is not macOS. c2mir rejects three
+constructs that Turmeric's *fixed preamble* emits unconditionally -- they are
+present in `arith`, the most trivial fixture in the corpus -- and none of them
+is guarded by a platform `#if` in `src/compiler/emit_module.c`:
+
+| Construct | c2mir support | Emitted |
+|---|---|---|
+| `__thread` | none -- only `_Thread_local` is registered (`c2mir.c:5453`); no `kw_add` for the GNU spelling on any target | ~9 per program, literal strings in `emit_module.c` |
+| `__atomic_load_n` / `store_n` / `add_fetch` / `compare_exchange_n`, `__ATOMIC_*` | **zero occurrences anywhere in the MIR tree** | ~17 per program |
+| `__auto_type` | none | normalizer rewrites most; the residue is 25 of the 34 sweep parse failures |
+
+`normalize-c11-subset.py` handles none of the first two. Section 7 says the
+"C11 minus atomics" risk was "accurate but incomplete" and that the costly gaps
+were elsewhere; that is wrong -- atomics are used by every single program.
+Section 0's "89% ... without any change to the compiler" cannot be reproduced
+from the committed artifacts, and the lost harness must have been doing
+something equivalent to `tools/jit-spike/subset-shim.h` (added here) via
+`c2mir_options.macro_commands`. **Treat 89% as unverified.** The 78% measured
+here is with the shim applied and is the first reproducible number in this
+document.
+
+The shim is deliberately a readable file rather than a pile of `-D` flags, and
+it is not a fix. Its atomic lowerings drop atomicity outright; they are sound
+only because the fixtures are single-threaded, and would silently corrupt the
+refcount under `spawn`. The real fix is that these belong in the **host
+runtime**, compiled by `cc` and resolved by address through
+`dlsym(RTLD_DEFAULT)` exactly as `hamt.c` already is -- they should never reach
+c2mir as text at all. `__thread` should simply be emitted as `_Thread_local`,
+which every supported `cc` also accepts.
+
+### 8.3 CORRECTION: the latency case inverts on Apple Silicon
+
+Best of 5, M2, on an ~8,000-line TU, against section 4's Linux figures:
+
+| | Linux (section 4) | macOS M2 |
+|---|---|---|
+| JIT: c2mir + link/gen | 91 + 23 = **114 ms** | 178 + 20 = **198 ms** |
+| `tur build` | 415 ms | **~190 ms** |
+| `cc -O2` compile+link | 1,050 ms | **~220 ms** |
+
+**The JIT is at parity with -- or slightly slower than -- simply shelling out to
+`cc` on this machine.** The Linux win came from a slow 4-core container running
+gcc 13, not from MIR being fast in absolute terms; an M2 with Apple clang does
+the whole `cc` path in ~200 ms. Section 0's framing of the JIT as the "REPL
+performance story" does not survive this.
+
+Section 4's preamble finding is not just confirmed but understated. `arith`
+(7,560 lines) takes 169.9 ms in c2mir and `hamt-basic` (8,076 lines) takes
+178.1 ms -- essentially flat, so nearly all c2mir time is fixed preamble cost
+regardless of program size. Of that, ~36 ms is the macOS SDK headers alone
+(measured with an 8-line `stdio.h` program), which are heavier than glibc's.
+
+The conclusion for J1/J2 is sharper than section 6.4's "promote S2 ahead of
+J2": **on Apple Silicon, S2 is not a prerequisite for good latency, it is the
+entire justification for the feature.** Without a prebuilt preamble there is no
+measurable reason to ship a JIT on macOS at all. S2 should be re-scoped as J1
+work and its projected win re-measured on both platforms before the
+`EXPERIMENTS[]` row is written.
+
+### 8.4 Reproducing
+
+```sh
+cmake -S . -B build-jit -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
+cmake --build build-jit -j --target tur-jit-spike
+bash tools/jit-spike/run-spike.sh            # 3 passed, 0 failed on M2
+bash tools/jit-spike/sweep-fixtures.sh       # indicative corpus sample
+```
+
+`run-spike.sh` and `sweep-fixtures.sh` now pass `--shim
+tools/jit-spike/subset-shim.h`; override with `SHIM=` to measure the raw
+unshimmed subset gap (every fixture fails).

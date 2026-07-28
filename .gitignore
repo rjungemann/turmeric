@@ -30,6 +30,8 @@ build-release-check/
 !examples/**/*.h
 !docs/**/*.c
 !docs/**/*.h
+!tools/**/*.c
+!tools/**/*.h
 
 # Python bytecode
 __pycache__/
