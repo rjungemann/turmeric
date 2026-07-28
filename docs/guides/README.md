@@ -83,6 +83,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[typeclass-guide.md](typeclass-guide.md)** -- Defining typeclasses with `defclass`, implementing instances with `definstance`, constraints, associated types, functional dependencies, and default implementations
 - **[hkt-guide.md](hkt-guide.md)** -- Higher-kinded types (functor, monad, applicative abstractions, performance/dispatch model)
 - **[hrt-guide.md](hrt-guide.md)** -- Higher-ranked types: rank-2/3 polymorphic function parameters
+- **[row-types-guide.md](row-types-guide.md)** -- Type-level rows: the `#row{...}` reader form, row-kinded (`^&`) parameters, the row algebra, erasure, and the limits
 - **[union-intersection-types-guide.md](union-intersection-types-guide.md)** -- Union (`A | B`) and intersection (`A & B`) types, `any`, gradual typing
 - **[sized-types-guide.md](sized-types-guide.md)** -- Tracking data-structure sizes in the type system for memory layout, stack allocation, and type-safe array operations
 - **[sized-primitives-guide.md](sized-primitives-guide.md)** -- Fixed-width numeric types (`int8/i8` through `uint64/u64`, `float32/f32`) -- literal syntax, coercion rules, and casting
@@ -234,7 +235,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 **By topic:**
 - Getting Started → [quickstart.md](quickstart.md), [syntax-guide.md](syntax-guide.md), [repl.md](repl.md), [repl-tutorial.md](repl-tutorial.md), [releases-and-installation-guide.md](releases-and-installation-guide.md)
 - Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [strings-guide.md](strings-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
-- Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
+- Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [row-types-guide.md](row-types-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
 - Advanced Types → [gadts-guide.md](gadts-guide.md), [existential-types-guide.md](existential-types-guide.md), [opaques-guide.md](opaques-guide.md), [advanced-type-system-rationale.md](advanced-type-system-rationale.md)
 - Type Safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
 - Error Handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
