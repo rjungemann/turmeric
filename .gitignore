@@ -4,6 +4,7 @@ build/
 build2/
 build-asan/
 build-debug/
+build-jit/
 build-norel/
 build-oracle/
 build-rel/

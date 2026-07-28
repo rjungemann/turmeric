@@ -112,6 +112,22 @@ include(cmake/CPM.cmake)
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
+# J0 JIT spike (docs/upcoming/jit-engine-plan.md) -- OFF by default.
+# ---------------------------------------------------------------------------
+# The spike harness vendors MIR (c2mir + MIR-gen) via FetchContent, which means
+# a network fetch at configure time.  Same posture as the Z3 oracle block
+# above: a default `cmake -S . -B build` -- Debug, Release, or WASM -- must not
+# reach the network and must not grow a dependency, so this is opt-in and the
+# spike binary is never part of `tur`.
+option(TUR_JIT_SPIKE
+  "build the Phase J0 JIT spike harness (fetches MIR; not part of tur)"
+  OFF)
+
+if(TUR_JIT_SPIKE)
+  add_subdirectory(tools/jit-spike)
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests (CTest)
 # ---------------------------------------------------------------------------
 enable_testing()

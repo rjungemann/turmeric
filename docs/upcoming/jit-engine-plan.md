@@ -1,6 +1,17 @@
 # JIT Execution Engine Plan (`tur jit`)
 
-Status: PROPOSED (initial research + plan, 2026-07-27)
+Status: J0 COMPLETE (x86-64 Linux), J1+ PROPOSED. Plan written 2026-07-27;
+J0 spike run 2026-07-28 -- results in
+[jit-engine-j0-findings.md](jit-engine-j0-findings.md).
+
+J0 verdict: MIR works, proceed to J1. All three exit-criteria fixtures run
+correctly in process, and 150 of a 168-fixture corpus sample (89%) pass with
+no compiler change. Two findings revise this plan's priorities and are folded
+into the sections below: c2mir silently discards `__attribute__((constructor))`
+and `((cleanup))` (a correctness hazard the plan did not anticipate, section
+4.1 below), and the fixed runtime preamble -- not the user's program -- is 76%
+of compile time, which promotes S2 from optional hygiene to a J2 prerequisite.
+The arm64 macOS MAP_JIT gate is still open: the spike ran on Linux only.
 
 ## 0. Summary
 
@@ -108,6 +119,16 @@ Silicon MAP_JIT path should be verified in the J0 spike, not assumed.
 Mitigation for all three: the cc path never goes away -- the JIT is an
 additive engine with a per-program fallback to `tur build` semantics.
 
+J0 revised this list. The subset gap turned out to be narrower than feared
+(no VLA or `_Complex` in generated output at all) and the diagnostics adequate,
+but a fourth risk outranks all three: **c2mir fails silently on constructs it
+merely ignores.** A parse error names a line; a discarded
+`__attribute__((constructor))` costs a SIGSEGV with no diagnostic, and a
+discarded `((cleanup))` produces a plausible wrong answer. That makes J3's
+parity sweep load-bearing rather than polish -- it is the only mechanism that
+catches the next attribute we start emitting. The Apple Silicon risk is
+unchanged and still unverified.
+
 macOS note: on Apple Silicon, `mmap(MAP_JIT)` +
 `pthread_jit_write_protect_np` is mandatory for any JIT. Ad-hoc-signed
 local builds (our `./build/tur`) need no entitlement; a future *notarized*
@@ -180,15 +201,33 @@ usage data exists.
 These are ordinary hygiene improvements on the existing paths; each is
 useful even if the JIT slips.
 
-- **S1 -- C11-subset audit of emitted C.** Sweep the preamble
-  (`emit_runtime_preamble`, `src/compiler/emit_module.c:6903`) and a full
-  fixture-corpus `emit-c` dump for constructs outside c2mir's subset:
-  `_Atomic`, VLAs, complex, and exotic GCC extensions. Anything found in
-  *generated* (non-inline-C) output gets rewritten to the subset -- portable
-  C99-style output is desirable regardless of MIR. User inline-C is not
-  audited; it hits the 3.2-step-6 fallback (or, if a real pattern emerges,
-  the `:jit` reader-conditional key from 1.4).
-- **S2 -- runtime-as-library boundary.** `--runtime=lib` /
+- **S1 -- C11-subset audit of emitted C.** J0 ran this audit; the result is
+  section 3 of the findings doc, and it is shorter than expected. No VLA and no
+  `_Complex` appear in generated output at all. The three constructs that
+  actually block c2mir are `__auto_type` (115-225 sites per TU),
+  `(T){0}` scalar compound literals (75-139), and `__thread`; fixing exactly
+  those takes corpus coverage from 89% to ~97% and deletes
+  `tools/jit-spike/normalize-c11-subset.py`. Expect a full fixture-snapshot
+  regen in the same PR. `__auto_type` is the non-trivial one -- see
+  `emit_expr.c:2801-2805` for why it was chosen over a derived type. User
+  inline-C is not audited; it hits the 3.2-step-6 fallback, which J0 confirmed
+  is sufficient (do not add the `:jit` key from 1.4).
+- **S1b -- explicit static init (NEW, from J0).** c2mir parses GCC attributes
+  and discards them without a diagnostic (`c2mir.c:4392`).
+  `__attribute__((constructor))` carries the direct->CPS registry, each dynamic
+  variable's `pthread_key_create`, and `__tur_module_def_init`; dropping it
+  cost a SIGSEGV in effectful code and wrong output in dynamic variables.
+  Emit an explicit `__tur_static_init()` called from `main` instead -- a
+  correctness fix for the JIT and a legibility win for the cc path.
+  `__attribute__((cleanup))` (dynamic-variable scope-exit pop) has no
+  equivalent recovery and needs its own decision: lower it at exit edges, or
+  make dynamic variables a documented cc-only feature under `tur jit`.
+- **S2 -- runtime-as-library boundary. J0 promoted this to a J2
+  prerequisite.** The fixed runtime preamble is byte-identical across programs
+  (3,847 lines) and accounts for 76% of c2mir time and 50% of generation time,
+  so this is the difference between a ~115 ms and a ~25 ms JIT compile -- and
+  it is the same change that keeps atomics and TLS out of c2mir's reach.
+  `--runtime=lib` /
   `apply_runtime_lib_mode()` (`src/main.c:2435`) already swaps runtime `.c`
   for prebuilt `libturi.a` on the cc path. Tighten this into a named,
   documented symbol boundary (one header listing every runtime symbol the
@@ -205,17 +244,23 @@ useful even if the JIT slips.
 
 ## 5. Phases
 
-- **J0 -- spike (timeboxed).** Vendor MIR via CMake `FetchContent` pinned
-  to a commit. Hand-feed `./build/tur emit-c tests/fixtures/hello/...`
-  output to `c2mir` + `MIR_gen` in a scratch harness; run on arm64 macOS
-  (verifying the MAP_JIT/exec-mem path) and x86-64 Linux. Exit criteria:
-  hello + one HAMT-using fixture + one effects/CPS fixture run correctly;
-  measured compile latency recorded. If the M1 exec path is broken and not
-  trivially patchable, stop and re-evaluate (sljit/AsmJit tier or improved
-  cc-cache path).
+- **J0 -- spike (timeboxed). DONE on x86-64 Linux (2026-07-28); arm64 macOS
+  still outstanding.** MIR is vendored via `FetchContent` pinned to
+  `a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c` behind `-DTUR_JIT_SPIKE=ON`
+  (`cmake/mir.cmake`), and the harness lives in `tools/jit-spike/`.
+  `arith` (standing in for `hello`, whose fixture dir carries no input file),
+  `hamt-basic`, and `cps-backend-effect` all run correctly in process; latency
+  is recorded in the findings doc. **The MAP_JIT/exec-mem verification on
+  arm64 macOS did not happen** -- the spike ran in a Linux container -- so the
+  plan's "if the M1 exec path is broken, stop and re-evaluate" gate is still
+  open and must be closed before the `EXPERIMENTS[]` row lands.
 - **J1 -- `tur jit <file>`.** Sections 3.1-3.2. Fallback-to-cc wired.
-  `EXPERIMENTS[]` row lands here.
-- **J2 -- REPL/watch integration.** Section 3.3.
+  `EXPERIMENTS[]` row lands here. Do S1 + S1b first (they delete the spike's
+  normalizer and close the attribute hazard), and default to
+  `MIR_set_lazy_gen_interface` -- J0 measured lazy generation at 23 ms of
+  link+gen against 125 ms eager, for the same output.
+- **J2 -- REPL/watch integration.** Section 3.3. **Requires S2** -- without
+  it every `(reload)` recompiles the identical 3,847-line preamble.
 - **J3 -- parity + perf.** Run the fixture corpus under `tur jit`
   (new harness flag mirroring `--interpret`'s worker; `requires.*` markers
   for genuinely cc-only fixtures, e.g. ASan-interop ones). Benchmark
