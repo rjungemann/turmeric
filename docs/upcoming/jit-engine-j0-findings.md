@@ -1818,10 +1818,11 @@ the spec (and its forward declaration, which is what records) does not exist
 yet. This is the ctor problem again, but the fix is not "add a record": the
 name is composed on the fly at the call site and the spec is minted from
 usage collected during the loop, so closing it means moving lens-spec minting
-ahead of body emission. Deferred, deliberately: it is 26 sites in 11
-fixture TUs, the spike normalizer still resolves them (their forward decls
-ARE in the TU text by the time it runs), and restructuring spec minting under
-time pressure is how regressions land.
+ahead of body emission. Deferred at first for exactly one session (**closed in 16.4**): moving spec
+minting stayed too risky, but the three redirect sites each know `e->type`,
+and handing its c-name to the hoist -- then *verifying* the derivation
+corpus-wide rather than trusting it -- turned out to be both safe and
+checkable.
 
 ### 16.3 Verification
 
@@ -1834,3 +1835,55 @@ time pressure is how regressions land.
 - The normalizer is now needed for: the `__tur_include__` hoist (which is
   `tur build`'s own in-process post-pass, not a subset fix), and the 26 lens
   sites. Its `__auto_type` machinery is inert for the other 1,917 TUs.
+
+### 16.4 Zero, verified -- and the census trap, sprung twice more
+
+Added later the same day (`3e6b26990`). The lens residue is closed at the
+three redirect sites (`note_call_ret(ctx, emit_type_c_name(ctx, e->type))`),
+and the derivation is checked rather than believed:
+`tools/jit-spike/verify-temp-types.py` compares every typed direct-call temp
+in every emitted TU against the callee's own declaration in the same TU --
+**247,487 temps across 1,928 TUs, 0 mismatches**. Two accepted differences
+are explicit in its code, not silent: `INT64_C`/`UINT64_C` (typed by the
+macro's definition), and same-width signedness (`rc_strong_count` declares
+`uint64_t` in C and `:int` in Turmeric; the side table records the
+language-level type, the conversion is value-preserving, and the pre-S1
+`__auto_type` temp fed the same int64 contexts).
+
+The verifier's own first runs re-learned two of the retired normalizer's
+oldest lessons -- caught by output, not review. Its declaration regex let the
+lazy type group split an identifier, so the statement `if (f(x))` parsed as a
+declaration of `f` returning `i`: the exact `printf -> sn` bug PROTO_RE's
+mandatory separator fixed in J0's first week, reproduced verbatim in a new
+tool. And it flagged `bool t = (INT64_C(1)) == (INT64_C(2))` by taking the
+comparison's first token as the initializer's callee. Both were verifier
+bugs, and both had the same shape as bugs this document already recorded --
+tooling regresses toward known failure modes when the lesson lives in prose
+instead of in the check.
+
+Then the retirement itself sprang the trap a third time. Stripping the
+normalizer to hoist-only dropped the corpus **1647 -> 1629**: 18 fixtures
+failed on "braces around scalar initializer" -- pointer compound literals
+(`(const char *){0}`) from three emitter sites S1's scalar-zero fix missed (a
+ctor default-argument site, `emit_core`'s option default, `emit_fns`'
+aggregate-return panic path). The `__auto_type` census counted ONE rule's
+sites and the whole file was retired on it, while the scalar-zero rule was
+still quietly fixing 18 TUs. All three sites now route through
+`emit_c_zero_of`; corpus back to 1647.
+
+### 16.5 End state: the emitted C is c2mir-clean as emitted
+
+| Sweep | Full corpus | |
+|---|---|---|
+| full normalizer (baseline M) | 1647 / 1680 | 98.0% |
+| **hoist-only normalizer (O)** | **1647 / 1680** | **98.0%** |
+
+Fixture diff between the two: **empty**. `normalize-c11-subset.py` now
+contains exactly one transformation -- the `__tur_include__` hoist, which is
+not a subset fix but a replay of `tur build`'s own in-process post-pass that
+bare `tur emit-c` does not run. A real `tur jit` therefore needs **no
+external rewriting at all**: plan section 3.2's step 2 (run the existing
+post-passes on the buffer) is the whole story between `emit_program` and
+`c2mir_compile`. This was S1's original exit criterion, one prediction
+("deletes the normalizer") finally made true -- two sections and three
+mechanisms after 11.2 showed the prediction was premature.
