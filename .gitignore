@@ -72,6 +72,17 @@ docs/api/
 web/node_modules/
 web/dist/
 web/test-results/
+web/.vite/
+web/.wrangler/
+
+# WASM build outputs. `tur_wasm` copies these out of build-wasm/ into
+# web/public/ (src/CMakeLists.txt), where vite picks them up as static assets.
+# They are build products, not source: tracking them forced a second
+# "regenerate web artifacts" commit after every deploy and left each release
+# tag carrying the *previous* release's binary. Run `just wasm` (or
+# `tur run wasm`) to produce them; `just web` / `just deploy-web` do it for you.
+web/public/turmeric.js
+web/public/turmeric.wasm
 
 # Playwright MCP browser session artifacts
 .playwright-mcp/

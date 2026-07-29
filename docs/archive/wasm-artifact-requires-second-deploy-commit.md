@@ -2,7 +2,10 @@
 
 **Severity:** low-medium (release workflow / repo hygiene; not a miscompile)
 
-**Status:** open.
+**Status:** **RESOLVED (2026-07-29)** via fix direction 2 -- the artifacts are
+untracked and deploys stay local. See [Resolution](#resolution). Fix direction
+1 (deploy from CI) remains available as a later step and is no longer blocked
+by anything in this report.
 
 ## Summary
 
@@ -160,3 +163,60 @@ otherwise the procedure keeps producing the second commit regardless.
 - **Prior art for fix direction 1:** `docs/archive/spices-site-separation-plan.md:139-180`
   already sketched a `deploy-web` CI job; it was never adopted. Worth reading
   before designing a new one, along with `docs/upcoming/hold/ci-release-workflows-plan.md`.
+
+## Resolution
+
+Taken via **fix direction 2** (untrack, keep deploys local), not direction 1
+(deploy from CI) -- direction 1 is the better end state but is gated on adding
+`CLOUDFLARE_API_TOKEN` to repo secrets and on moving production deploys of
+turmeric-lang.com off a workstation, which is a separate decision. Direction 2
+closes the reported defect with no secrets and no change to who deploys.
+
+| change | file |
+| --- | --- |
+| `web/public/turmeric.{js,wasm}` ignored, with a comment saying why | `.gitignore:71-85` |
+| `web/.vite/`, `web/.wrangler/` ignored (were tracked by accident) | `.gitignore:75-76` |
+| both artifacts + the two dirs removed from the index (`git rm --cached`) | -- |
+| `web-dev` guard: fail loudly if the wasm has never been built | `Justfile:357-372` |
+| `deploy-web` comment corrected (said GitHub Pages; it is Cloudflare) | `Justfile:351-355` |
+| "do NOT commit the regenerated artifacts" note in the release procedure | `.claude/commands/cut-{patch,minor,major}-release.md` |
+| sw.js fallback re-synced `0.30.8` -> `0.32.2` | `web/public/sw.js:17` |
+| sw.js fallback now bumped automatically by the version recipes | `Justfile:390-398,411-419,432-440` |
+
+Nothing that consumes the artifacts had to change: CI's `web-smoke` job already
+builds them from source (`.github/workflows/ci.yml:278-281`), `just web` and
+`just deploy-web` already depend on `wasm` (`Justfile:348,352`), and every other
+reference is to the *served* URL (`/turmeric.wasm`), not the repo path.
+
+### Why `web-dev` needed a guard
+
+`web-dev` depended only on `web-deps` (`Justfile:358` before this change), so it
+was the one entry point that never built the wasm. With the artifact committed
+that was harmless; with it ignored, a fresh clone would have gotten a vite
+server that 404s `turmeric.wasm` and a REPL that silently never boots. The
+recipe now checks for both files and exits 1 with a "run `just wasm` first"
+message. It *checks* rather than depending on `wasm` so you still don't need
+emscripten on PATH to iterate on CSS once the module exists.
+
+### Why the sw.js sed matches by shape, not by `$OLD`
+
+The bump recipes rewrite `wasm_glue.h` with `s/TURMERIC_VERSION "$OLD"/.../`,
+which silently no-ops if the file has drifted from `VERSION`. That is exactly
+how sw.js reached `0.30.8` against a `VERSION` of `0.32.2`. The new sed matches
+`tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+` instead, so a bump re-syncs the token no
+matter how far it has drifted.
+
+### Verification
+
+- `just --list` parses the modified Justfile.
+- The sed pattern rewrites `CACHE_VERSION` correctly against a scratch copy
+  (`tur-try-v1-0.32.2` -> `tur-try-v1-9.9.9`).
+- `git ls-files web/public/` no longer lists either artifact; both remain on
+  disk (3,029,099 and 84,085 bytes), so the current tree still builds and
+  serves.
+- The `web-dev` guard was exercised both ways in a scratch tree: exit 1 with
+  the message when the files are absent, exit 0 when present.
+
+Not verified: an actual `just wasm` rebuild or a live `just deploy-web`, neither
+of which this session had emscripten or wrangler credentials for. The change
+does not touch the emcc invocation or the wrangler config.

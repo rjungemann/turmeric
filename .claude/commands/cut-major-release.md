@@ -180,6 +180,12 @@ This runs `just wasm` (which runs `just docs`), then `just web-deps`,
 then `npm run build`, then `wrangler deploy ...` to push the web app
 to Cloudflare. The user must already be authenticated with `wrangler`.
 
+This regenerates `web/public/turmeric.{js,wasm}`. They are **gitignored build
+outputs -- do NOT commit them.** `git status` stays clean through this step;
+if it does not, something else changed and is worth looking at. There is no
+follow-up "regenerate web artifacts" commit any more: that habit is what left
+every release tag carrying the previous release's binary.
+
 If `just deploy-web` fails:
 - Report the failure to the user.
 - Run `git tag -d v<NEW>` to remove the local tag.
