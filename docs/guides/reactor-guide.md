@@ -72,7 +72,7 @@ This is the pattern used by the `tur/httpd` listener thread.
     (reactor-add-fd r listen-fd READ
       (fn [id events user]
         (let [client (accept-conn listen-fd)]
-          (when (!= client -1)
+          (when (not= client -1)
             (pool-submit worker-pool client))))
       nil)
     ;; Shutdown: one value on stop-ch ends the loop (one-shot).

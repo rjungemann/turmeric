@@ -129,9 +129,9 @@ term builder **normalizes as it interns**, so later stages have fewer cases to
 handle (`refine_vc.h:44`):
 
 ```
-  (> a b)   ==>  (< b a)
-  (>= a b)  ==>  (<= b a)
-  (!= a b)  ==>  (not (= a b))
+  (> a b)     ==>  (< b a)
+  (>= a b)    ==>  (<= b a)
+  (not= a b)  ==>  (not (= a b))
 ```
 
 No `VC_GT` / `VC_GE` term ever exists -- every backend handles three relations

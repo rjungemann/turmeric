@@ -1773,7 +1773,7 @@ Contract types (`#refine{ x : T | p }`, CT0--CT4) verify predicates at
 **runtime**. Refinement types go further: the compiler attempts to **prove**
 predicates statically, emitting a runtime check only when static proof fails.
 This eliminates whole classes of defensive guards that programmers currently
-scatter through the codebase -- e.g. `require! (!= divisor 0)` becomes a
+scatter through the codebase -- e.g. `require! (not= divisor 0)` becomes a
 type-level obligation the compiler resolves at every call site.
 
 The single fact that shapes this entire plan: **every refinement already has a
@@ -1905,7 +1905,7 @@ solver (S0--S4) can be made *complete* on, and it is also the corner of Z3 that
 the fallback ever touches.
 
 ```
-pred ::= (= e e) | (!= e e) | (< e e) | (<= e e) | (> e e) | (>= e e)
+pred ::= (= e e) | (not= e e) | (< e e) | (<= e e) | (> e e) | (>= e e)
        | (and pred pred ...) | (or pred pred ...) | (not pred)
        | (=> pred pred)
        | (measure e ...)             ;; named measure -> uninterpreted fn (EUF)
@@ -2562,7 +2562,7 @@ the seam checks which are implied by the argument refinements. Templates:
 
 1. Predicates appearing on the function's parameters.
 2. A small built-in vocabulary: `(> r 0)`, `(>= r 0)`, `(< r 0)`, `(<= r 0)`,
-   `(!= r 0)`, `(= r <literal>)`.
+   `(not= r 0)`, `(= r <literal>)`.
 
 First provable template wins; if none is provable and no explicit return
 refinement was written, the return carries no refinement (same as today).
@@ -2582,8 +2582,8 @@ Branching bodies (path-sensitive join at merge points) are deferred.
 (defn inc-pos [x : #refine{ v : int | (> v 0) }] : int
   (+ x 1))                       ;; inferred result (> r 0)
 
-(defn double-nonzero [x : #refine{ v : int | (!= v 0) }] : int
-  (* x 2))                       ;; inferred result (!= r 0)
+(defn double-nonzero [x : #refine{ v : int | (not= v 0) }] : int
+  (* x 2))                       ;; inferred result (not= r 0)
 ```
 
 Both compile without `TUR-E0371`, with inferred refinements shown by
@@ -2647,14 +2647,25 @@ proceed in parallel with RT5a once RT3 lands.
 (deftype Pos #refine{ x : int | (> x 0) })
 
 ;;; NonZero -- integer that is not zero
-(deftype NonZero #refine{ x : int | (!= x 0) })
-
-;;; Bounded lo hi -- integer in [lo, hi]
-(deftype (Bounded lo hi) #refine{ x : int | (and (>= x lo) (<= x hi)) })
+(deftype NonZero #refine{ x : int | (not= x 0) })
 
 ;;; PosFloat -- non-negative float
 (deftype PosFloat #refine{ x : double | (>= x 0.0) })
 ```
+
+> **Not shipped: parameterized refinement aliases.** An earlier draft of this
+> phase listed
+> `(deftype (Bounded lo hi) #refine{ x : int | (and (>= x lo) (<= x hi)) })`.
+> That form does not elaborate -- written as `(deftype (Bounded lo hi) ...)` it
+> fails with `deftype name must be a symbol`, and in the accepted shape
+> `(deftype Bounded [lo hi] ...)` it hits the deliberate guard at
+> `src/compiler/elab_types.c:2466-2470`: *"a refinement alias takes no type
+> parameters in this prototype (the predicate cannot mention them)."* This is a
+> settled non-goal, tagged `[prototype]` / "Not planned" in
+> [refinement-types-guide.md](../../guides/refinement-types-guide.md); the
+> revisit trigger lives in
+> [ecs-refinement-typed-apis-plan.md](ecs-refinement-typed-apis-plan.md).
+> `stdlib/refine.tur` shipped monomorphic aliases only -- there is no `Bounded`.
 
 `stdlib/refine-vec.tur` wires the `(< i n)` index obligation through
 `SizedVec` -- the direct target of S2a difference logic:
@@ -2680,7 +2691,7 @@ the elaborator falls back to bounds-checked `vec-get`.
   (println (safe-div 10 2)))
 ```
 
-`d : NonZero` gives `(!= d 0)`; S0 proves the obligation with no Z3 call at all.
+`d : NonZero` gives `(not= d 0)`; S0 proves the obligation with no Z3 call at all.
 
 ---
 

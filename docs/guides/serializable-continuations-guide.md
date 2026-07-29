@@ -167,18 +167,16 @@ serial-resume(k v) : T
 ### The `serial-continuation<T>` Type
 
 ```turmeric
-(defalias serial-continuation<T>
-  (struct
-    [resume    : (-> T (serial-continuation<T>))
-     to-bytes  : (-> bytes)
-     schema-id : cstr]))  ; Stable hash of frame chain shape
+(defstruct serial-continuation<T>
+  [resume    : (-> T serial-continuation<T>)
+   to-bytes  : (-> bytes)
+   schema-id : cstr])  ; Stable hash of frame chain shape
 ```
 ```sweet-exp
-defalias serial-continuation<T>
-  struct
-    [resume    : (-> T (serial-continuation<T>))
-     to-bytes  : (-> bytes)
-     schema-id : cstr]  ; Stable hash of frame chain shape
+defstruct serial-continuation<T>
+  [resume    : (-> T serial-continuation<T>)
+   to-bytes  : (-> bytes)
+   schema-id : cstr]  ; Stable hash of frame chain shape
 ```
 
 > **`schema-id` should be an owned `String`.** The comment calls it a *stable
