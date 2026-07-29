@@ -25,8 +25,7 @@ The short version:
 kind-polymorphic function -- Turmeric's spelling of `Monad m => m a -> ...` --
 compiles once and dispatches through a dictionary the caller resolves, so the
 same body runs at whichever instance the caller picks. What it cannot yet do is
-use the stdlib `Option` or `Result` as that abstract `m` -- the poly carrier is
-one machine word, so it is limited to int-carrier type constructors.
+abstract over `Result`, whose binary head cannot fill a unary `(m int)`.
 [Sharp edges](#sharp-edges) has the details.
 
 ## Picking a tool
@@ -552,10 +551,10 @@ Several constraints on one type constructor are fine, as above.
 
 **What does not work yet**, and why you will still mostly write concrete monads:
 
-- **By-value carriers.** The poly carrier is one machine word, so the abstract
-  `m` has to be an int-carrier `defopaque`. The stdlib `Option` and `Result` are
-  by-value ADTs and crash when passed through it -- which rules out the two
-  monads you are most likely to want.
+- **Only unary constructors.** `Option` works as the abstract `m`; `Result`
+  does not, because filling `m` needs the partially-applied head
+  `(Result _ cstr)` and unification against a unary `(m int)` does not accept
+  it. A wider by-value container than `Option` can also fail to compile.
 - **The middle-vector spelling.** `(defn f [^m] [(Monad m)] [ma : (m int)] ...)`
   elaborates and monomorphizes but miscompiles; use the in-parameter `^Monad m`
   form above.
@@ -564,7 +563,7 @@ Several constraints on one type constructor are fine, as above.
 monad, or write it in effect style, where handler choice *is* the polymorphism.
 That is usually the better trade anyway -- the code that wants `Monad m =>` in
 Haskell is largely the code that becomes an effect here. See
-`docs/reported/constrained-hkt-byvalue-carriers.md` for the remaining gap.
+`docs/reported/constrained-hkt-byvalue-carriers.md` for the remaining gaps.
 
 ### Return-position dispatch needs an expected type
 
@@ -625,7 +624,7 @@ until this is fixed.
 
 | Property | Turmeric | Haskell |
 |---|---|---|
-| `Monad m =>` polymorphism | Dictionary-passed; abstract `m` limited to int-carrier constructors | Full HKT polymorphism |
+| `Monad m =>` polymorphism | Dictionary-passed; abstract `m` limited to unary constructors | Full HKT polymorphism |
 | `do`-notation | `do-m`, dispatched on the receiver's type | `do`, polymorphic over `Monad` |
 | Most "monad" use cases | Effect handlers, direct style | Monad transformers / `mtl` |
 | Async / IO | Effects | `IO` |
@@ -639,7 +638,7 @@ until this is fixed.
 Nesting two handlers is the whole of what a two-layer transformer stack does,
 with no `lift` and no `MonadTrans` instance to write. Writing a combinator once
 and instantiating it at every monad is possible in principle -- the dictionary
-machinery is there -- but limited today to int-carrier type
+machinery is there -- but limited today to unary type
 constructors.
 
 ## See also

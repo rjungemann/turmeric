@@ -6463,6 +6463,38 @@ resolved_user_fallback:;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
+            /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
+             * type constructor of a constrained poly fn, this method call lowers to
+             * a dictionary-slot dispatch, whose method pointer returns the int64
+             * carrier -- and the instance impl invokes this `:fn` argument through
+             * `((int64_t (*)(void*, int64_t))k.fn)(...)`.  A continuation returning
+             * a by-value aggregate (e.g. `(fn [v] (some (dbl v)))` at `(Option
+             * int)`) therefore had a struct-returning thunk cast to an
+             * int64-returning pointer: an x86-64 return-ABI mismatch (RAX:RDX vs
+             * RAX) that handed the instance garbage, which the caller then
+             * dereferenced -- the Gap 2 segfault.
+             *
+             * Ask for the carrier-spill shim so the thunk boxes its aggregate
+             * return, matching the carrier ABI on both sides.  Only the abstract
+             * receiver opts in: a CONCRETE receiver resolves to the instance's own
+             * by-value entry point and must keep consuming the struct directly,
+             * which is what the existing gate protects.  The shim is itself
+             * defensive -- ensure_aggregate_spill_shim returns NULL unless the
+             * result really is a by-value aggregate -- so this is a no-op for
+             * carrier-returning continuations. */
+            {
+                /* The receiver is `(m int)` -- a TY_APP spine headed by the
+                 * abstract constructor -- not a bare TY_TYVAR, so walk to the
+                 * head before comparing against this body's constraint var. */
+                Type rcv = obj->type;
+                while (rcv.kind == TY_APP && rcv.as.app.fn) rcv = *rcv.as.app.fn;
+                bool rcv_is_ambient_ctor =
+                    rcv.kind == TY_TYVAR && rcv.as.tyvar_.name &&
+                    e->cur_hkt_constraint_tyvar &&
+                    strcmp(rcv.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0;
+                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor)
+                    wrap->as.poly_wrap_.boxes_aggregate = true;
+            }
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else if (inner_b->closure_fn_binding && !inner_b->is_global) {
