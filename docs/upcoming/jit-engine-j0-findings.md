@@ -1,8 +1,9 @@
 # JIT Engine -- Phase J0 spike results
 
-Status: J0 COMPLETE on x86-64 Linux (2026-07-28) and arm64 macOS (2026-07-27).
-Sections 0-7 are the original Linux write-up; **section 8 corrects three of
-their claims** -- read it first.
+Status: J0 COMPLETE on x86-64 Linux (2026-07-28) and arm64 macOS (2026-07-27,
+full corpus 2026-07-28). Sections 0-7 are the original Linux write-up;
+**section 8 corrects three of their claims**, and **section 9 corrects three of
+section 8's** from the full-corpus macOS run -- read 9 first.
 Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 
 ## 0. Verdict
@@ -14,7 +15,10 @@ sample without any change to the compiler. (**Amended -- see 8.2, 8.4, 8.4.2.**
 Both that 89% and the macOS 78% are stride-sampling artifacts of the same
 distribution: the full 1,680-fixture corpus on Linux under eager generation is
 **84.8%**, and stride-10 subsamples of it span 78.6%-89.3%. Quote 84.8%. All
-of these need a subset shim.)
+of these need a subset shim.) (**Amended again -- see 9.1.** Sampling is the
+dominant term but not the whole story: the full-corpus macOS run is **81.7%**,
+not the ~85% 8.4.2 predicted. 37 of the 51-fixture gap was `__extension__` in
+our own codegen, now fixed, which brings macOS to 83.9%.)
 
 Two things the plan did not anticipate, both actionable:
 
@@ -85,13 +89,23 @@ needed.
 ### 3.1 Silently dropped attributes -- the real hazard
 
 c2mir parses `__attribute__((...))` and discards it with no diagnostic. Three
-of the four attributes the emitter uses matter:
+of the four attributes the emitter uses matter -- and a fifth, `packed`, never
+comes from the emitter at all but is the most dangerous of the set (9.3):
 
 | Attribute | Emitted for | Consequence when dropped |
 |---|---|---|
 | `unused` | ~69 sites per TU | harmless |
 | `constructor` | `__tur_cps_register` direct->CPS registry; `pthread_key_create` per dynamic var; `__tur_module_def_init`; `__sk_register` call frames | **SIGSEGV** (effectful indirect call dispatches through a NULL registry entry) or **wrong output** (dynamic var reads its root default) |
 | `cleanup(f)` | `_dynvar_pop_*` on scope exit | **wrong output**; no recovery possible outside the compiler |
+| `packed` | never by the emitter -- arrives from **system headers and user inline-C** | **wrong struct layout**, silently. See 9.3 |
+
+(**Amended -- see 9.3.** This table lists only attributes the *emitter* emits,
+and its "three of the four matter" framing reads as the complete attribute
+story. It is not: `__attribute__((packed))` is dropped by the same mechanism,
+with a different consequence class -- ABI divergence rather than missing
+initialization -- and it reaches every TU through system headers.
+`#pragma pack` is dropped too, and is a separate mechanism this section does
+not mention at all.)
 
 `constructor` is recoverable from outside: the spike collects every constructor
 function and calls them at the top of `main`. That turned 3 of 3 SIGSEGVs into
@@ -113,6 +127,7 @@ fall back to `cc` under `tur jit`.
 | `(T){0}` for scalar `T` | 75-139 | Rejects scalar compound literals outright ("braces around scalar initializer", `c2mir.c:7781`). C99-legal, so this is a c2mir gap, not ours. | `((T)0)` -- trivial emitter change. |
 | `__thread` | ~10 | GNU spelling. `_Thread_local` parses, with a "not implemented" warning; behaves as a plain global, which is correct single-threaded and wrong the moment a fixture spawns. | Emit `_Thread_local`; keep genuinely threaded runtime TUs out of c2mir entirely (S2). |
 | `__atomic_*` / `__ATOMIC_*` | few | GCC builtins. | S2: these live only in runtime TUs that should never reach c2mir. |
+| `__extension__ ({ ... })` | 9 emitter sites | GNU only; c2mir takes `({ ... })` but has no `__extension__` keyword. **This table missed it** because glibc's `sys/cdefs.h` `#define`s the token away when `__GNUC__` is undefined -- which is c2mir's case -- so it is invisible on Linux. Apple's libc has no such fallback. | **FIXED** (`cc5cf8461`): emit the bare form. Was the single largest recoverable class at 37 fixtures. See 9.2. |
 
 On `__auto_type`: the spike recovers the type textually for ~92% of sites (the
 initializer is a call, and a call's type is its callee's declared return type,
@@ -260,7 +275,13 @@ breakdown.
 8. **Register `atexit` and the `__builtin_*` family via `MIR_load_external`**
    (8.4.3). `atexit` is not in the dynamic symbol table, so `dlsym` cannot
    reach it and every `module-defer-*` program fails to link. This is S4 work
-   and is cheap.
+   and is cheap. (**Amended -- see 9.4.** The `__builtin_*` half stands. The
+   `atexit` half is **not cheap and not sufficient**: macOS resolves `atexit`
+   already, and all three `module-defer-*` fixtures then SIGSEGV at process
+   exit instead of failing to link, because the handler is JIT'd code and the
+   MIR context is torn down before libc drains its atexit list. Registering
+   the symbol on Linux converts a clean diagnosable error into that silent
+   crash. J1 must *intercept* `atexit`, not merely resolve it.)
 9. **J3 must run the whole corpus, or shuffle with a seed -- never stride.**
    `tests/fixtures/` is alphabetical, so stride sampling draws correlated
    clusters and its output swings 10.7 points by offset alone (8.4.2). That
@@ -426,7 +447,8 @@ Two refinements to 8.2 while the record is being set straight:
 - The reconstruction is behaviourally equivalent to the original on this
   sample. The two atomics the shim omits relative to the original prologue
   (`__atomic_exchange_n`, `__atomic_thread_fence`/`__sync_synchronize`) are
-  not reached by any sampled fixture.
+  not reached by any sampled fixture. (**Sample artifact -- see 9.5.** At full
+  corpus each is reached by exactly one fixture, on both platforms.)
 - Section 3.2's table did list `__thread` and `__atomic_*`/`__ATOMIC_*` as
   subset gaps with fixes. What was wrong was section 7's *summary*, which
   said the costly gaps were elsewhere; the shim header's reading of that as
@@ -498,10 +520,20 @@ So **the gap needs no platform explanation and there is no evidence for one.**
 Both numbers are the same ~85% distribution sampled at different offsets. Two
 consequences:
 
+> **Superseded -- see 9.1.** This paragraph is the one claim in section 8 that
+> the full-corpus macOS run falsifies. Sampling really is the dominant term and
+> the offset analysis below stands unchanged, but there *was* a platform
+> difference underneath it: macOS full-corpus is 81.7%, not ~85%. The correct
+> statement is that sampling explained the 89-vs-78 gap **while masking** a real
+> 51-fixture delta, 37 of which were a defect in our own codegen that glibc's
+> headers had been concealing.
+
 - **89% was optimistic and should stop being quoted.** The honest Linux eager
   figure is **84.8%**, and section 0 and section 5 are amended accordingly.
   The macOS 78% is equally an artifact; a full-corpus macOS run would be
   expected near 85% too, and is the one measurement still worth taking.
+  (**Taken 2026-07-28 -- 81.7%, see 9.1.** The prediction was wrong by 51
+  fixtures. The run was worth taking for exactly that reason.)
 - **The sampling scheme itself is the defect, and J3 must not inherit it.**
   `tests/fixtures/` is alphabetical, so consecutive entries are near-duplicates
   by construction -- every `httpd-*` adjacent, every `dynvar-*` adjacent, every
@@ -519,6 +551,14 @@ suspect is c2mir on Apple SDK headers rather than anything in generated code --
 in the emitted text, the only platform split is `_WIN32`, and no host-
 conditional emission exists in `src/compiler/emit_*`).
 
+(**Half right -- see 9.1 and 9.3.** The Apple-SDK-header suspicion is confirmed
+and lands inside the predicted 4-9 range, at exactly 9 fixtures. But it was not
+the residual: it was buried under a 37-fixture class in *generated* code. The
+"emit-c output is host-independent" check was sound and is exactly what made
+the real cause hard to see -- the emitted text is identical on both platforms;
+what differs is that glibc's headers `#define __extension__` away and Apple's
+do not. Host-independent output can still fail host-dependently.)
+
 ### 8.4.3 What the full corpus found that the sample missed
 
 Running everything surfaced five failure classes no 168-fixture sample
@@ -529,7 +569,7 @@ contained, all of them concrete J1 work:
 | `__auto_type` residue (parse) | 193 | The dominant failure mode, 11.5% of the corpus on its own. Confirms S1 item 1 is the highest-value fix. |
 | GNU constructs in user inline-C (parse) | 31 | Step-6 fallback-to-`cc`, by design. |
 | `unresolved import: tur_reactor_new` | 10 | S2 boundary -- the harness links 9 runtime TUs and not the reactor. Sizing data for the real symbol table. |
-| `unresolved import: atexit` | 3 | **New and load-bearing.** All three are `module-defer-*`. Verified directly: from a `-rdynamic` executable, `dlsym(RTLD_DEFAULT, "atexit")` returns NULL while `printf`, `malloc`, and `abort` all resolve -- glibc ships `atexit` in `libc_nonshared.a`, statically linked into each executable and never exported. J1 must register it explicitly via `MIR_load_external`, exactly as c2m already does for `abort`. This is S4 work, not S2. |
+| `unresolved import: atexit` | 3 | **New and load-bearing.** All three are `module-defer-*`. Verified directly: from a `-rdynamic` executable, `dlsym(RTLD_DEFAULT, "atexit")` returns NULL while `printf`, `malloc`, and `abort` all resolve -- glibc ships `atexit` in `libc_nonshared.a`, statically linked into each executable and never exported. J1 must register it explicitly via `MIR_load_external`, exactly as c2m already does for `abort`. This is S4 work, not S2. (**Diagnosis right, fix wrong -- see 9.4.** Resolving the symbol is necessary but not sufficient; macOS resolves it already and the same 3 fixtures SIGSEGV at exit instead.) |
 | `unresolved import: __builtin_*` | 7 | `pow` x4, `strlen`, `popcount`, `memcpy`. All from **inline C**, not from generated code: `stdlib/math.tur:93` calls `__builtin_pow` (which is why 4 unrelated fixtures trip it), and three fixtures use `__builtin_strlen`/`popcount`/`memcpy` directly. c2mir implements no GCC builtins, so each is emitted as an ordinary external call and then fails to resolve. Cheapest fix is a small `MIR_load_external` table mapping the common builtins to their libc equivalents; `stdlib/math.tur` should arguably just call `pow` instead. |
 | `initialization of incomplete type variable` | 3 | c2mir checker limitation, all on fat-closure readback fixtures. |
 
@@ -601,3 +641,139 @@ sample (8.4.2), which also prints the stride spread so the drift stays visible:
 bash tools/jit-spike/sweep-full.sh              # eager; ~9 min on 4 cores
 GENMODE= bash tools/jit-spike/sweep-full.sh     # lazy
 ```
+
+## 9. Full-corpus arm64 macOS -- corrections to section 8
+
+Added 2026-07-28 on an Apple M-series (Darwin 27.0.0, AppleClang 21.0.0), MIR
+at the same `a8ab7c31` pin, Debug `tur` at `d657707dc`. This is the
+full-corpus macOS run 8.4.2 asks for and leaves open.
+
+Full detail, repros and severity analysis:
+[docs/reported/jit-macos-full-corpus-extension-and-atexit.md](../reported/jit-macos-full-corpus-extension-and-atexit.md).
+
+### 9.1 The predicted ~85% does not hold -- 81.7%, and sampling was masking a real gap
+
+| Run | Pass | Rate |
+|---|---|---|
+| Linux, eager (8.4.2) | 1424 / 1680 | 84.8% |
+| **macOS, eager, artifacts as of `d657707dc`** | **1373 / 1680** | **81.7%** |
+| macOS, eager, after the 9.2 codegen fix | 1409 / 1680 | 83.9% |
+
+8.4.2's sampling analysis is **sound and stands** -- the macOS full run
+reproduces the stride effect independently (spread 78.0%-88.7%, 10.7 points),
+so stride-on-an-alphabetical-corpus is genuinely the dominant error term, and
+recommendation 9 in section 6 needs no change.
+
+What does not stand is "the gap needs no platform explanation and there is no
+evidence for one." There was a 51-fixture platform delta; sampling variance was
+large enough to hide it. Its composition: **37** the `__extension__` codegen
+defect (9.2), **9** Apple SDK headers (9.3), the rest classification drift.
+
+### 9.2 `__extension__` -- a codegen defect glibc was concealing (FIXED)
+
+`elab_sessions.c`, `elab_global.c`, and `emit_expr.c` emitted
+`__extension__ ({ ... })` from 9 sites with no platform guard. c2mir accepts
+GNU statement expressions but has no `__extension__` keyword.
+
+It never surfaced on Linux because glibc's `<sys/cdefs.h>` `#define`s
+`__extension__` to nothing when `__GNUC__` is undefined -- exactly c2mir's
+case. Apple's `<sys/cdefs.h>` has no such fallback. So 8.4.4's observation that
+the `session-*` fixtures pass under eager on Linux was true only by accident of
+glibc's headers, not because the emitted C was in c2mir's subset.
+
+Fixed in `cc5cf8461` by emitting the bare form; the prefix only suppressed a
+`-pedantic` diagnostic that the generated-C compile never enables. The three
+prefix matchers in `src/turi/eval.c` moved in lockstep -- the interpreter
+recognizes these inline-C bodies by text, which is why this could not be a
+pure emitter edit. `bash tests/run.sh`: 2399 passed, 0 failed, zero snapshot
+churn.
+
+**Method note worth keeping:** 8.4.2 verified that `tur emit-c` output is
+host-independent and concluded the residual could not be in generated code.
+The verification was correct; the inference was not. Identical emitted text can
+still fail host-dependently, because what differs is the libc headers it is
+compiled against.
+
+### 9.3 The Apple SDK residue is real (9 fixtures), and c2mir drops struct packing
+
+The 4-9 fixture excess 8.4.2 predicts is confirmed at exactly **9**, and the
+suspected cause -- c2mir on Apple SDK headers -- is right. Root cause for 3 of
+them generalizes well beyond macOS: **c2mir silently ignores both
+`#pragma pack(N)` and `__attribute__((packed))`**.
+
+|  | clang | c2mir |
+|---|---|---|
+| `#pragma pack(4)` sizeof / offsetof | 20 / 12 | **24 / 16** |
+| unpacked control | 24 / 16 | 24 / 16 |
+| `__attribute__((packed))` | 12 / 4 | **16 / 8** |
+
+`#pragma pack` at least warns `unknown pragma`; the attribute is silent. This
+belongs in 3.1's table, which has been amended.
+
+Severity, stated precisely because the loud case is the harmless one: the 3
+affected fixtures are **not miscompiled**. `stdlib/image.tur` includes
+`<mach-o/dyld.h>` for `_NSGetExecutablePath(char *, uint32_t *)`; nothing in
+`stdlib/` or `src/runtime/` uses a `mach_msg` struct, so XNU's own
+`xnu_static_assert_struct_size` turns the layout bug into a clean compile
+error. Turmeric uses zero packing itself, so the JIT/host boundary is clean
+today. The open vector is user inline-C with a packed struct.
+
+**The platform framing inverts here.** The defect is host-independent. macOS is
+not more broken, it is *louder* -- XNU ships `_Static_assert` ABI locks in its
+headers and glibc does not, so the same wrong layout on Linux is adopted in
+silence.
+
+J1 should **reject rather than mislay**: fail the normalizer on both packing
+forms so such programs take the existing step-6 fallback to `cc`.
+
+### 9.4 `atexit` -- right diagnosis, insufficient fix
+
+Section 6 recommendation 8 and 8.4.3 call for registering `atexit` via
+`MIR_load_external`. macOS is the natural experiment, because `atexit` **does**
+resolve there (verified alongside `printf`/`malloc`/`abort`/`__cxa_atexit`).
+
+It is not enough. All three `module-defer-*` fixtures then print their first
+line and **SIGSEGV at process exit** rather than failing to link -- the handler
+is JIT'd code, and the MIR context is torn down before libc drains its atexit
+list. Registering the symbol on Linux would convert a clean, diagnosable
+`unresolved import` into that silent crash.
+
+J1 must **intercept** `atexit`, keep its own deferred-handler list, and drain it
+before finalizing the MIR context. That is materially more than one
+`MIR_load_external` row, and S4 sizing should reflect it. The `__builtin_*`
+half of recommendation 8 is unaffected and still cheap.
+
+### 9.5 Smaller corrections
+
+- **The two omitted atomics are reached.** 8.4 records
+  `__atomic_exchange_n` and `__atomic_thread_fence` as "not reached by any
+  sampled fixture"; at full corpus each is reached by exactly one, on both
+  platforms. Same sample-artifact family as the rest of 8.4.2.
+- **The runtime-failure set agrees across platforms.** With 9.2 applied the
+  macOS non-parse failures are `dynvar-log-level`, `dynvar-nested`,
+  `dynvar-thread-locale`, `self-recursive-carrier-struct-return`,
+  `taskgroup-async` (mismatch); `gc-registry-growth`,
+  `set-multiword-struct-element` (SIGSEGV); `any-cast-mismatch-panic`
+  (SIGABRT, and is supposed to panic -- 8.4.3's caveat applies). Three
+  `dynvar-*` mismatches reproduce 8.4.3's finding on a second platform.
+- **`Thread local is not implemented`** is warned by c2mir for every
+  `_Thread_local` in the TU (10+ per program). 8.4.3 attributes the `dynvar-*`
+  mismatches to `__attribute__((cleanup))`; unimplemented TLS is at least as
+  plausible and should be ruled out before S-work is scoped on the cleanup
+  hypothesis. Platform-independent.
+- **`sweep-full.sh` uses `nproc`**, absent on a stock macOS (Homebrew coreutils
+  supplied it here). Worth a `command -v nproc || sysctl -n hw.ncpu` fallback.
+- **One uncontrolled variable:** this run used a Debug `tur` (contracts live)
+  and 8.4.2's build type is unrecorded. The exact agreement on the
+  platform-independent classes (`__auto_type` 193/193, inline-C GNU 31/31)
+  argues it does not matter; a Release-`tur` macOS run would close it.
+
+### 9.6 Reproducing
+
+```sh
+cmake -S . -B build-jit -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
+cmake --build build-jit -j --target tur-jit-spike
+bash tools/jit-spike/sweep-full.sh              # 1409 / 1680 = 83.9%
+```
+
+To recover the pre-fix 81.7% baseline, revert `cc5cf8461` and re-run.

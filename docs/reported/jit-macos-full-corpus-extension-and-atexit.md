@@ -11,7 +11,12 @@ open.
 
 ## Summary -- the run does not land where 8.4.2 predicts
 
-**Status:** finding 1 is FIXED in this branch; findings 2 and 3 are open.
+**Status:** finding 1 is FIXED in this branch; findings 2, 3 and 4 are open.
+
+These results are reconciled into the canonical J0 write-up as **section 9** of
+[docs/upcoming/jit-engine-j0-findings.md](../upcoming/jit-engine-j0-findings.md),
+which also carries the amendment pointers on each superseded claim in sections
+0, 3.1, 3.2, 6 and 8. This file is the detail; section 9 is the summary.
 
 | Run | Pass | Rate |
 |---|---|---|
