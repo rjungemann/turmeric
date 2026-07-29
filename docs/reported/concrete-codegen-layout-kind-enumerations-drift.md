@@ -9,8 +9,8 @@ addresses stay under 2^53. It compiles, it prints correct answers today, and it
 is silently address-layout-dependent. See
 [Reachability](#reachability-reached-by-ordinary-code-and-currently-masked).
 
-**Status:** open. Filed 2026-07-29 as the follow-up flagged when root cause A of
-the map-show report was fixed.
+**Status:** Finding 1 **FIXED 2026-07-29**; Finding 2 still open. See
+[Resolution](#resolution-2026-07-29--finding-1).
 
 ## The shape of the problem
 
@@ -148,6 +148,69 @@ latent hazard awaiting a new feature.
 `TY_ANY` remains untestable from this angle: `(Vec any)` type-checks but cannot be
 built, because `vec-of`'s type-witness binding trips `TUR-E0201` (`any` is treated
 as unique) inside `stdlib/vec.tur`.
+
+
+## Resolution (2026-07-29) -- Finding 1
+
+`append_type_mangle` no longer has a `default` arm. All 60 `TypeKind` members now
+have an explicit case, so `-Wall`/`-Wswitch` makes a newly added kind a build
+failure here instead of a silent merge -- the same discipline that already keeps
+`type_c_name` exhaustive.
+
+**One token per kind was not enough.** The first attempt gave the nine
+collision-class kinds distinct tokens (`fn`, `set`, `cont`, ...) and the
+collision simply moved: `(Box (fn [int] float))` and `(Box (fn [int] int))` both
+mangled `fn`. The real requirement is that the mangling be **injective with
+respect to `type_eq`**, since `type_register_adt_app` keys its registry on
+`type_eq`. So each arm now appends exactly what `type_eq` compares:
+
+| kind | mangled payload | `type_eq` compares |
+| --- | --- | --- |
+| `TY_FN` | arity, arg kinds, result kind | same |
+| `TY_PTR_VOID` | inner (recursive) | same |
+| `TY_REF` / `TY_LREF` | `ref.inner` | same |
+| `TY_RC` / `TY_WEAK` | `rc.inner` | same |
+| `TY_REF_IMMUT` / `TY_REF_MUT` | `ref_borrow.target` | same |
+| `TY_CONT` / `TY_CLONEABLE_CONT` | `cont.returns` | same |
+| `TY_EXCEPTION` | `exn.payload_type` | same |
+| `TY_HANDLER` | value + result kind | also `handled_row` (see below) |
+| `TY_SET` | -- | nothing; one token is injective |
+
+That the reference family needed this too was **not** in the original report:
+`ref`, `lref`, `rc`, `weak`, `ref_immut`, `ref_mut` and `ptr_void` all had
+pre-existing tokens that dropped their inner type, so `(Box rc<int>)` and
+`(Box rc<float>)` were already colliding through arms that looked fine. Verified
+fixed: they now mangle `tur_adt_Box__rc_int` and `tur_adt_Box__rc_float`.
+
+Verified on the report's own repro: `tur_adt_Box__fn1_int__float` and
+`tur_adt_Box__fn1_int__int`, one typedef each, constructors with their correct
+`double` / `int64_t` signatures, output still `7.500000` / `42.000000`.
+
+**Known residual.** `TY_HANDLER`'s `type_eq` also consults `handled_row`, which
+has no short spelling here, so two handler types differing *only* in their
+handled row still merge. Narrower than before and recorded rather than silent.
+
+### Guard
+
+`tests/check-typekind-mangle-exhaustive.sh` (ctest `tur_typekind_mangle_tests`)
+checks all three properties from the source text, no build required: no `default`
+arm, a case for every enum member (60), and no two kinds sharing a bare token (44
+distinct). Verified to gate on both failure modes -- reintroducing a `default`
+arm and pointing two kinds at one token each fail it.
+
+### Cost
+
+140 codegen snapshots regenerated, all one cause: `opaque` -> `fn1_int__int`,
+1820 sites. No other token moved in any fixture.
+
+Two fixtures went red, and they are a **pre-existing defect made visible**, not a
+regression -- filed as
+[ap-spec-records-wrong-fn-element-type](ap-spec-records-wrong-fn-element-type.md).
+An `ap` specialization records the function-element argument type from a
+*different* call site; while both fn types mangled `opaque` the declared parameter
+and the passed variable agreed as C types, so nothing could complain. Carried red
+deliberately: a hard `cc` error beats a merged C name, and reverting would
+restore the collision.
 
 ## Finding 2 -- which absent kinds are correctly absent
 

@@ -179,6 +179,15 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# concrete-codegen-layout-kind-enumerations-drift: append_type_mangle must stay
+# exhaustive over TypeKind and injective in its tokens, or two distinct
+# instantiations silently share one monomorph C name.  Source-text check, no
+# build needed.
+add_test(
+  NAME tur_typekind_mangle_tests
+  COMMAND bash tests/check-typekind-mangle-exhaustive.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # F2.6 (compiled-shallow-handlers-plan): acceptance probes for `handle-shallow`.
 # The distinguishing shallow behavior (a resume that re-performs) is
 # interpreter-only and hard-errors on the compiled fiber fallback, so it lives
