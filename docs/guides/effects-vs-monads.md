@@ -24,8 +24,9 @@ The short version:
 **Polymorphism over the monad exists but is partial.** A constrained
 kind-polymorphic function -- Turmeric's spelling of `Monad m => m a -> ...` --
 compiles once and dispatches through a dictionary the caller resolves, so the
-same body runs at whichever instance the caller picks. What it cannot yet do is
-abstract over `Result`, whose binary head cannot fill a unary `(m int)`.
+same body runs at whichever instance the caller picks. The one thing it cannot
+yet do is abstract over a constructor whose mapped parameter is not its last --
+which in the stdlib means `Result`, but not `Either`.
 [Sharp edges](#sharp-edges) has the details.
 
 ## Picking a tool
@@ -553,11 +554,14 @@ Both constraint spellings work -- the in-parameter `^Monad m` form and the
 middle vector `[(Monad m) (Applicative m)]` -- and both by-value containers
 (the stdlib `Option`) and int-carrier `defopaque`s can fill `m`.
 
-**The one remaining limit: only unary constructors.** `Result` cannot fill a
-unary `(m int)` -- that needs the partially-applied head `(Result _ cstr)`
-(the shape its own `Monad [(Result _ B)]` instance head already uses), and
-call-site unification does not yet produce hole-headed bindings. See
-`docs/reported/constrained-hkt-binary-ctor-cannot-fill-unary-var.md`.
+**The one remaining limit: the abstracted parameter must be the constructor's
+last.** Arity is not the issue -- a binary constructor is fine when its free
+slot is last, so `Either` (whose instance head is the curried prefix
+`(Either E)`) abstracts cleanly. `Result` does not, because its parameter order
+is `(Result ok err)` while its instances are ok-biased, so the mapped slot is
+first and the head needs a hole (`(Result _ cstr)`) that call-site unification
+cannot express. See
+`docs/reported/constrained-hkt-abstract-var-requires-last-param-free.md`.
 
 **In practice** you will still often write concrete monads or effect-style code
 -- handler choice *is* the polymorphism there, and the code that wants
