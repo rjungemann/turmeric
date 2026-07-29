@@ -128,6 +128,32 @@ static void jit_atexit_drain (void) {
   while (n_jit_atexit > 0) jit_atexit_fns[--n_jit_atexit] ();
 }
 
+/* Link-time weak-symbol handshakes do not cross the JIT boundary.  libturi
+   declares `__attribute__((weak)) int tur_closure_headers_enabled = 0` and the
+   emitted program overrides it with a strong `= 1` when its closure boxes carry
+   drop-glue headers; under `cc` the linker resolves that, but host code in this
+   process was linked long ago and reads its own weak copy -- so the runtime
+   plain-free'd an interior pointer and every reactor fixture died at teardown
+   (docs/reported/jit-reactor-fixtures-abort-under-mir.md, root cause).  After
+   the module is loaded, copy the program's value onto the host's global.
+
+   The six weak no-op tur_scheduler_*_st FUNCTIONS in scheduler_common.c are
+   the same hazard and cannot be fixed this way -- host direct calls cannot be
+   re-bound to MIR code.  That needs J1's runtime-call redesign; recorded in
+   the report. */
+extern int tur_closure_headers_enabled;   /* libturi's weak definition */
+
+static void sync_config_globals (MIR_context_t ctx) {
+  for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
+       m = DLIST_NEXT (MIR_module_t, m))
+    for (MIR_item_t it = DLIST_HEAD (MIR_item_t, m->items); it != NULL;
+         it = DLIST_NEXT (MIR_item_t, it))
+      if (it->item_type == MIR_data_item && it->u.data->name != NULL
+          && strcmp (it->u.data->name, "tur_closure_headers_enabled") == 0
+          && it->addr != NULL)
+        tur_closure_headers_enabled = *(int *) it->addr;
+}
+
 /* c2mir emits calls to runtime functions by name; MIR asks us for an address.
    The runtime is compiled INTO this executable, so dlsym(RTLD_DEFAULT) finds
    it -- c2mir never parses a line of hamt.c. */
@@ -252,6 +278,7 @@ int main (int argc, char **argv) {
     MIR_gen_init (ctx);
     MIR_gen_set_optimize_level (ctx, (unsigned) opt_level);
     MIR_link (ctx, eager_p ? MIR_set_gen_interface : MIR_set_lazy_gen_interface, import_resolver);
+    sync_config_globals (ctx);
 
     /* Find main across the loaded modules. */
     MIR_item_t main_item = NULL;
