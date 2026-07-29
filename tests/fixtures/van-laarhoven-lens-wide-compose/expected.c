@@ -8076,7 +8076,7 @@ static int64_t over__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64
         __t233->__fn = (int64_t)(intptr_t)__fn_1371__spec__tur_adt_Identity__int_void___int64_t;
         __t233->h = h;
         void *__t235 = __t233;
-        __auto_type __ps_236 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t235), (int64_t)(intptr_t)(s)));
+        tur_adt_Identity__Line __ps_236 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t235), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_237 = (run_id__spec__int64_t_tur_adt_Identity__Line(__ps_236));
         if (tur_panicking) return ((int64_t)0);
@@ -8112,7 +8112,7 @@ static int64_t set__spec__int64_t_void___int64_t_int64_t(tur_poly_fn_t l, int64_
         __t240->__fn = (int64_t)(intptr_t)__fn_1380__spec__tur_adt_Identity__int_void___int64_t;
         __t240->b = b;
         void *__t242 = __t240;
-        __auto_type __ps_243 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t242), (int64_t)(intptr_t)(s)));
+        tur_adt_Identity__Line __ps_243 = (line_a_x__mono_19a433877f08106f((int64_t)(intptr_t)(__t242), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return ((int64_t)0);
         int64_t __ps_244 = (run_id__spec__int64_t_tur_adt_Identity__Line(__ps_243));
         if (tur_panicking) return ((int64_t)0);

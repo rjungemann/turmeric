@@ -7740,7 +7740,7 @@ static tur_adt_Option__float some__spec__tur_adt_Option__float_double(double x) 
 }
 
 static tur_adt_Option__float none__spec__tur_adt_Option__float() {
-        tur_adt_Option__float __ps_174 = (ctor_Option__float(false, (double){0}));
+        tur_adt_Option__float __ps_174 = (ctor_Option__float(false, ((double)0)));
         if (tur_panicking) return (tur_adt_Option__float){0};
         return __ps_174;
 }

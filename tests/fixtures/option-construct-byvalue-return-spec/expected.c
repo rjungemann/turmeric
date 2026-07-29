@@ -7887,7 +7887,7 @@ __attribute__((unused)) static tur_adt_Option__float keep_if__spec__tur_adt_Opti
     return __ret;
 }
 static tur_adt_Option__float none__spec__tur_adt_Option__float() {
-        tur_adt_Option__float __ps_202 = (ctor_Option__float(false, (double){0}));
+        tur_adt_Option__float __ps_202 = (ctor_Option__float(false, ((double)0)));
         if (tur_panicking) return (tur_adt_Option__float){0};
         return __ps_202;
 }

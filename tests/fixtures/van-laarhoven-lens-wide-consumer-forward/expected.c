@@ -7769,11 +7769,11 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p_1345 = __ps_183;
             (void)p_1345;
-            __auto_type __ps_184 = (tweak__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1345)));
+            tur_adt_Point * __ps_184 = (tweak__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1345)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p1_1360 = __ps_184;
             (void)p1_1360;
-            __auto_type __ps_185 = (tweak__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1345)));
+            tur_adt_Point * __ps_185 = (tweak__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1345)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p2_1375 = __ps_185;
             (void)p2_1375;

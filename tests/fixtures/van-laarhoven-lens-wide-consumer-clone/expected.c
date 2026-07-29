@@ -7863,19 +7863,19 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p_1351 = __ps_205;
             (void)p_1351;
-            __auto_type __ps_206 = (set_px__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1351)));
+            tur_adt_Point * __ps_206 = (set_px__lens_89e16e7f8669ca4e(INT64_C(99), (tur_adt_Point *)(intptr_t)(p_1351)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p1_1366 = __ps_206;
             (void)p1_1366;
-            __auto_type __ps_207 = (set_px__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1351)));
+            tur_adt_Point * __ps_207 = (set_px__lens_29dc1a87dc9f86df(INT64_C(88), (tur_adt_Point *)(intptr_t)(p_1351)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p2_1381 = __ps_207;
             (void)p2_1381;
-            __auto_type __ps_208 = (over_px__lens_89e16e7f8669ca4e((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1397 }, (tur_adt_Point *)(intptr_t)(p_1351)));
+            tur_adt_Point * __ps_208 = (over_px__lens_89e16e7f8669ca4e((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1397 }, (tur_adt_Point *)(intptr_t)(p_1351)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p3_1403 = __ps_208;
             (void)p3_1403;
-            __auto_type __ps_209 = (over_px__lens_29dc1a87dc9f86df((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1419 }, (tur_adt_Point *)(intptr_t)(p_1351)));
+            tur_adt_Point * __ps_209 = (over_px__lens_29dc1a87dc9f86df((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1419 }, (tur_adt_Point *)(intptr_t)(p_1351)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p4_1425 = __ps_209;
             (void)p4_1425;

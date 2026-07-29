@@ -3679,6 +3679,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_putc(&callb, '\0');
                         char *r = strdup(callb.data);
                         buf_free(&callb);
+                        /* findings 16.2: the consumer clone's record does not
+                         * exist yet (its spec is minted after the main emit
+                         * loop), so hand the hoist the ret type directly.
+                         * Verified corpus-wide against the emitted forward
+                         * declarations by tools/jit-spike/verify-temp-types.py. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                         return r;
                     }
                 }
@@ -3724,6 +3730,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *result = strdup(mo.data);
                         buf_free(&mo);
                         free(g_str); free(s_str);
+                        /* findings 16.2: same late-minted-spec gap as the
+                         * consumer redirect above. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                         return result;
                     }
                 }
@@ -4004,6 +4013,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *result = strdup(mo.data);
                         buf_free(&mo);
                         free(g_str); free(s_str);
+                        /* findings 16.2: same late-minted-spec gap as the
+                         * consumer redirect above. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                         return result;
                     }
                 }
@@ -4940,16 +4952,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * would land an int/double literal in a `void *`
                              * slot (-Wint-conversion).  Emit the NULL pointer. */
                             if (rfty.kind == TY_FN) { fc = "void *"; }
+                            /* S1/findings 16.4: a POINTER zero is scalar --
+                             * `(const char *){0}` is a compound literal c2mir
+                             * rejects.  Route through emit_c_zero_of, which
+                             * spells scalars `((T)0)` and aggregates `(T){0}`. */
                             if (fc && strcmp(fc, "void *") == 0) {
                                 free(arg_strs[i]);
-                                arg_strs[i] = strdup("(void *){0}");
+                                arg_strs[i] = strdup("((void *)0)");
                             } else if (fc && strcmp(fc, "int64_t") != 0) {
-                                Buf db; buf_init(&db);
-                                buf_printf(&db, ptr_slot ? "(%s *){0}" : "(%s){0}", fc);
-                                buf_putc(&db, '\0');
-                                free(arg_strs[i]);
-                                arg_strs[i] = strdup(db.data);
-                                buf_free(&db);
+                                if (ptr_slot) {
+                                    Buf db; buf_init(&db);
+                                    buf_printf(&db, "((%s *)0)", fc);
+                                    buf_putc(&db, '\0');
+                                    free(arg_strs[i]);
+                                    arg_strs[i] = strdup(db.data);
+                                    buf_free(&db);
+                                } else {
+                                    free(arg_strs[i]);
+                                    arg_strs[i] = emit_c_zero_of(fc);
+                                }
                             }
                         }
                     }

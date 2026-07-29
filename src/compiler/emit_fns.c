@@ -2315,8 +2315,9 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
          * type-check as the C return type). */
         char *rz;
         if (done_typed && gs->mem_ret_aggr[0]) {
-            size_t n = strlen(gs->mem_retctype[0]) + 8;
-            rz = (char *)malloc(n); snprintf(rz, n, "(%s){0}", gs->mem_retctype[0]);
+            /* S1/findings 16.4: mem_retctype can be a pointer spelling, and a
+             * pointer zero is scalar; emit_c_zero_of picks the legal form. */
+            rz = emit_c_zero_of(gs->mem_retctype[0]);
         } else if (done_typed) {
             rz = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)");
         } else {

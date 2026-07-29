@@ -4284,7 +4284,13 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         free(mp); free(bf);
                     }
                     buf_printf(&out, "}");
-                    if (is_option) buf_printf(&out, " : (%s){0})", cname);
+                    /* S1/findings 16.4: cname can be scalar; emit_c_zero_of
+                     * picks ((T)0) vs (T){0} so c2mir accepts either. */
+                    if (is_option) {
+                        char *z = emit_c_zero_of(cname);
+                        buf_printf(&out, " : %s)", z);
+                        free(z);
+                    }
                     free(src_tmp);
                     used_canonical = true;
                 }

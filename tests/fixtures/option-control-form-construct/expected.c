@@ -7821,7 +7821,7 @@ static tur_adt_Option__int none__spec__tur_adt_Option__int() {
 }
 
 static tur_adt_Result__int__cstr ok__spec__tur_adt_Result__int__cstr_int64_t(int64_t x) {
-        tur_adt_Result__int__cstr __ps_202 = (ctor_Result__int__cstr(true, x, (const char *){0}));
+        tur_adt_Result__int__cstr __ps_202 = (ctor_Result__int__cstr(true, x, ((const char *)0)));
         if (tur_panicking) return (tur_adt_Result__int__cstr){0};
         return __ps_202;
 }
