@@ -188,11 +188,8 @@ of those is materially more serious than the parse error it replaced:
 | `empty preprocessor expression` (`mach/port.h:100`) | **`static assertion failed: "struct changed size unexpectedly"`** at `mach/message.h:543` and `:569` | 3 |
 | `unresolved import: _OSSwapInt16` | unchanged | 1 |
 
-The middle row is the find. `xnu_static_assert_struct_size` is XNU's own ABI
-lock on its message structs, and **c2mir fails it** -- it lays those structs out
-at a different size than clang does. That is an ABI divergence, not a subset
-gap: JIT'd code touching a Mach message struct would be silently wrong rather
-than refused. It is invisible until `__arm64__` has a value, which is the
+The middle row is the find, and it has a root cause worth its own section --
+see finding 4. It is invisible until `__arm64__` has a value, which is the
 argument for keeping the predefines even though they fix nothing.
 
 Two incidental notes on the mechanism:
@@ -206,6 +203,83 @@ Two incidental notes on the mechanism:
   and libSystem exports no such symbol. Defining `__GNUC__` is the obvious next
   probe; it was not tried, because it would also switch many other headers onto
   GNU-builtin paths c2mir lacks.
+
+## Finding 4 -- c2mir silently ignores `#pragma pack` and `__attribute__((packed))`
+
+The root cause behind finding 3's static-assert row, and the only thing found on
+macOS whose failure mode is *wrong layout* rather than *refused input*.
+
+### Repro
+
+```c
+#pragma pack(push, 4)
+struct packed4  { unsigned a, b, c; uint64_t d; };
+#pragma pack(pop)
+struct natural  { unsigned a, b, c; uint64_t d; };
+struct attrpack { unsigned a; uint64_t d; } __attribute__((packed));
+```
+
+| | clang | c2mir |
+|---|---|---|
+| `packed4` sizeof / offsetof(d) | 20 / 12 | **24 / 16** |
+| `natural` sizeof / offsetof(d) | 24 / 16 | 24 / 16 |
+| `attrpack` sizeof / offsetof(d) | 12 / 4 | **16 / 8** |
+
+Both packing mechanisms are dropped; the unpacked control agrees, so this is
+specifically packing and not a general layout difference.
+
+**The two differ in detectability, and the more dangerous one is the quiet
+one.** `#pragma pack` at least produces `warning -- unknown pragma`.
+`__attribute__((packed))` produces **no diagnostic at all** -- which is the same
+mechanism section 3.1 already describes ("c2mir parses `__attribute__((...))`
+and discards it with no diagnostic"), but a consequence class 3.1 does not
+cover. 3.1's table lists only the attributes *the emitter* uses and concludes
+three of four matter; `packed` arrives from **system headers and user
+inline-C**, and its consequence is silent ABI divergence rather than missing
+initialization. It deserves a fourth row.
+
+### How it reaches the corpus, and why the 3 failures are NOT corruption
+
+`stdlib/image.tur:51` includes `<mach-o/dyld.h>` for `_NSGetExecutablePath`.
+That header transitively reaches `mach/message.h`, whose trailer structs live
+inside `#pragma pack(push, 4)` (line 291) and carry XNU's own
+`xnu_static_assert_struct_size` ABI locks. c2mir drops the packing, computes 64
+and 72 where XNU demands 60 and 68, and the assert fires.
+
+Being precise about severity, because the loud version is the harmless one:
+
+- **These 3 fixtures are not miscompiled.** Nothing in `stdlib/` or
+  `src/runtime/` references `mach_msg`, `mach_port_t`, or any `MACH_*` symbol;
+  the only mach-o symbol used is `_NSGetExecutablePath(char *, uint32_t *)`,
+  which passes no packed struct. The header is declared-only. XNU's assert
+  catches c2mir's bug at parse time and the program never runs -- a compile
+  error, not corruption.
+- **The latent risk is real but currently unreached.** Turmeric's runtime and
+  stdlib use zero packing (`grep 'pragma pack\|__attribute__((packed))' src/
+  stdlib/` is empty), so the JIT/host struct boundary is clean today. The open
+  vector is **user inline-C** defining a packed struct that the host runtime
+  also sees -- offsets would diverge with no diagnostic whatsoever.
+
+### The platform framing inverts here
+
+The c2mir defect is host-independent -- the repro above is pure C with no
+platform conditionals. macOS is not more broken, it is **louder**: XNU ships
+`_Static_assert` ABI locks in its own headers, so the divergence is caught at
+compile time. Linux headers carry no equivalent guard, so the same wrong layout
+there would simply be adopted silently. **If this is going to bite anyone, it
+will bite the platform that never reported it.**
+
+### Fix directions
+
+- J1 must decide explicitly whether packing is in-subset. The cheapest honest
+  option is to **reject** rather than mislay: teach the normalizer to fail on
+  `#pragma pack` and `__attribute__((packed))` so a program that needs them
+  falls back to `cc` (the step-6 fallback that already handles GNU constructs in
+  user inline-C) instead of silently getting different offsets.
+- Implementing packing in c2mir properly is the upstream fix and is out of scope
+  for J1.
+- Either way this belongs in section 3.1's table, which currently reads as
+  though `unused`/`constructor`/`cleanup` are the complete attribute story.
 
 ## Incidental corrections to section 8
 

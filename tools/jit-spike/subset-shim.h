@@ -81,12 +81,19 @@
  *   - 5 fixtures: TargetConditionals.h now parses, and they fail later on
  *     `syntax error on typedef`, an ordinary c2mir subset gap.
  *   - 3 fixtures: mach/message.h:543 and :569 now reach their
- *     `xnu_static_assert_struct_size` checks and FAIL them -- c2mir lays those
- *     mach_msg structs out at a different size than clang does.  That is an ABI
- *     divergence, not a parse gap: JIT'd code touching a Mach message struct
- *     would be silently wrong rather than refused.  J1 must not treat the
- *     header gate as merely cosmetic.  This is invisible without __arm64__
- *     having a value, which is why the predefine earns its place.
+ *     `xnu_static_assert_struct_size` checks and FAIL them.  Root cause is NOT
+ *     mach-specific: c2mir silently ignores `#pragma pack` AND
+ *     `__attribute__((packed))`, so it computes 64/72 where XNU demands 60/68.
+ *     Those 3 fixtures are not miscompiled -- nothing in stdlib/ or
+ *     src/runtime/ ever uses a mach_msg struct (stdlib/image.tur only wants
+ *     _NSGetExecutablePath), so XNU's assert turns a layout bug into a clean
+ *     compile error.  The real exposure is user inline-C with a packed struct
+ *     that the host runtime also sees: offsets would diverge with NO diagnostic
+ *     (the pragma at least warns "unknown pragma"; the attribute is silent).
+ *     Host-independent -- macOS is louder, not more broken, because XNU ships
+ *     _Static_assert ABI locks and glibc does not.  See finding 4 in the report.
+ *     Invisible without __arm64__ having a value, which is why the predefine
+ *     earns its place.
  *   - 1 fixture: _OSSwapInt16 stays unresolved.  libkern/_OSByteOrder.h only
  *     emits the static-inline bodies under __GNUC__; the fallback path declares
  *     them extern and libSystem exports no such symbol.  Defining __GNUC__ is
