@@ -505,7 +505,7 @@ static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
     Buf b; buf_init(&b);
     buf_printf(&b,
-        "__extension__ ({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
+        "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
         "*__tur_pbox = (%s); (int64_t)(intptr_t)__tur_pbox; })",
         cn, cn, cn, val);
     buf_putc(&b, '\0');
@@ -3114,7 +3114,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const char *cn = emit_type_c_name(ctx,
                     emit_resolve_type(ctx, e->as.union_inject_.value->type));
                 buf_printf(&out,
-                    "__extension__ ({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                    "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
                     "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
                     cn, cn, cn, inner, (long long)tag);
             } else {
@@ -3163,7 +3163,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (target_tag == (int64_t)TY_FLOAT) {
                 /* TY2.2: reverse the float bit-reinterpret stored on inject. */
                 buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
                     inner, (long long)target_tag);
@@ -3174,14 +3174,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * struct deref above. */
                 const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
                 buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
                     inner, (long long)target_tag, cn);
             } else {
                 Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
                 buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "(%s)(intptr_t)TUR_UNTAG(__tur_c); })",
                     inner, (long long)target_tag, type_c_name(target));
