@@ -10540,9 +10540,17 @@ eval_done:;
         /* SI4: persist TypeClassEnv for turi_try_show dispatch. */
         env->last_tc_env = tc_env_slot;
         /* SI4: extract type tag from the last new top-level expression. */
-        if (out_type_tag && tag_cap > 0 && total > n_fsd + prior_prog) {
+        env->last_result_type = NULL;
+        if (total > n_fsd + prior_prog) {
             Expr *last_expr = prog->as.program.items[total - 1];
-            if (last_expr) extract_type_tag(last_expr->type, out_type_tag, tag_cap);
+            if (last_expr) {
+                if (out_type_tag && tag_cap > 0)
+                    extract_type_tag(last_expr->type, out_type_tag, tag_cap);
+                /* Retain the FULL type alongside the head-only tag.  Lives in
+                 * the same arena as last_tc_env (set just above), so it stays
+                 * valid for the display pass that follows this eval. */
+                env->last_result_type = (void *)&last_expr->type;
+            }
         }
     } else {
         /* TR2: this turn's source is not appended to src_acc on failure, so its
@@ -11581,7 +11589,7 @@ void turi_debug_disable(TuriEnv *env) {
  * tag).  Returns a strdup'd string, or NULL when no matching instance exists
  * or the method does not return a cstr. */
 static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
-                                        TuriValue val) {
+                                        TuriValue val, const Type *recv_ty) {
     if (!env || !env->last_tc_env || !type_name) return NULL;
     TypeClassEnv *tc_env = (TypeClassEnv *)env->last_tc_env;
 
@@ -11628,6 +11636,30 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
     if (!cl) return NULL;
     memset(cl, 0, sizeof(*cl));
     cl->fn = show_impl;
+
+    /* Root cause B (docs/reported/map-show-keyword-key-raw-int.md): a generic
+     * instance body -- `Show [Map]`'s `map-show-loop [^Show K ^Show V]` -- shows
+     * each element through `(show (:: (hamt/iter-cur-key iter) K))`.  That
+     * ascription re-resolves the baked int-carrier representative instance only
+     * if `K` is bound in the frame chain, and the ordinary call path binds it
+     * from the call site's abi_bindings -- which a call synthesised here has
+     * none of.  So every element showed as `Show[int]`, printing the raw
+     * carrier: Sym keys AND cstr keys alike (int was right only by the
+     * coincidence of carrier == value).
+     *
+     * Seed the tyvars the same way the compiled path does, from the receiver's
+     * own type.  frame_lookup_tyvar walks the parent chain and eval_apply_driven
+     * parents the callee frame to cl->captured, so a synthetic frame hung here
+     * is visible throughout the instance body; the nested `map-show-loop` call
+     * then resolves K/V out of it via frame_record_abi.  recv_ty is NULL for a
+     * caller that has only the head tag, which degrades to the old behavior
+     * rather than failing. */
+    if (recv_ty) {
+        EvalFrame *tyframe = eval_frame_new(env, NULL);
+        frame_bind_instance_constraint_tyvars(env, tyframe, show_impl, recv_ty);
+        if (tyframe->tyvars) cl->captured = tyframe;
+    }
+
     TuriValue fn_val = turi_closure(cl);
 
     TuriValue result = turi_call(env, fn_val, &val, 1);
@@ -11653,7 +11685,9 @@ const char *turi_try_show(TuriEnv *env, TuriValue val) {
     if (!env || !env->last_tc_env) return NULL;
     if (val.tag != TURI_STRUCT || !val.as_struct || !val.as_struct->name)
         return NULL;
-    return turi_call_show_named(env, val.as_struct->name, val);
+    /* A TURI_STRUCT receiver names its own type and carries its fields as real
+     * values, so it needs no element-type seeding. */
+    return turi_call_show_named(env, val.as_struct->name, val, NULL);
 }
 
 /* Tags that must NOT route through a Show-instance lookup: primitives (their
@@ -11676,7 +11710,18 @@ const char *turi_try_show_by_tag(TuriEnv *env, TuriValue val,
                                  const char *type_tag) {
     if (!env || val.tag != TURI_INT || !type_tag || !type_tag[0]) return NULL;
     if (show_tag_is_skipped(type_tag)) return NULL;
-    return turi_call_show_named(env, type_tag, val);
+    /* Pair the head tag with the full type the same eval produced, so a
+     * collection's element types survive into instance selection.  The two are
+     * set together in turi_eval_impl and describe the same expression; a stale
+     * or absent type simply yields NULL seeding. */
+    const Type *recv_ty = (const Type *)env->last_result_type;
+    if (recv_ty) {
+        /* Guard against the tag and the type having drifted apart: only seed
+         * when the retained type really is the one this tag names. */
+        const char *hn = gde_type_head_name(recv_ty);
+        if (!hn || strcmp(hn, type_tag) != 0) recv_ty = NULL;
+    }
+    return turi_call_show_named(env, type_tag, val, recv_ty);
 }
 
 /* -------------------------------------------------------------------------

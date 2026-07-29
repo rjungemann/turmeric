@@ -648,6 +648,17 @@ add_test(
 set_tests_properties(tur_lang_switch_prelude PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# map-show-keyword-key-raw-int (root cause B): the auto-show display path keeps
+# the full result type beside the head-only tag, so a collection's elements
+# resolve their own Show instance instead of the int-carrier representative.
+add_test(
+  NAME tur_show_collection_elems
+  COMMAND "${CMAKE_BINARY_DIR}/tur_show_collection_elems"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_show_collection_elems PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # TR2.0: reader macros defined in one eval must stay usable across later evals
 # (pins the contract the incremental-elaboration change must preserve).
 add_test(
@@ -913,7 +924,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
-                     tur_lang_switch_prelude
+                     tur_lang_switch_prelude tur_show_collection_elems
                      tur_gc_runtime_copy_parity
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur

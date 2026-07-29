@@ -381,6 +381,16 @@ typedef struct TuriEnv {
     /* SI4: TypeClassEnv* from latest turi_eval; used by turi_try_show for Show dispatch.
      * Points into an eval_arena (never freed). Cast to TypeClassEnv* in eval.c. */
     void        *last_tc_env;
+    /* Full elaborated Type of the last top-level result, as a `const Type *`
+     * into the same eval_arena as last_tc_env (never freed; NULL when the turn
+     * produced no new top-level expression).  The companion `type_tag` string
+     * carries only the head constructor ("Map"), which is enough to FIND the
+     * Show instance but not to show its ELEMENTS: a generic `Show [Map]` body
+     * needs concrete K/V to re-resolve `(show (:: ... K))` away from the
+     * int-carrier representative instance.  Kept as void* because env.h stays
+     * free of the compiler type headers; cast to `const Type *` in eval.c.
+     * See docs/reported/map-show-keyword-key-raw-int.md (root cause B). */
+    void        *last_result_type;
     /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
      * turns so `(reader-macros/define ...)` on one line is visible to the
      * reader on the next. Allocated from sym_arena; entries' templates
