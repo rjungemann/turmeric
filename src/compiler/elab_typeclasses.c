@@ -4939,6 +4939,55 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                     break;
                 }
             }
+            /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the search above
+             * looks for a kind-`*` `int`-headed representative, which a
+             * higher-kinded class never has -- every `Applicative`/`Monad`
+             * instance head is a type CONSTRUCTOR.  So `pure`/`empty` on an
+             * abstract `m` inside a constrained poly fn found no representative
+             * and hard-errored ("no instance 'Applicative tyvar'"), even though
+             * the receiver-directed methods of the very same constraint (`ap`,
+             * `bind`) resolve fine through the representative path in
+             * elab_method_call.
+             *
+             * Mirror that path for the higher-kinded case: when the abstract
+             * tyvar IS this function's constraint variable and `tc` is the
+             * constraint's class, use the constraint's ambient representative
+             * instance as the polymorphic base.  Emit-side re-resolution then
+             * specializes it per monomorphization, exactly as for the kind-`*`
+             * representative above.  Gated on the ambient constraint so an
+             * unconstrained `(pure 42)` with no expected type still reports the
+             * ascription-required diagnostic rather than silently picking an
+             * instance.
+             *
+             * The gate is that `bound` names THIS body's abstract constraint
+             * variable -- not that `tc` is the ambient class.  A body may
+             * constrain several classes on one type constructor (`[^Monad m
+             * ^Applicative m ...]`), and only the first is recorded as ambient;
+             * keying on the tyvar covers the rest.  This is the same latitude
+             * the receiver-directed path already takes, which picks a
+             * representative for `ap`/`bind` without consulting the constraint
+             * set at all. */
+            if (!inst && e->cur_hkt_constraint_tyvar && bound.as.tyvar_.name &&
+                strcmp(bound.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0) {
+                TypeClassInstance *repr =
+                    (e->cur_hkt_dict_binding && e->cur_hkt_dict_binding->ambient_repr)
+                        ? e->cur_hkt_dict_binding->ambient_repr : NULL;
+                /* The ambient repr belongs to the FIRST constraint's class; it is
+                 * only usable here when that is also `tc`. */
+                if (repr && (repr->typeclass != tc ||
+                             midx >= repr->n_method_impls || !repr->method_impls[midx]))
+                    repr = NULL;
+                if (!repr) {
+                    for (TypeClassInstance *it = env->instances; it; it = it->next) {
+                        if (it->typeclass != tc) continue;
+                        if (midx >= it->n_method_impls || !it->method_impls[midx])
+                            continue;
+                        repr = it;
+                        break;
+                    }
+                }
+                inst = repr;
+            }
             abstract_return_dispatch = (inst != NULL);
         }
         if (!inst) {
@@ -6414,6 +6463,38 @@ resolved_user_fallback:;
             Expr *orig = args[i];
             Expr *wrap = expr_new(e->arena, EX_POLY_WRAP, TYPE_PTR_VOID, orig->span);
             wrap->as.poly_wrap_.inner = orig;
+            /* constrained-hkt-byvalue-carriers: when the receiver is the ABSTRACT
+             * type constructor of a constrained poly fn, this method call lowers to
+             * a dictionary-slot dispatch, whose method pointer returns the int64
+             * carrier -- and the instance impl invokes this `:fn` argument through
+             * `((int64_t (*)(void*, int64_t))k.fn)(...)`.  A continuation returning
+             * a by-value aggregate (e.g. `(fn [v] (some (dbl v)))` at `(Option
+             * int)`) therefore had a struct-returning thunk cast to an
+             * int64-returning pointer: an x86-64 return-ABI mismatch (RAX:RDX vs
+             * RAX) that handed the instance garbage, which the caller then
+             * dereferenced -- the Gap 2 segfault.
+             *
+             * Ask for the carrier-spill shim so the thunk boxes its aggregate
+             * return, matching the carrier ABI on both sides.  Only the abstract
+             * receiver opts in: a CONCRETE receiver resolves to the instance's own
+             * by-value entry point and must keep consuming the struct directly,
+             * which is what the existing gate protects.  The shim is itself
+             * defensive -- ensure_aggregate_spill_shim returns NULL unless the
+             * result really is a by-value aggregate -- so this is a no-op for
+             * carrier-returning continuations. */
+            {
+                /* The receiver is `(m int)` -- a TY_APP spine headed by the
+                 * abstract constructor -- not a bare TY_TYVAR, so walk to the
+                 * head before comparing against this body's constraint var. */
+                Type rcv = obj->type;
+                while (rcv.kind == TY_APP && rcv.as.app.fn) rcv = *rcv.as.app.fn;
+                bool rcv_is_ambient_ctor =
+                    rcv.kind == TY_TYVAR && rcv.as.tyvar_.name &&
+                    e->cur_hkt_constraint_tyvar &&
+                    strcmp(rcv.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0;
+                if (obj_is_abstract_tyvar || rcv_is_ambient_ctor)
+                    wrap->as.poly_wrap_.boxes_aggregate = true;
+            }
             if (inner_b->is_poly_fn) {
                 wrap->as.poly_wrap_.wrapper_binding = NULL; /* HRT4: pass-through */
             } else if (inner_b->closure_fn_binding && !inner_b->is_global) {

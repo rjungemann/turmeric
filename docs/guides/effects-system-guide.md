@@ -514,4 +514,4 @@ For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead
 - [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations
 - [STM Tutorial](stm-tutorial.md) -- Composable transactions with effects
 - [Custom Effects Tutorial](custom-effects-tutorial.md) -- Step-by-step walkthrough of all effect patterns
-- [Effects vs. Monads](effects-vs-monads.md) -- Why effects replace monadic chaining in Turmeric
+- [Effects vs. Monads](effects-vs-monads.md) -- Choosing between an effect handler and a monad value

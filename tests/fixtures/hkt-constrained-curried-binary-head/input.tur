@@ -1,0 +1,20 @@
+;; constrained-hkt-abstract-var-requires-last-param-free: a BINARY constructor
+;; fills a constrained unary `(m int)` fine, provided the abstracted parameter
+;; is its LAST one.
+;;
+;; `Either` is `[L R]` and its instance head is the curried prefix
+;; `Functor [(Either E)]`, so `m := (Either cstr)` is an ordinary partial
+;; application and structural unification handles it with no hole machinery.
+;; This guards the boundary from the other side: the open report is about
+;; heads whose free slot is NOT last (`(Result _ B)`), not about arity.
+
+(load "stdlib/either.tur")
+
+(defn mk-r [n : int] : (Either cstr int) (Right n))
+
+(defn poly-fmap [^m] [^Functor m x : (m int)] : (m int)
+  (fmap x (fn [v : int] : int (* v 2))))
+
+(defn main [] : int
+  (println (from-right -1 (poly-fmap (mk-r 21))))   ; 42
+  0)

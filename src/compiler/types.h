@@ -766,6 +766,20 @@ typedef struct Type {
         struct {
             struct Type *fn;   /* The type constructor being applied (kind * -> * or * -> * -> *) */
             struct Type *arg;  /* The type argument (kind *) */
+            /* constrained-hkt-abstract-var-requires-last-param-free: a
+             * HOLE-HEADED partial application -- `(Result _ cstr)`, the shape a
+             * wildcard instance head declares.  `fn` is the bare constructor and
+             * `arg` is the FIXED argument; the free slot is the hole.  Applying
+             * such a type to `X` places `X` at the hole index and the fixed args
+             * in the remaining slots, so `(Result _ cstr)` applied to `int` is
+             * `(Result int cstr)` -- which ordinary currying cannot express,
+             * since a curried prefix can only ever leave the LAST slot free.
+             *
+             * Encoding is hole-index PLUS ONE so that 0 -- the value every
+             * memset/zero-initialised Type already carries -- means "ordinary
+             * application, no hole".  Never read this field directly; use
+             * type_app_hole_pos() / type_app_has_hole(). */
+            uint8_t hole_pos_p1;
         } app;
         /* Phase HKT-P2: Recursive type binder — (defrec Name [params] body) */
         struct {
@@ -920,6 +934,10 @@ enum {
  * different arity; the arena is never freed (reachable, process-lifetime), so
  * the arrays outlive every by-value Type copy that shares them. */
 uint8_t *tur_fn_args_alloc(uint32_t n);
+
+/* The same process-lifetime arena, for building Types where no caller arena is
+ * in scope (see constrained-hkt-abstract-var-requires-last-param-free). */
+Arena *tur_type_arena(void);
 
 /* CONV-S1 (defstruct-as-defadt): the runtime `any`-box tag for a type.  A
  * struct-origin lowered ADT boxes / casts / is?-tests as TY_STRUCT, so the
@@ -1409,6 +1427,24 @@ static inline Type type_typeclass_inst(TypeClassInstance *inst) {
  * Both fn and arg are copied into newly-allocated memory on the arena.
  * The result kind is computed from fn's kind using kind_of_type_app. */
 Type type_app(Arena *a, Type fn, Type arg, Span span);
+/* constrained-hkt-abstract-var-requires-last-param-free: build the hole-headed
+ * partial application `ctor` with `fixed` in every slot but `hole_pos`, which
+ * stays free (e.g. type_app_hole(a, Result, cstr, 0) == `(Result _ cstr)`). */
+Type type_app_hole(Arena *a, Type fn, Type arg, uint8_t hole_pos, Span span);
+/* Does this type carry a partial-application hole?  False for every ordinary
+ * application, and for every non-TY_APP type. */
+static inline bool type_app_has_hole(const Type *t) {
+    return t && t->kind == TY_APP && t->as.app.hole_pos_p1 != 0;
+}
+/* The hole's slot index.  Only meaningful when type_app_has_hole(). */
+static inline uint8_t type_app_hole_pos(const Type *t) {
+    return (uint8_t)(t->as.app.hole_pos_p1 - 1);
+}
+/* Apply a hole-headed partial application to `elem`, yielding the saturated
+ * N-ary application (`(Result _ cstr)` + `int` -> `(Result int cstr)`).  When
+ * `head` carries no hole this is the ordinary type_app.  Returns the saturated
+ * type; arena-allocates the spine. */
+Type type_app_fill_hole(Arena *a, Type head, Type elem, Span span);
 
 /* Lift the substructural discipline (:linear / :affine) from a TY_APP's head
  * StructDef onto the application node.  Call after constructing a TY_APP whose

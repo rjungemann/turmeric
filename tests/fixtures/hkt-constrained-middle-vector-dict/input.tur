@@ -1,0 +1,31 @@
+;; The MIDDLE-VECTOR constraint spelling -- `[^m] [(Monad m) (Applicative m)]`
+;; [params] -- through the Route B dict-passing path, at two instances whose
+;; `pure` tags its payload differently (+100 vs +200).
+;;
+;; This spelling used to miscompile under monomorphization ("incompatible types
+;; when assigning to type 'int64_t' from type 'tur_adt_Option__int'" in the
+;; __spec__).  Route B routes constrained-HKT calls through the dict clone
+;; instead, which makes the two constraint spellings equivalent: elab_fns.c
+;; backlinks fn_constraints for both, and the dict-clone/dict-env lowering is
+;; spelling-agnostic from there.  107 then 207 proves caller-chosen dispatch,
+;; bind and pure alike, through the lifted continuation.
+;; middle-vector spelling at two differently-tagged instances via rank-2
+(defopaque T1 [a] :int)
+(defn mk-t1  [A] [x : A] : (T1 A) ```c return (int64_t)x; ```)
+(defn mk-t1b [A] [x : A] : (T1 A) ```c return (int64_t)x + 100; ```)
+(defn un-t1  [A] [b : (T1 A)] : A ```c return (int64_t)b; ```)
+(definstance Monad [T1] (bind [ma k] (k (un-t1 ma))))
+(definstance Applicative [T1] (pure [x] (mk-t1b x)) (ap [ff fa] fa))
+(defopaque T2 [a] :int)
+(defn mk-t2  [A] [x : A] : (T2 A) ```c return (int64_t)x; ```)
+(defn mk-t2b [A] [x : A] : (T2 A) ```c return (int64_t)x + 200; ```)
+(defn un-t2  [A] [b : (T2 A)] : A ```c return (int64_t)b; ```)
+(definstance Monad [T2] (bind [ma k] (k (un-t2 ma))))
+(definstance Applicative [T2] (pure [x] (mk-t2b x)) (ap [ff fa] fa))
+(defn btp [^m] [(Monad m) (Applicative m)] [x : (m int)] : (m int)
+  (bind x (fn [v] (pure (+ v 1)))))
+(defn at-t1 [g (forall [(m :: * -> *)] [(Monad m) (Applicative m)] (-> (m int) (m int)))] : int
+  (un-t1 (g (mk-t1 6))))
+(defn at-t2 [g (forall [(m :: * -> *)] [(Monad m) (Applicative m)] (-> (m int) (m int)))] : int
+  (un-t2 (g (mk-t2 6))))
+(defn main [] : int (println (at-t1 btp)) (println (at-t2 btp)) 0)

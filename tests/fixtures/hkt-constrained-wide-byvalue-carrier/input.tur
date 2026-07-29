@@ -1,0 +1,25 @@
+;; constrained-hkt-byvalue-carriers seam 1: a constrained poly fn instantiated
+;; at a WIDE by-value container -- three words, a layout wider than Option's --
+;; through a direct call.
+;;
+;; The monomorphized-spec path emitted the spec declaring the aggregate return
+;; while its body yielded the int64 carrier ("incompatible types when returning
+;; type 'int64_t' but 'tur_adt_Pad2__int' was expected").  Route B sidesteps the
+;; broken seam entirely: the direct call routes through the dict clone, which
+;; dispatches on the carrier and bridges the aggregate result back through the
+;; carrier->concrete ascription deref.
+
+(defstruct Pad2 [A] (a :int) (b :int) (val A))
+
+(defn mk-pad [A] [x : A] : (Pad2 A) (make-struct Pad2 :a 11 :b 22 :val x))
+(defn pad-val [A] [p : (Pad2 A)] : A (.val p))
+
+(definstance Monad [Pad2]
+  (bind [ma k] (k (.val ma))))
+
+(defn poly-bind [^m] [^Monad m x : (m int)] : (m int)
+  (bind x (fn [v] (mk-pad (* v 2)))))
+
+(defn main [] : int
+  (println (pad-val (poly-bind (mk-pad 7))))   ; 14
+  0)

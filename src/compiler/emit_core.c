@@ -185,6 +185,35 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
             if (!t.as.app.fn || !t.as.app.arg) return t;
             Type fn = emit_resolve_type(ctx, *t.as.app.fn);
             Type arg = emit_resolve_type(ctx, *t.as.app.arg);
+            /* constrained-hkt-abstract-var-requires-last-param-free: mirror the
+             * two instantiation paths -- when the head resolved to a hole-headed
+             * partial application, saturate through the hole so a spec body's
+             * `(m a)` materialises as `Result__int__cstr`, matching the
+             * signature emit_abi_instantiate_type already mangled. */
+            if (type_app_has_hole(&fn)) {
+                uint8_t hp = type_app_hole_pos(&fn);
+                Type ctor  = fn.as.app.fn ? *fn.as.app.fn : fn;
+                Type fixed = fn.as.app.arg ? *fn.as.app.arg : arg;
+                Type first  = (hp == 0) ? arg   : fixed;
+                Type second = (hp == 0) ? fixed : arg;
+                Type inner;
+                memset(&inner, 0, sizeof(inner));
+                inner.kind = TY_APP;
+                inner.copy_kind = ctor.copy_kind;
+                inner.as.app.fn  = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                inner.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *inner.as.app.fn  = ctor;
+                *inner.as.app.arg = first;
+                Type outer;
+                memset(&outer, 0, sizeof(outer));
+                outer.kind = TY_APP;
+                outer.copy_kind = ctor.copy_kind;
+                outer.as.app.fn  = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                outer.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *outer.as.app.fn  = inner;
+                *outer.as.app.arg = second;
+                return outer;
+            }
             Type out = t;
             out.as.app.fn = (Type *)emit_type_scratch(ctx, sizeof(Type));
             out.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
@@ -1853,6 +1882,30 @@ bool emit_dispatch_tyvar(const Expr *call, Type *out) {
         if (recv && recv->type.kind == TY_TYVAR) { *out = recv->type; return true; }
     }
     if (call->type.kind == TY_TYVAR) { *out = call->type; return true; }
+    /* constrained-hkt-spec-keeps-representative-instance: a higher-kinded class
+     * method called on the abstract constructor has receiver `(m int)` and
+     * result `(m b)` -- TY_APP spines whose HEAD is the dispatch variable.  The
+     * bare-TY_TYVAR checks above are a kind-`*` assumption and never see it, so
+     * the spec kept the env-ordered representative.  Hand back the whole spine;
+     * emit_resolve_type grounds it per spec and selection matches head-wise.
+     * Checked last so every kind-`*` case keeps its existing answer, and
+     * deliberately inert for the scan-time predicate (which re-checks TY_TYVAR). */
+    {
+        const Expr *recv = (call->as.call_.n_args >= 1 && call->as.call_.args)
+            ? call->as.call_.args[0] : NULL;
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        const Type *cands[2];
+        uint8_t nc = 0;
+        if (recv) cands[nc++] = &recv->type;
+        cands[nc++] = &call->type;
+        for (uint8_t i = 0; i < nc; i++) {
+            const Type *t = cands[i];
+            if (t->kind != TY_APP) continue;
+            const Type *head = t;
+            while (head->kind == TY_APP && head->as.app.fn) head = head->as.app.fn;
+            if (head->kind == TY_TYVAR) { *out = *t; return true; }
+        }
+    }
     return false;
 }
 
@@ -2253,16 +2306,25 @@ int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call) {
           call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
           call->as.call_.dict_arg->as.dict_.instance &&
           call->as.call_.dict_arg->as.dict_.instance->typeclass &&
-          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
-          /* The receiver must be the constraint's own type variable -- a
-           * concrete same-class call in the same mapper body (e.g. `(show 42)`
-           * alongside `(show x)`) is instance-resolved and must NOT be routed
-           * through the polymorphic env dict.  Mirrors the elab-side gate in
-           * mapper_scan_dispatch / dict_clone_nested_dispatch_rec. */
-          call->as.call_.n_args >= 1 && call->as.call_.args &&
-          call->as.call_.args[0] &&
-          call->as.call_.args[0]->type.kind == TY_TYVAR))
+          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0'))
         return -1;
+    /* The dispatch must be on the constraint's own type variable -- a concrete
+     * same-class call in the same mapper body (e.g. `(show 42)` alongside
+     * `(show x)`) is instance-resolved and must NOT be routed through the
+     * polymorphic env dict.  Mirrors the elab-side gate
+     * (call_dispatched_constraint_class): receiver-directed keys on a bare
+     * tyvar receiver; return-directed (`pure`/`empty` -- Route B,
+     * constrained-hkt-lifted-lambda-keeps-representative-instance) keys on the
+     * result being tyvar-headed. */
+    {
+        bool recv_is_tyvar =
+            call->as.call_.n_args >= 1 && call->as.call_.args &&
+            call->as.call_.args[0] &&
+            call->as.call_.args[0]->type.kind == TY_TYVAR;
+        const Type *h = &call->type;
+        while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+        if (!recv_is_tyvar && h->kind != TY_TYVAR) return -1;
+    }
     const TypeClass *mtc = call->as.call_.dict_arg->as.dict_.instance->typeclass;
     for (uint8_t k = 0; k < ctx->cur_dict_env_n; k++)
         if (ctx->cur_dict_env_classes[k] == mtc) return (int)k;

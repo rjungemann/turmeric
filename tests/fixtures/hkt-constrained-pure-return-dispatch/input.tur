@@ -1,0 +1,37 @@
+;; constrained-hkt-pure-and-byvalue-carriers gap 1: `pure` (a return-directed
+;; method) on the ABSTRACT type constructor of a constrained poly fn.
+;;
+;; Before the fix the abstract-tyvar representative search only looked for a
+;; kind-`*` `int`-headed instance, which a higher-kinded class never has, so this
+;; hard-errored with "no instance 'Applicative tyvar'" -- even though the
+;; receiver-directed methods of the SAME constraint (`ap`) resolved fine.
+;;
+;; Two shapes are pinned here:
+;;   1. a single `^Applicative m` constraint whose body is just `pure`
+;;   2. `[^Monad m ^Applicative m]` -- two classes on one type constructor,
+;;      the shape every bind-then-pure combinator needs.  The ambient
+;;      constraint used to be recorded only for a single-constraint fn.
+
+(defopaque Box [a] :int)
+(defn mk-box [A] [x : A] : (Box A) ```c return (int64_t)x; ```)
+(defn un-box [A] [b : (Box A)] : A ```c return (int64_t)b; ```)
+(definstance Monad [Box] (bind [ma k] (k (un-box ma))))
+(definstance Applicative [Box] (pure [x] (mk-box x)) (ap [ff fa] fa))
+
+;; 1. pure alone, single constraint
+(defn just-pure [^m] [^Applicative m x : (m int)] : (m int)
+  (pure 7))
+
+;; 2. bind ending in pure, two constraints on the same type constructor
+(defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
+  (bind x (fn [v] (pure (* v 2)))))
+
+;; 3. receiver-directed dispatch on the same constraint still works
+(defn just-ap [^m] [^Applicative m x : (m int)] : (m int)
+  (ap x x))
+
+(defn main [] : int
+  (println (un-box (just-pure (mk-box 0))))       ; 7
+  (println (un-box (bind-then-pure (mk-box 5))))  ; 10
+  (println (un-box (just-ap (mk-box 3))))         ; 3
+  0)

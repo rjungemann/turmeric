@@ -4732,7 +4732,24 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->cur_hkt_constraint_class = NULL;
     e->cur_hkt_constraint_tyvar = NULL;
     e->cur_hkt_dict_binding     = NULL;
-    if (n_constraints == 1 && constraint_list &&
+    /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the ambient constraint
+     * used to be recorded only for a SINGLE-constraint fn, so the moment a body
+     * needed two classes on the same type constructor -- `[^Monad m ^Applicative
+     * m ...]`, which is what any `bind`-then-`pure` combinator needs -- the
+     * ambient went unset and return-directed dispatch had nothing to key on.
+     * Accept N constraints as long as they all pin the SAME higher-kinded type
+     * variable; the ambient class/dict stay the first one (the dict-clone path
+     * below is still single-constraint by construction, see make_dict_clone),
+     * but `cur_hkt_constraint_tyvar` now correctly reports "this body abstracts
+     * over m". Constraints on DIFFERENT tyvars keep the old behaviour of
+     * recording no ambient at all. */
+    bool hkt_constraints_share_tyvar = (n_constraints >= 1 && constraint_list);
+    for (uint8_t ci = 1; ci < n_constraints && hkt_constraints_share_tyvar; ci++) {
+        if (!constraint_list[ci].typeclass || !constraint_list[ci].tyvar ||
+            constraint_list[ci].tyvar != constraint_list[0].tyvar)
+            hkt_constraints_share_tyvar = false;
+    }
+    if (hkt_constraints_share_tyvar &&
         constraint_list[0].typeclass && constraint_list[0].tyvar) {
         const Symbol *ctv = constraint_list[0].tyvar;
         for (uint8_t tpi = 0; tpi < n_fn_type_params; tpi++) {

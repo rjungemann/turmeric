@@ -515,4 +515,4 @@ risk of dependent unification or SMT integration.
 - [sized-types-guide.md](sized-types-guide.md) -- Sized types
 - [contract-types-guide.md](contract-types-guide.md) -- Contract types
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) -- Union and intersection types
-- [effects-vs-monads.md](effects-vs-monads.md) -- Why effects instead of monads
+- [effects-vs-monads.md](effects-vs-monads.md) -- Effect handlers vs. monad values
