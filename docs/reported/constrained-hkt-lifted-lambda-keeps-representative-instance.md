@@ -61,34 +61,62 @@ Schema; it was rewritten to put `pure` in the fn's own body, which genuinely
 emits `__inst_Applicative_pure_Option`. **Do not add a `bind`-then-`pure` fixture
 until this is fixed** -- it will pass while being wrong.
 
-## Root cause
+## Root cause -- a chain of four links
 
-Not pinpointed. The lambda is lifted to a file-scope `__fn_<N>` and emitted once,
-so `ctx->current_abi_specialization` is NULL in its body and
-`emit_reresolve_disp_type` cannot fire (it early-returns without an active spec).
+The lambda is lifted to a file-scope `__fn_<N>` and emitted once, so
+`ctx->current_abi_specialization` is NULL in its body and
+`emit_reresolve_disp_type` early-returns. Getting it cloned per specialization
+means clearing four separate obstacles. Links 1-3 were implemented and verified
+individually; **link 4 is the blocker** and the work was reverted because 1-3
+without it only mint a clone nothing calls.
 
-There is machinery for re-emitting a lifted closure per specialization --
-`emit_subtree_dispatches_on_spec_tyvar` / `emit_call_dispatches_on_spec_tyvar`
-(`emit_module.c`), added by constrained-instance-element-dispatch-in-closures.
-Relaxing its `dt.kind != TY_TYVAR` gate to walk to the head of a `(m int)` spine
-was tried and **had no effect**, so a different mechanism governs whether this
-particular lambda is cloned per spec. Find that first.
+1. **The predicate is kind-`*` only.** `emit_call_dispatches_on_spec_tyvar`
+   (`emit_module.c`) rejects anything but a bare `TY_TYVAR`. A higher-kinded call
+   hands back the `(m int)` spine, so walk to its head first. (One-line change;
+   verified.)
+
+2. **The finder cannot see the lambda.** `emit_find_dispatch_spec_closure` only
+   matches `EX_CLOSURE`. A NON-capturing continuation is lambda-lifted and packed
+   by `EX_POLY_WRAP` around an `EX_VAR` reference, so it must also descend
+   `EX_POLY_WRAP` / `EX_FN_TO_FAT` / `EX_POLY_TO_FAT` and match a lifted fn via
+   `binding->source_fn_def`. (Verified.)
+
+3. **The gate excludes constrained defns.** The caller runs the finder only when
+   `fd->owner_instance` is set -- instance-method bodies. A constrained poly
+   `defn` has the identical problem and never reaches it. Relaxing to
+   `fd->owner_instance || fd->constraints.n_constraints > 0` admits it. (Verified;
+   full suite stayed green at 2404.)
+
+4. **The call site still references the ORIGINAL lambda.** With 1-3 in place a
+   per-spec clone IS minted -- `__fn_1304__spec__int64_t_int64_t` appears -- but
+   the enclosing spec still emits
+
+       __inst_Monad_bind_Option(..., (tur_poly_fn_t){ NULL,
+           (int64_t(*)(void*,int64_t))__poly_1306 })
+
+   where `__poly_1306` is the `make_poly_wrapper` thunk built at ELABORATION time
+   around the original `__fn_1304`. The wrapper binding is baked into the
+   `EX_POLY_WRAP` node, so cloning the inner fn does not reroute anything; the
+   wrapper needs a per-spec twin too.
 
 ## Fix directions
 
-1. Determine what decides that the `bind` continuation is emitted once rather
-   than per spec. The closure-re-emission predicate above is the obvious
-   candidate but demonstrably is not the deciding path here.
-2. Once the lambda is cloned per spec, the existing re-resolution should handle
-   the body -- `emit_dispatch_tyvar` already understands the higher-kinded
-   dispatch position as of the fix above.
-3. Alternative: route return-directed methods on an abstract constructor through
-   the constraint dictionary (a real slot load) rather than a representative, so
-   correctness does not depend on specialization at all. That is how the
-   dict-passed path already gets the right answer.
-4. Prefer a representative whose layout is widest, or refuse to pick one when
-   candidate layouts differ, so a miss degrades to a compile error rather than a
-   silent wrong-instance call.
+1. Land links 1-3 together with a fix for link 4, not before -- on their own they
+   emit a dead spec.
+2. For link 4, the natural place is the `EX_POLY_WRAP` emit (`emit_expr.c`, where
+   `wn = raw_name_for_binding(wrapper_binding)`): inside an active specialization,
+   if the wrapped inner fn has a registered per-spec clone, emit a twin wrapper
+   forwarding to it. `ensure_aggregate_spill_shim` in `emit_module.c` is the
+   existing pattern for minting a wrapper at emit time.
+3. **Probably better than all of the above:** route return-directed methods on an
+   abstract constructor through the constraint dictionary (a real slot load)
+   rather than a representative. Correctness then does not depend on
+   specialization at all, and the lifted lambda can capture the dict the way it
+   captures anything else. This is already how the dict-passed rank-2 path gets
+   the right answer -- see `hkt-constrained-pure-two-instances` (107/207).
+4. Independently: prefer a representative whose layout is widest, or refuse to
+   pick one when candidate layouts differ, so a miss degrades to a compile error
+   rather than a silent wrong-instance call.
 
 ## Related
 
