@@ -48,9 +48,17 @@ import sys
 # --------------------------------------------------------------------------
 # The emitted C forward-declares every function it defines, so one linear scan
 # over the file is enough; no ordering assumption is needed.
+# The separator between return type and name is MANDATORY (whitespace and/or
+# `*`).  With it optional, a plain CALL statement `snprintf(__m, ...)` matched
+# as return type `sn` + name `printf` -- the lazy type group happily splits a
+# single identifier -- and poisoned the table with `printf -> sn`, which then
+# emitted `sn __ps_N = (printf(...));` and failed 24 fixtures as opaque parse
+# errors from the very first sweep.  Any identifier that splits two ways did
+# this; the mandatory separator makes the split impossible.
 PROTO_RE = re.compile(
     r'^\s*(?:static\s+|extern\s+|inline\s+|__attribute__\(\([^)]*\)\)\s*)*'
-    r'([A-Za-z_][A-Za-z0-9_ ]*?[A-Za-z0-9_])\s*(\**)\s*'
+    r'([A-Za-z_][A-Za-z0-9_ ]*?[A-Za-z0-9_])'
+    r'((?:\s|\*)+)'
     r'([A-Za-z_][A-Za-z0-9_]*)\s*\(')
 
 NOT_A_TYPE = {'return', 'if', 'while', 'for', 'switch', 'sizeof', 'typedef',
@@ -139,9 +147,10 @@ def build_proto_table(lines):
         m = PROTO_RE.match(line)
         if not m:
             continue
-        ret, stars, name = m.group(1).strip(), m.group(2), m.group(3)
+        ret, sep, name = m.group(1).strip(), m.group(2), m.group(3)
         if ret in NOT_A_TYPE:
             continue
+        stars = '*' * sep.count('*')
         proto.setdefault(name, (ret + ' ' + stars).strip())
     return proto
 

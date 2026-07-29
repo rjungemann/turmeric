@@ -11371,6 +11371,18 @@ int emit_program(Buf *out, const Expr *program) {
                     }
                 }
             }
+            /* S1: record the return type for EVERY extern-c form, including the
+             * suppressed ones -- suppression only means "the system header or
+             * hamt.h already declares this, do not emit a duplicate decl", but
+             * call sites still hoist these into typed temps, and `printf` et al
+             * being unrecorded left their temps on __auto_type.  The extern-c
+             * form itself is the type authority here (`:int` on printf). */
+            {
+                char *ec_rec = mangle_field_name(ec->c_name->name);
+                emit_sig_record_ret_ctype(ec_rec, ec->n_params,
+                                          type_c_name(ec->return_type));
+                free(ec_rec);
+            }
             if (!suppress_ec) {
             /* extern-c names map to a real C symbol via the LEGACY fold (e.g.
              * `tur_hamt_new` stays itself; `tvar/new` -> `tvar_new`). This must
