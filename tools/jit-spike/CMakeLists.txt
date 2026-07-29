@@ -33,50 +33,32 @@ target_compile_options(tur-jit-spike PRIVATE -O2 -std=gnu11 -Wall)
 # resolve by address, exactly as hamt.c already does.  Ten fixtures failed the
 # sweep purely because the harness linked the 9 runtime TUs and not these, which
 # is a property of the harness rather than of the engine (findings 8.4.3).
-set(TUR_JIT_HOST_RUNTIME
-  "${CMAKE_SOURCE_DIR}/src/runtime/hamt.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/symbols.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/tur_string.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/rc.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/gc.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/rc_free_queue.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/runtime.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/arena.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/buf.c"
-  "${CMAKE_SOURCE_DIR}/src/async/reactor.c"
-  "${CMAKE_SOURCE_DIR}/src/async/fiber.c"
-  "${CMAKE_SOURCE_DIR}/src/async/io.c"
-  "${CMAKE_SOURCE_DIR}/src/async/scheduler.c"
-  "${CMAKE_SOURCE_DIR}/src/async/scheduler_common.c"
-  "${CMAKE_SOURCE_DIR}/src/async/timer_wheel.c"
-  "${CMAKE_SOURCE_DIR}/src/async/atomic_queue.c"
-)
-
-# Architecture / platform selection, mirroring src/CMakeLists.txt.  The fiber
-# context switch is assembly and the I/O backend is per-OS; picking them here
-# rather than hard-coding the container's pair keeps the spike buildable
-# wherever `tur` itself is (the macOS runs in section 9 need the kqueue/arm64
-# arms).  ASM is enabled at the top level, so the .S file needs no extra setup.
+# S2 (findings 11.5): link the runtime ARCHIVE, not a curated TU list.
+#
+# This started as nine hand-picked src/runtime TUs and grew by adding whatever
+# the last sweep failure named.  That is how it ended up in the state 11.5
+# describes: linking *some* of the async runtime let the emitted preamble --
+# which carries its own fiber/scheduler implementation -- resolve part of its
+# reactor calls into a host implementation expecting the host's structures, and
+# ten reactor fixtures crashed where they had previously failed cleanly at link.
+#
+# `tur build` autolinks `-lturi`, the whole archive.  Matching that is both the
+# faithful reading of plan section 3.2 step 4 (the MIR_load_external table IS
+# the runtime boundary) and the thing that makes the boundary a DEFINED set
+# rather than a moving target.
+#
+# --whole-archive / -force_load because a static archive otherwise contributes
+# only members that resolve an undefined symbol in the harness itself, and the
+# harness references almost none of them -- the symbols have to be present and
+# exported for dlsym(RTLD_DEFAULT) to find them at JIT link time.
 if(APPLE)
-  list(APPEND TUR_JIT_HOST_RUNTIME "${CMAKE_SOURCE_DIR}/src/async/io_kqueue.c")
-elseif(UNIX)
-  list(APPEND TUR_JIT_HOST_RUNTIME "${CMAKE_SOURCE_DIR}/src/async/io_epoll.c")
+  target_link_options(tur-jit-spike PRIVATE
+    "LINKER:-force_load,$<TARGET_FILE:libturi>")
+  target_link_libraries(tur-jit-spike PRIVATE libturi)
+else()
+  target_link_libraries(tur-jit-spike PRIVATE
+    -Wl,--whole-archive libturi -Wl,--no-whole-archive)
 endif()
-
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-  target_sources(tur-jit-spike PRIVATE
-    "${CMAKE_SOURCE_DIR}/src/async/fiber_ctx_arm64.S")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-  target_sources(tur-jit-spike PRIVATE
-    "${CMAKE_SOURCE_DIR}/src/async/fiber_ctx_x64.S")
-endif()
-
-target_sources(tur-jit-spike PRIVATE ${TUR_JIT_HOST_RUNTIME})
-set_source_files_properties(
-  ${TUR_JIT_HOST_RUNTIME}
-  TARGET_DIRECTORY tur-jit-spike
-  PROPERTIES COMPILE_OPTIONS "-O2;-std=gnu11;-fno-strict-aliasing;-w"
-)
 target_include_directories(tur-jit-spike PRIVATE
   "${CMAKE_SOURCE_DIR}/src"
   "${CMAKE_SOURCE_DIR}/src/runtime"

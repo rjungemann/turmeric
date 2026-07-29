@@ -1052,16 +1052,31 @@ implementation that expects the host's structures mixes two runtimes that were
 never meant to meet. Before this commit the mismatch was invisible because the
 symbols simply did not resolve.
 
-This sharpens S2 rather than contradicting it. Plan section 3.2 step 4 says the
-JIT's `MIR_load_external` table *is* the runtime boundary; the finding is that
-the boundary has to be a **defined, complete symbol set** -- the archive, as
-`--runtime=lib` already does on the `cc` path -- and not a hand-picked TU list
-that happens to cover the current sweep. Curating it by adding whatever the
-last failure named is how you arrive at exactly this state.
+**CORRECTION: the diagnosis in the paragraph above was wrong.** It was written
+as an inference from the autolink markers and not tested before being recorded.
+The harness has since been switched to a `--whole-archive` link of `libturi` --
+the same archive `tur build` autolinks -- and **the ten aborts are unchanged**.
+A partial runtime is not what breaks them.
 
-J1 should link the archive (`libturt_runtime.a` extended, or `libturi`) rather
-than enumerate TUs. Until then the ten `reactor-*` fixtures are expected
-failures and the harness should probably say so, rather than crashing.
+What survives, and is worth keeping, is the *boundary discipline* argument,
+which is independent of the reactor question: plan section 3.2 step 4 says the
+JIT's `MIR_load_external` table *is* the runtime boundary, so that boundary
+should be a defined, complete symbol set -- the archive, as `--runtime=lib`
+already does on the `cc` path -- rather than a TU list curated by adding
+whatever the last sweep failure named. The harness now links the archive for
+that reason alone. (It needs one stub: `libturi` is not self-contained --
+`src/lsp/lsp.c` calls `tur_collect_symbols`, defined only in `src/main.c` --
+which `tur build` never notices because a normal archive link extracts only the
+members it needs. Anything wanting the *whole* runtime present, as a JIT does
+since it resolves by name at runtime, meets that edge.)
+
+The reactor aborts are now filed as their own open finding with what has
+actually been ruled out:
+[docs/reported/jit-reactor-fixtures-abort-under-mir.md](../reported/jit-reactor-fixtures-abort-under-mir.md).
+The established fact is that the emitted preamble carries its own `static`
+ucontext fiber runtime and uses a **JIT-generated function as a `makecontext`
+entry point**; the same split exists on the `cc` path, where it works. Settling
+it needs a backtrace, not another hypothesis.
 
 Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
 10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.

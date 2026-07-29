@@ -81,6 +81,25 @@ static const struct { const char *name; void *addr; } BUILTIN_SHIMS[] = {
   {"__atomic_thread_fence", (void *) jit_atomic_thread_fence},
 };
 
+/* libturi is not self-contained: src/lsp/lsp.c calls tur_collect_symbols, whose
+   only definition lives in src/main.c (the `tur` executable), so a
+   --whole-archive link of the archive pulls in the reference without the
+   definition.  The spike never drives the LSP, so a stub that reports "no
+   symbols" is sufficient and keeps the archive link honest -- the alternative
+   is going back to hand-picking TUs, which is the failure mode 11.5 is about.
+
+   Worth noting as its own small finding: `tur build` never hits this because it
+   links libturi normally, so only the members it actually needs are extracted.
+   Anything that wants the WHOLE runtime present -- which a JIT does, since it
+   resolves by name at runtime rather than by reference at link time -- meets
+   this edge. */
+int tur_collect_symbols (const char *path, void *out, int cap, int *count);
+int tur_collect_symbols (const char *path, void *out, int cap, int *count) {
+  (void) path; (void) out; (void) cap;
+  if (count != NULL) *count = 0;
+  return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* atexit interception                                                 */
 /* ------------------------------------------------------------------ */
