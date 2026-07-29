@@ -21,10 +21,13 @@ The short version:
   `Parser`, `Backtrack`, and `Goal`, and `do-m` gives you do-notation over any
   of them.
 
-The one thing Turmeric does not have is **polymorphism over the monad**: you
-cannot write `Monad m => m a -> ...` and have the caller pick `m`. Instances are
-resolved at concrete types. [Sharp edges](#sharp-edges) covers what that costs
-you and how to work around it.
+**Polymorphism over the monad exists but is partial.** A constrained
+kind-polymorphic function -- Turmeric's spelling of `Monad m => m a -> ...` --
+compiles once and dispatches through a dictionary the caller resolves, so the
+same body runs at whichever instance the caller picks. What it cannot yet do is
+call `pure` (or any other return-position method) on the abstract `m`, which
+rules out most of the combinators you would actually want to write this way.
+[Sharp edges](#sharp-edges) has the details.
 
 ## Picking a tool
 
@@ -473,27 +476,89 @@ the `Parser` monad, with `alt-or` giving full backtracking choice. See
 
 ## Sharp edges
 
-### No polymorphism over the monad
+### Polymorphism over the monad is partial
 
-This is the real trade. You cannot abstract over which monad you are in:
+Abstracting over the monad *works*, but only for part of the surface, so it is
+worth knowing exactly where the edge is.
 
-```turmeric no-check
-;; Rejected: `.bind` matches Monad[Result] and Monad[Option], and `ma`'s
-;; type is erased to int64_t, so there is nothing to dispatch on.
-(defn twice-m [ma]
-  (bind ma (fn [x] (bind ma (fn [y] (pure (+ x y)))))))
+**What works.** A constrained kind-polymorphic function -- `^m` for the type
+constructor, `^Monad m` for the constraint -- is compiled **once** and dispatches
+its method calls through a dictionary the caller resolves. It can be called
+directly at a concrete type, or passed as a rank-2 `forall` argument and
+instantiated at several instances:
+
+```turmeric
+(defopaque Id [a] :int)
+(defn mk-id [A] [x : A] : (Id A) ```c return (int64_t)x; ```)
+(defn un-id [A] [b : (Id A)] : A ```c return (int64_t)b; ```)
+(definstance Monad [Id] (bind [ma k] (k (un-id ma))))
+
+(defopaque Halt [a] :int)
+(defn mk-halt [A] [x : A] : (Halt A) ```c return (int64_t)x; ```)
+(defn un-halt [A] [h : (Halt A)] : A ```c return (int64_t)h; ```)
+(definstance Monad [Halt] (bind [ma k] ma))
+
+(defn double-it [^m] [^Monad m x : (m int)] : (m int)
+  (bind x (fn [v] (mk-id (* v 2)))))
+
+(defn at-id   [g (forall [(m :: * -> *)] [(Monad m)] (-> (m int) (m int)))] : int
+  (un-id   (g (mk-id 5))))
+(defn at-halt [g (forall [(m :: * -> *)] [(Monad m)] (-> (m int) (m int)))] : int
+  (un-halt (g (mk-halt 5))))
+
+(defn main [] : int
+  (println (at-id   double-it))
+  (println (at-halt double-it))
+  0)
 ```
 
-Nor does spelling the kind variable help -- `(defn twice-m [^m] [ma : (m int)] :
-(m int) ...)` type-checks the signature but fails inside the body with
-`no instance 'Applicative tyvar'`. There is no dictionary-passing for a
-type-constructor *variable*; instances resolve only at concrete types.
+```sweet-exp
+defopaque Id [a] :int
+defn mk-id [A] [x : A] : (Id A) ```c return (int64_t)x; ```
+defn un-id [A] [b : (Id A)] : A ```c return (int64_t)b; ```
+definstance Monad [Id] (bind [ma k] (k (un-id ma)))
 
-**Work around it** by picking the monad per call site. In practice this means
-writing the combinator once per monad, or writing it in effect style (where
-handler choice is the polymorphism) and skipping the monad entirely. This is
-usually fine, because the code that genuinely wants `Monad m =>` in Haskell is
-mostly the code that becomes an effect here.
+defopaque Halt [a] :int
+defn mk-halt [A] [x : A] : (Halt A) ```c return (int64_t)x; ```
+defn un-halt [A] [h : (Halt A)] : A ```c return (int64_t)h; ```
+definstance Monad [Halt] (bind [ma k] ma)
+
+defn double-it [^m] [^Monad m x : (m int)] : (m int)
+  bind x (fn [v] mk-id({v * 2}))
+
+defn at-id   [g (forall [(m :: * -> *)] [(Monad m)] (-> (m int) (m int)))] : int
+  un-id   $ g mk-id(5)
+defn at-halt [g (forall [(m :: * -> *)] [(Monad m)] (-> (m int) (m int)))] : int
+  un-halt $ g mk-halt(5)
+
+defn main [] : int
+  println $ at-id   double-it
+  println $ at-halt double-it
+  0
+```
+
+Prints `10` then `5` -- one body, two instances, chosen by the caller. This is
+the same dictionary-passing machinery the van Laarhoven optics need.
+
+**What does not work yet**, and why you will still mostly write concrete monads:
+
+- **`pure` on the abstract `m`.** Return-position methods are not resolved
+  through the constraint dictionary, so a body that ends in `pure` fails with
+  `no instance 'Applicative tyvar'` -- even with `^Applicative m` declared. Since
+  nearly every interesting monadic combinator ends in `pure`, this is the gap
+  that bites.
+- **By-value carriers.** The poly carrier is one machine word, so the abstract
+  `m` has to be an int-carrier `defopaque`. The stdlib `Option` and `Result` are
+  by-value ADTs and crash when passed through it.
+- **The middle-vector spelling.** `(defn f [^m] [(Monad m)] [ma : (m int)] ...)`
+  elaborates and monomorphizes but miscompiles; use the in-parameter `^Monad m`
+  form above.
+
+**In practice**, pick the monad per call site: write the combinator once per
+monad, or write it in effect style, where handler choice *is* the polymorphism.
+That is usually the better trade anyway -- the code that wants `Monad m =>` in
+Haskell is largely the code that becomes an effect here. See
+`docs/reported/constrained-hkt-pure-and-byvalue-carriers.md` for the two gaps.
 
 ### Return-position dispatch needs an expected type
 
@@ -554,7 +619,7 @@ until this is fixed.
 
 | Property | Turmeric | Haskell |
 |---|---|---|
-| `Monad m =>` polymorphism | None -- concrete monad per call site | Full HKT polymorphism |
+| `Monad m =>` polymorphism | Partial -- dictionary-passed, but no `pure` on the abstract `m` | Full HKT polymorphism |
 | `do`-notation | `do-m`, dispatched on the receiver's type | `do`, polymorphic over `Monad` |
 | Most "monad" use cases | Effect handlers, direct style | Monad transformers / `mtl` |
 | Async / IO | Effects | `IO` |
@@ -564,11 +629,12 @@ until this is fixed.
 | Parsers | Effects, or the `Parser` monad | Parser combinator monad |
 | Stacking several of the above | Nest handlers -- no lifting | Transformer stack + `lift` |
 
-**The deal Turmeric makes:** you give up type-level monad polymorphism and get
-direct-style code plus composition without lifting. Nesting two handlers is the
-whole of what a two-layer transformer stack does, with no `lift` and no
-`MonadTrans` instance to write. What you cannot do is write the combinator once
-and instantiate it at every monad.
+**The deal Turmeric makes:** direct-style code, and composition without lifting.
+Nesting two handlers is the whole of what a two-layer transformer stack does,
+with no `lift` and no `MonadTrans` instance to write. Writing a combinator once
+and instantiating it at every monad is possible in principle -- the dictionary
+machinery is there -- but not yet practical while `pure` on an abstract `m` is
+unresolved.
 
 ## See also
 
