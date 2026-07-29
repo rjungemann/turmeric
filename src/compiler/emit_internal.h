@@ -223,6 +223,19 @@ typedef struct EmitCtx {
     Buf  *thunk_typedefs; /* TS1: shared thunk typedef prelude */
     int   indent;
     int   tmp_n;
+    /* S1 (jit-engine-plan, findings 16): the return C type of the call
+     * expression an EX_CALL builder just finished composing, handed to
+     * emit_value's panic-hoist so the `__ps_N` temp can be declared with a
+     * real type instead of `__auto_type` (which c2mir cannot parse).  This is
+     * GROUND TRUTH, not inference: each builder writes the same ret_c string
+     * it spelled into the cast / thunk-typedef of the call text itself.
+     * Protocol: a builder sets it as the LAST thing before returning its
+     * composed call string (nested argument calls were already hoisted and
+     * consumed their own notes by then); emit_value captures and CLEARS it
+     * unconditionally after every dispatch, so a note from a void/never call
+     * (whose hoist is skipped) can never leak onto a later call.  Empty
+     * string == no note. */
+    char  call_ret_note[256];
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;

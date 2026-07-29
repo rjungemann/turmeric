@@ -5493,7 +5493,7 @@ static intptr_t map_hyeq_hyloop_j3(intptr_t env, intptr_t __t1__slot, DK *__kont
         /* panic-return-signal: ret ctype unknown; no propagation here */
         int64_t __ps_73 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_763, (void *)(intptr_t)(k_764), (void *)(intptr_t)(keyeq)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        __auto_type __ps_74 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_72, __ps_73));
+        bool __ps_74 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_72, __ps_73));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __t2 = __ps_74;
         if (__t2) {
@@ -5883,7 +5883,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t __ps_94 = (list_hyhead(l2));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_95 = ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), __ps_93, __ps_94));
+            bool __ps_95 = ((*( tur_thunk_bool_int64_t_int64_t_t *)((void *)(intptr_t)(cmp_fn)))((void *)(intptr_t)(cmp_fn), __ps_93, __ps_94));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             __t3 = __ps_95;
             if (__t3) {
@@ -5968,7 +5968,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     } else {
         int64_t __ps_105 = (list_hyhead(cell));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        __auto_type __ps_106 = ((*( tur_thunk_int64_t_int64_t_t *)(f))(f, __ps_105));
+        int64_t __ps_106 = ((*( tur_thunk_int64_t_int64_t_t *)(f))(f, __ps_105));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         __t1 = __ps_106;
         int64_t __ps_107 = (list_hytail(cell));
@@ -6512,7 +6512,7 @@ static bool mutmap_hyeq_hyloop(int64_t m1, int64_t m2, int64_t i, int64_t cap, i
                     if (tur_panicking) return ((bool)0);
                     int64_t __ps_142 = (mutmap_hyget(m2, __ps_140, __ps_141));
                     if (tur_panicking) return ((bool)0);
-                    __auto_type __ps_143 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_139, __ps_142));
+                    bool __ps_143 = (((bool (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_139, __ps_142));
                     if (tur_panicking) return ((bool)0);
                     if (__ps_143) {
                         bool __ps_144 = (mutmap_hyeq_hyloop(m1, m2, (i) + (INT64_C(1)), cap, (int64_t)(intptr_t)(val_cmp)));
@@ -7578,7 +7578,7 @@ static bool sym_eq_qu(const struct __tur_sym * a, const struct __tur_sym * b) {
 }
 
 static int64_t consume(int64_t x, int64_t f) {
-        __auto_type __ps_158 = (((int64_t (*)(int64_t))(intptr_t)f)(x));
+        int64_t __ps_158 = (((int64_t (*)(int64_t))(intptr_t)f)(x));
         if (tur_panicking) return ((int64_t)0);
         return __ps_158;
 }
@@ -7794,7 +7794,7 @@ static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
-    __auto_type __ps_182 = (ctor_Cons__int(h, t));
+    tur_adt_Cons__int * __ps_182 = (ctor_Cons__int(h, t));
     if (tur_panicking) return ((tur_adt_Cons__int *)0);
     return __ps_182;
 }
@@ -7815,13 +7815,13 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 }
 
 static tur_adt_Result__int__int ok__spec__tur_adt_Result__int__int_int64_t(int64_t x) {
-    __auto_type __ps_184 = (ctor_Result__int__int(true, x, ((int64_t)0)));
+    tur_adt_Result__int__int __ps_184 = (ctor_Result__int__int(true, x, ((int64_t)0)));
     if (tur_panicking) return (tur_adt_Result__int__int){0};
     return __ps_184;
 }
 
 static tur_adt_Result__int__int err__spec__tur_adt_Result__int__int_int64_t(int64_t e) {
-    __auto_type __ps_185 = (ctor_Result__int__int(false, ((int64_t)0), e));
+    tur_adt_Result__int__int __ps_185 = (ctor_Result__int__int(false, ((int64_t)0), e));
     if (tur_panicking) return (tur_adt_Result__int__int){0};
     return __ps_185;
 }

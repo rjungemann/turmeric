@@ -31,6 +31,8 @@ static const struct Binding *byref_set_target(const Expr *e);
  * the direct emitter (emit_expr.c) does. */
 char *mangle_field_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
+/* S1/findings 16: ground-truth return-type lookup for cps->direct call temps. */
+const char *emit_sig_lookup_ret_ctype(const char *cname);
 
 /* True for a NULL or `{}` (ERK_EMPTY) effect row.  Used to distinguish a
  * provably effect-free `TY_FN` param (safe to delegate an indirect call
@@ -5501,9 +5503,16 @@ static void emit_term(CE *ce, const CTerm *t) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
                 } else {
-                    /* __auto_type keeps the callee's real return type (int, cstr,
-                     * ...); the slot cast at delivery narrows it to the word. */
-                    ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    /* S1/findings 16: name the callee's real return type from the
+                     * signature side table (the forward declaration as actually
+                     * emitted) so the temp is c2mir-clean; __auto_type only when
+                     * the record is missing.  The slot cast at delivery narrows
+                     * it to the word either way. */
+                    const char *drt = emit_sig_lookup_ret_ctype(fn);
+                    if (drt && *drt && strcmp(drt, "void") != 0)
+                        ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
+                    else
+                        ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
                     emit_deliver(ce, &t->as.tailcall.kont, tmp);
                 }
                 free(argv_t);

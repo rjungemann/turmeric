@@ -7,6 +7,15 @@
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
  * KB-004 and KB-010 bridge insertion sites. */
+/* S1/findings 16: hand the panic-hoist the return C type this builder just
+ * spelled into its own call text (cast fn-ptr, thunk typedef, member fn).
+ * Call as the LAST thing before returning the composed string -- nested
+ * argument emissions clear the note (see EmitCtx.call_ret_note). */
+static void note_call_ret(EmitCtx *ctx, const char *ct) {
+    if (!ct || !*ct) return;
+    snprintf(ctx->call_ret_note, sizeof ctx->call_ret_note, "%s", ct);
+}
+
 static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
@@ -2797,6 +2806,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
         if (ctx->sub_holes[i] == e) return strdup(ctx->sub_names[i]);
     char *v = emit_value_dispatch(ctx, body, e);
+    /* S1/findings 16: capture-and-clear the builder's ret-type note
+     * UNCONDITIONALLY, so a note set by a void/never call (whose hoist below
+     * is skipped) can never leak onto a later, unrelated call. */
+    char ret_note[sizeof ctx->call_ret_note];
+    memcpy(ret_note, ctx->call_ret_note, sizeof ret_note);
+    ctx->call_ret_note[0] = '\0';
     if (e->kind != EX_CALL) return v;
     /* unit/void and never/diverging calls emit as C `void`, so there is no
      * value to bind into an __auto_type temp; their panic signal is handled at
@@ -2834,11 +2849,73 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (idlen < sizeof callee) {
                 memcpy(callee, q, idlen);
                 callee[idlen] = '\0';
-                const char *rt = emit_sig_lookup_ret_ctype(callee);
-                /* A `void` return never reaches here (filtered above), and an
-                 * empty record is no better than inference. */
-                if (rt && *rt && strcmp(rt, "void") != 0) ret_ct = rt;
+                /* INT64_C/UINT64_C: stdint's integer-constant macros.  An
+                 * exact read, not a guess -- giving the literal that type is
+                 * the macro's entire purpose. */
+                if (strcmp(callee, "INT64_C") == 0)       ret_ct = "int64_t";
+                else if (strcmp(callee, "UINT64_C") == 0) ret_ct = "uint64_t";
+                else {
+                    const char *rt = emit_sig_lookup_ret_ctype(callee);
+                    /* A `void` return never reaches here (filtered above), and an
+                     * empty record is no better than inference. */
+                    if (rt && *rt && strcmp(rt, "void") != 0) ret_ct = rt;
+                }
             }
+        }
+    }
+    /* Indirect calls: the builder's note carries the same ret type it spelled
+     * into the call text's own cast / thunk typedef.  Name lookup wins when
+     * both exist (it is the forward declaration, the strongest ground truth). */
+    if (!ret_ct && ret_note[0] != '\0' && strcmp(ret_note, "void") != 0)
+        ret_ct = ret_note;
+    /* Last resort before __auto_type: two ANCHORED exact reads of text the
+     * emitter itself just wrote (the same two rules the spike normalizer
+     * carried, ported to the one place they are needed -- findings 16).  `v`
+     * for an EX_CALL is composed entirely by this file and emit_core.c, never
+     * by user text, so position 0 is emitter output by construction.
+     *   1. `((RET (*)` -- a cast-function-pointer call head (the dict-vtable
+     *      dispatch emit_call_name composes, whose note cannot survive the
+     *      argument emissions that follow it).  RET is read up to the ` (*)`.
+     *   2. `((T)(`     -- a cast wrap; T restricted to primitive spellings or
+     *      anything ending `*`, so a parenthesized-callee call `(f)(x)` can
+     *      never be misread as a cast (normalizer 11.3's lesson, kept). */
+    char read_ct[256];
+    if (!ret_ct) {
+        const char *q = v;
+        while (*q == '(') q++;
+        const char *star = strstr(q, "(*)");
+        if (star && star > q && star < q + sizeof read_ct) {
+            size_t tlen = (size_t)(star - q);
+            while (tlen > 0 && q[tlen - 1] == ' ') tlen--;
+            bool ident_ok = tlen > 0;
+            for (size_t i = 0; i < tlen && ident_ok; i++)
+                if (!isalnum((unsigned char)q[i]) && q[i] != '_' &&
+                    q[i] != ' ' && q[i] != '*') ident_ok = false;
+            if (ident_ok) {
+                memcpy(read_ct, q, tlen);
+                read_ct[tlen] = '\0';
+                if (strcmp(read_ct, "void") != 0) ret_ct = read_ct;
+            }
+        }
+    }
+    if (!ret_ct && v[0] == '(') {
+        /* One leading paren, not two: the hoist's own printf adds the outer
+         * pair, so a cast wrap arrives here as `(T)(expr)`. */
+        const char *q = v + 1;
+        while (*q == '(') q++;
+        const char *close = strchr(q, ')');
+        if (close && close > q && close[1] == '(' && close - q < (long)sizeof read_ct) {
+            size_t tlen = (size_t)(close - q);
+            static const char *prim[] = {"bool","_Bool","char","short","int","long",
+                "float","double","unsigned","signed","int8_t","int16_t","int32_t",
+                "int64_t","uint8_t","uint16_t","uint32_t","uint64_t","intptr_t",
+                "uintptr_t","size_t","ssize_t","ptrdiff_t"};
+            memcpy(read_ct, q, tlen);
+            read_ct[tlen] = '\0';
+            bool ok = tlen > 0 && read_ct[tlen - 1] == '*';
+            for (size_t i = 0; !ok && i < sizeof prim / sizeof prim[0]; i++)
+                ok = strcmp(read_ct, prim[i]) == 0;
+            if (ok) ret_ct = read_ct;
         }
     }
     if (ret_ct)
@@ -3737,6 +3814,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *result = strdup(out.data);
                     buf_free(&out);
                     free(fn_ptr_val);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
 
@@ -3870,6 +3948,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(arg_strs);
                 free(resolved_arg_ty);
                 free(fn_ptr_val);
+                note_call_ret(ctx, ret_c);   /* findings 16 */
                 return result;
             }
 
@@ -4098,6 +4177,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
+                /* findings 16: the concrete branch's value type is the cast the
+                 * emitter just spelled; the generic carrier branch is int64_t
+                 * unless a wrap below retypes it (each wrap re-notes). */
+                note_call_ret(ctx, phase_f_concrete ? emit_type_c_name(ctx, e->type)
+                                                    : "int64_t");
                 /* Slice 3 (constrained-hkt-forall codegen): a by-value aggregate
                  * RESULT comes back through the carrier as an int64 heap-box
                  * pointer (the wrapper's carrier-spill shim boxed it) -- deref it
@@ -4110,6 +4194,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *unboxed = emit_agg_unbox(ctx, e->type, result);
                     free(result);
                     result = unboxed;
+                    note_call_ret(ctx, emit_type_c_name(ctx, e->type));   /* findings 16 */
                 }
                 /* VBM2b/VBM3/residual: inside a by-value monomorphized lens body
                  * the functor is spelled by value end to end -- `g : (-> A (f A))`
@@ -4137,6 +4222,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(result);
                         result = strdup(c.data);
                         buf_free(&c);
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));   /* findings 16 */
                     }
                 }
                 for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
@@ -4344,6 +4430,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *result = strdup(out.data);
                     buf_free(&out);
                     free(fn_ptr);
+                    note_call_ret(ctx, type_c_name(e->type));   /* findings 16 */
                     return result;
                 } else {
                     /* CY2: Fat-closure dynamic dispatch with n_args > 0.
@@ -4405,6 +4492,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
             }
@@ -4585,6 +4673,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
@@ -4620,6 +4709,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *result = strdup(out.data);
                     buf_free(&out);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 } else {
                     char **arg_strs = (char **)malloc(n * sizeof(char *));
@@ -4679,6 +4769,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
             }

@@ -1008,6 +1008,62 @@ static void append_adt_app_type_suffix(Buf *b, const AdtDef *def,
 
 /* TS4P1: Register a concrete ADT-app type and return its C typedef name
  * (e.g. "tur_adt_Maybe__float"), or NULL if the type is not a concrete ADT app. */
+/* S1 (jit-engine-plan): record every `ctor_X__T` monomorph's return C type in
+ * the signature side table, at REGISTRATION time.  The two non-parametric ctor
+ * emission sites in emit_module.c already record, but the monomorph clones are
+ * rendered by emit_registered_adt_app_rec at final program assembly -- AFTER
+ * every function body -- so recording there comes too late for any call-site
+ * lookup and left 2,289 ctor calls corpus-wide on `__auto_type` (findings 16).
+ * Registration happens the moment a body first names the type, which is
+ * always at-or-before the first ctor call.  Recording is idempotent
+ * (re-recording strdups the same string), so running on every registration
+ * call -- including ones that find an existing entry -- is safe, and it makes
+ * the record independent of WHICH caller registered first.
+ *
+ * The ret-type strings mirror emit_registered_adt_app_rec's `ctor_ret`
+ * exactly: `<inst> *` for :heap, the aggregate for a by-value product, else
+ * the int64 carrier.  Keeping the two in lockstep is the same seam discipline
+ * as CONV-S1's member-path routing. */
+/* Declared in emit_internal.h, which this file does not include (same
+ * convention as emit_cps_ir.c's forward decls); adt_app_is_byvalue_product is
+ * already public in types.h. */
+void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
+                               const char *ctype);
+static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
+                                     Type t) {
+    Buf name; buf_init(&name);
+    buf_puts(&name, "tur_adt_");
+    append_c_ident_mangled(&name, def->name);
+    append_adt_app_type_suffix(&name, def, args, n_args);
+    buf_putc(&name, '\0');
+    Buf suffix; buf_init(&suffix);
+    append_adt_app_type_suffix(&suffix, def, args, n_args);
+    buf_putc(&suffix, '\0');
+    char ret_heap[512];
+    snprintf(ret_heap, sizeof ret_heap, "%s *", name.data);
+    bool app_heap  = def->is_heap;
+    bool app_byval = adt_app_is_byvalue_product(t);
+    const char *ctor_ret = app_heap ? ret_heap
+                         : app_byval ? name.data : "int64_t";
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        CtorDef *ctor = def->ctors[ci];
+        char ctor_sym[512];
+        int off = snprintf(ctor_sym, sizeof ctor_sym, "ctor_");
+        size_t mlen = strlen(ctor->name);
+        for (size_t mi = 0; mi < mlen && off < (int)sizeof ctor_sym - 1; mi++) {
+            char c = ctor->name[mi];
+            ctor_sym[off++] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                               (c >= '0' && c <= '9') || c == '_') ? c : '_';
+        }
+        ctor_sym[off] = '\0';
+        if (off + suffix.len < sizeof ctor_sym)
+            memcpy(ctor_sym + off, suffix.data, suffix.len);   /* includes NUL */
+        emit_sig_record_ret_ctype(ctor_sym, ctor->n_fields, ctor_ret);
+    }
+    buf_free(&suffix);
+    buf_free(&name);
+}
+
 const char *type_register_adt_app(Type t) {
     AdtDef *def = NULL;
     Type args[16];
@@ -1018,6 +1074,7 @@ const char *type_register_adt_app(Type t) {
     for (uint32_t i = 0; i < n_args; i++) {
         if (args[i].kind == TY_TYVAR || args[i].kind == TY_UNKNOWN) return NULL;
     }
+    record_adt_app_ctor_sigs(def, args, n_args, t);
     /* Look for an existing registration. */
     for (uint32_t i = 0; i < g_n_adt_apps; i++) {
         if (type_eq(g_adt_apps[i].type, t)) return g_adt_apps[i].name;
