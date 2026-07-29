@@ -20,6 +20,7 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <math.h>
+#include <pthread.h> /* sized-stack entry thread */
 #include <time.h>
 
 #include "mir.h"
@@ -126,6 +127,26 @@ static int jit_atexit (void (*fn) (void)) {
 /* LIFO, matching C's atexit ordering. */
 static void jit_atexit_drain (void) {
   while (n_jit_atexit > 0) jit_atexit_fns[--n_jit_atexit] ();
+}
+
+/* Entry thunk for the sized-stack thread the JIT'd main runs on -- see the
+   comment at the pthread_create site.  The atexit drain lives here, on the
+   entry thread, because handlers may read host-side TLS (tur_tls.c) written
+   by the program; the cc path likewise runs them on the thread that called
+   main.  Still strictly before MIR_gen_finish unmaps the handler code. */
+struct jit_entry_box {
+  int (*fn) (int, char **, char **);
+  int rc;
+};
+
+static void *jit_run_entry (void *p) {
+  struct jit_entry_box *box = (struct jit_entry_box *) p;
+  char *fake_argv[] = {(char *) "jit", NULL};
+  char *fake_envp[] = {NULL};
+  box->rc = box->fn (1, fake_argv, fake_envp);
+  jit_atexit_drain ();
+  fflush (stdout);
+  return NULL;
 }
 
 /* Link-time weak-symbol handshakes do not cross the JIT boundary.  libturi
@@ -298,12 +319,33 @@ int main (int argc, char **argv) {
     if (iter == repeat - 1) {
       typedef int (*main_fn) (int, char **, char **);
       main_fn fn = (main_fn) main_item->addr;
-      char *fake_argv[] = {(char *) "jit", NULL};
-      char *fake_envp[] = {NULL};
-      rc = fn (1, fake_argv, fake_envp);
-      /* Drain BEFORE MIR_gen_finish below unmaps the code the handlers live in. */
-      jit_atexit_drain ();
-      fflush (stdout);
+      /* Run the entry on a thread with an explicitly sized stack (findings
+         15.3).  MIR-gen frames for direct-path recursion are roughly 2x
+         gcc's, so a program whose deep recursion fits the default 8 MB under
+         `tur build` can blow the stack under the JIT (gc-registry-growth:
+         20,000 frames).  Sizing the entry stack is the sanctioned STOPGAP --
+         "any size temporarily is fine" (owner, 2026-07-29) -- but the same
+         decision names the long-run direction: keep the runtime's stackless
+         architecture (the CPS/DK heap-continuation machinery, which runs
+         under MIR unchanged) rather than institutionalizing ever-bigger
+         stacks.  The eventual fix is MIR frame-size work or routing deep
+         direct recursion through the existing stackless machinery -- not a
+         larger constant here.  TUR_JIT_STACK_MB overrides the default 64. */
+      struct jit_entry_box box = {fn, 0};
+      size_t stack_mb = 64;
+      const char *env = getenv ("TUR_JIT_STACK_MB");
+      if (env != NULL && atoi (env) > 0) stack_mb = (size_t) atoi (env);
+      pthread_attr_t attr;
+      pthread_t entry_thread;
+      pthread_attr_init (&attr);
+      pthread_attr_setstacksize (&attr, stack_mb * 1024 * 1024);
+      if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
+        fprintf (stderr, "jit-spike: entry thread create failed\n");
+        return 4;
+      }
+      pthread_join (entry_thread, NULL);
+      pthread_attr_destroy (&attr);
+      rc = box.rc;
     }
 
     MIR_gen_finish (ctx);

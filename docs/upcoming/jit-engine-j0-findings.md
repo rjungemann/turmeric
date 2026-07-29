@@ -5,7 +5,7 @@ full corpus 2026-07-28); **S1 landed 2026-07-28 (section 11) and S1b
 2026-07-29 (section 12)**, which is the pre-work J1 depends on. Sections 0-7
 are the original Linux write-up; **section 8 corrects three of their claims**,
 and **section 9 corrects three of section 8's** from the full-corpus macOS run
--- read 9 first. Current Linux full-corpus coverage: **1646/1680 (98.0%)**,
+-- read 9 first. Current Linux full-corpus coverage: **1647/1680 (98.0%)**,
 every remaining failure a recorded decision or a filed report (12.6).
 Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 
@@ -1691,11 +1691,29 @@ recursion**, single-threaded, whose MIR-gen frames are simply bigger than
 gcc's: it dies at the default 8 MB stack and passes verbatim at 16 MB
 (`ulimit -s 16384`). Bounds: gcc's frame for this function fits 20,000 deep in
 8 MB (<= ~419 bytes); MIR's does not, but fits in 16 MB (< ~840 bytes). So this
-is **code quality / stack sizing**, not correctness: J1 can run the program
-entry on a thread with a sized stack (`pthread_attr_setstacksize`, the same
-way fibers already size theirs), document the deeper frames, or both. The
-sweep leaves it a FAIL on the default stack deliberately -- a `tur jit` user
-would hit exactly this today.
+is **code quality / stack sizing**, not correctness.
+
+**Resolved as a sanctioned stopgap (owner decision, 2026-07-29): "any size
+temporarily is fine, but retain the stackless nature of the runtime in the
+long run."** The harness now runs the JIT'd entry on a thread with an
+explicitly sized stack (64 MB default, `TUR_JIT_STACK_MB` to override) --
+which is what a real `tur jit` would do -- and `gc-registry-growth` passes.
+Probing the threshold through that override tightens the bound: the fixture
+dies at 11 MB and passes at 12, so MIR's frame for this function is ~590
+bytes against gcc's <= ~419 -- a ~1.4x factor, not the 2x the first bounds
+suggested.
+
+The long-run direction the decision names matters more than the number. The
+tur/turi runtimes were deliberately rewritten stackless -- turi as a
+work-stack machine, the compiled path's effect/CPS code on heap-allocated DK
+continuations -- and that architecture survives MIR untouched
+(`cps-backend-effect` is an exit-criteria pass; the DK trampoline needs no
+shim). What grows under MIR is only the *direct path's* plain C frames, which
+are stackful under `cc` too. So the eventual fix is MIR frame-size work
+(fork territory) or routing deep direct recursion through the existing
+stackless machinery -- **not** ever-bigger stack constants. The stopgap's
+comment in the harness says exactly this, so the constant cannot quietly
+become the design.
 
 That is the third re-diagnosis of this pair of fixtures (8.4.3: shim atomics;
 14.3: TLS; now: one TLS + one frame size), and each step was driven by
@@ -1724,9 +1742,12 @@ configure with `-DTUR_MIR_GIT_TAG=...` or a fresh dir, and verify HEAD in
 | S1b + cleanup lowering (12.6) | 1645 / 1680 | 97.9% |
 | 6(a) atomics (14) | 1645 | 97.9% |
 | **TLS host routing + RA fix (fork pin `41ff4d94`)** | **1646** | **98.0%** |
+| **sized entry stack (15.3 stopgap)** | **1647** | **98.0%** |
 
-The remaining 34: 31 user-inline-C fallbacks (by design), 1 by-design panic,
-1 filed `^persistent` key bug, 1 stack-depth (15.3, J1 sizing decision).
+The remaining 33: 31 user-inline-C fallbacks (by design), 1 by-design panic
+(`any-cast-mismatch-panic`), 1 filed `^persistent` key bug
+(`hamt-lowering-basic`). **The sweep now contains zero open engine or emitter
+items.**
 **Multi-threaded programs are now first-class under the JIT**: STM commits,
 scheduler cancel flags, and select's winner CAS run on real atomics and real
 per-thread state. What J1 still owes multi-threading specifically:

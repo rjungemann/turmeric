@@ -4,7 +4,7 @@ Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); **S1 and S1b landed**, so the
 pre-work J1 depends on is done. J1+ PROPOSED. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
-Full-corpus coverage under the spike harness is **1646/1680 (98.0%)**, with
+Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
 every remaining failure a recorded decision or a filed report.
 
 J0 verdict: MIR works, proceed to J1. All three exit-criteria fixtures run
@@ -313,9 +313,14 @@ useful even if the JIT slips.
   `try_spilled_reg_mem` overruns a 2-entry array when one insn carries the
   same spilled reg three times (`mul v,v,v`); fixed in the fork, pin
   `41ff4d94` (findings 15.2). What J1 still owes multi-threading:
-  concurrent-safe or serialized lazy generation (8.1), the
-  `tur_scheduler_*_st` weak-function fold (11.7), and a stack-size decision
-  for MIR's larger frames (`gc-registry-growth`, findings 15.3).
+  concurrent-safe or serialized lazy generation (8.1) and the
+  `tur_scheduler_*_st` weak-function fold (11.7). The stack-size question is
+  decided (findings 15.3): a sized entry-thread stack is the sanctioned
+  stopgap ("any size temporarily is fine"), with the standing constraint that
+  the long-run fix must retain the runtime's **stackless architecture** --
+  the CPS/DK heap-continuation machinery already runs under MIR unchanged,
+  and deep direct-path recursion should eventually ride MIR frame-size work
+  or the stackless machinery, not ever-bigger stacks.
 - **J2 -- REPL/watch integration.** Section 3.3. **Requires S2** -- without
   it every `(reload)` recompiles the identical 3,847-line preamble.
 - **J3 -- parity + perf.** Run the fixture corpus under `tur jit`
