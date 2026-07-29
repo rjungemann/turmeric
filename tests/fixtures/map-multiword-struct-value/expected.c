@@ -5350,13 +5350,13 @@ static void __inst_Drop_drop_String(int64_t x) {
 }
 
 static int64_t __inst_MapKey_mk_hybox_String(int64_t x) {
-        __auto_type __ps_51 = (tur_string_box_key((void *)(intptr_t)(x)));
+        void * __ps_51 = (tur_string_box_key((void *)(intptr_t)(x)));
         if (tur_panicking) return ((int64_t)0);
         return ((union { void * s; int64_t d; }){.s = __ps_51}).d;
 }
 
 static int64_t __inst_MapKey_mk_hycmp_String(int64_t x) {
-        __auto_type __ps_52 = (tur_string_key_eq_addr());
+        int64_t __ps_52 = (tur_string_key_eq_addr());
         if (tur_panicking) return ((int64_t)0);
         return __ps_52;
 }

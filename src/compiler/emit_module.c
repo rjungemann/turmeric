@@ -10786,6 +10786,23 @@ int emit_program(Buf *out, const Expr *program) {
      * before the forward-declaration pass runs). */
     emit_sig_reset();
     emit_localvar_reset();
+    /* S1: record every extern-c return type BEFORE any body is emitted.  The
+     * per-item record below still runs, but it is too late for bodies the
+     * emitter lifts ahead of the item loop -- a partially-applied printf's pap
+     * thunk in a `(load ...)`-first program hoists its call before the item
+     * loop reaches the extern-c form, and its temp stayed on __auto_type. */
+    {
+        uint32_t _n_pre = 0;
+        const Expr **_pre = flatten_program_items(program, &_n_pre);
+        for (uint32_t _i = 0; _pre && _i < _n_pre; _i++) {
+            if (_pre[_i]->kind != EX_EXTERN_C) continue;
+            ExternC *_ec = _pre[_i]->as.extern_c_.ext;
+            char *_m = mangle_field_name(_ec->c_name->name);
+            emit_sig_record_ret_ctype(_m, _ec->n_params, type_c_name(_ec->return_type));
+            free(_m);
+        }
+        free((void *)_pre);
+    }
 
     /* Two buffers: file scope (statics) and main body. We assemble at the end. */
     Buf file; buf_init(&file);
