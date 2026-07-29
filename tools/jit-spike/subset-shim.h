@@ -1,46 +1,71 @@
 /* c2mir subset shim -- J0 JIT spike.
  *
- * THIS FILE IS A FINDING, NOT A FIX.
+ * THIS FILE IS A FINDING, NOT A FIX -- and it is now almost empty, which is
+ * the point.  It began as three constructs the fixed runtime preamble emitted
+ * that c2mir does not accept, every one of them present in EVERY program
+ * including the trivial `arith`.  All three have since been fixed in the
+ * emitter:
  *
- * Turmeric's fixed runtime preamble emits three constructs that c2mir does not
- * accept.  All three appear in EVERY emitted program -- including `arith`, the
- * most trivial fixture in the corpus -- and none of them is guarded by a
- * platform `#if` in src/compiler/emit_module.c, so this is not macOS-specific.
- * Without this shim, c2mir rejects the preamble and no fixture compiles at all.
- *
- *   1. `__thread`.  c2mir registers only the C11 spelling `_Thread_local`
- *      (c2mir.c kw_add, ~line 5453); there is no kw_add for the GNU spelling on
- *      any target.  emit_module.c emits `__thread` as a literal string in ~9
- *      places.  Real fix: emit `_Thread_local`, which every supported cc also
- *      accepts.  Cheap and unambiguous.
+ *   1. `__thread`.  c2mir registers only the C11 spelling `_Thread_local` and
+ *      has no kw_add for the GNU one on any target.  FIXED in S1: the preamble
+ *      emits through TUR_THREAD_LOCAL, which is `_Thread_local` under C11 and
+ *      `__thread` otherwise, so the cc path keeps the exact spelling it had.
  *
  *   2. The GCC atomic builtins.  `__atomic_load_n` / `__atomic_store_n` /
  *      `__atomic_add_fetch` / `__atomic_compare_exchange_n` and the
- *      `__ATOMIC_*` memory orderings have ZERO occurrences anywhere in the MIR
- *      tree.  The plan flagged "C11 minus atomics" as a known risk; the J0
- *      findings then concluded the subset gap was "narrower than feared".  That
- *      conclusion is wrong -- ~17 atomic builtins are emitted per program.
- *      Real fix: these belong in the HOST runtime, compiled by cc and resolved
- *      by address through dlsym(RTLD_DEFAULT), exactly like hamt.c already is.
- *      They should never reach c2mir as text.  See plan section 3.2 step 4.
+ *      `__ATOMIC_*` orderings have ZERO occurrences anywhere in the MIR tree.
+ *      The plan flagged "C11 minus atomics" as a known risk; the J0 findings
+ *      then concluded the subset gap was "narrower than feared", which was
+ *      wrong -- 18 atomic builtins are emitted per program.  FIXED per
+ *      recommendation 6(a): the preamble routes through TUR_ATOMIC_*, which is
+ *      the builtins under __GNUC__/__clang__ and calls into the host runtime
+ *      (src/runtime/tur_atomics.c) otherwise -- compiled by cc and resolved by
+ *      address through dlsym(RTLD_DEFAULT), exactly as hamt.c already is, which
+ *      is what plan section 3.2 step 4 asks for.
  *
- *   3. `__auto_type`.  normalize-c11-subset.py rewrites most occurrences but
- *      cannot infer them all; the residue is the single largest parse-failure
- *      class in the fixture sweep (25 of 34).
+ *   3. `__auto_type`.  FIXED in S1 for the sites the emitter can type; the
+ *      residue is indirect calls, handled by normalize-c11-subset.py.
  *
- * The atomic lowerings below are NOT correct -- they drop atomicity outright.
- * They are sound only because the fixtures exercised here are single-threaded.
- * Shipping them would silently corrupt the refcount under `spawn`.  Fix (2)
- * properly before any of this graduates past a spike.
- *
- * The atomic list below is INCOMPLETE by construction -- it covers what the
- * fixture sweep actually hit.  A builtin that is missing here shows up as
- * `jit-spike: unresolved import: __atomic_...` at link time rather than as a
- * parse error, which is a clean signal: add it and re-run.
+ * What is left below is not about Turmeric's emitted C at all: Apple SDK header
+ * predefines, and prototypes for the `__builtin_*` family that USER inline-C
+ * and spliced stdlib reach for.  Both are properties of the surrounding
+ * ecosystem rather than of the compiler, which is why they outlived the rest.
  */
 #ifndef TUR_JIT_SUBSET_SHIM_H
 #define TUR_JIT_SUBSET_SHIM_H
 
+/* 6(a): the PREAMBLE's atomics are fixed in the emitter and no longer need a
+ * shim.  All 18 of them route through a TUR_ATOMIC_* macro layer that expands
+ * to the GCC builtins under __GNUC__/__clang__ and to calls into the host
+ * runtime (src/runtime/tur_atomics.c) otherwise -- real atomics, resolved by
+ * address like hamt.c, which is what plan section 3.2 step 4 asks for.
+ *
+ * What survives below is for INLINE-C ONLY: stdlib/atomic.tur, stdlib/future.tur
+ * and a handful of fixtures write __atomic_* directly in C blocks, and the
+ * emitter does not own that text.  Deleting these defines outright costs 13
+ * fixtures (measured: corpus 1645 -> 1631, all of them `unresolved import:
+ * __atomic_*` from stdlib or fixture inline-C, none from the preamble).
+ *
+ * THESE ARE STILL NOT ATOMIC.  They drop atomicity outright and are sound only
+ * because the fixtures reached through them do not actually lose a race in
+ * practice.  That is a property of the corpus, not a guarantee: `tur jit` must
+ * either take the plan's step-6 fallback to `cc` for inline-C that uses them,
+ * or stdlib/atomic.tur must route through host functions the way the preamble
+ * now does.  Do not ship this file.
+ *
+ * The list is INCOMPLETE by construction -- it covers what the sweep hit.  A
+ * missing builtin shows up as `jit-spike: unresolved import: __atomic_...` at
+ * link time rather than as a parse error, which is a clean signal: add it and
+ * re-run.  That is exactly how the 13 above were found.
+ */
+/* `static __thread` inside USER inline-C -- tests/fixtures/thread-local-basic
+ * writes it directly in a C block, and the emitter does not own that text.
+ * The PREAMBLE's own TLS goes through TUR_THREAD_LOCAL and needs nothing here.
+ * Deleting this line costs that fixture a parse error (measured).
+ *
+ * Note this only gets the SPELLING past the parser.  c2mir warns "Thread local
+ * is not implemented" and treats the variable as an ordinary global, so a
+ * program that actually spawns sees one shared slot -- see findings 14.3. */
 #define __thread _Thread_local
 
 #define __ATOMIC_RELAXED 0
@@ -50,14 +75,13 @@
 #define __ATOMIC_ACQ_REL 4
 #define __ATOMIC_SEQ_CST 5
 
-/* Spike-only, single-threaded-only.  See item (2) above. */
 #define __atomic_load_n(p, o) (*(p))
 #define __atomic_store_n(p, v, o) ((void) (*(p) = (v)))
 #define __atomic_add_fetch(p, v, o) (*(p) += (v))
 #define __atomic_sub_fetch(p, v, o) (*(p) -= (v))
 /* fetch_* return the value BEFORE the operation.  `p` is evaluated more than
-   once; every call site in the emitted preamble passes a plain address, so this
-   is safe here but would not be in general. */
+   once; every call site reached here passes a plain address, so this is safe
+   in context but would not be in general. */
 #define __atomic_fetch_add(p, v, o) (*(p) += (v), *(p) - (v))
 #define __atomic_fetch_sub(p, v, o) (*(p) -= (v), *(p) + (v))
 #define __atomic_compare_exchange_n(p, e, d, weak, succ, fail) \

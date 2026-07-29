@@ -241,6 +241,9 @@ set(TUR_CORE_SOURCES
     runtime/runtime.c
     runtime/serial.c
     runtime/stm.c
+    # 6(a): atomics for front ends without the GCC builtins (the JIT). Host-side
+    # by design -- see the file header and jit-engine-j0-findings.md 14.
+    runtime/tur_atomics.c
     # SYM5: the interned-symbol registrar an emitted program calls from its
     # static init.  Dual-listed in TURT_RUNTIME_SOURCES like every other
     # runtime TU here; it was the one member of that list missing from this
@@ -490,6 +493,7 @@ endif()
 set(TURT_RUNTIME_SOURCES
     runtime/hamt.c
     runtime/symbols.c
+    runtime/tur_atomics.c
     runtime/tur_string.c
     runtime/rc.c
     runtime/gc.c

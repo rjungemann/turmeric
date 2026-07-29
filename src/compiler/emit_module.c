@@ -7122,6 +7122,49 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#else\n");
     buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
     buf_puts(out, "#endif\n");
+    /* 6(a) (jit-engine-plan section 4): atomics, spelled through a macro layer.
+     *
+     * The preamble needs atomics in 18 places -- STM's version clock and each
+     * TVar's version/value, the scheduler's cancel flag, and select's
+     * winner-claim compare-exchange.  All were emitted as literal `__atomic_*`
+     * GCC builtins, which c2mir does not implement AT ALL (zero occurrences of
+     * the family in its whole tree), so the JIT spike had to #define them down
+     * to plain loads and stores -- sound only for single-threaded programs, and
+     * silent corruption under `spawn` otherwise.
+     *
+     * Under __GNUC__/__clang__ these expand to exactly the builtins that were
+     * emitted before, so the cc path is byte-identical in behaviour and keeps
+     * the inline atomic on the STM commit path.  Any other front end gets calls
+     * into the host runtime (src/runtime/tur_atomics.c), resolved by address
+     * like hamt.c -- which is what plan section 3.2 step 4 asks for.
+     *
+     * c2mir predefines neither macro (verified, not assumed), so the gate lands
+     * it on the fallback.  The order argument is accepted and discarded there;
+     * the host functions are seq_cst, a strengthening of every order used. */
+    buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_U64(p, mo)        __atomic_load_n((p), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_U64(p, v, mo)    __atomic_store_n((p), (v), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_ADD_FETCH_U64(p, v, mo) __atomic_add_fetch((p), (v), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_PTR(p, mo)        __atomic_load_n((p), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_PTR(p, v, mo)    __atomic_store_n((p), (v), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_INT(p, mo)        __atomic_load_n((p), (mo))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_CAS_INT(p, e, d, s, f) "
+                  "__atomic_compare_exchange_n((p), (e), (d), 0, (s), (f))\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#  define __ATOMIC_RELAXED 0\n");
+    buf_puts(out, "#  define __ATOMIC_CONSUME 1\n");
+    buf_puts(out, "#  define __ATOMIC_ACQUIRE 2\n");
+    buf_puts(out, "#  define __ATOMIC_RELEASE 3\n");
+    buf_puts(out, "#  define __ATOMIC_ACQ_REL 4\n");
+    buf_puts(out, "#  define __ATOMIC_SEQ_CST 5\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_U64(p, mo)        tur_atomic_load_u64((p))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_U64(p, v, mo)    tur_atomic_store_u64((p), (v))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_ADD_FETCH_U64(p, v, mo) tur_atomic_add_fetch_u64((p), (v))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_PTR(p, mo)        tur_atomic_load_ptr((void *const volatile *)(p))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_STORE_PTR(p, v, mo)    tur_atomic_store_ptr((void *volatile *)(p), (v))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_LOAD_INT(p, mo)        tur_atomic_load_int((p))\n");
+    buf_puts(out, "#  define TUR_ATOMIC_CAS_INT(p, e, d, s, f) tur_atomic_cas_int((p), (e), (d))\n");
+    buf_puts(out, "#endif\n");
     /* S1b (jit-engine-plan): forward declaration for the explicit static
      * initializer.  `main` calls it as its first statement, and `main` may be
      * emitted well before the definition (a user-defined `main` lands in the
@@ -7172,6 +7215,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#include <stdio.h>\n");
     buf_puts(out, "#include <stdint.h>\n");
     buf_puts(out, "#include <stdbool.h>\n");
+    /* 6(a): the host-runtime atomics the TUR_ATOMIC_* fallback calls.  Declared
+     * HERE, not up with the macro definitions, because they are spelled in
+     * terms of uint64_t and the macro block precedes every #include.  Under a
+     * GNU compiler the fallback branch is never taken and the mistake would be
+     * invisible; under c2mir it is a parse error on every program. */
+    buf_puts(out, "#if !defined(__GNUC__) && !defined(__clang__)\n");
+    buf_puts(out, "extern uint64_t tur_atomic_load_u64(const volatile uint64_t *);\n");
+    buf_puts(out, "extern void     tur_atomic_store_u64(volatile uint64_t *, uint64_t);\n");
+    buf_puts(out, "extern uint64_t tur_atomic_add_fetch_u64(volatile uint64_t *, uint64_t);\n");
+    buf_puts(out, "extern void    *tur_atomic_load_ptr(void *const volatile *);\n");
+    buf_puts(out, "extern void     tur_atomic_store_ptr(void *volatile *, void *);\n");
+    buf_puts(out, "extern int      tur_atomic_load_int(const volatile int *);\n");
+    buf_puts(out, "extern int      tur_atomic_cas_int(volatile int *, int *, int);\n");
+    buf_puts(out, "#endif\n");
     /* Phase T19: Thread primitives - pthread on all supported platforms
      * (MinGW supplies these via winpthreads, so no split is needed). */
     buf_puts(out, "#include <pthread.h>\n");
@@ -7493,7 +7550,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_printf(out, "%svoid tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }\n", rt_fn);
     /* Lazy, once-only state initialization (no generated-main wiring needed). */
     buf_puts(out, "static void __stm_do_init(void) {\n");
-    buf_puts(out, "    __atomic_store_n(&__stm_state.version_clock, (uint64_t)0, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "    TUR_ATOMIC_STORE_U64(&__stm_state.version_clock, (uint64_t)0, __ATOMIC_RELEASE);\n");
     buf_puts(out, "    pthread_mutex_init(&__stm_state.retry_lock, NULL);\n");
     buf_puts(out, "    pthread_cond_init(&__stm_state.retry_cond, NULL);\n");
     buf_puts(out, "    for (int i = 0; i < STM_NUM_LOCK_BUCKETS; i++) {\n");
@@ -7516,7 +7573,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    __stm_ensure_init();\n");
     buf_puts(out, "    TVar *tv = malloc(sizeof(TVar));\n");
     buf_puts(out, "    tv->value = initial_value;\n");
-    buf_puts(out, "    __atomic_store_n(&tv->version, (uint64_t)0, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "    TUR_ATOMIC_STORE_U64(&tv->version, (uint64_t)0, __ATOMIC_RELEASE);\n");
     buf_puts(out, "    return tv;\n");
     buf_puts(out, "}\n");
     /* TL2 lock-free read: snapshot version, load value, re-check version. */
@@ -7524,10 +7581,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    for (int i = 0; i < tx->write_count; i++) {\n");
     buf_puts(out, "        if (tx->write_set[i] == tv) return tx->new_values[i];\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    uint64_t v1 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    uint64_t v1 = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "    if ((v1 & 1u) || v1 > tx->read_stamp) { tx->aborted = true; return NULL; }\n");
-    buf_puts(out, "    void *val = __atomic_load_n(&tv->value, __ATOMIC_ACQUIRE);\n");
-    buf_puts(out, "    uint64_t v2 = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    void *val = TUR_ATOMIC_LOAD_PTR(&tv->value, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    uint64_t v2 = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "    if (v1 != v2) { tx->aborted = true; return NULL; }\n");
     buf_puts(out, "    if (tx->read_count < 256) {\n");
     buf_puts(out, "        int seen = 0;\n");
@@ -7587,11 +7644,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    unsigned idxs[128];\n");
     buf_puts(out, "    int nidx = __stm_write_buckets(tx, idxs);\n");
     buf_puts(out, "    for (int i = 0; i < nidx; i++) pthread_mutex_lock(&__stm_state.lock_buckets[idxs[i]].lock);\n");
-    buf_puts(out, "    uint64_t wv = __atomic_add_fetch(&__stm_state.version_clock, (uint64_t)2, __ATOMIC_ACQ_REL);\n");
+    buf_puts(out, "    uint64_t wv = TUR_ATOMIC_ADD_FETCH_U64(&__stm_state.version_clock, (uint64_t)2, __ATOMIC_ACQ_REL);\n");
     buf_puts(out, "    /* Re-validate the whole read set, including read-then-written TVars */\n");
     buf_puts(out, "    for (int i = 0; i < tx->read_count; i++) {\n");
     buf_puts(out, "        TVar *tv = tx->read_set[i];\n");
-    buf_puts(out, "        uint64_t cur = __atomic_load_n(&tv->version, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "        uint64_t cur = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "        if ((cur & 1u) || cur != tx->read_versions[i]) {\n");
     buf_puts(out, "            for (int k = nidx - 1; k >= 0; k--) pthread_mutex_unlock(&__stm_state.lock_buckets[idxs[k]].lock);\n");
     buf_puts(out, "            return false;\n");
@@ -7600,13 +7657,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    /* Publish: lock (odd), store value, store new even version */\n");
     buf_puts(out, "    for (int i = 0; i < tx->write_count; i++) {\n");
     buf_puts(out, "        TVar *tv = tx->write_set[i];\n");
-    buf_puts(out, "        uint64_t locked = __atomic_load_n(&tv->version, __ATOMIC_RELAXED) | 1u;\n");
-    buf_puts(out, "        __atomic_store_n(&tv->version, locked, __ATOMIC_RELEASE);\n");
-    buf_puts(out, "        __atomic_store_n(&tv->value, tx->new_values[i], __ATOMIC_RELEASE);\n");
-    buf_puts(out, "        __atomic_store_n(&tv->version, wv, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        uint64_t locked = TUR_ATOMIC_LOAD_U64(&tv->version, __ATOMIC_RELAXED) | 1u;\n");
+    buf_puts(out, "        TUR_ATOMIC_STORE_U64(&tv->version, locked, __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        TUR_ATOMIC_STORE_PTR(&tv->value, tx->new_values[i], __ATOMIC_RELEASE);\n");
+    buf_puts(out, "        TUR_ATOMIC_STORE_U64(&tv->version, wv, __ATOMIC_RELEASE);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tx->committed = true;\n");
-    buf_puts(out, "    for (int i = 0; i < nidx; i++) __atomic_add_fetch(&__stm_state.lock_buckets[idxs[i]].commit_seq, (uint64_t)1, __ATOMIC_ACQ_REL);\n");
+    buf_puts(out, "    for (int i = 0; i < nidx; i++) TUR_ATOMIC_ADD_FETCH_U64(&__stm_state.lock_buckets[idxs[i]].commit_seq, (uint64_t)1, __ATOMIC_ACQ_REL);\n");
     buf_puts(out, "    for (int i = nidx - 1; i >= 0; i--) pthread_mutex_unlock(&__stm_state.lock_buckets[idxs[i]].lock);\n");
     buf_puts(out, "    pthread_mutex_lock(&__stm_state.retry_lock);\n");
     buf_puts(out, "    pthread_cond_broadcast(&__stm_state.retry_cond);\n");
@@ -7623,7 +7680,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Begin: snapshot the global clock into the transaction's read stamp. */
     buf_puts(out, "static void __tur_stm_begin(STM_Transaction *tx) {\n");
     buf_puts(out, "    __stm_ensure_init();\n");
-    buf_puts(out, "    tx->read_stamp = __atomic_load_n(&__stm_state.version_clock, __ATOMIC_ACQUIRE);\n");
+    buf_puts(out, "    tx->read_stamp = TUR_ATOMIC_LOAD_U64(&__stm_state.version_clock, __ATOMIC_ACQUIRE);\n");
     buf_puts(out, "}\n");
     /* Park until a bucket covering the read set commits (global cond + filter). */
     buf_puts(out, "static void __tur_stm_park(STM_Transaction *tx) {\n");
@@ -7632,14 +7689,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        unsigned bi = __stm_bucket_idx(tx->read_set[i]);\n");
     buf_puts(out, "        int seen = 0;\n");
     buf_puts(out, "        for (int j = 0; j < n; j++) { if (idxs[j] == bi) { seen = 1; break; } }\n");
-    buf_puts(out, "        if (!seen) { idxs[n] = bi; seqs[n] = __atomic_load_n(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }\n");
+    buf_puts(out, "        if (!seen) { idxs[n] = bi; seqs[n] = TUR_ATOMIC_LOAD_U64(&__stm_state.lock_buckets[bi].commit_seq, __ATOMIC_ACQUIRE); n++; }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    if (n == 0) return;\n");
     buf_puts(out, "    pthread_mutex_lock(&__stm_state.retry_lock);\n");
     buf_puts(out, "    for (;;) {\n");
     buf_puts(out, "        int advanced = 0;\n");
     buf_puts(out, "        for (int i = 0; i < n; i++) {\n");
-    buf_puts(out, "            if (__atomic_load_n(&__stm_state.lock_buckets[idxs[i]].commit_seq, __ATOMIC_ACQUIRE) != seqs[i]) { advanced = 1; break; }\n");
+    buf_puts(out, "            if (TUR_ATOMIC_LOAD_U64(&__stm_state.lock_buckets[idxs[i]].commit_seq, __ATOMIC_ACQUIRE) != seqs[i]) { advanced = 1; break; }\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "        if (advanced) break;\n");
     buf_puts(out, "        pthread_cond_wait(&__stm_state.retry_cond, &__stm_state.retry_lock);\n");
@@ -8351,7 +8408,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     buf_puts(out, "static int tur_thread_cancel_requested(void) {\n");
     buf_puts(out, "    TurThreadState *s = tur_current_thread_state;\n");
-    buf_puts(out, "    return s ? __atomic_load_n(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;\n");
+    buf_puts(out, "    return s ? TUR_ATOMIC_LOAD_INT(&s->cancel_requested, __ATOMIC_ACQUIRE) : 0;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "/* TC0: cancel action -- longjmp into cancel guard if active, else exit thread */\n");
     buf_puts(out, "static void tur_thread_do_cancel(void) {\n");
@@ -9290,8 +9347,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    TurSelectWaiter *w = (TurSelectWaiter *)waiter_list;\n");
     buf_puts(out, "    while (w) {\n");
     buf_puts(out, "        int exp = -1;\n");
-    buf_puts(out, "        if (__atomic_compare_exchange_n(w->selected_idx, &exp, w->clause_idx, 0,\n");
-    buf_puts(out, "                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {\n");
+    buf_puts(out, "        if (TUR_ATOMIC_CAS_INT(w->selected_idx, &exp, w->clause_idx,\n");
+    buf_puts(out, "                               __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {\n");
     buf_puts(out, "            pthread_mutex_lock(w->wakeup_mutex);\n");
     buf_puts(out, "            pthread_cond_signal(w->wakeup_cond);\n");
     buf_puts(out, "            pthread_mutex_unlock(w->wakeup_mutex);\n");
