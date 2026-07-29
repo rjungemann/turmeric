@@ -296,10 +296,22 @@ useful even if the JIT slips.
   link+gen against 125 ms eager, for the same output. **Lazy generation is not
   re-entrant**: two threads entering the same not-yet-generated function trip a
   MIR assertion (`_MIR_duplicate_func_insns`), so J1 must serialize generation
-  or fall back to eager for programs that can `spawn` (findings 8.1). J1 should
+  or fall back to eager for programs that can `spawn` (findings 8.1). ~~J1 should
   also stop emitting `__thread` and the GCC atomic builtins into the TU -- the
   atomics belong in the host runtime, resolved by address like `hamt.c`
-  (findings 8.2).
+  (findings 8.2).~~ **Both done (S1 and findings 14): `TUR_THREAD_LOCAL` and
+  `TUR_ATOMIC_*` expand to the GNU spellings under `cc` and to
+  `src/runtime/tur_atomics.c` under any other front end.** Doing it uncovered
+  the item that outranks them: **c2mir has no TLS at all.** It accepts
+  `_Thread_local`, warns "Thread local is not implemented", and gives every
+  thread one shared slot. The preamble has 10 thread-local variables (STM's
+  current transaction, the handler chain and panic flag, the current fiber and
+  its cancel flag, thread state and its cancel `jmp_buf`, the MT scheduler
+  pointer); until they move into the host behind `pthread_getspecific`
+  accessors -- the pattern dynamic variables already use -- **`tur jit` is
+  single-threaded-only and must say so.** This is the largest single item J1
+  inherits (findings 14.3), and it is what `stm-stress` and
+  `gc-registry-growth` have been failing on all along.
 - **J2 -- REPL/watch integration.** Section 3.3. **Requires S2** -- without
   it every `(reload)` recompiles the identical 3,847-line preamble.
 - **J3 -- parity + perf.** Run the fixture corpus under `tur jit`

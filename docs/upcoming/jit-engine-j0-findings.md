@@ -287,8 +287,13 @@ breakdown.
    only with a lock and a fix for the codegen bug.
 6. ~~**Verify arm64 macOS MAP_JIT** before the `EXPERIMENTS[]` row lands.~~
    **Done, 2026-07-27 -- gate closed, see 8.1.** Replaced by three new items:
-   (a) move the atomic builtins into the host runtime instead of emitting them
-   as text, and emit `_Thread_local` rather than `__thread` (8.2); (b) make
+   (a) ~~move the atomic builtins into the host runtime instead of emitting them
+   as text, and emit `_Thread_local` rather than `__thread`~~ **-- BOTH DONE
+   (S1 and `94ead5062`); see section 14. Corpus unchanged at 1645 with an empty
+   fixture diff -- the win is correctness, not coverage. Doing it separated out
+   a third problem the two were masking: `stm-stress` and `gc-registry-growth`
+   fail on TLS, not atomics -- c2mir accepts `_Thread_local` and then treats it
+   as a plain global (14.3), which is J1 engine work**; (b) make
    generation safe under concurrent first-call before defaulting to lazy, per
    recommendation 5 (8.1); (c) re-scope S2 into J1 and re-measure -- on Apple
    Silicon the JIT is at parity with `cc` without it (8.3).
@@ -1389,8 +1394,11 @@ filed report:
   3.2-step-6 fallback to `cc`, working as designed.
 - **1 x** `any-cast-mismatch-panic` -- panics by design; the sweep scores any
   signal as a failure.
-- **2 x** `stm-stress`, `gc-registry-growth` -- the shim-atomics hazard (8.4.3).
-  `stm-stress` alternates `signal-11` and `output-mismatch` run to run.
+- **2 x** `stm-stress`, `gc-registry-growth` -- ~~the shim-atomics hazard
+  (8.4.3)~~. **Re-diagnosed in 14.3: these are TLS, not atomics.** The preamble's
+  atomics are real now and both still fail; c2mir accepts `_Thread_local`,
+  warns "Thread local is not implemented", and gives every thread the same
+  slot. `stm-stress` alternates `signal-11` and `output-mismatch` run to run.
 - **1 x** `hamt-lowering-basic` -- the filed `^persistent` cstr-key identity
   bug, reproduced on the `cc` path with no JIT involved
   ([report](../reported/persistent-map-cstr-keys-identity-compared.md)).
@@ -1508,3 +1516,100 @@ reaches libc and, under the JIT, whatever the host runtime supplies by address.
 - The 25-variant clustering means a prebuilt-module cache keyed on preamble
   content is cheap. It does not need to be perfect: a miss falls back to
   compiling the preamble, which is today's behaviour.
+
+## 14. Recommendation 6(a) -- atomics moved, and the TLS half separated out
+
+Added 2026-07-29, x86-64 Linux, same harness and pin (`94ead5062`).
+Recommendation 6(a) bundles two things: emit `_Thread_local` rather than
+`__thread`, and move the atomic builtins into the host runtime. The first
+shipped with S1. This is the second -- and doing it separated a third problem
+that was hiding behind both.
+
+### 14.1 What shipped
+
+The preamble emitted 18 literal `__atomic_*` builtins. c2mir implements none of
+the family, so the spike shimmed them to plain loads and stores -- correct only
+for single-threaded programs, and the shim said so in its own header.
+
+They now route through a `TUR_ATOMIC_*` macro layer:
+
+- under `__GNUC__`/`__clang__`, expands to exactly the builtins emitted before,
+  so the `cc` path is behaviourally identical and keeps the inline atomic on the
+  STM commit path;
+- otherwise, calls `src/runtime/tur_atomics.c` -- compiled by `cc`, resident in
+  the host, resolved by address exactly as `hamt.c` already is. This is plan
+  section 3.2 step 4 applied to the one part of the runtime that could not
+  survive c2mir at all.
+
+c2mir predefines neither macro. That was verified with a probe rather than
+inferred from 9.2's `__extension__` note, which is the same claim from a
+different direction.
+
+Memory orders are not threaded through the host functions -- all seven are
+seq_cst, a strengthening of every order the preamble requests (relaxed,
+acquire, release, acq_rel), so no program can observe a behaviour the requested
+order would have forbidden. Passing the order would cost a switch per call
+(GCC requires a compile-time-constant order), on a path only ever taken by a
+front end that has no builtins to be fast with.
+
+### 14.2 The corpus does not move, and the diff is empty
+
+| Sweep | Full corpus | |
+|---|---|---|
+| before | 1645 / 1680 | 97.9% |
+| **after** | **1645 / 1680** | **97.9%** |
+
+Fixture-by-fixture against the pre-change sweep: **zero fixtures changed
+outcome**. The win is correctness -- the preamble's atomics are real under the
+JIT instead of faked -- not coverage. Recording that plainly matters, because
+the tempting write-up ("atomics fixed") implies a number that did not move.
+
+Getting to that empty diff took two wrong turns, both caught by measurement:
+
+- **The fallback declarations were unreachable.** They are spelled in `uint64_t`
+  and were emitted with the macro block, which precedes every `#include`. Under
+  a GNU compiler the fallback branch is never compiled, so nothing shows; under
+  c2mir it is a parse error on every program. Moved after `<stdint.h>`.
+- **Deleting the shim's atomic defines cost 13 fixtures** (1645 -> 1631), every
+  one an `unresolved import: __atomic_*` originating in `stdlib/atomic.tur`,
+  `stdlib/future.tur`, or fixture inline-C. The shim was covering *inline-C*,
+  which the emitter does not own, as well as the preamble. Restoring it, I also
+  dropped `#define __thread` (same mistake: it covered user inline-C too, since
+  `thread-local-basic` writes `static __thread` in a C block) and added an
+  `__atomic_exchange_n` that returned the old value without storing the new one.
+  Both surfaced as a 1643 naming two fixtures.
+
+The shim's remaining atomics are still not atomic, and are now correctly scoped:
+they exist for inline-C only. `tur jit` must either take the step-6 `cc`
+fallback for inline-C that uses them, or `stdlib/atomic.tur` must route through
+host functions the way the preamble now does.
+
+### 14.3 `stm-stress` was never an atomics failure -- it is TLS
+
+With real atomics in the preamble, `stm-stress` still loses updates (4000
+expected; 3930, 1917, 97 across runs, sometimes SIGSEGV). The cause is one line
+up from where 6(a) was looking:
+
+```c
+static TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;
+```
+
+c2mir parses `_Thread_local` and then warns **"Thread local is not
+implemented"** -- 10 times per program -- and treats the variable as an ordinary
+global. All 8 worker threads therefore share one transaction descriptor. 3.2
+predicted exactly this ("behaves as a plain global, which is correct
+single-threaded and wrong the moment a fixture spawns"); what is new is that it
+is now the *only* thing standing between `stm-stress` and a pass, with the
+atomics no longer masking it.
+
+No emitter change fixes this. The 10 thread-local variables in the preamble
+(`__stm_current_tx`, the handler chain and panic flag, the current fiber and its
+cancel flag, the thread state and its cancel `jmp_buf`, the MT scheduler
+pointer) would have to move into the host behind accessor functions backed by
+`pthread_getspecific` -- the pattern dynamic variables already use -- or `tur
+jit` documents itself as single-threaded until MIR implements TLS. That is J1
+engine work and is deliberately not attempted here.
+
+The same reading applies to `gc-registry-growth` (still SIGSEGV) and is the
+honest status of the "2 shim-atomics casualties" line in 12.6: they were never
+about the shim's atomics. Both are TLS.
