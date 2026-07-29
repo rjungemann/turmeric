@@ -1181,8 +1181,10 @@ stands at:
   struct return inside an `if/else + goto-backedge` CFG (the emitted tail-loop
   shape) comes back as `{hi, hi}`; 12-line standalone-C repro, present at
   upstream master tip, each boundary condition verified by a one-line change.
-  Filed:
-  [docs/reported/mir-two-word-struct-return-goto-loop-miscompile.md](../reported/mir-two-word-struct-return-goto-loop-miscompile.md).
+  **Fixed in the rjungemann/mir fork** (`b79e3681`, root cause: `make_one_ret`
+  merge targets alias when simplify canonicalizes a trailing `ret 0,0`); the
+  spike pin now points at the fix commit. Corpus 1641 -> 1642. Archived:
+  [docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md](../archive/mir-two-word-struct-return-goto-loop-miscompile.md).
   **`load-in-imported-module` closes the set, and lands in a third layer: the
   spike harness itself.** The `(load "stdlib/math.tur")` splice gives the
   program a module-local `static double sqrt(double) { return

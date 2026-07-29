@@ -15,14 +15,19 @@
 # Pinned to a commit, never a branch: c2mir's accepted C subset is the spike's
 # whole subject matter, so a floating dependency would silently change the
 # result being measured.
-# A full mirror of upstream at this pin lives at
-# https://github.com/rjungemann/mir (branch master == the pinned commit), so
-# the spike stays buildable if upstream moves or disappears; override with
-# -DTUR_MIR_GIT_REPOSITORY=https://github.com/rjungemann/mir.git to use it.
-set(TUR_MIR_GIT_REPOSITORY "https://github.com/vnmakarov/mir.git"
-    CACHE STRING "MIR upstream repository for the JIT spike")
-set(TUR_MIR_GIT_TAG "a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c"
-    CACHE STRING "MIR commit pin for the JIT spike (post-v1.0.0)")
+# The pin points at the rjungemann/mir fork: upstream a8ab7c31 (master tip and
+# full history mirrored there) plus one fix, b79e3681 -- make_one_ret merged
+# multi-value rets through the LAST ret's operand list, which aliases when
+# simplify canonicalizes a trailing `ret 0, 0` to `ret t, t`, returning
+# { second-word, second-word } for a two-word struct.  That CFG is exactly the
+# emitted tail-loop for a self-recursive carrier-struct function, so the spike
+# needs the fix (docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md).
+# Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands an
+# equivalent.
+set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
+    CACHE STRING "MIR repository for the JIT spike (fork carrying the ret fix)")
+set(TUR_MIR_GIT_TAG "b79e368134f22a0008576e1e02785a752f4cf756"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + fix/make-one-ret-distinct-targets")
 
 include(FetchContent)
 

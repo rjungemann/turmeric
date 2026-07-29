@@ -1,5 +1,26 @@
 # MIR miscompiles 2-word struct return in an if/else + goto-backedge CFG
 
+**RESOLVED 2026-07-30: fixed in the rjungemann/mir fork; NOT filed upstream
+(owner's decision).** Root cause was `make_one_ret` (`mir.c`): it merges every
+ret into one exit using the LAST ret's operand list as the per-slot targets,
+and those alias when simplify canonicalizes a trailing `ret 0, 0` (which c2mir
+emits after an if/else whose arms both return) into `ret t, t` -- both of the
+real ret's distinct values were then moved into the same temp.
+
+Fix `b79e3681` (`fix/make-one-ret-distinct-targets` on the fork) materializes
+one fresh temp per result slot on the fall-through path, before the shared
+label so jumping rets cannot re-clobber what they just wrote.  Verified:
+the 12-line repro and all 15 bisection variants correct at -O0..-O2; MIR's own
+ctest identical before/after (the one gen-test11 abort is pre-existing on the
+unpatched tip); Turmeric corpus 1641 -> 1642, exactly the target fixture, zero
+regressions.  `cmake/mir.cmake` now pins the fork at the fix commit; repoint
+at upstream when an equivalent lands there.  The fork commit message is
+written to serve as the PR description should the owner choose to send it.
+
+Original report follows.
+
+---
+
 **Severity: high for `tur jit`, upstream defect.** Reproduces at MIR upstream
 master tip (`a8ab7c3`, current as of 2026-07-29), at `-O0` through `-O2`.
 Not a Turmeric codegen bug -- the repro is 12 lines of standalone, fully
