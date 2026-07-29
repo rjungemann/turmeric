@@ -10603,6 +10603,26 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    }\n");
     buf_puts(out, "    free(role);\n");
     buf_puts(out, "}\n\n");
+    /* S2 (jit-engine-plan section 4): the end of the fixed runtime preamble,
+     * named.  Everything above this line is runtime -- the same code
+     * `libturi.a` / `libturt_runtime.a` already contain -- and everything below
+     * is this program.  Nothing in the compiler needs the distinction today,
+     * which is why it was never marked; a JIT does, and S2's deliverable is "a
+     * named, documented symbol boundary" -- a region has to be delimited
+     * before its symbols can be.
+     *
+     * There is no natural terminator to key off instead: the last block above
+     * (`tur_role_close`) is gated on session types, and every other candidate
+     * is gated on something too.  Splitting by longest-common-prefix across a
+     * few TUs -- which is what produced the "3,847 lines, byte-identical across
+     * programs" claim in findings 4.3 -- conflates the runtime with whatever
+     * stdlib forward declarations those particular programs happened to share,
+     * and reports a fixed region that is not fixed corpus-wide.  See findings
+     * 13.1.
+     *
+     * Emitted unconditionally, including in `--shared` mode and in every
+     * separately-compiled TU, so a consumer can split any emitted C exactly. */
+    buf_puts(out, "/* ==== tur: end of fixed runtime preamble ==== */\n");
 }
 
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the

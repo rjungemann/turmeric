@@ -272,7 +272,13 @@ breakdown.
    the exits it cannot; an idempotent pop lets both fire. Corpus 1642 -> 1645,
    all ten `dynvar-*` fixtures green on both paths, dynamic variables not
    `cc`-only after all.
-4. **Promote S2 ahead of J2**, per section 4.3.
+4. **Promote S2 ahead of J2**, per section 4.3. **Sized, not yet implemented --
+   see section 13.** The preamble is 3,417 lines (not 3,847; 4.3 split the TU
+   at an LCP that ran past the runtime into shared stdlib decls), 25 variants
+   corpus-wide with one covering 89% of TUs, and **57% of total compile time**.
+   The boundary a program actually reaches is **21 symbols at the median, 177
+   as a corpus-wide union** -- small enough to be a hand-maintained header.
+   The emitter now marks the region end so any consumer can split exactly.
 5. ~~**Default to lazy generation** (`MIR_set_lazy_gen_interface`).~~
    **WITHDRAWN -- see 8.1 and 8.4.** Lazy generation has two independent
    defects at this pin: it is not re-entrant (8.1), and it miscompiles pthread
@@ -1388,3 +1394,117 @@ filed report:
 - **1 x** `hamt-lowering-basic` -- the filed `^persistent` cstr-key identity
   bug, reproduced on the `cc` path with no JIT involved
   ([report](../reported/persistent-map-cstr-keys-identity-compared.md)).
+
+## 13. S2 sized -- the runtime boundary, measured exactly
+
+Added 2026-07-29, x86-64 Linux, same harness and pin. Recommendations 4 and
+6(c) ask for S2 to be re-scoped into J1 and re-measured. This is the
+measurement; the implementation is J1 work.
+
+### 13.1 4.3 split the TU in the wrong place, and so did the first re-run
+
+Section 4.3 reported the fixed preamble as "3,847 lines, **byte-identical**
+across `arith`, `hamt-basic`, and `cps-backend-effect`". That number is a
+longest-common-prefix of three TUs, and an LCP does not stop at the end of the
+runtime: those three programs also share several hundred lines of *stdlib
+forward declarations* immediately after it. The figure is the runtime plus
+whatever stdlib the sample happened to have in common.
+
+Re-running the same LCP against all 1,928 emitted TUs gives **11 lines**, which
+reads as "the preamble is barely fixed at all" and is just as wrong in the other
+direction -- programs that gate a different preamble block diverge early, and
+everything after the divergence point gets counted as program text. Both numbers
+are artifacts of splitting by prefix agreement rather than by structure.
+
+The emitter now closes `emit_runtime_preamble()` with an explicit marker:
+
+```c
+/* ==== tur: end of fixed runtime preamble ==== */
+```
+
+It costs one comment line per TU, is emitted unconditionally (including
+`--shared` and every separately-compiled TU), and makes the split exact for the
+spike, for J3's harness, and for anything S2 builds later. S2's stated
+deliverable is "a named, documented symbol boundary"; a region has to be
+delimited before its symbols can be. Corpus sweep after adding it: 1645/1680,
+unchanged, as a comment should be.
+
+### 13.2 With the exact split, 4.3's claim was right after all
+
+| | Value |
+|---|---|
+| Preamble lines | **3,417** (median; 3,417 min, 3,689 max) |
+| Distinct preamble variants across 1,928 TUs | **25** |
+| TUs sharing the single most common variant | **1,711 (89%)** |
+
+So the preamble is not literally byte-identical corpus-wide -- it is gated on
+program features (`g_needs_hamt`, session types, and so on) -- but 89% of
+programs get the *same* text, and the whole corpus is covered by 25 variants.
+A content-keyed cache of prebuilt MIR modules is therefore viable with a
+handful of entries, which is a stronger result than 4.3 claimed and a much
+stronger one than the 11-line LCP suggested.
+
+### 13.3 Latency, re-measured on the exact preamble
+
+| Input | Lines | c2mir | link+gen |
+|---|---|---|---|
+| trivial `int main` + `<stdio.h>` | 2 | 10.0 ms | 1.7 ms |
+| **fixed runtime preamble alone** | **3,417** | **97.8 ms** | **91.3 ms** |
+| whole `arith` TU | 7,559 | 142.2 ms | 188.9 ms |
+| whole `hamt-basic` TU | 8,075 | 139.9 ms | 199.3 ms |
+| whole `cps-backend-effect` TU | 7,593 | 139.8 ms | 190.5 ms |
+
+The preamble is **69% of c2mir time, 48% of generation, 57% of the total** for
+`arith` -- against 4.3's 76% / 50%. Same conclusion, slightly smaller share.
+
+Absolute times here run ~1.5x 4.3's on the same fixtures at the same line
+counts, which is a property of the machine this session ran on, not a
+regression: the ratios are what carry across sessions and the ratios moved by a
+few points. Do not compare the millisecond columns of 4.3 and 13.3 directly.
+
+### 13.4 The boundary is 21 symbols for a typical program, 177 corpus-wide
+
+The number that actually sizes S2 is not the preamble's size but how much of it
+a program *reaches* -- that set is the `MIR_load_external` table, and the plan
+says so ("the JIT's `MIR_load_external` table *is* that list").
+
+Splitting every TU at the marker, taking the symbols the preamble defines
+(`nm --defined-only`, 340 of them) and intersecting with the identifiers
+appearing after the marker:
+
+| | Value |
+|---|---|
+| Symbols the preamble defines | 340 |
+| Referenced by the program half -- median | **21** |
+| -- p95 | 29 |
+| -- max | 46 |
+| **Union across all 1,928 TUs** | **177** |
+| Defined but referenced by no program in the corpus | **163** |
+
+Two things follow. **Nearly half the preamble is internal to itself**: 163 of
+340 symbols are never named by any generated program, so they are pure
+runtime-private code that has no business being recompiled per program and no
+business appearing in a boundary header either. And **the boundary is small and
+stable** -- 21 symbols are referenced by more than 90% of TUs, and the widest
+program in the corpus reaches 46. A hand-maintainable header is a realistic
+artifact at that size; it would not have been at 340 or at the thousands the
+"3,847 lines" framing suggests.
+
+This is measured by identifier occurrence in the post-marker text, so it is an
+upper bound on genuine references (a symbol named only in a comment or a string
+would count). It is not an upper bound on what S2 must *resolve*: a program also
+reaches libc and, under the JIT, whatever the host runtime supplies by address.
+
+### 13.5 What J1 should take from this
+
+- The `--runtime=lib` machinery (`apply_runtime_lib_mode`, `src/main.c`) already
+  swaps runtime sources for the archive on the `cc` path, and `g_rcgc_from_archive`
+  already gates a preamble block between "define" and "declare". S2 is an
+  extension of an existing pattern, not a new mechanism.
+- Skipping the preamble saves ~57% of compile time on a typical program. On
+  Apple Silicon, where 8.3 found the JIT at parity with `cc`, that is the
+  difference between a feature with no latency argument and one with a clear
+  one.
+- The 25-variant clustering means a prebuilt-module cache keyed on preamble
+  content is cheap. It does not need to be perfect: a miss falls back to
+  compiling the preamble, which is today's behaviour.

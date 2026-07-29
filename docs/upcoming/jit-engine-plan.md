@@ -240,11 +240,21 @@ useful even if the JIT slips.
   so both may fire. Corpus 1642 -> 1645. Dynamic variables are therefore NOT
   cc-only under `tur jit`. One edge remains for J1: an early `return`/`goto`
   out of a dynamic binding still pops only on the `cc` path.
-- **S2 -- runtime-as-library boundary. J0 promoted this to a J2
-  prerequisite.** The fixed runtime preamble is byte-identical across programs
-  (3,847 lines) and accounts for 76% of c2mir time and 50% of generation time,
-  so this is the difference between a ~115 ms and a ~25 ms JIT compile -- and
-  it is the same change that keeps atomics and TLS out of c2mir's reach.
+- **S2 -- runtime-as-library boundary. J0 promoted this to a J2 prerequisite,
+  and has now SIZED it (findings 13); the implementation is J1 work.** The
+  fixed runtime preamble is **3,417 lines** (4.3's 3,847 measured a
+  longest-common-prefix that ran past the runtime into shared stdlib
+  declarations), comes in **25 variants across the corpus with one covering 89%
+  of TUs**, and accounts for **69% of c2mir time, 48% of generation, 57% of the
+  total** -- and it is the same change that keeps atomics and TLS out of
+  c2mir's reach. The boundary a program actually reaches is **21 symbols at the
+  median and 177 as a corpus-wide union**, out of 340 the preamble defines --
+  so the "one header listing every runtime symbol the generated C may
+  reference" below is a realistic artifact, and 163 preamble symbols are
+  runtime-private and belong in neither the header nor a per-program compile.
+  `emit_runtime_preamble()` now ends with an explicit
+  `/* ==== tur: end of fixed runtime preamble ==== */` marker so any consumer
+  can split an emitted TU exactly.
   `--runtime=lib` /
   `apply_runtime_lib_mode()` (`src/main.c:2435`) already swaps runtime `.c`
   for prebuilt `libturi.a` on the cc path. Tighten this into a named,
