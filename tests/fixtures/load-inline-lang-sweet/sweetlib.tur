@@ -1,0 +1,9 @@
+#lang turmeric/sweet
+;; Dialect declared by an INLINE #lang directive, not by the file extension --
+;; the case the load splicer used to miss.
+
+defn sweet-add [a : int b : int] : int
+  +(a b)
+
+defn sweet-triple [x : int] : int
+  *(x 3)

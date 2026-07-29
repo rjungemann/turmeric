@@ -919,8 +919,47 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         sfile->src = src_copy;
         sfile->len = src_len;
         sfile->file_id = e->next_import_file_id++;
-        sfile->reader_type = reader_type_from_extension(path_buf);
-        if (sfile->reader_type == READER_UNKNOWN) sfile->reader_type = READER_TURMERIC;
+        /* load-ignores-inline-lang-directive: a loaded file's dialect was taken
+         * from its EXTENSION only, so `(load "sweetlib.tur")` on a file whose
+         * first line is `#lang turmeric/sweet` handed sweet source to the plain
+         * reader and died on the directive itself ("unexpected character '#'").
+         * Run the same detect_lang_layered sweep the entry file gets
+         * (resolve_reader_type in main.c) so the directive is both honoured and
+         * stripped.  Extension still wins for the base when it selected a
+         * non-default reader -- the directive is then a redundant hint --
+         * and layers ride along regardless of which source picked the base. */
+        {
+            ReaderType ext_type = reader_type_from_extension(path_buf);
+            if (ext_type == READER_UNKNOWN) ext_type = READER_TURMERIC;
+            const char  *lsrc  = src_copy;
+            size_t       llen  = src_len;
+            LangLayerSet layers = 0;
+            const char  *bad = NULL;
+            size_t       bad_len = 0;
+            ReaderType lang_type = detect_lang_layered(src_copy, src_len,
+                                                       &lsrc, &llen,
+                                                       &layers, &bad, &bad_len);
+            if (bad) {
+                diag_emit(DIAG_ERROR, path_f->span,
+                          "unknown #lang layer '%.*s' in loaded file '%s' "
+                          "(TUR-E0330)", (int)bad_len, bad, path_buf);
+                lx->rc = -1;
+                continue;
+            }
+            ReaderType chosen =
+                (ext_type != READER_TURMERIC) ? ext_type : lang_type;
+            if (!reader_type_is_implemented(chosen)) {
+                diag_emit(DIAG_ERROR, path_f->span,
+                          "#lang %s in loaded file '%s' is not yet implemented",
+                          reader_type_name(chosen), path_buf);
+                lx->rc = -1;
+                continue;
+            }
+            sfile->src         = lsrc;
+            sfile->len         = llen;
+            sfile->reader_type = chosen;
+            sfile->lang_layers = layers;
+        }
         diag_register_file(sfile);
         /* Transitive-RM (T2): share the entry file's macro registry. */
         uint32_t lf_n = 0;

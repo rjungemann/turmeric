@@ -1,0 +1,7 @@
+(defpackage app
+  :name    "app"
+  :version "0.1.0"
+  :spices #map{
+    "mid1" #map{:path "../mid1"}
+    "mid2" #map{:path "../mid2"}
+  })

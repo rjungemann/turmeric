@@ -1,0 +1,15 @@
+;; incremental-elab-loses-span-file-provenance (diagnostic half): a type error
+;; under `--interpret` must be reported against THIS file at its own 1-based
+;; line, not against the synthetic `<eval>` blob at a line offset by however
+;; many prelude `(load ...)` lines happened to be accumulated first.
+;;
+;; The expected.diag needles below pin the path and the line together, which is
+;; what makes this a provenance test rather than another type-mismatch test --
+;; before the fix the interpreter reported `<eval>:64:10` here while the
+;; compiled path reported the real location all along.
+;;
+;; Kept deliberately dull: the error itself is the plainest possible mismatch,
+;; so the fixture fails only if the LOCATION regresses.
+(defn main [] : int
+  (let [x 1]
+    (+ x "boom")))

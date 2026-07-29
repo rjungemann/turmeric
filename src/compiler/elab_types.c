@@ -882,10 +882,39 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                         return NULL;
                     }
                     if (!have_acc) { acc = *operand; have_acc = true; continue; }
+                    /* row-ops-drop-field-names, all-or-nothing labels: the
+                     * literal level already rejects a `#row{...}` that mixes
+                     * bare types with `name : T` slots (TUR-E0290); the algebra
+                     * has to hold the same line, or the fold would have to
+                     * invent a name for the bare side. An EMPTY operand is
+                     * label-neutral, so `(row-union R #row{})` stays legal --
+                     * type_typerow_is_labeled is false for a zero-length row on
+                     * both sides of this check. */
+                    if (operand->as.typerow_.n_elements > 0 &&
+                        acc.as.typerow_.n_elements > 0 &&
+                        type_typerow_is_labeled(acc) !=
+                            type_typerow_is_labeled(*operand)) {
+                        diag_emit(DIAG_ERROR, form->as.list.items[ai]->span,
+                            "'%s' operand %u mixes a labeled row with a bare one; "
+                            "labels are all-or-nothing across the whole operation "
+                            "(TUR-E0290)", h, (unsigned)ai);
+                        return NULL;
+                    }
                     switch (rop) {
                         case 1: acc = type_typerow_concat(e->arena, acc, *operand); break;
                         case 2: acc = type_typerow_union(e->arena, acc, *operand); break;
                         default: acc = type_typerow_intersect(e->arena, acc, *operand); break;
+                    }
+                    /* concat keeps duplicates outright, and union keeps two
+                     * slots that share a name but disagree on type -- both can
+                     * produce a labeled row that no literal could have spelled.
+                     * Report it against the operand that introduced it. */
+                    const char *dup = type_typerow_dup_field_name(acc);
+                    if (dup) {
+                        diag_emit(DIAG_ERROR, form->as.list.items[ai]->span,
+                            "'%s' result has duplicate field name `%s` "
+                            "(TUR-E0291)", h, dup);
+                        return NULL;
                     }
                 }
                 if (nargs == 0) acc = type_typerow(e->arena, NULL, 0);

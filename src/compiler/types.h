@@ -1451,7 +1451,22 @@ Type type_typerow_named(Arena *a, Type **elements, const char **field_names,
 bool type_typerow_eq_perm(Type a, Type b);
 
 /* Variadic HKT rows (Layer 5): row algebra -- the type-level operations the
- * ECS query / relational layers build on. All are pure and compile-time. */
+ * ECS query / relational layers build on. All are pure and compile-time.
+ *
+ * row-ops-drop-field-names: every operation below FORWARDS a labeled row's
+ * field_names. Dropping them would return a positional row, which compares
+ * equal to any same-shaped positional row, so `#row{id : int}` would start
+ * unifying with `#row{name : int}` after a round trip through the algebra.
+ * Labeled rows dedup and intersect on the (name, type) PAIR, matching how they
+ * unify elsewhere. Mixing a labeled operand with a bare one is rejected by the
+ * caller (elab_types.c) rather than resolved here; an EMPTY row is
+ * label-neutral, so `(row-union R #row{})` stays the identity either way. */
+/* True if `r` is a non-empty row carrying field names. */
+bool type_typerow_is_labeled(Type r);
+/* First field name appearing twice in a labeled row, or NULL if all distinct.
+ * concat/union can produce a duplicate that no literal could (TUR-E0291), so
+ * the caller scans the folded result. */
+const char *type_typerow_dup_field_name(Type r);
 /* Membership: true if `row` contains an element type_eq to `elem`. */
 bool type_typerow_contains(Type row, Type elem);
 /* Concatenation (`++`): x ++ y, order-preserving, duplicates kept (clamped 255). */
@@ -1460,10 +1475,11 @@ Type type_typerow_concat(Arena *a, Type x, Type y);
 Type type_typerow_union(Arena *a, Type x, Type y);
 /* Intersection: x's elements also in y, x's order, deduplicated. */
 Type type_typerow_intersect(Arena *a, Type x, Type y);
-/* L6 follow-up D: canonical (sorted-by-type_name) copy of a row -- the opt-in
- * surface for permutation-aware equality. (row-canon #row{a b}) and
- * (row-canon #row{b a}) reduce to the same TY_TYPEROW, so ordinary type_eq
- * agrees. Compile-time only. */
+/* L6 follow-up D: canonical (sorted) copy of a row -- the opt-in surface for
+ * permutation-aware equality. (row-canon #row{a b}) and (row-canon #row{b a})
+ * reduce to the same TY_TYPEROW, so ordinary type_eq agrees. Compile-time only.
+ * Sort key is (field_name, type_name) for a labeled row, type_name alone for a
+ * positional one -- see the note in types.c on why the field name has to lead. */
 Type type_typerow_canonical(Arena *a, Type x);
 
 /* Phase 17: Exception type constructor */

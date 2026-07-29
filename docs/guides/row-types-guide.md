@@ -163,6 +163,10 @@ produces a row usable anywhere a literal row is:
 | `(row-intersect A B ...)` | elements present in every operand |
 | `(row-canon R)` | sorted copy of `R` (unary) |
 
+All four preserve a labeled row's field names; see
+[Labels through the algebra](#labels-through-the-algebra) for the rules that
+follow from that.
+
 `row-concat` / `row-union` / `row-intersect` are variadic: zero operands give
 the empty row, one operand passes through. Every operand must itself be a row;
 a non-row operand is an error:
@@ -224,6 +228,50 @@ canonicalise agree regardless of how they spelled the row:
 The relaxation is scoped to the annotations that opt in. `type_eq` itself is
 never weakened, so a module that does not write `row-canon` keeps strict
 order-sensitive equality.
+
+## Labels through the algebra
+
+Every operation forwards a labeled row's field names, so a label survives the
+round trip and keeps doing its job -- `(row-canon #row{id : int})` stays
+distinct from `(row-canon #row{name : int})`.
+
+Two rules follow from labels being part of a slot's identity:
+
+**Labeled rows dedup and intersect on the `(name, type)` pair.** `row-union`
+collapses two slots only when they agree on *both*, and `row-intersect` keeps a
+slot only when both sides label it the same:
+
+```turmeric no-check
+(row-union     #row{id : int} #row{id : int})     ;; => #row{id : int}     (one slot)
+(row-intersect #row{id : int} #row{name : int})   ;; => #row{}             (labels differ)
+```
+
+`row-canon` sorts labeled rows by `(field_name, type_name)`, with the field name
+leading -- otherwise `#row{a : int  b : int}` and `#row{b : int  a : int}` would
+compare equal at every slot on type alone and keep their two different input
+orders.
+
+**Labels are all-or-nothing across an operation**, the same rule the literal
+enforces. Mixing a labeled operand with a bare one is `TUR-E0290`:
+
+```turmeric no-check
+(row-union #row{id : int} #row{int})
+;; error: 'row-union' operand 2 mixes a labeled row with a bare one; labels are
+;; all-or-nothing across the whole operation (TUR-E0290)
+```
+
+The empty row is the exception, because it contributes no slots to disagree
+about: `(row-union R #row{})` is the identity whether or not `R` is labeled.
+
+A labeled fold can also reach a state no literal could spell -- `row-concat`
+keeps duplicates outright, and `row-union` keeps two slots that share a name but
+disagree on type. Either way the result carries a repeated field name, which is
+`TUR-E0291`:
+
+```turmeric no-check
+(row-concat #row{id : int} #row{id : int})
+;; error: 'row-concat' result has duplicate field name `id` (TUR-E0291)
+```
 
 ## Rows are erased
 
@@ -352,13 +400,6 @@ be generic over a row, or you can compute with rows, but not both at once.
 world with `Pos` and `Vel`", the idiom is a typeclass constraint
 (`(HasPos W) (HasVel W) => ...`), not a row.
 
-**Row operations discard field names.** Every operation -- including
-`row-canon` -- returns a positional row, so a labeled row that passes through
-one loses its labels and starts unifying with differently-labeled rows. See
-[`docs/reported/row-ops-drop-field-names.md`](../reported/row-ops-drop-field-names.md).
-Until that is fixed, keep labeled rows as literals and do not feed them to the
-algebra.
-
 **No type-level head/tail/length/map.** The row algebra is the whole vocabulary.
 There is no way to fold over a row to derive another type, which is what would
 be needed to build records-as-rows on top of this. The trade-offs of going
@@ -375,8 +416,8 @@ further are recorded in
 | *(uncoded)* | non-row operand to `row-concat` / `row-union` / `row-intersect` / `row-canon` |
 | `TUR-E0001` | two rows that do not unify (different elements, order, or labels) |
 | `TUR-E0281` | unterminated `#row{` literal |
-| `TUR-E0290` | a `#row{...}` mixing bare and `name : type` slots |
-| `TUR-E0291` | duplicate field name in a labeled row |
+| `TUR-E0290` | a `#row{...}` mixing bare and `name : type` slots; a row operation mixing a labeled operand with a bare one |
+| `TUR-E0291` | duplicate field name in a labeled row, including one produced by `row-concat` / `row-union` |
 
 ## Prior art
 

@@ -1,0 +1,7 @@
+;; row-ops-drop-field-names, fix direction 2: labels are all-or-nothing across
+;; a row operation, matching the rule the #row{...} literal already enforces
+;; (TUR-E0290). Mixing a labeled operand with a bare one would require the fold
+;; to invent a name for the bare side, so it is rejected instead.
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn bad [t : (Tbl (row-union #row{id : int} #row{int}))] : int (.rows t))

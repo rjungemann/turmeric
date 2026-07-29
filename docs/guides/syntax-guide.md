@@ -314,6 +314,15 @@ guide do). If the directive is absent and the file is not `.tur.sweet`, the
 reader stays in plain s-expression mode and treats indentation as
 insignificant.
 
+Both activations work the same way whether the file is the one you compile or
+one pulled in by `(load "...")`: a loaded file's dialect is read from its own
+first line and its own extension, independently of whatever dialect the loading
+file is written in. When both are present the extension picks the base dialect
+and the directive is a redundant hint; layers on the `#lang` line apply either
+way. (Before 2026-07-29 a loaded file's dialect came from its extension alone,
+so `(load ...)` on a plain-`.tur` file whose first line was
+`#lang turmeric/sweet` failed to parse.)
+
 ### The three tools
 
 Sweet-exp gives you three independent tools. Use whichever reduces noise for a

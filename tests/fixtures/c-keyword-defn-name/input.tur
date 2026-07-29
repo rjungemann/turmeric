@@ -1,0 +1,32 @@
+;; A top-level defn whose name is a C reserved word must still emit valid C.
+;; Regression for docs/archive/c-keyword-function-names-not-mangled.md: the
+;; mangler passed a pure-alnum name through unchanged, so `(defn double ...)`
+;; lowered to `static int64_t double(int64_t);` -- a syntax error that derailed
+;; the whole translation unit (533 cc errors for `char`/`void`/`float`).
+;; The names below are C keywords that are NOT also Turmeric special forms or
+;; builtin type names, so they reach codegen as ordinary user bindings.
+
+(defn double [x : int] : int (* x 2))
+
+(defn float [x : int] : int (+ x 1))
+
+(defn char [x : int] : int (- x 1))
+
+(defn void [x : int] : int (* x x))
+
+(defn struct [x : int] : int (+ x 100))
+
+(defn typedef [x : int] : int (- 0 x))
+
+(defn sizeof [x : int] : int (* x 3))
+
+(defn main [] : int
+  (do
+    (println (double 21))
+    (println (float 41))
+    (println (char 43))
+    (println (void 7))
+    (println (struct 1))
+    (println (typedef 5))
+    (println (sizeof 4))
+    0))

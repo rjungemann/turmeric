@@ -3125,10 +3125,16 @@ static char **collect_project_src_files(const char *root, int *n_out) {
  * and add its :spices' src/ dirs too.  Walking only direct deps left tourist
  * unable to resolve `thread-pool/pool` (httpd's dep), even with the workspace
  * `:members` declaring it -- imports from one spice into another silently
- * dropped at the first hop.  The visited set is path-keyed to dedupe shared
- * deps across multiple parents (e.g. httpd + template both pulling json) and
- * to prevent cycles.  Capacity grows as we go since transitive width is not
- * bounded by m->n_spices. */
+ * dropped at the first hop.  Capacity grows as we go since transitive width is
+ * not bounded by m->n_spices.
+ *
+ * Two separate dedups are at work, and they are not interchangeable:
+ *   - include_dir_seen / push_include_dir dedupe the OUTPUT list, so a dep
+ *     pulled in by several parents contributes one -I.
+ *   - VisitedRoots below dedupes the WALK, so a cycle terminates.
+ * This comment used to claim the first also did the second; it does not, and
+ * a manifest cycle recursed until something else gave out.  See
+ * docs/archive/spice-cycle-include-path-blowup.md. */
 static bool include_dir_seen(const char **dirs, int n, const char *cand) {
     for (int i = 0; i < n; i++)
         if (dirs[i] && strcmp(dirs[i], cand) == 0) return true;
@@ -3143,8 +3149,61 @@ static void grow_include_dirs(const char ***dirs, int *cap, int need) {
     *cap = new_cap;
 }
 
+/* Append `cand` to the include list unless an equivalent entry is already
+ * there.  The path is canonicalized first (realpath, falling back to the raw
+ * spelling when it fails): a transitively-resolved dep dir arrives as
+ * `a/../b/src`, which the textual dedup would otherwise treat as distinct from
+ * the `b/src` a different parent contributed.  Canonicalizing keeps the `-I`
+ * list short and caps the damage from any future unbounded walk independently
+ * of the visited set. */
+static void push_include_dir(const char ***dirs, int *n, int *cap,
+                             const char *cand) {
+    char canon_buf[4096];
+    const char *canon = cand;
+    if (realpath(cand, canon_buf)) canon = canon_buf;
+    if (include_dir_seen(*dirs, *n, canon)) return;
+    grow_include_dirs(dirs, cap, *n + 1);
+    if (!*dirs) return;
+    (*dirs)[(*n)++] = strdup(canon);
+}
+
+/* spice-cycle-include-path-blowup: visited set for the transitive :spices walk,
+ * keyed on each package root's canonical (realpath'd) path.  Without it a
+ * manifest cycle (A declares B, B declares A) recurses forever: each lap
+ * resolves through one more `../` hop, so the textual paths never repeat and
+ * the output-dir dedup below never fires.  The symptom was either a
+ * multi-kilobyte `-I` argument that cc rejected with "File name too long" on an
+ * unrelated system header, or -- on a sanitized build -- a stack overflow.
+ * Mirrors the keying pkg_collect_transitive_cmake_deps already uses for the
+ * same shape of walk. */
+typedef struct { char **paths; int n; int cap; } VisitedRoots;
+
+/* True if `dir` was already visited; otherwise records it and returns false. */
+static bool visited_roots_mark(VisitedRoots *v, const char *dir) {
+    char canon_buf[4096];
+    const char *canon = dir;
+    if (realpath(dir, canon_buf)) canon = canon_buf;
+    for (int i = 0; i < v->n; i++)
+        if (strcmp(v->paths[i], canon) == 0) return true;
+    if (v->n >= v->cap) {
+        int nc = v->cap ? v->cap * 2 : 8;
+        char **np = (char **)realloc(v->paths, (size_t)nc * sizeof(char *));
+        if (!np) return true;   /* OOM: treat as visited so the walk terminates */
+        v->paths = np;
+        v->cap   = nc;
+    }
+    v->paths[v->n++] = strdup(canon);
+    return false;
+}
+
+static void visited_roots_free(VisitedRoots *v) {
+    for (int i = 0; i < v->n; i++) free(v->paths[i]);
+    free(v->paths);
+}
+
 static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap);
+                                       const char ***dirs, int *n, int *cap,
+                                       VisitedRoots *visited);
 
 static void resolve_include_dirs_from_manifest(const char *root,
                                                const PkgManifest *m,
@@ -3165,10 +3224,15 @@ static void resolve_include_dirs_from_manifest(const char *root,
         snprintf(own_src, sizeof(own_src), "%s/src", root);
         struct stat ss;
         if (stat(own_src, &ss) == 0 && S_ISDIR(ss.st_mode))
-            dirs[n++] = strdup(own_src);
+            push_include_dir(&dirs, &n, &cap, own_src);
     }
 
-    collect_dep_dirs_recursive(root, m, &dirs, &n, &cap);
+    /* Seed the visited set with the root itself, so a dep that declares the
+     * root back (the minimal A -> B -> A cycle) stops at the second hop. */
+    VisitedRoots visited; memset(&visited, 0, sizeof(visited));
+    visited_roots_mark(&visited, root);
+    collect_dep_dirs_recursive(root, m, &dirs, &n, &cap, &visited);
+    visited_roots_free(&visited);
 
     *out_dirs = dirs;
     *out_n    = n;
@@ -3177,7 +3241,8 @@ static void resolve_include_dirs_from_manifest(const char *root,
 /* Walk every :spices entry in m, resolve its on-disk dir, push its src/ (or
  * dep_dir) into *dirs (deduped), then recurse into the dep's own manifest. */
 static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
-                                       const char ***dirs, int *n, int *cap) {
+                                       const char ***dirs, int *n, int *cap,
+                                       VisitedRoots *visited) {
     char spices_dir[4096];
     snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
     for (int i = 0; i < m->n_spices; i++) {
@@ -3240,9 +3305,7 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                 snprintf(sib_src, sizeof(sib_src),
                          "%s/%s/src", ancestor, s->subdir);
                 if (stat(sib_src, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    grow_include_dirs(dirs, cap, *n + 1);
-                    if (!include_dir_seen(*dirs, *n, sib_src))
-                        (*dirs)[(*n)++] = strdup(sib_src);
+                    push_include_dir(dirs, n, cap, sib_src);
                     snprintf(resolved_root, sizeof(resolved_root),
                              "%s/%s", ancestor, s->subdir);
                     chosen = NULL;
@@ -3253,9 +3316,7 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                 snprintf(sib_dir, sizeof(sib_dir),
                          "%s/%s", ancestor, s->subdir);
                 if (stat(sib_dir, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    grow_include_dirs(dirs, cap, *n + 1);
-                    if (!include_dir_seen(*dirs, *n, sib_dir))
-                        (*dirs)[(*n)++] = strdup(sib_dir);
+                    push_include_dir(dirs, n, cap, sib_dir);
                     strncpy(resolved_root, sib_dir, sizeof(resolved_root) - 1);
                     resolved_root[sizeof(resolved_root) - 1] = '\0';
                     chosen = NULL;
@@ -3264,22 +3325,22 @@ static void collect_dep_dirs_recursive(const char *root, const PkgManifest *m,
                 }
             }
         }
-        if (chosen) {
-            grow_include_dirs(dirs, cap, *n + 1);
-            if (!include_dir_seen(*dirs, *n, chosen))
-                (*dirs)[(*n)++] = strdup(chosen);
-        }
+        if (chosen) push_include_dir(dirs, n, cap, chosen);
 
         /* Recurse into the dep's own manifest so its :spices contribute their
          * src/ too.  Use `resolved_root` (the real on-disk package root) for
          * manifest lookup; `dep_dir` may have :subdir appended to a :path,
          * yielding a non-existent path when both are set together. */
         if (!resolved_root[0]) continue;
+        /* Stop on re-entry. A diamond (two parents pulling the same dep) is
+         * deduped for free by the same check -- its src/ was already pushed on
+         * the first visit. */
+        if (visited_roots_mark(visited, resolved_root)) continue;
         char dmp[4096];
         if (!pkg_resolve_manifest_path(resolved_root, dmp, sizeof(dmp))) continue;
         PkgManifest dm; memset(&dm, 0, sizeof(dm));
         if (!pkg_manifest_read(dmp, &dm)) continue;
-        collect_dep_dirs_recursive(resolved_root, &dm, dirs, n, cap);
+        collect_dep_dirs_recursive(resolved_root, &dm, dirs, n, cap, visited);
         pkg_manifest_free(&dm);
     }
 }
@@ -6377,19 +6438,31 @@ static int cmd_eval_h(const char *path, bool use_color,
      * breakpoints and install its pause handler before any program node runs. */
     if (debug && hooks && hooks->on_ready)
         hooks->on_ready(env, hooks->ud);
+    /* The user file is brought in via `(load "path")` rather than
+     * turi_eval_file's concatenate-into-<eval> path: a loaded file gets its own
+     * file_id and keeps its real path + 1-based line numbers, so diagnostics,
+     * breakpoints (`break <line>`), source listings, and stack frames resolve
+     * against the user's source instead of the synthetic <eval> blob (which
+     * offsets every line by the preloaded prelude).
+     *
+     * incremental-elab-loses-span-file-provenance: this used to be the debug
+     * path only, and plain `--interpret` went through turi_eval_file -- so a
+     * type error in the user's file was reported as `<eval>:64:10` instead of
+     * `file.tur:3:10`.  That half of the report was never actually about
+     * incremental elaboration (TUR_NO_INCREMENTAL_ELAB=1 reproduced it
+     * identically); it is the eval-blob concatenation, which both paths shared.
+     * Routing both through `(load ...)` fixes it at the source.
+     *
+     * This became possible only once the load splicer learned to honour a
+     * loaded file's inline `#lang` directive (load-ignores-inline-lang-directive,
+     * elab_toplevel.c) -- before that, switching the entry file onto this route
+     * broke every `#lang`/sweet-exp fixture that did not also carry a
+     * dialect-bearing extension. */
     TuriValue result;
-    if (debug) {
-        /* Under the debugger the user file is brought in via `(load "path")`
-         * rather than turi_eval_file's concatenate-into-<eval> path: a loaded
-         * file gets its own file_id and keeps its real path + 1-based line
-         * numbers, so breakpoints (`break <line>`), source listings, and stack
-         * frames resolve against the user's source instead of the synthetic
-         * <eval> blob (which would offset every line by the preloaded prelude). */
+    {
         char load_form[4200];
         snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
         result = turi_eval(env, load_form);
-    } else {
-        result = turi_eval_file(env, path);
     }
     int rc = 0;
     if (turi_is_error(result)) {

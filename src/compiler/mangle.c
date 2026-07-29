@@ -231,7 +231,7 @@ size_t tur_demangle(const char *mangled, char *out, size_t cap) {
  * collisions surface rather than pre-emptively (over-broad entries would mangle
  * a user's function for no reason).  See
  * docs/archive/codegen-user-defn-collides-with-libc-pipe2.md. */
-static int libc_name_cmp(const void *key, const void *elem) {
+static int sorted_strcmp(const void *key, const void *elem) {
     return strcmp((const char *)key, *(const char *const *)elem);
 }
 
@@ -277,5 +277,44 @@ int tur_name_collides_libc(const char *name, size_t len) {
     };
     return bsearch(name, libc_names,
                    sizeof(libc_names) / sizeof(libc_names[0]),
-                   sizeof(libc_names[0]), libc_name_cmp) != NULL;
+                   sizeof(libc_names[0]), sorted_strcmp) != NULL;
+}
+
+int tur_name_is_c_keyword(const char *name, size_t len) {
+    if (!name || len == 0) return 0;
+    /* Same slice guard as tur_name_collides_libc: an interior NUL or trailing
+     * bytes mean this is not a whole identifier, so it cannot be a keyword. */
+    if (strlen(name) != len) return 0;
+    /* Every C reserved word, C89 through C23, plus `asm` / `typeof` (which
+     * every toolchain we target accepts).  Sorted for bsearch under strcmp,
+     * where the leading '_' (0x5F) of the C99/C11 spellings sorts before every
+     * lowercase letter, so the `_X` block comes first.  Unlike the libc list
+     * this one is complete by construction rather than grown on demand: the
+     * keyword set is fixed by the standard, and a missing entry is the same
+     * unreadable cc cascade the guard exists to prevent. */
+    static const char *const c_keywords[] = {
+        "_Alignas", "_Alignof", "_Atomic", "_BitInt", "_Bool", "_Complex",
+        "_Decimal128", "_Decimal32", "_Decimal64", "_Generic", "_Imaginary",
+        "_Noreturn", "_Static_assert", "_Thread_local",
+        "alignas", "alignof", "asm", "auto",
+        "bool", "break",
+        "case", "char", "const", "constexpr", "continue",
+        "default", "do", "double",
+        "else", "enum", "extern",
+        "false", "float", "for",
+        "goto",
+        "if", "inline", "int",
+        "long",
+        "nullptr",
+        "register", "restrict", "return",
+        "short", "signed", "sizeof", "static", "static_assert", "struct",
+        "switch",
+        "thread_local", "true", "typedef", "typeof", "typeof_unqual",
+        "union", "unsigned",
+        "void", "volatile",
+        "while",
+    };
+    return bsearch(name, c_keywords,
+                   sizeof(c_keywords) / sizeof(c_keywords[0]),
+                   sizeof(c_keywords[0]), sorted_strcmp) != NULL;
 }

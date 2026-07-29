@@ -1,0 +1,8 @@
+;; row-ops-drop-field-names: concat keeps duplicates outright, so a labeled
+;; concat can produce a row with a repeated field name -- something no literal
+;; could spell (TUR-E0291). row-union reaches the same state when two slots
+;; share a name but disagree on type, since labeled dedup is on the (name,
+;; type) pair.
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn bad [t : (Tbl (row-concat #row{id : int} #row{id : int}))] : int (.rows t))

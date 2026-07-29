@@ -1,0 +1,3 @@
+(defmodule cmod
+  (export c-val)
+  (defn c-val [] : int 3))

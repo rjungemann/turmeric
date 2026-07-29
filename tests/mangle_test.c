@@ -106,6 +106,42 @@ int main(void) {
     CHECK(tur_demangle("foo_zz", d, sizeof d) == 0,
           "unknown mnemonic should return 0");
 
+    /* (d) tur_name_is_c_keyword. Both keyword lists are bsearch'd, so a
+     * mis-sorted entry silently stops matching -- probe a spread of them
+     * across the table rather than trusting the source order by eye. */
+    static const char *const kw_hits[] = {
+        "_Bool", "_Static_assert", "_Thread_local", "alignas", "asm", "auto",
+        "bool", "case", "char", "const", "constexpr", "default", "do",
+        "double", "enum", "extern", "false", "float", "for", "goto", "if",
+        "inline", "int", "long", "nullptr", "register", "restrict", "return",
+        "short", "signed", "sizeof", "static", "static_assert", "struct",
+        "switch", "thread_local", "true", "typedef", "typeof", "union",
+        "unsigned", "void", "volatile", "while",
+    };
+    for (size_t i = 0; i < sizeof kw_hits / sizeof kw_hits[0]; i++)
+        CHECK(tur_name_is_c_keyword(kw_hits[i], strlen(kw_hits[i])),
+              "'%s' should be recognized as a C keyword", kw_hits[i]);
+
+    /* Near-misses: ordinary Turmeric names that merely resemble a keyword. */
+    static const char *const kw_misses[] = {
+        "doubles", "doubl", "Double", "intern", "in", "returns", "structure",
+        "voidp", "char-at", "my-int", "tur_u_double", "",
+    };
+    for (size_t i = 0; i < sizeof kw_misses / sizeof kw_misses[0]; i++)
+        CHECK(!tur_name_is_c_keyword(kw_misses[i], strlen(kw_misses[i])),
+              "'%s' should NOT be a C keyword", kw_misses[i]);
+
+    /* A prefix slice is not a whole identifier, so it never matches (the same
+     * length guard tur_name_collides_libc uses). */
+    CHECK(!tur_name_is_c_keyword("intx", 3), "slice 'int' of \"intx\" must not match");
+
+    /* The guard prefix survives mangling as data: a user name literally
+     * spelled `tur_u_double` cannot alias the guarded form of `double`,
+     * because its literal '_' encodes as "_un". */
+    tur_mangle_ident("tur_u_double", m, sizeof m);
+    CHECK(strcmp(m, "tur_unu_undouble") == 0,
+          "mangle(tur_u_double) = %s, expected tur_unu_undouble", m);
+
     if (failures == 0) {
         printf("mangle_test: all checks passed (%d oracle entries)\n",
                ORACLE_N);

@@ -1,0 +1,6 @@
+(defpackage a
+  :name    "a"
+  :version "0.1.0"
+  :spices #map{
+    "b" #map{:path "../b"}
+  })
