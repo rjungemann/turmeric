@@ -4644,7 +4644,7 @@ static void drop_glue___env_1333(void *__p) {
 }
 static tur_adt_Point * __fn_1331(void * __env_p_1334, int64_t nx) {
         struct __env_1333 *__env___env_1333 = (struct __env_1333 *)__env_p_1334;
-        __auto_type __ps_47 = (ctor_Point(nx, (int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1333->s))->y));
+        tur_adt_Point * __ps_47 = (ctor_Point(nx, (int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1333->s))->y));
         if (tur_panicking) return ((tur_adt_Point *)0);
         return __ps_47;
 }
@@ -4656,7 +4656,7 @@ static void drop_glue___env_1342(void *__p) {
 }
 static int64_t __fn_1340(void * __env_p_1343, tur_adt_Point * np) {
         struct __env_1342 *__env___env_1342 = (struct __env_1342 *)__env_p_1343;
-        __auto_type __ps_48 = (ctor_Line((int64_t)(intptr_t)(np), (int64_t)(intptr_t)((tur_adt_Point *)((tur_adt_Line *)(intptr_t)(__env___env_1342->s))->b)));
+        tur_adt_Line * __ps_48 = (ctor_Line((int64_t)(intptr_t)(np), (int64_t)(intptr_t)((tur_adt_Point *)((tur_adt_Line *)(intptr_t)(__env___env_1342->s))->b)));
         if (tur_panicking) return ((int64_t)0);
         return (int64_t)(intptr_t)__ps_48;
 }
@@ -5995,7 +5995,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_134 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_134 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_134;
 }
@@ -7842,7 +7842,7 @@ static int64_t get_hyconst(int64_t c) {
 }
 
 static int64_t mk_hyid(int64_t x) {
-        __auto_type __ps_204 = (ctor_Identity(x, INT64_C(0)));
+        int64_t __ps_204 = (ctor_Identity(x, INT64_C(0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_204;
 }
@@ -7908,11 +7908,11 @@ int main(int argc, char **argv) {
             g_tur_args = (int64_t)(intptr_t)_c;
         }
         {
-            __auto_type __ps_220 = (ctor_Point(INT64_C(7), INT64_C(2)));
+            tur_adt_Point * __ps_220 = (ctor_Point(INT64_C(7), INT64_C(2)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_221 = (ctor_Point(INT64_C(0), INT64_C(0)));
+            tur_adt_Point * __ps_221 = (ctor_Point(INT64_C(0), INT64_C(0)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_222 = (ctor_Line((int64_t)(intptr_t)(__ps_220), (int64_t)(intptr_t)(__ps_221)));
+            tur_adt_Line * __ps_222 = (ctor_Line((int64_t)(intptr_t)(__ps_220), (int64_t)(intptr_t)(__ps_221)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t ln_1385 = (int64_t)(intptr_t)(__ps_222);
             (void)ln_1385;

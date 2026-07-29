@@ -6818,7 +6818,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_132 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_132 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_132;
 }
@@ -9164,7 +9164,7 @@ int main(int argc, char **argv) {
             {
                 int64_t _un_untur_unmk_un_un_1851 = INT64_C(2);
                 (void)_un_untur_unmk_un_un_1851;
-                __auto_type __ps_249 = (ctor_Point(INT64_C(30), INT64_C(40)));
+                tur_adt_Point __ps_249 = (ctor_Point(INT64_C(30), INT64_C(40)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 tur_adt_Point _un_untur_unmv_un_un_1852 = __ps_249;
                 (void)_un_untur_unmv_un_un_1852;
@@ -9180,7 +9180,7 @@ int main(int argc, char **argv) {
                 {
                     int64_t _un_untur_unmk_un_un_1855 = INT64_C(1);
                     (void)_un_untur_unmk_un_un_1855;
-                    __auto_type __ps_253 = (ctor_Point(INT64_C(7), INT64_C(8)));
+                    tur_adt_Point __ps_253 = (ctor_Point(INT64_C(7), INT64_C(8)));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
                     tur_adt_Point _un_untur_unmv_un_un_1856 = __ps_253;
                     (void)_un_untur_unmv_un_un_1856;

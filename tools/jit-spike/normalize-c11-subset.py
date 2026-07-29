@@ -78,6 +78,9 @@ FNPTR_CAST_RE = re.compile(
 THUNK_RE = re.compile(r'tur_thunk_([A-Za-z0-9_]+)_t')
 THUNK_RETS = ('int64_t', 'double', 'bool', 'void')
 
+# `<expr>.fn(` / `<expr>->fn(` -- a fat/poly closure dispatch member call.
+MEMBER_FN_RE = re.compile(r'(?:\.|->)fn\s*\(')
+
 
 def balanced(s):
     depth = 0
@@ -124,6 +127,16 @@ def deduce_type(init, proto):
         for ret in THUNK_RETS:
             if head == ret or head.startswith(ret + '_'):
                 return ret
+
+    # Dispatch through a fat/poly closure member: `f.fn(...)`, `p->lk.fn(...)`.
+    # Every emitted dispatch struct that carries a value-producing `fn` member
+    # (tur_poly_fn_t, tur_handler_t, tur_handler_entry_t, and the lifted env
+    # structs) declares it `int64_t (*fn)(...)` -- the carrier ABI.  The `void
+    # (*fn)(...)` members are drop glue, and a void call never reaches a hoist
+    # site (emit_value returns before hoisting for TY_NIL/TY_NEVER), so a member
+    # call that needs a type here is always the carrier.
+    if MEMBER_FN_RE.search(e):
+        return 'int64_t'
     return None
 
 

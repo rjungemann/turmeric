@@ -5624,7 +5624,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_85 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_85 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_85;
 }
@@ -7518,7 +7518,7 @@ static int64_t main__cps(DK *__kont) {
     __t161->entries[0].dk_tag = 3;
     __t161->entries[0].dk_fn = __dk_hcase_158;
     tur_handler_table_t *__t162 = tur_handler_table_concat(__t157, __t161);
-    __auto_type __ps_163 = (ctor_HRow2((int64_t)(intptr_t)(__t162)));
+    tur_adt_HRow2 __ps_163 = (ctor_HRow2((int64_t)(intptr_t)(__t162)));
     /* panic-return-signal: ret ctype unknown; no propagation here */
     row_1305 = __ps_163;
     __t1 = (tur_handler_table_t *)(row_1305).h;

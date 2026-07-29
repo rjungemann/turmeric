@@ -5665,13 +5665,13 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t some(int64_t x) {
-        __auto_type __ps_85 = (ctor_Option(true, x));
+        int64_t __ps_85 = (ctor_Option(true, x));
         if (tur_panicking) return ((int64_t)0);
         return __ps_85;
 }
 
 static int64_t none() {
-        __auto_type __ps_86 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_86 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_86;
 }
@@ -5687,13 +5687,13 @@ static void option_hyfree(int64_t o) {
 }
 
 static int64_t ok(int64_t x) {
-        __auto_type __ps_87 = (ctor_Result(true, x, ((int64_t)0)));
+        int64_t __ps_87 = (ctor_Result(true, x, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_87;
 }
 
 static int64_t err(int64_t e) {
-        __auto_type __ps_88 = (ctor_Result(false, ((int64_t)0), e));
+        int64_t __ps_88 = (ctor_Result(false, ((int64_t)0), e));
         if (tur_panicking) return ((int64_t)0);
         return __ps_88;
 }

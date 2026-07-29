@@ -5640,7 +5640,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_85 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_85 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_85;
 }
@@ -7505,7 +7505,7 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t __ps_156 = (dn(INT64_C(35)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_157 = (ctor_PairD(__ps_155, __ps_156));
+            int64_t __ps_157 = (ctor_PairD(__ps_155, __ps_156));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t p_1309 = __ps_157;
             (void)p_1309;
@@ -7520,7 +7520,7 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t __ps_161 = (dn(INT64_C(9)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_162 = (ctor_World(__ps_160, __ps_161));
+            int64_t __ps_162 = (ctor_World(__ps_160, __ps_161));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             int64_t w_1310 = __ps_162;
             (void)w_1310;

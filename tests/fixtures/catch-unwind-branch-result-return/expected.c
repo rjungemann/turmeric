@@ -5686,7 +5686,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_85 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_85 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_85;
 }
@@ -7773,7 +7773,7 @@ int main(int argc, char **argv) {
             }
         }
         {
-            __auto_type __ps_185 = (ctor_First());
+            int64_t __ps_185 = (ctor_First());
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Result__int__int __ps_186 = (make_hymatch(__ps_185));
             /* panic-return-signal: ret ctype unknown; no propagation here */

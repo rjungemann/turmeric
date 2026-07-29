@@ -5477,9 +5477,12 @@ char *emit_c_zero_of(const char *cname) {
  * so that mutually-recursive static functions resolve at C-compile time. */
 static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
                                   const Expr **items, uint32_t n_items) {
-    /* gcc14-int-conversion: start each program's ground-truth sig table fresh. */
-    emit_sig_reset();
-    emit_localvar_reset();
+    /* S1: the per-program reset used to live HERE, which silently discarded
+     * every record made before this pass ran.  In the single-file path
+     * emit_program emits ADT ctors into `early_file` first, so their recorded
+     * return types were wiped a moment later and every `ctor_X(...)` call site
+     * fell back to __auto_type.  The reset now happens once at the top of each
+     * caller (emit_program / emit_implementation), before anything records. */
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind != EX_FN_DEF) continue;
@@ -10778,6 +10781,11 @@ int emit_program(Buf *out, const Expr *program) {
         return -1;
     }
     emit_mark_byval_fn_field_closures(program);
+    /* gcc14-int-conversion / S1: start this program's ground-truth side tables
+     * fresh, ahead of every recording site (ADT ctors land in `early_file`
+     * before the forward-declaration pass runs). */
+    emit_sig_reset();
+    emit_localvar_reset();
 
     /* Two buffers: file scope (statics) and main body. We assemble at the end. */
     Buf file; buf_init(&file);
@@ -11066,8 +11074,18 @@ int emit_program(Buf *out, const Expr *program) {
             for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
                 CtorDef *ctor = def->ctors[ci];
                 char *mctor = mangle_field_name(ctor->name);
-                buf_printf(&early_file, "static %s ctor_%s(",
-                           heap ? adt_ptr_name : byval ? adt_c_name : "int64_t", mctor);
+                const char *ctor_ret_c2 =
+                    heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
+                buf_printf(&early_file, "static %s ctor_%s(", ctor_ret_c2, mctor);
+                /* S1: emit_program emits ctors HERE, not through
+                 * emit_adt_typedef_and_ctors, so the record has to be made at
+                 * both sites -- recording only the other one left every
+                 * `ctor_X(...)` call on __auto_type in the single-file path. */
+                {
+                    char ctor_sym2[288];
+                    snprintf(ctor_sym2, sizeof ctor_sym2, "ctor_%s", mctor);
+                    emit_sig_record_ret_ctype(ctor_sym2, ctor->n_fields, ctor_ret_c2);
+                }
                 for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                     if (fi > 0) buf_puts(&early_file, ", ");
                     const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], hdr_byval);
@@ -12907,6 +12925,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     type_codegen_reset_adt_apps();
     type_codegen_reset_fn_ptr_typedefs();
     sym_codegen_reset();   /* SYM1/SYM2: clear interned-symbol records for this TU */
+    /* gcc14-int-conversion / S1: reset the ground-truth side tables here rather
+     * than inside emit_fn_forward_decls, so records made by earlier passes
+     * (notably ADT ctor return types) survive.  See the note there. */
+    emit_sig_reset();
+    emit_localvar_reset();
 
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);

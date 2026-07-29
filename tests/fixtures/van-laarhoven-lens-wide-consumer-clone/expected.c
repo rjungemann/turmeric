@@ -4574,7 +4574,7 @@ static void drop_glue___env_1321(void *__p) {
 }
 static tur_adt_Point * __fn_1319(void * __env_p_1322, int64_t nx) {
         struct __env_1321 *__env___env_1321 = (struct __env_1321 *)__env_p_1322;
-        __auto_type __ps_45 = (ctor_Point(nx, (int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1321->s))->y));
+        tur_adt_Point * __ps_45 = (ctor_Point(nx, (int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1321->s))->y));
         if (tur_panicking) return ((tur_adt_Point *)0);
         return __ps_45;
 }
@@ -4586,7 +4586,7 @@ static void drop_glue___env_1330(void *__p) {
 }
 static tur_adt_Point * __fn_1328(void * __env_p_1331, int64_t ny) {
         struct __env_1330 *__env___env_1330 = (struct __env_1330 *)__env_p_1331;
-        __auto_type __ps_46 = (ctor_Point((int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1330->s))->x, ny));
+        tur_adt_Point * __ps_46 = (ctor_Point((int64_t)((tur_adt_Point *)(intptr_t)(__env___env_1330->s))->x, ny));
         if (tur_panicking) return ((tur_adt_Point *)0);
         return __ps_46;
 }
@@ -5882,7 +5882,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_123 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_123 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_123;
 }
@@ -7721,7 +7721,7 @@ static int64_t replace(int64_t old, int64_t new) {
 }
 
 static int64_t mk_hyid(int64_t x) {
-        __auto_type __ps_193 = (ctor_Identity(x, INT64_C(0)));
+        int64_t __ps_193 = (ctor_Identity(x, INT64_C(0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_193;
 }
@@ -7774,7 +7774,7 @@ int main(int argc, char **argv) {
         }
         int64_t __t204;
         {
-            __auto_type __ps_205 = (ctor_Point(INT64_C(3), INT64_C(4)));
+            tur_adt_Point * __ps_205 = (ctor_Point(INT64_C(3), INT64_C(4)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Point * p_1351 = __ps_205;
             (void)p_1351;

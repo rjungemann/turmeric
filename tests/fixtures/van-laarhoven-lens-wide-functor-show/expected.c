@@ -5854,7 +5854,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_121 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_121 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_121;
 }
@@ -7693,7 +7693,7 @@ static int64_t replace(int64_t old, int64_t new) {
 }
 
 static int64_t mk_hyid(int64_t x) {
-        __auto_type __ps_191 = (ctor_Identity(x));
+        int64_t __ps_191 = (ctor_Identity(x));
         if (tur_panicking) return ((int64_t)0);
         return __ps_191;
 }

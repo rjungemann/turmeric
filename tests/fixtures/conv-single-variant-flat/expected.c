@@ -5626,7 +5626,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_85 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_85 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_85;
 }
@@ -7495,7 +7495,7 @@ int main(int argc, char **argv) {
         }
         int64_t __t157;
         {
-            __auto_type __ps_158 = (ctor_S(INT64_C(10), INT64_C(32)));
+            tur_adt_S __ps_158 = (ctor_S(INT64_C(10), INT64_C(32)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_S s_1306 = __ps_158;
             (void)s_1306;

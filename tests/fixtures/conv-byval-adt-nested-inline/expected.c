@@ -5652,7 +5652,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_85 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_85 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_85;
 }
@@ -7562,25 +7562,25 @@ int main(int argc, char **argv) {
         }
         int64_t __t163;
         {
-            __auto_type __ps_164 = (ctor_Pt(7.1, 2.0));
+            tur_adt_Pt __ps_164 = (ctor_Pt(7.1, 2.0));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_165 = (ctor_Pt(3.25, 9.0));
+            tur_adt_Pt __ps_165 = (ctor_Pt(3.25, 9.0));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_166 = (ctor_Line(__ps_164, __ps_165));
+            tur_adt_Line __ps_166 = (ctor_Line(__ps_164, __ps_165));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Line l_1320 = __ps_166;
             (void)l_1320;
-            __auto_type __ps_167 = (ctor_Pt(1.5, 2.5));
+            tur_adt_Pt __ps_167 = (ctor_Pt(1.5, 2.5));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_168 = (ctor_Pt(3.5, 4.5));
+            tur_adt_Pt __ps_168 = (ctor_Pt(3.5, 4.5));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_169 = (ctor_Line(__ps_167, __ps_168));
+            tur_adt_Line __ps_169 = (ctor_Line(__ps_167, __ps_168));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Line m_1321 = __ps_169;
             (void)m_1321;
-            __auto_type __ps_170 = (ctor_Pt(8.25, 6.75));
+            tur_adt_Pt __ps_170 = (ctor_Pt(8.25, 6.75));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            __auto_type __ps_171 = (ctor_Box(__ps_170));
+            tur_adt_Box __ps_171 = (ctor_Box(__ps_170));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             tur_adt_Box b_1322 = __ps_171;
             (void)b_1322;

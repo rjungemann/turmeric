@@ -4739,14 +4739,14 @@ static int64_t prog____fn_1490(void * __env_p_1493, int64_t e) {
                 int64_t b_1488 = (int64_t)__scrut->as.Left._0;
                 __auto_type __ps_67 = ((*( tur_thunk_int64_t_int64_t_t *)(__env___env_1492->f))(__env___env_1492->f, b_1488));
                 if (tur_panicking) return ((int64_t)0);
-                __auto_type __ps_68 = (ctor_Left(__ps_67));
+                int64_t __ps_68 = (ctor_Left(__ps_67));
                 if (tur_panicking) return ((int64_t)0);
                 __t66 = __ps_68;
                 break;
             }
             case 1: {
                 int64_t d_1489 = (int64_t)__scrut->as.Right._0;
-                __auto_type __ps_69 = (ctor_Right(d_1489));
+                int64_t __ps_69 = (ctor_Right(d_1489));
                 if (tur_panicking) return ((int64_t)0);
                 __t66 = __ps_69;
                 break;
@@ -4781,7 +4781,7 @@ static int64_t prog____fn_1498(void * __env_p_1501, int64_t e) {
             switch (__scrut->tag) {
             case 0: {
                 int64_t b_1496 = (int64_t)__scrut->as.Left._0;
-                __auto_type __ps_74 = (ctor_Left(b_1496));
+                int64_t __ps_74 = (ctor_Left(b_1496));
                 if (tur_panicking) return ((int64_t)0);
                 __t73 = __ps_74;
                 break;
@@ -4790,7 +4790,7 @@ static int64_t prog____fn_1498(void * __env_p_1501, int64_t e) {
                 int64_t d_1497 = (int64_t)__scrut->as.Right._0;
                 __auto_type __ps_75 = ((*( tur_thunk_int64_t_int64_t_t *)(__env___env_1500->f))(__env___env_1500->f, d_1497));
                 if (tur_panicking) return ((int64_t)0);
-                __auto_type __ps_76 = (ctor_Right(__ps_75));
+                int64_t __ps_76 = (ctor_Right(__ps_75));
                 if (tur_panicking) return ((int64_t)0);
                 __t73 = __ps_76;
                 break;
@@ -4828,7 +4828,7 @@ static int64_t prog____fn_1506(void * __env_p_1509, int64_t e) {
                 int64_t b_1504 = (int64_t)__scrut->as.Left._0;
                 __auto_type __ps_81 = ((*( tur_thunk_int64_t_int64_t_t *)(__env___env_1508->f))(__env___env_1508->f, b_1504));
                 if (tur_panicking) return ((int64_t)0);
-                __auto_type __ps_82 = (ctor_Left(__ps_81));
+                int64_t __ps_82 = (ctor_Left(__ps_81));
                 if (tur_panicking) return ((int64_t)0);
                 __t80 = __ps_82;
                 break;
@@ -4837,7 +4837,7 @@ static int64_t prog____fn_1506(void * __env_p_1509, int64_t e) {
                 int64_t d_1505 = (int64_t)__scrut->as.Right._0;
                 __auto_type __ps_83 = ((*( tur_thunk_int64_t_int64_t_t *)(__env___env_1508->g))(__env___env_1508->g, d_1505));
                 if (tur_panicking) return ((int64_t)0);
-                __auto_type __ps_84 = (ctor_Right(__ps_83));
+                int64_t __ps_84 = (ctor_Right(__ps_83));
                 if (tur_panicking) return ((int64_t)0);
                 __t80 = __ps_84;
                 break;
@@ -6133,7 +6133,7 @@ static bool slice_hyeq_qu(int64_t s1, int64_t s2, int64_t cmp_fn) {
 }
 
 static int64_t none() {
-        __auto_type __ps_147 = (ctor_Option(false, ((int64_t)0)));
+        int64_t __ps_147 = (ctor_Option(false, ((int64_t)0)));
         if (tur_panicking) return ((int64_t)0);
         return __ps_147;
 }
@@ -8250,7 +8250,7 @@ static int64_t prog__either_hymap(int64_t f, int64_t e) {
             switch (__scrut->tag) {
             case 0: {
                 int64_t l_1425 = (int64_t)__scrut->as.Left._0;
-                __auto_type __ps_250 = (ctor_Left(l_1425));
+                int64_t __ps_250 = (ctor_Left(l_1425));
                 if (tur_panicking) return ((int64_t)0);
                 __t249 = __ps_250;
                 break;
@@ -8259,7 +8259,7 @@ static int64_t prog__either_hymap(int64_t f, int64_t e) {
                 int64_t r_1426 = (int64_t)__scrut->as.Right._0;
                 __auto_type __ps_251 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), r_1426));
                 if (tur_panicking) return ((int64_t)0);
-                __auto_type __ps_252 = (ctor_Right(__ps_251));
+                int64_t __ps_252 = (ctor_Right(__ps_251));
                 if (tur_panicking) return ((int64_t)0);
                 __t249 = __ps_252;
                 break;
@@ -8279,14 +8279,14 @@ static int64_t prog__either_hymap_hyleft(int64_t f, int64_t e) {
                 int64_t l_1429 = (int64_t)__scrut->as.Left._0;
                 __auto_type __ps_254 = ((*( tur_thunk_int64_t_int64_t_t *)((void *)(intptr_t)(f)))((void *)(intptr_t)(f), l_1429));
                 if (tur_panicking) return ((int64_t)0);
-                __auto_type __ps_255 = (ctor_Left(__ps_254));
+                int64_t __ps_255 = (ctor_Left(__ps_254));
                 if (tur_panicking) return ((int64_t)0);
                 __t253 = __ps_255;
                 break;
             }
             case 1: {
                 int64_t r_1430 = (int64_t)__scrut->as.Right._0;
-                __auto_type __ps_256 = (ctor_Right(r_1430));
+                int64_t __ps_256 = (ctor_Right(r_1430));
                 if (tur_panicking) return ((int64_t)0);
                 __t253 = __ps_256;
                 break;
