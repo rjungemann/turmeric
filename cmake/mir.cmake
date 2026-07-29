@@ -15,6 +15,10 @@
 # Pinned to a commit, never a branch: c2mir's accepted C subset is the spike's
 # whole subject matter, so a floating dependency would silently change the
 # result being measured.
+# A full mirror of upstream at this pin lives at
+# https://github.com/rjungemann/mir (branch master == the pinned commit), so
+# the spike stays buildable if upstream moves or disappears; override with
+# -DTUR_MIR_GIT_REPOSITORY=https://github.com/rjungemann/mir.git to use it.
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/vnmakarov/mir.git"
     CACHE STRING "MIR upstream repository for the JIT spike")
 set(TUR_MIR_GIT_TAG "a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c"
