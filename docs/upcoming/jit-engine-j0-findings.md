@@ -252,9 +252,11 @@ breakdown.
    was already resolving most sites textually, so S1 moved the needle only on
    the sites it could not type (193 -> 144). Remaining emitter work is
    `emit_fns.c:1738` / `:2083`. Expect a full fixture-snapshot regen.
-2. **Emit an explicit `__tur_static_init()`** called from `main` rather than
-   relying on `__attribute__((constructor))`. This is a correctness fix for the
-   JIT and a legibility win for the `cc` path.
+2. ~~**Emit an explicit `__tur_static_init()`** called from `main` rather than
+   relying on `__attribute__((constructor))`.~~ **DONE (`77a4f1209`), and
+   unlike recommendation 1 it made no prediction to get wrong. See section
+   12.** Seven emission sites, corpus unchanged at 1642/1680 -- the value is
+   that normalizer rule 3 is retired, not that the number moved.
 3. **Decide `__attribute__((cleanup))`.** Either lower it explicitly at exit
    edges, or make dynamic variables a documented `cc`-only feature under
    `tur jit` (step-6 fallback with a TUR-W).
@@ -1207,6 +1209,106 @@ stands at:
 That composition -- every failure either a recorded decision or an open report
 with ruled-out hypotheses -- is the real J0->J1 handoff condition, more than
 the percentage. What J1 inherits as *engine* work: the reactor/fiber question,
-the `((cleanup))` decision, `__tur_static_init()` (recommendation 2, still
-open), S2's prebuilt-preamble latency work, and the three wrong-output
-fixtures.
+the `((cleanup))` decision, ~~`__tur_static_init()` (recommendation 2, still
+open)~~ **-- done, section 12**, S2's prebuilt-preamble latency work, and the
+three wrong-output fixtures.
+
+## 12. S1b executed -- the attribute hazard, closed except for `cleanup`
+
+Added 2026-07-29, x86-64 Linux, same harness and pin (`77a4f1209`). This is
+recommendation 2 carried out.
+
+### 12.1 What shipped
+
+Seven emission sites carried `__attribute__((constructor))`. All seven now
+register a plain `static void f(void)` into a per-TU table, and the emitter
+closes the program with an explicit `__tur_static_init()` that `main` calls as
+its first statement:
+
+| Site | File | Band |
+|---|---|---|
+| `__sk_register` call frames (2 branches) | `emit_cps_ir.c` | REGISTRY |
+| `__tur_e2reg_*` direct->CPS registration | `emit_cps_ir.c` | REGISTRY |
+| `__tur_sym_seed` interned-symbol seed | `emit_core.c` | REGISTRY |
+| `_dynvar_init_*` `pthread_key_create` | `emit_module.c` | KEYS |
+| `__module_defers_init` / `__module_defers_<M>_init` | `emit_module.c` | ATEXIT |
+| `__tur_module_def_init` top-level `def` initializers | `emit_module.c` | DEFS |
+
+Two things the shape has to get right, neither of which the recommendation
+mentioned:
+
+**There are two cases an explicit call from `main` cannot cover.** Separate
+compilation gives each TU its own initializers but only one TU has `main`, and
+a `--shared` library has no `main` at all. So one `constructor` wrapper is
+still emitted, and `__tur_static_init` is idempotent -- whichever path fires
+first wins and the other is a no-op. The `cc` path is therefore unchanged in
+behaviour, which is what keeps a 140-snapshot regen readable as pure addition.
+Under the JIT, single-TU is the only shape J1 compiles, so the wrapper being
+dropped costs nothing. **Multi-TU under `tur jit` is not covered by this
+change** and should not be assumed to be; it needs the same treatment
+`exports.manifest` gets in S3.
+
+**Ordering stopped being the toolchain's problem and became ours.** Previously
+these were N independent `.init_array` entries; now they are N calls in an
+order this emitter picks. The bands above encode the dependencies -- keys
+before anything reads a dynamic var, registries before any effectful indirect
+call dispatches through them, and `__tur_module_def_init` last because it is
+the only one that runs *user* code and so must see everything else in place.
+
+### 12.2 The corpus does not move, and that is the expected result
+
+| Sweep | Full corpus | |
+|---|---|---|
+| S1b emitter, normalizer rule 3 still active | 1642 / 1680 | 97.7% |
+| **S1b emitter, rule 3 retired** | **1642 / 1680** | **97.7%** |
+
+Both full runs, no sampling. The spike normalizer was already synthesizing the
+constructor call sequence textually, so there was no fixture left for the
+emitter to gain. The deliverable is the deletion: `normalize-c11-subset.py` is
+down from three rules to two, and both survivors are hard parse errors rather
+than silent drops.
+
+One fixture differs between the two sweeps -- `stm-stress`, `signal-11` in the
+first and `output-mismatch` in the second. It is not attributable: the same
+binary on the same normalized file alternates between the two outcomes across
+six consecutive runs. That is the shim-atomics class from 8.4.3 behaving as
+already documented. **This is the third time in this document a failure-class
+tally moved for a reason unrelated to the change under test** (31 -> 31 syntax,
+3 -> 2 signals, 4 -> 5 mismatches reads like a regression and is not); the
+fixture-by-fixture diff said "one fixture, and it is nondeterministic" in one
+line. Section 11.6's rule holds.
+
+### 12.3 The control: what the explicit call is actually worth
+
+A coverage number that does not move proves nothing about whether the emitter
+now does the rewriter's job. The direct test is to strip the
+`__tur_static_init();` call from the normalized C, leaving only the attribute
+c2mir discards, and compare:
+
+| Fixture | with the call | call stripped |
+|---|---|---|
+| `dynvar-multi` | PASS | **SIGSEGV** |
+| `dynvar-binding` | PASS | wrong output |
+| `module-defer-basic` | PASS | wrong output |
+| `cps-backend-effect` | PASS | PASS |
+| `dynvar-nested` | wrong output | wrong output |
+
+`cps-backend-effect` passing either way is worth noting rather than hiding:
+its registry is not load-bearing for that particular program, so it was never
+evidence for this fix in the first place. `dynvar-nested` is wrong in both
+columns because its defect is `((cleanup))`, which S1b does not touch.
+
+### 12.4 What is left of section 3.1
+
+Of the five attributes in 3.1's table, `constructor` is now closed and
+`unused` was always harmless. The remaining three are all still live, and none
+of them is emitter-side work:
+
+- **`cleanup(f)`** -- the dynamic-variable scope-exit pop. Still the one
+  correctness gap with no external recovery, still costing the 3 `dynvar-*`
+  wrong-output fixtures, still needing the J1 decision (lower at exit edges,
+  or make dynamic variables `cc`-only under `tur jit` with a TUR-W).
+- **`packed`** and **`#pragma pack`** -- arrive from system headers and user
+  inline-C, not from the emitter (9.3), so nothing in this section reaches
+  them. They remain a `tur jit` ABI hazard on any program whose inline-C
+  touches a packed struct.

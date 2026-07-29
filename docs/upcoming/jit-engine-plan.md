@@ -218,16 +218,22 @@ useful even if the JIT slips.
   `emit_expr.c:2801-2805` for why it was chosen over a derived type. User
   inline-C is not audited; it hits the 3.2-step-6 fallback, which J0 confirmed
   is sufficient (do not add the `:jit` key from 1.4).
-- **S1b -- explicit static init (NEW, from J0).** c2mir parses GCC attributes
-  and discards them without a diagnostic (`c2mir.c:4392`).
-  `__attribute__((constructor))` carries the direct->CPS registry, each dynamic
-  variable's `pthread_key_create`, and `__tur_module_def_init`; dropping it
-  cost a SIGSEGV in effectful code and wrong output in dynamic variables.
-  Emit an explicit `__tur_static_init()` called from `main` instead -- a
-  correctness fix for the JIT and a legibility win for the cc path.
+- **S1b -- explicit static init (NEW, from J0). DONE (2026-07-29), see
+  findings section 12.** c2mir parses GCC attributes and discards them without
+  a diagnostic (`c2mir.c:4392`). `__attribute__((constructor))` carried the
+  direct->CPS registry, each dynamic variable's `pthread_key_create`,
+  `__tur_module_def_init`, the `__sk_register` call frames, module-defer
+  `atexit` registration, and the interned-symbol seed; dropping it cost a
+  SIGSEGV in effectful code and wrong output in dynamic variables. All seven
+  sites now register into a per-TU table called from an explicit
+  `__tur_static_init()` at the top of `main`; one `constructor` wrapper
+  survives for the no-`main` cases (separate compilation, `--shared`) and the
+  function is idempotent. This retires rule 3 of the spike normalizer.
   `__attribute__((cleanup))` (dynamic-variable scope-exit pop) has no
-  equivalent recovery and needs its own decision: lower it at exit edges, or
-  make dynamic variables a documented cc-only feature under `tur jit`.
+  equivalent recovery and **remains open** -- it is now the only silently
+  dropped attribute the emitter still depends on. Decide it in J1: lower it at
+  exit edges, or make dynamic variables a documented cc-only feature under
+  `tur jit`.
 - **S2 -- runtime-as-library boundary. J0 promoted this to a J2
   prerequisite.** The fixed runtime preamble is byte-identical across programs
   (3,847 lines) and accounts for 76% of c2mir time and 50% of generation time,
@@ -265,8 +271,10 @@ useful even if the JIT slips.
   shim (findings 8.2); and the latency argument does not hold on Apple Silicon
   without S2 (findings 8.3).
 - **J1 -- `tur jit <file>`.** Sections 3.1-3.2. Fallback-to-cc wired.
-  `EXPERIMENTS[]` row lands here. Do S1 + S1b first (they delete the spike's
-  normalizer and close the attribute hazard), and default to
+  `EXPERIMENTS[]` row lands here. S1 and S1b are **both done** (findings 11
+  and 12); between them the spike normalizer is down to two rules, the
+  attribute hazard is closed except for `((cleanup))`, and the corpus stands
+  at 1642/1680. Default to
   `MIR_set_lazy_gen_interface` -- J0 measured lazy generation at 23 ms of
   link+gen against 125 ms eager, for the same output. **Lazy generation is not
   re-entrant**: two threads entering the same not-yet-generated function trip a
