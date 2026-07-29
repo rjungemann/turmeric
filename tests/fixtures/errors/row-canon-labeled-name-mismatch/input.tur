@@ -1,0 +1,13 @@
+;; row-ops-drop-field-names: row-canon must carry a labeled row's field names
+;; through. When it dropped them the result was a positional row, so this
+;; program compiled clean -- #row{id : int} and #row{name : int} both reduced
+;; to #row{int}. Without the row-canon wrapper the same program has always
+;; been rejected (errors/typed-field-row-name-mismatch).
+(defstruct Tbl [^&cols] (rows :int))
+
+(defn make-id [n : int] : (Tbl (row-canon #row{id : int}))
+  (:: (make-struct Tbl n) (Tbl (row-canon #row{id : int}))))
+
+(defn use-name [t : (Tbl (row-canon #row{name : int}))] : int (.rows t))
+
+(defn main [] : int (use-name (make-id 1)))

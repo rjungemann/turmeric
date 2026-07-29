@@ -1,11 +1,63 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-28
-area: compiler (type-level rows, src/compiler/types.c)
+resolved: 2026-07-29
+area: compiler (type-level rows, src/compiler/types.c + elab_types.c)
 ---
 
 # Row operations discard a labeled row's field names
+
+## Resolution (2026-07-29)
+
+All three fix directions taken.
+
+**1. Names threaded through every operation** (`src/compiler/types.c`).
+`row-canon`, `row-union`, `row-concat`, and `row-intersect` now build their
+result with `type_typerow_named()` and forward the operands' `field_names`.
+Two new predicates back the caller-side rules: `type_typerow_is_labeled` and
+`type_typerow_dup_field_name`.
+
+`row-canon`'s sort key became `(field_name, type_name)` with the field name
+leading, exactly as the report anticipated. This is load-bearing, not cosmetic:
+`#row{a : int  b : int}` and `#row{b : int  a : int}` compare equal at every
+slot on `type_name` alone, so a stable sort has nothing to reorder and the two
+would canonicalise to *different* rows. Field names are unique within a row
+(TUR-E0291), so the pair is a total order.
+
+`row_push_unique` (union's dedup) now compares the `(name, type)` pair for a
+labeled row -- two slots are the same slot only if they agree on both.
+
+**2. Mixed labeled/bare rejected** (`elab_types.c`), the consistent choice the
+report identified. The diagnostic reuses TUR-E0290, the literal-level
+all-or-nothing rule. One refinement the report did not call out: an **empty**
+row had to be treated as label-*neutral* rather than bare, or the report's own
+`(row-union #row{id : int} #row{})` repro would have become an error instead of
+the identity it is meant to be.
+
+**3. `row-intersect` matches on `(name, type)`**, so `#row{id : int}` and
+`#row{name : int}` intersect to the empty row rather than to `int`.
+
+One case the report did not raise, but that threading names creates: a labeled
+`row-concat` keeps duplicates outright, and a labeled `row-union` keeps two
+slots sharing a name but disagreeing on type. Both yield a row with a repeated
+field name that no literal could spell, so the fold's result is scanned and
+reported as TUR-E0291 -- consistent with the literal-level rule rather than
+silently dropping one of the two slots.
+
+Fixtures: `tests/fixtures/hkt-row-ops-labeled/` (label preservation across all
+four operations, including the same-type distinct-label canon case that pins the
+sort key), plus `errors/row-canon-labeled-name-mismatch`,
+`errors/row-union-labeled-name-mismatch`, `errors/row-op-mixed-labels`, and
+`errors/row-op-duplicate-field-name`.
+
+Zero fixture churn -- rows erase at codegen, so no snapshot moved.
+`bash tests/run.sh`: 2407 passed, 0 failed. The "Row operations discard field
+names" limitation is removed from
+[row-types-guide.md](../guides/row-types-guide.md) and replaced with a
+"Labels through the algebra" section.
+
+## Original report
 
 ## Summary
 

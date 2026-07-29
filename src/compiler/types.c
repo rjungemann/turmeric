@@ -3673,6 +3673,44 @@ bool type_typerow_eq_perm(Type a, Type b) {
  * "entities matching both"). A non-row argument yields the empty row /
  * `false`, so callers can pass through unchecked. */
 
+/* row-ops-drop-field-names: label plumbing for the row algebra.
+ *
+ * A labeled row (`#row{id : int}`) carries a parallel `field_names` array. Every
+ * operation below has to forward it, or the result silently degrades to a
+ * POSITIONAL row -- and a positional row compares equal to any other positional
+ * row with the same element types, so `#row{id : int}` and `#row{name : int}`
+ * start unifying the moment either passes through the algebra.
+ *
+ * An EMPTY row is label-NEUTRAL, not "bare". `(row-union R #row{})` is the
+ * identity and must stay legal whether or not R is labeled, so emptiness never
+ * counts as a bare operand for the all-or-nothing mixing rule. */
+bool type_typerow_is_labeled(Type r) {
+    return r.kind == TY_TYPEROW && r.as.typerow_.n_elements > 0 &&
+           r.as.typerow_.field_names != NULL;
+}
+
+/* Field name of slot `i`, or NULL for a positional row. */
+static const char *row_name_at(Type r, uint32_t i) {
+    if (r.kind != TY_TYPEROW || !r.as.typerow_.field_names) return NULL;
+    return r.as.typerow_.field_names[i];
+}
+
+static bool row_name_eq(const char *x, const char *y) {
+    return (!x || !y) ? (x == y) : strcmp(x, y) == 0;
+}
+
+const char *type_typerow_dup_field_name(Type r) {
+    if (!type_typerow_is_labeled(r)) return NULL;
+    uint32_t n = r.as.typerow_.n_elements;
+    for (uint32_t i = 0; i < n; i++) {
+        const char *ni = r.as.typerow_.field_names[i];
+        if (!ni) continue;
+        for (uint32_t j = 0; j < i; j++)
+            if (row_name_eq(r.as.typerow_.field_names[j], ni)) return ni;
+    }
+    return NULL;
+}
+
 /* True if `row` contains an element type_eq to `elem`. */
 bool type_typerow_contains(Type row, Type elem) {
     if (row.kind != TY_TYPEROW) return false;
@@ -3691,20 +3729,40 @@ Type type_typerow_concat(Arena *a, Type x, Type y) {
     uint32_t n = nx + ny;
     if (n > 255) n = 255;
     Type **elems = (n > 0) ? (Type **)arena_alloc(a, n * sizeof(Type *)) : NULL;
+    /* Labels ride along with their slots. The caller rejects a mixed
+     * labeled/bare pair, so "either side is labeled" means "both are" (modulo
+     * an empty operand, which contributes no slots). */
+    bool labeled = type_typerow_is_labeled(x) || type_typerow_is_labeled(y);
+    const char **names =
+        (labeled && n > 0) ? (const char **)arena_alloc(a, n * sizeof(const char *)) : NULL;
     uint32_t k = 0;
-    for (uint32_t i = 0; i < nx && k < n; i++) elems[k++] = x.as.typerow_.elements[i];
-    for (uint32_t i = 0; i < ny && k < n; i++) elems[k++] = y.as.typerow_.elements[i];
-    return type_typerow(a, elems, (uint8_t)k);
+    for (uint32_t i = 0; i < nx && k < n; i++) {
+        if (names) names[k] = row_name_at(x, i);
+        elems[k++] = x.as.typerow_.elements[i];
+    }
+    for (uint32_t i = 0; i < ny && k < n; i++) {
+        if (names) names[k] = row_name_at(y, i);
+        elems[k++] = y.as.typerow_.elements[i];
+    }
+    return type_typerow_named(a, elems, names, (uint8_t)k);
 }
 
 /* Append `el` to `acc` (an array of n Type*) iff no existing entry is type_eq
  * to it. Returns the new count. Used by union/intersect for dedup. */
-static uint32_t row_push_unique(Type **acc, uint32_t n, Type *el) {
+static uint32_t row_push_unique(Type **acc, const char **acc_names, uint32_t n,
+                                Type *el, const char *name) {
     if (!el) return n;
     for (uint32_t i = 0; i < n; i++) {
-        if (acc[i] && type_eq(*acc[i], *el)) return n;
+        if (!acc[i] || !type_eq(*acc[i], *el)) continue;
+        /* Labeled rows dedup on the (name, type) PAIR: two slots are the same
+         * slot only if they agree on both. Same name with a different type is
+         * therefore kept, and the caller's duplicate-name scan turns it into
+         * TUR-E0291 rather than silently dropping one of the two. */
+        if (acc_names && !row_name_eq(acc_names[i], name)) continue;
+        return n;
     }
     acc[n] = el;
+    if (acc_names) acc_names[n] = name;
     return n + 1;
 }
 
@@ -3716,11 +3774,16 @@ Type type_typerow_union(Arena *a, Type x, Type y) {
     uint32_t ny = (y.kind == TY_TYPEROW) ? y.as.typerow_.n_elements : 0;
     uint32_t cap = nx + ny;
     Type **elems = (cap > 0) ? (Type **)arena_alloc(a, cap * sizeof(Type *)) : NULL;
+    bool labeled = type_typerow_is_labeled(x) || type_typerow_is_labeled(y);
+    const char **names =
+        (labeled && cap > 0) ? (const char **)arena_alloc(a, cap * sizeof(const char *)) : NULL;
     uint32_t n = 0;
-    for (uint32_t i = 0; i < nx; i++) n = row_push_unique(elems, n, x.as.typerow_.elements[i]);
-    for (uint32_t i = 0; i < ny; i++) n = row_push_unique(elems, n, y.as.typerow_.elements[i]);
+    for (uint32_t i = 0; i < nx; i++)
+        n = row_push_unique(elems, names, n, x.as.typerow_.elements[i], row_name_at(x, i));
+    for (uint32_t i = 0; i < ny; i++)
+        n = row_push_unique(elems, names, n, y.as.typerow_.elements[i], row_name_at(y, i));
     if (n > 255) n = 255;
-    return type_typerow(a, elems, (uint8_t)n);
+    return type_typerow_named(a, elems, names, (uint8_t)n);
 }
 
 /* L6 follow-up D: canonical (sorted) copy of a row, the opt-in surface for
@@ -3739,24 +3802,46 @@ Type type_typerow_canonical(Arena *a, Type x) {
     if (x.kind != TY_TYPEROW) return type_typerow(a, NULL, 0);
     uint32_t n = x.as.typerow_.n_elements;
     if (n == 0) return type_typerow(a, NULL, 0);
+    bool labeled = type_typerow_is_labeled(x);
     Type **elems = (Type **)arena_alloc(a, n * sizeof(Type *));
-    for (uint32_t i = 0; i < n; i++) elems[i] = x.as.typerow_.elements[i];
-    /* Insertion sort by type_name -- stable, fine for the row sizes in
-     * practice (<= 255, almost always single digits). */
+    const char **names =
+        labeled ? (const char **)arena_alloc(a, n * sizeof(const char *)) : NULL;
+    for (uint32_t i = 0; i < n; i++) {
+        elems[i] = x.as.typerow_.elements[i];
+        if (names) names[i] = row_name_at(x, i);
+    }
+    /* Insertion sort -- stable, fine for the row sizes in practice (<= 255,
+     * almost always single digits). Labels are permuted alongside their slots.
+     *
+     * The sort key is (field_name, type_name) for a labeled row, type_name
+     * alone for a positional one. Field name has to lead: labeled rows are
+     * equal up to permutation of (name, type) pairs, so `#row{a : int  b : int}`
+     * and `#row{b : int  a : int}` must canonicalise identically -- and on
+     * type_name alone they compare equal at every slot, leaving the stable sort
+     * to preserve two *different* input orders. Field names are unique within a
+     * row (TUR-E0291), so the key is a total order. */
     for (uint32_t i = 1; i < n; i++) {
         Type *cur = elems[i];
+        const char *cur_field = names ? names[i] : NULL;
         const char *cur_name = cur ? type_name(*cur) : "";
         uint32_t j = i;
         while (j > 0) {
             Type *prev = elems[j - 1];
+            const char *prev_field = names ? names[j - 1] : NULL;
             const char *prev_name = prev ? type_name(*prev) : "";
-            if (strcmp(prev_name, cur_name) <= 0) break;
+            int c = 0;
+            if (names)
+                c = strcmp(prev_field ? prev_field : "", cur_field ? cur_field : "");
+            if (c == 0) c = strcmp(prev_name, cur_name);
+            if (c <= 0) break;
             elems[j] = prev;
+            if (names) names[j] = prev_field;
             j--;
         }
         elems[j] = cur;
+        if (names) names[j] = cur_field;
     }
-    return type_typerow(a, elems, (uint8_t)n);
+    return type_typerow_named(a, elems, names, (uint8_t)n);
 }
 
 /* Intersection: x's elements that also appear in y (by type_eq), in x's order,
@@ -3767,12 +3852,29 @@ Type type_typerow_intersect(Arena *a, Type x, Type y) {
     }
     uint32_t nx = x.as.typerow_.n_elements;
     Type **elems = (nx > 0) ? (Type **)arena_alloc(a, nx * sizeof(Type *)) : NULL;
+    /* An intersection can only narrow x, so the result is labeled exactly when
+     * x is; the surviving slots keep x's names. */
+    bool labeled = type_typerow_is_labeled(x);
+    const char **names =
+        (labeled && nx > 0) ? (const char **)arena_alloc(a, nx * sizeof(const char *)) : NULL;
     uint32_t n = 0;
     for (uint32_t i = 0; i < nx; i++) {
         Type *e = x.as.typerow_.elements[i];
-        if (e && type_typerow_contains(y, *e)) n = row_push_unique(elems, n, e);
+        if (!e) continue;
+        const char *xn = row_name_at(x, i);
+        /* Labeled rows match on the (name, type) PAIR, the same rule that
+         * governs how they unify everywhere else -- so `#row{id : int}` and
+         * `#row{name : int}` intersect to the empty row, not to `int`. */
+        bool present = false;
+        for (uint32_t j = 0; j < y.as.typerow_.n_elements && !present; j++) {
+            Type *yj = y.as.typerow_.elements[j];
+            if (!yj || !type_eq(*yj, *e)) continue;
+            if (labeled && !row_name_eq(row_name_at(y, j), xn)) continue;
+            present = true;
+        }
+        if (present) n = row_push_unique(elems, names, n, e, xn);
     }
-    return type_typerow(a, elems, (uint8_t)n);
+    return type_typerow_named(a, elems, names, (uint8_t)n);
 }
 
 TypeKind typekind_from_name(const char *name) {
