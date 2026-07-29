@@ -78,8 +78,23 @@ FNPTR_CAST_RE = re.compile(
 THUNK_RE = re.compile(r'tur_thunk_([A-Za-z0-9_]+)_t')
 THUNK_RETS = ('int64_t', 'double', 'bool', 'void')
 
-# `<expr>.fn(` / `<expr>->fn(` -- a fat/poly closure dispatch member call.
-MEMBER_FN_RE = re.compile(r'(?:\.|->)fn\s*\(')
+# A fat/poly closure dispatch member call, ANCHORED at the start of the
+# (paren-stripped) expression: `g.fn(...)`, `__env_1->lk.fn(...)`.
+#
+# Anchoring is the whole point.  An unanchored search matches the member call
+# nested inside a deref-of-cast --
+#   *(tur_adt_Option__int *)(intptr_t)(g.fn(g.env, ...))
+# -- whose value is the STRUCT, not the carrier the callee returned, and typing
+# that as int64_t makes c2mir reject the assignment ("incompatible types in
+# assignment to an arithmetic type lvalue").  Caught on hrt-rank2-aggregate-arg
+# and hrt-hkt-aggregate-container.
+# `*(T *)(...)` -- unboxing a carrier back to an aggregate.  Exact, not a guess.
+DEREF_CAST_RE = re.compile(r'^\*\s*\(\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*\*\s*\)')
+
+MEMBER_FN_RE = re.compile(
+    r'^[A-Za-z_][A-Za-z0-9_]*'
+    r'(?:(?:\.|->)[A-Za-z_][A-Za-z0-9_]*)*'
+    r'(?:\.|->)fn\s*\(')
 
 
 def balanced(s):
@@ -135,8 +150,15 @@ def deduce_type(init, proto):
     # (*fn)(...)` members are drop glue, and a void call never reaches a hoist
     # site (emit_value returns before hoisting for TY_NIL/TY_NEVER), so a member
     # call that needs a type here is always the carrier.
-    if MEMBER_FN_RE.search(e):
+    if MEMBER_FN_RE.match(e):
         return 'int64_t'
+
+    # Deref of a cast: `*(T *)(...)` has type `T`, exactly -- no guessing.  This
+    # is how a carrier-returning dispatch is unboxed back to an aggregate, e.g.
+    #   *(tur_adt_Option__int *)(intptr_t)(g.fn(g.env, ...))
+    m = DEREF_CAST_RE.match(e)
+    if m:
+        return m.group(1).strip()
     return None
 
 
