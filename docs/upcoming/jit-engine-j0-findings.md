@@ -871,7 +871,41 @@ lock, no diagnostic for the attribute form. 9.3's "reject rather than mislay"
 recommendation is the right call, and this is the strongest argument in the
 document for it: the loud platform is the safe one.
 
-### 10.5 `nproc` fallback
+### 10.5 Post-fix Linux baseline: unchanged, which is the point
+
+The `__extension__` fix (9.2) was predicted to be inert on Linux, because glibc
+had already erased the token (10.1). Confirmed by re-running the full corpus at
+`27b4cb399`:
+
+| Run | Pass | Rate |
+|---|---|---|
+| Linux, eager, pre-fix (`d657707dc`) | 1424 / 1680 | 84.8% |
+| **Linux, eager, post-fix (`27b4cb399`)** | **1424 / 1680** | **84.8%** |
+
+Not merely the same total: **zero fixtures changed outcome and zero changed
+failure reason**, and the stride spread is bit-identical (78.6%-89.3%). The fix
+is a pure macOS gain with no Linux cost or Linux signal, which is exactly what
+a header-concealed defect should look like once corrected.
+
+Where that leaves the platform gap:
+
+| | pre-fix | post-fix |
+|---|---|---|
+| Linux | 84.8% | 84.8% |
+| macOS | 81.7% | 83.9% |
+| **gap** | **3.1 pts (51 fixtures)** | **0.9 pts (15 fixtures)** |
+
+So 9.2 accounts for roughly three quarters of the real platform delta, and the
+residual is 9.3's Apple SDK set (9 fixtures) plus classification drift -- which
+is back inside the 4-9 band 8.4.2 originally predicted, arriving there by a
+mechanism 8.4.2 had wrongly excluded.
+
+One caveat on the comparison that 9.5 already flags and this run does not fix:
+the macOS numbers are from a Debug `tur`, these Linux numbers from the same
+Debug build (`./build/tur`, ASan on). That much is at least matched; a Release
+run on both would still be worth having before J1 quotes any of it.
+
+### 10.6 `nproc` fallback
 
 Fixed per 9.5: `sweep-full.sh` now takes `nproc`, then `sysctl -n hw.ncpu`,
 then 4. Falling back to 1 would make a full sweep ~35 minutes and read as a
