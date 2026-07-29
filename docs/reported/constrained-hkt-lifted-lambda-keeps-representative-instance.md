@@ -108,15 +108,82 @@ without it only mint a clone nothing calls.
    if the wrapped inner fn has a registered per-spec clone, emit a twin wrapper
    forwarding to it. `ensure_aggregate_spill_shim` in `emit_module.c` is the
    existing pattern for minting a wrapper at emit time.
-3. **Probably better than all of the above:** route return-directed methods on an
-   abstract constructor through the constraint dictionary (a real slot load)
-   rather than a representative. Correctness then does not depend on
-   specialization at all, and the lifted lambda can capture the dict the way it
-   captures anything else. This is already how the dict-passed rank-2 path gets
-   the right answer -- see `hkt-constrained-pure-two-instances` (107/207).
+3. **Route B -- dictionary-pass instead of monomorphize.** Prototyped and
+   reverted; see [Route B prototype](#route-b-prototype) below for what works and
+   what blocks it.
 4. Independently: prefer a representative whose layout is widest, or refuse to
    pick one when candidate layouts differ, so a miss degrades to a compile error
    rather than a silent wrong-instance call.
+
+## Route B prototype
+
+Route B is "stop depending on specialization: give the constrained poly fn its
+dicts as parameters and let every class-method call be a dict-slot load". It was
+prototyped end to end and reverted. Three of its four parts work; the fourth is
+the same wall as link 4 above, and the compiler already has a diagnostic for it.
+
+**Confirmed working.**
+
+- *`pure` already lowers to a dict-slot load* inside a dict clone. The rank-2
+  path emits, for a body of `(pure 7)`:
+
+      static int64_t make__dict_1331(int64_t __dict_1332, int64_t x) {
+          ... (((int64_t (*)(int64_t))((void **)(intptr_t)__dict_1332)[0])(7))
+
+  So return-directed dispatch through a dictionary needs no new mechanism.
+
+- *A direct call can be routed through the dict clone.* Adding a branch in
+  `elab_call.c` that, for a call to a constrained HKT poly fn whose constraints
+  all ground to concrete instances, calls `make_dict_clone` and prepends bare
+  `EX_DICT` nodes for the instance singletons. The clone then receives one dict
+  per constraint (`bump__dict(int64_t __dict_A, int64_t __dict_B, ...)`).
+
+- *The carrier/by-value return bridge.* A dict clone returns the int64 carrier
+  for every result (`emit_fns.c` forces that off `n_dict_clone`), so a call whose
+  result is `(Option int)` needs bridging. Typing the call as the carrier and
+  wrapping it in an `EX_ASCRIBE` to the aggregate reuses the existing
+  carrier->concrete ascription bridge and works.
+
+**The blocker: the continuation never gets the dict.**
+
+With all of the above, the clone dispatches `bind` through `__dict_A[0]`
+correctly, but still builds its continuation closure around the ORIGINAL lifted
+lambda, which calls `__inst_Applicative_pure_Schema` directly. The second dict
+parameter is passed and never read.
+
+There is machinery for a nested lambda to read a captured dict from its closure
+env -- `emit_call_dict_env_dispatch_index` / `ctx->cur_dict_env_*`, from
+forall-dict-pass-nested-lambda-dispatch-plan Phase 2, driven on the elab side by
+`dict_clone_nested_dispatch_rec`. Both its elab and emit gates require a
+**receiver** that is a bare tyvar, so a return-directed `pure` (no receiver; the
+constraint var is the head of the result spine) is invisible to them. Relaxing
+both gates symmetrically to accept "result head is a tyvar" was implemented --
+and the conversion still did not engage.
+
+For a NON-capturing continuation the compiler refuses outright, and already says
+so:
+
+    TUR-E0311: 'bind-then-pure' dispatches a typeclass method on its constrained
+    type variable from inside a directly-applied nested lambda that cannot be
+    lowered (a lifted lambda called by name, with no closure env to carry the
+    dict).
+
+That diagnostic is the honest statement of the wall: a lifted non-capturing
+lambda has no env, so there is nowhere to put the dict. Under Route B this fires
+where the code previously compiled -- `tests/fixtures/hkt-constrained-pure-return-
+dispatch` turns into a hard error -- which is why the prototype was reverted:
+it converts working programs into errors without yet fixing the dispatch.
+
+**What Route B needs to be landable**
+
+1. Make `dict_clone_nested_dispatch_rec` / the dict-env conversion actually
+   engage for return-directed methods (gate relaxation alone is not sufficient;
+   find what else keys on the receiver).
+2. Give a non-capturing continuation a closure env when its enclosing fn is
+   dict-cloned, so TUR-E0311 stops being reachable -- otherwise Route B is a
+   usability regression regardless of how correct it is.
+3. Only then flip direct calls onto the dict path, with the by-value ascription
+   bridge, and re-baseline the constrained-HKT fixtures.
 
 ## Related
 
