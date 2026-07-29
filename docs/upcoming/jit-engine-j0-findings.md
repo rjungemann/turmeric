@@ -1094,13 +1094,21 @@ it needs a backtrace, not another hypothesis.
 
 The archive link is confirmed **exactly neutral** against the curated list:
 1571/1680 both ways, zero fixtures changed outcome. Getting there surfaced one
-more real defect: `libturi.a` silently drops `src/runtime/symbols.c` to a
-basename collision with `src/compiler/symbols.c` (both become `symbols.c.o`;
-the compiler one wins; `tur_sym_register` is absent from the archive).
-`tur build` never notices because `libturt_runtime.a` supplies an uncolliding
-copy. Filed at
-[docs/reported/libturi-symbols-basename-collision.md](../reported/libturi-symbols-basename-collision.md);
-the harness compiles the shadowed TU directly until it is fixed.
+more real defect: `libturi.a` does not contain `src/runtime/symbols.c`, so
+`tur_sym_register` is absent from the archive. `tur build` never notices
+because `libturt_runtime.a` supplies it.
+
+(**Amended 2026-07-29 -- FIXED, and this paragraph's original explanation was
+wrong.** It attributed the miss to an `ar` basename collision with
+`src/compiler/symbols.c`. There is no collision: `runtime/symbols.c` was simply
+absent from `TUR_CORE_SOURCES`, the only member of `TURT_RUNTIME_SOURCES` not
+dual-listed there. Every *observation* behind the collision story was accurate
+and every one of them holds under both explanations -- the repro could not tell
+them apart and was written as though it had. One line of CMake fixes it; the
+harness's compile-the-TU-in workaround is reverted, and the corpus is unchanged
+at 1645 without it, which is what shows the fix replaces the workaround exactly.
+Archived with the full post-mortem at
+[docs/archive/libturi-symbols-basename-collision.md](../archive/libturi-symbols-basename-collision.md).)
 
 Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
 10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.

@@ -51,18 +51,6 @@ target_compile_options(tur-jit-spike PRIVATE -O2 -std=gnu11 -Wall)
 # only members that resolve an undefined symbol in the harness itself, and the
 # harness references almost none of them -- the symbols have to be present and
 # exported for dlsym(RTLD_DEFAULT) to find them at JIT link time.
-# libturi has a BASENAME COLLISION that costs the JIT a symbol.  The tree has
-# two files named symbols.c -- src/compiler/symbols.c and src/runtime/symbols.c
-# -- and both compile to a member called `symbols.c.o`.  The archive keeps the
-# compiler one, so `tur_sym_register` (defined in the runtime one) is simply not
-# in libturi, and a --whole-archive link loses it.  `tur build` never notices
-# because it also links libturt_runtime, which carries an uncolliding copy.
-#
-# Linking BOTH archives whole is not an option: they overlap on gc/rc/hamt and
-# the duplicate definitions fail the link.  So the archive is linked whole and
-# the one shadowed TU is compiled in directly.
-#
-# Reported at docs/reported/libturi-symbols-basename-collision.md.
 if(APPLE)
   target_link_options(tur-jit-spike PRIVATE
     "LINKER:-force_load,$<TARGET_FILE:libturi>")
@@ -71,12 +59,6 @@ else()
   target_link_libraries(tur-jit-spike PRIVATE
     -Wl,--whole-archive libturi -Wl,--no-whole-archive)
 endif()
-target_sources(tur-jit-spike PRIVATE
-  "${CMAKE_SOURCE_DIR}/src/runtime/symbols.c")
-set_source_files_properties(
-  "${CMAKE_SOURCE_DIR}/src/runtime/symbols.c"
-  TARGET_DIRECTORY tur-jit-spike
-  PROPERTIES COMPILE_OPTIONS "-O2;-std=gnu11;-fno-strict-aliasing;-w")
 target_include_directories(tur-jit-spike PRIVATE
   "${CMAKE_SOURCE_DIR}/src"
   "${CMAKE_SOURCE_DIR}/src/runtime"

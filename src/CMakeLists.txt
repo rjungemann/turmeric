@@ -241,6 +241,15 @@ set(TUR_CORE_SOURCES
     runtime/runtime.c
     runtime/serial.c
     runtime/stm.c
+    # SYM5: the interned-symbol registrar an emitted program calls from its
+    # static init.  Dual-listed in TURT_RUNTIME_SOURCES like every other
+    # runtime TU here; it was the one member of that list missing from this
+    # one, which left tur_sym_register out of libturi.a entirely.  A static
+    # archive only contributes members that resolve an undefined symbol, so
+    # the duplicate definition costs an existing link nothing -- but a
+    # whole-archive consumer (the JIT, which resolves runtime symbols by NAME
+    # at run time) needs it present.  docs/archive/libturi-symbols-basename-collision.md.
+    runtime/symbols.c
     runtime/tur_string.c
     # async/ -- async I/O, fibers, scheduler
     async/atomic_queue.c
