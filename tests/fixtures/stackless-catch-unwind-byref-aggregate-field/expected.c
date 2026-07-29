@@ -7532,8 +7532,8 @@ static int64_t step(const tur_adt_Result__int__int * acc, int64_t n) {
            }
           }
           case 2: {
-           __auto_type __ra161_0 = (acc);
-           __auto_type __ra161_1 = ((n) - (INT64_C(1)));
+           const tur_adt_Result__int__int *__ra161_0 = (acc);
+           int64_t __ra161_1 = ((n) - (INT64_C(1)));
            memmove(&acc__agg, __ra161_0, sizeof(tur_adt_Result__int__int)); acc = &acc__agg;
            n = __ra161_1;
            __pc = 1; break;

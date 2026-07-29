@@ -7502,8 +7502,8 @@ static double f(int64_t n, double acc) {
            }
           }
           case 2: {
-           __auto_type __ra159_0 = ((n) - (INT64_C(1)));
-           __auto_type __ra159_1 = ((acc) + (1.0));
+           int64_t __ra159_0 = ((n) - (INT64_C(1)));
+           double __ra159_1 = ((acc) + (1.0));
            n = __ra159_0;
            acc = __ra159_1;
            __pc = 1; break;

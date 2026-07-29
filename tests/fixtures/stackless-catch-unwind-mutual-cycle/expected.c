@@ -7522,7 +7522,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     }
    }
    case 4: {
-    __auto_type __ra161_0 = ((n_1303) - (INT64_C(1)));
+    int64_t __ra161_0 = ((n_1303) - (INT64_C(1)));
     n_1309 = __ra161_0;
     __pc = 2; break;
    }
@@ -7557,7 +7557,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
      __n162->saved[4] = (int64_t)(intptr_t)(__t157);
      __n162->saved[5] = (int64_t)(intptr_t)(__t158);
      __n162->saved[6] = (int64_t)(intptr_t)(__t159);
-     __auto_type __ra162_0 = ((n_1309) - (INT64_C(1)));
+     int64_t __ra162_0 = ((n_1309) - (INT64_C(1)));
      n_1310 = __ra162_0;
      __k = __n162; __pc = 3; break;
     }
@@ -7588,7 +7588,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
      __n163->saved[4] = (int64_t)(intptr_t)(__t157);
      __n163->saved[5] = (int64_t)(intptr_t)(__t158);
      __n163->saved[6] = (int64_t)(intptr_t)(__t159);
-     __auto_type __ra163_0 = ((n_1310) - (INT64_C(1)));
+     int64_t __ra163_0 = ((n_1310) - (INT64_C(1)));
      n_1303 = __ra163_0;
      __k = __n163; __pc = 1; break;
     }

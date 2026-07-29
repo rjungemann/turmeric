@@ -7519,7 +7519,7 @@ static int64_t f(int64_t n) {
             __n159->saved[1] = (int64_t)(intptr_t)(r_1304);
             __n159->saved[2] = (int64_t)(intptr_t)(__t155);
             __n159->saved[3] = (int64_t)(intptr_t)(__t156);
-            __auto_type __ra159_0 = ((n) - (INT64_C(1)));
+            int64_t __ra159_0 = ((n) - (INT64_C(1)));
             n = __ra159_0;
             __k = __n159; __pc = 1; break;
            } else {

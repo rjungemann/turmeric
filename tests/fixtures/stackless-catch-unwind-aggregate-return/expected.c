@@ -7544,8 +7544,8 @@ static tur_adt_Option__int go(tur_adt_Option__int acc, int64_t n) {
            __n159->saved[1] = (int64_t)(intptr_t)(n);
            __n159->saved[2] = (int64_t)(intptr_t)(__t156);
            { void *__ab = malloc(sizeof(tur_adt_Option__int)); memcpy(__ab, &__t157, sizeof(tur_adt_Option__int)); __n159->saved[3] = (int64_t)(intptr_t)__ab; }
-           __auto_type __ra159_0 = (acc);
-           __auto_type __ra159_1 = ((n) - (INT64_C(1)));
+           tur_adt_Option__int __ra159_0 = (acc);
+           int64_t __ra159_1 = ((n) - (INT64_C(1)));
            acc = __ra159_0;
            n = __ra159_1;
            __k = __n159; __pc = 1; break;

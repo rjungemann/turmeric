@@ -7543,8 +7543,8 @@ static int64_t f(tur_adt_Option__int acc, int64_t n) {
              __n166->saved[3] = (int64_t)(intptr_t)(__t157);
              __n166->saved[4] = (int64_t)(intptr_t)(__t158);
              __n166->saved[5] = (int64_t)(intptr_t)(__t159);
-             __auto_type __ra166_0 = (acc);
-             __auto_type __ra166_1 = ((n) - (INT64_C(1)));
+             tur_adt_Option__int __ra166_0 = (acc);
+             int64_t __ra166_1 = ((n) - (INT64_C(1)));
              acc = __ra166_0;
              n = __ra166_1;
              __k = __n166; __pc = 1; break;
@@ -7552,8 +7552,8 @@ static int64_t f(tur_adt_Option__int acc, int64_t n) {
            }
           }
           case 2: {
-           __auto_type __ra161_0 = (acc);
-           __auto_type __ra161_1 = (INT64_C(4));
+           tur_adt_Option__int __ra161_0 = (acc);
+           int64_t __ra161_1 = (INT64_C(4));
            acc = __ra161_0;
            n = __ra161_1;
            __pc = 1; break;

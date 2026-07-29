@@ -1731,11 +1731,22 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
     gs_save(gs, b, node);
     char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
     for (uint32_t i = 0; i < na; i++) {
+        GsVar *pv = &gs->vars[pbase + (int)i];
         gs->ctx->indent = gs->cur_ind;
         char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
         char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+        /* S1 (jit-engine-plan section 4): name the temp's type instead of
+         * __auto_type (GNU-only; c2mir cannot parse it).  The type is not
+         * guessed: gs_param_class gates entry to this whole lowering and never
+         * succeeds without a ctype, and the temp's only consumer is the
+         * assignment into that same param below, so declaring it as the param's
+         * type moves the identical conversion one line earlier.  An is_ref
+         * param's arg is a borrow pointer, so the temp is `const <ctype> *`. */
+        if (pv->is_ref)
+            buf_printf(b, "const %s *%s = (%s);\n", pv->ctype, nm, av);
+        else
+            buf_printf(b, "%s %s = (%s);\n", pv->ctype, nm, av);
         free(av); tmps[i] = tur_strdup(nm);
     }
     for (uint32_t i = 0; i < na; i++) {
@@ -2076,11 +2087,16 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
             uint32_t na = S->as.call_.n_args;
             char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
             for (uint32_t i = 0; i < na; i++) {
+                GsVar *pv = &gs->vars[pbase + (int)i];
                 gs->ctx->indent = gs->cur_ind;
                 char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
                 char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
                 indent_buf(b, gs->cur_ind);
-                buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+                /* S1: same named-type reasoning as gs_self_descend above. */
+                if (pv->is_ref)
+                    buf_printf(b, "const %s *%s = (%s);\n", pv->ctype, nm, av);
+                else
+                    buf_printf(b, "%s %s = (%s);\n", pv->ctype, nm, av);
                 free(av); tmps[i] = tur_strdup(nm);
             }
             for (uint32_t i = 0; i < na; i++) {

@@ -7529,7 +7529,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     }
    }
    case 3: {
-    __auto_type __ra162_0 = ((n_1302) - (INT64_C(1)));
+    int64_t __ra162_0 = ((n_1302) - (INT64_C(1)));
     n_1308 = __ra162_0;
     __pc = 2; break;
    }
@@ -7568,7 +7568,7 @@ static int64_t __cu_group_0(int __pc, int64_t __a0) {
     }
    }
    case 5: {
-    __auto_type __ra164_0 = ((n_1308) - (INT64_C(1)));
+    int64_t __ra164_0 = ((n_1308) - (INT64_C(1)));
     n_1302 = __ra164_0;
     __pc = 1; break;
    }

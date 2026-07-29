@@ -7536,7 +7536,7 @@ static int64_t g(int64_t n) {
            __k = __n160; __pc = 4; break;
           }
           case 4: {
-           __auto_type __ra161_0 = ((n) - (INT64_C(1)));
+           int64_t __ra161_0 = ((n) - (INT64_C(1)));
            n = __ra161_0;
            __pc = 1; break;
           }

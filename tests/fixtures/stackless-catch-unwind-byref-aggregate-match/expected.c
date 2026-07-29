@@ -7550,8 +7550,8 @@ static int64_t step(const tur_adt_Box__int * w, int64_t n) {
            }
           }
           case 2: {
-           __auto_type __ra162_0 = (w);
-           __auto_type __ra162_1 = ((n) - (INT64_C(1)));
+           const tur_adt_Box__int *__ra162_0 = (w);
+           int64_t __ra162_1 = ((n) - (INT64_C(1)));
            memmove(&w__agg, __ra162_0, sizeof(tur_adt_Box__int)); w = &w__agg;
            n = __ra162_1;
            __pc = 1; break;

@@ -7502,8 +7502,8 @@ static int64_t step(int64_t c, int64_t n) {
            }
           }
           case 2: {
-           __auto_type __ra159_0 = ((c) + (INT64_C(1)));
-           __auto_type __ra159_1 = ((n) - (INT64_C(1)));
+           int64_t __ra159_0 = ((c) + (INT64_C(1)));
+           int64_t __ra159_1 = ((n) - (INT64_C(1)));
            c = __ra159_0;
            n = __ra159_1;
            __pc = 1; break;

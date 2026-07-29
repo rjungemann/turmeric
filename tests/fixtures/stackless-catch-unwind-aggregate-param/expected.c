@@ -7538,8 +7538,8 @@ static int64_t step(tur_adt_Option__int acc, int64_t n) {
            }
           }
           case 2: {
-           __auto_type __ra162_0 = (acc);
-           __auto_type __ra162_1 = ((n) - (INT64_C(1)));
+           tur_adt_Option__int __ra162_0 = (acc);
+           int64_t __ra162_1 = ((n) - (INT64_C(1)));
            acc = __ra162_0;
            n = __ra162_1;
            __pc = 1; break;

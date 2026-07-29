@@ -7508,8 +7508,8 @@ static int64_t f(int64_t n, bool flag) {
            }
           }
           case 2: {
-           __auto_type __ra160_0 = ((n) - (INT64_C(1)));
-           __auto_type __ra160_1 = (!(flag));
+           int64_t __ra160_0 = ((n) - (INT64_C(1)));
+           bool __ra160_1 = (!(flag));
            n = __ra160_0;
            flag = __ra160_1;
            __pc = 1; break;

@@ -7567,8 +7567,8 @@ static int64_t __cu_group_0(int __pc, int64_t __a0, int64_t __a1) {
     }
    }
    case 3: {
-    __auto_type __ra166_0 = (acc_1302);
-    __auto_type __ra166_1 = ((n_1303) - (INT64_C(1)));
+    const tur_adt_Result__int__int *__ra166_0 = (acc_1302);
+    int64_t __ra166_1 = ((n_1303) - (INT64_C(1)));
     memmove(&acc_1309__agg, __ra166_0, sizeof(tur_adt_Result__int__int)); acc_1309 = &acc_1309__agg;
     n_1310 = __ra166_1;
     __pc = 2; break;
@@ -7628,8 +7628,8 @@ static int64_t __cu_group_0(int __pc, int64_t __a0, int64_t __a1) {
     }
    }
    case 5: {
-    __auto_type __ra172_0 = (acc_1309);
-    __auto_type __ra172_1 = ((n_1310) - (INT64_C(1)));
+    const tur_adt_Result__int__int *__ra172_0 = (acc_1309);
+    int64_t __ra172_1 = ((n_1310) - (INT64_C(1)));
     memmove(&acc_1302__agg, __ra172_0, sizeof(tur_adt_Result__int__int)); acc_1302 = &acc_1302__agg;
     n_1303 = __ra172_1;
     __pc = 1; break;

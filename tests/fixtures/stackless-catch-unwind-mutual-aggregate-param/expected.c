@@ -7571,8 +7571,8 @@ static int64_t __cu_group_0(int __pc, int64_t __a0, int64_t __a1) {
     }
    }
    case 3: {
-    __auto_type __ra165_0 = (acc_1302);
-    __auto_type __ra165_1 = ((n_1303) - (INT64_C(1)));
+    tur_adt_Option__int __ra165_0 = (acc_1302);
+    int64_t __ra165_1 = ((n_1303) - (INT64_C(1)));
     acc_1309 = __ra165_0;
     n_1310 = __ra165_1;
     __pc = 2; break;
@@ -7632,8 +7632,8 @@ static int64_t __cu_group_0(int __pc, int64_t __a0, int64_t __a1) {
     }
    }
    case 5: {
-    __auto_type __ra171_0 = (acc_1309);
-    __auto_type __ra171_1 = ((n_1310) - (INT64_C(1)));
+    tur_adt_Option__int __ra171_0 = (acc_1309);
+    int64_t __ra171_1 = ((n_1310) - (INT64_C(1)));
     acc_1302 = __ra171_0;
     n_1303 = __ra171_1;
     __pc = 1; break;

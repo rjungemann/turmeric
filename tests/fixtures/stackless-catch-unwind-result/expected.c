@@ -7503,7 +7503,7 @@ static int64_t f(int64_t n) {
            }
           }
           case 2: {
-           __auto_type __ra159_0 = ((n) - (INT64_C(1)));
+           int64_t __ra159_0 = ((n) - (INT64_C(1)));
            n = __ra159_0;
            __pc = 1; break;
           }

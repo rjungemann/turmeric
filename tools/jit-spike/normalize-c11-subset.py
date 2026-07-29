@@ -74,9 +74,15 @@ FNPTR_CAST_RE = re.compile(
     r'^\(+\s*([A-Za-z_][A-Za-z0-9_ ]*?[A-Za-z0-9_])\s*(\**)\s*'
     r'\(\s*\*\s*\)\s*\(')
 
-# Call through an emitted thunk typedef: `tur_thunk_<ret>_<args...>_t`.
-THUNK_RE = re.compile(r'tur_thunk_([A-Za-z0-9_]+)_t')
-THUNK_RETS = ('int64_t', 'double', 'bool', 'void')
+# Call through an emitted function-pointer typedef: `(*( SomeTypedef *)(x))(..)`.
+# The typedef's return type is READ from its own definition in the same TU --
+# `typedef <ret> (*<name>)(...)` -- rather than guessed from the name.  The old
+# name-prefix heuristic (int64_t/double/bool/void) silently failed on aggregate
+# thunks like tur_thunk_tur_adt_Person_..._t, whose return type is a struct.
+THUNK_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*_t)\b')
+TYPEDEF_FNPTR_RE = re.compile(
+    r'^\s*typedef\s+([A-Za-z_][A-Za-z0-9_ ]*?\**)\s*'
+    r'\(\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\(')
 
 # A fat/poly closure dispatch member call, ANCHORED at the start of the
 # (paren-stripped) expression: `g.fn(...)`, `__env_1->lk.fn(...)`.
@@ -139,7 +145,17 @@ def build_proto_table(lines):
     return proto
 
 
-def deduce_type(init, proto):
+def build_fnptr_typedef_table(lines):
+    """typedef name -> declared return type, for `typedef R (*name)(...)`."""
+    table = {}
+    for line in lines:
+        m = TYPEDEF_FNPTR_RE.match(line)
+        if m:
+            table.setdefault(m.group(2), ' '.join(m.group(1).split()))
+    return table
+
+
+def deduce_type(init, proto, fnptr_typedefs):
     """The C type of a parenthesized call expression, or None."""
     e = init.strip()
     while e.startswith('(') and e.endswith(')') and balanced(e[1:-1]):
@@ -153,12 +169,9 @@ def deduce_type(init, proto):
     if m:
         return (m.group(1) + ' ' + m.group(2)).strip()
 
-    m = THUNK_RE.search(e)
-    if m:
-        head = m.group(1)
-        for ret in THUNK_RETS:
-            if head == ret or head.startswith(ret + '_'):
-                return ret
+    for m in THUNK_RE.finditer(e):
+        if m.group(1) in fnptr_typedefs:
+            return fnptr_typedefs[m.group(1)]
 
     # Dispatch through a fat/poly closure member: `f.fn(...)`, `p->lk.fn(...)`.
     # Every emitted dispatch struct that carries a value-producing `fn` member
@@ -288,6 +301,7 @@ def normalize(text):
     text, n_hoisted = hoist_tur_includes(text)
     lines = text.split('\n')
     proto = build_proto_table(lines)
+    fnptr_typedefs = build_fnptr_typedef_table(lines)
     out, unresolved = [], []
     n_auto = n_zero = 0
 
@@ -302,7 +316,7 @@ def normalize(text):
         if m is None:
             out.append(line)
             continue
-        ty = deduce_type(m.group(3), proto)
+        ty = deduce_type(m.group(3), proto, fnptr_typedefs)
         if ty is None:
             unresolved.append((lineno, line.strip()[:140]))
             out.append(line)

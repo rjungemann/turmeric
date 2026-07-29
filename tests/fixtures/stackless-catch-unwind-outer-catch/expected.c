@@ -7513,7 +7513,7 @@ static int64_t f(int64_t n) {
            { tur_cont *__pk = __k->next; free(__k); __k = __pk; }
            tur_result_box_free((int64_t)(intptr_t)__box158);
            (void)(__box158);
-           __auto_type __ra159_0 = ((n) - (INT64_C(1)));
+           int64_t __ra159_0 = ((n) - (INT64_C(1)));
            n = __ra159_0;
            __pc = 1; break;
           }
