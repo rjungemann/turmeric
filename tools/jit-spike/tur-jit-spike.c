@@ -179,7 +179,21 @@ static void sync_config_globals (MIR_context_t ctx) {
 /* c2mir emits calls to runtime functions by name; MIR asks us for an address.
    The runtime is compiled INTO this executable, so dlsym(RTLD_DEFAULT) finds
    it -- c2mir never parses a line of hamt.c. */
+/* S2 proof (findings 19): when TUR_JIT_PRELIB names a host-resident runtime
+   library, resolve imports against IT before the process-global search.  The
+   executable exports its own copies of some runtime symbols (cps_rt.c, stm.c
+   -- diverged vintages of what the preamble carries), and dlsym(RTLD_DEFAULT)
+   searches the executable first, so without priority the program half binds a
+   MIX of .so-runtime and host-runtime machinery: CPS took SIGSEGV, STM lost
+   every increment.  Production S2 must make the runtime library THE runtime
+   (replacing the host duplicates); this env hook is the proof-scale stand-in. */
+static void *g_prelib_handle = NULL;
+
 static void *import_resolver (const char *name) {
+  if (g_prelib_handle != NULL) {
+    void *a = dlsym (g_prelib_handle, name);
+    if (a != NULL) return a;
+  }
   /* Intercepts first: these must win over any host symbol of the same name. */
   if (strcmp (name, "atexit") == 0) return (void *) jit_atexit;
   for (size_t i = 0; i < sizeof BUILTIN_SHIMS / sizeof BUILTIN_SHIMS[0]; i++)
@@ -244,6 +258,15 @@ int main (int argc, char **argv) {
     }
   }
   if (file_name == NULL) { fprintf (stderr, "usage: tur-jit-spike file.c\n"); return 2; }
+
+  const char *prelib = getenv ("TUR_JIT_PRELIB");
+  if (prelib != NULL && *prelib != '\0') {
+    g_prelib_handle = dlopen (prelib, RTLD_NOW | RTLD_GLOBAL);
+    if (g_prelib_handle == NULL) {
+      fprintf (stderr, "jit-spike: TUR_JIT_PRELIB: %s\n", dlerror ());
+      return 2;
+    }
+  }
 
   size_t body_len = 0, shim_len = 0;
   char *body = slurp (file_name, &body_len);

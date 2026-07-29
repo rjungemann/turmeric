@@ -2010,3 +2010,93 @@ Also fixed while writing the sweep: probing the binary with
 `... | grep -q` under `set -o pipefail` SIGPIPEs the probed process on
 match, so a successful capability check read as failure. Capture, then
 match.
+
+## 19. S2 architecture proven -- the runtime split works end to end
+
+Added 2026-07-29. J2 requires S2, and S2's implementation shape had never
+been settled beyond "a named symbol boundary." This section settles it with a
+working proof and enumerates every seam the production version must handle.
+
+### 19.1 Family-by-family is the wrong shape; two discoveries first
+
+The JIT-path preamble (2,946 lines -- smaller than 13.2's number, see below)
+holds 2,113 definition lines across 198 functions with **no dominant family**:
+scheduler 244, DK/CPS 230, select 169, panic 166, fiber 159, sessions 159,
+STM 143, timer 103, futures/io ~150. At ~29 us of c2mir per line, each family
+is worth ~5-7 ms -- a dozen emitter surgeries with a dozen ABI seams for
+wins that small individually. S2 must move the region wholesale.
+
+Discovery one, found by reading before building: **rc/GC host-residency has
+been live on the JIT path all along.** cmd_jit sets `g_emit_for_link`, so
+DEDUP-4b's `resolve_rcgc_from_archive()` fires, finds `libturt_runtime.a`,
+and emits the rc/GC family as declarations resolved by address into the host
+-- which the 1,633-fixture product sweep validated without anyone noticing.
+That is why the JIT-path preamble is 2,946 lines against 13.2's 3,417: the
+554-line rc/GC block is already out. S2's mechanism is DEDUP-4b's mechanism,
+scaled to the whole region.
+
+### 19.2 The proof
+
+`tools/jit-spike/s2-split-proof.py` splits an emitted TU at the preamble
+marker into (a) a runtime impl -- de-static'd, compiled ONCE by gcc into a
+`.so` -- and (b) a declarations-only region spliced ahead of the program half
+for c2mir. The spike harness gained `TUR_JIT_PRELIB`, a resolver-priority
+hook standing in for the production arrangement. Eight fixtures spanning
+every hard subsystem -- `arith`, `hamt-basic`, `cps-backend-effect`,
+`stm-stress` (8 threads), `dynvar-nested`, `module-defer-basic`,
+`gc-registry-growth` (20k-deep recursion), `self-recursive-carrier-struct-return`
+-- **all pass** with the runtime host-resident.
+
+Latency, best of 5, `arith`:
+
+| | c2mir | link+gen | total |
+|---|---|---|---|
+| full TU (status quo) | 92.5 ms | 141.0 ms | 233.5 ms |
+| **split (program half only)** | **77.6 ms** | **66.6 ms** | **144.2 ms** |
+
+**38% of engine time gone**, and the split is lopsided in an instructive way:
+generation halves (the runtime's 198 functions no longer generate per
+program) while c2mir drops only 16% (the declarations still parse; they just
+compile no bodies). For J2's `(reload)` loop this is the per-reload saving,
+and the `.so` compile is one-time.
+
+### 19.3 The seams, each found by a failing fixture
+
+1. **`static inline` loses its definition when de-static'd** -- plain C99
+   `inline` at external linkage emits no standalone symbol, so the `.so`
+   lacked `tur_frame_init`. Production: emit these `extern inline` +
+   declaration, or drop `inline` in the runtime TU.
+2. **TLS must have exactly one storage.** Giving the `.so` its own `__thread`
+   variables plus accessor overrides failed silently: dlsym(RTLD_DEFAULT)
+   prefers the EXECUTABLE's exports over a preload, so the program half bound
+   libturi's slots while `.so` code used its own -- divergent state,
+   `stm-stress` lost every increment. Fix: the impl routes the 11 TLS names
+   through the HOST accessors too (the emitted `#else` branch, applied to the
+   runtime TU). One storage, owned by `tur_tls.c`.
+3. **The host already carries a diverged second runtime.** `tur`/the harness
+   export `dk_prompt`, `tur_atomically`, `tur_stm_current_tx` from libturi's
+   own `cps_rt.c`/`stm.c` -- different vintages of what the preamble emits.
+   De-static'ing the preamble made its names collide: `.so`-internal calls
+   were preempted by host implementations with different layouts (CPS
+   SIGSEGV), and the program half bound a mix (STM answered 0). Proof-scale
+   fix: `-Wl,-Bsymbolic` self-binds the `.so`, and the resolver consults the
+   runtime lib before the process. **Production consequence, and it is the
+   big one: the generated runtime library must BE the runtime** -- built into
+   `tur` in place of the duplicated `cps_rt.c`/`stm.c`/fiber TUs, not
+   alongside them. That also finally reconciles the divergence the reactor
+   bug came from.
+
+### 19.4 What production S2 is, concretely
+
+1. An emitter mode producing the two artifacts from the same marked region:
+   the feature-complete runtime TU (all gates on, statics externalized, TLS
+   via host accessors) and the declarations region. Generated-and-committed
+   like `stdlib/docstrings.tur`, regenerated when the preamble changes, with
+   a content-hash guard: emit-time hash mismatch falls back to full-preamble
+   emission -- never wrong, just slower.
+2. The runtime TU compiled into `tur` (replacing libturi's duplicated copies)
+   and into `libturi.a` for the cc path's `--runtime=lib`.
+3. cmd_jit emits declarations-region + program half when the hash matches.
+
+The proof script and the `TUR_JIT_PRELIB` hook stay in-tree so the macOS
+re-validation can replay this end to end.

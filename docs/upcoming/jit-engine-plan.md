@@ -241,8 +241,13 @@ useful even if the JIT slips.
   so both may fire. Corpus 1642 -> 1645. Dynamic variables are therefore NOT
   cc-only under `tur jit`. One edge remains for J1: an early `return`/`goto`
   out of a dynamic binding still pops only on the `cc` path.
-- **S2 -- runtime-as-library boundary. J0 promoted this to a J2 prerequisite,
-  and has now SIZED it (findings 13); the implementation is J1 work.** The
+- **S2 -- runtime-as-library boundary. Sized (findings 13), architecture
+  PROVEN end to end (findings 19): split at the preamble marker, runtime
+  compiled once into a host-resident library, program half through c2mir with
+  declarations only -- 8/8 hard fixtures pass, 38% of engine time saved, and
+  the three seams (static inline, single-storage TLS, the host's own diverged
+  runtime copies) are each named with their production consequence. The
+  remaining work is the emitter mode + build wiring of 19.4.** The
   fixed runtime preamble is **3,417 lines** (4.3's 3,847 measured a
   longest-common-prefix that ran past the runtime into shared stdlib
   declarations), comes in **25 variants across the corpus with one covering 89%
