@@ -63,4 +63,61 @@
 #define __atomic_compare_exchange_n(p, e, d, weak, succ, fail) \
   (*(p) == *(e) ? ((*(p) = (d)), 1) : ((*(e) = *(p)), 0))
 
+/* --- Apple SDK header predefines (macOS hosts only) ----------------------
+ *
+ * Unlike everything above, these are NOT about Turmeric's emitted C -- they are
+ * about the SDK headers the emitted C includes.  Apple's headers auto-detect
+ * the compiler and #error out when they cannot identify it; c2mir identifies as
+ * nothing in particular, so three separate headers fail before a generated line
+ * is parsed.  9 fixtures fail this way.
+ *
+ * MEASURED RESULT: this block fixes NONE of them.  Full corpus is 1409/1680
+ * with it and 1410/1680 without (the one-fixture delta is stm-stress, which
+ * flakes on the atomic lowerings above, not on anything here).  What it does is
+ * move all 9 past the header gate and into a DEEPER failure -- which is worth
+ * keeping, because one of those deeper failures is the most serious thing the
+ * macOS sweep found:
+ *
+ *   - 5 fixtures: TargetConditionals.h now parses, and they fail later on
+ *     `syntax error on typedef`, an ordinary c2mir subset gap.
+ *   - 3 fixtures: mach/message.h:543 and :569 now reach their
+ *     `xnu_static_assert_struct_size` checks and FAIL them -- c2mir lays those
+ *     mach_msg structs out at a different size than clang does.  That is an ABI
+ *     divergence, not a parse gap: JIT'd code touching a Mach message struct
+ *     would be silently wrong rather than refused.  J1 must not treat the
+ *     header gate as merely cosmetic.  This is invisible without __arm64__
+ *     having a value, which is why the predefine earns its place.
+ *   - 1 fixture: _OSSwapInt16 stays unresolved.  libkern/_OSByteOrder.h only
+ *     emits the static-inline bodies under __GNUC__; the fallback path declares
+ *     them extern and libSystem exports no such symbol.  Defining __GNUC__ is
+ *     the obvious next probe and was not tried -- it would also switch a lot of
+ *     other headers onto GNU-builtin paths c2mir lacks.
+ *
+ * See docs/reported/jit-macos-full-corpus-extension-and-atexit.md.
+ * Guarded on __APPLE__, which c2mir does predefine, so the shim stays a single
+ * file across hosts.
+ */
+#ifdef __APPLE__
+
+/* c2mir predefines __arm64__ / __aarch64__ with an EMPTY replacement list, so
+ * mach/port.h:100's `#if __arm64__` is an empty controlling expression rather
+ * than a true one, and c2mir rejects it outright.  Give them values. */
+#undef __arm64__
+#define __arm64__ 1
+#undef __aarch64__
+#define __aarch64__ 1
+
+/* TargetConditionals.h:398 `#error unknown compiler`.  Its detection cascade
+ * needs __is_target_arch / __is_target_os (clang builtins c2mir lacks), and the
+ * header itself documents setting the TARGET_CPU_ and TARGET_OS_ macros as the
+ * supported escape hatch for exactly this case. */
+#define TARGET_CPU_ARM64 1
+#define TARGET_OS_MAC 1
+
+/* libkern/OSByteOrder.h:314 `#error Unknown endianess.`  Neither endianness
+ * macro is predefined, and every Apple arm64 target is little-endian. */
+#define __LITTLE_ENDIAN__ 1
+
+#endif /* __APPLE__ */
+
 #endif /* TUR_JIT_SUBSET_SHIM_H */

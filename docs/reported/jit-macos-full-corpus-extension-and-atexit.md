@@ -11,11 +11,13 @@ open.
 
 ## Summary -- the run does not land where 8.4.2 predicts
 
+**Status:** finding 1 is FIXED in this branch; findings 2 and 3 are open.
+
 | Run | Pass | Rate |
 |---|---|---|
 | Linux, eager (8.4.2, reported) | 1424 / 1680 | 84.8% |
 | **macOS, eager, artifacts as committed** | **1373 / 1680** | **81.7%** |
-| macOS, eager, + one shim line (below) | 1410 / 1680 | 83.9% |
+| macOS, eager, after the finding-1 codegen fix | 1409 / 1680 | 83.9% |
 
 Section 8.4.2 concludes "a full-corpus macOS run would be expected near 85%
 too" and that "the gap needs no platform explanation and there is no evidence
@@ -71,14 +73,12 @@ emitted C is inside c2mir's subset.
 
 ### Blast radius, measured
 
-Adding a single line to the shim:
-
-```c
-#define __extension__
-```
-
-takes the corpus from **1373 to 1410 (+37 fixtures, +2.2 points)** and removes
-three whole failure classes:
+First isolated by adding a single line to the shim (`#define __extension__`) as
+a diagnostic probe, which took the corpus from **1373 to 1410 (+37 fixtures,
++2.2 points)**. The landed emitter fix reproduces that at 1409; the
+one-fixture difference is `stm-stress` flaking on the shim's atomic lowerings,
+not a real gap between the two approaches. It removes three whole failure
+classes:
 
 | Class | as committed | with the define |
 |---|---|---|
@@ -91,12 +91,28 @@ residue 193 = 193, and GNU constructs in user inline-C 31 = 31. That agreement
 is the best evidence available that the two corpora are otherwise measuring the
 same thing.
 
-### Fix direction
+### Status: FIXED
 
-Fix the emitters, not the shim. `({ ... })` on its own is accepted by gcc,
-clang, and c2mir; the `__extension__` prefix suppresses a `-pedantic` warning
-we do not enable and costs the JIT 37 fixtures. Dropping it from the nine sites
-above is a mechanical change that regenerates fixture snapshots.
+Fixed in the emitters rather than the shim. `({ ... })` on its own is accepted
+by gcc, clang, and c2mir; the `__extension__` prefix only suppresses a
+`-pedantic` diagnostic, and generated C is compiled `-O2 -std=c99 -Wall
+-fno-strict-aliasing` (`src/main.c:2444`, `:4675`, `:5378`) which never sets
+it. All nine sites now emit the bare form, and the three prefix matchers in
+`src/turi/eval.c` (`:7445`, `:7473`, `:7514`) moved in lockstep -- the
+interpreter recognizes these inline-C bodies by text, so the emitters and the
+matchers must stay in sync.
+
+Verified:
+
+- `bash tests/run.sh` -- **2399 passed, 0 failed**. Zero snapshot churn: of the
+  140 `expected.c` files, none exercises these emitters.
+- Generated C compiles with **zero warnings** under the real flags. Under an
+  added `-pedantic` there is now one `statement expression` warning per affected
+  TU; that is the diagnostic `__extension__` was buying, and it is a warning,
+  never an error. A user passing `-pedantic` via `TUR_CC_FLAGS` would see it.
+- Interpreter session paths (`session-send`, `session-choose-left`,
+  `session-mp-ping`) still evaluate correctly.
+- JIT corpus **1373 -> 1409/1680**, exactly the predicted +37.
 
 ## Finding 2 -- resolving `atexit` is not the fix; it converts a clean error into a crash
 
@@ -153,9 +169,43 @@ implements no `__is_target_arch` / `__has_builtin`, so Apple's compiler-
 detection cascade falls through to its error branch. `sys/cdefs.h:81` also
 emits `#warning "Unsupported compiler detected"` on every macOS TU.
 
-Cheap to fix in the shim with a few predefines (`__clang__`, `__GNUC__`,
-`TARGET_CPU_ARM64=1`, `TARGET_OS_MAC=1`, endianness). Cosmetic next to
-findings 1 and 2.
+### The predefines do not fix it, and what that uncovered
+
+Predicted above as "cheap to fix with a few predefines." **That prediction is
+wrong and the measurement says so:** `__arm64__=1`, `__aarch64__=1`,
+`TARGET_CPU_ARM64=1`, `TARGET_OS_MAC=1`, `__LITTLE_ENDIAN__=1` (now in
+`subset-shim.h` under `#ifdef __APPLE__`) recover **zero** fixtures. Corpus is
+1409/1680 with them and 1410/1680 without; the one-fixture delta is
+`stm-stress`, which flakes on the shim's atomic lowerings and landed on both
+sides across three runs.
+
+What they do is push all 9 past the header gate into a deeper failure, and one
+of those is materially more serious than the parse error it replaced:
+
+| Was | Now | Count |
+|---|---|---|
+| `#error TargetConditionals.h: unknown compiler` | `syntax error on typedef` -- an ordinary c2mir subset gap | 5 |
+| `empty preprocessor expression` (`mach/port.h:100`) | **`static assertion failed: "struct changed size unexpectedly"`** at `mach/message.h:543` and `:569` | 3 |
+| `unresolved import: _OSSwapInt16` | unchanged | 1 |
+
+The middle row is the find. `xnu_static_assert_struct_size` is XNU's own ABI
+lock on its message structs, and **c2mir fails it** -- it lays those structs out
+at a different size than clang does. That is an ABI divergence, not a subset
+gap: JIT'd code touching a Mach message struct would be silently wrong rather
+than refused. It is invisible until `__arm64__` has a value, which is the
+argument for keeping the predefines even though they fix nothing.
+
+Two incidental notes on the mechanism:
+
+- c2mir predefines `__APPLE__`, `__arm64__`, and `__aarch64__` but with an
+  **empty replacement list**, so `#if __arm64__` is an empty controlling
+  expression rather than a true one. That is arguably a c2mir bug worth
+  reporting upstream.
+- `_OSSwapInt16` stays unresolved because `libkern/_OSByteOrder.h` emits the
+  static-inline bodies only under `__GNUC__`; its fallback declares them extern
+  and libSystem exports no such symbol. Defining `__GNUC__` is the obvious next
+  probe; it was not tried, because it would also switch many other headers onto
+  GNU-builtin paths c2mir lacks.
 
 ## Incidental corrections to section 8
 
@@ -181,12 +231,14 @@ findings 1 and 2.
 ```sh
 cmake -S . -B build-jit -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
 cmake --build build-jit -j --target tur-jit-spike
-bash tools/jit-spike/sweep-full.sh                       # 1373 / 1680 = 81.7%
-
-printf '#define __extension__\n' > /tmp/shim2.h
-cat tools/jit-spike/subset-shim.h >> /tmp/shim2.h
-SHIM=/tmp/shim2.h bash tools/jit-spike/sweep-full.sh     # 1410 / 1680 = 83.9%
+bash tools/jit-spike/sweep-full.sh                       # 1409 / 1680 = 83.9%
 ```
+
+To recover the pre-fix 1373 / 1680 = 81.7% baseline, revert the emitter change
+(`git revert` the finding-1 commit) and re-run. The `#define __extension__`
+shim line used to diagnose it is no longer needed and is deliberately NOT in
+`subset-shim.h`: the emitters no longer produce the token, and adding it back
+would only mask a reintroduction.
 
 One uncontrolled variable, stated for the record: this run used a **Debug**
 `tur` (contracts live), and section 8.4.2's build type is not recorded. The
