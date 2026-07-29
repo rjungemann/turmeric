@@ -85,7 +85,6 @@ Suite: 2403 passed, 0 failed.
 
 ## Still open
 
-`pure` inside a **lifted continuation** -- `(bind x (fn [v] (pure ...)))` -- is
-emitted outside any specialization and still keeps the `Applicative [Schema]`
-representative. See
-[../../reported/constrained-hkt-lifted-lambda-keeps-representative-instance.md](../../reported/constrained-hkt-lifted-lambda-keeps-representative-instance.md).
+`pure` inside a **lifted continuation** was resolved the same day by Route B
+(dictionary passing) -- see
+[../constrained-hkt-lifted-lambda-keeps-representative-instance.md](../constrained-hkt-lifted-lambda-keeps-representative-instance.md).

@@ -88,8 +88,8 @@ spec) and in the **dict-passed** rank-2 path (the 107/207 fixture). It does NOT
 hold for `pure` inside a **lifted continuation** -- `(bind x (fn [v] (pure ...)))`
 -- where the lambda is emitted outside any specialization and keeps the
 `Applicative [Schema]` representative. That produces numerically right answers
-only because Schema's tag word reads as Option's `is_some`. Tracked in
-[../../reported/constrained-hkt-lifted-lambda-keeps-representative-instance.md](../../reported/constrained-hkt-lifted-lambda-keeps-representative-instance.md).
+only because Schema's tag word reads as Option's `is_some`. Resolved same day by Route B (dictionary passing) -- see
+[../constrained-hkt-lifted-lambda-keeps-representative-instance.md](../constrained-hkt-lifted-lambda-keeps-representative-instance.md).
 
 ## Still open
 

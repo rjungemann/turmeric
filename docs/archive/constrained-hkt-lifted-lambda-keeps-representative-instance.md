@@ -1,11 +1,38 @@
 ---
-status: open
+status: RESOLVED (2026-07-29, Route B -- dictionary passing)
 severity: high
 discovered: 2026-07-29
 area: compiler (ABI specialization / lambda lifting)
 ---
 
 # A lifted continuation keeps the representative instance
+
+> **RESOLVED.** Route B landed on the second attempt. The missed mechanism from
+> the first prototype was `mapper_scan_dispatch` -- the scanner that decides
+> which dicts a nested mapper captures -- which shared the same bare-tyvar
+> receiver gate as the two sites the prototype relaxed. With a single shared
+> predicate (`call_dispatched_constraint_class`: receiver is a bare tyvar, OR
+> the result is tyvar-headed) applied at the scanner, the E0311 guard, and the
+> emit-side env-dict index, the EXISTING nested-mapper lowering converts the
+> lifted continuation into a dict-capturing closure -- including the
+> non-capturing shape, via `convert_mapper_to_dict_closure`, so the TUR-E0311
+> wall never materialized.  Direct calls at concrete constructors then route
+> through the callee's dict clone with the concrete instance singletons, and a
+> by-value `(Option int)` result is bridged back through an EX_ASCRIBE to the
+> existing carrier->concrete deref.
+>
+> The continuation now compiles to a dict-slot load off its closure env:
+>
+>     struct __env { int64_t __fn; int64_t __dict; };
+>     static int64_t __fn_N(void *env, int64_t v) {
+>         ... (((int64_t (*)(int64_t))((void **)env->__dict)[0])((v) + 1))
+>
+> Fixtures: `hkt-constrained-continuation-dict` (two differently-tagged
+> instances, 107/207 -- cannot pass by coincidence) and
+> `hkt-constrained-byvalue-bind-pure` (stdlib Option end to end, upgraded back
+> to the bind-then-pure shape).  Suite: 2405 passed, 0 failed.
+>
+> The analysis below is the pre-fix state, kept as the paper trail.
 
 ## Summary
 

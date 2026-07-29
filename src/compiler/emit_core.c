@@ -2253,16 +2253,25 @@ int emit_call_dict_env_dispatch_index(EmitCtx *ctx, const Expr *call) {
           call->as.call_.dict_arg && call->as.call_.dict_arg->kind == EX_DICT &&
           call->as.call_.dict_arg->as.dict_.instance &&
           call->as.call_.dict_arg->as.dict_.instance->typeclass &&
-          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0' &&
-          /* The receiver must be the constraint's own type variable -- a
-           * concrete same-class call in the same mapper body (e.g. `(show 42)`
-           * alongside `(show x)`) is instance-resolved and must NOT be routed
-           * through the polymorphic env dict.  Mirrors the elab-side gate in
-           * mapper_scan_dispatch / dict_clone_nested_dispatch_rec. */
-          call->as.call_.n_args >= 1 && call->as.call_.args &&
-          call->as.call_.args[0] &&
-          call->as.call_.args[0]->type.kind == TY_TYVAR))
+          call->as.call_.dict_arg->as.dict_.method_name[0] != '\0'))
         return -1;
+    /* The dispatch must be on the constraint's own type variable -- a concrete
+     * same-class call in the same mapper body (e.g. `(show 42)` alongside
+     * `(show x)`) is instance-resolved and must NOT be routed through the
+     * polymorphic env dict.  Mirrors the elab-side gate
+     * (call_dispatched_constraint_class): receiver-directed keys on a bare
+     * tyvar receiver; return-directed (`pure`/`empty` -- Route B,
+     * constrained-hkt-lifted-lambda-keeps-representative-instance) keys on the
+     * result being tyvar-headed. */
+    {
+        bool recv_is_tyvar =
+            call->as.call_.n_args >= 1 && call->as.call_.args &&
+            call->as.call_.args[0] &&
+            call->as.call_.args[0]->type.kind == TY_TYVAR;
+        const Type *h = &call->type;
+        while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+        if (!recv_is_tyvar && h->kind != TY_TYVAR) return -1;
+    }
     const TypeClass *mtc = call->as.call_.dict_arg->as.dict_.instance->typeclass;
     for (uint8_t k = 0; k < ctx->cur_dict_env_n; k++)
         if (ctx->cur_dict_env_classes[k] == mtc) return (int)k;

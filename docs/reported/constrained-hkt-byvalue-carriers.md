@@ -68,8 +68,8 @@ constrained poly fn.
 
 ## Related
 
-- [constrained-hkt-lifted-lambda-keeps-representative-instance.md](constrained-hkt-lifted-lambda-keeps-representative-instance.md)
-  -- a lifted continuation still keeps the representative instance. The spec-level
-  case was fixed 2026-07-29; the lambda case remains.
+- [../archive/constrained-hkt-lifted-lambda-keeps-representative-instance.md](../archive/constrained-hkt-lifted-lambda-keeps-representative-instance.md)
+  -- the representative-instance dispatch bugs (spec-level and lifted-lambda),
+  both RESOLVED 2026-07-29; the lambda case via Route B dictionary passing.
 - [result-monad-bind-typed-boundary-miscompiles.md](result-monad-bind-typed-boundary-miscompiles.md)
   -- the same carrier-vs-by-value confusion on the plain typed-boundary path.

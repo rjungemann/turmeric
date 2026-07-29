@@ -5850,7 +5850,97 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         }
     }
 
-    Expr *out = expr_new(e->arena, EX_CALL, call_result_type, call->span);
+    /* Route B (constrained-hkt-lifted-lambda-keeps-representative-instance):
+     * a DIRECT call to a constrained HIGHER-KINDED poly fn at a concrete type
+     * constructor -- `(bind-then-pure (some 41))` from an unconstrained caller.
+     * Monomorphizing this left every class-method call in the body resolved
+     * against the representative instance the elaborator baked; emit-side
+     * re-resolution repairs the body's own calls but cannot reach a lifted
+     * continuation, whose `pure` kept the representative for good.
+     *
+     * Route the call through the callee's DICT CLONE instead, passing the
+     * concrete instances' dict singletons.  Every method call in the body --
+     * receiver- or return-directed, inline or in a lifted continuation (which
+     * captures the dict in its closure env via the nested-mapper lowering) --
+     * then loads its target out of a dictionary, correct by construction with
+     * no dependence on specialization.  This is the same lowering the rank-2
+     * forall path uses.
+     *
+     * Gated to HIGHER-KINDED constraints only: kind-`*` constrained defns (the
+     * Dec/Enc/Tag family) keep monomorphization, which their by-value element
+     * specialization depends on.  Fires only when the ambient forwarding above
+     * did not already claim the call and every constraint grounds to a concrete
+     * instance; otherwise the call falls through to the existing paths. */
+    bool dict_clone_byvalue_result = false;
+    if (fwd_bound == bound_fn && fn_binding && bound_fn == fn_binding &&
+        fn_binding->fn_constraints &&
+        fn_binding->fn_constraints->n_constraints >= 1 &&
+        fn_binding->fn_constraints->n_constraints <= MAX_FN_CONSTRAINTS &&
+        fn_binding->source_fn_def && n_type_bindings > 0) {
+        const ConstraintSet *cs = fn_binding->fn_constraints;
+        TypeClassInstance *insts[MAX_FN_CONSTRAINTS];
+        uint8_t nc = cs->n_constraints;
+        bool all_hkt_concrete = true;
+        for (uint8_t ci = 0; ci < nc && all_hkt_concrete; ci++) {
+            const TypeConstraint *con = &cs->constraints[ci];
+            insts[ci] = NULL;
+            if (!con->typeclass || !con->tyvar || !con->tyvar->name) {
+                all_hkt_concrete = false; break;
+            }
+            bool is_hkt = false;
+            if (con->typeclass->type_param_kinds)
+                for (uint8_t k = 0; k < con->typeclass->n_type_params; k++)
+                    if (con->typeclass->type_param_kinds[k] != KIND_STAR) {
+                        is_hkt = true; break;
+                    }
+            if (!is_hkt) { all_hkt_concrete = false; break; }
+            uint8_t bidx = 0;
+            if (!call_find_type_binding(type_bindings, n_type_bindings,
+                                        con->tyvar->name, &bidx)) {
+                all_hkt_concrete = false; break;
+            }
+            /* The binding is the APPLIED type `(Option int)`; the instance head
+             * is the bare constructor, so walk the spine to it. */
+            Type bt = type_bindings[bidx].type;
+            while (bt.kind == TY_APP && bt.as.app.fn) bt = *bt.as.app.fn;
+            if (bt.kind == TY_TYVAR || bt.kind == TY_UNKNOWN) {
+                all_hkt_concrete = false; break;
+            }
+            insts[ci] = typeclass_env_lookup_instance(&e->typeclass_env,
+                                                      con->typeclass, &bt, 1);
+            if (!insts[ci]) { all_hkt_concrete = false; break; }
+        }
+        if (all_hkt_concrete) {
+            Binding *clone = make_dict_clone(e, fn_binding, call->span);
+            if (clone) {
+                Expr **na = (Expr **)arena_alloc(e->arena,
+                                                 (n_args + nc) * sizeof(Expr *));
+                for (uint8_t ci = 0; ci < nc; ci++) {
+                    Expr *d = expr_new(e->arena, EX_DICT, TYPE_PTR_VOID, call->span);
+                    d->as.dict_.instance = insts[ci];
+                    d->as.dict_.method_name[0] = '\0';
+                    d->as.dict_.is_ambient = false;
+                    na[ci] = d;
+                }
+                for (uint32_t k = 0; k < n_args; k++) na[nc + k] = args[k];
+                fwd_bound = clone;
+                fwd_args  = na;
+                fwd_nargs = n_args + nc;
+                /* A dict clone returns the int64 CARRIER for every result
+                 * (emit_fns.c forces that off n_dict_clone).  A by-value
+                 * aggregate result -- `(Option int)` -- must be bridged back:
+                 * type the call as the carrier and ascribe it to the aggregate
+                 * so the existing carrier->concrete ascription bridge derefs. */
+                if (call_result_type.kind == TY_APP)
+                    dict_clone_byvalue_result = true;
+            }
+        }
+    }
+
+    Expr *out = expr_new(e->arena, EX_CALL,
+                         dict_clone_byvalue_result ? type_from_kind(TY_INT)
+                                                   : call_result_type,
+                         call->span);
     out->as.call_.fn_binding = fwd_bound;
     out->as.call_.args = fwd_args;
     out->as.call_.n_args = fwd_nargs;
@@ -5863,6 +5953,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         for (uint8_t bi = 0; bi < n_type_bindings; bi++) saved[bi] = type_bindings[bi];
         out->as.call_.abi_bindings = saved;
         out->as.call_.n_abi_bindings = n_type_bindings;
+    }
+    if (dict_clone_byvalue_result) {
+        /* Bridge the dict clone's int64 carrier result back to the by-value
+         * aggregate the call site expects (see the Route B block above). */
+        Expr *asc = expr_new(e->arena, EX_ASCRIBE, call_result_type, call->span);
+        asc->as.ascribe_.inner = out;
+        return asc;
     }
     if (wrap_generic_result) {
         return call_wrap_reinterpret_owning(
@@ -5940,6 +6037,9 @@ static Expr *elab_call_fn(Elab *e, const Form *call, Binding *fn_binding) {
  * lambda (`is_lifted_lambda`), which is how a mapper argument reaches the body.
  * `depth` bounds the lifted-lambda chain so a self/mutually-recursive lifted
  * lambda cannot loop the walk. */
+static const TypeClass *call_dispatched_constraint_class(const Expr *e,
+                                                         const ConstraintSet *cs);
+
 static bool dict_clone_nested_dispatch_rec(const Expr *e,
                                            const ConstraintSet *cs,
                                            bool inside_lambda, int depth) {
@@ -5952,18 +6052,8 @@ static bool dict_clone_nested_dispatch_rec(const Expr *e,
              * bare type variable (the constraint's own var, resolved to the
              * carrier representative).  A concrete-typed receiver re-resolves
              * correctly inside a lifted lambda and must NOT be rejected. */
-            if (inside_lambda && e->as.call_.dict_arg &&
-                e->as.call_.dict_arg->kind == EX_DICT &&
-                e->as.call_.dict_arg->as.dict_.instance &&
-                e->as.call_.dict_arg->as.dict_.instance->typeclass &&
-                e->as.call_.n_args >= 1 && e->as.call_.args &&
-                e->as.call_.args[0] &&
-                e->as.call_.args[0]->type.kind == TY_TYVAR) {
-                const TypeClass *mtc =
-                    e->as.call_.dict_arg->as.dict_.instance->typeclass;
-                for (uint8_t c = 0; c < cs->n_constraints; c++)
-                    if (cs->constraints[c].typeclass == mtc) return true;
-            }
+            if (inside_lambda && call_dispatched_constraint_class(e, cs))
+                return true;
             if (e->as.call_.fn_expr && REC(e->as.call_.fn_expr)) return true;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 if (REC(e->as.call_.args[i])) return true;
@@ -6040,31 +6130,52 @@ static bool dict_clone_dispatch_in_nested_lambda(const Expr *e,
  * hoisted here.  A dispatch reached through a lambda boundary this scan cannot
  * cross (a direct-call lifted lambda) simply is not found here and falls through
  * to the TUR-E0311 guard. */
+/* Route B (constrained-hkt-lifted-lambda-keeps-representative-instance): does
+ * this call dispatch a typeclass method on the clone's constrained type
+ * variable?  Two shapes qualify:
+ *   - receiver-directed: arg 0's type is a bare TY_TYVAR (`bind`, `fmap`);
+ *   - return-directed: the method has no receiver to key on and carries the
+ *     constraint var in its RESULT -- a bare TY_TYVAR, or the head of a
+ *     `(m b)` TY_APP spine (`pure`, `empty`).
+ * Returns the dispatched class when it is one of `cs`'s constraints, else NULL.
+ * Shared by the mapper scanner, the E0311 guard, and (mirrored) the emit-side
+ * env-dict index so the three never disagree. */
+static const TypeClass *call_dispatched_constraint_class(const Expr *e,
+                                                         const ConstraintSet *cs) {
+    if (!e || e->kind != EX_CALL || !cs) return NULL;
+    if (!(e->as.call_.dict_arg && e->as.call_.dict_arg->kind == EX_DICT &&
+          e->as.call_.dict_arg->as.dict_.instance &&
+          e->as.call_.dict_arg->as.dict_.instance->typeclass))
+        return NULL;
+    bool recv_is_tyvar =
+        e->as.call_.n_args >= 1 && e->as.call_.args && e->as.call_.args[0] &&
+        e->as.call_.args[0]->type.kind == TY_TYVAR;
+    bool result_is_tyvar_headed = false;
+    {
+        const Type *h = &e->type;
+        while (h->kind == TY_APP && h->as.app.fn) h = h->as.app.fn;
+        result_is_tyvar_headed = (h->kind == TY_TYVAR);
+    }
+    if (!recv_is_tyvar && !result_is_tyvar_headed) return NULL;
+    const TypeClass *mtc = e->as.call_.dict_arg->as.dict_.instance->typeclass;
+    for (uint8_t c = 0; c < cs->n_constraints; c++)
+        if (cs->constraints[c].typeclass == mtc) return mtc;
+    return NULL;
+}
+
 static void mapper_scan_dispatch(const Expr *e, const ConstraintSet *cs,
                                  const TypeClass **out_classes, uint8_t *n_out) {
     if (!e) return;
 #define MS(x) mapper_scan_dispatch((x), cs, out_classes, n_out)
     switch (e->kind) {
         case EX_CALL: {
-            if (e->as.call_.dict_arg &&
-                e->as.call_.dict_arg->kind == EX_DICT &&
-                e->as.call_.dict_arg->as.dict_.instance &&
-                e->as.call_.dict_arg->as.dict_.instance->typeclass &&
-                e->as.call_.n_args >= 1 && e->as.call_.args &&
-                e->as.call_.args[0] &&
-                e->as.call_.args[0]->type.kind == TY_TYVAR) {
-                const TypeClass *mtc =
-                    e->as.call_.dict_arg->as.dict_.instance->typeclass;
-                bool is_constraint = false;
-                for (uint8_t c = 0; c < cs->n_constraints; c++)
-                    if (cs->constraints[c].typeclass == mtc) { is_constraint = true; break; }
-                if (is_constraint) {
-                    bool seen = false;
-                    for (uint8_t k = 0; k < *n_out; k++)
-                        if (out_classes[k] == mtc) { seen = true; break; }
-                    if (!seen && *n_out < MAX_FN_CONSTRAINTS)
-                        out_classes[(*n_out)++] = mtc;
-                }
+            const TypeClass *mtc = call_dispatched_constraint_class(e, cs);
+            if (mtc) {
+                bool seen = false;
+                for (uint8_t k = 0; k < *n_out; k++)
+                    if (out_classes[k] == mtc) { seen = true; break; }
+                if (!seen && *n_out < MAX_FN_CONSTRAINTS)
+                    out_classes[(*n_out)++] = mtc;
             }
             if (e->as.call_.fn_expr) MS(e->as.call_.fn_expr);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) MS(e->as.call_.args[i]);
