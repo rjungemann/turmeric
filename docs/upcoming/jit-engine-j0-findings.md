@@ -1176,6 +1176,16 @@ stands at:
   does not provide. Reproduced on the plain `cc` path with runtime-built keys,
   no JIT involved. Filed:
   [docs/reported/persistent-map-cstr-keys-identity-compared.md](../reported/persistent-map-cstr-keys-identity-compared.md).
+  **`self-recursive-carrier-struct-return` is also explained, in the opposite
+  direction: a genuine upstream MIR miscompilation** -- a two-word by-value
+  struct return inside an `if/else + goto-backedge` CFG (the emitted tail-loop
+  shape) comes back as `{hi, hi}`; 12-line standalone-C repro, present at
+  upstream master tip, each boundary condition verified by a one-line change.
+  Filed:
+  [docs/reported/mir-two-word-struct-return-goto-loop-miscompile.md](../reported/mir-two-word-struct-return-goto-loop-miscompile.md).
+  The two investigations landed on opposite sides of the boundary -- one
+  product bug the JIT unmasked, one engine bug the corpus caught -- which is
+  the parity sweep doing exactly what J3 intends it to do.
 
 That composition -- every failure either a recorded decision or an open report
 with ruled-out hypotheses -- is the real J0->J1 handoff condition, more than
