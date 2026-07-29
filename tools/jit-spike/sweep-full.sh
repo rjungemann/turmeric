@@ -83,8 +83,14 @@ echo "eligible: ${#eligible[@]}  mode: ${GENMODE:-lazy}"
 # parallel workers and is therefore unordered, so keep the ordering separately.
 printf '%s\n' "${eligible[@]}" > "$OUT/eligible.txt"
 
+# `nproc` is coreutils and is absent on a stock macOS; `sysctl -n hw.ncpu` is
+# the BSD spelling.  Fall back to 4 rather than to 1 -- a serial full sweep is
+# ~35 minutes and reads as a hang.
+jobs=$(command -v nproc > /dev/null && nproc \
+       || sysctl -n hw.ncpu 2> /dev/null \
+       || echo 4)
 printf '%s\n' "${eligible[@]}" \
-  | xargs -P "$(nproc)" -I{} bash -c 'run_one "$@"' _ {} >> "$OUT/results.tsv"
+  | xargs -P "$jobs" -I{} bash -c 'run_one "$@"' _ {} >> "$OUT/results.tsv"
 
 echo "--- outcome ---"
 cut -f2 "$OUT/results.tsv" | sort | uniq -c | sort -rn

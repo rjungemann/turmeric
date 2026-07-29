@@ -777,3 +777,102 @@ bash tools/jit-spike/sweep-full.sh              # 1409 / 1680 = 83.9%
 ```
 
 To recover the pre-fix 81.7% baseline, revert `cc5cf8461` and re-run.
+
+## 10. Linux-side verification of section 9
+
+Added 2026-07-28, x86-64 Linux, gcc 13.3.0, `tur` at `27b4cb399`. Section 9's
+claims that are platform-independent were re-run on the other platform; two of
+them are strengthened by it, and one of section 9's open questions closes.
+
+### 10.1 Section 9's correction of 8.4.2 is accepted
+
+9.1 is right and 8.4.2 overreached. "The gap needs no platform explanation and
+there is no evidence for one" was wrong: sampling was the dominant term, but a
+51-fixture platform delta was sitting underneath it.
+
+The specific reasoning error is worth naming, because it is subtle and easy to
+repeat. 8.4.2 verified `tur emit-c` output is byte-identical across hosts --
+that verification was correct -- and then inferred the residual could not be in
+generated code. **Identical emitted text is not host-independent behaviour: it
+is compiled against different libc headers.** Confirmed directly here:
+
+```
+/usr/include/x86_64-linux-gnu/sys/cdefs.h:493
+    #if !(__GNUC_PREREQ (2,8) || defined __clang__)
+    # define __extension__          /* Ignore */
+```
+
+c2mir does not define `__GNUC__` (probed), so on glibc the token our emitter
+produced was erased by glibc's own header before c2mir ever saw it --
+`__extension__ ({ 41+1; })` compiles and prints 42 under the spike on this box.
+Apple's `<sys/cdefs.h>` has no such fallback. 9.2's account is exact.
+
+### 10.2 The `__extension__` fix verified on Linux
+
+- `bash tests/run.sh`: **2399 passed, 0 failed** at `27b4cb399`.
+- Zero snapshot churn confirmed independently: no `tests/fixtures/*/expected.c`
+  ever contained `__extension__`, and the four snapshots that do carry `({ ... })`
+  statement-expressions still match the current emitter byte for byte.
+- The `src/turi/eval.c` half is load-bearing, not incidental: the interpreter
+  identifies these inline-C bodies by text prefix, so an emitter-only edit would
+  have silently broken session interception in `turi` while leaving the compiled
+  path green. Worth remembering that this coupling exists at all.
+
+### 10.3 CLOSED: the `dynvar-*` mismatches are `cleanup`, not TLS
+
+9.5 asks that unimplemented TLS be ruled out before S-work is scoped on the
+`__attribute__((cleanup))` hypothesis. Ruled out, on two independent grounds.
+
+**The dynvar machinery does not use TLS.** Its storage is `pthread_key_t` plus
+`pthread_getspecific`/`pthread_setspecific` (`_dynvar_key_*`, `_dynvar_root_*`).
+Grep for `__thread`/`_Thread_local` anywhere in the dynvar emission: zero hits.
+c2mir's unimplemented `_Thread_local` cannot be the mechanism for a feature that
+does not use it.
+
+**`cleanup` is confirmed dropped, in isolation.** A `pthread_setspecific`
+guarded by a `cleanup` handler, with no Turmeric involved:
+
+| | after scope exit |
+|---|---|
+| native cc | `getspecific NULL` -- handler ran |
+| MIR / c2mir | `getspecific set` -- **handler never ran** |
+
+The two observed dynvar outputs then form a complete causal chain, and each
+implicates a different dropped attribute:
+
+- constructors dropped (pre-8.4 state) => `pthread_key_create` never runs =>
+  `getspecific` returns NULL => the *root* default is read => `0 0`.
+- `cleanup` dropped (current state) => the scope-exit pop never runs => the
+  *inner* binding stays installed => `3 3`.
+
+Broken TLS would surface as the root value, i.e. the first shape. We observe
+the second. 3.1's attribution stands.
+
+9.5's general caution about `Thread local is not implemented` is still sound and
+should not be dropped -- `tur_handler_chain`, `tur_panicking`, and
+`tur_current_fiber` *are* `__thread` and do rely on it. It simply is not what
+breaks dynamic variables.
+
+### 10.4 The packing defect reproduces on x86-64, wider
+
+9.3 states the packing defect is host-independent and that macOS is merely
+louder about it. Confirmed, and the Linux divergence is larger than the arm64
+numbers in 9.3:
+
+| | gcc 13.3 (x86-64) | c2mir |
+|---|---|---|
+| `#pragma pack(4)` sizeof / offsetof | 16 / 4 | **24 / 8** |
+| unpacked control | 24 / 8 | 24 / 8 |
+| `__attribute__((packed))` | **13 / 1** | **24 / 8** |
+
+A packed struct is nearly twice its true size with every field after the first
+at the wrong offset, and on glibc nothing complains -- no `_Static_assert` ABI
+lock, no diagnostic for the attribute form. 9.3's "reject rather than mislay"
+recommendation is the right call, and this is the strongest argument in the
+document for it: the loud platform is the safe one.
+
+### 10.5 `nproc` fallback
+
+Fixed per 9.5: `sweep-full.sh` now takes `nproc`, then `sysctl -n hw.ncpu`,
+then 4. Falling back to 1 would make a full sweep ~35 minutes and read as a
+hang.
