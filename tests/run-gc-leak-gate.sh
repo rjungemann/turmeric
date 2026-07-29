@@ -172,7 +172,7 @@ for f in $PROBE_OUTPUT_FIXTURES $CONTROL_FIXTURES; do
     case " $CONTROL_FIXTURES " in *" $f "*) run_control=1 ;; *) run_control=0 ;; esac
     if [ "$run_control" = "0" ]; then
         skip "$f-collector-is-what-reclaims" \
-             "output comes from a malloc probe, which reads the same with the collector on and off under ASan"
+             "output comes from a malloc probe, which under ASan reports the sanitizer's allocator rather than the collector's work (identical on/off on glibc; quarantine-inflated on both sides on Darwin)"
     fi
     if [ "$run_control" = "1" ] && [ "$on" = "OK" ] && [ "$off" = "OK" ]; then
         if [ "$on_out" != "$off_out" ]; then

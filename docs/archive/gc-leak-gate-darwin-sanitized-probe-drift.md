@@ -22,24 +22,42 @@ measurement so nobody has to re-derive it.
 
 ### The measurement that settles which direction to take
 
-Run on Linux/glibc, this tree, `gc-collects-strong-cycle` built both ways:
+`gc-collects-strong-cycle` built both ways, on both platforms:
 
 |            | collector on | collector off |
 | ---        | ---          | ---           |
-| plain      | `0`          | `1087232`     |
-| ASan       | `0`          | `0`           |
+| Linux plain | `0`         | `1087232`     |
+| Linux ASan  | `0`         | `0`           |
+| Darwin plain | `0`        | `1058304`     |
+| Darwin ASan  | `800000`   | `996608`      |
 
 So on glibc the check the report found red on Darwin was **already not
 asserting anything on Linux**: it compared `0` against an expected `0` that the
-collector had no hand in producing. The bottom row is the whole story -- the
-probe cannot see the program's heap once ASan is underneath it, and every
+collector had no hand in producing. The ASan rows are the whole story -- the
+probe stops reporting the program's heap once ASan is underneath it, and every
 consequence follows:
 
-- the on/off control is impossible (identical output either way) -- which the
-  gate already knew, and
 - the expected-output check is vacuous on glibc and quarantine-inflated on
-  Darwin (~800000 = 160 B/iteration of ASan-quarantined frees over 5000
-  iterations, exactly as the report computed).
+  Darwin (`800000` = 160 B/iteration of ASan-quarantined frees over 5000
+  iterations, exactly as the report computed -- confirmed by direct
+  measurement on macOS, see Darwin verification below), and
+- the on/off control is not a control on either platform, though for
+  *different* reasons, which is worth stating precisely because the two look
+  alike from a Linux-only vantage point.
+
+On glibc the control is impossible because ASan replaces the allocator
+outright and both sides read `0`. On Darwin the probe reads the zone ASan
+installs, so the two sides do **not** match (`800000` vs `996608`) -- a
+Darwin-only run could be forgiven for concluding the control still
+discriminates. It does not: both numbers are dominated by quarantined frees
+rather than by retention, and their difference is an artifact of how much each
+variant happened to free, not evidence about the collector. A control whose
+signal is quarantine noise is not a weaker control, it is a different
+measurement wearing the same name.
+
+The gate's skip message was originally phrased for the glibc case ("reads the
+same with the collector on and off"), which is false on Darwin; it now names
+the platform-independent reason instead.
 
 ### Why not fix direction (2)
 
@@ -62,11 +80,26 @@ number means something.
 - `bash tests/run.sh` -- 2412 passed, 0 failed; `gc-collects-strong-cycle` still
   asserts `0` unsanitized, which is the check that was never in question.
 
-**Not verified on Darwin.** No macOS host in this session. The change is a
-harness-side skip that removes the failing comparison outright, so the reported
-`10 passed, 1 failed` becomes a pass by construction rather than by fixing a
-measurement -- but the Darwin run itself is unconfirmed. The two ASan-clean
-checks for this fixture are untouched and were already green there.
+### Darwin verification (2026-07-29)
+
+Confirmed on macOS (Darwin 27, AppleClang 21, Debug `tur` with
+`TUR_DEBUG_SANITIZE=ON`):
+
+- `bash tests/run-gc-leak-gate.sh` -- **14 passed, 2 skipped, 0 failed**,
+  matching Linux exactly. The previously-red
+  `gc-collects-strong-cycle-collector-on-output-matches` is now a printed SKIP,
+  not a silent absence.
+- `bash tests/run.sh` -- **2412 passed, 0 failed**, also matching Linux. The
+  unsanitized `0` assertion is intact, so the fix removed the meaningless
+  comparison without weakening the meaningful one.
+- The `800000` figure was reproduced directly (sanitized build prints `800000`,
+  plain build prints `0`), confirming the report's 160 B/iteration quarantine
+  arithmetic rather than taking it on inference.
+
+The earlier "not verified on Darwin" caveat is discharged. The one thing the
+Darwin run changed was the *reasoning*, not the outcome: it showed the gate's
+skip message for the on/off control was Linux-specific and false on macOS. See
+the measurement table above.
 
 ---
 
