@@ -632,6 +632,23 @@ body.split-dragging * {
     50% { opacity: 0.4; }
 }
 
+/* Analysis indicator. The footer is a two-item flex row (WASM status | cursor
+ * position), so this sits in the middle and is pushed away from both. */
+.lsp-status {
+    margin-left: auto;
+    margin-right: var(--spacing-md);
+    color: var(--text-dim);
+}
+
+/* `display: flex` on .status-indicator is a class rule and beats the user
+ * agent's `[hidden] { display: none }`, so the attribute alone does not hide
+ * this -- the indicator stayed on screen for every visitor whose language
+ * server never booted, which is the one case it is supposed to say nothing
+ * about. */
+.lsp-status[hidden] {
+    display: none;
+}
+
 .cursor-position {
     color: var(--text-dim);
     font-size: 11px;

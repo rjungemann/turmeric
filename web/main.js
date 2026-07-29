@@ -4,6 +4,7 @@
  */
 
 import { TUTORIAL_STEPS } from './tutorials.js';
+import { createLspClient } from './lsp-client.js';
 
 // ============================================================================
 // WASM Module State
@@ -28,6 +29,7 @@ let isExecuting = false;
 let replHistory = [];
 let replHistoryIndex = -1;
 let currentLangMode = 'turmeric'; // tracks active #lang mode
+let lspClient = null;            // language server adapter; booted lazily
 
 // ============================================================================
 // Configuration
@@ -289,6 +291,7 @@ function createTab({ name, content = '', activate = true } = {}) {
     if (activate) switchTab(tab.id);
     else renderTabs();
     persistTabs();
+    notifyTabsChanged();
     return tab;
 }
 
@@ -313,6 +316,7 @@ function closeTab(id) {
     renderTabs();
     persistTabs();
     persistActiveId();
+    notifyTabsChanged();
 }
 
 function sanitizeTabName(raw) {
@@ -342,6 +346,118 @@ function renameTab(id, rawName) {
     tab.name = final;
     renderTabs();
     persistTabs();
+    // A rename changes the document uri, so the server has to be told: the
+    // client closes the old one and opens the new.
+    notifyTabsChanged();
+}
+
+// ============================================================================
+// Language server (try-turmeric-lsp-plan)
+// ============================================================================
+
+/**
+ * Every tab is an open document as far as the server is concerned -- which is
+ * what makes workspace/symbol and cross-tab go-to-definition work here without
+ * the filesystem crawl a native client would need. That requires a Monaco
+ * model per tab, including tabs the user has not activated yet; models are
+ * otherwise created lazily on first switch.
+ */
+function ensureAllTabModels() {
+    for (const tab of tabs) ensureModel(tab);
+}
+
+/**
+ * Tell the server the tab set moved. Driven from the mutation sites rather
+ * than by polling, but the client re-derives the whole open set from `tabs`
+ * each time, so a missed call costs one stale moment rather than a permanently
+ * desynchronised server.
+ */
+function notifyTabsChanged() {
+    if (!lspClient || !lspClient.isAvailable()) return;
+    ensureAllTabModels();
+    lspClient.sync();
+}
+
+function setLspStatus(state) {
+    const wrap = document.getElementById('lsp-status');
+    const dot = document.getElementById('lsp-status-dot');
+    const text = document.getElementById('lsp-status-text');
+    if (!wrap || !dot || !text) return;
+
+    if (state === 'unavailable') {
+        // Nothing to say. The playground worked without analysis for its whole
+        // life and still does; a permanent red dot would read as a fault.
+        wrap.hidden = true;
+        return;
+    }
+    wrap.hidden = false;
+    if (state === 'booting') {
+        dot.className = 'dot loading';
+        text.textContent = 'Starting analysis...';
+    } else if (state === 'analyzing') {
+        dot.className = 'dot loading';
+        text.textContent = 'Analyzing...';
+    } else {
+        dot.className = 'dot online';
+        text.textContent = 'Analysis ready';
+    }
+}
+
+/**
+ * Boot the language server.
+ *
+ * Lazy on purpose: this is a second WASM instance, which roughly doubles the
+ * playground's wasm memory. It is the same /turmeric.js URL so it is a cache
+ * hit rather than a second download, but the memory is real -- and a visitor
+ * who lands on the page to read a snippet should not pay for an analysis they
+ * never asked a question of. First editor focus is the signal that they are
+ * going to.
+ */
+function startLspClient() {
+    if (lspClient) return lspClient.start();
+
+    lspClient = createLspClient({
+        monaco,
+        languageId: 'turmeric',
+        getTabs: () => tabs,
+        onStatus: setLspStatus,
+        onNavigate: (tab, range) => {
+            // Monaco's standalone editor cannot switch models on its own, so a
+            // definition in another tab is a tab switch we perform.
+            switchTab(tab.id);
+            try {
+                editor.revealRangeInCenterIfOutsideViewport(range);
+                editor.setPosition({
+                    lineNumber: range.startLineNumber,
+                    column: range.startColumn,
+                });
+            } catch {}
+        },
+    });
+
+    // Test surface: lets a spec await the server instead of sleeping on it.
+    window._turiLsp = {
+        ready: lspClient.start(),
+        isAvailable: () => lspClient.isAvailable(),
+        isBusy: () => lspClient.isBusy(),
+        openDocuments: () => lspClient._openDocumentCount(),
+        sync: () => notifyTabsChanged(),
+        // Monaco is a module-scoped import, not a global, so a spec has no
+        // other way to read the markers the adapter set.
+        markers: () => monaco.editor.getModelMarkers({ owner: 'turmeric' })
+            .map(m => ({
+                message: m.message,
+                severity: m.severity,
+                startLineNumber: m.startLineNumber,
+                startColumn: m.startColumn,
+                endColumn: m.endColumn,
+            })),
+    };
+
+    return lspClient.start().then((ok) => {
+        if (ok) notifyTabsChanged();
+        return ok;
+    });
 }
 
 function renderTabs() {
@@ -1404,6 +1520,14 @@ async function initEditor() {
         }
     });
     
+    // Boot the language server the first time the user puts a cursor in the
+    // editor. Reading code costs nothing; asking the editor a question is what
+    // pays for the second WASM instance.
+    const bootLsp = editor.onDidFocusEditorText(() => {
+        bootLsp.dispose();
+        startLspClient();
+    });
+
     // Initialize cursor position display
     updateCursorPosition();
     
@@ -1889,6 +2013,13 @@ function applyProjectLoad(parsed) {
     renderTabs();
     safeWrite(STORAGE_KEYS.tabs, tabsSnapshot());
     safeWrite(STORAGE_KEYS.activeTab, activeId);
+    // A wholesale replacement, not an edit. Re-opening the new tabs into a
+    // session that still holds the old project's documents would leave
+    // workspace/symbol answering with names from a workspace the user closed.
+    if (lspClient && lspClient.isAvailable()) {
+        ensureAllTabModels();
+        lspClient.resetWorkspace();
+    }
     showStatus(`Loaded ${tabs.length} tab${tabs.length === 1 ? '' : 's'}`, 'success');
 }
 
