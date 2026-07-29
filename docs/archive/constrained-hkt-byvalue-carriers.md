@@ -1,20 +1,27 @@
 ---
-status: open
+status: RESOLVED (2026-07-29) -- carrier ABI + seam 1 fixed; seam 2 extracted to its own report
 severity: medium
 discovered: 2026-07-29
 area: compiler (constrained HKT dispatch / poly carrier)
 ---
 
-# Constrained HKT polymorphism: by-value carriers, remaining seams
+# Constrained HKT polymorphism: by-value carriers
 
 ## Summary
 
 A constrained kind-polymorphic function (`[^m] [^Monad m x : (m int)]`) is
 compiled once and dispatches through a dictionary the caller resolves. The
-carrier ABI for **by-value** type constructors (stdlib `Option`, `Result` --
-real structs, not int-carrier `defopaque`s) is now correct for the
-dictionary-passed path.  Seam 1 below was resolved by Route B (2026-07-29);
-one seam remains: `Result` cannot fill a unary `(m int)` (seam 2).
+carrier ABI for **by-value** type constructors (real structs, not int-carrier
+`defopaque`s) is correct end to end: the return-ABI mismatch was fixed by the
+carrier-spill shim (below), and seam 1 -- the wider-container spec-return
+failure -- was resolved by Route B, which routes direct calls through the dict
+clone and off the broken monomorphized-spec return path entirely (fixture:
+`hkt-constrained-wide-byvalue-carrier`).
+
+The one remaining gap -- `Result`'s binary head cannot fill a unary `(m int)`
+(formerly seam 2) -- is an expressiveness limit in call-site unification, not a
+carrier fault, and now has its own report:
+[../reported/constrained-hkt-binary-ctor-cannot-fill-unary-var.md](../reported/constrained-hkt-binary-ctor-cannot-fill-unary-var.md).
 
 > **Fixed 2026-07-29:** the continuation handed to a dict-dispatched method was
 > a struct-returning thunk cast to an int64-returning function pointer -- an
@@ -25,10 +32,10 @@ one seam remains: `Result` cannot fill a unary `(m int)` (seam 2).
 > Fixtures: `hkt-constrained-byvalue-carrier`,
 > `hkt-constrained-byvalue-bind-pure`.
 
-## Seam 1 -- monomorphized spec return is not unboxed
+## Seam 1 -- monomorphized spec return is not unboxed (RESOLVED by Route B)
 
-A *wider* by-value container fails to compile: the spec declares the aggregate
-return but its body yields the int64 carrier.
+A *wider* by-value container failed to compile: the spec declared the aggregate
+return but its body yielded the int64 carrier.
 
     $ cat > /tmp/p.tur <<'EOF'
     (defstruct Pad2 [A] (a :int) (b :int) (val A))
@@ -54,18 +61,10 @@ carrier-returning method call needs `emit_agg_unbox` at the return. That ladder
 has ~6 tuned branches referencing several plans, so it wants its own focused
 pass rather than a tail-end addition.
 
-## Seam 2 -- `Result` cannot fill a unary `(m int)`
+## Seam 2 -- `Result` cannot fill a unary `(m int)` (EXTRACTED)
 
-    (defn poly-bind [^m] [^Monad m x : (m int)] : (m int) ...)
-    (poly-bind (ok-int 4))
-    error [TUR-E0001]: expected (type-app tyvar 'm' int),
-                       got (type-app (type-app Result int) cstr)
-
-`Result` is binary, so filling `m` needs the partially-applied head
-`(Result _ cstr)` -- the same shape `definstance Monad [(Result _ B)]` already
-uses. Type-constructor *application* accepts it; unification against a unary
-`(m int)` does not. Until that lands, only unary constructors can instantiate a
-constrained poly fn.
+Moved to its own open report:
+[../reported/constrained-hkt-binary-ctor-cannot-fill-unary-var.md](../reported/constrained-hkt-binary-ctor-cannot-fill-unary-var.md).
 
 ## Related
 

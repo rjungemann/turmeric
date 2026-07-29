@@ -74,7 +74,8 @@ Suite: 2403 passed, 0 failed (2401 before, plus the two new fixtures).
 ## Still open
 
 - Monomorphized spec return for a *wider* by-value container --
-  [../../reported/constrained-hkt-byvalue-carriers.md](../../reported/constrained-hkt-byvalue-carriers.md), seam 1.
+  [../constrained-hkt-byvalue-carriers.md](../constrained-hkt-byvalue-carriers.md), seam 1
+  (since RESOLVED by Route B).
 - `Result`'s binary head cannot fill a unary `(m int)` -- same report, seam 2.
 - A lifted continuation keeps the representative instance -- RESOLVED same day
   via Route B, see

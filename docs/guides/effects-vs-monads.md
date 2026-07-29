@@ -549,21 +549,21 @@ picked, so a full `bind`-then-`pure` combinator is expressible:
 
 Several constraints on one type constructor are fine, as above.
 
-**What does not work yet**, and why you will still mostly write concrete monads:
+Both constraint spellings work -- the in-parameter `^Monad m` form and the
+middle vector `[(Monad m) (Applicative m)]` -- and both by-value containers
+(the stdlib `Option`) and int-carrier `defopaque`s can fill `m`.
 
-- **Only unary constructors.** `Option` works as the abstract `m`; `Result`
-  does not, because filling `m` needs the partially-applied head
-  `(Result _ cstr)` and unification against a unary `(m int)` does not accept
-  it. A wider by-value container than `Option` can also fail to compile.
-- **The middle-vector spelling.** `(defn f [^m] [(Monad m)] [ma : (m int)] ...)`
-  elaborates and monomorphizes but miscompiles; use the in-parameter `^Monad m`
-  form above.
+**The one remaining limit: only unary constructors.** `Result` cannot fill a
+unary `(m int)` -- that needs the partially-applied head `(Result _ cstr)`
+(the shape its own `Monad [(Result _ B)]` instance head already uses), and
+call-site unification does not yet produce hole-headed bindings. See
+`docs/reported/constrained-hkt-binary-ctor-cannot-fill-unary-var.md`.
 
-**In practice**, pick the monad per call site: write the combinator once per
-monad, or write it in effect style, where handler choice *is* the polymorphism.
-That is usually the better trade anyway -- the code that wants `Monad m =>` in
-Haskell is largely the code that becomes an effect here. See
-`docs/reported/constrained-hkt-byvalue-carriers.md` for the remaining gaps.
+**In practice** you will still often write concrete monads or effect-style code
+-- handler choice *is* the polymorphism there, and the code that wants
+`Monad m =>` in Haskell is largely the code that becomes an effect here. But the
+abstraction is real now: one compiled body, caller-chosen instance, `bind` and
+`pure` alike, including inside lifted continuations.
 
 ### Return-position dispatch needs an expected type
 
