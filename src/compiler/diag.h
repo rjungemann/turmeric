@@ -100,6 +100,9 @@ typedef enum DiagCode {
     /* IT1: Union type errors (-Xunion-types) */
     TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
     TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
+    /* sealed-opaque experiment: `::` between a `:sealed` defopaque and its
+     * representation type, outside the module that declared it. */
+    TUR_E0302_SEALED_OPAQUE_CAST,
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */

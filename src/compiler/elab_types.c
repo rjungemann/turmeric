@@ -2720,6 +2720,56 @@ static bool ascribe_type_is_word_carrier(const Type *t) {
     return t && (t->kind == TY_INT || t->kind == TY_PTR_VOID);
 }
 
+/* sealed-opaque: the AdtDef behind a `:sealed` defopaque, or NULL.  Descends a
+ * parameterised head so a phantom-parameterised sealed opaque `(H A)` is caught
+ * as well as a bare `H`. */
+static const AdtDef *ascribe_sealed_opaque_def(const Type *t) {
+    if (!t) return NULL;
+    /* A TY_APP spine is left-nested -- `(H A B)` is app(app(H, A), B) -- so walk
+     * down to the head rather than unwrapping one level. */
+    while (t->kind == TY_APP && t->as.app.fn) t = t->as.app.fn;
+    if (t->kind != TY_ADT) return NULL;
+    const AdtDef *def = t->as.adt_.def;
+    return (def && def->is_opaque && def->sealed) ? def : NULL;
+}
+
+/* Reject a `::` that crosses a sealed opaque's representation boundary from
+ * outside the module that declared it.  Returns true if a diagnostic was
+ * emitted.  See docs/upcoming/sealed-opaque-plan.md.
+ *
+ * The rule is "exactly one side is this sealed type": an identity relabel
+ * (`(:: w H)` where w is already an H) crosses nothing and stays legal, while
+ * both the unwrap (`(:: w :int)`) and the fabricate (`(:: n H)`) directions are
+ * refused.  Sealing BOTH directions is what makes the representation private
+ * rather than merely hard to rebuild -- see the plan's "why both directions". */
+static bool ascribe_check_sealed(Elab *e, const Form *call,
+                                 const Type *from, const Type *to) {
+    if (!g_opt_sealed_opaque) return false;   /* experiment off: parses, imposes nothing */
+
+    const AdtDef *sf = ascribe_sealed_opaque_def(from);
+    const AdtDef *st = ascribe_sealed_opaque_def(to);
+    if (sf == st) return false;               /* both sides same sealed def, or neither */
+
+    const AdtDef *sealed_def = sf ? sf : st;
+    /* A moduleless top level has no module identity to compare, so nothing is
+     * "outside" it -- single-file programs are exactly where sealing has the
+     * least to offer, and erroring there would be noise.  Documented as a known
+     * limitation in the plan. */
+    if (!sealed_def->sealed_module) return false;
+    if (e->current_module_name == sealed_def->sealed_module) return false;
+
+    diag_emit_with_code(
+        DIAG_ERROR, call->span, TUR_E0302_SEALED_OPAQUE_CAST,
+        "cannot %s sealed opaque '%s' %s its representation -- '%s' is sealed to "
+        "module '%s', so `::` may not cross that boundary here",
+        sf ? "unwrap" : "fabricate",
+        sealed_def->name ? sealed_def->name : "<opaque>",
+        sf ? "to" : "from",
+        sealed_def->name ? sealed_def->name : "<opaque>",
+        sealed_def->sealed_module->name);
+    return true;
+}
+
 Expr *elab_ascribe(Elab *e, const Form *call) {
     if (call->as.list.len != 3) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2775,6 +2825,13 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     if (ascribed->kind == TY_ANY && inner->type.kind != TY_ANY) {
         return elab_coerce_to_any(e, inner);
     }
+
+    /* sealed-opaque: refuse to cross a sealed opaque's representation boundary
+     * from outside its declaring module.  Placed before the remaining coercion
+     * rules because it is a visibility question, not a representation one --
+     * whether the cast would LOWER soundly is beside the point if the caller is
+     * not allowed to express it. */
+    if (ascribe_check_sealed(e, call, &inner->type, ascribed)) return NULL;
 
     /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
      * an ADT constructor call whose own type is left bare/under-applied.  A

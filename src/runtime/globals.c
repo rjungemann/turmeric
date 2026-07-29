@@ -249,6 +249,14 @@ bool g_opt_cycle_gc = false;
  * prototype and ships behind --enable=refined / `#lang turmeric refined`. */
 bool g_opt_refined = false;
 
+/* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `(defopaque H :int
+ * :sealed)` makes `::` refuse to convert between H and its representation type
+ * outside the module that declared H, closing the extract-reconstruct aliasing
+ * hole that bounds every guarantee built on an opaque handle.  Off by default;
+ * when off, `:sealed` still PARSES but imposes nothing, so a spice can adopt it
+ * without breaking consumers who have not enabled the experiment. */
+bool g_opt_sealed_opaque = false;
+
 /* --strict-refine: hard-fail on any obligation the chain could not prove. */
 bool g_strict_refine = false;
 

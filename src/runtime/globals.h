@@ -231,6 +231,12 @@ extern bool g_opt_cycle_gc;
  * parse and stay runtime-only and the discharge pass never runs. */
 extern bool g_opt_refined;
 
+/* sealed-opaque: gates the `:sealed` defopaque attribute's ENFORCEMENT.  When
+ * off, `:sealed` parses and is recorded but the `::` check never fires, so
+ * adopting it downstream is not a breaking change for consumers who have not
+ * enabled the experiment.  See docs/upcoming/sealed-opaque-plan.md. */
+extern bool g_opt_sealed_opaque;
+
 /* lang-layers L4: true once a project manifest declared an `:experiments`
  * key (even the empty list), i.e. the project owner scoped the experiment set.
  * A `#lang <base> <semantic-layer>` file whose backing experiment is absent
