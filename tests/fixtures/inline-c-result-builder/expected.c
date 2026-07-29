@@ -494,7 +494,12 @@ typedef struct STM_State {
 } STM_State;
 static STM_State __stm_state;
 static pthread_once_t __stm_once = PTHREAD_ONCE_INIT;
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;
+#else
+extern void ** tur_tls_stm_current_tx_ptr(void);
+#define __stm_current_tx (*(STM_Transaction **)tur_tls_stm_current_tx_ptr())
+#endif
 STM_Transaction *tur_stm_current_tx(void) { return __stm_current_tx; }
 void tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }
 static void __stm_do_init(void) {
@@ -777,8 +782,18 @@ static void tur_panic_print_scope_chain(void) {
 
 typedef struct tur_panic_payload tur_panic_payload;
 typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain = NULL;
+#else
+extern void ** tur_tls_handler_chain_ptr(void);
+#define tur_handler_chain (*(tur_handler_node **)tur_tls_handler_chain_ptr())
+#endif
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL int tur_panicking = 0;
+#else
+extern int * tur_tls_panicking_ptr(void);
+#define tur_panicking (*tur_tls_panicking_ptr())
+#endif
 #define TUR_SC_MAXP 8
 #define TUR_SC_MAXN 32
 typedef struct tur_cont { int tag; tur_handler_node *boundary; struct tur_cont *next; int64_t saved[TUR_SC_MAXN]; uint32_t aggr_mask; } tur_cont;
@@ -1385,7 +1400,12 @@ struct FiberBlock {
     bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */
 };
 
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;
+#else
+extern void ** tur_tls_current_fiber_ptr(void);
+#define tur_current_fiber (*(FiberBlock **)tur_tls_current_fiber_ptr())
+#endif
 static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
@@ -1406,8 +1426,13 @@ static void tur_panic_with(int type_tag, void *payload, const char *file, int li
     abort();
 }
 
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;
 
+#else
+extern bool * tur_tls_fiber_cancelled_flag_ptr(void);
+#define tur_fiber_cancelled_flag (*tur_tls_fiber_cancelled_flag_ptr())
+#endif
 static void tur_task_group_notify_done(void *task_group);
 static void tur_fiber_set_cancelled(bool c);
 
@@ -1430,11 +1455,26 @@ typedef struct {
 } TurThreadSpawnArg;
 
 /* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;
+#else
+extern void ** tur_tls_current_thread_state_ptr(void);
+#define tur_current_thread_state (*(TurThreadState **)tur_tls_current_thread_state_ptr())
+#endif
 /* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;
+#else
+extern jmp_buf * tur_tls_cancel_jmpbuf_ptr(void);
+#define tur_cancel_jmpbuf (*tur_tls_cancel_jmpbuf_ptr())
+#endif
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;
 
+#else
+extern int * tur_tls_cancel_jmpbuf_valid_ptr(void);
+#define tur_cancel_jmpbuf_valid (*tur_tls_cancel_jmpbuf_valid_ptr())
+#endif
 static void *tur_thread_trampoline(void *raw) {
     TurThreadSpawnArg *a = (TurThreadSpawnArg *)raw;
     tur_current_thread_state = a->state;
@@ -1999,8 +2039,13 @@ typedef struct TurSchedulerMT {
     int              active;
 } TurSchedulerMT;
 
+#if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt = NULL;
 
+#else
+extern void ** tur_tls_current_scheduler_mt_ptr(void);
+#define tur_current_scheduler_mt (*(TurSchedulerMT **)tur_tls_current_scheduler_mt_ptr())
+#endif
 static void tur_scheduler_mt_enqueue_locked(TurSchedulerMT *s, FiberBlock *f) {
     if (((s->qtail + 1) % s->qcap) == s->qhead) {
         size_t ncap = s->qcap * 2;
@@ -3349,7 +3394,12 @@ static void *tur_session_thread_wrapper(void *arg) {
     thunk(arg);
     return NULL;
 }
+#if defined(__GNUC__) || defined(__clang__)
 static _Thread_local int64_t tur__rtv_ = 0;
+#else
+extern int64_t * tur_tls_rtv_ptr(void);
+#define tur__rtv_ (*tur_tls_rtv_ptr())
+#endif
 static int64_t tur_session_recv_timeout(TurChannel *ch, int64_t ms) {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);

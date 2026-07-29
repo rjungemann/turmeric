@@ -16,18 +16,32 @@
 # whole subject matter, so a floating dependency would silently change the
 # result being measured.
 # The pin points at the rjungemann/mir fork: upstream a8ab7c31 (master tip and
-# full history mirrored there) plus one fix, b79e3681 -- make_one_ret merged
-# multi-value rets through the LAST ret's operand list, which aliases when
-# simplify canonicalizes a trailing `ret 0, 0` to `ret t, t`, returning
-# { second-word, second-word } for a two-word struct.  That CFG is exactly the
-# emitted tail-loop for a self-recursive carrier-struct function, so the spike
-# needs the fix (docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md).
-# Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands an
-# equivalent.
+# full history mirrored there) plus two fixes on fix/make-one-ret-distinct-targets:
+#   b79e3681 -- make_one_ret merged multi-value rets through the LAST ret's
+#     operand list, which aliases when simplify canonicalizes a trailing
+#     `ret 0, 0` to `ret t, t`, returning { second-word, second-word } for a
+#     two-word struct -- exactly the emitted tail-loop for a self-recursive
+#     carrier-struct function
+#     (docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md).
+#   41ff4d94 -- try_spilled_reg_mem overran its 2-entry op_nums[] when one
+#     insn used the same spilled register in three operand positions
+#     (`mul r,r,r` from coalesced `r = r * r`), smashing rewrite_insn's frame
+#     (jit-engine-j0-findings.md section 15).
+# Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
+# equivalents.
+# CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
+# already in an existing build directory's CMakeCache.txt.  Editing the pin
+# here changes what a FRESH configure fetches; an existing build dir keeps
+# fetching its old pin silently -- even after `rm -rf <dir>/_deps`, which
+# re-clones from the CACHED repo/tag, not from this file.  After repointing,
+# either configure with -DTUR_MIR_GIT_REPOSITORY=... -DTUR_MIR_GIT_TAG=... or
+# use a fresh build dir, and VERIFY with `git -C <dir>/_deps/mir-src log`.
+# (This nearly shipped a spike binary built from unpatched upstream once:
+# the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
-    CACHE STRING "MIR repository for the JIT spike (fork carrying the ret fix)")
-set(TUR_MIR_GIT_TAG "b79e368134f22a0008576e1e02785a752f4cf756"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + fix/make-one-ret-distinct-targets")
+    CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
+set(TUR_MIR_GIT_TAG "41ff4d9464b88ab05c1920a52c4622d0ca0c1e58"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret fix + try_spilled_reg_mem fix")
 
 include(FetchContent)
 

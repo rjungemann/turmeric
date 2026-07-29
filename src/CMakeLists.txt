@@ -244,6 +244,9 @@ set(TUR_CORE_SOURCES
     # 6(a): atomics for front ends without the GCC builtins (the JIT). Host-side
     # by design -- see the file header and jit-engine-j0-findings.md 14.
     runtime/tur_atomics.c
+    # TLS1: thread-local runtime state for front ends without TLS (the JIT).
+    # Same host-residency pattern; see the file header and findings 15.
+    runtime/tur_tls.c
     # SYM5: the interned-symbol registrar an emitted program calls from its
     # static init.  Dual-listed in TURT_RUNTIME_SOURCES like every other
     # runtime TU here; it was the one member of that list missing from this
@@ -494,6 +497,7 @@ set(TURT_RUNTIME_SOURCES
     runtime/hamt.c
     runtime/symbols.c
     runtime/tur_atomics.c
+    runtime/tur_tls.c
     runtime/tur_string.c
     runtime/rc.c
     runtime/gc.c

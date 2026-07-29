@@ -6442,6 +6442,46 @@ static void emit_rt_global(Buf *out, bool shared,
                owner_body, extern_decl);
 }
 
+/* TLS1 (jit-engine-plan, findings 14.3): a THREAD-LOCAL runtime global.
+ *
+ * Under a GNU-family compiler this is exactly emit_rt_global -- the `cc` path
+ * keeps the plain `TUR_THREAD_LOCAL` variable it always had, at zero cost.
+ *
+ * Under any other front end the variable is not declared at all.  c2mir
+ * accepts `_Thread_local`, warns "Thread local is not implemented", and then
+ * treats the variable as an ordinary global -- so every spawned thread shares
+ * one slot, which is how 8 STM workers ended up sharing one transaction
+ * descriptor and losing updates (stm-stress).  Multi-threading under the JIT
+ * is a requirement (owner decision, 2026-07-29), so instead of documenting the
+ * gap, the name is #defined to a deref of a host-runtime accessor: the host is
+ * compiled by a real cc, holds a genuine `__thread` slot per variable
+ * (src/runtime/tur_tls.c), and hands back the calling thread's instance by
+ * address -- the same host-residency pattern as tur_atomics.c, applied to
+ * state instead of operations.
+ *
+ * An object-like macro rewrites every use site in the preamble text with no
+ * per-site emitter change; verified against all 1,928 emitted TUs that none
+ * of these names ever appears as a struct member (findings 15).  Slots are
+ * stored as void* / int / bool / int64_t / jmp_buf in the host, so the host needs no
+ * knowledge of preamble-private struct types; pointer-typed slots get the
+ * type back via `cast` here (NULL for a slot whose host type is already
+ * exact).  Shared mode takes the same #else branch -- accessors are
+ * process-global, which collapses the per-TU-static-TLS split for free. */
+static void emit_rt_tls(Buf *out, bool shared,
+                        const char *owner_body, const char *extern_decl,
+                        const char *name, const char *accessor_ret,
+                        const char *accessor, const char *cast) {
+    buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+    emit_rt_global(out, shared, owner_body, extern_decl);
+    buf_puts(out, "#else\n");
+    buf_printf(out, "extern %s %s(void);\n", accessor_ret, accessor);
+    if (cast)
+        buf_printf(out, "#define %s (*(%s)%s())\n", name, cast, accessor);
+    else
+        buf_printf(out, "#define %s (*%s())\n", name, accessor);
+    buf_puts(out, "#endif\n");
+}
+
 /* ---------------------------------------------------------------------------
  * DEDUP-4b: the rc<T>/GC runtime comes from the archive.
  *
@@ -7545,7 +7585,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "} STM_State;\n");
     emit_rt_global(out, shared, "STM_State __stm_state;\n", "STM_State __stm_state");
     emit_rt_global(out, shared, "pthread_once_t __stm_once = PTHREAD_ONCE_INIT;\n", "pthread_once_t __stm_once");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;\n", "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;\n", "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx",
+                "__stm_current_tx", "void **", "tur_tls_stm_current_tx_ptr", "STM_Transaction **");
     buf_printf(out, "%sSTM_Transaction *tur_stm_current_tx(void) { return __stm_current_tx; }\n", rt_fn);
     buf_printf(out, "%svoid tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }\n", rt_fn);
     /* Lazy, once-only state initialization (no generated-main wiring needed). */
@@ -7868,11 +7909,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * note in the plan.  The transport stays setjmp/longjmp; the chain is purely
      * the handler-discovery structure the plan's D1 calls for. */
     buf_puts(out, "typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;\n");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain = NULL;\n", "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain = NULL;\n", "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain",
+                "tur_handler_chain", "void **", "tur_tls_handler_chain_ptr", "tur_handler_node **");
     /* Panic-return signal: thread-local propagation flag.  Set by panic,
      * checked after every panic-capable call site, consumed by catch-unwind.
      * Always-on since the panic-return-signal experiment graduated. */
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL int tur_panicking = 0;\n", "TUR_THREAD_LOCAL int tur_panicking");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_panicking = 0;\n", "TUR_THREAD_LOCAL int tur_panicking",
+                "tur_panicking", "int *", "tur_tls_panicking_ptr", NULL);
     /* Heap continuation node used by the general catch-unwind segment-splitter
      * trampoline (always-on since stackless-catch-unwind graduated).  `tag`
      * names the resume segment (0 = DONE / function return), `saved[]` (up to
@@ -8271,7 +8314,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
-        emit_rt_global(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset");
+        emit_rt_tls(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset",
+                "tur_cur_shift_reset", "void **", "tur_tls_cur_shift_reset_ptr", "tur_shift_reset_ctx **");
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope.  A
@@ -8335,7 +8379,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber",
+                "tur_current_fiber", "void **", "tur_tls_current_fiber_ptr", "FiberBlock **");
     /* Phase R2: tur_panic_with body — placed here so FiberBlock and
      * tur_current_fiber are in scope for the per-fiber panic check. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
@@ -8372,7 +8417,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;\n\n", "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;\n\n", "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag",
+                "tur_fiber_cancelled_flag", "bool *", "tur_tls_fiber_cancelled_flag_ptr", NULL);
     /* Phase T22: TaskGroup notification forward declaration */
     buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n");
     /* Forward-declare tur_fiber_set_cancelled before tur_fiber_shim uses it */
@@ -8394,10 +8440,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    TurThreadState *state;\n");
     buf_puts(out, "} TurThreadSpawnArg;\n\n");
     buf_puts(out, "/* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */\n");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;\n", "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;\n", "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state",
+                "tur_current_thread_state", "void **", "tur_tls_current_thread_state_ptr", "TurThreadState **");
     buf_puts(out, "/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */\n");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;\n\n", "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf",
+                "tur_cancel_jmpbuf", "jmp_buf *", "tur_tls_cancel_jmpbuf_ptr", NULL);
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;\n\n", "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid",
+                "tur_cancel_jmpbuf_valid", "int *", "tur_tls_cancel_jmpbuf_valid_ptr", NULL);
     buf_puts(out, "static void *tur_thread_trampoline(void *raw) {\n");
     buf_puts(out, "    TurThreadSpawnArg *a = (TurThreadSpawnArg *)raw;\n");
     buf_puts(out, "    tur_current_thread_state = a->state;\n");
@@ -8981,7 +9030,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    bool             running;\n");
     buf_puts(out, "    int              active;\n");
     buf_puts(out, "} TurSchedulerMT;\n\n");
-    emit_rt_global(out, shared, "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt = NULL;\n\n", "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt");
+    emit_rt_tls(out, shared, "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt = NULL;\n\n", "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt",
+                "tur_current_scheduler_mt", "void **", "tur_tls_current_scheduler_mt_ptr", "TurSchedulerMT **");
     buf_puts(out, "static void tur_scheduler_mt_enqueue_locked(TurSchedulerMT *s, FiberBlock *f) {\n");
     buf_puts(out, "    if (((s->qtail + 1) % s->qcap) == s->qhead) {\n");
     buf_puts(out, "        size_t ncap = s->qcap * 2;\n");
@@ -10560,7 +10610,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n");
     /* SS3c: thread-local storage for recv-timeout value. */
-    emit_rt_global(out, shared, "_Thread_local int64_t tur__rtv_ = 0;\n", "_Thread_local int64_t tur__rtv_");
+    emit_rt_tls(out, shared, "_Thread_local int64_t tur__rtv_ = 0;\n", "_Thread_local int64_t tur__rtv_",
+                "tur__rtv_", "int64_t *", "tur_tls_rtv_ptr", NULL);
     buf_puts(out, "static int64_t tur_session_recv_timeout(TurChannel *ch, int64_t ms) {\n");
     buf_puts(out, "    struct timespec ts;\n");
     buf_puts(out, "    clock_gettime(CLOCK_REALTIME, &ts);\n");
