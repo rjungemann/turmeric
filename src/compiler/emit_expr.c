@@ -7938,6 +7938,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_puts(body, "{\n");
             ctx->indent += 4;
+            /* S1b/cleanup: the guard pointers, kept alive so the scope-exit pop
+             * can also be emitted EXPLICITLY after the body.  c2mir discards
+             * __attribute__((cleanup)) with no diagnostic (findings 3.1), so
+             * relying on it alone left every dynamic binding un-popped under
+             * the JIT -- `dynvar-nested` printed `3 3` for `3 1`.  The pop is
+             * idempotent, so the attribute still covers the exits this cannot
+             * see (a `return` or `goto` out of the block) on the cc path. */
+            char **guard_ptrs = n_pairs ? (char **)calloc(n_pairs, sizeof(char *)) : NULL;
+            char **guard_vars = n_pairs ? (char **)calloc(n_pairs, sizeof(char *)) : NULL;
             for (uint32_t pi = 0; pi < n_pairs; pi++) {
                 DynVarEntry *dv_entry = pairs[pi].entry;
                 char *mname = mangle_dynvar_name(dv_entry->name->name);
@@ -7964,10 +7973,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fptr, mname, frame);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "(void)%s;\n", fptr);
-                free(mname);
+                if (guard_ptrs) { guard_ptrs[pi] = fptr; guard_vars[pi] = mname; }
+                else { free(fptr); free(mname); }
                 free(vslot);
                 free(frame);
-                free(fptr);
             }
             /* Emit body */
             char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
@@ -7976,6 +7985,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s = %s;\n", result_tmp, bval);
             }
             free(bval);
+            /* Explicit scope-exit pops, reverse declaration order -- the order
+             * the cleanup attribute itself would have used. */
+            for (uint32_t pi = n_pairs; pi-- > 0 && guard_ptrs; ) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "_dynvar_pop_%s(&%s);\n", guard_vars[pi], guard_ptrs[pi]);
+                free(guard_ptrs[pi]);
+                free(guard_vars[pi]);
+            }
+            free(guard_ptrs);
+            free(guard_vars);
             ctx->indent -= 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "}\n");

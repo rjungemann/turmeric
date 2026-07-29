@@ -11197,8 +11197,18 @@ int emit_program(Buf *out, const Expr *program) {
                     "static void _dynvar_init_%s(void) {\n"
                     "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
                     "}\n"
+                    /* S1b/cleanup: idempotent.  The emitter now calls this
+                     * explicitly at the end of the binding block AND leaves
+                     * the __attribute__((cleanup)) in place for the exits an
+                     * explicit call cannot see (return/goto out of scope).
+                     * On the cc path both fire, so the first one clears the
+                     * pointer and the second is a no-op; under the JIT, where
+                     * c2mir discards the attribute, the explicit call is the
+                     * whole mechanism.  See jit-engine-j0-findings.md 12.5. */
                     "static void _dynvar_pop_%s(TurDynFrame **fp) {\n"
+                    "    if (!*fp) return;\n"
                     "    pthread_setspecific(_dynvar_key_%s, (*fp)->prev);\n"
+                    "    *fp = 0;\n"
                     "}\n\n",
                     mname,
                     mname, mname, mname,

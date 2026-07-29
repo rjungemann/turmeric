@@ -1300,15 +1300,71 @@ columns because its defect is `((cleanup))`, which S1b does not touch.
 
 ### 12.4 What is left of section 3.1
 
-Of the five attributes in 3.1's table, `constructor` is now closed and
-`unused` was always harmless. The remaining three are all still live, and none
-of them is emitter-side work:
+Of the five attributes in 3.1's table, `constructor` is closed here and
+`cleanup` in 12.5 below; `unused` was always harmless. What survives is not
+emitter-side work at all:
 
-- **`cleanup(f)`** -- the dynamic-variable scope-exit pop. Still the one
-  correctness gap with no external recovery, still costing the 3 `dynvar-*`
-  wrong-output fixtures, still needing the J1 decision (lower at exit edges,
-  or make dynamic variables `cc`-only under `tur jit` with a TUR-W).
 - **`packed`** and **`#pragma pack`** -- arrive from system headers and user
   inline-C, not from the emitter (9.3), so nothing in this section reaches
   them. They remain a `tur jit` ABI hazard on any program whose inline-C
   touches a packed struct.
+
+### 12.5 `((cleanup))` -- recommendation 3, decided and lowered
+
+The plan offered two ways out: lower `cleanup` at exit edges, or make dynamic
+variables a documented `cc`-only feature under `tur jit`. Neither is quite what
+the code wanted, and the third option is better than both.
+
+`__attribute__((cleanup(_dynvar_pop_X)))` guards the binding frame in
+`EX_DYNVAR_BINDING` (`emit_expr.c`), which the emitter already wraps in a plain
+C block. The normal exit from that block is a fall-through the emitter can see,
+so **the pop is emitted explicitly, in reverse declaration order, right before
+the closing brace** -- and the attribute is *kept*, because it also covers exits
+the expression emitter cannot see (a `return` or `goto` out of the block from a
+`?`-propagation or a tail-loop backedge). To let both fire on the `cc` path,
+`_dynvar_pop_X` became idempotent: it clears the guard pointer, so whichever
+runs first does the work and the second returns immediately.
+
+That is a strictly-additive change. The `cc` path keeps every exit edge it had,
+gains nothing it did not have, and stays green; the JIT gains the fall-through
+case, which is what every affected fixture actually needed.
+
+| Sweep | Full corpus | |
+|---|---|---|
+| S1b, `cleanup` still attribute-only | 1642 / 1680 | 97.7% |
+| **+ explicit scope-exit pop** | **1645 / 1680** | **97.9%** |
+
+The fixture-by-fixture diff is exactly the three `dynvar-*` mismatches --
+`dynvar-nested`, `dynvar-log-level`, `dynvar-thread-locale` -- and nothing else
+moved. All ten `dynvar-*` fixtures now pass under both `cc` and the JIT;
+`tests/run.sh` is 2399/0 with 140 snapshots regenerated.
+
+**The honest remainder.** An early `return` or `goto` out of a dynamic binding
+still pops on `cc` (via the surviving attribute) and still does not pop under
+the JIT. No fixture in the corpus exercises that shape, which is why the
+coverage number cannot see it -- so it is recorded here rather than inferred
+from a green sweep. Closing it means the CPS/exit-edge emitter placing the same
+call at each edge it generates, which is J1 work on a path this change does not
+touch.
+
+### 12.6 End state after S1b
+
+| Stage | Full corpus | |
+|---|---|---|
+| J0 baseline | 1424 / 1680 | 84.8% |
+| S1 + spike normalizer + host-symbol boundary (11.7) | 1631 | 97.1% |
+| weak-config sync, builtin prototypes, MIR ret fix | 1642 | 97.7% |
+| **S1b + `cleanup` lowering** | **1645** | **97.9%** |
+
+The 35 remaining failures are, without exception, a recorded decision or a
+filed report:
+
+- **31 x** GNU constructs in user inline-C (all `httpd-*`) -- the plan's
+  3.2-step-6 fallback to `cc`, working as designed.
+- **1 x** `any-cast-mismatch-panic` -- panics by design; the sweep scores any
+  signal as a failure.
+- **2 x** `stm-stress`, `gc-registry-growth` -- the shim-atomics hazard (8.4.3).
+  `stm-stress` alternates `signal-11` and `output-mismatch` run to run.
+- **1 x** `hamt-lowering-basic` -- the filed `^persistent` cstr-key identity
+  bug, reproduced on the `cc` path with no JIT involved
+  ([report](../reported/persistent-map-cstr-keys-identity-compared.md)).
