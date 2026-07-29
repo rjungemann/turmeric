@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <math.h>
 #include <time.h>
 
 #include "mir.h"
@@ -33,10 +34,90 @@ static int getc_func (void *data) {
   return src_pos >= src_len ? EOF : (unsigned char) src[src_pos++];
 }
 
+/* GCC builtins that c2mir does not implement.  It emits them as ordinary
+   external calls, so they arrive here as plain names and would otherwise fail
+   to resolve.  Every one of these reaches the emitted C from INLINE C, not from
+   codegen -- stdlib/math.tur calls __builtin_pow, and three fixtures use
+   __builtin_strlen / popcount / memcpy directly.  Mapping them to their libc
+   equivalents is what a real `tur jit` would do too (findings 8.4.3).
+
+   The set is exactly what a grep for __builtin_ over stdlib and the fixture
+   inputs reports, so it is complete for this corpus rather than accumulated one
+   sweep failure at a time.  A missing entry still shows up as a clean
+   "unresolved import" at link, which is a good signal: add it. */
+static double jit_builtin_pow (double x, double y) { return pow (x, y); }
+static double jit_builtin_sqrt (double x) { return sqrt (x); }
+static double jit_builtin_ceil (double x) { return ceil (x); }
+static double jit_builtin_floor (double x) { return floor (x); }
+static double jit_builtin_fabs (double x) { return fabs (x); }
+static void jit_builtin_trap (void) { abort (); }
+static size_t jit_builtin_strlen (const char *s) { return strlen (s); }
+static int jit_builtin_popcount (unsigned x) {
+  int n = 0;
+  while (x) { n += (int) (x & 1u); x >>= 1; }
+  return n;
+}
+static void *jit_builtin_memcpy (void *d, const void *s, size_t n) {
+  return memcpy (d, s, n);
+}
+/* The shim lowers atomics to plain memory ops; these two it does not cover,
+   and they are reached by exactly one fixture each at full corpus. */
+static long jit_atomic_exchange_n (volatile long *p, long v) {
+  long o = *p; *p = v; return o;
+}
+static void jit_atomic_thread_fence (int order) { (void) order; }
+
+static const struct { const char *name; void *addr; } BUILTIN_SHIMS[] = {
+  {"__builtin_pow", (void *) jit_builtin_pow},
+  {"__builtin_sqrt", (void *) jit_builtin_sqrt},
+  {"__builtin_ceil", (void *) jit_builtin_ceil},
+  {"__builtin_floor", (void *) jit_builtin_floor},
+  {"__builtin_fabs", (void *) jit_builtin_fabs},
+  {"__builtin_trap", (void *) jit_builtin_trap},
+  {"__builtin_strlen", (void *) jit_builtin_strlen},
+  {"__builtin_popcount", (void *) jit_builtin_popcount},
+  {"__builtin_memcpy", (void *) jit_builtin_memcpy},
+  {"__atomic_exchange_n", (void *) jit_atomic_exchange_n},
+  {"__atomic_thread_fence", (void *) jit_atomic_thread_fence},
+};
+
+/* ------------------------------------------------------------------ */
+/* atexit interception                                                 */
+/* ------------------------------------------------------------------ */
+/* `atexit` cannot be resolved by dlsym on glibc -- it lives in
+   libc_nonshared.a, statically linked into each executable and never exported
+   -- so `module-defer-*` programs failed to link at all.  But simply handing
+   over the real atexit is WRONG and was measured to be so on macOS, where the
+   symbol IS resolvable: the registered handler is JIT'd code, and the MIR
+   context is torn down before libc drains its list, so the process dies in
+   freed code at exit (findings 9.4).
+   
+   So the JIT owns the list.  Handlers are recorded here and drained while the
+   generated code is still mapped.  `tur jit` needs the same shape. */
+#define MAX_JIT_ATEXIT 64
+static void (*jit_atexit_fns[MAX_JIT_ATEXIT]) (void);
+static int n_jit_atexit = 0;
+
+static int jit_atexit (void (*fn) (void)) {
+  if (n_jit_atexit >= MAX_JIT_ATEXIT) return -1;
+  jit_atexit_fns[n_jit_atexit++] = fn;
+  return 0;
+}
+
+/* LIFO, matching C's atexit ordering. */
+static void jit_atexit_drain (void) {
+  while (n_jit_atexit > 0) jit_atexit_fns[--n_jit_atexit] ();
+}
+
 /* c2mir emits calls to runtime functions by name; MIR asks us for an address.
    The runtime is compiled INTO this executable, so dlsym(RTLD_DEFAULT) finds
    it -- c2mir never parses a line of hamt.c. */
 static void *import_resolver (const char *name) {
+  /* Intercepts first: these must win over any host symbol of the same name. */
+  if (strcmp (name, "atexit") == 0) return (void *) jit_atexit;
+  for (size_t i = 0; i < sizeof BUILTIN_SHIMS / sizeof BUILTIN_SHIMS[0]; i++)
+    if (strcmp (name, BUILTIN_SHIMS[i].name) == 0) return BUILTIN_SHIMS[i].addr;
+
   void *addr = dlsym (RTLD_DEFAULT, name);
   if (addr == NULL) fprintf (stderr, "jit-spike: unresolved import: %s\n", name);
   return addr;
@@ -174,6 +255,8 @@ int main (int argc, char **argv) {
       char *fake_argv[] = {(char *) "jit", NULL};
       char *fake_envp[] = {NULL};
       rc = fn (1, fake_argv, fake_envp);
+      /* Drain BEFORE MIR_gen_finish below unmaps the code the handlers live in. */
+      jit_atexit_drain ();
       fflush (stdout);
     }
 

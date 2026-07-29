@@ -26,7 +26,14 @@ target_compile_options(tur-jit-spike PRIVATE -O2 -std=gnu11 -Wall)
 # -O2 and NO sanitizer: this mirrors libturt_runtime.a's flags (src/CMakeLists),
 # keeps the runtime ABI-identical to a bare-source `tur build`, and keeps ASan
 # out of a measurement it would only skew (plan section 6).
-target_sources(tur-jit-spike PRIVATE
+# One list, used for both the sources and their per-file flags -- it was
+# duplicated, which is a standing invitation for the two copies to drift.
+#
+# The src/async/ TUs join the host runtime so `tur_reactor_new` and friends
+# resolve by address, exactly as hamt.c already does.  Ten fixtures failed the
+# sweep purely because the harness linked the 9 runtime TUs and not these, which
+# is a property of the harness rather than of the engine (findings 8.4.3).
+set(TUR_JIT_HOST_RUNTIME
   "${CMAKE_SOURCE_DIR}/src/runtime/hamt.c"
   "${CMAKE_SOURCE_DIR}/src/runtime/symbols.c"
   "${CMAKE_SOURCE_DIR}/src/runtime/tur_string.c"
@@ -36,23 +43,44 @@ target_sources(tur-jit-spike PRIVATE
   "${CMAKE_SOURCE_DIR}/src/runtime/runtime.c"
   "${CMAKE_SOURCE_DIR}/src/runtime/arena.c"
   "${CMAKE_SOURCE_DIR}/src/runtime/buf.c"
+  "${CMAKE_SOURCE_DIR}/src/async/reactor.c"
+  "${CMAKE_SOURCE_DIR}/src/async/fiber.c"
+  "${CMAKE_SOURCE_DIR}/src/async/io.c"
+  "${CMAKE_SOURCE_DIR}/src/async/scheduler.c"
+  "${CMAKE_SOURCE_DIR}/src/async/scheduler_common.c"
+  "${CMAKE_SOURCE_DIR}/src/async/timer_wheel.c"
+  "${CMAKE_SOURCE_DIR}/src/async/atomic_queue.c"
 )
+
+# Architecture / platform selection, mirroring src/CMakeLists.txt.  The fiber
+# context switch is assembly and the I/O backend is per-OS; picking them here
+# rather than hard-coding the container's pair keeps the spike buildable
+# wherever `tur` itself is (the macOS runs in section 9 need the kqueue/arm64
+# arms).  ASM is enabled at the top level, so the .S file needs no extra setup.
+if(APPLE)
+  list(APPEND TUR_JIT_HOST_RUNTIME "${CMAKE_SOURCE_DIR}/src/async/io_kqueue.c")
+elseif(UNIX)
+  list(APPEND TUR_JIT_HOST_RUNTIME "${CMAKE_SOURCE_DIR}/src/async/io_epoll.c")
+endif()
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  target_sources(tur-jit-spike PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/async/fiber_ctx_arm64.S")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+  target_sources(tur-jit-spike PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/async/fiber_ctx_x64.S")
+endif()
+
+target_sources(tur-jit-spike PRIVATE ${TUR_JIT_HOST_RUNTIME})
 set_source_files_properties(
-  "${CMAKE_SOURCE_DIR}/src/runtime/hamt.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/symbols.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/tur_string.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/rc.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/gc.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/rc_free_queue.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/runtime.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/arena.c"
-  "${CMAKE_SOURCE_DIR}/src/runtime/buf.c"
+  ${TUR_JIT_HOST_RUNTIME}
   TARGET_DIRECTORY tur-jit-spike
   PROPERTIES COMPILE_OPTIONS "-O2;-std=gnu11;-fno-strict-aliasing;-w"
 )
 target_include_directories(tur-jit-spike PRIVATE
   "${CMAKE_SOURCE_DIR}/src"
   "${CMAKE_SOURCE_DIR}/src/runtime"
+  "${CMAKE_SOURCE_DIR}/src/async"
 )
 
 # import_resolver() reaches the runtime through dlsym(RTLD_DEFAULT, ...), which
