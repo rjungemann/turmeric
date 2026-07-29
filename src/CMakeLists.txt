@@ -188,6 +188,7 @@ set(TUR_CORE_SOURCES
     compiler/reader.c
     compiler/reader_macros.c
     compiler/lang_layers.c
+    compiler/stdlib_autoload.c
     # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
     # types.  refine_libz3.c is a DEV-ONLY scaffold -- it compiles to nothing
     # unless TUR_REFINE_Z3_ORACLE is defined, and that option refuses Release
@@ -254,10 +255,13 @@ set(TUR_CORE_SOURCES
     ${TURI_EVAL_SOURCES}
     # lsp/ -- LSP server (JSON-RPC over stdio, part of the tur binary)
     lsp/lsp_io.c
+    lsp/lsp_sink.c
+    lsp/lsp_collect.c
     lsp/lsp_json.c
     lsp/lsp_docs.c
     lsp/lsp_util.c
     lsp/lsp.c
+    lsp/lsp_session.c
     # cli/ -- standalone subcommands
     cli/lsp_lite.c
 )
@@ -1130,6 +1134,76 @@ set_target_properties(tur_docscanner_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# ---------------------------------------------------------------------------
+# LSP session unit test (try-turmeric-lsp-plan, §4)
+#
+# Links tur_core -- which is everything except main.c -- and supplies its own
+# tur_collect_symbols. That is not a workaround for the link: it is the point.
+# A fixed stub index makes completion ordering, path remapping, and last-good
+# retention assertable, where the real compiler would tie every assertion to
+# whatever the stdlib currently exports.
+# ---------------------------------------------------------------------------
+add_executable(tur_lsp_session_unit
+    ${CMAKE_SOURCE_DIR}/tests/lsp/session_test.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_lsp_session_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_lsp_session_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_lsp_session_unit PRIVATE
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_compile_options(tur_lsp_session_unit PRIVATE -pthread)
+target_link_options(tur_lsp_session_unit PRIVATE -pthread)
+target_link_libraries(tur_lsp_session_unit PRIVATE m ${CMAKE_DL_LIBS})
+# tur_core carries repl.c, whose line editing is libedit's whenever libedit was
+# found. Omitting this links clean on a box without libedit and fails to link
+# on one with it -- the wrong way round for a check meant to catch things early.
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_lsp_session_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_lsp_session_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_lsp_session_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# WASM LSP analysis-backend test (try-turmeric-lsp-plan, L0)
+#
+# src/web/wasm_lsp.c is the front end the browser uses in place of main.c's
+# compile_to_c.  Nothing in it is actually wasm-specific -- the Emscripten
+# build differs only in where the stdlib is mounted, which is a TUR_STDLIB_DIR
+# lookup -- so it runs here against the in-tree stdlib and the real compiler.
+# Without this the file would only ever execute somewhere nothing can check it.
+# ---------------------------------------------------------------------------
+add_executable(tur_lsp_wasm_backend_unit
+    ${CMAKE_SOURCE_DIR}/tests/lsp/wasm_backend_test.c
+    ${CMAKE_SOURCE_DIR}/src/web/wasm_lsp.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_lsp_wasm_backend_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_lsp_wasm_backend_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_lsp_wasm_backend_unit PRIVATE
+    -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_lsp_wasm_backend_unit PRIVATE m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_lsp_wasm_backend_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_lsp_wasm_backend_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_lsp_wasm_backend_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Injective name-mangler round-trip + injectivity unit test
 # (reversible-name-mangling-plan, task T2).
 add_executable(tur_mangle_unit
@@ -1157,6 +1231,13 @@ set_target_properties(tur_mangle_unit PROPERTIES
 set(WASM_GLUE_SOURCES
     web/wasm_glue.c
     web/tutorial.c
+    # try-turmeric-lsp-plan: the LSP bridge, plus the WASM-side analysis
+    # backend.  tur_core carries the whole server already; what it does not
+    # carry is tur_collect_symbols, which lives in main.c (a CLI, and not part
+    # of this source set).  Nothing referenced the server, so wasm-ld collected
+    # it away and the dangling reference never surfaced -- exporting an entry
+    # point makes it live, and this file is what resolves it.
+    web/wasm_lsp.c
 )
 
 # Create a static library for the WASM glue + libturi
@@ -1219,7 +1300,7 @@ if(TUR_WASM)
                 -sSTACK_SIZE=16777216
                 -sDEFAULT_PTHREAD_STACK_SIZE=8388608
                 -sINITIAL_MEMORY=67108864
-                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_doc_lookup,_turi_type_of,_turi_explain,_malloc,_free
+                -sEXPORTED_FUNCTIONS=_turi_wasm_init,_turi_wasm_reset,_turi_wasm_shutdown,_turi_wasm_eval,_turi_wasm_eval_ex,_turi_wasm_version,_turi_wasm_format,_turi_wasm_lsp_request,_turi_wasm_lsp_flush,_turi_wasm_lsp_reset,_turi_wasm_set_lang,_turi_wasm_get_lang,_turi_doc_lookup,_turi_type_of,_turi_explain,_malloc,_free
                 -sEXPORTED_RUNTIME_METHODS=stringToUTF8,UTF8ToString,lengthBytesUTF8
                 -sEXPORT_NAME=TurmericModule
                 -sMODULARIZE=1

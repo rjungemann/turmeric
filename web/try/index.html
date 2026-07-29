@@ -157,6 +157,14 @@
                             <span class="dot offline"></span>
                             <span id="wasm-status-text">Initializing WASM...</span>
                         </span>
+                        <!-- Analysis indicator. Hidden until the language
+                             server boots (lazily, on first editor focus), and
+                             it stays hidden if the server never comes up --
+                             an absent analysis is not something to nag about. -->
+                        <span class="status-indicator lsp-status" id="lsp-status" hidden>
+                            <span class="dot" id="lsp-status-dot"></span>
+                            <span id="lsp-status-text">Analysis ready</span>
+                        </span>
                         <span class="cursor-position" id="cursor-pos">Line 1, Column 1</span>
                     </div>
                 </div>

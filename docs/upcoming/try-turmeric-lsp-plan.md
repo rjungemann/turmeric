@@ -1,6 +1,7 @@
 # Try Turmeric: LSP-backed editor intelligence
 
-> **Status:** proposed (2026-07-29)
+> **Status:** Executed (2026-07-29) -- L0-L4 landed. One item cannot be closed
+> in the execution environment (no `emcc`); see [§6 Execution record](#6-execution-record).
 > **Type:** Web playground / `src/lsp` / WASM glue
 > **Related:** [`lsp-client-gaps-plan.md`](lsp-client-gaps-plan.md) (executed),
 > [`try-turmeric-lang-toggle-plan.md`](try-turmeric-lang-toggle-plan.md)
@@ -272,3 +273,232 @@ The adapter owns:
 | Analysis-per-keystroke is too slow in wasm | 150 ms trailing debounce, plus the server's own last-good index means a slow analysis degrades to stale-but-useful rather than empty. |
 | Two wasm instances exhaust mobile memory | Lazy instantiation on editor focus; documented single-worker fallback in §2.4. |
 | MEMFS temp files unusable | Detected in L0, before any web work is written. |
+
+---
+
+## 6. Execution record
+
+Written after the fact. The plan body above is left as it was proposed; this
+section records what actually happened, including where the plan was wrong.
+
+### 6.1 Where the plan's repo facts were wrong
+
+**"The whole server is already inside the WASM bundle's source set" (§0) was
+nearly true, and the gap was a hard blocker.** `lsp/*.c` are in
+`TUR_CORE_SOURCES`, but `tur_collect_symbols` -- the analysis every handler
+calls -- is defined in `src/main.c`, which is a CLI and is *not* in the WASM
+source set. Nothing referenced `lsp_server_run`, so `wasm-ld` collected the
+whole server away and the dangling reference never surfaced. Exporting an entry
+point makes it live, and the link would have failed on the first `emcc` run.
+
+Confirmed statically before writing any code: `strings web/public/turmeric.wasm
+| grep -c textDocument` is `0`, so the handlers really are absent from today's
+bundle, exactly as §1.3 predicted -- and so is the analysis they call.
+
+The fix is `src/web/wasm_lsp.c`, which supplies a WASM-side
+`tur_collect_symbols` over pieces now shared with `main.c`
+(`compiler/stdlib_autoload.c`, `lsp/lsp_collect.c`). It stops after
+elaboration rather than running the whole `compile_to_c` pipeline: names,
+types, spans, and type errors all exist by then, and the later passes exist to
+produce a binary. **Stated cost:** borrow-check and lifetime errors do not
+appear as markers in the playground. The Run button still reports them.
+
+**The buffer sink emits a JSON array, not framed messages.** §2.1 specified
+`lsp_sink_buf` as "append framed messages to a buffer" while §2.3 specified the
+export as returning a JSON array "because the JS side has no reason to parse
+framing it is about to discard". Those contradict. The array won: the sink
+appends array elements and `lsp_sink_buf_open/close` bracket them, so nothing
+frames anything only to strip it back off.
+
+**`#lang` handling needed no fix.** §2.3 flagged it as a risk. `compile_to_c`
+already runs `detect_lang_layered`, and the WASM front end does the same;
+`tests/lsp/wasm_backend_test.c` asserts a `#lang turmeric/sweet` buffer -- which
+is what Try Turmeric opens with -- analyses clean.
+
+**`stdlib_root()` needed no fix either.** It reads `TUR_STDLIB_DIR`, which
+`wasm_lsp_init()` sets to the `/stdlib` mount point.
+
+### 6.2 Defects found while executing
+
+- **`stdlib_cache_prime` latched per process, not per session**
+  (`src/lsp/lsp.c`). It used a function-local `static int attempted`, which on
+  stdio is indistinguishable from correct -- one session is one process there.
+  A browser module outlives its session: the latch stayed set while
+  `stdlib_cache_free()` dropped the cache it guarded, so from the second
+  session onward a buffer opened with a syntax error already in it had
+  completion dead for the life of the page. That is precisely the case the
+  fallback exists for. Fixed; regression test resets and re-checks.
+- **`.status-indicator { display: flex }` beat `[hidden]`** (`web/styles.css`).
+  A class rule outranks the user agent's `[hidden] { display: none }`, so the
+  analysis indicator stayed visible for every visitor whose server never
+  booted. Caught by the degradation spec on its first run.
+- **Compiler-internal symbols flood completion** -- reported, not fixed:
+  [`docs/reported/lsp-completion-internal-symbols.md`](../reported/lsp-completion-internal-symbols.md).
+  Elaborator-synthesised globals (`__inst_Eq_eq_qu_int`, `__fn_774`) are
+  collected as ordinary symbols and overrun the 200-item cap on a trivial
+  buffer, so the stdlib names a user actually wants are the ones cut. Native
+  `tur lsp` has always had this; it is not new here.
+
+### 6.3 What landed
+
+| Phase | Landed as |
+|---|---|
+| L1 transport split | `src/lsp/lsp_sink.{h,c}`, `src/lsp/lsp_session.{h,c}`, dispatch lifted out of `lsp_server_run` |
+| L0 WASM bridge | `src/web/wasm_lsp.c`: `turi_wasm_lsp_request` / `_flush` / `_reset` + the analysis backend |
+| L2 worker + diagnostics | `web/public/lsp-worker.js`, `web/lsp-client.js`, markers via `setModelMarkers` |
+| L3 providers | completion, hover, signature help, definition (cross-tab), document symbols |
+| L4 polish | analysis indicator in the editor footer; client-side cancellation |
+
+Shared extractions that made the second front end possible without a copy:
+`src/lsp/lsp_collect.c` (the binding walk) and
+`src/compiler/stdlib_autoload.c` (the autoload list + form prepend, with the
+stdlib directory now a parameter).
+
+### 6.4 Testing, and what it does not cover
+
+| Suite | Result |
+|---|---|
+| `tests/lsp/run-mcp-lsp.sh` (native regression, §4) | 61/61 -- unchanged by the refactor |
+| `tests/lsp/session_test.c` (`tur_lsp_session_unit`) | 50 assertions, transport-free |
+| `tests/lsp/wasm_backend_test.c` (`tur_lsp_wasm_backend_unit`) | 19 assertions, the browser backend run natively |
+| `bash tests/run.sh` | 2411/2411 |
+| `web/tests/lsp.spec.js` | 10 passing, 5 skipped |
+
+`wasm_backend_test.c` deserves a note. `src/web/wasm_lsp.c` would otherwise
+only ever execute inside a wasm module, where a mistake surfaces months later
+as "completion in the browser is empty". Nothing in it is actually
+wasm-specific -- the Emscripten build differs only in where the stdlib is
+mounted, and that is a `TUR_STDLIB_DIR` lookup -- so it runs against the
+in-tree stdlib and the real compiler in CI.
+
+The 5 skipped Playwright specs are the ones that need a bundle with the LSP
+exports; `web/public/turmeric.wasm` predates them. Rather than ship the browser
+half with no coverage until someone runs `emcc`, a third `describe` intercepts
+the worker script and serves a scripted server speaking the same protocol, with
+answers copied from what the C tests assert the real one produces. The real
+client drives the real Monaco providers; only the language server is a script.
+
+**Not covered, and not coverable without `emcc`:**
+
+- **The wasm link itself.** `src/web/wasm_lsp.c` compiles clean natively (it is
+  in `WASM_GLUE_SOURCES`, so the `libturi_wasm` target builds it every time),
+  but nothing here has run `wasm-ld` over it.
+- **`mkstemps` under Emscripten** (§2.3). `lsp.c` uses the 4-suffix variant for
+  its analysis temp file. Emscripten's musl-derived libc provides it, so no
+  `#ifdef __EMSCRIPTEN__` fallback was written; if that is wrong the link fails
+  loudly rather than silently, which is the acceptable failure mode.
+- **`/tmp` in MEMFS.** `tur_temp_dir()` returns `/tmp`, which Emscripten's
+  default FS creates. Unverified.
+- **The bundle-size delta** (§5, and an explicit L0 exit criterion). Cannot be
+  measured without a build. Retaining the LSP handlers plus the elaborator
+  front end will not be free.
+- **Mobile behaviour** (L4). Completion popovers on a phone keyboard needed
+  checking rather than assuming, and the mobile Playwright project could not
+  launch a browser in this environment.
+
+## 7. Closing the `emcc` gap
+
+Everything §6.4 listed as uncoverable is now covered. Built with Homebrew
+Emscripten 5.0.5 on macOS arm64:
+
+```sh
+cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-wasm --target tur_wasm
+```
+
+### 7.1 The link, and the two guesses it settled
+
+`wasm-ld` linked clean on the first run, and all three exports are live in the
+module -- `wasm-objdump -x -j export` shows `turi_wasm_lsp_request`,
+`turi_wasm_lsp_flush`, `turi_wasm_lsp_reset`. `strings turmeric.wasm` now finds
+`textDocument/publishDiagnostics` and the full `initialize` capabilities blob,
+against `0` matches before, so the handlers §1.3 predicted were being collected
+away really are retained now.
+
+**`mkstemps` was the right guess.** It resolved from Emscripten's libc with no
+`#ifdef __EMSCRIPTEN__` fallback needed. **`/tmp` in MEMFS was too**, and that
+one the link could not have shown: the analysis path writes the buffer to a
+temp file and compiles it, so every diagnostic that reaches a Monaco marker in
+the browser is a round trip through `tur_temp_dir()` that completed. The
+provider specs below are what prove it.
+
+### 7.2 Bundle-size delta -- the L0 exit criterion
+
+| Artifact | Before | After | Delta |
+|---|---|---|---|
+| `turmeric.wasm` | 3,029,099 | 3,060,041 | **+30,942 (+1.0%)** |
+| `turmeric.js` | 84,085 | 85,930 | +1,845 (+2.2%) |
+
+§5 budgeted for this being "not free" and offered a second eval-only artifact
+if it went badly. It did not: 30 KB on a 3 MB module, gzipped rather less. The
+reason the number is this small is worth stating, because it is not that the
+LSP is small -- it is that the expensive half was already there. The
+elaborator, the type checker, and the stdlib are linked in for the eval path
+regardless; what `wasm-ld` newly retains is the handler dispatch and its JSON
+plumbing. **No second artifact. Pay the bytes**, exactly as §5 preferred.
+
+### 7.3 A defect the previous environment could not have found
+
+`tur_lsp_session_unit` and `tur_lsp_wasm_backend_unit` both link
+`$<TARGET_OBJECTS:tur_core>`, which carries `repl.c`, and neither carried the
+`if(HAVE_EDITLINE)` block every other `tur_core`-linking target in
+`src/CMakeLists.txt` has. That fails exactly backwards: it links clean on a box
+where CMake found no libedit and fails with seven undefined `readline` symbols
+on one where it did. The environment that wrote these targets was the former,
+so both looked fine. Fixed by adding the block to each.
+
+### 7.4 Mobile, checked rather than assumed
+
+L4 wanted "completion popovers on a phone keyboard checked, not assumed", and
+the previous run could not launch the mobile project at all. With WebKit
+installed the `mobile` project (iPhone 13, 390x664) runs, and
+`web/tests/mobile.lsp.spec.js` pins the two things that are phone-specific:
+
+- **Lazy instantiation actually holds.** A visitor who loads the page, runs the
+  buffer, and reads the output never instantiates the second module --
+  asserted on the device where the second 64 MB heap is the whole reason §2.4
+  chose lazy. This is the memory mitigation, made falsifiable.
+- **The suggest widget stays inside the viewport.** Monaco positions it against
+  available space, and on a 390px-wide screen a list rendered past the edge is
+  indistinguishable from no completion at all. The spec asserts the widget's
+  bounding box against the viewport on all four sides.
+
+Diagnostics and boot-on-WebKit are covered too; the degradation contract from
+§2.5 is re-asserted mobile-side, since a phone that cannot run the server must
+still show no fault.
+
+The single-worker fallback §2.4 documented is **not needed**: two instances
+boot and run on mobile WebKit without trouble.
+
+### 7.5 Results
+
+| Suite | Result |
+|---|---|
+| `tests/lsp/run-mcp-lsp.sh` | 61/61 |
+| `tur_lsp_session_unit` | 50/50 |
+| `tur_lsp_wasm_backend_unit` | 19/19 |
+| `bash tests/run.sh` | 2411/2411 |
+| `web/tests/lsp.spec.js` (desktop) | **15 passing, 0 skipped** (was 10 + 5 skipped) |
+| `web/tests/mobile.lsp.spec.js` (WebKit) | 4 passing |
+
+The 5 previously-skipped specs now run against the real server: markers appear
+and clear, completion offers the buffer's own definitions through the real
+suggest widget, hover reports a type, and every tab is an open document.
+
+Pre-existing failures elsewhere in `web/tests`, confirmed unrelated by
+re-running them against the previous bundle: `guide-toggle.spec.js` and
+`prod-smoke.spec.js` (generated docs / the live site), `smoke.spec.js`'s
+force-update case (a newer Chromium refuses the test's
+`Object.defineProperty` on `location.reload`), and two
+`mobile.split-and-pwa.spec.js` reload cases that report "Failed to load WASM"
+under WebKit.
+
+### 7.6 One thing to know before deploying
+
+`web/public/turmeric.{js,wasm}` are regenerated here, but `sw.js`'s
+`CACHE_VERSION` is rewritten from `VERSION` at *build* time
+(`injectSwVersion`, `apply: 'build'`), not on artifact regen. The precache is
+cache-first, so shipping new wasm bytes under an unchanged version token would
+serve a returning visitor the stale module. Nothing to do on this branch --
+the repo already ties artifact regeneration to a release cut, which bumps
+`VERSION` -- but do not deploy this bundle without one.

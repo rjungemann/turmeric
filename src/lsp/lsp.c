@@ -1,5 +1,6 @@
 #include "lsp.h"
 #include "lsp_io.h"
+#include "lsp_sink.h"
 #include "lsp_json.h"
 #include "lsp_docs.h"
 #include "lsp_sym.h"
@@ -43,7 +44,7 @@ static void json_str(Buf *b, const char *s) {
     buf_putc(b, '"');
 }
 
-static void send_response(int fd_out, const char *id_raw, size_t id_len,
+static void send_response(LspSink *sink, const char *id_raw, size_t id_len,
                           const char *result_json) {
     Buf b;
     buf_init(&b);
@@ -55,13 +56,13 @@ static void send_response(int fd_out, const char *id_raw, size_t id_len,
     buf_puts(&b, ",\"result\":");
     buf_puts(&b, result_json ? result_json : "null");
     buf_puts(&b, "}");
-    lsp_write_message(fd_out, b.data, b.len);
+    lsp_sink_send(sink, b.data, b.len);
     buf_free(&b);
 }
 
 /* A request must always be answered. Dropping one leaves a conforming client
  * waiting forever on an id that will never come back. */
-static void send_error(int fd_out, const char *id_raw, size_t id_len,
+static void send_error(LspSink *sink, const char *id_raw, size_t id_len,
                        int code, const char *message) {
     Buf b;
     buf_init(&b);
@@ -73,11 +74,11 @@ static void send_error(int fd_out, const char *id_raw, size_t id_len,
     buf_printf(&b, ",\"error\":{\"code\":%d,\"message\":", code);
     json_str(&b, message);
     buf_puts(&b, "}}");
-    lsp_write_message(fd_out, b.data, b.len);
+    lsp_sink_send(sink, b.data, b.len);
     buf_free(&b);
 }
 
-static void send_notification(int fd_out, const char *method,
+static void send_notification(LspSink *sink, const char *method,
                               const char *params_json) {
     Buf b;
     buf_init(&b);
@@ -86,7 +87,7 @@ static void send_notification(int fd_out, const char *method,
     buf_puts(&b, ",\"params\":");
     buf_puts(&b, params_json ? params_json : "null");
     buf_puts(&b, "}");
-    lsp_write_message(fd_out, b.data, b.len);
+    lsp_sink_send(sink, b.data, b.len);
     buf_free(&b);
 }
 
@@ -238,6 +239,14 @@ static size_t unescape_json(const char *src, size_t src_len, char *dst) {
 
 static LspSymbol *stdlib_syms_      = NULL;
 static int        stdlib_sym_count_ = 0;
+/* The prime is attempted at most once per session, not once per process. It
+ * was a function-local static, which is the same thing on stdio -- one session
+ * is one process there. It is not the same thing anywhere a session can be
+ * reset and the module keeps running: the latch stayed set while the cache it
+ * guarded was freed, so every session after the first served an empty stdlib
+ * fallback and a buffer opened with a syntax error had completion dead for the
+ * life of the page. */
+static int        stdlib_prime_tried_ = 0;
 
 /* Set by resolve_stdlib_root() in main.c before any subcommand runs. NULL if
  * the stdlib could not be located, which disables the cache rather than
@@ -275,8 +284,9 @@ static void stdlib_cache_fill(const LspSymbol *syms, int count) {
 
 static void stdlib_cache_free(void) {
     free(stdlib_syms_);
-    stdlib_syms_      = NULL;
-    stdlib_sym_count_ = 0;
+    stdlib_syms_        = NULL;
+    stdlib_sym_count_   = 0;
+    stdlib_prime_tried_ = 0;
 }
 
 /* Harvest the stdlib surface by analyzing an empty buffer.
@@ -291,9 +301,8 @@ static void stdlib_cache_free(void) {
  * that actually needs the fallback. A session where every document parses
  * never pays it. */
 static void stdlib_cache_prime(void) {
-    static int attempted = 0;
-    if (stdlib_syms_ || attempted) return;
-    attempted = 1;
+    if (stdlib_syms_ || stdlib_prime_tried_) return;
+    stdlib_prime_tried_ = 1;
     if (!stdlib_root()) return;
 
     char tmp_path[512];
@@ -335,7 +344,7 @@ static void doc_symbol_view(const LspDoc *doc,
     *count = doc->symbol_count;
 }
 
-static void run_doc_analysis(LspDoc *doc, int fd_out) {
+static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
     /* 1. Scan docstrings from source text */
     LspDocTable dtable;
     lsp_doc_table_init(&dtable);
@@ -440,7 +449,7 @@ static void run_doc_analysis(LspDoc *doc, int fd_out) {
     buf_putc(&params, '\0'); /* NUL-terminate for C-string use; strlen stops here */
     diag_lsp_end();
 
-    send_notification(fd_out, "textDocument/publishDiagnostics", params.data);
+    send_notification(sink, "textDocument/publishDiagnostics", params.data);
     buf_free(&params);
     lsp_doc_table_free(&dtable);
 }
@@ -456,11 +465,11 @@ static void run_doc_analysis(LspDoc *doc, int fd_out) {
 static void flush_one_dirty(LspDoc *doc, void *ctx) {
     if (!doc->dirty) return;
     doc->dirty = 0;
-    run_doc_analysis(doc, *(int *)ctx);
+    run_doc_analysis(doc, (LspSink *)ctx);
 }
 
-static void lsp_flush_dirty(int fd_out) {
-    lsp_docs_iterate_mut(flush_one_dirty, &fd_out);
+static void lsp_flush_dirty(LspSink *sink) {
+    lsp_docs_iterate_mut(flush_one_dirty, sink);
 }
 
 /* Wait up to timeout_ms for another message to show up on fd_in.
@@ -607,7 +616,7 @@ static bool shutdown_    = false;
 static bool hover_markdown_ = true;
 
 static void on_initialize(const char *id_raw, size_t id_len,
-                          const char *params, int fd_out) {
+                          const char *params, LspSink *sink) {
     /* capabilities.textDocument.hover.contentFormat is an ordered array of
      * MarkupKind, most-preferred first. Absent means the 3.17 default, which
      * includes markdown. */
@@ -631,7 +640,7 @@ static void on_initialize(const char *id_raw, size_t id_len,
         }
     }
 
-    send_response(fd_out, id_raw, id_len,
+    send_response(sink, id_raw, id_len,
         "{\"capabilities\":{"
           /* LSP 3.17 positionEncoding. `character` offsets here have always
            * been byte offsets (see lsp_word_at_pos in lsp_util.c), not the
@@ -661,12 +670,12 @@ static void on_initialize(const char *id_raw, size_t id_len,
     initialized_ = true;
 }
 
-static void on_shutdown(const char *id_raw, size_t id_len, int fd_out) {
+static void on_shutdown(const char *id_raw, size_t id_len, LspSink *sink) {
     shutdown_ = true;
-    send_response(fd_out, id_raw, id_len, "null");
+    send_response(sink, id_raw, id_len, "null");
 }
 
-static void on_did_open(const char *params, size_t params_len, int fd_out) {
+static void on_did_open(const char *params, size_t params_len, LspSink *sink) {
     (void)params_len;
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
@@ -687,10 +696,10 @@ static void on_did_open(const char *params, size_t params_len, int fd_out) {
 
     lsp_doc_open(uri, strlen(uri), text ? text : "", text_len);
     free(text);
-    (void)fd_out;  /* analysis is deferred; see lsp_flush_dirty */
+    (void)sink;  /* analysis is deferred; see lsp_flush_dirty */
 }
 
-static void on_did_change(const char *params, size_t params_len, int fd_out) {
+static void on_did_change(const char *params, size_t params_len, LspSink *sink) {
     (void)params_len;
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
@@ -741,7 +750,7 @@ static void on_did_change(const char *params, size_t params_len, int fd_out) {
 
     lsp_doc_change(uri, strlen(uri), text, text_len);
     free(text);
-    (void)fd_out;  /* analysis is deferred; see lsp_flush_dirty */
+    (void)sink;  /* analysis is deferred; see lsp_flush_dirty */
 }
 
 static void on_did_close(const char *params, size_t params_len) {
@@ -759,40 +768,40 @@ static void on_did_close(const char *params, size_t params_len) {
  * --------------------------------------------------------------------- */
 
 static void on_hover(const char *id_raw, size_t id_len,
-                     const char *params, int fd_out) {
+                     const char *params, LspSink *sink) {
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!td) { send_response(sink, id_raw, id_len, "null"); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     size_t pos_len;
     const char *pos = lsp_json_raw(params, "position", &pos_len);
-    if (!pos) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!pos) { send_response(sink, id_raw, id_len, "null"); return; }
 
     int line_0 = (int)lsp_json_int(pos, "line");
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
     if (!doc || !doc->symbols) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     char name[128];
     if (!lsp_word_at_pos(doc->text, doc->text_len,
                          line_0 + 1, char_0 + 1, name, sizeof(name))) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     const LspSymbol *sym = find_symbol(doc, name);
     if (!sym) {
-        send_response(fd_out, id_raw, id_len, "{\"contents\":\"\"}");
+        send_response(sink, id_raw, id_len, "{\"contents\":\"\"}");
         return;
     }
 
@@ -827,7 +836,7 @@ static void on_hover(const char *id_raw, size_t id_len,
     buf_puts(&result, "}}");
     buf_putc(&result, '\0');
 
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&result);
 }
 
@@ -836,40 +845,40 @@ static void on_hover(const char *id_raw, size_t id_len,
  * --------------------------------------------------------------------- */
 
 static void on_definition(const char *id_raw, size_t id_len,
-                          const char *params, int fd_out) {
+                          const char *params, LspSink *sink) {
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!td) { send_response(sink, id_raw, id_len, "null"); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     size_t pos_len;
     const char *pos = lsp_json_raw(params, "position", &pos_len);
-    if (!pos) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!pos) { send_response(sink, id_raw, id_len, "null"); return; }
 
     int line_0 = (int)lsp_json_int(pos, "line");
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
     if (!doc || !doc->symbols) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     char name[128];
     if (!lsp_word_at_pos(doc->text, doc->text_len,
                          line_0 + 1, char_0 + 1, name, sizeof(name))) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     const LspSymbol *sym = find_symbol(doc, name);
     if (!sym || sym->file_path[0] == '\0') {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
@@ -892,7 +901,7 @@ static void on_definition(const char *id_raw, size_t id_len,
         "}}",
         def_uri, def_line, def_col, def_line, def_end);
 
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&result);
 }
 
@@ -908,20 +917,20 @@ static int lsp_symbol_kind(const LspSymbol *sym) {
  * --------------------------------------------------------------------- */
 
 static void on_document_symbol(const char *id_raw, size_t id_len,
-                                const char *params, int fd_out) {
+                                const char *params, LspSink *sink) {
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, "[]"); return; }
+    if (!td) { send_response(sink, id_raw, id_len, "[]"); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, "[]");
+        send_response(sink, id_raw, id_len, "[]");
         return;
     }
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
     if (!doc || !doc->symbols) {
-        send_response(fd_out, id_raw, id_len, "[]");
+        send_response(sink, id_raw, id_len, "[]");
         return;
     }
 
@@ -961,7 +970,7 @@ static void on_document_symbol(const char *id_raw, size_t id_len,
 
     buf_putc(&result, ']');
     buf_putc(&result, '\0');
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&result);
 }
 
@@ -1030,7 +1039,7 @@ static void ws_collect_cb(const LspDoc *doc, void *ctx_) {
 }
 
 static void on_workspace_symbol(const char *id_raw, size_t id_len,
-                                 const char *params, int fd_out) {
+                                 const char *params, LspSink *sink) {
     size_t  query_len = 0;
     const char *query_raw = lsp_json_str(params, "query", &query_len);
 
@@ -1047,7 +1056,7 @@ static void on_workspace_symbol(const char *id_raw, size_t id_len,
 
     buf_putc(&result, ']');
     buf_putc(&result, '\0');
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&result);
 }
 
@@ -1062,20 +1071,20 @@ static void on_workspace_symbol(const char *id_raw, size_t id_len,
  * --------------------------------------------------------------------- */
 
 static void on_formatting(const char *id_raw, size_t id_len,
-                          const char *params, int fd_out) {
+                          const char *params, LspSink *sink) {
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!td) { send_response(sink, id_raw, id_len, "null"); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
     if (!doc || !doc->text) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
@@ -1098,7 +1107,7 @@ static void on_formatting(const char *id_raw, size_t id_len,
          * null is the spec's "no edits", which leaves the buffer untouched --
          * the right answer, and better than a hard error the editor surfaces
          * as a popup on every save. */
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
@@ -1122,7 +1131,7 @@ static void on_formatting(const char *id_raw, size_t id_len,
     buf_puts(&result, "}]");
     buf_putc(&result, '\0');
 
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&result);
     buf_free(&out);
 }
@@ -1183,27 +1192,27 @@ static int signature_params(const char *type_str, Buf *out_labels) {
 }
 
 static void on_signature_help(const char *id_raw, size_t id_len,
-                              const char *params, int fd_out) {
+                              const char *params, LspSink *sink) {
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!td) { send_response(sink, id_raw, id_len, "null"); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     size_t pos_len;
     const char *pos = lsp_json_raw(params, "position", &pos_len);
-    if (!pos) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!pos) { send_response(sink, id_raw, id_len, "null"); return; }
 
     int line_0 = (int)lsp_json_int(pos, "line");
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
     if (!doc || !doc->symbols) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
@@ -1213,12 +1222,12 @@ static void on_signature_help(const char *id_raw, size_t id_len,
     int  active = 0;
     if (!lsp_enclosing_call(doc->text, doc->text_len, cursor,
                             callee, sizeof(callee), &active)) {
-        send_response(fd_out, id_raw, id_len, "null");
+        send_response(sink, id_raw, id_len, "null");
         return;
     }
 
     const LspSymbol *sym = find_symbol(doc, callee);
-    if (!sym) { send_response(fd_out, id_raw, id_len, "null"); return; }
+    if (!sym) { send_response(sink, id_raw, id_len, "null"); return; }
 
     Buf plabels;
     buf_init(&plabels);
@@ -1256,7 +1265,7 @@ static void on_signature_help(const char *id_raw, size_t id_len,
     buf_printf(&result, "\"activeSignature\":0,\"activeParameter\":%d}", active);
     buf_putc(&result, '\0');
 
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&result);
     buf_free(&label);
     buf_free(&plabels);
@@ -1325,29 +1334,29 @@ static void emit_completion_item(Buf *result, const LspSymbol *sym, int *emitted
 }
 
 static void on_completion(const char *id_raw, size_t id_len,
-                          const char *params, int fd_out) {
+                          const char *params, LspSink *sink) {
     static const char *const EMPTY_LIST =
         "{\"isIncomplete\":false,\"items\":[]}";
 
     size_t td_len;
     const char *td = lsp_json_raw(params, "textDocument", &td_len);
-    if (!td) { send_response(fd_out, id_raw, id_len, EMPTY_LIST); return; }
+    if (!td) { send_response(sink, id_raw, id_len, EMPTY_LIST); return; }
 
     char uri[1024];
     if (lsp_json_str_copy(td, "uri", uri, sizeof(uri)) < 0) {
-        send_response(fd_out, id_raw, id_len, EMPTY_LIST);
+        send_response(sink, id_raw, id_len, EMPTY_LIST);
         return;
     }
 
     size_t pos_len;
     const char *pos = lsp_json_raw(params, "position", &pos_len);
-    if (!pos) { send_response(fd_out, id_raw, id_len, EMPTY_LIST); return; }
+    if (!pos) { send_response(sink, id_raw, id_len, EMPTY_LIST); return; }
 
     int line_0 = (int)lsp_json_int(pos, "line");
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
-    if (!doc) { send_response(fd_out, id_raw, id_len, EMPTY_LIST); return; }
+    if (!doc) { send_response(sink, id_raw, id_len, EMPTY_LIST); return; }
 
     /* The prefix is what has been typed *before* the cursor. Reading the word
      * *at* the cursor (which is what lsp_word_at_pos does, stepping right when
@@ -1437,25 +1446,173 @@ static void on_completion(const char *id_raw, size_t id_len,
     buf_puts(&result, items.data);
     buf_puts(&result, "]}");
     buf_putc(&result, '\0'); /* NUL-terminate for strlen in send_response */
-    send_response(fd_out, id_raw, id_len, result.data);
+    send_response(sink, id_raw, id_len, result.data);
     buf_free(&items);
     buf_free(&result);
 }
 
+
 /* -------------------------------------------------------------------------
- * Main loop
+ * Dispatch
+ *
+ * The `if (strcmp(method, ...))` chain below used to live inside
+ * lsp_server_run's read loop, which welded every handler to a pair of file
+ * descriptors. It is lifted out unchanged so the same dispatch can be driven
+ * from a transport that has no descriptors at all -- a browser, where the
+ * message arrives as a JS string and the replies go back as a JSON array
+ * (see lsp_session.c).
+ *
+ * `fd_in` is the one remaining transport-specific input: it is the descriptor
+ * the client's *next* message would arrive on, used to peek for a
+ * $/cancelRequest while a slow analysis is running. A caller with nothing to
+ * peek at passes -1 and gets the already-drained view -- which is the honest
+ * answer in the browser, where the client's own event loop decides what to
+ * send and when.
+ * --------------------------------------------------------------------- */
+
+/* lsp_docs_init() zeroes the table rather than freeing it, so calling it a
+ * second time on a live session would strand every open document. */
+static bool docs_ready_ = false;
+
+void lsp_dispatch_init(void) {
+    if (docs_ready_) return;
+    lsp_docs_init();
+    docs_ready_ = true;
+}
+
+void lsp_dispatch_flush(LspSink *sink) {
+    lsp_flush_dirty(sink);
+}
+
+void lsp_dispatch_teardown(void) {
+    queue_free();
+    stdlib_cache_free();
+    if (docs_ready_) {
+        lsp_docs_free();
+        docs_ready_ = false;
+    }
+    initialized_    = false;
+    shutdown_       = false;
+    hover_markdown_ = true;
+    cancelled_n_    = 0;
+}
+
+/* Handle exactly one message. Returns false when the client asked to exit --
+ * the caller decides whether that means tearing the process down or just this
+ * session. `msg` stays owned by the caller. */
+bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
+    lsp_dispatch_init();
+
+    size_t method_len;
+    const char *method_raw = lsp_json_str(msg, "method", &method_len);
+    if (!method_raw) return true;
+
+    char method[128];
+    size_t copy = method_len < sizeof(method) - 1 ? method_len : sizeof(method) - 1;
+    memcpy(method, method_raw, copy);
+    method[copy] = '\0';
+
+    size_t id_len = 0;
+    const char *id_raw = lsp_json_raw(msg, "id", &id_len);
+
+    size_t params_len = 0;
+    const char *params_raw = lsp_json_raw(msg, "params", &params_len);
+
+    if (strcmp(method, "initialize") == 0) {
+        on_initialize(id_raw, id_len, params_raw, sink);
+    } else if (strcmp(method, "initialized") == 0) {
+        /* no-op */
+    } else if (strcmp(method, "$/cancelRequest") == 0) {
+        /* Arrived on the main path rather than in a drain -- the request
+         * it names is already answered, so there is nothing to abandon.
+         * Recording it anyway would strand the id and reject a later
+         * request that reuses the number. */
+    } else if (strcmp(method, "shutdown") == 0) {
+        on_shutdown(id_raw, id_len, sink);
+    } else if (strcmp(method, "exit") == 0) {
+        return false;
+    } else if (strcmp(method, "textDocument/didOpen") == 0 && params_raw) {
+        on_did_open(params_raw, params_len, sink);
+    } else if (strcmp(method, "textDocument/didChange") == 0 && params_raw) {
+        on_did_change(params_raw, params_len, sink);
+    } else if (strcmp(method, "textDocument/didClose") == 0 && params_raw) {
+        on_did_close(params_raw, params_len);
+    } else if (strcmp(method, "textDocument/formatting") == 0) {
+        /* Formatting reads doc->text, not doc->symbols, so it does not
+         * need the analysis flush -- and skipping it keeps save-time
+         * formatting off the slow path. */
+        if (!params_raw)
+            send_error(sink, id_raw, id_len, -32602, "Invalid params");
+        else
+            on_formatting(id_raw, id_len, params_raw, sink);
+    } else if (strcmp(method, "textDocument/hover") == 0 ||
+               strcmp(method, "textDocument/definition") == 0 ||
+               strcmp(method, "textDocument/documentSymbol") == 0 ||
+               strcmp(method, "workspace/symbol") == 0 ||
+               strcmp(method, "textDocument/signatureHelp") == 0 ||
+               strcmp(method, "textDocument/completion") == 0) {
+        /* These all read doc->symbols, so any pending edit has to be
+         * analyzed first — otherwise the answer describes the buffer as it
+         * was before the user's last keystroke. This is what keeps the
+         * debounce invisible to correctness: it delays work, never skips
+         * it. */
+        lsp_flush_dirty(sink);
+        /* The flush is the one step slow enough for the client to change
+         * its mind during. Read what it sent meanwhile before committing
+         * to the rest of the work. A transport with no peekable descriptor
+         * skips this: there is no socket to look at, and the client's own
+         * scheduler already decided this request was still wanted. */
+        if (fd_in >= 0) drain_pending(fd_in);
+        if (cancel_take(id_raw, id_len)) {
+            send_error(sink, id_raw, id_len, -32800, "Request cancelled");
+        } else if (!params_raw) {
+            send_error(sink, id_raw, id_len, -32602, "Invalid params");
+        } else if (strcmp(method, "textDocument/hover") == 0) {
+            on_hover(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/definition") == 0) {
+            on_definition(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
+            on_document_symbol(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "workspace/symbol") == 0) {
+            on_workspace_symbol(id_raw, id_len, params_raw, sink);
+        } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
+            on_signature_help(id_raw, id_len, params_raw, sink);
+        } else {
+            on_completion(id_raw, id_len, params_raw, sink);
+        }
+    } else if (id_raw) {
+        send_error(sink, id_raw, id_len, -32601, "Method not found");
+    }
+
+    return true;
+}
+
+/* True when the client completed the shutdown handshake before exiting.
+ * Only the stdio loop cares: it is the difference between exit status 0 and 1. */
+bool lsp_dispatch_shutdown_seen(void) {
+    return shutdown_;
+}
+
+/* -------------------------------------------------------------------------
+ * Main loop -- the stdio transport
  * --------------------------------------------------------------------- */
 
 void lsp_server_run(int fd_in, int fd_out) {
-    lsp_docs_init();
+    LspSink sink = lsp_sink_fd(fd_out);
+    lsp_dispatch_init();
 
     for (;;) {
         /* Nothing new arrived while a document was waiting to be analyzed —
          * the client has stopped typing, so do the work now. A non-empty queue
-         * means messages are already in hand, which is the opposite of quiet. */
+         * means messages are already in hand, which is the opposite of quiet.
+         *
+         * This debounce is inherently stdio: it is a poll() on the input
+         * descriptor. A browser client owns its own quiet-typing window (the
+         * adapter's trailing debounce on didChange), which is why the session
+         * entry point has no equivalent. */
         if (queue_.count == 0 && lsp_docs_any_dirty() &&
             !input_pending(fd_in, LSP_ANALYSIS_DEBOUNCE_MS)) {
-            lsp_flush_dirty(fd_out);
+            lsp_flush_dirty(&sink);
             continue;
         }
 
@@ -1463,93 +1620,19 @@ void lsp_server_run(int fd_in, int fd_out) {
         if (!msg) msg = lsp_read_message(fd_in);
         if (!msg) break;
 
-        size_t method_len;
-        const char *method_raw = lsp_json_str(msg, "method", &method_len);
-        if (!method_raw) { free(msg); continue; }
-
-        char method[128];
-        size_t copy = method_len < sizeof(method) - 1 ? method_len : sizeof(method) - 1;
-        memcpy(method, method_raw, copy);
-        method[copy] = '\0';
-
-        size_t id_len = 0;
-        const char *id_raw = lsp_json_raw(msg, "id", &id_len);
-
-        size_t params_len = 0;
-        const char *params_raw = lsp_json_raw(msg, "params", &params_len);
-
-        if (strcmp(method, "initialize") == 0) {
-            on_initialize(id_raw, id_len, params_raw, fd_out);
-        } else if (strcmp(method, "initialized") == 0) {
-            /* no-op */
-        } else if (strcmp(method, "$/cancelRequest") == 0) {
-            /* Arrived on the main path rather than in a drain -- the request
-             * it names is already answered, so there is nothing to abandon.
-             * Recording it anyway would strand the id and reject a later
-             * request that reuses the number. */
-        } else if (strcmp(method, "shutdown") == 0) {
-            on_shutdown(id_raw, id_len, fd_out);
-        } else if (strcmp(method, "exit") == 0) {
-            free(msg);
-            queue_free();
-            stdlib_cache_free();
-            lsp_docs_free();
-            _exit(shutdown_ ? 0 : 1);
-        } else if (strcmp(method, "textDocument/didOpen") == 0 && params_raw) {
-            on_did_open(params_raw, params_len, fd_out);
-        } else if (strcmp(method, "textDocument/didChange") == 0 && params_raw) {
-            on_did_change(params_raw, params_len, fd_out);
-        } else if (strcmp(method, "textDocument/didClose") == 0 && params_raw) {
-            on_did_close(params_raw, params_len);
-        } else if (strcmp(method, "textDocument/formatting") == 0) {
-            /* Formatting reads doc->text, not doc->symbols, so it does not
-             * need the analysis flush -- and skipping it keeps save-time
-             * formatting off the slow path. */
-            if (!params_raw)
-                send_error(fd_out, id_raw, id_len, -32602, "Invalid params");
-            else
-                on_formatting(id_raw, id_len, params_raw, fd_out);
-        } else if (strcmp(method, "textDocument/hover") == 0 ||
-                   strcmp(method, "textDocument/definition") == 0 ||
-                   strcmp(method, "textDocument/documentSymbol") == 0 ||
-                   strcmp(method, "workspace/symbol") == 0 ||
-                   strcmp(method, "textDocument/signatureHelp") == 0 ||
-                   strcmp(method, "textDocument/completion") == 0) {
-            /* These all read doc->symbols, so any pending edit has to be
-             * analyzed first — otherwise the answer describes the buffer as it
-             * was before the user's last keystroke. This is what keeps the
-             * debounce invisible to correctness: it delays work, never skips
-             * it. */
-            lsp_flush_dirty(fd_out);
-            /* The flush is the one step slow enough for the client to change
-             * its mind during. Read what it sent meanwhile before committing
-             * to the rest of the work. */
-            drain_pending(fd_in);
-            if (cancel_take(id_raw, id_len)) {
-                send_error(fd_out, id_raw, id_len, -32800, "Request cancelled");
-            } else if (!params_raw) {
-                send_error(fd_out, id_raw, id_len, -32602, "Invalid params");
-            } else if (strcmp(method, "textDocument/hover") == 0) {
-                on_hover(id_raw, id_len, params_raw, fd_out);
-            } else if (strcmp(method, "textDocument/definition") == 0) {
-                on_definition(id_raw, id_len, params_raw, fd_out);
-            } else if (strcmp(method, "textDocument/documentSymbol") == 0) {
-                on_document_symbol(id_raw, id_len, params_raw, fd_out);
-            } else if (strcmp(method, "workspace/symbol") == 0) {
-                on_workspace_symbol(id_raw, id_len, params_raw, fd_out);
-            } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
-                on_signature_help(id_raw, id_len, params_raw, fd_out);
-            } else {
-                on_completion(id_raw, id_len, params_raw, fd_out);
-            }
-        } else if (id_raw) {
-            send_error(fd_out, id_raw, id_len, -32601, "Method not found");
-        }
-
+        bool keep_going = lsp_dispatch_message(msg, &sink, fd_in);
         free(msg);
+
+        if (!keep_going) {
+            /* `exit` on stdio means the editor is gone; the process has
+             * nothing left to serve. _exit rather than return so a client
+             * that never sent `shutdown` still gets the non-zero status the
+             * spec asks for, without unwinding through atexit handlers. */
+            int status = lsp_dispatch_shutdown_seen() ? 0 : 1;
+            lsp_dispatch_teardown();
+            _exit(status);
+        }
     }
 
-    queue_free();
-    stdlib_cache_free();
-    lsp_docs_free();
+    lsp_dispatch_teardown();
 }
