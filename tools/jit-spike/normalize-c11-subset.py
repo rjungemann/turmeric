@@ -39,6 +39,7 @@ so a c2mir failure downstream names a real gap rather than a silent miss.
 """
 
 import argparse
+import os
 import re
 import sys
 
@@ -297,11 +298,38 @@ def inject_ctor_runner(lines, names):
     return out, len(names)
 
 
-def normalize(text):
+QUOTED_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
+
+
+def scan_quoted_includes(lines, include_dirs):
+    """Prototype lines from project headers the TU includes by quote.
+
+    The `#include "hamt.h"` path (g_needs_hamt) declares the whole HAMT API in
+    a header rather than as inline externs, so the TU text alone has no
+    prototype for `tur_hamt_new` et al. and every hoisted call to them stayed
+    on __auto_type.  Reading the header is still a read, not a guess -- these
+    are the same declarations the C compiler resolves the calls against.
+    Angle includes are system headers and are deliberately not scanned."""
+    out = []
+    for line in lines:
+        m = QUOTED_INCLUDE_RE.match(line)
+        if not m:
+            continue
+        for d in include_dirs:
+            path = os.path.join(d, m.group(1))
+            if os.path.isfile(path):
+                with open(path) as f:
+                    out.extend(f.read().split('\n'))
+                break
+    return out
+
+
+def normalize(text, include_dirs=()):
     text, n_hoisted = hoist_tur_includes(text)
     lines = text.split('\n')
-    proto = build_proto_table(lines)
-    fnptr_typedefs = build_fnptr_typedef_table(lines)
+    proto_lines = lines + scan_quoted_includes(lines, include_dirs)
+    proto = build_proto_table(proto_lines)
+    fnptr_typedefs = build_fnptr_typedef_table(proto_lines)
     out, unresolved = [], []
     n_auto = n_zero = 0
 
@@ -338,11 +366,13 @@ def main():
     ap.add_argument('-o', '--out', default='-')
     ap.add_argument('--report', action='store_true',
                     help='print a rewrite tally to stderr')
+    ap.add_argument('-I', '--include-dir', action='append', default=[],
+                    help='scan quoted #include files here for prototypes')
     args = ap.parse_args()
 
     with open(args.source) as f:
         text = f.read()
-    result, stats = normalize(text)
+    result, stats = normalize(text, args.include_dir)
 
     if args.report:
         sys.stderr.write(

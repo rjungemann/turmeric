@@ -44,7 +44,7 @@ run_one() {
   if ! timeout 30 "$TUR" emit-c "$dir/input.tur" > "$W/$name.c" 2>/dev/null; then
     printf '%s\temit-fail\t\n' "$name"; rm -f "$W/$name.c"; return
   fi
-  python3 "$NORMALIZE" "$W/$name.c" -o "$W/$name.subset.c" 2> "$W/$name.norm.err"
+  python3 "$NORMALIZE" -I src/runtime "$W/$name.c" -o "$W/$name.subset.c" 2> "$W/$name.norm.err"
   local stdin_file=/dev/null
   [ -f "$dir/input.stdin" ] && stdin_file="$dir/input.stdin"
   timeout 60 "$SPIKE" -I src -I src/runtime -O 2 --quiet $GENMODE --shim "$SHIM" \

@@ -47,7 +47,7 @@ for dir in tests/fixtures/*/; do
     printf '%s\temit-fail\t\n' "$name" >> "$OUT/results.tsv"
     continue
   fi
-  python3 "$NORMALIZE" "$OUT/$name.c" -o "$OUT/$name.subset.c" \
+  python3 "$NORMALIZE" -I src/runtime "$OUT/$name.c" -o "$OUT/$name.subset.c" \
       2> "$OUT/$name.norm.err"
 
   stdin_file=/dev/null

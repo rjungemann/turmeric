@@ -55,7 +55,7 @@ for name in "${fixtures[@]}"; do
     continue
   fi
 
-  python3 "$NORMALIZE" "$OUT/$name.c" -o "$OUT/$name.subset.c" --report \
+  python3 "$NORMALIZE" -I src/runtime "$OUT/$name.c" -o "$OUT/$name.subset.c" --report \
     2> "$OUT/$name.norm.err"
   norm_rc=$?
 
