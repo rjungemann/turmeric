@@ -65,6 +65,19 @@ static void stub_sym(LspSymbol *s, const char *name, const char *type,
 int tur_collect_symbols(const char *source_path, LspSymbol *out, int cap,
                         int *count_out) {
     *count_out = 0;
+
+    /* The stdlib prime analyses an empty scratch file, which always compiles
+     * -- so "this buffer does not parse" must not make the prime fail too, or
+     * the fallback would be untestable. Recognise it by name, the way the
+     * server names it. */
+    int is_prime = strstr(source_path, "tur_lsp_std_") != NULL;
+    if (is_prime) {
+        if (cap >= 1)
+            stub_sym(&out[(*count_out)++], "cons", "(fn [int int] : int)",
+                     STUB_STDLIB_DIR "/list.tur", 12, 7, 11);
+        return 0;
+    }
+
     if (stub_yield_nothing) return 1;
 
     if (cap >= 1)
@@ -517,6 +530,33 @@ static void test_exit_ends_the_session_without_exiting(void) {
     buf_free(&reopened);
 }
 
+/* The stdlib fallback has to survive a reset.
+ *
+ * The prime used to latch on a function-local static, which on stdio is
+ * indistinguishable from correct -- one session is one process there. In a
+ * browser the module outlives the session: the latch stayed set while the
+ * cache it guarded was freed, so from the second session onward a buffer
+ * opened with a syntax error already in it had completion dead for the life
+ * of the page, which is exactly the case the fallback exists for. */
+static void test_stdlib_fallback_survives_a_reset(void) {
+    for (int round = 0; round < 2; round++) {
+        fresh_session();
+        stub_yield_nothing = 1;
+        session_open("file:///project/never-parsed.tur", "(cons");
+
+        Buf out = send_msg(
+            "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/completion\","
+            "\"params\":{\"textDocument\":{\"uri\":\"file:///project/never-parsed.tur\"},"
+            "\"position\":{\"line\":0,\"character\":5}}}");
+
+        CHECK(contains(&out, "\"label\":\"cons\""),
+              round == 0 ? "a never-parsed buffer completes from the stdlib"
+                         : "and still does after the session was reset");
+        buf_free(&out);
+        stub_yield_nothing = 0;
+    }
+}
+
 static void test_flush_with_nothing_dirty_is_empty(void) {
     fresh_session();
     session_open("file:///project/main.tur", "(cons 1 2)");
@@ -600,6 +640,7 @@ int main(void) {
     test_formatting_skips_the_analysis_flush();
     test_formatting_with_no_params_errors();
     test_exit_ends_the_session_without_exiting();
+    test_stdlib_fallback_survives_a_reset();
     test_flush_with_nothing_dirty_is_empty();
     test_did_close_drops_the_document();
     test_escapes_are_decoded();

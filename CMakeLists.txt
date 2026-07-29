@@ -800,6 +800,15 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_lsp_session_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# The playground's analysis backend (src/web/wasm_lsp.c), run natively against
+# the in-tree stdlib.  It normally only executes inside a wasm module, where a
+# mistake surfaces months later as "completion in the browser is empty";
+# nothing in it is actually wasm-specific, so it runs here instead.
+add_test(
+  NAME tur_lsp_wasm_backend_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_lsp_wasm_backend_unit" "${CMAKE_SOURCE_DIR}/stdlib"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Injective name-mangler round-trip + injectivity unit test
 add_test(
   NAME tur_mangle_unit

@@ -239,6 +239,14 @@ static size_t unescape_json(const char *src, size_t src_len, char *dst) {
 
 static LspSymbol *stdlib_syms_      = NULL;
 static int        stdlib_sym_count_ = 0;
+/* The prime is attempted at most once per session, not once per process. It
+ * was a function-local static, which is the same thing on stdio -- one session
+ * is one process there. It is not the same thing anywhere a session can be
+ * reset and the module keeps running: the latch stayed set while the cache it
+ * guarded was freed, so every session after the first served an empty stdlib
+ * fallback and a buffer opened with a syntax error had completion dead for the
+ * life of the page. */
+static int        stdlib_prime_tried_ = 0;
 
 /* Set by resolve_stdlib_root() in main.c before any subcommand runs. NULL if
  * the stdlib could not be located, which disables the cache rather than
@@ -276,8 +284,9 @@ static void stdlib_cache_fill(const LspSymbol *syms, int count) {
 
 static void stdlib_cache_free(void) {
     free(stdlib_syms_);
-    stdlib_syms_      = NULL;
-    stdlib_sym_count_ = 0;
+    stdlib_syms_        = NULL;
+    stdlib_sym_count_   = 0;
+    stdlib_prime_tried_ = 0;
 }
 
 /* Harvest the stdlib surface by analyzing an empty buffer.
@@ -292,9 +301,8 @@ static void stdlib_cache_free(void) {
  * that actually needs the fallback. A session where every document parses
  * never pays it. */
 static void stdlib_cache_prime(void) {
-    static int attempted = 0;
-    if (stdlib_syms_ || attempted) return;
-    attempted = 1;
+    if (stdlib_syms_ || stdlib_prime_tried_) return;
+    stdlib_prime_tried_ = 1;
     if (!stdlib_root()) return;
 
     char tmp_path[512];
