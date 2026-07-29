@@ -1,15 +1,19 @@
 # JIT Execution Engine Plan (`tur jit`)
 
-Status: J0 COMPLETE (x86-64 Linux), J1+ PROPOSED. Plan written 2026-07-27;
-J0 spike run 2026-07-28 -- results in
-[jit-engine-j0-findings.md](jit-engine-j0-findings.md).
+Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); **S1 and S1b landed**, so the
+pre-work J1 depends on is done. J1+ PROPOSED. Plan written 2026-07-27; J0 spike
+run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
+[jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
+Full-corpus coverage under the spike harness is **1645/1680 (97.9%)**, with
+every remaining failure a recorded decision or a filed report.
 
 J0 verdict: MIR works, proceed to J1. All three exit-criteria fixtures run
 correctly in process, and 150 of a 168-fixture corpus sample (89%) pass with
 no compiler change. Two findings revise this plan's priorities and are folded
 into the sections below: c2mir silently discards `__attribute__((constructor))`
 and `((cleanup))` (a correctness hazard the plan did not anticipate, section
-4.1 below), and the fixed runtime preamble -- not the user's program -- is 76%
+4.1 below -- **both now closed in the emitter**, findings 12), and the fixed
+runtime preamble -- not the user's program -- is 76%
 of compile time, which promotes S2 from optional hygiene to a J2 prerequisite.
 The arm64 macOS MAP_JIT gate is now CLOSED (2026-07-27, Apple M2): MIR handles
 Apple Silicon W^X correctly and needed no changes. That run also corrected the
@@ -229,11 +233,13 @@ useful even if the JIT slips.
   `__tur_static_init()` at the top of `main`; one `constructor` wrapper
   survives for the no-`main` cases (separate compilation, `--shared`) and the
   function is idempotent. This retires rule 3 of the spike normalizer.
-  `__attribute__((cleanup))` (dynamic-variable scope-exit pop) has no
-  equivalent recovery and **remains open** -- it is now the only silently
-  dropped attribute the emitter still depends on. Decide it in J1: lower it at
-  exit edges, or make dynamic variables a documented cc-only feature under
-  `tur jit`.
+  `__attribute__((cleanup))` (dynamic-variable scope-exit pop) is **also done**
+  (findings 12.5), by a third route neither option here anticipated: the pop is
+  emitted explicitly at the block's fall-through exit *and* the attribute is
+  kept for the exits the expression emitter cannot see, with an idempotent pop
+  so both may fire. Corpus 1642 -> 1645. Dynamic variables are therefore NOT
+  cc-only under `tur jit`. One edge remains for J1: an early `return`/`goto`
+  out of a dynamic binding still pops only on the `cc` path.
 - **S2 -- runtime-as-library boundary. J0 promoted this to a J2
   prerequisite.** The fixed runtime preamble is byte-identical across programs
   (3,847 lines) and accounts for 76% of c2mir time and 50% of generation time,
@@ -272,9 +278,10 @@ useful even if the JIT slips.
   without S2 (findings 8.3).
 - **J1 -- `tur jit <file>`.** Sections 3.1-3.2. Fallback-to-cc wired.
   `EXPERIMENTS[]` row lands here. S1 and S1b are **both done** (findings 11
-  and 12); between them the spike normalizer is down to two rules, the
-  attribute hazard is closed except for `((cleanup))`, and the corpus stands
-  at 1642/1680. Default to
+  and 12); between them the spike normalizer is down to two rules, every
+  attribute the emitter depends on is now recovered without relying on
+  c2mir honouring it, and the corpus stands at 1645/1680 (97.9%) with no
+  unexplained failure. Default to
   `MIR_set_lazy_gen_interface` -- J0 measured lazy generation at 23 ms of
   link+gen against 125 ms eager, for the same output. **Lazy generation is not
   re-entrant**: two threads entering the same not-yet-generated function trip a

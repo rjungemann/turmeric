@@ -1,9 +1,12 @@
 # JIT Engine -- Phase J0 spike results
 
 Status: J0 COMPLETE on x86-64 Linux (2026-07-28) and arm64 macOS (2026-07-27,
-full corpus 2026-07-28). Sections 0-7 are the original Linux write-up;
-**section 8 corrects three of their claims**, and **section 9 corrects three of
-section 8's** from the full-corpus macOS run -- read 9 first.
+full corpus 2026-07-28); **S1 landed 2026-07-28 (section 11) and S1b
+2026-07-29 (section 12)**, which is the pre-work J1 depends on. Sections 0-7
+are the original Linux write-up; **section 8 corrects three of their claims**,
+and **section 9 corrects three of section 8's** from the full-corpus macOS run
+-- read 9 first. Current Linux full-corpus coverage: **1645/1680 (97.9%)**,
+every remaining failure a recorded decision or a filed report (12.6).
 Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 
 ## 0. Verdict
@@ -27,6 +30,10 @@ Two things the plan did not anticipate, both actionable:
   (`c2mir.c:4392`). `__attribute__((constructor))` is load-bearing in the
   emitted C, and dropping it produced SIGSEGV in effectful code and wrong
   answers in dynamic variables -- with no diagnostic at all. See section 3.
+  (**Closed 2026-07-29 -- see section 12.** Both `constructor` and `cleanup`
+  are now recovered by the emitter rather than relied upon: an explicit
+  `__tur_static_init()` and an explicit scope-exit pop. What remains of this
+  hazard is `packed`/`#pragma pack`, which never came from the emitter.)
 - The dominant *latency* cost is not the program. It is the ~3,850-line runtime
   preamble that every emitted TU carries, identical program to program: 76% of
   c2mir time and 50% of generation time. S2 (runtime-as-prebuilt-library) is
@@ -257,9 +264,14 @@ breakdown.
    unlike recommendation 1 it made no prediction to get wrong. See section
    12.** Seven emission sites, corpus unchanged at 1642/1680 -- the value is
    that normalizer rule 3 is retired, not that the number moved.
-3. **Decide `__attribute__((cleanup))`.** Either lower it explicitly at exit
+3. ~~**Decide `__attribute__((cleanup))`.** Either lower it explicitly at exit
    edges, or make dynamic variables a documented `cc`-only feature under
-   `tur jit` (step-6 fallback with a TUR-W).
+   `tur jit`.~~ **DONE (`4bde858fa`), and neither option was the answer -- see
+   section 12.5.** The fall-through exit is one the expression emitter *can*
+   see, so the pop is emitted explicitly there while the attribute is kept for
+   the exits it cannot; an idempotent pop lets both fire. Corpus 1642 -> 1645,
+   all ten `dynvar-*` fixtures green on both paths, dynamic variables not
+   `cc`-only after all.
 4. **Promote S2 ahead of J2**, per section 4.3.
 5. ~~**Default to lazy generation** (`MIR_set_lazy_gen_interface`).~~
    **WITHDRAWN -- see 8.1 and 8.4.** Lazy generation has two independent
