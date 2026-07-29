@@ -88,6 +88,23 @@ THUNK_RETS = ('int64_t', 'double', 'bool', 'void')
 # that as int64_t makes c2mir reject the assignment ("incompatible types in
 # assignment to an arithmetic type lvalue").  Caught on hrt-rank2-aggregate-arg
 # and hrt-hkt-aggregate-container.
+# `INT64_C(n)` / `UINT64_C(n)` -- stdint's integer-constant macros.  Exact: the
+# macro's whole purpose is to give the literal that type.
+INTC_RE = re.compile(r'^U?INT(8|16|32|64)_C\s*\(')
+
+# `TUR_APPLY<N>_T(R, A0.., f, a..)` -- the emitted typed-apply macro.  Its FIRST
+# argument is the return type, by its own definition in the preamble, so this is
+# a read rather than an inference.
+TUR_APPLY_RE = re.compile(r'^TUR_APPLY\d+_T\s*\(\s*([^,]+?)\s*,')
+
+# `(T)(expr)` -- an ordinary cast; the type is written right there.  Restricted
+# to a recognized primitive spelling OR anything ending in `*`, so that `(f)(x)`
+# -- a call through a parenthesized function name -- cannot be mistaken for one.
+CAST_RE = re.compile(
+    r'^\(\s*((?:const\s+)?(?:bool|_Bool|char|short|int|long|float|double'
+    r'|unsigned|signed|u?int(?:8|16|32|64|ptr)_t|size_t|ssize_t|ptrdiff_t)'
+    r'(?:\s*\*)*|[A-Za-z_][A-Za-z0-9_ ]*\*+)\s*\)\s*[\(A-Za-z_]')
+
 # `*(T *)(...)` -- unboxing a carrier back to an aggregate.  Exact, not a guess.
 DEREF_CAST_RE = re.compile(r'^\*\s*\(\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*\*\s*\)')
 
@@ -159,6 +176,18 @@ def deduce_type(init, proto):
     m = DEREF_CAST_RE.match(e)
     if m:
         return m.group(1).strip()
+
+    m = TUR_APPLY_RE.match(e)
+    if m:
+        return m.group(1).strip()
+
+    m = INTC_RE.match(e)
+    if m:
+        return ('u' if e[0] == 'U' else '') + 'int' + m.group(1) + '_t'
+
+    m = CAST_RE.match(e)
+    if m:
+        return ' '.join(m.group(1).split())
     return None
 
 
