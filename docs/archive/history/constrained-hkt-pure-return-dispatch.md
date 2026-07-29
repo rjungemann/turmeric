@@ -81,6 +81,17 @@ Fixtures:
 
 Suite: 2401 passed, 0 failed (2399 before, plus the two new fixtures).
 
+## Correction (2026-07-29, same day)
+
+The claim above holds for `pure` in the poly fn's **own body** (re-resolved per
+spec) and in the **dict-passed** rank-2 path (the 107/207 fixture). It does NOT
+hold for `pure` inside a **lifted continuation** -- `(bind x (fn [v] (pure ...)))`
+-- where the lambda is emitted outside any specialization and keeps the
+`Applicative [Schema]` representative. That produces numerically right answers
+only because Schema's tag word reads as Option's `is_some`. Tracked in
+[../../reported/constrained-hkt-spec-keeps-representative-instance.md](../../reported/constrained-hkt-spec-keeps-representative-instance.md),
+which also documents an attempted-and-reverted fix.
+
 ## Still open
 
 The by-value carrier restriction is a separate fault and remains open --
