@@ -89,6 +89,7 @@
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 #include "experiments.h"  /* XF1: --enable=<name> experimental-flag registry */
+#include "jit_engine.h"   /* J1: tur jit (TUR_HAVE_JIT builds only) */
 #include "mono_specs.h"   /* VBM1: --dump-mono-specs registry dump */
 /* LSP server */
 #include "lsp/lsp.h"
@@ -3278,6 +3279,147 @@ static int decode_exit_status(int status) {
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return 1;
+}
+
+static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
+
+/* J1 (docs/upcoming/jit-engine-plan.md section 3.2): `tur jit <file>` --
+ * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
+ * disk artifacts.  Front half is cmd_build's exactly: run_core_passes via
+ * compile_to_c, then the same in-memory post-passes.  The back half hands the
+ * buffer to tur_jit_execute (src/jit_engine.c, built under -DTUR_JIT=ON).
+ *
+ * Fallback (plan step 6): any engine-level failure -- c2mir rejecting a GNU
+ * construct in user inline-C is the expected case -- prints a TUR-W and
+ * delegates to cmd_run, which recompiles through cc.  Never a hard stop.
+ *
+ * Usage: tur jit [-I <dir>...] <file> [-- <args>...]  */
+static int cmd_jit(int argc, char **argv) {
+    if (!g_opt_jit) {
+        fprintf(stderr,
+                "tur: 'jit' is an experimental feature; enable it with "
+                "--enable=jit\n"
+                "     (see docs/upcoming/jit-engine-plan.md, and `tur "
+                "experiments` for status)\n");
+        return 2;
+    }
+    experiment_warn_if_used("jit");
+#ifndef TUR_HAVE_JIT
+    fprintf(stderr,
+            "tur: this build carries no JIT engine; reconfigure with "
+            "-DTUR_JIT=ON\n"
+            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
+    return 2;
+#else
+    const char *input = NULL;
+    int passthrough_start = -1;
+    int scan_end = argc;
+    for (int i = 2; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { scan_end = i; break; }
+    char **user_inc = NULL;
+    int n_user_inc = parse_include_flags(scan_end, argv, 2, &user_inc);
+    if (n_user_inc < 0) { free(user_inc); return 2; }
+    for (int i = 2; i < scan_end; i++) {
+        int c;
+        if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+        if (argv[i][0] != '-' && !input) input = argv[i];
+    }
+    for (int i = 2; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { passthrough_start = i + 1; break; }
+    if (!input) {
+        fprintf(stderr, "usage: tur jit [-I <dir>...] <file> [-- <args>...]\n");
+        free(user_inc);
+        return 2;
+    }
+
+    refine_discharge_reset();
+    g_emit_for_link = true;
+    Buf csrc;
+    buf_init(&csrc);
+    int rc = compile_to_c(input, &csrc, (const char **)user_inc, n_user_inc,
+                          NULL, 0);
+    if (rc != 0) { buf_free(&csrc); free(user_inc); return rc; }
+    hoist_tur_include_directives(&csrc);
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+
+    /* Program argv: argv[0] = the source path (matches what a compiled binary
+     * would see as its own name closely enough for *args*), then everything
+     * after `--`. */
+    int prog_argc = 1 + (passthrough_start > 0 ? argc - passthrough_start : 0);
+    char **prog_argv = (char **)malloc(((size_t)prog_argc + 1) * sizeof(char *));
+    if (!prog_argv) { buf_free(&csrc); buf_free(&autolink); free(user_inc); return 2; }
+    prog_argv[0] = (char *)input;
+    for (int i = 0; i < prog_argc - 1; i++)
+        prog_argv[i + 1] = argv[passthrough_start + i];
+    prog_argv[prog_argc] = NULL;
+
+    /* Include path for `#include "hamt.h"` et al.: the Turmeric tree (dev
+     * checkout, walking up from the executable) or the installed SDK. */
+    static char jit_inc0[4096], jit_inc1[4096];
+    const char *jit_incs[2];
+    int n_jit_incs = 0;
+    {
+        char root[4096] = "";
+        const char *env = getenv("TUR_SDK_ROOT");
+        if (env && *env) {
+            snprintf(root, sizeof(root), "%s/share/turmeric", env);
+            struct stat st;
+            char probe[4200];
+            snprintf(probe, sizeof(probe), "%s/src/runtime/hamt.h", root);
+            if (stat(probe, &st) != 0) snprintf(root, sizeof(root), "%s", env);
+        } else {
+            char exe[4096] = "";
+            if (get_exe_path(exe, sizeof(exe)) == 0) {
+                char dir[4096];
+                dir_of_path(exe, dir, sizeof(dir));
+                for (int d = 0; d < 8; d++) {
+                    char probe[4200];
+                    struct stat st;
+                    snprintf(probe, sizeof(probe), "%s/src/runtime/hamt.h", dir);
+                    if (stat(probe, &st) == 0) { snprintf(root, sizeof(root), "%s", dir); break; }
+                    snprintf(probe, sizeof(probe),
+                             "%s/share/turmeric/src/runtime/hamt.h", dir);
+                    if (stat(probe, &st) == 0) {
+                        snprintf(root, sizeof(root), "%s/share/turmeric", dir);
+                        break;
+                    }
+                    char *sl = strrchr(dir, '/');
+                    if (!sl || sl == dir) break;
+                    *sl = '\0';
+                }
+            }
+        }
+        if (root[0]) {
+            snprintf(jit_inc0, sizeof(jit_inc0), "%s/src", root);
+            snprintf(jit_inc1, sizeof(jit_inc1), "%s/src/runtime", root);
+            jit_incs[n_jit_incs++] = jit_inc0;
+            jit_incs[n_jit_incs++] = jit_inc1;
+        }
+    }
+
+    int prog_rc = 0;
+    int jrc = tur_jit_execute(csrc.data, csrc.len,
+                              autolink.len ? autolink.data : NULL,
+                              jit_incs, n_jit_incs,
+                              prog_argc, prog_argv, &prog_rc);
+    free(prog_argv);
+    buf_free(&csrc);
+    buf_free(&autolink);
+    free(user_inc);
+    if (jrc == TUR_JIT_OK) return prog_rc;
+
+    /* Plan step 6: clean per-program fallback to the cc path.  cmd_run parses
+     * the same argv shape (it never looks at argv[1]), so delegate whole. */
+    fprintf(stderr,
+            "tur: warning: TUR-W0070: jit engine could not %s this program "
+            "(see diagnostics above); falling back to the cc path\n",
+            jrc == TUR_JIT_ERR_COMPILE ? "compile"
+            : jrc == TUR_JIT_ERR_LINK  ? "link"
+                                       : "run");
+    return cmd_run(argc, argv);
+#endif /* TUR_HAVE_JIT */
 }
 
 static int cmd_run(int argc, char **argv) {
@@ -8964,6 +9106,9 @@ int main(int argc, char **argv) {
         int rc = cmd_link(out, inputs, n_inputs, shared, link_flags);
         free(inputs);
         return rc;
+    }
+    if (strcmp(cmd, "jit") == 0) {
+        return cmd_jit(argc, argv);
     }
     if (strcmp(cmd, "run") == 0) {
         /* Disambiguate: if the first non-flag argument ends in .tur or

@@ -1,3 +1,4 @@
+include_guard(GLOBAL)
 # ---------------------------------------------------------------------------
 # MIR (c2mir + MIR-gen) -- vendored for the J0 JIT spike.
 # docs/upcoming/jit-engine-plan.md, Phase J0.

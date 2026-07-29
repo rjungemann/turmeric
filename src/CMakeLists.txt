@@ -399,6 +399,22 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(tur main.c lsp/mcp.c $<TARGET_OBJECTS:tur_core>)
 
+# J1 (jit-engine-plan): the in-process MIR JIT engine behind `tur jit`.
+# Only under -DTUR_JIT=ON: vendors MIR (cmake/mir.cmake, included by the
+# top-level guard), compiles the engine TU, and exports tur's symbols so the
+# engine's dlsym(RTLD_DEFAULT) resolver can see the linked-in runtime.
+if(TUR_JIT)
+  target_sources(tur PRIVATE jit_engine.c)
+  # MIR's headers are not -pedantic-clean (extra semicolons from its DLIST
+  # macros); suppress for the one TU that includes them, same treatment as
+  # the generated ffi_dispatch.c above.
+  set_source_files_properties(jit_engine.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-pedantic")
+  target_compile_definitions(tur PRIVATE TUR_HAVE_JIT=1)
+  target_link_libraries(tur PRIVATE tur_mir)
+  set_target_properties(tur PROPERTIES ENABLE_EXPORTS TRUE)
+endif()
+
 # tur also needs the subsystem subdirs on the include path for main.c.
 target_include_directories(tur PRIVATE ${TUR_INCLUDE_DIRS})
 

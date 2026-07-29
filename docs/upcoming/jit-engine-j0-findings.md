@@ -1927,3 +1927,50 @@ abort proved that for the config global) and the six functions pattern-matched
 it perfectly. The lesson is 11.6's again, from a new angle: a hazard inherited
 from a correct analysis of a NEIGHBORING defect still needs its own
 reachability check before it becomes a plan line.
+
+## 18. J1 landed -- `tur jit <file>` exists
+
+Added 2026-07-29. Phase J1's deliverable, per plan sections 3.1-3.2:
+
+- **Two gates, both required.** Build-time: `-DTUR_JIT=ON` vendors MIR
+  (cmake/mir.cmake, same fork pin as the spike) and compiles
+  `src/jit_engine.c` into `tur` with `ENABLE_EXPORTS` so the resolver can see
+  the linked-in runtime; a default build carries no fetch and no dependency.
+  Run-time: the `jit` EXPERIMENTS[] row (introduced 0.32.2, expires 0.36.0,
+  `g_opt_jit`), so `tur jit` errors out without `--enable=jit` and fires
+  TUR-W0060 with it. Each gate reports its own absence usably.
+- **The pipeline is plan 3.2 verbatim.** cmd_jit reuses cmd_build's front
+  half (`compile_to_c` -> `hoist_tur_include_directives` ->
+  `scan_autolink_markers`, all in memory), then `tur_jit_execute`: autolink
+  `-l` entries dlopen'd RTLD_GLOBAL, c2mir over the buffer, `MIR_link` with a
+  dlsym(RTLD_DEFAULT) resolver + the builtin-shim table + atexit
+  interception, eager generation (recommendation 5), weak-config sync, entry
+  on a sized-stack thread (15.3), `*args*` built from everything after `--`.
+- **Step-6 fallback is wired and observed.** Any engine-level failure prints
+  TUR-W0070 and delegates to cmd_run whole (it never reads argv[1]); a GNU
+  range-initializer probe compiles c2mir-rejected inline C through cc and
+  prints the right answer with rc 0.
+- **What the engine deliberately does NOT carry:** the spike shim's
+  `#define __thread` and fake non-atomic `__atomic_*` lowerings. Those exist
+  to squeeze fixture coverage out of inline-C the emitter does not own;
+  shipping them would trade a clean compile error for silent corruption under
+  spawn. Inline C that uses them takes the fallback.
+
+Verified on the J1 build: the three J0 exit-criteria fixtures plus
+`stm-stress` (deterministic 4000 -- real atomics, real TLS, 8 threads),
+`dynvar-nested`, `module-defer-basic`, `sym-dynamic`, and
+`gc-registry-growth` all match expected output under `tur jit`; args
+passthrough matches the cc path byte-for-byte; the default build's suite is
+2399/0 untouched.
+
+Latency, cold cache, `arith` end to end: **jit ~300 ms vs cc ~330-470 ms**.
+The shared Turmeric front end dominates both, which is 8.3's Apple-Silicon
+finding showing up on Linux at whole-command granularity: S2's prebuilt
+preamble remains the latency story, now measurable directly on `tur jit`.
+
+Known limits, recorded not hidden: single-file mode only (project mode and
+`tur repl --jit` are J2); the c2mir "unknown pragma" warnings still print
+(cosmetic); the `-lturi` SDK anchoring probe hardcodes `build/` so a
+`build-turjit/`-located binary cannot link fallback programs that autolink
+`-lturi` -- pre-existing (`./build/tur run` has the same limit in-tree), noted
+for the install-layout work.

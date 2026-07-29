@@ -123,6 +123,17 @@ option(TUR_JIT_SPIKE
   "build the Phase J0 JIT spike harness (fetches MIR; not part of tur)"
   OFF)
 
+# J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`).
+# Same network posture as the spike: OFF by default, opt-in fetch.  The
+# subcommand additionally sits behind the `jit` experiment (--enable=jit) at
+# run time, per the experimental-features rule.
+option(TUR_JIT
+  "build tur with the in-process MIR JIT engine (tur jit; fetches MIR)"
+  OFF)
+
+if(TUR_JIT_SPIKE OR TUR_JIT)
+  include(cmake/mir.cmake)   # defines tur_mir (guarded; spike re-include is a no-op)
+endif()
 if(TUR_JIT_SPIKE)
   add_subdirectory(tools/jit-spike)
 endif()

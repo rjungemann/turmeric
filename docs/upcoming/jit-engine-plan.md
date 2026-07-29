@@ -1,7 +1,8 @@
 # JIT Execution Engine Plan (`tur jit`)
 
-Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); **S1 and S1b landed**, so the
-pre-work J1 depends on is done. J1+ PROPOSED. Plan written 2026-07-27; J0 spike
+Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); S1/S1b/6(a)/TLS landed;
+**J1 LANDED 2026-07-29** (findings 18): `tur jit <file>` exists behind
+`-DTUR_JIT=ON` + `--enable=jit`, with the step-6 fallback wired. J2+ PROPOSED. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
