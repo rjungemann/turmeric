@@ -1183,9 +1183,24 @@ stands at:
   upstream master tip, each boundary condition verified by a one-line change.
   Filed:
   [docs/reported/mir-two-word-struct-return-goto-loop-miscompile.md](../reported/mir-two-word-struct-return-goto-loop-miscompile.md).
-  The two investigations landed on opposite sides of the boundary -- one
-  product bug the JIT unmasked, one engine bug the corpus caught -- which is
-  the parity sweep doing exactly what J3 intends it to do.
+  **`load-in-imported-module` closes the set, and lands in a third layer: the
+  spike harness itself.** The `(load "stdlib/math.tur")` splice gives the
+  program a module-local `static double sqrt(double) { return
+  __builtin_sqrt(x); }`; c2mir types the undeclared `__builtin_sqrt` as an
+  implicit `int`-returning function, so the call reads the integer return
+  register while the harness's shim delivers the value in xmm0 --
+  `floor(sqrt(25.0))` came out as 1. The defect was introduced by the
+  `7b97d4036` builtin shims: before them these calls failed CLEANLY at link
+  (`unresolved import`); supplying addresses without prototypes converted the
+  loud failure into silent value corruption -- the precise anti-pattern this
+  document keeps cataloguing. Fixed by prototyping the `__builtin_*` family in
+  `subset-shim.h`. Corpus 1640 -> 1641 (97.7%), zero regressions.
+
+  The three investigations landed one each in three different layers --
+  product (identity-keyed map path), engine (MIR struct-return miscompile),
+  and harness (untyped builtin shims) -- which is both the parity sweep doing
+  exactly what J3 intends and a caution that the harness is itself a
+  component under test.
 
 That composition -- every failure either a recorded decision or an open report
 with ruled-out hypotheses -- is the real J0->J1 handoff condition, more than

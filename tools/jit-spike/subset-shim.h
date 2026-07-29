@@ -127,4 +127,25 @@
 
 #endif /* __APPLE__ */
 
+/* The GCC __builtin_* family, PROTOTYPED.  c2mir does not know these names, so
+ * an undeclared `__builtin_sqrt(x)` gets an implicit declaration returning
+ * `int` -- the call then reads the integer return register while the harness
+ * shim delivers the result in xmm0, and floor(sqrt(25.0)) came out as 1
+ * (load-in-imported-module, the last unexplained wrong-output in the sweep).
+ * With prototypes, c2mir emits correctly-typed calls and the resolver's shim
+ * table supplies the addresses.
+ *
+ * `unsigned long` rather than size_t on purpose: this shim is prepended ahead
+ * of the TU's own #includes, so size_t is not in scope yet (LP64 targets only,
+ * which is what the spike runs on). */
+double __builtin_pow (double, double);
+double __builtin_sqrt (double);
+double __builtin_ceil (double);
+double __builtin_floor (double);
+double __builtin_fabs (double);
+void __builtin_trap (void);
+unsigned long __builtin_strlen (const char *);
+int __builtin_popcount (unsigned int);
+void *__builtin_memcpy (void *, const void *, unsigned long);
+
 #endif /* TUR_JIT_SUBSET_SHIM_H */
