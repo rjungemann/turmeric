@@ -1091,3 +1091,41 @@ the harness compiles the shadowed TU directly until it is fixed.
 Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
 10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.
 It is still wide enough that 8.4.2's rule holds: quote the full corpus.
+
+### 11.6 The "__auto_type residue" class was misattributed for the whole document
+
+Every failure table above counts a class labeled "syntax error on identifier"
+and reads it as `__auto_type` residue. That attribution is now known to be
+substantially wrong, and the correction changes what J1 should conclude from
+this document's numbers.
+
+**24 of those fixtures were failing on a normalizer bug, not on emitted C.**
+`PROTO_RE`'s separator between return type and function name was optional, so
+the ordinary call statement `snprintf(__m, ...)` matched as a *prototype* --
+return type `sn`, name `printf` -- and poisoned the table. Every hoisted
+`printf` call then emitted `sn __ps_N = (printf(...));`, an opaque parse error.
+This was present from the very first sweep, so the 84.8% baseline, the macOS
+numbers, and every intermediate figure carry it. The separator is mandatory
+now (`346d1e84f`); any identifier that splits two ways was affected.
+
+**Underneath sat one legitimate emitter gap** (`346d1e84f`): extern-c forms on
+the `preamble_decls` suppression list (`printf`, `strlen`, `getenv`, `puts`,
+...) never had their return types recorded, because the recording added in
+`30c0b7637` lived inside the emit branch that suppression skips. Suppression
+means "the system header already declares this"; the extern-c form is still the
+type authority, and it is now recorded unconditionally.
+
+**Method note, the third of its kind this session:** the misattribution was
+built by surveying failure *text* ("what shapes appear in the unresolved
+reports"), and it was dismantled by diffing result *sets* fixture-by-fixture
+(8.4.2's own technique, which also caught the include-scan gaining zero
+fixtures after 51336def8 claimed it would close most of 29 -- one fixture
+contributed every `tur_hamt_*` line in the survey). Failure-text surveys have
+misled this document twice; result-set diffs have not been wrong yet. J3
+tooling should diff, not grep.
+
+The quoted-include scan from `51336def8` stays despite gaining nothing
+directly: it is a read of real declarations, and it converted
+`hamt-lowering-basic` from a parse failure into a **wrong-output** failure
+under MIR (`false`/`2` where `true`/`1` expected) -- a correctness signal on
+the HAMT lowering path that a parse error was hiding, now visible for J3.
