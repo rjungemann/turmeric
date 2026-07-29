@@ -26,6 +26,8 @@
 #include <dlfcn.h>
 #include <math.h>
 #include <pthread.h>
+#include <setjmp.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,6 +120,30 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_memcpy", (void *) jit_builtin_memcpy},
   {"atexit", (void *) jit_atexit},
 };
+
+/* MIR's default error handler prints and EXITS the process -- from inside
+ * MIR_link, an unresolved import (e.g. a GCC atomic builtin in user inline-C
+ * that c2mir compiled as an implicit call) would kill `tur` before cmd_jit's
+ * step-6 fallback could run.  Found by the first full-corpus sweep of the
+ * real subcommand: 13 fixtures whose stdlib inline-C uses __atomic_* died
+ * with empty output instead of falling back to cc (findings 18.1).  Unwind
+ * to tur_jit_execute instead; the half-initialized context is deliberately
+ * LEAKED (tearing it down from an undefined intermediate state is how a
+ * fallback becomes a crash), which is acceptable in a one-shot CLI. */
+static jmp_buf g_jit_err_jb;
+static volatile int g_jit_err_active = 0;
+
+static void MIR_NO_RETURN jit_mir_error (MIR_error_type_t type, const char *fmt, ...) {
+  va_list ap;
+  va_start (ap, fmt);
+  fprintf (stderr, "tur: jit: ");
+  vfprintf (stderr, fmt, ap);
+  fputc ('\n', stderr);
+  va_end (ap);
+  (void) type;
+  if (g_jit_err_active) longjmp (g_jit_err_jb, 1);
+  exit (1);
+}
 
 static void *jit_import_resolver (const char *name) {
   for (size_t i = 0; i < sizeof JIT_SHIMS / sizeof JIT_SHIMS[0]; i++)
@@ -233,6 +259,13 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   g_n_atexit = 0;
 
   MIR_context_t ctx = MIR_init ();
+  MIR_set_error_func (ctx, jit_mir_error);
+  g_jit_err_active = 1;
+  if (setjmp (g_jit_err_jb) != 0) {
+    g_jit_err_active = 0;
+    free (full);
+    return TUR_JIT_ERR_LINK;
+  }
   c2mir_init (ctx);
 
   struct c2mir_options ops;
@@ -275,6 +308,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
    * miscompiled pthread entries even single-threaded (8.4.1). */
   MIR_link (ctx, MIR_set_gen_interface, jit_import_resolver);
   jit_sync_config_globals (ctx);
+  g_jit_err_active = 0;   /* past the last MIR call that can raise */
 
   typedef int (*main_fn) (int, char **, char **);
   struct jit_entry_box box = { (main_fn) main_item->addr, prog_argc, prog_argv, 0 };

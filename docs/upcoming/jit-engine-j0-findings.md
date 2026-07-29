@@ -1974,3 +1974,39 @@ Known limits, recorded not hidden: single-file mode only (project mode and
 `build-turjit/`-located binary cannot link fallback programs that autolink
 `-lturi` -- pre-existing (`./build/tur run` has the same limit in-tree), noted
 for the install-layout work.
+
+### 18.1 The product swept the corpus, and found its own first bug
+
+`tools/jit-spike/sweep-turjit.sh` drives the REAL `tur jit` subcommand over
+the same 1,680 fixtures as the spike sweeps -- no emit-c step, no normalizer,
+no shim; the pipeline a user runs. Fallback is a first-class outcome rather
+than a failure.
+
+The first run found a genuine cmd_jit bug the eight smoke fixtures could not:
+13 fixtures whose stdlib/fixture inline-C uses the GCC `__atomic_*` builtins
+died with EMPTY output instead of falling back -- because **MIR's default
+error handler exits the process** from inside `MIR_link` on an unresolved
+import, killing `tur` before the step-6 fallback could run. The engine now
+installs an error handler that unwinds back to `tur_jit_execute` via longjmp
+(deliberately leaking the half-initialized context: tearing it down from an
+undefined intermediate state is how a fallback becomes a crash), and the
+caller takes the cc path.
+
+| Outcome | Count | Reading |
+|---|---|---|
+| **jit-native PASS** | **1,633** | ran in process, output correct |
+| fallback-pass | 14 | inline-C c2mir rejects (13 x `__atomic_*`, 1 x `__thread`); TUR-W0070 + correct output via cc |
+| fallback-env | 31 | `httpd-*`: fallback fired but this checkout cannot link `-lturi` (pre-existing; `./build/tur run` has the same limit) |
+| output-mismatch | 1 | `hamt-lowering-basic` -- the filed `^persistent` key bug |
+| FAIL (signal-6) | 1 | `any-cast-mismatch-panic` -- panics by design |
+
+1,633 + 14 = 1,647: exactly the spike's number, with one honest difference in
+its favor -- the spike "passed" the 13 atomics fixtures through its fake
+non-atomic shim lowerings, while the product compiles them through cc and
+runs them on real atomics. The product is strictly more correct than the
+spike that validated it.
+
+Also fixed while writing the sweep: probing the binary with
+`... | grep -q` under `set -o pipefail` SIGPIPEs the probed process on
+match, so a successful capability check read as failure. Capture, then
+match.
