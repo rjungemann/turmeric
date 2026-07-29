@@ -110,7 +110,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[arrows-guide.md](arrows-guide.md)** -- Bare-function arrow combinators and building DSP signal graphs with `stdlib/arrow.tur` and `stdlib/signal/`
 - **[generators-guide.md](generators-guide.md)** -- Zero-overhead generators with `gen`/`yield`, lazy `Seq` combinators, and the `Range` type
-- **[effects-vs-monads.md](effects-vs-monads.md)** -- Design rationale: why effects instead of Haskell-style monads
+- **[effects-vs-monads.md](effects-vs-monads.md)** -- When to reach for an effect handler and when to reach for a monad value
 
 ## Concurrency and Async
 

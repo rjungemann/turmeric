@@ -643,5 +643,5 @@ stdlib/signal/dsp.tur     -- sine, square, sawtooth, triangle,
 - **[polymorphism-guide.md](polymorphism-guide.md)** -- overview of all polymorphism mechanisms; the typeclasses section covers `Category`, `Arrow`, and `Kleisli` in context with the broader stdlib
 - **[typeclass-internals-guide.md](typeclass-internals-guide.md)** -- how `definstance` lowers to a C dictionary, the closure-handle convention, and `definstance` idempotence
 - **[hkt-guide.md](hkt-guide.md)** -- higher-kinded types; the `^arr` kind used by the Arrow typeclass
-- **[effects-vs-monads.md](effects-vs-monads.md)** -- design rationale: why Turmeric uses effects rather than monad transformers for sequencing
+- **[effects-vs-monads.md](effects-vs-monads.md)** -- why sequencing usually goes through effect handlers rather than a monad transformer stack
 - **[generators-guide.md](generators-guide.md)** -- lazy sequences; a complementary pull-based abstraction

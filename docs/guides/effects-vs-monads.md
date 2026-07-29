@@ -1,334 +1,581 @@
 ---
 title: Effects vs. Monads
 category: Functional Patterns
-description: Design rationale: why effects instead of Haskell-style monads
+description: When to reach for an effect handler and when to reach for a monad value
 ---
 
 # Effects vs. Monads in Turmeric
 
-Turmeric uses algebraic effects instead of Haskell-style monadic chaining for
-most use cases. This guide explains the design decision and shows how each
-common monad use case maps to the Turmeric equivalent.
+Turmeric has both algebraic effects and monad typeclasses. They solve
+overlapping problems, and the guide's job is to tell you which one to reach for.
 
-## Why not Haskell-style monads?
+The short version:
 
-The classical Haskell signature:
+- **Effects are the default.** Sequencing, short-circuiting, state, errors,
+  async, and nondeterminism all have direct-style effect formulations. Code
+  written this way does not look monadic at all -- no `>>=`, no nesting, no
+  transformer stack.
+- **Monad values are for when the computation itself is the thing you want to
+  hold.** `Functor` / `Applicative` / `Monad` / `Alternative` / `MonadError` are
+  real higher-kinded typeclasses with instances for `Option`, `Result`,
+  `Parser`, `Backtrack`, and `Goal`, and `do-m` gives you do-notation over any
+  of them.
 
-```haskell
-Monad m => m a -> (a -> m b) -> m b
-```
+The one thing Turmeric does not have is **polymorphism over the monad**: you
+cannot write `Monad m => m a -> ...` and have the caller pick `m`. Instances are
+resolved at concrete types. [Sharp edges](#sharp-edges) covers what that costs
+you and how to work around it.
 
-requires **higher-kinded types** -- `m` is a type constructor of kind `* -> *`.
-Turmeric's typeclass system operates at kind `*` only. Extending to HKTs would
-require kind inference, kind-polymorphic dispatch, kind-checking in the
-elaborator, and new dispatch-table key shapes -- significant cost for a feature
-whose motivation mostly evaporates once effects exist.
+## Picking a tool
 
-The architectural decision:
-
-1. **No HKT typeclasses in v1 of the type system.**
-2. **`bind` / `pure` are per-type functions, not a `Monad` typeclass.**
-3. **Effects are the primary tool for what people use monads for in Haskell.**
-
-## Where monad use cases land in Turmeric
-
-| Use case | Turmeric answer |
+| You want | Reach for |
 |---|---|
-| `IO`, async | Effects (`Io`, `Await`) |
-| `State` | Effects (`Get`, `Set`) |
-| Exceptions / errors | Effects (`Throw`) or `do-result` macro |
-| `Maybe` / optional / short-circuit | Effects (`Fail`) or `do-option` macro |
-| `Either` / `Result` | Effects (`Throw`) or `do-result` macro |
-| `Logger` / `Writer` | Effects (`Log`) |
-| `List` / nondeterminism | Multi-shot effects (planned) |
-| Parser combinators | Effects (`Parse-Char`, `Parse-Fail`) -- direct-style |
-| Custom domain DSL | Per-type macro + typeclass-resolved `bind` |
+| I/O, async | Effects (`IO`, `Async`, `Await`) |
+| Mutable state threaded through a call tree | Effects (`Get` / `Put`) |
+| Errors with rich payloads | Effects (a `Throw`-shaped effect) |
+| Short-circuit on a missing value | Effects (a `Fail`-shaped effect) |
+| Logging / `Writer` | Effects (`Log`) |
+| Nondeterminism, search | Multi-shot effect handlers (`^multishot`) |
+| Parsing | Either -- effects for direct style, `Parser` + `do-m` for combinators |
+| A computation you store, pass, or interpret later | Monad value + `do-m` |
+| Backtracking search you want as a *value* | `Backtrack` / `Goal` + `do-m` |
 
-## Effect-handler version of "monadic" code
+The dividing line is whether the computation needs to be **reified**. An effect
+is performed where it occurs and interpreted by whatever handler is installed;
+there is no value sitting around representing "the rest of the work". When you
+need that value -- to send it across a thread, to store it in an AST, to
+interpret it twice -- you want a monad.
 
-This is what 80% of "monad chaining" turns into.
+## The effect formulations
 
-### Maybe / short-circuit on missing value
+This is what most "monad chaining" turns into.
+
+### Short-circuit on a missing value
 
 ```turmeric
-(defeffect Fail [] : a)
+(defeffect Fail-Lookup [] : int)
+(defeffect Read-Config [key : cstr] : int)
 
-(defn lookup-port [cfg-key : cstr] : int @ {Fail Read-Config}
-  (let [s (perform (Read-Config cfg-key))]
-    (cond
-      (empty? s) (perform (Fail))
-      :else      (parse-int s))))
+(defn lookup-port [key : cstr] #fx{Fail-Lookup Read-Config} : int
+  (let [v (perform (Read-Config key))]
+    (if (< v 0)
+      (perform (Fail-Lookup))
+      v)))
 
-(handle (lookup-port "http.port")
-  (Fail [] _) 8080)   ;; default if anything in the chain fails
+(defn main [] : int
+  (println (handle (lookup-port "http.port")
+             (Fail-Lookup [] _)  8080
+             (Read-Config [k] c) (resume c -1)))
+  0)
 ```
 
 ```sweet-exp
-defeffect Fail [] : a
+defeffect Fail-Lookup [] : int
+defeffect Read-Config [key : cstr] : int
 
-defn lookup-port [cfg-key :cstr] :int @ {Fail Read-Config}
-  let [s perform(Read-Config(cfg-key))]
-    cond
-      empty?(s)
-      perform(Fail())
-      :else
-      parse-int(s)
+defn lookup-port [key : cstr] #fx{Fail-Lookup Read-Config} : int
+  let [v perform(Read-Config(key))]
+    if <(v 0)
+      perform(Fail-Lookup())
+      v
 
-handle lookup-port("http.port")
-  (Fail [] _)
-  8080   ;; default if anything in the chain fails
+defn main [] : int
+  println
+    handle lookup-port("http.port")
+      (Fail-Lookup [] _)
+      8080
+      (Read-Config [k] c)
+      resume(c -1)
+  0
 ```
 
-No `>>=`, nested `Just`, or chains of `match`. Direct-style code that fails
-through an effect.
+Prints `8080`. No `>>=`, no nested `Just`, no chain of `match`. The failure path
+is a single `perform`; the default lives in the handler.
 
-### Result / Either with rich errors
+Note the `#fx{...}` effect row: it declares which effects the function may
+perform, and the compiler checks it (`TUR-E0009`). Rows are opt-in -- an
+unannotated function is not checked at all.
+
+### Errors with rich payloads
 
 ```turmeric
 (defstruct Cfg-Error [what : cstr where : cstr])
-(defeffect Throw [e :Cfg-Error] : a)
+(defeffect Throw-Cfg [e : Cfg-Error] : int)
 
-(defn read-config [path : cstr] : Config @ {Throw Io}
-  (let [text   (read-file path)
-        parsed (parse-toml text)]
-    (validate parsed)))
+(defn parse-port [raw : int] #fx{Throw-Cfg} : int
+  (if (< raw 0)
+    (perform (Throw-Cfg (Cfg-Error "not a number" "http.port")))
+    raw))
 
-(handle (read-config "/etc/foo.toml")
-  (Throw [e]  _) (do
-                   (eprintln (str-concat "config error: " (.what e)))
-                   (default-config))
-  (Io    [op] k) (resume k (do-io op)))
+(defn read-config [raw : int] #fx{Throw-Cfg} : int
+  (parse-port raw))
+
+(defn main [] : int
+  (println (handle (read-config -1)
+             (Throw-Cfg [e] _)
+             (do (println (.what e))
+                 (println (.where e))
+                 8080)))
+  0)
 ```
 
 ```sweet-exp
-defstruct Cfg-Error [what :cstr where :cstr]
-defeffect Throw [e :Cfg-Error] : a
+defstruct Cfg-Error [what : cstr where : cstr]
+defeffect Throw-Cfg [e : Cfg-Error] : int
 
-defn read-config [path :cstr] :Config @ {Throw Io}
-  let [text   read-file(path)
-       parsed parse-toml(text)]
-    validate(parsed)
+defn parse-port [raw : int] #fx{Throw-Cfg} : int
+  if <(raw 0)
+    perform $ Throw-Cfg $ Cfg-Error "not a number" "http.port"
+    raw
 
-handle read-config("/etc/foo.toml")
-  (Throw [e]  _)
-  do
-    eprintln $ str-concat "config error: " .what(e)
-    default-config()
-  (Io    [op] k)
-  resume(k do-io(op))
+defn read-config [raw : int] #fx{Throw-Cfg} : int
+  parse-port(raw)
+
+defn main [] : int
+  println
+    handle read-config(-1)
+      (Throw-Cfg [e] _)
+      do
+        println(.what(e))
+        println(.where(e))
+        8080
+  0
 ```
 
-Chains of `bind` threading `Result<T, Error>` become linear, direct-style
-code. The handler is the only place errors are visible.
+A chain of `bind`s threading `Result<T, Error>` collapses into linear code.
+`read-config` does not mention the error at all; it just calls `parse-port`. The
+handler is the only place errors are visible.
 
-A `Cfg-Error` thrown here travels up the stack to a handler that runs *after*
-`read-config` has returned, so any `what`/`where` string it carries outlives the
-frame that produced it. `cstr` fields are safe only while they hold static
-literals; the moment a message is *computed* (e.g. `(str-concat "bad key: "
-key)`), a `cstr` field dangles. For error payloads that may carry computed text,
-prefer owned `String` fields (`[what : String where : String]`). See
+**Payload lifetime.** The error travels up to a handler that runs *after*
+`parse-port` has returned, so anything the payload carries outlives the frame
+that produced it. `cstr` fields are safe only while they hold static literals.
+The moment a message is *computed* (`(str-concat "bad key: " key)`), a `cstr`
+field dangles -- use owned `String` fields for computed text. See
 [strings-guide.md](strings-guide.md).
 
 ### State threading
 
 ```turmeric
-(defeffect Get []       :int)
-(defeffect Set [v :int] :nil)
+(defn cell-new []                      : ptr<void> ```c return calloc(1, sizeof(int64_t)); ```)
+(defn cell-get [c : ptr<void>]         : int       ```c return *(int64_t *)c; ```)
+(defn cell-put [c : ptr<void> v : int] : int       ```c *(int64_t *)c = v; return v; ```)
 
-(defn counter-step [] : nil @ {Get Set}
-  (let [n (perform (Get))]
-    (perform (Set (+ n 1)))))
+(defeffect Get []        : int)
+(defeffect Put [v : int] : nil)
 
-(defn run-with-state [init : int body] :(pair int a)
-  (let [s init
-        r nil]
-    (handle (set! r (body))
-      (Get []  k) (resume k s)
-      (Set [v] k) (do (set! s v) (resume k nil)))
-    (pair s r)))
+(defn counter-step [] #fx{Get Put} : nil
+  (perform (Put (+ (perform (Get)) 1))))
 
-(run-with-state 0 counter-step)  ; => (pair 1 nil)
+(defn main [] : int
+  (let [s (cell-new)]
+    (handle (do (counter-step) (counter-step) (counter-step))
+      (Get []  k) (resume k (cell-get s))
+      (Put [v] k) (do (cell-put s v) (resume k nil)))
+    (println (cell-get s)))
+  0)
 ```
 
 ```sweet-exp
-defeffect Get []       :int
-defeffect Set [v :int] :nil
+defn cell-new []                      : ptr<void> ```c return calloc(1, sizeof(int64_t)); ```
+defn cell-get [c : ptr<void>]         : int       ```c return *(int64_t *)c; ```
+defn cell-put [c : ptr<void> v : int] : int       ```c *(int64_t *)c = v; return v; ```
 
-defn counter-step [] :nil @ {Get Set}
-  let [n perform(Get())]
-    perform(Set({n + 1}))
+defeffect Get []        : int
+defeffect Put [v : int] : nil
 
-defn run-with-state [init :int body] :(pair int a)
-  let [s init
-       r nil]
-    handle set!(r body())
-      (Get []  k)
-      resume(k s)
-      (Set [v] k)
+defn counter-step [] #fx{Get Put} : nil
+  perform $ Put {perform(Get()) + 1}
+
+defn main [] : int
+  let [s cell-new()]
+    handle
       do
-        set!(s v)
+        counter-step()
+        counter-step()
+        counter-step()
+      (Get []  k)
+      resume(k cell-get(s))
+      (Put [v] k)
+      do
+        cell-put(s v)
         resume(k nil)
-    pair(s r)
-
-run-with-state(0 counter-step)  ; => (pair 1 nil)
+    println(cell-get(s))
+  0
 ```
 
-This is the `State` monad as an effect handler. The handler is the
-interpretation; callers of `counter-step` don't see the threading.
+Prints `3`. This is the `State` monad as a handler: the handler *is* the
+interpretation, and callers of `counter-step` never see the threading.
 
-### Parser combinators
+The state lives in a heap cell rather than a `let`-bound `^mut` because a
+handler clause is emitted as its own frame and cannot assign to a binding in the
+enclosing function -- see [Sharp edges](#sharp-edges).
+
+### Nondeterminism
+
+A `^multishot` handler resumes the same continuation more than once, which is
+exactly what the list monad does. One `perform` explores every branch:
 
 ```turmeric
-(defeffect Parse-Peek [] :(option char))
-(defeffect Parse-Take [] :char)
-(defeffect Parse-Fail [] :a)
+(defeffect Choose [lo : int hi : int] : int)
 
-(defn digit [] : char @ {Parse-Peek Parse-Take Parse-Fail}
-  (let [c (perform (Parse-Peek))]
-    (cond
-      (none? c)     (perform (Parse-Fail))
-      (is-digit? c) (perform (Parse-Take))
-      :else         (perform (Parse-Fail)))))
+(defn pair-sum [] #fx{Choose} : int
+  (+ (perform (Choose 1 3)) (perform (Choose 10 20))))
+
+(defn main [] : int
+  (println (handle (pair-sum)
+             (Choose [lo hi] ^multishot k) (+ (resume k lo) (resume k hi))))
+  0)
 ```
 
 ```sweet-exp
-defeffect Parse-Peek [] :(option char)
-defeffect Parse-Take [] :char
-defeffect Parse-Fail [] :a
+defeffect Choose [lo : int hi : int] : int
 
-defn digit [] :char @ {Parse-Peek Parse-Take Parse-Fail}
-  let [c perform(Parse-Peek())]
-    cond
-      none?(c)
-      perform(Parse-Fail())
-      is-digit?(c)
-      perform(Parse-Take())
-      :else
-      perform(Parse-Fail())
+defn pair-sum [] #fx{Choose} : int
+  {perform(Choose(1 3)) + perform(Choose(10 20))}
+
+defn main [] : int
+  println
+    handle pair-sum()
+      (Choose [lo hi] ^multishot k)
+      {resume(k lo) + resume(k hi)}
+  0
 ```
 
-Classical Haskell parser-combinator code looks like `digit >>= \d -> ...`.
-The effect version is direct-style -- looks like reading a stream, fails
-through `Parse-Fail`. The handler interprets it.
+Prints `68` -- every combination of `{1, 3}` with `{10, 20}`, summed:
+`11 + 21 + 13 + 23`. Each `resume` runs an independent copy of the captured
+continuation, and the two `perform`s compose, so the second `Choose` re-explores
+under each branch of the first.
 
-> **Caveat.** Backtracking parsers want multi-shot continuations (resume the
-> same `k` more than once with different inputs). v1 effects are one-shot. Until
-> multi-shot lands, backtracking parsers either (a) use an explicit input cursor
-> with `Parse-Fail` and longest-match semantics, or (b) use a per-type `Parser`
-> value with `bind`. See the next section.
+To resume a *variable* number of times, pass the resumption strategy through the
+effect payload. The receiver gets `k` as a properly typed continuation and may
+call it as often as it likes, including recursively:
 
-## When you actually want a monad value
+```turmeric
+(defeffect ChooseE [f : (fn [multishot-effect-cont] int)] : int)
 
-Some cases want a first-class "this is a value representing a computation":
+(defn each [k : multishot-effect-cont lo : int hi : int] : int
+  (if (> lo hi)
+    0
+    (+ (k lo) (each k (+ lo 1) hi))))
 
-- Building an AST or query plan to be executed later by another mechanism.
-- Cross-thread message passing where the sender constructs a chain and the
+(defn choose [lo : int hi : int] : int
+  (perform (ChooseE (fn [k : multishot-effect-cont] : int (each k lo hi)))))
+
+(defn pair-sum [] : int
+  (+ (choose 1 3) (choose 10 20)))
+
+(defn main [] : int
+  (println (handle (pair-sum)
+             (ChooseE [f] ^multishot k) (f k)))
+  0)
+```
+
+```sweet-exp
+defeffect ChooseE [f : (fn [multishot-effect-cont] int)] : int
+
+defn each [k : multishot-effect-cont lo : int hi : int] : int
+  if >(lo hi)
+    0
+    {k(lo) + each(k {lo + 1} hi)}
+
+defn choose [lo : int hi : int] : int
+  perform $ ChooseE (fn [k : multishot-effect-cont] : int each(k lo hi))
+
+defn pair-sum [] : int
+  {choose(1 3) + choose(10 20)}
+
+defn main [] : int
+  println
+    handle pair-sum()
+      (ChooseE [f] ^multishot k)
+      f(k)
+  0
+```
+
+Prints `561` -- the sum over all 3 x 11 combinations. This indirection is
+necessary because `k` is type-erased inside a handler clause and cannot be
+handed to a helper directly.
+
+### Parsing
+
+Classical combinator code reads `digit >>= \d -> ...`. The effect version reads
+like consuming a stream and failing through an effect:
+
+```turmeric
+(defeffect Peek []       : int)
+(defeffect Advance []    : int)
+(defeffect Parse-Fail [] : int)
+
+(defn digit [] #fx{Peek Advance Parse-Fail} : int
+  (let [c (perform (Peek))]
+    (if (and (>= c 48) (<= c 57))
+      (do (perform (Advance)) (- c 48))
+      (perform (Parse-Fail)))))
+
+(defn main [] : int
+  (println (handle (digit)
+             (Peek []          k) (resume k 55)
+             (Advance []       k) (resume k 0)
+             (Parse-Fail []    _) -1))
+  0)
+```
+
+```sweet-exp
+defeffect Peek []       : int
+defeffect Advance []    : int
+defeffect Parse-Fail [] : int
+
+defn digit [] #fx{Peek Advance Parse-Fail} : int
+  let [c perform(Peek())]
+    if and(>=(c 48) <=(c 57))
+      do
+        perform(Advance())
+        -(c 48)
+      perform(Parse-Fail())
+
+defn main [] : int
+  println
+    handle digit()
+      (Peek []       k)
+      resume(k 55)
+      (Advance []    k)
+      resume(k 0)
+      (Parse-Fail [] _)
+      -1
+  0
+```
+
+Prints `7`. The handler decides what the input is and what failure means.
+
+For parsers you want to *build up and reuse* -- combinators like `many`,
+`sep-by`, `between` -- use the `Parser` monad instead; see below.
+
+## When you want a monad value
+
+Reach for a monad value when the computation must be reified:
+
+- Building an AST or query plan that another mechanism executes later.
+- Cross-thread message passing, where the sender constructs a chain and the
   receiver runs it.
-- Backtracking / nondeterministic search before multi-shot effects exist.
-- Lazy / pull-based streams where the consumer drives evaluation.
+- Combinator libraries, where the combinators take and return computations.
+- Search you want to hold, restart, or interleave.
 
-For these, write a per-type `bind` and use a `do-monadic` macro:
+### The typeclasses
+
+`Functor`, `Applicative`, `Monad`, `Alternative`, `MonadError`, `Bifunctor`,
+`Foldable`, and `Traversable` are higher-kinded typeclasses (`defclass Monad
+[^m]`). The `^m` marks a parameter of kind `* -> *`. Instances ship for:
+
+| Type | Instances |
+|---|---|
+| `Option` | `Functor`, `Applicative`, `Monad`, `Alternative` |
+| `(Result _ B)` | `Functor`, `Monad`, `MonadError`, `Bifunctor` |
+| `Parser` | `Functor`, `Applicative`, `Monad`, `Alternative` |
+| `Backtrack` | `Functor`, `Applicative`, `Monad` |
+| `Goal` | `Functor`, `Applicative`, `Monad` |
+| `(Either E)` | `Functor` |
+
+Instance heads may be partially applied, so a binary constructor can implement a
+unary class by fixing a parameter: `(definstance Monad [(Result _ B)] ...)`
+fixes the error type and leaves the ok type free (the right-biased convention).
+
+### `do-m` notation
+
+`do-m` is do-notation over any `Monad` instance. It desugars to nested `.bind`:
 
 ```turmeric
-;; Per-type bind functions -- no Monad typeclass needed.
-(defn opt-bind [m :(option a) f :(-> a (option b))] :(option b)
-  (cond (some? m) (f (unwrap m)) :else none))
+(defn half [x : int] : (Option int)
+  (if (= x (* 2 (/ x 2)))
+    (some (/ x 2))
+    (none)))
 
-(defn opt-pure [x] :(option a) (some x))
+(defn quarter-sum [x : int] : (Option int)
+  (do-m a (half x)
+        b (half a)
+        (some (+ a b))))
 
-(defn res-bind [m :(result a e) f :(-> a (result b e))] :(result b e)
-  (cond (ok? m) (f (unwrap-ok m)) :else m))
-
-(defn res-pure [x] :(result a e) (ok x))
+(defn main [] : int
+  (println (unwrap-or (quarter-sum 20) -1))
+  (println (unwrap-or (quarter-sum 21) -1))
+  0)
 ```
 
 ```sweet-exp
-;; Per-type bind functions -- no Monad typeclass needed.
-defn opt-bind [m :(option a) f :(-> a (option b))] :(option b)
-  cond
-    some?(m)
-    f(unwrap(m))
-    :else
-    none
+defn half [x : int] : (Option int)
+  if {x = {2 * {x / 2}}}
+    some({x / 2})
+    none()
 
-defn opt-pure [x] :(option a)
-  some(x)
+defn quarter-sum [x : int] : (Option int)
+  do-m a half(x) b half(a) some({a + b})
 
-defn res-bind [m :(result a e) f :(-> a (result b e))] :(result b e)
-  cond
-    ok?(m)
-    f(unwrap-ok(m))
-    :else
-    m
-
-defn res-pure [x] :(result a e)
-  ok(x)
+defn main [] : int
+  println(unwrap-or(quarter-sum(20) -1))
+  println(unwrap-or(quarter-sum(21) -1))
+  0
 ```
 
-`bind` and `pure` are just functions per-type, not methods of a `Monad`
-typeclass. Call them by name: `(opt-bind ...)`, `(res-pure ...)`.
+Prints `15` then `-1`: `half 20` gives `10`, `half 10` gives `5`, and `10 + 5 =
+15`; `half 21` is `none`, which short-circuits the whole chain.
 
-### `do-monadic` notation
+There is no separate `do-option` / `do-result` macro and no `bind`/`pure` name
+to thread through -- `do-m` dispatches on the receiver's type through the
+`Monad` typeclass.
 
-A macro lifts the chaining boilerplate. It takes the `bind` / `pure` names as
-parameters, since there is no global "the Monad":
+### `bind`, `pure`, `alt-or`
+
+The methods are callable directly when a macro would obscure things:
 
 ```turmeric
-(defmacro do-option [bindings body]
-  `(do-monadic opt-bind opt-pure ~bindings ~body))
+(defn lookup [k : int] : (Option int)
+  (if (= k 1) (some 10) (none)))
 
-(defmacro do-result [bindings body]
-  `(do-monadic res-bind res-pure ~bindings ~body))
+(defn doubled [k : int] : (Option int)
+  (bind (lookup k) (fn [x] (some (* x 2)))))
+
+(defn either-key [] : (Option int)
+  (alt-or (lookup 2) (lookup 1)))
+
+(defn main [] : int
+  (println (unwrap-or (doubled 1) -1))
+  (println (unwrap-or (either-key) -1))
+  0)
 ```
 
 ```sweet-exp
-defmacro do-option [bindings body]
-  `(do-monadic opt-bind opt-pure ~bindings ~body)
+defn lookup [k : int] : (Option int)
+  if {k = 1} some(10) none()
 
-defmacro do-result [bindings body]
-  `(do-monadic res-bind res-pure ~bindings ~body)
+defn doubled [k : int] : (Option int)
+  bind(lookup(k) (fn [x] some({x * 2})))
+
+defn either-key [] : (Option int)
+  alt-or(lookup(2) lookup(1))
+
+defn main [] : int
+  println(unwrap-or(doubled(1) -1))
+  println(unwrap-or(either-key() -1))
+  0
 ```
 
-Usage:
+Prints `20` then `10`.
 
-```turmeric
-(do-option
-  [x (lookup-int "port")
-   y (lookup-int "timeout")]
-  (opt-pure (+ x y)))
-;; => (some 30) if both lookups succeed; none otherwise.
+`bind` and `alt-or` dispatch on their receiver argument. `pure` and `empty` have
+no receiver -- they dispatch on the *expected* type, so they need a return-type
+annotation or an ascription (`(:: (pure 42) (Option int))`) to resolve.
+
+### Parser combinators as values
+
+`stdlib/parsec.tur` exposes `Parser` as a kind-`(* -> *)` type constructor with
+the full instance set, so combinator code is ordinary `do-m` and `alt-or` over
+the `Parser` monad, with `alt-or` giving full backtracking choice. See
+[parser-combinators-tutorial.md](parser-combinators-tutorial.md).
+
+## Sharp edges
+
+### No polymorphism over the monad
+
+This is the real trade. You cannot abstract over which monad you are in:
+
+```turmeric no-check
+;; Rejected: `.bind` matches Monad[Result] and Monad[Option], and `ma`'s
+;; type is erased to int64_t, so there is nothing to dispatch on.
+(defn twice-m [ma]
+  (bind ma (fn [x] (bind ma (fn [y] (pure (+ x y)))))))
 ```
 
-```sweet-exp
-do-option
-  [x lookup-int("port")
-   y lookup-int("timeout")]
-  opt-pure({x + y})
-;; => (some 30) if both lookups succeed; none otherwise.
+Nor does spelling the kind variable help -- `(defn twice-m [^m] [ma : (m int)] :
+(m int) ...)` type-checks the signature but fails inside the body with
+`no instance 'Applicative tyvar'`. There is no dictionary-passing for a
+type-constructor *variable*; instances resolve only at concrete types.
+
+**Work around it** by picking the monad per call site. In practice this means
+writing the combinator once per monad, or writing it in effect style (where
+handler choice is the polymorphism) and skipping the monad entirely. This is
+usually fine, because the code that genuinely wants `Monad m =>` in Haskell is
+mostly the code that becomes an effect here.
+
+### Return-position dispatch needs an expected type
+
+`pure` and `empty` dispatch on the expected type, not on an argument. With more
+than one `Applicative` instance in scope they are ambiguous unless the context
+pins the type:
+
+```turmeric no-check
+(pure 42)                        ;; ambiguous
+(:: (pure 42) (Option int))      ;; OK -- ascribed
+(defn mk [] : (Option int) (pure 42))   ;; OK -- return type pins it
 ```
 
-## Tradeoffs vs. Haskell
+The `for` comprehension macro is currently caught by this: it desugars the body
+to `.pure`, which sits inside a `fn` with no expected type, so `for` fails to
+resolve against the auto-loaded `Applicative` instances. **Use `do-m` instead**
+-- it only desugars to `.bind`, which is receiver-directed and resolves fine.
+
+### Type erasure at instance boundaries
+
+Typeclass method parameters and results arrive type-erased (`int64_t`). Instance
+bodies for handle-carrying types therefore ascribe their arguments back
+(`(:: f :int)`), and code that needs a typed handle out of a method result
+ascribes at the boundary (`(:: (fmap p f) (Parser int))`). For `Option` the
+round trip is transparent; for other carriers expect ascriptions.
+
+Where two instances of the same class are in scope and the receiver is erased,
+the compiler raises `TUR_E0020_AMBIGUOUS_DISPATCH`; a `@TypeName` witness
+(`(.fmap @option opt f)`) picks the instance at zero runtime cost. The witness
+selects the *instance*, not the element type, so a result still needs an
+ascription if you want a typed handle.
+
+### Handler-clause restrictions
+
+A handler clause is emitted as its own frame, which constrains what can go in
+one:
+
+- It cannot `set!` a `^mut` binding from the enclosing function -- put the state
+  in a heap cell (as the state example above does).
+- `k` is type-erased inside the clause and cannot be passed to a helper
+  expecting a `cont<...>`. Route the resumption strategy through the effect
+  payload instead (as the nondeterminism example above does).
+- An `if` in statement (non-tail) position inside a clause currently ICEs the
+  compiler. Keep conditionals in tail position, or hoist the branch into a
+  helper called from the clause.
+
+See `docs/reported/` for the open compiler defects behind the last two.
+
+### `Result` through `do-m`
+
+`bind` / `do-m` over `(Result A B)` currently miscompiles when the chain crosses
+a typed `(Result A B)` function boundary -- the method result carries the int
+erasure and is read back as a by-value struct. `Option` chains are unaffected.
+Use explicit `if (ok? r)` threading, or the `Result` effect formulation above,
+until this is fixed.
+
+## Compared to Haskell
 
 | Property | Turmeric | Haskell |
 |---|---|---|
-| `Monad m =>` polymorphism | None -- pick a concrete monad per call site | Full HKT polymorphism |
-| `do`-notation | Per-monad macros (`do-option`, `do-result`, ...) | Single `do` polymorphic over `Monad` |
-| Most "monad" use cases | Effect handlers (direct-style) | Monad transformers / `mtl` |
-| Async / IO | Effects | `IO` monad |
-| State | Effects | `State` monad |
-| Errors | Effects | `Either` / `ExceptT` |
-| Parsers | Effects | Parser combinator monad |
-| First-class "computation values" | Per-type bind + macro | Polymorphic `>>=` |
-| Multi-shot continuations | Planned (multi-shot effects) | Native via `>>=` for `[]` |
+| `Monad m =>` polymorphism | None -- concrete monad per call site | Full HKT polymorphism |
+| `do`-notation | `do-m`, dispatched on the receiver's type | `do`, polymorphic over `Monad` |
+| Most "monad" use cases | Effect handlers, direct style | Monad transformers / `mtl` |
+| Async / IO | Effects | `IO` |
+| State | Effects | `State` |
+| Errors | Effects, or `Result` + `MonadError` | `Either` / `ExceptT` |
+| Nondeterminism | `^multishot` handlers, or `Backtrack` | `[]` |
+| Parsers | Effects, or the `Parser` monad | Parser combinator monad |
+| Stacking several of the above | Nest handlers -- no lifting | Transformer stack + `lift` |
 
-**The deal Turmeric makes:** trade type-level monad polymorphism for
-direct-style code via effects. Most "monad-heavy" programs become
-effect-using programs that don't look monadic at all. The cases that
-genuinely want monad-as-value get a per-type fallback.
+**The deal Turmeric makes:** you give up type-level monad polymorphism and get
+direct-style code plus composition without lifting. Nesting two handlers is the
+whole of what a two-layer transformer stack does, with no `lift` and no
+`MonadTrans` instance to write. What you cannot do is write the combinator once
+and instantiate it at every monad.
 
 ## See also
 
-- [effects-system-guide.md](effects-system-guide.md) -- Algebraic effects API
-- [custom-effects-tutorial.md](custom-effects-tutorial.md) -- Writing custom effects
-- [error-handling-guide.md](error-handling-guide.md) -- Error handling patterns
-- [parser-combinators-tutorial.md](parser-combinators-tutorial.md) -- Per-type bind in practice: building parser combinators from scratch on the list monad
+- [effects-system-guide.md](effects-system-guide.md) -- the algebraic effects API
+- [custom-effects-tutorial.md](custom-effects-tutorial.md) -- writing custom effects
+- [hkt-guide.md](hkt-guide.md) -- higher-kinded types, `defclass [^f]`, dispatch model
+- [typeclass-guide.md](typeclass-guide.md) -- constraints, partially applied instance heads
+- [error-handling-guide.md](error-handling-guide.md) -- error handling patterns
+- [logic-programming-guide.md](logic-programming-guide.md) -- cloneable continuations and search
+- [parser-combinators-tutorial.md](parser-combinators-tutorial.md) -- combinators on the backtracking monad
