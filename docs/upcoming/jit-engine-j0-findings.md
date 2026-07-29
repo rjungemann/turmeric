@@ -962,6 +962,7 @@ coverage from 84.8% to ~96%". Measured:
 | Pre-S1 baseline | 1424 / 1680 | 84.8% |
 | **S1 emitter work alone** | **1473 / 1680** | **87.7%** |
 | + exact normalizer rules (11.3) | 1557 / 1680 | 92.7% |
+| + `TUR_APPLY` aggregate-cast fix (`b61cdf578`) | **1559 / 1680** | **92.8%** |
 
 The emitter work is worth **+2.9 points**, not +11. The prediction conflated
 "removes almost every occurrence" with "removes the blocking ones": the sweep
@@ -1011,7 +1012,7 @@ diagnostic on the first sweep.
 | `unresolved import: tur_reactor_new` | 10 | S2 boundary -- harness links 9 runtime TUs. |
 | `unresolved import: __builtin_*` / `atexit` | 10 | Recommendation 8. |
 | `initialization of incomplete type variable` | 3 | c2mir checker limitation. |
-| **`conversion to non-scalar type requested`** | **2** | **New, and a real emitter defect** -- `TUR_APPLY<N>_T` expands to `(A0)(a)`, a cast to a struct type when `A0` is an aggregate, which is not legal C. gcc accepts it; c2mir does not. Filed as [docs/reported/jit-tur-apply-casts-to-aggregate-param-type.md](../reported/jit-tur-apply-casts-to-aggregate-param-type.md). |
+| ~~`conversion to non-scalar type requested`~~ | ~~2~~ **0** | **FIXED in `b61cdf578`** -- `TUR_APPLY<N>_T` expanded to `(A0)(a)`, a cast to a struct type when `A0` is an aggregate, which is not legal C. gcc accepts it; c2mir does not. The emitter now decides per argument: cast for scalars (load-bearing for the int64 <-> pointer direction), bare for aggregates (where it was provably a no-op). Corpus 1557 -> 1559. Archived at [docs/archive/jit-tur-apply-casts-to-aggregate-param-type.md](../archive/jit-tur-apply-casts-to-aggregate-param-type.md). |
 | signals | 2 | Shim's documented atomics hazard (8.4.3). |
 
 Note on that last-but-one row: both fixtures previously failed *earlier*, on

@@ -1,5 +1,26 @@
 # `TUR_APPLY<N>_T` casts arguments to a struct type (invalid C)
 
+**RESOLVED 2026-07-28 in `b61cdf578`.** Fixed as the "conditional on `A0`
+being scalar" option below: the emitter now decides per argument, keeping the
+cast for scalars and omitting it for aggregates.  The all-scalar case still
+emits the macro verbatim, so stdlib's hand-written inline-C users are
+untouched.  `tests/run.sh` 2399 passed / 0 failed; JIT full corpus
+1557 -> 1559 (92.8%); zero snapshot churn.
+
+The load-bearing question the "Fix directions" section raises below was
+answered by *not* answering it: rather than determine whether the cast is
+needed for the int64 -> pointer direction (unverifiable here -- gcc 14 makes
+it an error and this box has gcc 13.3), the cast is simply kept wherever it
+was valid.  Only the provably-inert aggregate case changed.
+
+Cost worth carrying forward: the aggregate path spells out the macro's own
+expansion, so `emit_expr.c` and the macro definition in `emit_module.c` must
+now stay in sync.  Both carry a comment pointing at the other.
+
+Original report follows.
+
+---
+
 **Severity: low today, latent portability defect.** 2 fixtures; no known
 miscompile on the `cc` path. Found by the J0 JIT sweep, not by the suite.
 
