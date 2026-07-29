@@ -10,9 +10,9 @@ It also replays one post-pass that `tur build` runs but bare `tur emit-c` does
 not (the `__tur_include__` hoist); that one is not a subset fix, it is step 2
 of the plan's execution flow.
 
-Three subset rewrites.  The first two are driven by hard c2mir parse errors;
-the third repairs something c2mir accepts and then silently discards, which is
-the more dangerous kind.
+Two subset rewrites, both driven by hard c2mir parse errors.  A third rule --
+repairing something c2mir accepts and then silently discards, the more
+dangerous kind -- has been retired into the emitter; see below.
 
   1. `__auto_type x = (E);`  ->  `T x = (E);`
      GNU C only; c2mir registers `typeof` as a keyword but never wires it into
@@ -24,9 +24,14 @@ the more dangerous kind.
      A scalar compound literal is C99-legal; c2mir rejects it outright
      ("braces around scalar initializer").  Aggregate `(T){0}` is left alone.
 
-  3. `__attribute__((constructor))` -> an explicit call sequence at the top of
-     main.  c2mir drops GCC attributes without a diagnostic; dropping this one
-     costs a SIGSEGV in effectful code and wrong answers in dynamic variables.
+Rule 3 used to synthesize a call sequence for `__attribute__((constructor))`,
+which c2mir drops without a diagnostic -- costing a SIGSEGV in effectful code
+and wrong answers in dynamic variables.  **RETIRED: the emitter now does this
+itself.**  S1b (jit-engine-plan section 4) collects every startup action into an
+explicit `__tur_static_init()` called from `main`, so there is nothing left for
+a rewriter to recover.  A single `constructor` wrapper survives in the emitted C
+for the no-`main` cases (separate compilation, `--shared`); dropping *that* one
+is harmless, because `main` calls the same idempotent function directly.
 
 `__attribute__((cleanup(f)))` has NO rewrite here and none is possible: a
 scope-exit destructor cannot be recovered from outside the compiler.  It is the
@@ -235,78 +240,6 @@ def hoist_tur_includes(text):
     return header + text, len(bodies)
 
 
-# --------------------------------------------------------------------------
-# `__attribute__((constructor))` -- the load-bearing one
-# --------------------------------------------------------------------------
-# c2mir PARSES GCC attributes and then throws them away (c2mir.c:4392, "GCC
-# attributes are not implemented"), with no diagnostic at the use site.  For
-# `unused` that is harmless.  For `constructor` it is not: the emitted C uses
-# it to register the direct->CPS function mapping (__tur_cps_register) and to
-# create each dynamic variable's pthread key, both before main runs.  Dropped,
-# the CPS registry stays empty -- an effectful indirect call then dispatches
-# through NULL and the program takes SIGSEGV -- and dynamic variables silently
-# read their root default instead of the innermost binding.
-#
-# There is no macro that recovers this, so the spike synthesizes the call
-# sequence a real ELF ctor section would have run and invokes it at the top of
-# main.  J1 wants this in the emitter (an explicit __tur_static_init() called
-# from main) rather than in a rewriter: it is also the only way the JIT and the
-# cc path can be guaranteed to agree on initialization order.
-# The emitter spells the attribute in three positions -- ahead of the storage
-# class, between `void` and the name, and as a separate declaration -- and
-# sometimes on its own line above the definition.  Rather than encode one house
-# style, a line is a candidate iff it mentions the attribute at all, and the
-# function name is then pulled out separately.
-CTOR_ATTR_RE = re.compile(r'__attribute__\(\(\s*constructor\s*\)\)')
-CTOR_NAME_RE = re.compile(
-    r'\bstatic\s+void\s+(?:__attribute__\(\([^)]*\)\)\s*)?'
-    r'([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*void\s*\)')
-MAIN_RE = re.compile(r'^\s*int\s+main\s*\(')
-
-CTOR_RUNNER = '__tur_jit_run_ctors'
-
-
-def collect_ctors(lines):
-    """Constructor function names, in the source order a ctor section uses."""
-    names, seen, pending_attr = [], set(), False
-    for line in lines:
-        has_attr = CTOR_ATTR_RE.search(line) is not None
-        if not has_attr and not pending_attr:
-            continue
-        m = CTOR_NAME_RE.search(line)
-        if m is None:
-            # a bare `__attribute__((constructor))` line: the definition is next
-            pending_attr = has_attr
-            continue
-        pending_attr = False
-        if m.group(1) not in seen:
-            seen.add(m.group(1))
-            names.append(m.group(1))
-    return names
-
-
-def inject_ctor_runner(lines, names):
-    """Define a runner just above main and call it as main's first statement."""
-    if not names:
-        return lines, 0
-    out, injected = [], False
-    for line in lines:
-        if not injected and MAIN_RE.match(line):
-            out.append('static void %s(void) {' % CTOR_RUNNER)
-            out.extend('    %s();' % n for n in names)
-            out.append('}')
-            out.append(line)
-            # main's `{` is on the same line in the emitted C.
-            if line.rstrip().endswith('{'):
-                out.append('    %s();' % CTOR_RUNNER)
-                injected = True
-                continue
-            injected = True
-            continue
-        out.append(line)
-    return out, len(names)
-
-
 QUOTED_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
 
 
@@ -362,10 +295,8 @@ def normalize(text, include_dirs=()):
             out.append('%s%s %s = %s;%s'
                        % (m.group(1), ty, m.group(2), m.group(3), m.group(4)))
 
-    out, n_ctors = inject_ctor_runner(out, collect_ctors(lines))
-
     return '\n'.join(out), {'auto_type': n_auto, 'scalar_zero': n_zero,
-                            'hoisted': n_hoisted, 'ctors': n_ctors,
+                            'hoisted': n_hoisted,
                             'unresolved': unresolved, 'protos': len(proto)}
 
 
@@ -386,9 +317,9 @@ def main():
     if args.report:
         sys.stderr.write(
             '%s: %d __auto_type, %d scalar (T){0}, %d hoisted __tur_include__,'
-            ' %d constructors, %d prototypes\n'
+            ' %d prototypes\n'
             % (args.source, stats['auto_type'], stats['scalar_zero'],
-               stats['hoisted'], stats['ctors'], stats['protos']))
+               stats['hoisted'], stats['protos']))
     if stats['unresolved']:
         sys.stderr.write('%s: %d UNRESOLVED __auto_type site(s)\n'
                          % (args.source, len(stats['unresolved'])))

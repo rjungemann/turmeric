@@ -8,6 +8,7 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
+static void __tur_static_init(void);
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -7487,6 +7488,7 @@ static int64_t dense_hy_gtint(int64_t d) {
 }
 
 int main(int argc, char **argv) {
+        __tur_static_init();
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
@@ -7561,7 +7563,6 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 }
 
 
-static void __tur_module_def_init(void) __attribute__((constructor));
 static void __tur_module_def_init(void) {
     SCHEMA_unSTR_1195 = INT64_C(0);
     SCHEMA_unINT_1196 = INT64_C(1);
@@ -7581,4 +7582,16 @@ static void __tur_module_def_init(void) {
     SCHEMA_unFIELD_1210 = INT64_C(15);
     SCHEMA_unAP_unFAT_1211 = INT64_C(16);
 }
+
+/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.
+ * Called from main(); the constructor below covers the no-main cases
+ * (separate compilation, --shared).  Whichever runs first wins. */
+static void __tur_static_init(void) {
+    static int __tur_static_init_done = 0;
+    if (__tur_static_init_done) return;
+    __tur_static_init_done = 1;
+    __tur_module_def_init();
+}
+__attribute__((constructor))
+static void __tur_static_init_ctor(void) { __tur_static_init(); }
 

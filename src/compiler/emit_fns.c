@@ -3561,6 +3561,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * user-defined-main path; the synthesized-main paths in emit_module.c and
      * the CPS D2b wrapper in emit_cps_ir.c call the same helper. */
     if (is_main) {
+        /* S1b (jit-engine-plan): explicit static initialization, ahead of
+         * everything else in main -- that is where the `constructor`
+         * attributes it replaces used to run.  Idempotent, so the constructor
+         * wrapper emitted alongside the definition is harmless here. */
+        ctx->indent += 4;
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "__tur_static_init();\n");
+        ctx->indent -= 4;
         emit_win_binary_stdio_prologue(file);
     }
 

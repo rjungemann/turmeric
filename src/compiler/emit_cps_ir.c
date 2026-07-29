@@ -6863,16 +6863,21 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
-                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
                     ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             } else {
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
-                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
                     ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             }
+            /* S1b: the session-kind registry must be populated before any
+             * effectful call dispatches through it. */
+            char skinit[320];
+            snprintf(skinit, sizeof(skinit), "%s_skreginit%d_%u", ce->fn_cn, id, i);
+            static_init_register(skinit, STATIC_INIT_REGISTRY);
             free(eser); free(edeser);
             free(cfn);
         }
@@ -8068,6 +8073,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
         bool mvoid = (mrt->kind == TY_NIL);
         buf_puts(file, "int main(int argc, char **argv) {\n");
+        buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
         if (g_emit_panic_trace)
             buf_puts(file, "    g_panic_trace = 1;\n");
@@ -8226,9 +8232,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
     if (g_opt_cps_tramp_resume && threadable_has(fd->binding)) {
         buf_printf(file,
-            "static void __attribute__((constructor)) __tur_e2reg_%s(void) {\n"
+            "static void __tur_e2reg_%s(void) {\n"
             "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"
             "}\n", cn, cn, cn);
+        /* S1b: the direct->CPS registry must be populated before a threaded
+         * call site looks up its CPS variant.  A dropped constructor here was
+         * the SIGSEGV in findings 3.1. */
+        char e2init[320];
+        snprintf(e2init, sizeof(e2init), "__tur_e2reg_%s", cn);
+        static_init_register(e2init, STATIC_INIT_REGISTRY);
     }
 
     ctx->fn_params   = saved_fn_params;

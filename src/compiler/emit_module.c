@@ -7122,6 +7122,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "#else\n");
     buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
     buf_puts(out, "#endif\n");
+    /* S1b (jit-engine-plan): forward declaration for the explicit static
+     * initializer.  `main` calls it as its first statement, and `main` may be
+     * emitted well before the definition (a user-defined `main` lands in the
+     * function-body buffer, while the definition must follow every registered
+     * initializer -- they are all `static`).  Declared unconditionally so the
+     * preamble stays independent of what the program turns out to register;
+     * the definition is likewise always emitted, empty if nothing registered.
+     * The -Wunused-function pragma above covers the no-main TUs. */
+    buf_puts(out, "static void __tur_static_init(void);\n");
     /* Phase P3: HAMT lowering - include HAMT header when needed */
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
@@ -10786,6 +10795,7 @@ int emit_program(Buf *out, const Expr *program) {
      * before the forward-declaration pass runs). */
     emit_sig_reset();
     emit_localvar_reset();
+    static_init_reset();   /* S1b: per-program explicit-init registry */
     /* S1: record every extern-c return type BEFORE any body is emitted.  The
      * per-item record below still runs, but it is too late for bodies the
      * emitter lifts ahead of the item loop -- a partially-applied printf's pap
@@ -11184,7 +11194,6 @@ int emit_program(Buf *out, const Expr *program) {
                     "        frame = prev;\n"
                     "    }\n"
                     "}\n"
-                    "__attribute__((constructor))\n"
                     "static void _dynvar_init_%s(void) {\n"
                     "    pthread_key_create(&_dynvar_key_%s, _dynvar_cleanup_%s);\n"
                     "}\n"
@@ -11194,6 +11203,10 @@ int emit_program(Buf *out, const Expr *program) {
                     mname,
                     mname, mname, mname,
                     mname, mname);
+                /* S1b: the key must exist before any read of this dynamic var. */
+                char initfn[256];
+                snprintf(initfn, sizeof(initfn), "_dynvar_init_%s", mname);
+                static_init_register(initfn, STATIC_INIT_KEYS);
                 free(mname);
             }
 
@@ -12056,13 +12069,12 @@ int emit_program(Buf *out, const Expr *program) {
             buf_free(&thunk_body);
             buf_puts(&file, "}\n");
         }
-        buf_puts(&file,
-            "__attribute__((constructor))\n"
-            "static void __module_defers_init(void) {\n");
+        buf_puts(&file, "static void __module_defers_init(void) {\n");
         for (uint32_t i = 0; i < n_prog_defers; i++) {
             buf_printf(&file, "    atexit(__module_defer_%u);\n", i);
         }
         buf_puts(&file, "}\n");
+        static_init_register("__module_defers_init", STATIC_INIT_ATEXIT);
         free(prog_defers);
     }
 
@@ -12130,6 +12142,9 @@ int emit_program(Buf *out, const Expr *program) {
     if (!user_has_main) {
         /* Only generate main() if user didn't define one */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        /* S1b: first statement, matching where the constructors used to run
+         * (before the Windows stdio mode switch and before g_panic_trace). */
+        buf_puts(out, "    __tur_static_init();\n");
         emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_emit_panic_trace) {
@@ -12155,17 +12170,23 @@ int emit_program(Buf *out, const Expr *program) {
         /* Gap F: when the user has their own main(), `body` is silently
          * dropped (pre-existing behaviour for top-level non-def
          * statements after a user main). The def initializers in
-         * `def_init_body` are wired into a __constructor__ function so
-         * the runtime invokes them before main() runs. Supported by
-         * gcc + clang + ICC; the runtime preamble already assumes
-         * constructor priority works.
+         * `def_init_body` are wired into an init function so they run
+         * before the user's main() body does.
+         *
+         * S1b: registered in the STATIC_INIT_DEFS band, which runs last --
+         * these are the only initializers that execute *user* code, so they
+         * must see the pthread keys and registries already in place.
          *
          * Filed under docs/reported/top-level-def-init-dropped.md. */
-        buf_puts(out, "static void __tur_module_def_init(void) __attribute__((constructor));\n");
         buf_puts(out, "static void __tur_module_def_init(void) {\n");
         buf_write(out, def_init_body.data, def_init_body.len);
         buf_puts(out, "}\n\n");
+        static_init_register("__tur_module_def_init", STATIC_INIT_DEFS);
     }
+
+    /* S1b: after every registered initializer's own definition (they are all
+     * `static`), and after `main` -- the preamble carries the declaration. */
+    static_init_emit(out);
 
     buf_free(&file);
     buf_free(&body);
@@ -12959,6 +12980,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
      * (notably ADT ctor return types) survive.  See the note there. */
     emit_sig_reset();
     emit_localvar_reset();
+    static_init_reset();   /* S1b: per-TU explicit-init registry */
 
     Buf file; buf_init(&file);
     Buf body; buf_init(&body);
@@ -13398,13 +13420,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         /* Emit constructor that registers thunks via atexit in definition
          * order. atexit is LIFO so last-defined defer fires first, matching
          * function-level defer semantics. */
-        buf_printf(&file,
-            "__attribute__((constructor))\n"
-            "static void __module_defers_%s_init(void) {\n", guard);
+        buf_printf(&file, "static void __module_defers_%s_init(void) {\n", guard);
         for (uint32_t i = 0; i < n_module_defers; i++) {
             buf_printf(&file, "    atexit(__module_defer_%u);\n", i);
         }
         buf_puts(&file, "}\n");
+        char dinit[256];
+        snprintf(dinit, sizeof(dinit), "__module_defers_%s_init", guard);
+        static_init_register(dinit, STATIC_INIT_ATEXIT);
         free(module_defers);
     }
 
@@ -13449,6 +13472,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */
         if (g_emit_panic_trace) {
@@ -13468,6 +13492,11 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         buf_puts(out, "    return 0;\n");
         buf_puts(out, "}\n");
     }
+
+    /* S1b: after every registered initializer's definition.  Emitted in
+     * separate-compilation mode too -- there is no `main` in this TU to call
+     * it, so the constructor wrapper is the whole mechanism there. */
+    static_init_emit(out);
 
     buf_free(&file);
     buf_free(&body);

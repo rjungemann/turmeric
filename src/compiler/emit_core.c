@@ -4531,12 +4531,103 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
      * query the table -- so a literal-only program emits no constructor. */
     if (g_n_sym_records > 0 && g_sym_intern_used) {
         buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
-        buf_puts(out, "__attribute__((constructor)) static void __tur_sym_seed(void) {\n");
+        buf_puts(out, "static void __tur_sym_seed(void) {\n");
         for (uint32_t i = 0; i < g_n_sym_records; i++) {
             buf_printf(out, "    tur_sym_register((const struct __tur_sym *)&%s);\n",
                        g_sym_records[i].cid);
         }
         buf_puts(out, "}\n");
+        static_init_register("__tur_sym_seed", STATIC_INIT_REGISTRY);
     }
     if (g_n_sym_records > 0) buf_putc(out, '\n');
+}
+
+/* ============================================================================
+ * S1b (jit-engine-plan): explicit static initialization.
+ * ============================================================================
+ *
+ * Every startup action the emitter used to hang off
+ * `__attribute__((constructor))` is registered here instead and called from an
+ * explicit `__tur_static_init()` at the top of `main`.  The motivation is the
+ * JIT: c2mir parses GCC attributes and discards them with NO diagnostic
+ * (docs/upcoming/jit-engine-j0-findings.md section 3.1), so a dropped
+ * `constructor` cost a SIGSEGV in effectful code and wrong output in dynamic
+ * variables -- silently.  An ordinary call survives any C11 front end.
+ *
+ * A single `__attribute__((constructor))` wrapper is still emitted, so the
+ * `cc` path keeps working exactly as before for the two cases an explicit call
+ * from `main` cannot cover: separate compilation (each TU initializes itself,
+ * and only one TU has `main`) and `--shared` libraries (no `main` at all).
+ * `__tur_static_init` is therefore idempotent -- whichever of the two paths
+ * fires first wins and the other is a no-op.
+ *
+ * Ordering was previously the toolchain's business (`.init_array` order within
+ * a TU).  It is now ours, and the bands below encode the dependencies:
+ * dynamic-variable pthread keys must exist before anything reads a dynamic
+ * var, the registries must be populated before any effectful indirect call
+ * dispatches through them, and `__tur_module_def_init` runs *user* code so it
+ * goes last.
+ */
+
+typedef struct StaticInitEntry {
+    char           *fn;    /* malloc'd owned copy of the C identifier */
+    StaticInitBand  band;
+} StaticInitEntry;
+
+static StaticInitEntry *g_static_inits   = NULL;
+static uint32_t         g_n_static_inits = 0;
+static uint32_t         g_cap_static_inits = 0;
+
+void static_init_reset(void) {
+    for (uint32_t i = 0; i < g_n_static_inits; i++) free(g_static_inits[i].fn);
+    free(g_static_inits);
+    g_static_inits     = NULL;
+    g_n_static_inits   = 0;
+    g_cap_static_inits = 0;
+}
+
+void static_init_register(const char *fn, StaticInitBand band) {
+    if (!fn || !*fn) return;
+    for (uint32_t i = 0; i < g_n_static_inits; i++)
+        if (strcmp(g_static_inits[i].fn, fn) == 0) return;   /* idempotent by name */
+    if (g_n_static_inits == g_cap_static_inits) {
+        uint32_t nc = g_cap_static_inits ? g_cap_static_inits * 2 : 8;
+        StaticInitEntry *ne = (StaticInitEntry *)realloc(g_static_inits,
+                                                         nc * sizeof(StaticInitEntry));
+        if (!ne) return;
+        g_static_inits     = ne;
+        g_cap_static_inits = nc;
+    }
+    g_static_inits[g_n_static_inits].fn   = strdup(fn);
+    g_static_inits[g_n_static_inits].band = band;
+    g_n_static_inits++;
+}
+
+uint32_t static_init_count(void) { return g_n_static_inits; }
+
+/* Emit the definition.  MUST come after every registered function's own
+ * definition: they are all `static`, so a forward reference would be an
+ * implicit declaration.  The declaration `main` calls is emitted in the
+ * runtime preamble instead. */
+void static_init_emit(Buf *out) {
+    buf_puts(out,
+        "/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.\n"
+        " * Called from main(); the constructor below covers the no-main cases\n"
+        " * (separate compilation, --shared).  Whichever runs first wins. */\n"
+        "static void __tur_static_init(void) {\n");
+    if (g_n_static_inits > 0) {
+        buf_puts(out, "    static int __tur_static_init_done = 0;\n"
+                      "    if (__tur_static_init_done) return;\n"
+                      "    __tur_static_init_done = 1;\n");
+        for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
+            for (uint32_t i = 0; i < g_n_static_inits; i++)
+                if (g_static_inits[i].band == (StaticInitBand)band)
+                    buf_printf(out, "    %s();\n", g_static_inits[i].fn);
+    }
+    buf_puts(out, "}\n");
+    if (g_n_static_inits > 0)
+        buf_puts(out,
+            "__attribute__((constructor))\n"
+            "static void __tur_static_init_ctor(void) { __tur_static_init(); }\n");
+    buf_putc(out, '\n');
 }

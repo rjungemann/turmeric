@@ -8,6 +8,7 @@
 #else
 #  define TUR_THREAD_LOCAL __thread
 #endif
+static void __tur_static_init(void);
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -7508,6 +7509,7 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__() {
 
 
 int main(int argc, char **argv) {
+    __tur_static_init();
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
@@ -7540,3 +7542,9 @@ int main(int argc, char **argv) {
     SCHEMA_unAP_unFAT_1206 = INT64_C(16);
     return 0;
 }
+/* S1b: explicit static initialization -- see docs/upcoming/jit-engine-plan.md.
+ * Called from main(); the constructor below covers the no-main cases
+ * (separate compilation, --shared).  Whichever runs first wins. */
+static void __tur_static_init(void) {
+}
+

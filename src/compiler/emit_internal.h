@@ -99,6 +99,21 @@ void        sym_codegen_emit(Buf *out, bool external_weak);
 /* SYM5: note that str->sym is defined in this TU (gates the seeding ctor). */
 void        sym_codegen_note_intern_used(void);
 
+/* S1b (jit-engine-plan): per-TU explicit static-initialization registry.
+ * Replaces per-site `__attribute__((constructor))`, which c2mir silently
+ * discards (findings 3.1).  Bands encode the ordering the toolchain used to
+ * pick for us; within a band, registration order is preserved. */
+typedef enum StaticInitBand {
+    STATIC_INIT_KEYS     = 0,  /* pthread_key_create for dynamic variables */
+    STATIC_INIT_REGISTRY = 1,  /* __sk_register / __tur_cps_register / tur_sym_register */
+    STATIC_INIT_ATEXIT   = 2,  /* module-defer atexit() registration */
+    STATIC_INIT_DEFS     = 3,  /* __tur_module_def_init -- runs user code, last */
+} StaticInitBand;
+void     static_init_reset(void);
+void     static_init_register(const char *fn, StaticInitBand band);
+uint32_t static_init_count(void);
+void     static_init_emit(Buf *out);
+
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
 /* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
