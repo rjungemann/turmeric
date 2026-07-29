@@ -241,13 +241,17 @@ breakdown.
 
 ## 6. Recommendations for J1
 
-1. **S1 first, and scope it to three things**: stop emitting `__auto_type`,
-   emit `((T)0)` instead of `(T){0}`, emit `_Thread_local` instead of
-   `__thread`. `__auto_type` alone is 193 of the 256 full-corpus failures
-   (8.4.3) -- 11.5% of the whole fixture set -- so this single fix is worth
-   more than everything else in this list combined. That deletes
-   `normalize-c11-subset.py` and should take coverage from 84.8% to ~96%.
-   Expect a full fixture-snapshot regen in the same PR.
+1. ~~**S1 first, and scope it to three things**~~ **-- DONE, and the
+   projection was wrong. See section 11.** All three shipped
+   (30c0b7637, e285922de): `__auto_type` 115-225 -> 6-12 per TU, scalar
+   `(T){0}` -> 0, literal `__thread` -> 0, suite green at 2399/0. But this
+   item predicted "deletes `normalize-c11-subset.py` and takes coverage from
+   84.8% to ~96%", and neither followed from the emitter work alone -- the
+   measured emitter gain is 84.8% -> 87.7%. The prediction conflated "removes
+   almost every occurrence" with "removes the blocking ones"; the normalizer
+   was already resolving most sites textually, so S1 moved the needle only on
+   the sites it could not type (193 -> 144). Remaining emitter work is
+   `emit_fns.c:1738` / `:2083`. Expect a full fixture-snapshot regen.
 2. **Emit an explicit `__tur_static_init()`** called from `main` rather than
    relying on `__attribute__((constructor))`. This is a correctness fix for the
    JIT and a legibility win for the `cc` path.
@@ -910,3 +914,111 @@ run on both would still be worth having before J1 quotes any of it.
 Fixed per 9.5: `sweep-full.sh` now takes `nproc`, then `sysctl -n hw.ncpu`,
 then 4. Falling back to 1 would make a full sweep ~35 minutes and read as a
 hang.
+
+## 11. S1 executed -- measured, and the projection corrected
+
+Added 2026-07-28, x86-64 Linux, same harness and pin. This is
+recommendation 1 carried out, and the result does not match what
+recommendation 1 predicted.
+
+### 11.1 What shipped
+
+| Construct | Per TU before | After | Where |
+|---|---|---|---|
+| `__auto_type` | 115-225 | **6-12** | `30c0b7637`, `e285922de` |
+| scalar `(T){0}` | 75-139 | **0** | `30c0b7637` |
+| literal `__thread` | 11 | **0** | `30c0b7637` |
+
+`bash tests/run.sh`: **2399 passed, 0 failed**, with 140 snapshots
+regenerated in the same commits.
+
+`__auto_type` was the one the emitter deliberately used, on the stated
+grounds that "the repr heuristic disagrees with the emitted form for some
+carrier calls" (`emit_expr.c`). That warning is correct, so nothing is
+re-derived: the existing signature side table grew a return-type half,
+captured as the literal substring the prototype emitted -- which is by
+construction what `__auto_type` deduced. Three recording sites were needed,
+because three kinds of callee never reach `emit_fn_forward_decls`:
+`extern-c` declarations, ABI spec clones, and ADT ctors (at **two** distinct
+emission sites -- `emit_program` emits them inline into `early_file`, and
+recording only `emit_adt_typedef_and_ctors` missed the common path).
+
+Two traps in that side table, both real bugs found while wiring it:
+`emit_sig_find_or_add` fixes an entry's arity on creation and
+`emit_sig_record_param_ctype` refuses to write into an entry whose arity
+disagrees, so recording a return type first silently discarded every param
+type for that function; and `emit_sig_reset()` lived *inside*
+`emit_fn_forward_decls`, which runs after the `early_file` ctor emission, so
+anything recorded earlier was wiped before a call site could read it. The
+reset now runs once per program at each entry point.
+
+### 11.2 The projection was wrong
+
+Recommendation 1 said S1 "deletes `normalize-c11-subset.py` and should take
+coverage from 84.8% to ~96%". Measured:
+
+| Stage | Full corpus | |
+|---|---|---|
+| Pre-S1 baseline | 1424 / 1680 | 84.8% |
+| **S1 emitter work alone** | **1473 / 1680** | **87.7%** |
+| + exact normalizer rules (11.3) | 1557 / 1680 | 92.7% |
+
+The emitter work is worth **+2.9 points**, not +11. The prediction conflated
+"removes almost every occurrence" with "removes the blocking ones": the sweep
+runs the normalizer, which already resolved most `__auto_type` sites
+textually, so S1 could only move the sites it could *not* type -- 193 -> 144.
+
+It also does not delete the normalizer. The residue is entirely indirect
+calls (cast function pointers, thunk typedefs, fat-closure member dispatch),
+which the emitter still infers **on purpose**. The case that they are all the
+int64 carrier is decent, but a decent case is how a silent miscompile lands,
+and guarding against exactly that is why `__auto_type` was there.
+
+Remaining emitter work to actually retire the normalizer: `emit_fns.c:1738`
+and `:2083`, which emit `__auto_type __ra<id>_<i> = (...)` for call-argument
+temps. That site holds the argument `Expr` *and* the callee's populated
+param-ctype table, so it can name the type exactly rather than textually.
+
+### 11.3 Exact normalizer rules, and one bad guess
+
+Four rules were added to the spike normalizer to close the measurement gap.
+Three are reads off text the emitter itself generated, not inferences:
+`INT64_C(n)` -> `int64_t`; `TUR_APPLY<N>_T(R, ...)` -> `R` (the first macro
+argument *is* the return type); `(T)(expr)` -> `T`; and `*(T *)(...)` -> `T`.
+The cast rule is restricted to recognized primitive spellings or anything
+ending in `*`, so `(f)(x)` -- a call through a parenthesized function name --
+cannot be misread as a cast.
+
+A fifth was wrong and the sweep caught it. A `.fn(` rule matched the member
+call *nested inside a deref-of-cast*,
+`*(tur_adt_Option__int *)(intptr_t)(g.fn(...))`, whose value is the struct
+rather than the carrier, producing a new failure class ("incompatible types
+in assignment to an arithmetic type lvalue") on two fixtures. Anchoring it to
+the start of the paren-stripped expression fixed it.
+
+That mistake is the argument for where these rules live. The identical
+heuristic in `emit_expr.c` would have been a silent wrong-type miscompile,
+and the `cc` path would very likely have accepted it -- `tests/run.sh` would
+have stayed green while the JIT diverged. In the normalizer it surfaced as a
+diagnostic on the first sweep.
+
+### 11.4 What the 92.7% run still fails
+
+| Class | Count | Reading |
+|---|---|---|
+| `__auto_type` residue | 58 | Indirect calls; `emit_fns.c` work above. |
+| GNU constructs in user inline-C | 31 | Step-6 fallback to `cc`, by design. |
+| `unresolved import: tur_reactor_new` | 10 | S2 boundary -- harness links 9 runtime TUs. |
+| `unresolved import: __builtin_*` / `atexit` | 10 | Recommendation 8. |
+| `initialization of incomplete type variable` | 3 | c2mir checker limitation. |
+| **`conversion to non-scalar type requested`** | **2** | **New, and a real emitter defect** -- `TUR_APPLY<N>_T` expands to `(A0)(a)`, a cast to a struct type when `A0` is an aggregate, which is not legal C. gcc accepts it; c2mir does not. Filed as [docs/reported/jit-tur-apply-casts-to-aggregate-param-type.md](../reported/jit-tur-apply-casts-to-aggregate-param-type.md). |
+| signals | 2 | Shim's documented atomics hazard (8.4.3). |
+
+Note on that last-but-one row: both fixtures previously failed *earlier*, on
+an unresolved `__auto_type`, so fixing S1 is what let c2mir reach the bad
+line. A new failure class appearing after a fix is unmasking as often as it
+is regression, and the sweep's class tally should be read with that in mind.
+
+Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
+10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.
+It is still wide enough that 8.4.2's rule holds: quote the full corpus.
