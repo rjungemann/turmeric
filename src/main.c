@@ -6438,19 +6438,31 @@ static int cmd_eval_h(const char *path, bool use_color,
      * breakpoints and install its pause handler before any program node runs. */
     if (debug && hooks && hooks->on_ready)
         hooks->on_ready(env, hooks->ud);
+    /* The user file is brought in via `(load "path")` rather than
+     * turi_eval_file's concatenate-into-<eval> path: a loaded file gets its own
+     * file_id and keeps its real path + 1-based line numbers, so diagnostics,
+     * breakpoints (`break <line>`), source listings, and stack frames resolve
+     * against the user's source instead of the synthetic <eval> blob (which
+     * offsets every line by the preloaded prelude).
+     *
+     * incremental-elab-loses-span-file-provenance: this used to be the debug
+     * path only, and plain `--interpret` went through turi_eval_file -- so a
+     * type error in the user's file was reported as `<eval>:64:10` instead of
+     * `file.tur:3:10`.  That half of the report was never actually about
+     * incremental elaboration (TUR_NO_INCREMENTAL_ELAB=1 reproduced it
+     * identically); it is the eval-blob concatenation, which both paths shared.
+     * Routing both through `(load ...)` fixes it at the source.
+     *
+     * This became possible only once the load splicer learned to honour a
+     * loaded file's inline `#lang` directive (load-ignores-inline-lang-directive,
+     * elab_toplevel.c) -- before that, switching the entry file onto this route
+     * broke every `#lang`/sweet-exp fixture that did not also carry a
+     * dialect-bearing extension. */
     TuriValue result;
-    if (debug) {
-        /* Under the debugger the user file is brought in via `(load "path")`
-         * rather than turi_eval_file's concatenate-into-<eval> path: a loaded
-         * file gets its own file_id and keeps its real path + 1-based line
-         * numbers, so breakpoints (`break <line>`), source listings, and stack
-         * frames resolve against the user's source instead of the synthetic
-         * <eval> blob (which would offset every line by the preloaded prelude). */
+    {
         char load_form[4200];
         snprintf(load_form, sizeof load_form, "(load \"%s\")", path);
         result = turi_eval(env, load_form);
-    } else {
-        result = turi_eval_file(env, path);
     }
     int rc = 0;
     if (turi_is_error(result)) {
