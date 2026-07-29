@@ -13,7 +13,8 @@ A constrained kind-polymorphic function (`[^m] [^Monad m x : (m int)]`) is
 compiled once and dispatches through a dictionary the caller resolves. The
 carrier ABI for **by-value** type constructors (stdlib `Option`, `Result` --
 real structs, not int-carrier `defopaque`s) is now correct for the
-dictionary-passed path; two narrower seams remain.
+dictionary-passed path.  Seam 1 below was resolved by Route B (2026-07-29);
+one seam remains: `Result` cannot fill a unary `(m int)` (seam 2).
 
 > **Fixed 2026-07-29:** the continuation handed to a dict-dispatched method was
 > a struct-returning thunk cast to an int64-returning function pointer -- an
