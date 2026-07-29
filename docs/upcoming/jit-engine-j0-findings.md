@@ -1078,6 +1078,16 @@ ucontext fiber runtime and uses a **JIT-generated function as a `makecontext`
 entry point**; the same split exists on the `cc` path, where it works. Settling
 it needs a backtrace, not another hypothesis.
 
+The archive link is confirmed **exactly neutral** against the curated list:
+1571/1680 both ways, zero fixtures changed outcome. Getting there surfaced one
+more real defect: `libturi.a` silently drops `src/runtime/symbols.c` to a
+basename collision with `src/compiler/symbols.c` (both become `symbols.c.o`;
+the compiler one wins; `tur_sym_register` is absent from the archive).
+`tur build` never notices because `libturt_runtime.a` supplies an uncolliding
+copy. Filed at
+[docs/reported/libturi-symbols-basename-collision.md](../reported/libturi-symbols-basename-collision.md);
+the harness compiles the shadowed TU directly until it is fixed.
+
 Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
 10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.
 It is still wide enough that 8.4.2's rule holds: quote the full corpus.
