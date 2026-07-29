@@ -1,0 +1,32 @@
+;; constrained-hkt-pure-and-byvalue-carriers gap 1: `pure` inside a constrained
+;; poly fn must dispatch to the instance the CALLER chose, not to a statically
+;; picked representative.
+;;
+;; `make` is compiled against the abstract `m` and instantiated at two different
+;; Applicative instances through a rank-2 forall.  Each instance's `pure` tags
+;; its payload differently (+100 vs +200), so a static representative would
+;; print the same number twice -- a silent miscompile, strictly worse than the
+;; "no instance 'Applicative tyvar'" error this replaced.
+(defopaque T1 [a] :int)
+(defn mk-t1  [A] [x : A] : (T1 A) ```c return (int64_t)x; ```)
+(defn mk-t1b [A] [x : A] : (T1 A) ```c return (int64_t)x + 100; ```)
+(defn un-t1  [A] [b : (T1 A)] : A ```c return (int64_t)b; ```)
+(definstance Applicative [T1] (pure [x] (mk-t1b x)) (ap [ff fa] fa))
+
+(defopaque T2 [a] :int)
+(defn mk-t2  [A] [x : A] : (T2 A) ```c return (int64_t)x; ```)
+(defn mk-t2b [A] [x : A] : (T2 A) ```c return (int64_t)x + 200; ```)
+(defn un-t2  [A] [b : (T2 A)] : A ```c return (int64_t)b; ```)
+(definstance Applicative [T2] (pure [x] (mk-t2b x)) (ap [ff fa] fa))
+
+(defn make [^m] [^Applicative m x : (m int)] : (m int) (pure 7))
+
+(defn at-t1 [g (forall [(m :: * -> *)] [(Applicative m)] (-> (m int) (m int)))] : int
+  (un-t1 (g (mk-t1 0))))
+(defn at-t2 [g (forall [(m :: * -> *)] [(Applicative m)] (-> (m int) (m int)))] : int
+  (un-t2 (g (mk-t2 0))))
+
+(defn main [] : int
+  (println (at-t1 make))   ; want 107
+  (println (at-t2 make))   ; want 207
+  0)

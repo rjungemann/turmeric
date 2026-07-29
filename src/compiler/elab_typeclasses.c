@@ -4939,6 +4939,55 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                     break;
                 }
             }
+            /* constrained-hkt-pure-and-byvalue-carriers (gap 1): the search above
+             * looks for a kind-`*` `int`-headed representative, which a
+             * higher-kinded class never has -- every `Applicative`/`Monad`
+             * instance head is a type CONSTRUCTOR.  So `pure`/`empty` on an
+             * abstract `m` inside a constrained poly fn found no representative
+             * and hard-errored ("no instance 'Applicative tyvar'"), even though
+             * the receiver-directed methods of the very same constraint (`ap`,
+             * `bind`) resolve fine through the representative path in
+             * elab_method_call.
+             *
+             * Mirror that path for the higher-kinded case: when the abstract
+             * tyvar IS this function's constraint variable and `tc` is the
+             * constraint's class, use the constraint's ambient representative
+             * instance as the polymorphic base.  Emit-side re-resolution then
+             * specializes it per monomorphization, exactly as for the kind-`*`
+             * representative above.  Gated on the ambient constraint so an
+             * unconstrained `(pure 42)` with no expected type still reports the
+             * ascription-required diagnostic rather than silently picking an
+             * instance.
+             *
+             * The gate is that `bound` names THIS body's abstract constraint
+             * variable -- not that `tc` is the ambient class.  A body may
+             * constrain several classes on one type constructor (`[^Monad m
+             * ^Applicative m ...]`), and only the first is recorded as ambient;
+             * keying on the tyvar covers the rest.  This is the same latitude
+             * the receiver-directed path already takes, which picks a
+             * representative for `ap`/`bind` without consulting the constraint
+             * set at all. */
+            if (!inst && e->cur_hkt_constraint_tyvar && bound.as.tyvar_.name &&
+                strcmp(bound.as.tyvar_.name, e->cur_hkt_constraint_tyvar) == 0) {
+                TypeClassInstance *repr =
+                    (e->cur_hkt_dict_binding && e->cur_hkt_dict_binding->ambient_repr)
+                        ? e->cur_hkt_dict_binding->ambient_repr : NULL;
+                /* The ambient repr belongs to the FIRST constraint's class; it is
+                 * only usable here when that is also `tc`. */
+                if (repr && (repr->typeclass != tc ||
+                             midx >= repr->n_method_impls || !repr->method_impls[midx]))
+                    repr = NULL;
+                if (!repr) {
+                    for (TypeClassInstance *it = env->instances; it; it = it->next) {
+                        if (it->typeclass != tc) continue;
+                        if (midx >= it->n_method_impls || !it->method_impls[midx])
+                            continue;
+                        repr = it;
+                        break;
+                    }
+                }
+                inst = repr;
+            }
             abstract_return_dispatch = (inst != NULL);
         }
         if (!inst) {

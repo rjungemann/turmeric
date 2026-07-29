@@ -25,8 +25,8 @@ The short version:
 kind-polymorphic function -- Turmeric's spelling of `Monad m => m a -> ...` --
 compiles once and dispatches through a dictionary the caller resolves, so the
 same body runs at whichever instance the caller picks. What it cannot yet do is
-call `pure` (or any other return-position method) on the abstract `m`, which
-rules out most of the combinators you would actually want to write this way.
+use the stdlib `Option` or `Result` as that abstract `m` -- the poly carrier is
+one machine word, so it is limited to int-carrier type constructors.
 [Sharp edges](#sharp-edges) has the details.
 
 ## Picking a tool
@@ -540,16 +540,22 @@ defn main [] : int
 Prints `10` then `5` -- one body, two instances, chosen by the caller. This is
 the same dictionary-passing machinery the van Laarhoven optics need.
 
+`pure` works in these bodies too, dispatching to whichever instance the caller
+picked, so a full `bind`-then-`pure` combinator is expressible:
+
+```turmeric no-check
+(defn bind-then-pure [^m] [^Monad m ^Applicative m x : (m int)] : (m int)
+  (bind x (fn [v] (pure (* v 2)))))
+```
+
+Several constraints on one type constructor are fine, as above.
+
 **What does not work yet**, and why you will still mostly write concrete monads:
 
-- **`pure` on the abstract `m`.** Return-position methods are not resolved
-  through the constraint dictionary, so a body that ends in `pure` fails with
-  `no instance 'Applicative tyvar'` -- even with `^Applicative m` declared. Since
-  nearly every interesting monadic combinator ends in `pure`, this is the gap
-  that bites.
 - **By-value carriers.** The poly carrier is one machine word, so the abstract
   `m` has to be an int-carrier `defopaque`. The stdlib `Option` and `Result` are
-  by-value ADTs and crash when passed through it.
+  by-value ADTs and crash when passed through it -- which rules out the two
+  monads you are most likely to want.
 - **The middle-vector spelling.** `(defn f [^m] [(Monad m)] [ma : (m int)] ...)`
   elaborates and monomorphizes but miscompiles; use the in-parameter `^Monad m`
   form above.
@@ -558,7 +564,7 @@ the same dictionary-passing machinery the van Laarhoven optics need.
 monad, or write it in effect style, where handler choice *is* the polymorphism.
 That is usually the better trade anyway -- the code that wants `Monad m =>` in
 Haskell is largely the code that becomes an effect here. See
-`docs/reported/constrained-hkt-pure-and-byvalue-carriers.md` for the two gaps.
+`docs/reported/constrained-hkt-byvalue-carriers.md` for the remaining gap.
 
 ### Return-position dispatch needs an expected type
 
@@ -619,7 +625,7 @@ until this is fixed.
 
 | Property | Turmeric | Haskell |
 |---|---|---|
-| `Monad m =>` polymorphism | Partial -- dictionary-passed, but no `pure` on the abstract `m` | Full HKT polymorphism |
+| `Monad m =>` polymorphism | Dictionary-passed; abstract `m` limited to int-carrier constructors | Full HKT polymorphism |
 | `do`-notation | `do-m`, dispatched on the receiver's type | `do`, polymorphic over `Monad` |
 | Most "monad" use cases | Effect handlers, direct style | Monad transformers / `mtl` |
 | Async / IO | Effects | `IO` |
@@ -633,8 +639,8 @@ until this is fixed.
 Nesting two handlers is the whole of what a two-layer transformer stack does,
 with no `lift` and no `MonadTrans` instance to write. Writing a combinator once
 and instantiating it at every monad is possible in principle -- the dictionary
-machinery is there -- but not yet practical while `pure` on an abstract `m` is
-unresolved.
+machinery is there -- but limited today to int-carrier type
+constructors.
 
 ## See also
 
