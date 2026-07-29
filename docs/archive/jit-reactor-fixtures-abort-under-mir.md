@@ -1,8 +1,33 @@
 # `reactor-*` fixtures abort under the MIR JIT (work under `cc`)
 
-**Severity: medium, and unexplained.** 10 fixtures. Not a regression --
-they previously failed at link and now fail at runtime, which is a worse
-failure mode but more honest information.
+**RESOLVED 2026-07-29 in `9a39519f3`.** Root cause: **link-time weak-symbol
+overrides do not cross the JIT boundary.** libturi declares
+`__attribute__((weak)) int tur_closure_headers_enabled = 0`
+(`src/async/reactor.c:81`) and the emitted program strong-defines it to `1` to
+declare that its closure boxes carry drop-glue headers; the linker performs
+that handshake on the `cc` path, but host code in the JIT process reads its
+own weak copy forever, so `tur_reactor_release_box` took the flag-off path and
+plain-freed an interior pointer (fat-closure handle = malloc base + header).
+
+Proof chain: backtrace -> freed pointer == spawn body box, 8-mod-16 aligned ->
+same TU + same archive under gcc passes with the same interior-pointer shape ->
+trampoline fires AND returns cleanly under MIR (the fiber runs; two earlier
+hypotheses about fibers were wrong) -> `release_box` dispatches on the weak
+flag -> forcing the host global to 1 in gdb makes the fixture pass end to end.
+
+Fix: the harness syncs the module's data-item value onto the host global after
+`MIR_link` (`sync_config_globals`). All 9 sampled reactor fixtures recovered;
+corpus 1631 -> 1640.
+
+**Still open, folded into the J1 static-init work:** `scheduler_common.c`
+carries six weak no-op FUNCTIONS (`tur_scheduler_*_st`) with the identical
+hazard, and value-copying cannot fix those -- host direct calls cannot be
+re-bound to MIR code. The durable design is an explicit runtime call from the
+program's static init instead of a linker handshake.
+
+Original report follows; its "next steps" section is what was executed.
+
+---
 
 ## Summary
 

@@ -1155,11 +1155,17 @@ stands at:
 
 - **31 x** GNU constructs in *user inline-C* -- the plan's 3.2-step-6
   fallback-to-`cc`, a design decision, working as designed.
-- **12 x** signals: 10 `reactor-*`
-  ([open report](../reported/jit-reactor-fixtures-abort-under-mir.md), needs a
-  backtrace; prime suspect is JIT-generated code as a `makecontext` entry) and
-  2 concurrency fixtures dying to the subset shim's documented
-  atomics-dropped-to-plain-ops hazard.
+- ~~**12 x** signals: 10 `reactor-*` ... and 2 concurrency fixtures~~
+  **RESOLVED to 3** (`9a39519f3`, corpus 1640/1680 = 97.6%): the reactor
+  aborts were root-caused to a **link-time weak-symbol handshake that cannot
+  cross the JIT boundary** (`tur_closure_headers_enabled`;
+  [archived report with the proof chain](../archive/jit-reactor-fixtures-abort-under-mir.md)
+  -- note the prime suspect named here, `makecontext` entry, was WRONG; the
+  fiber machinery is fine under MIR). The harness now syncs weak config
+  globals; the six weak `tur_scheduler_*_st` FUNCTIONS carry the same hazard,
+  are not value-copyable, and fold into the `__tur_static_init()` J1 work.
+  Remaining 3 signals: 2 shim-atomics casualties + `any-cast-mismatch-panic`,
+  which panics BY DESIGN (the sweep counts any signal as failure).
 - **6 x** wrong output: 3 `dynvar-*` (the `((cleanup))` gap, 3.1),
   `hamt-lowering-basic` + `load-in-imported-module` +
   `self-recursive-carrier-struct-return` (unmasked wrong-answers under MIR,
