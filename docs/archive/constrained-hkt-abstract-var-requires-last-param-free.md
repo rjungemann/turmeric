@@ -1,11 +1,43 @@
 ---
-status: open
+status: RESOLVED (2026-07-29) -- the hole now lives in the Type
 severity: medium
 discovered: 2026-07-29
 area: compiler (call-site unification, src/compiler/elab_call.c)
 ---
 
 # A constrained abstract type constructor only accepts a LAST-param-free head
+
+> **RESOLVED** by fix direction 1 -- putting the hole in the `Type` rather than
+> the stopgaps.  `Type.as.app.hole_pos_p1` encodes the free slot (index PLUS
+> ONE, so the zero every memset'd Type already carries means "ordinary
+> application" and no construction site needed auditing).  Four sites became
+> hole-aware:
+>
+> - `call_collect_type_bindings` (`elab_call.c`) -- the curried match is tried
+>   first on a scratch binding set, so existing programs are bit-identical; only
+>   on failure does it retry with the element at an earlier slot and bind
+>   `m := (Result _ cstr)`.  Last slot keeps priority when both could match.
+> - `call_instantiate_type` (`elab_call.c`), `emit_abi_instantiate_type` and
+>   `emit_resolve_type` (`emit_module.c` / `emit_core.c`) -- saturating a
+>   hole-headed head places the element AT the hole, so `(m b)` becomes
+>   `(Result b cstr)` and the spec mangles/materialises as
+>   `Result__int__cstr` rather than the transposed `Result__cstr__int`.
+> - `type_eq` distinguishes `(Result _ B)` from `(Result B)`; `type_print`
+>   spells the hole.
+>
+> `Monad m => (m int) -> (m int)` now runs at `Result`:
+>
+>     (defn poly-bind [^m] [^Monad m x : (m int)] : (m int)
+>       (bind x (fn [v] (ok-int (* v 3)))))
+>     (poly-bind (ok-int 4))     ;; => ok 12
+>     (poly-bind (bad))          ;; => err "boom"  (ok-biased short-circuit)
+>
+> Fixture: `hkt-constrained-hole-headed-instance-head` (both arms -- the `err`
+> arm proves the ok-biased instance actually ran).  Suite: 2409 passed, 0
+> failed, with no fixture churn: the curried-first ordering meant nothing that
+> compiled before changed shape.
+>
+> The analysis below is the pre-fix state, kept as the paper trail.
 
 ## Summary
 

@@ -21,13 +21,12 @@ The short version:
   `Parser`, `Backtrack`, and `Goal`, and `do-m` gives you do-notation over any
   of them.
 
-**Polymorphism over the monad exists but is partial.** A constrained
-kind-polymorphic function -- Turmeric's spelling of `Monad m => m a -> ...` --
-compiles once and dispatches through a dictionary the caller resolves, so the
-same body runs at whichever instance the caller picks. The one thing it cannot
-yet do is abstract over a constructor whose mapped parameter is not its last --
-which in the stdlib means `Result`, but not `Either`.
-[Sharp edges](#sharp-edges) has the details.
+**Polymorphism over the monad works.** A constrained kind-polymorphic function
+-- Turmeric's spelling of `Monad m => m a -> ...` -- compiles once and
+dispatches through a dictionary the caller resolves, so the same body runs at
+whichever instance the caller picks: `Option`, `Result`, `Either`, or your own
+constructor. [Polymorphism over the monad](#polymorphism-over-the-monad) has
+the details.
 
 ## Picking a tool
 
@@ -474,18 +473,16 @@ the full instance set, so combinator code is ordinary `do-m` and `alt-or` over
 the `Parser` monad, with `alt-or` giving full backtracking choice. See
 [parser-combinators-tutorial.md](parser-combinators-tutorial.md).
 
-## Sharp edges
+### Polymorphism over the monad
 
-### Polymorphism over the monad is partial
+This is Turmeric's `Monad m => ...`, and it is worth a section because the
+spelling is unfamiliar even though the capability is ordinary.
 
-Abstracting over the monad *works*, but only for part of the surface, so it is
-worth knowing exactly where the edge is.
-
-**What works.** A constrained kind-polymorphic function -- `^m` for the type
-constructor, `^Monad m` for the constraint -- is compiled **once** and dispatches
-its method calls through a dictionary the caller resolves. It can be called
-directly at a concrete type, or passed as a rank-2 `forall` argument and
-instantiated at several instances:
+A constrained kind-polymorphic function -- `^m` for the type constructor,
+`^Monad m` for the constraint -- is compiled **once** and dispatches its method
+calls through a dictionary the caller resolves. It can be called directly at a
+concrete type, or passed as a rank-2 `forall` argument and instantiated at
+several instances:
 
 ```turmeric
 (defopaque Id [a] :int)
@@ -554,20 +551,17 @@ Both constraint spellings work -- the in-parameter `^Monad m` form and the
 middle vector `[(Monad m) (Applicative m)]` -- and both by-value containers
 (the stdlib `Option`) and int-carrier `defopaque`s can fill `m`.
 
-**The one remaining limit: the abstracted parameter must be the constructor's
-last.** Arity is not the issue -- a binary constructor is fine when its free
-slot is last, so `Either` (whose instance head is the curried prefix
-`(Either E)`) abstracts cleanly. `Result` does not, because its parameter order
-is `(Result ok err)` while its instances are ok-biased, so the mapped slot is
-first and the head needs a hole (`(Result _ cstr)`) that call-site unification
-cannot express. See
-`docs/reported/constrained-hkt-abstract-var-requires-last-param-free.md`.
+Constructors of any arity fill `m`, and the abstracted parameter need not be
+the last: `Either` abstracts through the curried head `(Either E)`, and
+`Result` -- whose instances are ok-biased, so the mapped slot is *first* --
+through the hole-headed `(Result _ cstr)`.
 
 **In practice** you will still often write concrete monads or effect-style code
 -- handler choice *is* the polymorphism there, and the code that wants
-`Monad m =>` in Haskell is largely the code that becomes an effect here. But the
-abstraction is real now: one compiled body, caller-chosen instance, `bind` and
-`pure` alike, including inside lifted continuations.
+`Monad m =>` in Haskell is largely the code that becomes an effect here. Reach
+for this when you genuinely want one body to serve every instance.
+
+## Sharp edges
 
 ### Return-position dispatch needs an expected type
 
@@ -628,7 +622,7 @@ until this is fixed.
 
 | Property | Turmeric | Haskell |
 |---|---|---|
-| `Monad m =>` polymorphism | Dictionary-passed; abstract `m` limited to unary constructors | Full HKT polymorphism |
+| `Monad m =>` polymorphism | Dictionary-passed, one compiled body per fn | Dictionary-passed / specialized |
 | `do`-notation | `do-m`, dispatched on the receiver's type | `do`, polymorphic over `Monad` |
 | Most "monad" use cases | Effect handlers, direct style | Monad transformers / `mtl` |
 | Async / IO | Effects | `IO` |
@@ -641,9 +635,9 @@ until this is fixed.
 **The deal Turmeric makes:** direct-style code, and composition without lifting.
 Nesting two handlers is the whole of what a two-layer transformer stack does,
 with no `lift` and no `MonadTrans` instance to write. Writing a combinator once
-and instantiating it at every monad is possible in principle -- the dictionary
-machinery is there -- but limited today to unary type
-constructors.
+and instantiating it at every monad works too -- it is just rarely the thing you
+reach for, because the programs that need it in Haskell are mostly the programs
+that become effect handlers here.
 
 ## See also
 

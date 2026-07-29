@@ -96,6 +96,6 @@ only because Schema's tag word reads as Option's `is_some`. Resolved same day by
 The by-value carrier restriction is a separate fault and remains open --
 [../constrained-hkt-byvalue-carriers.md](../constrained-hkt-byvalue-carriers.md) (since RESOLVED,
 with the unary-head limit extracted to
-[../../reported/constrained-hkt-abstract-var-requires-last-param-free.md](../../reported/constrained-hkt-abstract-var-requires-last-param-free.md)).
+[../constrained-hkt-abstract-var-requires-last-param-free.md](../constrained-hkt-abstract-var-requires-last-param-free.md), since RESOLVED).
 The abstract `m` must still be an int-carrier `defopaque`; stdlib `Option` and
 `Result` crash through the poly carrier.

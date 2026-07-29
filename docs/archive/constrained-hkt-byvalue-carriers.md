@@ -20,10 +20,10 @@ clone and off the broken monomorphized-spec return path entirely (fixture:
 
 The one remaining gap (formerly seam 2) is an expressiveness limit in call-site
 unification, not a carrier fault, and now has its own report:
-[../reported/constrained-hkt-abstract-var-requires-last-param-free.md](../reported/constrained-hkt-abstract-var-requires-last-param-free.md).
-Note that report re-diagnoses it: the "binary head" framing used below is wrong
--- arity is not the issue (`Either` abstracts fine), the abstracted parameter
-must be the constructor's LAST.
+[constrained-hkt-abstract-var-requires-last-param-free.md](constrained-hkt-abstract-var-requires-last-param-free.md)
+(since RESOLVED).  Note that report re-diagnoses it: the "binary head" framing
+used below is wrong -- arity is not the issue (`Either` abstracts fine); the
+free slot had to be the constructor's LAST, which the hole-in-Type fix lifted.
 
 > **Fixed 2026-07-29:** the continuation handed to a dict-dispatched method was
 > a struct-returning thunk cast to an int64-returning function pointer -- an
@@ -65,8 +65,8 @@ pass rather than a tail-end addition.
 
 ## Seam 2 -- `Result` cannot fill a unary `(m int)` (EXTRACTED)
 
-Moved to its own open report, and re-diagnosed there:
-[../reported/constrained-hkt-abstract-var-requires-last-param-free.md](../reported/constrained-hkt-abstract-var-requires-last-param-free.md).
+Moved to its own report, re-diagnosed, and since RESOLVED:
+[constrained-hkt-abstract-var-requires-last-param-free.md](constrained-hkt-abstract-var-requires-last-param-free.md).
 
 ## Related
 

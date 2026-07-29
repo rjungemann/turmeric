@@ -444,10 +444,68 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                 }
                 return false;
             }
-            return call_collect_type_bindings(expected->as.app.fn, *actual.as.app.fn,
-                                              bindings, n_bindings) &&
-                   call_collect_type_bindings(expected->as.app.arg, *actual.as.app.arg,
-                                              bindings, n_bindings);
+            {
+                /* Ordinary curried match first, on a SCRATCH binding set so a
+                 * failed attempt leaves no half-bound tyvars behind.  This is
+                 * the existing behaviour and stays exact. */
+                CallTypeBinding scratch[16];
+                uint8_t n_scratch = *n_bindings;
+                for (uint8_t s = 0; s < n_scratch; s++) scratch[s] = bindings[s];
+                if (call_collect_type_bindings(expected->as.app.fn, *actual.as.app.fn,
+                                               scratch, &n_scratch) &&
+                    call_collect_type_bindings(expected->as.app.arg, *actual.as.app.arg,
+                                               scratch, &n_scratch)) {
+                    for (uint8_t s = 0; s < n_scratch; s++) bindings[s] = scratch[s];
+                    *n_bindings = n_scratch;
+                    return true;
+                }
+            }
+            /* constrained-hkt-abstract-var-requires-last-param-free: currying
+             * can only leave the LAST constructor slot free, so `(m elem)`
+             * against `(Result int cstr)` binds `m := (Result int)` -- fixing
+             * the very slot meant to stay free -- and then mismatches.  When the
+             * expected head is an unbound type VARIABLE, retry with the element
+             * at an earlier slot and bind `m` to the hole-headed partial
+             * application `(Result _ cstr)`, which saturates back to
+             * `(Result elem cstr)` (type_app_fill_hole).
+             *
+             * Only reached after the curried attempt fails, so every program
+             * that type-checked before is unaffected, and the LAST slot keeps
+             * priority when more than one could match. */
+            if (expected->as.app.fn->kind == TY_TYVAR &&
+                expected->as.app.fn->as.tyvar_.name &&
+                actual.as.app.fn->kind == TY_APP &&
+                actual.as.app.fn->as.app.fn && actual.as.app.fn->as.app.arg &&
+                !type_app_has_hole(&actual)) {
+                uint8_t ex_idx = 0;
+                bool already_bound = call_find_type_binding(
+                    bindings, *n_bindings, expected->as.app.fn->as.tyvar_.name, &ex_idx);
+                /* slot 0 of a binary application `((C t0) t1)` */
+                const Type *t0 = actual.as.app.fn->as.app.arg;
+                const Type *ctor = actual.as.app.fn->as.app.fn;
+                CallTypeBinding scratch[16];
+                uint8_t n_scratch = *n_bindings;
+                for (uint8_t s = 0; s < n_scratch; s++) scratch[s] = bindings[s];
+                if (call_collect_type_bindings(expected->as.app.arg, *t0,
+                                               scratch, &n_scratch)) {
+                    Type hole = type_app_hole(tur_type_arena(), *ctor,
+                                              *actual.as.app.arg, 0,
+                                              (Span){0});
+                    if (already_bound) {
+                        if (!type_eq(bindings[ex_idx].type, hole)) return false;
+                    } else if (n_scratch >= 16) {
+                        return false;
+                    } else {
+                        scratch[n_scratch].name = expected->as.app.fn->as.tyvar_.name;
+                        scratch[n_scratch].type = hole;
+                        n_scratch++;
+                    }
+                    for (uint8_t s = 0; s < n_scratch; s++) bindings[s] = scratch[s];
+                    *n_bindings = n_scratch;
+                    return true;
+                }
+            }
+            return false;
         case TY_FN: {
             /* poly-closure-result-specialization (Stage A1): bind the named
              * tyvars in a function-typed parameter (e.g. `:(fn [A] B)`) from a
@@ -620,6 +678,14 @@ static Type call_instantiate_type(Elab *e, const Type *t,
         case TY_APP: {
             Type fn = call_instantiate_type(e, t->as.app.fn, bindings, n_bindings);
             Type arg = call_instantiate_type(e, t->as.app.arg, bindings, n_bindings);
+            /* constrained-hkt-abstract-var-requires-last-param-free: when the
+             * head substituted to a HOLE-headed partial application -- the
+             * binding `m := (Result _ cstr)` the call site produced -- applying
+             * it must place `arg` at the hole, not curry it onto the end.  So
+             * `(m b)` instantiates to `(Result b cstr)`, which is what makes a
+             * combinator returning `(m b)` type-check at an ok-biased head. */
+            if (type_app_has_hole(&fn))
+                return type_app_fill_hole(e->arena, fn, arg, (Span){0});
             return type_app(e->arena, fn, arg, (Span){0});
         }
         case TY_FN: {

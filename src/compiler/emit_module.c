@@ -1009,6 +1009,36 @@ static Type emit_abi_instantiate_type(const Type *t,
             if (!t->as.app.fn || !t->as.app.arg) return *t;
             Type fn = emit_abi_instantiate_type(t->as.app.fn, bindings, n_bindings, arena);
             Type arg = emit_abi_instantiate_type(t->as.app.arg, bindings, n_bindings, arena);
+            /* constrained-hkt-abstract-var-requires-last-param-free: mirror
+             * call_instantiate_type -- when the head substituted to a
+             * hole-headed partial application, saturating it puts `arg` at the
+             * hole rather than currying it on the end, so the spec's result
+             * type (and hence its mangled name and C signature) is
+             * `Result__int__cstr`, not the transposed `Result__cstr__int`. */
+            if (type_app_has_hole(&fn)) {
+                uint8_t hp = type_app_hole_pos(&fn);
+                Type ctor  = fn.as.app.fn ? *fn.as.app.fn : fn;
+                Type fixed = fn.as.app.arg ? *fn.as.app.arg : arg;
+                Type first  = (hp == 0) ? arg   : fixed;
+                Type second = (hp == 0) ? fixed : arg;
+                Type inner;
+                memset(&inner, 0, sizeof(inner));
+                inner.kind = TY_APP;
+                inner.copy_kind = ctor.copy_kind;
+                inner.as.app.fn  = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                inner.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *inner.as.app.fn  = ctor;
+                *inner.as.app.arg = first;
+                Type outer;
+                memset(&outer, 0, sizeof(outer));
+                outer.kind = TY_APP;
+                outer.copy_kind = ctor.copy_kind;
+                outer.as.app.fn  = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                outer.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *outer.as.app.fn  = inner;
+                *outer.as.app.arg = second;
+                return outer;
+            }
             Type out = *t;
             out.as.app.fn = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
             out.as.app.arg = (Type *)emit_abi_type_scratch(arena, sizeof(Type));

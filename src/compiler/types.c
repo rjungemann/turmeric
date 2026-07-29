@@ -29,6 +29,16 @@ uint8_t *tur_fn_args_alloc(uint32_t n) {
     return p;
 }
 
+/* constrained-hkt-abstract-var-requires-last-param-free: the same
+ * process-lifetime arena, exposed for building a hole-headed partial
+ * application where no caller-supplied arena is in scope (call-site
+ * unification).  Same lifetime rationale as tur_fn_args_alloc: the Type is
+ * copied by value into a binding table that outlives any per-call scratch. */
+Arena *tur_type_arena(void) {
+    if (!g_type_arena_ready) { arena_init(&g_type_arena, 0); g_type_arena_ready = true; }
+    return &g_type_arena;
+}
+
 /* CONV-S1 seam 4 (keystone): named-layout helpers defined in emit_core.c.
  * Forward-declared here (types.c does not include emit_internal.h) so the
  * single-variant record monomorph emit routes its field stores through the same
@@ -213,6 +223,10 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_APP) {
         if (!a.as.app.fn || !b.as.app.fn) return a.as.app.fn == b.as.app.fn;
         if (!a.as.app.arg || !b.as.app.arg) return a.as.app.arg == b.as.app.arg;
+        /* constrained-hkt-abstract-var-requires-last-param-free: `(Result _ B)`
+         * and the ordinary application `(Result B)` share fn and arg but denote
+         * different constructors, so the hole slot is part of identity. */
+        if (a.as.app.hole_pos_p1 != b.as.app.hole_pos_p1) return false;
         return type_eq(*a.as.app.fn, *b.as.app.fn) && type_eq(*a.as.app.arg, *b.as.app.arg);
     }
     /* Phase HKT-P2: Recursive types - identity by name pointer (interned) */
@@ -2002,6 +2016,20 @@ static void type_name_buf(Buf *b, Type t) {
         }
         /* Phase HKT-P1: Type application */
         case TY_APP: {
+            /* constrained-hkt-abstract-var-requires-last-param-free: print a
+             * hole-headed partial application in its source spelling --
+             * `(Result _ cstr)` -- rather than as a bare application, so a
+             * diagnostic naming one is recognisable. */
+            if (t.as.app.hole_pos_p1 != 0) {
+                buf_putc(b, '(');
+                if (t.as.app.fn) type_name_buf(b, *t.as.app.fn); else buf_puts(b, "?");
+                uint8_t hp = (uint8_t)(t.as.app.hole_pos_p1 - 1);
+                buf_puts(b, hp == 0 ? " _ " : " ");
+                if (t.as.app.arg) type_name_buf(b, *t.as.app.arg); else buf_puts(b, "?");
+                if (hp != 0) buf_puts(b, " _");
+                buf_putc(b, ')');
+                break;
+            }
             buf_puts(b, "(type-app ");
             if (t.as.app.fn) type_name_buf(b, *t.as.app.fn); else buf_puts(b, "?");
             buf_putc(b, ' ');
@@ -2868,6 +2896,34 @@ Type type_app(Arena *a, Type fn, Type arg, Span span) {
     t.hkt_kind = kind_of_type_app(fn, arg, span);
 
     return t;
+}
+
+/* constrained-hkt-abstract-var-requires-last-param-free: hole-headed partial
+ * application.  Same shape as type_app, plus the free-slot index; the kind is
+ * forced to `* -> *` because exactly one slot remains to be filled. */
+Type type_app_hole(Arena *a, Type fn, Type arg, uint8_t hole_pos, Span span) {
+    Type t = type_app(a, fn, arg, span);
+    t.as.app.hole_pos_p1 = (uint8_t)(hole_pos + 1);
+    t.hkt_kind = KIND_ARROW;
+    return t;
+}
+
+/* Saturate a (possibly hole-headed) partial application with `elem`.  For a
+ * hole at index h the result places `elem` at slot h and the already-fixed
+ * argument in the remaining slot, so `(Result _ cstr)` + `int` yields
+ * `(Result int cstr)` rather than the curried `(Result cstr int)`. */
+Type type_app_fill_hole(Arena *a, Type head, Type elem, Span span) {
+    if (!type_app_has_hole(&head)) return type_app(a, head, elem, span);
+    uint8_t h = type_app_hole_pos(&head);
+    Type ctor  = head.as.app.fn ? *head.as.app.fn : head;
+    Type fixed = head.as.app.arg ? *head.as.app.arg : elem;
+    /* Binary constructors only: the hole is slot 0 or slot 1, and the single
+     * fixed argument takes the other.  (A wider wildcard head is rejected at
+     * the instance-head parser, so no such Type is constructible today.) */
+    Type first  = (h == 0) ? elem  : fixed;
+    Type second = (h == 0) ? fixed : elem;
+    Type inner = type_app(a, ctor, first, span);
+    return type_app(a, inner, second, span);
 }
 
 /* Phase HKT-P2: One-step unrolling of a TY_REC type.

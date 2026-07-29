@@ -185,6 +185,35 @@ Type emit_resolve_type(EmitCtx *ctx, Type t) {
             if (!t.as.app.fn || !t.as.app.arg) return t;
             Type fn = emit_resolve_type(ctx, *t.as.app.fn);
             Type arg = emit_resolve_type(ctx, *t.as.app.arg);
+            /* constrained-hkt-abstract-var-requires-last-param-free: mirror the
+             * two instantiation paths -- when the head resolved to a hole-headed
+             * partial application, saturate through the hole so a spec body's
+             * `(m a)` materialises as `Result__int__cstr`, matching the
+             * signature emit_abi_instantiate_type already mangled. */
+            if (type_app_has_hole(&fn)) {
+                uint8_t hp = type_app_hole_pos(&fn);
+                Type ctor  = fn.as.app.fn ? *fn.as.app.fn : fn;
+                Type fixed = fn.as.app.arg ? *fn.as.app.arg : arg;
+                Type first  = (hp == 0) ? arg   : fixed;
+                Type second = (hp == 0) ? fixed : arg;
+                Type inner;
+                memset(&inner, 0, sizeof(inner));
+                inner.kind = TY_APP;
+                inner.copy_kind = ctor.copy_kind;
+                inner.as.app.fn  = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                inner.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *inner.as.app.fn  = ctor;
+                *inner.as.app.arg = first;
+                Type outer;
+                memset(&outer, 0, sizeof(outer));
+                outer.kind = TY_APP;
+                outer.copy_kind = ctor.copy_kind;
+                outer.as.app.fn  = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                outer.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
+                *outer.as.app.fn  = inner;
+                *outer.as.app.arg = second;
+                return outer;
+            }
             Type out = t;
             out.as.app.fn = (Type *)emit_type_scratch(ctx, sizeof(Type));
             out.as.app.arg = (Type *)emit_type_scratch(ctx, sizeof(Type));
