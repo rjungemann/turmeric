@@ -1195,8 +1195,9 @@ stands at:
   [archived report with the proof chain](../archive/jit-reactor-fixtures-abort-under-mir.md)
   -- note the prime suspect named here, `makecontext` entry, was WRONG; the
   fiber machinery is fine under MIR). The harness now syncs weak config
-  globals; the six weak `tur_scheduler_*_st` FUNCTIONS carry the same hazard,
-  are not value-copyable, and fold into the `__tur_static_init()` J1 work.
+  globals; ~~the six weak `tur_scheduler_*_st` FUNCTIONS carry the same hazard,
+  are not value-copyable, and fold into the `__tur_static_init()` J1 work~~
+  **-- dissolved in section 17: the whole module was dead code.**
   Remaining 3 signals: 2 shim-atomics casualties + `any-cast-mismatch-panic`,
   which panics BY DESIGN (the sweep counts any signal as failure).
 - **6 x** wrong output: 3 `dynvar-*` (the `((cleanup))` gap, 3.1),
@@ -1751,8 +1752,8 @@ items.**
 **Multi-threaded programs are now first-class under the JIT**: STM commits,
 scheduler cancel flags, and select's winner CAS run on real atomics and real
 per-thread state. What J1 still owes multi-threading specifically:
-concurrent-safe (or serialized) lazy generation (8.1), and the
-`tur_scheduler_*_st` weak-function fold into `__tur_static_init()` (11.7).
+concurrent-safe (or serialized) lazy generation (8.1) -- the scheduler
+weak-function fold dissolved as dead code (17).
 
 ## 16. S1 completed -- 13,730 `__auto_type` sites down to 26
 
@@ -1887,3 +1888,42 @@ post-passes on the buffer) is the whole story between `emit_program` and
 `c2mir_compile`. This was S1's original exit criterion, one prediction
 ("deletes the normalizer") finally made true -- two sections and three
 mechanisms after 11.2 showed the prediction was premature.
+
+## 17. The scheduler weak-function hazard was in dead code
+
+Added 2026-07-29. Sections 11.7 and 15.5, the plan's J1 bullet, and the
+harness's own boundary note all carried the same J1 work item: the six weak
+no-op `tur_scheduler_*_st` functions in `src/async/scheduler_common.c` are a
+link-time handshake that cannot cross the JIT boundary (host direct calls
+cannot be re-bound to MIR code the way `tur_closure_headers_enabled`'s value
+was copied), so they "fold into the `__tur_static_init()` work" -- the
+expected fix being a registration API where the program hands the host its
+function pointers at startup.
+
+Sitting down to build that, the first question was *when does the host call
+these* -- and the answer is never:
+
+- No emitted TU defines the strong `tur_scheduler_*_st` implementations the
+  weak stubs claim to defer to ("real implementations are in generated
+  output" -- 0 of 1,928 TUs contain them; the comment described a codegen
+  that no longer exists).
+- The only calls to the weak functions are inside `TurSchedulerCommonST`'s
+  vtable methods, whose sole constructor is `tur_scheduler_common_new` --
+  which has **zero callers** in `src/`, `stdlib/`, and all 1,928 emitted TUs.
+- Every other export of the module (`_current`, `_set_current`, `io_wait`,
+  `io_signal`) is equally unreferenced. The real fiber/scheduler machinery
+  (`fiber.c`, `scheduler.c`, and the emitted preamble's own copy) never
+  touches it.
+
+The module is deleted -- `scheduler_common.c`, its header, and its
+`TUR_CORE_SOURCES` row. Verification: full rebuild of `tur` and the spike,
+suite 2399/0, corpus 1647/1680 with an **empty** fixture diff, which is what
+"nothing reached it" predicts.
+
+The J1 work item this dissolves was carried through four documents for three
+sessions, always phrased as future engine work, never once checked for
+reachability -- because the weak-symbol *mechanism* was real (the reactor
+abort proved that for the config global) and the six functions pattern-matched
+it perfectly. The lesson is 11.6's again, from a new angle: a hazard inherited
+from a correct analysis of a NEIGHBORING defect still needs its own
+reachability check before it becomes a plan line.

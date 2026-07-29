@@ -263,7 +263,6 @@ set(TUR_CORE_SOURCES
     async/io.c
     async/reactor.c
     async/scheduler.c
-    async/scheduler_common.c
     async/timer_wheel.c
     # web/ -- WASM glue and playground tutorial
     web/tutorial.c

@@ -313,8 +313,10 @@ useful even if the JIT slips.
   `try_spilled_reg_mem` overruns a 2-entry array when one insn carries the
   same spilled reg three times (`mul v,v,v`); fixed in the fork, pin
   `41ff4d94` (findings 15.2). What J1 still owes multi-threading:
-  concurrent-safe or serialized lazy generation (8.1) and the
-  `tur_scheduler_*_st` weak-function fold (11.7). The stack-size question is
+  concurrent-safe or serialized lazy generation (8.1) -- the
+  `tur_scheduler_*_st` weak-function fold dissolved as dead code
+  (findings 17: the module carrying the hazard had zero callers anywhere;
+  deleted). The stack-size question is
   decided (findings 15.3): a sized entry-thread stack is the sanctioned
   stopgap ("any size temporarily is fine"), with the standing constraint that
   the long-run fix must retain the runtime's **stackless architecture** --

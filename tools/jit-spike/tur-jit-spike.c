@@ -158,10 +158,11 @@ static void *jit_run_entry (void *p) {
    (docs/reported/jit-reactor-fixtures-abort-under-mir.md, root cause).  After
    the module is loaded, copy the program's value onto the host's global.
 
-   The six weak no-op tur_scheduler_*_st FUNCTIONS in scheduler_common.c are
-   the same hazard and cannot be fixed this way -- host direct calls cannot be
-   re-bound to MIR code.  That needs J1's runtime-call redesign; recorded in
-   the report. */
+   The six weak no-op tur_scheduler_*_st FUNCTIONS this note used to flag as
+   "the same hazard, needs J1's runtime-call redesign" turned out to live in a
+   module with ZERO callers -- scheduler_common.c's every export was
+   unreachable from src/, stdlib/, and all 1,928 emitted TUs (findings 17).
+   The module is deleted; the hazard was in dead code all along. */
 extern int tur_closure_headers_enabled;   /* libturi's weak definition */
 
 static void sync_config_globals (MIR_context_t ctx) {
