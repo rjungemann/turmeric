@@ -5222,6 +5222,7 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
      * this override-skip, a `Dec[int]` spec returning `(Result int cstr)`
      * still lowers to `int64_t`, and the caller's bridge has to unbox — the
      * very bridge crossing Path A is trying to retire. */
+    size_t _spec_ret_start = out->len;   /* S1: capture the emitted return type */
     if (spec->fn->box_aggregate_result) {
         /* WF1/WF2/WF3 (van-laarhoven-wide-functor-carrier-plan): an
          * ABI-specialized functor-wrapping closure `g` returns its wide `(f A)`
@@ -5248,6 +5249,14 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         buf_puts(out, "int64_t");
     } else {
         buf_puts(out, type_c_name(spec->result_type));
+    }
+    /* S1: same capture as the forward-decl pass -- specs are not top-level
+     * items, so this is the only place their return type is written. */
+    char *_spec_ret = NULL;
+    if (out->len > _spec_ret_start) {
+        size_t _l = out->len - _spec_ret_start;
+        _spec_ret = (char *)malloc(_l + 1);
+        if (_spec_ret) { memcpy(_spec_ret, out->data + _spec_ret_start, _l); _spec_ret[_l] = '\0'; }
     }
     buf_printf(out, " %s(", spec->clone_name);
     for (uint32_t i = 0; i < spec->n_args; i++) {
@@ -5283,6 +5292,8 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
         emit_sig_record_param_ctype(spec->clone_name, i, spec->n_args, pc);
     }
     buf_puts(out, ");\n");
+    emit_sig_record_ret_ctype(spec->clone_name, spec->n_args, _spec_ret);
+    free(_spec_ret);
 }
 
 /* gcc14-int-conversion (carrier-representation-tracking): ground-truth side
@@ -5292,6 +5303,11 @@ typedef struct EmitSigEntry {
     char     *cname;
     uint32_t  n_params;
     char    **param_ctypes;   /* n_params strings (each strdup'd, may be NULL) */
+    /* S1 (jit-engine-plan section 4): the ACTUAL emitted C return-type string,
+     * captured the same way the param types are -- as the substring the forward
+     * declaration wrote.  It is what `__auto_type t = f(...)` deduced, so a call
+     * site can name the type outright instead of asking GNU C to infer it. */
+    char     *ret_ctype;
 } EmitSigEntry;
 static EmitSigEntry *g_sig_tab;
 static uint32_t      g_sig_tab_n;
@@ -5302,6 +5318,7 @@ void emit_sig_reset(void) {
         for (uint32_t j = 0; j < g_sig_tab[i].n_params; j++)
             free(g_sig_tab[i].param_ctypes[j]);
         free(g_sig_tab[i].param_ctypes);
+        free(g_sig_tab[i].ret_ctype);
         free(g_sig_tab[i].cname);
     }
     free(g_sig_tab);
@@ -5325,6 +5342,7 @@ static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) 
     e->n_params = n_params;
     e->param_ctypes = n_params
         ? (char **)calloc(n_params, sizeof(char *)) : NULL;
+    e->ret_ctype = NULL;   /* S1: a fresh entry has no recorded return type yet */
     return e;
 }
 
@@ -5335,6 +5353,30 @@ void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_par
     if (!e || e->n_params != n_params || !e->param_ctypes) return;
     free(e->param_ctypes[idx]);
     e->param_ctypes[idx] = ctype ? strdup(ctype) : NULL;
+}
+
+/* S1: record/lookup the emitted C return type.  Recorded from the same
+ * forward-declaration pass as the params, so it is the identical string the
+ * prototype carries rather than a re-derivation. */
+void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
+                               const char *ctype) {
+    if (!cname || !ctype) return;
+    /* n_params is threaded through because emit_sig_find_or_add fixes an
+     * entry's arity on creation and emit_sig_record_param_ctype refuses to
+     * write into an entry whose arity disagrees.  Creating the entry here with
+     * a placeholder 0 would therefore silently discard every param type for a
+     * function whose return type is recorded first. */
+    EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
+    if (!e) return;
+    free(e->ret_ctype);
+    e->ret_ctype = strdup(ctype);
+}
+
+const char *emit_sig_lookup_ret_ctype(const char *cname) {
+    if (!cname) return NULL;
+    for (uint32_t i = 0; i < g_sig_tab_n; i++)
+        if (strcmp(g_sig_tab[i].cname, cname) == 0) return g_sig_tab[i].ret_ctype;
+    return NULL;
 }
 
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
@@ -5393,6 +5435,43 @@ const char *emit_localvar_lookup_ctype(const char *cname) {
     return NULL;
 }
 
+/* S1 (jit-engine-plan section 4): see emit_internal.h. */
+bool emit_c_type_is_scalar(const char *cname) {
+    if (!cname || !*cname) return false;
+    size_t n = strlen(cname);
+    while (n > 0 && cname[n - 1] == ' ') n--;
+    if (n == 0) return false;
+    if (cname[n - 1] == '*') return true;   /* any pointer, incl. `const char *` */
+
+    /* Compare on the LAST word so `unsigned long`, `const char`, and `long long`
+     * all land on their final token. */
+    size_t start = n;
+    while (start > 0 && (isalnum((unsigned char)cname[start - 1]) ||
+                         cname[start - 1] == '_'))
+        start--;
+    static const char *const scalars[] = {
+        "bool", "_Bool", "char", "short", "int", "long", "float", "double",
+        "unsigned", "signed",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+    };
+    size_t wlen = n - start;
+    for (size_t i = 0; i < sizeof scalars / sizeof scalars[0]; i++)
+        if (strlen(scalars[i]) == wlen && strncmp(cname + start, scalars[i], wlen) == 0)
+            return true;
+    return false;
+}
+
+char *emit_c_zero_of(const char *cname) {
+    if (!cname) return tur_strdup("0");
+    size_t n = strlen(cname) + 8;
+    char *out = (char *)malloc(n);
+    if (!out) return NULL;
+    snprintf(out, n, emit_c_type_is_scalar(cname) ? "((%s)0)" : "(%s){0}", cname);
+    return out;
+}
+
 /* Emit C forward declarations for every EX_FN_DEF in items.  Used by both
  * emit_program (single-file) and emit_implementation (separate compilation)
  * so that mutually-recursive static functions resolve at C-compile time. */
@@ -5424,6 +5503,9 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             fd->binding->is_from_stdlib) {
             buf_puts(out, "static ");
         }
+        /* S1: the return type is written by the branches below; capture the
+         * exact substring so a call site can name it instead of __auto_type. */
+        size_t _ret_start = out->len;
         if (e->type.kind == TY_FN) {
             TypeKind result = e->type.as.fn.result_kind;
             /* RT/SC5: carrier-return bridge -- must mirror the definition path
@@ -5533,6 +5615,16 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             buf_puts(out, "void");
         }
         const char *fn_name = raw_name_for_binding(fd->binding);
+        /* S1: out->data[_ret_start..len) is now exactly the emitted return type.
+         * Stashed rather than recorded immediately -- emit_sig_find_or_add fixes
+         * an entry's arity on creation, so the record has to follow the param
+         * loop or it would lock the entry at 0 params. */
+        char *_ret_ty = NULL;
+        if (out->len > _ret_start) {
+            size_t _rlen = out->len - _ret_start;
+            _ret_ty = (char *)malloc(_rlen + 1);
+            if (_ret_ty) { memcpy(_ret_ty, out->data + _ret_start, _rlen); _ret_ty[_rlen] = '\0'; }
+        }
         buf_printf(out, " %s(", fn_name);
         for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
@@ -5596,6 +5688,8 @@ static void emit_fn_forward_decls(EmitCtx *ctx, Buf *out,
             }
         }
         buf_puts(out, ");\n");
+        emit_sig_record_ret_ctype(fn_name, fd->n_params, _ret_ty);
+        free(_ret_ty);
         free((void*)fn_name);
     }
     /* CPS3: forward declarations for __cps wrappers */
@@ -6022,8 +6116,20 @@ static void emit_adt_typedef_and_ctors(Buf *out, const AdtDef *def,
     for (uint32_t ci = 0; ci < def->n_ctors && !skip_heap_generic_base; ci++) {
         CtorDef *ctor = def->ctors[ci];
         char *mctor = mangle_field_name(ctor->name);
+        const char *ctor_ret_c = heap ? adt_ptr_name : byval ? adt_c_name : "int64_t";
         buf_printf(out, "static %s ctor_%s(",
-                   heap ? adt_ptr_name : byval ? adt_c_name : "int64_t", mctor);
+                   ctor_ret_c, mctor);
+        /* S1: a ctor is not an EX_FN_DEF either, so record it here.  This is the
+         * `ctor_X(...)` case the old __auto_type comment called out explicitly:
+         * a heap ADT ctor returns the concrete `tur_adt_X *` even though its
+         * source type c-names to the int64 carrier, so naming the type from the
+         * source type would be wrong -- naming it from what the prototype
+         * actually says is right by construction. */
+        {
+            char ctor_sym[288];
+            snprintf(ctor_sym, sizeof ctor_sym, "ctor_%s", mctor);
+            emit_sig_record_ret_ctype(ctor_sym, ctor->n_fields, ctor_ret_c);
+        }
         for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
             if (fi > 0) buf_puts(out, ", ");
             const char *ctype = adt_ctor_field_c_type(&ctor->fields[fi], byval || heap);
@@ -6994,6 +7100,25 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "#  define TUR_RT_LOCAL\n");
         buf_puts(out, "#endif\n");
     }
+    /* S1 (jit-engine-plan section 4): thread-local storage, spelled portably.
+     *
+     * The preamble needs TLS in ~11 places.  `__thread` is a GNU extension that
+     * every cc we target accepts, but it is not C at all -- c2mir registers only
+     * the C11 keyword `_Thread_local` (c2mir.c kw_add) and has no `kw_add` for
+     * the GNU spelling on any target, so a literal `__thread` made the JIT's
+     * subset shim mandatory for every program including `arith`.
+     *
+     * Keyed on __STDC_VERSION__ rather than swapped outright: the generated C is
+     * compiled `-std=c99` (see cc_flags in main.c), where `_Thread_local` is not
+     * a standard keyword.  gcc happens to accept it there anyway, but relying on
+     * that across every supported cc buys nothing -- this way the cc path keeps
+     * the exact spelling it has always used, and only a C11-or-later front end
+     * (c2mir reports 201112) sees the standard one. */
+    buf_puts(out, "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L\n");
+    buf_puts(out, "#  define TUR_THREAD_LOCAL _Thread_local\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#  define TUR_THREAD_LOCAL __thread\n");
+    buf_puts(out, "#endif\n");
     /* Phase P3: HAMT lowering - include HAMT header when needed */
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
@@ -7351,7 +7476,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "} STM_State;\n");
     emit_rt_global(out, shared, "STM_State __stm_state;\n", "STM_State __stm_state");
     emit_rt_global(out, shared, "pthread_once_t __stm_once = PTHREAD_ONCE_INIT;\n", "pthread_once_t __stm_once");
-    emit_rt_global(out, shared, "__thread STM_Transaction *__stm_current_tx = NULL;\n", "__thread STM_Transaction *__stm_current_tx");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;\n", "TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx");
     buf_printf(out, "%sSTM_Transaction *tur_stm_current_tx(void) { return __stm_current_tx; }\n", rt_fn);
     buf_printf(out, "%svoid tur_stm_set_current_tx(STM_Transaction *tx) { __stm_current_tx = tx; }\n", rt_fn);
     /* Lazy, once-only state initialization (no generated-main wiring needed). */
@@ -7674,11 +7799,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * note in the plan.  The transport stays setjmp/longjmp; the chain is purely
      * the handler-discovery structure the plan's D1 calls for. */
     buf_puts(out, "typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;\n");
-    emit_rt_global(out, shared, "__thread tur_handler_node *tur_handler_chain = NULL;\n", "__thread tur_handler_node *tur_handler_chain");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain = NULL;\n", "TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain");
     /* Panic-return signal: thread-local propagation flag.  Set by panic,
      * checked after every panic-capable call site, consumed by catch-unwind.
      * Always-on since the panic-return-signal experiment graduated. */
-    emit_rt_global(out, shared, "__thread int tur_panicking = 0;\n", "__thread int tur_panicking");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL int tur_panicking = 0;\n", "TUR_THREAD_LOCAL int tur_panicking");
     /* Heap continuation node used by the general catch-unwind segment-splitter
      * trampoline (always-on since stackless-catch-unwind graduated).  `tag`
      * names the resume segment (0 = DONE / function return), `saved[]` (up to
@@ -8077,7 +8202,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    int64_t result;  /* f(operand), set by an abortive shift before longjmp */\n");
         buf_puts(out, "    struct tur_shift_reset_ctx *prev; /* nested resets */\n");
         buf_puts(out, "} tur_shift_reset_ctx;\n\n");
-        emit_rt_global(out, shared, "__thread tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "__thread tur_shift_reset_ctx *tur_cur_shift_reset");
+        emit_rt_global(out, shared, "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;\n\n", "TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset");
     }
     /* CPS9: the cloneable-continuation <-> DK bridge needs both the cloneable
      * runtime (emitted above) and the DK machine (just emitted) in scope.  A
@@ -8141,7 +8266,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    jmp_buf panic_jmpbuf; /* Per-fiber panic recovery buffer */\n");
     buf_puts(out, "    bool panic_jmpbuf_valid; /* Whether this fiber's panic handler is active */\n");
     buf_puts(out, "};\n\n");
-    emit_rt_global(out, shared, "__thread FiberBlock *tur_current_fiber = NULL;\n", "__thread FiberBlock *tur_current_fiber");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;\n", "TUR_THREAD_LOCAL FiberBlock *tur_current_fiber");
     /* Phase R2: tur_panic_with body — placed here so FiberBlock and
      * tur_current_fiber are in scope for the per-fiber panic check. */
     buf_puts(out, "static void tur_panic_with(int type_tag, void *payload, const char *file, int line) {\n");
@@ -8178,7 +8303,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
     /* Phase T22: Cooperative cancellation flag */
-    emit_rt_global(out, shared, "__thread bool tur_fiber_cancelled_flag = false;\n\n", "__thread bool tur_fiber_cancelled_flag");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;\n\n", "TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag");
     /* Phase T22: TaskGroup notification forward declaration */
     buf_puts(out, "static void tur_task_group_notify_done(void *task_group);\n");
     /* Forward-declare tur_fiber_set_cancelled before tur_fiber_shim uses it */
@@ -8200,10 +8325,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    TurThreadState *state;\n");
     buf_puts(out, "} TurThreadSpawnArg;\n\n");
     buf_puts(out, "/* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */\n");
-    emit_rt_global(out, shared, "__thread TurThreadState *tur_current_thread_state = NULL;\n", "__thread TurThreadState *tur_current_thread_state");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;\n", "TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state");
     buf_puts(out, "/* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */\n");
-    emit_rt_global(out, shared, "__thread jmp_buf tur_cancel_jmpbuf;\n", "__thread jmp_buf tur_cancel_jmpbuf");
-    emit_rt_global(out, shared, "__thread int tur_cancel_jmpbuf_valid = 0;\n\n", "__thread int tur_cancel_jmpbuf_valid");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf;\n", "TUR_THREAD_LOCAL jmp_buf tur_cancel_jmpbuf");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;\n\n", "TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid");
     buf_puts(out, "static void *tur_thread_trampoline(void *raw) {\n");
     buf_puts(out, "    TurThreadSpawnArg *a = (TurThreadSpawnArg *)raw;\n");
     buf_puts(out, "    tur_current_thread_state = a->state;\n");
@@ -8787,7 +8912,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    bool             running;\n");
     buf_puts(out, "    int              active;\n");
     buf_puts(out, "} TurSchedulerMT;\n\n");
-    emit_rt_global(out, shared, "__thread TurSchedulerMT *tur_current_scheduler_mt = NULL;\n\n", "__thread TurSchedulerMT *tur_current_scheduler_mt");
+    emit_rt_global(out, shared, "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt = NULL;\n\n", "TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt");
     buf_puts(out, "static void tur_scheduler_mt_enqueue_locked(TurSchedulerMT *s, FiberBlock *f) {\n");
     buf_puts(out, "    if (((s->qtail + 1) % s->qcap) == s->qhead) {\n");
     buf_puts(out, "        size_t ncap = s->qcap * 2;\n");
@@ -11235,9 +11360,15 @@ int emit_program(Buf *out, const Expr *program) {
              * call sites (raw_name_for_binding special-cases is_extern_c), and
              * any inline-C reference all agree on the real symbol name. */
             char *ec_mangled = mangle_field_name(ec->c_name->name);
+            const char *ec_ret_c = type_c_name(ec->return_type);
             buf_printf(&extern_decls, "extern %s %s(",
-                       type_c_name(ec->return_type),
+                       ec_ret_c,
                        ec_mangled);
+            /* S1: an extern-c callee never passes through emit_fn_forward_decls,
+             * so without this its call sites had no recorded return type and
+             * stayed on __auto_type -- which is most of the residue on any
+             * HAMT/string/IO-using program. */
+            emit_sig_record_ret_ctype(ec_mangled, ec->n_params, ec_ret_c);
             free(ec_mangled);
             for (uint32_t j = 0; j < ec->n_params; j++) {
                 if (j > 0) buf_puts(&extern_decls, ", ");

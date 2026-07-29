@@ -495,6 +495,13 @@ void emit_sig_reset(void);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
+/* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
+ * call site consults it to name the type of a hoisted call temp outright,
+ * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all
+ * and which accounts for 193 of the 256 full-corpus JIT failures. */
+void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
+                               const char *ctype);
+const char *emit_sig_lookup_ret_ctype(const char *cname);
 /* gcc14-int-conversion (carrier-representation-tracking): a side table recording
  * the ACTUAL emitted C type of each LOCAL variable / temp, keyed by its (globally
  * unique via fresh_tmp) C name.  A binder init `int64_t z = __t169;` reading a
@@ -506,6 +513,23 @@ const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+/* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
+ * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
+ * produces.  Anything else (a struct typedef such as `Option__int` or
+ * `tur_adt_Vec__int`) is reported as non-scalar.
+ *
+ * Deliberately conservative in that direction: the only consumer picks between
+ * `((T)0)` and `(T){0}`, and `(T){0}` is what every site emitted before, so a
+ * false "aggregate" verdict is a no-op while a false "scalar" verdict would be
+ * a miscompile. */
+bool emit_c_type_is_scalar(const char *cname);
+/* S1: a zero of `cname`, spelled so c2mir accepts it.  `((T)0)` for scalars,
+ * `(T){0}` for aggregates.  Returns a malloc'd string the caller frees.
+ *
+ * A scalar compound literal is C99-legal and every cc takes it, but c2mir
+ * rejects it outright ("braces around scalar initializer", c2mir.c:7781), and
+ * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
+char *emit_c_zero_of(const char *cname);
 bool emit_str_is_bare_ident(const char *s);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);

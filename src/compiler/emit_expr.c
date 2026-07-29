@@ -2747,8 +2747,12 @@ static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     if (rt && strcmp(rt, "void") == 0) {
         buf_puts(body, "if (tur_panicking) return;\n");
     } else if (rt) {
-        /* A zero of the exact declared return type propagates the signal. */
-        buf_printf(body, "if (tur_panicking) return (%s){0};\n", rt);
+        /* A zero of the exact declared return type propagates the signal.
+         * S1: `((T)0)` for scalars -- c2mir rejects a scalar compound literal,
+         * and this is the highest-volume `(T){0}` site in the emitter. */
+        char *rzero = emit_c_zero_of(rt);
+        buf_printf(body, "if (tur_panicking) return %s;\n", rzero ? rzero : "0");
+        free(rzero);
     } else {
         /* D1a prototype limit: the enclosing function's C return type is not
          * recorded here (some carrier/dict-clone closure shapes), so we cannot
@@ -2806,7 +2810,41 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char tmp[64];
     snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* S1 (jit-engine-plan section 4): name the type when we can prove it, and
+     * fall back to __auto_type when we cannot.
+     *
+     * The temp must take the call's EXACT emitted C representation -- carrier
+     * int64 vs by-value aggregate vs pointer -- and the comment this replaces
+     * was right that the repr heuristic disagrees with the emitted form for some
+     * carrier calls.  So this does not re-derive anything: for a DIRECT call it
+     * looks up the callee's return type as the forward-declaration pass actually
+     * wrote it, which is by construction what __auto_type deduced.
+     *
+     * Indirect calls (through a fat-closure field, a thunk typedef, or a cast
+     * function pointer) keep __auto_type; they are the residue S1 has still to
+     * close, and leaving them inferred is strictly safer than guessing. */
+    const char *ret_ct = NULL;
+    {
+        const char *q = v;
+        while (*q == '(') q++;            /* tolerate a parenthesized callee */
+        size_t idlen = 0;
+        while (q[idlen] && (isalnum((unsigned char)q[idlen]) || q[idlen] == '_')) idlen++;
+        if (idlen > 0 && q[idlen] == '(') {
+            char callee[256];
+            if (idlen < sizeof callee) {
+                memcpy(callee, q, idlen);
+                callee[idlen] = '\0';
+                const char *rt = emit_sig_lookup_ret_ctype(callee);
+                /* A `void` return never reaches here (filtered above), and an
+                 * empty record is no better than inference. */
+                if (rt && *rt && strcmp(rt, "void") != 0) ret_ct = rt;
+            }
+        }
+    }
+    if (ret_ct)
+        buf_printf(body, "%s %s = (%s);\n", ret_ct, tmp, v);
+    else
+        buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
     /* A constructor call (`ctor_X(...)`) always returns the concrete heap pointer
      * `tur_adt_X *`, even though its `(X ..)` type c-names to the int64 carrier
      * under emit_binding_repr_c_name.  Capture that before freeing v so the temp
@@ -2915,12 +2953,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * recursively zeroed.  emit_type_c_name resolves to the concrete C
              * name (already accounts for parametric struct instantiations). */
             const char *cname = emit_type_c_name(ctx, e->type);
-            Buf out; buf_init(&out);
-            buf_printf(&out, "(%s){0}", cname);
-            buf_putc(&out, '\0');
-            char *result = strdup(out.data);
-            buf_free(&out);
-            return result;
+            /* S1: scalars come back as `((T)0)`; aggregates keep the compound
+             * literal, which is the only spelling that zeroes every field. */
+            char *result = emit_c_zero_of(cname);
+            return result ? result : strdup("0");
         }
         case EX_SYM_LIT: {
             /* SYM1: reference the TU-local static record for this keyword. */
