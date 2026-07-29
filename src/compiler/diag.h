@@ -124,6 +124,13 @@ typedef enum DiagCode {
      * bound is now MAX_FN_ARITY (64) -- but a lint nudge toward the arity style
      * guide (a defstruct options value or a `& rest :type` variadic). */
     TUR_W0041_HIGH_ARITY,
+    /* A `defn`/`defmacro` names a reserved special form (`return`, `match`,
+     * `handle`, ...).  Head-position dispatch in elab_call matches those names
+     * by symbol identity *before* any binding or macro lookup, so the
+     * definition is accepted but every bare `(name ...)` call site elaborates
+     * as the special form and the definition is unreachable by its bare name.
+     * See docs/archive/defn-shadows-return-special-form.md. */
+    TUR_W0042_SHADOWS_SPECIAL_FORM,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

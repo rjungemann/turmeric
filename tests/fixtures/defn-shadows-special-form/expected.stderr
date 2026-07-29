@@ -1,0 +1,2 @@
+warning [TUR-W0042]: defn 'return' shadows the special form 'return'
+warning [TUR-W0042]: defmacro 'match' shadows the special form 'match'

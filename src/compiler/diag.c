@@ -207,6 +207,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0039_METHOD_DEFN_CLASH:          return "TUR-W0039";
         case TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH: return "TUR-W0040";
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
+        case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -356,6 +357,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
     if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
+    if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -853,6 +855,31 @@ static const DiagExplanation diag_explanations_[] = {
       "Alternatively, wrap the inline-C call site in (unsafe ...) if the function\n"
       "is a safe abstraction over an unsafe implementation:\n"
       "  (defn safe-fn [] :int (unsafe (raw-c-helper)))\n",
+    },
+    { TUR_W0042_SHADOWS_SPECIAL_FORM,
+      "TUR-W0042: Definition shadows a special form\n"
+      "\n"
+      "A defn or defmacro was given the name of a reserved special form, e.g.\n"
+      "  (defn return [x :int] : (fn [] int) ...)\n"
+      "\n"
+      "Call heads are matched against the special forms by name BEFORE any\n"
+      "binding, macro, or typeclass-method lookup, so the definition is accepted\n"
+      "but never consulted: a bare (return 1) elaborates as the early-return\n"
+      "form, not as a call to your function. The resulting type error -- if there\n"
+      "is one at all -- lands on the caller's argument and never mentions the\n"
+      "name collision.\n"
+      "\n"
+      "Fix: rename the definition. `pure` is the conventional name for a monadic\n"
+      "unit, which is the usual reason `return` gets reached for:\n"
+      "  (defn pure [x :int] : (fn [] int) ...)\n"
+      "\n"
+      "Inside a defmodule the definition is still reachable through its qualified\n"
+      "name ((mymod/return 1)), since a qualified head symbol never matches a\n"
+      "special form -- but the bare name stays shadowed, so renaming is better.\n"
+      "\n"
+      "Names that are deliberately shadowable (handler, with, default-of, and the\n"
+      "session ops send/recv/close/...) do not trigger this warning: a user\n"
+      "definition of those genuinely wins over the form.\n",
     },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,

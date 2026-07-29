@@ -1335,6 +1335,17 @@ void  expr_print(Buf *b, const Expr *e);   /* debug only */
  * same hint when a deferred runtime-dispatch head turns out to be unbound. */
 const char *tur_stdlib_load_hint(const char *name);
 
+/* True when `name` is dispatched unconditionally as a special form in call-head
+ * position, so a `defn`/`defmacro` of that name is unreachable by its bare
+ * name.  Drives TUR-W0042; see the table in elab_call.c for the membership
+ * rule (deliberately-shadowable and arity-gated forms are excluded). */
+bool tur_name_is_reserved_special_form(const char *name);
+
+/* Emit TUR-W0042 at `span` when `name` collides with a reserved special form.
+ * `form_kind` names the definition form in the message ("defn", "defmacro"). */
+void tur_warn_if_shadows_special_form(const Symbol *name, Span span,
+                                      const char *form_kind);
+
 /* Map a legacy "store pointers as :int and hand-roll allocation" form that was
  * never a Turmeric language operator (`sizeof`, `float64*`/`float32*` raw-pointer
  * indexing, `declare`) to a one-line migration pointer, or NULL when the name is
