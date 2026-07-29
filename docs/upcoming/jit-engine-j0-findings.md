@@ -1169,7 +1169,13 @@ stands at:
 - **6 x** wrong output: 3 `dynvar-*` (the `((cleanup))` gap, 3.1),
   `hamt-lowering-basic` + `load-in-imported-module` +
   `self-recursive-carrier-struct-return` (unmasked wrong-answers under MIR,
-  each needing its own investigation).
+  each needing its own investigation). **`hamt-lowering-basic` is now
+  explained and is NOT a MIR defect**: the P3 `^persistent` lowering compares
+  cstr keys by pointer identity and passes the suite only because gcc merges
+  identical string literals -- unspecified behavior (C11 6.4.5p7) that c2mir
+  does not provide. Reproduced on the plain `cc` path with runtime-built keys,
+  no JIT involved. Filed:
+  [docs/reported/persistent-map-cstr-keys-identity-compared.md](../reported/persistent-map-cstr-keys-identity-compared.md).
 
 That composition -- every failure either a recorded decision or an open report
 with ruled-out hypotheses -- is the real J0->J1 handoff condition, more than
