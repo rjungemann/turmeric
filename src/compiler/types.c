@@ -3,6 +3,7 @@
 #include "kind_check.h"  /* Phase HKT-P1: for kind_of_type_app */
 #include "forms.h"      /* Phase HKT-P1: for Span */
 #include "effect.h"     /* FH4.1: EffectRow name-set helpers for TY_HANDLER */
+#include "mangle.h"  /* c-keyword guard: keep append_c_ident_mangled in lockstep with mangle_field_name */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -572,6 +573,13 @@ bool type_is_transparent_int_newtype(Type t) {
  * (e.g. `Lens'`); folding it here keeps the apostrophe from leaking into an
  * emitted C identifier (`tur_adt_Lens'__...` is not valid C). */
 static void append_c_ident_mangled(Buf *b, const char *name) {
+    /* c-keyword-function-names-not-mangled: keep this byte-for-byte in lockstep
+     * with mangle_field_name in emit_core.c, which spells the same names at the
+     * declaration sites. A keyword-named ADT is not itself a C collision here
+     * (every use is prefixed, `tur_adt_enum`), but if the two manglers disagree
+     * the typedef and its use sites name different types. */
+    if (name && tur_name_is_c_keyword(name, strlen(name)))
+        buf_puts(b, TUR_NAME_GUARD_PREFIX);
     for (const char *p = name; p && *p; p++) {
         char c = *p;
         bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -2584,12 +2592,10 @@ bool adt_app_is_byvalue_product(Type t) {
 const char *adt_byval_c_name(const AdtDef *def) {
     Buf b; buf_init(&b);
     buf_puts(&b, "tur_adt_");
-    for (const char *p = def->name; *p; p++) {
-        char c = *p;
-        bool ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '_';
-        buf_putc(&b, ident ? c : '_');
-    }
+    /* Shared with type_register_adt_app above and mangle_field_name in
+     * emit_core.c -- all three must spell a given ADT identically or the
+     * typedef and its use sites name different types. */
+    append_c_ident_mangled(&b, def->name);
     buf_putc(&b, '\0');
     const char *r = intern_type_name(b.data);
     buf_free(&b);

@@ -2770,11 +2770,24 @@ char *elab_mangle_binding_name(const Binding *b) {
          * resolve to the same collision-free C name. */
         if (mod_prefix_len == 0 && !is_main_binding &&
             tur_name_collides_libc(b->name->name, b->name->len)) {
-            memcpy(p + k, "tur_u_", 6);
-            k += 6;
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
+        /* c-keyword-function-names-not-mangled: mirror raw_name_for_binding --
+         * a bare global whose spelling is a C reserved word gets the same guard
+         * prefix so def, use, and inline-C `__TUR_CNAME_` all agree. */
+        else if (mod_prefix_len == 0 &&
+                 tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
         }
         tur_mangle_append(p, &k, b->name->name, b->name->len);
     } else {
+        /* Mirror raw_name_for_binding's local/parameter branch. */
+        if (tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
         tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
     }
     p[k] = '\0';

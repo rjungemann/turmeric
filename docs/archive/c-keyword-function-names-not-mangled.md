@@ -1,11 +1,59 @@
 ---
-status: open
+status: resolved
 severity: medium
 discovered: 2026-07-26
-area: compiler (name mangling, src/compiler/emit_module.c / name_mangle)
+resolved: 2026-07-29
+area: compiler (name mangling, src/compiler/mangle.c + emit_core.c / elab_core.c / types.c)
 ---
 
 # A function named after a C keyword emits an unmangled identifier
+
+## Resolution (2026-07-29)
+
+Fixed along fix direction 1, reusing the `tur_u_` guard prefix the libc-collision
+guard already established (`codegen-user-defn-collides-with-libc-pipe2`).
+
+- `tur_name_is_c_keyword` in `src/compiler/mangle.c` -- the complete C89-through-C23
+  reserved-word set plus `asm`/`typeof`, `bsearch`ed like the libc table.
+  `TUR_NAME_GUARD_PREFIX` in `mangle.h` is now the shared spelling of `tur_u_`,
+  replacing the two open-coded `memcpy(p + k, "tur_u_", 6)` sites.
+- Guard applied at three chokepoints:
+  - `raw_name_for_binding` (`emit_core.c`) + its mirror `elab_mangle_binding_name`
+    (`elab_core.c`) -- covers bare globals (`double`) *and* the legacy-fold branch
+    for parameters and locals (`f(int64_t double)`), which the libc guard does not
+    reach. Module-qualified globals are untouched: `geom__double` is a fine C
+    identifier.
+  - `mangle_field_name` (`emit_core.c`) -- struct/ADT fields (`int64_t int;`),
+    constructors, and dynvars.
+- Two straggler copies of the same fold had to be brought into lockstep, or the
+  typedef and its use sites named different types: `append_c_ident_mangled` and
+  `adt_byval_c_name` in `src/compiler/types.c`. `adt_byval_c_name` now delegates to
+  `append_c_ident_mangled` instead of open-coding a third copy. (An ADT *type* name
+  was never a bare collision -- it is always spelled `tur_adt_<name>` -- but all
+  three manglers still have to agree on it.)
+
+Verified with a sweep of every keyword in all three positions. What remains
+failing in that sweep is unrelated and pre-existing: `if`, `for`, `while`, `do`,
+`case`, `return`, `true`, `false`, `int`, `bool` are Turmeric special forms or
+builtin type names, so those definitions are rejected (or shadowed at the call
+site) long before codegen. That is a Turmeric-level naming question, not the C
+cascade this report is about.
+
+Fixtures: `tests/fixtures/c-keyword-defn-name/`, `c-keyword-param-name/`,
+`c-keyword-struct-field/` -- one per bucket, as fix direction 3 asked for. Unit
+coverage for the predicate (including sort-order probes, since a mis-sorted
+`bsearch` table silently stops matching) in `tests/mangle_test.c`.
+
+Zero fixture churn -- no existing fixture used a keyword name, and the guard is a
+no-op for every other spelling. `bash tests/run.sh`: 2402 passed, 0 failed.
+Guide updated: [name-mangling-guide.md](../guides/name-mangling-guide.md#the-tur_u_-guard-prefix----names-c-already-owns).
+
+Not addressed (explicitly out of scope in the report itself): collisions with
+*identifiers* the emitted preamble declares (`RcControlBlock`, `tur_poly_fn_t`,
+`malloc`, ...). The libc denylist covers the common libc half of that class and
+is grown on demand.
+
+## Original report
 
 ## Summary
 

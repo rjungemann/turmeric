@@ -1464,18 +1464,25 @@ char *mangle_dynvar_name(const char *name) {
  * Caller frees. */
 char *mangle_field_name(const char *name) {
     size_t len = strlen(name);
-    char *p = (char *)malloc(len + 1);
+    /* c-keyword-function-names-not-mangled: a field (or struct/ctor) named
+     * after a C reserved word emits `int64_t int;` / `struct enum { ... }`.
+     * Guard it exactly as raw_name_for_binding guards a colliding global. This
+     * is the single chokepoint for declaration and every access site, so both
+     * move together. */
+    size_t pre = tur_name_is_c_keyword(name, len) ? TUR_NAME_GUARD_PREFIX_LEN : 0;
+    char *p = (char *)malloc(pre + len + 1);
     if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+    if (pre) memcpy(p, TUR_NAME_GUARD_PREFIX, pre);
     for (size_t i = 0; i < len; i++) {
         char c = name[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') || c == '_') {
-            p[i] = c;
+            p[pre + i] = c;
         } else {
-            p[i] = '_';
+            p[pre + i] = '_';
         }
     }
-    p[len] = '\0';
+    p[pre + len] = '\0';
     return p;
 }
 
@@ -1593,11 +1600,28 @@ char *raw_name_for_binding(const Binding *b) {
          * `main` is never remapped. */
         if (mod_prefix_len == 0 && !is_main_binding &&
             tur_name_collides_libc(b->name->name, b->name->len)) {
-            memcpy(p + k, "tur_u_", 6);
-            k += 6;
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
+        /* c-keyword-function-names-not-mangled: `(defn double ...)` would emit
+         * `static int64_t double(int64_t);`. Unlike the libc guard this applies
+         * only when the name reaches C unqualified -- a module-prefixed global
+         * is `geom__double`, which is not a keyword. */
+        else if (mod_prefix_len == 0 &&
+                 tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
         }
         tur_mangle_append(p, &k, b->name->name, b->name->len);
     } else {
+        /* Function-locals and parameters. A keyword here lands as
+         * `f(int64_t double)` / `int64_t return;`, so it needs the same guard --
+         * and an inline-C body could never have referenced the raw spelling
+         * anyway, since it would not have parsed. */
+        if (tur_name_is_c_keyword(b->name->name, b->name->len)) {
+            memcpy(p + k, TUR_NAME_GUARD_PREFIX, TUR_NAME_GUARD_PREFIX_LEN);
+            k += TUR_NAME_GUARD_PREFIX_LEN;
+        }
         tur_mangle_legacy_append(p, &k, b->name->name, b->name->len);
     }
     p[k] = '\0';
