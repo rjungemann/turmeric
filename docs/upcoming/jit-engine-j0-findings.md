@@ -5,7 +5,7 @@ full corpus 2026-07-28); **S1 landed 2026-07-28 (section 11) and S1b
 2026-07-29 (section 12)**, which is the pre-work J1 depends on. Sections 0-7
 are the original Linux write-up; **section 8 corrects three of their claims**,
 and **section 9 corrects three of section 8's** from the full-corpus macOS run
--- read 9 first. Current Linux full-corpus coverage: **1645/1680 (97.9%)**,
+-- read 9 first. Current Linux full-corpus coverage: **1646/1680 (98.0%)**,
 every remaining failure a recorded decision or a filed report (12.6).
 Plan: [docs/upcoming/jit-engine-plan.md](jit-engine-plan.md)
 
@@ -1395,10 +1395,9 @@ filed report:
 - **1 x** `any-cast-mismatch-panic` -- panics by design; the sweep scores any
   signal as a failure.
 - **2 x** `stm-stress`, `gc-registry-growth` -- ~~the shim-atomics hazard
-  (8.4.3)~~. **Re-diagnosed in 14.3: these are TLS, not atomics.** The preamble's
-  atomics are real now and both still fail; c2mir accepts `_Thread_local`,
-  warns "Thread local is not implemented", and gives every thread the same
-  slot. `stm-stress` alternates `signal-11` and `output-mismatch` run to run.
+  (8.4.3)~~ ~~re-diagnosed in 14.3 as TLS~~ -- **finally split in section 15:
+  `stm-stress` was TLS (fixed, now a deterministic PASS), `gc-registry-growth`
+  is MIR frame size vs. the default stack (open, a J1 sizing decision).**
 - **1 x** `hamt-lowering-basic` -- the filed `^persistent` cstr-key identity
   bug, reproduced on the `cc` path with no JIT involved
   ([report](../reported/persistent-map-cstr-keys-identity-compared.md)).
@@ -1610,6 +1609,126 @@ pointer) would have to move into the host behind accessor functions backed by
 jit` documents itself as single-threaded until MIR implements TLS. That is J1
 engine work and is deliberately not attempted here.
 
-The same reading applies to `gc-registry-growth` (still SIGSEGV) and is the
-honest status of the "2 shim-atomics casualties" line in 12.6: they were never
-about the shim's atomics. Both are TLS.
+The same reading was applied to `gc-registry-growth` at the time this section
+was written -- and half of it did not survive section 15: with real TLS in
+place that fixture STILL crashes, because it is a 20,000-deep non-tail
+recursion whose MIR-gen frames outgrow the default stack (15.3). So the honest
+status of 12.6's "2 shim-atomics casualties" line is: neither was atomics;
+one (`stm-stress`) was TLS, one (`gc-registry-growth`) is frame size.
+
+## 15. Multi-threading retained -- TLS routed host-side, and what it flushed out
+
+Added 2026-07-29, x86-64 Linux (`dbc2c0bfd`, MIR fork `41ff4d94`). Section
+14.3 ended with a choice: move the preamble's thread-locals into the host, or
+document `tur jit` as single-threaded. **The owner's decision is that the JIT
+retains multi-threading**, so this is the first option, executed.
+
+### 15.1 The mechanism
+
+The preamble declares 11 thread-local variables (STM's current transaction,
+the handler chain and panic flag, the shift/reset context, the current fiber
+and its cancel flag, thread state and its cancel `jmp_buf` and validity flag,
+the MT scheduler pointer, and the runtime type-value scratch). All went
+through `emit_rt_global` already, so one sibling helper (`emit_rt_tls`)
+converts them all:
+
+- **GNU-family cc:** the identical `TUR_THREAD_LOCAL` variable as before --
+  the compiled `cc` path is unchanged in both text-shape and behaviour.
+- **Any other front end:** the variable is not declared; the *name* becomes an
+  object-like macro, `#define __stm_current_tx
+  (*(STM_Transaction **)tur_tls_stm_current_tx_ptr())`. The accessor lives in
+  `src/runtime/tur_tls.c`, compiled by a real cc, holding a genuine `__thread`
+  slot and returning the calling thread's instance by address. Same
+  host-residency pattern as `tur_atomics.c`, applied to state.
+
+Slots are `void*`/`int`/`bool`/`int64_t`/`jmp_buf`, so the host knows nothing
+of preamble-private structs; the macro restores the precise type at each use
+site. Safety of the object-like macro was *measured*, not assumed: across all
+1,928 emitted TUs, none of the 11 names ever appears as a struct member (where
+a macro would also expand after `.`/`->`).
+
+Result: `stm-stress` prints a deterministic 4000 on 10 consecutive runs
+(previously 3930 / 1917 / 97 / SIGSEGV across runs), and c2mir's "Thread local
+is not implemented" warning count drops from 10 per program to 0. Corpus
+1645 -> 1646 (98.0%), fixture diff exactly `{stm-stress}`, zero regressions.
+
+### 15.2 Second engine bug: `try_spilled_reg_mem` overruns a 2-entry array
+
+The first sweep after the TLS change broke `module-spec-same-module` with
+`*** stack smashing detected ***` -- a regression the fixture diff caught
+immediately. The backtrace lands in MIR's register allocator
+(`rewrite_insn`), and an ASan build of the engine pinned it:
+
+```c
+int n = 0, op_nums[MAX_INSN_RELOAD_MEM_OPS];   /* == 2 */
+...
+    insn->ops[i] = mem_op;
+    gen_assert (n < MAX_INSN_RELOAD_MEM_OPS);
+    op_nums[n++] = i;
+```
+
+`try_spilled_reg_mem` replaces *every* occurrence of a spilled register in one
+instruction with its stack-slot form. `mul v, v, v` -- which coalescing
+produces from `r = r * r`, i.e. the fixture's generic `square` -- has the same
+register in **three** operand positions; the third write lands in
+`op_nums[2]`, past the end. The TLS *accessor call* is what exposed it:
+a call in the panic guard raised register pressure enough to spill `v`, which
+this path had never seen before. The trigger was ours; the bug is upstream's,
+present at master tip.
+
+**Fixed in the rjungemann/mir fork** (`41ff4d94`, on the same branch as the
+`make_one_ret` fix): on a third occurrence, undo the replacements and fall
+back to the ordinary reload path -- the same thing the function already does
+when `target_insn_ok_p` rejects. Verified by ASan (clean, correct output) and
+the corpus (one intended fix, zero regressions). NOT filed upstream, per the
+same owner decision as the first fix.
+
+### 15.3 Correction: `gc-registry-growth` was never TLS either
+
+14.3 filed both remaining signals under TLS. Half right. `gc-registry-growth`
+still crashed with real TLS -- because it is a **20,000-deep non-tail
+recursion**, single-threaded, whose MIR-gen frames are simply bigger than
+gcc's: it dies at the default 8 MB stack and passes verbatim at 16 MB
+(`ulimit -s 16384`). Bounds: gcc's frame for this function fits 20,000 deep in
+8 MB (<= ~419 bytes); MIR's does not, but fits in 16 MB (< ~840 bytes). So this
+is **code quality / stack sizing**, not correctness: J1 can run the program
+entry on a thread with a sized stack (`pthread_attr_setstacksize`, the same
+way fibers already size theirs), document the deeper frames, or both. The
+sweep leaves it a FAIL on the default stack deliberately -- a `tur jit` user
+would hit exactly this today.
+
+That is the third re-diagnosis of this pair of fixtures (8.4.3: shim atomics;
+14.3: TLS; now: one TLS + one frame size), and each step was driven by
+removing the masking layer the previous diagnosis named. The lesson for J3 is
+the same one 11.6 recorded: a failure class named from its symptom
+("signals") is a bucket, not a diagnosis.
+
+### 15.4 The cache-variable trap almost shipped an unpatched engine
+
+Repointing `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` does nothing to an existing
+build directory: `set(... CACHE ...)` never updates an existing cache entry,
+and `rm -rf build-jit/_deps` re-clones from the **cached** repo/tag, not the
+file's. The rebuilt spike was briefly pure upstream `a8ab7c31` -- both fork
+fixes silently absent -- caught only because `git -C _deps/mir-src log` was
+checked rather than trusted. (It also revealed that the earlier `make_one_ret`
+verification had been running against a hand-patched `_deps` tree with the
+cache still pointing at upstream -- right code, misleading provenance.)
+`cmake/mir.cmake` now documents the trap; the rule is: after any repoint,
+configure with `-DTUR_MIR_GIT_TAG=...` or a fresh dir, and verify HEAD in
+`_deps/mir-src` before believing any number.
+
+### 15.5 End state
+
+| Stage | Full corpus | |
+|---|---|---|
+| S1b + cleanup lowering (12.6) | 1645 / 1680 | 97.9% |
+| 6(a) atomics (14) | 1645 | 97.9% |
+| **TLS host routing + RA fix (fork pin `41ff4d94`)** | **1646** | **98.0%** |
+
+The remaining 34: 31 user-inline-C fallbacks (by design), 1 by-design panic,
+1 filed `^persistent` key bug, 1 stack-depth (15.3, J1 sizing decision).
+**Multi-threaded programs are now first-class under the JIT**: STM commits,
+scheduler cancel flags, and select's winner CAS run on real atomics and real
+per-thread state. What J1 still owes multi-threading specifically:
+concurrent-safe (or serialized) lazy generation (8.1), and the
+`tur_scheduler_*_st` weak-function fold into `__tur_static_init()` (11.7).

@@ -4,7 +4,7 @@ Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); **S1 and S1b landed**, so the
 pre-work J1 depends on is done. J1+ PROPOSED. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
-Full-corpus coverage under the spike harness is **1645/1680 (97.9%)**, with
+Full-corpus coverage under the spike harness is **1646/1680 (98.0%)**, with
 every remaining failure a recorded decision or a filed report.
 
 J0 verdict: MIR works, proceed to J1. All three exit-criteria fixtures run
@@ -290,7 +290,7 @@ useful even if the JIT slips.
   `EXPERIMENTS[]` row lands here. S1 and S1b are **both done** (findings 11
   and 12); between them the spike normalizer is down to two rules, every
   attribute the emitter depends on is now recovered without relying on
-  c2mir honouring it, and the corpus stands at 1645/1680 (97.9%) with no
+  c2mir honouring it, and the corpus stands at 1646/1680 (98.0%) with no
   unexplained failure. Default to
   `MIR_set_lazy_gen_interface` -- J0 measured lazy generation at 23 ms of
   link+gen against 125 ms eager, for the same output. **Lazy generation is not
@@ -302,16 +302,20 @@ useful even if the JIT slips.
   (findings 8.2).~~ **Both done (S1 and findings 14): `TUR_THREAD_LOCAL` and
   `TUR_ATOMIC_*` expand to the GNU spellings under `cc` and to
   `src/runtime/tur_atomics.c` under any other front end.** Doing it uncovered
-  the item that outranks them: **c2mir has no TLS at all.** It accepts
+  the item that outranked them: **c2mir has no TLS at all** -- it accepts
   `_Thread_local`, warns "Thread local is not implemented", and gives every
-  thread one shared slot. The preamble has 10 thread-local variables (STM's
-  current transaction, the handler chain and panic flag, the current fiber and
-  its cancel flag, thread state and its cancel `jmp_buf`, the MT scheduler
-  pointer); until they move into the host behind `pthread_getspecific`
-  accessors -- the pattern dynamic variables already use -- **`tur jit` is
-  single-threaded-only and must say so.** This is the largest single item J1
-  inherits (findings 14.3), and it is what `stm-stress` and
-  `gc-registry-growth` have been failing on all along.
+  thread one shared slot. **Also done (findings 15): multi-threading under
+  the JIT is a requirement (owner decision, 2026-07-29), so the preamble's 11
+  thread-local variables now route through host-resident `__thread` slots
+  (`src/runtime/tur_tls.c`, `emit_rt_tls`) under any non-GNU front end, with
+  the `cc` path unchanged.** `stm-stress` is a deterministic PASS on real
+  per-thread state. Fixing it exposed a second engine bug -- MIR's
+  `try_spilled_reg_mem` overruns a 2-entry array when one insn carries the
+  same spilled reg three times (`mul v,v,v`); fixed in the fork, pin
+  `41ff4d94` (findings 15.2). What J1 still owes multi-threading:
+  concurrent-safe or serialized lazy generation (8.1), the
+  `tur_scheduler_*_st` weak-function fold (11.7), and a stack-size decision
+  for MIR's larger frames (`gc-registry-growth`, findings 15.3).
 - **J2 -- REPL/watch integration.** Section 3.3. **Requires S2** -- without
   it every `(reload)` recompiles the identical 3,847-line preamble.
 - **J3 -- parity + perf.** Run the fixture corpus under `tur jit`
