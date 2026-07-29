@@ -446,6 +446,15 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_FLOAT32:
         case TY_FLOAT64:
         case TY_CSTR:
+        /* map-show-keyword-key-raw-int root cause A: `:Sym` is a pointer-sized
+         * scalar (`const struct __tur_sym *`, see type_c_name below and
+         * emit_expr.c) -- as concrete a codegen layout as `cstr`.  Omitting it
+         * here made adt_app_is_byvalue_product((Vec Sym)) false, so type_c_name
+         * fell through to the int64 carrier: `(Vec Sym)` never got a by-value
+         * monomorph, its constrained-instance bodies were never specialized,
+         * and generic collection show bound Show[int] for the element and
+         * printed the raw carrier. */
+        case TY_SYM:
         case TY_PTR_VOID:
         case TY_REF:
         case TY_LREF:
@@ -619,6 +628,7 @@ static void append_type_mangle(Buf *b, Type t) {
         case TY_FLOAT32:  buf_puts(b, "float32"); break;
         case TY_FLOAT64:  buf_puts(b, "float64"); break;
         case TY_CSTR:     buf_puts(b, "cstr"); break;
+        case TY_SYM:      buf_puts(b, "sym"); break;
         case TY_PTR_VOID: buf_puts(b, "ptr_void"); break;
         case TY_REF:      buf_puts(b, "ref"); break;
         case TY_LREF:     buf_puts(b, "lref"); break;

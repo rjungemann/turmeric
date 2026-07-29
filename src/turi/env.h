@@ -389,7 +389,7 @@ typedef struct TuriEnv {
      * needs concrete K/V to re-resolve `(show (:: ... K))` away from the
      * int-carrier representative instance.  Kept as void* because env.h stays
      * free of the compiler type headers; cast to `const Type *` in eval.c.
-     * See docs/reported/map-show-keyword-key-raw-int.md (root cause B). */
+     * See docs/archive/map-show-keyword-key-raw-int.md (root cause B). */
     void        *last_result_type;
     /* RM Q#5: session-scoped reader-macro registry. Persists across REPL
      * turns so `(reader-macros/define ...)` on one line is visible to the

@@ -2,7 +2,7 @@
 
 **Severity:** low (display only; the values themselves are correct).
 
-## Status (2026-07-26): partially fixed
+## Status (2026-07-29): RESOLVED -- all three parts fixed
 
 - **FIXED -- missing `Show [Sym]` instance.** There was no `Show` instance for
   `:Sym` at all (only `Eq`/`Hash`/`MapKey[Sym]` in `sym.tur`). Added
@@ -22,9 +22,9 @@
 - **FIXED (2026-07-29) -- root cause B, the interpreter/REPL auto-show path.**
   See [Resolution: root cause B](#resolution-2026-07-29--root-cause-b).
 
-- **STILL OPEN -- root cause A**, the compiled path's carrier collapse. Its
-  blast radius turned out to be **narrower than this report originally
-  claimed**; see [Root cause A](#root-cause-a--compiled-generic-show-binds-showint-for-a-sym-element).
+- **FIXED (2026-07-29) -- root cause A**, the compiled path. The mechanism was
+  **not** the Sym-vs-int carrier collision this report described; see
+  [Resolution: root cause A](#resolution-2026-07-29--root-cause-a-was-not-a-carrier-collision).
 
 ## Repro of what remains
 
@@ -46,6 +46,89 @@ turi> #map{7 70}          => #map{7 70}
 turi> #set{:x :y}         => #set{:x :y}
 turi> (vec-of :a :b)      => [:a :b]
 ```
+
+
+## Resolution (2026-07-29) -- root cause A was not a carrier collision
+
+**One line, in `type_has_concrete_codegen_layout` (`src/compiler/types.c`):
+`TY_SYM` was missing from its list of concrete kinds and fell to
+`default: return false`.**
+
+That single omission produces the whole symptom, through this chain:
+
+1. `adt_app_is_byvalue_product((Vec Sym))` checks every type argument with
+   `type_has_concrete_codegen_layout`. For `Sym` it gets `false`, so the app is
+   not a by-value product.
+2. `type_c_name`'s `TY_APP` arm therefore skips `type_register_adt_app` and
+   falls through to its final `return "int64_t"`.
+3. So `(Vec Sym)` has no by-value monomorph. `vec-empty-like__`'s spec is minted
+   as `vec_empty_like____spec__int64_t_const_struct___tur_sym__` -- **result
+   `int64_t`** -- against `(Vec cstr)`'s
+   `vec_empty_like____spec__tur_adt_Vec__cstr___const_char__`.
+4. With no `(Vec Sym)` monomorph there is no `vec_show_loop__spec__` and no
+   `__inst_Show_show_Vec__spec__` for it, so the call lands in the *generic*
+   `vec_hyshow_hyloop`, whose element `show` is the elaborator's int
+   representative: `__inst_Show_show_int`.
+
+`Sym` is a pointer-sized scalar (`const struct __tur_sym *`), every bit as
+concrete as `cstr`. Adding it to the list is the fix.
+
+### Corrections to this report's diagnosis
+
+Both of the mechanisms recorded above are wrong, and worth striking explicitly
+because each would have sent a fixer somewhere unproductive.
+
+- **"Specialization names are mangled through `type_c_name`, i.e. through the C
+  carrier, which is where `Sym` and `int` become indistinguishable."** They do
+  not become indistinguishable: `type_c_name(TY_SYM)` is
+  `const struct __tur_sym *`, not `int64_t`. The report's own evidence contains
+  the counterexample -- `vec_empty_like____spec__int64_t_const_struct___tur_sym__`
+  mangles a `Sym` perfectly well. The collapse was in the *result* type of that
+  same spec, not in the naming of the argument.
+- **"the element type collapses to its `int64_t` carrier and instance selection
+  binds `Show[int]`"** -- right about the observed effect, wrong about the level.
+  Nothing collapses the *element*; the whole `(Vec Sym)` container fails to
+  become a by-value monomorph, and binding `Show[int]` is the downstream
+  consequence of landing in the unspecialized generic body.
+
+The 2026-07-29 correction note (that a `defopaque` over `:int` resolves its own
+instance fine) was accurate, and is now explained: a `defopaque` lowers to
+`TY_ADT`, which **is** in the concrete-layout list, so `(Vec UserId)` got its
+by-value monomorph and its specializations all along.
+
+### A second, independent defect found on the way
+
+`append_type_mangle` (same file) also had no `TY_SYM` arm, so `(Vec Sym)` was
+named `tur_adt_Vec__opaque` -- the token its `default` arm gives to *every*
+unlisted kind. That is a latent collision, not just a cosmetic name: two
+distinct instantiations whose element kinds both fall to `default` would mangle
+to one C typedef. Fixed alongside (`Sym` now mangles `sym`), which is what makes
+the emitted monomorph `tur_adt_Vec__sym`.
+
+Note this one is **not** what caused the show bug -- fixing the mangling alone
+was measured and left the output still wrong. The two defects are independent
+and both real.
+
+### Verification
+
+- `tests/fixtures/show-sym-collection-elems/` -- `(Vec Sym)`, `(Map Sym int)`,
+  `(Set Sym)` render through their own instances, with `(Vec cstr)` /
+  `(Vec int)` / `(Map cstr int)` as controls. Verified to gate: 3 of its 6 lines
+  regress to raw carrier integers with the `TY_SYM` case removed.
+- `bash tests/run.sh` -- 2412 passed, 0 failed, and **zero snapshot churn**: no
+  existing fixture instantiates a Sym-parameterized container.
+- `run-turi.sh` 1668/0, `run-build-project.sh` 38/0, `run-flags.sh` 78/0,
+  `run-fmt.sh` 18/0, `ctest -R '...'` 15/15.
+
+### Still worth a look
+
+`type_has_concrete_codegen_layout` is a hand-maintained enumeration of
+TypeKinds, and this bug was one missing arm in it. The kinds still absent --
+`TY_SET`, `TY_UNION`, `TY_ANY`, `TY_REC`, `TY_INTERSECTION`, `TY_FORALL` /
+`TY_EXISTS` -- were not audited here. Some are genuinely non-concrete; `TY_SET`
+in particular has a real C type (`tur_set_t *`) and is listed as concrete in
+that very function, which suggests the same question is worth asking of
+`append_type_mangle`'s default arm for each of them.
 
 ## Root cause A -- compiled generic show binds `Show[int]` for a Sym element
 

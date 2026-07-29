@@ -11637,7 +11637,7 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
     memset(cl, 0, sizeof(*cl));
     cl->fn = show_impl;
 
-    /* Root cause B (docs/reported/map-show-keyword-key-raw-int.md): a generic
+    /* Root cause B (docs/archive/map-show-keyword-key-raw-int.md): a generic
      * instance body -- `Show [Map]`'s `map-show-loop [^Show K ^Show V]` -- shows
      * each element through `(show (:: (hamt/iter-cur-key iter) K))`.  That
      * ascription re-resolves the baked int-carrier representative instance only
