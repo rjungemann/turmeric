@@ -23,18 +23,18 @@ git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices
 Declare the spice in your project's `build.tur`:
 
 ```turmeric no-check
-:spices {
-  "notebook" {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "notebook-v0.1.0"
-              :subdir "spices/notebook"}
+:spices #map{
+  "notebook" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "notebook-v0.1.0"
+                  :subdir "spices/notebook"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "notebook" {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "notebook-v0.1.0"
-              :subdir "spices/notebook"}
+#map{
+  "notebook" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "notebook-v0.1.0"
+                  :subdir "spices/notebook"}
 }
 ```
 

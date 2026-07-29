@@ -114,9 +114,9 @@ After `tur add https://github.com/alice/tur-geom --ref v0.2.1`:
 (defpackage my-app
   :name    "my-app"
   :version "0.1.0"
-  :spices {
-    "geom" {:url "https://github.com/alice/tur-geom"
-            :ref "v0.2.1"}
+  :spices #map{
+    "geom" #map{:url "https://github.com/alice/tur-geom"
+                :ref "v0.2.1"}
   })
 ```
 
@@ -124,9 +124,9 @@ After `tur add https://github.com/alice/tur-geom --ref v0.2.1`:
 defpackage my-app
   :name    "my-app"
   :version "0.1.0"
-  :spices {
-    "geom" {:url "https://github.com/alice/tur-geom"
-            :ref "v0.2.1"}
+  :spices #map{
+    "geom" #map{:url "https://github.com/alice/tur-geom"
+                :ref "v0.2.1"}
   }
 ```
 
@@ -161,18 +161,18 @@ reproducible across machines and CI runs.
 
 (deflockfile
   :format-version 1
-  :spices {
-    "geom" {:url        "https://github.com/alice/tur-geom"
-            :ref        "v0.2.1"
-            :resolved   "a1b2c3d4e5f6..."
-            :sha256     "abc123..."
-            :fetched-at "2026-05-22T09:00:00Z"}
-    "math" {:url        "https://github.com/rjungemann/turmeric-spices"
-            :ref        "math-v0.1.0"
-            :subdir     "spices/math"
-            :resolved   "d6e7f8a9b0c1..."
-            :sha256     "def456..."
-            :fetched-at "2026-05-22T09:00:03Z"}
+  :spices #{
+    "geom" #{:url        "https://github.com/alice/tur-geom"
+             :ref        "v0.2.1"
+             :resolved   "a1b2c3d4e5f6..."
+             :sha256     "abc123..."
+             :fetched-at "2026-05-22T09:00:00Z"}
+    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+             :ref        "math-v0.1.0"
+             :subdir     "spices/math"
+             :resolved   "d6e7f8a9b0c1..."
+             :sha256     "def456..."
+             :fetched-at "2026-05-22T09:00:03Z"}
   })
 ```
 
@@ -182,18 +182,18 @@ reproducible across machines and CI runs.
 
 deflockfile
   :format-version 1
-  :spices {
-    "geom" {:url        "https://github.com/alice/tur-geom"
-            :ref        "v0.2.1"
-            :resolved   "a1b2c3d4e5f6..."
-            :sha256     "abc123..."
-            :fetched-at "2026-05-22T09:00:00Z"}
-    "math" {:url        "https://github.com/rjungemann/turmeric-spices"
-            :ref        "math-v0.1.0"
-            :subdir     "spices/math"
-            :resolved   "d6e7f8a9b0c1..."
-            :sha256     "def456..."
-            :fetched-at "2026-05-22T09:00:03Z"}
+  :spices #{
+    "geom" #{:url        "https://github.com/alice/tur-geom"
+             :ref        "v0.2.1"
+             :resolved   "a1b2c3d4e5f6..."
+             :sha256     "abc123..."
+             :fetched-at "2026-05-22T09:00:00Z"}
+    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+             :ref        "math-v0.1.0"
+             :subdir     "spices/math"
+             :resolved   "d6e7f8a9b0c1..."
+             :sha256     "def456..."
+             :fetched-at "2026-05-22T09:00:03Z"}
   }
 ```
 
@@ -243,20 +243,20 @@ Mark a spice `:optional true` when it is only needed for tests or dev
 tooling. Optional spices that are absent do not cause a build error.
 
 ```turmeric no-check
-:spices {
-  "test" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "test-v0.1.0"
-          :subdir "spices/test"
-          :optional true}
+:spices #map{
+  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "test-v0.1.0"
+              :subdir "spices/test"
+              :optional true}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "test" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "test-v0.1.0"
-          :subdir "spices/test"
-          :optional true}
+:spices #map{
+  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "test-v0.1.0"
+              :subdir "spices/test"
+              :optional true}
 }
 ```
 
@@ -285,11 +285,11 @@ This appends a `:cmake-deps` entry to `build.tur`:
 (defpackage my-app
   :name    "my-app"
   :version "0.1.0"
-  :cmake-deps {
-    "raylib" {:url     "https://github.com/raysan5/raylib"
-              :ref     "5.5"
-              :options {:BUILD_SHARED_LIBS "OFF"
-                        :BUILD_EXAMPLES   "OFF"}}
+  :cmake-deps #map{
+    "raylib" #map{:url     "https://github.com/raysan5/raylib"
+                  :ref     "5.5"
+                  :options #map{:BUILD_SHARED_LIBS "OFF"
+                                :BUILD_EXAMPLES   "OFF"}}
   })
 ```
 
@@ -297,11 +297,11 @@ This appends a `:cmake-deps` entry to `build.tur`:
 defpackage my-app
   :name    "my-app"
   :version "0.1.0"
-  :cmake-deps {
-    "raylib" {:url     "https://github.com/raysan5/raylib"
-              :ref     "5.5"
-              :options {:BUILD_SHARED_LIBS "OFF"
-                        :BUILD_EXAMPLES   "OFF"}}
+  :cmake-deps #map{
+    "raylib" #map{:url     "https://github.com/raysan5/raylib"
+                  :ref     "5.5"
+                  :options #map{:BUILD_SHARED_LIBS "OFF"
+                                :BUILD_EXAMPLES   "OFF"}}
   }
 ```
 

@@ -131,18 +131,33 @@ static const Form *map_get_kw(const Form *map, const char *kw) {
 }
 
 /* Emit a diagnostic when a build.tur keyword expected a map but got something
- * else. The most common mistake is writing `{...}` (which the reader parses
- * as a contract-type annotation `F_CONTRACT_TYPE`) instead of `#{...}` (a
- * real `F_MAP`). Without this, parse_cmake_deps and parse_spices would
- * silently skip everything and write empty lockfiles. */
+ * else. The most common mistake by far is writing a bare `{...}` instead of
+ * `#map{...}`. Without this, parse_cmake_deps and parse_spices would silently
+ * skip everything and write empty lockfiles.
+ *
+ * docs/archive/spice-guides-bare-brace-manifest-syntax.md: the hint used to be
+ * gated on `got->tag == F_CONTRACT_TYPE`, from when a bare `{...}` read as a
+ * contract-type annotation. Contract types moved to `#refine{...}` and bare
+ * `{` is now unconditionally SRFI-105 curly-infix (reader.c), so that tag never
+ * appears in a manifest slot and the one diagnostic that could teach the fix
+ * had gone dead -- leaving a bare ":spices must be a map" with no hint of what
+ * a map looks like. Suggest the spelling unconditionally: the hint is useful
+ * for ANY wrong shape here, and it makes every stale copy of the docs
+ * self-correcting. Curly-infix gets the extra sentence naming what the reader
+ * actually saw, since that is the case a user is overwhelmingly in. */
 static void report_non_map(const Form *got, const char *what) {
     if (!got) return;
-    const char *hint =
-        (got->tag == F_CONTRACT_TYPE)
-        ? " (use `#{...}` for map syntax; bare `{...}` is a contract type)"
-        : "";
+    /* A bare `{a b c}` reads as curly-infix, which the reader lowers to an
+     * ordinary call form -- there is no distinguishing tag left by the time it
+     * reaches here, so key on the source text at the span instead. */
+    const SourceFile *sf = diag_source_file(got->span.file_id);
+    bool bare_brace = sf && sf->src && got->span.off_start < sf->len &&
+                      sf->src[got->span.off_start] == '{';
     diag_emit(DIAG_ERROR, got->span,
-              "build.tur: %s must be a map%s", what, hint);
+              "build.tur: %s must be a map -- use `#map{...}`%s", what,
+              bare_brace
+                ? " (a bare `{...}` is curly-infix arithmetic, not a map)"
+                : "");
 }
 
 /* Reject an effect-row literal sitting in a manifest slot that means "map".
@@ -3637,7 +3652,7 @@ static const Symbol *pkg_intern(SymbolTable *st, const char *name) {
 static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
                                   const char *url, const char *ref,
                                   const char *path, const char *subdir,
-                                  bool optional) {
+                                  bool optional, bool literal) {
     Form *items[10];
     uint32_t n = 0;
     if (path) {
@@ -3660,7 +3675,10 @@ static Form *pkg_build_spice_val(Arena *a, SymbolTable *st,
         items[n++] = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "optional"));
         items[n++] = form_bool(a, SPAN_UNKNOWN, true);
     }
-    return form_map(a, SPAN_UNKNOWN, items, n);
+    /* Match the spelling of the enclosing :spices map so one manifest does not
+     * end up mixing `#map{...}` and `#{...}` after a `tur add`. */
+    return literal ? form_map_literal(a, SPAN_UNKNOWN, items, n)
+                   : form_map(a, SPAN_UNKNOWN, items, n);
 }
 
 /* Return a new defpackage Form (F_LIST) with a new spice entry appended.
@@ -3674,8 +3692,6 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
                                        bool optional) {
     Form *entry_key = form_str(a, SPAN_UNKNOWN,
                                spice_name, (uint32_t)strlen(spice_name));
-    Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir, optional);
-
     uint32_t n = dp->as.list.len;
 
     /* Find :spices keyword index */
@@ -3693,9 +3709,23 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
     Span orig_span = dp->span;
 
     if (spices_val_idx >= 0) {
-        /* Extend existing :spices map */
+        /* Extend existing :spices map.
+         *
+         * Both spellings have to be handled here: `#{...}` is F_MAP and
+         * `#map{...}` is F_MAP_LITERAL. Reading only F_MAP silently produced
+         * map_n == 0, so `tur add` on a `#map{...}`-spelled manifest DROPPED
+         * every dependency already declared and wrote back a map holding only
+         * the new entry. `#map{...}` is the canonical spelling the guides now
+         * use, so that path is the common one, not an exotic case.
+         *
+         * Rebuild with the tag the manifest already had, so adding a dep does
+         * not silently respell the user's `#map{...}` as `#{...}`. */
         const Form *old_map = dp->as.list.items[spices_val_idx];
-        uint32_t map_n = (old_map->tag == F_MAP) ? old_map->as.list.len : 0;
+        bool is_literal = (old_map->tag == F_MAP_LITERAL);
+        Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir,
+                                              optional, is_literal);
+        uint32_t map_n = (old_map->tag == F_MAP || is_literal)
+                       ? old_map->as.list.len : 0;
         Form **new_map_items = (Form **)arena_alloc(
                 a, (map_n + 2) * sizeof(Form *));
         if (map_n > 0)
@@ -3703,7 +3733,9 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
                    map_n * sizeof(Form *));
         new_map_items[map_n]     = entry_key;
         new_map_items[map_n + 1] = entry_val;
-        Form *new_map = form_map(a, SPAN_UNKNOWN, new_map_items, map_n + 2);
+        Form *new_map = is_literal
+            ? form_map_literal(a, SPAN_UNKNOWN, new_map_items, map_n + 2)
+            : form_map(a, SPAN_UNKNOWN, new_map_items, map_n + 2);
 
         Form **new_dp = (Form **)arena_alloc(a, n * sizeof(Form *));
         memcpy(new_dp, dp->as.list.items, n * sizeof(Form *));
@@ -3712,6 +3744,8 @@ static Form *pkg_defpackage_add_spice(Arena *a, SymbolTable *st,
     } else {
         /* Append :spices #{ entry } */
         Form *kw = form_keyword(a, SPAN_UNKNOWN, pkg_intern(st, "spices"));
+        Form *entry_val = pkg_build_spice_val(a, st, url, ref, path, subdir,
+                                              optional, false);
         Form *new_map_items[2] = { entry_key, entry_val };
         Form *new_map = form_map(a, SPAN_UNKNOWN, new_map_items, 2);
 

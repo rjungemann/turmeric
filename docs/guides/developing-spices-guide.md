@@ -76,7 +76,7 @@ A complete library manifest:
   :authors     ["Your Name <you@example.com>"]
   :repository  "https://github.com/you/tur-mylib"
 
-  :exports {
+  :exports #map{
     "mylib/core" ["some-fn" "another-fn"]
     "mylib/util" ["helper-fn"]
   })
@@ -91,7 +91,7 @@ defpackage tur-mylib
   :authors     ["Your Name <you@example.com>"]
   :repository  "https://github.com/you/tur-mylib"
 
-  :exports {
+  :exports #map{
     "mylib/core" ["some-fn" "another-fn"]
     "mylib/util" ["helper-fn"]
   }
@@ -120,7 +120,7 @@ The `:exports` map controls what is visible to consumers. Only listed
 symbols are part of the public API; everything else is private.
 
 ```turmeric no-check
-:exports {
+:exports #map{
   "mylib/types" ["Coord" "Rect" "Color"]
   "mylib/draw"  ["draw-rect" "draw-circle" "draw-line"]
   "mylib/io"    ["read-file" "write-file"]
@@ -253,18 +253,18 @@ tur add https://github.com/rjungemann/turmeric-spices \
 This produces:
 
 ```turmeric no-check
-:spices {
-  "math" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "math-v0.1.0"
-          :subdir "spices/math"}
+:spices #map{
+  "math" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "math-v0.1.0"
+              :subdir "spices/math"}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "math" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "math-v0.1.0"
-          :subdir "spices/math"}
+:spices #map{
+  "math" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "math-v0.1.0"
+              :subdir "spices/math"}
 }
 ```
 
@@ -272,20 +272,20 @@ Mark spices that are only needed for tests `:optional true` so consumers
 are not forced to fetch them:
 
 ```turmeric no-check
-:spices {
-  "test" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "test-v0.1.0"
-          :subdir "spices/test"
-          :optional true}
+:spices #map{
+  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "test-v0.1.0"
+              :subdir "spices/test"
+              :optional true}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "test" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "test-v0.1.0"
-          :subdir "spices/test"
-          :optional true}
+:spices #map{
+  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "test-v0.1.0"
+              :subdir "spices/test"
+              :optional true}
 }
 ```
 
@@ -344,14 +344,14 @@ tur add ../watch --path
 This writes to `build.tur`:
 
 ```turmeric no-check
-:spices {
-  "watch" {:path "../watch"}
+:spices #map{
+  "watch" #map{:path "../watch"}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "watch" {:path "../watch"}
+:spices #map{
+  "watch" #map{:path "../watch"}
 }
 ```
 
@@ -387,18 +387,18 @@ For a spice that will be published and consumed outside the workspace, add a URL
 entry alongside (or instead of) the local one:
 
 ```turmeric no-check
-:spices {
-  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "watch-v0.1.0"
-           :subdir "spices/watch"}
+:spices #map{
+  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "watch-v0.1.0"
+               :subdir "spices/watch"}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "watch-v0.1.0"
-           :subdir "spices/watch"}
+:spices #map{
+  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "watch-v0.1.0"
+               :subdir "spices/watch"}
 }
 ```
 
@@ -418,18 +418,18 @@ compilation step. You write only Turmeric; CMake is an implementation detail.
 ### Declaring the dependency
 
 ```turmeric no-check
-:cmake-deps {
-  "sqlite3" {:url     "https://github.com/sqlite/sqlite"
-             :ref     "version-3.47.2"
-             :options {:BUILD_SHARED_LIBS "OFF"}}
+:cmake-deps #map{
+  "sqlite3" #map{:url     "https://github.com/sqlite/sqlite"
+                 :ref     "version-3.47.2"
+                 :options #map{:BUILD_SHARED_LIBS "OFF"}}
 }
 ```
 
 ```sweet-exp
-:cmake-deps {
-  "sqlite3" {:url     "https://github.com/sqlite/sqlite"
-             :ref     "version-3.47.2"
-             :options {:BUILD_SHARED_LIBS "OFF"}}
+:cmake-deps #map{
+  "sqlite3" #map{:url     "https://github.com/sqlite/sqlite"
+                 :ref     "version-3.47.2"
+                 :options #map{:BUILD_SHARED_LIBS "OFF"}}
 }
 ```
 
@@ -501,11 +501,11 @@ When the CMake `find_package` name or target name differs from the key in
 `:cmake-deps`, supply overrides:
 
 ```turmeric
-:cmake-deps {
-  "sqlite" {:url        "https://github.com/sqlite/sqlite"
-            :ref        "version-3.47.2"
-            :cmake-name "SQLite3"
-            :targets    ["SQLite::SQLite3"]}
+:cmake-deps #map{
+  "sqlite" #map{:url        "https://github.com/sqlite/sqlite"
+                :ref        "version-3.47.2"
+                :cmake-name "SQLite3"
+                :targets    ["SQLite::SQLite3"]}
 }
 ```
 
@@ -518,17 +518,17 @@ every clean `tur fetch` is slow. Add `:prefer-system true` to try CMake's
 copy is found:
 
 ```turmeric
-:cmake-deps {
-  "mbedtls" {:prefer-system true                ;; try find_package first
-             :cmake-name    "MbedTLS"           ;; name passed to find_package
-             :cmake-version "3.0"               ;; optional minimum version
-             :targets       ["MbedTLS::mbedtls"
-                             "MbedTLS::mbedx509"
-                             "MbedTLS::mbedcrypto"]
-             :url           "https://github.com/Mbed-TLS/mbedtls"  ;; fallback
-             :ref           "v3.6.2"
-             :options       {:ENABLE_PROGRAMS "OFF"
-                             :USE_STATIC_MBEDTLS_LIBRARY "ON"}}
+:cmake-deps #map{
+  "mbedtls" #map{:prefer-system true                ;; try find_package first
+                 :cmake-name    "MbedTLS"           ;; name passed to find_package
+                 :cmake-version "3.0"               ;; optional minimum version
+                 :targets       ["MbedTLS::mbedtls"
+                                 "MbedTLS::mbedx509"
+                                 "MbedTLS::mbedcrypto"]
+                 :url           "https://github.com/Mbed-TLS/mbedtls"  ;; fallback
+                 :ref           "v3.6.2"
+                 :options       #map{:ENABLE_PROGRAMS "OFF"
+                                     :USE_STATIC_MBEDTLS_LIBRARY "ON"}}
 }
 ```
 
@@ -991,8 +991,8 @@ A future v2 will let a project opt in to consuming a globally-installed
 spice as a library by naming it in its `build.tur`:
 
 ```turmeric
-:spices {
-  "notebook" {:global true}
+:spices #map{
+  "notebook" #map{:global true}
 }
 ```
 

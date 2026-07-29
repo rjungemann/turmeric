@@ -15,18 +15,18 @@ need a "file changed, react" loop.
 ## Installation
 
 ```turmeric no-check
-:spices {
-  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "watch-v0.2.0"
-           :subdir "spices/watch"}
+:spices #map{
+  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "watch-v0.2.0"
+               :subdir "spices/watch"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "watch-v0.2.0"
-           :subdir "spices/watch"}
+#map{
+  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "watch-v0.2.0"
+               :subdir "spices/watch"}
 }
 ```
 

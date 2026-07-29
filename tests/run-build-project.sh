@@ -995,6 +995,46 @@ else
     fail "build-project-manifest-map-slots-accepted" "rc=$mapslot_rc out=$mapslot_out"
 fi
 
+# docs/archive/spice-guides-bare-brace-manifest-syntax.md: a bare `{...}` in a
+# map-shaped slot is the single most common manifest mistake -- it is what every
+# stale copy of the guides spells -- and the hint that would teach the fix had
+# gone dead.  It was gated on `got->tag == F_CONTRACT_TYPE`, from when a bare
+# `{...}` read as a contract-type annotation; contract types moved to
+# `#refine{...}` and bare `{` is now unconditionally curly-infix, so the tag
+# never appeared and the user got a bare ":spices must be a map".  The hint is
+# unconditional now, with an extra clause naming curly-infix when that is what
+# the reader actually saw.
+for brace_case in \
+    'spices|:spices {"dep" {:url "https://example.invalid/d" :ref "v1"}}' \
+    'cmake-deps|:cmake-deps {"nng" {:url "https://example.invalid/n" :ref "v1"}}' \
+    'build-opts|:build-opts {:c-flags ["-DFOO=1"]}' \
+; do
+    brace_name=${brace_case%%|*}
+    brace_body=${brace_case#*|}
+    BRACEDIR="$WORK/manifest-bare-brace-$brace_name"
+    mkdir -p "$BRACEDIR/src/app"
+    cat > "$BRACEDIR/build.tur" <<EOF
+(defpackage tur-bare-brace-$brace_name
+  :name    "tur-bare-brace-$brace_name"
+  :version "0.1.0"
+  $brace_body
+  :exports #map{ "app/main" ["main"] })
+EOF
+    cat > "$BRACEDIR/src/app/main.tur" <<'EOF'
+(defmodule app/main (defn main [] : int 0))
+EOF
+    brace_out=$(cd "$WORK" && "$TUR" build "$BRACEDIR" -o "$WORK/bracebin" 2>&1)
+    brace_rc=$?
+    if [ $brace_rc -ne 0 ] &&
+       echo "$brace_out" | grep -q 'use `#map{\.\.\.}`' &&
+       echo "$brace_out" | grep -q 'curly-infix'; then
+        pass "build-project-manifest-bare-brace-hint-$brace_name"
+    else
+        fail "build-project-manifest-bare-brace-hint-$brace_name" \
+             "rc=$brace_rc out=$brace_out"
+    fi
+done
+
 echo
 echo "summary: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
