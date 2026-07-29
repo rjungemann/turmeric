@@ -5,7 +5,7 @@ in *constrained-instance resolution*, not in Show -- so the blast radius is
 every generic typeclass dispatch in a long-lived REPL, not just rendering.
 
 **Status:** open. Found 2026-07-29 while verifying the WASM half of
-[web-repl-lang-switch-drops-stdlib](web-repl-lang-switch-drops-stdlib.md).
+[web-repl-lang-switch-drops-stdlib](../archive/web-repl-lang-switch-drops-stdlib.md).
 Reproduces natively; **no emscripten needed**.
 
 ## Repro
@@ -106,6 +106,66 @@ the int-carrier representative for *any* typeclass, not just `Show`. Worth
 checking `Eq`/`Ord`/`Hash` over a `Map`/`Set` post-switch before assuming the
 impact is display-only -- a wrong `Eq` instance is a wrong answer, not a
 cosmetic one.
+
+## Blast-radius probe: `Eq` is measurably unaffected (2026-07-29, Linux)
+
+This report asks, correctly, whether the impact is display-only -- "worth
+checking `Eq`/`Ord`/`Hash` over a `Map`/`Set` post-switch before assuming".
+Probed; the answer so far is **yes, display-only**, but the probe needs one
+piece of care to be worth anything.
+
+**`Sym` elements cannot answer the question.** Sym equality *is* pointer
+equality, so a regression to `Eq[int]` on the carrier returns the same answer as
+`Eq[Sym]`. `(eq? #map{:a 1} #map{:a 1})` is `true` before and after the switch,
+and that measures nothing -- the same coincidence that made `#map{7 70}` render
+correctly. The discriminating element type is `cstr`: `Eq[cstr]` compares
+content, `Eq[int]` compares the pointer.
+
+Validated first, compiled, that the probe discriminates at all -- a runtime-built
+string and a literal of the same content are at **different addresses**, and
+`eq?` on them is `true`:
+
+```
+DIFFERENT-POINTER
+eq?=true
+```
+
+Then, one REPL session, the same value, across the switch:
+
+```
+(load "stdlib/str-build.tur")
+(eq?  (:: (vec-of (str-concat "a" "b")) (Vec cstr)) (:: (vec-of "ab") (Vec cstr)))  => true
+(show (:: (vec-of (str-concat "a" "b")) (Vec cstr)))                                => "[ab]"
+#lang turmeric/neoteric                       ; reader set (session reset)
+(load "stdlib/str-build.tur")                 ; re-loaded: the rewind drops prompt-loaded code
+(eq?  (:: (vec-of (str-concat "a" "b")) (Vec cstr)) (:: (vec-of "ab") (Vec cstr)))  => true
+(show (:: (vec-of (str-concat "a" "b")) (Vec cstr)))                                => "[88098369185552]"
+```
+
+`Eq [Vec]` still returns content equality; `Show [Vec]` over the *identical*
+receiver regresses to the raw carrier. Both are constrained instances
+(`[(Eq A)]` / `[(Show A)]`) whose bodies are structurally the same shape --
+re-ascribe the element to the tyvar (`(:: (vec-get v i) A)`) and call the class
+method through a `^Eq A` / `^Show A` helper defn (`vec-eq-loop`,
+`vec-show-loop`).
+
+So this report's "every generic typeclass dispatch" framing is **wider than what
+is measured**: at least one other constrained instance over the same receiver
+type, with the same body shape, is unaffected. That is also a debugging lead --
+a working and a broken case that differ in almost nothing.
+
+**Not established: why.** Two candidates, untested:
+
+1. The inner `eq?` on a `cstr` receiver resolves through the *runtime-tag*
+   route, which works because `cstr` has its own carrier -- in which case `Eq`
+   never exercises the broken tyvar re-resolution and the blast-radius question
+   is still open for any element type riding the int64 carrier.
+2. `Eq`'s tyvar re-resolution genuinely survives the reset and `Show`'s does not.
+
+Candidate 1 would mean the narrowing above is weaker than it looks -- an element
+type with an int64 carrier (`Sym`, an opaque, a nested `Vec`) is the case to
+probe next, with a class whose answer is not pointer-equality by coincidence.
+`Ord`/`Hash` over a collection were not probed at all.
 
 ## Fix directions
 

@@ -192,11 +192,14 @@ ever right by the coincidence of carrier == value.
 
 Measured on macOS (Darwin 27), Debug build with ASan+UBSan.
 
-### Not addressed here
+### The web display tiers -- confirmed later the same day
 
-The **web display tiers** still need the same pairing: `wasm_glue.c` calls
-`turi_try_show_by_tag` at two sites and will pick the fix up automatically for
-any path that goes through `turi_eval_typed`, but this has not been rebuilt or
-exercised under emscripten yet. Tracked in
-`docs/reported/web-repl-lang-switch-drops-stdlib.md`, whose remaining open item
-is exactly that routing.
+`wasm_glue.c` calls `turi_try_show_by_tag` at two sites and picks this fix up
+automatically for any path that goes through `turi_eval_typed`. That was
+predicted here before a rebuild existed, and then **verified**: a fresh
+emscripten build renders `#map{:a 1}` => `#map{:a 1}`, `#map{"s" 1}` =>
+`#map{s 1}`, `#set{:x}` => `#set{:x}`, `(vec-of :a :b)` => `[:a :b]`. No
+web-side change was needed, which retired the last open item of
+[web-repl-lang-switch-drops-stdlib](../archive/web-repl-lang-switch-drops-stdlib.md)
+(now archived) -- it had been filed as a Show *routing* gap and was really this
+type erasure.
