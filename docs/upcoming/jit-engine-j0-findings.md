@@ -1129,3 +1129,45 @@ directly: it is a read of real declarations, and it converted
 `hamt-lowering-basic` from a parse failure into a **wrong-output** failure
 under MIR (`false`/`2` where `true`/`1` expected) -- a correctness signal on
 the HAMT lowering path that a parse error was hiding, now visible for J3.
+
+### 11.7 End state: no unexplained failure classes
+
+With the misattribution unwound (`346d1e84f`) and one final ordering gap
+closed (`637fc4c61` -- extern-c return types are now recorded in a pre-pass at
+the top of `emit_program`, because the emitter lifts pap-thunk bodies ahead of
+the item loop and the per-item record arrived too late for them), the corpus
+stands at:
+
+| Stage | Full corpus | |
+|---|---|---|
+| J0 baseline | 1424 / 1680 | 84.8% |
+| S1 emitter (`__auto_type`/zeros/`__thread`) | 1473 | 87.7% |
+| exact normalizer rules | 1557 | 92.7% |
+| `TUR_APPLY` aggregate-cast fix | 1559 | 92.8% |
+| host-symbol boundary | 1571 | 93.5% |
+| gs-splitter temps + thunk typedef table | 1603 | 95.4% |
+| proto-misparse fix + unconditional extern-c record | 1629 | 97.0% |
+| **extern-c pre-pass** | **1631** | **97.1%** |
+
+`tests/run.sh`: 2399 passed / 0 failed at every step.
+
+**The remaining 49 failures contain no unexplained class.** They are exactly:
+
+- **31 x** GNU constructs in *user inline-C* -- the plan's 3.2-step-6
+  fallback-to-`cc`, a design decision, working as designed.
+- **12 x** signals: 10 `reactor-*`
+  ([open report](../reported/jit-reactor-fixtures-abort-under-mir.md), needs a
+  backtrace; prime suspect is JIT-generated code as a `makecontext` entry) and
+  2 concurrency fixtures dying to the subset shim's documented
+  atomics-dropped-to-plain-ops hazard.
+- **6 x** wrong output: 3 `dynvar-*` (the `((cleanup))` gap, 3.1),
+  `hamt-lowering-basic` + `load-in-imported-module` +
+  `self-recursive-carrier-struct-return` (unmasked wrong-answers under MIR,
+  each needing its own investigation).
+
+That composition -- every failure either a recorded decision or an open report
+with ruled-out hypotheses -- is the real J0->J1 handoff condition, more than
+the percentage. What J1 inherits as *engine* work: the reactor/fiber question,
+the `((cleanup))` decision, `__tur_static_init()` (recommendation 2, still
+open), S2's prebuilt-preamble latency work, and the three wrong-output
+fixtures.
