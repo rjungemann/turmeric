@@ -1159,6 +1159,13 @@ target_link_options(tur_lsp_session_unit PRIVATE
 target_compile_options(tur_lsp_session_unit PRIVATE -pthread)
 target_link_options(tur_lsp_session_unit PRIVATE -pthread)
 target_link_libraries(tur_lsp_session_unit PRIVATE m ${CMAKE_DL_LIBS})
+# tur_core carries repl.c, whose line editing is libedit's whenever libedit was
+# found. Omitting this links clean on a box without libedit and fails to link
+# on one with it -- the wrong way round for a check meant to catch things early.
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_lsp_session_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_lsp_session_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
 set_target_properties(tur_lsp_session_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
@@ -1189,6 +1196,10 @@ target_link_options(tur_lsp_wasm_backend_unit PRIVATE
     $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
 )
 target_link_libraries(tur_lsp_wasm_backend_unit PRIVATE m ${CMAKE_DL_LIBS})
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_lsp_wasm_backend_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_lsp_wasm_backend_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
 set_target_properties(tur_lsp_wasm_backend_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )

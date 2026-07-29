@@ -396,11 +396,109 @@ client drives the real Monaco providers; only the language server is a script.
   checking rather than assuming, and the mobile Playwright project could not
   launch a browser in this environment.
 
-To close these, run:
+## 7. Closing the `emcc` gap
+
+Everything §6.4 listed as uncoverable is now covered. Built with Homebrew
+Emscripten 5.0.5 on macOS arm64:
 
 ```sh
 cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build-wasm --target tur_wasm
-ls -l web/public/turmeric.wasm          # record the delta against 3,029,099 bytes
-cd web && npx playwright test tests/lsp.spec.js   # the 5 skips should run
 ```
+
+### 7.1 The link, and the two guesses it settled
+
+`wasm-ld` linked clean on the first run, and all three exports are live in the
+module -- `wasm-objdump -x -j export` shows `turi_wasm_lsp_request`,
+`turi_wasm_lsp_flush`, `turi_wasm_lsp_reset`. `strings turmeric.wasm` now finds
+`textDocument/publishDiagnostics` and the full `initialize` capabilities blob,
+against `0` matches before, so the handlers §1.3 predicted were being collected
+away really are retained now.
+
+**`mkstemps` was the right guess.** It resolved from Emscripten's libc with no
+`#ifdef __EMSCRIPTEN__` fallback needed. **`/tmp` in MEMFS was too**, and that
+one the link could not have shown: the analysis path writes the buffer to a
+temp file and compiles it, so every diagnostic that reaches a Monaco marker in
+the browser is a round trip through `tur_temp_dir()` that completed. The
+provider specs below are what prove it.
+
+### 7.2 Bundle-size delta -- the L0 exit criterion
+
+| Artifact | Before | After | Delta |
+|---|---|---|---|
+| `turmeric.wasm` | 3,029,099 | 3,060,041 | **+30,942 (+1.0%)** |
+| `turmeric.js` | 84,085 | 85,930 | +1,845 (+2.2%) |
+
+§5 budgeted for this being "not free" and offered a second eval-only artifact
+if it went badly. It did not: 30 KB on a 3 MB module, gzipped rather less. The
+reason the number is this small is worth stating, because it is not that the
+LSP is small -- it is that the expensive half was already there. The
+elaborator, the type checker, and the stdlib are linked in for the eval path
+regardless; what `wasm-ld` newly retains is the handler dispatch and its JSON
+plumbing. **No second artifact. Pay the bytes**, exactly as §5 preferred.
+
+### 7.3 A defect the previous environment could not have found
+
+`tur_lsp_session_unit` and `tur_lsp_wasm_backend_unit` both link
+`$<TARGET_OBJECTS:tur_core>`, which carries `repl.c`, and neither carried the
+`if(HAVE_EDITLINE)` block every other `tur_core`-linking target in
+`src/CMakeLists.txt` has. That fails exactly backwards: it links clean on a box
+where CMake found no libedit and fails with seven undefined `readline` symbols
+on one where it did. The environment that wrote these targets was the former,
+so both looked fine. Fixed by adding the block to each.
+
+### 7.4 Mobile, checked rather than assumed
+
+L4 wanted "completion popovers on a phone keyboard checked, not assumed", and
+the previous run could not launch the mobile project at all. With WebKit
+installed the `mobile` project (iPhone 13, 390x664) runs, and
+`web/tests/mobile.lsp.spec.js` pins the two things that are phone-specific:
+
+- **Lazy instantiation actually holds.** A visitor who loads the page, runs the
+  buffer, and reads the output never instantiates the second module --
+  asserted on the device where the second 64 MB heap is the whole reason §2.4
+  chose lazy. This is the memory mitigation, made falsifiable.
+- **The suggest widget stays inside the viewport.** Monaco positions it against
+  available space, and on a 390px-wide screen a list rendered past the edge is
+  indistinguishable from no completion at all. The spec asserts the widget's
+  bounding box against the viewport on all four sides.
+
+Diagnostics and boot-on-WebKit are covered too; the degradation contract from
+§2.5 is re-asserted mobile-side, since a phone that cannot run the server must
+still show no fault.
+
+The single-worker fallback §2.4 documented is **not needed**: two instances
+boot and run on mobile WebKit without trouble.
+
+### 7.5 Results
+
+| Suite | Result |
+|---|---|
+| `tests/lsp/run-mcp-lsp.sh` | 61/61 |
+| `tur_lsp_session_unit` | 50/50 |
+| `tur_lsp_wasm_backend_unit` | 19/19 |
+| `bash tests/run.sh` | 2411/2411 |
+| `web/tests/lsp.spec.js` (desktop) | **15 passing, 0 skipped** (was 10 + 5 skipped) |
+| `web/tests/mobile.lsp.spec.js` (WebKit) | 4 passing |
+
+The 5 previously-skipped specs now run against the real server: markers appear
+and clear, completion offers the buffer's own definitions through the real
+suggest widget, hover reports a type, and every tab is an open document.
+
+Pre-existing failures elsewhere in `web/tests`, confirmed unrelated by
+re-running them against the previous bundle: `guide-toggle.spec.js` and
+`prod-smoke.spec.js` (generated docs / the live site), `smoke.spec.js`'s
+force-update case (a newer Chromium refuses the test's
+`Object.defineProperty` on `location.reload`), and two
+`mobile.split-and-pwa.spec.js` reload cases that report "Failed to load WASM"
+under WebKit.
+
+### 7.6 One thing to know before deploying
+
+`web/public/turmeric.{js,wasm}` are regenerated here, but `sw.js`'s
+`CACHE_VERSION` is rewritten from `VERSION` at *build* time
+(`injectSwVersion`, `apply: 'build'`), not on artifact regen. The precache is
+cache-first, so shipping new wasm bytes under an unchanged version token would
+serve a returning visitor the stale module. Nothing to do on this branch --
+the repo already ties artifact regeneration to a release cut, which bumps
+`VERSION` -- but do not deploy this bundle without one.
