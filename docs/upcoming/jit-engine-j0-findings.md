@@ -962,7 +962,8 @@ coverage from 84.8% to ~96%". Measured:
 | Pre-S1 baseline | 1424 / 1680 | 84.8% |
 | **S1 emitter work alone** | **1473 / 1680** | **87.7%** |
 | + exact normalizer rules (11.3) | 1557 / 1680 | 92.7% |
-| + `TUR_APPLY` aggregate-cast fix (`b61cdf578`) | **1559 / 1680** | **92.8%** |
+| + `TUR_APPLY` aggregate-cast fix (`b61cdf578`) | 1559 / 1680 | 92.8% |
+| + host-symbol boundary (`7b97d4036`) | **1571 / 1680** | **93.5%** |
 
 The emitter work is worth **+2.9 points**, not +11. The prediction conflated
 "removes almost every occurrence" with "removes the blocking ones": the sweep
@@ -1019,6 +1020,48 @@ Note on that last-but-one row: both fixtures previously failed *earlier*, on
 an unresolved `__auto_type`, so fixing S1 is what let c2mir reach the bad
 line. A new failure class appearing after a fix is unmasking as often as it
 is regression, and the sweep's class tally should be read with that in mind.
+
+### 11.5 Recommendation 8, and what linking half a runtime costs
+
+`7b97d4036` implements recommendation 8: `atexit` **interception** (the JIT
+owns the list and drains it before `MIR_gen_finish` unmaps the handlers -- 9.4
+established that registering the real `atexit` is not merely insufficient but
+actively worse), a `__builtin_*` shim table enumerated from stdlib and the
+fixture inputs in one pass, and the `src/async/` TUs linked into the host so
+`tur_reactor_new` resolves by address.
+
+Corpus 1559 -> 1571 (93.5%). Every `unresolved import` class is gone.
+
+**But the reactor half traded a clean failure for a crash, and that is the more
+useful result.** The ten `reactor-*` fixtures previously failed at link; they
+now link and abort (`free(): invalid pointer`). They pass on the `cc` path, so
+this is JIT-specific.
+
+The cause is visible in the emitted C's own autolink markers:
+
+```
+__tur_autolink__: -lturi
+__tur_autolink__: src/runtime/hamt.c -Isrc/runtime
+```
+
+`tur build` links **the whole `libturi` archive**. The harness links a curated
+list of 16 TUs. A partial runtime is not a smaller version of the whole one --
+it is a different one: the emitted preamble carries its own fiber/scheduler
+implementation, and resolving *some* of its reactor calls into a host
+implementation that expects the host's structures mixes two runtimes that were
+never meant to meet. Before this commit the mismatch was invisible because the
+symbols simply did not resolve.
+
+This sharpens S2 rather than contradicting it. Plan section 3.2 step 4 says the
+JIT's `MIR_load_external` table *is* the runtime boundary; the finding is that
+the boundary has to be a **defined, complete symbol set** -- the archive, as
+`--runtime=lib` already does on the `cc` path -- and not a hand-picked TU list
+that happens to cover the current sweep. Curating it by adding whatever the
+last failure named is how you arrive at exactly this state.
+
+J1 should link the archive (`libturt_runtime.a` extended, or `libturi`) rather
+than enumerate TUs. Until then the ten `reactor-*` fixtures are expected
+failures and the harness should probably say so, rather than crashing.
 
 Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
 10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.
