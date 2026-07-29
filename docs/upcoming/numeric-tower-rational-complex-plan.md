@@ -1,9 +1,48 @@
 # Rational and Complex numbers
 
-> **Status:** proposed (2026-07-29)
+> **Status:** N0/N1/N2 landed (2026-07-29); N3 blocked on `tur jit` (J1),
+> N4 deferred by design
 > **Type:** Language / stdlib / reader
 > **Hard constraint:** must run unchanged under `tur`, `turi`, and the
 > upcoming `tur jit` -- see [`jit-engine-plan.md`](jit-engine-plan.md)
+
+## Status of each phase
+
+| Phase | State | Notes |
+|---|---|---|
+| **N0** -- `Num` de-`:int` + builtin-miss -> `Num` dispatch | **landed** | `stdlib/typeclass.tur`, `src/compiler/elab_call.c` |
+| **N1** -- `Rational` + `#rat{...}` | **landed** | `stdlib/rational.tur`, `src/compiler/reader.c` |
+| **N2** -- `Complex` + `#cx{...}` | **landed** | `stdlib/complex.tur`, `src/compiler/reader.c` |
+| **N3** -- JIT parity | **blocked** | `tur jit` (J1) does not exist yet |
+| **N4** -- the `i` suffix | **deferred** | by design, per §5.2 |
+
+Deviations from the plan as written, and why:
+
+- **§3.1 said the existing `Num` instances cover `float`.** They did not --
+  there was no `Num [float]` instance at all. One was added alongside the
+  class-signature change.
+- **§7 said `stdlib/math.tur` stays as-is.** It could not: `complex/exp` and
+  `complex/arg` need `exp`, `sin`, `cos`, and `atan2`, and math.tur had only
+  `sqrt`/`fabs`/`floor`/`ceil`/`pow`. The four scalar libm wrappers were added
+  there (which is what that file is for) rather than to `complex.tur`, keeping
+  the plan's actual intent -- no Complex-specific code in math.tur. Each got a
+  matching interpreter native, as did `fabs`/`ceil`/`pow`, which had been
+  missing them; without a `fabs` native an interpreted `complex/div` dies on
+  "inline-C not supported in interpreter mode".
+- **§4.3's checked variants** are written as explicit pre-multiply comparisons
+  rather than `__builtin_*_overflow` equivalents, so the check itself never
+  relies on observing a wrapped result -- which would be C UB and would also
+  trip the Debug build's UBSan.
+
+Fixtures: `tests/fixtures/{rational-basics,rational-arith,rational-overflow,
+complex-basics,complex-smith-div,num-typeclass-operator-dispatch}` plus
+`tests/fixtures/errors/{complex-no-ord,rat-literal-zero-denominator,
+cx-literal-arity}`. All pass under both `tests/run.sh` and `tests/run-turi.sh`
+against the same `expected.stdout`.
+
+User-facing docs: [`docs/guides/numeric-tower-guide.md`](../guides/numeric-tower-guide.md)
+and the numeric-literal section of
+[`docs/guides/data-literals-guide.md`](../guides/data-literals-guide.md).
 
 ## 0. Summary
 

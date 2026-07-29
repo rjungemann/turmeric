@@ -1122,6 +1122,178 @@ static Form *maybe_container_type_suffix(Reader *r, Form *lit, const char *ctor)
     return form_list(r->arena, sp, asc_items, 3);
 }
 
+/* N1 (numeric-tower-rational-complex-plan §5.1): parse a decimal int64 out of
+ * the raw `#rat{...}` body, starting at *i and stopping at the first byte that
+ * is not part of the number.  Returns false on a missing digit run or on
+ * int64 overflow, so the caller can report a read-time error instead of
+ * silently wrapping a literal.  Accepts a leading '+' or '-'. */
+static char *read_raw_body(Reader *r, int open, int close, uint32_t *out_len);
+
+static bool rat_parse_int(const char *body, uint32_t len, uint32_t *i,
+                          int64_t *out) {
+    uint32_t k = *i;
+    bool neg = false;
+    if (k < len && (body[k] == '-' || body[k] == '+')) {
+        neg = (body[k] == '-');
+        k++;
+    }
+    if (k >= len || body[k] < '0' || body[k] > '9') return false;
+    /* Accumulate the magnitude in uint64 so the int64 minimum -- whose
+     * magnitude is one past the positive range -- parses without overflowing
+     * the accumulator it is being range-checked against. */
+    uint64_t mag = 0;
+    const uint64_t limit = neg ? 9223372036854775808ULL : 9223372036854775807ULL;
+    while (k < len && body[k] >= '0' && body[k] <= '9') {
+        uint64_t digit = (uint64_t)(body[k] - '0');
+        if (mag > (limit - digit) / 10) return false;   /* would overflow */
+        mag = mag * 10 + digit;
+        k++;
+    }
+    *i = k;
+    *out = neg ? (int64_t)(~mag + 1ULL) : (int64_t)mag;
+    return true;
+}
+
+/* N1: gcd of two non-negative values, for read-time normalization. */
+static uint64_t rat_gcd_u64(uint64_t a, uint64_t b) {
+    while (b != 0) { uint64_t t = a % b; a = b; b = t; }
+    return a;
+}
+
+/* N1: read a `#rat{n/d}` rational literal -> `(rat/of! n d)`, normalized at
+ * read time (`#rat{6/8}` emits `(rat/of! 3 4)`).
+ *
+ * Bare `3/4` is not available as rational syntax: read_number stops at '/', so
+ * `3/4` already reads as `3` followed by the symbol `/4`, and making it a
+ * rational would collide with '/' as division and with module-qualified names
+ * (`tur/list`).  Hence a '#'-dispatch alongside #map / #set / #json.
+ *
+ * The body is read RAW rather than as forms, because curly-infix is enabled in
+ * every dialect: an ordinarily-read `{3 / 4}` would be infix division, not a
+ * literal.  A missing denominator (`#rat{5}`) is the whole number 5/1.
+ *
+ *   TUR-E0284 -- malformed body, zero denominator, or out-of-int64-range part */
+static Form *read_rat_literal(Reader *r) {
+    uint32_t s_line = r->line, s_col = r->col;
+    size_t   s_off  = r->pos;
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'r' */
+    advance(r); /* consume 'a' */
+    advance(r); /* consume 't' */
+    /* peek == '{' guaranteed by caller */
+    uint32_t body_len = 0;
+    char *body = read_raw_body(r, '{', '}', &body_len);
+    if (!body || r->error) return NULL;
+    Span sp = span_from_to(r, s_line, s_col, s_off, r->pos);
+
+    uint32_t i = 0;
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+    int64_t n = 0, d = 1;
+    if (!rat_parse_int(body, body_len, &i, &n)) {
+        diag_emit(DIAG_ERROR, sp,
+                  "malformed rational literal '#rat{%.*s}'; expected "
+                  "'#rat{n/d}' with int64 parts (TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+    if (i < body_len && body[i] == '/') {
+        i++;
+        while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+        if (!rat_parse_int(body, body_len, &i, &d)) {
+            diag_emit(DIAG_ERROR, sp,
+                      "malformed rational literal '#rat{%.*s}'; expected an "
+                      "int64 denominator after '/' (TUR-E0284)",
+                      (int)body_len, body);
+            r->error = true;
+            return NULL;
+        }
+    }
+    while (i < body_len && (body[i] == ' ' || body[i] == '\t')) i++;
+    if (i != body_len) {
+        diag_emit(DIAG_ERROR, sp,
+                  "trailing junk in rational literal '#rat{%.*s}'; expected "
+                  "'#rat{n/d}' (TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+    if (d == 0) {
+        diag_emit(DIAG_ERROR, sp,
+                  "rational literal '#rat{%.*s}' has a zero denominator "
+                  "(TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+
+    /* Normalize at read time so `#rat{6/8}` and `#rat{3/4}` are the same
+     * literal, and so structural equality on the emitted value is
+     * mathematical equality.  Magnitudes go through uint64 so the int64
+     * minimum normalizes without a negation that would overflow. */
+    bool neg  = ((n < 0) != (d < 0));
+    uint64_t un = (n < 0) ? (~(uint64_t)n + 1ULL) : (uint64_t)n;
+    uint64_t ud = (d < 0) ? (~(uint64_t)d + 1ULL) : (uint64_t)d;
+    uint64_t g  = rat_gcd_u64(un, ud);
+    if (g != 0) { un /= g; ud /= g; }
+    if (ud > 9223372036854775807ULL ||
+        un > (neg ? 9223372036854775808ULL : 9223372036854775807ULL)) {
+        diag_emit(DIAG_ERROR, sp,
+                  "normalized rational literal '#rat{%.*s}' does not fit in "
+                  "int64 (TUR-E0284)",
+                  (int)body_len, body);
+        r->error = true;
+        return NULL;
+    }
+    int64_t nn = neg ? (int64_t)(~un + 1ULL) : (int64_t)un;
+    int64_t nd = (int64_t)ud;
+
+    const Symbol *ctor = symtab_intern(r->st, strslice("rat/of!", 7));
+    Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(r->arena, sp, ctor);
+    items[1] = form_int(r->arena, sp, nn);
+    items[2] = form_int(r->arena, sp, nd);
+    return form_list(r->arena, sp, items, 3);
+}
+
+/* N2 (numeric-tower-rational-complex-plan §5.2): read a `#cx{re im}` complex
+ * literal -> `(complex/of re im)`.
+ *
+ * `#cx` rather than `#c`: a single-letter dispatch is too scarce a name to
+ * spend, and `#c` reads as "C" in a codebase full of inline-C blocks.  Unlike
+ * `#rat{...}`, the two slots are read as ordinary FORMS, so a computed
+ * component composes -- `#cx{3.25 {1.0 + 0.5}}` works, and the curly-infix
+ * inner expression is exactly what it looks like.
+ *
+ *   TUR-E0285 -- wrong number of slot forms */
+static Form *read_cx_literal(Reader *r) {
+    uint32_t s_line = r->line, s_col = r->col;
+    size_t   s_off  = r->pos;
+    advance(r); /* consume '#' */
+    advance(r); /* consume 'c' */
+    advance(r); /* consume 'x' */
+    /* peek == '{' guaranteed by caller */
+    Form *seq = read_seq(r, '{', '}', F_LIST,
+                         "unterminated complex literal (missing '}') "
+                         "(TUR-E0285)");
+    if (!seq || r->error) return NULL;
+    Span sp = span_from_to(r, s_line, s_col, s_off, r->pos);
+    if (seq->as.list.len != 2) {
+        diag_emit(DIAG_ERROR, sp,
+                  "#cx{...} requires exactly two slot forms (real and "
+                  "imaginary part); got %u (TUR-E0285)", seq->as.list.len);
+        r->error = true;
+        return NULL;
+    }
+    const Symbol *ctor = symtab_intern(r->st, strslice("complex/of", 10));
+    Form **items = (Form **)arena_alloc(r->arena, 3 * sizeof(Form *));
+    items[0] = form_sym(r->arena, sp, ctor);
+    items[1] = seq->as.list.items[0];
+    items[2] = seq->as.list.items[1];
+    return form_list(r->arena, sp, items, 3);
+}
+
 /* DL0: Try to read a #<tag>{...} data literal.  Returns NULL (without
  * consuming) when the input is not a data literal so the caller can fall
  * through to other '#'-dispatches.  Only invoked when -Xdata-literals is on.
@@ -1148,6 +1320,15 @@ static Form *try_read_data_literal(Reader *r) {
         peek_at(r, 7) == '{') {
         return read_refine_literal(r);
     }
+    /* N1/N2: the numeric-tower literals.  Always on, not a #lang layer -- a
+     * core data-literal dispatch belongs here with #map / #set. */
+    if (peek_at(r, 1) == 'r' && peek_at(r, 2) == 'a' &&
+        peek_at(r, 3) == 't' && peek_at(r, 4) == '{') {
+        return read_rat_literal(r);
+    }
+    if (peek_at(r, 1) == 'c' && peek_at(r, 2) == 'x' && peek_at(r, 3) == '{') {
+        return read_cx_literal(r);
+    }
     /* Detect a #<ident>{ shape with an unrecognized tag -> TUR-E0283.
      * Scan a run of identifier characters after '#'; if it is followed by
      * '{' and the run is non-empty, it looked like a data-literal dispatch. */
@@ -1161,7 +1342,8 @@ static Form *try_read_data_literal(Reader *r) {
         tag[tlen] = '\0';
         diag_emit(DIAG_ERROR, s,
                   "unknown data-literal dispatch tag '#%s{...}'; "
-                  "expected '#map{...}', '#set{...}', or '#row{...}' (TUR-E0283)", tag);
+                  "expected '#map{...}', '#set{...}', '#row{...}', "
+                  "'#rat{...}', or '#cx{...}' (TUR-E0283)", tag);
         r->error = true;
         return NULL;
     }

@@ -99,18 +99,23 @@
 ;;;   a -- the numeric type
 ;;;
 ;;; Returns:
-;;;   Results are typed as :int (int64_t) in v1; specific numeric types
-;;;   are handled by each instance.
+;;;   Every method is closed over the instance type `a`: `add`/`sub`/`mul`/
+;;;   `div`/`neg` take and return `a`, so a `Num` instance for a non-integer
+;;;   type (Rational, Complex, a user newtype) types correctly at call sites.
 ;;;
-;;; Since: Phase 15
+;;; Example:
+;;;   (add 2 3)          ; => 5      (Num [int])
+;;;   (add 2.5 0.25)     ; => 2.75   (Num [float])
+;;;
+;;; Since: Phase 15 (N0: de-:int-ified)
 ;; Num typeclass - numeric operations
 
 (defclass Num [a]
-  (add [x y] : int)
-  (sub [x y] : int)
-  (mul [x y] : int)
-  (div [x y] : int)
-  (neg [x] : int))
+  (add [x : a y : a] : a)
+  (sub [x : a y : a] : a)
+  (mul [x : a y : a] : a)
+  (div [x : a y : a] : a)
+  (neg [x : a] : a))
 ;; Instance for int
 ;;; Num [int] -- Num instance for int.
 
@@ -185,6 +190,14 @@
   (mul [x y] (* x y))
   (div [x y] (/ x y))
   (neg [x] (- 0.0f32 x)))
+;;; Num [float] -- Num instance for float (double).
+
+(definstance Num [float]
+  (add [x y] (+ x y))
+  (sub [x y] (- x y))
+  (mul [x y] (* x y))
+  (div [x y] (/ x y))
+  (neg [x] (- 0.0 x)))
 ;;; Clone -- typeclass for deep copying a value.
 ;;;
 ;;; Parameters:

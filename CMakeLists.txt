@@ -268,6 +268,15 @@ add_test(
   COMMAND bash tests/check-stdlib-no-rc-cycles.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Numeric-tower guard: emitted C must never contain `_Complex`, `<complex.h>`,
+# or the `__mul*c3` / `__div*c3` compiler-runtime helpers -- c2mir's C11 subset
+# excludes the first and the JIT's symbol boundary should not grow the rest.
+# See docs/upcoming/numeric-tower-rational-complex-plan.md section 1.
+add_test(
+  NAME tur_no_c_complex
+  COMMAND bash tests/check-no-c-complex.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

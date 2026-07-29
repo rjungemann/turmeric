@@ -1,0 +1,62 @@
+;; complex-smith-div -- complex division survives denominators whose squares
+;; leave the double range.
+;;
+;; The naive closed form is
+;;
+;;     (a+bi)/(c+di) = ((ac + bd) + (bc - ad)i) / (c^2 + d^2)
+;;
+;; which computes `c^2 + d^2` as an intermediate.  That intermediate is where it
+;; breaks: for c near 1e200 it is +inf, and for c near 1e-200 it is 0 -- in both
+;; cases the true quotient is perfectly ordinary and representable.  This
+;; fixture prints the naive denominator so the failure mode is visible, then
+;; shows complex/div getting the right answer anyway.
+;;
+;; complex/div uses Smith's algorithm: divide through by the larger-magnitude
+;; denominator component FIRST, so every intermediate stays near the magnitude
+;; of the answer.
+;;
+;; (The naive quotient itself is not computed here -- dividing by that 0 would
+;; trip the runtime division-by-zero check and abort the program, which is
+;; itself the point.)
+(load "stdlib/complex.tur")
+
+(defn pr [z : Complex] : void
+  (let [s (complex->string z)]
+    (do (println (string/to-cstr s)) (string/release s))))
+
+;;; naive-denom -- the `c^2 + d^2` intermediate the textbook form needs.
+
+(defn naive-denom [y : Complex] : float
+  (let [c (complex/re y)
+        d (complex/im y)]
+    (+ (* c c) (* d d))))
+
+(defn main [] : int
+  ;; Ordinary magnitudes: the naive denominator is fine and Smith's answer is
+  ;; the textbook one, so the robustness costs nothing in the normal case.
+  (println (naive-denom #cx{0.5 2.0}))
+  (pr (complex/div #cx{3.25 1.5} #cx{0.5 2.0}))
+  ;; A purely real divisor takes the |c| >= |d| branch with r = 0.
+  (pr (complex/div #cx{3.25 1.5} #cx{0.5 0.0}))
+  ;; A purely imaginary divisor takes the |c| < |d| branch with r = 0.
+  (pr (complex/div #cx{3.25 1.5} #cx{0.0 2.5}))
+  ;; Huge denominator: c^2 + d^2 overflows to +inf, and finite/inf is 0 -- the
+  ;; naive form loses the answer entirely.  Smith's returns the true ~1e-200.
+  (println (naive-denom (complex/of 1.0e200 1.0e199)))
+  (pr (complex/div #cx{3.25 1.5} (complex/of 1.0e200 1.0e199)))
+  ;; Same, on the |c| < |d| branch.
+  (println (naive-denom (complex/of 1.0e199 1.0e200)))
+  (pr (complex/div #cx{3.25 1.5} (complex/of 1.0e199 1.0e200)))
+  ;; Tiny denominator: c^2 + d^2 underflows to exactly 0, so the naive form
+  ;; divides by zero.  Smith's returns the true ~1e200 quotient.
+  (println (naive-denom (complex/of 1.0e-200 1.0e-201)))
+  (pr (complex/div #cx{3.25 1.5} (complex/of 1.0e-200 1.0e-201)))
+  ;; Round trip: (x/y)*y recovers x at magnitudes the naive form cannot reach.
+  (pr (* (complex/div #cx{3.25 1.5} (complex/of 1.0e200 1.0e199))
+         (complex/of 1.0e200 1.0e199)))
+  (pr (* (complex/div #cx{3.25 1.5} (complex/of 1.0e-200 1.0e-201))
+         (complex/of 1.0e-200 1.0e-201)))
+  ;; Magnitude is scaled the same way, so |z| is finite where re^2 + im^2 is not.
+  (println (complex/abs (complex/of 1.0e200 1.0e199)))
+  (println (complex/abs2 (complex/of 1.0e200 1.0e199)))
+  0)

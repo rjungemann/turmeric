@@ -1649,6 +1649,90 @@ static bool elab_name_is_typeclass_method(Elab *e, const Symbol *name) {
     return false;
 }
 
+/* N0 (numeric-tower-rational-complex-plan §3): map an arithmetic operator
+ * symbol onto the `Num` method that implements it.  `n_args` picks between the
+ * binary reading of `-` (sub) and the unary one (neg); the other operators are
+ * binary/variadic only.  Returns NULL when `name` is not an arithmetic
+ * operator, so every other builtin miss keeps its existing diagnostic. */
+static const char *num_method_for_operator(const Symbol *name, uint32_t n_args) {
+    if (!name || name->len != 1) return NULL;
+    switch (name->name[0]) {
+        case '+': return n_args >= 2 ? "add" : NULL;
+        case '-': return n_args >= 2 ? "sub" : (n_args == 1 ? "neg" : NULL);
+        case '*': return n_args >= 2 ? "mul" : NULL;
+        case '/': return n_args >= 2 ? "div" : NULL;
+        default:  return NULL;
+    }
+}
+
+/* N0: true when some registered `Num` instance dispatches on exactly `t`.
+ * Matched by full structural equality rather than by TypeKind, so a `Num`
+ * instance for one by-value product never captures an unrelated one. */
+static bool elab_num_instance_matches(Elab *e, const TypeClass *num,
+                                      const Type *t) {
+    if (!num || !t || t->kind == TY_UNKNOWN) return false;
+    for (TypeClassInstance *inst = e->typeclass_env.instances; inst;
+         inst = inst->next) {
+        if (inst->typeclass != num || inst->n_type_args != 1) continue;
+        if (type_eq(inst->type_args[0], *t)) return true;
+    }
+    return false;
+}
+
+/* N0: fall back from a builtin-operator miss to `Num` typeclass dispatch.
+ *
+ * `+`/`-`/`*`/`/` are BuiltinSpec rows keyed by TypeKind that emit a C infix
+ * operator (src/compiler/builtins.c), a shape that cannot express arithmetic
+ * over a struct and has no way to name a specific ADT anyway.  Rather than
+ * bolting Rational/Complex rows onto that table, a miss re-reads the call as
+ * the corresponding `Num` method, which gives operator overloading to every
+ * user numeric type.  Primitive arithmetic is untouched: the builtin row still
+ * wins whenever it matches, so there is no codegen drift on existing programs
+ * and no dictionary in the hot path.
+ *
+ * Variadic calls left-fold into nested binary method calls, matching
+ * BS_VARIADIC_FOLD: `(+ a b c)` becomes `(.add (.add a b) c)`.
+ *
+ * Returns NULL (having consumed nothing) when the call is not arithmetic, no
+ * `Num` class is in scope, or no instance dispatches on the receiver -- the
+ * caller then proceeds to its usual operator-lookup-failed diagnostic. */
+static Expr *elab_try_num_operator_dispatch(Elab *e, const Form *call,
+                                            const Form *head,
+                                            const Symbol *name,
+                                            const Type *first_t,
+                                            uint32_t n_args) {
+    const char *method = num_method_for_operator(name, n_args);
+    if (!method) return NULL;
+
+    TypeClass *num = typeclass_env_lookup_typeclass(
+        &e->typeclass_env, symtab_intern(e->st, strslice("Num", 3)));
+    if (!num) return NULL;
+    if (!elab_num_instance_matches(e, num, first_t)) return NULL;
+
+    char dotbuf[8];
+    int dotlen = snprintf(dotbuf, sizeof(dotbuf), ".%s", method);
+    if (dotlen <= 0 || (size_t)dotlen >= sizeof(dotbuf)) return NULL;
+    const Symbol *dot_sym =
+        symtab_intern(e->st, strslice(dotbuf, (uint32_t)dotlen));
+
+    if (n_args == 1) {
+        Form **items = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
+        items[0] = form_sym(e->arena, head->span, dot_sym);
+        items[1] = call->as.list.items[1];
+        return elab_method_call(e, form_list(e->arena, call->span, items, 2));
+    }
+
+    Form *acc = call->as.list.items[1];
+    for (uint32_t i = 2; i <= n_args; i++) {
+        Form **items = (Form **)arena_alloc(e->arena, 3 * sizeof(Form *));
+        items[0] = form_sym(e->arena, head->span, dot_sym);
+        items[1] = acc;
+        items[2] = call->as.list.items[i];
+        acc = form_list(e->arena, call->span, items, 3);
+    }
+    return elab_method_call(e, acc);
+}
+
 /* True when a TY_FN receiver carries a float-class value in any argument or in
  * its result.  Used to keep float-carrier function composition (e.g. a float
  * `>>>` pipeline) on the register-class-correct free defn instead of the
@@ -2897,10 +2981,35 @@ Expr *elab_call(Elab *e, Form *call) {
 
     /* Builtin operator. Evaluate args first, then look up. */
     uint32_t n_args = call->as.list.len - 1;
+
+    /* N0 (numeric-tower-rational-complex-plan §3): the builtin operator rows
+     * are keyed by TypeKind and emit a C infix operator, so they can never
+     * express `Rational + Rational`.  Peek at the first argument's type BEFORE
+     * committing to the builtin path: when no builtin row matches but a `Num`
+     * instance does, the call is `Num` typeclass dispatch, not an error.
+     *
+     * The peek happens before the move-tracking loop below on purpose -- the
+     * Num path re-elaborates the argument forms inside elab_method_call, and a
+     * move already poisoned here would surface as a bogus use-after-move.  On
+     * the builtin path the peeked expression is reused verbatim, so an ordinary
+     * `(+ a b)` still elaborates each argument exactly once. */
+    Expr *arg0_peek = NULL;
+    if (n_args > 0) {
+        arg0_peek = elab_form(e, call->as.list.items[1]);
+        if (!arg0_peek) return NULL;
+    }
+    Type first_t = (n_args > 0) ? arg0_peek->type : TYPE_NIL;
+    const BuiltinSpec *spec = builtin_lookup(name, first_t, n_args);
+    if (!spec) {
+        Expr *num_disp = elab_try_num_operator_dispatch(e, call, head, name,
+                                                        &first_t, n_args);
+        if (num_disp) return num_disp;
+    }
+
     Expr **args = (n_args == 0) ? NULL :
         (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
     for (uint32_t i = 0; i < n_args; i++) {
-        args[i] = elab_form(e, call->as.list.items[1 + i]);
+        args[i] = (i == 0) ? arg0_peek : elab_form(e, call->as.list.items[1 + i]);
         if (!args[i]) return NULL;
         /* Phase 11: Move tracking - if arg is a CK_MOVE binding reference, poison it.
          * UT2 exception: ^unique ^mut bindings represent exclusive mutable access;
@@ -2913,8 +3022,6 @@ Expr *elab_call(Elab *e, Form *call) {
             }
         }
     }
-    Type first_t = (n_args > 0) ? args[0]->type : TYPE_NIL;
-    const BuiltinSpec *spec = builtin_lookup(name, first_t, n_args);
     if (!spec) {
         const BuiltinSpec *any = builtin_first_with_name(name);
         if (any) {

@@ -92,6 +92,93 @@
   ```c
   return __builtin_pow(x, y);
   ```)
+;;; exp -- e raised to the power x.
+;;;
+;;; Parameters:
+;;;   x -- float exponent
+;;;
+;;; Returns:
+;;;   e^x.
+;;;
+;;; Example:
+;;;   (exp 1.0)  ; => 2.71828
+;;;
+;;; Since: Phase N2
+
+(defn exp [x : float] : float
+  ```c
+  return __builtin_exp(x);
+  ```)
+;;; log -- natural logarithm of a float.
+;;;
+;;; Parameters:
+;;;   x -- positive float value
+;;;
+;;; Returns:
+;;;   ln(x).
+;;;
+;;; Example:
+;;;   (log 2.718281828459045)  ; => 1
+;;;
+;;; Since: Phase N2
+
+(defn log [x : float] : float
+  ```c
+  return __builtin_log(x);
+  ```)
+;;; sin -- sine of an angle in radians.
+;;;
+;;; Parameters:
+;;;   x -- angle in radians
+;;;
+;;; Returns:
+;;;   sin(x).
+;;;
+;;; Example:
+;;;   (sin 0.5)  ; => 0.479426
+;;;
+;;; Since: Phase N2
+
+(defn sin [x : float] : float
+  ```c
+  return __builtin_sin(x);
+  ```)
+;;; cos -- cosine of an angle in radians.
+;;;
+;;; Parameters:
+;;;   x -- angle in radians
+;;;
+;;; Returns:
+;;;   cos(x).
+;;;
+;;; Example:
+;;;   (cos 0.5)  ; => 0.877583
+;;;
+;;; Since: Phase N2
+
+(defn cos [x : float] : float
+  ```c
+  return __builtin_cos(x);
+  ```)
+;;; atan2 -- principal arc tangent of y/x, using the signs of both arguments
+;;; to place the result in the correct quadrant.
+;;;
+;;; Parameters:
+;;;   y -- ordinate
+;;;   x -- abscissa
+;;;
+;;; Returns:
+;;;   The angle in radians in (-pi, pi].
+;;;
+;;; Example:
+;;;   (atan2 1.5 0.0)  ; => 1.5708
+;;;
+;;; Since: Phase N2
+
+(defn atan2 [y : float x : float] : float
+  ```c
+  return __builtin_atan2(y, x);
+  ```)
 ;;; int->float -- convert an integer to a float via numeric cast.
 ;;;
 ;;; Parameters:

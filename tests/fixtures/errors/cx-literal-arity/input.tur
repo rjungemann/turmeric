@@ -1,0 +1,8 @@
+;; cx-literal-arity -- `#cx{...}` takes exactly two slot forms, a real part and
+;; an imaginary part.  One or three is a read-time error, not a silently
+;; defaulted component.
+(load "stdlib/complex.tur")
+
+(defn main [] : int
+  (println (complex/re #cx{1.5}))
+  0)

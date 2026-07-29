@@ -1,0 +1,11 @@
+;; complex-no-ord -- the complex numbers are not an ordered field, so
+;; stdlib/complex.tur deliberately ships NO `Ord [Complex]` instance.
+;;
+;; A lexicographic order would type-check and would be wrong, so the correct
+;; answer is a missing instance and a type error that says so.  This fixture
+;; exists to keep someone from "completing the table" later.
+(load "stdlib/complex.tur")
+
+(defn main [] : int
+  (println (lt? #cx{1.5 0.25} #cx{2.5 0.75}))
+  0)
