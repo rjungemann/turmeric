@@ -1753,3 +1753,84 @@ scheduler cancel flags, and select's winner CAS run on real atomics and real
 per-thread state. What J1 still owes multi-threading specifically:
 concurrent-safe (or serialized) lazy generation (8.1), and the
 `tur_scheduler_*_st` weak-function fold into `__tur_static_init()` (11.7).
+
+## 16. S1 completed -- 13,730 `__auto_type` sites down to 26
+
+Added 2026-07-29 (`5f9418f86`). Section 11.2 left S1 with an honest debt: the
+emitter work "does not delete the normalizer", because the residue --
+indirect calls -- was inferred on purpose. This section pays the debt down to
+one named family. The motive is J1's entry condition: an in-compiler
+`tur jit` cannot run a Python rewriter between emit and c2mir, so the emitted
+C has to be subset-clean as emitted.
+
+### 16.1 The census, then the fixes
+
+Every one of the 1,928 emitted TUs still carried `__auto_type` -- 13,730
+sites. Shape census before fixing anything (the same fixture-by-fixture
+discipline 11.6 institutionalized, applied to emitted text):
+
+| Shape | Sites | Fix |
+|---|---|---|
+| cast-fn-ptr call | 6,396 | builder note (ground truth) |
+| thunk-typedef call | 4,385 | builder note (ground truth) |
+| `ctor_*` monomorphs | 2,289 | record at type registration |
+| `INT64_C` | 308 | exact read by name |
+| direct-name lookup misses | 218 | cps->direct sig lookup + (residue) |
+| member `.fn` dispatch | 134 | region notes at result wraps |
+
+Three mechanisms:
+
+- **Registration-time recording** for monomorph ADT ctors. The renderer
+  (`emit_registered_adt_app_rec`) runs at final program assembly, after every
+  body, so recording there is too late by construction -- the same too-late
+  shape 11.1 found twice (`emit_sig_reset` placement; extern-c pre-pass).
+  `type_register_adt_app` fires the moment a body first names the type, which
+  is always at-or-before the first ctor call.
+- **A builder-to-hoist note** (`EmitCtx.call_ret_note`): each indirect-call
+  builder hands the panic-hoist the same `ret_c` string it just spelled into
+  the call text's own cast or thunk typedef. Protocol matters more than the
+  field: set as the LAST thing before returning the composed string, captured
+  and cleared unconditionally by `emit_value` after every dispatch -- so a
+  note from a void/never call (whose hoist is skipped) can never leak onto a
+  later, unrelated call.
+- **Two anchored exact reads** at the hoist, as the last resort: `((RET (*)`
+  and `(T)(expr)` with T restricted exactly as the normalizer's CAST_RE was
+  (primitive spellings or trailing `*`), so `(f)(x)` cannot be misread.
+  These are the spike normalizer's two blessed rules -- "reads off text the
+  emitter itself generated" -- ported to the one place they are needed. They
+  exist because one builder's note structurally cannot survive:
+  `emit_call_name` composes the dict-vtable dispatch head, and the argument
+  emissions that follow it clear any note it could set.
+
+One measurement-caught mistake worth its line: the cast read first required
+TWO leading parens and matched nothing (71 residue, unchanged shape). The
+hoist's own printf adds the outer paren pair, so a cast wrap arrives as
+`(T)(expr)` with one. 71 -> 26 after the fix -- the census caught in one
+re-emit what reading the code had not.
+
+### 16.2 What remains, and why it is structural
+
+The 26 survivors sit in 11 TUs, all van-laarhoven lens fixtures, all direct
+calls to `<consumer>__lens_<hash>` / `<lens>__mono_<hash>` clones. Their ABI
+specs are minted in a dedicated block AFTER the main emit loop has already
+emitted `main`'s body -- so at the moment the call site consults the table,
+the spec (and its forward declaration, which is what records) does not exist
+yet. This is the ctor problem again, but the fix is not "add a record": the
+name is composed on the fly at the call site and the spec is minted from
+usage collected during the loop, so closing it means moving lens-spec minting
+ahead of body emission. Deferred, deliberately: it is 26 sites in 11
+fixture TUs, the spike normalizer still resolves them (their forward decls
+ARE in the TU text by the time it runs), and restructuring spec minting under
+time pressure is how regressions land.
+
+### 16.3 Verification
+
+- `tests/run.sh` 2399/0 with 140 snapshots regenerated -- the typed temps are
+  the bulk of the diff. `run-turi.sh` 1657/0.
+- Corpus 1647/1680 with an **empty** fixture diff against the pre-change
+  sweep: naming the types changes no behaviour on either path. (A wrong
+  read/note would have: these declarations are live on the `cc` path too, so
+  the suite is the control that the "exact read" claim is actually exact.)
+- The normalizer is now needed for: the `__tur_include__` hoist (which is
+  `tur build`'s own in-process post-pass, not a subset fix), and the 26 lens
+  sites. Its `__auto_type` machinery is inert for the other 1,917 TUs.
