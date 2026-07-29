@@ -1,0 +1,27 @@
+;; constrained-hkt-spec-keeps-representative-instance: a monomorphized spec of a
+;; constrained poly fn must dispatch its class methods on ITS OWN concrete type,
+;; not on the representative instance elaboration picked.
+;;
+;; `emit_dispatch_tyvar` used to look for a bare TY_TYVAR in all three dispatch
+;; positions -- a kind-`*` assumption.  A `defclass Monad [^m]` method on the
+;; abstract constructor has receiver `(m int)`, a TY_APP whose HEAD is the
+;; dispatch variable, so re-resolution never fired and the spec kept
+;; `Monad [Result]` (first in env order).  Option values were then read through
+;; the Result layout: correct by prefix coincidence on the `some` path, and an
+;; out-of-bounds load of `err_val` at offset 16 of a 2-word Option on `none`.
+;;
+;; NOTE: stdout cannot distinguish the instance here -- Option and Result share a
+;; prefix, which is exactly why the bug survived so long.  The regression signal
+;; is the emitted symbol: `tur emit-c` on this file must contain
+;; `__inst_Monad_bind_Option` and must NOT route these calls through
+;; `__inst_Monad_bind_Result_tyvar`.
+
+(defn poly-bind [^m] [^Monad m x : (m int)] : (m int)
+  (bind x (fn [v] (some (* v 2)))))
+
+(defn nothing [] : (Option int) (none))
+
+(defn main [] : int
+  (println (unwrap-or (poly-bind (some 7)) -1))     ; 14
+  (println (unwrap-or (poly-bind (nothing)) -1))    ; -1 (short-circuits)
+  0)

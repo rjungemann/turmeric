@@ -2566,18 +2566,40 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     if (ctx->current_abi_specialization && call->as.call_.dict_arg) {
         Type rresolved = {0}; const Expr *rdict = NULL;
         FnDef *redisp = NULL;
+        bool redisp_is_hkt = false;
         if (emit_reresolve_disp_type(ctx, call, &rresolved, &rdict) && rdict &&
             rdict->as.dict_.instance && rdict->as.dict_.instance->typeclass) {
             redisp = emit_concrete_inst_method_fndef(
                 ctx, rdict->as.dict_.instance->typeclass, rresolved,
                 rdict->as.dict_.method_name);
+            /* constrained-hkt-spec-keeps-representative-instance: is the
+             * re-dispatched class parameterised over a type CONSTRUCTOR? */
+            const TypeClass *rtc = rdict->as.dict_.instance->typeclass;
+            if (rtc->type_param_kinds) {
+                for (uint8_t i = 0; i < rtc->n_type_params; i++)
+                    if (rtc->type_param_kinds[i] != KIND_STAR) {
+                        redisp_is_hkt = true; break;
+                    }
+            }
         }
         if (redisp && redisp->binding) {
             /* G2: when the re-dispatched instance method is itself parametric and
              * the recovered receiver is a concrete parametric container, mint its
              * by-value spec and route the call to it (the carrier base alone would
-             * silently miscompile a by-value/float element). */
-            if (emit_abi_try_nested_instance_dispatch_redirect(
+             * silently miscompile a by-value/float element).
+             *
+             * constrained-hkt-spec-keeps-representative-instance: NOT for a
+             * higher-kinded class.  Those keep the uniform int64-carrier dispatch
+             * (Plan M6/M7 -- the same carve-out elab applies when binding the
+             * class var), and their instance methods are emitted against the
+             * carrier: `__inst_Monad_bind_Option` takes `int64_t ma` and derefs
+             * it, so a by-value spec clones that body under a struct parameter and
+             * produces ill-typed C (`some_qu` fed a `tur_adt_Option__int`).
+             * A wide-functor Path B body still gets its by-value twin -- from the
+             * interning below, via the existing is_vl_wide_mono carve-out, not
+             * from this redirect. */
+            if (!redisp_is_hkt &&
+                emit_abi_try_nested_instance_dispatch_redirect(
                     ctx, call, items, n_items, redisp, &rresolved)) {
                 return;
             }

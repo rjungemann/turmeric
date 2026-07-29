@@ -68,9 +68,8 @@ constrained poly fn.
 
 ## Related
 
-- [constrained-hkt-spec-keeps-representative-instance.md](constrained-hkt-spec-keeps-representative-instance.md)
-  -- the spec dispatches through an env-ordered representative instance rather
-  than its own type. Newly observable now that by-value instantiations run at
-  all, and the more dangerous of the two reports.
+- [constrained-hkt-lifted-lambda-keeps-representative-instance.md](constrained-hkt-lifted-lambda-keeps-representative-instance.md)
+  -- a lifted continuation still keeps the representative instance. The spec-level
+  case was fixed 2026-07-29; the lambda case remains.
 - [result-monad-bind-typed-boundary-miscompiles.md](result-monad-bind-typed-boundary-miscompiles.md)
   -- the same carrier-vs-by-value confusion on the plain typed-boundary path.

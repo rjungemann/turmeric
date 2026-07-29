@@ -76,6 +76,6 @@ Suite: 2403 passed, 0 failed (2401 before, plus the two new fixtures).
 - Monomorphized spec return for a *wider* by-value container --
   [../../reported/constrained-hkt-byvalue-carriers.md](../../reported/constrained-hkt-byvalue-carriers.md), seam 1.
 - `Result`'s binary head cannot fill a unary `(m int)` -- same report, seam 2.
-- The spec dispatches through an env-ordered representative instance --
-  [../../reported/constrained-hkt-spec-keeps-representative-instance.md](../../reported/constrained-hkt-spec-keeps-representative-instance.md).
-  Newly observable, and the more dangerous of the two.
+- A lifted continuation keeps the representative instance --
+  [../../reported/constrained-hkt-lifted-lambda-keeps-representative-instance.md](../../reported/constrained-hkt-lifted-lambda-keeps-representative-instance.md).
+  The spec-level half of this was fixed 2026-07-29.

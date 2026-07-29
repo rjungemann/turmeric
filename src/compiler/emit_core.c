@@ -1829,6 +1829,30 @@ bool emit_dispatch_tyvar(const Expr *call, Type *out) {
         if (recv && recv->type.kind == TY_TYVAR) { *out = recv->type; return true; }
     }
     if (call->type.kind == TY_TYVAR) { *out = call->type; return true; }
+    /* constrained-hkt-spec-keeps-representative-instance: a higher-kinded class
+     * method called on the abstract constructor has receiver `(m int)` and
+     * result `(m b)` -- TY_APP spines whose HEAD is the dispatch variable.  The
+     * bare-TY_TYVAR checks above are a kind-`*` assumption and never see it, so
+     * the spec kept the env-ordered representative.  Hand back the whole spine;
+     * emit_resolve_type grounds it per spec and selection matches head-wise.
+     * Checked last so every kind-`*` case keeps its existing answer, and
+     * deliberately inert for the scan-time predicate (which re-checks TY_TYVAR). */
+    {
+        const Expr *recv = (call->as.call_.n_args >= 1 && call->as.call_.args)
+            ? call->as.call_.args[0] : NULL;
+        while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
+        const Type *cands[2];
+        uint8_t nc = 0;
+        if (recv) cands[nc++] = &recv->type;
+        cands[nc++] = &call->type;
+        for (uint8_t i = 0; i < nc; i++) {
+            const Type *t = cands[i];
+            if (t->kind != TY_APP) continue;
+            const Type *head = t;
+            while (head->kind == TY_APP && head->as.app.fn) head = head->as.app.fn;
+            if (head->kind == TY_TYVAR) { *out = *t; return true; }
+        }
+    }
     return false;
 }
 
