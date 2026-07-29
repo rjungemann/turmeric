@@ -1134,6 +1134,35 @@ set_target_properties(tur_docscanner_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
+# ---------------------------------------------------------------------------
+# LSP session unit test (try-turmeric-lsp-plan, §4)
+#
+# Links tur_core -- which is everything except main.c -- and supplies its own
+# tur_collect_symbols. That is not a workaround for the link: it is the point.
+# A fixed stub index makes completion ordering, path remapping, and last-good
+# retention assertable, where the real compiler would tie every assertion to
+# whatever the stdlib currently exports.
+# ---------------------------------------------------------------------------
+add_executable(tur_lsp_session_unit
+    ${CMAKE_SOURCE_DIR}/tests/lsp/session_test.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_lsp_session_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_lsp_session_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD}
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_lsp_session_unit PRIVATE
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_compile_options(tur_lsp_session_unit PRIVATE -pthread)
+target_link_options(tur_lsp_session_unit PRIVATE -pthread)
+target_link_libraries(tur_lsp_session_unit PRIVATE m ${CMAKE_DL_LIBS})
+set_target_properties(tur_lsp_session_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
 # Injective name-mangler round-trip + injectivity unit test
 # (reversible-name-mangling-plan, task T2).
 add_executable(tur_mangle_unit

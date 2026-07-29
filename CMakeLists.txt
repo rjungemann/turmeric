@@ -791,6 +791,15 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_docscanner_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Transport-free LSP session tests (try-turmeric-lsp-plan, §4).  Drives
+# scripted JSON-RPC through lsp_session_handle with a stubbed analysis
+# backend -- no pipe, no subprocess, and no dependence on what the stdlib
+# happens to export today.  This is the browser path, tested without a browser.
+add_test(
+  NAME tur_lsp_session_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_lsp_session_unit"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Injective name-mangler round-trip + injectivity unit test
 add_test(
   NAME tur_mangle_unit
