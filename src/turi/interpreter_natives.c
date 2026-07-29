@@ -2539,6 +2539,57 @@ static TuriValue native_math_floor(TuriEnv *env, TuriValue *a, uint32_t n, void 
     double x = (n > 0) ? a[0].as_float : 0.0;
     TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = floor(x); return rv;
 }
+/* N2 (numeric-tower-rational-complex-plan): the transcendental libm wrappers
+ * stdlib/complex.tur builds `complex/exp` and `complex/arg` on.  They are
+ * inline-C in math.tur, which the tree-walker cannot run, so each needs the
+ * same native override sqrt/floor already carry -- otherwise a Complex program
+ * would diverge between the compiled and interpreted engines. */
+static TuriValue native_math_exp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = exp(x); return rv;
+}
+static TuriValue native_math_log(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = log(x); return rv;
+}
+static TuriValue native_math_sin(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = sin(x); return rv;
+}
+static TuriValue native_math_cos(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = cos(x); return rv;
+}
+static TuriValue native_math_atan2(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double y = (n > 0) ? a[0].as_float : 0.0;
+    double x = (n > 1) ? a[1].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = atan2(y, x); return rv;
+}
+/* fabs / ceil / pow: math.tur's remaining libm wrappers, which had no native
+ * override.  stdlib/complex.tur reaches `fabs` from complex/div and complex/abs,
+ * so without these an interpreted Complex program dies on "inline-C not
+ * supported in interpreter mode" the moment it divides. */
+static TuriValue native_math_fabs(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = fabs(x); return rv;
+}
+static TuriValue native_math_ceil(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = ceil(x); return rv;
+}
+static TuriValue native_math_pow(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    double x = (n > 0) ? a[0].as_float : 0.0;
+    double y = (n > 1) ? a[1].as_float : 0.0;
+    TuriValue rv = {0}; rv.tag = TURI_FLOAT; rv.as_float = pow(x, y); return rv;
+}
 
 /* -------------------------------------------------------------------------
  * I/O benchmark native helpers (file_read.tur, file_write.tur).
@@ -3073,6 +3124,14 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "float->int",        native_float_to_int,    NULL);
     turi_env_register_native(env, "sqrt",              native_math_sqrt,       NULL);
     turi_env_register_native(env, "floor",             native_math_floor,      NULL);
+    turi_env_register_native(env, "exp",               native_math_exp,        NULL);
+    turi_env_register_native(env, "log",               native_math_log,        NULL);
+    turi_env_register_native(env, "sin",               native_math_sin,        NULL);
+    turi_env_register_native(env, "cos",               native_math_cos,        NULL);
+    turi_env_register_native(env, "atan2",             native_math_atan2,      NULL);
+    turi_env_register_native(env, "fabs",              native_math_fabs,       NULL);
+    turi_env_register_native(env, "ceil",              native_math_ceil,       NULL);
+    turi_env_register_native(env, "pow",               native_math_pow,        NULL);
     /* I/O benchmark helpers */
     turi_env_register_native(env, "write-temp-file",   native_write_temp_file, NULL);
     turi_env_register_native(env, "io-fopen-read",     native_io_fopen_read,   NULL);

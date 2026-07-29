@@ -1,0 +1,52 @@
+;; rational-overflow -- the checked `rat/try-*` surface at the int64 boundary.
+;;
+;; num and den are int64 with no bignum behind them, so `a/b + c/d` overflows
+;; eventually.  Two things are pinned here:
+;;
+;;   1. Cross-cancelling before multiplying keeps the COMMON case in range far
+;;      longer than the naive `a*d + c*b` over `b*d` -- adding two halves of a
+;;      huge denominator still succeeds.
+;;   2. When it genuinely cannot fit, `rat/try-*` returns `Err Overflow`
+;;      rather than wrapping.  The check runs BEFORE the multiply, so nothing
+;;      relies on observing a wrapped result.
+(load "stdlib/rational.tur")
+
+(defn outcome [r : (Result Rational ArithError)] : void
+  (if (.is-ok r)
+    (let [s (rat->string (.ok-val r))]
+      (do (println (string/to-cstr s)) (string/release s)))
+    (println (match (.err-val r) (DivByZero) "Err DivByZero" (Overflow) "Err Overflow"))))
+
+(defn main [] : int
+  ;; In range: the checked forms agree with the plain ones.
+  (outcome (rat/try-add #rat{1/3} #rat{1/6}))
+  (outcome (rat/try-sub #rat{1/2} #rat{1/6}))
+  (outcome (rat/try-mul #rat{2/3} #rat{3/4}))
+  (outcome (rat/try-div #rat{1/2} #rat{3/4}))
+  ;; Cross-cancellation: a shared denominator of 2^32 -- whose square is one
+  ;; past the int64 range -- still adds fine, because gcd(b, d) is divided out
+  ;; before anything is multiplied.  The naive b*d form would overflow here.
+  (outcome (rat/try-add (rat/of! 1 4294967296) (rat/of! 2 4294967296)))
+  ;; 2^32 * 2^32 = 2^64: one past the int64 range, and reported as such.
+  (outcome (rat/try-mul (rat/from-int 4294967296) (rat/from-int 4294967296)))
+  ;; Denominators multiply too: 1/2^32 * 1/2^32 overflows the denominator.
+  (outcome (rat/try-mul (rat/of! 1 4294967296) (rat/of! 1 4294967296)))
+  ;; Addition at the very top of the range.
+  (outcome (rat/try-add (rat/from-int 9223372036854775807) (rat/from-int 1)))
+  (outcome (rat/try-add (rat/from-int 9223372036854775807) (rat/from-int 0)))
+  ;; Subtraction at the very bottom.
+  (outcome (rat/try-sub (rat/from-int (- (- 0 9223372036854775807) 1))
+                        (rat/from-int 1)))
+  ;; Division by the zero rational is DivByZero, not Overflow.
+  (outcome (rat/try-div #rat{1/2} #rat{0/1}))
+  ;; The overflow predicates themselves, at their exact boundaries.
+  (println (int/add-overflows? 9223372036854775806 1))
+  (println (int/add-overflows? 9223372036854775807 1))
+  (println (int/sub-overflows? (- (- 0 9223372036854775807) 1) 1))
+  ;; 3037000499 is the largest int whose square still fits; one more does not.
+  (println (int/mul-overflows? 3037000499 3037000499))
+  (println (int/mul-overflows? 3037000500 3037000500))
+  (println (int/mul-overflows? -3037000500 3037000500))
+  (println (int/mul-overflows? (- (- 0 9223372036854775807) 1) -1))
+  (println (int/mul-overflows? 0 9223372036854775807))
+  0)

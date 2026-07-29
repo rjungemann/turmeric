@@ -2,6 +2,46 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Numeric tower: `Rational` and `Complex`** (`stdlib/rational.tur`,
+  `stdlib/complex.tur`). `Rational` is an exact `num`/`den` pair over int64,
+  always normalized, so structural equality is mathematical equality;
+  `Complex` is a plain `re`/`im` pair of doubles. Both are pure Turmeric with
+  no inline C, so they behave identically under `tur` and `turi`. Complex
+  division uses Smith's algorithm, and the emitted C never contains
+  `_Complex`, `<complex.h>`, or the `__mul*c3`/`__div*c3` compiler-runtime
+  helpers. Complex deliberately has **no** `Ord` instance. See
+  [docs/guides/numeric-tower-guide.md](docs/guides/numeric-tower-guide.md).
+- **Operator overloading via `Num`**: when no builtin operator row matches the
+  argument types, `+`/`-`/`*`/`/` now fall back to `Num` typeclass dispatch --
+  so any user numeric type with a `Num` instance works with the bare
+  operators. Variadic calls left-fold into nested binary method calls, and
+  unary `-` reaches `neg`. Primitive arithmetic is untouched: the builtin row
+  still wins whenever it matches.
+- **`#rat{3/4}` and `#cx{3.25 -1.5}` reader literals**, alongside `#map{...}`
+  and `#set{...}`. `#rat{...}` reads its body raw (curly-infix would otherwise
+  make `{3 / 4}` infix division) and normalizes at read time, so `#rat{6/8}`
+  and `#rat{3/4}` are the same literal; a zero denominator is a read-time
+  error (`TUR-E0284`). `#cx{...}` reads two ordinary expression slots, so
+  `#cx{3.25 {1.0 + 0.5}}` composes (`TUR-E0285` on any other arity).
+- **`exp`, `log`, `sin`, `cos`, `atan2` in `stdlib/math.tur`**, with matching
+  interpreter natives; `fabs`, `ceil`, and `pow` gained the interpreter
+  natives they were missing.
+- **`Num [float]` instance**, which the class was missing.
+
+### Changed
+
+- **`Num` class methods are closed over the instance type**: `add`/`sub`/
+  `mul`/`div`/`neg` now take and return `a` instead of returning `:int`. The
+  existing instances needed no body changes, but emitted dictionaries and
+  instance methods now carry the instance's own type (e.g.
+  `__inst_Num_add_int8` returns `int8_t`, not `int64_t`). This is what makes a
+  `Num` instance for a non-integer type -- Rational, Complex, a user newtype --
+  usable at a call site.
+
 ## [0.32.2] -- 2026-07-27
 
 ### Added

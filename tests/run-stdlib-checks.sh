@@ -70,6 +70,10 @@ STDLIB_FILES=(
     stdlib/session.tur
     # S1: session-typed channel wrappers (parameterized defopaque phantoms).
     stdlib/schan.tur
+    # N1/N2 (numeric-tower-rational-complex-plan): the exact Rational and the
+    # hand-written Complex.  Both are pure Turmeric over typeclass.tur + math.tur.
+    stdlib/rational.tur
+    stdlib/complex.tur
 )
 STDLIB_FLAGS=(
     ""
@@ -95,6 +99,8 @@ STDLIB_FLAGS=(
     "--no-auto-stdlib"
 
     # Bucket B flags
+    ""
+    ""
     ""
     ""
     ""
