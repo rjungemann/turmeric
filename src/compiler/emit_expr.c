@@ -3672,22 +3672,67 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (gf->type.kind == TY_FN && gf->type.as.fn.boxed
                     && e->as.call_.n_args <= 4) {
                     uint32_t n = e->as.call_.n_args;
-                    Buf out; buf_init(&out);
-                    buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
-                    for (uint32_t i = 0; i < n; i++) {
+                    /* Collect the declared C arg types first: whether any of
+                     * them is an aggregate decides how this call is spelled. */
+                    const char *arg_ct[4] = {NULL, NULL, NULL, NULL};
+                    bool any_aggregate = false;
+                    for (uint32_t i = 0; i < n && i < 4; i++) {
                         Type at = (gf->type.as.fn.arg_full_types &&
                                    gf->type.as.fn.arg_full_types[i])
                                       ? *gf->type.as.fn.arg_full_types[i]
                                       : emit_type_from_kind(gf->type.as.fn.arg_kinds[i]);
-                        buf_printf(&out, ", %s", emit_type_c_name(ctx, at));
+                        arg_ct[i] = emit_type_c_name(ctx, at);
+                        if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
                     }
-                    buf_printf(&out, ", %s", fn_ptr_val);
-                    for (uint32_t i = 0; i < n; i++) {
-                        char *av = emit_value(ctx, body, e->as.call_.args[i]);
-                        buf_printf(&out, ", %s", av);
-                        free(av);
+                    Buf out; buf_init(&out);
+                    if (!any_aggregate) {
+                        buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
+                        for (uint32_t i = 0; i < n; i++)
+                            buf_printf(&out, ", %s", arg_ct[i]);
+                        buf_printf(&out, ", %s", fn_ptr_val);
+                        for (uint32_t i = 0; i < n; i++) {
+                            char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            buf_printf(&out, ", %s", av);
+                            free(av);
+                        }
+                        buf_puts(&out, ")");
+                    } else {
+                        /* jit-tur-apply-casts-to-aggregate-param-type.md:
+                         * TUR_APPLY<N>_T coerces every argument with `(Ai)(a)`,
+                         * which is only valid while Ai is scalar -- C forbids a
+                         * cast to a struct type (C11 6.5.4p2).  gcc and clang
+                         * accept it as a no-op when the argument already has
+                         * that type, which is exactly this case, so the cast was
+                         * never doing work here; c2mir rejects it outright.
+                         *
+                         * The cast IS load-bearing for scalars (the int64
+                         * carrier <-> pointer direction is a constraint
+                         * violation without it, an error on gcc 14), so it is
+                         * kept per-argument rather than dropped wholesale, and
+                         * the macro stays exactly as it is for the all-scalar
+                         * case -- which is every hand-written inline-C user in
+                         * stdlib and the overwhelming majority of call sites.
+                         *
+                         * This is the macro's own expansion with that one
+                         * change; keep the two in sync (emit_module.c, search
+                         * TUR_APPLY0_T). */
+                        buf_printf(&out, "(((%s (*)(void *", ret_c);
+                        for (uint32_t i = 0; i < n; i++)
+                            buf_printf(&out, ", %s", arg_ct[i]);
+                        buf_printf(&out,
+                                   "))(intptr_t)((int64_t *)(intptr_t)(%s))[0])"
+                                   "((void *)(intptr_t)(%s)",
+                                   fn_ptr_val, fn_ptr_val);
+                        for (uint32_t i = 0; i < n; i++) {
+                            char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            if (emit_c_type_is_scalar(arg_ct[i]))
+                                buf_printf(&out, ", (%s)(%s)", arg_ct[i], av);
+                            else
+                                buf_printf(&out, ", (%s)", av);
+                            free(av);
+                        }
+                        buf_puts(&out, "))");
                     }
-                    buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
