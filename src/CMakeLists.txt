@@ -188,6 +188,7 @@ set(TUR_CORE_SOURCES
     compiler/reader.c
     compiler/reader_macros.c
     compiler/lang_layers.c
+    compiler/stdlib_autoload.c
     # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
     # types.  refine_libz3.c is a DEV-ONLY scaffold -- it compiles to nothing
     # unless TUR_REFINE_Z3_ORACLE is defined, and that option refuses Release
@@ -254,10 +255,13 @@ set(TUR_CORE_SOURCES
     ${TURI_EVAL_SOURCES}
     # lsp/ -- LSP server (JSON-RPC over stdio, part of the tur binary)
     lsp/lsp_io.c
+    lsp/lsp_sink.c
+    lsp/lsp_collect.c
     lsp/lsp_json.c
     lsp/lsp_docs.c
     lsp/lsp_util.c
     lsp/lsp.c
+    lsp/lsp_session.c
     # cli/ -- standalone subcommands
     cli/lsp_lite.c
 )

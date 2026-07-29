@@ -93,6 +93,8 @@
 /* LSP server */
 #include "lsp/lsp.h"
 #include "lsp/lsp_sym.h"
+#include "lsp/lsp_collect.h"
+#include "stdlib_autoload.h"
 #include "lsp/lsp_docs.h"
 /* MCP server */
 #include "lsp/mcp.h"
@@ -652,80 +654,9 @@ static int auto_append_spice_includes(const char *input,
 
 static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
 
-/* Global state for symbol collection -- set by tur_collect_symbols before
- * calling compile_to_c, cleared after.  Single-threaded LSP use only. */
-static LspSymbol  *g_collect_syms_out   = NULL;
-static int         g_collect_syms_cap   = 0;
-static int        *g_collect_syms_count = NULL;
-
-/* Walk one level of Expr items and record global bindings into the collector. */
-static void collect_items(const Expr **items, uint32_t n);
-
-static void collect_binding(const Binding *b) {
-    if (!b || !b->name || !b->is_global) return;
-    if (!g_collect_syms_out || !g_collect_syms_count) return;
-    if (*g_collect_syms_count >= g_collect_syms_cap) return;
-    LspSymbol *sym = &g_collect_syms_out[(*g_collect_syms_count)++];
-    memset(sym, 0, sizeof(*sym));
-    size_t nlen = strlen(b->name->name);
-    if (nlen >= sizeof(sym->name)) nlen = sizeof(sym->name) - 1;
-    memcpy(sym->name, b->name->name, nlen);
-    const char *tn = type_name(b->type);
-    if (tn) {
-        size_t tlen = strlen(tn);
-        if (tlen >= sizeof(sym->type_str)) tlen = sizeof(sym->type_str) - 1;
-        memcpy(sym->type_str, tn, tlen);
-    }
-    sym->line      = (int)b->span.line;
-    sym->col_start = (int)b->span.col_start;
-    sym->col_end   = (int)b->span.col_end;
-    const char *fp = diag_file_path(b->span.file_id);
-    if (fp) {
-        size_t flen = strlen(fp);
-        if (flen >= sizeof(sym->file_path)) flen = sizeof(sym->file_path) - 1;
-        memcpy(sym->file_path, fp, flen);
-    }
-}
-
-static void collect_items(const Expr **items, uint32_t n) {
-    for (uint32_t i = 0; i < n; i++) {
-        const Expr *item = items[i];
-        if (!item) continue;
-        switch (item->kind) {
-            case EX_FN_DEF:
-                collect_binding(item->as.fn_def_.fn ? item->as.fn_def_.fn->binding : NULL);
-                break;
-            case EX_DEF:
-                collect_binding(item->as.def_.binding);
-                break;
-            case EX_DEFDATA:
-                collect_binding(item->as.defdata_.binding);
-                break;
-            case EX_DEFGADT:
-                collect_binding(item->as.defgadt_.binding);
-                break;
-            case EX_DEFMODULE:
-                if (item->as.defmodule_.mod)
-                    collect_items((const Expr **)item->as.defmodule_.mod->body,
-                                  item->as.defmodule_.mod->n_body);
-                break;
-            default:
-                break;
-        }
-    }
-}
-
-static void collect_symbols_from_prog(const Expr *prog) {
-    if (!prog || prog->kind != EX_PROGRAM) return;
-    collect_items((const Expr **)prog->as.program.items, prog->as.program.n);
-}
-
 int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
                         int *count_out) {
-    *count_out = 0;
-    g_collect_syms_out   = out;
-    g_collect_syms_cap   = cap;
-    g_collect_syms_count = count_out;
+    lsp_collect_begin(out, cap, count_out);
     Buf discard;
     buf_init(&discard);
     int rm_n = 0;
@@ -734,9 +665,7 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
                           (const char **)rm_p, rm_n);
     free_reader_macro_paths(rm_p, rm_n);
     buf_free(&discard);
-    g_collect_syms_out   = NULL;
-    g_collect_syms_cap   = 0;
-    g_collect_syms_count = NULL;
+    lsp_collect_end();
     return rc;
 }
 
@@ -747,122 +676,21 @@ int tur_collect_symbols(const char *path, LspSymbol *out, int cap,
  * `(reader-macros/define ...)` definition files that are preloaded into
  * the reader's macro registry before the entry file is parsed. Typically
  * derived from the project's `build.tur :reader-macros [...]` entry. */
-/* Auto-loaded stdlib files.  Shared by compile_to_c (single-file) and
- * compile_to_h / compile_to_implementation (project-mode multi-file) so
- * spice code in `tur build .` sees `Cons`, `tnil?`, `Option`, etc. without
- * explicit imports -- matching single-file semantics.  Each TU embeds its
- * own static copy of stdlib defns; emit_module.c's
- * `is_from_stdlib`-aware paths static-ify them per TU so multi-TU links
- * don't see duplicate symbols. */
-static const char *const g_stdlib_autoload_files[] = {
-    "macros.tur",
-    "safe.tur",
-    "contract.tur",
-    "hamt.tur",
-    "typeclass-eq.tur",
-    "typeclass-functor.tur",
-    "typeclass-clone.tur",
-    "typeclass-drop.tur",
-    "typeclass-hash.tur",
-    "typeclass-applicative.tur",
-    "typeclass-alternative.tur",
-    "typeclass-monad.tur",
-    "typeclass-monaderror.tur",
-    "typeclass-bifunctor.tur",
-    "map.tur",
-    "vec.tur",
-    "slice.tur",
-    "option.tur",
-    "result.tur",
-    "pair.tur",
-    "tuple.tur",
-    "list.tur",
-    "grid.tur",
-    "zipper.tur",
-    "set.tur",
-    "mutmap.tur",
-    "json.tur",
-    "schema.tur",
-    "sym.tur",
-    "unique.tur",
-    NULL
-};
-
-/* Read every stdlib file in g_stdlib_autoload_files into `arena`/`st`, then
- * prepend the resulting forms onto `*forms_in_out` (growing the array via a
- * fresh arena allocation).  Updates `*nforms_in_out` and the running
- * `*file_id_in_out` counter.  Returns the count of prepended stdlib forms
- * (which the caller passes to `elaborate_program` as `stdlib_prefix`) so the
- * elab loop can bracket those forms with `in_stdlib_load = true` and the
- * binding records get `is_from_stdlib` set -- the same flag the
- * separate-compilation emit path keys off to static-ify stdlib defns per
- * TU.  `entry_path` is the user-visible input file: used by the suffix-skip
- * rule for `--no-auto-stdlib` builds where the entry file IS one of the
- * stdlib files (everything from that file onward is skipped). */
+/* Thin adapter over the shared prepend in compiler/stdlib_autoload.c.
+ * The list, the read loop, and the form splice moved there so the WASM
+ * playground's in-process analyzer prepends exactly the same stdlib this
+ * does; what stays here is the CLI's own two answers -- where the stdlib
+ * lives (resolve_stdlib_root, an exe-relative walk-up that means nothing in
+ * a browser) and whether --no-auto-stdlib was passed. */
 static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
                                      const char *entry_path,
                                      Form ***forms_in_out,
                                      uint32_t *nforms_in_out,
                                      uint8_t *file_id_in_out) {
-    int no_stdlib_skip_from = -1;
-    if (g_no_auto_stdlib) {
-        const char *input_base = basename_of(entry_path);
-        for (int j = 0; g_stdlib_autoload_files[j] != NULL; j++) {
-            if (strcmp(input_base, g_stdlib_autoload_files[j]) == 0) {
-                no_stdlib_skip_from = j;
-                break;
-            }
-        }
-    }
-
-    uint32_t total = 0;
-    Form **all = NULL;
-    for (int i = 0; g_stdlib_autoload_files[i] != NULL; i++) {
-        if (no_stdlib_skip_from >= 0 && i >= no_stdlib_skip_from) continue;
-        char path_buf[4096];
-        tur_stdlib_path(g_stdlib_autoload_files[i], path_buf, sizeof(path_buf));
-        char *stdlib_src = NULL;
-        size_t stdlib_len = 0;
-        if (read_entire_file_quiet(path_buf, &stdlib_src, &stdlib_len) != 0)
-            continue;
-
-        char *src_copy = (char *)arena_alloc(arena, stdlib_len);
-        memcpy(src_copy, stdlib_src, stdlib_len);
-        char *path_copy = (char *)arena_alloc(arena, strlen(path_buf) + 1);
-        memcpy(path_copy, path_buf, strlen(path_buf) + 1);
-
-        SourceFile *stdlib_file = (SourceFile *)arena_alloc(arena, sizeof(SourceFile));
-        *stdlib_file = (SourceFile){0};
-        stdlib_file->path = path_copy;
-        stdlib_file->src = src_copy;
-        stdlib_file->len = stdlib_len;
-        stdlib_file->file_id = (*file_id_in_out)++;
-        stdlib_file->reader_type = READER_TURMERIC;
-        diag_register_file(stdlib_file);
-
-        uint32_t n = 0;
-        Form **fs = read_all(arena, st, stdlib_file, &n);
-        if (fs && n > 0) {
-            Form **new_all = (Form **)arena_alloc(arena,
-                (total + n) * sizeof(Form *));
-            for (uint32_t j = 0; j < total; j++) new_all[j] = all[j];
-            for (uint32_t j = 0; j < n; j++) new_all[total + j] = fs[j];
-            all = new_all;
-            total += n;
-        }
-        free(stdlib_src);
-    }
-
-    if (all && total > 0) {
-        Form **out = (Form **)arena_alloc(arena,
-            (*nforms_in_out + total) * sizeof(Form *));
-        for (uint32_t i = 0; i < total; i++) out[i] = all[i];
-        for (uint32_t i = 0; i < *nforms_in_out; i++)
-            out[total + i] = (*forms_in_out)[i];
-        *forms_in_out = out;
-        *nforms_in_out += total;
-    }
-    return total;
+    return tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
+                                    entry_path, g_no_auto_stdlib,
+                                    forms_in_out, nforms_in_out,
+                                    file_id_in_out);
 }
 
 static int compile_to_c(const char *path, Buf *out_c,
@@ -956,8 +784,8 @@ static int compile_to_c(const char *path, Buf *out_c,
         rc = run_core_passes(&ctx);
         /* Collect symbols whether or not later passes failed -- elaboration
          * may have succeeded even when borrow-check reports errors. */
-        if (g_collect_syms_out && ctx.prog)
-            collect_symbols_from_prog(ctx.prog);
+        if (lsp_collect_active() && ctx.prog)
+            lsp_collect_program(ctx.prog);
         if (g_audit_spans) {
             /* Audit-only mode: never emit.  A clean audit is rc 0; remaining
              * holes surface as rc 3 (distinct from rc 1 = elaboration failure,
@@ -1012,7 +840,7 @@ static Form **load_project_prelude(Arena *arena, SymbolTable *st,
      * stdlib bindings; exported ones (`ok`, `ok-val`,
      * `make-struct Result ...`) are static-or-inline-C wrappers so the
      * per-TU duplication mirrors `emit_closure_fat_runtime`. */
-    const char *const *prelude_files = g_stdlib_autoload_files;
+    const char *const *prelude_files = tur_stdlib_autoload_files();
 
     uint32_t total = 0;
     Form **all = NULL;

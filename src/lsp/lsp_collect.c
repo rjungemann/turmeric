@@ -1,0 +1,91 @@
+#include "lsp_collect.h"
+
+#include "diag.h"
+#include "expr.h"
+#include "types.h"
+
+#include <string.h>
+
+/* Destination of the collection currently in flight, or NULL. */
+static LspSymbol *out_      = NULL;
+static int        cap_      = 0;
+static int       *count_    = NULL;
+
+static void collect_items(const Expr **items, uint32_t n);
+
+static void collect_binding(const Binding *b) {
+    if (!b || !b->name || !b->is_global) return;
+    if (!out_ || !count_) return;
+    if (*count_ >= cap_) return;
+    LspSymbol *sym = &out_[(*count_)++];
+    memset(sym, 0, sizeof(*sym));
+    size_t nlen = strlen(b->name->name);
+    if (nlen >= sizeof(sym->name)) nlen = sizeof(sym->name) - 1;
+    memcpy(sym->name, b->name->name, nlen);
+    const char *tn = type_name(b->type);
+    if (tn) {
+        size_t tlen = strlen(tn);
+        if (tlen >= sizeof(sym->type_str)) tlen = sizeof(sym->type_str) - 1;
+        memcpy(sym->type_str, tn, tlen);
+    }
+    sym->line      = (int)b->span.line;
+    sym->col_start = (int)b->span.col_start;
+    sym->col_end   = (int)b->span.col_end;
+    const char *fp = diag_file_path(b->span.file_id);
+    if (fp) {
+        size_t flen = strlen(fp);
+        if (flen >= sizeof(sym->file_path)) flen = sizeof(sym->file_path) - 1;
+        memcpy(sym->file_path, fp, flen);
+    }
+}
+
+static void collect_items(const Expr **items, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        const Expr *item = items[i];
+        if (!item) continue;
+        switch (item->kind) {
+            case EX_FN_DEF:
+                collect_binding(item->as.fn_def_.fn ? item->as.fn_def_.fn->binding : NULL);
+                break;
+            case EX_DEF:
+                collect_binding(item->as.def_.binding);
+                break;
+            case EX_DEFDATA:
+                collect_binding(item->as.defdata_.binding);
+                break;
+            case EX_DEFGADT:
+                collect_binding(item->as.defgadt_.binding);
+                break;
+            case EX_DEFMODULE:
+                if (item->as.defmodule_.mod)
+                    collect_items((const Expr **)item->as.defmodule_.mod->body,
+                                  item->as.defmodule_.mod->n_body);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void lsp_collect_begin(LspSymbol *out, int cap, int *count_out) {
+    out_   = out;
+    cap_   = cap;
+    count_ = count_out;
+    if (count_) *count_ = 0;
+}
+
+bool lsp_collect_active(void) {
+    return out_ != NULL;
+}
+
+void lsp_collect_program(const struct Expr *prog_) {
+    const Expr *prog = (const Expr *)prog_;
+    if (!out_ || !prog || prog->kind != EX_PROGRAM) return;
+    collect_items((const Expr **)prog->as.program.items, prog->as.program.n);
+}
+
+void lsp_collect_end(void) {
+    out_   = NULL;
+    cap_   = 0;
+    count_ = NULL;
+}
