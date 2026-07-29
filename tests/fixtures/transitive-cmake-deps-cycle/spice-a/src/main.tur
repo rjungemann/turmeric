@@ -1,3 +1,12 @@
-(defn main [] : int
-  (println "cycle-ok")
-  0)
+;; spice-cycle-include-path-blowup: the import is load-bearing. Terminating the
+;; transitive :spices walk is easy to get wrong in the other direction -- a
+;; visited set that prunes too eagerly stops contributing spice-b's src/ to the
+;; include path, and this import stops resolving. Printing "cycle-ok" only when
+;; the cross-cycle call actually returns 42 makes the harness assert both at
+;; once: the walk terminates AND it still collects what it is walking for.
+(defmodule mainmod
+  (import leaf :refer [forty-two])
+  (defn main [] : int
+    (if (= (forty-two) 42)
+      (do (println "cycle-ok") 0)
+      (do (println "cycle-bad") 1))))

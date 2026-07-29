@@ -1,0 +1,9 @@
+;;; spice-cycle-include-path-blowup: a three-hop :spices cycle, a -> b -> c -> a.
+;;; The two-spice fixture next door only exercises the shortest cycle, which a
+;;; naive "is this dep my own parent?" check would also survive; this one needs
+;;; a real visited set. `a` imports from both `b` and `c`, so the walk has to
+;;; terminate AND still collect every src/ on the ring.
+(defpackage spice-cycle-three-hop
+  :name    "spice-cycle-three-hop"
+  :version "0.1.0"
+  :members ["a" "b" "c"])

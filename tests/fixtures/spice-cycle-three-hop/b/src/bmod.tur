@@ -1,0 +1,3 @@
+(defmodule bmod
+  (export b-val)
+  (defn b-val [] : int 2))

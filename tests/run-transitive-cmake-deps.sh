@@ -11,6 +11,16 @@
 #                                        :cmake-deps" diagnostic and exit
 #                                        non-zero before invoking cmake.
 #
+# Plus two cases for the *include-path* walk, which is a separate traversal
+# over the same :spices graph and needed its own visited set
+# (docs/archive/spice-cycle-include-path-blowup.md):
+#   4. spice-cycle-three-hop          -- a -> b -> c -> a; terminates, and
+#                                        every src/ on the ring still lands on
+#                                        the include path.
+#   5. spice-diamond-shared-dep       -- one dep reached by two parents; the
+#                                        visited set must dedupe the WALK
+#                                        without pruning the include dir.
+#
 # The plan's third case (transitive-cmake-deps-basic, an end-to-end build
 # through a sibling's :cmake-deps) is exercised by the cascade fixture in
 # `../turmeric-spices/spices/tourist/tests/fixtures/cascade/` -- it is not
@@ -106,6 +116,45 @@ elif ! grep -q 'conflicting :cmake-deps for "fakelib"' "$WMD_DIR/member-b/fetch.
 else
     pass "workspace-member-cmake-deps-seed"
 fi
+
+# ---------------------------------------------------------------------------
+# 4/5. spice-cycle-include-path-blowup: the transitive :spices walk that unions
+#      dep src/ dirs into the include path needs the same visited set the
+#      :cmake-deps walk above already has. Without one, a manifest cycle
+#      recursed forever -- each lap resolved through one more `../` hop, so the
+#      paths never repeated textually and the output dedup never fired. It
+#      surfaced as a multi-kilobyte `-I` that cc rejected with "File name too
+#      long" on an unrelated system header, or as a stack overflow under ASan.
+#
+#      Case 1 above covers the two-spice ring. These two cover the ways a
+#      too-clever fix goes wrong: a three-hop ring (which a "is this dep my
+#      parent?" check would miss) and a diamond (which an over-eager visited
+#      set would prune, dropping an include dir that is genuinely needed).
+run_spice_walk_case() {  # <fixture> <member> <binary> <expected-output>
+    local fixture="$1" member="$2" bin="$3" want="$4"
+    local name="${fixture}-builds"
+    local src="tests/fixtures/$fixture"
+    local dir="$WORK/$fixture"
+    cp -r "$src" "$dir"
+    if timeout 30 "$TUR_ABS" build "$dir/$member" >"$WORK/$fixture.log" 2>&1; then
+        if [ ! -x "$dir/$member/build/bin/$bin" ]; then
+            fail "$name" "binary missing at $dir/$member/build/bin/$bin"
+        else
+            local out
+            out="$("$dir/$member/build/bin/$bin" 2>&1)"
+            if [ "$out" = "$want" ]; then
+                pass "$name"
+            else
+                fail "$name" "expected '$want', got '$out'"
+            fi
+        fi
+    else
+        fail "$name" "tur build exit=$?: $(cat "$WORK/$fixture.log")"
+    fi
+}
+
+run_spice_walk_case spice-cycle-three-hop     a   a   "three-hop-ok"
+run_spice_walk_case spice-diamond-shared-dep  app app "diamond-ok"
 
 echo
 echo "transitive-cmake-deps: $PASS passed, $FAIL failed"

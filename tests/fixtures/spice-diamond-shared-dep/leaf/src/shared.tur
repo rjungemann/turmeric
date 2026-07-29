@@ -1,0 +1,3 @@
+(defmodule shared
+  (export base)
+  (defn base [] : int 40))
