@@ -1,0 +1,29 @@
+;; effectful-fat-fn-param-named -- a NAMED effectful defn passed as a `^fat`
+;; parameter whose fn type carries a non-empty effect row.
+;;
+;; The sibling fixture effectful-fat-fn-param covers the inline-lambda shapes.
+;; This one pins the named-defn shape, which is the case that made the original
+;; SIGSEGV easiest to read: `logit__cps` IS registered under `(intptr_t)logit`,
+;; and the fat record's direct-entry slot holds exactly `logit` -- so keying the
+;; registry lookup on the parameter's own value (a heap address) missed a lookup
+;; that was sitting right there.  See
+;; docs/archive/effectful-fn-typed-param-call-segfaults.md.
+;;
+;; Kept separate and deliberately minimal: passing a named effectful defn this
+;; way only reaches codegen when the call is the sole `handle` body.  Sequencing
+;; it inside a `do`, or nesting its result in a builtin call, trips a separate
+;; pre-existing emitter abort ("effect form reached the direct/fiber emitter")
+;; that has nothing to do with the registry key.
+
+(defeffect Log [n : int] : nil)
+
+(defn logit [x : int] #fx{Log} : nil
+  (perform (Log x)))
+
+(defn use-fn [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : int
+  (do (lg n) 0))
+
+(defn main [] : int
+  (handle
+    (use-fn logit 42)
+    (Log [n] k) (do (println n) (resume k nil))))

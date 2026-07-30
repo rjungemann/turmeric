@@ -4916,6 +4916,29 @@ static char *callee_name(const Binding *fn) {
     return raw_name_for_binding(fn);   /* malloc'd */
 }
 
+/* E2a lookup key for a `via_registry` callee.
+ *
+ * The registry is keyed on a function's DIRECT ENTRY address
+ * (`__tur_cps_register((intptr_t)f, f__cps)`), so the key has to be that
+ * address.  A plain fn-value param holds it directly.  A `^fat` param does
+ * NOT: its calling convention guarantees an already-boxed
+ * `{ shim, direct-entry }` fat record (the arg loop auto-shims a thin fn into
+ * one), carried as the int64 pointer carrier -- so the param's own value is a
+ * heap address that was never registered.  Keying on it missed every time,
+ * and the miss was called unguarded: a NULL call, i.e. SIGSEGV, for every
+ * `^fat` parameter carrying a non-empty effect row.  Read slot 1 instead,
+ * which is exactly what `__tur_fatshim_*` dispatches through.
+ *
+ * Writes into `out`; returns `out` for use in a format argument. */
+static const char *e2a_lookup_key(char *out, size_t cap,
+                                  const Binding *fn, const char *callee) {
+    if (fn && fn->is_fat)
+        snprintf(out, cap, "((int64_t *)(intptr_t)(%s))[1]", callee);
+    else
+        snprintf(out, cap, "(intptr_t)%s", callee);
+    return out;
+}
+
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
 static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
     Buf b; buf_init(&b);
@@ -5392,12 +5415,14 @@ static void emit_term(CE *ce, const CTerm *t) {
                 for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
                     off += snprintf(cast + off, sizeof cast - (size_t)off, "int64_t, ");
                 snprintf(cast + off, sizeof cast - (size_t)off, "DK *)");
+                char key[640];
+                e2a_lookup_key(key, sizeof key, t->as.tailcall.fn, pf);
                 if (t->as.tailcall.n)
-                    ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value */",
-                            cast, pf, argv, thread);
+                    ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s, %s); /* E2a threaded fn-value */",
+                            cast, key, pf, argv, thread);
                 else
-                    ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value */",
-                            cast, pf, thread);
+                    ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value */",
+                            cast, key, pf, thread);
                 free(pf); free(argv);
                 break;
             }
@@ -6207,12 +6232,14 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
         /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
         char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
+        char key[640];
+        e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
         if (call->as.tailcall.n)
-            ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value heap join */",
-                    cast, fn, argv_cps, frame);
+            ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s, %s); /* E2a threaded fn-value heap join */",
+                    cast, key, fn, argv_cps, frame);
         else
-            ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value heap join */",
-                    cast, fn, frame);
+            ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value heap join */",
+                    cast, key, fn, frame);
         free(argv_cps);
     } else if (call->as.tailcall.n)
     {

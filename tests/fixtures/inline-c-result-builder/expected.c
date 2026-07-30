@@ -1111,6 +1111,21 @@ __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
         if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;
     return (__tur_cps_fn)0;
 }
+/* A registry MISS used to be called straight through -- i.e. a call to NULL,
+   which lands as a bare SIGSEGV with nothing pointing at the cause.  Only a
+   value whose CPS entry was registered at startup can thread the handler
+   chain, so a miss is a compiler bug, not a user error; say so and stop. */
+__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(intptr_t direct,
+                                                                     const char *who) {
+    __tur_cps_fn f = __tur_cps_lookup(direct);
+    if (!f) {
+        fprintf(stderr, "tur: internal error: no CPS entry registered for "
+                        "effectful fn-value '%s' -- it cannot thread the "
+                        "effect handler chain\n", who ? who : "?");
+        abort();
+    }
+    return f;
+}
 /* Structural-chain reaping (docs/archive/cps-delimited-dk-node-leak.md).
  * reset/handle install a prompt/handler chain as the current continuation and
  * thread it through the delimited body in TAIL position, so the install site

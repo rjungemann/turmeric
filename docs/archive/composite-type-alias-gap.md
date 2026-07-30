@@ -350,13 +350,16 @@ Two pre-existing defects were hit while validating the guide code and
 confirmed **not** to be alias-related -- each reproduces identically with the
 type spelled inline:
 
-- Calling a fn-typed parameter whose type carries a **non-empty effect row**
-  (`(fn [int] #fx{Log} nil)`) segfaults -- no handler or `perform` needed; the
-  emitted call goes through `__tur_cps_lookup`, misses, and calls NULL
-  unguarded. Filed as
-  [effectful-fn-typed-param-call-segfaults.md](../reported/effectful-fn-typed-param-call-segfaults.md).
-  This is why `tests/fixtures/defalias-composite/` aliases a pure
-  `(fn [int] int)` rather than the effect-annotated shape.
+- Calling a **`^fat`** parameter whose fn type carries a **non-empty effect
+  row** (`(fn [int] #fx{Log} nil)`) segfaults -- no handler or `perform`
+  needed; the emitted call keys `__tur_cps_lookup` on the parameter's own
+  value, which for a `^fat` param is a boxed `{ shim, direct-entry }` record
+  rather than the direct entry the registry is keyed on, so it misses and
+  calls NULL unguarded. Filed, then **fixed in this branch** -- see
+  [effectful-fn-typed-param-call-segfaults.md](effectful-fn-typed-param-call-segfaults.md).
+  `tests/fixtures/defalias-composite/` still aliases a pure `(fn [int] int)`;
+  the effect-annotated shape has its own fixtures
+  (`effectful-fat-fn-param{,-named}`).
 - Sweet-exp `$` double-applies when the rest-of-line is already one complete
   call, so `println $ g(7)` becomes `(println ((g 7)))`. `CLAUDE.md`'s own
   chained example (`println $ normalize $ vec3(...)`) does not compile. Filed
