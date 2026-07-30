@@ -68,6 +68,25 @@ articulate about which properties are load-bearing:
   (`docs/archive/history/hkt-dispatch-options-tradeoff.md` scored the three
   dispatch models on blast radius, expressiveness, and "decisively --
   whether they retire or reintroduce the int64 carrier ABI").
+- **Raw C function pointers at `extern-c` boundaries** -- a correctness
+  constraint that reads like a perf one: the closure-unification plan's
+  risk list is explicit that consolidation "must not box a fn destined for
+  a raw C function-pointer parameter"; the raw-callback set is excluded
+  from any fn-value normalization by name.
+
+Two archive findings sharpen how cheap consolidation can be when it
+respects width:
+
+- **"Reinterpret, not box" (the b4 key decision):** a single-carrier
+  wrapper whose by-value form fits one word crosses the fat-closure
+  boundary "by reinterpret with no heap box and no deref." **Width, not
+  nominal kind, is the right discriminator** -- a same-width unification
+  is free, and only genuinely wide values need the spill/box bridge.
+- **The by-value <-> carrier box bridge is already mandatory where it
+  exists** (`emit_expr.c` ~432: "the box/unbox bridge is mandatory at the
+  seam"), with `:heap` as the documented escape ("it already IS a
+  pointer-sized carrier"). Consolidation does not add this cost; it makes
+  the existing cost total instead of site-by-site.
 
 The protecting principle: **fast in the small, uniform in the large.**
 
@@ -87,9 +106,63 @@ direct calls to the same functions stay thin everywhere else. Nobody has
 measured a regression from it. Each child plan still carries an explicit
 benchmark gate (below) so this stays an empirical claim, not a vibe.
 
-## Why past efforts stalled -- and why two succeeded
+## Why past efforts stalled -- and why the successes succeeded
 
 The archive holds both outcomes; the meta-plan is built from the deltas.
+
+**Succeeded: the closure representation unification (2026-06).**
+`docs/archive/history/closure-representation-unification-plan.md` faced
+nearly this exact problem (captureless -> bare pointer, capturing -> heap
+fat box, five stdlib crash sites) and its decisive move was **escalating
+scope to the root fix**: rather than "papering over the `:ptr<void>`
+overload with an implicit-`^fat` heuristic (Option A)," it introduced the
+first-class closure type (Option B) -- "this removes the bare/fat
+representation split at its root ... without needing a per-call-site
+boxing heuristic that has to enumerate every fat sink." Option A stayed
+documented as the fallback if B proved too large. The rule: when the
+choice is between a heuristic that must enumerate sites and a
+representation change that makes the enumeration unnecessary, take the
+representation change -- and keep the cheap option on file as the
+pre-registered retreat.
+
+**Succeeded: the CPS backend unification -- the repo's best retirement
+template** (`docs/archive/cps-backend-unification-plan.md` and siblings).
+Two lowering strategies consolidated to one, old path deleted
+(`emit_cps.{c,h}` no longer exist). What made it land:
+
+- **Two milestones, explicitly not conflated**: "becoming the default" and
+  "deleting the old path" were separate gates with separate criteria.
+- **A forced-on probe over the whole corpus** as the graduation signal
+  (2142 fixtures, every failure classified) -- and, crucially, **the probe
+  was wrong and the doc says so**: flipping the default surfaced 24
+  failures the probe missed, because the eviction gate admitted shapes it
+  should have evicted. The fix was *narrowing* what the new path claims
+  ("Restricting CPS-emitted signatures to scalars keeps the ABI
+  single-valued"), not patching the 24 sites.
+- **A hard `expires_at` contract** as forcing function -- the release-cut
+  skills refuse to bump past it until the row graduates or shelves.
+- **Byte-identity** as the faithfulness proof for the final deletion
+  (flag-off output byte-identical across the corpus).
+
+Its stalled sub-efforts carry the single most recurring stall verdict in
+the archive -- **"load-bearing, not redundant."** Three independent docs
+reach it (`abortive-shift-retirement-blocked.md`,
+`cps-backend-n6-fallback-followups-blocked.md`,
+`closure-result-monomorphization-plan.md`): a path that looked like a
+redundant duplicate turned out to be strictly more expressive or more
+general for its case, and the deletion was blocked by numbered probes.
+The corollary rule: **every representation slated for deletion gets a
+probe whose only job is to falsify "this is redundant" -- before any code
+moves.**
+
+There is also a second-order stall: **"functionally free."** The
+closure-result monomorphization plan shipped its groundings but abandoned
+its consolidation objective ("delete the bridge / 0 crossings": crossing
+count went 102 -&gt; 102, Phase 3 "NOT PURSUED, by decision") because "the
+bridge stays -- load-bearing and functionally free." A redundant-looking
+path survives if keeping it costs nothing; deletion must state its benefit
+beyond tidiness (here: each unconsolidated cell is a standing bug
+generator -- the missing-cells table is the benefit ledger).
 
 **Succeeded: the carrier<->concrete crossing campaign (2026-06).** PRs
 #437-#481 were a reactive whack-a-mole -- one defect ("a parametric
@@ -112,8 +185,21 @@ surfacing at a different emit site per spice. What ended it
 pass scored the options *before* committing; the migration ran dual-path
 under `TUR_M7_HKT` with the new path as default; the legacy carrier path
 was retired only after the suite flip -- and CLAUDE.md now says "there is
-no longer a second suite." Dualism was a phase with an exit, not a
-steady state.
+no longer a second suite." Dualism was a phase with an exit (~2 weeks),
+not a steady state, and the exit was engineered in advance: a **written
+rot license** ("may degrade as classes migrate ... that is expected, not a
+regression to chase") is what made the second suite non-load-bearing, a
+downstream-dependency sweep (including `../turmeric-spices/` and open
+reports citing the flag as a workaround) cleared the deletion, and a
+pre-registered abort path said exactly what to do if the old path turned
+out load-bearing after all. Two more of its lessons bind here: the flag
+was deliberately NOT promoted to `EXPERIMENTS[]` ("a toggle whose 'off'
+branch is explicitly permitted to rot ... is dead code waiting to be
+removed"), and its aftershock is a warning --
+`b4-fat-closure-byvalue-adt-abi-plan.md` records that "M7 graduating did
+not deliver the ABI change described here": **consolidating a dispatch
+path is not consolidating a representation**; each axis needs its own
+campaign.
 
 **Stalled (instructively): the first fn-element substitution fix
 (2026-07-30).** `docs/archive/fn-element-tyvars-not-substituted-in-spec-types.md`
@@ -145,15 +231,40 @@ Distilled stall anatomy:
 | Enforce before centralizing | poly-result compile-time diagnostic (6 false positives) | The ICE/gate comes *after* the chokepoint exists (routing plan R3 after R1/R2) |
 | Permanent dual-path | (avoided by M7; risk for any flag) | A dual-path ships with its retirement criterion, per the experiments discipline |
 | Fix sites one fish at a time | PRs #437-#481, #475-#504 | Audit first; route through chokepoints; ratchet with a registry check |
+| Delete a "redundant" path unprobed | abortive-shift retirement, N6 fallback ("load-bearing, not redundant") | A redundancy-falsification probe per deletion candidate, before code moves |
+| No forcing function | (the shelved consolidations) | Every dual-path carries an `expires_at`-style contract or a written rot license |
+| Assume the flip probe is complete | CPS graduation (probe missed 24 failures) | The default flip is its own measurement; when it disagrees with the probe, narrow the new path's claim rather than patch the misses |
+
+Two further findings from the archive shape expectations rather than rules:
+
+- **Coincidences hold this area up.** Two 2026-07 docs say so verbatim:
+  `result_kind` staying `TY_INT` was "a correct handle width by accident,
+  which is the coincidence this area rests on," and the mangling fix
+  "removed the coincidence that was hiding" a latent mismatch.
+  Consolidation will therefore *surface* latent bugs; pre-register that as
+  an expected outcome of each increment, not a regression against it.
+- **Representation splits hide behind one-sided test coverage.** The
+  arrow-thin crash was "masked only because the test suite exercises
+  captureless arrows exclusively." For every representation an increment
+  touches, first find (or write) the fixture that exercises the *other*
+  side of the split.
 
 ## The probe discipline
 
 "Probe" here follows the house usage (`tests/shallow-handler-probes.sh`,
-`stackless-signoff-probes.sh`, the refine plans' RE probes): a small,
-targeted, runnable check that pins one *assumption* -- distinct from a
-fixture, which pins one *behavior*. Probes are how a migration learns
-whether its premises hold before it bets the tree on them. This campaign
-uses four kinds:
+`stackless-signoff-probes.sh`, `tests/probes/cps-abi-c0/`, the refine
+plans' RE probes): a deliberately non-suite measurement that answers ONE
+de-risking question about a migration, under conditions the fixture
+harness cannot express -- distinct from a fixture, which permanently pins
+a behavior. A probe that produces a result worth pinning gets promoted
+into a fixture (the shallow-handler 105-vs-10 result is the precedent).
+The house's sharpest statement of why probes come first is in the
+refinement plan: a report there was "WRONG TWICE before it was right ...
+both earlier readings were consistent with the probes run at the time --
+which is the argument for widening the probe set BEFORE writing down a
+root cause, not after."
+
+This campaign uses five kinds:
 
 1. **Blast-radius probes.** Before an increment lands, its mechanical core
    is applied alone and the suite delta measured (the fn-element fix's
@@ -171,12 +282,25 @@ uses four kinds:
    `known_bug_slug` keeping default runs green. Each landed increment
    retires its known rows, returns those shapes to the default pool, and
    runs fresh-seed sessions as acceptance.
-4. **Performance probes.** Each child plan names the benchmark(s) that
+4. **ABI-ratification probes.** For a new normalized convention, prove the
+   calling convention in hand-written C against the real runtime *before*
+   the emitter that will produce it exists -- `tests/probes/cps-abi-c0/`
+   is the exemplar ("each transcribes a colored function into the ABI by
+   hand, node-for-node ... and compiles against the real DK runtime").
+   Increment 1's fat-normalized boundaries should get the same treatment:
+   a hand-written C file per boundary shape, ASan/UBSan clean, kept for
+   reproducibility.
+5. **Performance probes.** Each child plan names the benchmark(s) that
    actually exercise its seam (`benchmarks/`, `tur run bench` -- e.g.
    `bench-poly-specialize.tur` for dispatch seams, closure-heavy benches
    for the fn axis), records before/after on the same box, and states its
-   acceptable delta *in the plan before landing*. A regression outside the
-   stated envelope is a stop-and-redesign signal, not a note in the PR.
+   acceptable delta *in the plan before landing*. The house neutrality
+   template is `catch-unwind-graduation-plan.md` Part B: flag-off codegen
+   byte-identical for untouched fixtures, plus suite wall-clock and a
+   representative bench with the change on vs off -- and the CPS
+   readiness doc states the governance: "if a regression shows, it gates
+   the flip, not the correctness." A regression outside the stated
+   envelope is a stop-and-redesign signal, not a note in the PR.
 
 ## Observability: make the decision auditable
 
@@ -232,7 +356,11 @@ about, and cowpaths are paved before the field is closed:
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --
-  delete it, M7-style: dual-path flag, default flip, scheduled retirement.
+  delete it CPS-style, with the two milestones kept explicitly separate:
+  becoming the default (forced-on corpus probe, every failure classified)
+  and deleting the old path (byte-identity proof, dependency sweep,
+  pre-registered abort path). The redundancy-falsification probe from the
+  checklist runs before either milestone starts.
 
 ## Per-increment landing checklist (the template child plans follow)
 
@@ -250,7 +378,15 @@ about, and cowpaths are paved before the field is closed:
 8. Representation trace diff reviewed: only the intended boundaries moved.
 9. Guide updated (inventory + missing-cells table) in the same PR --
    enforced socially by each report's Guide-upkeep section.
-10. Any dual-path flag carries its retirement criterion in writing.
+10. Any dual-path flag carries its retirement criterion in writing: a hard
+    `expires_at`-style contract (CPS) or a written rot license (M7) --
+    never an open-ended coexistence.
+11. For any representation slated for deletion: the redundancy-
+    falsification probe ran and failed to find a load-bearing use, AND a
+    fixture exists exercising the *other* side of the split it leaves
+    behind.
+12. Deletion states its benefit beyond tidiness (the "functionally free"
+    test) -- usually the missing-cells rows it permanently closes.
 
 ## Stall-recovery rule
 
