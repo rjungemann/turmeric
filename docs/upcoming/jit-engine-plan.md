@@ -2,7 +2,12 @@
 
 Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); S1/S1b/6(a)/TLS landed;
 **J1 LANDED 2026-07-29** (findings 18): `tur jit <file>` exists behind
-`-DTUR_JIT=ON` + `--enable=jit`, with the step-6 fallback wired. J2+ PROPOSED. Plan written 2026-07-27; J0 spike
+`-DTUR_JIT=ON` + `--enable=jit`, with the step-6 fallback wired.
+**S2 COMPLETE 2026-07-30** (findings 23-25): the runtime preamble is split
+into a committed host-resident runtime TU (which REPLACES the host's
+diverged copies -- the runtime library IS the runtime) plus a declarations
+region `tur jit` swaps in under a content-hash guard; sweep byte-identical
+at ~28% lower end-to-end latency. J2+ PROPOSED. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with

@@ -2681,3 +2681,55 @@ vintage, generated from the same preamble programs compile against. Suite
 Seam 3 is thereby closed at the root: there is no second vintage left in
 the process for a split program half to mis-bind against. cmd_jit's
 hash-gated decls+program emission (item 3) can now land.
+
+## 25. S2 COMPLETE -- cmd_jit runs the split, the sweep is byte-identical
+
+Added 2026-07-30. 19.4 item 3, the last piece: `tur jit` now swaps the
+fixed preamble for the committed declarations region whenever the compiler
+still matches the artifacts.
+
+### 25.1 The wiring
+
+After compile_to_c + hoist, cmd_jit re-emits the all-gates preamble under
+current process state (emit_rt_split_source -- AFTER program emission, its
+registry resets must not disturb it), hashes it, and compares against the
+embedded `tur_rt_split_hash` (src/runtime/generated/tur_rt_split_embed.c,
+linked into TUR_JIT builds only). On a match it splices
+[hoisted user prefix][committed decls][program half] -- the hoisted prefix
+must survive, findings 21.3's two-bucket block sits ABOVE the preamble --
+and hands that to the engine. `TUR_JIT_NO_SPLIT=1` opts out.
+
+Failure ladder: a split-path COMPILE/LINK failure prints TUR-W0071 and
+retries the full TU in the engine before conceding TUR-W0070 to cc -- the
+hash guard covers emitter drift, not e.g. an export a host build dropped,
+and the full TU is self-contained against that. RUN failures are the
+program's own and are not retried.
+
+### 25.2 Validation
+
+Product sweep with the split live: **1,655 native + 14 fallback-pass =
+1,669/1,701, results.tsv byte-identical** to the pre-split sweep. The 14
+TUR-W0071 retries are exactly the user-inline-C `__atomic_*` fixtures
+(split half fails c2mir, full TU fails identically, cc passes) -- no
+fixture needed the retry to SUCCEED, i.e. the split path has no holes the
+full path was papering over. 45 TUR-W0070 = 31 fallback-env + 14
+fallback-pass, all accounted for. Suite 2430/0 on the non-JIT build
+(the splice code is TUR_HAVE_JIT-guarded; non-JIT builds skip the ~100KB
+embed TU entirely).
+
+Latency, arith, wall-clock including the compiler front end, 5 runs:
+~200ms split vs ~278ms full -- the 39% engine-only cut of 23.3 lands as
+~28% end-to-end.
+
+### 25.3 The regeneration workflow
+
+When the preamble changes: `python3 tools/gen-runtime-split.py --tur
+./build/tur` and commit the three artifacts in the same PR (fixture-
+snapshot policy). Forgetting is safe -- the hash mismatch quietly reverts
+every `tur jit` to full-preamble emission until the artifacts catch up;
+`tools/jit-spike/s2-artifacts-run.sh` is the standalone artifact check.
+
+S2 is thereby COMPLETE: the runtime boundary is named (the marker), the
+runtime library IS the runtime (section 24), and the JIT compiles each
+program against declarations, resolving the runtime by address into the
+host process. J2 (REPL integration) is unblocked.

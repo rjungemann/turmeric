@@ -437,6 +437,16 @@ if(TUR_JIT)
   # the generated ffi_dispatch.c above.
   set_source_files_properties(jit_engine.c PROPERTIES
     COMPILE_OPTIONS "-Wno-pedantic")
+  # S2 (findings 19.4 item 3): the committed declarations-region string +
+  # content hash cmd_jit consults before swapping the full preamble for the
+  # split.  JIT-only: non-JIT builds never read it, so they skip the ~100KB
+  # string TU entirely.
+  target_sources(tur PRIVATE runtime/generated/tur_rt_split_embed.c)
+  # The decls string exceeds C99's 4095-char minimum guarantee by design;
+  # every supported compiler handles it, so silence the portability nudge
+  # for the one generated TU.
+  set_source_files_properties(runtime/generated/tur_rt_split_embed.c
+    PROPERTIES COMPILE_OPTIONS "-Wno-overlength-strings")
   target_compile_definitions(tur PRIVATE TUR_HAVE_JIT=1)
   target_link_libraries(tur PRIVATE tur_mir)
   set_target_properties(tur PROPERTIES ENABLE_EXPORTS TRUE)
