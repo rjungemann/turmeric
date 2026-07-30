@@ -788,8 +788,15 @@ for d in tests/fixtures/*/; do
     d="${d%/}"
     [ "$d" = "tests/fixtures/errors" ] && continue
     [ -d "$d" ] || continue
+    # "holds no regular file of its own" via a plain glob -- BSD/macOS find has
+    # no portable `-print -quit`, and this file is otherwise careful to stay
+    # macOS-clean (stat -f first, sysctl for core count, gtimeout fallback).
     _is_group=0
-    if [ -z "$(find "$d" -maxdepth 1 -type f -print -quit)" ]; then
+    _has_own_file=0
+    for _f in "$d"/*; do
+        [ -f "$_f" ] && { _has_own_file=1; break; }
+    done
+    if [ "$_has_own_file" = 0 ]; then
         for sub in "$d"/*/; do
             [ -f "${sub}input.tur" ] && { _is_group=1; break; }
         done

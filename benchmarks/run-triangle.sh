@@ -33,7 +33,13 @@ export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0"
 _tur_build_dir=$(dirname "$TUR")
 export TUR_CC_FLAGS="${TUR_CC_FLAGS:--O2 -std=c99 -fno-strict-aliasing -L${_tur_build_dir}/src}"
 
-now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
+# BSD/macOS date has no %N -- it emits a literal "N", which would silently
+# poison every arithmetic below.  Detect that and use python3 for the clock.
+if date +%s%N 2>/dev/null | grep -q 'N$'; then
+    now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
+else
+    now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
+fi
 
 # best-of-REPS wall time of "$@" in ms; output discarded.
 best() {

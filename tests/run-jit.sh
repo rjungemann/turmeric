@@ -91,6 +91,22 @@ _tur_hash_file() {
 }
 _tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
 
+# Stock macOS ships no `timeout(1)` -- Homebrew coreutils installs it as
+# `gtimeout` unless the gnubin path is on PATH.  run.sh has detected this since
+# T19; this harness called bare `timeout`, so on a Mac without GNU coreutils
+# every fixture would have died in the runner rather than the compiler.  Mirror
+# run.sh: prefer timeout, fall back to gtimeout, and run untimed if neither
+# exists (a hung fixture then hangs the run, which is the pre-existing tradeoff
+# run.sh already makes).
+_tur_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then _tur_timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then _tur_timeout_bin="gtimeout"; fi
+_run_timed() {
+    local secs="$1"; shift
+    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then "$@"
+    else "$_tur_timeout_bin" "$secs" "$@"; fi
+}
+
 export TUR_MTIME="$(_tur_mtime "$TUR")"
 
 stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
@@ -201,11 +217,11 @@ run_jit_fixture() {
 
     local rc=0
     if [ "${#run_args_arr[@]}" -gt 0 ]; then
-        timeout "$fixture_timeout" "$TUR" $fixture_flags --enable=jit jit "$input" \
+        _run_timed "$fixture_timeout" "$TUR" $fixture_flags --enable=jit jit "$input" \
             -- "${run_args_arr[@]}" \
             < "$stdin_file" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
     else
-        timeout "$fixture_timeout" "$TUR" $fixture_flags --enable=jit jit "$input" \
+        _run_timed "$fixture_timeout" "$TUR" $fixture_flags --enable=jit jit "$input" \
             < "$stdin_file" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
     fi
 
@@ -297,6 +313,8 @@ export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME TUR_CC_FLAGS
 export JIT_KNOWN_MISCOMPILE
 export -f run_jit_fixture run_jit_error_fixture jit_known_miscompile
 export -f stamp_check stamp_write stamp_key _tur_hash_file _tur_mtime
+export -f _run_timed
+export _tur_timeout_bin
 
 shopt -s nullglob
 ALL_DIRS=()

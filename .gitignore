@@ -136,3 +136,4 @@ tests/fixtures/*/*/jit.stderr
 
 # J3 benchmark triangle artifacts (run-triangle.sh output dir).
 benchmarks/output/
+build-mirpin/

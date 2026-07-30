@@ -3390,3 +3390,44 @@ Both produce failures that read exactly like product regressions:
 - **`cmake --build <dir> --target tur` does not build `libturi.a`.** Every
   fixture then fails to link with `ld: library 'turi' not found`, again
   reported as `build failed`. Build all targets.
+
+## 33. The new MIR pin cross-checked on x86-64, and two harness portability traps
+
+Added 2026-07-30, on top of section 32's arm64 work.
+
+### 33.1 The uint128-alignment pin does not regress x86-64 Linux
+
+Section 32.1's MIR patch was validated on Apple Silicon, where the bug lives.
+It also changes struct layout rules for every target, so it needs a check on
+the platform it was NOT written for. Fresh build directory (the 32.1 cache trap
+is real -- both pre-existing local JIT build dirs still carried
+`TUR_MIR_GIT_TAG=41ff4d94` in their CMakeCache and a plain rebuild silently
+kept using it; the fresh dir fetches `90633091`):
+
+`tests/run-jit.sh` on x86-64 Linux, new pin: **2394 passed / 0 failed / 47
+skipped, 47 cc fallbacks** -- identical to the old pin. No regression.
+
+### 33.2 Two ways the harnesses would have wasted a macOS run
+
+Both are in code added by J3 (section 27), both would have surfaced as broad,
+misleading failures rather than clear ones:
+
+- **`tests/run-jit.sh` called bare `timeout(1)`.** Stock macOS ships none --
+  Homebrew coreutils installs it as `gtimeout` unless the gnubin path is on
+  PATH. `tests/run.sh` has detected this since T19; the JIT harness did not, so
+  on a Mac without GNU coreutils every fixture would have died in the RUNNER,
+  reading as a total engine failure. Now mirrors run.sh (timeout -> gtimeout ->
+  untimed), with the helper exported to the xargs workers.
+- **`benchmarks/run-triangle.sh` used `date +%s%N`.** BSD date has no `%N`; it
+  emits a literal `N`, which would have poisoned every arithmetic in the script
+  silently rather than failing. Now detects that and uses python3 for the
+  millisecond clock.
+
+Section 30.3's group-directory scan also used `find -maxdepth 1 -print -quit`,
+which is not portable to BSD find; it is a plain glob now. run.sh is otherwise
+careful here (`stat -f` before `stat -c`, `sysctl hw.logicalcpu`, the gtimeout
+fallback), so the addition was the outlier, not the rule.
+
+None of this was hit by section 32 -- that machine has GNU coreutils on PATH
+and the triangle was not part of the re-validation set. They were latent, and
+the next macOS run would have paid for them.
