@@ -1105,6 +1105,13 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "assoc takes 3 arguments: (assoc map key value)");
             return NULL;
         }
+        /* :cstr keys hash and compare by CONTENT (hamt/set-cstr), never by
+         * pointer -- identity hash/compare of string keys only "worked" when
+         * the C compiler merged identical literals (unspecified, C11
+         * 6.4.5p7), and never for runtime-built keys.  args is already
+         * {m, k, v}, the wrapper's exact signature. */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_set_cstr, 3, args);
         /* assoc m k v -> (hamt/set m (hamt_hash_ptr k) k v) */
         /* First, compute the hash: (hamt_hash_ptr k) */
         bool hash_qual_err = false;
@@ -1137,6 +1144,9 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "dissoc takes 2 arguments: (dissoc map key)");
             return NULL;
         }
+        /* :cstr keys: content hash + content compare (see the assoc arm). */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_del_cstr, 2, args);
         /* dissoc m k -> (hamt/del m (hamt_hash_ptr k) k) */
         bool hash_qual_err2 = false;
         Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err2);
@@ -1165,6 +1175,9 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "get takes 2 arguments: (get map key)");
             return NULL;
         }
+        /* :cstr keys: content hash + content compare (see the assoc arm). */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_get_cstr, 2, args);
         /* get m k -> (hamt/get m (hamt_hash_ptr k) k) */
         bool hash_qual_err4 = false;
         Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err4);
@@ -1193,6 +1206,9 @@ static Expr *elab_lower_map_call(Elab *e, const Form *call, const Symbol *name) 
             diag_emit(DIAG_ERROR, call->span, "has? takes 2 arguments: (has? map key)");
             return NULL;
         }
+        /* :cstr keys: content hash + content compare (see the assoc arm). */
+        if (args[1]->type.kind == TY_CSTR)
+            return elab_call_hamt_fn(e, call->span, e->sym_hamt_has_cstr, 2, args);
         /* has? m k -> (hamt/has? m (hamt_hash_ptr k) k) */
         bool hash_qual_err3 = false;
         Binding *hash_binding = elab_lookup_sym(e, e->sym_hamt_hash_ptr, call->span, &hash_qual_err3);

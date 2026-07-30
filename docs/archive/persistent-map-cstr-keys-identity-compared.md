@@ -1,5 +1,18 @@
 # P3 `^persistent` map: cstr keys compare by pointer identity
 
+**RESOLVED 2026-07-30.** Fixed per the first fix direction below, one layer
+lower than proposed: content-keyed cstr entry points in the runtime
+(`tur_hamt_set_cstr` / `del` / `has` / `get` in `src/runtime/hamt.c`, which
+content-hash and content-compare through the TCE4 `_eq` family), plain-
+Turmeric wrappers `hamt/set-cstr` / `del-cstr` / `get-cstr` / `has-cstr?` in
+`stdlib/hamt.tur`, four backing turi natives, and a `TY_CSTR` check in each
+P3 arm of `elab_lower_map_call` (`src/compiler/elab_call.c`) routing to the
+wrappers. Non-cstr keys keep identity semantics. `hamt-lowering-basic` now
+probes and deletes through runtime-built keys (`str-concat`) as directed.
+The cc-path repro below prints true/true; the fixture passes natively under
+the MIR JIT (the sweep's output-mismatch bucket is empty); suite 2430/0.
+See jit-engine-j0-findings.md section 22.
+
 **Severity: high for any real program on the legacy path; invisible to the
 suite.** Found via the JIT sweep (`hamt-lowering-basic` wrong output under
 MIR), then reproduced on the ordinary `tur build` path with no JIT involved.

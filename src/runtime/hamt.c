@@ -1085,6 +1085,47 @@ void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq) {
 }
 
 /* ----------------------------------------------------------------------------
+ * Content-keyed cstr convenience entry points
+ *
+ * One-call set/del/has/get for NUL-terminated string keys: hash by content
+ * (xxHash64 of the bytes) and compare by content on collision, mirroring the
+ * MapKey[cstr] comparator of the typed-Map path.  These exist so the P3
+ * `^persistent` lowering never routes a cstr key through hash-ptr + identity
+ * compare -- a scheme that only ever "worked" when the C compiler merged
+ * identical string literals, which C11 6.4.5p7 leaves unspecified (gcc/clang
+ * merge, c2mir does not).  Keys built at runtime (concatenation, parsed
+ * input) were silently lost.
+ * --------------------------------------------------------------------------*/
+
+static bool hamt_cstr_key_eq(int64_t a, int64_t b) {
+    const char *p = (const char *)(intptr_t)a;
+    const char *q = (const char *)(intptr_t)b;
+    if (p == q) return true;
+    if (!p || !q) return false;
+    return strcmp(p, q) == 0;
+}
+
+Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, void *val) {
+    return tur_hamt_set_eq(m, tur_hamt_hash_str(key), (void *)key, val,
+                           hamt_cstr_key_eq);
+}
+
+Hamt *tur_hamt_del_cstr(Hamt *m, const char *key) {
+    return tur_hamt_del_eq(m, tur_hamt_hash_str(key), (void *)key,
+                           hamt_cstr_key_eq);
+}
+
+bool tur_hamt_has_cstr(Hamt *m, const char *key) {
+    return tur_hamt_has_eq(m, tur_hamt_hash_str(key), (void *)key,
+                           hamt_cstr_key_eq);
+}
+
+void *tur_hamt_get_cstr(Hamt *m, const char *key) {
+    return tur_hamt_get_eq(m, tur_hamt_hash_str(key), (void *)key,
+                           hamt_cstr_key_eq);
+}
+
+/* ----------------------------------------------------------------------------
  * Context-carrying key-equality variants (prereq 2a)
  *
  * Identical to the _eq family, but `eq` takes a third `void *ctx` argument that

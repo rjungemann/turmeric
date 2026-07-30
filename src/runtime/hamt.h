@@ -167,6 +167,21 @@ Hamt *tur_hamt_del_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 bool  tur_hamt_has_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 void *tur_hamt_get_eq(Hamt *m, uint64_t hash, void *key, tur_hamt_keyeq_fn eq);
 
+/* Content-keyed cstr convenience entry points.
+ *
+ * One-call set/del/has/get for NUL-terminated string keys: the key is hashed
+ * by content (tur_hamt_hash_str) and compared by content on collision (an
+ * internal strcmp comparator through the _eq family above).  Use these for
+ * string keys instead of hash-ptr + the plain entry points -- identity
+ * hashing/compare of string keys only "works" when the C compiler merges
+ * identical literals, which C11 6.4.5p7 leaves unspecified, and never works
+ * for keys built at runtime.  The map stores the key POINTER (no copy);
+ * caller owns its lifetime, exactly like tur_hamt_set. */
+Hamt *tur_hamt_set_cstr(Hamt *m, const char *key, void *val);
+Hamt *tur_hamt_del_cstr(Hamt *m, const char *key);
+bool  tur_hamt_has_cstr(Hamt *m, const char *key);
+void *tur_hamt_get_cstr(Hamt *m, const char *key);
+
 /* Context-carrying key-equality comparator (prereq 2a -- turi-map-set-hamt-
  * interpreter-gap.md).  Same as tur_hamt_keyeq_fn but with a trailing `void *ctx`
  * threaded through to every collision-time compare.  This is what lets a key

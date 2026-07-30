@@ -6,7 +6,10 @@ Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); S1/S1b/6(a)/TLS landed;
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
-every remaining failure a recorded decision or a filed report.
+every remaining failure a recorded decision or a filed report. The product
+sweep post-rebase stands at **1,669/1,701** (1,655 native + 14
+fallback-pass, findings 22); the `^persistent` cstr-key bug the sweep
+surfaced (11.7) is **fixed** and its output-mismatch bucket is empty.
 
 **arm64 macOS re-validated 2026-07-29 (Apple M2, findings 20).** Everything
 from section 11 onward had run only on x86-64 Linux; it now replays on Apple

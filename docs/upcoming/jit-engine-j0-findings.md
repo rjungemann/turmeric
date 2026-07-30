@@ -1400,8 +1400,9 @@ filed report:
   `stm-stress` was TLS (fixed, now a deterministic PASS), `gc-registry-growth`
   is MIR frame size vs. the default stack (open, a J1 sizing decision).**
 - **1 x** `hamt-lowering-basic` -- the filed `^persistent` cstr-key identity
-  bug, reproduced on the `cc` path with no JIT involved
-  ([report](../reported/persistent-map-cstr-keys-identity-compared.md)).
+  bug, reproduced on the `cc` path with no JIT involved -- **FIXED in section
+  22; now a native PASS**
+  ([archived](../archive/persistent-map-cstr-keys-identity-compared.md)).
 
 ## 13. S2 sized -- the runtime boundary, measured exactly
 
@@ -1747,8 +1748,8 @@ configure with `-DTUR_MIR_GIT_TAG=...` or a fresh dir, and verify HEAD in
 
 The remaining 33: 31 user-inline-C fallbacks (by design), 1 by-design panic
 (`any-cast-mismatch-panic`), 1 filed `^persistent` key bug
-(`hamt-lowering-basic`). **The sweep now contains zero open engine or emitter
-items.**
+(`hamt-lowering-basic` -- **since fixed, section 22**). **The sweep now
+contains zero open engine or emitter items.**
 **Multi-threaded programs are now first-class under the JIT**: STM commits,
 scheduler cancel flags, and select's winner CAS run on real atomics and real
 per-thread state. What J1 still owes multi-threading specifically:
@@ -2467,3 +2468,61 @@ started.
 
 Report archived:
 [../archive/hoisted-inline-c-precedes-includes.md](../archive/hoisted-inline-c-precedes-includes.md).
+
+## 22. The `^persistent` cstr-key bug fixed -- the sweep's last output-mismatch retired
+
+Added 2026-07-30, after the rebase onto main (post-rebase baseline: 1,654
+native + 14 fallback-pass = 1,668/1,701, suite 2430/0).
+
+Section 11.7 filed `hamt-lowering-basic`'s wrong output under MIR as a
+product bug, not a MIR defect: the P3 `^persistent` lowering routed cstr
+keys through `hamt/hash-ptr` + the identity-comparing HAMT entry points, so
+string keys were identity-HASHED and identity-COMPARED. That only ever
+"worked" because gcc/clang merge identical string literals in a TU -- which
+C11 6.4.5p7 leaves unspecified and c2mir does not do. Any key built at
+runtime (concatenation, parsed input) was silently lost on every path, JIT
+or not.
+
+The fix follows the report's first direction, one layer lower than proposed:
+
+- **Runtime** (`src/runtime/hamt.c/.h`): content-keyed cstr entry points
+  `tur_hamt_set_cstr` / `del` / `has` / `get` -- one call that content-hashes
+  (`tur_hamt_hash_str`) and content-compares on collision (an internal
+  strcmp comparator through the TCE4 `_eq` family, the same semantics as the
+  GHE path's `MapKey[cstr]` comparator).
+- **stdlib** (`stdlib/hamt.tur`): `hamt/set-cstr` / `hamt/del-cstr` /
+  `hamt/get-cstr` / `hamt/has-cstr?` -- plain-Turmeric wrappers, so the
+  interpreter evaluates them without an inline-C carve-out.
+- **Elaborator** (`elab_call.c`): each P3 arm (assoc/dissoc/get/has?) checks
+  the elaborated key's type; `TY_CSTR` routes to the cstr wrapper (the arm's
+  args are already the wrapper's exact signature -- no hash-call synthesis).
+  Non-cstr keys keep hash-ptr identity semantics, and mixing key kinds in
+  one map stays sound: the comparator is per-operation and consulted only on
+  a 64-bit hash collision.
+- **Interpreter** (`src/turi/collections_native.c`): four natives backing
+  the new extern-c leaves, with the same retain-on-no-change quirk as
+  `native_tur_hamt_set`.
+
+`hamt-lowering-basic` now probes and deletes through **runtime-built keys**
+(`str-concat`: equal text, distinct pointer) alongside literals, per the
+report -- the fixture can no longer pass by literal merging. It is
+whitelisted in `run-turi.sh`'s `TURI_INLINEC_RUN` (verified to interpret
+correctly; the inline-C it loads is str-build.tur, whose `str-concat` has a
+native override).
+
+Verification: the report's cc-path repro prints true/true (was
+false/false); suite **2430/0** with all 140 snapshots regenerated (the new
+stdlib defns shift gensym counters in every TU); turi suite 1,680/1
+(the one failure, `hkt-constrained-byvalue-bind-pure`, is a pre-existing
+interpreter HKT gap -- A/B-confirmed against the pre-change tree and filed
+in `docs/reported/`); product sweep **1,655 native + 14 fallback-pass =
+1,669/1,701**, output-mismatch bucket now **empty**. The only remaining
+non-environmental line in the sweep is the by-design
+`any-cast-mismatch-panic` signal.
+
+A consistency bonus: `#map{...}` data literals already content-hash their
+string keys (`elab_toplevel.c` lowers keyword/string keys through
+`hamt/hash-str`), so a `^persistent`-bound literal map probed via `has?`
+used to mix content-hashed inserts with pointer-hashed probes -- misses on
+every C compiler, literal merging or not. The P3 arms now agree with the
+literal path.
