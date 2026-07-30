@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/check-typekind-mangle-exhaustive.sh
 #
-# Guard for docs/reported/concrete-codegen-layout-kind-enumerations-drift.md.
+# Guard for docs/archive/concrete-codegen-layout-kind-enumerations-drift.md.
 #
 # `append_type_mangle` (src/compiler/types.c) names a TypeKind inside a
 # monomorph's C identifier. It used to end in `default: "opaque"`, which did not
@@ -11,21 +11,29 @@
 # the first's layout. That was reachable from ordinary code and produced a
 # closure handle round-tripping through a `double`.
 #
-# Three properties keep that closed. All are checked from the source text, so
+# Five properties keep that closed. All are checked from the source text, so
 # this needs no build:
 #
 #   1. No `default:` arm -- so -Wall's -Wswitch makes a newly added TypeKind a
 #      build failure here rather than a silent merge.
 #   2. Every TypeKind enum member has a case.
 #   3. No two kinds emit the same literal token (injectivity of the simple arms).
+#   4. Every kind whose `type_eq` discriminates on a PAYLOAD still mangles that
+#      payload -- i.e. none of the SKIP_KINDS below has decayed into a bare
+#      one-token arm. Injectivity is required against `type_eq`, so a bare token
+#      on a payload-comparing kind re-merges two distinct types (Finding 2:
+#      `(Box (| int float))` and `(Box (| int cstr))` both mangled `union`).
+#   5. `type_has_concrete_codegen_layout` -- the second of the report's three
+#      enumerations -- is under the same discipline: no `default:` arm, a case
+#      per enum member. Its fallback fails in the opposite direction (a missing
+#      kind silently loses the by-value monomorph to the int64 carrier, which is
+#      the map-show-keyword-key-raw-int bug), so it needs -Wswitch just as much.
 #
-# Property 3 is checked only for the one-line `buf_puts(b, "tok")` arms. Arms
-# that append a payload (TY_FN's arity/args/result, the ref/rc family's inner,
-# TY_ADT's name, TY_APP's recursion) are injective by construction and are
-# skipped -- they are listed in SKIP_KINDS below with the field `type_eq`
-# compares, so a future edit that drops a payload is at least visible here.
+# Property 3 is checked only for the one-line `buf_puts(b, "tok")` arms; the
+# payload-appending arms are listed in SKIP_KINDS with the field `type_eq`
+# compares, and property 4 is what keeps that list honest.
 #
-# Exit 0 if all three hold, 1 otherwise.
+# Exit 0 if all five hold, 1 otherwise.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -53,14 +61,28 @@ TY_EXCEPTION     exn.payload_type
 TY_HANDLER       handler_.value_kind+result_kind
 TY_ADT           def->name
 TY_APP           recurses into its args
+TY_CONTRACT      contract_.base_type
+TY_UNION         union_.members
+TY_INTERSECTION  intersection_.members
+TY_REC           rec.name
+TY_TYPEROW       typerow_.elements+field_names
+TY_FORALL        forall_.n_vars+constraints+body
+TY_EXISTS        forall_.n_vars+constraints+body
+TY_TYPECLASS     typeclass.typeclass (mangled as the class name)
+TY_TYPECLASS_INST typeclass_inst.instance (class name + type args)
 TY_UNKNOWN       shares the TY_TYVAR placeholder token by design
 TY_TYVAR         shares the TY_UNKNOWN placeholder token by design
 "
 
-python3 - "$TYPES_C" "$TYPES_H" "$SKIP_KINDS" <<'PY'
+# The two SKIP_KINDS entries above that are NOT payload-mangled: they share one
+# token deliberately, so property 4 must not demand a payload from them.
+BARE_OK="TY_UNKNOWN TY_TYVAR"
+
+python3 - "$TYPES_C" "$TYPES_H" "$SKIP_KINDS" "$BARE_OK" <<'PY'
 import re, sys
-types_c, types_h, skip_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+types_c, types_h, skip_raw, bare_ok_raw = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 skip = {l.split()[0] for l in skip_raw.strip().splitlines() if l.split()}
+bare_ok = set(bare_ok_raw.split())
 src = open(types_c).read()
 
 def func_body(sig):
@@ -85,11 +107,13 @@ def top_switch(body):
         elif d > 1: out.append(' ' if ch == '\n' else ch)
     return ''.join(out)
 
-sw = top_switch(func_body('static void append_type_mangle(Buf *b, Type t)'))
-# Strip comments: the arms carry prose that mentions `default:` and token names,
-# and matching inside a comment is a false positive.
-sw = re.sub(r'/\*.*?\*/', ' ', sw, flags=re.S)
-sw = re.sub(r'//[^\n]*', ' ', sw)
+def strip_comments(s):
+    # The arms carry prose that mentions `default:` and token names; matching
+    # inside a comment is a false positive.
+    s = re.sub(r'/\*.*?\*/', ' ', s, flags=re.S)
+    return re.sub(r'//[^\n]*', ' ', s)
+
+sw = strip_comments(top_switch(func_body('static void append_type_mangle(Buf *b, Type t)')))
 rc = 0
 
 # (1) no default arm
@@ -137,6 +161,42 @@ if dupes:
 else:
     print(f"PASS typekind-mangle-injective ({len(tokens)} bare tokens, all distinct)")
 
+# (4) the payload-mangled kinds still mangle a payload
+bare_arms = set()
+for m in re.finditer(r'((?:case TY_[A-Z_0-9]+:\s*)+)buf_puts\(b, "[^"]+"\);\s*break;', sw):
+    bare_arms.update(re.findall(r'case (TY_[A-Z_0-9]+):', m.group(1)))
+decayed = sorted((skip - bare_ok) & bare_arms)
+if decayed:
+    print("FAIL typekind-mangle-payload -- payload-comparing kind(s) mangle a bare token:")
+    for k in decayed:
+        print(f"     {k}")
+    print("     `type_eq` discriminates these on a payload, so a bare token")
+    print("     re-merges two distinct types under one monomorph C name.")
+    rc = 1
+else:
+    print(f"PASS typekind-mangle-payload ({len(skip - bare_ok)} payload-mangled kinds)")
+
+# (5) the concrete-layout switch is under the same discipline
+csw = strip_comments(top_switch(
+    func_body('bool type_has_concrete_codegen_layout(const Type *t)')))
+if re.search(r'\bdefault\s*:', csw):
+    print("FAIL typekind-concrete-no-default -- type_has_concrete_codegen_layout")
+    print("     has a `default:` arm. A default SILENTLY drops a kind to the")
+    print("     int64 carrier (the map-show-keyword-key-raw-int bug) instead of")
+    print("     failing the build. Add an explicit case per kind instead.")
+    rc = 1
+else:
+    print("PASS typekind-concrete-no-default")
+
+ccased = set(re.findall(r'case (TY_[A-Z_0-9]+):', csw))
+cmissing = [k for k in members if k not in ccased]
+if cmissing:
+    print(f"FAIL typekind-concrete-exhaustive -- {len(cmissing)} kind(s) have no case:")
+    for k in cmissing: print(f"     {k}")
+    rc = 1
+else:
+    print(f"PASS typekind-concrete-exhaustive ({len(members)} kinds)")
+
 sys.exit(rc)
 PY
 rc=$?
@@ -146,6 +206,6 @@ echo
 if [ "$FAIL" -eq 0 ]; then
     echo "typekind-mangle: all checks passed"
 else
-    echo "typekind-mangle: FAILED -- see docs/reported/concrete-codegen-layout-kind-enumerations-drift.md"
+    echo "typekind-mangle: FAILED -- see docs/archive/concrete-codegen-layout-kind-enumerations-drift.md"
 fi
 exit "$FAIL"
