@@ -3,8 +3,8 @@
 ; loop on every engine.  (A CAPTURING named-let `(let go ...)` is TCO'd too
 ; as of 2026-07-30 -- docs/archive/named-let-self-tail-not-tco.md -- but the
 ; defn form is kept here so the published numbers stay comparable to the
-; run that produced them.  A NON-capturing named let is still not TCO'd:
-; docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.)
+; run that produced them.  The non-capturing named let is TCO'd as well as of
+; the same day: docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md.)
 ; Pure Turmeric, no imports, no inline C.
 (defn sum-to [i : int n : int acc : int] : int
   (if (>= i n)

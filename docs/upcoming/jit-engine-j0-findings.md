@@ -3064,8 +3064,9 @@ sibling-call optimization to elide, and a prompt per iteration besides.
 
 That is a different root cause with a different fix, so it is a separate
 report:
-docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.
-There is a settled precedent for the shape of the answer -- the
+docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md
+(FIXED, section 31 -- and by call-target resolution, not the eviction this
+paragraph reaches for).  There is a settled precedent for the shape of the answer -- the
 recursive-await eviction (emit_cps_ir.c:1815, :2250,
 docs/archive/cps-async-recursive-await-eviction.md) records the decision
 that a self-recursive shape the DIRECT emitter's TCO handles in O(1) stack
@@ -3183,10 +3184,8 @@ mechanism for carrying a compile-path miscompile without hiding it.
 ### 30.4 Closing the phase
 
 All three of J3's finds are fixed (sections 28, 29, 30), and the structural
-gap that hid them is closed. The one thing J3 surfaced that is NOT fixed is
-the second defect section 29 split out --
-docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md --
-which is a CPS-classification change, not an emitter one.
+gap that hid them is closed. The second defect section 29 split out is fixed too (section 31):
+docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md.
 
 The J0-era lesson has now paid out four times in this phase: a new engine or
 harness that runs code a previous one skipped finds real, latent product bugs.
@@ -3194,3 +3193,93 @@ Worth stating the corollary plainly, since it is the reusable part: the bugs
 were not caused by the JIT and were not even engine-specific -- gcc and MIR
 agreed on every one of them. They were invisible because nothing compiled that
 code. Coverage gaps do not announce themselves; they read as green.
+
+## 31. The non-capturing loop -- the fix was resolution, not eviction
+
+Added 2026-07-30, resolving the defect section 29 split out of the named-let
+report (docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md).
+
+### 31.1 The report guessed the wrong fix, and said so with a precedent
+
+Section 29.3 filed this as "extend the CPS eviction gate", citing the
+recursive-await eviction as precedent: a self-recursive shape the direct
+emitter's TCO handles in O(1) stack should evict from the CPS path rather than
+lower through DK. That reasoning is sound and the precedent is real -- but it
+treats the symptom. The question it skips is *why the loop was colored at all*,
+given it contains no control operator of any kind.
+
+The answer is the SAME identity skew section 29.2 fixed one layer up. A
+captureless letrec lambda binds `go` to a different Binding object than the
+lifted `__fn_N`'s own FnDef binding, and records that function's C symbol in
+`c_export_name` -- which is precisely how the emitter resolves the call
+(`raw_name_for_binding` consults `c_export_name` first; emit_fns.c's self-TCO
+check compares the same mangled names). `cps_find_node` compared Binding
+POINTERS only. So the self-call resolved to no node, fell into the
+"unresolved -> conservatively colored" arm, set `has_indirect`, and colored the
+loop.
+
+Everything downstream followed from that one mismatch: colored meant the direct
+emitter never saw the function, so CF1 self-TCO never ran; and the CPS
+translation, unable to make a `cps->cps` tail call out of a call it could not
+resolve either, delegated the body to the direct emitter, whose self-call
+targeted the function's own DK ENTRY WRAPPER -- `__dk_entry_depth++`, a
+`dk_prompt` malloc, a `setjmp` -- once per iteration.
+
+`cps_find_node` now falls back to C-symbol identity. Two bindings carrying the
+same C symbol ARE the same C function (the emitter emits one definition), so
+this resolves a real edge rather than widening anything.
+
+### 31.2 Why more precise coloring is not less safe
+
+Un-coloring is the dangerous direction -- an effect that escapes its handler is
+a silent miscompile, far worse than an unnecessary DK frame. Three properties
+make this change sound, and they are worth stating because they are what makes
+the difference between "more precise" and "less conservative":
+
+1. A function that USES a control operator is seeded colored directly
+   (`cps_directly_uses_control`). No resolution change can un-color it.
+2. Coloring propagates BACKWARD along resolved edges: a conduit that calls a
+   colored callee is still colored. Resolving a call ADDS such an edge -- the
+   conservative `has_indirect` blanket is only what happens when there is no
+   edge to add.
+3. The blanket is still there for genuinely unresolvable calls (a call through
+   a runtime fn value, an extern not in the node set).
+
+So the functions that stop being colored are exactly those whose callees are
+all genuinely uncolored -- the analysis working as designed, on better inputs.
+
+### 31.3 Blast radius: wider than the bug, in the same direction
+
+14 fixtures' `expected.c` moved (regenerated in this change): the four
+`letrec-*` / `named-let-*` fixtures whose lowering this is about, and ten
+`stackless-catch-unwind-*` whose diffs are stdlib functions no longer being
+CPS-emitted at all -- entire `__cps` families (hamt, map, iterator) that were
+colored only because a call to an extern-c or non-node callee tripped
+`has_indirect`. `letrec-mutual`'s old snapshot carried the exact pathological
+shape from 29.3, so mutual letrec was hitting this too.
+
+Every runtime assertion passed before the snapshots were regenerated -- all 14
+failures were codegen mismatches, no behavior changed. The effect fixtures keep
+their DK lowering (`effect-abort` 143 `__cps` clones, `effects-async` 141),
+which property 1 above guarantees.
+
+All three harnesses: `tests/run.sh` **2478 passed / 0 failed**,
+`tests/run-jit.sh` (Debug JIT) **2393 / 0 / 47**, `tests/run-turi.sh` **1680
+passed / 1 failed** -- the one failure being the pre-existing, separately filed
+`hkt-constrained-byvalue-bind-pure`. The benchmark triangle reports no
+divergence across interpreter / jit / cc on any program.
+
+### 31.4 The guide's guarantee is now true as written
+
+docs/guides/performance-guide.md listed the named-let idiom under the
+self-tail-call guarantee. Section 29.4 had to add a "known gap" bullet for the
+non-capturing shape and rewrite the worked example around it. Both shapes are
+now optimized, so the bullet is gone and the example needs no caveat; the
+boundary list keeps only genuine boundaries. Pinned at 5,000,000 iterations by
+`tco-named-let-capture-deep` and `tco-named-let-nocapture-deep`.
+
+Which closes every defect J3 surfaced. The pattern across all four (sections
+28-31) is worth keeping: none was caused by the JIT, none was engine-specific
+-- gcc and MIR agreed on every one -- and two of the four were fixed by making
+an analysis agree with the emitter about IDENTITY, in code where the emitter
+already had the answer written down.

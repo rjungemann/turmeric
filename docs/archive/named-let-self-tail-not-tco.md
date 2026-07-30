@@ -12,7 +12,8 @@ Diagnosing it turned up a SECOND, unrelated defect behind the same surface
 syntax: a named let that captures NOTHING is CPS-colored instead, and its
 self-call recurses through the DK entry wrapper -- which SIGSEGVs on the cc
 path too, and is not a TCO gap at all. Filed separately as
-docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.
+docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md
+(also fixed the same day, findings 31).
 
 The original report follows.
 

@@ -112,8 +112,7 @@ loop:
     acc
     (count-down (- n 1) (+ acc 1))))
 
-; named-let -- the (loop ...) call is the self-tail-call.  `n` is read INSIDE
-; the loop body, so the loop is a capturing closure -- see the note below.
+; named-let -- the (loop ...) call is the self-tail-call
 (defn sum-to [n :int] :int
   (let loop [i   :int 0
              acc :int 0]
@@ -122,10 +121,13 @@ loop:
       (loop (+ i 1) (+ acc i)))))
 ```
 
-A named-let that reads an enclosing variable lowers to a lifted closure, and
-the backedge reassigns the loop parameters while leaving the captured
-environment alone (it does not change across a self-call).  Pinned by
-`tests/fixtures/tco-named-let-capture-deep` at 5,000,000 iterations.
+A named let lowers one of two ways -- to a lifted closure when the loop body
+reads an enclosing variable, and to a plain lifted function when it does not
+-- and both are optimized.  In the closure case the backedge reassigns the
+loop parameters and leaves the captured environment alone (it does not change
+across a self-call).  Pinned by `tests/fixtures/tco-named-let-capture-deep`
+and `tests/fixtures/tco-named-let-nocapture-deep` at 5,000,000 iterations
+each.
 
 **Boundary (1.0).** Only *self*-tail calls are optimized.  The following are
 left as ordinary recursive calls -- correct, but not stack-optimized:
@@ -136,16 +138,9 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
 - **tail calls inside `match` arms**;
 - self-recursive functions with pass-by-pointer struct, function-typed, or
   poly-fn parameters;
-- **a named let that captures NOTHING** from its enclosing function -- a
-  known gap, not a design boundary.  Such a loop is conservatively
-  CPS-colored (it is a lifted lambda, so the coloring analysis cannot rule
-  out an indirect call reaching a control operator), which routes it away
-  from the optimizer above; its self-call then re-enters the function's own
-  delimited-control entry wrapper once per iteration and overflows the stack
-  on *every* engine.  Until it is fixed, give the loop something to capture
-  -- reading a parameter of the enclosing `defn` in the loop body, as the
-  example above does, is enough.  Tracked in
-  docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.
+- a self-recursive function that genuinely uses a control operator
+  (`perform`/`handle`/`shift`/`await`) -- it is CPS-lowered, and the loop
+  runs on the delimited-control path rather than as a C backedge.
 
 General/mutual tail-call elimination and trampolining are deferred to the
 post-1.0 CPS pass.  See

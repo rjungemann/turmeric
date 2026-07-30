@@ -436,11 +436,43 @@ static void cps_node_add_edge(CpsNode *self, uint32_t target) {
     self->edges[self->n_edges++] = target;
 }
 
-/* Find the top-level node whose function binding == b, or -1. */
+/* The C symbol a binding resolves to, for call-target identity.  A captureless
+ * letrec lambda -- the named-let `(let go [...] ...)` idiom -- binds `go` to a
+ * DIFFERENT Binding object than the lifted `__fn_N`'s own FnDef binding, and
+ * records the lifted function's C name in `c_export_name`.  That is precisely
+ * how the emitter resolves the call (raw_name_for_binding consults
+ * c_export_name first, and emit_fns.c's self-TCO check compares the same
+ * mangled names), so it is the identity the coloring analysis must use too. */
+static const char *cps_binding_c_symbol(const Binding *b) {
+    if (!b) return NULL;
+    if (b->c_export_name) return b->c_export_name;
+    return b->name ? b->name->name : NULL;
+}
+
+/* Find the top-level node whose function binding == b, or -1.
+ *
+ * The pointer compare is the fast, exact case.  The C-symbol fallback resolves
+ * the alias above: without it a named let's self-call read as an UNRESOLVED
+ * call, which set `has_indirect` and conservatively colored the loop -- so a
+ * plain `(let go [i 0 acc 0] ... (go ...))` with no control operator anywhere
+ * was CPS-emitted, and its self-call then re-entered the function's own DK
+ * entry wrapper (a dk_prompt malloc + setjmp) once per iteration, overflowing
+ * the stack on every engine.  Two bindings that carry the SAME C symbol are the
+ * same C function by construction (the emitter emits one definition), so the
+ * fallback resolves a real edge rather than widening anything: the callee's own
+ * seed still colors it if it uses control, and the fixpoint still propagates
+ * that to callers.  See
+ * docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md. */
 static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
     if (!b) return -1;
     for (uint32_t i = 0; i < n; i++)
         if (nodes[i].fd->binding == b) return (int)i;
+    const char *bsym = cps_binding_c_symbol(b);
+    if (!bsym || !*bsym) return -1;
+    for (uint32_t i = 0; i < n; i++) {
+        const char *nsym = cps_binding_c_symbol(nodes[i].fd->binding);
+        if (nsym && strcmp(nsym, bsym) == 0) return (int)i;
+    }
     return -1;
 }
 

@@ -1,5 +1,17 @@
 # Non-capturing named let: CPS-colored, self-call recurses through the DK entry wrapper
 
+**RESOLVED 2026-07-30.** Root cause was not the eviction gate this report
+guessed at, but call-target RESOLUTION in the coloring analysis: `cps_find_node`
+matched only by Binding pointer, and a captureless letrec lambda binds `go` to a
+different Binding than the lifted `__fn_N` -- carrying that function's C symbol
+in `c_export_name`, which is exactly how the emitter resolves it. The self-call
+therefore read as unresolved, set `has_indirect`, and conservatively colored a
+loop with no control operator in it. The analysis now falls back to C-symbol
+identity, so the loop is uncolored, direct-emitted, and self-TCO'd. See
+[jit-engine-j0-findings.md](../upcoming/jit-engine-j0-findings.md) section 31;
+pinned by `tests/fixtures/tco-named-let-nocapture-deep`. The original report
+follows.
+
 **Severity: medium-high.** A deep loop overflows the stack on EVERY engine
 (cc included -- no optimizer can rescue it), and each iteration pays a
 `dk_prompt` malloc + `setjmp`. Found 2026-07-30 while fixing
