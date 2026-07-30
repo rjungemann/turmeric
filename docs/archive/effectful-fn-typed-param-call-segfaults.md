@@ -145,28 +145,26 @@ which is why this survived. Regenerating all 140 codegen snapshots produced
   and not performing, tail and non-tail (heap-join) position, `nil` and `int`
   results, with the empty-row and no-row spellings as controls.
 - `tests/fixtures/effectful-fat-fn-param-named/` -- the named-`defn` shape, kept
-  separate and minimal for the reason below.
+  separate for the reason below.
 
 `bash tests/run.sh`: **2442 passed, 0 failed**.
 
-### Still broken, and orthogonal -- filed as
-[named-effectful-defn-as-fat-fn-value-ices.md](../reported/named-effectful-defn-as-fat-fn-value-ices.md)
+### A second defect on the same shape -- also fixed
 
-Passing a **named** effectful `defn` as a `^fat` fn-value only reaches codegen
-when the call is the sole `handle` body. Sequencing it inside a `do`, or nesting
-its result in a builtin call (`(println (use-fn logit 4))`), aborts the
-compiler:
+While writing `effectful-fat-fn-param-named` it turned out that passing a
+**named** effectful `defn` as a `^fat` fn-value only reached codegen at all when
+the call was the sole `handle` body; sequencing it inside a `do`, or nesting its
+result in a builtin call, aborted the compiler with
+`effect form (EX kind 57) reached the direct/fiber emitter`. Confirmed
+orthogonal at the time (it aborted identically on a compiler rebuilt with this
+fix stashed), filed separately, and since fixed:
+[named-effectful-defn-as-fat-fn-value-ices.md](named-effectful-defn-as-fat-fn-value-ices.md).
 
-```
-tur: internal error: effect form (EX kind 57) reached the direct/fiber emitter
-  (fiber effect runtime deleted)
-```
-
-Confirmed pre-existing: both shapes abort identically on a compiler rebuilt with
-this fix stashed. It is a form-classification problem in the direct/fiber
-routing, not a registry-key problem, and it is at least a loud abort rather than
-a crash. `effectful-fat-fn-param-named` is shaped around it, and the inline
-lambda shapes are unaffected.
+Root cause there was the mirror image of this one -- boxing a function into a
+fat closure was counted as *performing* its effect, where here the box was not
+recognised as *holding* the function. Both come from the fat record sitting
+between a named fn and the code that uses it. `effectful-fat-fn-param-named` now
+exercises all three call positions rather than avoiding two of them.
 
 ## Found while
 

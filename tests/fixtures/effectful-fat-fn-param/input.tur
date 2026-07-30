@@ -13,8 +13,7 @@
 ;; tail and non-tail position, with a `nil` and an `int` result.  The empty-row
 ;; and no-row spellings are the controls -- they never took this path and must
 ;; not move.  A named defn as the fn-value is the sibling fixture
-;; effectful-fat-fn-param-named (it only reaches codegen as the sole `handle`
-;; body -- see the note there).
+;; effectful-fat-fn-param-named.
 
 (defeffect Log [n : int] : nil)
 

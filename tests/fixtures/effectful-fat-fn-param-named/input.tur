@@ -2,28 +2,45 @@
 ;; parameter whose fn type carries a non-empty effect row.
 ;;
 ;; The sibling fixture effectful-fat-fn-param covers the inline-lambda shapes.
-;; This one pins the named-defn shape, which is the case that made the original
-;; SIGSEGV easiest to read: `logit__cps` IS registered under `(intptr_t)logit`,
-;; and the fat record's direct-entry slot holds exactly `logit` -- so keying the
-;; registry lookup on the parameter's own value (a heap address) missed a lookup
-;; that was sitting right there.  See
-;; docs/archive/effectful-fn-typed-param-call-segfaults.md.
+;; This one pins the named-defn shape, which hit TWO separate defects:
 ;;
-;; Kept separate and deliberately minimal: passing a named effectful defn this
-;; way only reaches codegen when the call is the sole `handle` body.  Sequencing
-;; it inside a `do`, or nesting its result in a builtin call, trips a separate
-;; pre-existing emitter abort ("effect form reached the direct/fiber emitter")
-;; that has nothing to do with the registry key.
+;;  1. The E2a registry lookup keyed on the parameter's own value. `logit__cps`
+;;     IS registered under `(intptr_t)logit`, and the fat record's direct-entry
+;;     slot holds exactly `logit` -- but a `^fat` param carries the record, not
+;;     the entry, so the lookup missed and the miss was called through NULL.
+;;     See docs/archive/effectful-fn-typed-param-call-segfaults.md.
+;;
+;;  2. Boxing `logit` into that fat record was counted as *performing* its
+;;     effect, so the handled body containing the box construction was refused
+;;     by the CPS admission -- evicting the handler, tainting the effect,
+;;     co-evicting `logit`, and landing its `perform` in the direct emitter,
+;;     an ICE.  Taking a function's address runs nothing; only the call does.
+;;     See docs/archive/named-effectful-defn-as-fat-fn-value-ices.md.
+;;
+;; Defect 2 is why the call's POSITION matters here: before it was fixed, only
+;; the sole-`handle`-body shape reached codegen at all.  Each position below
+;; took a different path to the same crash, so all three are exercised.
 
 (defeffect Log [n : int] : nil)
 
 (defn logit [x : int] #fx{Log} : nil
   (perform (Log x)))
 
-(defn use-fn [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : int
-  (do (lg n) 0))
+;; the fn-value is called in non-tail position (the heap-join emit site)
+(defn run-join [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : int
+  (do (lg n) 7))
+
+;; the fn-value is called in tail position
+(defn run-tail [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : nil
+  (lg n))
 
 (defn main [] : int
   (handle
-    (use-fn logit 42)
+    (do
+      ;; sequenced inside a `do` -- previously ICEd
+      (run-join logit 1)
+      (run-tail logit 2)
+      ;; result nested in a builtin call -- previously ICEd
+      (println (run-join logit 3))
+      0)
     (Log [n] k) (do (println n) (resume k nil))))
