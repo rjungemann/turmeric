@@ -37,7 +37,7 @@ include_guard(GLOBAL)
 #     supporting c2mir fixes -- _Alignas was unparseable in spec_qual_list
 #     (struct members) and ignored for layout when it did parse
 #     (jit-engine-j0-findings.md section 30.1,
-#     docs/reported/jit-arm64-uint128-align-struct-layout-skew.md).
+#     docs/archive/jit-arm64-uint128-align-struct-layout-skew.md).
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is

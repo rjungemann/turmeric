@@ -299,7 +299,7 @@ Expr *elab_session_send(Elab *e, const Form *call) {
      * -pedantic, which the generated-C compile (-O2 -std=c99 -Wall) never sets,
      * and c2mir has no __extension__ keyword -- so it cost the JIT every
      * session fixture on any libc whose headers do not #define it away.  See
-     * docs/reported/jit-macos-full-corpus-extension-and-atexit.md.  The
+     * docs/archive/jit-macos-full-corpus-extension-and-atexit.md.  The
      * interpreter matches this text by prefix in src/turi/eval.c; keep the two
      * in sync. */
     static const char send_code[] =

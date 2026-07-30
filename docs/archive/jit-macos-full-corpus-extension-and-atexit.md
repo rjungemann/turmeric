@@ -1,5 +1,28 @@
 # JIT macOS full-corpus run: `__extension__` codegen gap, and `atexit` that resolves and then crashes
 
+**RESOLVED 2026-07-30.** All four findings are closed or carried forward:
+
+- **Finding 1 (`__extension__`)** -- FIXED at the time of writing; verified
+  still fixed (no emission site remains in `src/compiler/`, only explanatory
+  comments).
+- **Finding 2 (`atexit`)** -- FIXED. The engine intercepts `atexit` into a
+  per-image list rather than registering the real one (`src/jit_engine.c`,
+  findings 9.4), and J2 drains that list at image teardown. All
+  `module-defer-*` fixtures pass under `tur jit`.
+- **Finding 3 (Apple SDK header residue)** -- still live, and the only part
+  that is. Split into its own report so `docs/reported/` carries something
+  actionable rather than this whole document:
+  docs/reported/jit-macos-apple-sdk-headers-force-cc-fallback.md. It is
+  performance-only -- every affected fixture passes via the cc fallback.
+- **Finding 4 (c2mir ignores `#pragma pack` / `__attribute__((packed))`)** --
+  not exercised. Verified 2026-07-30 that the emitter produces neither
+  construct, so nothing depends on the layout c2mir gets wrong. Recorded as a
+  constraint in the split-out report: do not start emitting packed structs
+  without checking c2mir first.
+
+The original report follows, including the corpus measurements, which remain
+the record of how the platform delta was decomposed.
+
 **Severity:** medium (JIT spike / J1 planning only -- nothing here affects
 `tur build` or `tur emit-c` output correctness for the normal `cc` path).
 

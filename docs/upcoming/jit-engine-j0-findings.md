@@ -678,7 +678,7 @@ at the same `a8ab7c31` pin, Debug `tur` at `d657707dc`. This is the
 full-corpus macOS run 8.4.2 asks for and leaves open.
 
 Full detail, repros and severity analysis:
-[docs/reported/jit-macos-full-corpus-extension-and-atexit.md](../reported/jit-macos-full-corpus-extension-and-atexit.md).
+[docs/archive/jit-macos-full-corpus-extension-and-atexit.md](../archive/jit-macos-full-corpus-extension-and-atexit.md).
 
 ### 9.1 The predicted ~85% does not hold -- 81.7%, and sampling was masking a real gap
 
@@ -3310,7 +3310,7 @@ seam 20.5 warned diverges. Invisible on x86-64 Linux because nothing in
 glibc's `ucontext_t` needs 16-byte alignment.
 
 Report + validated 3-hunk MIR patch:
-docs/reported/jit-arm64-uint128-align-struct-layout-skew.md (the patch also
+docs/archive/jit-arm64-uint128-align-struct-layout-skew.md (the patch also
 fixes two independent c2mir gaps: `_Alignas` is unparseable in
 `spec_qual_list`, and ignored for layout when it does parse). LANDED as
 fork commit `90633091`, with `TUR_MIR_GIT_TAG` repointed in

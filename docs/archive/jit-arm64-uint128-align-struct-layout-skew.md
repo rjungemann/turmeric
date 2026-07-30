@@ -1,5 +1,17 @@
 # JIT on arm64 macOS: c2mir aligns `__uint128_t` to 8, skewing every struct that embeds `ucontext_t`
 
+**RESOLVED 2026-07-30.** Fixed by a three-hunk patch to the MIR fork
+(`rjungemann/mir` `90633091`), with `TUR_MIR_GIT_TAG` repointed in
+`cmake/mir.cmake`; verified on Apple Silicon from a fresh build directory
+(findings 32) and cross-checked on x86-64 Linux, where `tests/run-jit.sh`
+gives 2394 / 0 / 47 -- identical to the old pin, no regression (findings 33.1).
+The patch is not upstream in vnmakarov/mir; if it lands there, point
+`TUR_MIR_GIT_REPOSITORY`/`TAG` back and drop the fork.
+
+The macOS build-and-toolchain guidance at the end of this report is now also in
+CLAUDE.md ("macOS: building fixtures against a sanitized libturi.a"), since it
+applies to any macOS run, not just this bug. The original report follows.
+
 **Severity: HIGH.** Silent layout divergence at the JIT/host-runtime ABI
 seam. The program's view of a runtime struct disagrees with the host
 runtime's view, so field reads land on the wrong bytes. Observed as an

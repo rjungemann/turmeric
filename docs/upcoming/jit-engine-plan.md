@@ -31,8 +31,7 @@ descends into fixture GROUP directories, so the 52 `typed/*`,
 `typed-slots/*`, `recursive-types/*`, `lambda-call-head/*` and
 `lang-dispatch/*` fixtures -- which no compiling harness had ever run --
 are compiled by the default suite (2,478/0; Debug jit harness 2,393/0/47).
-With findings 31 every defect J3 surfaced is closed. J4 remains optional,
-post-usage-data. Plan written 2026-07-27; J0 spike
+With findings 31 every defect J3 surfaced is closed. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
@@ -79,15 +78,11 @@ and the tree-walking interpreter (`tur interpret`/`tur repl`): an in-process
 JIT that compiles a program to native code with no `cc` subprocess and no
 disk artifacts, at sub-millisecond-per-function compile latency.
 
-**Recommended engine: MIR (`c2mir` + `MIR-gen`), not AsmJit.** Turmeric
-already emits C; MIR ships a built-in C11-to-IR front end (`c2mir`) plus an
-optimizing JIT back end, so the entire existing codegen path is reused
-verbatim and no per-architecture instruction selection is written at all.
-AsmJit remains the recorded fallback for a possible later baseline-JIT tier
-(see section 3.4), but it is an assembler *framework* -- choosing it means
-inventing a bytecode/lowering IR plus two hand-written instruction selectors
-(x86-64 and AArch64) plus a C++17 shim in a pure-C codebase. MIR gets to a
-working JIT with roughly two orders of magnitude less new code.
+**Engine: MIR (`c2mir` + `MIR-gen`).** Turmeric already emits C; MIR ships a
+built-in C11-to-IR front end (`c2mir`) plus an optimizing JIT back end, so the
+entire existing codegen path is reused verbatim and no per-architecture
+instruction selection is written at all. Section 2 records the alternatives
+considered and why each was rejected.
 
 Pipeline: `reader -> elaborate -> kind/effect/CPS/borrow -> emit C (in
 memory) -> c2mir -> MIR-gen -> call function pointer`.
@@ -164,7 +159,7 @@ of scope here; the emit-C JIT makes it unnecessary for v1-era goals.
 | Option | Language/license | Build | Fit |
 |---|---|---|---|
 | **MIR (c2mir + MIR-gen)** | C (~20 KLOC), MIT | CMake upstream | **Chosen.** Feed it the C we already emit. ~100x faster codegen than `gcc -O2`, output ~91% of gcc -O2 speed (Makarov's numbers). x86-64 + AArch64, macOS Apple Silicon (M1) explicitly supported. Precedent: Ravi (typed Lua) dropped LLVM and OMR for MIR. |
-| AsmJit | C++17, Zlib | CMake-native | Excellent assembler framework (Compiler layer does regalloc; Apple Silicon MAP_JIT/W^X handled in-library), but no IR/isel -- we would write two instruction selectors + a C shim. Recorded as the tier-2 option (3.4). |
+| AsmJit | C++17, Zlib | CMake-native | Excellent assembler framework (Compiler layer does regalloc; Apple Silicon MAP_JIT/W^X handled in-library), but no IR/isel -- we would write two instruction selectors + a C shim, plus a bytecode to lower from, in a pure-C codebase. Rejected. |
 | libtcc | C, LGPL-2.1 | ad hoc | Feed-it-C convenience but ~`-O0` code quality, LGPL, and unverified in-memory-exec support on arm64 macOS (predates MAP_JIT regime). Rejected. |
 | libjit | C, LGPL | autotools only | Confirmed moribund ("last release severely out of date" per GNU page); AArch64 shaky. The CMake pain is real and is the least of its problems. Rejected. |
 | sljit | C, BSD-2 | CMake | Best pure-C low-level fallback (proven on Apple Silicon via PCRE2), but no regalloc and still per-arch lowering work. Not needed given MIR. |
@@ -242,18 +237,6 @@ dlsym are replaced by MIR module lookup; `ffi_thunk.c` binding installation
 is unchanged. `(reload)` / `--watch` re-run c2mir on the changed module
 only -- this is where sub-millisecond compiles visibly beat the current
 subprocess round trip.
-
-### 3.4 Recorded decision: AsmJit tier (not now)
-
-If a later need emerges for (a) lower compile latency than c2mir on cold
-REPL input, or (b) a profile-guided hot-loop tier above MIR's output
-quality, the shape would be: a small bytecode lowered from post-CPS
-`Expr`, a baseline template JIT per op (Guile/lightening precedent shows
-no-regalloc template JITs are a legitimate tier), with AsmJit's `Compiler`
-layer (regalloc, ABI frames, MAP_JIT handling) as the emitter -- behind an
-`extern "C"` shim, C++17 toolchain added via `enable_language(CXX)`.
-Nothing in the MIR plan forecloses this; do not start it before MIR-tier
-usage data exists.
 
 ## 4. Pre-work that shrinks the JIT surface (can land independently)
 
@@ -390,8 +373,6 @@ useful even if the JIT slips.
   for genuinely cc-only fixtures, e.g. ASan-interop ones). Benchmark
   triangle: interpreter vs `tur jit` vs `cc -O2`, published in
   `docs/guides/performance-guide.md`.
-- **J4 (optional, post-usage-data).** AsmJit baseline tier per 3.4, only
-  with evidence.
 
 ## 6. Testing and tooling notes
 
