@@ -57,6 +57,51 @@ exactly as-is for carrier-eligible signatures -- this plan does not widen
 carrier eligibility (`fn_type_has_named_tyvar` exists because widening it
 miscompiled by-value struct args; see `poly-hof-constrained-arg-baked-carrier`).
 
+## Stage 0 -- landed 2026-07-30 (ABI ratified, matrix pinned, blast radius measured)
+
+Per the meta-plan checklist, before any emitter change:
+
+- **ABI ratification probe:** `tests/probes/fat-normalization-f0/fatparam.c`
+  proves the stage-1 convention in hand-written C against the real emitted
+  layouts (drop-glue header, `__fn` slot 0, `{shim, orig}` bare box,
+  slot-0 dispatch): one compiled callee body serves a capturing closure
+  AND a shimmed bare fn through a nominal fn-typed parameter, including a
+  pass-through (`thru`) hop. All 5 properties PASS, ASan/UBSan clean.
+- **Ok-rows pinned pre-fix:** `tests/fixtures/fn-value-matrix-ok-rows/`
+  holds the working rows of the boundary matrix (direct / let / ascribe /
+  gid invoke, thin consume, `^fat` consume, cstr payload) so the working
+  boundary cannot regress while the broken rows flip.
+- **D0 blast radius, measured with the increment-0 repr-trace** over a
+  300-fixture sample (seed-42 shuffle; stdlib baseline of 12 fn-param
+  lines/emit subtracted): the sample carries **~20 user nominal thin-fn
+  params** vs ~21 `^fat`, ~8 carrier, 1 cfnptr -- extrapolating,
+  **roughly 95-100 nominal thin fn params corpus-wide, plus 1 in the
+  auto-loaded stdlib** (a tyvar-sig param, so present in every program).
+  Stage 1's churn is therefore concentrated in ~7% of fixtures plus one
+  stdlib signature -- moderate, not tree-wide.
+
+**Implementation map for stage 1** (found while investigating; the two
+sides must land together):
+
+- *Elab side:* the `^fat` auto-shim block (`elab_call.c` ~5425, keyed on
+  `FN_ARG_FLAG(..., FA_FAT)`) is the machinery to extend to nominal thin
+  TY_FN param slots -- and it is a dense accretion of guards that ALL
+  apply to the generalized case: the already-fat ascription strip, the
+  captureless-under-ascription strip, the is_fat double-shim retype, the
+  `EX_POLY_TO_FAT` conversion, and the pass-through set. Each guard is a
+  pre-registered canary for stage 1, not incidental complexity.
+- *Emit side:* the invoke branch (`emit_expr.c`, "ER2: Callback call
+  through a local TY_FN parameter") currently fat-dispatches only
+  `is_fat || boxed` and falls through to the thin
+  `((R (*)(...))(intptr_t)p)(...)` call. The flip is scoped to
+  `is_param` bindings (let-bound TY_FN locals keep today's behavior in
+  stage 1) and must exclude `cfnptr`.
+- *Hazard found:* a capturing closure at a nominal param is ACCEPTED by a
+  different elab path than the `^fat` one (`A#1` gate at ~4780 is
+  FA_FAT-gated), so the acceptance and the shim rules live in different
+  blocks -- stage 1 must reconcile them or the shim will miss shapes the
+  checker admits.
+
 ## Stages
 
 1. **Param normalization.** Non-carrier fn-typed parameters take the fat

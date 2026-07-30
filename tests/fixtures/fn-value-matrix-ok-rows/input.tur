@@ -1,0 +1,28 @@
+;; fn-value-matrix-ok-rows -- the OK rows of the boundary matrix in
+;; docs/reported/fn-typed-value-return-ascribe-miscompiles.md, pinned BEFORE
+;; the fat-normalization fix lands (meta-plan landing checklist item 3: the
+;; working boundary must not regress while the broken rows flip).  The
+;; broken rows join this fixture when fn-value-fat-normalization-plan
+;; stage 2 makes them compile.
+(defn mk [x : int] : (fn [] int) (fn [] x))
+(defn mkc [s : cstr] : (fn [] cstr) (fn [] s))
+(defn gid [A] [x : A] : A x)
+(defn use-thin [v : (fn [] int)] : int (v))
+(defn use-fat [^fat v : (fn [] int)] : int (v))
+
+(defn main [] : int
+  ;; direct invoke of a returned closure
+  (println ((mk 5)))
+  ;; let-bound, then invoked
+  (println ((let [v (mk 6)] v)))
+  ;; ascribed (directly), then invoked
+  (println ((:: (mk 7) (fn [] int))))
+  ;; through generic identity
+  (println ((gid (mk 8))))
+  ;; consumed through a thin fn-typed param (callee calls, does not return it)
+  (println (use-thin (mk 9)))
+  ;; consumed through a ^fat param
+  (println (use-fat (mk 10)))
+  ;; non-int payload: direct invoke round-trips a cstr
+  (println ((mkc "ok-11")))
+  0)
