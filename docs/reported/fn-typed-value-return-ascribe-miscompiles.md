@@ -89,11 +89,21 @@ them, a parser library passing parsers through identity/compose functions --
 
 ## Fix directions
 
-1. Fold into the poly-result-hof-capturing-closure-sigbus calling-convention
-   plan (fat protocol for every non-carrier fn boundary); these repros are
-   additional acceptance tests for that plan -- the pass-through and
+1. Fold into the calling-convention plan (fat protocol for every non-carrier
+   fn boundary) --
+   [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md);
+   these repros are its stage-2 acceptance tests -- the pass-through and
    ascribe-around-let shapes specifically.
 2. Fixtures: the full matrix above, ok rows included -- the working/broken
    boundary is sharp enough that a regression in either direction should pin.
 3. Until fixed, `tests/type-fuzz-src.py` avoids the shapes via
    `known_bug_slug` (slug: this file) and pins them in `--known-probes`.
+
+## Guide upkeep
+
+When this report is resolved -- or any representation/bridge it describes
+changes shape on the way -- update
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+in the same PR: fix the representation inventory, move this report's row out
+of the missing-cells table, and correct the link when the report moves to
+`docs/archive/`.

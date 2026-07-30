@@ -69,3 +69,12 @@ boundary.
 ## Workaround
 
 Mark the element struct `:heap`.
+
+## Guide upkeep
+
+When this report is resolved -- or any representation/bridge it describes
+changes shape on the way -- update
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+in the same PR: fix the representation inventory, move this report's row out
+of the missing-cells table, and correct the link when the report moves to
+`docs/archive/`.

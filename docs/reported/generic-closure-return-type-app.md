@@ -237,3 +237,12 @@ the parametric version compiles but still needs the casts from step 2.
   `(fn [] (Cons A))` inline everywhere instead of naming it once.
 - [defn-shadows-return-special-form.md](defn-shadows-return-special-form.md) --
   the third defect found in the same guide.
+
+## Guide upkeep
+
+When this report is resolved -- or any representation/bridge it describes
+changes shape on the way -- update
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+in the same PR: fix the representation inventory, move this report's row out
+of the missing-cells table, and correct the link when the report moves to
+`docs/archive/`.

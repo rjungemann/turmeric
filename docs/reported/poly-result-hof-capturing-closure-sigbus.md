@@ -15,7 +15,8 @@ VALUES (a returned closure through a pass-through param, `^fat` included, or
 an ascription around a let) -- see
 [fn-typed-value-return-ascribe-miscompiles.md](fn-typed-value-return-ascribe-miscompiles.md).
 Those repros are additional acceptance tests for the calling-convention plan
-sketched below; the two reports should land together.
+sketched below; the two reports should land together. The plan is now
+written: [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md).
 
 ## Investigation (2026-07-29)
 
@@ -204,3 +205,12 @@ the memory notes on poly-closure-result specialization
 `tur run` the snippet above with any current `build/tur` (seen at v0.31.0).
 The monomorphic control in the table is the fastest confirmation it is the
 result tyvar and not the capture.
+
+## Guide upkeep
+
+When this report is resolved -- or any representation/bridge it describes
+changes shape on the way -- update
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+in the same PR: fix the representation inventory, move this report's row out
+of the missing-cells table, and correct the link when the report moves to
+`docs/archive/`.

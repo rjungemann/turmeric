@@ -14,7 +14,9 @@ Every one of those bugs has the same anatomy: a value's REAL type (a by-value
 struct, a closure with an environment, a type application) meets the int64
 carrier erasure at some boundary -- a function return, a `(fn ...)` parameter,
 a typeclass method result, a Vec element slot -- and the two sides disagree
-about the representation.  The checker accepts, and then either cc rejects the
+about the representation.  The full representation/boundary inventory this
+harness walks is documented in docs/guides/value-representations-guide.md;
+keep the two in sync.  The checker accepts, and then either cc rejects the
 emitted C (`invalid initializer`), the linker misses a symbol, or the binary
 reads a struct out of a pointer and dies.  Hand-written fixtures only cover
 the combinations someone thought of; the reports above are all combinations
