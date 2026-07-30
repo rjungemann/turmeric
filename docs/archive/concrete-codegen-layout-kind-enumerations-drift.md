@@ -2,15 +2,16 @@
 
 **Severity:** high. One missing arm in the first of these produced the
 just-fixed silent-wrong-output bug in
-[map-show-keyword-key-raw-int](../archive/map-show-keyword-key-raw-int.md). The
+[map-show-keyword-key-raw-int](map-show-keyword-key-raw-int.md). The
 second is worse: ordinary code reaches a two-types-one-C-name collision that
 routes a closure handle through a `double`, which round-trips exactly only while
 addresses stay under 2^53. It compiles, it prints correct answers today, and it
 is silently address-layout-dependent. See
 [Reachability](#reachability-reached-by-ordinary-code-and-currently-masked).
 
-**Status:** Finding 1 **FIXED 2026-07-29**; Finding 2 still open. See
-[Resolution](#resolution-2026-07-29--finding-1).
+**Status:** **RESOLVED.** Finding 1 fixed 2026-07-29
+([Resolution](#resolution-2026-07-29--finding-1)); Finding 2 fixed 2026-07-30
+([Resolution](#resolution-2026-07-30--finding-2)).
 
 ## The shape of the problem
 
@@ -99,7 +100,7 @@ the default arm.
 An earlier revision of this report concluded "real defect, no reachable trigger."
 **That was wrong**, and the way it was wrong is instructive: the first probe used
 a `(fn [] float)` payload, which fails to compile for an unrelated reason
-([fn-payload-in-container-undeclared-temp](fn-payload-in-container-undeclared-temp.md)
+([fn-payload-in-container-undeclared-temp](../reported/fn-payload-in-container-undeclared-temp.md)
 -- niladic float thunks only). Narrowing *that* bug freed up fn types that do
 compile, and the collision is reachable with them.
 
@@ -205,7 +206,7 @@ arm and pointing two kinds at one token each fail it.
 
 Two fixtures went red, and they are a **pre-existing defect made visible**, not a
 regression -- filed as
-[fn-element-tyvars-not-substituted-in-spec-types](../archive/fn-element-tyvars-not-substituted-in-spec-types.md).
+[fn-element-tyvars-not-substituted-in-spec-types](fn-element-tyvars-not-substituted-in-spec-types.md).
 A function-typed element's tyvars are never substituted into a spec's argument
 types -- `emit_abi_instantiate_type` has no `TY_FN` arm, and a fn keeps its
 tyvars only in the out-of-line `arg_full_types`/`result_full_type`. While both
@@ -246,9 +247,162 @@ so if either is ever admitted to the concrete list while still mangling to
 differ in *size*, not just register class. Admitting them without fixing the
 mangling first would upgrade a latent defect into a live one.
 
+## Resolution (2026-07-30) -- Finding 2
+
+Three changes, in `src/compiler/types.c`. The audit came back with one
+admission, one *new* live collision, and eight documented exclusions.
+
+### The correction to Finding 2's premise
+
+The report says the questionable kinds are "rejected", implying they never
+reach a monomorph name. **They do.** `type_register_adt_app` rejects only
+`TY_TYVAR` / `TY_UNKNOWN` type arguments (types.c:1155); every other kind gets a
+registry entry and a `tur_adt_<Name>__<token>` typedef *regardless* of what
+`type_has_concrete_codegen_layout` says. The concrete list controls whether the
+value flows by value and whether constrained instances specialize -- not whether
+a name is minted. So the Finding 1 rule ("the mangling must be injective with
+respect to `type_eq`") applies to **every** kind, including the ones this switch
+rejects, and the "they are rejected anyway" hedge in the old mangler comment was
+not load-bearing after all.
+
+Under that rule, eight kinds were still merging, because their arms spelled a
+bare token while `type_eq` discriminates on a payload:
+
+| kind | `type_eq` compares | now mangles |
+| --- | --- | --- |
+| `TY_UNION` | members, structurally | `union2_int_float` |
+| `TY_INTERSECTION` | members, structurally | `intersection2_...` |
+| `TY_REC` | `rec.name` (interned) | `rec_<name>` |
+| `TY_TYPEROW` | elements + field names, order-sensitive | `typerow2_<e0>_<e1>` |
+| `TY_FORALL` / `TY_EXISTS` | n_vars + constraint set + body | `forall1_0__int` |
+| `TY_TYPECLASS` | the `TypeClass *` | `typeclass_<name>` |
+| `TY_TYPECLASS_INST` | the instance pointer | `typeclass_inst_<class>_<args>` |
+| `TY_CONTRACT` | -- see below | `contract_<base>` |
+
+Verified live for unions before the fix: `(Box (| int float))` and
+`(Box (| int cstr))` both emit `tur_adt_Box__union`, two typedefs under one
+name, second `#ifndef`'d away. Both bodies carry a `tur_tagged_t` field, so
+this one is layout-safe by luck -- but every name-keyed specialization
+downstream still merges, which is the map-show failure mode.
+
+### The one that was not layout-safe: `TY_CONTRACT`
+
+`TY_CONTRACT` failed in *both* directions at once, and this is the live defect
+Finding 2 turned up:
+
+- `type_c_name` **delegates to the base type**, so `{ x : int | .. }` is
+  `int64_t` and `{ y : float | .. }` is `double` -- two different layouts.
+- `type_eq` had **no arm at all** for it, falling through to the trailing
+  `return 1`: *every* pair of contract types compared equal.
+
+So the two shared one registry entry and one `tur_adt_Box__contract` typedef.
+Emitted before the fix, from `(Box { x : int | (> x 0) })` alongside
+`(Box { y : float | (> y 0.0) })`:
+
+```c
+typedef struct tur_adt_Box__contract {          /* survives */
+    union { struct { int64_t _0; } MkBox; } as;
+} tur_adt_Box__contract;
+typedef struct tur_adt_Box__contract {          /* #ifndef'd away */
+    union { struct { double  _0; } MkBox; } as;
+} tur_adt_Box__contract;
+...
+double v_1307 = (double)__scrut->as.MkBox._0;   /* float arm reads the int64 field */
+```
+
+Note the read is a *numeric* `(double)` conversion off an `int64_t` field --
+worse than Finding 1's bit-preserving round trip, and not masked by address
+layout. Mangling alone could not fix it: with `type_eq` saying the two types
+are equal, the registry never creates a second entry to name differently. So
+`type_eq` gained a `TY_CONTRACT` arm comparing base types. Predicates are
+deliberately *not* compared -- they are run-time-checked and never C-visible,
+so `{ x : int | (> x 0) }` and `{ x : int | (< x 0) }` stay interchangeable
+exactly as before.
+
+With identity fixed, the report's own recommendation for this kind follows:
+`type_has_concrete_codegen_layout` now **delegates to the base type** too, so
+`(Box { y : float | .. })` monomorphises with the `double` field its base asks
+for instead of losing the by-value monomorph to the int64 carrier. Result:
+`tur_adt_Box__contract_int` (int64 field) and `tur_adt_Box__contract_float`
+(double field), one typedef each, constructors with matching signatures.
+
+### The other four questionable kinds -- excluded, with reasons
+
+Each now carries its rejection in the switch rather than falling off a
+`default`:
+
+- **`TY_ANY` / `TY_UNION`.** `tur_tagged_t` is a real C type and it is **two
+  words**; every kind on the accepted list is one. Admitting them is a
+  by-value-ABI change (a 16-byte monomorph field with its own copy/drop
+  crossings), not a table edit, and there is still no way to build one to test
+  it -- `(Vec any)` type-checks but `vec-of`'s type-witness binding trips
+  `TUR-E0201` inside `stdlib/vec.tur`. Their tokens are now distinct, so the
+  size-mismatch hazard the report warned about ("admitting them without fixing
+  the mangling first would upgrade a latent defect into a live one") is closed
+  ahead of any future admission.
+- **`TY_REC` / `TY_INTERSECTION`.** `type_c_name` gives both the plain
+  `int64_t` carrier, so a by-value monomorph over either would have exactly the
+  carrier's layout and buy nothing but an extra C name. Revisit if either grows
+  a representation of its own (`TY_INTERSECTION` is documented as an IT2
+  placeholder).
+
+The kinds the report classed as correctly rejected keep that verdict, with one
+refinement: `TY_SESSION_PAIR` / `TY_SESSION_RECV_PAIR` / `TY_SESSION_OFFER` are
+**not** comment-void (they lower to `void *` / `int64_t`), so they are excluded
+on a different ground -- they are internal result types of `make-session` /
+`recv` / `offer` that exist only between the call and its destructuring pattern,
+and are never written by a user in a type-argument slot.
+
+### Discipline: the third switch is exhaustive now too
+
+`type_has_concrete_codegen_layout` has **no `default` arm**. All 60 `TypeKind`
+members have an explicit case, so `-Wall`/`-Wswitch` makes a newly added kind a
+build failure there as well -- which is fix direction 3's actual goal (drift
+becomes a compile error) reached without collapsing three switches whose arms
+are mostly *computed*, not table lookups: `type_c_name` registers fn-pointer
+typedefs and consults `AdtDef`s, and the mangler now recurses into payloads. A
+`KIND_INFO[]` row could carry only the bare-token minority; the switches would
+survive anyway, and a table that covers a third of the cases enforces nothing.
+Two of the three enumerations were unenforced when this report was filed; zero
+are now.
+
+### Guard
+
+- `tests/check-typekind-mangle-exhaustive.sh` gained two properties (now five):
+  every payload-comparing kind still mangles a payload (a kind cannot quietly
+  decay back to a bare token), and `type_has_concrete_codegen_layout` has no
+  `default` arm and a case per enum member. Verified to gate on both.
+- `tests/check-monomorph-name-collision.sh` (new; ctest
+  `tur_monomorph_name_collision`) is the behavioural half -- it compiles four
+  programs that instantiate one ADT at two type arguments (fn payloads, `rc`
+  inners, union members, contract bases) and asserts (a) no `#ifndef`-guarded
+  name is defined twice with differing bodies, and (b) the two expected
+  monomorph names both appear. Property (b) is what catches a merge whose two
+  layouts coincide, like the union pair. Verified to gate: reverting the union
+  and contract mangle arms fails it, and the contract failure prints the
+  `int64_t`-vs-`double` body divergence.
+
+### Cost
+
+**Zero fixture churn** -- `bash tests/run.sh` is 2436/0 both before and after.
+No fixture instantiates a parametric ADT at a contract, union, intersection,
+rec, row, quantified or typeclass type argument, which is also why the
+collision survived this long.
+
+### Not fixed here
+
+A contract-typed payload is still hard to *use* at a boundary, for reasons
+outside this report: `(match b (MkBox v) v)` returning `v` as `float` trips
+`TUR-E0707` (the contract is not peeled to its base for the register-class
+check), and `(println v)` finds no overload for `{ y : float | .. }`. The
+layouts are right now; the surface still needs the peel.
+
 ## Fix directions
 
-Roughly increasing cost:
+Roughly increasing cost. **(1) done 2026-07-29, (2) done 2026-07-30, (3)
+superseded** -- see the two Resolution sections above; (3)'s goal (drift is a
+compile error) is met by making all three switches exhaustive, without the
+table.
 
 1. **Give `append_type_mangle` a real token per kind, or make its default
    loud.** The cheap, high-value half -- and given the Reachability section, the
@@ -277,3 +431,11 @@ assert that if `type_has_concrete_codegen_layout` accepts it then
 `append_type_mangle` gives it a token other than `opaque`. That single assertion
 covers all of Finding 1 and fails loudly the next time a kind is added to one
 switch and not the other.
+
+**Added.** Both halves, and the assertion ended up stronger than proposed --
+"a token other than `opaque`" is not enough, because a merge can also happen
+between two *listed* kinds (Finding 1's `fn` vs `fn`) or within one kind whose
+payload is dropped (Finding 2's `union` vs `union`). What the guards assert is
+injectivity against `type_eq`, plus exhaustiveness of both switches:
+`tests/check-typekind-mangle-exhaustive.sh` (five source-text properties, no
+build) and `tests/check-monomorph-name-collision.sh` (four compiled repros).

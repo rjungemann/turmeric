@@ -8,7 +8,7 @@ the error names a generated identifier rather than anything in the source.
 fails to compile, it compiles with a `-Wint-conversion` warning and
 **segfaults**. See [Failure mode change](#failure-mode-change-2026-07-30).
 Found 2026-07-29 while investigating
-[concrete-codegen-layout-kind-enumerations-drift](concrete-codegen-layout-kind-enumerations-drift.md);
+[concrete-codegen-layout-kind-enumerations-drift](../archive/concrete-codegen-layout-kind-enumerations-drift.md);
 independent of it (see [Not the mangling collision](#not-the-mangling-collision)).
 
 ## Repro

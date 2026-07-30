@@ -187,13 +187,21 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-# concrete-codegen-layout-kind-enumerations-drift: append_type_mangle must stay
-# exhaustive over TypeKind and injective in its tokens, or two distinct
-# instantiations silently share one monomorph C name.  Source-text check, no
-# build needed.
+# concrete-codegen-layout-kind-enumerations-drift: append_type_mangle and
+# type_has_concrete_codegen_layout must stay exhaustive over TypeKind, and the
+# mangle must stay injective against type_eq, or two distinct instantiations
+# silently share one monomorph C name.  Source-text check, no build needed.
 add_test(
   NAME tur_typekind_mangle_tests
   COMMAND bash tests/check-typekind-mangle-exhaustive.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Same report, behavioural half: compile programs that instantiate one ADT at
+# two type arguments and assert the two monomorphs do not land on one C name
+# (and that no #ifndef-guarded name is defined twice with differing bodies).
+add_test(
+  NAME tur_monomorph_name_collision
+  COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # F2.6 (compiled-shallow-handlers-plan): acceptance probes for `handle-shallow`.
