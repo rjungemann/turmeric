@@ -328,6 +328,16 @@ about, and cowpaths are paved before the field is closed:
   representation trace above; the guide's missing-cells table reconciled
   against `docs/reported/` (it is the campaign's live scoreboard, per the
   Guide-upkeep tasks each report carries).
+  *Status 2026-07-30: first slice landed.* `repr-trace` lines ship under
+  `--emit-abi-trace`: one per fn-typed parameter (carrier / fat / cfnptr /
+  thin-fn + which gate forced it, from the `carrier_ok` decision in
+  `elab_fns.c`) and one per emit-side fat bridge (bare-to-fat with shim
+  kind, poly-to-fat), pinned by `tests/run-repr-trace.sh` (ctest
+  `tur_repr_trace`). Guide table reconciled (+2 rows:
+  `fn-payload-in-container-undeclared-temp`, enumerations-drift Finding
+  2); all 10 `--known-probes` fire on current main. Remaining for a later
+  slice: value-position bridges (carrier<->concrete re-wraps) and
+  container-element slot decisions.
 - **Increment 1 -- the fn-value axis.**
   [fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md),
   staged as written (params -> return/let/ascribe -> unify flag'd sinks).

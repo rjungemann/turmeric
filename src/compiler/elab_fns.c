@@ -3,6 +3,7 @@
 #include "refine_discharge.h"   /* RT3: decide a refinement obligation in place */
 #include "refine_solver.h"      /* RT1: refine_model_search, for the W0377 witness */
 #include "runtime/experiments.h" /* RT0: experiment_warn_if_used("refined") */
+#include "globals.h"            /* repr-trace: g_emit_abi_trace */
 
 /* closure-drop-glue S1c: the closure-escape analysis (defined emit-side in
  * emit_core.c) is a pure walk of the shared Expr tree, reused here to infer
@@ -3612,6 +3613,32 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                   ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
                                   !fn_type_has_named_tyvar(ann) &&
                                   fn_type_is_carrier_safe(ann);
+                /* repr-trace (representation-consolidation-meta-plan increment
+                 * 0): with --emit-abi-trace, print the representation this
+                 * fn-typed parameter was routed onto, and -- for the thin
+                 * nominal TY_FN fallthrough -- which gate forced it there.
+                 * This makes the per-boundary decision diffable: a
+                 * consolidation increment can assert "only the intended
+                 * boundaries moved" by diffing traces. */
+                if (g_emit_abi_trace) {
+                    const char *repr;
+                    const char *why = "";
+                    if (carrier_ok)                repr = "carrier";
+                    else if (pb->is_fat)           repr = "fat";
+                    else if (ann->as.fn.cfnptr)    repr = "cfnptr";
+                    else {
+                        repr = "thin-fn";
+                        if (effectful)                              why = " effect-row";
+                        else if (ann->as.fn.is_variadic)            why = " variadic";
+                        else if (fn_type_has_named_tyvar(ann))      why = " tyvar-sig";
+                        else if (!fn_type_is_carrier_safe(ann))     why = " non-scalar-sig";
+                        else if (!plain)                            why = " substructural";
+                        else                                        why = " arity";
+                    }
+                    fprintf(stderr, "repr-trace %u:%u fn-param %s %s%s\n",
+                            p->span.line, p->span.col_start,
+                            pb->name ? pb->name->name : "_", repr, why);
+                }
                 if (carrier_ok) {
                     param_kinds[n_params - 1] = TY_PTR_VOID;
                     pb->type = TYPE_PTR_VOID;

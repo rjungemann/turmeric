@@ -501,6 +501,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_type_fuzz_src PROPERTIES TIMEOUT 600)
+# Representation trace smoke (representation-consolidation-meta-plan,
+# increment 0): --emit-abi-trace's repr-trace lines classify every fn-typed
+# parameter's representation and every emit-side representation bridge, so
+# consolidation increments can diff traces.  This pins each classification.
+add_test(
+  NAME tur_repr_trace
+  COMMAND bash tests/run-repr-trace.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repr_trace PROPERTIES TIMEOUT 120)
 # RT5a: the refinement solver on wasm32 -- compiles under Emscripten AND gives
 # the same answers at 32-bit pointers.  Skips cleanly when emcc is absent.
 add_test(

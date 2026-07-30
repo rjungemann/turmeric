@@ -8561,6 +8561,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
 
+            /* repr-trace: a bare fn crossing into a fat sink -- the shim
+             * bridge is where the representation changes hands. */
+            if (g_emit_abi_trace) {
+                fprintf(stderr, "repr-trace %u:%u bridge bare-to-fat arity=%u %s\n",
+                        e->span.line, e->span.col_start, (unsigned)arity,
+                        typed_shim ? "typed-shim" : "int64-shim");
+            }
+
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             {
@@ -8605,6 +8613,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * method's real N-ary thunk (make_poly_wrapper), so binary or
              * higher-arity poly methods round-trip into a matching ^fat sink. */
             const Expr *inner = e->as.poly_to_fat_.inner;
+            /* repr-trace: a poly-carrier {env,fn} value boxed into a fat
+             * handle for a ^fat sink. */
+            if (g_emit_abi_trace) {
+                fprintf(stderr, "repr-trace %u:%u bridge poly-to-fat\n",
+                        e->span.line, e->span.col_start);
+            }
             char *pv = emit_value(ctx, body, inner);
             char *pf = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);

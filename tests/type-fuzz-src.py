@@ -223,6 +223,20 @@ KNOWN_PROBES = [
      "(defn gid [A] [x : A] : A x)\n"
      "(defn main [] : int\n"
      "  (println (match (gid (.thru (FzWc -10))) (FzWc x) x))\n  0)\n"),
+    # Not a shape this generator emits (wrappers hold scalars, never fn
+    # values); pinned anyway so the burn-down meter covers the whole
+    # missing-cells table.  The report's Vec variant runs clean on current
+    # main; the parametric-defdata + FLOAT variant is the one still open
+    # (per the float rule: an int-returning fn hides in the int64 register
+    # class, a float one cannot).
+    ("fn-payload-in-container-undeclared-temp",
+     "(defdata FpBox [a] (MkFpBox a))\n"
+     "(defn mk-flt [] : (fn [] float) (fn [] 7.25))\n"
+     "(defn use-flt [b : (FpBox (fn [] float))] : float\n"
+     "  (match b\n"
+     "    (MkFpBox f) (f)))\n"
+     "(defn main [] : int\n"
+     "  (println (= (use-flt (MkFpBox (mk-flt))) 7.25))\n  0)\n"),
 ]
 
 

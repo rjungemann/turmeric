@@ -102,6 +102,17 @@ report is one missing cell:
 | capturing closure -> nominal thin `TY_FN` param | `poly-result-hof-capturing-closure-sigbus` |
 | closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | `fn-typed-value-return-ascribe-miscompiles` |
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
+| fn value read out of a container element, then called (parametric ADT payload; the Vec variant fixed 2026-07-30) | `fn-payload-in-container-undeclared-temp` |
+| closure handle -> `double`-typed element slot (two-types-one-C-name collision; exact only below 2^53) | `concrete-codegen-layout-kind-enumerations-drift` (Finding 2) |
+
+A structural note the last row exposes: the representation decision today is
+not one function but (at least) three hand-maintained `TypeKind` switches in
+`src/compiler/types.c` -- `type_c_name` (exhaustive),
+`type_has_concrete_codegen_layout` (fails closed: a missing kind silently
+falls back to the carrier), and `append_type_mangle` (failed open to
+`"opaque"` until 2026-07-29) -- and codegen is correct only when all three
+agree. Their drift is a bug generator of its own; collapsing them is
+increment 4 of the consolidation meta-plan.
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
