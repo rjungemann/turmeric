@@ -21,6 +21,7 @@
 ;;;
 ;;; Since: Phase N2 (numeric-tower-rational-complex-plan)
 (load "stdlib/typeclass.tur")
+
 (load "stdlib/math.tur")
 ;;; Complex -- a re/im pair of doubles.
 ;;;
@@ -29,9 +30,7 @@
 ;;;
 ;;; Since: Phase N2
 
-(defstruct Complex :copy
-  [re : float
-   im : float])
+(defstruct Complex :copy [re : float im : float])
 ;; -- construction ------------------------------------------------------------
 ;;; complex/of -- build the complex number re + im*i.
 ;;;
@@ -199,8 +198,7 @@
 ;;;
 ;;; Since: Phase N2
 
-(defn complex/conj [x : Complex] : Complex
-  (Complex (.re x) (- 0.0 (.im x))))
+(defn complex/conj [x : Complex] : Complex (Complex (.re x) (- 0.0 (.im x))))
 ;;; complex/mul -- product of two complex numbers.
 ;;;
 ;;; Parameters:
@@ -221,8 +219,7 @@
         b (.im x)
         c (.re y)
         d (.im y)]
-    (Complex (- (* a c) (* b d))
-             (+ (* a d) (* b c)))))
+    (Complex (- (* a c) (* b d)) (+ (* a d) (* b c)))))
 ;;; complex/scale -- multiply a complex number by a real scalar.
 ;;;
 ;;; Parameters:
@@ -271,12 +268,10 @@
     (if (>= (fabs c) (fabs d))
       (let [r   (/ d c)
             den (+ c (* d r))]
-        (Complex (/ (+ a (* b r)) den)
-                 (/ (- b (* a r)) den)))
+        (Complex (/ (+ a (* b r)) den) (/ (- b (* a r)) den)))
       (let [r   (/ c d)
             den (+ (* c r) d)]
-        (Complex (/ (+ (* a r) b) den)
-                 (/ (- (* b r) a) den))))))
+        (Complex (/ (+ (* a r) b) den) (/ (- (* b r) a) den))))))
 ;; -- magnitude / transcendentals ---------------------------------------------
 ;;; complex/abs2 -- squared magnitude |z|^2.
 ;;;
@@ -332,8 +327,7 @@
 ;;;
 ;;; Since: Phase N2
 
-(defn complex/arg [z : Complex] : float
-  (atan2 (.im z) (.re z)))
+(defn complex/arg [z : Complex] : float (atan2 (.im z) (.re z)))
 ;;; complex/exp -- e raised to a complex power.
 ;;;
 ;;; Parameters:
@@ -349,8 +343,7 @@
 ;;; Since: Phase N2
 
 (defn complex/exp [z : Complex] : Complex
-  (let [m (exp (.re z))]
-    (Complex (* m (cos (.im z))) (* m (sin (.im z))))))
+  (let [m (exp (.re z))] (Complex (* m (cos (.im z))) (* m (sin (.im z))))))
 ;; -- comparison / printing ---------------------------------------------------
 ;;; complex/eq? -- componentwise equality.
 ;;;
@@ -408,12 +401,10 @@
   (neg [x] (complex/neg x)))
 ;;; Eq [Complex] -- componentwise IEEE equality.
 
-(definstance Eq [Complex]
-  (eq? [x y] (complex/eq? x y)))
+(definstance Eq [Complex] (eq? [x y] (complex/eq? x y)))
 ;; There is deliberately NO `Ord [Complex]` instance: the complex numbers are
 ;; not an ordered field, so `(lt? z1 z2)` must stay a type error.  A missing
 ;; instance is the correct answer -- see the module docstring.
 ;;; Show [Complex] -- "3.25+4.5i" with an always-explicit imaginary sign.
 
-(definstance Show [Complex]
-  (show [x] (complex->string x)))
+(definstance Show [Complex] (show [x] (complex->string x)))
