@@ -61,6 +61,12 @@ static int jit_builtin_popcount (unsigned x) {
 static void *jit_builtin_memcpy (void *d, const void *s, size_t n) {
   return memcpy (d, s, n);
 }
+/* Numeric tower (Rational/Complex): five more math builtins from stdlib. */
+static double jit_builtin_sin (double x) { return sin (x); }
+static double jit_builtin_cos (double x) { return cos (x); }
+static double jit_builtin_exp (double x) { return exp (x); }
+static double jit_builtin_log (double x) { return log (x); }
+static double jit_builtin_atan2 (double y, double x) { return atan2 (y, x); }
 /* The shim lowers atomics to plain memory ops; these two it does not cover,
    and they are reached by exactly one fixture each at full corpus. */
 static long jit_atomic_exchange_n (volatile long *p, long v) {
@@ -78,6 +84,11 @@ static const struct { const char *name; void *addr; } BUILTIN_SHIMS[] = {
   {"__builtin_strlen", (void *) jit_builtin_strlen},
   {"__builtin_popcount", (void *) jit_builtin_popcount},
   {"__builtin_memcpy", (void *) jit_builtin_memcpy},
+  {"__builtin_sin", (void *) jit_builtin_sin},
+  {"__builtin_cos", (void *) jit_builtin_cos},
+  {"__builtin_exp", (void *) jit_builtin_exp},
+  {"__builtin_log", (void *) jit_builtin_log},
+  {"__builtin_atan2", (void *) jit_builtin_atan2},
   {"__atomic_exchange_n", (void *) jit_atomic_exchange_n},
   {"__atomic_thread_fence", (void *) jit_atomic_thread_fence},
 };

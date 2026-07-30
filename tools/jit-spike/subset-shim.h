@@ -171,5 +171,10 @@ void __builtin_trap (void);
 unsigned long __builtin_strlen (const char *);
 int __builtin_popcount (unsigned int);
 void *__builtin_memcpy (void *, const void *, unsigned long);
+double __builtin_sin (double);
+double __builtin_cos (double);
+double __builtin_exp (double);
+double __builtin_log (double);
+double __builtin_atan2 (double, double);
 
 #endif /* TUR_JIT_SUBSET_SHIM_H */

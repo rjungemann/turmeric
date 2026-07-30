@@ -69,7 +69,12 @@ static const char JIT_PRELUDE[] =
   "void __builtin_trap (void);\n"
   "unsigned long __builtin_strlen (const char *);\n"
   "int __builtin_popcount (unsigned int);\n"
-  "void *__builtin_memcpy (void *, const void *, unsigned long);\n";
+  "void *__builtin_memcpy (void *, const void *, unsigned long);\n"
+  "double __builtin_sin (double);\n"
+  "double __builtin_cos (double);\n"
+  "double __builtin_exp (double);\n"
+  "double __builtin_log (double);\n"
+  "double __builtin_atan2 (double, double);\n";
 
 static double jit_builtin_pow (double x, double y) { return pow (x, y); }
 static double jit_builtin_sqrt (double x) { return sqrt (x); }
@@ -86,6 +91,13 @@ static int jit_builtin_popcount (unsigned x) {
 static void *jit_builtin_memcpy (void *d, const void *s, size_t n) {
   return memcpy (d, s, n);
 }
+/* The numeric tower (Rational/Complex, merged from main 2026-07-29) reaches
+ * these from stdlib inline C; enumerated by the same grep as the rest. */
+static double jit_builtin_sin (double x) { return sin (x); }
+static double jit_builtin_cos (double x) { return cos (x); }
+static double jit_builtin_exp (double x) { return exp (x); }
+static double jit_builtin_log (double x) { return log (x); }
+static double jit_builtin_atan2 (double y, double x) { return atan2 (y, x); }
 
 /* ------------------------------------------------------------------ */
 /* atexit interception (findings 9.4)                                  */
@@ -118,6 +130,11 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_strlen", (void *) jit_builtin_strlen},
   {"__builtin_popcount", (void *) jit_builtin_popcount},
   {"__builtin_memcpy", (void *) jit_builtin_memcpy},
+  {"__builtin_sin", (void *) jit_builtin_sin},
+  {"__builtin_cos", (void *) jit_builtin_cos},
+  {"__builtin_exp", (void *) jit_builtin_exp},
+  {"__builtin_log", (void *) jit_builtin_log},
+  {"__builtin_atan2", (void *) jit_builtin_atan2},
   {"atexit", (void *) jit_atexit},
 };
 
