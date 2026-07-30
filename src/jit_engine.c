@@ -74,7 +74,10 @@ static const char JIT_PRELUDE[] =
   "double __builtin_cos (double);\n"
   "double __builtin_exp (double);\n"
   "double __builtin_log (double);\n"
-  "double __builtin_atan2 (double, double);\n";
+  "double __builtin_atan2 (double, double);\n"
+  "unsigned short _OSSwapInt16 (unsigned short);\n"
+  "unsigned int _OSSwapInt32 (unsigned int);\n"
+  "unsigned long long _OSSwapInt64 (unsigned long long);\n";
 
 static double jit_builtin_pow (double x, double y) { return pow (x, y); }
 static double jit_builtin_sqrt (double x) { return sqrt (x); }
@@ -120,6 +123,37 @@ static void jit_atexit_drain (void) {
   while (g_n_atexit > 0) g_atexit_fns[--g_n_atexit] ();
 }
 
+/* ------------------------------------------------------------------ */
+/* Darwin byte-swap inlines                                            */
+/* ------------------------------------------------------------------ */
+/* <libkern/_OSByteOrder.h> spells _OSSwapInt{16,32,64} as __DARWIN_OS_INLINE
+ * (= static __inline__), and htons/ntohs reach them through the
+ * __DARWIN_OSSwapInt16 macro.  c2mir emits no definition for them, so every
+ * program touching network byte order -- the whole httpd family plus
+ * async-echo-server -- died at MIR_link on `import of undefined item
+ * _OSSwapInt16` and took the cc fallback (27 fixtures on macOS).
+ *
+ * Unlike the __atomic_* family above, these are safe to shim: one fixed
+ * signature per name, a pure function of its argument, no memory ordering.
+ *
+ * The JIT_PRELUDE declarations are NOT optional.  Shimming these by address
+ * alone reproduces findings 11.7 exactly: c2mir falls back to an implicit
+ * int-returning declaration, the call reads the wrong register, and
+ * htons(8080) yields 0xb8f6 instead of 0x901f -- silently corrupting ports
+ * and header lengths rather than failing loudly.  Declaring the real
+ * prototype ahead of the TU is what makes the shim correct. */
+static uint16_t jit_osswap16 (uint16_t x) {
+  return (uint16_t) ((x << 8) | (x >> 8));
+}
+static uint32_t jit_osswap32 (uint32_t x) {
+  return ((x << 24) | ((x << 8) & 0x00ff0000u)
+          | ((x >> 8) & 0x0000ff00u) | (x >> 24));
+}
+static uint64_t jit_osswap64 (uint64_t x) {
+  return ((uint64_t) jit_osswap32 ((uint32_t) x) << 32)
+         | jit_osswap32 ((uint32_t) (x >> 32));
+}
+
 static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_pow", (void *) jit_builtin_pow},
   {"__builtin_sqrt", (void *) jit_builtin_sqrt},
@@ -136,6 +170,9 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_log", (void *) jit_builtin_log},
   {"__builtin_atan2", (void *) jit_builtin_atan2},
   {"atexit", (void *) jit_atexit},
+  {"_OSSwapInt16", (void *) jit_osswap16},
+  {"_OSSwapInt32", (void *) jit_osswap32},
+  {"_OSSwapInt64", (void *) jit_osswap64},
 };
 
 /* ------------------------------------------------------------------ */
