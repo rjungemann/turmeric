@@ -2616,3 +2616,68 @@ at least as new as the compiler that emitted the program half.
 3. Then re-run the product sweep expecting the same 1,669/1,701 at lower
    engine latency, and regenerate-artifacts becomes part of the
    preamble-change workflow (same-PR policy as fixture snapshots).
+
+## 24. S2 production, step 2 -- the runtime library IS the runtime
+
+Added 2026-07-30. This lands 19.4 item 2: the generated runtime TU is now
+compiled into `tur` (via tur_core, hence also libturi.a), REPLACING the
+host's diverged copies. Only cmd_jit consumption (item 3) remains.
+
+### 24.1 The five diverged TUs, measured before removal
+
+`nm` over every libturi member against the generated TU's 272 external
+symbols: the overlap is **58 names across exactly five TUs** --
+`runtime/runtime.c` (panic/catch-unwind/cloneable-cont), `runtime/
+cps_prompt.c` (the DK machine), `runtime/stm.c`, `async/scheduler.c`,
+`async/timer_wheel.c`. Three facts made the swap safe, each verified
+rather than assumed:
+
+- **No host consumer**: zero undefined references into those five from any
+  other libturi member, and zero from src/turi, main.c, or the REPL. They
+  were pure dlsym-export surface -- the dormant wrong-vintage exports that
+  seam 3 warned would preempt a split program's runtime calls.
+- **No unit-test loss**: tur_cps_prompt_unit and tur_cps_rt_unit compile
+  their subject .c files directly into the test binary (and cps_rt.c, the
+  file findings 19.3 loosely named, has ZERO overlap -- the tur_kont_*
+  trampoline family stays untouched in tur_core).
+- **No archive-mode loss**: TURT_RUNTIME_SOURCES (libturt_runtime.a,
+  --runtime=lib) never contained the five.
+
+The five .c files stay in the tree as unit-test subjects and vintage
+reference; they are simply no longer part of tur/libturi.
+
+### 24.2 The first sweep after the swap failed 1,656 fixtures -- one symbol
+
+`tur_rt_split.c` compiled and linked cleanly (after per-file warning relax
+to TUR_CC_FLAGS' bar -- it is emitted C, and tur_core's pedantic -Werror
+profile rejects fn-ptr/object-ptr casts every compiled program makes), the
+full suite stayed 2430/0, unit tests green... and the product sweep
+collapsed to **0 jit-native**: `import of undefined item
+tur_set_contract_handler` on 1,656 fixtures.
+
+The miss in 24.1's method: the nm cross-reference covered HOST consumers,
+but the emitted programs themselves resolve host symbols by address, and
+runtime.c carried one API pair that is NOT part of the preamble -- the CT4
+contract-handler registry (stdlib/contract.tur inline-C calls
+tur_set/get_contract_handler extern). Now extracted to
+`src/runtime/contract_handler.c`, kept in tur_core.
+
+Why the cc path never noticed the same hole (suite was 2430/0 the whole
+time): the referencing stdlib functions are emitted `static`, gcc discards
+them when unused, and the undefined reference vanishes with them. c2mir
+does no unused-static elimination, so the JIT surfaces the import in every
+stdlib-bearing program -- the JIT as ABI-canary again, this time for the
+host-residency surface itself.
+
+### 24.3 End state, fully validated
+
+With contract_handler.c restored: product sweep **1,655 native + 14
+fallback-pass = 1,669/1,701 -- byte-identical composition to the pre-swap
+sweep** -- on a `tur` whose exported dk_prompt/tur_atomically/
+tur_stm_*/scheduler/timer-wheel families are now the CURRENT emitted
+vintage, generated from the same preamble programs compile against. Suite
+2430/0, turi suite 1,680/1 (same pre-existing HKT gap), unit tests green.
+
+Seam 3 is thereby closed at the root: there is no second vintage left in
+the process for a split program half to mis-bind against. cmd_jit's
+hash-gated decls+program emission (item 3) can now land.
