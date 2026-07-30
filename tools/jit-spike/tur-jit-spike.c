@@ -190,14 +190,22 @@ static void sync_config_globals (MIR_context_t ctx) {
 static void *g_prelib_handle = NULL;
 
 static void *import_resolver (const char *name) {
+  /* Intercepts first: these must win over any host symbol of the same name --
+     including one reachable through TUR_JIT_PRELIB.  The prelib lookup used to
+     sit above this block, which contradicted the comment and was latent only
+     because glibc never exports `atexit` (findings 9.4), so dlsym through the
+     .so handle missed it on Linux.  macOS resolves libSystem's `atexit` through
+     the dylib's dependency chain, so the prelib preempted the interception and
+     every module-defer-* fixture took SIGSEGV at exit under the S2 proof while
+     passing under the real `tur jit`. */
+  if (strcmp (name, "atexit") == 0) return (void *) jit_atexit;
+  for (size_t i = 0; i < sizeof BUILTIN_SHIMS / sizeof BUILTIN_SHIMS[0]; i++)
+    if (strcmp (name, BUILTIN_SHIMS[i].name) == 0) return BUILTIN_SHIMS[i].addr;
+
   if (g_prelib_handle != NULL) {
     void *a = dlsym (g_prelib_handle, name);
     if (a != NULL) return a;
   }
-  /* Intercepts first: these must win over any host symbol of the same name. */
-  if (strcmp (name, "atexit") == 0) return (void *) jit_atexit;
-  for (size_t i = 0; i < sizeof BUILTIN_SHIMS / sizeof BUILTIN_SHIMS[0]; i++)
-    if (strcmp (name, BUILTIN_SHIMS[i].name) == 0) return BUILTIN_SHIMS[i].addr;
 
   void *addr = dlsym (RTLD_DEFAULT, name);
   if (addr == NULL) fprintf (stderr, "jit-spike: unresolved import: %s\n", name);

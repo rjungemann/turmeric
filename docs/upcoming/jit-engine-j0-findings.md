@@ -2100,3 +2100,203 @@ and the `.so` compile is one-time.
 
 The proof script and the `TUR_JIT_PRELIB` hook stay in-tree so the macOS
 re-validation can replay this end to end.
+
+## 20. arm64 macOS re-validation of J1 + S2 -- three real defects, none of them the JIT's
+
+Added 2026-07-29 on an Apple M2 (Darwin 27.0.0, Apple clang 21.0.0), `tur`
+v0.32.2, MIR pin `41ff4d94`, `-DTUR_JIT=ON` Release build. Everything from
+section 11 onward -- S1, S1b, 6(a)/TLS, J1, and section 19's S2 proof -- had
+only ever run on x86-64 Linux. This is the macOS replay section 19.4 reserved.
+
+**Verdict: the architecture holds on Apple Silicon.** The S2 split proof passes
+8/8, the J1 engine sweeps the corpus within 3 fixtures of the Linux number, and
+every one of the three genuine failures traces to a **pre-existing Turmeric
+defect that the `cc` path was getting away with by luck** -- not to MIR, not to
+Apple Silicon, and not to anything J1 built.
+
+### 20.1 Smoke and full-corpus results
+
+The eight subsystem fixtures section 18 verified on Linux all pass natively,
+with no fallback: `arith`, `hamt-basic`, `cps-backend-effect`, `stm-stress`
+(deterministic 4000 over 5 runs -- real atomics, real TLS, 8 threads),
+`dynvar-nested`, `module-defer-basic`, `sym-dynamic`, `gc-registry-growth`.
+
+Note `module-defer-basic` **passes**, which retires the open worry in 9.4 that
+macOS's resolvable `atexit` left those fixtures SIGSEGV-ing at exit. J1's
+`atexit` interception handles it.
+
+`tools/jit-spike/sweep-turjit.sh`, same 1,680 eligible fixtures as Linux:
+
+| Outcome | macOS | Linux (18.1) |
+|---|---|---|
+| **jit-native PASS** | **1,617** | 1,633 |
+| fallback-pass | 27 | 14 |
+| **correct (native + fallback)** | **1,644** | **1,647** |
+| fallback-env (`-lturi`, pre-existing) | 31 | 31 |
+| output-mismatch | 2 | 1 |
+| FAIL | 3 | 1 |
+
+The whole delta reconciles exactly: 1,633 - 1,617 = 16 fixtures left the native
+bucket, of which **13** merely moved to the (correct) fallback bucket and **3**
+are the new genuine failures below. 1,647 - 1,644 = 3.
+
+### 20.2 The 13 extra fallbacks are Apple SDK headers, and they are cosmetic
+
+The fallback bucket splits cleanly by phase:
+
+- **14 link failures** -- `import of undefined item __atomic_fetch_sub` and
+  friends. Same `__atomic_*` class as Linux's 13; c2mir has no GCC atomic
+  builtins and these come from user/stdlib inline C the emitter does not own.
+- **13 compile failures, macOS-only** -- c2mir cannot parse Apple's SDK headers
+  when user inline C includes them. Three distinct causes:
+  - `TargetConditionals.h:398: #error TargetConditionals.h: unknown compiler`
+  - `libkern/OSByteOrder.h:314: #error Unknown endianess.`
+  - `dirent.h:77: syntax error on struct` / `dirent.h:109: syntax error on *`
+    (Apple's `_Nullable`/`_Nonnull` nullability qualifiers)
+
+  The first two are `#error`s gated on `__clang__`/`__GNUC__`, which c2mir
+  defines neither of. This is 9.3's "Apple SDK residue," now measured on the
+  product path at 13 fixtures.
+
+All 27 **fall back cleanly and produce correct output**. This is a latency and
+coverage cost, not a correctness one, and it is plausibly cheap to shrink: a
+small set of predefines (a `__clang__`-shaped identity plus empty
+`_Nullable`/`_Nonnull`) would likely recover most of the 13. That is the same
+shape as the spike's `subset-shim.h` and should be weighed as J2/J3 work.
+
+One fallback worth calling out as *not* an emitter defect: `thread-local-basic`
+fails on `<tur-jit>:7555: syntax error on static`, which is the fixture's own
+inline-C `static __thread int64_t tls_val`. Section 16's claim that the emitted
+C is c2mir-clean as emitted survives -- every compile-phase fallback is user
+inline C or an SDK header, never generated code.
+
+### 20.3 Three genuine failures, all pre-existing Turmeric defects
+
+Both are filed; neither is a MIR defect.
+
+**(a) `map-multiword-struct-key` and `set-multiword-struct-element` -- SIGBUS.**
+One shared cause: the emitted TU calls `tur_hamt_hash_xxh64` with **no prototype
+in scope**. The preamble declares its siblings `tur_hamt_box_key` and
+`tur_hamt_box_key_eq` and simply omits this one. Under Apple's arm64 ABI
+anonymous variadic arguments go on the stack, and c2mir treats a no-prototype
+call as all-anonymous-variadic, so `&p` and `16` land on the stack while xxh64
+reads junk from `x0`/`x1`:
+
+```
+thread #2, EXC_BAD_ACCESS (code=1, address=0x101968000)
+frame #0: tur`tur_hamt_hash_xxh64 + 104   ->  ldp x17, x2, [x0]
+x0 = 0x000000010015d6f8  tur`tur_hamt_hash_xxh64   <- the callee's OWN address, as `data`
+x1 = 0x0000000173e06e90                            <- the real &p, as `len`
+```
+
+x86-64 SysV passes unprototyped arguments in the same registers either way,
+which is why Linux never saw it. Splicing one `extern` declaration into the
+fixture's own emitted TU fixes it end to end.
+
+`src/main.c:4913-4917` already names this exact symbol as a known-open concern
+and passes `-Wno-error=implicit-function-declaration` to keep the `cc` build
+quiet about it. That suppression is hiding a wrong-code bug on a second backend:
+even without a struct the JIT computes a *different hash*, and the implicit
+`int` return has been truncating this hash to 32 bits on the `cc` path on every
+host all along. Filed:
+[../reported/jit-xxh64-missing-prototype.md](../reported/jit-xxh64-missing-prototype.md).
+
+**(b) `taskgroup-async` -- rc=0, empty stdout.** A silent wrong answer, worse
+than the crash. `emit_module.c` emits **two different, mutually inconsistent**
+local `typedef`s for `TaskGroupBlock` and **neither matches** what
+`stdlib/taskgroup.tur:78` actually allocates (`pthread_mutex_t lock` first).
+`emit_module.c:8497` declares `{bool cancelled;}` and so reads byte 0 of the
+initialized mutex -- `0x5A` on this box -- as `cancelled`. Every fiber spawned
+into a TaskGroup is therefore marked cancelled before its entry runs; the
+futures stay pending, the await lowering parks a continuation nothing resumes,
+and `main` never reaches its `println`s.
+
+Reading a byte that is neither 0 nor 1 through a `bool` lvalue is UB and the two
+front ends disagree: clang masks to bit 0 (`0x5A & 1 == 0`, so it survives),
+c2mir tests the whole byte. On Linux glibc leaves that byte `0`, so the layout
+bug is invisible there under *either* front end -- which is the entire reason
+the Linux baseline is clean.
+
+The sibling shim at `emit_module.c:8448` is worse and protected by no luck at
+all: it writes `cancelled`/`done` over the mutex's first two bytes and calls
+`pthread_mutex_lock` on **offset 16**, the middle of the real mutex. That is
+corruption on every platform; it is just on a rarely-exercised panic path.
+Filed:
+[../reported/emitted-taskgroupblock-layout-mismatch.md](../reported/emitted-taskgroupblock-layout-mismatch.md).
+
+Both defects are arguments *for* plan item **S2**: each exists because the
+inline-C-facing runtime surface has no single declared boundary, so a symbol
+goes undeclared in one place and a struct gets retyped by hand in three.
+
+`any-cast-mismatch-panic` (signal-6, panics by design) and
+`hamt-lowering-basic` (the filed `^persistent` key bug) reproduce exactly as on
+Linux and are not new.
+
+### 20.4 S2 replays 8/8 -- but the latency case is much weaker on Apple Silicon
+
+`tools/jit-spike/s2-proof-run.sh` (added here; section 19's Linux driver was
+ad hoc and never committed) replays 19.2 end to end. All eight subsystem
+fixtures pass with the runtime host-resident: `arith`, `hamt-basic`,
+`cps-backend-effect`, `stm-stress`, `dynvar-nested`, `module-defer-basic`,
+`gc-registry-growth`, `self-recursive-carrier-struct-return`. The runtime half
+is 3,521 lines; program halves are 5,373-5,906.
+
+19.3's three seams all reproduce, and macOS reaches seam 3 by a different route:
+`ld64` has no `-Bsymbolic`, but its default two-level namespace already
+self-binds the dylib's intra-library calls, which is the property `-Bsymbolic`
+buys on ELF.
+
+Latency, best of 5, `arith`, eager:
+
+| | c2mir | link+gen | total |
+|---|---|---|---|
+| full TU (status quo) | 161.7 ms | 60.9 ms | 222.6 ms |
+| **split (program half only)** | **153.5 ms** | **32.0 ms** | **185.5 ms** |
+
+**17% of engine time gone, against 38% on Linux.** The split does what it did on
+Linux to the half it targets -- link+gen nearly halves (60.9 -> 32.0, 47%;
+Linux 141.0 -> 66.6, 53%) -- but on Apple Silicon that half is no longer where
+the time is. c2mir dominates at 73% of the total and the split barely touches it
+(-5%), because the declarations still parse and, per 8.3, ~36 ms of macOS c2mir
+time is the Apple SDK headers alone, which both halves parse identically.
+
+This qualifies 19.2's headline number and sharpens 8.3's conclusion rather than
+overturning it. S2 remains worth doing and remains a J2 prerequisite. But on
+Apple Silicon **S2 alone does not make the JIT beat `cc`** -- the next lever
+after S2 is c2mir's front-end cost, i.e. not re-parsing system headers per
+program (a precompiled/serialized header, or keeping system headers out of the
+program half entirely). Whoever picks up J2 on macOS should size that before
+assuming S2 closes the gap.
+
+### 20.5 Two harness bugs found and fixed
+
+- **`sweep-turjit.sh` classified all 31 `httpd-*` fixtures as `fallback-fail`.**
+  Its environmental check matched only GNU ld's `cannot find -lturi`; ld64 says
+  `library 'turi' not found`. A purely environmental limit read as 31 JIT
+  defects. Now matches both.
+- **`tur-jit-spike.c`'s `import_resolver` consulted `TUR_JIT_PRELIB` *before*
+  its own intercepts**, contradicting the comment directly above it
+  ("Intercepts first"). Latent on Linux because glibc never exports `atexit`
+  (9.4), live on macOS because libSystem's `atexit` resolves through the
+  dylib's dependency chain -- so the prelib preempted the interception and
+  `module-defer-basic` took SIGSEGV at exit under the S2 proof while passing
+  under the real `tur jit`. Intercepts now precede the prelib lookup, and the
+  proof goes 7/8 -> 8/8.
+
+Both are proof/harness-scale bugs, but the second is a real warning for
+production S2: once the runtime library is a genuine host-resident artifact,
+resolver **priority** is load-bearing and the ordering has to be stated
+deliberately rather than inherited from whichever platform's dynamic linker
+happens to hide the conflict.
+
+### 20.6 Reproducing
+
+```sh
+cmake -S . -B build-turjit -DCMAKE_BUILD_TYPE=Release -DTUR_JIT=ON
+cmake --build build-turjit -j --target tur
+bash tools/jit-spike/sweep-turjit.sh          # 1617 native + 27 fallback-pass / 1680
+
+cmake -S . -B build-jit-spike -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
+cmake --build build-jit-spike -j --target tur-jit-spike
+bash tools/jit-spike/s2-proof-run.sh          # 8 passed, 0 failed + latency table
+```

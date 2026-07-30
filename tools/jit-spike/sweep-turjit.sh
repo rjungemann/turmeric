@@ -53,7 +53,11 @@ run_one() {
     else
       printf '%s\tPASS\t\n' "$name"
     fi
-  elif [ -n "$fell_back" ] && grep -q 'cannot find -lturi' "$W/$name.err"; then
+  # GNU ld says "cannot find -lturi"; ld64 says "library 'turi' not found".
+  # Matching only the former filed all 31 httpd-* fixtures as fallback-fail on
+  # macOS -- a purely environmental limit reading as 31 JIT defects.
+  elif [ -n "$fell_back" ] \
+       && grep -qE "cannot find -lturi|library '?turi'? not found" "$W/$name.err"; then
     printf '%s\tfallback-env\t\n' "$name"
   elif [ -n "$fell_back" ]; then
     printf '%s\tfallback-fail\t\n' "$name"
