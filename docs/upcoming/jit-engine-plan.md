@@ -16,8 +16,9 @@ failures are **pre-existing Turmeric defects the `cc` path was surviving by
 luck**, not JIT or MIR defects: a missing `tur_hamt_hash_xxh64` prototype and
 two wrong `TaskGroupBlock` layouts in the emitter -- **both FIXED on Linux
 2026-07-29** ([archived](../archive/jit-xxh64-missing-prototype.md),
-[archived](../archive/emitted-taskgroupblock-layout-mismatch.md)); the macOS
-repros await confirmation on the next Apple Silicon run. One result
+[archived](../archive/emitted-taskgroupblock-layout-mismatch.md)), and
+**confirmed fixed on Apple Silicon 2026-07-29** -- macOS now sweeps
+**1,668/1,701, matching Linux exactly** (findings 21). One result
 revises this plan: **S2 buys 17% of engine time on Apple Silicon, not Linux's
 38%**, because c2mir -- not MIR-gen -- is 73% of the cost there, so S2 alone
 does not make the JIT beat `cc` on macOS (findings 20.4).

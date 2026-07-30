@@ -2328,3 +2328,89 @@ expected shape for fixing defects Linux was surviving by luck. The arm64
 SIGBUS and the silent-empty-stdout repros await confirmation on the next
 macOS run; expected result there is native PASS for all three and
 **1,647/1,680 matching Linux exactly**.
+
+## 21. macOS confirms both fixes -- full parity -- and the suppression stays
+
+Added 2026-07-29, same Apple M2 / Darwin 27.0.0 / Apple clang 21.0.0 host as
+section 20, `tur` rebuilt at `158397346`.
+
+### 21.1 20.7's predicted result, confirmed exactly
+
+All three fixtures are native PASS under `tur jit` on arm64 macOS, and correct
+under `tur run`: `map-multiword-struct-key`, `set-multiword-struct-element`
+(the SIGBUS pair) and `taskgroup-async` (the silent-empty-stdout one).
+
+`sweep-turjit.sh`, full corpus. Measured twice: first at the fix commit on the
+1,680-fixture corpus, then re-measured at `3b2cf9e75` after main's numeric tower
+brought the corpus to 1,701 and the JIT prelude gained five math builtins.
+
+| | corpus | native PASS | fallback-pass | **correct** |
+|---|---|---|---|---|
+| macOS, section 20 (pre-fix) | 1,680 | 1,617 | 27 | 1,644 |
+| macOS, at the fix | 1,680 | 1,620 | 27 | **1,647** |
+| Linux, at the fix | 1,680 | 1,633 | 14 | 1,647 |
+| **macOS, at `3b2cf9e75`** | 1,701 | 1,641 | 27 | **1,668** |
+| Linux, at `3b2cf9e75` | 1,701 | 1,654 | 14 | 1,668 |
+
+**macOS matches Linux exactly on both corpora** -- 1,647/1,680 at the fix, and
+1,668/1,701 after the numeric tower -- which is what 20.7 predicted. The
+remaining composition is identical too: 31 `fallback-env`, one
+`output-mismatch` (`hamt-lowering-basic`, the filed `^persistent` key bug) and
+one `FAIL` (`any-cast-mismatch-panic`, panics by design).
+
+The native/fallback split still differs by 13 in Linux's favor. That is 20.2's
+Apple SDK header residue, unrelated to these fixes, and it is the one macOS
+number that has not moved -- the standing item for J2/J3.
+
+### 21.2 NEGATIVE RESULT: `-Wno-error=implicit-function-declaration` is load-bearing
+
+20.3 argued the suppression at `src/main.c` "should be revisited," on the theory
+that it was hiding a wrong-code bug and nothing else. **That was tested here and
+is wrong.** Recording it so nobody re-derives the same bad idea.
+
+The evidence that looked convincing: emit the C for all **1,934** fixtures and
+run `clang -fsyntax-only -Werror=implicit-function-declaration` over each. Zero
+implicit declarations. On that basis the flag was removed -- from all **three**
+cc invocation sites, not the one the comment describes -- and the whole suite
+re-run: **2342 passed / 57 failed, byte-identical** to the run before it, with
+zero non-environmental failures.
+
+Both signals were false, for the same reason: **they measure the wrong
+artifact.** `tur emit-c` output is not what `tur build` hands to `cc`, and the
+57 suite failures already included every fixture that would have exposed the
+difference. The JIT sweep caught it, because its step-6 fallback exercises the
+real build path:
+
+```
+tests_fixtures_httpd-async-echo__input_tur.c:9:119: error: call to undeclared
+library function 'malloc' ... ISO C99 and later do not support implicit
+function declarations
+```
+
+Reading that generated file explains it -- the `#include <stdlib.h>` is on line
+**10**, and hoisted user inline C calls `malloc` on line **9**:
+
+```c
+  9  static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { ... malloc(sizeof(HttpdOwnedStr)) ... }
+ 10  #include <stdlib.h>
+```
+
+So the suppression is not vestigial: it papers over an **include-ordering defect
+in the inline-C hoisting path**, where a `#tur-include`-hoisted block can land
+ahead of the standard-header include a later block contributes. Removing the
+flag turns that into a hard error for real spice code (the httpd spice here),
+which is a user-facing break well outside the scope of the xxh64 fix. The
+removal has been **reverted**; all three sites keep the flag.
+
+The ordering defect is the thing actually worth fixing, and it is independent of
+the JIT: hoisted includes should precede hoisted code. Until then the comment at
+`src/main.c` should say *this* -- an include-ordering workaround -- rather than
+naming a single xxh64 call site that is now fixed, because the current wording
+invites exactly the removal attempted here. Filed:
+[../reported/hoisted-inline-c-precedes-includes.md](../reported/hoisted-inline-c-precedes-includes.md).
+
+Method note, generalizing past this instance: a corpus-wide static sweep is only
+as good as its artifact, and "the suite did not change" is not evidence when the
+fixtures that would show the change were already failing for another reason. The
+JIT sweep found this precisely because it is the one harness that drives the
+real end-to-end path.
