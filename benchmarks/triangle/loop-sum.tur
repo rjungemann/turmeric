@@ -1,0 +1,14 @@
+; triangle/loop-sum -- tight iterative loop: branch + arithmetic codegen.
+; Written as defn-level self-tail recursion, which the emitter TCOs into a
+; loop on every engine.  (A named-let `(let go ...)` at this depth is NOT
+; emitter-TCO'd and only survives the cc path via gcc's sibling-call
+; optimization -- see docs/reported/named-let-self-tail-not-tco.md.)
+; Pure Turmeric, no imports, no inline C.
+(defn sum-to [i : int n : int acc : int] : int
+  (if (>= i n)
+    acc
+    (sum-to (+ i 1) n (+ acc i))))
+
+(defn main [] : int
+  (println (sum-to 0 5000000 0))
+  0)

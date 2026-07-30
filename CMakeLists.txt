@@ -577,10 +577,24 @@ add_test(
 if(TUR_JIT)
   add_test(
     NAME tur_repl_spice_jit
-    COMMAND bash tests/turi/repl-spice-jit.sh
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/turi/repl-spice-jit.sh
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE)
+  # J3 (jit-engine-plan section 5): the full fixture corpus through
+  # `tur --enable=jit jit`.  RUN_SERIAL like the other whole-corpus
+  # harnesses -- it fans out across nproc internally.  TUR is pinned to
+  # THIS build's binary (the script's default would probe a sibling
+  # build dir).  Note a fully green run needs a Debug binary (refine-*
+  # discharge is Debug-only), same as tests/run.sh.
+  add_test(
+    NAME tur_jit_fixture_tests
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/run-jit.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE)
 endif()
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture

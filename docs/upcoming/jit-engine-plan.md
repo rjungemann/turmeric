@@ -11,8 +11,13 @@ at ~28% lower end-to-end latency.
 **J2 LANDED 2026-07-30** (findings 26): `tur --enable=jit repl` builds the
 enclosing spice IN PROCESS through the engine (TurSpiceJitHook replacing
 the `tur build --shared` subprocess + dlopen); cold spice load ~3.2x
-faster, RP call/reload/watch suites green through the jit path. J3+
-PROPOSED. Plan written 2026-07-27; J0 spike
+faster, RP call/reload/watch suites green through the jit path.
+**J3 LANDED 2026-07-30** (findings 27): tests/run-jit.sh runs the corpus
+under `tur jit` (Debug: 2,390/0, ctest tur_jit_fixture_tests) and the
+engine triangle is published in the performance guide -- plus three latent
+product bugs found on the way (two nested-fixture miscompiles the compiling
+harnesses never saw, and named-let self-recursion relying on gcc sibling
+calls). J4 remains optional, post-usage-data. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with

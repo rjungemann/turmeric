@@ -1,0 +1,11 @@
+; triangle/fib -- call-heavy recursion: raw function-call codegen.
+; Pure Turmeric, no imports, no inline C, so it runs identically on all
+; three engines (tur --interpret / tur jit / tur build + cc).
+(defn fib [n : int] : int
+  (if (<= n 1)
+    n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn main [] : int
+  (println (fib 27))
+  0)

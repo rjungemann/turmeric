@@ -687,6 +687,54 @@ defn dot [ax ay az bx by bz] :float
 
 ---
 
+## Execution engines: interpreter vs `tur jit` vs `cc -O2`
+
+Turmeric has three execution engines, and which one is fastest depends on
+what you are optimizing for -- startup latency or steady-state throughput:
+
+| engine | invocation | compile step | best for |
+|---|---|---|---|
+| interpreter | `tur --interpret f.tur` | none | tiny scripts, REPL turns, debugging |
+| MIR JIT | `tur --enable=jit jit f.tur` | in-process (c2mir) | run-edit-run loops, spice REPL reloads |
+| cc | `tur build f.tur` + run | subprocess cc -O2 | long-running programs, deployment |
+
+Measured triangle (x86-64 Linux, Release `tur`, best of 3, end-to-end wall
+time; `bash benchmarks/run-triangle.sh` regenerates this from
+`benchmarks/triangle/`):
+
+| program | interpreter | tur jit | cc build | cc run | cc total |
+|---|---|---|---|---|---|
+| fib (fib 27, call-heavy) | 223ms | 273ms | 243ms | 4ms | 247ms |
+| loop-sum (5M-iteration loop) | 2295ms | 261ms | 263ms | 4ms | 267ms |
+| mandel (float inner loop) | 960ms | 301ms | 262ms | 7ms | 269ms |
+
+How to read it:
+
+- **The front end dominates one-shot latency on every engine.** Roughly
+  200ms of each cell is elaboration and codegen shared by all three legs;
+  the engines differ in what happens after. For a program this small the
+  interpreter's zero-compile leg makes it competitive end to end even
+  while its loop throughput is 9x behind (loop-sum).
+- **`tur jit` matches the cc path's one-shot latency** on Linux (its
+  engine is ~40% faster than cc's compile step, but that step is a
+  minority of the wall). Its structural advantage is being IN PROCESS: no
+  subprocess, no disk artifacts, and the spice REPL reload path is ~3.2x
+  faster than the `tur build --shared` round trip it replaces (see the
+  repl guide).
+- **Compiled native runtime is 4-7ms** for these workloads -- for any
+  long-running or repeatedly-invoked program, `tur build` once and run
+  the binary; nothing else is close in steady state.
+- The MIR tier generates good-but-not-gcc code: expect JIT'd loop bodies
+  within ~1-2x of cc -O2, not parity, and note the JIT runs the program
+  on a sized entry stack (`TUR_JIT_STACK_MB`, default 64) because
+  MIR does not perform gcc's sibling-call optimization (see
+  docs/reported/named-let-self-tail-not-tco.md for the sharp edge).
+
+The engine triangle is exact on OUTPUT: `benchmarks/run-triangle.sh`
+refuses to time a program whose three engines disagree, and the fixture
+corpus runs under all three harnesses (`tests/run.sh`, `tests/run-turi.sh`,
+`tests/run-jit.sh`).
+
 ## Benchmarking methodology
 
 ### Harness structure

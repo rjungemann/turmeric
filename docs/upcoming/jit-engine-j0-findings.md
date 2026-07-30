@@ -2816,3 +2816,70 @@ include path (single-spice projects only; the subprocess path remains
 the default and handles them), and POSIX symlinks gate the shadow dir
 out of Windows along with the engine itself.  Both are hook-local:
 lifting them touches repl_jit_build only.
+
+## 27. J3 LANDED -- the parity harness and the triangle, plus two latent miscompiles
+
+Added 2026-07-30. Plan section 5's J3: the fixture corpus runs under
+`tur jit` through a first-class harness, and the engine triangle is
+measured and published.
+
+### 27.1 tests/run-jit.sh
+
+Modeled on run-turi.sh (scan, markers, stamp cache, parallel fan-out,
+errors/ diag pass) with run.sh's RESULT semantics (expected.stdout diff +
+expected.exit + run.args + input.stdin) -- which is why the by-design
+panic fixture that the sweep scores as FAIL passes here: the harness
+honors `expected.exit: nonzero`, the sweep scores signals. The engine's
+step-6 cc fallback is a first-class outcome, tallied separately (the
+harness exports run.sh's `-L` in TUR_CC_FLAGS, so the sweep's 31
+"fallback-env" fixtures link and pass here). New marker: `requires.cc`
+(phase-separated dump fixtures whose --dump-* output run.sh discards
+with the build invocation; under one-process jit it interleaves with
+program stdout). hook.sh fixtures stay run.sh-owned.
+
+Result: **Debug build 2,390 passed / 0 failed / 49 skipped (47 via cc
+fallback)**; Release differs by exactly the known Debug-only refine-*
+discharge set, same posture as run.sh. ctest: `tur_jit_fixture_tests`
+(TUR_JIT-gated, RUN_SERIAL, TUR pinned to the configuring build's
+binary).
+
+### 27.2 The harness compiles what run.sh never did -- and found two miscompiles
+
+run.sh scans only `tests/fixtures/*/`; this harness (like run-turi.sh)
+scans one level deeper -- so it is the FIRST harness to COMPILE the
+nested `typed/*` fixtures, and two of them miscompile on every compiling
+engine (gcc and MIR agree; the interpreter is correct, which is why the
+suite stayed green):
+
+- `typed/result-basic` -- the `__cps` clone assigns a by-value
+  `(Result int int)` struct to an int64 carrier; hard cc error
+  (docs/reported/typed-result-map-cps-clone-struct-assign.md).
+- `typed-slots/cs3-nested-specialization` -- the nested-specialization
+  float slot prints an int bit pattern through a double
+  (docs/reported/typed-slots-nested-specialization-float-garbage.md).
+
+Both are denylisted in the harness with report pointers (removed when
+fixed). The J0-era lesson generalizes again: every new engine or harness
+that runs code a previous one skipped surfaces real, latent product bugs
+-- the JIT keeps being the canary, this time just by scanning deeper.
+
+### 27.3 The triangle, and a third find
+
+benchmarks/triangle/ (fib / loop-sum / mandel -- pure Turmeric, no
+imports, no inline C, exact int checksums) + benchmarks/run-triangle.sh,
+which refuses to time engines that disagree on output. Numbers and
+reading are in docs/guides/performance-guide.md ("Execution engines"):
+the front end dominates one-shot latency (~200ms of every leg), the
+interpreter wins tiny scripts by skipping compilation entirely and loses
+9x on loops, `tur jit` matches cc's one-shot wall with its structural
+win in-process (J2's reload), and native runtime is 4-7ms -- nothing
+else close in steady state.
+
+Writing loop-sum found the third bug of the phase: **named-let
+self-recursion is not emitter-TCO'd** -- it survives the cc path solely
+because gcc's sibling-call optimization turns the emitted self-call into
+a jump; MIR performs no such optimization, so 5M iterations SIGSEGV on
+the default 64MB entry stack (TUR_JIT_STACK_MB=2048 passes, confirming
+depth). Filed: docs/reported/named-let-self-tail-not-tco.md. Per the
+standing owner decision, the fix direction is extending the defn-level
+TCO rewrite to named-let, never a bigger stack.
