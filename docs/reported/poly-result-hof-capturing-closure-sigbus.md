@@ -10,6 +10,13 @@ the fix is a calling-convention change, not a patch -- see
 title has been generalized. Everything below the investigation section is the
 report as originally filed.
 
+2026-07-30: `tests/type-fuzz-src.py` found the sibling family for fn-typed
+VALUES (a returned closure through a pass-through param, `^fat` included, or
+an ascription around a let) -- see
+[fn-typed-value-return-ascribe-miscompiles.md](fn-typed-value-return-ascribe-miscompiles.md).
+Those repros are additional acceptance tests for the calling-convention plan
+sketched below; the two reports should land together.
+
 ## Investigation (2026-07-29)
 
 ### The trigger is not the tyvar result

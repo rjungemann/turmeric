@@ -471,6 +471,19 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_refine_fuzz_src PROPERTIES TIMEOUT 600)
+# Typed-boundary fuzz: correct-by-construction programs routing known values
+# through random wrappers (structs, ADTs, Option/Result, Vec, closures) and
+# boundary crossings, asserting check-accepted => compiles, links, runs, and
+# prints the predicted output.  Shapes reproducing open docs/reported entries
+# are excluded via known_bug_slug (pinned by --known-probes instead), so a
+# finding here is a NEW checker/codegen disagreement.  Smoke size -- run
+# tests/type-fuzz-src.py directly for a session.
+add_test(
+  NAME tur_type_fuzz_src
+  COMMAND bash tests/run-type-fuzz-src.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_type_fuzz_src PROPERTIES TIMEOUT 600)
 # RT5a: the refinement solver on wasm32 -- compiles under Emscripten AND gives
 # the same answers at 32-bit pointers.  Skips cleanly when emcc is absent.
 add_test(
