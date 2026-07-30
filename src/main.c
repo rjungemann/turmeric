@@ -64,6 +64,7 @@
 #include "kind_check.h"   /* Phase HKT H0: kind inference pass */
 #include "elab.h"
 #include "emit.h"
+#include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "fmt.h"
@@ -3307,6 +3308,39 @@ static int decode_exit_status(int status) {
 }
 
 static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
+
+/* S2 (jit-engine-plan, findings 19.4): dump the feature-complete single-file
+ * runtime preamble -- every program-gated block on, rc/GC in archive mode,
+ * ending at the preamble marker -- for the split-generation tool
+ * (tools/gen-runtime-split.py), or with --hash just the xxHash64 of that
+ * text.  The hash spelling here IS the JIT-time compare: both sides call
+ * tur_hamt_hash_xxh64 over the same emission, so the recorded artifact hash
+ * and cmd_jit's probe can never disagree on hash function or input framing.
+ *
+ * Archive mode is hard-set rather than probed so the generated text is a
+ * property of the compiler, not of which build tree generated it; cmd_jit's
+ * probe runs under real process state, and a JIT invocation with no runtime
+ * archive (rc/GC emitted as definitions) therefore hashes differently and
+ * falls back to full-preamble emission -- the guard is self-enforcing. */
+static int cmd_emit_rt_split(int argc, char **argv) {
+    bool hash_only = false;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--hash") == 0) { hash_only = true; continue; }
+        fprintf(stderr, "usage: tur emit-rt-split [--hash]\n");
+        return 2;
+    }
+    emit_set_rcgc_from_archive(true);
+    Buf out; buf_init(&out);
+    emit_rt_split_source(&out);
+    if (hash_only) {
+        printf("%016llx\n",
+               (unsigned long long)tur_hamt_hash_xxh64(out.data, out.len));
+    } else {
+        fwrite(out.data, 1, out.len, stdout);
+    }
+    buf_free(&out);
+    return 0;
+}
 
 /* J1 (docs/upcoming/jit-engine-plan.md section 3.2): `tur jit <file>` --
  * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
@@ -9144,6 +9178,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(cmd, "jit") == 0) {
         return cmd_jit(argc, argv);
+    }
+    if (strcmp(cmd, "emit-rt-split") == 0) {
+        return cmd_emit_rt_split(argc, argv);
     }
     if (strcmp(cmd, "run") == 0) {
         /* Disambiguate: if the first non-flag argument ends in .tur or

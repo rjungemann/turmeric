@@ -7101,6 +7101,12 @@ static void emit_winsock_compat_shim(Buf *out) {
     buf_puts(out, "#endif /* _WIN32 */\n");
 }
 
+/* S2 (jit-engine-plan, findings 19.4): when set, emit_runtime_preamble forces
+ * every program-gated block on (the cps_uses_* scan gates below), producing
+ * the feature-complete preamble the split-runtime artifacts are generated
+ * from.  Set only by emit_rt_split_source; never during normal emission. */
+static bool g_rt_split_all_gates = false;
+
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
@@ -8231,12 +8237,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * presence scan (cps.c) instead of the old `cl_can_lower` "would the direct
      * emitter lower it" subset check -- verified byte-identical corpus-wide, since
      * post-D4 every cloneable reset lowers natively so presence == can-lower. */
-    const bool cps_uses_delimited    = preamble_uses_base_delimited(program);
-    const bool cps_uses_cloneable_dk = cps_expr_contains_cloneable_shift(program);
-    const bool cps_uses_serial       = preamble_uses_serial(program);
-    const bool cps_uses_callcc       = preamble_uses_callcc(program);
-    const bool cps_ir_emittable      = emit_cps_ir_program_has_emittable(program);
-    const bool cps_uses_cloneable_rt = cps_expr_contains_cloneable_shift(program)
+    /* S2 (jit-engine-plan): emit_rt_split_source forces every program-gated
+     * prelude on so the split runtime TU / declarations artifacts are
+     * feature-complete regardless of any single program -- same effect the
+     * `shared ||` alternatives below give --shared mode, extended to the
+     * program-scan gates. */
+    const bool cps_uses_delimited    = g_rt_split_all_gates || preamble_uses_base_delimited(program);
+    const bool cps_uses_cloneable_dk = g_rt_split_all_gates || cps_expr_contains_cloneable_shift(program);
+    const bool cps_uses_serial       = g_rt_split_all_gates || preamble_uses_serial(program);
+    const bool cps_uses_callcc       = g_rt_split_all_gates || preamble_uses_callcc(program);
+    const bool cps_ir_emittable      = g_rt_split_all_gates || emit_cps_ir_program_has_emittable(program);
+    const bool cps_uses_cloneable_rt = g_rt_split_all_gates
+                                    || cps_expr_contains_cloneable_shift(program)
                                     || expr_has_multishot_handler(program)
                                     || cps_uses_cloneable_dk;
 
@@ -10781,6 +10793,42 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
+}
+
+/* S2 (jit-engine-plan, findings 19.4): the feature-complete SINGLE-FILE
+ * runtime preamble -- every program-gated block forced on, single-file
+ * linkage (not --shared's static demotion) -- ending at the preamble marker.
+ *
+ * Two consumers, which MUST see identical text for the same process state:
+ *   (a) the split-generation tool (`tur emit-rt-split` -> tools/
+ *       gen-runtime-split.py) producing the committed runtime-TU +
+ *       declarations artifacts, plus the recorded content hash;
+ *   (b) cmd_jit at JIT time, hashing this emission against the recorded
+ *       hash to decide whether the committed artifacts still describe the
+ *       compiler it is running in.  Any drift -- an emitter edit, a knob like
+ *       --backtrack-depth or --enable=cps-tramp-resume, archive-mode state --
+ *       changes this text, fails the compare, and falls back to full-preamble
+ *       emission.  Never wrong, just slower.
+ *
+ * Knobs are deliberately NOT normalized here: the text must reflect the
+ * current process state so the hash compare covers them.  Gate globals
+ * (g_needs_*) are forced and restored because they are per-program facts,
+ * not knobs. */
+void emit_rt_split_source(Buf *out) {
+    extern bool g_needs_hamt, g_needs_regex_h, g_has_variadics, g_cps_path;
+    extern bool g_needs_winsock;
+    bool s_hamt = g_needs_hamt, s_regex = g_needs_regex_h;
+    bool s_var = g_has_variadics, s_cps = g_cps_path, s_wsk = g_needs_winsock;
+    g_needs_hamt = true; g_needs_regex_h = true;
+    g_has_variadics = true; g_cps_path = true; g_needs_winsock = true;
+    g_rt_split_all_gates = true;
+    type_codegen_reset_adt_apps();
+    type_codegen_reset_fn_ptr_typedefs();
+    sym_codegen_reset();
+    emit_runtime_preamble(out, NULL, /*shared=*/false);
+    g_rt_split_all_gates = false;
+    g_needs_hamt = s_hamt; g_needs_regex_h = s_regex;
+    g_has_variadics = s_var; g_cps_path = s_cps; g_needs_winsock = s_wsk;
 }
 
 /* structdef-retirement slice 5: an `(defopaque ...)` elaborates to an EX_DEF

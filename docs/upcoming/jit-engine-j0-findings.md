@@ -2526,3 +2526,93 @@ string keys (`elab_toplevel.c` lowers keyword/string keys through
 used to mix content-hashed inserts with pointer-hashed probes -- misses on
 every C compiler, literal merging or not. The P3 arms now agree with the
 literal path.
+
+## 23. S2 production, step 1 -- the split artifacts exist, generated and committed
+
+Added 2026-07-30. This lands 19.4 item 1 (the artifacts + generator + hash)
+and the validation harness for them; items 2 (runtime TU into `tur`) and 3
+(cmd_jit consumption) remain.
+
+### 23.1 The all-gates emission mode and `tur emit-rt-split`
+
+`emit_rt_split_source()` (emit_module.c) emits the feature-complete
+SINGLE-FILE runtime preamble: every program-gated block forced on via a new
+`g_rt_split_all_gates` flag OR'd into the six `cps_uses_*` scan gates --
+the same effect the `shared ||` alternatives give `--shared` mode, extended
+to the program-scan gates -- plus the five boolean gate globals
+(hamt/regex/variadics/winsock/cps_path) saved, forced, and restored.
+Normal emission is byte-identical (flag is false; suite 2430/0, snapshots
+untouched).
+
+Two consumers see this text, and they must agree byte-for-byte:
+`tur emit-rt-split` (the generation input; `--hash` prints its xxHash64 via
+`tur_hamt_hash_xxh64`, so both sides share one hash spelling) and, next
+step, cmd_jit's probe. Knobs are deliberately NOT normalized in the mode:
+`--backtrack-depth` interpolates into a `#define`, `--enable`
+experiments swap emitted bodies, archive mode flips rc/GC between
+definitions and prototypes -- all of it lands in the text, so any knob
+drift fails the hash compare and falls back. The subcommand hard-sets
+archive mode (the committed artifacts describe the JIT-time state, where
+DEDUP-4b resolves rc/GC from the archive); a JIT invocation with no
+archive hashes differently and self-excludes. 3,295 lines, deterministic.
+
+### 23.2 The generator and the committed artifacts
+
+`tools/gen-runtime-split.py` is the validated proof transform
+(s2-split-proof.py) promoted to a generator writing
+`src/runtime/generated/`:
+
+- `tur_rt_split.c` (3,305 lines) -- the runtime TU: statics externalized
+  (`static inline` loses both), the 11 thread-locals routed through the
+  host `tur_tls_*` accessors. Compiles clean under gcc first try.
+- `tur_rt_split_decls.h` (1,324 lines -- 60% below the preamble's 3,295) --
+  the declarations region cmd_jit will splice ahead of the program half.
+- `tur_rt_split_embed.c` -- the decls as a C string plus
+  `tur_rt_split_hash`, to be linked into `tur` so the JIT path needs no
+  install-path lookup.
+
+One correctness addition over the proof: a `static` prototype whose
+definition is NOT in the preamble is per-program (defined below the marker
+-- `__tur_static_init` is the case, detected by a definitions census). The
+proof blanket-de-static'd it, declaring `void f(void);` and then compiling
+the program half's `static void f(void){...}` after it -- c2mir tolerates
+that linkage conflict, gcc would not have. The generator keeps such
+prototypes verbatim in the decls half and drops them from the runtime TU.
+
+### 23.3 Validated: 8/8 subsystems and a 300-fixture sample, zero failures
+
+`tools/jit-spike/s2-artifacts-run.sh` validates the COMMITTED artifacts --
+distinct from s2-proof-run.sh's per-fixture re-splitting: ONE runtime .so
+built from the committed all-gates TU, and each fixture's emitted TU cut at
+the marker with the COMMITTED union decls spliced ahead of the program
+half. This is also the superset-property test 19.4 needed: a program half
+emitted under ITS gates must bind against the union runtime.
+
+All 8 subsystem fixtures pass, and a 300-fixture random sample from the
+product sweep's PASS bucket passes 300/300. Latency on `arith`, best of 5
+(union artifacts, not per-fixture): full TU 87.4 + 142.0 = 229.4 ms; split
+74.1 + 65.1 = 139.2 ms -- **39% off engine time**, matching 19.2's 38%
+within noise. The c2mir cut is smaller than the per-fixture proof's (the
+union decls are bigger than arith's own preamble) while link+gen halves
+(the runtime's 198 functions are not re-generated per program).
+
+Two runner potholes worth recording: the union decls carry
+`#include "hamt.h"` even for programs that never gated it in, so the
+consumer needs `-I src/runtime` (cmd_jit already passes include dirs); and
+the first validation run failed 8/8 on `unresolved import:
+tur_hamt_set_cstr` -- a stale spike binary predating section 22's runtime
+addition, not an artifact defect. Rebuild first; the harness binary must be
+at least as new as the compiler that emitted the program half.
+
+### 23.4 What remains for production S2
+
+1. Compile `tur_rt_split.c` into `tur` itself (and `libturi.a`), REPLACING
+   the host's diverged `cps_rt.c`/`stm.c`/fiber duplicates -- seam 3's
+   "the runtime library must BE the runtime". The big, risky step: those
+   TUs also serve turi natives and the REPL host paths today.
+2. cmd_jit: hash-probe `emit_rt_split_source` against the embedded
+   `tur_rt_split_hash`; on match emit decls + program half; on mismatch
+   fall back to the full preamble (status quo).
+3. Then re-run the product sweep expecting the same 1,669/1,701 at lower
+   engine latency, and regenerate-artifacts becomes part of the
+   preamble-change workflow (same-PR policy as fixture snapshots).
