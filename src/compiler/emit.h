@@ -27,6 +27,12 @@ void emit_shared_runtime_header(Buf *out);
  * flags): knob drift must change the text and fail the hash compare. */
 void emit_rt_split_source(Buf *out);
 
+/* J2: when true, emit_program appends the per-export `<mangled>__ffi` shims
+ * (the --shared path's interpreter-arbitrary-arity-ffi emission) to the
+ * single-file TU.  Set only by the REPL's in-process spice build; leave
+ * false everywhere else so ordinary emission stays byte-identical. */
+extern bool g_emit_ffi_export_shims;
+
 /* DEDUP-4b (docs/archive/gc-cycle-collection-plan.md): declare, rather than define, the
  * rc<T>/GC runtime in the emitted preamble, because the program will link
  * libturt_runtime.a (which carries src/runtime/{rc,gc,rc_free_queue}.c).

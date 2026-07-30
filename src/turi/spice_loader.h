@@ -102,6 +102,27 @@ const TurSpiceExport *tur_spice_image_find(const TurSpiceImage *img,
  * short-circuit when nothing changed. */
 bool tur_spice_image_is_fresh(const TurSpiceImage *img);
 
+/* ------------------------------------------------------------------ */
+/* J2 (jit-engine-plan section 3.3): in-process JIT hook.               */
+/* ------------------------------------------------------------------ */
+/* When installed, tur_spice_image_load builds the spice IN PROCESS via
+ * the MIR engine instead of the `tur build --shared` subprocess + dlopen:
+ * `build` compiles the spice at build_dir and hands back an opaque image
+ * plus the exports.manifest TEXT (malloc'd; the loader owns and frees
+ * it); `sym` replaces dlsym against that image; `free_image` replaces
+ * dlclose.  The hook lives behind a function-pointer table because the
+ * engine is only linked into `tur` under -DTUR_JIT=ON while this loader
+ * is part of tur_core -- main.c installs it at REPL start when the `jit`
+ * experiment is enabled.  NULL (the default) keeps the subprocess path. */
+typedef struct TurSpiceJitHook {
+    int   (*build)(const char *build_dir, void **out_image,
+                   char **out_manifest);
+    void *(*sym)(void *image, const char *mangled);
+    void  (*free_image)(void *image);
+} TurSpiceJitHook;
+
+void tur_spice_set_jit_hook(const TurSpiceJitHook *hook);
+
 #ifdef __cplusplus
 }
 #endif

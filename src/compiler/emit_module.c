@@ -10992,6 +10992,12 @@ static void emit_mark_byval_fn_field_closures(const Expr *e) {
     }
 }
 
+/* J2: when set, emit_program appends the per-export `<mangled>__ffi` shims
+ * (normally a --shared-only emission).  Set by the REPL's in-process spice
+ * build only; every other emission keeps byte-identical output. */
+bool g_emit_ffi_export_shims = false;
+static void emit_ffi_export_shims(Buf *out, const Expr *program);
+
 int emit_program(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
         fprintf(stderr, "tur: emit: expected EX_PROGRAM\n");
@@ -12405,6 +12411,14 @@ int emit_program(Buf *out, const Expr *program) {
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
+
+    /* J2: the REPL's in-process spice build compiles the whole spice as ONE
+     * single-file TU, and its high-arity exports need the same
+     * `<mangled>__ffi` shims the --shared path emits per module
+     * (interpreter-arbitrary-arity-ffi).  Gated so every other single-file
+     * emission stays byte-identical -- shims would be dead weight in a
+     * normal binary and would churn every fixture snapshot. */
+    if (g_emit_ffi_export_shims) emit_ffi_export_shims(out, program);
 
     buf_free(&file);
     buf_free(&body);

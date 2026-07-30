@@ -30,4 +30,36 @@ int tur_jit_execute(const char *csrc, size_t csrc_len, const char *autolink,
                     const char **include_dirs, int n_include_dirs,
                     int prog_argc, char **prog_argv, int *prog_rc);
 
+/* ------------------------------------------------------------------ */
+/* J2 (plan section 3.3): persistent image mode for the REPL.          */
+/* ------------------------------------------------------------------ */
+/* A TurJitImage is a compiled-and-linked module set (a whole spice) kept
+ * resident so its functions can be called repeatedly from the REPL --
+ * the in-process replacement for the `tur build --shared` + dlopen path.
+ *
+ * Lifecycle: tur_jit_compile_image compiles the emitted C, links against
+ * this process (same resolver as tur_jit_execute), eagerly generates
+ * code, and runs the module's `__tur_static_init` (c2mir discards the
+ * constructor attribute, so it must be called explicitly -- the same S1b
+ * fact that shaped `main`).  Exported (or static) functions are then
+ * resolved by tur_jit_image_sym -- MIR item lookup by name, which unlike
+ * dlsym sees static functions, so the single-TU spice emission needs no
+ * linkage changes.  tur_jit_image_free tears the context down; any
+ * pointer obtained from the image is dead after that, so the caller must
+ * rebind before freeing (the REPL's (reload) order). */
+typedef struct TurJitImage TurJitImage;
+
+/* Returns TUR_JIT_OK and sets *out on success; on failure returns the
+ * TUR_JIT_ERR_* class (diagnostics already printed) and *out is NULL. */
+int tur_jit_compile_image(const char *csrc, size_t csrc_len,
+                          const char *autolink,
+                          const char **include_dirs, int n_include_dirs,
+                          TurJitImage **out);
+
+/* Address of the generated function named `name` (mangled C name), or
+ * NULL if the image has no such function item. */
+void *tur_jit_image_sym(TurJitImage *img, const char *name);
+
+void tur_jit_image_free(TurJitImage *img);
+
 #endif /* TUR_JIT_ENGINE_H */

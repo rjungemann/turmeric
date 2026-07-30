@@ -2733,3 +2733,86 @@ S2 is thereby COMPLETE: the runtime boundary is named (the marker), the
 runtime library IS the runtime (section 24), and the JIT compiles each
 program against declarations, resolving the runtime by address into the
 host process. J2 (REPL integration) is unblocked.
+
+## 26. J2 LANDED -- the REPL builds spices in process
+
+Added 2026-07-30. Plan section 3.3: `tur --enable=jit repl` swaps the
+`tur build --shared` subprocess + dlopen + dlsym pipeline for the MIR
+engine, in process. Cold spice load drops **~850ms -> ~260ms (3.2x)** on
+the two-module probe spice -- the subprocess + cc + link round trip
+replaced by one c2mir pass over the S2 split (the decls region + program
+half; a REPL reload is exactly the loop S2 exists for).
+
+### 26.1 The shape
+
+- **Engine** (jit_engine.c): the one-shot front half is factored into
+  jit_compile_and_link (prelude, c2mir, module load, eager MIR_link,
+  config-global sync), shared by tur_jit_execute and the new persistent
+  TurJitImage API: compile_image / image_sym / image_free.  image_sym is
+  MIR item lookup by name -- which, unlike dlsym, sees `static`
+  functions, so the single-TU spice emission needs no linkage changes.
+  compile_image explicitly calls `__tur_static_init` (S1b's no-main
+  case: c2mir discards the constructor attribute).  image_free drains
+  the engine's atexit list (module defers) while the code is still
+  mapped; callers rebind before freeing (the (reload) order).
+- **Loader** (spice_loader.c): a TurSpiceJitHook (build / sym /
+  free_image) installed by main.c at REPL start when the `jit`
+  experiment is on -- the loader is tur_core, the engine is
+  TUR_JIT-only, so a function-pointer table is the seam.  With the hook
+  set, tur_spice_image_load skips needs_rebuild/run_build/dlopen
+  entirely; the manifest arrives as in-memory text; freshness for
+  (reload)/--watch is source mtime vs the image's build stamp.
+- **Build glue** (main.c repl_jit_build): the whole spice compiles as
+  ONE single-file TU -- a synthetic root module importing every source
+  module, so imports dedupe through the ordinary module machinery.  Two
+  probe-driven discoveries shaped this: a LOAD-based root duplicates any
+  module also imported intra-spice (sh__add42 defined twice), and module
+  resolution is FILENAME-based while --shared-path spices may name
+  modules freely (defmodule oth in other.tur) -- so a SHADOW DIR of
+  module-name -> file symlinks under .tur-repl-cache/jit-mods/ makes
+  every module importable uniformly.  The manifest comes from the same
+  compile (a g_manifest_sink capture around emit); the S2 hash-gated
+  preamble swap and the W0071 full-TU retry ladder are the same helpers
+  cmd_jit now uses (jit_try_split_preamble / jit_sdk_include_dirs).
+
+### 26.2 Two real defects the tests caught
+
+- **Interpreter-mode leak.** The REPL process runs with
+  g_interpret_mode=true (turi_env_new), and the in-process compile
+  inherited it: unknown names demoted from hard errors to W0040
+  runtime-dispatch warnings -- and, unexercised but worse, `#?(:turi
+  ...)` branches would have been selected into NATIVE code.  The
+  subprocess never saw the flag because it was a fresh process.  Cleared
+  for exactly the compile.  This is the class of bug in-process
+  integration keeps buying: process-global state the subprocess boundary
+  used to launder (g_emit_for_link got the same save/restore).
+- **Missing __ffi shims.** interpreter-arbitrary-arity-ffi's per-export
+  shims were emitted only on the --shared path; the three high-arity RP4
+  tests failed under the image build.  emit_program now emits them
+  behind g_emit_ffi_export_shims, set only by repl_jit_build -- every
+  other emission stays byte-identical (suite 2430/0, snapshots
+  untouched).
+
+### 26.3 Validation
+
+The four RP suites driven through `--enable=jit`: **call 14/14, reload
+4/4, watch 5/5, errors 3/5** -- the two failures are structurally
+subprocess-specific (a manufactured stale exports.manifest FILE, which
+the in-process path cannot have, and a strings(1) grep over the $TUR
+wrapper script rather than the binary).  The same suites on the
+subprocess path (hook not installed): all green, byte-for-byte the
+loader refactor is inert when off.  New tests/turi/repl-spice-jit.sh
+(ctest tur_repl_spice_jit, TUR_JIT-gated, self-skipping) pins the
+in-process path: load with no .so artifact, bare/qualified/float
+(fractional probe)/arity-12 calls, the compile-error surface, (reload)
+self-heal.  Suite 2430/0; product sweep unchanged at 1,655 + 14 =
+1,669/1,701 after the engine refactor (the moved free of the source
+buffer validated under ASan by the whole sweep).
+
+### 26.4 Recorded v1 limits
+
+Transitive :spices deps are not auto-appended to the image build's
+include path (single-spice projects only; the subprocess path remains
+the default and handles them), and POSIX symlinks gate the shadow dir
+out of Windows along with the engine itself.  Both are hook-local:
+lifting them touches repl_jit_build only.

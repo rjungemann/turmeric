@@ -254,11 +254,22 @@ static void *jit_run_entry (void *p) {
 }
 
 /* ------------------------------------------------------------------ */
-/* the engine                                                          */
+/* shared front half: compile + load + link one emitted TU              */
 /* ------------------------------------------------------------------ */
-int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
-                     const char **include_dirs, int n_include_dirs,
-                     int prog_argc, char **prog_argv, int *prog_rc) {
+/* Everything up to "the program is linked and generated": prelude concat,
+ * c2mir, module load, eager MIR_link with the process resolver, and the
+ * config-global sync.  Shared verbatim by the one-shot tur_jit_execute and
+ * the J2 image path; on success the caller owns tearing the context down
+ * (MIR_gen_finish -> c2mir_finish -> MIR_finish, in that order).
+ *
+ * Returns TUR_JIT_OK with *out_ctx set, or a TUR_JIT_ERR_* class with all
+ * engine state already torn down (except the deliberately-leaked context
+ * on a longjmp'd link error -- see jit_mir_error). */
+static int jit_compile_and_link (const char *csrc, size_t csrc_len,
+                                 const char *autolink,
+                                 const char **include_dirs, int n_include_dirs,
+                                 MIR_context_t *out_ctx) {
+  *out_ctx = NULL;
   if (jit_load_autolink (autolink) != 0) return TUR_JIT_ERR_LINK;
 
   /* Prepend the builtin prototypes.  A memory concat beats teaching c2mir
@@ -273,7 +284,6 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   g_src = full;
   g_src_len = full_len;
   g_src_pos = 0;
-  g_n_atexit = 0;
 
   MIR_context_t ctx = MIR_init ();
   MIR_set_error_func (ctx, jit_mir_error);
@@ -294,6 +304,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 
   int ok = c2mir_compile (ctx, &ops, jit_getc, NULL, "<tur-jit>", NULL);
   if (!ok) {
+    g_jit_err_active = 0;
     c2mir_finish (ctx);
     MIR_finish (ctx);
     free (full);
@@ -303,29 +314,54 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   MIR_gen_init (ctx);
   MIR_gen_set_optimize_level (ctx, 2);
 
-  MIR_item_t main_item = NULL;
   for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
-       m = DLIST_NEXT (MIR_module_t, m)) {
+       m = DLIST_NEXT (MIR_module_t, m))
     MIR_load_module (ctx, m);
-    for (MIR_item_t it = DLIST_HEAD (MIR_item_t, m->items); it != NULL;
-         it = DLIST_NEXT (MIR_item_t, it))
-      if (it->item_type == MIR_func_item && strcmp (it->u.func->name, "main") == 0)
-        main_item = it;
-  }
-  if (main_item == NULL) {
-    MIR_gen_finish (ctx);
-    c2mir_finish (ctx);
-    MIR_finish (ctx);
-    free (full);
-    fprintf (stderr, "tur: jit: no main in generated module\n");
-    return TUR_JIT_ERR_COMPILE;
-  }
 
   /* Eager generation: lazy is not re-entrant at this pin (findings 8.1) and
    * miscompiled pthread entries even single-threaded (8.4.1). */
   MIR_link (ctx, MIR_set_gen_interface, jit_import_resolver);
   jit_sync_config_globals (ctx);
   g_jit_err_active = 0;   /* past the last MIR call that can raise */
+
+  free (full);             /* c2mir consumed the stream; the text is done */
+  *out_ctx = ctx;
+  return TUR_JIT_OK;
+}
+
+/* Find the generated function named `name` across the context's modules.
+ * MIR item lookup sees static functions too (unlike dlsym), which is what
+ * lets the single-TU spice emission keep its `static` linkage. */
+static MIR_item_t jit_find_func (MIR_context_t ctx, const char *name) {
+  for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
+       m = DLIST_NEXT (MIR_module_t, m))
+    for (MIR_item_t it = DLIST_HEAD (MIR_item_t, m->items); it != NULL;
+         it = DLIST_NEXT (MIR_item_t, it))
+      if (it->item_type == MIR_func_item && strcmp (it->u.func->name, name) == 0)
+        return it;
+  return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* the engine                                                          */
+/* ------------------------------------------------------------------ */
+int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
+                     const char **include_dirs, int n_include_dirs,
+                     int prog_argc, char **prog_argv, int *prog_rc) {
+  g_n_atexit = 0;
+  MIR_context_t ctx;
+  int frc = jit_compile_and_link (csrc, csrc_len, autolink,
+                                  include_dirs, n_include_dirs, &ctx);
+  if (frc != TUR_JIT_OK) return frc;
+
+  MIR_item_t main_item = jit_find_func (ctx, "main");
+  if (main_item == NULL) {
+    MIR_gen_finish (ctx);
+    c2mir_finish (ctx);
+    MIR_finish (ctx);
+    fprintf (stderr, "tur: jit: no main in generated module\n");
+    return TUR_JIT_ERR_COMPILE;
+  }
 
   typedef int (*main_fn) (int, char **, char **);
   struct jit_entry_box box = { (main_fn) main_item->addr, prog_argc, prog_argv, 0 };
@@ -342,7 +378,6 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
-    free (full);
     fprintf (stderr, "tur: jit: entry thread create failed\n");
     return TUR_JIT_ERR_RUN;
   }
@@ -352,8 +387,68 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   MIR_gen_finish (ctx);
   c2mir_finish (ctx);
   MIR_finish (ctx);
-  free (full);
 
   if (prog_rc) *prog_rc = box.rc;
   return TUR_JIT_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* J2: persistent image mode (plan section 3.3)                        */
+/* ------------------------------------------------------------------ */
+struct TurJitImage {
+  MIR_context_t ctx;
+};
+
+int tur_jit_compile_image (const char *csrc, size_t csrc_len,
+                           const char *autolink,
+                           const char **include_dirs, int n_include_dirs,
+                           TurJitImage **out) {
+  *out = NULL;
+  /* atexit interception note: the list is engine-global.  Image-registered
+   * handlers (module defers) accumulate and are drained when the image is
+   * freed, while the generated code is still mapped -- approximate for
+   * overlapping images (a reload window), exact for the common one-image
+   * session.  A per-image list is J3 work if it ever matters. */
+  MIR_context_t ctx;
+  int frc = jit_compile_and_link (csrc, csrc_len, autolink,
+                                  include_dirs, n_include_dirs, &ctx);
+  if (frc != TUR_JIT_OK) return frc;
+
+  /* S1b, applied to the no-main case: c2mir discards the constructor
+   * attribute, so the wrapper never fires and module state (dynvar keys,
+   * module defs, interned symbols, direct->CPS registry) stays
+   * uninitialized.  Call the explicit initializer by name -- it is static
+   * in the TU, which MIR item lookup sees fine, and idempotent by
+   * construction. */
+  MIR_item_t init = jit_find_func (ctx, "__tur_static_init");
+  if (init != NULL && init->addr != NULL) ((void (*) (void)) init->addr) ();
+
+  TurJitImage *img = (TurJitImage *) malloc (sizeof *img);
+  if (!img) {
+    MIR_gen_finish (ctx);
+    c2mir_finish (ctx);
+    MIR_finish (ctx);
+    return TUR_JIT_ERR_RUN;
+  }
+  img->ctx = ctx;
+  *out = img;
+  return TUR_JIT_OK;
+}
+
+void *tur_jit_image_sym (TurJitImage *img, const char *name) {
+  if (!img) return NULL;
+  MIR_item_t it = jit_find_func (img->ctx, name);
+  return it ? it->addr : NULL;
+}
+
+void tur_jit_image_free (TurJitImage *img) {
+  if (!img) return;
+  /* Drain pending image atexit handlers (module defers) while the
+   * generated code is still mapped; the callers' contract is that no
+   * image function pointer is used after this call. */
+  jit_atexit_drain ();
+  MIR_gen_finish (img->ctx);
+  c2mir_finish (img->ctx);
+  MIR_finish (img->ctx);
+  free (img);
 }

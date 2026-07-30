@@ -569,6 +569,19 @@ add_test(
   COMMAND bash tests/turi/repl-spice-errors.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# J2 (jit-engine-plan 3.3): the IN-PROCESS spice build behind
+# `--enable=jit repl` -- load with no .so artifact, calls (incl. the
+# __ffi high-arity shim and a fractional float), the compile-error
+# surface, and (reload) self-heal.  The script self-skips on a binary
+# without the engine; the registration is gated the same way.
+if(TUR_JIT)
+  add_test(
+    NAME tur_repl_spice_jit
+    COMMAND bash tests/turi/repl-spice-jit.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE)
+endif()
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture
 # imports them. See docs/stdlib-check-allowlist-plan.md.

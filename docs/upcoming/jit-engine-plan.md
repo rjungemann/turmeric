@@ -7,7 +7,12 @@ Status: J0 COMPLETE (x86-64 Linux + arm64 macOS); S1/S1b/6(a)/TLS landed;
 into a committed host-resident runtime TU (which REPLACES the host's
 diverged copies -- the runtime library IS the runtime) plus a declarations
 region `tur jit` swaps in under a content-hash guard; sweep byte-identical
-at ~28% lower end-to-end latency. J2+ PROPOSED. Plan written 2026-07-27; J0 spike
+at ~28% lower end-to-end latency.
+**J2 LANDED 2026-07-30** (findings 26): `tur --enable=jit repl` builds the
+enclosing spice IN PROCESS through the engine (TurSpiceJitHook replacing
+the `tur build --shared` subprocess + dlopen); cold spice load ~3.2x
+faster, RP call/reload/watch suites green through the jit path. J3+
+PROPOSED. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
