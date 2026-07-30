@@ -245,8 +245,11 @@ readability tool, not a new type. The target can be any type expression:
 (defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
 ```
 ```sweet-exp
-defalias Sample :int
-defalias Backtrack (fn [] int)
+defalias Sample    :int                              ; primitive
+defalias IntList   (Cons int)                        ; type application
+defalias Point     P                                 ; struct / ADT name
+defalias Backtrack (fn [] int)                       ; function type
+defalias NonZero   #refine{ q : int | (not= q 0) }   ; refinement
 ```
 
 Because it is transparent, `(defn f [b : Backtrack] : int (b))` applies `b`
