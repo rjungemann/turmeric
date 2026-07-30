@@ -10,6 +10,11 @@ gate: this is a miscompile fix converging on existing checked behavior, not a
 new user-facing feature -- the experiment machinery does not apply, the
 regen-coordination rules do.
 
+This is **increment 1** of
+[representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md);
+the landing checklist and probe discipline there apply on top of the stages
+below.
+
 ## Problem
 
 A fn-typed value today travels in one of (at least) six representations,

@@ -120,7 +120,11 @@ pinned by `--known-probes` instead, so a red run means a NEW cell.
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
 per-boundary -- is planned in
-`docs/upcoming/fn-value-fat-normalization-plan.md`.
+`docs/upcoming/fn-value-fat-normalization-plan.md`. The campaign-level
+strategy governing that plan and its successors (which seams consolidate in
+which order, the probe/blast-radius discipline, and the performance
+guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;
+this guide's missing-cells table is that campaign's live scoreboard.
 
 ## Maintenance -- keep this guide truthful
 
