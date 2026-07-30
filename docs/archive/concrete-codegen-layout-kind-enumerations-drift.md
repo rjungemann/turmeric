@@ -249,8 +249,9 @@ mangling first would upgrade a latent defect into a live one.
 
 ## Resolution (2026-07-30) -- Finding 2
 
-Three changes, in `src/compiler/types.c`. The audit came back with one
-admission, one *new* live collision, and eight documented exclusions.
+Two changes, in `src/compiler/types.c`. The audit came back with one *new*
+live collision, no admissions, and five documented exclusions -- one of them
+(`TY_CONTRACT`) blocked on a missing peel rather than on its layout.
 
 ### The correction to Finding 2's premise
 
@@ -319,14 +320,39 @@ deliberately *not* compared -- they are run-time-checked and never C-visible,
 so `{ x : int | (> x 0) }` and `{ x : int | (< x 0) }` stay interchangeable
 exactly as before.
 
-With identity fixed, the report's own recommendation for this kind follows:
-`type_has_concrete_codegen_layout` now **delegates to the base type** too, so
-`(Box { y : float | .. })` monomorphises with the `double` field its base asks
-for instead of losing the by-value monomorph to the int64 carrier. Result:
-`tur_adt_Box__contract_int` (int64 field) and `tur_adt_Box__contract_float`
-(double field), one typedef each, constructors with matching signatures.
+Result: `tur_adt_Box__contract_int` (int64 field) and
+`tur_adt_Box__contract_float` (double field), one typedef each, constructors
+with matching signatures. Note the correct per-base **field width** comes from
+`type_c_name`, which already delegated; the distinct **names** are what the
+`type_eq` and mangle arms buy. Both hold with contracts on the int64 carrier.
+
+**The one recommendation not taken: concreteness does NOT delegate.** The
+report proposes `type_has_concrete_codegen_layout` delegate to the base type
+too, on the reasoning that `type_c_name` does. Implemented and measured, that
+regresses a program that compiles today:
+
+```turmeric
+(defn mk [] : (Box #refine{ v : int | (> v 0) }) (MkBox 5))
+```
+```
+error: incompatible types when returning type 'tur_adt_Box__int'
+       but 'tur_adt_Box__contract_int' was expected
+```
+
+The ctor call is typed from its argument -- `(MkBox 5)` is `(Box int)` -- and
+nothing peels the declared `(Box contract)` to it, so admitting contracts
+splits one carrier into two by-value monomorphs that no crossing reconciles.
+On the carrier both collapse to one C type and the mismatch cannot arise. The
+missing peel is filed as
+[contract-type-arg-not-peeled-to-base](../reported/contract-type-arg-not-peeled-to-base.md),
+which is also what blocks the float base (`TUR-E0707`); flipping this arm is a
+two-line follow-on once that lands, and
+`tests/check-monomorph-name-collision.sh` already carries the repro. The arm
+is present and explicit (`src/compiler/types.c:516`) with that reasoning
+recorded, so this is a documented exclusion, not a gap in the audit.
 
 ### The other four questionable kinds -- excluded, with reasons
+
 
 Each now carries its rejection in the switch rather than falling off a
 `default`:
@@ -391,11 +417,15 @@ collision survived this long.
 
 ### Not fixed here
 
-A contract-typed payload is still hard to *use* at a boundary, for reasons
-outside this report: `(match b (MkBox v) v)` returning `v` as `float` trips
-`TUR-E0707` (the contract is not peeled to its base for the register-class
-check), and `(println v)` finds no overload for `{ y : float | .. }`. The
-layouts are right now; the surface still needs the peel.
+A contract-typed payload is still hard to *use* at a boundary, and it is one
+cause, not three: a contract in **type-argument position** is never peeled to
+its base. `(match b (MkBox v) (+ v 1))` trips `TUR-E0006` (operator lookup on
+`{ v : int | .. }`), returning `v` as `float` trips `TUR-E0707`, `(println v)`
+finds no overload, and admitting `TY_CONTRACT` to the concrete list splits the
+monomorph. Parameters, returns and `let` annotations all peel already; this
+fifth site does not. Filed as
+[contract-type-arg-not-peeled-to-base](../reported/contract-type-arg-not-peeled-to-base.md).
+The layouts and names are right now; the surface still needs the peel.
 
 ## Fix directions
 

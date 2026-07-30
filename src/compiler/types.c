@@ -490,17 +490,31 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_ROLE:
         case TY_GENERATOR:
             return true;
-        /* concrete-codegen-layout-kind-enumerations-drift Finding 2: a contract
-         * type IS its base type in C (type_c_name delegates), so concreteness
-         * delegates too -- `(Box { y : float | .. })` monomorphises with the
-         * `double` field its base asks for instead of losing the by-value
-         * monomorph to the int64 carrier.  Safe only because `type_eq` and
-         * `append_type_mangle` now discriminate contracts by that same base
-         * type; while they did not, every contract shared one registry entry
-         * and one `tur_adt_Box__contract` typedef. */
+        /* concrete-codegen-layout-kind-enumerations-drift Finding 2 proposed
+         * delegating this to the base type, since type_c_name does.  It does
+         * not belong here YET, and the reason is measured, not theoretical:
+         * with `return type_has_concrete_codegen_layout(base)` here,
+         *
+         *   (defn mk [] : (Box #refine{ v : int | (> v 0) }) (MkBox 5))
+         *
+         * stops compiling -- `cc` reports "incompatible types when returning
+         * 'tur_adt_Box__int' but 'tur_adt_Box__contract_int' was expected".
+         * The ctor call is typed from its argument, `(Box int)`, and nothing
+         * peels the declared `(Box contract)` to it, so admitting contracts
+         * splits one carrier into two by-value monomorphs that no crossing
+         * reconciles.  Today both collapse to the int64 carrier and the
+         * mismatch is invisible.  See
+         * docs/reported/contract-type-arg-not-peeled-to-base.md; that peel is
+         * the prerequisite, and it also unblocks the float base, which is
+         * separately stuck behind TUR-E0707.
+         *
+         * Nothing about the collision fix depends on this: the correct per-base
+         * FIELD width comes from type_c_name, and the distinct monomorph NAMES
+         * come from the type_eq / append_type_mangle arms.  Both hold with
+         * contracts on the carrier -- `tur_adt_Box__contract_int` still gets an
+         * int64_t field and `tur_adt_Box__contract_float` a double. */
         case TY_CONTRACT:
-            return t->as.contract_.base_type &&
-                   type_has_concrete_codegen_layout(t->as.contract_.base_type);
+            return false;
         case TY_APP:
             /* structdef-retirement DS-D: a struct-headed TY_APP can never form
              * (no Type has kind TY_STRUCT), so a parametric-struct monomorph has
