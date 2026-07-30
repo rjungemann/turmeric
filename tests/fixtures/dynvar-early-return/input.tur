@@ -1,0 +1,34 @@
+;; S1b edge: an early `return` out of a `binding` body must pop the dynamic
+;; frame before it leaves.
+;;
+;; The pop used to ride only on __attribute__((cleanup)), which covers every
+;; scope exit on the cc path.  c2mir DISCARDS that attribute with no
+;; diagnostic, so under `tur jit` the dynvar key was left pointing at a
+;; returned function's stack frame -- a SEGV on the next read, not a leak.
+;; The emitter now fires the pop explicitly ahead of the return, the way it
+;; already does for defers.
+
+(defdynamic *lvl* :int 0)
+
+(defn probe [n : int] : int
+  (binding [*lvl* 7]
+    (if (> n 0)
+      (return 100)
+      0))
+  *lvl*)
+
+(defn nested [n : int] : int
+  (binding [*lvl* 1]
+    (binding [*lvl* 2]
+      (if (> n 0)
+        (return 200)
+        0)))
+  *lvl*)
+
+(defn main [] : int
+  (println (probe 1))     ; early return out of one binding
+  (println *lvl*)         ; 0 -- the frame was popped
+  (println (nested 1))    ; early return out of two nested bindings
+  (println *lvl*)         ; 0 -- both were popped
+  (println (probe 0))     ; fall-through path still works
+  0)

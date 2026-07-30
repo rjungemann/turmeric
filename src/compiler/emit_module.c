@@ -12467,6 +12467,14 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
+    /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
+     * closes, so only the backing arrays outlive emission. */
+    for (uint32_t _dg = 0; _dg < ctx.n_dynvar_guards; _dg++) {
+        free(ctx.dynvar_guard_ptrs[_dg]);
+        free(ctx.dynvar_guard_names[_dg]);
+    }
+    free(ctx.dynvar_guard_ptrs);
+    free(ctx.dynvar_guard_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);
@@ -13777,6 +13785,14 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
     free(ctx.pbp_param_ptrs);
+    /* S1b/dynvar early-exit: the guard stack is emptied as each binding scope
+     * closes, so only the backing arrays outlive emission. */
+    for (uint32_t _dg = 0; _dg < ctx.n_dynvar_guards; _dg++) {
+        free(ctx.dynvar_guard_ptrs[_dg]);
+        free(ctx.dynvar_guard_names[_dg]);
+    }
+    free(ctx.dynvar_guard_ptrs);
+    free(ctx.dynvar_guard_names);
     for (uint32_t i = 0; i < ctx.n_abi_specializations; i++) free(ctx.abi_specializations[i].clone_name);
     free(ctx.abi_specializations);
     free(ctx.specialized_call_exprs);

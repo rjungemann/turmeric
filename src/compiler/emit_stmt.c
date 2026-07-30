@@ -789,6 +789,16 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* Set flag to indicate return has been emitted */
             ctx->return_emitted = true;
 
+            /* S1b/dynvar early-exit: pop every dynamic binding still in scope,
+             * innermost first -- the order the cleanup attribute would use.
+             * Without this the JIT (where c2mir drops that attribute) leaves
+             * the dynvar key pointing into this frame after it returns. */
+            for (uint32_t di = ctx->n_dynvar_guards; di-- > 0; ) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "_dynvar_pop_%s(&%s);\n",
+                           ctx->dynvar_guard_names[di], ctx->dynvar_guard_ptrs[di]);
+            }
+
             /* Fire all defers in the frame chain if we're in a scope with defers */
             if (ctx->frame_var) {
                 indent_buf(body, ctx->indent);

@@ -274,8 +274,11 @@ useful even if the JIT slips.
   emitted explicitly at the block's fall-through exit *and* the attribute is
   kept for the exits the expression emitter cannot see, with an idempotent pop
   so both may fire. Corpus 1642 -> 1645. Dynamic variables are therefore NOT
-  cc-only under `tur jit`. One edge remains for J1: an early `return`/`goto`
-  out of a dynamic binding still pops only on the `cc` path.
+  cc-only under `tur jit`. **That edge is closed too** (findings 35): an early
+  `return` out of a dynamic binding now fires the pop explicitly, the way
+  `EX_RETURN` already fires pending defers. It was a SEGV under the JIT rather
+  than the leak the note implied -- the key was left pointing at a returned
+  function's frame.
 - **S2 -- runtime-as-library boundary. Sized (findings 13), architecture
   PROVEN end to end (findings 19): split at the preamble marker, runtime
   compiled once into a host-resident library, program half through c2mir with

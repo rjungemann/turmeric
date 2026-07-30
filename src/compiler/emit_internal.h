@@ -276,6 +276,15 @@ typedef struct EmitCtx {
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
     /* Phase 4 v1: Frame tracking for unified defer model */
     const char *frame_var;    /* Name of current tur_frame variable (e.g., "__frame_3") */
+    /* S1b/dynvar early-exit: the dynamic-binding guards currently in scope,
+     * innermost LAST.  An early `return` out of a `binding` body must pop them
+     * explicitly: the __attribute__((cleanup)) that covers this on the cc path
+     * is discarded by c2mir with no diagnostic, which left the dynvar key
+     * pointing at a returned function's stack frame (a SEGV, not a leak).
+     * The pop is idempotent, so firing here AND via the attribute is safe. */
+    char    **dynvar_guard_ptrs;
+    char    **dynvar_guard_names;
+    uint32_t  n_dynvar_guards, cap_dynvar_guards;
     bool in_scope_with_defers; /* Track if current scope has defers */
     struct DeferThunk *pending_defer_thunks; /* Thunks to emit at file scope */
     /* Phase 4 v1: For defer thunk emission with captures */

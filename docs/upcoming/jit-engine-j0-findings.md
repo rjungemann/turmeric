@@ -3512,3 +3512,67 @@ the knob is the diagnostic.
 J2's suite (`tests/turi/repl-spice-jit.sh`) is 4/0 under the new default --
 the reload loop is where lazy should help most, since a reload regenerates
 only what the next call touches.
+
+## 35. The S1b dynamic-variable early-exit edge -- a SEGV, not a leak
+
+Added 2026-07-30. Closes the one edge S1b left open: "an early `return`/`goto`
+out of a dynamic binding still pops only on the `cc` path."
+
+### 35.1 Worse than the note suggested
+
+`binding` emits the frame push, then a guard carrying
+`__attribute__((cleanup(_dynvar_pop_<name>)))`, then an explicit pop after the
+body (findings 12.5 -- the explicit pop exists precisely because c2mir drops
+the attribute). An early `return` inside the body jumps past the explicit pop:
+
+```c
+TurDynFrame __t161 = { pthread_getspecific (_dynvar_key_lvl), &__t160 };
+pthread_setspecific (_dynvar_key_lvl, &__t161);
+TurDynFrame *__t162 __attribute__((cleanup(_dynvar_pop_lvl))) = &__t161;
+if ((n) > 0) {
+    return INT64_C(100);          /* <-- past the pop below */
+}
+...
+_dynvar_pop_lvl (&__t162);
+```
+
+On the cc path the attribute still fires, so this is invisible. Under `tur
+jit` nothing pops, and the key is left pointing at `__t161` -- a local of a
+function that has returned. The next read of the dynamic variable dereferences
+a dead stack frame. Measured: cc prints `100 0`; the JIT takes
+`AddressSanitizer: SEGV on unknown address 0x0`.
+
+So the recorded severity was too low. "Pops only on the cc path" reads like a
+leak; it is a dangling pointer into a reused frame, and the failure is a crash
+or a silent wrong read depending on what overwrote the stack.
+
+### 35.2 The fix is the one defers already use
+
+`EX_RETURN` already fires pending defers before returning
+(`tur_frame_fire_chain` on `ctx->frame_var`). Dynamic bindings now use the
+same shape: `EmitCtx` carries a stack of in-scope dynvar guards, pushed as
+each binding opens and popped as it closes, and `EX_RETURN` emits
+`_dynvar_pop_<name>(&<guard>)` for every guard still on it, innermost first --
+the order the cleanup attribute would have used. The pop is idempotent
+(12.5's design), so firing here AND via the attribute on the cc path is safe,
+which is what lets one emission serve both engines.
+
+The value-position `EX_RETURN` in emit_expr.c needs no change: it only
+materializes the value, and the actual `return` comes from emit_stmt.
+
+One thing the fix had to get right that the leak-checked build caught
+immediately: the guard stack's backing arrays outlive emission and have to be
+freed at EmitCtx teardown, or `tur build` itself leaks -- the compiler path
+runs with LeakSanitizer on.
+
+### 35.3 Coverage
+
+New fixture `dynvar-early-return` pins three shapes: an early return out of
+one binding, out of two NESTED bindings (both must pop, innermost first), and
+the fall-through path still working. `tests/run.sh` **2480 / 0**;
+`tests/run-jit.sh` **2395 / 0 / 47**.
+
+Worth noting what found this: nothing did, for as long as it existed. It was
+recorded as a known edge at S1b and sat there because no fixture combined
+`binding` with an early `return` -- the same shape of gap as section 30.3's
+never-compiled group directories. The engines disagreed the whole time.

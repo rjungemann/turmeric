@@ -8085,7 +8085,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fptr, mname, frame);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "(void)%s;\n", fptr);
-                if (guard_ptrs) { guard_ptrs[pi] = fptr; guard_vars[pi] = mname; }
+                if (guard_ptrs) {
+                    guard_ptrs[pi] = fptr; guard_vars[pi] = mname;
+                    /* Register so an early `return` inside the body pops it. */
+                    if (ctx->n_dynvar_guards >= ctx->cap_dynvar_guards) {
+                        ctx->cap_dynvar_guards = ctx->cap_dynvar_guards ? ctx->cap_dynvar_guards * 2 : 8;
+                        ctx->dynvar_guard_ptrs = (char **)realloc(ctx->dynvar_guard_ptrs,
+                            ctx->cap_dynvar_guards * sizeof(char *));
+                        ctx->dynvar_guard_names = (char **)realloc(ctx->dynvar_guard_names,
+                            ctx->cap_dynvar_guards * sizeof(char *));
+                    }
+                    ctx->dynvar_guard_ptrs[ctx->n_dynvar_guards] = strdup(fptr);
+                    ctx->dynvar_guard_names[ctx->n_dynvar_guards] = strdup(mname);
+                    ctx->n_dynvar_guards++;
+                }
                 else { free(fptr); free(mname); }
                 free(vslot);
                 free(frame);
@@ -8097,6 +8110,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s = %s;\n", result_tmp, bval);
             }
             free(bval);
+            /* Leaving the binding scope: unregister the guards an early
+             * `return` inside the body would have popped. */
+            for (uint32_t pi = 0; pi < n_pairs && ctx->n_dynvar_guards > 0; pi++) {
+                ctx->n_dynvar_guards--;
+                free(ctx->dynvar_guard_ptrs[ctx->n_dynvar_guards]);
+                free(ctx->dynvar_guard_names[ctx->n_dynvar_guards]);
+            }
             /* Explicit scope-exit pops, reverse declaration order -- the order
              * the cleanup attribute itself would have used. */
             for (uint32_t pi = n_pairs; pi-- > 0 && guard_ptrs; ) {
