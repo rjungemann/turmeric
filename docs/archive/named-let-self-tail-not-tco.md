@@ -1,5 +1,21 @@
 # Named-let self-recursion is not emitter-TCO'd; deep loops SIGSEGV under MIR
 
+**RESOLVED 2026-07-30** for the shape this report describes -- the repro
+below, a named let that CAPTURES an enclosing variable. Self-TCO no longer
+rejects lifted closure thunks: the backedge reassigns the source params and
+leaves the env pointer alone (it is loop-invariant, because a closure's own
+self-call threads the env it was called with). See
+[jit-engine-j0-findings.md](../upcoming/jit-engine-j0-findings.md) section 29;
+pinned by `tests/fixtures/tco-named-let-capture-deep`.
+
+Diagnosing it turned up a SECOND, unrelated defect behind the same surface
+syntax: a named let that captures NOTHING is CPS-colored instead, and its
+self-call recurses through the DK entry wrapper -- which SIGSEGVs on the cc
+path too, and is not a TCO gap at all. Filed separately as
+docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.
+
+The original report follows.
+
 **Severity: medium.** Expressiveness hole with an engine-dependent blast
 radius: silent reliance on gcc on the cc path, SIGSEGV under `tur jit`.
 Found 2026-07-30 writing the J3 benchmark triangle.

@@ -1,0 +1,26 @@
+;; CF1 follow-up: self-TCO through a CAPTURING named let.
+;;
+;; `(let go [...] ... (go ...))` inside a fn whose parameter the loop reads
+;; lowers to a lifted closure thunk -- `__fn_N(void *env, i, acc)` -- because
+;; `n` is captured.  Self-TCO used to reject every closure outright, so this
+;; shape emitted a real recursive call and grew the C stack once per
+;; iteration.  It survived the cc path only because gcc -O2's sibling-call
+;; optimization rewrote the self-call into a jump; MIR performs no such
+;; optimization, so the same program SIGSEGV'd under `tur jit`.
+;;
+;; The backedge now reassigns the source params and leaves the env pointer
+;; alone (it is loop-invariant: a closure's own self-call threads the env it
+;; was called with).  5,000,000 iterations complete without stack growth.
+;;
+;; See docs/archive/named-let-self-tail-not-tco.md.
+
+(defn sum-to [n : int] : int
+  (let go [i   :int 0
+           acc :int 0]
+    (if (>= i n)
+      acc
+      (go (+ i 1) (+ acc i)))))
+
+(defn main [] : int
+  (println (sum-to 5000000))
+  0)

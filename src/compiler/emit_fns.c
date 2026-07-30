@@ -42,6 +42,13 @@ static void pbp_push(EmitCtx *ctx, Binding *b) {
  * lets `tco_params_simple` accept by-value-struct params (e.g.
  * `Vec__int`) that the generic form would reject as carrier-ABI. */
 static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i) {
+    /* A lifted CLOSURE thunk carries the env pointer as params[0], so its
+     * fd->params / fd->param_types are one longer than the SOURCE fn type
+     * (`fn_e->type.as.fn.arg_full_types`, which has no env).  Indexing the
+     * source type here would read the wrong param -- take the FnDef's own
+     * types, which are parallel to fd->params.  (The pbp scan above
+     * side-steps the same skew by skipping closures entirely.) */
+    if (fd->closure) return fd->param_types[i];
     if (ctx && ctx->current_abi_specialization
         && i < ctx->current_abi_specialization->n_args) {
         return ctx->current_abi_specialization->arg_types[i];
@@ -50,6 +57,16 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
         fn_e->type.as.fn.arg_full_types[i])
         return *fn_e->type.as.fn.arg_full_types[i];
     return fd->param_types[i];
+}
+
+/* Index of the first SOURCE parameter in fd->params: 1 for a lifted closure
+ * thunk (params[0] is the env pointer), 0 otherwise.  A self-tail backedge
+ * reassigns only the source params -- the env is loop-invariant, because the
+ * emitter routes a closure's own recursive self-call through the env pointer
+ * the thunk was called with (see the S5 self-call arm in emit_expr.c's
+ * closure-call emission), never a freshly built box. */
+static uint32_t tco_env_offset(const FnDef *fd) {
+    return (fd->closure && fd->n_params > 0) ? 1u : 0u;
 }
 
 /* A function is TCO-eligible only if every parameter is a plain scalar we can
@@ -65,8 +82,17 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
  * "int64_t" (the carrier fallback), which indicates the type would need
  * a bridge to/from the carrier on reassignment. */
 static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
-    if (fd->is_variadic || fd->closure) return false;
-    for (uint32_t i = 0; i < fd->n_params; i++) {
+    if (fd->is_variadic) return false;
+    /* A lifted closure thunk IS eligible: its env param is skipped (it is
+     * loop-invariant across a self-call, see tco_env_offset) and the remaining
+     * params are checked exactly as a plain defn's are.  This is what makes the
+     * CAPTURING named-let -- `(let go [...] ... (go ...))` inside a fn whose
+     * params the loop reads -- iterative instead of self-recursive; without it
+     * every such loop is one engine switch away from a stack overflow (it
+     * survives the cc path only because gcc -O2 turns the emitted self-call
+     * into a sibling call; MIR performs no such optimization).  See
+     * docs/archive/named-let-self-tail-not-tco.md. */
+    for (uint32_t i = tco_env_offset(fd); i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
         Type pty = tco_param_type(ctx, fn_e, fd, i);
         if (pty.kind == TY_FN) return false;
@@ -103,7 +129,15 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
      * existed for pre-Path-A indirect dispatch through the dict slot
      * cast, which `fn_expr != NULL` already filters out. */
     if (call->as.call_.is_poly_call) return false;     /* rank-2 poly call */
-    if (call->as.call_.n_args != fd->n_params) return false;
+    if (call->as.call_.n_args != fd->n_params - tco_env_offset(fd)) return false;
+    /* A lifted closure thunk is never NAMED by the call: the call's target is
+     * the enclosing letrec binding (`go`), whose closure_fn_binding points at
+     * the thunk being emitted.  That is the same identity test the closure-call
+     * emitter uses to decide it is looking at the closure's own recursive
+     * self-call (and so to thread the current env rather than an outer box), so
+     * matching it here keeps the backedge and the ordinary call in agreement. */
+    if (tco_env_offset(fd) > 0)
+        return call->as.call_.fn_binding->closure_fn_binding == fd->binding;
     if (call->as.call_.fn_binding == fd->binding) return true;  /* fast path */
     char *cn = raw_name_for_binding(call->as.call_.fn_binding);
     bool same = fn_cname && cn && strcmp(cn, fn_cname) == 0;
@@ -170,9 +204,12 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
                                FnDef *fd, const Expr *call) {
     uint32_t n = fd->n_params;
+    /* Closure thunk: params[0] is the env, which the self-call reuses unchanged
+     * -- reassign only params[env..n) from the call's args[0..). */
+    uint32_t off = tco_env_offset(fd);
     char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
-    for (uint8_t i = 0; i < n; i++) {
-        char *av = emit_value(ctx, body, call->as.call_.args[i]);
+    for (uint8_t i = (uint8_t)off; i < n; i++) {
+        char *av = emit_value(ctx, body, call->as.call_.args[i - off]);
         char *t = fresh_tmp(ctx);
         Type pty = tco_param_type(ctx, fn_e, fd, i);
         const char *pcty = emit_type_c_name(ctx, pty);
@@ -204,7 +241,7 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         tmps[i] = t;
         free(av);
     }
-    for (uint8_t i = 0; i < n; i++) {
+    for (uint8_t i = (uint8_t)off; i < n; i++) {
         char *pn = raw_name_for_binding(fd->params[i]);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", pn, tmps[i]);

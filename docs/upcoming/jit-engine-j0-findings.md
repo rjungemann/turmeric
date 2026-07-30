@@ -2881,7 +2881,8 @@ self-recursion is not emitter-TCO'd** -- it survives the cc path solely
 because gcc's sibling-call optimization turns the emitted self-call into
 a jump; MIR performs no such optimization, so 5M iterations SIGSEGV on
 the default 64MB entry stack (TUR_JIT_STACK_MB=2048 passes, confirming
-depth). Filed: docs/reported/named-let-self-tail-not-tco.md. Per the
+depth). Filed (and FIXED for the capturing form, section 29):
+docs/archive/named-let-self-tail-not-tco.md. Per the
 standing owner decision, the fix direction is extending the defn-level
 TCO rewrite to named-let, never a bigger stack.
 
@@ -2979,4 +2980,113 @@ coming off the harness denylist.
 
 Two of the phase's three finds remain open:
 docs/reported/typed-slots-nested-specialization-float-garbage.md and
-docs/reported/named-let-self-tail-not-tco.md.
+docs/archive/named-let-self-tail-not-tco.md (the latter fixed in section 29).
+
+## 29. Named-let TCO -- one surface syntax, two lowerings, two different bugs
+
+Added 2026-07-30, resolving the second of section 27's finds
+(docs/archive/named-let-self-tail-not-tco.md) and splitting a second defect
+out from under it.
+
+### 29.1 The named let has two lowerings, and neither was a loop
+
+`(let go [...] ... (go ...))` lowers one of two ways depending on whether
+the loop body reads anything from the enclosing function:
+
+| shape | lowering | self-call was |
+| --- | --- | --- |
+| captures an outer var | lifted closure thunk `__fn_N(void *env, i, acc)` | a real recursive call |
+| captures nothing | CPS-COLORED `__fn_N__cps(i, acc, DK *)` | a call to its own DK ENTRY WRAPPER |
+
+Both overflow the stack at depth; only the first is a TCO gap. They had
+been reported as one bug because they share a surface syntax.
+
+### 29.2 The capturing form: self-TCO rejected every closure
+
+`tco_params_simple` opened with `if (fd->is_variadic || fd->closure) return
+false;`, so no lifted closure thunk was ever eligible -- which is exactly
+what a capturing named let compiles to. The emitted self-call survived the
+cc path only because gcc -O2's sibling-call optimization rewrote it into a
+jump; MIR performs no such optimization, so the same program SIGSEGV'd
+under `tur jit`. (Relying on an optimization the language never asked for
+is not a guarantee, and section 27.3 is where the bill came due.)
+
+The env pointer is what made this look unsafe, and it is exactly what makes
+it safe: a closure's own recursive self-call threads the env it was CALLED
+with, never a freshly built box. The closure-call emitter already depends
+on this -- it detects the self-call and passes the raw env param (the "S5"
+arm in emit_expr.c) -- so the env is loop-invariant across a backedge by
+construction. The fix reassigns the source params and leaves params[0]
+alone:
+
+```c
+static int64_t __fn_1331(void * __env_p_1334, int64_t i, int64_t acc) {
+    struct __env_1333 *__env___env_1333 = (struct __env_1333 *)__env_p_1334;
+    __tur_tailcall:;
+    if ((i) >= (__env___env_1333->n)) { return acc; }
+    else {
+        int64_t __t42 = (i) + (INT64_C(1));
+        int64_t __t43 = (acc) + (i);
+        i = __t42; acc = __t43;
+        goto __tur_tailcall;
+    }
+}
+```
+
+Mechanically (src/compiler/emit_fns.c): `tco_env_offset(fd)` names the skew
+(1 for a closure thunk, 0 otherwise); `tco_params_simple` and
+`emit_tail_backedge` iterate from it, the backedge reading
+`call->args[i - off]`; `tco_is_self_call` compares arity against
+`n_params - off` and matches the closure by
+`fn_binding->closure_fn_binding == fd->binding` -- the SAME identity test
+the closure-call emitter uses to decide it is looking at a self-call, so
+the backedge and the ordinary call can never disagree about which env is
+live. `tco_param_type` reads `fd->param_types[i]` for a closure rather than
+indexing the source fn type, which has no env slot (the pbp scan
+side-steps the same skew by skipping closures outright).
+
+Blast radius: 7 fixtures gain a closure backedge -- the
+`letrec-self-recursive-*` family (carrier/float/struct/vec returns),
+`constrained-instance-closure-element-dispatch`, `refine-macrogen-foreach`,
+`w3-letrec-open-capture` -- all passing, none carrying an `expected.c`, so
+no snapshot regen. New fixture `tco-named-let-capture-deep` (5M iterations,
+`requires.compiled`) pins it.
+
+### 29.3 The non-capturing form is not a TCO bug at all -- and it is worse
+
+With the capturing case fixed, the same program written WITHOUT a capture
+still died -- and, unlike the first, it dies on the cc path too. A
+non-capturing named let is CPS-colored (it is a lifted lambda, so the
+coloring analysis conservatively assumes an indirect call could reach a
+control operator), its body is direct-emitted as a value, and its self-call
+targets the function's own DIRECT ENTRY WRAPPER -- `__dk_entry_depth++`, a
+`dk_prompt` malloc, a `setjmp` -- once per iteration. Nothing for a
+sibling-call optimization to elide, and a prompt per iteration besides.
+
+That is a different root cause with a different fix, so it is a separate
+report:
+docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.
+There is a settled precedent for the shape of the answer -- the
+recursive-await eviction (emit_cps_ir.c:1815, :2250,
+docs/archive/cps-async-recursive-await-eviction.md) records the decision
+that a self-recursive shape the DIRECT emitter's TCO handles in O(1) stack
+must EVICT from the CPS path rather than lower through DK. Applying it here
+means extending the eviction gate, which sits inside the S-set fixpoint
+whose own comments warn that a mis-marked entry splits a handler from its
+performer; not something to change unreviewed at the end of a stretch.
+
+### 29.4 The guide was documenting a guarantee it did not deliver
+
+docs/guides/performance-guide.md listed "the named-let / loop idiom" under
+the self-tail-call guarantee -- and its worked example was the NON-capturing
+shape, which SIGSEGVs at 5M iterations on every engine. The guide now shows
+a capturing loop (verified to complete under both cc and `tur jit`), states
+what the capture has to do with it, and lists the non-capturing case under
+the boundary list as a known gap rather than a design limit, with the
+workaround (read an enclosing parameter in the loop body) and the report
+pointer.
+
+Suites after the change: `tests/run.sh` **2431 passed / 0 failed**;
+`tests/run-jit.sh` on the Debug JIT build **2392 passed / 0 failed / 48
+skipped** (47 via cc fallback) -- the new fixture, passing natively under
+MIR, which is the engine that could not fake it.

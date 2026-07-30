@@ -112,13 +112,20 @@ loop:
     acc
     (count-down (- n 1) (+ acc 1))))
 
-; named-let -- the (loop ...) call is the self-tail-call
+; named-let -- the (loop ...) call is the self-tail-call.  `n` is read INSIDE
+; the loop body, so the loop is a capturing closure -- see the note below.
 (defn sum-to [n :int] :int
-  (let loop [i n acc 0]
-    (if (= i 0)
+  (let loop [i   :int 0
+             acc :int 0]
+    (if (>= i n)
       acc
-      (loop (- i 1) (+ acc i)))))
+      (loop (+ i 1) (+ acc i)))))
 ```
+
+A named-let that reads an enclosing variable lowers to a lifted closure, and
+the backedge reassigns the loop parameters while leaving the captured
+environment alone (it does not change across a self-call).  Pinned by
+`tests/fixtures/tco-named-let-capture-deep` at 5,000,000 iterations.
 
 **Boundary (1.0).** Only *self*-tail calls are optimized.  The following are
 left as ordinary recursive calls -- correct, but not stack-optimized:
@@ -128,7 +135,17 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
 - **mutual / general tail calls** (function A tail-calls B which tail-calls A);
 - **tail calls inside `match` arms**;
 - self-recursive functions with pass-by-pointer struct, function-typed, or
-  poly-fn parameters.
+  poly-fn parameters;
+- **a named let that captures NOTHING** from its enclosing function -- a
+  known gap, not a design boundary.  Such a loop is conservatively
+  CPS-colored (it is a lifted lambda, so the coloring analysis cannot rule
+  out an indirect call reaching a control operator), which routes it away
+  from the optimizer above; its self-call then re-enters the function's own
+  delimited-control entry wrapper once per iteration and overflows the stack
+  on *every* engine.  Until it is fixed, give the loop something to capture
+  -- reading a parameter of the enclosing `defn` in the loop body, as the
+  example above does, is enough.  Tracked in
+  docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md.
 
 General/mutual tail-call elimination and trampolining are deferred to the
 post-1.0 CPS pass.  See
@@ -727,8 +744,11 @@ How to read it:
 - The MIR tier generates good-but-not-gcc code: expect JIT'd loop bodies
   within ~1-2x of cc -O2, not parity, and note the JIT runs the program
   on a sized entry stack (`TUR_JIT_STACK_MB`, default 64) because
-  MIR does not perform gcc's sibling-call optimization (see
-  docs/reported/named-let-self-tail-not-tco.md for the sharp edge).
+  MIR does not perform gcc's sibling-call optimization -- so a deep
+  recursion the cc path survives only because gcc turned the self-call into
+  a jump will overflow here.  That is a real difference in what the two
+  engines forgive, and it is worth knowing which of your loops are actually
+  lowered to loops (see the self-tail-call section above).
 
 The engine triangle is exact on OUTPUT: `benchmarks/run-triangle.sh`
 refuses to time a program whose three engines disagree, and the fixture

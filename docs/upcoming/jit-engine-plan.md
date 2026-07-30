@@ -17,10 +17,14 @@ under `tur jit` (Debug: 2,390/0, ctest tur_jit_fixture_tests) and the
 engine triangle is published in the performance guide -- plus three latent
 product bugs found on the way (two nested-fixture miscompiles the compiling
 harnesses never saw, and named-let self-recursion relying on gcc sibling
-calls). The first of those three is **fixed 2026-07-30** (findings 28): the
-cps->direct aggregate-carrier bridge, which retires `typed/result-basic`
-from the harness denylist (Debug jit harness now 2,391/0/48). J4 remains
-optional, post-usage-data. Plan written 2026-07-27; J0 spike
+calls). Two of those three are **fixed 2026-07-30**: the cps->direct
+aggregate-carrier bridge (findings 28), which retires `typed/result-basic`
+from the harness denylist; and named-let self-TCO for the capturing form
+(findings 29), which also split a second, worse defect out from under it
+(a non-capturing named let is CPS-colored and recurses through its own DK
+entry wrapper -- filed) and corrected a performance-guide guarantee whose
+worked example did not survive its own claim. Debug jit harness now
+2,392/0/48. J4 remains optional, post-usage-data. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
