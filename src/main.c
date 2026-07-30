@@ -1591,16 +1591,42 @@ static void hoist_tur_include_directives(Buf *csrc) {
     const char *inc_mark = "/* __tur_include__: ";
     size_t inc_mlen = strlen(inc_mark);
     const char *p = csrc->data;
-    Buf hdr;
+    /* TWO buckets, not one.  `__tur_include__` carries two different kinds of
+     * payload -- preprocessor directives (`#include <stdlib.h>`) and file-scope
+     * CODE (a `typedef`, or a `static` helper).  Concatenating them in source
+     * order lets a code payload land ahead of a directive payload it depends
+     * on, which is exactly what stdlib/httpd.tur does: the malloc-using
+     * `httpd_conn_own_cstr` is hoisted from line 93 and `#include <stdlib.h>`
+     * from line 3916, so the emitted TU called malloc with no declaration in
+     * scope.  That compiled only because every cc invocation passed
+     * -Wno-error=implicit-function-declaration, and it is UB regardless.
+     *
+     * So: all directive payloads first (in their own source order, which keeps
+     * any feature-test `#define` ahead of the include it conditions), then all
+     * code payloads (likewise in source order).  Relative order within each
+     * bucket is preserved; only the two kinds are separated.
+     * See docs/reported/hoisted-inline-c-precedes-includes.md. */
+    Buf hdr, code;
     buf_init(&hdr);
+    buf_init(&code);
     while (p && (p = strstr(p, inc_mark)) != NULL) {
         p += inc_mlen;
         const char *end = strstr(p, " */");
         if (!end) break;
-        buf_write(&hdr, p, (size_t)(end - p));
-        buf_putc(&hdr, '\n');
+        const char *q = p;
+        while (q < end && (*q == ' ' || *q == '\t')) q++;
+        int is_directive = (q < end && *q == '#')
+            && (strncmp(q, "#include", 8) == 0 || strncmp(q, "#define", 7) == 0
+                || strncmp(q, "#undef", 6) == 0 || strncmp(q, "#pragma", 7) == 0);
+        Buf *dst = is_directive ? &hdr : &code;
+        buf_write(dst, p, (size_t)(end - p));
+        buf_putc(dst, '\n');
         p = end + 3;
     }
+    if (code.len > 0) {
+        buf_write(&hdr, code.data, code.len);
+    }
+    buf_free(&code);
     if (hdr.len > 0) {
         Buf new_csrc;
         buf_init(&new_csrc);
@@ -2137,7 +2163,6 @@ static int link_command_run(const char *cc, const char *cc_flags,
         if (include_dirs[_i] && include_dirs[_i][0])
             buf_printf(&cmd, " -I%s", include_dirs[_i]);
     }
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
@@ -4799,11 +4824,22 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * downgrades are removed -- a NEW straddle now fails the build (as intended)
      * instead of hiding behind the macOS CI red.
      *
-     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open concern
-     * (e.g. an emitted inline-C call to `tur_hamt_hash_xxh64` with no in-scope
-     * prototype) and stays.  Appended after the user's TUR_CC_FLAGS on purpose,
-     * so an override cannot accidentally drop it. */
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
+     * -Wno-error=implicit-function-declaration used to be appended here and at
+     * the two sibling cc invocations.  It is gone from all three: the two things
+     * it was covering are fixed at the source -- the undeclared
+     * `tur_hamt_hash_xxh64` call (now declared in the preamble) and the
+     * `__tur_include__` hoist emitting code payloads ahead of directive payloads
+     * (hoist_tur_include_directives now buckets the two).  An implicit
+     * declaration is UB, and suppressing it here is what let a wrong-code bug
+     * ride all the way to a second backend on another platform; it now fails the
+     * build, as intended.
+     *
+     * Do NOT re-add it to paper over a new implicit declaration -- fix the
+     * declaration.  And do not verify any change in this area with `emit-c`
+     * output or a plain `tests/run.sh`: neither exercises the hoist path, and
+     * both reported a false all-clear on exactly this question.  Use
+     * tools/jit-spike/sweep-turjit.sh.  See findings 21.2/21.3 and
+     * docs/archive/hoisted-inline-c-precedes-includes.md. */
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -5430,7 +5466,6 @@ static int cmd_compile(const char *input, const char *out_obj,
         if (include_dirs[i] && include_dirs[i][0])
             buf_printf(&cmd, " -I%s", include_dirs[i]);
     }
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_printf(&cmd, " -c %s -o %s", cpath, out_obj);
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);

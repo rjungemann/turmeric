@@ -2400,17 +2400,70 @@ in the inline-C hoisting path**, where a `#tur-include`-hoisted block can land
 ahead of the standard-header include a later block contributes. Removing the
 flag turns that into a hard error for real spice code (the httpd spice here),
 which is a user-facing break well outside the scope of the xxh64 fix. The
-removal has been **reverted**; all three sites keep the flag.
+removal was **reverted** at this point. (It was re-landed shortly after, once
+the ordering defect itself was fixed -- see 21.3.)
 
 The ordering defect is the thing actually worth fixing, and it is independent of
 the JIT: hoisted includes should precede hoisted code. Until then the comment at
 `src/main.c` should say *this* -- an include-ordering workaround -- rather than
 naming a single xxh64 call site that is now fixed, because the current wording
 invites exactly the removal attempted here. Filed:
-[../reported/hoisted-inline-c-precedes-includes.md](../reported/hoisted-inline-c-precedes-includes.md).
+[../archive/hoisted-inline-c-precedes-includes.md](../archive/hoisted-inline-c-precedes-includes.md).
 
 Method note, generalizing past this instance: a corpus-wide static sweep is only
 as good as its artifact, and "the suite did not change" is not evidence when the
 fixtures that would show the change were already failing for another reason. The
 JIT sweep found this precisely because it is the one harness that drives the
 real end-to-end path.
+
+### 21.3 The ordering defect fixed, and the suppression retired for real
+
+21.2 ended with the suppression restored and the include-ordering defect filed
+but unfixed. Both are now closed.
+
+**The defect was one level deeper than 21.2 described.** It is not "a hoisted
+block precedes a plain inline-C include" -- both halves are `__tur_include__`
+payloads. That marker carries two different kinds of thing:
+
+```
+stdlib/httpd.tur:93    /* __tur_include__: static char *httpd_conn_own_cstr(...) { ... malloc(...) ... } */
+stdlib/httpd.tur:3916  /* __tur_include__: #include <stdlib.h> */
+```
+
+`hoist_tur_include_directives()` concatenated every payload in **source order**,
+so the line-93 code landed ahead of the line-3916 directive. The marker's name
+says "include" but roughly half its uses in the corpus are file-scope code
+(`typedef` and `static` helpers that must sit above the functions using them),
+and nothing kept the two kinds ordered relative to each other.
+
+**Fix:** two buckets. Each payload's first non-whitespace token decides --
+`#include`/`#define`/`#undef`/`#pragma` go to a directives buffer, everything
+else to a code buffer -- and directives are emitted first. Relative order within
+each bucket is preserved, so a feature-test `#define` still precedes the include
+it conditions; only the two kinds separate. The corpus uses exactly three
+payload shapes (`typedef`, `static`, `#include`), so no conditional-compilation
+structure risks being split. `<stdlib.h>` now sits on line 3 of the httpd TU,
+ahead of the `malloc` call on line 10.
+
+**No snapshot churn**: `emit-c` does not hoist (the hoist is a post-pass on the
+build/JIT paths), so all `expected.c` stay byte-identical -- which is also the
+mechanical reason 21.2's `emit-c` sweep could never have detected the problem.
+
+With ordering fixed, `-Wno-error=implicit-function-declaration` is gone from all
+three cc invocation sites.
+
+Verification, run the way 21.2 concluded it must be:
+
+| | with flag | flag removed |
+|---|---|---|
+| `sweep-turjit.sh` | 1,641 native + 27 fallback = 1,668/1,701 | **identical** |
+| 31 `httpd-*` | `fallback-env` | **`fallback-env`** |
+| `tests/run.sh` | 2373 passed / 57 failed | **identical** |
+
+All 57 suite failures remain environmental (32 `httpd-*` + 15 `reactor-*` on
+`-lturi`, 10 `refine-*` on a Release `tur`). The `httpd-*` fixtures compile
+cleanly now and fail only at link, where they failed before this whole thread
+started.
+
+Report archived:
+[../archive/hoisted-inline-c-precedes-includes.md](../archive/hoisted-inline-c-precedes-includes.md).
