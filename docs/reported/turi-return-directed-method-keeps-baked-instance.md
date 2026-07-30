@@ -126,10 +126,19 @@ family only because it never executed any of it.
      bind rather than `abi_bindings[0]`.
    - the expected type at the call, which is what already makes the ascribed
      `(:: (pure 7) (Option int))` case work.
-2. **Or give the interpreter real dictionaries** for constrained generics. The
-   principled fix, and what would retire this whole family of divergences
+2. **Or make the interpreter use the dict clones the elaborator already builds.**
+   The principled fix, and what would retire this whole family of divergences
    (this report, the archived receiver-dispatch one, and map-show's root cause
-   B), but a much larger change.
+   B).
+
+   Scoped out in [docs/upcoming/turi-dict-passing-plan.md](../upcoming/turi-dict-passing-plan.md),
+   and it is **smaller than "a much larger change" suggests**: `make_dict_clone`
+   lives in the *elaborator* (`elab_call.c`), and instrumenting it shows it fires
+   on the interpreter path too -- `[dictclone] just-pure` under both `emit-c` and
+   `interpret`. The dictionaries already exist in the tree turi walks; what is
+   emit-only is the *lowering* (`((void**)__dict)[0]`). turi contains zero
+   references to `dict_clone` and resolves `EX_DICT` from the elaboration-baked
+   instance instead. So the work is "follow the clone", not "build dict passing".
 
 ## Coverage note
 
