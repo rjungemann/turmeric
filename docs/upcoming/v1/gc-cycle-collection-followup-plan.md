@@ -264,7 +264,19 @@ way reports 0 under ASan no matter what. `gc-collects-strong-cycle` prints a
 on fixtures whose output comes from the CG6 counters, which are allocator-
 independent; `gc-collects-strong-cycle` still gets the ASan-clean checks.
 
-Result: 11 passed, 0 failed. Opt-in (`bash tests/run-gc-leak-gate.sh`) -- a
+**Amended 2026-07-29.** That exclusion was drawn one check too narrowly: the
+*expected-output* check kept running on the same blind probe. On glibc it passed
+vacuously (0 compared against an expected 0 the collector had no part in
+producing); on Darwin the probe is not blind but quarantine-inflated -- ASan's
+freed blocks stay accounted in `malloc_zone_statistics`, so the fixture printed
+~800000 and the check failed for a reason unrelated to the collector. A
+probe-output fixture is now excluded from **both** output checks and prints a
+visible SKIP line for each; `tests/run.sh` (unsanitized) remains where that
+assertion actually lives. See
+[docs/archive/gc-leak-gate-darwin-sanitized-probe-drift.md](../../archive/gc-leak-gate-darwin-sanitized-probe-drift.md).
+
+Result: 14 passed, 2 skipped, 0 failed (was 11 passed when first measured; the
+fixture set has grown since). Opt-in (`bash tests/run-gc-leak-gate.sh`) -- a
 sanitized compile per fixture is slow, and it is a diagnostic gate rather than
 an everyday one.
 

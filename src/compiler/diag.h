@@ -100,6 +100,9 @@ typedef enum DiagCode {
     /* IT1: Union type errors (-Xunion-types) */
     TUR_E0300_UNION_TYPE_MISMATCH,   /* value type not a member of union type */
     TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH, /* match on union type missing arm for one or more members */
+    /* sealed-opaque experiment: `::` between a `:sealed` defopaque and its
+     * representation type, outside the module that declared it. */
+    TUR_E0302_SEALED_OPAQUE_CAST,
     /* IT3: Intersection type errors (-Xintersection-types) */
     TUR_E0350_INTERSECTION_UNSATISFIABLE,   /* no value can satisfy all intersection members */
     TUR_E0351_INTERSECTION_MEMBER_MISMATCH, /* value doesn't satisfy an intersection member */
@@ -124,6 +127,13 @@ typedef enum DiagCode {
      * bound is now MAX_FN_ARITY (64) -- but a lint nudge toward the arity style
      * guide (a defstruct options value or a `& rest :type` variadic). */
     TUR_W0041_HIGH_ARITY,
+    /* A `defn`/`defmacro` names a reserved special form (`return`, `match`,
+     * `handle`, ...).  Head-position dispatch in elab_call matches those names
+     * by symbol identity *before* any binding or macro lookup, so the
+     * definition is accepted but every bare `(name ...)` call site elaborates
+     * as the special form and the definition is unreachable by its bare name.
+     * See docs/archive/defn-shadows-return-special-form.md. */
+    TUR_W0042_SHADOWS_SPECIAL_FORM,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
@@ -249,6 +259,18 @@ typedef enum DiagCode {
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */
     TUR_E0620_EXPORTS_FX_ROW,
+    /* `:tur-version` in build.tur (no-compiler-version-constraint-in-manifest):
+     * E0621 -- the running compiler is BELOW the declared floor, so the spice's
+     *          source genuinely will not work.  Hard error.
+     * E0622 -- the range itself is malformed; a typo must not silently become a
+     *          different constraint.  Hard error.
+     * W0623 -- the running compiler is ABOVE the declared ceiling.  Only means
+     *          "never tested against this compiler", which is usually fine, so
+     *          it warns: a hard ceiling would make every release break every
+     *          spice until each author bumped a number. */
+    TUR_E0621_TUR_VERSION_BELOW_FLOOR,
+    TUR_E0622_TUR_VERSION_MALFORMED,
+    TUR_W0623_TUR_VERSION_ABOVE_CEILING,
 } DiagCode;
 
 typedef enum DiagLevel {

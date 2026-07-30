@@ -25,7 +25,21 @@
      Darwin equivalent is malloc_zone_statistics on the default zone.  Any
      other libc has no portable query, so the probe reports 0 there and the
      no-growth assertions below degrade to vacuously true -- CI covers glibc
-     and Darwin, which are the two that actually measure. */
+     and Darwin, which are the two that actually measure.
+
+     NOT meaningful under -fsanitize=address, on either platform, which is why
+     tests/run-gc-leak-gate.sh skips this fixture's output checks and only
+     tests/run.sh (unsanitized) asserts the printed value.  Measured:
+
+              collector on   collector off
+       plain        0           1087232
+       ASan         0                 0     (glibc: ASan replaces the allocator)
+
+     On Darwin the sanitized reading is worse than blind -- the probe reads
+     whatever zone ASan installs, and the quarantine keeps freed blocks
+     accounted as in-use, so this prints ~800000 (160 B/iteration of quarantined
+     frees, not a leak).  See
+     docs/archive/gc-leak-gate-darwin-sanitized-probe-drift.md. */
   #if defined(__APPLE__)
   #include <malloc/malloc.h>
   malloc_statistics_t ms;

@@ -235,8 +235,8 @@ the parametric version compiles but still needs the casts from step 2.
 - [composite-type-alias-gap.md](composite-type-alias-gap.md) -- the missing
   transparent alias, which is why these signatures must spell
   `(fn [] (Cons A))` inline everywhere instead of naming it once.
-- [defn-shadows-return-special-form.md](defn-shadows-return-special-form.md) --
-  the third defect found in the same guide.
+- [defn-shadows-return-special-form.md](../archive/defn-shadows-return-special-form.md) --
+  the third defect found in the same guide (resolved as TUR-W0042; archived).
 
 ## Guide upkeep
 

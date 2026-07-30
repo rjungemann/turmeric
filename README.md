@@ -109,14 +109,14 @@ file at the project root declares the package identity and its dependencies
   :version "0.1.0"
 
   ;; Turmeric dependencies -- declared as git URLs
-  :spices {
-    "geom" {:url "https://github.com/alice/tur-geom" :ref "v0.2.1"}
-    "math" {:url "https://github.com/bob/tur-math"   :ref "v1.5.0"}
+  :spices #map{
+    "geom" #map{:url "https://github.com/alice/tur-geom" :ref "v0.2.1"}
+    "math" #map{:url "https://github.com/bob/tur-math"   :ref "v1.5.0"}
   }
 
   ;; C/CMake libraries (CPM-compatible) -- fetched and linked automatically
-  :cmake-deps {
-    "raylib" {:url "https://github.com/raysan5/raylib" :ref "5.0"}
+  :cmake-deps #map{
+    "raylib" #map{:url "https://github.com/raysan5/raylib" :ref "5.0"}
   })
 ```
 

@@ -1,5 +1,6 @@
 /* elab_structs.c -- struct/ADT/GADT definitions, pattern matching, and borrow traits. */
 #include "elab_internal.h"
+#include "experiments.h"  /* sealed-opaque: experiment_warn_if_used */
 #include <assert.h>   /* structdef-retirement slice 5 DS-B: zero-producer guard */
 
 /* ---- file-local helper forward declarations ---- */
@@ -1189,20 +1190,37 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
         }
     }
 
-    /* Optional substructural discipline keyword after the base type. */
+    /* Optional attributes after the base type.  These used to be a single
+     * substructural keyword; `:sealed` is orthogonal to :linear/:affine (it
+     * governs `::` visibility, not how many times the value may be used), so
+     * the slot now takes a SET.  :linear and :affine remain mutually exclusive
+     * -- "exactly once" and "at most once" are contradictory claims. */
     bool opaque_linear = false;
     bool opaque_affine = false;
-    if (call->as.list.len >= base_idx + 2) {
-        Form *attr = call->as.list.items[base_idx + 1];
+    bool opaque_sealed = false;
+    for (uint32_t ai = base_idx + 1; ai < call->as.list.len; ai++) {
+        Form *attr = call->as.list.items[ai];
         if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_linear) {
             opaque_linear = true;
         } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_affine) {
             opaque_affine = true;
+        } else if (attr->tag == F_KEYWORD && attr->as.sym == e->kw_sealed) {
+            opaque_sealed = true;
         } else {
             diag_emit(DIAG_ERROR, attr->span,
-                      "defopaque: unexpected attribute -- expected :linear or :affine");
+                      "defopaque: unexpected attribute -- expected :linear, "
+                      ":affine or :sealed");
             return NULL;
         }
+    }
+    /* Lifecycle warning (TUR-W0060/W0061) fires where the feature is USED --
+     * declaring a sealed opaque -- not where the check happens to run. */
+    if (opaque_sealed) experiment_warn_if_used("sealed-opaque");
+    if (opaque_linear && opaque_affine) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "defopaque: :linear and :affine are mutually exclusive "
+                  "(exactly-once vs at-most-once)");
+        return NULL;
     }
     AdtDef *def;
     Binding *b;
@@ -1230,6 +1248,12 @@ Expr *elab_defopaque(Elab *e, const Form *call) {
     def->is_linear = opaque_linear;
     def->is_affine = opaque_affine;
     def->is_opaque = true;
+    /* sealed-opaque: assigned UNCONDITIONALLY, like the flags above -- the
+     * forward-declared-stub path reuses an existing def rather than the
+     * freshly memset one, so a conditional assignment would silently leave a
+     * re-elaborated def unsealed. */
+    def->sealed = opaque_sealed;
+    def->sealed_module = e->current_module_name;   /* NULL at a moduleless top level */
     def->n_ctors = 0;        /* an opaque newtype has no constructors */
     def->ctors = NULL;
     def->origin_file_id = call->span.file_id;

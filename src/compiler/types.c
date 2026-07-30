@@ -446,6 +446,15 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_FLOAT32:
         case TY_FLOAT64:
         case TY_CSTR:
+        /* map-show-keyword-key-raw-int root cause A: `:Sym` is a pointer-sized
+         * scalar (`const struct __tur_sym *`, see type_c_name below and
+         * emit_expr.c) -- as concrete a codegen layout as `cstr`.  Omitting it
+         * here made adt_app_is_byvalue_product((Vec Sym)) false, so type_c_name
+         * fell through to the int64 carrier: `(Vec Sym)` never got a by-value
+         * monomorph, its constrained-instance bodies were never specialized,
+         * and generic collection show bound Show[int] for the element and
+         * printed the raw carrier. */
+        case TY_SYM:
         case TY_PTR_VOID:
         case TY_REF:
         case TY_LREF:
@@ -602,6 +611,19 @@ static void append_c_ident_mangled(Buf *b, const char *name) {
     }
 }
 
+/* Mangle a bare TypeKind by routing it through append_type_mangle, so a
+ * payload kind and a top-level kind always spell the same token. */
+static void append_type_mangle(Buf *b, Type t);
+static void append_kind_mangle(Buf *b, TypeKind k) {
+    append_type_mangle(b, type_from_kind(k));
+}
+
+static void append_u32(Buf *b, uint32_t n) {
+    char tmp[12];
+    snprintf(tmp, sizeof(tmp), "%u", (unsigned)n);
+    buf_puts(b, tmp);
+}
+
 static void append_type_mangle(Buf *b, Type t) {
     switch (t.kind) {
         case TY_NIL:      buf_puts(b, "nil"); break;
@@ -619,13 +641,38 @@ static void append_type_mangle(Buf *b, Type t) {
         case TY_FLOAT32:  buf_puts(b, "float32"); break;
         case TY_FLOAT64:  buf_puts(b, "float64"); break;
         case TY_CSTR:     buf_puts(b, "cstr"); break;
-        case TY_PTR_VOID: buf_puts(b, "ptr_void"); break;
-        case TY_REF:      buf_puts(b, "ref"); break;
-        case TY_LREF:     buf_puts(b, "lref"); break;
-        case TY_RC:       buf_puts(b, "rc"); break;
-        case TY_WEAK:     buf_puts(b, "weak"); break;
-        case TY_REF_IMMUT: buf_puts(b, "ref_immut"); break;
-        case TY_REF_MUT:  buf_puts(b, "ref_mut"); break;
+        case TY_SYM:      buf_puts(b, "sym"); break;
+        /* The pointer/reference family: type_eq discriminates these by their
+         * INNER type, so the mangling has to as well -- a flat "ref" token made
+         * `(Box (ref int))` and `(Box (ref float))` one C name. */
+        case TY_PTR_VOID:
+            buf_puts(b, "ptr_void");
+            if (t.as.ptr.inner) { buf_putc(b, '_'); append_type_mangle(b, *t.as.ptr.inner); }
+            break;
+        case TY_REF:
+            buf_puts(b, "ref"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.ref.inner);
+            break;
+        case TY_LREF:
+            buf_puts(b, "lref"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.ref.inner);
+            break;
+        case TY_RC:
+            buf_puts(b, "rc"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.rc.inner);
+            break;
+        case TY_WEAK:
+            buf_puts(b, "weak"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.rc.inner);
+            break;
+        case TY_REF_IMMUT:
+            buf_puts(b, "ref_immut"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.ref_borrow.target);
+            break;
+        case TY_REF_MUT:
+            buf_puts(b, "ref_mut"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.ref_borrow.target);
+            break;
         case TY_ADT:
             append_c_ident_mangled(b, t.as.adt_.def && t.as.adt_.def->name
                                           ? t.as.adt_.def->name : "adt");
@@ -657,9 +704,98 @@ static void append_type_mangle(Buf *b, Type t) {
             }
             break;
         }
-        default:
-            buf_puts(b, "opaque");
+        /* docs/reported/concrete-codegen-layout-kind-enumerations-drift.md:
+         * this switch used to end in `default: "opaque"`, which did not drop an
+         * unlisted kind but MERGED it -- every kind without a case mangled to
+         * the single token `opaque`, so two distinct instantiations claimed one
+         * C name.  `type_register_adt_app` keys its registry on `type_eq`, so
+         * both got registry entries, both emitted a typedef and a constructor
+         * under that one name, and the `#ifndef TUR_TY_...` / `#ifndef TUR_FN_...`
+         * guards silently dropped the second of each -- leaving the second type
+         * using the first's layout.  Reached by ordinary code:
+         * `(Box (fn [int] float))` alongside `(Box (fn [int] int))` compiled and
+         * passed `(int64_t)`-cast closure handles into a surviving `double`
+         * constructor, exact only below 2^53.
+         *
+         * There is no `default` arm now, and there must not be one again: `-Wall`
+         * (`-Wswitch`) then makes a newly-added TypeKind a build failure here
+         * rather than a silent name merge.  `type_c_name` is exhaustive for the
+         * same reason.  Every kind below needs a token distinct from every other
+         * kind's; a kind with no runtime representation still needs one, because
+         * "cannot appear here" is not enforced and a merge is unrecoverable. */
+        /* type_eq compares a TY_FN by arity, argument kinds and result kind --
+         * mangle exactly that triple.  A bare "fn" token merged every function
+         * type, which is the collision the report demonstrates: two `Box`
+         * instantiations over `(fn [int] float)` and `(fn [int] int)`. */
+        case TY_FN:
+            buf_puts(b, "fn");
+            append_u32(b, t.as.fn.arity);
+            for (uint32_t i = 0; i < t.as.fn.arity; i++) {
+                buf_putc(b, '_');
+                append_kind_mangle(b, t.as.fn.arg_kinds[i]);
+            }
+            buf_puts(b, "__");
+            append_kind_mangle(b, t.as.fn.result_kind);
             break;
+        /* type_eq treats every TY_SET as equal (no payload comparison), so one
+         * token is injective here. */
+        case TY_SET:             buf_puts(b, "set");            break;
+        case TY_CONT:
+            buf_puts(b, "cont"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.cont.returns);
+            break;
+        case TY_CLONEABLE_CONT:
+            buf_puts(b, "cont_cloneable"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.cont.returns);
+            break;
+        case TY_EXCEPTION:
+            buf_puts(b, "exception"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.exn.payload_type);
+            break;
+        case TY_GENERATOR:       buf_puts(b, "generator");       break;
+        case TY_HANDLER:
+            /* type_eq also consults handled_row, which has no short spelling
+             * here; value/result kinds are the part that changes the C-visible
+             * shape.  Two handlers differing ONLY in handled_row still merge --
+             * narrower than before, and recorded rather than silent. */
+            buf_puts(b, "handler"); buf_putc(b, '_');
+            append_kind_mangle(b, t.as.handler_.value_kind);
+            buf_putc(b, '_');
+            append_kind_mangle(b, t.as.handler_.result_kind);
+            break;
+        case TY_ROLE:            buf_puts(b, "role");            break;
+        case TY_SESSION:         buf_puts(b, "session");         break;
+        /* Type-level / no-runtime-representation kinds.  These are rejected by
+         * type_has_concrete_codegen_layout, so they should never reach a
+         * monomorph name -- but they get distinct tokens anyway, so that if one
+         * ever does, it collides with nothing. */
+        case TY_ANY:             buf_puts(b, "any");             break;
+        case TY_UNION:           buf_puts(b, "union");           break;
+        case TY_INTERSECTION:    buf_puts(b, "intersection");    break;
+        case TY_REC:             buf_puts(b, "rec");             break;
+        case TY_CONTRACT:        buf_puts(b, "contract");        break;
+        case TY_NEVER:           buf_puts(b, "never");           break;
+        case TY_FORALL:          buf_puts(b, "forall");          break;
+        case TY_EXISTS:          buf_puts(b, "exists");          break;
+        case TY_TYPECLASS:       buf_puts(b, "typeclass");       break;
+        case TY_TYPECLASS_INST:  buf_puts(b, "typeclass_inst");  break;
+        case TY_TYPEROW:         buf_puts(b, "typerow");         break;
+        case TY_DYNVAR:          buf_puts(b, "dynvar");          break;
+        case TY_GLOBAL:          buf_puts(b, "global");          break;
+        /* Session protocol states (SS0b-SS5). */
+        case TY_SEND:               buf_puts(b, "send");              break;
+        case TY_RECV:               buf_puts(b, "recv");              break;
+        case TY_CLOSE:              buf_puts(b, "close");             break;
+        case TY_CHOOSE:             buf_puts(b, "choose");            break;
+        case TY_BRANCH:             buf_puts(b, "branch");            break;
+        case TY_SESSION_REC:        buf_puts(b, "session_rec");       break;
+        case TY_TIMEOUT:            buf_puts(b, "timeout");           break;
+        case TY_SESSION_PAIR:       buf_puts(b, "session_pair");      break;
+        case TY_SESSION_RECV_PAIR:  buf_puts(b, "session_recv_pair"); break;
+        case TY_SESSION_OFFER:      buf_puts(b, "session_offer");     break;
+        /* structdef-retirement DS-D: no Type ever has kind TY_STRUCT.  Listed
+         * only to keep the switch exhaustive. */
+        case TY_STRUCT:          buf_puts(b, "structdef");       break;
     }
 }
 
@@ -2702,8 +2838,8 @@ const char *type_c_name(Type t) {
              * references keep returning their result type's C name below. */
             if (t.as.fn.result_kind == TY_FN || t.as.fn.result_kind == TY_UNKNOWN)
                 return "int64_t";
-            /* For bare function references, return the result type's C name. */
-            return type_c_name(type_from_kind(t.as.fn.result_kind));
+            /* EXPERIMENT: a non-boxed, non-cfnptr fn is a closure handle. */
+            return "int64_t";
         }
         case TY_REF: {
             /* ref<T> lowers to a pointer to T in C */

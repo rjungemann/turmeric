@@ -1957,6 +1957,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_move = intern_cstr(st, "move");
     e->kw_linear = intern_cstr(st, "linear"); /* LT4 */
     e->kw_affine = intern_cstr(st, "affine");
+    e->kw_sealed = intern_cstr(st, "sealed");   /* sealed-opaque experiment */
     e->kw_heap = intern_cstr(st, "heap");
     e->kw_no_auto_ctor = intern_cstr(st, "no-auto-ctor"); /* CTOR-V0 opt-out */
     /* Phase G0: ADT registry */

@@ -174,17 +174,13 @@ Driving it -- `mplus` offers both branches, `bind` maps over every result:
 ;; => 20
 ```
 
-> **Three constraints shape the code above, all of them current-compiler facts.**
+> **Two constraints shape the code above, both of them current-compiler facts.**
 >
 > - **No composite type alias.** The natural `(deftype Backtrack [a] ...)` binds
 >   a `TY_REC`, not an alias, so *applying* a `Backtrack` value fails with
 >   `'fs' is not a function or continuation`. The signatures below therefore
 >   spell the underlying `(fn [] int)` directly. See
 >   [docs/reported/composite-type-alias-gap.md](../reported/composite-type-alias-gap.md).
-> - **`return` is a reserved special form.** Naming the monadic unit `return`
->   makes every call site resolve to the early-return form instead of your
->   `defn`, with no warning -- hence `pure`. See
->   [docs/reported/defn-shadows-return-special-form.md](../reported/defn-shadows-return-special-form.md).
 > - **Cons cells are int-carried**, so the element thunks ride as `int` handles
 >   and the closures are `^fat`. A parametric version over `(Cons A)` is blocked
 >   by two separate defects -- a generic closure return type erases its type

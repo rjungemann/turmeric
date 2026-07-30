@@ -1,5 +1,7 @@
 # `(defn return ...)` is silently ignored -- call sites resolve to the `return` special form
 
+**Status:** resolved 2026-07-29 -- fix direction (1) landed as `TUR-W0042`.
+
 **Severity:** medium -- the definition is accepted with no error and no warning,
 every call site silently binds to the special form instead, and the resulting
 diagnostic points at the *caller's* argument type rather than at the shadowing.
@@ -7,6 +9,86 @@ diagnostic points at the *caller's* argument type rather than at the shadowing.
 to read.
 
 Verified against `./build/tur` at **v0.32.2** (Debug, tree at `b54ab718e`).
+
+
+## Resolution (2026-07-29) -- fix direction (1), TUR-W0042
+
+The shadowing is now diagnosed **at the definition**, which is where the
+mistake is. `(defn return ...)` emits:
+
+```
+z5.tur:1:7: warning [TUR-W0042]: defn 'return' shadows the special form
+'return'; a bare (return ...) call always elaborates as the special form, so
+this definition is unreachable by its bare name -- rename it
+```
+
+The E0001 against the caller still follows -- the elaboration behavior is
+unchanged -- but it is no longer the only signal, and the warning names the
+real cause on the real line.
+
+**What landed**
+
+- `reserved_special_forms_[]` + `tur_name_is_reserved_special_form()` /
+  `tur_warn_if_shadows_special_form()` in `src/compiler/elab_call.c`, placed
+  directly above `elab_call` so the table sits next to the dispatch chain it
+  mirrors.
+- Emitted from `elab_defn` (`src/compiler/elab_fns.c`, right after the name
+  form is validated) and from `elab_defmacro` (`src/compiler/elab_macros.c`) --
+  macro dispatch also runs *after* special-form dispatch, so a
+  `(defmacro match ...)` is dead in exactly the same way.
+- `TUR_W0042_SHADOWS_SPECIAL_FORM` in `src/compiler/diag.h`, with the code
+  string, the `tur explain` reverse-lookup, and a full `tur explain TUR-W0042`
+  write-up in `src/compiler/diag.c`.
+- Regression fixture `tests/fixtures/defn-shadows-special-form/` -- asserts the
+  warning fires for `defn return` / `defmacro match` *and* that the
+  deliberately-shadowable names stay silent and still call the user's defn.
+
+**Membership rule (the part worth remembering).** A name is reserved only if
+`elab_call` dispatches it *unconditionally*. Three groups are deliberately
+excluded:
+
+- Forms gated on `!scope_lookup` -- `handler`, `with`, `default-of`, and the
+  session ops (`send`/`recv`/`close`/...). A user defn of those genuinely wins,
+  so warning would be wrong.
+- Arity-gated forms -- `async`, `await`, `select`, `atomically`, `check`,
+  `or-else`, `thread-spawn`, the `tvar-*` ops. They intercept one call shape
+  only, and the check runs before the parameter list is parsed. Left out rather
+  than half-diagnosed.
+- The map surface (`assoc`/`get`/`count`/`merge`/...), which routes through
+  `elab_lower_map_call` and falls back to ordinary call resolution for a
+  non-persistent receiver.
+
+**Audit outcome.** The report asked whether `return` was the only trap. It is
+not -- the sweep found ~120 unconditional names, and the plausible-collision
+ones are `open`, `match`, `handle`, `escape`, `binding`, `ref`, `cast`,
+`load`, `panic`, `resume`, `reset`, `shift`, `as`, `stm`, `retry`. Two already
+existed in-tree and were renamed with this change:
+`tests/fixtures/c-fn-ptr-size-const-precise` (`handle` -> `on-log`, a c-fn
+callback) and `tests/fixtures/errors/exg6-linear-escape` (`escape` ->
+`escaping`). Neither was broken -- both are referenced as values, never as call
+heads -- but the tree is now warning-clean. Full suite: 2412 passed, 0 failed.
+
+**Not taken.** Direction (2) (hard error) stays declined: it is a breaking
+change for any file carrying a dead definition, and the warning already moves
+the message to the right line. Direction (3) (call-site message naming the
+shadowing) is still worth doing on its own merits -- it would help someone
+reading a caller-side error in a file they did not write -- but it is
+strictly additive on top of what landed here.
+
+**Doc follow-ups (the report's own list, for case (1)).** Both done:
+
+- The `return` bullet is deleted from the constraints blockquote in
+  [docs/guides/logic-programming-guide.md](../guides/logic-programming-guide.md);
+  the guide keeps `pure`.
+- [docs/guides/syntax-guide.md](../guides/syntax-guide.md) gained a **Reserved
+  names** section in the reference appendix -- the full table by group, the
+  not-reserved list, the qualified-name escape, and a pointer to
+  `tur explain TUR-W0042`. This closes the "no doc lists reserved words" gap
+  the report flagged, which is part of why it bit in the first place.
+
+---
+
+## Original report
 
 ## Repro
 

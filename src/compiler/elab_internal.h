@@ -332,6 +332,9 @@ typedef struct Elab {
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
+    const Symbol *kw_sealed;      /* :sealed keyword for defopaque -- `::` cannot
+                                   * cross the type/representation boundary
+                                   * outside the declaring module */
     const Symbol *kw_heap;        /* :heap keyword for defstruct (typed-pointer ABI) */
     const Symbol *kw_no_auto_ctor;/* CTOR-V0: :no-auto-ctor keyword for defstruct */
     /* Phase 12: Borrow traits */

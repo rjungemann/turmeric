@@ -3666,18 +3666,18 @@ struct __tur_sym {
 };
 #endif
 
-#ifndef TUR_TY_tur_adt_Option__opaque
-#define TUR_TY_tur_adt_Option__opaque
-typedef struct tur_adt_Option__opaque {
+#ifndef TUR_TY_tur_adt_Option__fn1_int__int
+#define TUR_TY_tur_adt_Option__fn1_int__int
+typedef struct tur_adt_Option__fn1_int__int {
     bool is_some;
     void * value;
-} tur_adt_Option__opaque;
+} tur_adt_Option__fn1_int__int;
 #endif
 
-#ifndef TUR_FN_tur_adt_Option__opaque
-#define TUR_FN_tur_adt_Option__opaque
-static tur_adt_Option__opaque ctor_Option__opaque(bool _0, void * _1) {
-    tur_adt_Option__opaque __r;
+#ifndef TUR_FN_tur_adt_Option__fn1_int__int
+#define TUR_FN_tur_adt_Option__fn1_int__int
+static tur_adt_Option__fn1_int__int ctor_Option__fn1_int__int(bool _0, void * _1) {
+    tur_adt_Option__fn1_int__int __r;
     __r.is_some = _0;
     __r.value = _1;
     return __r;
@@ -4106,7 +4106,7 @@ static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
 static int64_t size_hyof(tur_adt_Map__int__int *);
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
@@ -4121,7 +4121,7 @@ static tur_adt_Map__int__float * map_assoc_eq_o__spec__tur_adt_Map__int__float__
 static tur_adt_Map__int__float * tur_map_kcheck__spec__tur_adt_Map__int__float___tur_adt_Map__int__float___const_void__(tur_adt_Map__int__float *, const void *);
 static tur_adt_Map__int__float * map_new__spec__tur_adt_Map__int__float__();
 static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int__(tur_adt_Map__int__int *, tur_adt_Map__int__int *);
-static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool(tur_adt_Map__int__int *, tur_adt_Map__int__int *, int64_t);
+static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t(tur_adt_Map__int__int *, tur_adt_Map__int__int *, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -7702,7 +7702,7 @@ int main(int argc, char **argv) {
         return (int)__t206;
 }
 
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {
         return (bool)(o).is_some;
 }
 
@@ -7826,14 +7826,14 @@ static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map_
             __t212[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
             __t212[1] = (int64_t)(intptr_t)__fn_775;
             void *__t214 = __t212;
-            __auto_type __ps_215 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t214)));
+            __auto_type __ps_215 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t214)));
             if (tur_panicking) return (bool){0};
             __t209 = __ps_215;
         }
         return __t209;
 }
 
-static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool(tur_adt_Map__int__int * m1, tur_adt_Map__int__int * m2, int64_t val_cmp) {
+static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t(tur_adt_Map__int__int * m1, tur_adt_Map__int__int * m2, int64_t val_cmp) {
         bool __t216;
         {
             __auto_type __ps_217 = (map_hyhamt((int64_t)(intptr_t)(m1)));

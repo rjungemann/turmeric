@@ -2,12 +2,22 @@
 
 **Severity:** medium (display/usability; not a miscompile)
 
-**Status:** open, narrowed to the display gap alone. The headline stdlib drop is
-**FIXED (2026-07-26)** -- and it was never web-specific: it reproduces in the
-native `tur repl`, which is how it was fixed and verified here. See
-[Resolution: the stdlib drop](#resolution-the-stdlib-drop). What remains is the
-third fix direction, the `#map{}` / `#set{}` Show routing, which really is
-WASM-side and still needs emscripten to verify.
+**Status:** resolved 2026-07-29 -- all three fix directions closed.
+
+- The headline **stdlib drop** was never web-specific: it reproduces in the
+  native `tur repl`, which is how it was fixed (2026-07-26) and verified. See
+  [Resolution: the stdlib drop](#resolution-the-stdlib-drop). Confirmed under a
+  rebuilt WASM module on 2026-07-29, across all four switch paths.
+- The **`#map{}` / `#set{}` display gap** turned out not to be a web-side
+  routing gap at all -- it was auto-show type erasure, fixed as root cause B of
+  [map-show-keyword-key-raw-int](../reported/map-show-keyword-key-raw-int.md),
+  which the WASM rebuild picked up unchanged. See
+  [Resolution of the display gap](#resolution-of-the-display-gap-2026-07-29).
+
+Nothing web-specific remains. One check failing during that verification was a
+**separate, pre-existing defect**, filed as
+[lang-switch-breaks-generic-instance-resolution](../reported/lang-switch-breaks-generic-instance-resolution.md)
+-- it is not tracked by this report.
 
 ## Summary
 
@@ -144,7 +154,11 @@ still resolves, so a test written that way passes with and without the fix.
 is 1797 passed / 1 failed (`refine-off-is-contracts-only`), and that one failure
 reproduces unchanged at the base commit -- pre-existing, unrelated.
 
-## Still open: the `#map{}` display gap
+## The `#map{}` display gap (was: still open)
+
+**Resolved 2026-07-29 -- and what remained of it turned out to be a different
+bug. See [the resolution below](#resolution-of-the-display-gap-2026-07-29).**
+The section is kept as filed for the record:
 
 Third fix direction only: route `#map{}` / `#set{}` through their Show instance
 in the web display tiers so an empty map prints `{}` rather than a raw carrier
@@ -161,3 +175,38 @@ turi> #map{:a 1}
 
 so the Show routing is incomplete on the native side too, not only in the web
 display tiers.
+
+## Resolution of the display gap (2026-07-29)
+
+Verified against a freshly built WASM module (emscripten 5.0.5, macOS), driving
+`_turi_wasm_eval` from node exactly as the browser does.
+
+**The stdlib-drop fix holds under WASM.** All four switch paths were exercised
+-- inline `#lang` eval, switch-back, a third reader, and the browser language
+selector (`turi_wasm_set_lang`, the site this report noted had drifted). Macros,
+`#map{}` / `#set{}` / `[...]` literals and `map-count` all resolve after every
+one of them. 20 of 21 checks passed.
+
+**The populated-`#map{}` display gap was not a routing gap.** It was type
+erasure in the auto-show path, tracked and fixed as root cause B of
+[map-show-keyword-key-raw-int](map-show-keyword-key-raw-int.md). The web display
+tiers needed no change of their own: `wasm_glue.c` already routes through
+`turi_try_show_by_tag`, so it picked the fix up with the rebuild. Confirmed in
+WASM -- `#map{:a 1}` => `#map{:a 1}`, `#map{"s" 1}` => `#map{s 1}`,
+`#set{:x}` => `#set{:x}`, `(vec-of :a :b)` => `[:a :b]`, and the empty
+`#map{}` => `#map{}`.
+
+That closes the third fix direction. Nothing web-specific remains here.
+
+**The one failing check is a separate, pre-existing bug**, now filed as
+[lang-switch-breaks-generic-instance-resolution](lang-switch-breaks-generic-instance-resolution.md):
+after a reader switch, *generic* (constraint-resolved) typeclass instances stop
+resolving, permanently and un-symmetrically. It reproduces natively with an
+explicitly-annotated `(show (:: #map{:a 1} (Map Sym int)))`, so it is neither
+web-specific nor caused by the auto-show fix -- verified by compiling that fix
+out and observing byte-identical behavior.
+
+It is worth noting why this report's own test did not catch it: the checks in
+`tests/turi/lang-switch-prelude.c` are all integer results (`map-count`,
+`when`), which exercise name resolution but never a generic instance. The
+missing assertion is recorded in the new report.

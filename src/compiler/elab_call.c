@@ -146,6 +146,107 @@ static const char *stdlib_load_hint_file(const Symbol *name) {
     return tur_stdlib_load_hint(name->name);
 }
 
+/* docs/archive/defn-shadows-return-special-form.md: head-position dispatch in
+ * elab_call (below) matches special forms by symbol identity *before* any
+ * binding, macro, or typeclass-method lookup.  A user `(defn return ...)` is
+ * therefore accepted, bound, and then never consulted: every bare
+ * `(return ...)` elaborates as the early-return form, and the resulting
+ * diagnostic lands on the CALLER's argument type with no mention of the
+ * shadowing.  `return` is a natural name for a monadic unit, so this is easy
+ * to hit and very hard to read.
+ *
+ * This table drives the TUR-W0042 warning emitted at the DEFINITION site, which
+ * is where the mistake actually is.  Membership rule -- a name belongs here
+ * only if elab_call dispatches it UNCONDITIONALLY:
+ *
+ *   - Names gated on `!scope_lookup(e->scope, name)` are deliberately
+ *     shadowable (`handler`, `with`, `default-of`, and the session ops
+ *     `send`/`recv`/`close`/...).  A user defn of those wins, so they are NOT
+ *     reserved and must stay out of this table.
+ *   - Names dispatched only at one arity or one argument shape (`async`,
+ *     `await`, `select`, `atomically`, `check`, `or-else`, the `tvar-*` ops,
+ *     `thread-spawn`) are omitted too: a defn at another arity is genuinely
+ *     callable, and this check runs before the parameter list is parsed.
+ *   - The map surface (`assoc`, `get`, `count`, `merge`, ...) routes through
+ *     elab_lower_map_call, which falls back to ordinary call resolution for a
+ *     non-persistent receiver.  Not reserved.
+ *
+ * Inside a `defmodule`, a shadowing definition is still reachable through its
+ * QUALIFIED name (`mod/return`) -- the qualified head symbol is a different
+ * symbol and never matches a special form -- which is why the warning speaks
+ * about the bare name specifically. */
+static const char *const reserved_special_forms_[] = {
+    /* core binding / control forms */
+    "def", "define", "let", "let*", "letrec", "if", "do", "unsafe", "set!",
+    "while", "case", "defer", "return", "match", "quote", "gensym",
+    /* definition forms */
+    "defn", "fn", "\xce\xbb", "extern-c", "defmacro", "defmodule", "import",
+    "export", "load", "defstruct", "make-struct", "defopaque", "defdata",
+    "defgadt", "defclass", "definstance", "defkind", "defrec", "deftype",
+    "defalias", "defdynamic", "defeffect", "defprotocol",
+    /* generators */
+    "gen", "yield", "gen-next", "gen-done?",
+    /* references, rc, weak */
+    "ref", "deref", "drop!", "lref/new", "rc/of", "rc/clone", "rc/drop",
+    "rc->ptr", "rc/strong-count", "rc/from-ref", "ref/from-rc", "weak",
+    "upgrade", "weak?", "ref?",
+    /* delimited continuations */
+    "reset", "shift", "shift0", "call/cc", "call/cc*", "escape",
+    "cloneable-reset", "cloneable-shift", "serial-reset", "serial-shift",
+    "cont?",
+    /* algebraic effects */
+    "binding", "perform", "handle", "handle-shallow", "try-with",
+    "with-handler", "resume", "discontinue", "compose-handlers",
+    /* types, casts, ascription */
+    "as", "type-of", "cast", "is?", "coerce", "&", "&mut",
+    "forall", "exists", "type-app", "::", "pack", "open",
+    /* sessions -- the definition/constructor forms only; the value-level ops
+     * are shadowable and deliberately absent */
+    "make-protocol", "make-session",
+    /* panic / unwinding */
+    "panic", "panic-with", "catch-unwind", "catch-panic-of",
+    "panic-payload-type", "panic-payload-value", "panic-payload-file",
+    "panic-payload-line", "panic-payload-downcast",
+    /* unsafe primitives */
+    "ptr-deref", "ptr-write", "ptr-add", "ptr-sub", "ptr-null?", "ptr-of",
+    "unsafe-cast", "reinterpret", "transmute", "array-get-unchecked",
+    "array-set-unchecked", "raw-malloc", "raw-free", "raw-realloc",
+    "raw-memcpy", "raw-memset", "c-call", "dlopen", "dlsym", "dlclose",
+    /* STM */
+    "stm", "retry",
+    /* GC */
+    "gc!", "gc-enable!", "gc-disable!", "gc-auto!", "gc-collections",
+    "gc-objects-freed", "gc-live-blocks", "gc-candidate-high-water",
+    /* misc operators */
+    "?", "->", "->>",
+};
+
+bool tur_name_is_reserved_special_form(const char *name) {
+    if (!name) return false;
+    /* `(.method obj ...)` is dispatched on the leading dot, so any name that
+     * starts with `.` is equally unreachable as a bare call head. */
+    if (name[0] == '.' && name[1] != '\0') return true;
+    for (size_t i = 0;
+         i < sizeof(reserved_special_forms_) / sizeof(reserved_special_forms_[0]);
+         i++) {
+        if (strcmp(name, reserved_special_forms_[i]) == 0) return true;
+    }
+    return false;
+}
+
+/* Emit TUR-W0042 when `name` (a defn/defmacro name being defined at `span`)
+ * collides with a reserved special form.  Callers suppress it for stdlib
+ * auto-load and for re-elaborated specialization clones. */
+void tur_warn_if_shadows_special_form(const Symbol *name, Span span,
+                                      const char *form_kind) {
+    if (!name || !tur_name_is_reserved_special_form(name->name)) return;
+    diag_emit_with_code(DIAG_WARNING, span, TUR_W0042_SHADOWS_SPECIAL_FORM,
+        "%s '%s' shadows the special form '%s'; a bare (%s ...) call always "
+        "elaborates as the special form, so this definition is unreachable by "
+        "its bare name -- rename it",
+        form_kind, name->name, name->name, name->name);
+}
+
 /* Migration aid for legacy C-backed spice code.  A handful of forms that older
  * "store a pointer as :int and hand-roll allocation + field access" code reaches
  * for were never Turmeric language operators -- they only ever existed inside an

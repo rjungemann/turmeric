@@ -2929,6 +2929,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
         return NULL;
     }
+    /* TUR-W0042 (docs/archive/defn-shadows-return-special-form.md): defining a
+     * function whose name is a reserved special form (`return`, `match`, ...)
+     * is accepted and bound, but every bare call site dispatches to the special
+     * form instead.  Warn HERE, at the definition, rather than leaving the
+     * author to decode a type error against the caller's argument.  Suppressed
+     * during stdlib auto-load and for specialization clones (which re-elaborate
+     * the same Form and would double-report). */
+    if (!e->in_stdlib_load && !e->bare_fat_spec_active)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defn");
+
     Binding *existing = scope_lookup(e->scope, name_f->as.sym);
     /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
      * same `(defn ...)` Form under a mangled name, so the original (lazy)

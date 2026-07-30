@@ -3666,18 +3666,18 @@ struct __tur_sym {
 };
 #endif
 
-#ifndef TUR_TY_tur_adt_Option__opaque
-#define TUR_TY_tur_adt_Option__opaque
-typedef struct tur_adt_Option__opaque {
+#ifndef TUR_TY_tur_adt_Option__fn1_int__int
+#define TUR_TY_tur_adt_Option__fn1_int__int
+typedef struct tur_adt_Option__fn1_int__int {
     bool is_some;
     void * value;
-} tur_adt_Option__opaque;
+} tur_adt_Option__fn1_int__int;
 #endif
 
-#ifndef TUR_FN_tur_adt_Option__opaque
-#define TUR_FN_tur_adt_Option__opaque
-static tur_adt_Option__opaque ctor_Option__opaque(bool _0, void * _1) {
-    tur_adt_Option__opaque __r;
+#ifndef TUR_FN_tur_adt_Option__fn1_int__int
+#define TUR_FN_tur_adt_Option__fn1_int__int
+static tur_adt_Option__fn1_int__int ctor_Option__fn1_int__int(bool _0, void * _1) {
+    tur_adt_Option__fn1_int__int __r;
     __r.is_some = _0;
     __r.value = _1;
     return __r;
@@ -4095,7 +4095,7 @@ static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
 static int64_t step(const tur_adt_Result__int__int *, int64_t);
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
@@ -7592,7 +7592,7 @@ int main(int argc, char **argv) {
         return (int)__t171;
 }
 
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {
         return (bool)(o).is_some;
 }
 
