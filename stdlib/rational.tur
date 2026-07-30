@@ -17,6 +17,7 @@
 ;;;
 ;;; Since: Phase N1 (numeric-tower-rational-complex-plan)
 (load "stdlib/typeclass.tur")
+
 (load "stdlib/math.tur")
 ;;; ArithError -- the failure modes of exact integer/rational arithmetic.
 ;;;
@@ -38,9 +39,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defstruct Rational :copy
-  [num : int
-   den : int])
+(defstruct Rational :copy [num : int den : int])
 ;; -- integer helpers ---------------------------------------------------------
 ;;; int/abs -- absolute value of an int.
 ;;;
@@ -56,8 +55,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defn int/abs [x : int] : int
-  (if (< x 0) (- 0 x) x))
+(defn int/abs [x : int] : int (if (< x 0) (- 0 x) x))
 ;;; int/gcd -- greatest common divisor of two non-negative ints (Euclid).
 ;;;
 ;;; Parameters:
@@ -72,8 +70,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defn int/gcd [a : int b : int] : int
-  (if (= b 0) a (int/gcd b (mod a b))))
+(defn int/gcd [a : int b : int] : int (if (= b 0) a (int/gcd b (mod a b))))
 ;;; int/max-value -- the largest representable int (2^63 - 1).
 ;;;
 ;;; Returns:
@@ -116,9 +113,7 @@
 (defn int/add-overflows? [a : int b : int] : bool
   (if (> b 0)
     (> a (- (int/max-value) b))
-    (if (< b 0)
-      (< a (- (int/min-value) b))
-      false)))
+    (if (< b 0) (< a (- (int/min-value) b)) false)))
 ;;; int/sub-overflows? -- would `(- a b)` leave the int64 range?
 ;;;
 ;;; Parameters:
@@ -136,9 +131,7 @@
 (defn int/sub-overflows? [a : int b : int] : bool
   (if (< b 0)
     (> a (+ (int/max-value) b))
-    (if (> b 0)
-      (< a (+ (int/min-value) b))
-      false)))
+    (if (> b 0) (< a (+ (int/min-value) b)) false)))
 ;;; int/mul-overflows? -- would `(* a b)` leave the int64 range?
 ;;;
 ;;; Parameters:
@@ -164,12 +157,8 @@
       (if (= b -1)
         (= a (int/min-value))
         (if (> a 0)
-          (if (> b 0)
-            (> a (/ (int/max-value) b))
-            (< b (/ (int/min-value) a)))
-          (if (> b 0)
-            (< a (/ (int/min-value) b))
-            (< b (/ (int/max-value) a))))))))
+          (if (> b 0) (> a (/ (int/max-value) b)) (< b (/ (int/min-value) a)))
+          (if (> b 0) (< a (/ (int/min-value) b)) (< b (/ (int/max-value) a))))))))
 ;; -- construction ------------------------------------------------------------
 ;;; rat/normalize -- build a Rational in lowest terms with a positive denominator.
 ;;;
@@ -189,9 +178,7 @@
   (let [sn (if (< d 0) (- 0 n) n)
         sd (if (< d 0) (- 0 d) d)
         g  (int/gcd (int/abs sn) sd)]
-    (if (= g 0)
-      (Rational 0 1)
-      (Rational (/ sn g) (/ sd g)))))
+    (if (= g 0) (Rational 0 1) (Rational (/ sn g) (/ sd g)))))
 ;;; rat/of -- construct a Rational, reporting a zero denominator as an error.
 ;;;
 ;;; Parameters:
@@ -208,9 +195,7 @@
 ;;; Since: Phase N1
 
 (defn rat/of [n : int d : int] : (Result Rational ArithError)
-  (if (= d 0)
-    (err (DivByZero))
-    (ok (rat/normalize n d))))
+  (if (= d 0) (err (DivByZero)) (ok (rat/normalize n d))))
 ;;; rat/of! -- construct a Rational, panicking on a zero denominator.
 ;;;
 ;;; Parameters:
@@ -229,9 +214,7 @@
 
 (defn rat/of! [n : int d : int] : Rational
   (if (= d 0)
-    (do
-      (panic "rat/of!: zero denominator")
-      (Rational 0 1))
+    (do (panic "rat/of!: zero denominator") (Rational 0 1))
     (rat/normalize n d)))
 ;;; rat/from-int -- the Rational n/1.
 ;;;
@@ -366,8 +349,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defn rat/neg [x : Rational] : Rational
-  (Rational (- 0 (.num x)) (.den x)))
+(defn rat/neg [x : Rational] : Rational (Rational (- 0 (.num x)) (.den x)))
 ;;; rat/sub -- exact difference of two rationals.
 ;;;
 ;;; Parameters:
@@ -382,8 +364,7 @@
 ;;;
 ;;; Since: Phase N1
 
-(defn rat/sub [x : Rational y : Rational] : Rational
-  (rat/add x (rat/neg y)))
+(defn rat/sub [x : Rational y : Rational] : Rational (rat/add x (rat/neg y)))
 ;;; rat/mul -- exact product of two rationals.
 ;;;
 ;;; Parameters:
@@ -427,9 +408,7 @@
 
 (defn rat/div [x : Rational y : Rational] : Rational
   (if (rat/zero? y)
-    (do
-      (panic "rat/div: division by the zero rational")
-      (Rational 0 1))
+    (do (panic "rat/div: division by the zero rational") (Rational 0 1))
     (rat/mul x (Rational (.den y) (.num y)))))
 ;;; rat/recip -- the reciprocal; panics on the zero rational.
 ;;;
@@ -446,9 +425,7 @@
 
 (defn rat/recip [x : Rational] : Rational
   (if (rat/zero? x)
-    (do
-      (panic "rat/recip: reciprocal of the zero rational")
-      (Rational 0 1))
+    (do (panic "rat/recip: reciprocal of the zero rational") (Rational 0 1))
     (rat/normalize (.den x) (.num x))))
 ;; -- checked arithmetic ------------------------------------------------------
 ;;; rat/try-add -- checked sum; `Err Overflow` instead of wrapping.
@@ -475,8 +452,7 @@
         db (/ d g)
         bb (/ b g)]
     (if (or (int/mul-overflows? a db)
-            (or (int/mul-overflows? c bb)
-                (int/mul-overflows? b db)))
+          (or (int/mul-overflows? c bb) (int/mul-overflows? b db)))
       (err (Overflow))
       (if (int/add-overflows? (* a db) (* c bb))
         (err (Overflow))
@@ -497,9 +473,7 @@
 ;;; Since: Phase N1
 
 (defn rat/try-sub [x : Rational y : Rational] : (Result Rational ArithError)
-  (if (= (.num y) (int/min-value))
-    (err (Overflow))
-    (rat/try-add x (rat/neg y))))
+  (if (= (.num y) (int/min-value)) (err (Overflow)) (rat/try-add x (rat/neg y))))
 ;;; rat/try-mul -- checked product; `Err Overflow` instead of wrapping.
 ;;;
 ;;; Parameters:
@@ -587,7 +561,7 @@
 ;;; Since: Phase N1
 
 (defn rat/cmp [x : Rational y : Rational] : int
-  (let [g  (int/gcd (.den x) (.den y))
+  (let [g   (int/gcd (.den x) (.den y))
         lhs (* (.num x) (/ (.den y) g))
         rhs (* (.num y) (/ (.den x) g))]
     (if (< lhs rhs) -1 (if (> lhs rhs) 1 0))))
@@ -706,8 +680,7 @@
   (neg [x] (rat/neg x)))
 ;;; Eq [Rational] -- structural equality, which normalization makes exact.
 
-(definstance Eq [Rational]
-  (eq? [x y] (rat/eq? x y)))
+(definstance Eq [Rational] (eq? [x y] (rat/eq? x y)))
 ;;; Ord [Rational] -- total order via the cross-cancelled cross-product.
 
 (definstance Ord [Rational]
@@ -717,9 +690,7 @@
   (gte? [x y] (rat/gte? x y)))
 ;;; Hash [Rational] -- mixes the normalized numerator and denominator.
 
-(definstance Hash [Rational]
-  (hash [x] (+ (* (.num x) 31) (.den x))))
+(definstance Hash [Rational] (hash [x] (+ (* (.num x) 31) (.den x))))
 ;;; Show [Rational] -- "3/4" / "-3/4" / "5"; round-trips through #rat{...}.
 
-(definstance Show [Rational]
-  (show [x] (rat->string x)))
+(definstance Show [Rational] (show [x] (rat->string x)))
