@@ -232,9 +232,14 @@ the parametric version compiles but still needs the casts from step 2.
   positions, but all three are "polymorphic instantiation meets closure" -- a
   fix in the substitution/emission walk may well touch all of them, so worth
   reading together.
-- [composite-type-alias-gap.md](composite-type-alias-gap.md) -- the missing
-  transparent alias, which is why these signatures must spell
-  `(fn [] (Cons A))` inline everywhere instead of naming it once.
+- [composite-type-alias-gap.md](../archive/composite-type-alias-gap.md) -- the
+  missing transparent alias, which is why these signatures had to spell
+  `(fn [] (Cons A))` inline everywhere instead of naming it once. **Resolved**
+  (`defalias` takes composite targets as of Phase TA2), but only for a
+  *monomorphic* target -- `(defalias Backtrack (fn [] int))` names the
+  int-carried shape, while the parametric `(fn [] (Cons A))` still cannot be
+  named, since alias type parameters remain unsupported. This defect is what
+  keeps the parametric version out of reach.
 - [defn-shadows-return-special-form.md](../archive/defn-shadows-return-special-form.md) --
   the third defect found in the same guide (resolved as TUR-W0042; archived).
 

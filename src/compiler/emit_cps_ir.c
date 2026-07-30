@@ -3131,6 +3131,14 @@ typedef struct {
      * count_target raises *thr_tier to max(*thr_tier, param_thread_class) so the
      * trace can report the hardest E2 tier a fn-value needs (PT_NOW/NONTAIL/E1). */
     int           *thr_tier;
+    /* letraw_effect_free: record only CALL-position callees, skipping the
+     * fn-VALUE reference channel below (EX_VAR on a TY_FN binding).  The two
+     * uses of the callee list ask different questions -- the call-path taint
+     * asks "may this fn be called downstream through the value", which a value
+     * reference genuinely answers yes to; a CT_LETRAW admission asks "does this
+     * raw op run an effect right here", which taking a function's ADDRESS never
+     * does.  Only letraw_effect_free sets this. */
+    bool           calls_only;
 } EffAcc;
 
 /* E2 param-threading tiers -- how ready a HOF param is to thread the DK to the
@@ -3445,7 +3453,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 && acc->count_out)
                 (*acc->count_out)++;
             if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN) {
-                eff_acc_add_callee(acc, e->as.var.binding);
+                if (!acc->calls_only) eff_acc_add_callee(acc, e->as.var.binding);
                 /* E2/taint-completeness (cps-tramp-resume): a fn-value reference in
                  * VALUE position (this EX_VAR is not a direct-call callee -- those
                  * carry fn_binding with fn_expr=NULL and never reach here) means the
@@ -3476,7 +3484,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
  * every existing caller uses.  Perform and handle tags fold into the same set. */
 static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                   NULL, NULL, NULL };
+                   NULL, NULL, NULL, false };
     expr_collect_effects_acc(e, &acc);
 }
 
@@ -3571,8 +3579,21 @@ static bool letraw_effect_free(const CTerm *t) {
     if (!t || t->kind != CT_LETRAW || !t->as.letraw.e) return false;
     uint64_t lo = 0, hi = 0; bool ov = false;
     const Binding *callees[64]; int nc = 0;
+    /* calls_only: a raw op that merely REFERENCES an effectful fn -- boxing
+     * `my-eff` into a fat closure to pass it as a `^fat` argument -- runs no
+     * effect; the effect happens at the eventual call, which is a separate
+     * CTerm node with its own admission.  Counting the reference as a callee
+     * here rejected the box construction, which dropped the whole handled body
+     * to term_core_ok, whose CT_APPCONT case refuses the KK_PROMPT delivery a
+     * `(handle (do (f g) 0) ...)` ends with.  That evicted the handler fn,
+     * tainted its effect, co-evicted the performer, and landed its `perform` in
+     * the direct emitter -- an ICE.  See
+     * docs/archive/named-effectful-defn-as-fat-fn-value-ices.md.  A genuine
+     * delegated CALL to an effectful callee is still rejected: that is the case
+     * this gate exists for (its effect would run on the fiber, escaping the
+     * handle's DK prompt). */
     EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
-                   NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true };
     expr_collect_effects_acc(t->as.letraw.e, &acc);
     if (lo || hi || ov) return false;
     for (int i = 0; i < nc; i++)
@@ -3612,7 +3633,7 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
     int n = 0;
     uint64_t dl = 0, dh = 0;
     EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
-                   b, &n, NULL };
+                   b, &n, NULL, false };
     expr_collect_effects_acc(e, &acc);
     return n;
 }
@@ -3927,7 +3948,7 @@ static bool fn_value_threadable(const Expr *program, const Binding *fv,
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
         EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
-                       fv, &total, program, &ok, NULL, NULL, &tier };
+                       fv, &total, program, &ok, NULL, NULL, &tier, false };
         expr_collect_effects_acc(body, &acc);
     }
     if (out_total) *out_total = total;
@@ -4336,7 +4357,7 @@ static void ensure_S(const Expr *program) {
                 en->edges = NULL; en->edges_all = false;
                 EffAcc acc = { &en->perf_lo, &en->perf_hi,
                                &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
-                               NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+                               NULL, NULL, NULL, NULL, NULL, NULL, NULL, false };
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi;
@@ -4381,7 +4402,7 @@ static void ensure_S(const Expr *program) {
         uint64_t scratch_lo = 0, scratch_hi = 0;
         EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
                        cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
-                       NULL, NULL, NULL };
+                       NULL, NULL, NULL, false };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
         g_ents[i].edges_all = overflow;
         for (int k = 0; k < ncb; k++)
@@ -4916,6 +4937,29 @@ static char *callee_name(const Binding *fn) {
     return raw_name_for_binding(fn);   /* malloc'd */
 }
 
+/* E2a lookup key for a `via_registry` callee.
+ *
+ * The registry is keyed on a function's DIRECT ENTRY address
+ * (`__tur_cps_register((intptr_t)f, f__cps)`), so the key has to be that
+ * address.  A plain fn-value param holds it directly.  A `^fat` param does
+ * NOT: its calling convention guarantees an already-boxed
+ * `{ shim, direct-entry }` fat record (the arg loop auto-shims a thin fn into
+ * one), carried as the int64 pointer carrier -- so the param's own value is a
+ * heap address that was never registered.  Keying on it missed every time,
+ * and the miss was called unguarded: a NULL call, i.e. SIGSEGV, for every
+ * `^fat` parameter carrying a non-empty effect row.  Read slot 1 instead,
+ * which is exactly what `__tur_fatshim_*` dispatches through.
+ *
+ * Writes into `out`; returns `out` for use in a format argument. */
+static const char *e2a_lookup_key(char *out, size_t cap,
+                                  const Binding *fn, const char *callee) {
+    if (fn && fn->is_fat)
+        snprintf(out, cap, "((int64_t *)(intptr_t)(%s))[1]", callee);
+    else
+        snprintf(out, cap, "(intptr_t)%s", callee);
+    return out;
+}
+
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
 static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
     Buf b; buf_init(&b);
@@ -5392,12 +5436,14 @@ static void emit_term(CE *ce, const CTerm *t) {
                 for (uint32_t i = 0; i < t->as.tailcall.n && off < 400; i++)
                     off += snprintf(cast + off, sizeof cast - (size_t)off, "int64_t, ");
                 snprintf(cast + off, sizeof cast - (size_t)off, "DK *)");
+                char key[640];
+                e2a_lookup_key(key, sizeof key, t->as.tailcall.fn, pf);
                 if (t->as.tailcall.n)
-                    ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value */",
-                            cast, pf, argv, thread);
+                    ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s, %s); /* E2a threaded fn-value */",
+                            cast, key, pf, argv, thread);
                 else
-                    ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value */",
-                            cast, pf, thread);
+                    ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value */",
+                            cast, key, pf, thread);
                 free(pf); free(argv);
                 break;
             }
@@ -6207,12 +6253,14 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         snprintf(cast + coff, sizeof cast - (size_t)coff, "DK *)");
         /* Carrier ABI: pointer-like args must be int64-cast (gcc14-int-conversion). */
         char *argv_cps = atoms_csv_call_cps(ce, call->as.tailcall.args, call->as.tailcall.n);
+        char key[640];
+        e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
         if (call->as.tailcall.n)
-            ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s, %s); /* E2a threaded fn-value heap join */",
-                    cast, fn, argv_cps, frame);
+            ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s, %s); /* E2a threaded fn-value heap join */",
+                    cast, key, fn, argv_cps, frame);
         else
-            ce_line(ce, "return ((%s)__tur_cps_lookup((intptr_t)%s))(%s); /* E2a threaded fn-value heap join */",
-                    cast, fn, frame);
+            ce_line(ce, "return ((%s)__tur_cps_lookup_checked(%s, \"%s\"))(%s); /* E2a threaded fn-value heap join */",
+                    cast, key, fn, frame);
         free(argv_cps);
     } else if (call->as.tailcall.n)
     {

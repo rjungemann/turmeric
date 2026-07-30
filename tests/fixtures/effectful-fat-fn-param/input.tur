@@ -1,0 +1,57 @@
+;; effectful-fat-fn-param -- calling a `^fat` parameter whose fn type carries a
+;; non-empty effect row.
+;;
+;; This used to SIGSEGV.  The E2a call site recovers the callee's CPS entry from
+;; the direct-entry registry, but keyed the lookup on the parameter's own value.
+;; A `^fat` parameter does not hold a direct entry -- it holds a boxed
+;; { shim, direct-entry } fat record -- so the lookup missed every time, and the
+;; miss was called unguarded, i.e. a call through NULL.  The key now reads the
+;; record's direct-entry slot, which is what the fat shim itself dispatches
+;; through.  See docs/archive/effectful-fn-typed-param-call-segfaults.md.
+;;
+;; Pinned across the inline-lambda shapes: performing and not performing, in
+;; tail and non-tail position, with a `nil` and an `int` result.  The empty-row
+;; and no-row spellings are the controls -- they never took this path and must
+;; not move.  A named defn as the fn-value is the sibling fixture
+;; effectful-fat-fn-param-named.
+
+(defeffect Log [n : int] : nil)
+
+;; -- non-empty effect row on the ^fat param: the path that used to crash -----
+
+;; tail position, nil result
+(defn run-tail [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : nil
+  (lg n))
+
+;; non-tail position (the heap-join emit site), int result
+(defn run-join [^fat lg : (fn [int] #fx{Log} nil) n : int] #fx{Log} : int
+  (do (lg n) 7))
+
+;; the fn-value's own result is an int rather than nil
+(defn run-int [^fat lg : (fn [int] #fx{Log} int) n : int] #fx{Log} : int
+  (lg n))
+
+;; -- controls: these never went through the registry ------------------------
+
+;; empty effect row
+(defn run-empty [^fat lg : (fn [int] #fx{} nil) n : int] : int
+  (do (lg n) 1))
+
+;; no effect row at all
+(defn run-plain [^fat lg : (fn [int] nil) n : int] : int
+  (do (lg n) 2))
+
+(defn main [] : int
+  (handle
+    (do
+      ;; captureless lambda that performs -- the handler sees it and resumes
+      (run-tail (fn [x : int] (perform (Log x))) 1)
+      (println (run-join (fn [x : int] (perform (Log x))) 2))
+      (println (run-int (fn [x : int] : int (do (perform (Log x)) 30)) 3))
+      ;; a fn-value that never performs: no handler traffic, still must not crash
+      (println (run-join (fn [x : int] nil) 5))
+      ;; controls
+      (println (run-empty (fn [x : int] nil) 6))
+      (println (run-plain (fn [x : int] nil) 7))
+      0)
+    (Log [n] k) (do (println n) (resume k nil))))
