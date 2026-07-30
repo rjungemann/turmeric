@@ -2853,7 +2853,8 @@ suite stayed green):
 
 - `typed/result-basic` -- the `__cps` clone assigns a by-value
   `(Result int int)` struct to an int64 carrier; hard cc error
-  (docs/reported/typed-result-map-cps-clone-struct-assign.md).
+  (FIXED, section 28:
+  docs/archive/typed-result-map-cps-clone-struct-assign.md).
 - `typed-slots/cs3-nested-specialization` -- the nested-specialization
   float slot prints an int bit pattern through a double
   (docs/reported/typed-slots-nested-specialization-float-garbage.md).
@@ -2883,3 +2884,99 @@ the default 64MB entry stack (TUR_JIT_STACK_MB=2048 passes, confirming
 depth). Filed: docs/reported/named-let-self-tail-not-tco.md. Per the
 standing owner decision, the fix direction is extending the defn-level
 TCO rewrite to named-let, never a bigger stack.
+
+## 28. First of the three fixed -- the cps->direct aggregate-carrier bridge
+
+Added 2026-07-30, resolving the first of section 27's finds:
+`typed/result-basic` (docs/archive/typed-result-map-cps-clone-struct-assign.md).
+
+### 28.1 Two representations of one ADT, and a delivery that admitted only one
+
+The fixture's `test-result-map-preserves-tag` is CPS-colored, and its
+`__cps` clone tail-calls `result-map`. The CPS IR types that call at the
+ERASED `(Result A B)` carrier -- one int64 word, which is how the stdlib
+prelude actually represents a Result (`ok`/`err` malloc a
+`tur_result_box_t` and hand back the pointer; `ok?` derefs it through
+`tur_is_ok`). But the emitter RESOLVES the callee to a monomorph/spec
+clone, `result_map__spec__tur_adt_Result__int__int_int64_t_int64_t`,
+which returns its ADT **by value** as a C struct.
+
+So the delivery had a struct in hand and a one-word slot to put it in:
+
+```c
+int64_t __t0;                                          /* join local */
+tur_adt_Result__int__int __t238 = result_map__spec__...(...);
+__t0 = __t238;                                         /* <-- ill-typed */
+```
+
+gcc: "incompatible types when assigning to type 'int64_t' from type
+'tur_adt_Result__int__int'". c2mir: "incompatible types in assignment to
+an arithmetic type lvalue". Every compiling engine agreed; only the
+interpreter, which never sees this C, ran the fixture.
+
+`emit_deliver_ty` boxes a Tier-C aggregate on the KK_RET / KK_PROMPT
+paths (`slot_store_reap`), but the KK_VAR inline-join path is a plain C
+assignment with no conversion at all -- and the value's aggregate-ness is
+not visible from the IR type anyway. It lives only in the signature side
+table (`emit_sig_lookup_ret_ctype`), which knows what the clone was
+actually declared to return.
+
+### 28.2 The fix: bridge concrete->carrier the way the direct emitter does
+
+The direct emitter already crosses this exact boundary, by spilling the
+aggregate and passing its ADDRESS:
+
+```c
+tur_adt_Result__int__int __t225 = __ps_224;
+result_hyeq_qu((int64_t)(intptr_t)(&__t225), ...);   /* int64 carrier param */
+```
+
+which works because every carrier consumer of an ADT word derefs it --
+`tur_is_ok`, and the spec clone's own `(tur_adt_Result *)(intptr_t)r`
+parameter cast. The CPS delivery now does the same thing, heap-copied
+rather than stack-addressed because a delivery can sit inside a nested
+block while the join label is outside, so `&local` would dangle:
+
+```c
+__t0 = (int64_t)__dk_reap_ptr((intptr_t)({
+    tur_adt_Result__int__int *__bx = malloc(sizeof *__bx); *__bx = __t238; __bx; }));
+```
+
+`__dk_reap_ptr` registers the box on the per-run reap list, so it is
+freed at the outermost entry boundary -- the fixture is clean under
+`ASAN_OPTIONS=detect_leaks=1`.
+
+Mechanically (src/compiler/emit_cps_ir.c):
+
+- `cty_is_byval_agg(cty)` -- keyed on the C SPELLING, not a Type, because
+  the sig side table is the source of truth for what a spec clone returns
+  and it carries only the string. Positive list (`tur_adt_*`, not a
+  pointer) so anything unrecognized stays a word: the historical behavior.
+- `deliver_slot_cty(ce, kont)` -- the C type the delivery lands in: the
+  join local's declared type (KK_VAR, newly recorded in `ce->joins[]`
+  alongside the name), or the crossing type `slot_store_reap` keys its
+  own boxing on (KK_RET / KK_PROMPT). Comparing the two is what keeps the
+  bridge from double-boxing a slot that is ALREADY the aggregate.
+- The CT_TAILCALL cps->direct arm bridges iff the callee's real return
+  ctype is an aggregate and the slot is not.
+
+Caveat recorded rather than engineered around: an aggregate with owning
+(rc/ref/weak) fields would cross as a bitwise copy whose box is reaped
+with a bare `free`, so owned fields are not dropped -- the same caveat
+`slot_box_ty`'s Tier-C box carries, except Tier C can decline and fall
+back while this site's only alternative is the hard compile error it used
+to be. No fixture reaches it.
+
+### 28.3 Blast radius: one fixture
+
+A sweep of `emit-c` over the whole corpus (both scan depths) finds the new
+bridge in exactly ONE fixture -- `typed/result-basic` itself. No
+`expected.c` snapshot moves, so there is no regen in this change. Suites:
+`tests/run.sh` **2430 passed / 0 failed**; `tests/run-jit.sh` on the Debug
+JIT build **2391 passed / 0 failed / 48 skipped** (47 via cc fallback) --
+one more pass and one fewer skip than section 27.1, which is the fixture
+coming off the harness denylist.
+
+Two of the phase's three finds remain open:
+docs/reported/typed-slots-nested-specialization-float-garbage.md and
+docs/reported/named-let-self-tail-not-tco.md.

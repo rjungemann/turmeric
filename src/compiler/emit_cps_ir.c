@@ -4769,8 +4769,11 @@ typedef struct {
     Buf        *out;         /* current function/helper body buffer */
     Buf        *helpers;     /* file-scope accumulator for lifted reset/shift helpers */
     int         indent;
-    /* active inline joins: KK_VAR id -> join-parameter C name */
-    struct { uint32_t id; const char *param; } joins[MAX_JOINS];
+    /* active inline joins: KK_VAR id -> join-parameter C name + the C type the
+     * join local is DECLARED with (so a delivery can tell whether the slot is a
+     * one-word carrier or the by-value aggregate itself -- see
+     * deliver_slot_cty / the cps->direct aggregate bridge). */
+    struct { uint32_t id; const char *param; const char *cty; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
     const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
@@ -4819,6 +4822,13 @@ static const char *join_param(CE *ce, uint32_t id) {
     for (int i = ce->n_joins - 1; i >= 0; i--)
         if (ce->joins[i].id == id) return ce->joins[i].param;
     return "0";  /* unreachable when the term is well-formed */
+}
+
+/* The C type the join local for `id` was declared with, or NULL if unknown. */
+static const char *join_param_cty(CE *ce, uint32_t id) {
+    for (int i = ce->n_joins - 1; i >= 0; i--)
+        if (ce->joins[i].id == id) return ce->joins[i].cty;
+    return NULL;
 }
 
 /* Materialize an atom as a malloc'd C expression string. */
@@ -5158,6 +5168,30 @@ static const Type *deliver_ty(CE *ce, const CKont *kont) {
     if (kont->kind == KK_RET)    return ce->ret_ty;
     if (kont->kind == KK_PROMPT) return ce->cur_ty;
     return NULL;   /* KK_VAR: inline join, a plain C-local assignment */
+}
+
+/* True when C type spelling `cty` names a BY-VALUE AGGREGATE -- an ADT/struct
+ * record passed and returned as a C struct (`tur_adt_Result__int__int`), as
+ * opposed to a scalar, a pointer, or the uniform int64 carrier.  Keyed on the
+ * spelling rather than a Type because the sig side table (the source of truth
+ * for what a monomorph/spec clone actually returns) carries only the string.
+ * Positive-list on purpose: everything not recognizably an aggregate is treated
+ * as a word, which is the historical behavior. */
+static bool cty_is_byval_agg(const char *cty) {
+    if (!cty || !*cty) return false;
+    size_t L = strlen(cty);
+    if (cty[L - 1] == '*') return false;              /* a handle, not a value */
+    return strncmp(cty, "tur_adt_", 8) == 0;
+}
+
+/* The C type of the SLOT that a delivery to `kont` lands in: the join local's
+ * declared type (KK_VAR), or -- for the one-word DK slot -- the type the
+ * crossing value is expected to have there, which is what slot_store_reap keys
+ * its Tier-C boxing on.  NULL when not knowable (treated as a word). */
+static const char *deliver_slot_cty(CE *ce, const CKont *kont) {
+    if (kont->kind == KK_VAR) return join_param_cty(ce, kont->id);
+    const Type *vty = deliver_ty(ce, kont);
+    return vty ? binder_ctype_full(ce->ctx, vty->kind, vty) : NULL;
 }
 
 /* Deliver value-string `v` to continuation `kont`.  A Tier C by-value aggregate
@@ -5513,7 +5547,33 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
-                    emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                    /* findings 28 (typed/result-basic): the callee resolved to a
+                     * MONOMORPH/spec clone that returns its ADT BY VALUE
+                     * (`tur_adt_Result__int__int`), while the IR types the call at
+                     * the ERASED int64 carrier -- so the delivery slot is a word.
+                     * Assigning the struct straight into it is "incompatible types
+                     * when assigning" (gcc) / "incompatible types in assignment to
+                     * an arithmetic type lvalue" (c2mir): a hard error on every
+                     * COMPILING engine.  Bridge concrete->carrier the way the
+                     * direct emitter does (spill, deliver the ADDRESS), heap-copied
+                     * so the pointer outlives the delivering block and
+                     * reap-registered so it is freed at the entry boundary.  The
+                     * read side needs no change: every carrier consumer of an ADT
+                     * word already derefs it (`tur_is_ok`, and the spec clone's own
+                     * `(tur_adt_Result *)(intptr_t)r` parameter cast). */
+                    const char *slot_cty = deliver_slot_cty(ce, &t->as.tailcall.kont);
+                    if (cty_is_byval_agg(drt) && !cty_is_byval_agg(slot_cty)) {
+                        Buf bx; buf_init(&bx);
+                        buf_printf(&bx,
+                            "(int64_t)__dk_reap_ptr((intptr_t)({ %s *__bx = "
+                            "(%s *)malloc(sizeof(%s)); *__bx = %s; __bx; }))",
+                            drt, drt, drt, tmp);
+                        buf_putc(&bx, '\0');
+                        emit_deliver(ce, &t->as.tailcall.kont, bx.data);
+                        buf_free(&bx);
+                    } else {
+                        emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                    }
                 }
                 free(argv_t);
                 free(tmp);
@@ -5535,6 +5595,11 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (pushed) {
                 ce->joins[ce->n_joins].id = t->as.letcont.j.id;
                 ce->joins[ce->n_joins].param = pn;
+                /* Same spelling emit_binder_decls declares the local with, so a
+                 * delivery can compare the slot's C type against the delivered
+                 * value's (the cps->direct aggregate bridge). */
+                ce->joins[ce->n_joins].cty =
+                    binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type);
                 ce->n_joins++;
             }
             emit_term(ce, t->as.letcont.body);

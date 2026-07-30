@@ -1,5 +1,11 @@
 # typed/result-basic: CPS clone assigns Result struct to int64 -- cc rejects
 
+**RESOLVED 2026-07-30.** Fixed by the cps->direct aggregate-carrier bridge in
+`src/compiler/emit_cps_ir.c` -- see
+[jit-engine-j0-findings.md](../upcoming/jit-engine-j0-findings.md) section 28.
+The fixture now compiles and passes under gcc AND MIR, and came off the
+tests/run-jit.sh denylist. The original report follows.
+
 **Severity: medium.** A latent MISCOMPILE (hard cc error) in a fixture no
 compiling harness ever ran: tests/run.sh scans only `tests/fixtures/*/`,
 so nested `typed/*` fixtures were interpreter-covered (run-turi.sh) only.

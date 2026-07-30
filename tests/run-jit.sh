@@ -112,12 +112,12 @@ trap 'rm -rf "$RESULTS_DIR"' EXIT
 
 # Known latent MISCOMPILES, discovered by this harness being the first to
 # COMPILE the nested typed/* fixtures (run.sh scans only tests/fixtures/*/;
-# these were interpreter-covered only).  Both fail identically under gcc
+# these were interpreter-covered only).  Each fails identically under gcc
 # and MIR -- the defect is in the emitted C, not an engine -- so they are
 # denylisted here with their reports rather than failing every run.  Remove
-# the entry when the report is resolved.
+# the entry when the report is resolved.  (typed/result-basic was resolved by
+# the cps->direct aggregate-carrier bridge, findings 28, and now runs.)
 JIT_KNOWN_MISCOMPILE="
-typed/result-basic
 typed-slots/cs3-nested-specialization
 "
 jit_known_miscompile() {
