@@ -114,6 +114,11 @@ static bool mkdirp(const char *path) {
 }
 
 /* ================================================================== */
+/* :tur-version is validated inline in the defpackage key loop (below) so the
+ * caret lands on the range the user wrote; defined further down beside the
+ * version-range helpers it depends on. */
+static void pkg_check_tur_version_span(const char *range, Span span);
+
 /* Form-walking helpers for defpackage parsing                         */
 /* ================================================================== */
 
@@ -633,6 +638,11 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
             out->name = form_str_dup(vf);
         } else if (strcmp(kw, "version") == 0) {
             out->version = form_str_dup(vf);
+        } else if (strcmp(kw, "tur-version") == 0) {
+            out->tur_version = form_str_dup(vf);
+            /* Checked here rather than after the loop so the caret lands on the
+             * range the user wrote. */
+            pkg_check_tur_version_span(out->tur_version, vf->span);
         } else if (strcmp(kw, "description") == 0) {
             out->description = form_str_dup(vf);
         } else if (strcmp(kw, "license") == 0) {
@@ -731,6 +741,113 @@ bool pkg_manifest_read(const char *path, PkgManifest *out) {
 }
 
 /* ================================================================== */
+/* :tur-version enforcement                                             */
+/* ================================================================== */
+
+/* The compiler's own version, injected by CMake on tur_core.  Guarded because
+ * pkg.c had no reason to know it before this check existed. */
+#ifndef TUR_VERSION
+#define TUR_VERSION "unknown"
+#endif
+
+/* Sticky record of a REJECTING :tur-version verdict, surviving diag_reset().
+ *
+ * The manifest is read once, before compilation; every compile entry point then
+ * calls diag_reset() to clear `had_error_` so a batch driver
+ * (`tur check <dir>`) does not mark later files failed because an earlier one
+ * was.  That reset is correct, and it also wiped this check's error -- so a
+ * floor violation printed an "error" and then exited 0, which is not an error
+ * at all.  (The pre-existing TUR-E0620 manifest error has the same shape.)
+ *
+ * So the verdict is recorded here and re-asserted after each diag_reset(), next
+ * to experiment_reset_warnings() which handles the same once-per-compile
+ * problem from the other direction. */
+static bool g_tv_rejected = false;
+static char g_tv_reject_brief[320];
+/* Report the verdict at most once per process: the manifest is read more than
+ * once per invocation (walk-up for build-dir, again for reader macros), and
+ * repeating the same verdict per read is pure noise. */
+static bool g_tv_reported = false;
+
+void pkg_tur_version_reassert(void) {
+    if (!g_tv_rejected) return;
+    /* Re-emitted per compile, deliberately: had_error_ must be set for THIS
+     * compile to fail, and there is no diag API to mark an error without
+     * printing.  The brief form keeps the repeat cheap to read. */
+    diag_emit(DIAG_ERROR, SPAN_UNKNOWN, "%s", g_tv_reject_brief);
+}
+
+void pkg_tur_version_reset(void) {
+    g_tv_rejected = false;
+    g_tv_reported = false;
+    g_tv_reject_brief[0] = '\0';
+}
+
+/* Check `range` (the :tur-version value) against the running compiler.  `span`
+ * is the value form's own span, so the caret lands on the range the user wrote
+ * rather than on the top of the file.
+ *
+ */
+static void pkg_check_tur_version_span(const char *range, Span span) {
+    if (!range || !*range) return;
+
+    if (!pkg_version_range_valid(range)) {
+        if (!g_tv_reported)
+            diag_emit(DIAG_ERROR, span,
+                      "TUR-E0622: :tur-version \"%s\" is not a valid version "
+                      "range.  Expected comma-separated comparators or a "
+                      "caret, e.g. \">=0.32.2\", \">=0.32.2, <0.35.0\", or "
+                      "\"^0.32\".  (`~`, `*` and `||` are not supported.)",
+                      range);
+        g_tv_reported = true;
+        g_tv_rejected = true;
+        snprintf(g_tv_reject_brief, sizeof(g_tv_reject_brief),
+                 "TUR-E0622: refusing to compile: build.tur declares "
+                 ":tur-version \"%s\", which is not a valid version range",
+                 range);
+        return;
+    }
+
+    /* A build that cannot report its own version cannot honour a range, and
+     * failing closed would break every non-release build.  Stay silent. */
+    if (strcmp(TUR_VERSION, "unknown") == 0) return;
+
+    bool below_floor = false;
+    if (pkg_version_range_match(range, TUR_VERSION, &below_floor)) return;
+
+    if (below_floor) {
+        /* The spice needs syntax / experiments / manifest keys this compiler
+         * does not have.  Stop rather than let the real failure surface later as
+         * an error about perfectly valid source -- which is the whole reason
+         * this key exists. */
+        if (!g_tv_reported)
+            diag_emit(DIAG_ERROR, span,
+                      "TUR-E0621: this spice requires tur %s, but this is tur "
+                      "%s.  Upgrade the compiler, or use a spice revision that "
+                      "supports %s.",
+                      range, TUR_VERSION, TUR_VERSION);
+        g_tv_reported = true;
+        g_tv_rejected = true;
+        snprintf(g_tv_reject_brief, sizeof(g_tv_reject_brief),
+                 "TUR-E0621: refusing to compile: build.tur requires tur %s, "
+                 "this is tur %s", range, TUR_VERSION);
+    } else {
+        /* Above a declared ceiling: the author never tested this combination,
+         * which is usually still fine.  A hard error would mean every compiler
+         * release breaks every spice until each author bumps a number, so this
+         * stays advisory. */
+        if (!g_tv_reported)
+            diag_emit(DIAG_WARNING, span,
+                      "TUR-W0623: this spice declares tur %s, but this is tur "
+                      "%s -- newer than the author tested against.  "
+                      "Continuing; if something breaks, report it upstream "
+                      "rather than assuming it is your build.",
+                      range, TUR_VERSION);
+        g_tv_reported = true;
+    }
+}
+
+/* ================================================================== */
 /* pkg_manifest_write                                                   */
 /* ================================================================== */
 
@@ -746,6 +863,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
     fprintf(f, "(defpackage %s\n", m->name ? m->name : "unnamed");
     if (m->name)        fprintf(f, "  :name        \"%s\"\n", m->name);
     if (m->version)     fprintf(f, "  :version     \"%s\"\n", m->version);
+    if (m->tur_version) fprintf(f, "  :tur-version \"%s\"\n", m->tur_version);
     if (m->description) fprintf(f, "  :description \"%s\"\n", m->description);
     if (m->license)     fprintf(f, "  :license     \"%s\"\n", m->license);
     if (m->repository)  fprintf(f, "  :repository  \"%s\"\n", m->repository);
@@ -905,6 +1023,7 @@ bool pkg_manifest_write(const char *path, const PkgManifest *m) {
 void pkg_manifest_free(PkgManifest *m) {
     free(m->name);
     free(m->version);
+    free(m->tur_version);
     free(m->description);
     free(m->license);
     free(m->repository);
@@ -1291,18 +1410,29 @@ bool pkg_semver_parse(const char *v,
                       char **pre) {
     if (!v) return false;
     if (*v == 'v') v++;
+    if (*v < '0' || *v > '9') return false;   /* strtol would accept " +1", "-3" */
     /* parse major.minor.patch */
     char *end;
     long ma = strtol(v, &end, 10);
     if (*end != '.') return false;
     v = end + 1;
+    if (*v < '0' || *v > '9') return false;
     long mi = strtol(v, &end, 10);
     if (*end != '.' && *end != '\0' && *end != '-') return false;
     v = (*end == '.') ? end + 1 : end;
     long pa = 0;
     if (*end == '.') {
+        if (*v < '0' || *v > '9') return false;
         pa = strtol(v, &end, 10);
     }
+    /* Reject trailing garbage.  "0.32.2junk" used to parse as 0.32.2, which is
+     * tolerable for a lenient sort but wrong for validating a user-authored
+     * constraint -- a typo in a `:tur-version` range must be an error, not a
+     * silently different range.  Only end-of-string or a `-<pre>` suffix is
+     * accepted; `+build` metadata is deliberately unsupported (nothing in the
+     * toolchain emits it, and accepting it would imply we compare it). */
+    if (*end != '\0' && *end != '-') return false;
+    if (*end == '-' && end[1] == '\0') return false;  /* dangling '-' */
     *major = (int)ma;
     *minor = (int)mi;
     *patch = (int)pa;
@@ -1315,6 +1445,51 @@ bool pkg_semver_parse(const char *v,
     return true;
 }
 
+/* Compare one dot-separated pre-release identifier pair, semver rules:
+ * all-numeric identifiers compare numerically, others lexically, and a numeric
+ * identifier always ranks LOWER than an alphanumeric one. */
+static int semver_pre_ident_cmp(const char *a, size_t alen,
+                                const char *b, size_t blen) {
+    bool a_num = alen > 0, b_num = blen > 0;
+    for (size_t i = 0; i < alen; i++) if (a[i] < '0' || a[i] > '9') { a_num = false; break; }
+    for (size_t i = 0; i < blen; i++) if (b[i] < '0' || b[i] > '9') { b_num = false; break; }
+    if (a_num && b_num) {
+        /* Length-then-lexical rather than strtol: no overflow on a long
+         * identifier, and valid semver has no leading zeros anyway. */
+        while (alen > 1 && *a == '0') { a++; alen--; }
+        while (blen > 1 && *b == '0') { b++; blen--; }
+        if (alen != blen) return alen < blen ? -1 : 1;
+        int d = memcmp(a, b, alen);
+        return d < 0 ? -1 : (d > 0 ? 1 : 0);
+    }
+    if (a_num != b_num) return a_num ? -1 : 1;   /* numeric < alphanumeric */
+    size_t n = alen < blen ? alen : blen;
+    int d = memcmp(a, b, n);
+    if (d != 0) return d < 0 ? -1 : 1;
+    if (alen != blen) return alen < blen ? -1 : 1;
+    return 0;
+}
+
+/* Compare two pre-release strings ("rc1", "alpha.2").  NULL means "no
+ * pre-release", which ranks HIGHER than any pre-release: 1.0.0 > 1.0.0-rc1. */
+static int semver_pre_cmp(const char *a, const char *b) {
+    if (!a && !b) return 0;
+    if (!a) return  1;    /* release beats pre-release */
+    if (!b) return -1;
+    for (;;) {
+        if (!*a && !*b) return 0;
+        /* A shorter identifier list is lower when all preceding fields match. */
+        if (!*a) return -1;
+        if (!*b) return  1;
+        const char *ae = strchr(a, '.'); size_t alen = ae ? (size_t)(ae - a) : strlen(a);
+        const char *be = strchr(b, '.'); size_t blen = be ? (size_t)(be - b) : strlen(b);
+        int d = semver_pre_ident_cmp(a, alen, b, blen);
+        if (d != 0) return d;
+        a = ae ? ae + 1 : a + alen;
+        b = be ? be + 1 : b + blen;
+    }
+}
+
 int pkg_semver_compare(const char *a, const char *b) {
     int ma, mi, pa, mb, mib, pb;
     char *prea = NULL, *preb = NULL;
@@ -1324,9 +1499,149 @@ int pkg_semver_compare(const char *a, const char *b) {
     if (!oka) { free(prea); free(preb); return -1; }
     if (!okb) { free(prea); free(preb); return  1; }
     int d = (ma != mb) ? ma - mb : (mi != mib) ? mi - mib : pa - pb;
+    /* Pre-release is a TIE-BREAKER, not ignored.  It used to be parsed and then
+     * freed unread, so 0.33.0-rc1 and 0.33.0 compared EQUAL -- exactly the case
+     * a version floor has to get right during a release cycle. */
+    if (d == 0) d = semver_pre_cmp(prea, preb);
     free(prea);
     free(preb);
     return d;
+}
+
+/* ------------------------------------------------------------------ */
+/* Version ranges (`:tur-version`)                                     */
+/*                                                                     */
+/* Grammar, Cargo-flavoured -- comma-separated conjuncts, each either a */
+/* comparator or a caret:                                              */
+/*                                                                     */
+/*   range    := conjunct ("," conjunct)*                              */
+/*   conjunct := (">=" | "<=" | ">" | "<" | "=")? version              */
+/*             | "^" version                                           */
+/*                                                                     */
+/* A bare version means "=".  `^X.Y.Z` is the compatible-update range:  */
+/* >=X.Y.Z and < the next version that could break it -- which for a   */
+/* 0.x version is the next MINOR (0.32.2 -> <0.33.0), because pre-1.0  */
+/* minors are breaking by convention.  That 0.x rule is the one people  */
+/* get wrong, so it is spelled out in the guide.                        */
+/*                                                                     */
+/* Deliberately NOT supported: `~`, `*`, `||` disjunction, wildcards.   */
+/* Each is easy to add later and none is needed to express a floor, a   */
+/* ceiling, or a compatible range -- which is all this key is for.      */
+/* ------------------------------------------------------------------ */
+
+typedef enum { RG_GE, RG_GT, RG_LE, RG_LT, RG_EQ } RangeOp;
+
+/* Skip ASCII spaces/tabs. */
+static const char *rg_skip_ws(const char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    return s;
+}
+
+/* Parse one conjunct at *pp, advancing it past the conjunct.  On success writes
+ * through `op` and `ver` (the latter a malloc'd version string the caller
+ * frees) and returns true.  `is_caret` reports a `^` conjunct, which expands to
+ * TWO bounds rather than one. */
+static bool rg_parse_conjunct(const char **pp, RangeOp *op, char **ver,
+                              bool *is_caret) {
+    const char *s = rg_skip_ws(*pp);
+    *is_caret = false;
+    *op = RG_EQ;
+    if (s[0] == '^')                       { *is_caret = true; s += 1; }
+    else if (s[0] == '>' && s[1] == '=')   { *op = RG_GE; s += 2; }
+    else if (s[0] == '<' && s[1] == '=')   { *op = RG_LE; s += 2; }
+    else if (s[0] == '>')                  { *op = RG_GT; s += 1; }
+    else if (s[0] == '<')                  { *op = RG_LT; s += 1; }
+    else if (s[0] == '=')                  { *op = RG_EQ; s += 1; }
+    s = rg_skip_ws(s);
+    const char *start = s;
+    while (*s && *s != ',' && *s != ' ' && *s != '\t') s++;
+    if (s == start) return false;
+    size_t n = (size_t)(s - start);
+    char *v = (char *)malloc(n + 1);
+    if (!v) return false;
+    memcpy(v, start, n);
+    v[n] = '\0';
+    /* Validate eagerly: a malformed conjunct must be an error rather than a
+     * silently different constraint. */
+    int ma, mi, pa; char *pre = NULL;
+    if (!pkg_semver_parse(v, &ma, &mi, &pa, &pre)) { free(pre); free(v); return false; }
+    free(pre);
+    *ver = v;
+    *pp = rg_skip_ws(s);
+    return true;
+}
+
+bool pkg_version_range_valid(const char *range) {
+    if (!range || !*range) return false;
+    const char *p = range;
+    int n_conjuncts = 0;
+    for (;;) {
+        RangeOp op; char *ver = NULL; bool caret = false;
+        if (!rg_parse_conjunct(&p, &op, &ver, &caret)) return false;
+        free(ver);
+        n_conjuncts++;
+        p = rg_skip_ws(p);
+        if (*p == ',') { p++; continue; }
+        if (*p == '\0') break;
+        return false;                       /* junk between conjuncts */
+    }
+    return n_conjuncts > 0;
+}
+
+/* Upper bound implied by `^v`: next minor for 0.x, next major otherwise. */
+static void rg_caret_bound(const char *v, int *maj, int *min) {
+    int ma = 0, mi = 0, pa = 0; char *pre = NULL;
+    pkg_semver_parse(v, &ma, &mi, &pa, &pre);
+    free(pre);
+    if (ma == 0) { *maj = 0;      *min = mi + 1; }
+    else         { *maj = ma + 1; *min = 0; }
+}
+
+bool pkg_version_range_match(const char *range, const char *version,
+                             bool *out_below_floor) {
+    if (out_below_floor) *out_below_floor = false;
+    if (!range || !version) return true;
+    const char *p = range;
+    bool ok = true;
+    for (;;) {
+        RangeOp op; char *ver = NULL; bool caret = false;
+        if (!rg_parse_conjunct(&p, &op, &ver, &caret)) return true;  /* invalid: caller validates */
+        if (caret) {
+            /* >= ver */
+            if (pkg_semver_compare(version, ver) < 0) {
+                ok = false;
+                if (out_below_floor) *out_below_floor = true;
+            } else {
+                int bmaj, bmin;
+                rg_caret_bound(ver, &bmaj, &bmin);
+                char bound[64];
+                snprintf(bound, sizeof(bound), "%d.%d.0", bmaj, bmin);
+                if (pkg_semver_compare(version, bound) >= 0) ok = false;
+            }
+        } else {
+            int c = pkg_semver_compare(version, ver);
+            bool pass = (op == RG_GE) ? (c >= 0)
+                      : (op == RG_GT) ? (c >  0)
+                      : (op == RG_LE) ? (c <= 0)
+                      : (op == RG_LT) ? (c <  0)
+                      :                 (c == 0);
+            if (!pass) {
+                ok = false;
+                /* A lower-bound conjunct the version fails is a FLOOR miss --
+                 * the code genuinely predates what the spice needs.  Failing an
+                 * upper bound only means untested-against, which the caller
+                 * downgrades to a warning. */
+                if ((op == RG_GE || op == RG_GT || op == RG_EQ) && c < 0 &&
+                    out_below_floor)
+                    *out_below_floor = true;
+            }
+        }
+        free(ver);
+        p = rg_skip_ws(p);
+        if (*p == ',') { p++; continue; }
+        break;
+    }
+    return ok;
 }
 
 /* ================================================================== */

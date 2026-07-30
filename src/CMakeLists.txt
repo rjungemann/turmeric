@@ -931,6 +931,32 @@ set_target_properties(tur_codegen_carrier_bridge PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# Semver + :tur-version range unit test (pkg_semver_* were dead code carrying
+# two bugs; :tur-version is the first caller).
+# ---------------------------------------------------------------------------
+add_executable(tur_semver_range_unit
+    ${CMAKE_SOURCE_DIR}/tests/compiler/test_semver_range.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_semver_range_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_semver_range_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_semver_range_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_semver_range_unit PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_semver_range_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_semver_range_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_semver_range_unit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # Theme E (TP3): arbitrary-arity Kind helper unit test
 # ---------------------------------------------------------------------------
 add_executable(tur_kind_arity_unit

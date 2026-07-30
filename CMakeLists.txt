@@ -145,6 +145,14 @@ add_test(
   COMMAND bash tests/run-tur-new.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `:tur-version` in build.tur (no-compiler-version-constraint-in-manifest):
+# a satisfied range is silent, a missed floor is a hard error AND a non-zero
+# exit, an exceeded ceiling only warns, and a malformed range is an error.
+add_test(
+  NAME tur_version_range
+  COMMAND bash tests/run-tur-version.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Regression for tur-run-alias-breaks-snapshot-ci-guard: `alias NAME :=
 # TARGET` lines used to abort the whole Justfile parse, making recipes
 # after them unreachable.
@@ -778,6 +786,14 @@ set_tests_properties(tur_env_longlived PROPERTIES
 add_test(
   NAME tur_codegen_reinterpret
   COMMAND "${CMAKE_BINARY_DIR}/tur_codegen_reinterpret"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Semver + :tur-version range unit test: pins the two bugs pkg_semver_* carried
+# while dead (pre-release ignored, trailing garbage accepted) plus the range
+# grammar, including the 0.x caret rule.
+add_test(
+  NAME tur_semver_range_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_semver_range_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Theme E (TP3): arbitrary-arity Kind helper round-trip unit test

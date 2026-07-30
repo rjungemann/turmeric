@@ -282,6 +282,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
+        case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
+        case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
+        case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         default:                          return "";
     }
 }
@@ -433,6 +436,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
+    if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
+    if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
+    if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     return DIAG_CODE_NONE;
 }
 

@@ -90,6 +90,11 @@ typedef struct PkgSpice {
 typedef struct PkgManifest {
     char        *name;
     char        *version;
+    /* `:tur-version "<range>"` -- which COMPILER versions this spice is valid
+     * under, as opposed to `version` above, which is the spice's own version.
+     * NULL when unconstrained (the overwhelming majority today).  See
+     * docs/reported/no-compiler-version-constraint-in-manifest.md. */
+    char        *tur_version;
     char        *description;
     char        *license;
     char       **authors;
@@ -237,8 +242,40 @@ bool pkg_semver_parse(const char *v,
                       int *major, int *minor, int *patch,
                       char **pre);
 
-/* Compare two semver strings.  Returns <0, 0, or >0 like strcmp. */
+/* Compare two semver strings.  Returns <0, 0, or >0 like strcmp.  A
+ * pre-release ranks BELOW the same version without one (1.0.0-rc1 < 1.0.0). */
 int pkg_semver_compare(const char *a, const char *b);
+
+/* Version ranges, for `:tur-version` (see the grammar comment in pkg.c).
+ *
+ *   pkg_version_range_valid  -- is `range` syntactically a range at all?
+ *                               Call this before match(); match() treats an
+ *                               unparseable range as vacuously satisfied so a
+ *                               malformed constraint cannot silently reject.
+ *   pkg_version_range_match  -- does `version` satisfy every conjunct?
+ *                               `out_below_floor` (optional) reports that the
+ *                               failure was a LOWER bound, which callers treat
+ *                               as a hard error; an upper-bound-only failure
+ *                               means "untested against", i.e. a warning. */
+bool pkg_version_range_valid(const char *range);
+bool pkg_version_range_match(const char *range, const char *version,
+                             bool *out_below_floor);
+
+/* `:tur-version` is diagnosed inside pkg_manifest_read (TUR-E0622 malformed
+ * range, TUR-E0621 below floor -- hard error, TUR-W0623 above ceiling --
+ * warning), so every manifest-discovering entry point gets the check for free.
+ * Reported at most once per process; silent when the manifest declares no range
+ * or the build cannot report its own version.
+ *
+ * A rejecting verdict must survive diag_reset(), which every
+ * compile entry point calls to keep batch drivers from poisoning later files.
+ * Without this the floor error printed and then exited 0 -- an "error" that did
+ * not fail.  Call reassert() right after diag_reset() (beside
+ * experiment_reset_warnings()); it re-emits a brief form so THIS compile fails,
+ * and is a no-op when the manifest declared no range or the range was met.
+ * reset() clears the sticky state for in-process drivers that switch projects. */
+void pkg_tur_version_reassert(void);
+void pkg_tur_version_reset(void);
 
 /* ------------------------------------------------------------------ */
 /* Git / fetch operations                                              */

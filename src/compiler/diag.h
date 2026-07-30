@@ -259,6 +259,18 @@ typedef enum DiagCode {
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */
     TUR_E0620_EXPORTS_FX_ROW,
+    /* `:tur-version` in build.tur (no-compiler-version-constraint-in-manifest):
+     * E0621 -- the running compiler is BELOW the declared floor, so the spice's
+     *          source genuinely will not work.  Hard error.
+     * E0622 -- the range itself is malformed; a typo must not silently become a
+     *          different constraint.  Hard error.
+     * W0623 -- the running compiler is ABOVE the declared ceiling.  Only means
+     *          "never tested against this compiler", which is usually fine, so
+     *          it warns: a hard ceiling would make every release break every
+     *          spice until each author bumped a number. */
+    TUR_E0621_TUR_VERSION_BELOW_FLOOR,
+    TUR_E0622_TUR_VERSION_MALFORMED,
+    TUR_W0623_TUR_VERSION_ABOVE_CEILING,
 } DiagCode;
 
 typedef enum DiagLevel {
