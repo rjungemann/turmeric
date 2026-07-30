@@ -102,6 +102,52 @@ sides must land together):
   blocks -- stage 1 must reconcile them or the shim will miss shapes the
   checker admits.
 
+## Stage 1 -- LANDED 2026-07-30, with a NARROWED claim
+
+Shipped: a nominal thin fn-typed parameter with a **concrete, effect-free**
+signature is fat-normalized -- the shared decision is
+`fn_param_type_is_fat_normalized` (`types.c`), consulted by BOTH the elab
+call-site shim (`elab_call.c`, the generalized `^fat` auto-shim gate) and
+the emit invoke dispatch (`emit_expr.c` ER2, scoped to `is_param`).  The
+measurements, in meta-plan per-step form:
+
+| tree | `run.sh` | behavioral |
+| --- | --- | --- |
+| baseline (stage 0) | 2437 / 0 | -- |
+| Step A alone (emit flip, broad claim) | 2275 / 162 | 24 stdout |
+| A+B (broad claim) | 2265 / 172 | 28 stdout |
+| A+B (narrowed) + forwarding guard | **2437 / 0** | 0 |
+
+The two narrowings, each measured (the CPS-graduation rule -- narrow the
+claim, do not patch the misses):
+
+- **effect rows stay thin**: 17 effect/cps fixtures regress behaviorally
+  under normalization -- a colored (CPS-lowered) callback's thin convention
+  is LOAD-BEARING (twin/trampoline dispatch).  Normalizing effectful fn
+  params needs CPS-aware treatment; deferred.
+- **tyvar signatures stay thin**: 10 hkt-cata / van-laarhoven fixtures
+  regress -- a tyvar-sig param's arguments arrive through the
+  generic/carrier machinery as thin pointers the call-site shim cannot
+  see.  Deferred to the carrier-side increments (meta-plan 2+).
+
+One post-flip defect found and fixed by the s1c probe: a normalized param
+FORWARDED as an argument into another normalized slot was double-shimmed
+(the fat handle re-boxed, then invoked as code).  The existing `is_fat`
+double-shim guard now also covers normalized params.  Zero snapshot churn:
+no fixture exercised the normalized set -- which is exactly why its crash
+rows survived so long.
+
+What this closes (pinned in `tests/fixtures/fn-value-fat-normalized-params/`):
+the poly-result crash table's by-value struct ARG and RESULT rows, heap
+container results, and the forwarding hop -- each with capturing closures.
+The `^linear`/`^borrow` substructural rows are verified fixed as well
+(probed with capturing closures, correct output): substructural params are
+not `plain` so they were nominal, and their concrete signatures fall inside
+the narrowed claim.  Still open from that table: the tyvar rows and the
+effect-row row, both now explicitly out of the narrowed claim.  The
+`--known-probes` by-value probe prints FIXED; the tyvar probe still fires,
+as narrowed.
+
 ## Stages
 
 1. **Param normalization.** Non-carrier fn-typed parameters take the fat

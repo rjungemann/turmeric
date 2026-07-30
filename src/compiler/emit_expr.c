@@ -4346,8 +4346,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * must dispatch through slot 0 with the box as the env argument
                  * -- the same fat-call protocol as the TY_PTR_VOID path above.
                  * Emitting a thin ((R (*)(A...))g)(args) call here would treat the
-                 * fat box's address as code and jump to garbage. */
-                if (fn_binding->is_fat || fn_binding->type.as.fn.boxed) {
+                 * fat box's address as code and jump to garbage.
+                 *
+                 * fn-value-fat-normalization stage 1: a NOMINAL thin TY_FN
+                 * parameter joins the fat protocol -- every value flowing into
+                 * one is a fat handle (the elab call-site shim guarantees it,
+                 * keyed on the SAME fn_param_type_is_fat_normalized predicate),
+                 * so the invoke dispatches fat uniformly.  This is what turns
+                 * "capturing closure into a non-carrier fn param" from a SIGSEGV
+                 * (poly-result-hof-capturing-closure-sigbus) into a working
+                 * call.  Scoped to parameters; let-bound TY_FN locals keep
+                 * their existing paths. */
+                if (fn_binding->is_fat || fn_binding->type.as.fn.boxed ||
+                    (fn_binding->is_param &&
+                     fn_param_type_is_fat_normalized(&fn_binding->type))) {
                     char *raw_ptr = name_for_binding(ctx, fn_binding);
                     /* A TY_FN parameter is stored as int64_t in C; the fat-call
                      * protocol wants the box as a void *, so coerce once. */

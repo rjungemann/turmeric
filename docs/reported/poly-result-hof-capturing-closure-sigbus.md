@@ -3,7 +3,19 @@
 **Severity:** medium (miscompile: clean compile, crashes at run time; a
 carrier-eligible-signature workaround exists).
 
-**Status:** open. Root cause identified and mechanism confirmed (2026-07-29);
+**Status:** PARTIALLY RESOLVED 2026-07-30 -- fn-value-fat-normalization
+stage 1 landed with a narrowed claim
+([docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md)).
+Of the crash table below: the by-value struct arg/result rows, heap-result
+shapes, and the `^linear`/`^borrow` rows are FIXED (concrete effect-free
+signatures are fat-normalized; pinned by
+`tests/fixtures/fn-value-fat-normalized-params/`).  Still crashing, and
+now explicitly out of the narrowed claim: the tyvar arg/result rows
+(arguments arrive thin through the generic/carrier machinery) and the
+effect-row row (the thin convention is load-bearing for the CPS backend).
+The report stays open for those rows.
+
+Root cause identified and mechanism confirmed (2026-07-29);
 the fix is a calling-convention change, not a patch -- see
 [Investigation](#investigation-2026-07-29). The original title said
 "polymorphic-result HOF"; the trigger is materially wider than that, so the

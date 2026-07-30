@@ -1807,6 +1807,10 @@ const char  *type_struct_value_c_name(Type t);
  * a transparent newtype over int64 -- one C representation everywhere, so HKT
  * dispatch can chain it (.fmap (.fmap s g) h) without rep-mixing. */
 bool         type_is_transparent_int_newtype(Type t);
+/* fn-value-fat-normalization stage 1: the shared param-normalization decision
+ * (see types.c). Consulted by BOTH the elab call-site shim and the emit
+ * invoke dispatch -- do not fork this logic. */
+bool         fn_param_type_is_fat_normalized(const Type *t);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 

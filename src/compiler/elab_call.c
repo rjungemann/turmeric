@@ -5432,8 +5432,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * same arg-emission casts that already feed closures to :fn/:int/:ptr. */
         if (!is_rank2_param && fn_type.kind == TY_FN) {
             uint32_t fn_arg_idx_fat = fn_binding->closure_fn_binding ? i + 1 : i;
-            if (fn_arg_idx_fat < fn_type.as.fn.arity &&
-                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fat, FA_FAT)) {
+            bool slot_fat_decl = fn_arg_idx_fat < fn_type.as.fn.arity &&
+                FN_ARG_FLAG(fn_type.as.fn, fn_arg_idx_fat, FA_FAT);
+            /* fn-value-fat-normalization stage 1: a NOMINAL thin TY_FN param
+             * slot gets the same treatment as a ^fat one -- every fn value
+             * flowing in is normalized to a fat handle, because the callee's
+             * invoke now dispatches fat (emit_expr.c ER2, keyed on the SAME
+             * fn_param_type_is_fat_normalized predicate).  Carrier-eligible
+             * params never appear here (their arg_kind is TY_PTR_VOID by
+             * elab-defn time); cfnptr/variadic/arity>5 stay thin by the
+             * predicate.  The diagnostic else-branch below stays ^fat-only:
+             * shapes the checker already accepts at a nominal param must not
+             * become new errors. */
+            bool slot_nominal = false;
+            if (!slot_fat_decl && fn_arg_idx_fat < fn_type.as.fn.arity &&
+                fn_type.as.fn.arg_kinds[fn_arg_idx_fat] == TY_FN &&
+                fn_type.as.fn.arg_full_types) {
+                const Type *aft_nom = fn_type.as.fn.arg_full_types[fn_arg_idx_fat];
+                slot_nominal = aft_nom && fn_param_type_is_fat_normalized(aft_nom);
+            }
+            if (slot_fat_decl || slot_nominal) {
                 /* fat-closure-ascription: an *already-fat* closure value that is
                  * carried as a one-word :int/:ptr<void> (e.g. a list-head result,
                  * or a handler threaded around as :int) and ascribed to a (fn ...)
@@ -5484,7 +5502,14 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * pass-through branch -- identical to a bare `^fat` parameter
                  * (which carries TY_PTR_VOID and works). */
                 if (args[i]->kind == EX_VAR && args[i]->as.var.binding &&
-                    args[i]->as.var.binding->is_fat &&
+                    (args[i]->as.var.binding->is_fat ||
+                     /* fn-value-fat-normalization stage 1: a NORMALIZED nominal
+                      * param already holds a fat handle -- forwarding it into
+                      * another fat/normalized slot must pass through, not
+                      * re-shim (the double-box reads the handle as code and
+                      * SEGVs -- the s1c forwarding probe). */
+                     (args[i]->as.var.binding->is_param &&
+                      fn_param_type_is_fat_normalized(&args[i]->as.var.binding->type))) &&
                     args[i]->type.kind == TY_FN &&
                     !args[i]->type.as.fn.boxed) {
                     args[i]->type = TYPE_PTR_VOID;
@@ -5552,7 +5577,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * same plumbing that threads composed handlers as :int without
                      * re-boxing them; a bare non-capturing fn still arrives as
                      * TY_FN at its first boundary and is shimmed above. */
-                } else {
+                } else if (slot_fat_decl) {
                     Buf gb; buf_init(&gb);
                     type_print(&gb, args[i]->type);
                     buf_putc(&gb, '\0');
@@ -5563,6 +5588,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     buf_free(&gb);
                     return NULL;
                 }
+                /* slot_nominal with an unrecognized arg kind: leave the
+                 * argument untouched -- the checker already accepted this
+                 * shape under the thin convention, and stage 1 must not turn
+                 * accepted programs into errors.  (If such a value is invoked
+                 * fat it was already broken; the fuzzer's known probes track
+                 * those shapes.) */
             }
         }
 

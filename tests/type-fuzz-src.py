@@ -139,12 +139,11 @@ def known_bug_slug(tags):
     # HOF -- miscompiles; only direct consume/invoke works.
     if "thunk" in tags and tags & CROSSING_TAGS:
         return "fn-typed-value-return-ascribe-miscompiles"
-    # Thin (non-^fat) fn-typed param + capturing closure crashes whenever the
-    # fn signature is not carrier-safe; by-value results are one such shape,
-    # heap containers (Vec) another.
-    if "thin_hof" in tags and tags & (BYVALUE_WRAPPERS
-                                      | {"vec", "vec_heap_struct"}):
-        return "poly-result-hof-capturing-closure-sigbus"
+    # (Retired 2026-07-30 by fn-value-fat-normalization stage 1: thin fn
+    # params with CONCRETE non-carrier-safe signatures -- by-value and heap
+    # results/args -- are fat-normalized now, so those thin_hof shapes are
+    # back in the default pool.  The tyvar-result rule below remains: tyvar
+    # signatures are excluded from the narrowed stage-1 claim.)
     # A capturing closure through a tyvar-result HOF ((fn [] R) : R) crashes
     # for every wrapper -- same report, widest trigger.
     if "tyvar_run" in tags:
@@ -548,11 +547,10 @@ class Gen:
             return [self.x_through, self.x_let, self.x_ascribe,
                     self.x_fat_hof]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-              self.x_fat_hof]
-        # Thin HOF is carrier-safe for true scalars only; by-value wrappers
-        # and heap containers there are the known sigbus shape.
-        if tn in ("int", "float", "bool", "cstr") or self.emit_known:
-            xs.append(self.x_thin_hof)
+              self.x_fat_hof, self.x_thin_hof]
+        # Thin HOF over every wrapper: scalars ride the poly carrier;
+        # concrete by-value/heap signatures are fat-normalized as of
+        # fn-value-fat-normalization stage 1 (2026-07-30).
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)

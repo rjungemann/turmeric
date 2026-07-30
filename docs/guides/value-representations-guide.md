@@ -65,8 +65,14 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 3. **`:ptr<void>`-fat sink** -- carries an `is_fat` flag disambiguating
    thin-vs-fat dispatch at the invoke (`src/compiler/emit_expr.c` ~4246).
 4. **Nominal bare `TY_FN` pointer** -- a thin code pointer with nowhere to
-   put an environment. Passing a capturing closure into one is the crash in
-   `poly-result-hof-capturing-closure-sigbus`.
+   put an environment. Since 2026-07-30 (fat-normalization stage 1) a
+   nominal param with a CONCRETE, EFFECT-FREE signature is fat-normalized
+   -- the thin form survives only for effect-row'd signatures (load-bearing
+   for the CPS backend's twin/trampoline convention), tyvar signatures
+   (arguments arrive thin through the carrier machinery), cfnptr, variadic,
+   and arity>5. Passing a capturing closure into one of THOSE is still the
+   crash in `poly-result-hof-capturing-closure-sigbus`; the shared decision
+   is `fn_param_type_is_fat_normalized` (`src/compiler/types.c`).
 5. **Struct-field-fat** -- `defstruct` fn-typed fields, normalized to the fat
    representation uniformly after the same bug was fixed there
    (`tests/fixtures/capturing-closure-struct-field/`).
@@ -99,7 +105,7 @@ report is one missing cell:
 | method result (carrier) -> typed `(Result A B)` defn boundary | `result-monad-bind-typed-boundary-miscompiles` |
 | method result (carrier) -> generic call argument | `class-method-result-into-generic-invalid-c` |
 | by-value struct -> Vec element slot | `vec-byvalue-struct-element-invalid-c` |
-| capturing closure -> nominal thin `TY_FN` param | `poly-result-hof-capturing-closure-sigbus` |
+| capturing closure -> nominal thin `TY_FN` param, tyvar-sig or effectful (concrete effect-free sigs FIXED 2026-07-30, fat-normalized) | `poly-result-hof-capturing-closure-sigbus` |
 | closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | `fn-typed-value-return-ascribe-miscompiles` |
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
 | fn value read out of a container element, then called (parametric ADT payload; the Vec variant fixed 2026-07-30) | `fn-payload-in-container-undeclared-temp` |

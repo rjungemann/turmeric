@@ -589,6 +589,68 @@ bool type_is_transparent_int_newtype(Type t) {
     return false;
 }
 
+/* fn-value-fat-normalization stage 1: true when a DECLARED nominal fn-typed
+ * parameter type is normalized onto the fat {thunk, env} protocol -- every
+ * value flowing into such a parameter is a fat handle (bare fns shimmed via
+ * EX_FN_TO_FAT at the call site) and every invoke of it dispatches through
+ * slot 0.  This is THE shared decision: the elaborator's call-site shim
+ * (elab_call.c) and the emitter's invoke dispatch (emit_expr.c ER2) both
+ * consult it, so the two sides cannot disagree.  Deliberately excluded:
+ *   - cfnptr    -- a raw C function pointer must stay thin (extern-c ABI);
+ *   - variadic  -- no shim family;
+ *   - arity > 5 -- outside the __tur_fatshim0..5 family (mirrors the ^fat
+ *                  auto-shim bound; such params keep today's thin protocol).
+ * Carrier-eligible params never reach this predicate: elab_fns retypes them
+ * to TY_PTR_VOID (is_poly_fn) before any caller asks.  ^fat params are fat
+ * by their own flag; this predicate makes the NOMINAL remainder match them.
+ *
+ * Stage-1 measurement narrowed the claim (the CPS-graduation rule: when the
+ * flip disagrees with the estimate, narrow the new path's claim rather than
+ * patch the misses).  Two further exclusions, both measured 2026-07-30:
+ *   - effect rows -- an effectful callback's thin convention is LOAD-BEARING
+ *     for the CPS backend (17 effect/cps fixtures regress behaviorally when
+ *     normalized: colored fn values have their own twin/trampoline calling
+ *     convention this predicate must not override);
+ *   - named tyvars anywhere in the signature -- a tyvar-sig param's
+ *     arguments arrive through the generic/carrier machinery as thin
+ *     pointers the call-site shim cannot see (10 hkt-cata / van-laarhoven
+ *     fixtures regress).  Normalizing those needs the carrier-side work
+ *     (meta-plan increments 2+), not a param-side rule.
+ * What remains normalized -- CONCRETE, EFFECT-FREE, non-carrier-safe
+ * signatures (by-value aggregate args/results, heap-container results) --
+ * is exactly the poly-result crash table's by-value rows. */
+static bool fn_sig_type_has_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return fn_sig_type_has_tyvar(t->as.app.fn) ||
+               fn_sig_type_has_tyvar(t->as.app.arg);
+    if (t->kind == TY_FN) {
+        if (fn_sig_type_has_tyvar(t->as.fn.result_full_type)) return true;
+        if (t->as.fn.arg_full_types)
+            for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                if (fn_sig_type_has_tyvar(t->as.fn.arg_full_types[i]))
+                    return true;
+    }
+    return false;
+}
+
+bool fn_param_type_is_fat_normalized(const Type *t) {
+    if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
+          !t->as.fn.is_variadic && t->as.fn.arity <= 5))
+        return false;
+    if (t->as.fn.effect_row) return false;
+    if (t->as.fn.result_kind == TY_TYVAR) return false;
+    if (fn_sig_type_has_tyvar(t->as.fn.result_full_type)) return false;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+        if (t->as.fn.arg_kinds[i] == TY_TYVAR) return false;
+        if (t->as.fn.arg_full_types &&
+            fn_sig_type_has_tyvar(t->as.fn.arg_full_types[i]))
+            return false;
+    }
+    return true;
+}
+
 /* Append `name` folded to a valid C-identifier component: any non-[A-Za-z0-9_]
  * byte becomes '_'.  Mirrors mangle_field_name (emit_core.c) and
  * adt_byval_c_name so a monomorph name built here agrees, byte for byte, with
