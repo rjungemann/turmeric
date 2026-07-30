@@ -100,48 +100,61 @@ A `Backtrack` computation is a **thunk that yields a cons-list of result
 thunks**: forcing the outer thunk runs the search one level, and each element
 is itself a suspended result.
 
+`defalias` names both halves of that shape, so the signatures below read as the
+monad rather than as its representation:
+
 ```turmeric
+;; Backtrack -- a suspended search: forcing it yields a cons-list of results
+(defalias Backtrack (fn [] int))
+;; Goal -- a step: one result in, a list of results out
+(defalias Goal (fn [int] int))
+
 ;; mzero -- the empty computation (no results)
-(defn mzero [] : (fn [] int)
+(defn mzero [] : Backtrack
   (fn [] (tnil)))
 
 ;; mplus -- choice: all of fs's results, then all of gs's
-(defn mplus [^fat fs : (fn [] int) ^fat gs : (fn [] int)] : (fn [] int)
+(defn mplus [^fat fs : Backtrack ^fat gs : Backtrack] : Backtrack
   (fn [] (list-concat (fs) (gs))))
 
 ;; pure -- a computation with exactly one result
-(defn pure [x : int] : (fn [] int)
+(defn pure [x : int] : Backtrack
   (fn [] (cons x (tnil))))
 
 ;; flat-map over an int-carried cons list; f returns a list per element
-(defn list-flat-map [xs : int ^fat f : (fn [int] int)] : int
+(defn list-flat-map [xs : int ^fat f : Goal] : int
   (if (tnil? xs)
     (tnil)
     (list-concat (f (list-head xs))
                  (list-flat-map (list-tail xs) f))))
 
 ;; bind -- sequence: run xs, then f on each result, concatenating
-(defn bind [^fat xs : (fn [] int) ^fat f : (fn [int] int)] : (fn [] int)
+(defn bind [^fat xs : Backtrack ^fat f : Goal] : Backtrack
   (fn [] (list-flat-map (xs) f)))
 ```
 
 ```sweet-exp
+;; Backtrack -- a suspended search: forcing it yields a cons-list of results
+defalias Backtrack (fn [] int)
+;; Goal -- a step: one result in, a list of results out
+defalias Goal (fn [int] int)
+
 ;; mzero -- the empty computation (no results)
-defn mzero [] : (fn [] int)
+defn mzero [] : Backtrack
   fn [] tnil()
 
 ;; mplus -- choice: all of fs's results, then all of gs's
-defn mplus [^fat fs : (fn [] int) ^fat gs : (fn [] int)] : (fn [] int)
+defn mplus [^fat fs : Backtrack ^fat gs : Backtrack] : Backtrack
   fn []
     list-concat(fs() gs())
 
 ;; pure -- a computation with exactly one result
-defn pure [x : int] : (fn [] int)
+defn pure [x : int] : Backtrack
   fn []
     cons(x tnil())
 
 ;; flat-map over an int-carried cons list; f returns a list per element
-defn list-flat-map [xs : int ^fat f : (fn [int] int)] : int
+defn list-flat-map [xs : int ^fat f : Goal] : int
   if tnil?(xs)
     tnil()
     list-concat
@@ -149,10 +162,16 @@ defn list-flat-map [xs : int ^fat f : (fn [int] int)] : int
       list-flat-map(list-tail(xs) f)
 
 ;; bind -- sequence: run xs, then f on each result, concatenating
-defn bind [^fat xs : (fn [] int) ^fat f : (fn [int] int)] : (fn [] int)
+defn bind [^fat xs : Backtrack ^fat f : Goal] : Backtrack
   fn []
     list-flat-map(xs() f)
 ```
+
+`defalias` is *transparent*: `Backtrack` and `(fn [] int)` are the same type at
+every use site, so `(fs)` applies exactly as it would without the alias. That
+is why `deftype` is the wrong tool here -- it binds a recursive `TY_REC`, which
+is a distinct nominal type and makes `(fs)` fail with `'fs' is not a function
+or continuation`.
 
 Driving it -- `mplus` offers both branches, `bind` maps over every result:
 
@@ -174,13 +193,8 @@ Driving it -- `mplus` offers both branches, `bind` maps over every result:
 ;; => 20
 ```
 
-> **Two constraints shape the code above, both of them current-compiler facts.**
+> **One constraint shapes the code above, a current-compiler fact.**
 >
-> - **No composite type alias.** The natural `(deftype Backtrack [a] ...)` binds
->   a `TY_REC`, not an alias, so *applying* a `Backtrack` value fails with
->   `'fs' is not a function or continuation`. The signatures below therefore
->   spell the underlying `(fn [] int)` directly. See
->   [docs/reported/composite-type-alias-gap.md](../reported/composite-type-alias-gap.md).
 > - **Cons cells are int-carried**, so the element thunks ride as `int` handles
 >   and the closures are `^fat`. A parametric version over `(Cons A)` is blocked
 >   by two separate defects -- a generic closure return type erases its type

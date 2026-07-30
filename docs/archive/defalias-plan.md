@@ -56,6 +56,12 @@ defalias Sample :int
 Future phases can extend `defalias` to non-primitive targets once the
 need arises; Phase TA1 is strictly limited to the signal spice use case.
 
+> **Superseded for the first column.** Phase TA2 (2026-07-30) extended
+> `defalias` to ADTs, structs, type applications, function types and
+> refinements — see [Phase TA2](#phase-ta2--composite-targets-2026-07-30)
+> at the end of this document. Alias *type parameters* remain
+> unsupported.
+
 ---
 
 ## Implementation plan
@@ -403,7 +409,45 @@ rm requires.typecheck-skip
   `defalias` forms.  A follow-up can add a `;;;`-docstring block to the
   alias declaration and render it on the module HTML page.
 
-- **`deftype` overlap.** `(deftype Sample [] :int)` already parses but
-  produces a `TY_REC` binding rather than a `TY_INT` alias.  `defalias`
-  is intentionally narrower and simpler.  The two forms are not
-  interchangeable.
+- **`deftype` overlap.** *Answered in Phase TA2* (see below).  `deftype`
+  is the recursive type binder and always produces a `TY_REC`;
+  `defalias` is the transparent alias.  The two forms are deliberately
+  disjoint, not interchangeable, and `defalias` now covers every target
+  `deftype` was being mistaken for.
+
+---
+
+## Phase TA2 — composite targets (2026-07-30)
+
+The "Not supported" row above ("Aliases for ADTs, structs, or
+parameterized types") anticipated a later phase; this is it.  The
+motivating finding was that between `defalias` (primitives only) and
+`deftype` (always `TY_REC`) there was **no transparent-alias spelling
+for a composite type at all** — see
+[composite-type-alias-gap.md](composite-type-alias-gap.md).
+
+`defalias` now accepts any type expression the elaborator can resolve:
+
+```turmeric
+(defalias Sample    :int)                           ; TA1, unchanged
+(defalias IntList   (Cons int))                     ; type application
+(defalias Point     P)                              ; struct / ADT name
+(defalias Backtrack (fn [] int))                    ; function type
+(defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
+```
+
+Still not supported: **alias type parameters**.
+`(defalias Name [a] body)` is a hard error naming the restriction — a
+parameterised alias would need type-level substitution at every use
+site, which nothing in the resolver does today.  The target must be
+fully applied.
+
+Implementation: `Elab` gained `type_alias_types` (a full `Type *` per
+alias) beside the existing `type_alias_kinds`; `elab_defalias` keeps the
+TA1 primitive-keyword fast path and routes everything else through
+`type_expr_from_form`; the five lookup sites (two in
+`type_expr_from_form`, three in the `elab_fns` param/return ladders) copy
+the full target type instead of rebuilding one from a bare `TypeKind`.
+Two new guards reject a self-referential alias and an unresolved target
+name, so `(defalias Bad :not-a-type)` stays an error rather than
+silently aliasing a type variable.

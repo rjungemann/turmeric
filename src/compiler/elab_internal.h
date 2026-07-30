@@ -348,11 +348,16 @@ typedef struct Elab {
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
     const Symbol *sym_deftype;      /* deftype */
-    /* Phase TA1: defalias — primitive type alias declarations */
+    /* Phase TA1/TA2: defalias — transparent type alias declarations.
+     * TA1 accepted primitive keywords only; TA2 accepts any type expression
+     * (composites included), so `type_alias_types` carries the full resolved
+     * target and `type_alias_kinds` is its `kind` field, kept as a fast
+     * TypeKind-only view for the ladders that only need the kind. */
     const Symbol *sym_defalias;
 
     const Symbol **type_alias_names;  /* interned alias name symbols */
-    TypeKind      *type_alias_kinds;  /* resolved target TypeKind */
+    TypeKind      *type_alias_kinds;  /* resolved target TypeKind (== types[i]->kind) */
+    Type         **type_alias_types;  /* resolved target type, arena-allocated */
     uint32_t       n_type_aliases;    /* number of declared aliases */
     uint32_t       cap_type_aliases;  /* allocated capacity */
     /* Phase HKT-P1: type-app — type-level application */

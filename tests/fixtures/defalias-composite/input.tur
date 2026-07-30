@@ -1,0 +1,77 @@
+;; defalias-composite -- `defalias` names a composite type transparently.
+;;
+;; TA1 accepted primitive keywords only, so a struct, a type application, a
+;; function type or a refinement had no transparent-alias spelling at all
+;; (`deftype` wraps its body in a TY_REC, which is the recursive binder, not
+;; an alias).  TA2 lets `defalias` take any type expression the elaborator can
+;; resolve.  See docs/archive/composite-type-alias-gap.md.
+;;
+;; The alias is transparent: every use site sees the target type itself, so
+;; `Point` and `P` are the same type and no unification ever mentions the
+;; alias.  Pinned here across both annotation spellings (spaced `: Point` and
+;; keyword `:Point`) and in parameter, return and lambda position.
+
+(defstruct P [x : int y : float])
+
+(defalias Point     P)                            ; struct name
+(defalias IntList   (Cons int))                   ; type application
+(defalias Backtrack (fn [int] int))               ; function type
+(defalias NonZero   #refine{ q : int | (not= q 0) })  ; refinement
+
+;; spaced annotation -- parameter and return position
+(defn mk-point [] : Point
+  (make-struct P 7 3.25))
+
+(defn point-x [p : Point] : int
+  (.x p))
+
+(defn point-y [p : Point] : float
+  (.y p))
+
+;; keyword annotation -- the elab_fns ladders, not type_expr_from_form
+(defn kw-mk-point [] :Point
+  (make-struct P 5 1.5))
+
+(defn kw-point-x [p :Point] :int
+  (.x p))
+
+;; type application through the alias
+(defn mk-list [] : IntList
+  (cons 1 (cons 2 (cons 3 (tnil)))))
+
+(defn list-len [xs : IntList] : int
+  (list-length xs))
+
+;; function type through the alias, in both parameter and return position
+(defn inc [n : int] : int
+  (+ n 1))
+
+(defn mk-backtrack [] : Backtrack
+  inc)
+
+(defn apply-backtrack [f : Backtrack x : int] : int
+  (f x))
+
+;; refinement alias -- the predicate rides along as a contract on the argument
+(defn safe-div [n : int d : NonZero] : int
+  (/ n d))
+
+;; an alias of an alias resolves through to the underlying type
+(defalias Coord Point)
+
+(defn coord-x [c : Coord] : int
+  (.x c))
+
+(defn main [] : int
+  (println (point-x (mk-point)))          ; 7
+  (println (point-y (mk-point)))          ; 3.25
+  (println (kw-point-x (kw-mk-point)))    ; 5
+  (println (coord-x (mk-point)))          ; 7
+  (println (list-len (mk-list)))          ; 3
+  (println (apply-backtrack inc 41))      ; 42
+  (println ((mk-backtrack) 99))           ; 100
+  (println (safe-div 84 2))               ; 42
+  ;; the alias also resolves inside a lambda annotation
+  (let [f (fn [p : Point] : int (.x p))]
+    (println (f (kw-mk-point))))          ; 5
+  0)

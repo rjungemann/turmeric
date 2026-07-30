@@ -1,5 +1,11 @@
 # No transparent type alias for composite types, and three docs advertise forms the compiler rejects
 
+> **RESOLVED 2026-07-30 -- Fix direction 4 (extend `defalias`).** `defalias`
+> now accepts any type expression the elaborator can resolve; `deftype` is
+> untouched and stays the recursive binder, so the two forms are disjoint
+> exactly as the design intent stated. Repros 1, 2 and 3 below all check
+> clean. Details in *Resolution* at the end of this document.
+
 **Severity:** medium (expressiveness) for the alias gap itself -- there is no
 route at all to name a composite type transparently. **High (docs)** for the
 three snippets below, which are published as working code and are hard errors
@@ -224,3 +230,135 @@ revisit:
    `serializable-continuations-guide.md` moved to `defstruct` and
    `logic-programming-guide.md` to inline function types. Both are correct
    today, but a real alias may be the more natural spelling for the second one.
+
+---
+
+## Resolution -- 2026-07-30
+
+Took **fix direction 4**: `defalias` accepts a full type expression. Direction
+3 (relaxing `deftype`'s `TY_REC` wrap when the body is non-recursive) was the
+smaller diff, but it makes one form mean two things depending on its body, and
+the report's own note at *Why this looks untracked* records the design intent
+that the two forms stay disjoint. Extending `defalias` keeps `deftype` purely
+recursive and gives the transparent alias one unambiguous spelling.
+
+### What ships
+
+```turmeric
+(defalias Sample    :int)                            ; TA1, unchanged
+(defalias IntList   (Cons int))                      ; type application
+(defalias Point     P)                               ; struct / ADT name
+(defalias Backtrack (fn [] int))                     ; function type
+(defalias Logger    (fn [cstr] #fx{Log} nil))        ; effect-annotated fn type
+(defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
+(defalias Coord     Point)                           ; alias of an alias
+```
+
+The alias is **transparent** (fix direction 5's open question, answered):
+`Point` and `P` are the same type at every use site, unification never mentions
+the alias, and the codegen is byte-identical to the un-aliased spelling. That
+matches what `defalias` already did for primitives, and it is what makes
+`(defn f [b : Backtrack] : int (b))` apply `b` at all -- the nominal reading
+would have reproduced the exact `deftype` failure this report is about.
+
+Not supported: **alias type parameters**. `(defalias Name [a] body)` is a hard
+error naming the restriction. A parameterised alias needs type-level
+substitution at every use site and nothing in the resolver does that today, so
+`Backtrack<a>` from the doc-defect table still has no spelling; the
+monomorphic `(defalias Backtrack (fn [] int))` is what the guide now uses.
+
+### Implementation
+
+- `src/compiler/elab_internal.h` -- `Elab` gains `type_alias_types`
+  (`Type **`, the full resolved target) beside the existing
+  `type_alias_kinds`, which stays as a fast kind-only view.
+- `src/compiler/elab_types.c` `elab_defalias` -- primitive keywords keep the
+  TA1 fast path; every other target goes through `type_expr_from_form`.
+  Four guards, all of them about not letting a bad target into the table
+  where it would resurface as a confusing use-site failure:
+  - a `deftype`-shaped parameter vector (`(defalias N [a] ...)`) gets a
+    diagnostic naming the restriction;
+  - a self-referential alias (`(defalias Loop Loop)`) is rejected with a
+    pointer at `deftype`;
+  - an unresolved target name is rejected, because `type_expr_from_form`'s
+    last resort is a `TY_TYVAR` carrying that very name -- without the guard
+    `(defalias Bad :not-a-type)` would have silently become a tyvar alias
+    instead of the error the existing fixture pins;
+  - the same fallback one level in: an applied name that is not a type
+    constructor (`(defalias L (list int))` -- the head of the `TY_APP` chain
+    is an unresolved tyvar) is rejected at the declaration, matching the
+    kind-mismatch the direct annotation `[xs : (list int)]` reports.
+
+  That last one is worth a note for anyone re-reading this report's **Repro
+  1**: `(list int)` was never a valid type. The cons-list constructor is
+  `Cons`, and `(defn len [xs : (list int)] ...)` fails on its own with
+  `TUR-E0012` even with no alias in the file. `(defalias IntList (Cons int))`
+  is the working form, and is what the fixture uses.
+- Five lookup sites now copy the full target type instead of rebuilding one
+  from a bare `TypeKind`: two in `type_expr_from_form` (bare-symbol and
+  keyword annotation positions) and three in the `elab_fns.c` ladders
+  (`defn` parameter, `defn` return, lambda return). The `defn` return site
+  also threads the target into the same capture variables the
+  `: (type-expr)` path uses (`return_adt_def`, `return_fn_type`,
+  `return_app_type`, ...), without which a composite return reached call
+  sites as an empty shell of the right kind.
+
+### Tests
+
+- `tests/fixtures/defalias-composite/` -- struct, type application, function
+  type, refinement and alias-of-alias targets, each exercised in parameter,
+  return and lambda position, in both the spaced (`: Point`) and keyword
+  (`:Point`) annotation spellings.
+- `tests/fixtures/errors/defalias-type-params/` -- the parameter-vector guard.
+- `tests/fixtures/errors/defalias-self-reference/` -- the self-reference guard.
+- `tests/fixtures/errors/defalias-not-a-type-constructor/` -- the applied
+  non-constructor guard.
+
+The pre-existing `tests/fixtures/errors/defalias-bad-target/` still passes:
+`(defalias Bad :not-a-type)` is an error under the new resolver too.
+
+`bash tests/run.sh`: **2440 passed, 0 failed**. No fixture snapshot moved --
+the alias is transparent, so codegen is unchanged. That transparency was
+checked directly rather than assumed: for each composite target the emitted C
+was diffed against the same program with the type spelled inline, and is
+identical.
+
+### Doc follow-up -- done
+
+1. `docs/guides/logic-programming-guide.md` -- the Backtrack Monad section now
+   names `Backtrack` and `Goal` via `defalias` across `mzero`, `mplus`,
+   `pure`, `bind` and `list-flat-map`, and the "No composite type alias"
+   bullet is gone. Both code blocks were extracted and run verbatim: they
+   print the documented `1 / 2 / 10 / 20`. The partial-fix note is removed --
+   Gap B (`'fs' is not a function or continuation`) was a *consequence* of the
+   `TY_REC` wrap, so a transparent alias resolves it rather than working
+   around it.
+2. `docs/archive/defalias-plan.md` -- the *Open questions* `deftype`-overlap
+   entry now records the answer, and a Phase TA2 section documents the
+   extension. The Phase TA1 scope table carries a pointer to it.
+3. `docs/guides/syntax-guide.md` -- new *Naming a type -- `defalias` vs
+   `deftype`* subsection under Type-annotation syntax. This is the
+   user-facing doc the report noted did not exist.
+4. `serializable-continuations-guide.md` needs no further change. Its
+   `serial-continuation<T>` is a parameterised **record** -- `defstruct` is
+   the right form for it, and an alias could not express it anyway while
+   alias type parameters are unsupported.
+
+### Noted in passing, not fixed here
+
+Two pre-existing defects were hit while validating the guide code and
+confirmed **not** to be alias-related -- each reproduces identically with the
+type spelled inline:
+
+- Calling a fn-typed parameter whose type carries a **non-empty effect row**
+  (`(fn [int] #fx{Log} nil)`) segfaults -- no handler or `perform` needed; the
+  emitted call goes through `__tur_cps_lookup`, misses, and calls NULL
+  unguarded. Filed as
+  [effectful-fn-typed-param-call-segfaults.md](../reported/effectful-fn-typed-param-call-segfaults.md).
+  This is why `tests/fixtures/defalias-composite/` aliases a pure
+  `(fn [int] int)` rather than the effect-annotated shape.
+- Sweet-exp `$` double-applies when the rest-of-line is already one complete
+  call, so `println $ g(7)` becomes `(println ((g 7)))`. `CLAUDE.md`'s own
+  chained example (`println $ normalize $ vec3(...)`) does not compile. Filed
+  as
+  [sweet-dollar-double-applies-single-call.md](../reported/sweet-dollar-double-applies-single-call.md).

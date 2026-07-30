@@ -1,0 +1,4 @@
+;; A `deftype`-shaped parameter vector is not a defalias target.  A
+;; parameterised alias would need type-level substitution at every use site,
+;; which the resolver does not do; the target must be fully applied.
+(defalias Backtrack [a] (fn [a] a))
