@@ -6,8 +6,8 @@
  * with no cc subprocess and no disk artifacts:
  *
  *   c2mir (C11 front end) -> MIR_link (symbols resolved against THIS process
- *   by dlsym(RTLD_DEFAULT)) -> MIR_gen (eager; recommendation 5 withdrew lazy
- *   until it is re-entrant) -> call main on a sized-stack thread.
+ *   by dlsym(RTLD_DEFAULT)) -> MIR_gen (lazy, serialized -- see the generation
+ *   mode note below) -> call main on a sized-stack thread.
  *
  * Everything in here is a straight port of the J0 spike harness
  * (tools/jit-spike/tur-jit-spike.c), which the findings doc validated against
@@ -137,6 +137,56 @@ static const struct { const char *name; void *addr; } JIT_SHIMS[] = {
   {"__builtin_atan2", (void *) jit_builtin_atan2},
   {"atexit", (void *) jit_atexit},
 };
+
+/* ------------------------------------------------------------------ */
+/* serialized lazy generation (findings 8.1 / 34)                      */
+/* ------------------------------------------------------------------ */
+/* MIR's own `MIR_set_lazy_gen_interface` installs a first-call wrapper that
+ * runs MIR-gen on the context's single shared gen_ctx.  Two threads entering
+ * two not-yet-generated functions therefore corrupt that state: measured as
+ * three different assertions across five runs of one fixture
+ * (`destroy_func_cfg`, `mark_unreachable_bbs`, `undeclared reg N of func`).
+ * MIR-gen is simply not thread-safe, and Turmeric has `spawn`, fibers, and a
+ * work-stealing scheduler.
+ *
+ * The plan's instruction is "serialize generation behind a lock or generate
+ * eagerly for any program that can spawn".  Serializing needs no fork patch:
+ * every piece MIR's lazy path uses is public (`_MIR_get_wrapper`,
+ * `_MIR_redirect_thunk`, `MIR_gen`, and `machine_code` on the func), so the
+ * interface is reimplemented here with a mutex around it.  `MIR_gen` is
+ * literally `generate_func_code (ctx, item, TRUE)` -- the same call MIR's hook
+ * makes -- so this is MIR's lazy semantics plus mutual exclusion, not a
+ * different code path.
+ *
+ * The DOUBLE-CHECK is the load-bearing half.  A plain lock still lets two
+ * threads that both got past the stub generate the same function twice, which
+ * is what trips `_MIR_duplicate_func_insns`; re-reading `machine_code` under
+ * the lock makes the second arrival a lookup.
+ *
+ * Contention is bounded and self-extinguishing: a function is generated once,
+ * after which its thunk goes straight to the code and never reaches this hook
+ * again. The lock is process-wide rather than per-context because gen state is
+ * per-context but the cost of over-serializing across images is a few
+ * microseconds on a path that runs once per function. */
+static pthread_mutex_t g_gen_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *jit_lazy_gen_locked (MIR_context_t ctx, MIR_item_t func_item) {
+  pthread_mutex_lock (&g_gen_lock);
+  void *code = func_item->u.func->machine_code;
+  if (code == NULL) code = MIR_gen (ctx, func_item);
+  pthread_mutex_unlock (&g_gen_lock);
+  return code;
+}
+
+/* Drop-in for MIR_set_lazy_gen_interface, routing first-call generation
+ * through the lock above.  Mirrors MIR's version exactly otherwise. */
+static void jit_set_lazy_gen_interface (MIR_context_t ctx, MIR_item_t func_item) {
+  void *addr;
+
+  if (func_item == NULL) return;
+  addr = _MIR_get_wrapper (ctx, func_item, jit_lazy_gen_locked);
+  _MIR_redirect_thunk (ctx, func_item->addr, addr);
+}
 
 /* MIR's default error handler prints and EXITS the process -- from inside
  * MIR_link, an unresolved import (e.g. a GCC atomic builtin in user inline-C
@@ -318,9 +368,46 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
        m = DLIST_NEXT (MIR_module_t, m))
     MIR_load_module (ctx, m);
 
-  /* Eager generation: lazy is not re-entrant at this pin (findings 8.1) and
-   * miscompiled pthread entries even single-threaded (8.4.1). */
-  MIR_link (ctx, MIR_set_gen_interface, jit_import_resolver);
+  /* Generation mode.  LAZY is the default -- the plan's original
+   * recommendation, restored now that both defects that withdrew it are
+   * addressed (findings 34):
+   *
+   *   8.1  lazy is not re-entrant -> jit_set_lazy_gen_interface above
+   *        serializes generation and double-checks machine_code, so two
+   *        threads racing a first call cannot corrupt gen state or generate
+   *        the same function twice.
+   *   8.4.1  lazy miscompiled pthread entries single-threaded -> does not
+   *        reproduce at the current fork pin; re-measured directly on both
+   *        fixtures the finding named.  Its `undeclared reg N` symptom now
+   *        appears only as one of the race's several faces, so 8.4.1 was
+   *        most likely always 8.1 seen without the concurrency in view.
+   *
+   * Full corpus is identical either way (2394/0/47), and lazy saves 23-36%
+   * of end-to-end wall time on a Release build -- enough to move `tur jit`
+   * from parity with the cc round trip to clearly ahead of it.
+   *
+   *   TUR_JIT_GEN=eager   MIR_set_gen_interface
+   *   TUR_JIT_GEN=lazy    jit_set_lazy_gen_interface (default)
+   *
+   * The escape hatch is worth keeping and worth understanding: eager doubles
+   * as a VERIFICATION pass, generating every function before any of the
+   * program runs, so a generation failure surfaces at compile time where
+   * cmd_jit's step-6 cc fallback can still catch it.  Under lazy the same
+   * failure surfaces at first call -- after output may already have been
+   * written, and past the point where g_jit_err_active can unwind to the
+   * fallback.  The set of functions that fail is the same in both modes (same
+   * generator, same input; lazy merely skips ones never called), so this is a
+   * question of WHEN, not WHETHER.  No fixture reaches it.  If one ever does,
+   * TUR_JIT_GEN=eager is the diagnostic.
+   *
+   * Deliberately an env knob, not an --enable= experiment: it selects between
+   * two implementations of one already-shipping behavior. */
+  void (*gen_iface) (MIR_context_t, MIR_item_t) = jit_set_lazy_gen_interface;
+  {
+    const char *g = getenv ("TUR_JIT_GEN");
+    if (g != NULL && strcmp (g, "eager") == 0) gen_iface = MIR_set_gen_interface;
+  }
+  MIR_link (ctx, gen_iface, jit_import_resolver);
   jit_sync_config_globals (ctx);
   g_jit_err_active = 0;   /* past the last MIR call that can raise */
 

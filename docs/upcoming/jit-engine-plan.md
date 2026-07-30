@@ -31,7 +31,11 @@ descends into fixture GROUP directories, so the 52 `typed/*`,
 `typed-slots/*`, `recursive-types/*`, `lambda-call-head/*` and
 `lang-dispatch/*` fixtures -- which no compiling harness had ever run --
 are compiled by the default suite (2,478/0; Debug jit harness 2,393/0/47).
-With findings 31 every defect J3 surfaced is closed. Plan written 2026-07-27; J0 spike
+With findings 31 every defect J3 surfaced is closed.
+**J1 COMPLETE 2026-07-30** (findings 34): serialized lazy generation closes
+the last item J1 owed (8.1), restoring the plan's original default -- corpus
+identical to eager (2,394/0/47) and 23-36% faster end to end, which moves
+`tur jit` from parity with the cc round trip to ~25-30% ahead of it. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
@@ -328,12 +332,13 @@ useful even if the JIT slips.
   and 12); between them the spike normalizer is down to two rules, every
   attribute the emitter depends on is now recovered without relying on
   c2mir honouring it, and the corpus stands at 1646/1680 (98.0%) with no
-  unexplained failure. Default to
-  `MIR_set_lazy_gen_interface` -- J0 measured lazy generation at 23 ms of
-  link+gen against 125 ms eager, for the same output. **Lazy generation is not
-  re-entrant**: two threads entering the same not-yet-generated function trip a
-  MIR assertion (`_MIR_duplicate_func_insns`), so J1 must serialize generation
-  or fall back to eager for programs that can `spawn` (findings 8.1). ~~J1 should
+  unexplained failure. Lazy generation is the
+  default as of findings 34 -- J0 measured it at 23 ms of link+gen against
+  125 ms eager for the same output. It is **not re-entrant** (two threads
+  entering the same not-yet-generated function trip `_MIR_duplicate_func_insns`,
+  findings 8.1), so `src/jit_engine.c` reimplements the interface from MIR's
+  public primitives with a mutex and a double-check on `machine_code` --
+  serializing generation rather than evicting programs that can `spawn`. ~~J1 should
   also stop emitting `__thread` and the GCC atomic builtins into the TU -- the
   atomics belong in the host runtime, resolved by address like `hamt.c`
   (findings 8.2).~~ **Both done (S1 and findings 14): `TUR_THREAD_LOCAL` and
@@ -349,8 +354,8 @@ useful even if the JIT slips.
   per-thread state. Fixing it exposed a second engine bug -- MIR's
   `try_spilled_reg_mem` overruns a 2-entry array when one insn carries the
   same spilled reg three times (`mul v,v,v`); fixed in the fork, pin
-  `41ff4d94` (findings 15.2). What J1 still owes multi-threading:
-  concurrent-safe or serialized lazy generation (8.1) -- the
+  `41ff4d94` (findings 15.2). What J1 owed multi-threading is now DONE:
+  serialized lazy generation (8.1, findings 34) -- the
   `tur_scheduler_*_st` weak-function fold dissolved as dead code
   (findings 17: the module carrying the hazard had zero callers anywhere;
   deleted). The stack-size question is

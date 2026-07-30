@@ -710,15 +710,21 @@ what you are optimizing for -- startup latency or steady-state throughput:
 | MIR JIT | `tur --enable=jit jit f.tur` | in-process (c2mir) | run-edit-run loops, spice REPL reloads |
 | cc | `tur build f.tur` + run | subprocess cc -O2 | long-running programs, deployment |
 
-Measured triangle (x86-64 Linux, Release `tur`, best of 3, end-to-end wall
+Measured triangle (x86-64 Linux, Release `tur`, best of 5, end-to-end wall
 time; `bash benchmarks/run-triangle.sh` regenerates this from
 `benchmarks/triangle/`):
 
 | program | interpreter | tur jit | cc build | cc run | cc total |
 |---|---|---|---|---|---|
-| fib (fib 27, call-heavy) | 223ms | 273ms | 243ms | 4ms | 247ms |
-| loop-sum (5M-iteration loop) | 2295ms | 261ms | 263ms | 4ms | 267ms |
-| mandel (float inner loop) | 960ms | 301ms | 262ms | 7ms | 269ms |
+| fib (fib 27, call-heavy) | 137ms | 127ms | 178ms | 2ms | 180ms |
+| loop-sum (5M-iteration loop) | 1567ms | 137ms | 180ms | 3ms | 183ms |
+| mandel (float inner loop) | 639ms | 142ms | 187ms | 5ms | 192ms |
+
+All three legs are re-measured together on each run, so the columns are
+comparable to each other. They are NOT comparable to an older snapshot taken
+on a different machine -- an earlier edition of this table had the interpreter
+at 223ms for `fib` where this one has 137ms, and essentially none of that is a
+Turmeric change.
 
 How to read it:
 
@@ -727,12 +733,15 @@ How to read it:
   the engines differ in what happens after. For a program this small the
   interpreter's zero-compile leg makes it competitive end to end even
   while its loop throughput is 9x behind (loop-sum).
-- **`tur jit` matches the cc path's one-shot latency** on Linux (its
-  engine is ~40% faster than cc's compile step, but that step is a
-  minority of the wall). Its structural advantage is being IN PROCESS: no
+- **`tur jit` beats the cc round trip end to end**, by ~25-30% on these
+  programs. It did not always: with eager code generation it merely matched
+  cc, and switching to serialized LAZY generation -- only the functions a run
+  actually calls get compiled -- is what moved it ahead (23-36% off the JIT
+  leg alone). Its other advantage is structural, being IN PROCESS: no
   subprocess, no disk artifacts, and the spice REPL reload path is ~3.2x
   faster than the `tur build --shared` round trip it replaces (see the
-  repl guide).
+  repl guide). `TUR_JIT_GEN=eager` restores whole-program generation, which
+  is slower but compiles every function up front.
 - **Compiled native runtime is 4-7ms** for these workloads -- for any
   long-running or repeatedly-invoked program, `tur build` once and run
   the binary; nothing else is close in steady state.

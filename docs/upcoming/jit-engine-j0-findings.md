@@ -3431,3 +3431,84 @@ fallback), so the addition was the outlier, not the rule.
 None of this was hit by section 32 -- that machine has GNU coreutils on PATH
 and the triangle was not part of the re-validation set. They were latent, and
 the next macOS run would have paid for them.
+
+## 34. Lazy generation, serialized -- J1's last owed item
+
+Added 2026-07-30. Closes "concurrent-safe or serialized lazy generation"
+(8.1), the one thing the J1 phase still owed, and restores section 6's
+withdrawn recommendation 5.
+
+### 34.1 Both blockers were measured at a pin three fixes ago
+
+Recommendation 5 ("default to lazy generation") was withdrawn on two defects,
+both measured at `a8ab7c31`. The fork is now at `90633091`. Re-measured rather
+than inherited:
+
+- **8.4.1 (single-threaded pthread-entry miscompile) does not reproduce.**
+  `session-project-basic` and `defstruct-field-session-project` -- the two
+  fixtures the finding names -- both print 42 under lazy at the current pin.
+- **8.1 (re-entrancy) does.** Full corpus under lazy: 2390 / 4, and all four
+  failures are concurrency fixtures (`schan-worker-pool`, `session-effects`,
+  `session-mp-effects`, `session-mp-three-role`). Five runs of one of them
+  gave three DIFFERENT assertions -- `destroy_func_cfg`, `mark_unreachable_bbs`,
+  and `undeclared reg N of func` -- which is a data race with no other
+  reading.
+
+That third symptom is 8.4.1's. The likeliest history is that 8.4.1 was always
+8.1 seen without the concurrency in view; whatever else moved at the newer pin
+just stopped it presenting single-threaded. Worth noting because it means the
+corpus regression count (8.4.4's 17 under lazy) was never 17 independent bugs.
+
+### 34.2 Serializing needs no fork patch
+
+MIR-gen runs on one shared `gen_ctx` per context and is not thread-safe.
+MIR's `MIR_set_lazy_gen_interface` installs a first-call wrapper that calls
+straight into it, so two threads entering two ungenerated functions corrupt it.
+
+Every piece that path uses is public -- `_MIR_get_wrapper`,
+`_MIR_redirect_thunk`, `MIR_gen`, and `machine_code` on the func -- so the
+interface is reimplemented in `src/jit_engine.c` with a mutex around it.
+`MIR_gen` is literally `generate_func_code (ctx, item, TRUE)`, the same call
+MIR's own hook makes, so this is MIR's lazy semantics plus mutual exclusion
+rather than a second code path. The fork stays clean.
+
+The **double-check is the load-bearing half**. A bare lock still lets two
+threads that both cleared the stub generate the same function twice, which is
+what trips `_MIR_duplicate_func_insns`; re-reading `machine_code` under the
+lock turns the second arrival into a lookup. Contention is self-extinguishing:
+a function is generated once, after which its thunk goes straight to the code
+and never reaches the hook again.
+
+Result: the fixture that failed 5/5 passes 6/6, and the corpus is **2394 / 0 /
+47 -- identical to eager**.
+
+### 34.3 What it buys, and the tradeoff kept in view
+
+Release build, best of 5-7, end-to-end wall:
+
+| program | eager | lazy | saved |
+|---|---|---|---|
+| fib | 188ms | 144ms | 23% |
+| mandel | 190ms | 145ms | 23% |
+| loop-sum | 231ms | 147ms | 36% |
+
+Enough to change the headline: with eager, `tur jit` MATCHED the cc round trip
+(the reading published in the performance guide at J3); with lazy it beats it
+by ~25-30% on all three triangle programs. The guide's table and reading are
+updated, with a note that all three legs are re-measured together and are not
+comparable to the older snapshot taken on a slower machine.
+
+Lazy is now the default. `TUR_JIT_GEN=eager` is kept, and the reason is worth
+recording: **eager doubles as a verification pass.** It generates every
+function before any of the program runs, so a generation failure surfaces at
+compile time, where cmd_jit's step-6 cc fallback can still catch it. Under lazy
+the same failure surfaces at first call -- after output may already have been
+written, and past the point where `g_jit_err_active` can unwind to the
+fallback. The set of functions that fail is identical in both modes (same
+generator, same input; lazy merely skips ones never called), so this is a
+question of WHEN, not WHETHER, and no fixture reaches it. If one ever does,
+the knob is the diagnostic.
+
+J2's suite (`tests/turi/repl-spice-jit.sh`) is 4/0 under the new default --
+the reload loop is where lazy should help most, since a reload regenerates
+only what the next call touches.
