@@ -328,16 +328,28 @@ about, and cowpaths are paved before the field is closed:
   representation trace above; the guide's missing-cells table reconciled
   against `docs/reported/` (it is the campaign's live scoreboard, per the
   Guide-upkeep tasks each report carries).
-  *Status 2026-07-30: first slice landed.* `repr-trace` lines ship under
-  `--emit-abi-trace`: one per fn-typed parameter (carrier / fat / cfnptr /
-  thin-fn + which gate forced it, from the `carrier_ok` decision in
-  `elab_fns.c`) and one per emit-side fat bridge (bare-to-fat with shim
-  kind, poly-to-fat), pinned by `tests/run-repr-trace.sh` (ctest
-  `tur_repr_trace`). Guide table reconciled (+2 rows:
+  *Status 2026-07-30: landed (both slices).* `repr-trace` lines ship under
+  `--emit-abi-trace`:
+  - one per fn-typed parameter (carrier / fat / cfnptr / thin-fn + which
+    gate forced it, from the `carrier_ok` decision in `elab_fns.c`);
+  - one per emit-side fat bridge (bare-to-fat with shim kind,
+    poly-to-fat);
+  - one per carrier<->concrete crossing lowered by the
+    `emit_carrier_bridge` chokepoint, with direction and the lowering form
+    it picked (heap-reinterpret / inline-reinterpret / aggregate) --
+    container-element crossings (Vec push/get) route through here;
+  - one per aggregate heap-box/unbox at the `emit_agg_box`/`emit_agg_unbox`
+    chokepoints (poly-carrier and wide-byval crossings).
+
+  All pinned by `tests/run-repr-trace.sh` (ctest `tur_repr_trace`, 8
+  classifications). Guide table reconciled (+2 rows:
   `fn-payload-in-container-undeclared-temp`, enumerations-drift Finding
-  2); all 10 `--known-probes` fire on current main. Remaining for a later
-  slice: value-position bridges (carrier<->concrete re-wraps) and
-  container-element slot decisions.
+  2); all 10 `--known-probes` fire on current main; suite green (2436/0)
+  with the trace in. Known coverage gap, intentionally deferred: ad-hoc
+  spill sites NOT routed through the named chokepoints (e.g. the
+  call-site by-value->carrier-`:int`-sink spill) do not trace -- those
+  sites becoming chokepoint calls is increments 2-4's job, and the trace
+  will grow with them.
 - **Increment 1 -- the fn-value axis.**
   [fn-value-fat-normalization-plan.md](fn-value-fat-normalization-plan.md),
   staged as written (params -> return/let/ascribe -> unify flag'd sinks).

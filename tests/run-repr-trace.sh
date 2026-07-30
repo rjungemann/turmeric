@@ -38,7 +38,25 @@ cat > "$tmp/probe.tur" <<'EOF'
   0)
 EOF
 
+# Value-position bridges: a Vec of by-value (Option int) elements crosses
+# concrete->carrier on push (heap reinterpret of the Vec handle) and
+# carrier->concrete on the ascribed vec-get read (aggregate).  A by-value
+# aggregate through a bare `:fn` poly-carrier param heap-boxes on the way
+# in (agg-box) and derefs back on the way out (agg-unbox).
+cat > "$tmp/vprobe.tur" <<'EOF'
+(defn opt-get [o : (Option int)] : int (unwrap-or o -1))
+(defn call-it [f : fn x : (Option int)] : int (f x))
+(defn main [] : int
+  (let [vo (:: (vec-new) (Vec (Option int)))]
+    (vec-push! vo (:: (some 5) (Option int)))
+    (let [a (:: (vec-get vo 0) (Option int))]
+      (println (unwrap-or a -1))))
+  (println (call-it opt-get (some 7)))
+  0)
+EOF
+
 trace="$("$TUR" emit-c --emit-abi-trace "$tmp/probe.tur" 2>&1 >/dev/null | grep '^repr-trace')"
+vtrace="$("$TUR" emit-c --emit-abi-trace "$tmp/vprobe.tur" 2>&1 >/dev/null | grep '^repr-trace')"
 
 rc=0
 check() {
@@ -59,10 +77,27 @@ check "thin-fn + reason traced"     "^repr-trace 3:[0-9]+ fn-param f thin-fn eff
 # Emit-side bridges (any location -- stdlib exercises them too).
 check "bare-to-fat bridge traced"   "^repr-trace [0-9]+:[0-9]+ bridge bare-to-fat arity=[0-9]+ (typed|int64)-shim$"
 
+# Value-position bridge classifications, from the second probe.
+vcheck() {
+  local label="$1" pattern="$2"
+  if echo "$vtrace" | grep -qE "$pattern"; then
+    echo "  ok  $label"
+  else
+    echo "  FAIL $label -- no line matching: $pattern"
+    rc=1
+  fi
+}
+vcheck "heap reinterpret crossing traced" "^repr-trace bridge concrete->carrier heap-reinterpret "
+vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete aggregate \(type-app Option int\)$"
+vcheck "agg-box traced"                   "^repr-trace bridge agg-box tur_adt_Option__int$"
+vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_Option__int$"
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
-  echo "--- full trace ---"
+  echo "--- fn-param trace ---"
   echo "$trace"
+  echo "--- value-position trace ---"
+  echo "$vtrace"
 else
   echo "PASS repr-trace"
 fi

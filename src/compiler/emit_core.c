@@ -4184,6 +4184,24 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
         }
     }
 
+    /* repr-trace (representation-consolidation-meta-plan increment 0):
+     * with --emit-abi-trace, print every carrier<->concrete crossing this
+     * chokepoint lowers, with the lowering form it picked -- the
+     * value-position counterpart of the fn-param decision lines in
+     * elab_fns.c.  (TUR_M3_AUDIT above is the older, env-gated variant
+     * with its own tripwire; both stay.) */
+    if (g_emit_abi_trace) {
+        const char *dir = (src_ck == CK_CARRIER && sink_ck == CK_CONCRETE)
+            ? "carrier->concrete" : "concrete->carrier";
+        const char *form =
+            (type_is_heap_struct(concrete_ty) || type_is_heap_adt(concrete_ty))
+                ? "heap-reinterpret"
+                : carrier_is_inline(concrete_ty.kind) ? "inline-reinterpret"
+                                                      : "aggregate";
+        fprintf(stderr, "repr-trace bridge %s %s %s\n",
+                dir, form, type_name(concrete_ty));
+    }
+
     const char *cname = emit_type_c_name(ctx, concrete_ty);
     Buf out;
     buf_init(&out);

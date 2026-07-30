@@ -503,6 +503,10 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
  * malloc'd string the caller owns. */
 static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
+    /* repr-trace: aggregate heap-boxed into an int64 slot (field store /
+     * poly-carrier crossing / wide-byval element). */
+    if (g_emit_abi_trace)
+        fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
     Buf b; buf_init(&b);
     buf_printf(&b,
         "__extension__ ({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
@@ -515,6 +519,9 @@ static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
 }
 static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
+    /* repr-trace: int64 slot deref'd back to the by-value aggregate. */
+    if (g_emit_abi_trace)
+        fprintf(stderr, "repr-trace bridge agg-unbox %s\n", cn);
     Buf b; buf_init(&b);
     buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
     buf_putc(&b, '\0');
