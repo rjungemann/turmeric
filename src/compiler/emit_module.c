@@ -3203,19 +3203,52 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * (`re_cata__spec__double`) instead of a spurious int64 sibling whose return
      * register class (rax vs xmm0) is wrong.  Only fires for a bare-tyvar declared
      * result still sitting on the carrier; an int element recovers to int (no
-     * change), a float/bool/etc. recovers to its native kind. */
+     * change), a float/bool/etc. recovers to its native kind.
+     *
+     * CS3 nested specialization (findings 30): this is NOT specific to a passed
+     * closure clone -- it is the general shape of a generic body calling another
+     * generic whose result tyvar only the ACTIVE spec binds.  The gate used to
+     * require `is_passed_closure_clone`, so an ordinary function spec
+     * (`use-second` specialized to `(Pair int float)` calling `pair-second`)
+     * took exactly the spurious int64 sibling this comment warns about: the
+     * callee returned the float's BIT PATTERN in an int64 and the caller handed
+     * it back through an implicit int64->double NUMERIC conversion, printing
+     * 4.61425e+18 for 3.14 -- under gcc and MIR alike.  Widening the gate is
+     * what makes `(defn use-second [A B] [p :(Pair A B)] :B (pair-second p))`
+     * resolve its inner call to the sibling spec with the matching return ABI.
+     * See tests/fixtures/typed-slots/cs3-nested-specialization.
+     *
+     * Outside a passed closure clone the recovery is held to what this comment
+     * has always SAID it recovers -- a PRIMITIVE / register-class result.  A
+     * recovered by-value AGGREGATE stays on the carrier there: those ride the
+     * int64 carrier by deliberate convention, and un-collapsing one retypes the
+     * spec's return while its consumers still pass/accept the carrier (a
+     * `(Vec (Option int))` push handed an `Option__int` where the accessor
+     * declares int64 -- constrained-loop-vec-push-byvalue-result-element).  The
+     * aggregate case has its own recovery path above, keyed on the CALL's own
+     * bindings rather than the active spec's. */
     if (!result_type_override &&
         ctx->current_abi_specialization &&
-        ctx->current_abi_specialization->is_passed_closure_clone &&
         fn_binding->type.as.fn.result_kind == TY_TYVAR &&
         generic_result.kind == TY_TYVAR &&
         (result_type.kind == TY_TYVAR || result_type.kind == TY_INT) &&
         spec_bindings && spec_n_bindings > 0) {
         Type recovered = emit_abi_instantiate_type(
             &generic_result, spec_bindings, spec_n_bindings, ctx->type_arena);
-        if (recovered.kind != TY_TYVAR && recovered.kind != TY_INT &&
-            recovered.kind != TY_UNKNOWN)
-            result_type = recovered;
+        bool prim_only = !ctx->current_abi_specialization->is_passed_closure_clone;
+        bool ok_kind = recovered.kind != TY_TYVAR && recovered.kind != TY_INT &&
+                       recovered.kind != TY_UNKNOWN;
+        if (ok_kind && prim_only) {
+            switch (recovered.kind) {
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_BOOL:  case TY_CSTR:
+                case TY_INT8:  case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                    break;                 /* register-class primitive: recover */
+                default: ok_kind = false;  /* aggregate / nil / ptr: stay carrier */
+            }
+        }
+        if (ok_kind) result_type = recovered;
     }
     /* constrained-defn-monomorphize: when the call's element bindings were
      * re-hydrated from the active spec (above), `call->type` was the elab-

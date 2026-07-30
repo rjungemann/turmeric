@@ -2857,10 +2857,11 @@ suite stayed green):
   docs/archive/typed-result-map-cps-clone-struct-assign.md).
 - `typed-slots/cs3-nested-specialization` -- the nested-specialization
   float slot prints an int bit pattern through a double
-  (docs/reported/typed-slots-nested-specialization-float-garbage.md).
+  (FIXED, section 30:
+  docs/archive/typed-slots-nested-specialization-float-garbage.md).
 
-Both are denylisted in the harness with report pointers (removed when
-fixed). The J0-era lesson generalizes again: every new engine or harness
+Both were denylisted in the harness with report pointers; both are
+fixed (sections 28 and 30) and the denylist is empty. The J0-era lesson generalizes again: every new engine or harness
 that runs code a previous one skipped surfaces real, latent product bugs
 -- the JIT keeps being the canary, this time just by scanning deeper.
 
@@ -2978,9 +2979,7 @@ JIT build **2391 passed / 0 failed / 48 skipped** (47 via cc fallback) --
 one more pass and one fewer skip than section 27.1, which is the fixture
 coming off the harness denylist.
 
-Two of the phase's three finds remain open:
-docs/reported/typed-slots-nested-specialization-float-garbage.md and
-docs/archive/named-let-self-tail-not-tco.md (the latter fixed in section 29).
+All three of the phase's finds are now fixed -- sections 28, 29 and 30.
 
 ## 29. Named-let TCO -- one surface syntax, two lowerings, two different bugs
 
@@ -3090,3 +3089,108 @@ Suites after the change: `tests/run.sh` **2431 passed / 0 failed**;
 `tests/run-jit.sh` on the Debug JIT build **2392 passed / 0 failed / 48
 skipped** (47 via cc fallback) -- the new fixture, passing natively under
 MIR, which is the engine that could not fake it.
+
+## 30. The last of the three -- a return-ABI sibling, and the hole it hid in
+
+Added 2026-07-30, resolving the third and final find of section 27
+(docs/archive/typed-slots-nested-specialization-float-garbage.md) and closing
+the coverage gap that let all three sit undisturbed.
+
+### 30.1 Two clones, identical arguments, different return ABI
+
+`typed-slots/cs3-nested-specialization` printed `3.14` then `4.61425e+18`.
+The emitted C says it plainly:
+
+```c
+static double use_second__spec__double_tur_adt_Pair__int__float(tur_adt_Pair__int__float p) {
+        int64_t __ps_166 = (pair_second__spec__int64_t_tur_adt_Pair__int__float(p));
+        return __ps_166;                       /* int64 -> double NUMERIC conversion */
+}
+static int64_t pair_second__spec__int64_t_tur_adt_Pair__int__float(tur_adt_Pair__int__float p) {
+        return ((union { double s; int64_t d; }){.s = ((double)(p).snd)}).d;   /* BIT PATTERN */
+}
+```
+
+The callee is correct: on the carrier ABI it returns the double's bits in an
+int64. The caller is correct in isolation too. What is wrong is that a
+`double`-returning spec called the `int64_t` SIBLING -- two clones of
+`pair-second` with identical argument types that differ only in return ABI --
+and then converted rather than reinterpreted. `4.61425e+18` is what 3.14's bit
+pattern looks like read as a number.
+
+`pair-second`'s own `double` spec existed the whole time, three lines away.
+The call just did not select it.
+
+### 30.2 The recovery already existed, gated one case too narrowly
+
+Tracing the selection showed the wrong clone was chosen at RECORD time, in the
+ABI scan (`emit_abi_record_specialized_call`), not at emit time. The inner
+call's `call->type` is the elab-collapsed int64 carrier -- `B` is bound only by
+the ACTIVE spec, not by anything the call itself carries -- so the interned
+spec's result stayed `int64_t`.
+
+emit_module.c already had the fix for this, "M6 / gap G6(c)", whose comment
+describes the bug in advance:
+
+> Recover the concrete PRIMITIVE / register-class result from the active
+> spec's bindings so the call resolves to the right return-spec
+> (`re_cata__spec__double`) instead of a spurious int64 sibling whose return
+> register class (rax vs xmm0) is wrong.
+
+It was gated on `is_passed_closure_clone`. `use-second` is an ordinary
+function spec, so the recovery never ran and produced precisely the spurious
+int64 sibling the comment names. The gate is now dropped.
+
+One correction on the way: removing the gate outright also recovered by-value
+AGGREGATE results, which ride the int64 carrier by deliberate convention --
+un-collapsing one retyped a spec's return while its consumers still passed the
+carrier (`constrained-loop-vec-push-byvalue-result-element` broke with
+"incompatible type for argument 2 of vec_hypush_ex"). Outside a closure clone
+the recovery is therefore held to what the comment always SAID it recovers: a
+register-class primitive. Aggregates keep their own recovery path, the one
+keyed on the call's own bindings.
+
+### 30.3 The actual hole: run.sh never scanned group directories
+
+All three of section 27's bugs shared one cause of INVISIBILITY. `tests/run.sh`
+iterated `tests/fixtures/*/`, and a group directory (`typed/`, `typed-slots/`,
+`recursive-types/`, `lambda-call-head/`, `lang-dispatch/`) is not a fixture --
+it holds them. So its children were dispatched by no compiling harness at all;
+run-turi.sh scans that deep but only interprets. **52 fixtures had never been
+compiled by the default suite.**
+
+run.sh now descends into a group dir. The test is structural and deliberately
+strict: a dir is a group only when it holds NOTHING BUT subdirectories AND at
+least one of them carries an `input.tur`. Both halves earn their keep -- a
+project fixture driven by `build.tur`/`hook.sh` instead of `input.tur`
+(`workspace-ls2/`, `spice-resolver-ok/`, `reader-macros-*`) has regular files
+and stays a fixture, and one whose only entry is a source dir
+(`module-transitive-imports/src/`) passes the first half but fails the second.
+
+A looser first attempt (descend whenever there is no `input.tur`) silently
+DROPPED ~34 project fixtures while still reporting `0 failed` -- the exact
+invisible-coverage-loss this change exists to end, reproduced inside the fix
+for it. It was caught by the arithmetic not working: 52 fixtures added moved
+the total by only 18. The dispatch sets are now diffed explicitly -- the new
+set drops exactly the 5 container dirs (never runnable) and adds exactly the 52
+fixtures -- rather than inferred from a green run.
+
+`tests/run.sh` **2478 passed / 0 failed** (2431 before: +52 fixtures, -5
+container dirs). `tests/run-jit.sh` on the Debug JIT build **2393 passed / 0
+failed / 47 skipped**, with the harness denylist now empty and kept as the
+mechanism for carrying a compile-path miscompile without hiding it.
+
+### 30.4 Closing the phase
+
+All three of J3's finds are fixed (sections 28, 29, 30), and the structural
+gap that hid them is closed. The one thing J3 surfaced that is NOT fixed is
+the second defect section 29 split out --
+docs/reported/cps-colored-noncapture-named-let-recurses-through-entry.md --
+which is a CPS-classification change, not an emitter one.
+
+The J0-era lesson has now paid out four times in this phase: a new engine or
+harness that runs code a previous one skipped finds real, latent product bugs.
+Worth stating the corollary plainly, since it is the reusable part: the bugs
+were not caused by the JIT and were not even engine-specific -- gcc and MIR
+agreed on every one of them. They were invisible because nothing compiled that
+code. Coverage gaps do not announce themselves; they read as green.

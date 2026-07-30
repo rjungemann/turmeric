@@ -757,14 +757,58 @@ export TUR_TSAN _tur_timeout_bin TUR_MTIME
 export -f matches_filter matches_shard write_result run_happy run_negative run_happy_worker run_negative_worker
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
 
-# Happy fixtures: tests/fixtures/* except tests/fixtures/errors
+# Happy fixtures: tests/fixtures/* except tests/fixtures/errors, PLUS the
+# fixtures one level down inside a GROUP directory.
+#
+# A group dir (typed/, typed-slots/, recursive-types/, ...) holds fixtures
+# rather than being one -- it has no input.tur of its own, so the top-level
+# scan skipped both it and its children, and those children were compiled by
+# NO harness (run-turi.sh scans this deep, but only interprets).  That is
+# exactly where two latent miscompiles sat undisturbed until the J3 jit
+# harness compiled them: docs/archive/typed-result-map-cps-clone-struct-assign.md
+# and docs/archive/typed-slots-nested-specialization-float-garbage.md.  Both
+# are fixed, so this scan now covers them and the class cannot re-hide.
+#
+# Detection is structural, not a hard-coded list, and deliberately STRICT: a
+# dir is a group only when it holds NOTHING BUT subdirectories (no regular
+# file of its own -- no input.tur, expected.*, build.tur, hook.sh, marker, or
+# loose *.tur) AND at least one of those subdirectories carries an input.tur.
+#
+# Both halves are load-bearing.  A project fixture driven by build.tur/hook.sh
+# rather than input.tur (workspace-ls2/, spice-resolver-ok/, reader-macros-*)
+# has regular files, so the first half keeps it a fixture.  A project fixture
+# whose only entry is a source dir (module-transitive-imports/src/) passes the
+# first half but fails the second, because src/ has no input.tur.  A looser
+# rule silently DROPPED ~34 such fixtures from the suite while still reporting
+# 0 failed -- the same invisible-coverage-loss this whole change exists to
+# close, so the set inclusion is asserted below rather than assumed.
 shopt -s nullglob
-HAPPY_DIRS=()
-fixture_ordinal=0
+FIXTURE_DIRS=()
 for d in tests/fixtures/*/; do
     d="${d%/}"
     [ "$d" = "tests/fixtures/errors" ] && continue
     [ -d "$d" ] || continue
+    _is_group=0
+    if [ -z "$(find "$d" -maxdepth 1 -type f -print -quit)" ]; then
+        for sub in "$d"/*/; do
+            [ -f "${sub}input.tur" ] && { _is_group=1; break; }
+        done
+    fi
+    if [ "$_is_group" = 0 ]; then
+        FIXTURE_DIRS+=("$d")            # a fixture in its own right
+    else
+        for sub in "$d"/*/; do          # a group dir: take its children
+            sub="${sub%/}"
+            [ -d "$sub" ] || continue
+            [ -f "$sub/input.tur" ] || [ -f "$sub/$(basename "$sub").tur" ] || continue
+            FIXTURE_DIRS+=("$sub")
+        done
+    fi
+done
+
+HAPPY_DIRS=()
+fixture_ordinal=0
+for d in "${FIXTURE_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
     if suite_admits happy "$d" && matches_filter "$name" && matches_shard "$fixture_ordinal"; then
         HAPPY_DIRS+=("$d")

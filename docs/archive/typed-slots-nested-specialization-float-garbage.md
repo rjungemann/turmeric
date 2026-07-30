@@ -1,5 +1,16 @@
 # typed-slots/cs3-nested-specialization: float slot prints garbage -- cc and jit agree
 
+**RESOLVED 2026-07-30.** The inner call resolved to a return-differentiated
+`__spec__int64_t` sibling of `pair-second` (which returns the float's BIT
+PATTERN in an int64), and the caller handed that back through an implicit
+int64->double NUMERIC conversion. The CS3 result recovery that exists to
+prevent exactly this was gated to passed-closure clones; it now applies to any
+active specialization, held to register-class primitives. See
+[jit-engine-j0-findings.md](../upcoming/jit-engine-j0-findings.md) section 30.
+The fixture is off the tests/run-jit.sh denylist and `tests/run.sh` now scans
+group directories, so `typed/*` and `typed-slots/*` are compiled by the default
+suite. The original report follows.
+
 **Severity: medium.** A latent WRONG-OUTPUT miscompile in a fixture no
 compiling harness ever ran (run.sh scans only `tests/fixtures/*/`; this
 lives one level down and was interpreter-covered only). Found 2026-07-30

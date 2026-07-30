@@ -17,14 +17,20 @@ under `tur jit` (Debug: 2,390/0, ctest tur_jit_fixture_tests) and the
 engine triangle is published in the performance guide -- plus three latent
 product bugs found on the way (two nested-fixture miscompiles the compiling
 harnesses never saw, and named-let self-recursion relying on gcc sibling
-calls). Two of those three are **fixed 2026-07-30**: the cps->direct
-aggregate-carrier bridge (findings 28), which retires `typed/result-basic`
-from the harness denylist; and named-let self-TCO for the capturing form
-(findings 29), which also split a second, worse defect out from under it
-(a non-capturing named let is CPS-colored and recurses through its own DK
-entry wrapper -- filed) and corrected a performance-guide guarantee whose
-worked example did not survive its own claim. Debug jit harness now
-2,392/0/48. J4 remains optional, post-usage-data. Plan written 2026-07-27; J0 spike
+calls). **All three are fixed 2026-07-30** (findings 28-30): the cps->direct
+aggregate-carrier bridge; named-let self-TCO for the capturing form, which
+also split a second, worse defect out from under it (a non-capturing named
+let is CPS-colored and recurses through its own DK entry wrapper -- filed)
+and corrected a performance-guide guarantee whose worked example did not
+survive its own claim; and the CS3 nested-spec result recovery, which was
+selecting a return-differentiated int64 sibling and converting a float's
+bit pattern instead of reinterpreting it. The harness denylist is empty,
+and the structural gap that hid all three is closed: `tests/run.sh` now
+descends into fixture GROUP directories, so the 52 `typed/*`,
+`typed-slots/*`, `recursive-types/*`, `lambda-call-head/*` and
+`lang-dispatch/*` fixtures -- which no compiling harness had ever run --
+are compiled by the default suite (2,478/0; Debug jit harness 2,393/0/47).
+J4 remains optional, post-usage-data. Plan written 2026-07-27; J0 spike
 run 2026-07-28, S1 the same day, S1b 2026-07-29 -- results in
 [jit-engine-j0-findings.md](jit-engine-j0-findings.md) (sections 11 and 12).
 Full-corpus coverage under the spike harness is **1647/1680 (98.0%)**, with
