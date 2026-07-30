@@ -1046,6 +1046,47 @@ static Type emit_abi_instantiate_type(const Type *t,
             *out.as.app.arg = arg;
             return out;
         }
+        case TY_FN: {
+            if (!t->as.fn.arg_full_types && !t->as.fn.result_full_type) return *t;
+            Type out = *t;
+            if (t->as.fn.arity > 0 && t->as.fn.arg_full_types && t->as.fn.arg_kinds) {
+                Type **nfull = (Type **)emit_abi_type_scratch(
+                    arena, (size_t)t->as.fn.arity * sizeof(Type *));
+                uint8_t *nkinds = (uint8_t *)emit_abi_type_scratch(
+                    arena, (size_t)t->as.fn.arity * sizeof(uint8_t));
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+                    nkinds[i] = t->as.fn.arg_kinds[i];
+                    nfull[i] = t->as.fn.arg_full_types[i];
+                    if (!t->as.fn.arg_full_types[i]) continue;
+                    Type sub = emit_abi_instantiate_type(
+                        t->as.fn.arg_full_types[i], bindings, n_bindings, arena);
+                    Type *slot = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                    *slot = sub;
+                    /* Only adopt the substitution when it actually RESOLVED.
+                     * A context whose bindings do not cover this tyvar leaves
+                     * `sub` a TY_TYVAR; overwriting the stable erased kind with
+                     * it renames the monomorph (`fn1_int__int` ->
+                     * `fn1_struct__struct`, `struct` being the tyvar token) so
+                     * the definition no longer matches its forward declaration. */
+                    if (sub.kind == TY_TYVAR || sub.kind == TY_UNKNOWN) continue;
+                    nfull[i] = slot;
+                    nkinds[i] = (uint8_t)sub.kind;
+                }
+                out.as.fn.arg_full_types = nfull;
+                out.as.fn.arg_kinds = nkinds;
+            }
+            if (t->as.fn.result_full_type) {
+                Type sub = emit_abi_instantiate_type(t->as.fn.result_full_type,
+                                                    bindings, n_bindings, arena);
+                Type *slot = (Type *)emit_abi_type_scratch(arena, sizeof(Type));
+                *slot = sub;
+                if (sub.kind != TY_TYVAR && sub.kind != TY_UNKNOWN) {
+                    out.as.fn.result_full_type = slot;
+                    out.as.fn.result_kind = sub.kind;
+                }
+            }
+            return out;
+        }
         case TY_UNION: {
             Type out = *t;
             if (t->as.union_.n_members == 0 || !t->as.union_.members) return out;

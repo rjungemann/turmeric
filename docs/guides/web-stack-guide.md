@@ -24,48 +24,48 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 ### `tur-httpd` only
 
 ```turmeric no-check
-:spices {
-  "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "httpd-v0.1.0"
-           :subdir "spices/httpd"}
+:spices #map{
+  "httpd" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "httpd-v0.1.0"
+               :subdir "spices/httpd"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "httpd" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "httpd-v0.1.0"
-           :subdir "spices/httpd"}
+#map{
+  "httpd" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "httpd-v0.1.0"
+               :subdir "spices/httpd"}
 }
 ```
 
 ### Full stack (httpd + template + tourist)
 
 ```turmeric no-check
-:spices {
-  "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "httpd-v0.1.0"
-              :subdir "spices/httpd"}
-  "template" {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "template-v0.1.0"
-              :subdir "spices/template"}
-  "tourist"  {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "tourist-v0.1.0"
-              :subdir "spices/tourist"}
+:spices #map{
+  "httpd"    #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "httpd-v0.1.0"
+                  :subdir "spices/httpd"}
+  "template" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "template-v0.1.0"
+                  :subdir "spices/template"}
+  "tourist"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "tourist-v0.1.0"
+                  :subdir "spices/tourist"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "httpd"    {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "httpd-v0.1.0"
-              :subdir "spices/httpd"}
-  "template" {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "template-v0.1.0"
-              :subdir "spices/template"}
-  "tourist"  {:url    "https://github.com/rjungemann/turmeric-spices"
-              :ref    "tourist-v0.1.0"
-              :subdir "spices/tourist"}
+#map{
+  "httpd"    #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "httpd-v0.1.0"
+                  :subdir "spices/httpd"}
+  "template" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "template-v0.1.0"
+                  :subdir "spices/template"}
+  "tourist"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+                  :ref    "tourist-v0.1.0"
+                  :subdir "spices/tourist"}
 }
 ```
 

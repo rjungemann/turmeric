@@ -14,6 +14,16 @@ For each adjacent turmeric+sweet-exp block pair found, the checker reports:
   - Whether the pair is non-empty on both sides
   - (if 'tur' binary available) parse-equality: both blocks parse to the same AST
 
+Independently of pairing, every fenced block whose first form is
+`(defpackage ...)` is shape-checked as a build.tur with `tur fetch --dry-run`
+(no network). Mark a block ```turmeric no-manifest-check to opt out. This is
+gap (1) of docs/archive/spice-guides-bare-brace-manifest-syntax.md: manifest
+snippets are the ones most likely to be pasted verbatim, and 107 of them had
+rotted into hard parse errors with nothing to notice.
+
+The 'tur' binary is taken from --tur, then $PATH, then ./build/tur. Without it
+both the parse-equality and manifest checks silently no-op.
+
 With --strict-unpaired the checker also fails when a turmeric block is NOT
 followed by an adjacent sweet-exp sibling. Mark a block ```turmeric no-check
 to opt out (used for install / config / API signature blocks).
@@ -148,6 +158,73 @@ def try_parse_check(tur_src: str, sweet_src: str, tur_bin: str) -> list[str]:
     return errors
 
 
+# `lisp` is in the set because README.md fences its manifest snippets that way
+# -- the front door, and 5 of the 107 rotted sites.
+ANY_BLOCK_OPEN_RE = re.compile(r'(?m)^```(?P<lang>turmeric|sweet-exp|lisp)(?P<mods>[^\n]*)\n')
+# A manifest block is one whose first real form is (defpackage ...) -- plain --
+# or `defpackage ...` at column 0 -- sweet-exp.
+DEFPACKAGE_RE = re.compile(r'(?m)^\s*\(?defpackage\b')
+
+
+def find_manifest_blocks(text: str) -> list[tuple[str, str, int]]:
+    """Return (src, lang, line_number) for every fenced block that is a build.tur.
+
+    docs/archive/spice-guides-bare-brace-manifest-syntax.md, gap (1): a
+    ```turmeric fence in a guide is unvalidated prose, so 107 manifest snippets
+    across the guides and the README rotted into a hard parse error (bare
+    `{...}` became curly-infix) without anything noticing. Manifests are the
+    worst case for that -- they are the snippets most likely to be pasted
+    verbatim by someone starting a project -- and unlike a general doc-compiler
+    they are cheap to validate: `tur fetch --dry-run` reads and shape-checks the
+    manifest without touching the network.
+
+    `no-check` does NOT opt a block out here. That marker means "this block has
+    no sweet-exp companion", which is true of almost every manifest snippet --
+    and those are precisely the ones that rotted. Use `no-manifest-check` for a
+    snippet that is deliberately not a valid manifest (an error example, a
+    fragment shown mid-edit).
+    """
+    blocks = []
+    for m in ANY_BLOCK_OPEN_RE.finditer(text):
+        if 'no-manifest-check' in (m.group('mods') or '').split():
+            continue
+        src, _ = _read_fenced_block(text, m.end())
+        if not DEFPACKAGE_RE.search(src):
+            continue
+        blocks.append((src, m.group('lang'), text[:m.start()].count('\n') + 1))
+    return blocks
+
+
+def check_manifest(src: str, lang: str, tur_bin: str) -> list[str]:
+    """Shape-check one manifest snippet with `tur fetch --dry-run`.
+
+    Only manifest-level diagnostics (those prefixed with the manifest filename)
+    are treated as failures, and existence checks are excluded on top of that: a
+    snippet legitimately names `:c-sources`/`:include-dirs`/`:path` entries that
+    exist only in the reader's own project, and "not found" is a fact about this
+    temp dir, not a defect in the doc. What remains is exactly the syntax and
+    shape checking the report asked for.
+    """
+    RESOLUTION_ONLY = ('not found (resolved to',)
+    name = 'build.tur.sweet' if lang == 'sweet-exp' else 'build.tur'
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / name).write_text(src, encoding='utf-8')
+        try:
+            result = subprocess.run(
+                [tur_bin, 'fetch', '--dry-run'],
+                cwd=td, capture_output=True, text=True, timeout=20,
+            )
+        except FileNotFoundError:
+            return []            # tur binary not available; skip
+        except subprocess.TimeoutExpired:
+            return ['manifest check timed out']
+    out = (result.stderr or '') + (result.stdout or '')
+    bad = [ln for ln in out.splitlines()
+           if ln.startswith(name + ':')
+           and not any(sub in ln for sub in RESOLUTION_ONLY)]
+    return [f'manifest snippet does not parse: {bad[0]}'] if bad else []
+
+
 def find_unpaired_turmeric(text: str) -> list[tuple[int, str]]:
     """
     Return list of (line_number, modifier_string) for every turmeric block
@@ -169,11 +246,13 @@ def find_unpaired_turmeric(text: str) -> list[tuple[int, str]]:
 
 
 def check_file(path: Path, tur_bin: str | None, verbose: bool,
-               strict_unpaired: bool = False) -> tuple[int, int, int, int]:
-    """Returns (pairs_found, pairs_ok, pairs_failed, unpaired_failed)."""
+               strict_unpaired: bool = False) -> tuple[int, int, int, int, int, int]:
+    """Returns (pairs_found, pairs_ok, pairs_failed, unpaired_failed,
+    manifests_found, manifests_failed)."""
     text = path.read_text(encoding='utf-8')
     pairs = find_pairs(text)
     ok = failed = unpaired_failed = 0
+    manifests = man_failed = 0
     for tur_src, sweet_src, line_no in pairs:
         errors: list[str] = []
         errors += check_nonempty(tur_src, sweet_src)
@@ -199,7 +278,19 @@ def check_file(path: Path, tur_bin: str | None, verbose: bool,
                   '```sweet-exp sibling')
             print(f'      add a sweet-exp companion, or mark as ```turmeric no-check')
 
-    return len(pairs), ok, failed, unpaired_failed
+    if tur_bin:
+        for src, lang, line_no in find_manifest_blocks(text):
+            manifests += 1
+            errors = check_manifest(src, lang, tur_bin)
+            if errors:
+                man_failed += 1
+                print(f'FAIL  {path}:{line_no}')
+                for e in errors:
+                    print(f'      {e}')
+            elif verbose:
+                print(f'ok    {path}:{line_no} (manifest)')
+
+    return len(pairs), ok, failed, unpaired_failed, manifests, man_failed
 
 
 def collect_md_files(paths: list[str], include_readme: bool) -> list[Path]:
@@ -261,18 +352,26 @@ def main() -> None:
         p.error('no paths given (use --spices or pass a path)')
 
     tur_bin = args.tur or shutil.which('tur')
+    if not tur_bin:
+        for cand in (Path('build/tur'), Path('build-release/tur')):
+            if cand.is_file():
+                tur_bin = str(cand.resolve())
+                break
 
     md_files = collect_md_files(args.paths, include_readme=args.spices)
 
     total_pairs = total_ok = total_failed = total_unpaired = 0
+    total_manifests = total_man_failed = 0
     for f in md_files:
-        n, ok, fail, unpaired = check_file(
+        n, ok, fail, unpaired, manifests, man_failed = check_file(
             f, tur_bin, args.verbose, strict_unpaired=args.strict_unpaired,
         )
         total_pairs += n
         total_ok += ok
         total_failed += fail
         total_unpaired += unpaired
+        total_manifests += manifests
+        total_man_failed += man_failed
 
     paired_guides = sum(
         1 for f in md_files
@@ -287,12 +386,14 @@ def main() -> None:
     print(f'Pairs failed     : {total_failed}')
     if args.strict_unpaired:
         print(f'Unpaired blocks  : {total_unpaired}')
+    print(f'Manifests found  : {total_manifests}')
+    print(f'Manifests failed : {total_man_failed}')
     if tur_bin:
-        print(f'Checker          : {tur_bin} (parse-check)')
+        print(f'Checker          : {tur_bin} (parse-check + manifest dry-run)')
     else:
         print('Checker          : basic only (tur binary not found; skipped parse-check)')
 
-    if total_failed > 0 or total_unpaired > 0:
+    if total_failed > 0 or total_unpaired > 0 or total_man_failed > 0:
         sys.exit(1)
     if args.require_pairs and total_pairs == 0:
         print('error: no pairs found', file=sys.stderr)

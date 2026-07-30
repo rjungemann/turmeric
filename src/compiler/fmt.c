@@ -891,7 +891,10 @@ static void fmt_vec_broken(FmtState *s, const Form *f) {
 
 /* #{k v\n  k v} */
 static void fmt_map_broken(FmtState *s, const Form *f) {
-    const char *open = fx_map_open(f);
+    /* `#map{...}` (F_MAP_LITERAL) shares this layout -- it is the canonical
+     * manifest spelling, and a `:spices #map{...}` with several deps is exactly
+     * the case that overruns the line width. */
+    const char *open = (f->tag == F_MAP_LITERAL) ? "#map{" : fx_map_open(f);
     uint32_t inner = s->col + (uint32_t)strlen(open); /* past the '#{'/'#fx{' */
     uint32_t n = f->as.list.len;
     fs_puts(s, open);
@@ -1131,8 +1134,18 @@ static void fmt_form(FmtState *s, const Form *f) {
         case F_RANGE_VAR:
             if (f->as.list.len > 1) fmt_form(s, f->as.list.items[1]);
             break;
-        /* DL0: data literals -- emit inline (#map{...} / #set{...} / #row{...}) */
-        case F_MAP_LITERAL:
+        /* DL0: data literals.  `#map{...}` breaks across lines when it does not
+         * fit, exactly as `#{...}` does: it is the canonical spelling for a
+         * manifest's :spices / :cmake-deps map, and squashing one of those onto
+         * a single 200-column line is not a formatting outcome anyone wants.
+         * #set{...} / #row{...} stay inline -- their elements are short and
+         * their line-per-element layout has no established shape. */
+        case F_MAP_LITERAL: {
+            uint32_t w = fmt_measure(f);
+            if (s->col + w <= s->opts.line_width) fmt_emit_inline(s, f);
+            else fmt_map_broken(s, f);
+            break;
+        }
         case F_SET_LITERAL:
         case F_ROW_LITERAL:
             fmt_emit_inline(s, f);

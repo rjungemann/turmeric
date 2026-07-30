@@ -48,8 +48,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 PASS=0
 FAIL=0
+SKIP=0
 pass() { PASS=$((PASS + 1)); echo "PASS $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
+# Skips are counted and printed: a check this gate declines to make must not
+# read as a check that passed.
+skip() { SKIP=$((SKIP + 1)); echo "SKIP $1 -- $2"; }
 
 if [ ! -x "$TUR" ]; then
     echo "tests: $TUR not built" >&2
@@ -58,16 +62,34 @@ fi
 
 # Fixtures that build unreachable rc<T> cycles and rely on the collector.
 #
-# Every fixture here gets the ASan-clean checks.  The on/off CONTROL, though,
-# needs output that actually changes when the collector is off -- and that rules
-# out anything measuring retention with mallinfo2, because ASan replaces glibc's
-# allocator and mallinfo2 then reports 0 no matter what.  (Measured:
-# gc-collects-strong-cycle prints a 1,087,232-byte delta with the collector off
-# under normal flags, and 0 under ASan.  Its heap probe is simply blind here.)
+# Every fixture here gets the ASan-clean checks.  Nothing that reads its result
+# from a malloc probe gets an OUTPUT check of any kind, because a malloc probe
+# does not measure the program's own heap once ASan is underneath it.  Measured
+# for gc-collects-strong-cycle:
 #
-# So the control runs only on fixtures whose output comes from the CG6 counters,
-# which are real regardless of which allocator is underneath.
-ASAN_ONLY_FIXTURES="gc-collects-strong-cycle"
+#            collector on   collector off
+#   plain          0           1087232      <- the probe measures; run.sh asserts this
+#   ASan           0                 0      <- the probe is blind
+#
+# Both consequences follow from that one row:
+#
+#   - The on/off CONTROL is impossible: identical output either way.
+#   - The expected-output check is VACUOUS on glibc -- it compares 0 against an
+#     expected 0 that the collector had no part in producing -- and on Darwin it
+#     is worse than vacuous.  There the probe is malloc_zone_statistics on the
+#     default zone, which reads whatever zone ASan installs, and ASan's
+#     quarantine keeps freed blocks accounted as in-use; the fixture then prints
+#     ~800000 (a clean 160 B/iteration of quarantined frees over 5000
+#     iterations, not a leak) and the check fails for a reason that has nothing
+#     to do with the collector.  See
+#     docs/archive/gc-leak-gate-darwin-sanitized-probe-drift.md, and the two
+#     Darwin heap reports archived before it for the same probe-vs-allocator
+#     family.
+#
+# So a probe-output fixture is here for its ASan-clean checks only.  Its output
+# assertion lives in tests/run.sh, which compiles fixtures WITHOUT sanitizers --
+# where the probe measures what it claims to.  The skip is printed, not silent.
+PROBE_OUTPUT_FIXTURES="gc-collects-strong-cycle"
 CONTROL_FIXTURES="exg5-exists-cycle gc-stats-observability rcvec-cycle-is-collected"
 
 # TUR_CC_FLAGS REPLACES the default compiler flags rather than appending, so the
@@ -109,7 +131,7 @@ build_and_run() {
     fi
 }
 
-for f in $ASAN_ONLY_FIXTURES $CONTROL_FIXTURES; do
+for f in $PROBE_OUTPUT_FIXTURES $CONTROL_FIXTURES; do
     dir="tests/fixtures/$f"
     [ -f "$dir/input.tur" ] || { fail "$f-present" "no input.tur"; continue; }
 
@@ -122,7 +144,12 @@ for f in $ASAN_ONLY_FIXTURES $CONTROL_FIXTURES; do
     esac
     on_out=$(cat "$WORK/out.on" 2>/dev/null)
 
-    if [ "$on" = "OK" ]; then
+    case " $PROBE_OUTPUT_FIXTURES " in *" $f "*) probe_output=1 ;; *) probe_output=0 ;; esac
+
+    if [ "$probe_output" = "1" ]; then
+        skip "$f-collector-on-output-matches" \
+             "malloc-probe output is not meaningful under ASan (blind on glibc, quarantine-inflated on Darwin); tests/run.sh asserts it unsanitized"
+    elif [ "$on" = "OK" ]; then
         if [ -f "$dir/expected.stdout" ] && [ "$on_out" = "$(cat "$dir/expected.stdout")" ]; then
             pass "$f-collector-on-output-matches"
         else
@@ -143,6 +170,10 @@ for f in $ASAN_ONLY_FIXTURES $CONTROL_FIXTURES; do
     # on-run did not. Identical output would mean the collector changed nothing
     # and the on-run's success was proving something else.
     case " $CONTROL_FIXTURES " in *" $f "*) run_control=1 ;; *) run_control=0 ;; esac
+    if [ "$run_control" = "0" ]; then
+        skip "$f-collector-is-what-reclaims" \
+             "output comes from a malloc probe, which under ASan reports the sanitizer's allocator rather than the collector's work (identical on/off on glibc; quarantine-inflated on both sides on Darwin)"
+    fi
     if [ "$run_control" = "1" ] && [ "$on" = "OK" ] && [ "$off" = "OK" ]; then
         if [ "$on_out" != "$off_out" ]; then
             pass "$f-collector-is-what-reclaims"
@@ -154,5 +185,5 @@ for f in $ASAN_ONLY_FIXTURES $CONTROL_FIXTURES; do
 done
 
 echo
-echo "gc-leak-gate: $PASS passed, $FAIL failed"
+echo "gc-leak-gate: $PASS passed, $SKIP skipped, $FAIL failed"
 [ "$FAIL" -eq 0 ]

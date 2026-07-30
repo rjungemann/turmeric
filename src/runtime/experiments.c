@@ -183,6 +183,30 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
                                   *   shelve, or bump */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_jit },
+    /* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `::` is a COERCING
+     * cast, so a `defopaque` handle can always be unwrapped to its carrier and
+     * re-wrapped as a fresh value -- which bounds every guarantee built on top
+     * of one (the motivating case is the ECS spice's `frozen` region, whose
+     * uniqueness argument an alias walks straight around; see
+     * docs/reported/frozen-region-aliasing-via-coercing-cast.md).  `:sealed`
+     * makes `::` refuse both directions outside the declaring module.
+     *
+     * Gated because it is a NEW ENCAPSULATION CLAIM whose two-direction rule is
+     * the part most likely to be wrong: sealing the unwrap direction as well as
+     * fabrication is what makes the representation genuinely private, but if
+     * real spices turn out to need cross-module unwraps, the right answer is to
+     * seal only fabrication.  That is the question the gate exists to answer.
+     * With it off, `:sealed` still parses and imposes nothing, so adoption is
+     * not a breaking change for consumers who have not opted in. */
+    { "sealed-opaque",
+      "`(defopaque H :int :sealed)` -- `::` cannot cross the H/representation "
+      "boundary outside H's declaring module",
+      "docs/upcoming/sealed-opaque-plan.md",
+      "0.32.2",                  /* introduced */
+      "0.35.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_sealed_opaque },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };

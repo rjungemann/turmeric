@@ -18,24 +18,24 @@ dataframes and raw float64 columns.
 Add `tur-stats` as a dependency in your `build.tur`:
 
 ```turmeric no-check
-:spices {
-  "frame" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "frame-v0.1.0"
-           :subdir "spices/frame"}
-  "stats" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "stats-v0.1.0"
-           :subdir "spices/stats"}
+:spices #map{
+  "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "frame-v0.1.0"
+               :subdir "spices/frame"}
+  "stats" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "stats-v0.1.0"
+               :subdir "spices/stats"}
 }
 ```
 ```sweet-exp
 :spices
-{
-  "frame" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "frame-v0.1.0"
-           :subdir "spices/frame"}
-  "stats" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "stats-v0.1.0"
-           :subdir "spices/stats"}
+#map{
+  "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "frame-v0.1.0"
+               :subdir "spices/frame"}
+  "stats" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "stats-v0.1.0"
+               :subdir "spices/stats"}
 }
 ```
 

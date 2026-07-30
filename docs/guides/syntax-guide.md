@@ -229,6 +229,54 @@ compound-annotation grammar is in the
 [Type Annotations Guide](type-annotations-guide.md); variadic rules are in the
 function-arity section of the project conventions.
 
+### Naming a type -- `defalias` vs `deftype`
+
+Two forms bind a type name, and they do different things.
+
+`defalias` is the **transparent** alias. The name and its target are the same
+type everywhere, so the alias never shows up in unification -- it is a
+readability tool, not a new type. The target can be any type expression:
+
+```turmeric
+(defalias Sample    :int)                            ; primitive
+(defalias IntList   (Cons int))                      ; type application
+(defalias Point     P)                               ; struct / ADT name
+(defalias Backtrack (fn [] int))                     ; function type
+(defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
+```
+```sweet-exp
+defalias Sample    :int                              ; primitive
+defalias IntList   (Cons int)                        ; type application
+defalias Point     P                                 ; struct / ADT name
+defalias Backtrack (fn [] int)                       ; function type
+defalias NonZero   #refine{ q : int | (not= q 0) }   ; refinement
+```
+
+Because it is transparent, `(defn f [b : Backtrack] : int (b))` applies `b`
+exactly as `(fn [] int)` would, and a `Point` is accepted anywhere a `P` is.
+
+`deftype` is the **recursive type binder**. It wraps its body in a recursive
+type, which is what `Fix`/`Free` need, and takes its parameters as a bracket
+vector:
+
+```turmeric
+(deftype Fix [^f] (f (Fix f)))
+```
+
+That wrapping makes `deftype` the wrong tool for naming a non-recursive type:
+the bound name is a distinct nominal type, so use sites fail to unify with the
+body. Reach for `defalias` there. The one exception is a bare refinement body,
+which `deftype` binds transparently for `stdlib/refine.tur`'s benefit --
+`defalias` handles that case too, and is the clearer spelling in new code.
+
+Neither form takes alias type parameters: `(defalias Name [a] ...)` is an
+error, and a `deftype`'s parameters belong to the recursive type, not to an
+alias. For a named parametric shape, use `defstruct`/`defdata`.
+
+Two more forms are adjacent but distinct: `defopaque` makes a **nominal**
+newtype (deliberately *not* interchangeable with its representation), and
+`defstruct` declares a record.
+
 ### Indentation conventions
 
 Turmeric source follows Clojure-style indentation.
@@ -600,3 +648,53 @@ A short list of pitfalls newcomers hit:
 6. **Mixing up `[...]` positions.** `[...]` is a value (lowers to `vec-of`)
    in expression position and a binding spec (parameter list / `let` bindings)
    in binding position -- the context determines which.
+7. **Naming a definition after a special form.** `(defn return ...)`,
+   `(defn match ...)`, `(defmacro open ...)` are accepted, but a bare call site
+   dispatches to the form, never to your definition. See
+   [Reserved names](#reserved-names) below -- the compiler now flags this as
+   `TUR-W0042` at the definition.
+
+### Reserved names
+
+A call head is matched against the special forms **by name, before any binding,
+macro, or typeclass-method lookup**. Naming a `defn` or `defmacro` after one of
+them is accepted and the binding is created, but every bare `(name ...)` call
+site elaborates as the form, so the definition is unreachable by its bare name.
+The compiler emits **`TUR-W0042`** at the definition; run
+`tur explain TUR-W0042` for the full write-up.
+
+`return` is the one that bites most often -- it is the conventional name for a
+monadic unit, and `(return x)` is always the early-return form. Use `pure`.
+
+Reserved in call-head position:
+
+| Group | Names |
+|---|---|
+| Binding / control | `def` `define` `let` `let*` `letrec` `if` `do` `unsafe` `set!` `while` `case` `defer` `return` `match` `quote` `gensym` `?` `->` `->>` |
+| Definition forms | `defn` `fn` `λ` `extern-c` `defmacro` `defmodule` `import` `export` `load` `defstruct` `make-struct` `defopaque` `defdata` `defgadt` `defclass` `definstance` `defkind` `defrec` `deftype` `defalias` `defdynamic` `defeffect` `defprotocol` |
+| Generators | `gen` `yield` `gen-next` `gen-done?` |
+| References / rc / weak | `ref` `deref` `drop!` `ref?` `weak` `weak?` `upgrade` `lref/new` `rc/of` `rc/clone` `rc/drop` `rc->ptr` `rc/strong-count` `rc/from-ref` `ref/from-rc` |
+| Continuations | `reset` `shift` `shift0` `call/cc` `call/cc*` `escape` `cloneable-reset` `cloneable-shift` `serial-reset` `serial-shift` `cont?` |
+| Effects | `binding` `perform` `handle` `handle-shallow` `try-with` `with-handler` `resume` `discontinue` `compose-handlers` |
+| Types / casts | `as` `type-of` `cast` `is?` `coerce` `&` `&mut` `forall` `exists` `type-app` `::` `pack` `open` |
+| Sessions | `make-protocol` `make-session` |
+| Panic | `panic` `panic-with` `catch-unwind` `catch-panic-of` `panic-payload-type` `panic-payload-value` `panic-payload-file` `panic-payload-line` `panic-payload-downcast` |
+| Unsafe / FFI | `ptr-deref` `ptr-write` `ptr-add` `ptr-sub` `ptr-null?` `ptr-of` `unsafe-cast` `reinterpret` `transmute` `array-get-unchecked` `array-set-unchecked` `raw-malloc` `raw-free` `raw-realloc` `raw-memcpy` `raw-memset` `c-call` `dlopen` `dlsym` `dlclose` |
+| STM / GC | `stm` `retry` `gc!` `gc-enable!` `gc-disable!` `gc-auto!` `gc-collections` `gc-objects-freed` `gc-live-blocks` `gc-candidate-high-water` |
+
+A leading `.` is reserved too: `(.method obj ...)` is method-call syntax, so a
+definition named `.foo` is never reachable as a call head.
+
+**Not reserved -- these are deliberately shadowable.** A user definition of
+`handler`, `with`, `default-of`, or a session op (`send` `recv` `close` `offer`
+`send-to` `recv-from` `choose-left` `choose-right` `recv-timeout`) wins over the
+form, and the map surface (`map-new` `assoc` `dissoc` `get` `has?` `count`
+`merge`) falls back to ordinary call resolution. The arity-gated forms (`async`
+`await` `select` `atomically` `check` `or-else` `thread-spawn` and the `tvar-*`
+ops) intercept only one call shape, so a definition at a different arity is
+genuinely callable -- no warning is emitted for those, and the shadowing is
+worth avoiding anyway.
+
+Inside a `defmodule`, a shadowing definition remains reachable through its
+**qualified** name (`mymod/return`) -- a qualified head symbol never matches a
+special form -- but the bare name stays shadowed, so renaming is still better.

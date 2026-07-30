@@ -172,6 +172,14 @@ add_test(
   COMMAND bash tests/run-tur-new.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `:tur-version` in build.tur (no-compiler-version-constraint-in-manifest):
+# a satisfied range is silent, a missed floor is a hard error AND a non-zero
+# exit, an exceeded ceiling only warns, and a malformed range is an error.
+add_test(
+  NAME tur_version_range
+  COMMAND bash tests/run-tur-version.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Regression for tur-run-alias-breaks-snapshot-ci-guard: `alias NAME :=
 # TARGET` lines used to abort the whole Justfile parse, making recipes
 # after them unreachable.
@@ -204,6 +212,23 @@ add_test(
 add_test(
   NAME tur_span_tests
   COMMAND bash tests/check-span-unknown.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# concrete-codegen-layout-kind-enumerations-drift: append_type_mangle and
+# type_has_concrete_codegen_layout must stay exhaustive over TypeKind, and the
+# mangle must stay injective against type_eq, or two distinct instantiations
+# silently share one monomorph C name.  Source-text check, no build needed.
+add_test(
+  NAME tur_typekind_mangle_tests
+  COMMAND bash tests/check-typekind-mangle-exhaustive.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Same report, behavioural half: compile programs that instantiate one ADT at
+# two type arguments and assert the two monomorphs do not land on one C name
+# (and that no #ifndef-guarded name is defined twice with differing bodies).
+add_test(
+  NAME tur_monomorph_name_collision
+  COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # F2.6 (compiled-shallow-handlers-plan): acceptance probes for `handle-shallow`.
@@ -498,6 +523,19 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_refine_fuzz_src PROPERTIES TIMEOUT 600)
+# Typed-boundary fuzz: correct-by-construction programs routing known values
+# through random wrappers (structs, ADTs, Option/Result, Vec, closures) and
+# boundary crossings, asserting check-accepted => compiles, links, runs, and
+# prints the predicted output.  Shapes reproducing open docs/reported entries
+# are excluded via known_bug_slug (pinned by --known-probes instead), so a
+# finding here is a NEW checker/codegen disagreement.  Smoke size -- run
+# tests/type-fuzz-src.py directly for a session.
+add_test(
+  NAME tur_type_fuzz_src
+  COMMAND bash tests/run-type-fuzz-src.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_type_fuzz_src PROPERTIES TIMEOUT 600)
 # RT5a: the refinement solver on wasm32 -- compiles under Emscripten AND gives
 # the same answers at 32-bit pointers.  Skips cleanly when emcc is absent.
 add_test(
@@ -689,6 +727,17 @@ add_test(
 set_tests_properties(tur_lang_switch_prelude PROPERTIES
   ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
+# map-show-keyword-key-raw-int (root cause B): the auto-show display path keeps
+# the full result type beside the head-only tag, so a collection's elements
+# resolve their own Show instance instead of the int-carrier representative.
+add_test(
+  NAME tur_show_collection_elems
+  COMMAND "${CMAKE_BINARY_DIR}/tur_show_collection_elems"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_show_collection_elems PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # TR2.0: reader macros defined in one eval must stay usable across later evals
 # (pins the contract the incremental-elaboration change must preserve).
 add_test(
@@ -799,6 +848,14 @@ set_tests_properties(tur_env_longlived PROPERTIES
 add_test(
   NAME tur_codegen_reinterpret
   COMMAND "${CMAKE_BINARY_DIR}/tur_codegen_reinterpret"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# Semver + :tur-version range unit test: pins the two bugs pkg_semver_* carried
+# while dead (pre-release ignored, trailing garbage accepted) plus the range
+# grammar, including the 0.x caret rule.
+add_test(
+  NAME tur_semver_range_unit
+  COMMAND "${CMAKE_BINARY_DIR}/tur_semver_range_unit"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Theme E (TP3): arbitrary-arity Kind helper round-trip unit test
@@ -954,7 +1011,7 @@ set_tests_properties(tur_tests tur_cli_tests tur_span_tests tur_flags_tests
                      tur_eval_stm tur_env_teardown tur_env_longlived tur_embed_peripherals
                      tur_collections_embed tur_stdlib_natives_embed
                      tur_reader_macro_cross_eval tur_incremental_elab_diff
-                     tur_lang_switch_prelude
+                     tur_lang_switch_prelude tur_show_collection_elems
                      tur_gc_runtime_copy_parity
                      tur_experiments_user_config_e2e
   PROPERTIES DEPENDS tur

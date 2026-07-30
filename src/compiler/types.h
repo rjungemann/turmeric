@@ -347,6 +347,22 @@ typedef struct AdtDef {
      * skip an opaque one -- it stays the int64 carrier with its name kept only
      * for nominal identity (typeclass dispatch, REPL type tags, mangling). */
     bool        is_opaque;
+    /* sealed-opaque experiment (docs/upcoming/sealed-opaque-plan.md): set by the
+     * `:sealed` attribute on a defopaque.  `::` is a COERCING cast, so an
+     * ordinary opaque can always be unwrapped to its carrier and re-wrapped as a
+     * fresh value -- which bounds every guarantee built on the handle (see
+     * docs/reported/frozen-region-aliasing-via-coercing-cast.md).  When this is
+     * set AND the experiment is enabled, elab_ascribe refuses to cross the
+     * type/representation boundary outside `sealed_module`.  Parsed and recorded
+     * unconditionally; only the ENFORCEMENT is gated, so adopting `:sealed`
+     * downstream does not break consumers who have not opted in. */
+    bool             sealed;
+    /* The module that declared this def, or NULL for a moduleless top level.
+     * Interned, so compare by pointer against `e->current_module_name`.  Only
+     * read for the `sealed` check today; `origin_file_id` above stays the
+     * FILE-granular identity the orphan-instance check uses, which is a
+     * different question (a module can span files). */
+    const Symbol    *sealed_module;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is

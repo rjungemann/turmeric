@@ -1412,6 +1412,13 @@ Expr *elab_defmacro(Elab *e, const Form *call) {
         return NULL;
     }
 
+    /* TUR-W0042: macro dispatch happens AFTER special-form dispatch in
+     * elab_call, so a macro named after a reserved special form is never
+     * expanded at a bare call site.  Same warning, same reasoning as the defn
+     * path (docs/archive/defn-shadows-return-special-form.md). */
+    if (!e->in_stdlib_load)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defmacro");
+
     /* Check if macro already exists */
     if (elab_lookup_macro(e, name_f->as.sym)) {
         diag_emit(DIAG_ERROR, name_f->span,

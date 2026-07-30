@@ -1162,6 +1162,21 @@ __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
         if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;
     return (__tur_cps_fn)0;
 }
+/* A registry MISS used to be called straight through -- i.e. a call to NULL,
+   which lands as a bare SIGSEGV with nothing pointing at the cause.  Only a
+   value whose CPS entry was registered at startup can thread the handler
+   chain, so a miss is a compiler bug, not a user error; say so and stop. */
+__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(intptr_t direct,
+                                                                     const char *who) {
+    __tur_cps_fn f = __tur_cps_lookup(direct);
+    if (!f) {
+        fprintf(stderr, "tur: internal error: no CPS entry registered for "
+                        "effectful fn-value '%s' -- it cannot thread the "
+                        "effect handler chain\n", who ? who : "?");
+        abort();
+    }
+    return f;
+}
 /* Structural-chain reaping (docs/archive/cps-delimited-dk-node-leak.md).
  * reset/handle install a prompt/handler chain as the current continuation and
  * thread it through the delimited body in TAIL position, so the install site
@@ -3756,18 +3771,18 @@ struct __tur_sym {
 };
 #endif
 
-#ifndef TUR_TY_tur_adt_Option__opaque
-#define TUR_TY_tur_adt_Option__opaque
-typedef struct tur_adt_Option__opaque {
+#ifndef TUR_TY_tur_adt_Option__fn1_int__int
+#define TUR_TY_tur_adt_Option__fn1_int__int
+typedef struct tur_adt_Option__fn1_int__int {
     bool is_some;
     void * value;
-} tur_adt_Option__opaque;
+} tur_adt_Option__fn1_int__int;
 #endif
 
-#ifndef TUR_FN_tur_adt_Option__opaque
-#define TUR_FN_tur_adt_Option__opaque
-static tur_adt_Option__opaque ctor_Option__opaque(bool _0, void * _1) {
-    tur_adt_Option__opaque __r;
+#ifndef TUR_FN_tur_adt_Option__fn1_int__int
+#define TUR_FN_tur_adt_Option__fn1_int__int
+static tur_adt_Option__fn1_int__int ctor_Option__fn1_int__int(bool _0, void * _1) {
+    tur_adt_Option__fn1_int__int __r;
     __r.is_some = _0;
     __r.value = _1;
     return __r;
@@ -4195,7 +4210,7 @@ static int64_t replace(int64_t, int64_t);
 static tur_adt_Option__int g();
 static tur_adt_Option__int gn();
 static int64_t dbl(int64_t);
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
@@ -4204,7 +4219,7 @@ static tur_adt_Option__int none__spec__tur_adt_Option__int();
 static bool some___spec__bool_tur_adt_Option__int(tur_adt_Option__int);
 static int64_t unwrap_or__spec__int64_t_tur_adt_Option__int_int64_t(tur_adt_Option__int, int64_t);
 static tur_adt_Option__int option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int, int64_t);
-static bool option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool(tur_adt_Option__int, tur_adt_Option__int, int64_t);
+static bool option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int, tur_adt_Option__int, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -4717,7 +4732,7 @@ static int64_t list_hyeq_qu__cps(int64_t l1_1033, int64_t l2_1034, int64_t cmp_f
 static int64_t _un_uncons_hyfmap__cps(int64_t cell_1045, void * f_1046, DK *__kont);
 static int64_t set_hyeq_hyloop__cps(void * iter_1122, void * s2_hyhamt_1123, void * keyeq_1124, DK *__kont);
 static int64_t option_map__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o_863, int64_t f, DK *__kont);
-static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool__cps(tur_adt_Option__int o1_865, tur_adt_Option__int o2_866, int64_t cmp_fn, DK *__kont);
+static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o1_865, tur_adt_Option__int o2_866, int64_t cmp_fn, DK *__kont);
 static int64_t hamt_slnew__cps(DK *__kont) {
     void * __t0;
     void * __ps_42 = (tur_hamt_new());
@@ -7771,7 +7786,7 @@ int main(int argc, char **argv) {
         __t185[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t185[1] = (int64_t)(intptr_t)__fn_1332;
         void *__t187 = __t185;
-        bool __ps_188 = (option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool(__ps_183, __ps_184, (int64_t)(intptr_t)(__t187)));
+        bool __ps_188 = (option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t(__ps_183, __ps_184, (int64_t)(intptr_t)(__t187)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts((__ps_188) ? "true" : "false");
         tur_adt_Option__int __ps_189 = (g());
@@ -7784,7 +7799,7 @@ int main(int argc, char **argv) {
         __t191[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
         __t191[1] = (int64_t)(intptr_t)__fn_1336;
         void *__t193 = __t191;
-        bool __ps_194 = (option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool(__ps_189, __ps_190, (int64_t)(intptr_t)(__t193)));
+        bool __ps_194 = (option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t(__ps_189, __ps_190, (int64_t)(intptr_t)(__t193)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts((__ps_194) ? "true" : "false");
         tur_adt_Option__int __ps_195 = (some__spec__tur_adt_Option__int_int64_t(INT64_C(1)));
@@ -7802,7 +7817,7 @@ int main(int argc, char **argv) {
         return (int)__t199;
 }
 
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {
         return (bool)(o).is_some;
 }
 
@@ -7883,7 +7898,7 @@ __attribute__((unused)) static tur_adt_Option__int option_map__spec__tur_adt_Opt
     if (!tur_async_suspended && --__dk_entry_depth == 0) __dk_reap_run();
     return __ret;
 }
-static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool__cps(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn, DK *__kont) {
+static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn, DK *__kont) {
     bool __t0;
     bool __t209;
     if ((bool)(o1).is_some) {
@@ -7902,12 +7917,12 @@ static int64_t option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bo
     __t0 = __t209;
     return dk_run(__kont, (intptr_t)(__t0));
 }
-__attribute__((unused)) static bool option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn) {
+__attribute__((unused)) static bool option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t(tur_adt_Option__int o1, tur_adt_Option__int o2, int64_t cmp_fn) {
     __dk_entry_depth++;
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     jmp_buf __dkjb; jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
-    if (setjmp(__dkjb) == 0) { __r = option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_bool__cps(o1, o2, cmp_fn, __root); }
+    if (setjmp(__dkjb) == 0) { __r = option_eq___spec__bool_tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(o1, o2, cmp_fn, __root); }
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);

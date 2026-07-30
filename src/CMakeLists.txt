@@ -644,6 +644,27 @@ set_target_properties(tur_lang_switch_prelude PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# map-show-keyword-key-raw-int (root cause B): the REPL auto-show path must
+# show a collection's elements through their own Show instances rather than the
+# int-carrier representative, which printed raw carrier integers for Sym AND
+# cstr keys alike.
+# ---------------------------------------------------------------------------
+add_executable(tur_show_collection_elems ${CMAKE_SOURCE_DIR}/tests/turi/show-collection-elems.c)
+target_include_directories(tur_show_collection_elems PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_show_collection_elems PRIVATE libturi)
+target_compile_options(tur_show_collection_elems PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_show_collection_elems PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_show_collection_elems PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
 # TR2.0 (turi-incremental-elaboration-design): cross-eval reader-macro coverage
 # ---------------------------------------------------------------------------
 add_executable(tur_reader_macro_cross_eval ${CMAKE_SOURCE_DIR}/tests/turi/reader-macro-cross-eval.c)
@@ -975,6 +996,32 @@ if(HAVE_EDITLINE)
     target_compile_definitions(tur_codegen_carrier_bridge PRIVATE TURI_HAVE_EDITLINE=1)
 endif()
 set_target_properties(tur_codegen_carrier_bridge PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# Semver + :tur-version range unit test (pkg_semver_* were dead code carrying
+# two bugs; :tur-version is the first caller).
+# ---------------------------------------------------------------------------
+add_executable(tur_semver_range_unit
+    ${CMAKE_SOURCE_DIR}/tests/compiler/test_semver_range.c
+    $<TARGET_OBJECTS:tur_core>
+)
+target_include_directories(tur_semver_range_unit PRIVATE ${TUR_INCLUDE_DIRS})
+target_compile_options(tur_semver_range_unit PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_semver_range_unit PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+target_link_libraries(tur_semver_range_unit PRIVATE m)
+if(HAVE_EDITLINE)
+    target_link_libraries(tur_semver_range_unit PRIVATE ${LIBEDIT_LIB})
+    target_compile_definitions(tur_semver_range_unit PRIVATE TURI_HAVE_EDITLINE=1)
+endif()
+set_target_properties(tur_semver_range_unit PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 

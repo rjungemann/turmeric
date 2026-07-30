@@ -313,9 +313,12 @@ spices:
     python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json
 
 
-# Check that every turmeric+sweet-exp toggle pair in the guides is valid.
+# Check that every turmeric+sweet-exp toggle pair in the guides is valid, and
+# that every build.tur snippet in the guides and the README actually parses.
+# README.md is in the list on purpose: it is the front door, and its manifest
+# snippet is the first thing a new user copies.
 check-guides:
-    python3 tools/check-guide-pairs.py docs/guides/
+    python3 tools/check-guide-pairs.py README.md docs/guides/
 
 # Strict check for spice READMEs: every `turmeric block must have an adjacent
 # `sweet-exp sibling (or be marked `turmeric no-check`).

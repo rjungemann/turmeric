@@ -2929,6 +2929,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
         diag_emit(DIAG_ERROR, name_f->span, "defn name must be a symbol");
         return NULL;
     }
+    /* TUR-W0042 (docs/archive/defn-shadows-return-special-form.md): defining a
+     * function whose name is a reserved special form (`return`, `match`, ...)
+     * is accepted and bound, but every bare call site dispatches to the special
+     * form instead.  Warn HERE, at the definition, rather than leaving the
+     * author to decode a type error against the caller's argument.  Suppressed
+     * during stdlib auto-load and for specialization clones (which re-elaborate
+     * the same Form and would double-report). */
+    if (!e->in_stdlib_load && !e->bare_fat_spec_active)
+        tur_warn_if_shadows_special_form(name_f->as.sym, name_f->span, "defn");
+
     Binding *existing = scope_lookup(e->scope, name_f->as.sym);
     /* bare-fat-result-monomorphization: a specialized clone re-elaborates the
      * same `(defn ...)` Form under a mangled name, so the original (lazy)
@@ -3857,15 +3867,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     params[n_params - 1]->type = type_from_kind(ck);
                     params[n_params - 1]->type.copy_kind = typekind_default_copy_kind(ck);
                 } else {
-                    /* Phase TA1: check defalias table */
+                    /* Phase TA1/TA2: check defalias table.  Copy the full
+                     * target type so a composite alias keeps its payload
+                     * (element types, struct def, fn signature). */
                     const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
-                    TypeKind ak = TY_UNKNOWN;
+                    const Type *at = NULL;
                     for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
-                        if (e->type_alias_names[ai] == ksym) { ak = e->type_alias_kinds[ai]; break; }
+                        if (e->type_alias_names[ai] == ksym) { at = e->type_alias_types[ai]; break; }
                     }
-                    if (ak != TY_UNKNOWN) {
-                        param_kinds[n_params - 1] = ak;
-                        params[n_params - 1]->type = type_from_kind(ak);
+                    if (at) {
+                        param_kinds[n_params - 1] = at->kind;
+                        params[n_params - 1]->type = *at;
                     } else {
                     /* Try to look up as ADT name */
                     AdtDef *param_adt = NULL;
@@ -4230,13 +4242,31 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 } else if (ck != TY_UNKNOWN) {
                     return_kind = ck;
                 } else {
-                    /* Phase TA1: check defalias table */
+                    /* Phase TA1/TA2: check defalias table.  A composite target
+                     * has to thread its full type through the same capture
+                     * variables the `: (type-expr)` path uses below, or the
+                     * payload (struct def, fn signature, app args) is lost and
+                     * call sites see a bare shell of the right kind. */
                     bool alias_found = false;
                     {
                         const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
                         for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                             if (e->type_alias_names[ai] == ksym) {
-                                return_kind = e->type_alias_kinds[ai];
+                                Type *at = e->type_alias_types[ai];
+                                return_kind = at->kind;
+                                switch (at->kind) {
+                                case TY_ADT:       return_adt_def       = at->as.adt_.def; break;
+                                case TY_SESSION:
+                                case TY_ROLE:      return_session_type  = at; break;
+                                case TY_APP:       return_app_type      = at; break;
+                                case TY_EXISTS:
+                                case TY_FORALL:    return_exists_type   = at; break;
+                                case TY_FN:        return_fn_type       = at; break;
+                                case TY_TYVAR:     return_tyvar_type    = at; break;
+                                case TY_REF_IMMUT:
+                                case TY_REF_MUT:   return_borrow_type   = at; break;
+                                default: break;
+                                }
                                 alias_found = true;
                                 break;
                             }
@@ -6368,12 +6398,13 @@ Expr *elab_fn(Elab *e, const Form *call) {
                  * int64 carrier and the value's struct type was lost at the
                  * call site -- a following (.field ...) could not resolve. */
                 bool resolved_nominal = false;
-                /* defalias table (mirror elab_defn's TA1 ladder) */
+                /* defalias table (mirror elab_defn's TA1/TA2 ladder) */
                 {
                     const Symbol *ksym = symtab_intern(e->st, strslice(kw->name, kw->len));
                     for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                         if (e->type_alias_names[ai] == ksym) {
-                            return_kind = e->type_alias_kinds[ai];
+                            return_kind      = e->type_alias_kinds[ai];
+                            return_full_type = e->type_alias_types[ai];
                             resolved_nominal = true;
                             break;
                         }

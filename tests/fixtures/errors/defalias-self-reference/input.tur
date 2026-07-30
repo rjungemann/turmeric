@@ -1,0 +1,3 @@
+;; A transparent alias to itself never terminates at a use site; the recursive
+;; type binder is `deftype`, not `defalias`.
+(defalias Loop Loop)

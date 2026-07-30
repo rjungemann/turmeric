@@ -76,7 +76,7 @@ A complete library manifest:
   :authors     ["Your Name <you@example.com>"]
   :repository  "https://github.com/you/tur-mylib"
 
-  :exports {
+  :exports #map{
     "mylib/core" ["some-fn" "another-fn"]
     "mylib/util" ["helper-fn"]
   })
@@ -91,7 +91,7 @@ defpackage tur-mylib
   :authors     ["Your Name <you@example.com>"]
   :repository  "https://github.com/you/tur-mylib"
 
-  :exports {
+  :exports #map{
     "mylib/core" ["some-fn" "another-fn"]
     "mylib/util" ["helper-fn"]
   }
@@ -103,6 +103,7 @@ defpackage tur-mylib
 |---|---|---|
 | `:name` | Yes | Must match `[a-z][a-z0-9-]*` |
 | `:version` | Yes | Semver: `MAJOR.MINOR.PATCH` |
+| `:tur-version` | Recommended | Which **compiler** versions this spice works with -- see [Declaring a compiler version range](#declaring-a-compiler-version-range-tur-version) |
 | `:description` | Recommended | One-line summary |
 | `:license` | Recommended | SPDX identifier (e.g. `"MIT"`) |
 | `:authors` | Recommended | `"Name <email>"` list |
@@ -114,13 +115,94 @@ defpackage tur-mylib
 
 ---
 
+## Declaring a compiler version range (`:tur-version`)
+
+`:version` is *your* version. `:tur-version` is which **`tur` versions your
+spice is valid under** -- a different question, and the one consumers hit:
+
+```turmeric
+(defpackage my-spice
+  :version     "0.4.0"
+  :tur-version ">=0.32.2"      ; needs the :sealed defopaque attribute
+  ...)
+```
+
+Declare it whenever you adopt anything version-dependent: new syntax, a
+`:experiments` entry, or a manifest key. Without it, a consumer on an older
+compiler gets an error about *your source* -- a caret under a line that is
+perfectly correct, with nothing suggesting an upgrade:
+
+```
+error: defopaque: unexpected attribute -- expected :linear or :affine
+  |
+1 | (defopaque RGWorld :int :sealed)
+  |                         ^^^^^^^
+```
+
+With a floor declared, they get the actual problem instead (`TUR-E0621`), naming
+the required range and the running version.
+
+### Syntax
+
+Comma-separated conjuncts; all must hold. Each is a comparator or a caret:
+
+| Form | Means |
+|---|---|
+| `">=0.32.2"` | a floor -- the common case |
+| `">=0.32.2, <0.35.0"` | floor and ceiling |
+| `"^0.32.2"` | compatible-update range (see below) |
+| `"0.32.2"` | exactly that version (rarely what you want) |
+
+`~`, `*`, and `||` are **not** supported and are an error rather than a silent
+no-op, so a typo cannot quietly become a different constraint.
+
+**The caret's 0.x rule** is the part that surprises people. `^X.Y.Z` means "from
+`X.Y.Z` up to the next version that could break you" -- and for a pre-1.0
+version that is the next **minor**, because 0.x minors are breaking by
+convention:
+
+- `^0.32.2` admits `0.32.9`, excludes `0.33.0`
+- `^1.2.3` admits `1.9.9`, excludes `2.0.0`
+
+Since `tur` is pre-1.0, `^0.32.2` is a fairly tight constraint. Prefer a plain
+floor (`">=0.32.2"`) unless you specifically want to exclude the next minor.
+
+### Floors are errors, ceilings are warnings
+
+| Situation | Result |
+|---|---|
+| Range satisfied | silent |
+| Compiler **below** the floor | `TUR-E0621`, hard error, non-zero exit |
+| Compiler **above** the ceiling | `TUR-W0623`, warning, build continues |
+| Range malformed | `TUR-E0622`, hard error |
+
+The asymmetry is deliberate. Below a floor, your code genuinely will not
+work. Above a ceiling, it merely has not been *tested* -- which is usually
+fine, and making it fatal would mean every compiler release breaks every spice
+until each author bumps a number. So declare a ceiling to record what you
+tested, not to prevent use.
+
+### Note on adoption
+
+The key can only diagnose skew against compilers that already know about it
+(0.32.2+); older ones ignore unknown manifest keys silently. So declaring it
+helps the *next* consumer, not the one already on an old compiler -- which is a
+reason to add it early rather than when you first need it.
+
+This is also distinct from tvm's `.tur-version` file, which pins *which*
+compiler to install in a directory. `:tur-version` states which compilers your
+source is valid under; a spice consumed as a dependency has no say over the
+former.
+
+---
+
 ## Declaring Exports
 
 The `:exports` map controls what is visible to consumers. Only listed
 symbols are part of the public API; everything else is private.
 
 ```turmeric no-check
-:exports {
+:exports #map{
   "mylib/types" ["Coord" "Rect" "Color"]
   "mylib/draw"  ["draw-rect" "draw-circle" "draw-line"]
   "mylib/io"    ["read-file" "write-file"]
@@ -253,18 +335,18 @@ tur add https://github.com/rjungemann/turmeric-spices \
 This produces:
 
 ```turmeric no-check
-:spices {
-  "math" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "math-v0.1.0"
-          :subdir "spices/math"}
+:spices #map{
+  "math" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "math-v0.1.0"
+              :subdir "spices/math"}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "math" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "math-v0.1.0"
-          :subdir "spices/math"}
+:spices #map{
+  "math" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "math-v0.1.0"
+              :subdir "spices/math"}
 }
 ```
 
@@ -272,20 +354,20 @@ Mark spices that are only needed for tests `:optional true` so consumers
 are not forced to fetch them:
 
 ```turmeric no-check
-:spices {
-  "test" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "test-v0.1.0"
-          :subdir "spices/test"
-          :optional true}
+:spices #map{
+  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "test-v0.1.0"
+              :subdir "spices/test"
+              :optional true}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "test" {:url    "https://github.com/rjungemann/turmeric-spices"
-          :ref    "test-v0.1.0"
-          :subdir "spices/test"
-          :optional true}
+:spices #map{
+  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+              :ref    "test-v0.1.0"
+              :subdir "spices/test"
+              :optional true}
 }
 ```
 
@@ -344,14 +426,14 @@ tur add ../watch --path
 This writes to `build.tur`:
 
 ```turmeric no-check
-:spices {
-  "watch" {:path "../watch"}
+:spices #map{
+  "watch" #map{:path "../watch"}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "watch" {:path "../watch"}
+:spices #map{
+  "watch" #map{:path "../watch"}
 }
 ```
 
@@ -387,18 +469,18 @@ For a spice that will be published and consumed outside the workspace, add a URL
 entry alongside (or instead of) the local one:
 
 ```turmeric no-check
-:spices {
-  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "watch-v0.1.0"
-           :subdir "spices/watch"}
+:spices #map{
+  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "watch-v0.1.0"
+               :subdir "spices/watch"}
 }
 ```
 
 ```sweet-exp
-:spices {
-  "watch" {:url    "https://github.com/rjungemann/turmeric-spices"
-           :ref    "watch-v0.1.0"
-           :subdir "spices/watch"}
+:spices #map{
+  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+               :ref    "watch-v0.1.0"
+               :subdir "spices/watch"}
 }
 ```
 
@@ -418,18 +500,18 @@ compilation step. You write only Turmeric; CMake is an implementation detail.
 ### Declaring the dependency
 
 ```turmeric no-check
-:cmake-deps {
-  "sqlite3" {:url     "https://github.com/sqlite/sqlite"
-             :ref     "version-3.47.2"
-             :options {:BUILD_SHARED_LIBS "OFF"}}
+:cmake-deps #map{
+  "sqlite3" #map{:url     "https://github.com/sqlite/sqlite"
+                 :ref     "version-3.47.2"
+                 :options #map{:BUILD_SHARED_LIBS "OFF"}}
 }
 ```
 
 ```sweet-exp
-:cmake-deps {
-  "sqlite3" {:url     "https://github.com/sqlite/sqlite"
-             :ref     "version-3.47.2"
-             :options {:BUILD_SHARED_LIBS "OFF"}}
+:cmake-deps #map{
+  "sqlite3" #map{:url     "https://github.com/sqlite/sqlite"
+                 :ref     "version-3.47.2"
+                 :options #map{:BUILD_SHARED_LIBS "OFF"}}
 }
 ```
 
@@ -501,11 +583,11 @@ When the CMake `find_package` name or target name differs from the key in
 `:cmake-deps`, supply overrides:
 
 ```turmeric
-:cmake-deps {
-  "sqlite" {:url        "https://github.com/sqlite/sqlite"
-            :ref        "version-3.47.2"
-            :cmake-name "SQLite3"
-            :targets    ["SQLite::SQLite3"]}
+:cmake-deps #map{
+  "sqlite" #map{:url        "https://github.com/sqlite/sqlite"
+                :ref        "version-3.47.2"
+                :cmake-name "SQLite3"
+                :targets    ["SQLite::SQLite3"]}
 }
 ```
 
@@ -518,17 +600,17 @@ every clean `tur fetch` is slow. Add `:prefer-system true` to try CMake's
 copy is found:
 
 ```turmeric
-:cmake-deps {
-  "mbedtls" {:prefer-system true                ;; try find_package first
-             :cmake-name    "MbedTLS"           ;; name passed to find_package
-             :cmake-version "3.0"               ;; optional minimum version
-             :targets       ["MbedTLS::mbedtls"
-                             "MbedTLS::mbedx509"
-                             "MbedTLS::mbedcrypto"]
-             :url           "https://github.com/Mbed-TLS/mbedtls"  ;; fallback
-             :ref           "v3.6.2"
-             :options       {:ENABLE_PROGRAMS "OFF"
-                             :USE_STATIC_MBEDTLS_LIBRARY "ON"}}
+:cmake-deps #map{
+  "mbedtls" #map{:prefer-system true                ;; try find_package first
+                 :cmake-name    "MbedTLS"           ;; name passed to find_package
+                 :cmake-version "3.0"               ;; optional minimum version
+                 :targets       ["MbedTLS::mbedtls"
+                                 "MbedTLS::mbedx509"
+                                 "MbedTLS::mbedcrypto"]
+                 :url           "https://github.com/Mbed-TLS/mbedtls"  ;; fallback
+                 :ref           "v3.6.2"
+                 :options       #map{:ENABLE_PROGRAMS "OFF"
+                                     :USE_STATIC_MBEDTLS_LIBRARY "ON"}}
 }
 ```
 
@@ -991,8 +1073,8 @@ A future v2 will let a project opt in to consuming a globally-installed
 spice as a library by naming it in its `build.tur`:
 
 ```turmeric
-:spices {
-  "notebook" {:global true}
+:spices #map{
+  "notebook" #map{:global true}
 }
 ```
 

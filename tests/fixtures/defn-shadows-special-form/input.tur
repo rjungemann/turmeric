@@ -1,0 +1,30 @@
+; A defn whose name is a reserved special form is accepted and bound, but every
+; bare call site dispatches to the special form instead -- the definition is
+; unreachable by its bare name.  TUR-W0042 says so at the DEFINITION, which is
+; where the mistake is; before it existed the only signal was a type error
+; against the *caller's* argument that never mentioned the shadowing.
+;
+; `return` is the motivating case: it is the conventional name for a monadic
+; unit, and (return x) always elaborates as the early-return form.
+;
+; See docs/archive/defn-shadows-return-special-form.md
+(defn return [x : int] : int
+  (+ x 1))
+
+; A macro named after a special form is equally dead -- macro dispatch happens
+; after special-form dispatch.
+(defmacro match [x] `(+ ,x 1))
+
+; Deliberately-shadowable forms must NOT warn: a user binding named `handler`,
+; `with`, or a session op wins over the form (elab_call gates those on
+; !scope_lookup), and the map surface falls back to ordinary call resolution.
+(defn handler [x : int] : int x)
+(defn with [x : int] : int x)
+(defn recv [x : int] : int x)
+(defn assoc [x : int] : int x)
+
+(defn main [] : int
+  (if (= (+ (handler 1) (+ (with 2) (+ (recv 3) (assoc 4)))) 10)
+    (println "shadowable forms still call the user defn")
+    (println "WRONG"))
+  0)

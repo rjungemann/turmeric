@@ -338,6 +338,9 @@ typedef struct Elab {
     const Symbol *kw_move;        /* :move keyword for defstruct */
     const Symbol *kw_linear;      /* LT4: :linear keyword for defstruct (exactly-once) */
     const Symbol *kw_affine;      /* :affine keyword for defopaque (at-most-once) */
+    const Symbol *kw_sealed;      /* :sealed keyword for defopaque -- `::` cannot
+                                   * cross the type/representation boundary
+                                   * outside the declaring module */
     const Symbol *kw_heap;        /* :heap keyword for defstruct (typed-pointer ABI) */
     const Symbol *kw_no_auto_ctor;/* CTOR-V0: :no-auto-ctor keyword for defstruct */
     /* Phase 12: Borrow traits */
@@ -351,11 +354,16 @@ typedef struct Elab {
     /* Phase HKT-P2: defrec — recursive type binders */
     const Symbol *sym_defrec;      /* defrec */
     const Symbol *sym_deftype;      /* deftype */
-    /* Phase TA1: defalias — primitive type alias declarations */
+    /* Phase TA1/TA2: defalias — transparent type alias declarations.
+     * TA1 accepted primitive keywords only; TA2 accepts any type expression
+     * (composites included), so `type_alias_types` carries the full resolved
+     * target and `type_alias_kinds` is its `kind` field, kept as a fast
+     * TypeKind-only view for the ladders that only need the kind. */
     const Symbol *sym_defalias;
 
     const Symbol **type_alias_names;  /* interned alias name symbols */
-    TypeKind      *type_alias_kinds;  /* resolved target TypeKind */
+    TypeKind      *type_alias_kinds;  /* resolved target TypeKind (== types[i]->kind) */
+    Type         **type_alias_types;  /* resolved target type, arena-allocated */
     uint32_t       n_type_aliases;    /* number of declared aliases */
     uint32_t       cap_type_aliases;  /* allocated capacity */
     /* Phase HKT-P1: type-app — type-level application */

@@ -207,6 +207,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0039_METHOD_DEFN_CLASH:          return "TUR-W0039";
         case TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH: return "TUR-W0040";
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
+        case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -235,6 +236,7 @@ const char *diag_code_to_string(DiagCode code) {
         /* IT1: Union type errors */
         case TUR_E0300_UNION_TYPE_MISMATCH:        return "TUR-E0300";
         case TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH: return "TUR-E0301";
+        case TUR_E0302_SEALED_OPAQUE_CAST:         return "TUR-E0302";
         /* IT3: Intersection type errors */
         case TUR_E0350_INTERSECTION_UNSATISFIABLE:   return "TUR-E0350";
         case TUR_E0351_INTERSECTION_MEMBER_MISMATCH: return "TUR-E0351";
@@ -280,6 +282,9 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0060_EXPERIMENTAL_PROTOTYPE:    return "TUR-W0060";
         case TUR_W0061_EXPERIMENTAL_BETA:         return "TUR-W0061";
         case TUR_E0620_EXPORTS_FX_ROW:            return "TUR-E0620";
+        case TUR_E0621_TUR_VERSION_BELOW_FLOOR:   return "TUR-E0621";
+        case TUR_E0622_TUR_VERSION_MALFORMED:     return "TUR-E0622";
+        case TUR_W0623_TUR_VERSION_ABOVE_CEILING: return "TUR-W0623";
         default:                          return "";
     }
 }
@@ -356,6 +361,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0036") == 0) return TUR_W0036_INLINE_C_MISSING_UNSAFE;
     if (strcmp(s, "TUR-W0040") == 0) return TUR_W0040_EVAL_UNKNOWN_CALL_RUNTIME_DISPATCH;
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
+    if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -384,6 +390,7 @@ DiagCode diag_code_from_string(const char *s) {
     /* IT1: Union type errors */
     if (strcmp(s, "TUR-E0300") == 0) return TUR_E0300_UNION_TYPE_MISMATCH;
     if (strcmp(s, "TUR-E0301") == 0) return TUR_E0301_NON_EXHAUSTIVE_UNION_MATCH;
+    if (strcmp(s, "TUR-E0302") == 0) return TUR_E0302_SEALED_OPAQUE_CAST;
     /* IT3: Intersection type errors */
     if (strcmp(s, "TUR-E0350") == 0) return TUR_E0350_INTERSECTION_UNSATISFIABLE;
     if (strcmp(s, "TUR-E0351") == 0) return TUR_E0351_INTERSECTION_MEMBER_MISMATCH;
@@ -429,6 +436,9 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0060") == 0) return TUR_W0060_EXPERIMENTAL_PROTOTYPE;
     if (strcmp(s, "TUR-W0061") == 0) return TUR_W0061_EXPERIMENTAL_BETA;
     if (strcmp(s, "TUR-E0620") == 0) return TUR_E0620_EXPORTS_FX_ROW;
+    if (strcmp(s, "TUR-E0621") == 0) return TUR_E0621_TUR_VERSION_BELOW_FLOOR;
+    if (strcmp(s, "TUR-E0622") == 0) return TUR_E0622_TUR_VERSION_MALFORMED;
+    if (strcmp(s, "TUR-W0623") == 0) return TUR_W0623_TUR_VERSION_ABOVE_CEILING;
     return DIAG_CODE_NONE;
 }
 
@@ -854,6 +864,31 @@ static const DiagExplanation diag_explanations_[] = {
       "is a safe abstraction over an unsafe implementation:\n"
       "  (defn safe-fn [] :int (unsafe (raw-c-helper)))\n",
     },
+    { TUR_W0042_SHADOWS_SPECIAL_FORM,
+      "TUR-W0042: Definition shadows a special form\n"
+      "\n"
+      "A defn or defmacro was given the name of a reserved special form, e.g.\n"
+      "  (defn return [x :int] : (fn [] int) ...)\n"
+      "\n"
+      "Call heads are matched against the special forms by name BEFORE any\n"
+      "binding, macro, or typeclass-method lookup, so the definition is accepted\n"
+      "but never consulted: a bare (return 1) elaborates as the early-return\n"
+      "form, not as a call to your function. The resulting type error -- if there\n"
+      "is one at all -- lands on the caller's argument and never mentions the\n"
+      "name collision.\n"
+      "\n"
+      "Fix: rename the definition. `pure` is the conventional name for a monadic\n"
+      "unit, which is the usual reason `return` gets reached for:\n"
+      "  (defn pure [x :int] : (fn [] int) ...)\n"
+      "\n"
+      "Inside a defmodule the definition is still reachable through its qualified\n"
+      "name ((mymod/return 1)), since a qualified head symbol never matches a\n"
+      "special form -- but the bare name stays shadowed, so renaming is better.\n"
+      "\n"
+      "Names that are deliberately shadowable (handler, with, default-of, and the\n"
+      "session ops send/recv/close/...) do not trigger this warning: a user\n"
+      "definition of those genuinely wins over the form.\n",
+    },
     /* LT1: Linear type errors */
     { TUR_E0100_LINEAR_DROPPED,
       "TUR-E0100: Linear value dropped without being consumed\n"
@@ -1185,6 +1220,37 @@ static const DiagExplanation diag_explanations_[] = {
       "`(:: v :any)` (or just passing v where an `any` is expected) heap-boxes it\n"
       "as a one-word handle; `(cast h T)` reads it back as T.  See\n"
       "docs/archive/byvalue-adt-int-cast-plan.md.\n",
+    },
+    { TUR_E0302_SEALED_OPAQUE_CAST,
+      "TUR-E0302: Cannot cast across a sealed opaque's representation boundary\n"
+      "\n"
+      "`(defopaque H :int :sealed)` declares that H's representation is private\n"
+      "to the module that defines it.  Outside that module, `::` refuses BOTH\n"
+      "directions: you can neither unwrap an H to its representation nor build\n"
+      "an H from one.\n"
+      "\n"
+      "Example:\n"
+      "  ;; in module ecs/refined-world\n"
+      "  (defopaque RGWorld :int :sealed)\n"
+      "\n"
+      "  ;; in some other module\n"
+      "  (:: w :int)         ; error: cannot unwrap sealed 'RGWorld'\n"
+      "  (:: n RGWorld)      ; error: cannot fabricate sealed 'RGWorld'\n"
+      "\n"
+      "Why this exists: `::` is a COERCING cast, so an ordinary defopaque can\n"
+      "always be unwrapped and re-wrapped -- which mints an ALIAS of a handle\n"
+      "the type system believes is uniquely held.  That bounds every guarantee\n"
+      "built on the handle.  The motivating case is a `frozen` region: mutating\n"
+      "the borrowed world is correctly TUR-E0200, but mutating an alias rebuilt\n"
+      "through `::` was not.\n"
+      "\n"
+      "Fix: go through the declaring module's API.  If you genuinely need the\n"
+      "representation outside, that module should export a function for it --\n"
+      "which makes the escape explicit and reviewable instead of implicit.\n"
+      "\n"
+      "This check is part of the `sealed-opaque` experiment; without\n"
+      "--enable=sealed-opaque, `:sealed` parses but imposes nothing.  See\n"
+      "docs/upcoming/sealed-opaque-plan.md.\n",
     },
     { TUR_E0296_WITH_NOT_COPY,
       "TUR-E0296: `with` requires a :copy type\n"

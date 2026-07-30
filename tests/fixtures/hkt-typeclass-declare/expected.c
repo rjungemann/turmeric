@@ -1162,6 +1162,21 @@ __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup(intptr_t direct) {
         if (__tur_cps_reg[i].direct == direct) return __tur_cps_reg[i].cps;
     return (__tur_cps_fn)0;
 }
+/* A registry MISS used to be called straight through -- i.e. a call to NULL,
+   which lands as a bare SIGSEGV with nothing pointing at the cause.  Only a
+   value whose CPS entry was registered at startup can thread the handler
+   chain, so a miss is a compiler bug, not a user error; say so and stop. */
+__attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(intptr_t direct,
+                                                                     const char *who) {
+    __tur_cps_fn f = __tur_cps_lookup(direct);
+    if (!f) {
+        fprintf(stderr, "tur: internal error: no CPS entry registered for "
+                        "effectful fn-value '%s' -- it cannot thread the "
+                        "effect handler chain\n", who ? who : "?");
+        abort();
+    }
+    return f;
+}
 /* Structural-chain reaping (docs/archive/cps-delimited-dk-node-leak.md).
  * reset/handle install a prompt/handler chain as the current continuation and
  * thread it through the delimited body in TAIL position, so the install site
@@ -3756,18 +3771,18 @@ struct __tur_sym {
 };
 #endif
 
-#ifndef TUR_TY_tur_adt_Option__opaque
-#define TUR_TY_tur_adt_Option__opaque
-typedef struct tur_adt_Option__opaque {
+#ifndef TUR_TY_tur_adt_Option__fn1_int__int
+#define TUR_TY_tur_adt_Option__fn1_int__int
+typedef struct tur_adt_Option__fn1_int__int {
     bool is_some;
     void * value;
-} tur_adt_Option__opaque;
+} tur_adt_Option__fn1_int__int;
 #endif
 
-#ifndef TUR_FN_tur_adt_Option__opaque
-#define TUR_FN_tur_adt_Option__opaque
-static tur_adt_Option__opaque ctor_Option__opaque(bool _0, void * _1) {
-    tur_adt_Option__opaque __r;
+#ifndef TUR_FN_tur_adt_Option__fn1_int__int
+#define TUR_FN_tur_adt_Option__fn1_int__int
+static tur_adt_Option__fn1_int__int ctor_Option__fn1_int__int(bool _0, void * _1) {
+    tur_adt_Option__fn1_int__int __r;
     __r.is_some = _0;
     __r.value = _1;
     return __r;
@@ -4170,7 +4185,7 @@ static const char * sym_hy_gtstr(const struct __tur_sym *);
 static bool sym_eq_qu(const struct __tur_sym *, const struct __tur_sym *);
 static int64_t consume(int64_t, int64_t);
 static int64_t replace(int64_t, int64_t);
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque);
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int);
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t, int64_t);
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t);
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__();
@@ -7645,7 +7660,7 @@ int main(int argc, char **argv) {
         return (int)INT64_C(0);
 }
 
-static bool some___spec__bool_tur_adt_Option__opaque(tur_adt_Option__opaque o) {
+static bool some___spec__bool_tur_adt_Option__fn1_int__int(tur_adt_Option__fn1_int__int o) {
         return (bool)(o).is_some;
 }
 
