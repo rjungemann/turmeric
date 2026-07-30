@@ -2199,7 +2199,7 @@ quiet about it. That suppression is hiding a wrong-code bug on a second backend:
 even without a struct the JIT computes a *different hash*, and the implicit
 `int` return has been truncating this hash to 32 bits on the `cc` path on every
 host all along. Filed:
-[../reported/jit-xxh64-missing-prototype.md](../reported/jit-xxh64-missing-prototype.md).
+[../archive/jit-xxh64-missing-prototype.md](../archive/jit-xxh64-missing-prototype.md).
 
 **(b) `taskgroup-async` -- rc=0, empty stdout.** A silent wrong answer, worse
 than the crash. `emit_module.c` emits **two different, mutually inconsistent**
@@ -2222,7 +2222,7 @@ all: it writes `cancelled`/`done` over the mutex's first two bytes and calls
 `pthread_mutex_lock` on **offset 16**, the middle of the real mutex. That is
 corruption on every platform; it is just on a rarely-exercised panic path.
 Filed:
-[../reported/emitted-taskgroupblock-layout-mismatch.md](../reported/emitted-taskgroupblock-layout-mismatch.md).
+[../archive/emitted-taskgroupblock-layout-mismatch.md](../archive/emitted-taskgroupblock-layout-mismatch.md).
 
 Both defects are arguments *for* plan item **S2**: each exists because the
 inline-C-facing runtime surface has no single declared boundary, so a symbol
@@ -2300,3 +2300,31 @@ cmake -S . -B build-jit-spike -DCMAKE_BUILD_TYPE=Release -DTUR_JIT_SPIKE=ON
 cmake --build build-jit-spike -j --target tur-jit-spike
 bash tools/jit-spike/s2-proof-run.sh          # 8 passed, 0 failed + latency table
 ```
+
+### 20.7 Both macOS-found emitter defects fixed on Linux, same day
+
+Both of 20.3's reports are resolved and archived:
+
+- **xxh64 prototype**: the preamble now declares
+  `uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);` -- hamt.h's
+  exact spelling, emitted after the standard includes. The first attempt sat
+  with the pre-include macro block and broke every fixture on an undeclared
+  `uint64_t` -- findings 14.1's mistake repeated verbatim and re-caught by the
+  suite within one run, which is an argument for the suite and an indictment
+  of the author in equal measure. Note the cc-path side effect: the hash is
+  now the full 64 bits everywhere (it had been silently truncated through the
+  implicit `int` since the fixture existed); no fixture output depends on
+  hash-order, so the suite stayed 2399/0.
+- **TaskGroupBlock**: all THREE emitted typedefs (20.3 found two; a third in
+  `tur_task_group_notify_done` had correct offsets under a misleading
+  trailing field name) now spell the canonical layout verbatim from
+  `stdlib/taskgroup.tur:78`.
+
+Verification on Linux: `map-multiword-struct-key`,
+`set-multiword-struct-element`, and `taskgroup-async` all pass under the
+Linux `tur jit`; suite 2399/0 with 140 snapshots regenerated; the product
+sweep is **byte-identical** (1,633 + 14, zero fixture diffs) -- which is the
+expected shape for fixing defects Linux was surviving by luck. The arm64
+SIGBUS and the silent-empty-stdout repros await confirmation on the next
+macOS run; expected result there is native PASS for all three and
+**1,647/1,680 matching Linux exactly**.

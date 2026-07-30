@@ -1,5 +1,17 @@
 # Emitted `TaskGroupBlock` shims declare the wrong struct layout
 
+**RESOLVED 2026-07-29**: all three emitted `TaskGroupBlock` typedefs (the
+report found two; a third in `tur_task_group_notify_done` had correct offsets
+but a misleading trailing field name) now spell the ONE canonical layout,
+verbatim from `stdlib/taskgroup.tur:78`.  Verified on Linux: `taskgroup-async`
+passes under `tur jit` and cc, suite 2399/0, product sweep byte-identical.
+The macOS silent-empty-stdout repro should be confirmed fixed on the next
+macOS run.  The report's layered-luck analysis (glibc zero byte x clang bool
+masking) is preserved below -- it is the reason this survived every Linux
+sweep.
+
+---
+
 **Severity: high** (host-independent latent memory corruption; currently masked
 on the `cc` path by luck, and already causing a silent wrong answer under
 `tur jit` on arm64 macOS).

@@ -7218,6 +7218,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_hamt) {
         buf_puts(out, "#include \"hamt.h\"\n");
     }
+
     /* WIN1 (windows-support-plan): the emitted C is portable, so the platform
      * split lives in the OUTPUT as #ifdef _WIN32 rather than being decided by
      * whichever host ran `tur emit-c`.  A snapshot generated on Linux therefore
@@ -7269,6 +7270,19 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "extern int      tur_atomic_load_int(const volatile int *);\n");
     buf_puts(out, "extern int      tur_atomic_cas_int(volatile int *, int *, int);\n");
     buf_puts(out, "#endif\n");
+    /* jit-xxh64-missing-prototype (docs/archive): inline-C instance bodies for
+     * multiword struct keys call tur_hamt_hash_xxh64, and NOTHING declared it
+     * -- stdlib/hamt.tur extern-c's its siblings (box_key, box_key_eq) but not
+     * this one.  The implicit declaration truncated the 64-bit hash to int on
+     * the cc path on every host, and under the JIT on arm64 macOS c2mir
+     * lowers the unprototyped call as all-anonymous-variadic (stack-passed on
+     * Apple's ABI), so the callee read garbage registers and took SIGBUS.
+     * Spelled exactly as hamt.h:336 so the two declarations are identical
+     * when g_needs_hamt also includes the header.  HERE, after <stdint.h> /
+     * <stddef.h> -- the first attempt sat with the pre-include macro block
+     * and broke every fixture on an undeclared uint64_t, the exact mistake
+     * findings 14.1 already recorded once. */
+    buf_puts(out, "uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);\n");
     /* Phase T19: Thread primitives - pthread on all supported platforms
      * (MinGW supplies these via winpthreads, so no split is needed). */
     buf_puts(out, "#include <pthread.h>\n");
@@ -8497,7 +8511,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            f->panic_jmpbuf_valid = 0;\n");
     buf_puts(out, "            tur_current_fiber = NULL;\n");
     buf_puts(out, "            if (global_panic_payload) {\n");
-    buf_puts(out, "                typedef struct TaskGroupBlock { bool cancelled; bool done; int64_t cancel_reason; pthread_mutex_t lock; pthread_cond_t done_cond; } TaskGroupBlock;\n");
+    /* emitted-taskgroupblock-layout-mismatch (docs/archive): this shim used
+     * to declare {cancelled, done, cancel_reason, lock, cond} -- fields in the
+     * WRONG ORDER vs what task-group-new allocates, so it wrote the flags over
+     * the mutex's first bytes and locked offset 16, the middle of the real
+     * mutex.  All three emitted TaskGroupBlock typedefs now spell the ONE
+     * canonical layout, verbatim from stdlib/taskgroup.tur:78. */
+    buf_puts(out, "                typedef struct TaskGroupBlock { pthread_mutex_t lock; pthread_cond_t done_cond; int64_t task_count; int64_t completed_count; bool cancelled; bool done; int64_t cancel_reason; } TaskGroupBlock;\n");
     buf_puts(out, "                TaskGroupBlock *g = (TaskGroupBlock *)task_group;\n");
     buf_puts(out, "                pthread_mutex_lock(&g->lock);\n");
     buf_puts(out, "                g->cancelled = true;\n");
@@ -8546,7 +8566,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase T22: Check if fiber or its task group was cancelled before resuming */
     buf_puts(out, "    if (f->cancelled) { f->done = 1; return 0; }\n");
     buf_puts(out, "    if (f->task_group) {\n");
-    buf_puts(out, "        typedef struct TaskGroupBlock { bool cancelled; } TaskGroupBlock;\n");
+    /* emitted-taskgroupblock-layout-mismatch (docs/archive): this shim used
+     * to declare {bool cancelled;} -- reading byte 0 of the initialized MUTEX
+     * as the flag.  glibc leaves that byte 0 and clang masks bool loads to
+     * bit 0, so both cc paths passed by two layers of luck; c2mir tests the
+     * whole byte (0x5A on macOS), so every fiber spawned into a TaskGroup was
+     * born cancelled and taskgroup-async exited silently empty.  Canonical
+     * layout, verbatim from stdlib/taskgroup.tur:78. */
+    buf_puts(out, "        typedef struct TaskGroupBlock { pthread_mutex_t lock; pthread_cond_t done_cond; int64_t task_count; int64_t completed_count; bool cancelled; bool done; int64_t cancel_reason; } TaskGroupBlock;\n");
     buf_puts(out, "        if (((TaskGroupBlock *)f->task_group)->cancelled) { f->cancelled = 1; f->done = 1; return 0; }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
@@ -8623,6 +8650,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Phase T22: TaskGroup notification on fiber completion */
     buf_puts(out, "static void tur_task_group_notify_done(void *task_group) {\n");
     buf_puts(out, "    if (!task_group) return;\n");
+    /* emitted-taskgroupblock-layout-mismatch: this one had the right offsets
+     * for every field it touches, but its trailing field said `pthread_t
+     * owner_thread` where the real block has `int64_t cancel_reason` -- a
+     * misleading name for the next editor.  Canonical layout, verbatim from
+     * stdlib/taskgroup.tur:78. */
     buf_puts(out, "    typedef struct TaskGroupBlock {\n");
     buf_puts(out, "        pthread_mutex_t lock;\n");
     buf_puts(out, "        pthread_cond_t done_cond;\n");
@@ -8630,7 +8662,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        int64_t completed_count;\n");
     buf_puts(out, "        bool cancelled;\n");
     buf_puts(out, "        bool done;\n");
-    buf_puts(out, "        pthread_t owner_thread;\n");
+    buf_puts(out, "        int64_t cancel_reason;\n");
     buf_puts(out, "    } TaskGroupBlock;\n");
     buf_puts(out, "    TaskGroupBlock *g = (TaskGroupBlock *)task_group;\n");
     buf_puts(out, "    pthread_mutex_lock(&g->lock);\n");

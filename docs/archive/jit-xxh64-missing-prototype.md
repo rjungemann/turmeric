@@ -1,5 +1,21 @@
 # Missing `tur_hamt_hash_xxh64` prototype corrupts the call under `tur jit`
 
+**RESOLVED 2026-07-29** (fix direction 1): the preamble now declares
+`uint64_t tur_hamt_hash_xxh64(const void *data, size_t len);` -- spelled
+exactly as hamt.h:336 -- after the standard includes (the first attempt sat
+before `<stdint.h>` and broke every fixture; findings 14.1's mistake,
+repeated and re-caught by the suite).  Verified on Linux: both fixtures pass
+under `tur jit`, suite 2399/0 with 140 snapshots regenerated, product sweep
+byte-identical (Linux passed by luck before; now by construction).  The
+arm64 crash itself should be confirmed fixed on the next macOS run.  The
+systemic half of the report stands: S2's declared boundary is what makes
+this class unrepresentable, and `-Wno-error=implicit-function-declaration`
+still hides any remaining siblings on the cc path (user inline-C relies on
+implicit declarations too -- e.g. httpd's `malloc` -- so dropping it is a
+user-facing breaking change to schedule, not a cleanup).
+
+---
+
 **Severity: high** (silent memory corruption -> SIGSEGV/SIGBUS; wrong-code class,
 not merely a diagnostic gap). Affects the JIT engine only; the `cc` path is
 correct by suppression, not by construction.

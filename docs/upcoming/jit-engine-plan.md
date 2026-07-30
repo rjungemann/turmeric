@@ -13,10 +13,11 @@ from section 11 onward had run only on x86-64 Linux; it now replays on Apple
 Silicon. J1 sweeps **1,644/1,680 correct** (1,617 native + 27 fallback) against
 Linux's 1,647, and the S2 split proof passes **8/8**. All three genuine
 failures are **pre-existing Turmeric defects the `cc` path was surviving by
-luck**, not JIT or MIR defects: a missing `tur_hamt_hash_xxh64` prototype
-([reported](../reported/jit-xxh64-missing-prototype.md)) and two wrong
-`TaskGroupBlock` layouts in the emitter
-([reported](../reported/emitted-taskgroupblock-layout-mismatch.md)). One result
+luck**, not JIT or MIR defects: a missing `tur_hamt_hash_xxh64` prototype and
+two wrong `TaskGroupBlock` layouts in the emitter -- **both FIXED on Linux
+2026-07-29** ([archived](../archive/jit-xxh64-missing-prototype.md),
+[archived](../archive/emitted-taskgroupblock-layout-mismatch.md)); the macOS
+repros await confirmation on the next Apple Silicon run. One result
 revises this plan: **S2 buys 17% of engine time on Apple Silicon, not Linux's
 38%**, because c2mir -- not MIR-gen -- is 73% of the cost there, so S2 alone
 does not make the JIT beat `cc` on macOS (findings 20.4).
