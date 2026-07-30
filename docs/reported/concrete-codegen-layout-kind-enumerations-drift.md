@@ -205,14 +205,15 @@ arm and pointing two kinds at one token each fail it.
 
 Two fixtures went red, and they are a **pre-existing defect made visible**, not a
 regression -- filed as
-[fn-element-tyvars-not-substituted-in-spec-types](fn-element-tyvars-not-substituted-in-spec-types.md).
+[fn-element-tyvars-not-substituted-in-spec-types](../archive/fn-element-tyvars-not-substituted-in-spec-types.md).
 A function-typed element's tyvars are never substituted into a spec's argument
 types -- `emit_abi_instantiate_type` has no `TY_FN` arm, and a fn keeps its
 tyvars only in the out-of-line `arg_full_types`/`result_full_type`. While both
 fn types mangled `opaque` the declared parameter and the passed variable agreed
 as C types, so nothing could complain. Carried red
 deliberately: a hard `cc` error beats a merged C name, and reverting would
-restore the collision.
+restore the collision. **Both were fixed on 2026-07-30** -- `run.sh` is now
+2417/0.
 
 ## Finding 2 -- which absent kinds are correctly absent
 

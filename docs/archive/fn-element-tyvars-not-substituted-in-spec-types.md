@@ -8,8 +8,9 @@ its call site". That framing was disproven -- see
 two fixtures. Not a wrong-answer bug at any point -- see
 [Why it only appeared now](#why-it-only-appeared-now).
 
-**Status:** open, root cause **found** (2026-07-30) and a fix attempted and
-**reverted** -- see [Attempted fix](#attempted-fix-and-why-it-was-reverted).
+**Status:** **RESOLVED 2026-07-30.** Both fixtures pass; `run.sh` is 2417/0,
+better than the 2415/2 baseline. The first attempt was reverted; the working fix
+needed one more piece -- see [Resolution](#resolution-2026-07-30).
 Exposed 2026-07-29 by the `append_type_mangle` injectivity fix in
 [concrete-codegen-layout-kind-enumerations-drift](concrete-codegen-layout-kind-enumerations-drift.md).
 
@@ -75,6 +76,92 @@ argument.
 So the ordering is: the mangling fix did not introduce a defect, it removed the
 coincidence that was hiding one. The two fixtures went from "passing with a
 mismatch nobody could see" to "failing with the mismatch named".
+
+
+## Resolution (2026-07-30)
+
+Three changes, in the order the revised directions predicted. The first attempt
+failed because it did only the second of them.
+
+### 1. A stored fn element spells as a handle
+
+`type_c_name`'s `TY_FN` arm ended with "for bare function references, return the
+result type's C name". For a fn *stored* somewhere that is wrong -- the stored
+thing is a closure handle, not its result. Changed to return `int64_t` (the
+handle) once `cfnptr` and `boxed` have been ruled out.
+
+Blast radius, measured before anything else was touched: **3 fixtures**, all
+snapshot mismatches with unchanged runtime output. And the diffs argue for the
+change rather than against it -- the old names were lying:
+
+```
+-static bool option_eq___spec__bool_..._bool(tur_adt_Option__int, tur_adt_Option__int, int64_t);
++static bool option_eq___spec__bool_..._int64_t(tur_adt_Option__int, tur_adt_Option__int, int64_t);
+```
+
+The third parameter is `int64_t` in the C signature; the mangled name called it
+`bool` (the fn's result type). Now they agree.
+
+### 2. Substitute a fn element's tyvars
+
+The `TY_FN` arm added to `emit_abi_instantiate_type` (`emit_module.c`) and
+`emit_resolve_type` (`emit_core.c`): substitute through `arg_full_types` /
+`result_full_type`, then re-derive the erased `arg_kinds` / `result_kind`.
+
+### 3. Only adopt a substitution that RESOLVED
+
+This is the piece the first attempt was missing, and the reason it produced 1916
+failures. A context whose bindings do not cover the tyvar leaves the
+substitution *as a tyvar*. Overwriting the stable erased `TY_INT` with it renames
+the monomorph -- `fn1_int__int` becomes `fn1_struct__struct` (`struct` is
+`append_type_mangle`'s token for `TY_TYVAR`) -- so a definition stops matching
+its own forward declaration:
+
+```
+error: conflicting types for 'some___spec__bool_tur_adt_Option__fn1_int__int';
+       have '_Bool(tur_adt_Option__fn1_struct__struct)'
+```
+
+Both arms now skip the update when `sub.kind` is `TY_TYVAR` or `TY_UNKNOWN`,
+keeping the erased kind. That is what took it from 1916 failures to 3.
+
+### The measurements, in order
+
+| tree | `run.sh` |
+| --- | --- |
+| baseline | 2415 passed, 2 failed |
+| step 2 alone (first attempt) | 2412 / 5, then 501 / **1916** with both arms |
+| step 1 alone | 2412 / 5 -- 3 snapshot diffs, runtime unchanged |
+| steps 1 + 2 | 2412 / 5 -- targets still fail, `__cps` twin still wrong |
+| steps 1 + 2 + 3 | 2414 / 3 -- targets **pass**, 3 snapshots stale |
+| + snapshots regenerated | **2417 / 0** |
+
+The hypothesis that step 1 would defuse step 2 was **wrong** -- with both, the
+suite was still at 1916. Step 3 is what actually did it, and it is a different
+problem (unresolved-tyvar leakage) from the one step 1 addresses (spelling).
+
+### Verification
+
+- `run.sh` **2417 passed, 0 failed** -- both target fixtures build and produce
+  correct output, including `hkt-ap-fn-in-container`'s `4175`, the float case the
+  fixture exists to check.
+- `run-flags` 78/0, `run-fmt` 18/0, `run-build-project` 38/0, mangle guard green,
+  `ctest -R '...'` 14/14.
+- `run-turi` 1669/2 (`cps-tramp-resume-deep`, `cps-tramp-resume-multicase`) --
+  **pre-existing at HEAD**, identical with these changes stashed. The same tree
+  gave 1669/2 and 1671/0 at different points in one session, so they look flaky;
+  not investigated here.
+- 3 snapshots regenerated, all the step-1 spelling change.
+
+### One thing got worse
+
+[fn-payload-in-container-undeclared-temp](fn-payload-in-container-undeclared-temp.md)
+-- the zero-arity float thunk -- used to be a hard `cc` error. It now compiles
+with a `-Wint-conversion` warning and **segfaults**. No fixture covers that
+shape, so the suite is silent about it. A compile error is a better resting state
+than a crash, and that report has been updated to say so; it is the natural next
+piece of work, and it is the same underlying confusion about how a function value
+is represented when stored rather than called.
 
 ## Root cause -- found, and it is not "a different call site"
 

@@ -2838,8 +2838,8 @@ const char *type_c_name(Type t) {
              * references keep returning their result type's C name below. */
             if (t.as.fn.result_kind == TY_FN || t.as.fn.result_kind == TY_UNKNOWN)
                 return "int64_t";
-            /* For bare function references, return the result type's C name. */
-            return type_c_name(type_from_kind(t.as.fn.result_kind));
+            /* EXPERIMENT: a non-boxed, non-cfnptr fn is a closure handle. */
+            return "int64_t";
         }
         case TY_REF: {
             /* ref<T> lowers to a pointer to T in C */

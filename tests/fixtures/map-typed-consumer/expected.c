@@ -4121,7 +4121,7 @@ static tur_adt_Map__int__float * map_assoc_eq_o__spec__tur_adt_Map__int__float__
 static tur_adt_Map__int__float * tur_map_kcheck__spec__tur_adt_Map__int__float___tur_adt_Map__int__float___const_void__(tur_adt_Map__int__float *, const void *);
 static tur_adt_Map__int__float * map_new__spec__tur_adt_Map__int__float__();
 static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int__(tur_adt_Map__int__int *, tur_adt_Map__int__int *);
-static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool(tur_adt_Map__int__int *, tur_adt_Map__int__int *, int64_t);
+static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t(tur_adt_Map__int__int *, tur_adt_Map__int__int *, int64_t);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -7826,14 +7826,14 @@ static bool __inst_Eq_eq_qu_Map__spec__bool_tur_adt_Map__int__int___tur_adt_Map_
             __t212[0] = (int64_t)(intptr_t)__tur_fatshim_bool_int64_t_int64_t;
             __t212[1] = (int64_t)(intptr_t)__fn_775;
             void *__t214 = __t212;
-            __auto_type __ps_215 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t214)));
+            __auto_type __ps_215 = (map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t((tur_adt_Map__int__int *)(intptr_t)(x), (tur_adt_Map__int__int *)(intptr_t)(y), (int64_t)(intptr_t)(__t214)));
             if (tur_panicking) return (bool){0};
             __t209 = __ps_215;
         }
         return __t209;
 }
 
-static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___bool(tur_adt_Map__int__int * m1, tur_adt_Map__int__int * m2, int64_t val_cmp) {
+static bool map_eq_driver__spec__bool_tur_adt_Map__int__int___tur_adt_Map__int__int___int64_t(tur_adt_Map__int__int * m1, tur_adt_Map__int__int * m2, int64_t val_cmp) {
         bool __t216;
         {
             __auto_type __ps_217 = (map_hyhamt((int64_t)(intptr_t)(m1)));

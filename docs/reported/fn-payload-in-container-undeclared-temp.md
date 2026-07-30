@@ -4,7 +4,10 @@
 wrong answers. But it makes function values unusable as container payloads, and
 the error names a generated identifier rather than anything in the source.
 
-**Status:** open. Found 2026-07-29 while investigating
+**Status:** open, and its **failure mode changed on 2026-07-30**: it no longer
+fails to compile, it compiles with a `-Wint-conversion` warning and
+**segfaults**. See [Failure mode change](#failure-mode-change-2026-07-30).
+Found 2026-07-29 while investigating
 [concrete-codegen-layout-kind-enumerations-drift](concrete-codegen-layout-kind-enumerations-drift.md);
 independent of it (see [Not the mangling collision](#not-the-mangling-collision)).
 
@@ -98,6 +101,35 @@ carrier.
 
 CLAUDE.md's float rule is what made this visible at all -- the first probe used
 `7.25`, and an integer literal would have shown nothing.
+
+
+## Failure mode change (2026-07-30)
+
+The fn-element spelling fix
+([fn-element-tyvars-not-substituted-in-spec-types](../archive/fn-element-tyvars-not-substituted-in-spec-types.md))
+changed how this shape fails, and **for the worse**:
+
+```
+before:  error: '__ps_167' undeclared            -- hard cc failure, no binary
+after:   warning: passing argument 1 of 'ctor_MkBox__fn0__float' makes integer
+                  from pointer without a cast [-Wint-conversion]
+         Segmentation fault                       -- compiles, then crashes
+```
+
+The generated constructor is now `ctor_MkBox__fn0__float(int64_t _0)` and the
+call passes a `tur_fnptr_double_t` (`double (*)(void)`), so the C compiler warns
+and the program runs into a bad handle.
+
+That fix is a net improvement overall -- it repaired two red fixtures and made
+several monomorph names stop lying about their C types -- and no fixture covers
+this shape, so the suite did not see it. But a compile error is a better resting
+state than a segfault, and this report should be read as **higher priority than
+its "medium" severity suggests** until that is true again.
+
+The pairing is not accidental: this bug and that one are the same underlying
+confusion about how a function value is represented when it is stored rather
+than called. Whoever fixes this should expect the fix to be in that same area,
+not in the temp emitter the original root-cause guess pointed at.
 
 ## Root cause direction (unproven)
 
