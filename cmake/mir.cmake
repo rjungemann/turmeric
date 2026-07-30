@@ -17,7 +17,7 @@ include_guard(GLOBAL)
 # whole subject matter, so a floating dependency would silently change the
 # result being measured.
 # The pin points at the rjungemann/mir fork: upstream a8ab7c31 (master tip and
-# full history mirrored there) plus two fixes on fix/make-one-ret-distinct-targets:
+# full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targets:
 #   b79e3681 -- make_one_ret merged multi-value rets through the LAST ret's
 #     operand list, which aliases when simplify canonicalizes a trailing
 #     `ret 0, 0` to `ret t, t`, returning { second-word, second-word } for a
@@ -28,6 +28,16 @@ include_guard(GLOBAL)
 #     insn used the same spilled register in three operand positions
 #     (`mul r,r,r` from coalesced `r = r * r`), smashing rewrite_insn's frame
 #     (jit-engine-j0-findings.md section 15).
+#   90633091 -- c2mir gave the aarch64 target header's fake __uint128_t
+#     (`struct {unsigned long hi, lo;}`) alignment 8 where AAPCS64 requires
+#     16.  On Apple that skews the whole signal-context chain, since
+#     _STRUCT_ARM_NEON_STATE64 is `__uint128_t __v[32]`: ucontext_t comes out
+#     864 vs clang's 880, so any struct embedding one disagrees between
+#     JIT-compiled and host-compiled code with no diagnostic.  Carries two
+#     supporting c2mir fixes -- _Alignas was unparseable in spec_qual_list
+#     (struct members) and ignored for layout when it did parse
+#     (jit-engine-j0-findings.md section 30.1,
+#     docs/reported/jit-arm64-uint128-align-struct-layout-skew.md).
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -41,8 +51,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "41ff4d9464b88ab05c1920a52c4622d0ca0c1e58"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret fix + try_spilled_reg_mem fix")
+set(TUR_MIR_GIT_TAG "90633091d044c8a16218e21a3cd2601501ac47e8"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align fixes")
 
 include(FetchContent)
 

@@ -3283,3 +3283,110 @@ Which closes every defect J3 surfaced. The pattern across all four (sections
 -- gcc and MIR agreed on every one -- and two of the four were fixed by making
 an analysis agree with the emitter about IDENTITY, in code where the emitter
 already had the answer written down.
+
+## 32. arm64 macOS re-validation of S2/J2/J3 -- one real bug, then parity
+
+Added 2026-07-30 (Apple M2, macOS 27.0). Sections 22-29 had run only on
+x86-64 Linux; the last macOS run was `d3eed7d83`. This replays everything
+from S2 production forward on Apple Silicon.
+
+Build used: `-DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON -DTUR_DEBUG_SANITIZE=OFF`
+with Apple clang. See 30.4 -- the toolchain choice is not incidental.
+
+### 32.1 One real bug: c2mir aligns `__uint128_t` to 8
+
+`async-await-channel` and `fiber-scheduler` HUNG under `tur jit` (they pass
+under `tur build`). c2mir gives the AArch64 target header's fake
+`__uint128_t` (`typedef struct {unsigned long hi, lo;}`) alignment 8 where
+AAPCS64 requires 16. That propagates through Apple's NEON-bearing signal
+context -- `_STRUCT_ARM_NEON_STATE64` 520/8 vs 528/16, `ucontext_t` 864 vs
+880 -- so `FiberBlock` (two embedded `ucontext_t`) comes out 2032 bytes in
+the host's view and 2000 in the program's. `tur_fiber_shim` runs
+host-resident and writes `f->done` at offset 1776; the JIT-compiled fixture
+reads it at 1744, never sees it, and the scheduler re-enqueues forever.
+
+Same shape as 20.3's `TaskGroupBlock`, and exactly the host-runtime/program
+seam 20.5 warned diverges. Invisible on x86-64 Linux because nothing in
+glibc's `ucontext_t` needs 16-byte alignment.
+
+Report + validated 3-hunk MIR patch:
+docs/reported/jit-arm64-uint128-align-struct-layout-skew.md (the patch also
+fixes two independent c2mir gaps: `_Alignas` is unparseable in
+`spec_qual_list`, and ignored for layout when it does parse). LANDED as
+fork commit `90633091`, with `TUR_MIR_GIT_TAG` repointed in
+`cmake/mir.cmake`. The 30.2 numbers are from a FRESH build directory that
+fetches the new pin -- re-verifying in the edited `_deps` tree would have
+proved nothing, per the cache trap at `cmake/mir.cmake:33-41`.
+
+### 32.2 Parity after the patch
+
+Measured on this section's base (`5ef07d50a`), i.e. after 30.3 taught
+run.sh to descend into group directories AND after 31's CPS coloring
+change. An earlier pass of this work recorded 2431 / 0 and 2391 / 1 / 48
+against the pre-30.3 harness; those numbers are superseded and are not
+comparable to these.
+
+| suite | arm64 macOS | x86-64 Linux |
+|---|---|---|
+| `tests/run.sh` | **2479 / 0** | 2478 / 0 (section 31.3) |
+| `tests/run-jit.sh` | **2393 / 1 / 47**, 60 fallback | 2393 / 0 / 47, 47 fallback |
+| `tests/turi/repl-spice-jit.sh` (J2) | **4 / 0** | 4 / 0 |
+
+The run.sh `+1` is not a divergence: 31.3's quoted 2478 predates the
+`tco-named-let-nocapture-deep` fixture added in that same commit. On the
+base as committed, macOS runs 2479 and the new 5,000,000-iteration TCO
+fixture passes on Apple Silicon. (This section's own previous pass, on
+`6a63c9d24`, measured 2478 -- exactly one less, the fixture.)
+
+run.sh is otherwise at exact parity, and it stays at parity across 30.3's
++52 fixtures -- the group directories that had never been compiled by the
+default suite hold nothing that diverges on Apple Silicon. The run-jit.sh
+skip counts match and the single failure is accounted for below. The +13
+cc fallbacks are 20.2's Apple SDK header residue, the number that still
+has not moved.
+
+The single `run-jit.sh` failure, `httpd-new-pool-fail-drops-handler`, is
+NOT a JIT defect: standalone it prints `built` under both AOT and JIT on
+macOS. The fixture forces a bind conflict to make `httpd-new-pool` fail,
+but BSD `SO_REUSEADDR` permits the second bind where Linux refuses. A
+macOS socket-semantics gap in the fixture -- and flaky, since it passed the
+AOT suite in the same session.
+
+### 32.3 S2 is live on macOS, and the split has no holes
+
+The 25.1 hash guard is silent on mismatch, so "it works" and "it silently
+reverted to full-preamble" look identical from the outside. Checked
+directly: `tur emit-rt-split --hash` gives `89d1c5bb0818cb97`, matching the
+committed `tur_rt_split_hash`. The preamble is platform-independent; the
+split really is taken on macOS.
+
+Full-corpus A/B, `TUR_JIT_NO_SPLIT=1` vs default: **identical** --
+2393/1/47 with 60 fallbacks both ways, and byte-identical stdout on a
+5-fixture spot check (arith, hamt-basic, stm-stress, dynvar-nested,
+self-recursive-carrier-struct-return). No W0071 retries observed. The
+resolver-priority hazard 20.5 flagged does not bite the production
+arrangement, where the runtime is host-resident and resolved by address
+rather than through a dylib's symbol table.
+
+Latency, `arith`, median of 7: **216 ms split vs 246 ms full = 12%**
+end-to-end, against Linux's ~28% (25.2). That gap is itself a data point
+for the open "size c2mir on macOS" item (plan J2, section 20.4): the split
+removes preamble re-parsing, but the ~36 ms of Apple SDK headers (8.3)
+sits in the PROGRAM half, which the split cannot touch. Whatever is left
+to win on macOS is still in front of the program half, not the preamble.
+
+### 32.4 Toolchain traps that cost two suite runs here
+
+Both produce failures that read exactly like product regressions:
+
+- **Homebrew-LLVM `tur` + Apple-clang fixtures.** CLAUDE.md recommends
+  Homebrew LLVM to dodge the ASan startup deadlock, but then `libturi.a`
+  carries ASan v8 symbols the system linker cannot resolve:
+  `Undefined symbols: ___asan_version_mismatch_check_v8`, reported as
+  `build failed` for 46 fixtures. Either pin `CC` to the same clang or
+  build `-DTUR_DEBUG_SANITIZE=OFF`. The unsanitized build is cleaner: the
+  pinned-`CC` route still shows two spurious httpd failures
+  (`httpd-h4-keepalive`, `httpd-h6-routing`) that are ASan artifacts.
+- **`cmake --build <dir> --target tur` does not build `libturi.a`.** Every
+  fixture then fails to link with `ld: library 'turi' not found`, again
+  reported as `build failed`. Build all targets.
