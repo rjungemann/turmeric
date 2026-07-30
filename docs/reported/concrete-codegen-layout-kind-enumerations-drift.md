@@ -205,10 +205,12 @@ arm and pointing two kinds at one token each fail it.
 
 Two fixtures went red, and they are a **pre-existing defect made visible**, not a
 regression -- filed as
-[ap-spec-records-wrong-fn-element-type](ap-spec-records-wrong-fn-element-type.md).
-An `ap` specialization records the function-element argument type from a
-*different* call site; while both fn types mangled `opaque` the declared parameter
-and the passed variable agreed as C types, so nothing could complain. Carried red
+[fn-element-tyvars-not-substituted-in-spec-types](fn-element-tyvars-not-substituted-in-spec-types.md).
+A function-typed element's tyvars are never substituted into a spec's argument
+types -- `emit_abi_instantiate_type` has no `TY_FN` arm, and a fn keeps its
+tyvars only in the out-of-line `arg_full_types`/`result_full_type`. While both
+fn types mangled `opaque` the declared parameter and the passed variable agreed
+as C types, so nothing could complain. Carried red
 deliberately: a hard `cc` error beats a merged C name, and reverting would
 restore the collision.
 
