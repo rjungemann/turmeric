@@ -148,6 +148,34 @@ effect-row row, both now explicitly out of the narrowed claim.  The
 `--known-probes` by-value probe prints FIXED; the tyvar probe still fires,
 as narrowed.
 
+## Stage 2 -- LANDED 2026-07-30 (return / let / ascribe positions)
+
+Four targeted bridges, all gated on the same shared predicate:
+
+1. **Tail normalization** (`elab_normalize_fn_tail_leaves`, elab_fns.c): a
+   defn whose declared result is a concrete effect-free fn type returns a
+   fat handle ALWAYS -- thin tail leaves shimmed, carrier-param leaves
+   boxed via EX_POLY_TO_FAT (previously `return (int64_t)(intptr_t)v;` on
+   the tur_poly_fn_t aggregate, the invalid-C row), fat leaves untouched;
+   the declared result is marked `boxed` so consumers ride the existing
+   boxed-result plumbing.
+2. **Binding-aware tail classification**: `fn_tail_fn_leaf_kinds` and the
+   mixed-path boxer now recognize stage-1 normalized params and carrier
+   params -- closing a latent stage-1 double-box hazard in mixed bodies.
+3. **Ascription preserves fat identity** (elab_types.c): `(:: e T)` onto a
+   fn type keeps `boxed` when the inner is already a fat handle -- the
+   ascribe-around-let SIGSEGV row.
+4. **Nested results in param annotations** are boxed recursively: stage-2
+   producers return fat, so `(fn [int] (fn [int] int))` annotations must
+   say so or `((f 1) 2)` thin-dispatches a fat handle -- found by the
+   suite measurement (2 curried fixtures), not predicted.
+
+Measurements: matrix probes all green (m1-m15); suite 2436/2 after the
+first three bridges (the two curried fixtures), **2438/0** with bridge 4.
+The full boundary matrix of `fn-typed-value-return-ascribe-miscompiles` --
+broken rows included -- is pinned in
+`tests/fixtures/fn-value-matrix-ok-rows/`.
+
 ## Stages
 
 1. **Param normalization.** Non-carrier fn-typed parameters take the fat

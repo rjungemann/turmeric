@@ -134,11 +134,14 @@ CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
 
 def known_bug_slug(tags):
     """Return the docs/reported slug a leg shape reproduces, or None."""
-    # A fn-typed VALUE (returned closure) across any further boundary --
-    # pass-through return, ^fat pass-through, ascribe-around-let, nested fat
-    # HOF -- miscompiles; only direct consume/invoke works.
-    if "thunk" in tags and tags & CROSSING_TAGS:
-        return "fn-typed-value-return-ascribe-miscompiles"
+    # (Retired 2026-07-30 by fn-value-fat-normalization stage 2: fn-typed
+    # VALUES survive pass-through returns, ascribe-around-let, and nested
+    # fat HOFs now -- thunk legs are back in the full crossing pool.)
+    # Residual seams stage 2's first full-pool sessions surfaced: a thunk
+    # value through a pass-through DEFN (through/deep) hits the carrier<->fat
+    # alias/unification gaps.  let/ascribe/gid/HOF crossings are fine.
+    if "thunk" in tags and tags & {"through", "deep"}:
+        return "fn-value-carrier-fat-seam-residuals"
     # (Retired 2026-07-30 by fn-value-fat-normalization stage 1: thin fn
     # params with CONCRETE non-carrier-safe signatures -- by-value and heap
     # results/args -- are fat-normalized now, so those thin_hof shapes are
@@ -203,18 +206,10 @@ KNOWN_PROBES = [
      "    (vec-push! v (FzB 31))\n"
      "    (let [b (:: (vec-get v 0) FzB)]\n"
      "      (println (.a b))))\n  0)\n"),
-    ("fn-typed-value-return-ascribe-miscompiles (thin pass-through)",
-     "(defn mk [x : int] : (fn [] int) (fn [] x))\n"
-     "(defn thru [v : (fn [] int)] : (fn [] int) v)\n"
-     "(defn main [] : int (println ((thru (mk 5)))) 0)\n"),
-    ("fn-typed-value-return-ascribe-miscompiles (fat pass-through)",
-     "(defn mk [x : int] : (fn [] int) (fn [] x))\n"
-     "(defn thru [^fat v : (fn [] int)] : (fn [] int) v)\n"
-     "(defn main [] : int (println ((thru (mk 5)))) 0)\n"),
-    ("fn-typed-value-return-ascribe-miscompiles (ascribe around let)",
-     "(defn mk [x : int] : (fn [] int) (fn [] x))\n"
-     "(defn main [] : int\n"
-     "  (println ((:: (let [v (mk 5)] v) (fn [] int))))\n  0)\n"),
+    # (fn-typed-value-return-ascribe-miscompiles: RESOLVED 2026-07-30 by
+    # fat-normalization stage 2 and archived; its matrix -- broken rows
+    # included -- is pinned by tests/fixtures/fn-value-matrix-ok-rows/, so
+    # the probes are retired rather than kept as permanent FIXED rows.)
     ("class-method-result-into-generic-invalid-c",
      "(defdata FzW (FzWc :int))\n"
      "(defclass FzT [a] (thru [self : a] : a))\n"
@@ -222,20 +217,14 @@ KNOWN_PROBES = [
      "(defn gid [A] [x : A] : A x)\n"
      "(defn main [] : int\n"
      "  (println (match (gid (.thru (FzWc -10))) (FzWc x) x))\n  0)\n"),
-    # Not a shape this generator emits (wrappers hold scalars, never fn
-    # values); pinned anyway so the burn-down meter covers the whole
-    # missing-cells table.  The report's Vec variant runs clean on current
-    # main; the parametric-defdata + FLOAT variant is the one still open
-    # (per the float rule: an int-returning fn hides in the int64 register
-    # class, a float one cannot).
-    ("fn-payload-in-container-undeclared-temp",
-     "(defdata FpBox [a] (MkFpBox a))\n"
-     "(defn mk-flt [] : (fn [] float) (fn [] 7.25))\n"
-     "(defn use-flt [b : (FpBox (fn [] float))] : float\n"
-     "  (match b\n"
-     "    (MkFpBox f) (f)))\n"
+    # (fn-payload-in-container-undeclared-temp: RESOLVED 2026-07-31 by
+    # fat-normalization stage 2 -- the parametric-defdata + FLOAT variant
+    # verified by hand -- and archived; probe retired.)
+    ("fn-value-carrier-fat-seam-residuals (let-aliased carrier param tail)",
+     "(defn thru2 [v : (fn [] float)] : (fn [] float) (let [w v] w))\n"
      "(defn main [] : int\n"
-     "  (println (= (use-flt (MkFpBox (mk-flt))) 7.25))\n  0)\n"),
+     "  (let [k 1.25]\n"
+     "    (println (= ((thru2 (fn [] k))) 1.25)))\n  0)\n"),
 ]
 
 
@@ -538,14 +527,14 @@ class Gen:
         return "(%s%s %s)" % (dot, meth, e), "class_thru"
 
     def crossings_for(self, tn, tags):
-        # Fn-typed VALUES miscompile across every crossing here except direct
-        # consume/invoke (fn-typed-value-return-ascribe-miscompiles); the
-        # default pool for a thunk leg is therefore empty.
+        # Fn-typed VALUES are fat-normalized across returns/let/ascribe and
+        # HOF hops as of fn-value-fat-normalization stage 2 (2026-07-30) --
+        # thunk legs take the full crossing pool minus the class/gid pair
+        # (instance heads need plain names; gid over a thunk is fine and
+        # included).
         if "thunk" in tags:
-            if not self.emit_known:
-                return []
-            return [self.x_through, self.x_let, self.x_ascribe,
-                    self.x_fat_hof]
+            return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
+                    self.x_fat_hof, self.x_thin_hof]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
               self.x_fat_hof, self.x_thin_hof]
         # Thin HOF over every wrapper: scalars ride the poly carrier;

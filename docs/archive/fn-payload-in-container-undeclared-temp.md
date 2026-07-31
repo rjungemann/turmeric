@@ -4,7 +4,9 @@
 wrong answers. But it makes function values unusable as container payloads, and
 the error names a generated identifier rather than anything in the source.
 
-**Status:** open, and its **failure mode changed on 2026-07-30**: it no longer
+**Status:** RESOLVED 2026-07-31 by fn-value-fat-normalization stage 2 (docs/upcoming/fn-value-fat-normalization-plan.md): fn values stored in container payloads are uniform fat handles now; the defdata (float payload) and Vec variants both run correctly (a cosmetic -Wint-conversion warning remains at the ctor slot -- the int64-handle spelling family). Archived. Original status text follows.
+
+**Status (original):** open, and its **failure mode changed on 2026-07-30**: it no longer
 fails to compile, it compiles with a `-Wint-conversion` warning and
 **segfaults**. See [Failure mode change](#failure-mode-change-2026-07-30).
 Found 2026-07-29 while investigating

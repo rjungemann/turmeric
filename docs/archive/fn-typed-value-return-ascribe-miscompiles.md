@@ -1,9 +1,17 @@
 ---
-status: open
+status: RESOLVED 2026-07-30 -- fn-value-fat-normalization stage 2 (archived)
 severity: high
 discovered: 2026-07-30
 area: codegen (first-class fn-typed VALUES at return/ascription boundaries)
 ---
+
+**Resolution:** every row of the matrix below passes as of fat-normalization
+stage 2 (docs/upcoming/fn-value-fat-normalization-plan.md): tail leaves of a
+concrete effect-free fn-typed result are normalized onto the fat handle
+(thin shimmed, carrier boxed via poly-to-fat), ascription preserves fat
+identity, and nested results in param annotations are boxed to match.
+Pinned -- ok rows AND former broken rows -- by
+`tests/fixtures/fn-value-matrix-ok-rows/`. Suite 2438/0 at landing.
 
 # Fn-typed values as data: returning a fn param or ascribing a let-wrapped closure miscompiles
 

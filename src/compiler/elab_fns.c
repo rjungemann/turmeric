@@ -2794,6 +2794,20 @@ static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
         case EX_FN_TO_FAT:
             return 2u;  /* fat box */
         case EX_VAR:
+            /* fn-value-fat-normalization: binding-aware classification.  A
+             * carrier (is_poly_fn) fn param is a by-value tur_poly_fn_t --
+             * neither thin nor fat (bit 4).  A ^fat param or a stage-1
+             * NORMALIZED nominal param already holds a fat handle even though
+             * its static type is a non-boxed TY_FN -- classifying those as
+             * thin would double-box them. */
+            if (x->as.var.binding) {
+                const Binding *vb = x->as.var.binding;
+                if (vb->is_poly_fn && vb->is_param) return 4u;
+                if (vb->is_fat ||
+                    (vb->is_param && vb->type.kind == TY_FN &&
+                     fn_param_type_is_fat_normalized(&vb->type)))
+                    return 2u;
+            }
             if (x->type.kind == TY_FN)
                 return x->type.as.fn.boxed ? 2u : 1u;  /* boxed=fat, bare=thin */
             return 0;
@@ -2840,6 +2854,74 @@ static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot) {
     }
     if (x->kind == EX_VAR && x->type.kind == TY_FN && !x->type.as.fn.boxed &&
         x->type.as.fn.arity >= 1 && x->type.as.fn.arity <= 5) {
+        /* stage-1 normalized params and ^fat params already hold fat handles
+         * despite their non-boxed static type -- shimming them here would
+         * double-box (mirrors the classifier's binding-aware cases). */
+        if (x->as.var.binding &&
+            (x->as.var.binding->is_fat ||
+             (x->as.var.binding->is_param &&
+              fn_param_type_is_fat_normalized(&x->as.var.binding->type))))
+            return;
+        Type bt = x->type;
+        bt.as.fn.boxed = true;
+        Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, bt, x->span);
+        shim->as.fn_to_fat_.inner = x;
+        *slot = shim;
+    }
+}
+
+/* fn-value-fat-normalization stage 2: normalize EVERY tail leaf of a defn
+ * whose declared result is a concrete effect-free fn type
+ * (fn_param_type_is_fat_normalized) onto the fat handle: a thin bare-fn leaf
+ * is shimmed (EX_FN_TO_FAT), a carrier (tur_poly_fn_t) param leaf is boxed
+ * (EX_POLY_TO_FAT -- previously `return (int64_t)(intptr_t)v;` on the
+ * aggregate, a hard cc error), and already-fat leaves pass through.  The
+ * caller then marks the declared result `boxed`, which steers the signature
+ * and every consumer onto the existing fat-result plumbing. */
+static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
+                                          Type *sink_fn_type) {
+    Expr *x = *slot;
+    if (!x) return;
+    switch (x->kind) {
+        case EX_DO:
+            if (x->as.do_.n > 0)
+                elab_normalize_fn_tail_leaves(e,
+                    &x->as.do_.items[x->as.do_.n - 1], sink_fn_type);
+            return;
+        case EX_IF:
+            elab_normalize_fn_tail_leaves(e, &x->as.if_.then_, sink_fn_type);
+            if (x->as.if_.else_or_null)
+                elab_normalize_fn_tail_leaves(e, &x->as.if_.else_or_null,
+                                              sink_fn_type);
+            return;
+        case EX_LET:
+        case EX_LETREC:
+            elab_normalize_fn_tail_leaves(e, &x->as.let_.body, sink_fn_type);
+            return;
+        case EX_MATCH:
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                elab_normalize_fn_tail_leaves(e, &x->as.match_.arms[i].body,
+                                              sink_fn_type);
+            return;
+        default:
+            break;
+    }
+    if (x->kind != EX_VAR || !x->as.var.binding) return;
+    Binding *vb = x->as.var.binding;
+    if (vb->is_poly_fn && vb->is_param) {
+        Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
+        conv->as.poly_to_fat_.inner = x;
+        conv->as.poly_to_fat_.sink_fn_type =
+            (sink_fn_type && sink_fn_type->kind == TY_FN) ? sink_fn_type : NULL;
+        *slot = conv;
+        return;
+    }
+    if (vb->is_fat ||
+        (vb->is_param && vb->type.kind == TY_FN &&
+         fn_param_type_is_fat_normalized(&vb->type)))
+        return;  /* already fat */
+    if (x->type.kind == TY_FN && !x->type.as.fn.boxed &&
+        x->type.as.fn.arity <= 5) {
         Type bt = x->type;
         bt.as.fn.boxed = true;
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, bt, x->span);
@@ -3613,6 +3695,21 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                   ann->as.fn.arity <= (MAX_FN_ARITY - 1) &&
                                   !fn_type_has_named_tyvar(ann) &&
                                   fn_type_is_carrier_safe(ann);
+                /* fn-value-fat-normalization stage 2: a NESTED concrete
+                 * effect-free fn RESULT inside a fn-typed param annotation is
+                 * marked boxed, recursively -- stage-2 producers return fat
+                 * handles for such types, so an annotation left thin would
+                 * make `((f 1) 2)` thin-dispatch a fat handle (the
+                 * curried-fn-typed-param SIGSEGV found by the stage-2 suite
+                 * measurement). */
+                {
+                    Type *nr = ann->as.fn.result_full_type;
+                    while (nr && nr->kind == TY_FN && !nr->as.fn.boxed &&
+                           fn_param_type_is_fat_normalized(nr)) {
+                        nr->as.fn.boxed = true;
+                        nr = nr->as.fn.result_full_type;
+                    }
+                }
                 /* repr-trace (representation-consolidation-meta-plan increment
                  * 0): with --emit-abi-trace, print the representation this
                  * fn-typed parameter was routed onto, and -- for the thin
@@ -5803,6 +5900,28 @@ Expr *elab_defn(Elab *e, const Form *call) {
             if ((leaves & 1u) && (leaves & 2u)) {
                 elab_box_thin_fn_tail_leaves(e, &body);
             }
+        }
+    }
+
+    /* fn-value-fat-normalization stage 2: a defn whose declared result is a
+     * concrete effect-free fn type returns a fat handle, ALWAYS -- tail
+     * leaves are normalized (thin shimmed, carrier param boxed via
+     * poly-to-fat, fat passed through) and the result is marked boxed so
+     * every consumer rides the existing boxed-result plumbing.  Same
+     * narrowed claim as stage 1 (the shared predicate); the nested-result
+     * (result_kind == TY_FN/TY_UNKNOWN) and ^fat-result carve-outs mirror
+     * the returns_boxed_closure block above. */
+    {
+        Type *rft = fn_type.as.fn.result_full_type;
+        if (body && rft && rft->kind == TY_FN && !rft->as.fn.boxed &&
+            !fn_type.as.fn.result_fat &&
+            rft->as.fn.result_kind != TY_FN &&
+            rft->as.fn.result_kind != TY_UNKNOWN &&
+            fn_param_type_is_fat_normalized(rft) &&
+            !(b->name && b->name->name &&
+              strncmp(b->name->name, "__inst_", 7) == 0)) {
+            elab_normalize_fn_tail_leaves(e, &body, rft);
+            rft->as.fn.boxed = true;
         }
     }
 

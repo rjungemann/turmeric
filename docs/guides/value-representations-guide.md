@@ -78,9 +78,10 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    (`tests/fixtures/capturing-closure-struct-field/`).
 
 Plus one in-flight form the minimization matrix in
-`docs/reported/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
-**by-value fat struct** sitting in a parameter slot, whose return path then
-casts it thin (`return (int64_t)(intptr_t)v;` on an aggregate).
+`docs/archive/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
+**by-value fat struct** sitting in a parameter slot, whose return path
+used to cast it thin (`return (int64_t)(intptr_t)v;` on an aggregate --
+fixed by fat-normalization stage 2's poly-to-fat tail conversion).
 
 ## Boundaries
 
@@ -106,9 +107,10 @@ report is one missing cell:
 | method result (carrier) -> generic call argument | `class-method-result-into-generic-invalid-c` |
 | by-value struct -> Vec element slot | `vec-byvalue-struct-element-invalid-c` |
 | capturing closure -> nominal thin `TY_FN` param, tyvar-sig or effectful (concrete effect-free sigs FIXED 2026-07-30, fat-normalized) | `poly-result-hof-capturing-closure-sigbus` |
-| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | `fn-typed-value-return-ascribe-miscompiles` |
+| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF (RESOLVED 2026-07-30, fat-normalization stage 2; archived) | [`fn-typed-value-return-ascribe-miscompiles`](../archive/fn-typed-value-return-ascribe-miscompiles.md) |
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
-| fn value read out of a container element, then called (parametric ADT payload; the Vec variant fixed 2026-07-30) | `fn-payload-in-container-undeclared-temp` |
+| fn value read out of a container element, then called (RESOLVED 2026-07-31, fat-normalization stage 2; archived) | [`fn-payload-in-container-undeclared-temp`](../archive/fn-payload-in-container-undeclared-temp.md) |
+| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification | `fn-value-carrier-fat-seam-residuals` |
 | closure handle -> `double`-typed element slot (two-types-one-C-name collision; exact only below 2^53) | `concrete-codegen-layout-kind-enumerations-drift` (Finding 2) |
 
 A structural note the last row exposes: the representation decision today is

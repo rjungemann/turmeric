@@ -11,6 +11,7 @@
 (defn use-fat [^fat v : (fn [] int)] : int (v))
 
 (defn main [] : int
+  (stage2)
   ;; direct invoke of a returned closure
   (println ((mk 5)))
   ;; let-bound, then invoked
@@ -25,4 +26,21 @@
   (println (use-fat (mk 10)))
   ;; non-int payload: direct invoke round-trips a cstr
   (println ((mkc "ok-11")))
+  0)
+
+;; --- stage 2 (2026-07-30): the previously-broken rows, now normal ---
+(defn thru-thin [v : (fn [] int)] : (fn [] int) v)
+(defn thru-fat [^fat v : (fn [] int)] : (fn [] int) v)
+(defn hof-nested [^fat f : (fn [] (fn [] int))] : (fn [] int) (f))
+
+(defn stage2 [] : int
+  ;; thin pass-through return of a closure value (was: invalid C)
+  (println ((thru-thin (mk 12))))
+  ;; ^fat pass-through return (was: SIGSEGV)
+  (println ((thru-fat (mk 13))))
+  ;; ascription around a let-wrapped closure value (was: SIGSEGV)
+  (println ((:: (let [v (mk 14)] v) (fn [] int))))
+  ;; nested fat HOF over a closure value (was: SIGSEGV)
+  (let [c (mk 15)]
+    (println ((hof-nested (fn [] c)))))
   0)

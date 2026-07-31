@@ -2993,7 +2993,15 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * docs/reported/ascribing-fat-closure-value-to-fn-type-double-shims.md. */
     if (ascribed->kind == TY_FN &&
         (src_kind == TY_INT || src_kind == TY_PTR_VOID ||
-         ascribe_type_is_opaque_handle(&inner->type))) {
+         ascribe_type_is_opaque_handle(&inner->type) ||
+         /* fn-value-fat-normalization stage 2: the inner value is ALREADY a
+          * fat handle (a boxed TY_FN -- e.g. a let whose init was a
+          * closure-returning call).  Retyping it to the bare non-boxed fn
+          * type would send the invoke down the thin path and jump into the
+          * box (the ascribe-around-let SIGSEGV in
+          * fn-typed-value-return-ascribe-miscompiles).  Fat identity is
+          * preserved through `::`. */
+         (inner->type.kind == TY_FN && inner->type.as.fn.boxed))) {
         out->type.as.fn.boxed = true;
     }
     return out;
