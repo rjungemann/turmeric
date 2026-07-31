@@ -4471,3 +4471,122 @@ const char *type_struct_value_c_name(Type t) {
      * type_c_name handles every remaining case (ADT monomorphs included). */
     return type_c_name(t);
 }
+
+/* ============================================================================
+ * Increment 4 stage 2 (repr-decision-function-plan): repr_of -- the intended
+ * representation protocol per (type, position).  See types.h for the contract:
+ * in stage 2 this is consulted only by shadow checks under --emit-abi-trace;
+ * a disagreement with a site's actual decision is a logged finding, never a
+ * behavior change.  The rules below are the consolidated protocol increments
+ * 1-3 established:
+ *
+ *   - scalars are their bits in every position;
+ *   - heap structs/ADTs/containers are heap pointers everywhere (the carrier
+ *     round trip is lossless);
+ *   - non-heap by-value products are real aggregates at param/result/binding/
+ *     field positions, and HEAP-BOXED (any width) in container element slots
+ *     and generic carrier sinks (increment 3);
+ *   - fn values: cfnptr is a bare C pointer; effect-row'd, tyvar-signature,
+ *     variadic, or arity>5 signatures keep the thin convention (the narrowed
+ *     stage-1 claim); every other fn value is a fat handle (stages 1-2);
+ *   - tyvars and compile-time-only kinds are the erased int64 carrier.
+ * ==========================================================================*/
+const char *repr_form_name(ReprForm f) {
+    switch (f) {
+        case REPR_SCALAR_BITS: return "scalar-bits";
+        case REPR_HEAP_PTR:    return "heap-ptr";
+        case REPR_BYVAL_AGG:   return "byval-agg";
+        case REPR_BOXED_AGG:   return "boxed-agg";
+        case REPR_CARRIER_I64: return "carrier-i64";
+        case REPR_FAT_HANDLE:  return "fat-handle";
+        case REPR_THIN_FN:     return "thin-fn";
+    }
+    return "?";
+}
+
+const char *repr_position_name(ReprPosition pos) {
+    switch (pos) {
+        case REPR_POS_PARAM:          return "param";
+        case REPR_POS_RESULT:         return "result";
+        case REPR_POS_LET_BIND:       return "let-bind";
+        case REPR_POS_CONTAINER_ELEM: return "container-elem";
+        case REPR_POS_STRUCT_FIELD:   return "struct-field";
+        case REPR_POS_CARRIER_SINK:   return "carrier-sink";
+    }
+    return "?";
+}
+
+ReprForm repr_of(const Type *t, ReprPosition pos) {
+    if (!t) return REPR_CARRIER_I64;
+
+    /* Contracts share their base type's representation (type_c_name rule). */
+    if (t->kind == TY_CONTRACT)
+        return t->as.contract_.base_type
+                   ? repr_of(t->as.contract_.base_type, pos)
+                   : REPR_CARRIER_I64;
+
+    /* fn values (the increment-1 protocol). */
+    if (t->kind == TY_FN) {
+        if (t->as.fn.cfnptr) return REPR_THIN_FN;
+        if (t->as.fn.boxed) return REPR_FAT_HANDLE;
+        if (pos == REPR_POS_CARRIER_SINK) return REPR_CARRIER_I64;
+        return fn_param_type_is_fat_normalized(t) ? REPR_FAT_HANDLE
+                                                  : REPR_THIN_FN;
+    }
+
+    /* Erased/unresolved: the int64 carrier in every position. */
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_FORALL)
+        return REPR_CARRIER_I64;
+
+    /* An existential package is a heap-boxed (value, dict) pair -- a heap
+     * pointer wherever it travels (first sweep: 52 sites, all pointer-
+     * declared; the initial carrier spelling here was the spec hole). */
+    if (t->kind == TY_EXISTS)
+        return REPR_HEAP_PTR;
+
+    /* `any` / union values are the two-word tur_tagged_t -- a real by-value
+     * aggregate at direct positions; the erased carrier at generic sinks and
+     * container slots (the layout switch deliberately rejects them from
+     * by-value monomorph fields -- see the TY_ANY note there). */
+    if (t->kind == TY_ANY || t->kind == TY_UNION) {
+        if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK ||
+            pos == REPR_POS_STRUCT_FIELD)
+            return REPR_CARRIER_I64;
+        return REPR_BYVAL_AGG;
+    }
+
+    /* Heap-represented nominal/parametric types: the pointer IS the value.
+     * A heap app with UNRESOLVED (tyvar) arguments -- `(Vec A)` inside a
+     * generic body -- is the SAME pointer spelled as the erased carrier
+     * (int64_t); report the erased spelling so the shadow log measures real
+     * seams, not the lossless pointer/carrier round trip (first sweep: 431
+     * of 521 lines were this spelling distinction). */
+    if (type_is_heap_struct(*t) || type_is_heap_adt(*t)) {
+        if (t->kind == TY_APP && fn_sig_type_has_tyvar(t))
+            return REPR_CARRIER_I64;
+        return REPR_HEAP_PTR;
+    }
+
+    /* Non-heap by-value products (nominal ADT or concrete parametric app):
+     * real aggregates in direct positions; boxed in container slots and
+     * generic sinks (increment 3, width-independent). */
+    bool byval_product =
+        (t->kind == TY_ADT && t->as.adt_.def &&
+         adt_is_byvalue_product(t->as.adt_.def)) ||
+        (t->kind == TY_APP && adt_app_is_byvalue_product(*t));
+    if (byval_product) {
+        if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK)
+            return REPR_BOXED_AGG;
+        return REPR_BYVAL_AGG;
+    }
+
+    /* Non-product ADTs / non-concrete apps ride the carrier. */
+    if (t->kind == TY_ADT || t->kind == TY_APP)
+        return REPR_CARRIER_I64;
+
+    /* Everything else with a concrete layout is a one-word scalar (int,
+     * float, bool, cstr, sym, ptr leaves, refs, handles...); the rest is the
+     * erased carrier (compile-time-only kinds, unions, placeholders). */
+    if (type_has_concrete_codegen_layout(t)) return REPR_SCALAR_BITS;
+    return REPR_CARRIER_I64;
+}

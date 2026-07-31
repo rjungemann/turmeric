@@ -92,6 +92,49 @@ vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete 
 vcheck "agg-box traced"                   "^repr-trace bridge agg-box tur_adt_Option__int$"
 vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_Option__int$"
 
+# Increment 4 stage 2: the repr_of shadow log.  Two smokes: (a) a known
+# mid-migration shape (a phantom-parametric by-value app bound from a carrier
+# producer) fires a `repr-shadow` disagreement line -- proving the shadow
+# instrument is alive; (b) a fully-consolidated shape (increment 3's vec
+# element protocol) fires none -- proving the spec does not false-positive on
+# clean code.  When stage 3 migrates the binding site, (a) starts failing:
+# that is the signal to move the smoke to the next unmigrated shape (or
+# retire it if the log is empty corpus-wide).
+cat > "$tmp/shadow-dirty.tur" <<'EOF'
+(defstruct ArrShadow [a] [raw : int])
+(defn get-raw [w : (ArrShadow int)] : int (.raw w))
+(defn main [] : int
+  (let [w (:: (make-struct ArrShadow 7) (ArrShadow int))]
+    (println (get-raw w)))
+  0)
+EOF
+strace="$("$TUR" emit-c --emit-abi-trace "$tmp/shadow-dirty.tur" 2>&1 >/dev/null | grep '^repr-shadow' || true)"
+if echo "$strace" | grep -q "^repr-shadow binding let-bind .*want=byval-agg got=carrier-i64"; then
+  echo "  ok  shadow disagreement fires on mid-migration shape"
+else
+  echo "  FAIL shadow disagreement -- expected a 'repr-shadow binding let-bind ... want=byval-agg got=carrier-i64' line, got:"
+  echo "$strace"
+  rc=1
+fi
+
+cat > "$tmp/shadow-clean.tur" <<'EOF'
+(defstruct FzShadow [a : int])
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec FzShadow))]
+    (vec-push! v (FzShadow 31))
+    (let [b (:: (vec-get v 0) FzShadow)]
+      (println (.a b))))
+  0)
+EOF
+ctrace="$("$TUR" emit-c --emit-abi-trace "$tmp/shadow-clean.tur" 2>&1 >/dev/null | grep '^repr-shadow' || true)"
+if [ -z "$ctrace" ]; then
+  echo "  ok  no shadow noise on consolidated shape"
+else
+  echo "  FAIL shadow noise -- expected no repr-shadow lines on the clean shape, got:"
+  echo "$ctrace"
+  rc=1
+fi
+
 if [ $rc -ne 0 ]; then
   echo "FAIL repr-trace"
   echo "--- fn-param trace ---"

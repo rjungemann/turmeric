@@ -57,19 +57,34 @@ exhaustive/no-default, previously unguarded).  37 rows, 60 kinds, behavior
 byte-identical (snapshots unchanged, suite green).
 
 ### Stage 2 -- name the positions (observability before commitment)
+(LANDED 2026-07-31)
 
-Introduce `ReprPosition` (an enum: PARAM, RESULT, LET_BIND, CONTAINER_ELEM,
-STRUCT_FIELD, CLOSURE_CAPTURE, CARRIER_SINK, INLINE_C_EDGE) and a
-`repr_of(const Type *, ReprPosition)` returning a small closed enum of
-representation forms (SCALAR_BITS, HEAP_PTR, BYVAL_AGG, BOXED_AGG,
-CARRIER_I64, FAT_HANDLE, THIN_FN, POLY_CARRIER).  Do NOT wire it into
-emission yet: shadow-call it at the existing decision sites under
-`--emit-abi-trace` (the increment-0 instrument) and log disagreements
-between what `repr_of` says and what the site decided.  This is the same
-observability-first discipline increment 0 used: the shadow log is the
-blast-radius measurement for stage 3, produced at zero behavioral risk.
-A Debug-build ICE on disagreement (R3-style) graduates from logging once
-the corpus runs silent.
+`ReprPosition` (PARAM, RESULT, LET_BIND, CONTAINER_ELEM, STRUCT_FIELD,
+CARRIER_SINK) and `repr_of(const Type *, ReprPosition) -> ReprForm`
+(SCALAR_BITS, HEAP_PTR, BYVAL_AGG, BOXED_AGG, CARRIER_I64, FAT_HANDLE,
+THIN_FN) live in `types.c`/`types.h`.  It is NOT wired into emission:
+shadow checks at two decision sites (`emit_binding_repr_c_name` -> the
+let-bind decl; `control_result_temp_ctype` -> the control-form merge temp)
+log one `repr-shadow` stderr line per disagreement under
+`--emit-abi-trace`.  `tests/run-repr-trace.sh` pins the instrument (a
+mid-migration shape must fire; a consolidated shape must not).
+
+**First corpus measurement** (1976 fixtures, 2026-07-31): the raw sweep
+found 521 disagreement lines; two spec-calibration passes (existential
+packages ARE heap pointers; tyvar-elemented heap apps are the erased
+spelling of the same bits; `any`/union are the two-word tagged aggregate
+at direct positions; the merge-temp shadow must use the walker's RECOVERED
+type, not the elab-collapsed one) reduced it to **80 lines in exactly two
+residual classes**, both genuine protocol gaps that today's bridges paper
+over:
+
+| class | count | meaning |
+| --- | --- | --- |
+| `let-bind want=heap-ptr got=carrier-i64` | 51 (+2 merge-temp) | a CONCRETE heap container (`(Vec int)`, `(MutableMap int int)`, a :heap struct) bound as `int64_t` instead of its typed pointer -- the spelling seam behind the gcc14 pointer/int straddle bridge family |
+| `let-bind want=byval-agg got=carrier-i64` | 27 | a concrete by-value app (`(Schema int)`, `(BoxW int)`, phantom-param structs) bound as the carrier because the INIT produced a carrier -- the init-dependent mid-migration regime in `emit_binding_repr_c_name` |
+
+This is stage 3's work list.  A Debug-build ICE on disagreement (R3-style)
+graduates from logging once the corpus runs silent.
 
 ### Stage 3 -- migrate sites chokepoint by chokepoint
 

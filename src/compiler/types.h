@@ -1768,6 +1768,37 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);
 bool         type_is_boxed_container_elem(Type t);
+
+/* Increment 4 stage 2 (repr-decision-function-plan): the POSITION axis.
+ * `repr_of(type, position)` states the INTENDED representation protocol --
+ * what form a value of this type takes in this position under the
+ * consolidated rules increments 1-3 established.  In stage 2 it is
+ * consulted only by SHADOW checks (under --emit-abi-trace) that log
+ * disagreements with what a site actually decided; behavior is unchanged.
+ * A disagreement is either a residual seam or a hole in this spec -- both
+ * are findings.  Stage 3 migrates sites to consult it for real. */
+typedef enum ReprPosition {
+    REPR_POS_PARAM,           /* a defn/fn parameter slot */
+    REPR_POS_RESULT,          /* a fn result / control-form merge value */
+    REPR_POS_LET_BIND,        /* a let/letrec binding */
+    REPR_POS_CONTAINER_ELEM,  /* a Vec/Map/Set element slot */
+    REPR_POS_STRUCT_FIELD,    /* a struct/ADT field slot */
+    REPR_POS_CARRIER_SINK,    /* a generic (tyvar/inline-C) int64 sink */
+} ReprPosition;
+
+typedef enum ReprForm {
+    REPR_SCALAR_BITS,   /* value IS the bits (int/float/bool/cstr/ptr leaf) */
+    REPR_HEAP_PTR,      /* pointer to a heap object; carrier round-trip lossless */
+    REPR_BYVAL_AGG,     /* a real C aggregate, by value */
+    REPR_BOXED_AGG,     /* heap-boxed aggregate; slot holds the box pointer */
+    REPR_CARRIER_I64,   /* the erased int64 carrier */
+    REPR_FAT_HANDLE,    /* fat closure box {thunk, env...} as a void-ptr/int64 handle */
+    REPR_THIN_FN,       /* bare code pointer, no environment */
+} ReprForm;
+
+ReprForm     repr_of(const Type *t, ReprPosition pos);
+const char  *repr_form_name(ReprForm f);
+const char  *repr_position_name(ReprPosition pos);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
  * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the

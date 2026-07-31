@@ -393,6 +393,62 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
     return emit_type_c_name(ctx, binding_ty);
 }
 
+/* Increment 4 stage 2 (repr-decision-function-plan): shadow-check a site's
+ * representation decision against repr_of's intended protocol.  Active only
+ * under --emit-abi-trace; NEVER changes what the site decided -- a mismatch
+ * is one stderr line, which the stage-3 migration reads as its blast-radius
+ * measurement.  `chosen_cty` is the C type the site actually declared; the
+ * observed ReprForm is recovered from it plus the resolved type. */
+static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
+                                        const char *cty) {
+    size_t n = strlen(cty);
+    bool is_ptr = n >= 1 && cty[n - 1] == '*';
+    if (strcmp(cty, "int64_t") == 0) {
+        if (resolved.kind != TY_FN && resolved.kind != TY_ADT &&
+            resolved.kind != TY_APP &&
+            strcmp(emit_type_c_name(ctx, resolved), "int64_t") == 0 &&
+            type_has_concrete_codegen_layout(&resolved))
+            return REPR_SCALAR_BITS;   /* int64_t IS this scalar's spelling */
+        return REPR_CARRIER_I64;
+    }
+    if (is_ptr) {
+        if (resolved.kind == TY_FN) return REPR_FAT_HANDLE;
+        if (type_is_heap_struct(resolved) || type_is_heap_adt(resolved))
+            return REPR_HEAP_PTR;
+        /* A pointer that is the type's own scalar spelling (cstr, Sym,
+         * ptr<T> leaves) is the value's bits; any other pointer decl is a
+         * heap-object handle. */
+        if (strcmp(emit_type_c_name(ctx, resolved), cty) == 0 &&
+            type_has_concrete_codegen_layout(&resolved))
+            return REPR_SCALAR_BITS;
+        return REPR_HEAP_PTR;
+    }
+    if (strcmp(cty, "bool") == 0 || strcmp(cty, "double") == 0 ||
+        strcmp(cty, "float") == 0 || strcmp(cty, "void") == 0 ||
+        strstr(cty, "int8_t") || strstr(cty, "int16_t") ||
+        strstr(cty, "int32_t") || strstr(cty, "uint"))
+        return REPR_SCALAR_BITS;
+    return REPR_BYVAL_AGG;             /* a bare aggregate type name */
+}
+
+static void repr_shadow_check(EmitCtx *ctx, const char *site,
+                              ReprPosition pos, Type declared_ty,
+                              const char *chosen_cty) {
+    if (!g_emit_abi_trace || !chosen_cty) return;
+    Type resolved = emit_resolve_type(ctx, declared_ty);
+    ReprForm want = repr_of(&resolved, pos);
+    ReprForm got = repr_form_from_decision(ctx, resolved, chosen_cty);
+    if (want != got) {
+        Buf tb; buf_init(&tb);
+        type_print(&tb, resolved);
+        buf_putc(&tb, '\0');
+        fprintf(stderr, "repr-shadow %s %s type=%s want=%s got=%s cty=%s\n",
+                site, repr_position_name(pos), tb.data,
+                repr_form_name(want), repr_form_name(got), chosen_cty);
+        buf_free(&tb);
+    }
+}
+
 /* KB-021: true when emitting `e` yields a *by-value* concrete carrier-ABI
  * aggregate rather than the int64_t carrier.  Such a value must be bridged to
  * the carrier before a dictionary-dispatch / carrier-ABI call; an already-
@@ -1408,14 +1464,23 @@ static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
  * assigned value to match the temp's declared representation. */
 static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
                                               const Expr *tail) {
+    const char *out;
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail);
     if (bv.kind != TY_UNKNOWN)
-        return emit_type_c_name(ctx, bv);
-    if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
-        fn_body_tail_is_carrier_producer(tail) &&
-        !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
-        return "int64_t";
-    return emit_type_c_name(ctx, type);
+        out = emit_type_c_name(ctx, bv);
+    else if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
+             fn_body_tail_is_carrier_producer(tail) &&
+             !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
+        out = "int64_t";
+    else
+        out = emit_type_c_name(ctx, type);
+    /* Shadow against the RECOVERED type when the walker found one: the
+     * declared `type` may have been collapsed to a scalar at elab (the
+     * return-only-poly accessor shape), and shadowing the collapsed type
+     * reports the site's correct recovery as a false disagreement. */
+    repr_shadow_check(ctx, "merge-temp", REPR_POS_RESULT,
+                      bv.kind != TY_UNKNOWN ? bv : type, out);
+    return out;
 }
 
 /* gcc14-int-conversion (carrier-to-typed-param): reconcile a control-form result
@@ -1707,6 +1772,8 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (e.g. `int64_t v = (Vec__int){...}` or `Vec__int v = vec_new()`). */
             const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
                                      e->as.let_.bindings[i].init);
+            repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                              bind_c);
             /* KB-021: record whether this binding ended up by-value so that a
              * later dictionary-dispatch use of the var bridges it to the carrier. */
             if (e->as.let_.bindings[i].binding)
@@ -2040,6 +2107,8 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
                                      e->as.let_.bindings[i].init);
+            repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                              bind_c);
             if (e->as.let_.bindings[i].binding)
                 e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
                     type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
