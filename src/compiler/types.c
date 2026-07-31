@@ -4583,6 +4583,15 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
         return REPR_HEAP_PTR;
     }
 
+    /* A transparent int newtype (a PARAMETRIC single-ctor record whose one
+     * field is a concrete int -- `(defstruct Schema [A] (raw :int))`) is its
+     * int64 payload in every position: the SC7 rule type_c_name applies, and
+     * the reason `(:: (ArrShadow 7) (ArrShadow int))` emits no ctor call at
+     * all.  Fourth-sweep finding: the byval-agg prediction for these was a
+     * spec hole, not a site seam. */
+    if (type_is_transparent_int_newtype(*t))
+        return REPR_SCALAR_BITS;
+
     /* Non-heap by-value products (nominal ADT or concrete parametric app):
      * real aggregates in direct positions; boxed in container slots and
      * generic sinks (increment 3, width-independent). */

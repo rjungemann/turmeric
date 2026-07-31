@@ -420,6 +420,11 @@ static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
     size_t n = strlen(cty);
     bool is_ptr = n >= 1 && cty[n - 1] == '*';
     if (strcmp(cty, "int64_t") == 0) {
+        /* A transparent int newtype's int64 decl IS the payload -- the same
+         * scalar-bits form repr_of predicts (SC7); without this the shadow
+         * reports a spelling identity as a disagreement. */
+        if (type_is_transparent_int_newtype(resolved))
+            return REPR_SCALAR_BITS;
         if (resolved.kind != TY_FN && resolved.kind != TY_ADT &&
             resolved.kind != TY_APP &&
             strcmp(emit_type_c_name(ctx, resolved), "int64_t") == 0 &&

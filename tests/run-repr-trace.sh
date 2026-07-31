@@ -92,27 +92,24 @@ vcheck "aggregate crossing traced"        "^repr-trace bridge carrier->concrete 
 vcheck "agg-box traced"                   "^repr-trace bridge agg-box tur_adt_Option__int$"
 vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_Option__int$"
 
-# Increment 4 stage 2: the repr_of shadow log.  Two smokes: (a) a known
-# mid-migration shape (a phantom-parametric by-value app bound from a carrier
-# producer) fires a `repr-shadow` disagreement line -- proving the shadow
-# instrument is alive; (b) a fully-consolidated shape (increment 3's vec
-# element protocol) fires none -- proving the spec does not false-positive on
-# clean code.  When stage 3 migrates the binding site, (a) starts failing:
-# that is the signal to move the smoke to the next unmigrated shape (or
-# retire it if the log is empty corpus-wide).
-cat > "$tmp/shadow-dirty.tur" <<'EOF'
-(defstruct ArrShadow [a] [raw : int])
-(defn get-raw [w : (ArrShadow int)] : int (.raw w))
-(defn main [] : int
-  (let [w (:: (make-struct ArrShadow 7) (ArrShadow int))]
-    (println (get-raw w)))
-  0)
-EOF
-strace="$("$TUR" emit-c --emit-abi-trace "$tmp/shadow-dirty.tur" 2>&1 >/dev/null | grep '^repr-shadow' || true)"
-if echo "$strace" | grep -q "^repr-shadow binding let-bind .*want=byval-agg got=carrier-i64"; then
-  echo "  ok  shadow disagreement fires on mid-migration shape"
+# Increment 4 stage 2/3: the repr_of shadow log.  Two smokes: (a) a known
+# UNMIGRATED shape fires a `repr-shadow` disagreement line -- proving the
+# shadow instrument is alive; (b) a fully-consolidated shape fires none --
+# proving the spec does not false-positive on clean code.
+#
+# (a) anchors on the rank-2 functor-lens fixture, the one family stage 3's
+# chokepoint 1 left un-migrated (a Line binding spelled int64 inside the
+# lens machinery).  When a later chokepoint migrates it, this smoke fails:
+# that is the signal to move the anchor to the next unmigrated shape -- or,
+# once the corpus log is empty, to flip this check to assert SILENCE
+# (stage 3's completion criterion).  The original anchor (a phantom
+# int-newtype app) stopped firing when the spec learned SC7 transparency --
+# by design, not by migration.
+strace="$("$TUR" emit-c --emit-abi-trace tests/fixtures/van-laarhoven-lens-compose/input.tur 2>&1 >/dev/null | grep '^repr-shadow' || true)"
+if echo "$strace" | grep -q "^repr-shadow binding let-bind .*want=heap-ptr got=carrier-i64"; then
+  echo "  ok  shadow disagreement fires on unmigrated lens shape"
 else
-  echo "  FAIL shadow disagreement -- expected a 'repr-shadow binding let-bind ... want=byval-agg got=carrier-i64' line, got:"
+  echo "  FAIL shadow disagreement -- expected a 'repr-shadow binding let-bind ... want=heap-ptr got=carrier-i64' line from the lens fixture, got:"
   echo "$strace"
   rc=1
 fi
