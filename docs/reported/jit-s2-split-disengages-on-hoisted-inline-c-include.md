@@ -6,7 +6,7 @@ on every `tur jit` / `tur build`, which is exactly the per-program cost S2 was
 built to remove. It fails closed, which is why it has gone unnoticed.
 
 Found 2026-07-30 while measuring the macOS cc-fallback baseline for
-docs/reported/jit-macos-apple-sdk-headers-force-cc-fallback.md.
+docs/archive/jit-macos-apple-sdk-headers-force-cc-fallback.md.
 
 ## Summary
 

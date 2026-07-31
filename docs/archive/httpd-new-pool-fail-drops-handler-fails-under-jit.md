@@ -92,4 +92,4 @@ fails to link the cc fallback (`___asan_version_mismatch_check_v8` undefined),
 which turns ~27 fallbacks into spurious failures and makes the baseline
 unreadable. Building `-DTUR_DEBUG_SANITIZE=OFF` with Apple clang, as above,
 sidesteps both that and the ASan startup deadlock. See the environment section
-of [jit-macos-apple-sdk-headers-force-cc-fallback.md](../reported/jit-macos-apple-sdk-headers-force-cc-fallback.md).
+of [jit-macos-apple-sdk-headers-force-cc-fallback.md](jit-macos-apple-sdk-headers-force-cc-fallback.md).

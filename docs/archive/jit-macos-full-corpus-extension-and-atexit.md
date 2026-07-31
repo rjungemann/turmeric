@@ -12,7 +12,7 @@
 - **Finding 3 (Apple SDK header residue)** -- still live, and the only part
   that is. Split into its own report so `docs/reported/` carries something
   actionable rather than this whole document:
-  docs/reported/jit-macos-apple-sdk-headers-force-cc-fallback.md. It is
+  docs/archive/jit-macos-apple-sdk-headers-force-cc-fallback.md. It is
   performance-only -- every affected fixture passes via the cc fallback.
 - **Finding 4 (c2mir ignores `#pragma pack` / `__attribute__((packed))`)** --
   not exercised. Verified 2026-07-30 that the emitter produces neither

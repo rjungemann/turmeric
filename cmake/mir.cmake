@@ -48,7 +48,15 @@ include_guard(GLOBAL)
 #     (the only stage that sees the directive) and stamped onto each emitted
 #     token, so it stays correct across #include nesting; the parser lifts it
 #     onto the struct node and the layout code caps member alignment
-#     (docs/reported/jit-c2mir-ignores-pragma-pack.md).
+#     (docs/archive/jit-c2mir-ignores-pragma-pack.md).
+#   9c5ad5ef -- `enum [tag] : type` (the C23 enum-type-specifier) was a syntax
+#     error, so any program including <malloc/malloc.h> failed to parse:
+#     malloc.h:96 is `typedef enum __enum_options : uint64_t {...}`, and
+#     __enum_options expands to nothing for a compiler that does not advertise
+#     __flag_enum__.  struct enum_type already carried enum_basic_type, so size
+#     /align/conversion needed no change; the rule added is that a fixed
+#     underlying type IS the enum's type -- never widened or narrowed to fit the
+#     enumerators -- while a plain enum keeps the range-based inference.
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -62,8 +70,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "d7e19e8d6159fb0dd242c2347fe165d552ae2b80"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack")
+set(TUR_MIR_GIT_TAG "9c5ad5efcd6f3042cb41b42e1d04533ece810afe"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types")
 
 include(FetchContent)
 

@@ -1,5 +1,66 @@
 # `tur jit` on macOS: Apple SDK headers push 13 fixtures to the cc fallback
 
+**RESOLVED 2026-07-31.** No remaining cc fallback on macOS is attributable to
+an Apple SDK header. The eight fixtures this report tracked all JIT now, and
+the corpus fallback count went **31 -> 22** (the six-fixture enum round turned
+over one more than the five predicted -- `gc-auto-collects-without-gc-call`
+reaches `<malloc/malloc.h>` through the same inline-C heap probe).
+
+Totals across the whole effort: **2414 passed, 0 failed, 47 skipped**, before
+and after.
+
+The five blockers and how each closed:
+
+| # | Blocker | Fix |
+|---|---|---|
+| 1 | `__arm64__` defined empty by MIR's prelude | `JIT_PRELUDE` redefine |
+| 2 | `__LITTLE_ENDIAN__` undefined -> `OSByteOrder.h:314` | `JIT_PRELUDE` define |
+| 3 | `TargetConditionals.h:398 #error` | `JIT_PRELUDE`, the six `TARGET_*` macros clang computes as 1 |
+| 4 | C23 `enum : uint64_t` (`malloc/malloc.h:96`) | fork commit `9c5ad5ef` |
+| 5 | `#pragma pack` ignored -> `mach/message.h` size asserts | fork commit `d7e19e8d` |
+
+Rows 4 and 5 are c2mir changes in `rjungemann/mir`; `cmake/mir.cmake` is
+repinned from `90633091` to `9c5ad5ef`. **Repinning needs a fresh build dir** --
+the cache-variable trap documented in that file is real; verify with
+`git -C <dir>/_deps/mir-src log --oneline -1`.
+
+## What is left, and why it is not this report
+
+22 fallbacks remain, none SDK-attributable:
+
+- **14 are the `__atomic_*` / `__sync_*` family** (`arc-*`, `atomic-*`,
+  `cancel-*`, `future-*`, `once-basic`, `promise-linear`, `workstealing-*`,
+  `httpd-async-*`, `thread-local-basic`). Deliberate -- see
+  `src/jit_engine.c:58-62`. These builtins are type-generic and MIR binds one
+  name to one signature, so any single shim writes the wrong width somewhere.
+  The cc fallback is the correct behaviour for this class.
+- **The rest are unrelated c2mir strictness gaps** in the emitted C, not header
+  refusals -- e.g. `panic-trace` trips
+  `<tur-jit>: return with a value in function returning void`. Worth its own
+  report if anyone wants those fixtures; it has nothing to do with the SDK.
+
+## Lessons worth keeping
+
+- **Do not advertise `__GNUC__`** to get past `TargetConditionals.h`. It
+  suppresses the `#error`, then unlocks GCC-only spellings elsewhere in the SDK
+  that c2mir cannot parse (`__header_always_inline` at
+  `sys/_types/_fd_def.h:59` is the first to bite). Setting `TARGET_*` directly
+  is the header's own documented workaround.
+- **Only the `TARGET_*` macros clang computes as 1 are defined.** An undefined
+  macro already evaluates to 0 in `#if`, so the ~30 zero-valued ones buy
+  nothing and a short list is easier to keep honest.
+- **`tur jit -I` does not reach c2mir** -- only `jit_sdk_include_dirs`
+  (`src/main.c:3364`) does, which is what made the ceiling experiment possible.
+- **Fix direction 1 was a false lead, and diagnosing that was the whole job.**
+  Predefining macros cleared both `#error`s and moved the fallback count by
+  exactly zero, because each error was masking a deeper c2mir gap. The
+  ceiling experiment -- neutralising every blocker by hand before writing any
+  compiler code -- is what turned a guess into an ordered plan.
+
+---
+
+## Original report follows
+
 **Severity: low (performance, not correctness).** Every affected fixture
 PASSES -- the engine's step-6 cc fallback catches it. The cost is that those
 programs get no JIT at all, on the platform where the JIT has the least
