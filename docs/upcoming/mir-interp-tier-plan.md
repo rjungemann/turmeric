@@ -389,12 +389,24 @@ stack pushes hard the wrong way.
 ### 6.5 Incidental find (unrelated to the tier)
 
 The 13 SAME failures are 9 `refine-*` fixtures plus flaky cc-fallback ones.
-Isolating the refine ones off the JIT path entirely shows the `refined`
-experiment's runtime obligations **do not fire on a Release build** --
-`tur run` on `refine-match-field-wrong` exits 134 on Debug and 0 on Release.
-Filed separately as
-[docs/reported/refined-obligations-silently-pass-in-release.md](../reported/refined-obligations-silently-pass-in-release.md).
-It is a Release-only product bug, found only because I0 measured on Release.
+The refine ones fail off the JIT path too: `tur run` on
+`refine-match-field-wrong` exits 134 on Debug and 0 on Release.
+
+This was first written up as a high-severity product bug ("the `refined`
+experiment checks nothing in Release"). **That was wrong and is retracted** --
+see
+[docs/archive/refined-obligations-silently-pass-in-release.md](../archive/refined-obligations-silently-pass-in-release.md).
+Contract checks are stripped from Release builds by CT3 policy unless
+`--keep-contracts` is passed (`elab_fns.c:250`, `:5287`), the same bargain C
+makes with `assert()`/`NDEBUG`; refinement obligations fall back to those
+checks by design, so they inherit it. `--keep-contracts` restores the abort
+exactly.
+
+The real defect was in the fixtures: they asserted a runtime abort while
+declaring only `--enable=refined`, so they silently depended on `tur` being
+built Debug. Fixed by adding `--keep-contracts` to all nine, which makes them
+build-type-independent -- `tests/run-jit.sh` on a Release build went from 9
+failed to **0 failed**.
 
 ### 6.6 Verdict
 
@@ -506,8 +518,9 @@ divergence trap rather than a fix.
 
 - `tests/run.sh`: **2499 passed, 0 failed**
 - `tests/run-jit.sh` (Release, `-DTUR_JIT=ON`): 2405 passed, **9 failed**,
-  47 skipped -- the 9 are exactly the Release `refined` bug from section 6.5,
-  unrelated to I4 and filed separately
+  47 skipped at the time I4 landed -- the 9 were the section-6.5 fixtures,
+  unrelated to I4. Now **2414 passed, 0 failed** since those fixtures were
+  taught to ask for `--keep-contracts`.
 - `tur_jit_embed` passes in both the JIT and no-JIT configurations
 - `tur --version` and `tur jit` unaffected; the `tur` binary is unchanged
 
