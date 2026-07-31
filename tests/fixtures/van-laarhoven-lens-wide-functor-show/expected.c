@@ -7905,7 +7905,7 @@ static const char * use_hyint(tur_poly_fn_t l, int64_t s) {
         if (tur_panicking) return ((const char *)0);
         const char * __ps_200 = (run_id__spec__const_char___tur_adt_Identity__cstr(__ps_199));
         if (tur_panicking) return ((const char *)0);
-        return (const char *)(intptr_t)__ps_200;
+        return __ps_200;
 }
 
 static const char * use_hybool(tur_poly_fn_t l, bool s) {
@@ -7919,7 +7919,7 @@ static const char * use_hybool(tur_poly_fn_t l, bool s) {
         if (tur_panicking) return ((const char *)0);
         const char * __ps_205 = (run_id__spec__const_char___tur_adt_Identity__cstr(__ps_204));
         if (tur_panicking) return ((const char *)0);
-        return (const char *)(intptr_t)__ps_205;
+        return __ps_205;
 }
 
 int main(int argc, char **argv) {

@@ -5387,6 +5387,36 @@ static EmitSigEntry *g_sig_tab;
 static uint32_t      g_sig_tab_n;
 static uint32_t      g_sig_tab_cap;
 
+/* Superseded ret_ctype strings, retired rather than freed.
+ *
+ * emit_sig_lookup_ret_ctype hands out the entry's INTERIOR pointer, and
+ * callers hold it across further emission -- emit_expr.c's declared-type
+ * recovery keeps it in `ret_ct` and dereferences it later.  Re-recording a
+ * return type used to free the old string in place, which turned every
+ * outstanding pointer into a dangler; ASan caught it as a heap-use-after-free
+ * at emit_expr.c (read) / here (free), and 43 fixtures failed under a
+ * sanitized Debug build.
+ *
+ * Retiring instead of freeing keeps every pointer ever returned valid for the
+ * whole emission, which is the lifetime callers already assume.  The strings
+ * are released in emit_sig_reset with the rest of the table, so the
+ * leak-checked compiler path stays clean. */
+static char    **g_sig_retired;
+static uint32_t  g_sig_retired_n;
+static uint32_t  g_sig_retired_cap;
+
+static void emit_sig_retire(char *s) {
+    if (!s) return;
+    if (g_sig_retired_n == g_sig_retired_cap) {
+        uint32_t nc = g_sig_retired_cap ? g_sig_retired_cap * 2 : 16;
+        char **nt = (char **)realloc(g_sig_retired, nc * sizeof(char *));
+        if (!nt) { free(s); return; }   /* OOM: the old behavior, not a leak */
+        g_sig_retired = nt;
+        g_sig_retired_cap = nc;
+    }
+    g_sig_retired[g_sig_retired_n++] = s;
+}
+
 void emit_sig_reset(void) {
     for (uint32_t i = 0; i < g_sig_tab_n; i++) {
         for (uint32_t j = 0; j < g_sig_tab[i].n_params; j++)
@@ -5399,6 +5429,11 @@ void emit_sig_reset(void) {
     g_sig_tab = NULL;
     g_sig_tab_n = 0;
     g_sig_tab_cap = 0;
+    for (uint32_t i = 0; i < g_sig_retired_n; i++) free(g_sig_retired[i]);
+    free(g_sig_retired);
+    g_sig_retired = NULL;
+    g_sig_retired_n = 0;
+    g_sig_retired_cap = 0;
 }
 
 static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) {
@@ -5442,7 +5477,11 @@ void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
      * function whose return type is recorded first. */
     EmitSigEntry *e = emit_sig_find_or_add(cname, n_params);
     if (!e) return;
-    free(e->ret_ctype);
+    /* Re-recording the same type is the common case and must not churn the
+     * retired list; it also keeps the previously handed-out pointer live and
+     * correct, which is strictly better than replacing it with an equal copy. */
+    if (e->ret_ctype && strcmp(e->ret_ctype, ctype) == 0) return;
+    emit_sig_retire(e->ret_ctype);   /* readers may still hold it -- see above */
     e->ret_ctype = strdup(ctype);
 }
 
