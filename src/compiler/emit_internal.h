@@ -208,6 +208,15 @@ typedef struct EmitCtx {
     Buf  *thunk_typedefs; /* TS1: shared thunk typedef prelude */
     int   indent;
     int   tmp_n;
+    /* consolidation increment 2 (bind cell): set while emitting an
+     * EX_POLY_WRAP argument of a call whose resolved callee is the CARRIER
+     * base instance entry (an __inst_* binding with no matched by-value
+     * spec and a tyvar-mentioning result).  Such a callee invokes the
+     * continuation through the int64 carrier cast, so the wrapper must box
+     * a by-value aggregate result (the spill shim) -- pairing the wrapper
+     * ABI with the SELECTED entry point instead of guessing from receiver
+     * abstractness (result-monad-bind-typed-boundary-miscompiles). */
+    bool  poly_wrap_callee_carrier;
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;

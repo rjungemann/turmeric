@@ -1,0 +1,45 @@
+;; fn-value-carrier-fat-seams: the two residual carrier<->fat cells left open
+;; by fat-normalization stage 2, plus the ascribed-alias variant found while
+;; fixing them (docs/archive/fn-value-carrier-fat-seam-residuals.md).
+;;
+;; Cell 1 -- a let-ALIAS of a carrier (tur_poly_fn_t) fn param in tail
+;; position.  The stage-2 tail walkers resolve aliases to their origin, so
+;; the alias converts via poly-to-fat exactly like the direct param leaf
+;; (previously: `void * = tur_poly_fn_t`, invalid C).  Variants: plain,
+;; do-wrapped, nested double alias, if-arm alias, ascribed alias (the
+;; ascription of a carrier param to its own fn type is a no-op assertion).
+;;
+;; Cell 2 -- if-branch join of a carrier param against the boxed recursive
+;; result.  The unifier inserts the poly-to-fat conversion at the join
+;; (previously: "if branches have mismatched types: then=ptr<void>
+;; else=(fn [] : bool)", a checker reject).  Variants: carrier arm on
+;; either side, int/cstr/bool results.
+;;
+;; Float probes use non-zero fractional parts (7.25) per the float rule.
+
+(defn thru2 [v : (fn [] float)] : (fn [] float) (let [w v] w))
+(defn thru-do [v : (fn [] int)] : (fn [] int) (let [w v] (do w)))
+(defn thru-nest [v : (fn [] cstr)] : (fn [] cstr) (let [w v] (let [u w] u)))
+(defn thru-asc [v : (fn [] int)] : (fn [] int) (let [w (:: v (fn [] int))] w))
+(defn thru-if [p : int v : (fn [] bool)] : (fn [] bool)
+  (let [w v] (if (= p 0) w w)))
+
+(defn f3 [n : int v : (fn [] bool)] : (fn [] bool)
+  (if (= n 0) v (f3 (- n 1) v)))
+(defn g1 [n : int v : (fn [] int)] : (fn [] int)
+  (if (= n 0) (g1 1 v) v))
+(defn g2 [n : int v : (fn [] cstr)] : (fn [] cstr)
+  (if (= n 0) v (g2 (- n 1) v)))
+
+(defn main [] : int
+  (let [k 5
+        x 7.25]
+    (println ((thru2 (fn [] : float x))))
+    (println ((thru-do (fn [] : int (+ k 2)))))
+    (println ((thru-nest (fn [] : cstr "zx"))))
+    (println ((thru-asc (fn [] : int (* k 3)))))
+    (println (if ((thru-if 0 (fn [] : bool (= k 5)))) 1 0))
+    (println (if ((f3 3 (fn [] : bool (= k 5)))) 10 20))
+    (println ((g1 3 (fn [] : int (+ k 1)))))
+    (println ((g2 2 (fn [] : cstr "yy")))))
+  0)

@@ -5061,16 +5061,23 @@ static TuriValue try_retag_carrier_struct(EvalFrame *frame, const Type *ty,
     if (rt.kind != TY_ADT || !rt.as.adt_.def) return v;
     const AdtDef *d = rt.as.adt_.def;
     if (d->is_heap || !d->name) return v;
-    /* Only a MULTI-WORD single-ctor record (>= 2 fields) is stored as a carrier
-     * POINTER (matching the compiled ">8 byte by-value is boxed" rule).  A
-     * single-word value -- a `defopaque` int newtype, a 1-field record -- rides
-     * the carrier as its INLINE value (a plain int, NOT a TuriStruct pointer), so
-     * dereferencing it as a struct would read arbitrary memory (a large opaque
-     * int looks like a pointer).  Requiring >= 2 fields excludes every
-     * single-word carrier and confines the deref to real multi-word TuriStructs. */
+    /* Only a single-ctor RECORD is stored as a carrier POINTER.  A `defopaque`
+     * int newtype rides the carrier as its INLINE value (a plain int, NOT a
+     * TuriStruct pointer), so dereferencing it as a struct would read arbitrary
+     * memory (a large opaque int looks like a pointer).
+     *
+     * Increment 3 (container element protocol): a 1-FIELD defstruct-lowered
+     * record IS a TuriStruct pointer in the interpreter (its constructor
+     * allocates one), and the compiled protocol now boxes any-width by-value
+     * elements -- so `(:: (map-get m k) FzB)` on a single-field record must
+     * retag too, or the field read returns the raw pointer bits.  Admit
+     * nf == 1 only for a genuine lowered defstruct (from_struct_lowering --
+     * never a defopaque, which has no fields and no lowering flag); the
+     * structural checks below (pointer plausibility, field-count match, name
+     * strcmp) still validate the pointee before the deref commits. */
     if (d->n_ctors != 1 || !d->ctors || !d->ctors[0]) return v;
     uint32_t nf = d->ctors[0]->n_fields;
-    if (nf < 2) return v;
+    if (nf < 2 && !(nf == 1 && d->from_struct_lowering)) return v;
     uintptr_t p = (uintptr_t)(intptr_t)v.as_int;
     if (p < 0x1000) return v;
     TuriStruct *s = (TuriStruct *)p;

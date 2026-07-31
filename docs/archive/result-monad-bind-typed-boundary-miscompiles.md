@@ -1,11 +1,66 @@
 ---
-status: open
+status: RESOLVED 2026-07-31 -- consolidation increment 2 (archived)
 severity: high
 discovered: 2026-07-29
 area: stdlib + compiler (HKT method result typing, stdlib/result.tur)
 ---
 
 # `bind` / `do-m` over `Result` miscompiles across a typed `(Result A B)` boundary
+
+## Resolution (2026-07-31)
+
+Both symptoms fixed, per the investigation below:
+
+1. **Segfault (defn boundary):** the continuation wrapper's return ABI is now
+   paired with the entry point the dispatch actually SELECTS -- when the
+   callee is the carrier base instance (`__inst_*_tyvar`: no by-value spec,
+   tyvar-mentioning result), the EX_POLY_WRAP argument gets the
+   `ensure_aggregate_spill_shim` int64-returning wrapper
+   (`ctx->poly_wrap_callee_carrier`, set at the call-arg emission, consulted
+   at the spill gate).  A by-value spec callee keeps the raw aggregate
+   wrapper -- the load-bearing Option pairing, unchanged.
+2. **Invalid C (let + ascription):** `fn_body_tail_byvalue_carrier_type`'s
+   EX_ASCRIBE arm now falls back to the ASCRIBED type when the inner is a
+   carrier producer with a still-generic declared result -- the ascription
+   is the programmer stating what the carrier holds -- so the let-init
+   carrier->concrete re-wrap fires.  (Its gate deliberately avoids
+   `type_has_concrete_codegen_layout`, which has no TY_APP arm and fails
+   closed -- the enumerations-drift pattern.)
+
+Pinned by `tests/fixtures/result-monad-bind-typed-boundary/` (both forms,
+the err path, and the Option control).  The `Option`/`Result` call shapes now
+behave identically, which was this report's "worth fixing" bar.
+
+## Investigation update (2026-07-31, consolidation increment 2)
+
+The crash is now pinned one level deeper than the original root cause. On
+current main the TYPED BOUNDARY itself is handled -- the emitted `g` spills
+`(f n)` by value, passes its address to the carrier `bind`, and re-wraps the
+int64 result into the by-value `(Result int int)` correctly. The surviving
+defect is a **return-ABI mismatch in the continuation pairing**:
+
+- the lambda's poly wrapper is emitted returning the by-value aggregate
+  (`static tur_adt_Result__int__int __poly_N(void*, int64_t)`), because the
+  elab-side `boxes_aggregate` gate (elab_typeclasses.c, the Gap-2 comment
+  block) assumes "a CONCRETE receiver resolves to the instance's own
+  by-value entry point" and skips the carrier-spill shim;
+- but `Result`'s partially-applied instance head resolves to the CARRIER
+  base entry (`__inst_Monad_bind_Result_tyvar`), which invokes the
+  continuation through `(int64_t(*)(void*,int64_t))k.fn` -- a struct-return
+  fn cast to an int64-returning pointer (RAX:RDX vs RAX), handing bind
+  garbage that the (otherwise correct) boundary re-wrap then dereferences.
+
+So the fix is not at the boundary: the wrapper/callee ABI pairing must be
+decided by WHICH entry point the dispatch selects (by-value spec => raw
+aggregate wrapper; carrier base => spill-shimmed wrapper via
+`ensure_aggregate_spill_shim`), not by receiver abstractness. The
+by-value-spec side must stay unshimmed -- that pairing is byte-for-byte
+load-bearing for the working `Option` path (see the emit-side comment at
+the EX_POLY_WRAP spill gate, emit_expr.c). The selection happens at emit
+(abi specialization), after the elab-side gate has already chosen -- which
+is the same split-decision anatomy as every other cell in this family, and
+increment-4 material if the pairing cannot be decided in one place sooner.
+
 
 ## Summary
 

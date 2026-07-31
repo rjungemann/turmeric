@@ -7501,7 +7501,7 @@ int main(int argc, char **argv) {
         {
             __auto_type __ps_155 = (ctor_Box__cstr("hello", INT64_C(9)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t bc_1302 = (int64_t)(intptr_t)(__ps_155);
+            tur_adt_Box__cstr * bc_1302 = __ps_155;
             (void)bc_1302;
             puts((const char *)((tur_adt_Box__cstr *)(intptr_t)(bc_1302))->val);
         }

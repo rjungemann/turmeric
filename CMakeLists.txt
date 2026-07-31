@@ -204,6 +204,15 @@ add_test(
   COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Increment 4 stage 4 (repr-decision-function-plan): representation-DECISION
+# predicates must not gain new inline call sites -- new code consults
+# repr_of / the shared predicates at chokepoints, or consciously updates the
+# baseline.  Source-text check, no build needed.
+add_test(
+  NAME tur_repr_decision_ratchet
+  COMMAND bash tests/check-repr-decision-ratchet.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # F2.6 (compiled-shallow-handlers-plan): acceptance probes for `handle-shallow`.
 # The distinguishing shallow behavior (a resume that re-performs) is
 # interpreter-only and hard-errors on the compiled fiber fallback, so it lives
@@ -509,6 +518,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_type_fuzz_src PROPERTIES TIMEOUT 600)
+# Representation trace smoke (representation-consolidation-meta-plan,
+# increment 0): --emit-abi-trace's repr-trace lines classify every fn-typed
+# parameter's representation and every emit-side representation bridge, so
+# consolidation increments can diff traces.  This pins each classification.
+add_test(
+  NAME tur_repr_trace
+  COMMAND bash tests/run-repr-trace.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_repr_trace PROPERTIES TIMEOUT 120)
 # RT5a: the refinement solver on wasm32 -- compiles under Emscripten AND gives
 # the same answers at 32-bit pointers.  Skips cleanly when emcc is absent.
 add_test(

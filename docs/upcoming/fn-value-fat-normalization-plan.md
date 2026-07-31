@@ -10,6 +10,11 @@ gate: this is a miscompile fix converging on existing checked behavior, not a
 new user-facing feature -- the experiment machinery does not apply, the
 regen-coordination rules do.
 
+This is **increment 1** of
+[representation-consolidation-meta-plan.md](representation-consolidation-meta-plan.md);
+the landing checklist and probe discipline there apply on top of the stages
+below.
+
 ## Problem
 
 A fn-typed value today travels in one of (at least) six representations,
@@ -51,6 +56,125 @@ of a non-carrier fn value dispatches via the fat protocol. The carrier stays
 exactly as-is for carrier-eligible signatures -- this plan does not widen
 carrier eligibility (`fn_type_has_named_tyvar` exists because widening it
 miscompiled by-value struct args; see `poly-hof-constrained-arg-baked-carrier`).
+
+## Stage 0 -- landed 2026-07-30 (ABI ratified, matrix pinned, blast radius measured)
+
+Per the meta-plan checklist, before any emitter change:
+
+- **ABI ratification probe:** `tests/probes/fat-normalization-f0/fatparam.c`
+  proves the stage-1 convention in hand-written C against the real emitted
+  layouts (drop-glue header, `__fn` slot 0, `{shim, orig}` bare box,
+  slot-0 dispatch): one compiled callee body serves a capturing closure
+  AND a shimmed bare fn through a nominal fn-typed parameter, including a
+  pass-through (`thru`) hop. All 5 properties PASS, ASan/UBSan clean.
+- **Ok-rows pinned pre-fix:** `tests/fixtures/fn-value-matrix-ok-rows/`
+  holds the working rows of the boundary matrix (direct / let / ascribe /
+  gid invoke, thin consume, `^fat` consume, cstr payload) so the working
+  boundary cannot regress while the broken rows flip.
+- **D0 blast radius, measured with the increment-0 repr-trace** over a
+  300-fixture sample (seed-42 shuffle; stdlib baseline of 12 fn-param
+  lines/emit subtracted): the sample carries **~20 user nominal thin-fn
+  params** vs ~21 `^fat`, ~8 carrier, 1 cfnptr -- extrapolating,
+  **roughly 95-100 nominal thin fn params corpus-wide, plus 1 in the
+  auto-loaded stdlib** (a tyvar-sig param, so present in every program).
+  Stage 1's churn is therefore concentrated in ~7% of fixtures plus one
+  stdlib signature -- moderate, not tree-wide.
+
+**Implementation map for stage 1** (found while investigating; the two
+sides must land together):
+
+- *Elab side:* the `^fat` auto-shim block (`elab_call.c` ~5425, keyed on
+  `FN_ARG_FLAG(..., FA_FAT)`) is the machinery to extend to nominal thin
+  TY_FN param slots -- and it is a dense accretion of guards that ALL
+  apply to the generalized case: the already-fat ascription strip, the
+  captureless-under-ascription strip, the is_fat double-shim retype, the
+  `EX_POLY_TO_FAT` conversion, and the pass-through set. Each guard is a
+  pre-registered canary for stage 1, not incidental complexity.
+- *Emit side:* the invoke branch (`emit_expr.c`, "ER2: Callback call
+  through a local TY_FN parameter") currently fat-dispatches only
+  `is_fat || boxed` and falls through to the thin
+  `((R (*)(...))(intptr_t)p)(...)` call. The flip is scoped to
+  `is_param` bindings (let-bound TY_FN locals keep today's behavior in
+  stage 1) and must exclude `cfnptr`.
+- *Hazard found:* a capturing closure at a nominal param is ACCEPTED by a
+  different elab path than the `^fat` one (`A#1` gate at ~4780 is
+  FA_FAT-gated), so the acceptance and the shim rules live in different
+  blocks -- stage 1 must reconcile them or the shim will miss shapes the
+  checker admits.
+
+## Stage 1 -- LANDED 2026-07-30, with a NARROWED claim
+
+Shipped: a nominal thin fn-typed parameter with a **concrete, effect-free**
+signature is fat-normalized -- the shared decision is
+`fn_param_type_is_fat_normalized` (`types.c`), consulted by BOTH the elab
+call-site shim (`elab_call.c`, the generalized `^fat` auto-shim gate) and
+the emit invoke dispatch (`emit_expr.c` ER2, scoped to `is_param`).  The
+measurements, in meta-plan per-step form:
+
+| tree | `run.sh` | behavioral |
+| --- | --- | --- |
+| baseline (stage 0) | 2437 / 0 | -- |
+| Step A alone (emit flip, broad claim) | 2275 / 162 | 24 stdout |
+| A+B (broad claim) | 2265 / 172 | 28 stdout |
+| A+B (narrowed) + forwarding guard | **2437 / 0** | 0 |
+
+The two narrowings, each measured (the CPS-graduation rule -- narrow the
+claim, do not patch the misses):
+
+- **effect rows stay thin**: 17 effect/cps fixtures regress behaviorally
+  under normalization -- a colored (CPS-lowered) callback's thin convention
+  is LOAD-BEARING (twin/trampoline dispatch).  Normalizing effectful fn
+  params needs CPS-aware treatment; deferred.
+- **tyvar signatures stay thin**: 10 hkt-cata / van-laarhoven fixtures
+  regress -- a tyvar-sig param's arguments arrive through the
+  generic/carrier machinery as thin pointers the call-site shim cannot
+  see.  Deferred to the carrier-side increments (meta-plan 2+).
+
+One post-flip defect found and fixed by the s1c probe: a normalized param
+FORWARDED as an argument into another normalized slot was double-shimmed
+(the fat handle re-boxed, then invoked as code).  The existing `is_fat`
+double-shim guard now also covers normalized params.  Zero snapshot churn:
+no fixture exercised the normalized set -- which is exactly why its crash
+rows survived so long.
+
+What this closes (pinned in `tests/fixtures/fn-value-fat-normalized-params/`):
+the poly-result crash table's by-value struct ARG and RESULT rows, heap
+container results, and the forwarding hop -- each with capturing closures.
+The `^linear`/`^borrow` substructural rows are verified fixed as well
+(probed with capturing closures, correct output): substructural params are
+not `plain` so they were nominal, and their concrete signatures fall inside
+the narrowed claim.  Still open from that table: the tyvar rows and the
+effect-row row, both now explicitly out of the narrowed claim.  The
+`--known-probes` by-value probe prints FIXED; the tyvar probe still fires,
+as narrowed.
+
+## Stage 2 -- LANDED 2026-07-30 (return / let / ascribe positions)
+
+Four targeted bridges, all gated on the same shared predicate:
+
+1. **Tail normalization** (`elab_normalize_fn_tail_leaves`, elab_fns.c): a
+   defn whose declared result is a concrete effect-free fn type returns a
+   fat handle ALWAYS -- thin tail leaves shimmed, carrier-param leaves
+   boxed via EX_POLY_TO_FAT (previously `return (int64_t)(intptr_t)v;` on
+   the tur_poly_fn_t aggregate, the invalid-C row), fat leaves untouched;
+   the declared result is marked `boxed` so consumers ride the existing
+   boxed-result plumbing.
+2. **Binding-aware tail classification**: `fn_tail_fn_leaf_kinds` and the
+   mixed-path boxer now recognize stage-1 normalized params and carrier
+   params -- closing a latent stage-1 double-box hazard in mixed bodies.
+3. **Ascription preserves fat identity** (elab_types.c): `(:: e T)` onto a
+   fn type keeps `boxed` when the inner is already a fat handle -- the
+   ascribe-around-let SIGSEGV row.
+4. **Nested results in param annotations** are boxed recursively: stage-2
+   producers return fat, so `(fn [int] (fn [int] int))` annotations must
+   say so or `((f 1) 2)` thin-dispatches a fat handle -- found by the
+   suite measurement (2 curried fixtures), not predicted.
+
+Measurements: matrix probes all green (m1-m15); suite 2436/2 after the
+first three bridges (the two curried fixtures), **2438/0** with bridge 4.
+The full boundary matrix of `fn-typed-value-return-ascribe-miscompiles` --
+broken rows included -- is pinned in
+`tests/fixtures/fn-value-matrix-ok-rows/`.
 
 ## Stages
 

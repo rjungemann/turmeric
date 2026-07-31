@@ -1,0 +1,37 @@
+;; map-narrow-struct-value (increment 3, container element protocol): a
+;; Map[K V] whose VALUE type V is a NARROW (<= 8 byte) non-:heap by-value
+;; defstruct.  The wide (> 8 byte) case was already boxed via tur_hamt_box_key
+;; (tests/fixtures/map-multiword-struct-value); the narrow case used to
+;; stack-spill on insert and had no read-back unbox at a LET-BOUND read
+;; (`(let [b (:: (map-get m k) FzB)] ...)` -- invalid C).  Now any-width
+;; by-value products box on insert, the tur-wide-byval? fold threads the
+;; owned bit so map-free releases the box, and the outer let binding does
+;; NOT re-deref the merge temp the macro expansion already bridged (the
+;; increment-3 double-deref guard).
+;;
+;; Rows: narrow int-field value read through a let binding (51); narrow
+;; FLOAT-field value, bit preservation (3.5); wide value via a let binding
+;; (61, 63) -- the shape the multiword fixture never pinned.
+
+(defstruct FzB [a : int])
+(defstruct FzF [a : float])
+(defstruct FzW [a : int b : int c : int])
+
+(defn main [] : int
+  (let [m0 (:: (map-new) (Map int FzB))]
+    (let [m1 (:: (map-assoc m0 1 (FzB 51)) (Map int FzB))]
+      (let [b (:: (map-get m1 1) FzB)]
+        (println (.a b)))
+      (map-free m1)))
+  (let [f0 (:: (map-new) (Map int FzF))]
+    (let [f1 (:: (map-assoc f0 1 (FzF 3.5)) (Map int FzF))]
+      (let [f (:: (map-get f1 1) FzF)]
+        (println (.a f)))
+      (map-free f1)))
+  (let [w0 (:: (map-new) (Map int FzW))]
+    (let [w1 (:: (map-assoc w0 1 (FzW 61 62 63)) (Map int FzW))]
+      (let [w (:: (map-get w1 1) FzW)]
+        (println (.a w))
+        (println (.c w)))
+      (map-free w1)))
+  0)
