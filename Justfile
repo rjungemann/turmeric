@@ -359,17 +359,24 @@ deploy-web: web
     cd web && npm run deploy
 
 # Run web dev server.
-# web/public/turmeric.{js,wasm} are gitignored build outputs, so a fresh clone
-# has none. Vite would happily serve the site with a 404'ing wasm and a REPL
-# that silently never boots, so fail loudly instead of debugging that. We check
-# rather than depend on `wasm` so you don't need emscripten on PATH just to
-# iterate on CSS once the module has been built.
+# web/public/turmeric.{js,wasm} and doc-names.json are gitignored build
+# outputs, so a fresh clone has none. Vite would happily serve the site with a
+# 404'ing wasm and a REPL that silently never boots, or with a doc panel that
+# finds nothing, so fail loudly instead of debugging that. We check rather than
+# depend on `wasm` so you don't need emscripten on PATH just to iterate on CSS
+# once the module has been built.
 web-dev: web-deps
     #!/usr/bin/env bash
     set -euo pipefail
     if [ ! -f web/public/turmeric.wasm ] || [ ! -f web/public/turmeric.js ]; then
       echo "error: web/public/turmeric.{js,wasm} missing -- run 'just wasm' first" >&2
       echo "       (they are build outputs and are no longer committed)" >&2
+      exit 1
+    fi
+    if [ ! -f web/public/doc-names.json ]; then
+      echo "error: web/public/doc-names.json missing -- run 'just docs' first" >&2
+      echo "       (it is a build output and is no longer committed; without it" >&2
+      echo "        the REPL's doc panel silently finds nothing)" >&2
       exit 1
     fi
     cd web && npm run dev

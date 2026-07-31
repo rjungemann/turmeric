@@ -118,6 +118,10 @@ In parallel:
 1. Write `NEW` to `VERSION` (no trailing newline beyond the existing format).
 2. Edit `src/web/wasm_glue.h` -- update the `TURMERIC_VERSION "<OLD>"`
    define to `TURMERIC_VERSION "<NEW>"`.
+2b. Edit `web/public/sw.js` -- update the `CACHE_VERSION = 'tur-try-v1-<OLD>'`
+   literal to `<NEW>`. Vite rewrites this token at build time, so the deployed
+   worker is correct either way, but the in-tree literal is the dev/no-build
+   fallback and silently drifts a release behind if you skip it.
 3. Edit `CHANGELOG.md` -- insert the new entry immediately after the
    `# Changelog\n\nAll notable changes...\n` header and before the
    existing `## [<OLD>]` entry. Keep one blank line between entries.
@@ -129,7 +133,7 @@ Do not commit yet.
 ## Step 6: Commit locally
 
 ```sh
-git add VERSION src/web/wasm_glue.h CHANGELOG.md README.md
+git add VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
 git commit -m "$(cat <<'EOF'
 chore: release v<NEW>
 
@@ -161,11 +165,13 @@ This runs `just wasm` (which runs `just docs`), then `just web-deps`,
 then `npm run build`, then `wrangler deploy ...` to push the web app
 to Cloudflare. The user must already be authenticated with `wrangler`.
 
-This regenerates `web/public/turmeric.{js,wasm}`. They are **gitignored build
-outputs -- do NOT commit them.** `git status` stays clean through this step;
-if it does not, something else changed and is worth looking at. There is no
-follow-up "regenerate web artifacts" commit any more: that habit is what left
-every release tag carrying the previous release's binary.
+This regenerates `web/public/turmeric.{js,wasm}` and `web/public/doc-names.json`.
+They are **gitignored build outputs -- do NOT commit them.** `git status` stays
+clean through this step; if it does not, something else changed and is worth
+looking at. There is no follow-up "regenerate web artifacts" commit any more:
+that habit is what left every release tag carrying the previous release's
+binary, and (until v0.32.3) a doc-name index missing the release's own new
+stdlib symbols.
 
 If `just deploy-web` fails:
 - Report the failure to the user.

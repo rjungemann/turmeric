@@ -84,6 +84,17 @@ web/.wrangler/
 web/public/turmeric.js
 web/public/turmeric.wasm
 
+# Doc-name index behind the web REPL's doc panel, emitted by `just docs`
+# (tools/gendocs.py --emit-json). Same story as the wasm pair above: tracking
+# it meant every release tag either carried a stale index -- v0.32.3 nearly
+# shipped without a single `rat/*` or `complex/*` entry -- or dirtied the tree
+# mid-deploy. It also merges spice entries from the *optional* sibling
+# ../turmeric-spices/ checkout, so a contributor who has that clone and one
+# who does not could never agree on its contents. Note this is unlike
+# stdlib/docstrings.tur, gendocs' other emitted output, which stays tracked
+# because it is a real source module the compiler imports.
+web/public/doc-names.json
+
 # Playwright MCP browser session artifacts
 .playwright-mcp/
 
