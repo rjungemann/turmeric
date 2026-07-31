@@ -38,6 +38,17 @@ include_guard(GLOBAL)
 #     (struct members) and ignored for layout when it did parse
 #     (jit-engine-j0-findings.md section 30.1,
 #     docs/archive/jit-arm64-uint128-align-struct-layout-skew.md).
+#   d7e19e8d -- c2mir accepted `#pragma pack` and silently ignored it, laying
+#     the struct out at natural alignment.  Unlike c2mir's other gaps this one
+#     does not refuse the input: it compiles, runs, and is wrong (a pack(4)
+#     struct measured 16 bytes where clang gives 12), with no diagnostic beyond
+#     "unknown pragma".  <mach/message.h> wraps every Mach message trailer in
+#     `#pragma pack(push, 4)`, so mach_msg_context_trailer_t came out 64 against
+#     the SDK's own asserted 60.  The packing is tracked in the preprocessor
+#     (the only stage that sees the directive) and stamped onto each emitted
+#     token, so it stays correct across #include nesting; the parser lifts it
+#     onto the struct node and the layout code caps member alignment
+#     (docs/reported/jit-c2mir-ignores-pragma-pack.md).
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -51,8 +62,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "90633091d044c8a16218e21a3cd2601501ac47e8"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align fixes")
+set(TUR_MIR_GIT_TAG "d7e19e8d6159fb0dd242c2347fe165d552ae2b80"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack")
 
 include(FetchContent)
 

@@ -82,6 +82,29 @@ static const char JIT_PRELUDE[] =
   "#if defined(__APPLE__) && defined(__aarch64__)\n"
   "#undef __arm64__\n"
   "#define __arm64__ 1\n"
+  /* <libkern/OSByteOrder.h>:80 selects on __LITTLE_ENDIAN__/__BIG_ENDIAN__ and
+   * #errors "Unknown endianess" when neither is set.  c2mir advertises neither;
+   * arm64 Darwin is unambiguously little-endian. */
+  "#define __LITTLE_ENDIAN__ 1\n"
+  /* <TargetConditionals.h> auto-detects the compiler and #errors at :398 when
+   * it recognizes none.  Its own documented workaround (see the comment above
+   * that #error) is to set TARGET_CPU_/TARGET_OS_ on the command line, which is
+   * what this does -- rather than advertising __GNUC__, which does suppress the
+   * #error but then unlocks GCC-only spellings elsewhere in the SDK that c2mir
+   * cannot parse (__header_always_inline in sys/_types/_fd_def.h:59 is the
+   * first one that bites).
+   *
+   * Only the macros clang computes as 1 for arm64 macOS are listed, taken from
+   * `clang -dM -E -include TargetConditionals.h`.  The ~30 it computes as 0 are
+   * deliberately omitted: an undefined macro already evaluates to 0 in #if, so
+   * defining them adds nothing, and a short list is far easier to keep honest.
+   * Guarded on __aarch64__ so this cannot mislabel an Intel host. */
+  "#define TARGET_CPU_ARM64 1\n"
+  "#define TARGET_OS_MAC 1\n"
+  "#define TARGET_OS_OSX 1\n"
+  "#define TARGET_RT_64_BIT 1\n"
+  "#define TARGET_RT_LITTLE_ENDIAN 1\n"
+  "#define TARGET_RT_MAC_MACHO 1\n"
   "#endif\n"
   "double __builtin_pow (double, double);\n"
   "double __builtin_sqrt (double);\n"

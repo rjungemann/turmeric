@@ -1,5 +1,51 @@
 # c2mir silently ignores `#pragma pack` and `__attribute__((packed))`
 
+**`#pragma pack` RESOLVED 2026-07-31** in the `rjungemann/mir` fork, commit
+`d7e19e8d` (`cmake/mir.cmake` repinned from `90633091`).
+`__attribute__((packed))` is **still open** -- it goes through the attribute
+path, not the pragma path -- but nothing in the corpus or the Darwin SDK
+headers reaches it, so it is recorded here rather than left in
+`docs/reported/`.
+
+## Resolution
+
+The packing is now tracked in the preprocessor -- the only stage that sees the
+directive, since `check_pragma` consumes it and `pre()` runs to completion
+before `parse()` starts. `out_token` stamps the packing in effect onto every
+token it emits, which is the single choke point every parser-bound token passes
+through and runs in preprocessing order, so the stamp stays correct when a
+`pack(push)` spans an `#include` (how the Apple and Windows SDKs actually use
+it). The parser lifts the stamp off the `struct`/`union` keyword onto the
+`N_STRUCT`/`N_UNION` node, and `set_type_layout` / `aux_set_type_align` cap each
+member's alignment at `min(its own alignment, pack)`.
+
+Supported: `pack(N)`, `pack()`, `pack(push)`, `pack(push, N)`, `pack(pop)`,
+`pack(pop, N)`, N a power of two in 1..16. An unrecognized form warns and is
+ignored rather than silently changing layout.
+
+Measured after the fix, on arm64 macOS:
+
+| construct | `cc` | `tur jit` before | `tur jit` after |
+|---|---|---|---|
+| `#pragma pack(push, 4)` | 12 | 16 | **12** |
+| `__attribute__((packed))` | 12 | 16 | 16 (still open) |
+| `mach_msg_context_trailer_t` | 60 | failed the SDK assert | **60** |
+| `mach_msg_mac_trailer_t` | 68 | failed the SDK assert | **68** |
+
+(The two "before" Mach sizes are recorded as the assertion outcome rather than
+a number: once `__arm64__` was restored the SDK's `_Static_assert` rejected the
+layout before anything could print a `sizeof`, and the pre-fix values were
+never measured directly.)
+
+The Mach trailers now satisfy the SDK's own `_Static_assert`s, which is what
+had been forcing the `image-*` fixtures to the cc fallback. Full JIT corpus:
+**2414 passed, 0 failed**, with cc fallbacks down from 31 to 28 (the three
+`image-*` fixtures now JIT).
+
+---
+
+## Original report follows
+
 **Severity: medium-high (silent wrong layout, no diagnostic).** Unlike every
 other c2mir gap on the JIT path, this one does not fail the compile and take
 the cc fallback -- it *succeeds* and lays the struct out differently from the

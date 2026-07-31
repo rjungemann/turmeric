@@ -186,24 +186,41 @@ real 8-fixture prize here; nothing is fundamentally out of reach.
 
 The full blocker chain, in the order each fixture hits it:
 
-| # | Blocker | Blocks | Fix |
+| # | Blocker | Blocks | Status |
 |---|---|---|---|
-| 1 | `__arm64__` defined empty by MIR's prelude | image-* (3) | **SHIPPED** (`JIT_PRELUDE`) |
-| 2 | `__LITTLE_ENDIAN__` undefined -> `OSByteOrder.h:314 #error Unknown endianess` | image-* (3) | one-line prelude define |
-| 3 | `TargetConditionals.h:398 #error` | gc/hkt/weak (5) | prelude defines (needs the full `TARGET_CPU_*`/`TARGET_OS_*` set, not one macro) |
-| 4 | C23 `enum : uint64_t` (`malloc/malloc.h:96`) | gc/hkt/weak (5) | **c2mir grammar -- fork** |
-| 5 | `#pragma pack` ignored -> `mach/message.h:543,569` size asserts | **all 8** | **c2mir layout -- fork** |
+| 1 | `__arm64__` defined empty by MIR's prelude | image-* (3) | **DONE** (`JIT_PRELUDE`) |
+| 2 | `__LITTLE_ENDIAN__` undefined -> `OSByteOrder.h:314 #error Unknown endianess` | image-* (3) | **DONE** (`JIT_PRELUDE`) |
+| 3 | `TargetConditionals.h:398 #error` | all 8 | **DONE** (`JIT_PRELUDE`, the 6 macros clang computes as 1) |
+| 4 | C23 `enum : uint64_t` (`malloc/malloc.h:96`) | gc/hkt/weak (5) | **OPEN -- c2mir grammar, fork** |
+| 5 | `#pragma pack` ignored -> `mach/message.h:543,569` size asserts | all 8 | **DONE** -- fork commit `d7e19e8d` |
 
-### The ordering conclusion that matters
+**Rows 1, 2, 3 and 5 landed 2026-07-31.** The three `image-*` fixtures now JIT;
+corpus fallbacks went 31 -> 28 with totals unchanged at 2414 passed / 0 failed.
+Row 4 is the only thing still holding the five gc/hkt/weak fixtures, and it is
+now the *sole* blocker for them -- with the enum syntax patched out by hand
+those five compiled and ran (the ceiling experiment below).
 
-**`#pragma pack` (row 5) is the keystone: it blocks all 8, so until it lands no
-other fix on this list buys a single fixture.** That is why shipping
-`__LITTLE_ENDIAN__` or `TARGET_CPU_ARM64` on their own was declined -- they are
-correct but inert, and inert changes that assert things about the target are
-pure downside.
+Two notes for whoever picks up row 4:
 
-Sequence, if this is taken up: row 5, then row 4, then rows 2-3 (trivial once
-they can pay off). Row 4 was separately confirmed sufficient for `malloc.h` --
+- Do **not** advertise `__GNUC__` to get past `TargetConditionals.h`. It does
+  suppress the `#error`, but it then unlocks GCC-only spellings elsewhere in the
+  SDK that c2mir cannot parse -- `__header_always_inline` at
+  `sys/_types/_fd_def.h:59` is the first to bite. Setting the `TARGET_*` macros
+  directly, which is what the header's own comment recommends, is why row 3
+  shipped.
+- Only the six `TARGET_*` macros clang computes as **1** are defined. The ~30 it
+  computes as 0 are omitted on purpose: an undefined macro already evaluates to
+  0 in `#if`, so defining them buys nothing and a short list is easier to keep
+  honest.
+
+### The ordering conclusion that mattered
+
+**`#pragma pack` (row 5) was the keystone: it blocked all 8, so until it landed
+no other fix on this list bought a single fixture.** That is why
+`__LITTLE_ENDIAN__` and `TARGET_CPU_ARM64` were initially declined -- correct
+but inert, and inert changes that assert things about the target are pure
+downside. Once row 5 landed they became live and shipped alongside it, which is
+what turned 3 fixtures over. Row 4 was separately confirmed sufficient for `malloc.h` --
 with only the enum syntax patched, that header parses clean, so no further
 c2mir gap hides behind it.
 
