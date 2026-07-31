@@ -4491,6 +4491,19 @@ const char *type_struct_value_c_name(Type t) {
  *     stage-1 claim); every other fn value is a fat handle (stages 1-2);
  *   - tyvars and compile-time-only kinds are the erased int64 carrier.
  * ==========================================================================*/
+/* True when an app spine mentions an unresolved or deliberately-erased
+ * argument (a tyvar, an unknown, or an existential package type) -- the
+ * cases whose container spelling stays the erased int64 carrier. */
+static bool repr_app_mentions_erased_arg(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_EXISTS)
+        return true;
+    if (t->kind == TY_APP)
+        return repr_app_mentions_erased_arg(t->as.app.fn) ||
+               repr_app_mentions_erased_arg(t->as.app.arg);
+    return false;
+}
+
 const char *repr_form_name(ReprForm f) {
     switch (f) {
         case REPR_SCALAR_BITS: return "scalar-bits";
@@ -4556,13 +4569,16 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
     }
 
     /* Heap-represented nominal/parametric types: the pointer IS the value.
-     * A heap app with UNRESOLVED (tyvar) arguments -- `(Vec A)` inside a
-     * generic body -- is the SAME pointer spelled as the erased carrier
-     * (int64_t); report the erased spelling so the shadow log measures real
-     * seams, not the lossless pointer/carrier round trip (first sweep: 431
-     * of 521 lines were this spelling distinction). */
+     * A heap app with UNRESOLVED (tyvar) or EXISTENTIAL arguments -- `(Vec
+     * A)` inside a generic body, `(Vec (exists ...))` whose element is a
+     * deliberately-erased package (the vec-get-existential-element design)
+     * -- is the SAME pointer spelled as the erased carrier (int64_t); report
+     * the erased spelling so the shadow log measures real seams, not the
+     * lossless pointer/carrier round trip (first sweep: 431 of 521 lines
+     * were this spelling distinction; the exists-element rows surfaced in
+     * the third). */
     if (type_is_heap_struct(*t) || type_is_heap_adt(*t)) {
-        if (t->kind == TY_APP && fn_sig_type_has_tyvar(t))
+        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t))
             return REPR_CARRIER_I64;
         return REPR_HEAP_PTR;
     }

@@ -342,8 +342,24 @@ static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
  * types have a single representation, so they fall through to emit_type_c_name. */
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init) {
-    if (!type_uses_carrier_abi(emit_resolve_type(ctx, binding_ty)))
+    Type rbt = emit_resolve_type(ctx, binding_ty);
+    if (!type_uses_carrier_abi(rbt))
         return emit_type_c_name(ctx, binding_ty);
+
+    /* Increment 4 stage 3, chokepoint 1 (repr-decision-function-plan): a
+     * CONCRETE (tyvar-free) heap container / :heap struct binding is its
+     * typed pointer, regardless of how the INIT spells the same bits --
+     * consulting repr_of's protocol instead of inheriting the initializer's
+     * erased int64 spelling.  The binding-emission arms below already bridge
+     * an int64 init into a pointer decl (and consumers reinterpret back), so
+     * this changes the declared spelling, never the value.  The first shadow
+     * sweep measured 53 sites of this class (`(Vec int)` / `(MutableMap int
+     * int)` / `Line` bound as int64_t); a tyvar-elemented heap app keeps the
+     * erased carrier spelling (same bits, unresolved element). */
+    if ((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
+        !emit_repr_type_mentions_tyvar(&rbt) &&
+        repr_of(&rbt, REPR_POS_LET_BIND) == REPR_HEAP_PTR)
+        return emit_type_c_name(ctx, rbt);
 
     const Expr *p = init;
     /* After KB-021 an ascription emits its inner value unchanged for carrier-ABI
@@ -1772,8 +1788,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (e.g. `int64_t v = (Vec__int){...}` or `Vec__int v = vec_new()`). */
             const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
                                      e->as.let_.bindings[i].init);
-            repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
-                              bind_c);
+            /* Shadow only bindings whose DECLARED type is concrete: a
+             * tyvar-declared binding inside a generic body keeps the erased
+             * spelling by design even when the active spec resolves it (the
+             * shadow resolves through the spec, so it would misread the
+             * erasure as a disagreement -- the Line-in-lens rows of the
+             * third sweep). */
+            if (!emit_repr_type_mentions_tyvar(&b->type))
+                repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                                  bind_c);
             /* KB-021: record whether this binding ended up by-value so that a
              * later dictionary-dispatch use of the var bridges it to the carrier. */
             if (e->as.let_.bindings[i].binding)
@@ -2107,8 +2130,15 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
                                      e->as.let_.bindings[i].init);
-            repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
-                              bind_c);
+            /* Shadow only bindings whose DECLARED type is concrete: a
+             * tyvar-declared binding inside a generic body keeps the erased
+             * spelling by design even when the active spec resolves it (the
+             * shadow resolves through the spec, so it would misread the
+             * erasure as a disagreement -- the Line-in-lens rows of the
+             * third sweep). */
+            if (!emit_repr_type_mentions_tyvar(&b->type))
+                repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                                  bind_c);
             if (e->as.let_.bindings[i].binding)
                 e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
                     type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&

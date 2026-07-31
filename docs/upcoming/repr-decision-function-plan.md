@@ -87,14 +87,37 @@ This is stage 3's work list.  A Debug-build ICE on disagreement (R3-style)
 graduates from logging once the corpus runs silent.
 
 ### Stage 3 -- migrate sites chokepoint by chokepoint
+(chokepoint 1 LANDED 2026-07-31; work list below)
 
-With the shadow log silent on the suite + fuzz corpus, flip sites to
-CONSULT `repr_of` instead of re-deriving, one chokepoint at a time
-(the R0-R4 routing precedent), each measured in isolation.  Candidate
-order, narrowest blast radius first: container-element sites (already one
-predicate -- mechanical), fn-value tail/join classification (already
-alias-aware), method-result carrier production, then the long tail of
-`emit_expr.c` per-arg bridges.
+With the shadow log measured, flip sites to CONSULT `repr_of` instead of
+re-deriving, one chokepoint at a time (the R0-R4 routing precedent), each
+measured in isolation.
+
+**Chokepoint 1 (landed): concrete heap bindings get their typed pointer.**
+`emit_binding_repr_c_name` consults `repr_of(rbt, LET_BIND)`: a concrete
+(tyvar-free, non-existential-elemented) heap container / :heap struct
+binding is declared as its typed pointer regardless of the init's erased
+spelling; the existing binding-emission arms bridge an int64 init into the
+pointer decl.  Consumed 47 of the 53 heap-ptr shadow lines; one snapshot
+regenerated (`make-struct-cstr-carrier-bridge` -- the diff is a REMOVED
+`(int64_t)(intptr_t)` cast, the exact seam this chokepoint closes).  Suite
+2449/0; fuzz seed 139, 250 cases, 0 findings.  Two spec refinements rode
+along, both narrowing what counts as a disagreement: existential-elemented
+heap apps stay carrier-spelled (`(Vec (exists ...))` -- the
+vec-get-existential-element erasure design), and the let-bind shadow skips
+bindings whose DECLARED type mentions tyvars (a spec-resolved generic body
+keeps the erased spelling by design).
+
+**Residual shadow inventory after chokepoint 1: 33 lines.**
+
+| class | count | disposition |
+| --- | --- | --- |
+| `let-bind want=byval-agg got=carrier-i64` | 27 | chokepoint 2, DEFERRED with grounding guard: migrating means deref-initializing a by-value monomorph from the base-ctor carrier, which assumes base-struct/monomorph layout agreement for phantom-parameter apps (`(ArrW int)`, `(Schema int)`).  That proof is adjacent to the TY_CONTRACT peel prerequisite in the layout switch; until it exists the sites keep their init-following logic and the log keeps watching. |
+| `let-bind want=heap-ptr got=carrier-i64` (Line) | 6 | one fixture family (rank-2 van-laarhoven functor-lens result bindings); the minimal reproductions (make-struct init, generic-call init) do NOT reproduce, so the path is lens-specific.  Left on the work list; not chased under the one-track rule. |
+
+Remaining candidates after the above: fn-value tail/join classification
+(already alias-aware -- mechanical), method-result carrier production,
+then the long tail of `emit_expr.c` per-arg bridges.
 
 ### Stage 4 -- registry + ratchet
 
