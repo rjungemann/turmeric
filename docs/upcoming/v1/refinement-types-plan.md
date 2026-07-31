@@ -2046,12 +2046,14 @@ Consequences that follow directly from "scaffolding, not backend":
   into `tur.wasm` and are the entire discharge path there. There is no
   `z3-solver`, no lazy fetch, no `SharedArrayBuffer`/`Atomics.wait` bridge.
 
-**Retirement.** Z3's bootstrap role ends the moment the in-house chain can
-discharge the fixtures RT3 relies on (target: end of S1, fully by S3). Its
-oracle role ends once the fuzzing corpus and SMT-LIB differential runs are
-trusted. At that point the Z3 backend file, the `find_package` block, and the
-`TUR_REFINE_Z3_ORACLE` option are **deleted** -- see "Z3 retirement criteria"
-below. Nothing in the shipped compiler ever referenced them.
+**Retirement. DONE -- executed 2026-07-30 in 0.32.5.** Z3's bootstrap role
+ended when the in-house chain could discharge the fixtures RT3 relied on; its
+oracle role ended once the corpus and differential runs were trusted. The Z3
+backend file, the `find_package` block, the `TUR_REFINE_Z3_ORACLE` option, the
+VC-level differential fuzzer and every `#ifdef` are **deleted** -- see "Z3
+retirement criteria" below for the criteria and the evidence they were met.
+Nothing in the shipped compiler ever referenced them, so the retirement is
+invisible to users.
 
 The one dividing line we do **not** cross: a competitive **DPLL(T)** SAT engine
 driving the theories is a months-to-years project. Decision procedures for a
@@ -2488,9 +2490,21 @@ rather than pulling in a solver.)
 
 ### Z3 retirement criteria
 
-The scaffold is deleted -- `refine_libz3.c`, the `find_package(Z3)` block, the
-`TUR_REFINE_Z3_ORACLE` option, and every `#ifdef TUR_REFINE_Z3_ORACLE` -- once
-all of the following hold:
+**EXECUTED 2026-07-30 (0.32.5).** Both criteria below were met, and the
+scaffold is gone: `refine_libz3.c`, the `find_package(Z3)` block, the
+`TUR_REFINE_Z3_ORACLE` option, the `tur_refine_fuzz` VC-level differential
+target, and every `#ifdef TUR_REFINE_Z3_ORACLE`. `TUR-I0379` is retired but its
+enum slot stays reserved in `diag.h`, per the convention `TUR-E0700`/`E0701`
+set. Post-retirement verification: `tur_refine_corpus` replays 125 labelled
+benchmarks with no solver linked -- 68 unsat proved, 56 sat correctly declined,
+**0 soundness failures** -- and the full suite was unchanged by the deletion.
+
+That is expected rather than lucky: the removed code was entirely inside
+`#ifdef` branches that a default build never compiled, so the shipped binary is
+functionally identical to the one before it.
+
+*The original criteria, retained as the record of what was required:* the
+scaffold is deleted once all of the following hold:
 
 - **Bootstrap discharged:** every RT3/RT5b fixture that Z3 statically decided is
   now statically decided by the in-house chain (reached incrementally; fully by

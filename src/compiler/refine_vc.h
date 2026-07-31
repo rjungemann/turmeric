@@ -8,8 +8,10 @@
  * backend-independent structure: a set of sorted variables, a set of
  * uninterpreted function symbols (named measures + nonlinear terms), a list
  * of hypotheses, and a single goal.  Every backend -- the in-house S0..S3
- * stages and the dev-only Z3 scaffold alike -- consumes exactly this and
- * returns one of three verdicts.
+ * stages, and the dev-only Z3 scaffold that used to sit behind them before its
+ * retirement in 0.32.5 -- consumes exactly this and returns one of three
+ * verdicts.  The seam is kept backend-independent regardless: it is what makes
+ * a new stage droppable into the chain without touching the encoder.
  *
  * THE SOUNDNESS INVARIANT IS ONE-DIRECTIONAL AND ABSOLUTE: a backend may
  * never answer RT_VALID for an obligation that is not genuinely entailed.

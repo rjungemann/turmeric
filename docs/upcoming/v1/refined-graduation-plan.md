@@ -11,31 +11,42 @@ preconditions are now closed and one prerequisite has been BUILT ahead of time.
 | 3. nothing still moving | **waiting** -- sit clock RESTARTED 2026-07-26 (macro-expansion path walk, `#reads` entry-contract suppression, template-emitter fixes); see the decision review below for the sit-through-0.32.x recommendation |
 | 4. exclusions documented as permanent | **DONE** -- every Limits entry tagged |
 
-**Z3 retirement input (banked 2026-07-26):** the oracle build (system Z3
-4.15.4) re-checked every VC the tur-ecs corpus generates -- verdicts identical
-to the in-house chain, zero `TUR-I0379`. Real-program oracle agreement is on
-file in the dogfood report; the scaffold can be retired on schedule.
+**Z3 retirement: DONE, executed 2026-07-30 in 0.32.5.** The input was banked
+2026-07-26 -- the oracle build (system Z3 4.15.4) re-checked every VC the
+tur-ecs corpus generates, verdicts identical to the in-house chain, zero
+`TUR-I0379`. The scaffold is now deleted: `refine_libz3.c`, the
+`TUR_REFINE_Z3_ORACLE` option, the `find_package(Z3)` block, the VC-level
+differential fuzzer, and every `#ifdef`. What survives as the standing
+regression is `tur_refine_corpus` (125 labelled benchmarks, no solver linked,
+0 soundness failures) plus the source-level fuzzer `tests/refine-fuzz-src.py`,
+which never needed an oracle. `TUR-I0379` is retired-but-reserved in `diag.h`.
 
 | prerequisite | state |
 |---|---|
 | graduated-layer shim (`GRADUATED_LAYERS[]`) | **DONE and verified**, landed empty ahead of use |
 
 **Clock:** `refined` is `XF_LIFECYCLE_PROTOTYPE`, `introduced 0.31.0`,
-`expires_at 0.34.0`. `VERSION` is `0.31.0` (released), so the experiment is
-shipping and there are roughly three minor lines of runway. At the cut it
-graduates (row deleted, behaviour unconditional) or is shelved. `expires_at`
-is a hard contract, not a suggestion.
+`expires_at 0.34.0`. `VERSION` is `0.32.5`, so the experiment is shipping with
+roughly two minor lines of runway. At the 0.34.0 cut it graduates (row deleted,
+behaviour unconditional) or is shelved.
+
+`expires_at` is **advisory and never blocks a release** -- per CLAUDE.md, no
+registry check has ever existed in the release-cut skills. An earlier revision
+of this plan called it "a hard contract, not a suggestion" in two places; that
+was wrong, it is the prose that has stranded releases before, and it is
+corrected here and in [Ordering](#ordering). Treat 0.34.0 as the review point
+at which someone decides, not a wall that decides for them.
 
 **Ordering:** corpus work, then gated dogfooding, then Z3 retirement, then
-graduation -- see [Ordering](#ordering) for why, and for the deadline that
-overrides it.
+graduation. The first three are **done**; only the flip remains. See
+[Ordering](#ordering).
 
 ---
 
 ## Decision review 2026-07-26 -- where the flip stands
 
-The ordering's first two steps are done and the third is GO; what remains is
-the sit clock and the flip itself.
+The ordering's first three steps are done (step 3 executed 2026-07-30); what
+remains is the sit clock and the flip itself.
 
 **Ordering progress.**
 
@@ -43,8 +54,8 @@ the sit clock and the flip itself.
 |---|---|
 | 1. corpus | **clean** -- in-tree corpus 119/119 parsed, 0 soundness failures, 0 over-budget; the external 200-sample reader tail (193 parsed) is `corpus-reader-tail-plan.md`, which declares itself optional |
 | 2. gated dogfooding + oracle build | **DONE** -- [refined-dogfood-ecs-report.md](refined-dogfood-ecs-report.md); oracle re-run at head over all 12 refined ecs tests (including the `ecs/sized-refined` promotion surface, which generates novel crossing shapes): verdicts identical, zero `TUR-I0379` |
-| 3. Z3 retirement | **GO** -- both gates it was waiting on are clean. Execute as its own change set during the sit window, before the flip |
-| 4. graduation | waiting on the sit clock (below) |
+| 3. Z3 retirement | **DONE 2026-07-30 (0.32.5)** -- executed as its own change set during the sit window, as planned. Suite unchanged by it: 2442 passed / 7 failed, and all 7 are pre-existing HKT carrier-cast codegen failures verified to fail identically at HEAD without the change |
+| 4. graduation | waiting on the sit clock (below) -- now the ONLY remaining step |
 
 **The stop-list, scored against the dogfood run.** None of the three
 would-stop conditions fired: zero `TUR-E0371` anywhere (so none on correct
@@ -277,12 +288,19 @@ So the sequence is:
    VCs that real programs generate, which is the evidence retirement actually
    needs and which no corpus can supply.
 3. **Retire Z3** once the corpus and the dogfooding are both clean.
-4. **Graduate** after that.
+   **DONE 2026-07-30 in 0.32.5.**
+4. **Graduate** after that. -- the only step left.
 
-**The deadline outranks this preference.** `expires_at` is `0.34.0`. If steps
-1--3 run long, graduation gets forced first; take that rather than let the
-experiment expire, and retire the oracle afterwards. The order is a preference;
-the deadline is a contract.
+**If the review point arrives first, prefer graduating to stalling.**
+`expires_at` is `0.34.0`. Steps 1--3 are done, so this no longer bites, but the
+principle stands for the next experiment: if the ordering runs long, graduate
+first and finish the scaffold cleanup afterwards.
+
+An earlier revision ended this section "the order is a preference; the deadline
+is a contract." The second half is **wrong** and is corrected: per CLAUDE.md,
+`expires_at` is advisory and never blocks a release -- the release-cut skills
+surface an expiring row and proceed. Graduating early is routine; being at or
+past expiry is not a reason to refuse a version bump.
 
 ### A caution on "200/200"
 

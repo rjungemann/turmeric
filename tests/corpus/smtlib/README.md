@@ -5,10 +5,12 @@ replayed by `tur_refine_corpus` with **no solver linked**.
 
 This exists because of the Z3 retirement criteria in
 [docs/upcoming/v1/refinement-types-plan.md](../../../docs/upcoming/v1/refinement-types-plan.md).
-`refine_libz3.c` is a *live* cross-check that only exists on a dev build with a
-system Z3; the moment it is deleted, that safety net goes with it. What has to
-survive is a corpus whose labels are **data in the repo** -- which is what this
-is.
+`refine_libz3.c` was a *live* cross-check that only existed on a dev build with
+a system Z3, and **it was deleted in 0.32.5** -- that safety net is gone. What
+survives it is a corpus whose labels are **data in the repo**, which is what
+this is. As of 0.32.5 this corpus and the source-level fuzzer
+(`tests/refine-fuzz-src.py`) are the whole of the standing solver-soundness
+check, so a soundness failure here is no longer backed up by anything else.
 
 ## What is checked
 
@@ -59,8 +61,11 @@ stage that legitimately decides more later must not break this corpus.
 ## Provenance of the labels
 
 Every label agrees with **both Z3 and cvc5**. Two scripts, both **development
-scaffolding** in exactly the way `refine_libz3.c` is -- neither is built,
-linked, or run by the test suite, and `tur_refine_corpus` does not import them:
+scaffolding** in exactly the way `refine_libz3.c` was -- neither is built,
+linked, or run by the test suite, and `tur_refine_corpus` does not import them.
+That separation is why they SURVIVE the oracle's deletion: they run at
+authoring time from a pip install, and labelling a *new* benchmark still needs
+a reference solver even though nothing links one any more:
 
 ```sh
 pip install z3-solver          # required
@@ -69,9 +74,11 @@ python3 tests/corpus/validate-labels.py          # every label vs both
 python3 tests/corpus/generate-corpus.py --out DIR --n 2000 --seed 7
 ```
 
-Two solvers rather than one, because **Z3 is the thing being retired**. A label
-confirmed only by Z3 inherits whatever Z3 gets wrong, and this corpus exists
-precisely so the in-house chain can be trusted once Z3 is gone. cvc5 is a
+Two solvers rather than one, because **Z3 was the thing being retired** (and
+now has been). A label confirmed only by Z3 inherits whatever Z3 gets wrong,
+and this corpus exists precisely so the in-house chain can be trusted now that
+Z3 is gone -- which makes the two-solver seal more important after the
+retirement, not less. cvc5 is a
 different implementation lineage, so agreement between them is meaningfully
 stronger than either alone. cvc5 is optional; without it the script still
 checks Z3 and says which seal each label carries (`z3+cvc5` or `z3 only`).

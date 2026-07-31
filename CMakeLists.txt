@@ -59,48 +59,22 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# RT3 (docs/upcoming/v1/refinement-types-plan.md): the Z3 refinement SCAFFOLD.
+# RT3: the Z3 refinement scaffold was RETIRED in 0.32.5.
 #
-# Z3 is a development-time correctness oracle and a transitional bootstrap for
-# the refinement-types pipeline -- never a shipped backend.  The in-house
-# staged decision procedure (S0..S3, src/compiler/refine_solver_*.c) is the
-# only solver a user ever runs, which is why the shipped compiler carries ZERO
-# heavyweight solver dependency and the WASM bundle pays nothing for it.
+# `TUR_REFINE_Z3_ORACLE`, the `find_package(Z3)` block, `refine_libz3.c` and
+# every `#ifdef TUR_REFINE_Z3_ORACLE` are gone, per the retirement criteria in
+# docs/upcoming/v1/refinement-types-plan.md ("Z3 retirement criteria").  Both
+# criteria were met: the in-house chain discharges the fixtures the bootstrap
+# carried, and oracle trust was established over a labelled corpus, a 3600-
+# benchmark generated soak, a 7000-VC differential run, and a real-program
+# dogfood (tur-ecs) -- all clean.
 #
-# Deliberate departures from a conventional dependency: no CPMAddPackage, no
-# FetchContent, no auto-download, no static linking into a distributable.  The
-# oracle uses a Z3 the developer already has; absent one, the option is simply
-# unavailable and the build proceeds in-house-only.  Release and WASM builds
-# REFUSE the option, so there is structurally no path by which Z3 reaches a
-# shipped binary or the web bundle.
+# Nothing replaces it, because nothing shipped ever used it: the in-house
+# staged decision procedure (S0..S3, src/compiler/refine_solver_*.c) is and was
+# the only solver a user runs.  What survives as the standing regression is the
+# labelled SMT-LIB corpus under tests/corpus/smtlib/, replayed by the
+# `tur_refine_corpus` ctest target with NO solver linked -- see below.
 #
-# This whole block is deleted once S0..S3 meet the plan's retirement criteria.
-option(TUR_REFINE_Z3_ORACLE
-  "link a system Z3 as a dev-build refinement oracle (never shipped)"
-  OFF)
-
-if(TUR_REFINE_Z3_ORACLE)
-  # `EMSCRIPTEN` alone did NOT catch this project's WASM build.  CMake sets it
-  # only when cross-compiling under the Emscripten toolchain (`emcmake cmake`),
-  # and the `tur_wasm` target is a normal host configure that shells out to
-  # `emcc` from an add_custom_target -- so `-DTUR_WASM=ON
-  # -DTUR_REFINE_Z3_ORACLE=ON` configured cleanly with the oracle ENABLED,
-  # while the comment above claimed WASM refuses it.
-  #
-  # No Z3 actually reached the bundle (the custom target inherits neither
-  # target_compile_definitions nor link_libraries, so refine_libz3.c compiled
-  # to its stub branch), but that is safety by accident of the build's shape,
-  # not the structural refusal this is supposed to be.  TUR_WASM is a cache
-  # variable set on the command line, so it is visible here even though the
-  # option() that documents it lives in src/CMakeLists.txt.
-  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR EMSCRIPTEN OR TUR_WASM)
-    message(FATAL_ERROR
-      "TUR_REFINE_Z3_ORACLE is a dev scaffold; not allowed in Release or WASM builds")
-  endif()
-  find_package(Z3 4.12 CONFIG REQUIRED)   # SYSTEM install only -- never fetched/bundled
-  message(STATUS "tur: refinement Z3 oracle ENABLED (dev scaffold; not shippable)")
-endif()
-
 # ---------------------------------------------------------------------------
 # CPM: package manager for fetching Raylib (and any future C dependencies).
 # ---------------------------------------------------------------------------

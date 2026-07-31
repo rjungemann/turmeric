@@ -254,7 +254,10 @@ typedef enum DiagCode {
     TUR_W0377_REFINE_INSTANCE_LENIENCY, /* call allowed only because the resolved
                                          * instance demands less than its class */
     TUR_E0378_REFINE_IN_FN_TYPE,  /* refinement written inside a (fn ...) type */
-    TUR_I0379_REFINE_ORACLE_MISMATCH, /* dev oracle: in-house stage disagreed with Z3 */
+    TUR_I0379_REFINE_ORACLE_MISMATCH, /* RETIRED (Z3 oracle retirement, 0.32.5): the
+                                       * dev-only oracle whose disagreements this
+                                       * reported is gone. Code reserved, no longer
+                                       * emitted. */
     /* exports-map-syntax-tighten-plan: `:exports` in build.tur got an
      * effect-row literal (`#fx{...}` or `@{...}`) instead of a map literal
      * (`#map{...}`) or a legacy bare `#{...}` map or a path vector. */

@@ -6,11 +6,12 @@
  * Owns the ordered backend array and the fall-through loop:
  *
  *   S0 (normalize/trivial) -> S1 (EUF) -> S2 (arithmetic) -> S3 (N-O combine)
- *      -> [dev-only Z3 scaffold] -> RT_UNKNOWN => keep the runtime check
+ *      -> RT_UNKNOWN => keep the runtime check
  *
- * In every default and release build the chain is the in-house stages only.
- * An obligation no stage can decide falls straight to the runtime contract
- * check it would have had anyway (or, under --strict-refine, to a hard error).
+ * The chain is the in-house stages, full stop (a dev-only Z3 oracle sat at the
+ * tail during bootstrap and was retired in 0.32.5).  An obligation no stage can
+ * decide falls straight to the runtime contract check it would have had anyway
+ * (or, under --strict-refine, to a hard error).
  *
  * See docs/upcoming/v1/refinement-types-plan.md (phase RT3). */
 

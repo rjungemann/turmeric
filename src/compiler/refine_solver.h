@@ -2,8 +2,9 @@
 #define TUR_REFINE_SOLVER_H
 
 /* refine_solver.h -- shared declarations for the in-house staged decision
- * procedure (S0..S3).  These stages ARE the shipped solver: the Z3 backend is
- * dev-only scaffolding that never enters a default or release build.
+ * procedure (S0..S3).  These stages ARE the solver, and always were the only
+ * one a user ran: the Z3 backend was dev-only scaffolding, and was retired
+ * outright in 0.32.5.
  *
  * Every stage implements the RefineBackend seam from refine_vc.h and obeys the
  * one-directional soundness invariant: never RT_VALID unless genuinely
@@ -119,11 +120,5 @@ RefineDecision refine_s0_decide(RefineVC *vc, Arena *a);
 RefineDecision refine_s1_decide(RefineVC *vc, Arena *a);
 RefineDecision refine_s2_decide(RefineVC *vc, Arena *a);
 RefineDecision refine_s3_decide(RefineVC *vc, Arena *a);
-
-#ifdef TUR_REFINE_Z3_ORACLE
-/* Dev-only scaffold (see refine_libz3.c).  Never linked into a default or
- * release build; the CMake option refuses Release and WASM outright. */
-RefineDecision refine_z3_decide(RefineVC *vc, Arena *a);
-#endif
 
 #endif /* TUR_REFINE_SOLVER_H */

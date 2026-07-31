@@ -35,14 +35,13 @@ the plan's phase names):
 |---|---|---|
 | `refine_collect.{c,h}` | RT1 | Collect obligations at crossing points; encode `Form` -> normalized VC |
 | `refine_vc.{c,h}` | RT2 | The normalized VC data structure, hash-consing, sorts, the backend seam |
-| `refine_smtlib.{c,h}` | RT2 | Serialize a VC to SMT-LIB2 (diagnostics + dev-only Z3 oracle) |
+| `refine_smtlib.{c,h}` | RT2 | Serialize a VC to SMT-LIB2 (`TUR_REFINE_DUMP=1` diagnostics) |
 | `refine_solver.{c,h}` | RT3 | Shared machinery: NNF, DNF cube expansion, bounded model search |
 | `refine_solver_s0.c` | RT3 | **S0** -- normalize + trivial/syntactic discharge |
 | `refine_solver_euf.c` | RT3 | **S1** -- congruence closure (EUF) |
 | `refine_solver_arith.c` | RT3 | **S2** -- linear arithmetic (Fourier-Motzkin) |
 | `refine_solver_no.c` | RT3 | **S3** -- Nelson-Oppen combination of S1 + S2 |
 | `refine_discharge.{c,h}` | RT3/RT6/RT7 | The backend chain, memoization, hint generation, diagnostics |
-| `refine_libz3.c` | (dev) | Optional Z3 oracle cross-check; never linked into a shipped build |
 
 The elaborator wires it in from `elab_fns.c`, `elab_call.c`,
 `elab_typeclasses.c`, and friends; the runtime-check codegen lives in
@@ -63,7 +62,7 @@ The elaborator wires it in from `elab_fns.c`, `elab_call.c`,
         v
    [ RefineVC ]               -- vars, ufuncs, hyps[], goal
         |
-   RT3  |  refine_discharge_one -> S0 -> S1 -> S2 -> S3 -> (Z3 dev) -> UNKNOWN
+   RT3  |  refine_discharge_one -> S0 -> S1 -> S2 -> S3 -> UNKNOWN
         v
    verdict: VALID  -> elide the runtime check
             INVALID-> TUR-E0371 with a counterexample
@@ -261,9 +260,6 @@ static const RefineBackend CHAIN[] = {
     refine_s1_decide,   // congruence closure (EUF)
     refine_s2_decide,   // linear arithmetic
     refine_s3_decide,   // Nelson-Oppen combination
-#ifdef TUR_REFINE_Z3_ORACLE
-    refine_z3_decide,   // DEV-ONLY cross-check; refuses Release/WASM builds
-#endif
 };
 ```
 
@@ -454,7 +450,7 @@ Registered in `diag.c` / `diag.h` (the `RT3` block, `diag.c:241`):
 | `TUR-E0376` | error | refinement over a type parameter (a refinement alias with type parameters is rejected at `elab_types.c` with a plain diagnostic) |
 | `TUR-W0377` | warn | instance-leniency note (paired with the class-method checks) |
 | `TUR-E0378` | error | refinement appears inside a function type |
-| `TUR-I0379` | internal | Z3-oracle mismatch: an in-house stage proved something the oracle refutes (dev builds only; downgrades to Unknown so the build stays sound) |
+| `TUR-I0379` | internal | **RETIRED in 0.32.5**, never emitted: reported a Z3-oracle mismatch back when a dev build could link one. Code reserved, not reused |
 | `TUR-W0060` / `TUR-W0061` | warn | the `refined` experiment lifecycle notice |
 
 `TUR-E0371` and `TUR-W0372` both leave the program safe -- the runtime check
@@ -491,16 +487,38 @@ TUR_REFINE_STATS=1 tur build --enable=refined main.tur
 TUR_REFINE_DUMP=1 tur emit-c --enable=refined main.tur
 ```
 
-### The Z3 oracle (compiler developers only)
+### The Z3 oracle -- RETIRED in 0.32.5
 
-`refine_libz3.c` is a **dev-only** backend gated behind the
-`TUR_REFINE_Z3_ORACLE` CMake option, which refuses Release and WASM builds
-outright -- it can never reach a shipped artifact. When linked, it runs *after*
-the in-house chain and cross-checks: an in-house stage claiming `VALID` where Z3
-says `INVALID` is a soundness bug, reported as `TUR-I0379` and downgraded to
-`UNKNOWN` so the build stays sound even while the bug is open
-(`refine_discharge.c:70`). Use it for differential testing against any Z3
->= 4.12 with a CMake package config.
+There used to be a dev-only Z3 backend (`refine_libz3.c`, behind a
+`TUR_REFINE_Z3_ORACLE` CMake option) that ran after the in-house chain and
+flagged any stage claiming `VALID` where Z3 said `INVALID`. It is **gone** --
+file, option, `find_package` block, and the VC-level differential fuzzer that
+depended on it. There is no way to link a solver into `tur` today, and nothing
+to enable.
+
+It was scaffolding with a defined end: a bootstrap while the in-house stages
+were thin, and an oracle while their trustworthiness was still being
+established. Both jobs finished (see `docs/upcoming/v1/refinement-types-plan.md`,
+"Z3 retirement criteria"), and keeping a second solver around past that point
+buys nothing while implying the shipped compiler has a solver dependency it
+never had.
+
+**What replaced it, and why the replacement is better:**
+
+- `tests/corpus/smtlib/` + the `tur_refine_corpus` ctest target -- 125
+  benchmarks whose `sat`/`unsat` labels are **data in the repo**, replayed
+  against the in-house chain with no solver linked. A live oracle only worked
+  on a machine that had Z3 installed; this runs in every build, including CI
+  and WASM, which are exactly the ones that never had one.
+- `tests/refine-fuzz-src.py` -- a **source-level** differential fuzzer that
+  compiles generated programs twice (gate off vs gate on) and compares what
+  happens. It needs no oracle at all, and it covers the part that actually
+  broke: both known soundness bugs lived in the source-to-VC encoder, *above*
+  where the deleted VC-level fuzzer started, which is why ~17,300 generated VCs
+  across six seeds stayed clean through both of them.
+
+To debug a specific VC against an external solver by hand, dump it with
+`TUR_REFINE_DUMP=1` and feed the SMT-LIB2 to whatever solver you like.
 
 ---
 
@@ -524,11 +542,15 @@ whole pipeline. Representative cases:
 | `refine-off-is-contracts-only` | experiment off -> pure runtime behavior |
 | `refined-bounded-idx`, `refined-nonempty` | index/non-empty bounds end to end |
 
-Beyond the fixtures, two differential fuzzers stress the solver against a
-trusted oracle: `tests/unit/refine_fuzz.c` generates random VCs and cross-checks
-the in-house chain against Z3 (dev builds), and `tests/refine-fuzz-src.py`
-fuzzes at the source level. Both target the soundness invariant -- the failure
-they hunt for is a stage answering `RT_VALID` where the oracle says otherwise.
+Beyond the fixtures, `tests/refine-fuzz-src.py` fuzzes at the source level:
+it generates whole programs and compares gate-off against gate-on behavior, so
+its oracle is the runtime contract layer rather than a second solver. It
+targets the soundness invariant -- the failure it hunts for is a program the
+gate-off build catches and the gate-on build lets through.
+
+(A second, VC-level fuzzer cross-checked the chain against Z3 until 0.32.5. It
+went with the oracle; see "The Z3 oracle -- RETIRED in 0.32.5" above for why
+that costs less coverage than it sounds like.)
 
 Run the suite with the mandatory 12-minute timeout:
 

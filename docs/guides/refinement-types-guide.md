@@ -770,45 +770,38 @@ crossing is `runtime_guarded`, so it does not warn by default at all; without
 this line an obligation the encoder dropped and one the solver could not decide
 were indistinguishable.
 
-### Cross-checking against Z3 (compiler developers)
+### Cross-checking against Z3 -- removed in 0.32.5
 
-The compiler ships no solver dependency, but a development build can link a
-system Z3 as a correctness oracle: every obligation is decided by both, and a
-disagreement is reported as `TUR-I0379` and downgraded to unknown so the build
-stays sound. The option is off by default and Release and WASM builds refuse
-it outright, so it cannot reach a shipped artifact.
+A development build used to be able to link a system Z3 as a correctness
+oracle, decide every obligation twice, and report disagreements as
+`TUR-I0379`. That scaffold has been **retired**: there is no
+`TUR_REFINE_Z3_ORACLE` option, no `tur_refine_fuzz` binary, and no way to link
+a solver into `tur`. The compiler ships no solver dependency and now has no
+build mode that adds one.
 
-```sh
-# any Z3 >= 4.12 that provides a CMake package config
-cmake -S . -B build-oracle -DCMAKE_BUILD_TYPE=Debug       -DTUR_REFINE_Z3_ORACLE=ON -DZ3_DIR=/path/to/lib/cmake/z3
-cmake --build build-oracle -j
-```
+The standing replacement is `tests/corpus/smtlib/`, replayed by the
+`tur_refine_corpus` ctest target: 125 benchmarks whose `sat`/`unsat` labels
+live in the repo as data, checked against the in-house chain in every build
+rather than only on a machine with Z3 installed.
 
-An oracle build also produces `tur_refine_fuzz`, which generates random
-verification conditions and fails on any disagreement in either direction. It
-is deterministic; a failure prints the seed that reproduces it. Expect roughly
-13 VCs/second in a Debug build -- a fresh Z3 context per query is what costs,
-and it is what keeps the oracle honest.
-
-```sh
-TUR_FUZZ_SEED=42 TUR_FUZZ_ITERS=20000 ./build-oracle/tur_refine_fuzz
-```
-
-Note that Z3's `sat` is only a counterexample when the VC contains no
-uninterpreted symbols. Abstraction is sound in one direction only: `unsat` of
-an abstracted VC implies the concrete obligation holds, but a model that
-assigns an opaque symbol a convenient value proves nothing about the function
-it stands for.
+One caveat the oracle era taught, still worth knowing when you check a VC
+against an external solver by hand (dump it with `TUR_REFINE_DUMP=1`): `sat` is
+only a counterexample when the VC contains no uninterpreted symbols.
+Abstraction is sound in one direction only -- `unsat` of an abstracted VC
+implies the concrete obligation holds, but a model that assigns an opaque
+symbol a convenient value proves nothing about the function it stands for.
 
 ### Source-level differential fuzzing
 
-`tur_refine_fuzz` starts at the VC, *below* the encoder, so it is blind to
-every bug in the translation from Turmeric source into a VC. Both soundness
-bugs found in this work lived exactly there, and neither was visible to it.
+The deleted `tur_refine_fuzz` started at the VC, *below* the encoder, so it was
+blind to every bug in the translation from Turmeric source into a VC. Both
+soundness bugs found in this work lived exactly there, and neither was visible
+to it -- which is why its deletion costs less coverage than it appears to.
 
 `tests/refine-fuzz-src.py` starts at the top instead. It generates whole
 programs, compiles and runs each one with the gate off and on, and compares
-what actually happened. It needs no Z3 -- the oracle is the gate-off build.
+what actually happened. It never needed Z3 -- the oracle is the gate-off build
+-- so it is unaffected by the retirement and is now the primary fuzzer.
 
 ```sh
 python3 tests/refine-fuzz-src.py --n 500 --seed 3

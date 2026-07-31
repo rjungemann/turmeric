@@ -4,13 +4,14 @@
  * ascending cost and the loop stops at the first non-Unknown verdict:
  *
  *   S0 (normalize/trivial) -> S1 (EUF) -> S2 (arithmetic) -> S3 (N-O combine)
- *      -> [dev-only Z3 scaffold] -> RT_UNKNOWN => keep the runtime check
+ *      -> RT_UNKNOWN => keep the runtime check
  *
- * In every default and release build the chain is the in-house stages only --
- * Z3 is not linked, so an obligation no stage can decide falls straight to its
- * runtime contract check.  Adding a stage only ever moves obligations LEFT in
- * the chain; it never changes an answer, because every stage preserves the
- * one-directional soundness invariant.
+ * The chain is the in-house stages, full stop -- a dev-only Z3 oracle sat at
+ * the tail during bootstrap and was retired in 0.32.5 once the in-house stages
+ * met the plan's retirement criteria.  An obligation no stage can decide falls
+ * straight to its runtime contract check.  Adding a stage only ever moves
+ * obligations LEFT in the chain; it never changes an answer, because every
+ * stage preserves the one-directional soundness invariant.
  *
  * See docs/upcoming/v1/refinement-types-plan.md (phase RT3). */
 
@@ -58,33 +59,8 @@ static const RefineBackend CHAIN[] = {
     refine_s1_decide,   /* congruence closure (EUF)     */
     refine_s2_decide,   /* linear arithmetic            */
     refine_s3_decide,   /* Nelson-Oppen combination     */
-#ifdef TUR_REFINE_Z3_ORACLE
-    /* DEV-ONLY transitional bootstrap.  The CMake option refuses Release and
-     * WASM builds outright, so this link can never reach a shipped artifact.
-     * Deleted wholesale once S0..S3 meet the retirement criteria. */
-    refine_z3_decide,
-#endif
 };
 #define CHAIN_LEN (sizeof(CHAIN) / sizeof(CHAIN[0]))
-
-#ifdef TUR_REFINE_Z3_ORACLE
-/* Oracle cross-check: an in-house stage claiming Valid where Z3 says Invalid
- * is a soundness bug.  Report it and downgrade to Unknown so the build stays
- * sound even while the bug is open. */
-static RefineDecision oracle_crosscheck(RefineVC *vc, Arena *a,
-                                        RefineDecision d, Span loc) {
-    if (d.verdict != RT_VALID) return d;
-    RefineDecision z = refine_z3_decide(vc, a);
-    if (z.verdict == RT_INVALID) {
-        diag_emit_with_code(DIAG_ERROR, loc, TUR_I0379_REFINE_ORACLE_MISMATCH,
-                            "internal: in-house refinement stage proved an "
-                            "obligation the Z3 oracle refutes; downgrading to "
-                            "unknown (this is a solver soundness bug)");
-        return refine_unknown();
-    }
-    return d;
-}
-#endif
 
 /* ------------------------------------------------------------------------- *
  * Diagnostics
@@ -578,9 +554,6 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
         for (size_t i = 0; i < CHAIN_LEN; i++) {
             g_stats.backend_calls++;
             d = CHAIN[i](vc, a);
-#ifdef TUR_REFINE_Z3_ORACLE
-            if (CHAIN[i] != refine_z3_decide) d = oracle_crosscheck(vc, a, d, ob->loc);
-#endif
             if (d.verdict != RT_UNKNOWN) break;
         }
         memo_insert(vc, memo_fp, d.verdict == RT_VALID);

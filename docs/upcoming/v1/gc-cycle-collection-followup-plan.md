@@ -26,7 +26,7 @@ CG7's corpus and CG8's graduation sit on top of those.
 | `--shared` / bare `emit-c` | still the emitted replica (deliberately -- see DEDUP-5) |
 | Runs without being asked | **no** -- CG5 |
 | Reports what it did | **no** -- CG6 |
-| On by default | **no** -- CG8, and deliberately so |
+| On by default | **no, and never** -- a permanent design decision, not a pending phase; see CG8 |
 
 Five bugs came out of the duplication (CG1 double suspect-removal, CG3 `:heap`
 mis-cast, CG4 weak force-free, the `gc_enable` mode gap, and the
@@ -492,16 +492,38 @@ not quadratic, and removing it needs lazy per-block seeding behind an epoch
 stamp -- a new field, in a struct pinned by the DEDUP-1 layout guard, in both
 copies. Not worth it at these numbers; the note is here if it ever is.
 
-### CG8 -- (Stretch) graduation toward default-on [NOT YET -- deliberately]
+### CG8 -- Ungating `(gc-auto!)` [NOT YET -- deliberately]
 
-CG5--CG7 are done, which is the precondition this phase named. It is still too
-early: `cycle-gc` was introduced at **0.30.8**, the same day CG5 landed, and
-graduating an experiment on its introduction day defeats the point of having
-gated it. Its `expires_at` is **0.34.0**, and the release-cut skills surface
-that as a review point -- which is the right moment for this decision, with
-several releases of bake behind it.
+**Scope, decided 2026-07-30 -- read this before anything below.** This phase
+was originally titled "graduation toward default-on", which conflated two
+decisions that are not the same and do not travel together:
 
-What graduation should weigh when it comes up:
+1. **Ungating `(gc-auto!)`** -- deleting the `cycle-gc` row so the call form
+   works without `--enable`. This is what the registry row actually controls
+   (`src/compiler/elab_memory.c:605`), and it is the only thing CG8 decides.
+2. **Making `GC_AUTO` the default collection mode.** **REJECTED, permanently.**
+   Not deferred, not "behind a longer bake" -- not happening, before or after
+   v1. Automatic GC is opt-in in this language, full stop. A program that never
+   calls `(gc-auto!)` gets the pure-RC path with no collector overhead, and
+   that stays true after CG8 lands.
+
+The two are independent because the gate is on the *call form*, not on a
+default: `(gc!)`, `(gc-enable!)` and the CG6 stat readers are always available
+regardless of the row, and the `rc_cb_alloc_kinded` payload zeroing is
+conditional on `GC_AUTO` mode **at run time**. So ungating costs a non-calling
+program exactly nothing, and no amount of bake time on (1) ever adds up to (2).
+
+Read the measurements below accordingly: they are inputs to "is this call form
+ready to be unflagged", never to "should everyone get it".
+
+That settled, what remains for CG8 is timing. `cycle-gc` was introduced at
+**0.30.8**, the same day CG5 landed, and graduating an experiment on its
+introduction day defeats the point of having gated it. Its `expires_at` is
+**0.34.0**, which the release-cut skills surface as a review point (advisory --
+per CLAUDE.md it never blocks a release), and that is the right moment to
+decide, with several releases of bake behind it.
+
+What ungating should weigh when it comes up:
 
 - **Pause time** -- **measured and fixed, see PT1/PT2 above.** No longer the
   open risk it was: the quadratic is gone and a collection no longer walks the
@@ -552,11 +574,17 @@ What graduation should weigh when it comes up:
   it is no longer masked by an unrelated refcount leak. That is the number
   graduation should weigh.
 
-*Original phase text:*
+*Original phase text (SUPERSEDED by the scope decision at the top of CG8 --
+retained only to show what changed):*
 
-Only after CG5--CG7 are solid and measured: consider a default `GC_AUTO` behind
-a longer bake. This is where the `cycle-gc` experiment graduates or is shelved
-per its `expires_at`.
+> Only after CG5--CG7 are solid and measured: consider a default `GC_AUTO`
+> behind a longer bake. This is where the `cycle-gc` experiment graduates or is
+> shelved per its `expires_at`.
+
+The "consider a default `GC_AUTO`" clause is **withdrawn**, per (2) above --
+the default is never coming, so there is nothing to consider behind any length
+of bake. What survives from the original text, and is the reason (2) was
+rejected rather than merely postponed:
 
 Keep the zero-overhead pure-RC path available (`--disable` / `(gc-disable!)`)
 regardless. "Reach past Rust" must never mean "lose Rust's predictable no-GC

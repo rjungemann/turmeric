@@ -17,16 +17,6 @@ if(WIN32)
     link_libraries(ws2_32)
 endif()
 
-# RT3: the dev-only refinement oracle needs the same treatment for exactly the
-# same reason. refine_libz3.c is compiled into tur_core, and EVERY executable
-# that embeds $<TARGET_OBJECTS:tur_core> -- not just `tur` -- then carries an
-# unresolved Z3_* reference. Per-target PRIVATE links on an OBJECT library do
-# not propagate to objects-embedding consumers, so the first oracle build
-# failed to link the whole test-harness fleet. Directory scope covers them all.
-if(TUR_REFINE_Z3_ORACLE)
-    link_libraries(z3::libz3)
-endif()
-
 # ---------------------------------------------------------------------------
 # Feature-test macro: macOS gates the POSIX-XSI ucontext_t (used by
 # TuriEnv::sched_ctx for the async scheduler) behind _XOPEN_SOURCE.
@@ -190,9 +180,9 @@ set(TUR_CORE_SOURCES
     compiler/lang_layers.c
     compiler/stdlib_autoload.c
     # RT1--RT3 + S0--S3 (docs/upcoming/v1/refinement-types-plan.md): refinement
-    # types.  refine_libz3.c is a DEV-ONLY scaffold -- it compiles to nothing
-    # unless TUR_REFINE_Z3_ORACLE is defined, and that option refuses Release
-    # and WASM builds, so no shipped artifact can ever link Z3.
+    # types.  These stages are the whole solver -- the dev-only Z3 oracle that
+    # once sat behind them was retired in 0.32.5, so there is no solver
+    # dependency here to gate, in any build type.
     compiler/refine_vc.c
     compiler/refine_collect.c
     compiler/refine_smtlib.c
@@ -202,7 +192,6 @@ set(TUR_CORE_SOURCES
     compiler/refine_solver_euf.c
     compiler/refine_solver_arith.c
     compiler/refine_solver_no.c
-    compiler/refine_libz3.c
     compiler/symbols.c
     compiler/typeclass.c
     compiler/types.c
@@ -371,14 +360,6 @@ endif()
 file(READ "${CMAKE_SOURCE_DIR}/VERSION" _TUR_VERSION_RAW)
 string(STRIP "${_TUR_VERSION_RAW}" _TUR_VERSION_STR)
 target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
-
-# RT3: the dev-only refinement oracle.  OFF by default and refused for Release
-# and WASM in the top-level CMakeLists, so this never reaches a shipped build.
-# The LINK is directory-scoped above (an OBJECT library cannot propagate it);
-# only the compile definition belongs on the target.
-if(TUR_REFINE_Z3_ORACLE)
-    target_compile_definitions(tur_core PRIVATE TUR_REFINE_Z3_ORACLE=1)
-endif()
 
 # ---------------------------------------------------------------------------
 # tur: main compiler executable
@@ -821,11 +802,11 @@ set_target_properties(tur_refine_solver PROPERTIES
 
 # ---------------------------------------------------------------------------
 # Z3 retirement: replay a LABELLED SMT-LIB2 corpus against the in-house chain,
-# with no solver dependency of its own.  The oracle in refine_libz3.c is a live
-# cross-check that only exists on a dev build with a system Z3; what has to
-# survive its deletion is a corpus whose labels are DATA in the repo.  This
-# target is that regression, so it is built unconditionally -- exactly the
-# builds that have no Z3 are the ones it must run in.
+# with no solver dependency of its own.  The live cross-check (refine_libz3.c)
+# only ever existed on a dev build with a system Z3; what had to survive its
+# deletion -- which happened in 0.32.5 -- is a corpus whose labels are DATA in
+# the repo.  This target IS that surviving regression, and is now the whole of
+# the standing solver-soundness check, so it is built unconditionally.
 # See tests/unit/refine_corpus.c and tests/corpus/smtlib/README.md.
 # ---------------------------------------------------------------------------
 add_executable(tur_refine_corpus
@@ -851,32 +832,14 @@ set_target_properties(tur_refine_corpus PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
-# RT3: differential fuzzing of the in-house refinement solver against Z3.
-# Built only in an oracle build -- it links Z3, which no shipped build does.
-# See the file header for why fixture coverage is not differential coverage.
+# RT3: the VC-level differential fuzzer (tests/unit/refine_fuzz.c) compared the
+# in-house solver against Z3 and was deleted with the oracle in 0.32.5.  Its
+# replacement is not a solver fuzzer at all: tests/refine-fuzz-src.py is a
+# SOURCE-level differential fuzzer that compiles generated programs twice
+# (gate off vs on) and needs no oracle, which is the coverage that actually
+# mattered -- both known soundness bugs lived in the source->VC encoder, ABOVE
+# where the VC-level fuzzer started.
 # ---------------------------------------------------------------------------
-if(TUR_REFINE_Z3_ORACLE)
-    add_executable(tur_refine_fuzz
-        ${CMAKE_SOURCE_DIR}/tests/unit/refine_fuzz.c
-        $<TARGET_OBJECTS:tur_core>
-    )
-    target_include_directories(tur_refine_fuzz PRIVATE ${TUR_INCLUDE_DIRS})
-    target_compile_options(tur_refine_fuzz PRIVATE
-        -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
-        $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
-    )
-    target_compile_definitions(tur_refine_fuzz PRIVATE TUR_REFINE_Z3_ORACLE=1)
-    target_link_options(tur_refine_fuzz PRIVATE -pthread
-        $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
-    )
-    target_link_libraries(tur_refine_fuzz PRIVATE m)
-    if(HAVE_EDITLINE)
-        target_link_libraries(tur_refine_fuzz PRIVATE ${LIBEDIT_LIB})
-        target_compile_definitions(tur_refine_fuzz PRIVATE TURI_HAVE_EDITLINE=1)
-    endif()
-    set_target_properties(tur_refine_fuzz PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-endif()
 
 # ---------------------------------------------------------------------------
 # UC-2: user-level experiments file reader unit test
