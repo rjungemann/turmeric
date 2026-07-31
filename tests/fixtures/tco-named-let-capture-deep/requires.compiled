@@ -1,0 +1,7 @@
+tco-named-let-capture-deep: a 5,000,000-iteration CAPTURING named-let loop whose
+whole point is the *compiled* self-tail-call lowering through a lifted closure
+thunk (the `__tur_tailcall:` label + goto, with the env param left alone).  The
+tree-walking interpreter applies its own self-TCO and is correct here, but 5M
+tree-walk iterations run well past the harness's 10s per-fixture run timeout --
+a compiled-path codegen test, not an interpreter gap.  Same posture as
+tco-self-tail-deep.

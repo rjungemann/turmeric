@@ -86,6 +86,33 @@ include(cmake/CPM.cmake)
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
+# J0 JIT spike (docs/upcoming/jit-engine-plan.md) -- OFF by default.
+# ---------------------------------------------------------------------------
+# The spike harness vendors MIR (c2mir + MIR-gen) via FetchContent, which means
+# a network fetch at configure time.  Same posture as the Z3 oracle block
+# above: a default `cmake -S . -B build` -- Debug, Release, or WASM -- must not
+# reach the network and must not grow a dependency, so this is opt-in and the
+# spike binary is never part of `tur`.
+option(TUR_JIT_SPIKE
+  "build the Phase J0 JIT spike harness (fetches MIR; not part of tur)"
+  OFF)
+
+# J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`).
+# Same network posture as the spike: OFF by default, opt-in fetch.  The
+# subcommand additionally sits behind the `jit` experiment (--enable=jit) at
+# run time, per the experimental-features rule.
+option(TUR_JIT
+  "build tur with the in-process MIR JIT engine (tur jit; fetches MIR)"
+  OFF)
+
+if(TUR_JIT_SPIKE OR TUR_JIT)
+  include(cmake/mir.cmake)   # defines tur_mir (guarded; spike re-include is a no-op)
+endif()
+if(TUR_JIT_SPIKE)
+  add_subdirectory(tools/jit-spike)
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests (CTest)
 # ---------------------------------------------------------------------------
 enable_testing()
@@ -573,6 +600,33 @@ add_test(
   COMMAND bash tests/turi/repl-spice-errors.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# J2 (jit-engine-plan 3.3): the IN-PROCESS spice build behind
+# `--enable=jit repl` -- load with no .so artifact, calls (incl. the
+# __ffi high-arity shim and a fractional float), the compile-error
+# surface, and (reload) self-heal.  The script self-skips on a binary
+# without the engine; the registration is gated the same way.
+if(TUR_JIT)
+  add_test(
+    NAME tur_repl_spice_jit
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/turi/repl-spice-jit.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE)
+  # J3 (jit-engine-plan section 5): the full fixture corpus through
+  # `tur --enable=jit jit`.  RUN_SERIAL like the other whole-corpus
+  # harnesses -- it fans out across nproc internally.  TUR is pinned to
+  # THIS build's binary (the script's default would probe a sibling
+  # build dir).  Note a fully green run needs a Debug binary (refine-*
+  # discharge is Debug-only), same as tests/run.sh.
+  add_test(
+    NAME tur_jit_fixture_tests
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/run-jit.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE)
+endif()
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture
 # imports them. See docs/stdlib-check-allowlist-plan.md.
@@ -654,6 +708,18 @@ add_test(
   NAME tur_eval_basic
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# I4: a libturi embedder reaches the JIT engine (and falls back to the
+# tree-walking interpreter when the build has no engine).  The interpreter
+# half registers process-lifetime closures it never frees by design, so this
+# takes the same detect_leaks=0 the other turi harnesses do.
+add_test(
+  NAME tur_jit_embed
+  COMMAND "${CMAKE_BINARY_DIR}/tur_jit_embed"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_embed PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 # web-repl-lang-switch-drops-stdlib: a reader-type change truncates src_acc back
 # to the pinned stdlib preload rather than emptying it, so the first collection

@@ -238,6 +238,9 @@ bool g_opt_owning_cloneable_capture = true;
  * when it is on, which is exactly what the experiment gate exists for.  See
  * docs/upcoming/v1/gc-cycle-collection-followup-plan.md. */
 bool g_opt_cycle_gc = false;
+/* J1 (jit-engine-plan): the `jit` experiment's enable bit -- gates the
+ * `tur jit` subcommand until graduation. */
+bool g_opt_jit = false;
 
 /* closure-drop-glue GRADUATED 2026-07-22 -- the Model R drop-glue header ABI is
  * unconditional; the enable bit and its codegen gates are gone.  See

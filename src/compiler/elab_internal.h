@@ -228,6 +228,12 @@ typedef struct Elab {
     const Symbol *sym_hamt_count; /* hamt/count */
     const Symbol *sym_hamt_merge; /* hamt/merge */
     const Symbol *sym_hamt_hash_ptr; /* hamt_hash_ptr */
+    /* Content-keyed cstr entry points -- :cstr keys route here so runtime-
+     * built keys (equal text, distinct pointers) behave like literals. */
+    const Symbol *sym_hamt_set_cstr; /* hamt/set-cstr */
+    const Symbol *sym_hamt_del_cstr; /* hamt/del-cstr */
+    const Symbol *sym_hamt_get_cstr; /* hamt/get-cstr */
+    const Symbol *sym_hamt_has_cstr; /* hamt/has-cstr? */
     const Symbol *sym_defer;      /* Phase 4 */
     const Symbol *sym_return;     /* return - early return with defer firing */
     /* Phase 5 */

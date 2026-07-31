@@ -42,6 +42,13 @@ static void pbp_push(EmitCtx *ctx, Binding *b) {
  * lets `tco_params_simple` accept by-value-struct params (e.g.
  * `Vec__int`) that the generic form would reject as carrier-ABI. */
 static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i) {
+    /* A lifted CLOSURE thunk carries the env pointer as params[0], so its
+     * fd->params / fd->param_types are one longer than the SOURCE fn type
+     * (`fn_e->type.as.fn.arg_full_types`, which has no env).  Indexing the
+     * source type here would read the wrong param -- take the FnDef's own
+     * types, which are parallel to fd->params.  (The pbp scan above
+     * side-steps the same skew by skipping closures entirely.) */
+    if (fd->closure) return fd->param_types[i];
     if (ctx && ctx->current_abi_specialization
         && i < ctx->current_abi_specialization->n_args) {
         return ctx->current_abi_specialization->arg_types[i];
@@ -50,6 +57,16 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
         fn_e->type.as.fn.arg_full_types[i])
         return *fn_e->type.as.fn.arg_full_types[i];
     return fd->param_types[i];
+}
+
+/* Index of the first SOURCE parameter in fd->params: 1 for a lifted closure
+ * thunk (params[0] is the env pointer), 0 otherwise.  A self-tail backedge
+ * reassigns only the source params -- the env is loop-invariant, because the
+ * emitter routes a closure's own recursive self-call through the env pointer
+ * the thunk was called with (see the S5 self-call arm in emit_expr.c's
+ * closure-call emission), never a freshly built box. */
+static uint32_t tco_env_offset(const FnDef *fd) {
+    return (fd->closure && fd->n_params > 0) ? 1u : 0u;
 }
 
 /* A function is TCO-eligible only if every parameter is a plain scalar we can
@@ -65,8 +82,17 @@ static Type tco_param_type(EmitCtx *ctx, const Expr *fn_e, FnDef *fd, uint8_t i)
  * "int64_t" (the carrier fallback), which indicates the type would need
  * a bridge to/from the carrier on reassignment. */
 static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
-    if (fd->is_variadic || fd->closure) return false;
-    for (uint32_t i = 0; i < fd->n_params; i++) {
+    if (fd->is_variadic) return false;
+    /* A lifted closure thunk IS eligible: its env param is skipped (it is
+     * loop-invariant across a self-call, see tco_env_offset) and the remaining
+     * params are checked exactly as a plain defn's are.  This is what makes the
+     * CAPTURING named-let -- `(let go [...] ... (go ...))` inside a fn whose
+     * params the loop reads -- iterative instead of self-recursive; without it
+     * every such loop is one engine switch away from a stack overflow (it
+     * survives the cc path only because gcc -O2 turns the emitted self-call
+     * into a sibling call; MIR performs no such optimization).  See
+     * docs/archive/named-let-self-tail-not-tco.md. */
+    for (uint32_t i = tco_env_offset(fd); i < fd->n_params; i++) {
         if (fd->params[i]->is_poly_fn) return false;
         Type pty = tco_param_type(ctx, fn_e, fd, i);
         if (pty.kind == TY_FN) return false;
@@ -103,7 +129,15 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
      * existed for pre-Path-A indirect dispatch through the dict slot
      * cast, which `fn_expr != NULL` already filters out. */
     if (call->as.call_.is_poly_call) return false;     /* rank-2 poly call */
-    if (call->as.call_.n_args != fd->n_params) return false;
+    if (call->as.call_.n_args != fd->n_params - tco_env_offset(fd)) return false;
+    /* A lifted closure thunk is never NAMED by the call: the call's target is
+     * the enclosing letrec binding (`go`), whose closure_fn_binding points at
+     * the thunk being emitted.  That is the same identity test the closure-call
+     * emitter uses to decide it is looking at the closure's own recursive
+     * self-call (and so to thread the current env rather than an outer box), so
+     * matching it here keeps the backedge and the ordinary call in agreement. */
+    if (tco_env_offset(fd) > 0)
+        return call->as.call_.fn_binding->closure_fn_binding == fd->binding;
     if (call->as.call_.fn_binding == fd->binding) return true;  /* fast path */
     char *cn = raw_name_for_binding(call->as.call_.fn_binding);
     bool same = fn_cname && cn && strcmp(cn, fn_cname) == 0;
@@ -170,9 +204,12 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
 static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
                                FnDef *fd, const Expr *call) {
     uint32_t n = fd->n_params;
+    /* Closure thunk: params[0] is the env, which the self-call reuses unchanged
+     * -- reassign only params[env..n) from the call's args[0..). */
+    uint32_t off = tco_env_offset(fd);
     char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
-    for (uint8_t i = 0; i < n; i++) {
-        char *av = emit_value(ctx, body, call->as.call_.args[i]);
+    for (uint8_t i = (uint8_t)off; i < n; i++) {
+        char *av = emit_value(ctx, body, call->as.call_.args[i - off]);
         char *t = fresh_tmp(ctx);
         Type pty = tco_param_type(ctx, fn_e, fd, i);
         const char *pcty = emit_type_c_name(ctx, pty);
@@ -204,7 +241,7 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
         tmps[i] = t;
         free(av);
     }
-    for (uint8_t i = 0; i < n; i++) {
+    for (uint8_t i = (uint8_t)off; i < n; i++) {
         char *pn = raw_name_for_binding(fd->params[i]);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", pn, tmps[i]);
@@ -655,10 +692,26 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         return;
     }
     indent_buf(body, ctx->indent);
-    if (is_main && result_kind == TY_INT)
+    if (is_main && result_kind == TY_INT) {
         buf_printf(body, "return (int)%s;\n", v);
-    else
+    } else if (!is_main && ctx->current_fn_ret_ctype &&
+               strcmp(ctx->current_fn_ret_ctype, "void") == 0) {
+        /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+         * violation in a function returning void -- even when the expression is
+         * itself void-typed.  A `!`-returning defn whose tail is a call to
+         * another `!`-returning defn lands exactly there:
+         *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+         * clang accepts it as an extension, so the cc path never complained,
+         * but c2mir rejects it and the program silently loses the JIT
+         * (panic-trace was the fixture that surfaced this).  Emit the tail as a
+         * statement and return separately; the cast keeps -Wunused-value quiet
+         * for a non-call tail and is valid on a void-typed one. */
+        buf_printf(body, "(void)(%s);\n", v);
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "return;\n");
+    } else {
         buf_printf(body, "return %s;\n", v);
+    }
     free(v);
 }
 
@@ -1755,11 +1808,22 @@ static void gs_self_descend(GsCtx *gs, Buf *b, const Expr *S, const GsSink *sink
     gs_save(gs, b, node);
     char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
     for (uint32_t i = 0; i < na; i++) {
+        GsVar *pv = &gs->vars[pbase + (int)i];
         gs->ctx->indent = gs->cur_ind;
         char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
         char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
         indent_buf(b, gs->cur_ind);
-        buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+        /* S1 (jit-engine-plan section 4): name the temp's type instead of
+         * __auto_type (GNU-only; c2mir cannot parse it).  The type is not
+         * guessed: gs_param_class gates entry to this whole lowering and never
+         * succeeds without a ctype, and the temp's only consumer is the
+         * assignment into that same param below, so declaring it as the param's
+         * type moves the identical conversion one line earlier.  An is_ref
+         * param's arg is a borrow pointer, so the temp is `const <ctype> *`. */
+        if (pv->is_ref)
+            buf_printf(b, "const %s *%s = (%s);\n", pv->ctype, nm, av);
+        else
+            buf_printf(b, "%s %s = (%s);\n", pv->ctype, nm, av);
         free(av); tmps[i] = tur_strdup(nm);
     }
     for (uint32_t i = 0; i < na; i++) {
@@ -2100,11 +2164,16 @@ static void cps_emit_value_susp(GsCtx *gs, Buf *b, const Expr *e, const GsSink *
             uint32_t na = S->as.call_.n_args;
             char **tmps = (char **)malloc(sizeof(char *) * (na ? na : 1));
             for (uint32_t i = 0; i < na; i++) {
+                GsVar *pv = &gs->vars[pbase + (int)i];
                 gs->ctx->indent = gs->cur_ind;
                 char *av = emit_value(gs->ctx, b, S->as.call_.args[i]);
                 char nm[48]; snprintf(nm, sizeof nm, "__ra%d_%u", id, i);
                 indent_buf(b, gs->cur_ind);
-                buf_printf(b, "__auto_type %s = (%s);\n", nm, av);
+                /* S1: same named-type reasoning as gs_self_descend above. */
+                if (pv->is_ref)
+                    buf_printf(b, "const %s *%s = (%s);\n", pv->ctype, nm, av);
+                else
+                    buf_printf(b, "%s %s = (%s);\n", pv->ctype, nm, av);
                 free(av); tmps[i] = tur_strdup(nm);
             }
             for (uint32_t i = 0; i < na; i++) {
@@ -2323,8 +2392,9 @@ static void gs_emit_driver(GsCtx *gs, Buf *out, int bi, bool done_typed) {
          * type-check as the C return type). */
         char *rz;
         if (done_typed && gs->mem_ret_aggr[0]) {
-            size_t n = strlen(gs->mem_retctype[0]) + 8;
-            rz = (char *)malloc(n); snprintf(rz, n, "(%s){0}", gs->mem_retctype[0]);
+            /* S1/findings 16.4: mem_retctype can be a pointer spelling, and a
+             * pointer zero is scalar; emit_c_zero_of picks the legal form. */
+            rz = emit_c_zero_of(gs->mem_retctype[0]);
         } else if (done_typed) {
             rz = sc_restore_expr(gs->mem_retctype[0], gs->mem_ret[0], "INT64_C(0)");
         } else {
@@ -3569,6 +3639,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * user-defined-main path; the synthesized-main paths in emit_module.c and
      * the CPS D2b wrapper in emit_cps_ir.c call the same helper. */
     if (is_main) {
+        /* S1b (jit-engine-plan): explicit static initialization, ahead of
+         * everything else in main -- that is where the `constructor`
+         * attributes it replaces used to run.  Idempotent, so the constructor
+         * wrapper emitted alongside the definition is harmless here. */
+        ctx->indent += 4;
+        indent_buf(file, ctx->indent);
+        buf_puts(file, "__tur_static_init();\n");
+        ctx->indent -= 4;
         emit_win_binary_stdio_prologue(file);
     }
 
@@ -4217,6 +4295,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * int64 temp, which this branch never sees -- the recorded type is a
              * pointer). */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (!is_main && ret_ctype && strcmp(ret_ctype, "void") == 0) {
+            /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+             * violation in a function returning void -- even when the
+             * expression is itself void-typed.  A `!`-returning defn whose tail
+             * is a call to another `!`-returning defn lands exactly there:
+             *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+             * clang accepts it as an extension, so the cc path never
+             * complained, but c2mir rejects it and the program silently loses
+             * the JIT (panic-trace was the fixture that surfaced this).  Emit
+             * the tail as a statement and return separately; the cast keeps
+             * -Wunused-value quiet for a non-call tail and is valid on a
+             * void-typed one. */
+            buf_printf(file, "(void)(%s);\n", ret_val);
+            indent_buf(file, ctx->indent);
+            buf_puts(file, "return;\n");
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

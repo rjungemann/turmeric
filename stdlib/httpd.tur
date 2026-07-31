@@ -1948,12 +1948,9 @@
   size_t blen = strlen(b64);
   if (blen == 0) return 0;
   /* Base64-decode into a per-call heap buffer.  Output size <= input size. */
-  static const signed char b64tab[256] = {
-      /* fill with -1 except for valid base64 chars; we use a runtime init */
-      [0 ... 255] = -1
-  };
-  /* Designated initializers with ranges are a GNU extension; rebuild as
-   * a one-shot runtime table to stay portable. */
+  /* Designated initializers with ranges ([0 ... 255] = -1) are a GNU
+   * extension that c2mir cannot parse, which pushed every httpd program to
+   * the JIT's cc fallback.  Build the table at runtime instead. */
   signed char tab[256];
   for (int i = 0; i < 256; i++) tab[i] = -1;
   for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');

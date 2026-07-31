@@ -293,9 +293,17 @@ Expr *elab_session_send(Elab *e, const Form *call) {
     Expr *sess_q_alloc = expr_new(e->arena, EX_INLINE_C, sess_q, call->span);
 
     /* SS2: emit a GNU statement-expression that sends and returns the channel.
-     * val_exprs[0] = EX_VAR(chan_binding), val_exprs[1] = val */
+     * val_exprs[0] = EX_VAR(chan_binding), val_exprs[1] = val
+     *
+     * Bare `({ ... })`, NOT `__extension__ ({ ... })`: the prefix only silences
+     * -pedantic, which the generated-C compile (-O2 -std=c99 -Wall) never sets,
+     * and c2mir has no __extension__ keyword -- so it cost the JIT every
+     * session fixture on any libc whose headers do not #define it away.  See
+     * docs/archive/jit-macos-full-corpus-extension-and-atexit.md.  The
+     * interpreter matches this text by prefix in src/turi/eval.c; keep the two
+     * in sync. */
     static const char send_code[] =
-        "__extension__ ({ tur_session_send(__TUR_VAL_0__, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })";
+        "({ tur_session_send(__TUR_VAL_0__, (int64_t)(__TUR_VAL_1__)); (void *)__TUR_VAL_0__; })";
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice(send_code, sizeof(send_code) - 1);
     ic->return_type = sess_q;
@@ -513,7 +521,7 @@ Expr *elab_session_choose_left(Elab *e, const Form *call) {
     Type sess_p = type_session(left_proto_alloc);
     Expr *out = expr_new(e->arena, EX_INLINE_C, sess_p, call->span);
     static const char choose_left_code[] =
-        "__extension__ ({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)0); (void *)__TUR_VAL_0__; })";
+        "({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)0); (void *)__TUR_VAL_0__; })";
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice(choose_left_code, sizeof(choose_left_code) - 1);
     ic->return_type = sess_p;
@@ -568,7 +576,7 @@ Expr *elab_session_choose_right(Elab *e, const Form *call) {
     Type sess_q = type_session(right_proto_alloc);
     Expr *out = expr_new(e->arena, EX_INLINE_C, sess_q, call->span);
     static const char choose_right_code[] =
-        "__extension__ ({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)1); (void *)__TUR_VAL_0__; })";
+        "({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)1); (void *)__TUR_VAL_0__; })";
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
     ic->code = strslice(choose_right_code, sizeof(choose_right_code) - 1);
     ic->return_type = sess_q;

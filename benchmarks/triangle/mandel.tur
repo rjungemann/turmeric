@@ -1,0 +1,22 @@
+; triangle/mandel -- float-heavy inner loop (fractional values throughout):
+; multiply/add/compare codegen on doubles, with an int checksum so output
+; is exact across engines. Pure Turmeric, no imports, no inline C.
+(defn iters [cx : float cy : float] : int
+  (let go [i :int 0 zx :float 0.0 zy :float 0.0]
+    (if (>= i 64)
+      i
+      (let [zx2 (* zx zx)
+            zy2 (* zy zy)]
+        (if (> (+ zx2 zy2) 4.0)
+          i
+          (go (+ i 1) (+ (- zx2 zy2) cx) (+ (* 2.0 (* zx zy)) cy)))))))
+
+(defn main [] : int
+  (let go [y :int 0 cy :float -1.2 acc :int 0]
+    (if (>= y 200)
+      (do (println acc) 0)
+      (let inner [x :int 0 cx :float -2.1 acc2 :int acc]
+        (if (>= x 200)
+          (go (+ y 1) (+ cy 0.012) acc2)
+          (inner (+ x 1) (+ cx 0.015)
+                 (+ acc2 (iters cx cy))))))))

@@ -1,0 +1,7 @@
+tco-named-let-nocapture-deep: a 5,000,000-iteration NON-capturing named-let loop
+whose whole point is the *compiled* lowering -- that the loop is not
+CPS-colored, and so reaches the direct emitter's self-tail-call optimization
+instead of recursing through its own delimited-control entry wrapper.  The
+tree-walking interpreter applies its own self-TCO and is correct here, but 5M
+tree-walk iterations run well past the harness's 10s per-fixture run timeout.
+Same posture as tco-self-tail-deep and tco-named-let-capture-deep.

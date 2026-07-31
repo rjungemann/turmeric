@@ -223,6 +223,31 @@ catches a real deadlock). Two ways to deal with it locally:
 The Release build never carries the sanitizers, so `tur --version` on a Release
 build always works regardless.
 
+#### macOS: building fixtures against a sanitized `libturi.a`
+
+A first fixture-suite run on macOS can produce dozens of failures that are a
+**toolchain mismatch, not a product regression**. Two traps, both of which the
+harness reports as `build failed`:
+
+- **Mixed toolchains.** If `tur` is built with Homebrew LLVM (the workaround
+  above) but fixtures link with Apple's system `cc`, every fixture that pulls in
+  the ASan-instrumented `libturi.a` fails to link with
+  `Undefined symbols ... ___asan_version_mismatch_check_v8`. Either pin the
+  fixture compiler to the same toolchain (`CC=/opt/homebrew/opt/llvm/bin/clang
+  bash tests/run-jit.sh`) or -- better -- build unsanitized with Apple clang,
+  which sidesteps both this and the startup deadlock:
+
+  ```sh
+  cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON \
+        -DTUR_DEBUG_SANITIZE=OFF
+  cmake --build build-nosan -j
+  ```
+
+- **`--target tur` is not enough.** The `tur` executable links `tur_core`
+  objects and (under `-DTUR_JIT=ON`) `tur_mir`; it never links `turi`. So
+  `cmake --build <dir> --target tur` does not produce `libturi.a`, and every
+  fixture then dies with `ld: library 'turi' not found`. Build all targets.
+
 ## CLI Argument Parsing -- STRICT RULE
 
 Reading CLI arguments via any mechanism other than `*args*` or `stdlib/args.tur` is

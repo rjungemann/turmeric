@@ -151,6 +151,7 @@ typed/slice-basic
 contract-ffi
 seq-core-from-list
 seq-transform-filter-map
+hamt-lowering-basic
 "
 while IFS= read -r _fx; do
     _fx="${_fx#"${_fx%%[![:space:]]*}"}"; _fx="${_fx%"${_fx##*[![:space:]]}"}"

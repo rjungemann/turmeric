@@ -1,19 +1,29 @@
 ; Phase P3: Test that persistent map operations are lowered to HAMT calls
-; Create a persistent map and perform operations
+; Create a persistent map and perform operations.
+;
+; cstr keys are content-hashed and content-compared, so probes and deletes
+; through RUNTIME-BUILT keys (str-concat: equal text, distinct pointer) must
+; behave exactly like literal keys.  Do not replace the str-concat probes
+; with literals: literal-only probes pass by unspecified literal merging
+; (C11 6.4.5p7) and hide identity-compare regressions (see
+; docs/archive/persistent-map-cstr-keys-identity-compared.md).
+(load "stdlib/str-build.tur")
 
 (defn main [] : int
   (let [^persistent m (map-new)]
     ; m is empty
     (println (count m))
-    (let [^persistent m2 (assoc m "key1" "value1")]
-      ; m2 has 1 entry
+    (let [^persistent m2 (assoc m (str-concat "key" "1") "value1")]
+      ; m2 has 1 entry, probed via a literal AND another runtime-built key
       (println (count m2))
       (println (has? m2 "key1"))
+      (println (has? m2 (str-concat "ke" "y1")))
       (let [^persistent m3 (assoc m2 "key2" "value2")]
         ; m3 has 2 entries
         (println (count m3))
-        (let [^persistent m4 (dissoc m3 "key1")]
-          ; m4 has 1 entry (key2 remains)
+        (let [^persistent m4 (dissoc m3 (str-concat "key" "1"))]
+          ; m4 has 1 entry (key2 remains): the runtime-built key deleted the
+          ; entry inserted under a different pointer with the same text
           (println (count m4))
           (println (has? m4 "key1"))
           (println (has? m4 "key2"))

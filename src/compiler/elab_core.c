@@ -1834,6 +1834,10 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_hamt_count = intern_cstr(st, "hamt/count");
     e->sym_hamt_merge = intern_cstr(st, "hamt/merge");
     e->sym_hamt_hash_ptr = intern_cstr(st, "hamt/hash-ptr");
+    e->sym_hamt_set_cstr = intern_cstr(st, "hamt/set-cstr");
+    e->sym_hamt_del_cstr = intern_cstr(st, "hamt/del-cstr");
+    e->sym_hamt_get_cstr = intern_cstr(st, "hamt/get-cstr");
+    e->sym_hamt_has_cstr = intern_cstr(st, "hamt/has-cstr?");
     e->sym_defer     = intern_cstr(st, "defer");
     e->sym_return    = intern_cstr(st, "return");
     /* Phase 5 */

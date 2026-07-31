@@ -7,6 +7,15 @@
 /* ACB: true when kind represents a concrete aggregate type (struct, ADT, or
  * type-application) that the carrier ABI stores as a heap pointer.  Used by
  * KB-004 and KB-010 bridge insertion sites. */
+/* S1/findings 16: hand the panic-hoist the return C type this builder just
+ * spelled into its own call text (cast fn-ptr, thunk typedef, member fn).
+ * Call as the LAST thing before returning the composed string -- nested
+ * argument emissions clear the note (see EmitCtx.call_ret_note). */
+static void note_call_ret(EmitCtx *ctx, const char *ct) {
+    if (!ct || !*ct) return;
+    snprintf(ctx->call_ret_note, sizeof ctx->call_ret_note, "%s", ct);
+}
+
 static bool type_kind_is_aggregate(TypeKind k) {
     return k == TY_STRUCT || k == TY_ADT || k == TY_APP;
 }
@@ -635,7 +644,7 @@ static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
         fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
     Buf b; buf_init(&b);
     buf_printf(&b,
-        "__extension__ ({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
+        "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
         "*__tur_pbox = (%s); (int64_t)(intptr_t)__tur_pbox; })",
         cn, cn, cn, val);
     buf_putc(&b, '\0');
@@ -2986,8 +2995,12 @@ static void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     if (rt && strcmp(rt, "void") == 0) {
         buf_puts(body, "if (tur_panicking) return;\n");
     } else if (rt) {
-        /* A zero of the exact declared return type propagates the signal. */
-        buf_printf(body, "if (tur_panicking) return (%s){0};\n", rt);
+        /* A zero of the exact declared return type propagates the signal.
+         * S1: `((T)0)` for scalars -- c2mir rejects a scalar compound literal,
+         * and this is the highest-volume `(T){0}` site in the emitter. */
+        char *rzero = emit_c_zero_of(rt);
+        buf_printf(body, "if (tur_panicking) return %s;\n", rzero ? rzero : "0");
+        free(rzero);
     } else {
         /* D1a prototype limit: the enclosing function's C return type is not
          * recorded here (some carrier/dict-clone closure shapes), so we cannot
@@ -3032,6 +3045,12 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     for (uint8_t i = 0; i < ctx->n_sub_holes; i++)
         if (ctx->sub_holes[i] == e) return strdup(ctx->sub_names[i]);
     char *v = emit_value_dispatch(ctx, body, e);
+    /* S1/findings 16: capture-and-clear the builder's ret-type note
+     * UNCONDITIONALLY, so a note set by a void/never call (whose hoist below
+     * is skipped) can never leak onto a later, unrelated call. */
+    char ret_note[sizeof ctx->call_ret_note];
+    memcpy(ret_note, ctx->call_ret_note, sizeof ret_note);
+    ctx->call_ret_note[0] = '\0';
     if (e->kind != EX_CALL) return v;
     /* unit/void and never/diverging calls emit as C `void`, so there is no
      * value to bind into an __auto_type temp; their panic signal is handled at
@@ -3045,7 +3064,103 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char tmp[64];
     snprintf(tmp, sizeof tmp, "__ps_%d", ctx->tmp_n++);
     indent_buf(body, ctx->indent);
-    buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
+    /* S1 (jit-engine-plan section 4): name the type when we can prove it, and
+     * fall back to __auto_type when we cannot.
+     *
+     * The temp must take the call's EXACT emitted C representation -- carrier
+     * int64 vs by-value aggregate vs pointer -- and the comment this replaces
+     * was right that the repr heuristic disagrees with the emitted form for some
+     * carrier calls.  So this does not re-derive anything: for a DIRECT call it
+     * looks up the callee's return type as the forward-declaration pass actually
+     * wrote it, which is by construction what __auto_type deduced.
+     *
+     * Indirect calls (through a fat-closure field, a thunk typedef, or a cast
+     * function pointer) keep __auto_type; they are the residue S1 has still to
+     * close, and leaving them inferred is strictly safer than guessing. */
+    const char *ret_ct = NULL;
+    {
+        const char *q = v;
+        while (*q == '(') q++;            /* tolerate a parenthesized callee */
+        size_t idlen = 0;
+        while (q[idlen] && (isalnum((unsigned char)q[idlen]) || q[idlen] == '_')) idlen++;
+        if (idlen > 0 && q[idlen] == '(') {
+            char callee[256];
+            if (idlen < sizeof callee) {
+                memcpy(callee, q, idlen);
+                callee[idlen] = '\0';
+                /* INT64_C/UINT64_C: stdint's integer-constant macros.  An
+                 * exact read, not a guess -- giving the literal that type is
+                 * the macro's entire purpose. */
+                if (strcmp(callee, "INT64_C") == 0)       ret_ct = "int64_t";
+                else if (strcmp(callee, "UINT64_C") == 0) ret_ct = "uint64_t";
+                else {
+                    const char *rt = emit_sig_lookup_ret_ctype(callee);
+                    /* A `void` return never reaches here (filtered above), and an
+                     * empty record is no better than inference. */
+                    if (rt && *rt && strcmp(rt, "void") != 0) ret_ct = rt;
+                }
+            }
+        }
+    }
+    /* Indirect calls: the builder's note carries the same ret type it spelled
+     * into the call text's own cast / thunk typedef.  Name lookup wins when
+     * both exist (it is the forward declaration, the strongest ground truth). */
+    if (!ret_ct && ret_note[0] != '\0' && strcmp(ret_note, "void") != 0)
+        ret_ct = ret_note;
+    /* Last resort before __auto_type: two ANCHORED exact reads of text the
+     * emitter itself just wrote (the same two rules the spike normalizer
+     * carried, ported to the one place they are needed -- findings 16).  `v`
+     * for an EX_CALL is composed entirely by this file and emit_core.c, never
+     * by user text, so position 0 is emitter output by construction.
+     *   1. `((RET (*)` -- a cast-function-pointer call head (the dict-vtable
+     *      dispatch emit_call_name composes, whose note cannot survive the
+     *      argument emissions that follow it).  RET is read up to the ` (*)`.
+     *   2. `((T)(`     -- a cast wrap; T restricted to primitive spellings or
+     *      anything ending `*`, so a parenthesized-callee call `(f)(x)` can
+     *      never be misread as a cast (normalizer 11.3's lesson, kept). */
+    char read_ct[256];
+    if (!ret_ct) {
+        const char *q = v;
+        while (*q == '(') q++;
+        const char *star = strstr(q, "(*)");
+        if (star && star > q && star < q + sizeof read_ct) {
+            size_t tlen = (size_t)(star - q);
+            while (tlen > 0 && q[tlen - 1] == ' ') tlen--;
+            bool ident_ok = tlen > 0;
+            for (size_t i = 0; i < tlen && ident_ok; i++)
+                if (!isalnum((unsigned char)q[i]) && q[i] != '_' &&
+                    q[i] != ' ' && q[i] != '*') ident_ok = false;
+            if (ident_ok) {
+                memcpy(read_ct, q, tlen);
+                read_ct[tlen] = '\0';
+                if (strcmp(read_ct, "void") != 0) ret_ct = read_ct;
+            }
+        }
+    }
+    if (!ret_ct && v[0] == '(') {
+        /* One leading paren, not two: the hoist's own printf adds the outer
+         * pair, so a cast wrap arrives here as `(T)(expr)`. */
+        const char *q = v + 1;
+        while (*q == '(') q++;
+        const char *close = strchr(q, ')');
+        if (close && close > q && close[1] == '(' && close - q < (long)sizeof read_ct) {
+            size_t tlen = (size_t)(close - q);
+            static const char *prim[] = {"bool","_Bool","char","short","int","long",
+                "float","double","unsigned","signed","int8_t","int16_t","int32_t",
+                "int64_t","uint8_t","uint16_t","uint32_t","uint64_t","intptr_t",
+                "uintptr_t","size_t","ssize_t","ptrdiff_t"};
+            memcpy(read_ct, q, tlen);
+            read_ct[tlen] = '\0';
+            bool ok = tlen > 0 && read_ct[tlen - 1] == '*';
+            for (size_t i = 0; !ok && i < sizeof prim / sizeof prim[0]; i++)
+                ok = strcmp(read_ct, prim[i]) == 0;
+            if (ok) ret_ct = read_ct;
+        }
+    }
+    if (ret_ct)
+        buf_printf(body, "%s %s = (%s);\n", ret_ct, tmp, v);
+    else
+        buf_printf(body, "__auto_type %s = (%s);\n", tmp, v);
     /* A constructor call (`ctor_X(...)`) always returns the concrete heap pointer
      * `tur_adt_X *`, even though its `(X ..)` type c-names to the int64 carrier
      * under emit_binding_repr_c_name.  Capture that before freeing v so the temp
@@ -3062,6 +3177,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * value would only add a value-preserving no-op cast, never a wrong one. */
     {
         const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
+        /* repr-typed-pointer straddle (increment 4 follow-up): when the temp's
+         * DECLARED C type is known (`ret_ct` -- read from the callee's own
+         * forward declaration, i.e. by construction what __auto_type would have
+         * deduced), that is ground truth and the side table must record it.
+         * Re-deriving from the source TYPE disagrees with the emitted form for
+         * a concrete heap ADT whose callee returns the int64 carrier: since
+         * increment 4 stage 3, `(HBox int)` c-names to `tur_adt_HBox__int *`,
+         * so the temp was DECLARED `int64_t` but RECORDED as a pointer.  Every
+         * downstream straddle bridge keys on the recorded representation, so
+         * all of them read "pointer -> pointer, nothing to do" and emitted
+         * `tur_adt_HBox__int * m = __ps_N;` -- an int64->pointer initialisation
+         * that Apple clang rejects outright (-Wint-conversion is an error by
+         * default there, a warning under the older gcc/clang on CI).
+         * Recording the declared type restores the agreement the bridges
+         * assume; it is value-preserving and only ever adds a reinterpret. */
+        if (ret_ct && *ret_ct) rcty = ret_ct;
         /* hkt-fmap-result-is-not-droppable: a carrier-dispatched typeclass method
          * whose call-node result type was REFINED to a pointer-family handle.
          *
@@ -3154,12 +3285,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * recursively zeroed.  emit_type_c_name resolves to the concrete C
              * name (already accounts for parametric struct instantiations). */
             const char *cname = emit_type_c_name(ctx, e->type);
-            Buf out; buf_init(&out);
-            buf_printf(&out, "(%s){0}", cname);
-            buf_putc(&out, '\0');
-            char *result = strdup(out.data);
-            buf_free(&out);
-            return result;
+            /* S1: scalars come back as `((T)0)`; aggregates keep the compound
+             * literal, which is the only spelling that zeroes every field. */
+            char *result = emit_c_zero_of(cname);
+            return result ? result : strdup("0");
         }
         case EX_SYM_LIT: {
             /* SYM1: reference the TU-local static record for this keyword. */
@@ -3353,7 +3482,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const char *cn = emit_type_c_name(ctx,
                     emit_resolve_type(ctx, e->as.union_inject_.value->type));
                 buf_printf(&out,
-                    "__extension__ ({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
+                    "({ %s *__tur_box = (%s *)malloc(sizeof(%s)); "
                     "*__tur_box = (%s); TUR_TAG(%lld, (int64_t)(intptr_t)__tur_box); })",
                     cn, cn, cn, inner, (long long)tag);
             } else {
@@ -3402,7 +3531,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             if (target_tag == (int64_t)TY_FLOAT) {
                 /* TY2.2: reverse the float bit-reinterpret stored on inject. */
                 buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "((union { int64_t i; double d; }){.i = TUR_UNTAG(__tur_c)}).d; })",
                     inner, (long long)target_tag);
@@ -3413,14 +3542,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * struct deref above. */
                 const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, e->type));
                 buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "*(%s *)(intptr_t)TUR_UNTAG(__tur_c); })",
                     inner, (long long)target_tag, cn);
             } else {
                 Type target = type_simple(e->as.any_cast_.target_kind, CK_COPY);
                 buf_printf(&out,
-                    "__extension__ ({ tur_tagged_t __tur_c = (%s); "
+                    "({ tur_tagged_t __tur_c = (%s); "
                     "__tur_any_cast_check(TUR_GETTAG(__tur_c), %lld); "
                     "(%s)(intptr_t)TUR_UNTAG(__tur_c); })",
                     inner, (long long)target_tag, type_c_name(target));
@@ -3812,6 +3941,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         buf_putc(&callb, '\0');
                         char *r = strdup(callb.data);
                         buf_free(&callb);
+                        /* findings 16.2: the consumer clone's record does not
+                         * exist yet (its spec is minted after the main emit
+                         * loop), so hand the hoist the ret type directly.
+                         * Verified corpus-wide against the emitted forward
+                         * declarations by tools/jit-spike/verify-temp-types.py. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                         return r;
                     }
                 }
@@ -3857,6 +3992,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *result = strdup(mo.data);
                         buf_free(&mo);
                         free(g_str); free(s_str);
+                        /* findings 16.2: same late-minted-spec gap as the
+                         * consumer redirect above. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                         return result;
                     }
                 }
@@ -3882,26 +4020,72 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (gf->type.kind == TY_FN && gf->type.as.fn.boxed
                     && e->as.call_.n_args <= 4) {
                     uint32_t n = e->as.call_.n_args;
-                    Buf out; buf_init(&out);
-                    buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
-                    for (uint32_t i = 0; i < n; i++) {
+                    /* Collect the declared C arg types first: whether any of
+                     * them is an aggregate decides how this call is spelled. */
+                    const char *arg_ct[4] = {NULL, NULL, NULL, NULL};
+                    bool any_aggregate = false;
+                    for (uint32_t i = 0; i < n && i < 4; i++) {
                         Type at = (gf->type.as.fn.arg_full_types &&
                                    gf->type.as.fn.arg_full_types[i])
                                       ? *gf->type.as.fn.arg_full_types[i]
                                       : emit_type_from_kind(gf->type.as.fn.arg_kinds[i]);
-                        buf_printf(&out, ", %s", emit_type_c_name(ctx, at));
+                        arg_ct[i] = emit_type_c_name(ctx, at);
+                        if (!emit_c_type_is_scalar(arg_ct[i])) any_aggregate = true;
                     }
-                    buf_printf(&out, ", %s", fn_ptr_val);
-                    for (uint32_t i = 0; i < n; i++) {
-                        char *av = emit_value(ctx, body, e->as.call_.args[i]);
-                        buf_printf(&out, ", %s", av);
-                        free(av);
+                    Buf out; buf_init(&out);
+                    if (!any_aggregate) {
+                        buf_printf(&out, "TUR_APPLY%u_T(%s", n, ret_c);
+                        for (uint32_t i = 0; i < n; i++)
+                            buf_printf(&out, ", %s", arg_ct[i]);
+                        buf_printf(&out, ", %s", fn_ptr_val);
+                        for (uint32_t i = 0; i < n; i++) {
+                            char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            buf_printf(&out, ", %s", av);
+                            free(av);
+                        }
+                        buf_puts(&out, ")");
+                    } else {
+                        /* jit-tur-apply-casts-to-aggregate-param-type.md:
+                         * TUR_APPLY<N>_T coerces every argument with `(Ai)(a)`,
+                         * which is only valid while Ai is scalar -- C forbids a
+                         * cast to a struct type (C11 6.5.4p2).  gcc and clang
+                         * accept it as a no-op when the argument already has
+                         * that type, which is exactly this case, so the cast was
+                         * never doing work here; c2mir rejects it outright.
+                         *
+                         * The cast IS load-bearing for scalars (the int64
+                         * carrier <-> pointer direction is a constraint
+                         * violation without it, an error on gcc 14), so it is
+                         * kept per-argument rather than dropped wholesale, and
+                         * the macro stays exactly as it is for the all-scalar
+                         * case -- which is every hand-written inline-C user in
+                         * stdlib and the overwhelming majority of call sites.
+                         *
+                         * This is the macro's own expansion with that one
+                         * change; keep the two in sync (emit_module.c, search
+                         * TUR_APPLY0_T). */
+                        buf_printf(&out, "(((%s (*)(void *", ret_c);
+                        for (uint32_t i = 0; i < n; i++)
+                            buf_printf(&out, ", %s", arg_ct[i]);
+                        buf_printf(&out,
+                                   "))(intptr_t)((int64_t *)(intptr_t)(%s))[0])"
+                                   "((void *)(intptr_t)(%s)",
+                                   fn_ptr_val, fn_ptr_val);
+                        for (uint32_t i = 0; i < n; i++) {
+                            char *av = emit_value(ctx, body, e->as.call_.args[i]);
+                            if (emit_c_type_is_scalar(arg_ct[i]))
+                                buf_printf(&out, ", (%s)(%s)", arg_ct[i], av);
+                            else
+                                buf_printf(&out, ", (%s)", av);
+                            free(av);
+                        }
+                        buf_puts(&out, "))");
                     }
-                    buf_puts(&out, ")");
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
                     free(fn_ptr_val);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
 
@@ -4035,6 +4219,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 free(arg_strs);
                 free(resolved_arg_ty);
                 free(fn_ptr_val);
+                note_call_ret(ctx, ret_c);   /* findings 16 */
                 return result;
             }
 
@@ -4090,6 +4275,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         char *result = strdup(mo.data);
                         buf_free(&mo);
                         free(g_str); free(s_str);
+                        /* findings 16.2: same late-minted-spec gap as the
+                         * consumer redirect above. */
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                         return result;
                     }
                 }
@@ -4263,6 +4451,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
+                /* findings 16: the concrete branch's value type is the cast the
+                 * emitter just spelled; the generic carrier branch is int64_t
+                 * unless a wrap below retypes it (each wrap re-notes). */
+                note_call_ret(ctx, phase_f_concrete ? emit_type_c_name(ctx, e->type)
+                                                    : "int64_t");
                 /* Slice 3 (constrained-hkt-forall codegen): a by-value aggregate
                  * RESULT comes back through the carrier as an int64 heap-box
                  * pointer (the wrapper's carrier-spill shim boxed it) -- deref it
@@ -4275,6 +4468,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *unboxed = emit_agg_unbox(ctx, e->type, result);
                     free(result);
                     result = unboxed;
+                    note_call_ret(ctx, emit_type_c_name(ctx, e->type));   /* findings 16 */
                 }
                 /* VBM2b/VBM3/residual: inside a by-value monomorphized lens body
                  * the functor is spelled by value end to end -- `g : (-> A (f A))`
@@ -4302,6 +4496,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(result);
                         result = strdup(c.data);
                         buf_free(&c);
+                        note_call_ret(ctx, emit_type_c_name(ctx, e->type));   /* findings 16 */
                     }
                 }
                 for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
@@ -4509,6 +4704,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *result = strdup(out.data);
                     buf_free(&out);
                     free(fn_ptr);
+                    note_call_ret(ctx, type_c_name(e->type));   /* findings 16 */
                     return result;
                 } else {
                     /* CY2: Fat-closure dynamic dispatch with n_args > 0.
@@ -4570,6 +4766,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
             }
@@ -4762,6 +4959,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
                 char *fn_ptr = name_for_binding(ctx, fn_binding);
@@ -4797,6 +4995,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *result = strdup(out.data);
                     buf_free(&out);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 } else {
                     char **arg_strs = (char **)malloc(n * sizeof(char *));
@@ -4856,6 +5055,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
                     free(fn_ptr);
+                    note_call_ret(ctx, ret_c);   /* findings 16 */
                     return result;
                 }
             }
@@ -5026,16 +5226,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * would land an int/double literal in a `void *`
                              * slot (-Wint-conversion).  Emit the NULL pointer. */
                             if (rfty.kind == TY_FN) { fc = "void *"; }
+                            /* S1/findings 16.4: a POINTER zero is scalar --
+                             * `(const char *){0}` is a compound literal c2mir
+                             * rejects.  Route through emit_c_zero_of, which
+                             * spells scalars `((T)0)` and aggregates `(T){0}`. */
                             if (fc && strcmp(fc, "void *") == 0) {
                                 free(arg_strs[i]);
-                                arg_strs[i] = strdup("(void *){0}");
+                                arg_strs[i] = strdup("((void *)0)");
                             } else if (fc && strcmp(fc, "int64_t") != 0) {
-                                Buf db; buf_init(&db);
-                                buf_printf(&db, ptr_slot ? "(%s *){0}" : "(%s){0}", fc);
-                                buf_putc(&db, '\0');
-                                free(arg_strs[i]);
-                                arg_strs[i] = strdup(db.data);
-                                buf_free(&db);
+                                if (ptr_slot) {
+                                    Buf db; buf_init(&db);
+                                    buf_printf(&db, "((%s *)0)", fc);
+                                    buf_putc(&db, '\0');
+                                    free(arg_strs[i]);
+                                    arg_strs[i] = strdup(db.data);
+                                    buf_free(&db);
+                                } else {
+                                    free(arg_strs[i]);
+                                    arg_strs[i] = emit_c_zero_of(fc);
+                                }
                             }
                         }
                     }
@@ -8187,6 +8396,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             indent_buf(body, ctx->indent);
             buf_puts(body, "{\n");
             ctx->indent += 4;
+            /* S1b/cleanup: the guard pointers, kept alive so the scope-exit pop
+             * can also be emitted EXPLICITLY after the body.  c2mir discards
+             * __attribute__((cleanup)) with no diagnostic (findings 3.1), so
+             * relying on it alone left every dynamic binding un-popped under
+             * the JIT -- `dynvar-nested` printed `3 3` for `3 1`.  The pop is
+             * idempotent, so the attribute still covers the exits this cannot
+             * see (a `return` or `goto` out of the block) on the cc path. */
+            char **guard_ptrs = n_pairs ? (char **)calloc(n_pairs, sizeof(char *)) : NULL;
+            char **guard_vars = n_pairs ? (char **)calloc(n_pairs, sizeof(char *)) : NULL;
             for (uint32_t pi = 0; pi < n_pairs; pi++) {
                 DynVarEntry *dv_entry = pairs[pi].entry;
                 char *mname = mangle_dynvar_name(dv_entry->name->name);
@@ -8213,10 +8431,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     fptr, mname, frame);
                 indent_buf(body, ctx->indent);
                 buf_printf(body, "(void)%s;\n", fptr);
-                free(mname);
+                if (guard_ptrs) {
+                    guard_ptrs[pi] = fptr; guard_vars[pi] = mname;
+                    /* Register so an early `return` inside the body pops it. */
+                    if (ctx->n_dynvar_guards >= ctx->cap_dynvar_guards) {
+                        ctx->cap_dynvar_guards = ctx->cap_dynvar_guards ? ctx->cap_dynvar_guards * 2 : 8;
+                        ctx->dynvar_guard_ptrs = (char **)realloc(ctx->dynvar_guard_ptrs,
+                            ctx->cap_dynvar_guards * sizeof(char *));
+                        ctx->dynvar_guard_names = (char **)realloc(ctx->dynvar_guard_names,
+                            ctx->cap_dynvar_guards * sizeof(char *));
+                    }
+                    ctx->dynvar_guard_ptrs[ctx->n_dynvar_guards] = strdup(fptr);
+                    ctx->dynvar_guard_names[ctx->n_dynvar_guards] = strdup(mname);
+                    ctx->n_dynvar_guards++;
+                }
+                else { free(fptr); free(mname); }
                 free(vslot);
                 free(frame);
-                free(fptr);
             }
             /* Emit body */
             char *bval = emit_value(ctx, body, e->as.dynvar_binding_.body);
@@ -8225,6 +8456,23 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(body, "%s = %s;\n", result_tmp, bval);
             }
             free(bval);
+            /* Leaving the binding scope: unregister the guards an early
+             * `return` inside the body would have popped. */
+            for (uint32_t pi = 0; pi < n_pairs && ctx->n_dynvar_guards > 0; pi++) {
+                ctx->n_dynvar_guards--;
+                free(ctx->dynvar_guard_ptrs[ctx->n_dynvar_guards]);
+                free(ctx->dynvar_guard_names[ctx->n_dynvar_guards]);
+            }
+            /* Explicit scope-exit pops, reverse declaration order -- the order
+             * the cleanup attribute itself would have used. */
+            for (uint32_t pi = n_pairs; pi-- > 0 && guard_ptrs; ) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "_dynvar_pop_%s(&%s);\n", guard_vars[pi], guard_ptrs[pi]);
+                free(guard_ptrs[pi]);
+                free(guard_vars[pi]);
+            }
+            free(guard_ptrs);
+            free(guard_vars);
             ctx->indent -= 4;
             indent_buf(body, ctx->indent);
             buf_puts(body, "}\n");

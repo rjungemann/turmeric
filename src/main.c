@@ -64,6 +64,9 @@
 #include "kind_check.h"   /* Phase HKT H0: kind inference pass */
 #include "elab.h"
 #include "emit.h"
+#include "runtime/hamt.h" /* S2: tur_hamt_hash_xxh64 for the split-artifact hash */
+#include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
+#include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "fmt.h"
@@ -89,6 +92,7 @@
 /* Global configuration variables — defined in globals.c */
 #include "globals.h"
 #include "experiments.h"  /* XF1: --enable=<name> experimental-flag registry */
+#include "jit_engine.h"   /* J1: tur jit (TUR_HAVE_JIT builds only) */
 #include "mono_specs.h"   /* VBM1: --dump-mono-specs registry dump */
 /* LSP server */
 #include "lsp/lsp.h"
@@ -626,6 +630,10 @@ static int locate_runtime_lib(char *libdir, size_t dcap,
 /* True while emitting C that `tur` itself will go on to compile and link. */
 static bool g_emit_for_link = false;
 
+/* J2: when non-NULL, compile_to_c also appends the exports manifest of the
+ * compiled program here (set only by the REPL's in-process spice build). */
+static Buf *g_manifest_sink = NULL;
+
 static void resolve_rcgc_from_archive(void) {
     const char *opt = getenv("TUR_RCGC_FROM_ARCHIVE");
     bool forced_on = opt && strcmp(opt, "1") == 0;
@@ -798,6 +806,12 @@ static int compile_to_c(const char *path, Buf *out_c,
              * on whether the archive will supply the rc<T>/GC runtime. */
             resolve_rcgc_from_archive();
             if (emit_program(out_c, ctx.prog) != 0) rc = 1;
+            /* J2: the REPL's in-process spice build wants the exports
+             * manifest from this same single-TU compile (the sink is set
+             * only around that call; every other caller leaves it NULL). */
+            if (rc == 0 && g_manifest_sink
+                && emit_exports_manifest(g_manifest_sink, ctx.prog) != 0)
+                rc = 1;
         }
     }
 
@@ -1593,16 +1607,42 @@ static void hoist_tur_include_directives(Buf *csrc) {
     const char *inc_mark = "/* __tur_include__: ";
     size_t inc_mlen = strlen(inc_mark);
     const char *p = csrc->data;
-    Buf hdr;
+    /* TWO buckets, not one.  `__tur_include__` carries two different kinds of
+     * payload -- preprocessor directives (`#include <stdlib.h>`) and file-scope
+     * CODE (a `typedef`, or a `static` helper).  Concatenating them in source
+     * order lets a code payload land ahead of a directive payload it depends
+     * on, which is exactly what stdlib/httpd.tur does: the malloc-using
+     * `httpd_conn_own_cstr` is hoisted from line 93 and `#include <stdlib.h>`
+     * from line 3916, so the emitted TU called malloc with no declaration in
+     * scope.  That compiled only because every cc invocation passed
+     * -Wno-error=implicit-function-declaration, and it is UB regardless.
+     *
+     * So: all directive payloads first (in their own source order, which keeps
+     * any feature-test `#define` ahead of the include it conditions), then all
+     * code payloads (likewise in source order).  Relative order within each
+     * bucket is preserved; only the two kinds are separated.
+     * See docs/reported/hoisted-inline-c-precedes-includes.md. */
+    Buf hdr, code;
     buf_init(&hdr);
+    buf_init(&code);
     while (p && (p = strstr(p, inc_mark)) != NULL) {
         p += inc_mlen;
         const char *end = strstr(p, " */");
         if (!end) break;
-        buf_write(&hdr, p, (size_t)(end - p));
-        buf_putc(&hdr, '\n');
+        const char *q = p;
+        while (q < end && (*q == ' ' || *q == '\t')) q++;
+        int is_directive = (q < end && *q == '#')
+            && (strncmp(q, "#include", 8) == 0 || strncmp(q, "#define", 7) == 0
+                || strncmp(q, "#undef", 6) == 0 || strncmp(q, "#pragma", 7) == 0);
+        Buf *dst = is_directive ? &hdr : &code;
+        buf_write(dst, p, (size_t)(end - p));
+        buf_putc(dst, '\n');
         p = end + 3;
     }
+    if (code.len > 0) {
+        buf_write(&hdr, code.data, code.len);
+    }
+    buf_free(&code);
     if (hdr.len > 0) {
         Buf new_csrc;
         buf_init(&new_csrc);
@@ -2139,7 +2179,6 @@ static int link_command_run(const char *cc, const char *cc_flags,
         if (include_dirs[_i] && include_dirs[_i][0])
             buf_printf(&cmd, " -I%s", include_dirs[_i]);
     }
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     buf_puts(&cmd, " -lpthread -lws2_32 -lshlwapi");
@@ -3282,6 +3321,547 @@ static int decode_exit_status(int status) {
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return 1;
 }
+
+static int cmd_run(int argc, char **argv);   /* defined below; J1 fallback */
+
+#ifdef TUR_HAVE_JIT
+/* S2 (findings 25): swap an emitted TU's fixed preamble for the committed
+ * declarations region when this compiler still matches the committed
+ * artifacts.  Returns true and fills `out` with
+ * [hoisted user prefix][committed decls][program half]; false (out
+ * untouched) on hash mismatch, missing marker, or TUR_JIT_NO_SPLIT=1.
+ * Shared by cmd_jit and the J2 REPL image build.  See cmd_jit's call site
+ * for the full rationale. */
+static bool jit_try_split_preamble(Buf *csrc, Buf *out) {
+    const char *no_split = getenv("TUR_JIT_NO_SPLIT");
+    if (no_split && *no_split && strcmp(no_split, "0") != 0) return false;
+    if (!csrc->data) return false;
+    Buf probe;
+    buf_init(&probe);
+    emit_rt_split_source(&probe);
+    uint64_t cur = tur_hamt_hash_xxh64(probe.data, probe.len);
+    buf_free(&probe);
+    if (cur != tur_rt_split_hash) return false;
+    buf_putc(csrc, '\0');
+    csrc->len--;   /* NUL-terminate for strstr, keep logical len */
+    static const char pre_start[] = "/* generated by tur (phase 2) */\n";
+    static const char pre_end[] =
+        "/* ==== tur: end of fixed runtime preamble ==== */\n";
+    const char *ps = strstr(csrc->data, pre_start);
+    const char *pe = ps ? strstr(ps, pre_end) : NULL;
+    if (!ps || !pe) return false;
+    const char *after = pe + sizeof(pre_end) - 1;
+    buf_write(out, csrc->data, (size_t)(ps - csrc->data));
+    buf_write(out, tur_rt_split_decls, tur_rt_split_decls_len);
+    buf_write(out, after, csrc->len - (size_t)(after - csrc->data));
+    return true;
+}
+
+/* The engine's `#include "hamt.h"` (et al.) include path: the Turmeric tree
+ * (dev checkout, walking up from the executable) or the installed SDK.
+ * Fills inc0/inc1 (caller-owned, >= 4096 each) and incs[0..1]; returns the
+ * count (0 when no root was found). */
+static int jit_sdk_include_dirs(char *inc0, size_t cap0,
+                                char *inc1, size_t cap1,
+                                const char *incs[2]) {
+    int n = 0;
+    char root[4096] = "";
+    const char *env = getenv("TUR_SDK_ROOT");
+    if (env && *env) {
+        snprintf(root, sizeof(root), "%s/share/turmeric", env);
+        struct stat st;
+        char probe[4200];
+        snprintf(probe, sizeof(probe), "%s/src/runtime/hamt.h", root);
+        if (stat(probe, &st) != 0) snprintf(root, sizeof(root), "%s", env);
+    } else {
+        char exe[4096] = "";
+        if (get_exe_path(exe, sizeof(exe)) == 0) {
+            char dir[4096];
+            dir_of_path(exe, dir, sizeof(dir));
+            for (int d = 0; d < 8; d++) {
+                char probe[4200];
+                struct stat st;
+                snprintf(probe, sizeof(probe), "%s/src/runtime/hamt.h", dir);
+                if (stat(probe, &st) == 0) { snprintf(root, sizeof(root), "%s", dir); break; }
+                snprintf(probe, sizeof(probe),
+                         "%s/share/turmeric/src/runtime/hamt.h", dir);
+                if (stat(probe, &st) == 0) {
+                    snprintf(root, sizeof(root), "%s/share/turmeric", dir);
+                    break;
+                }
+                char *sl = strrchr(dir, '/');
+                if (!sl || sl == dir) break;
+                *sl = '\0';
+            }
+        }
+    }
+    if (root[0]) {
+        snprintf(inc0, cap0, "%s/src", root);
+        snprintf(inc1, cap1, "%s/src/runtime", root);
+        incs[n++] = inc0;
+        incs[n++] = inc1;
+    }
+    return n;
+}
+#endif /* TUR_HAVE_JIT */
+
+/* S2 (jit-engine-plan, findings 19.4): dump the feature-complete single-file
+ * runtime preamble -- every program-gated block on, rc/GC in archive mode,
+ * ending at the preamble marker -- for the split-generation tool
+ * (tools/gen-runtime-split.py), or with --hash just the xxHash64 of that
+ * text.  The hash spelling here IS the JIT-time compare: both sides call
+ * tur_hamt_hash_xxh64 over the same emission, so the recorded artifact hash
+ * and cmd_jit's probe can never disagree on hash function or input framing.
+ *
+ * Archive mode is hard-set rather than probed so the generated text is a
+ * property of the compiler, not of which build tree generated it; cmd_jit's
+ * probe runs under real process state, and a JIT invocation with no runtime
+ * archive (rc/GC emitted as definitions) therefore hashes differently and
+ * falls back to full-preamble emission -- the guard is self-enforcing. */
+static int cmd_emit_rt_split(int argc, char **argv) {
+    bool hash_only = false;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--hash") == 0) { hash_only = true; continue; }
+        fprintf(stderr, "usage: tur emit-rt-split [--hash]\n");
+        return 2;
+    }
+    emit_set_rcgc_from_archive(true);
+    Buf out; buf_init(&out);
+    emit_rt_split_source(&out);
+    if (hash_only) {
+        printf("%016llx\n",
+               (unsigned long long)tur_hamt_hash_xxh64(out.data, out.len));
+    } else {
+        fwrite(out.data, 1, out.len, stdout);
+    }
+    buf_free(&out);
+    return 0;
+}
+
+/* J1 (docs/upcoming/jit-engine-plan.md section 3.2): `tur jit <file>` --
+ * compile and execute in process via c2mir + MIR-gen, no cc subprocess, no
+ * disk artifacts.  Front half is cmd_build's exactly: run_core_passes via
+ * compile_to_c, then the same in-memory post-passes.  The back half hands the
+ * buffer to tur_jit_execute (src/jit_engine.c, built under -DTUR_JIT=ON).
+ *
+ * Fallback (plan step 6): any engine-level failure -- c2mir rejecting a GNU
+ * construct in user inline-C is the expected case -- prints a TUR-W and
+ * delegates to cmd_run, which recompiles through cc.  Never a hard stop.
+ *
+ * Usage: tur jit [-I <dir>...] <file> [-- <args>...]  */
+static int cmd_jit(int argc, char **argv) {
+    if (!g_opt_jit) {
+        fprintf(stderr,
+                "tur: 'jit' is an experimental feature; enable it with "
+                "--enable=jit\n"
+                "     (see docs/upcoming/jit-engine-plan.md, and `tur "
+                "experiments` for status)\n");
+        return 2;
+    }
+    experiment_warn_if_used("jit");
+#ifndef TUR_HAVE_JIT
+    fprintf(stderr,
+            "tur: this build carries no JIT engine; reconfigure with "
+            "-DTUR_JIT=ON\n"
+            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
+    return 2;
+#else
+    const char *input = NULL;
+    int passthrough_start = -1;
+    int scan_end = argc;
+    for (int i = 2; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { scan_end = i; break; }
+    char **user_inc = NULL;
+    int n_user_inc = parse_include_flags(scan_end, argv, 2, &user_inc);
+    if (n_user_inc < 0) { free(user_inc); return 2; }
+    for (int i = 2; i < scan_end; i++) {
+        int c;
+        if (is_include_flag(argc, argv, i, &c)) { i += c - 1; continue; }
+        if (argv[i][0] != '-' && !input) input = argv[i];
+    }
+    for (int i = 2; i < argc; i++)
+        if (strcmp(argv[i], "--") == 0) { passthrough_start = i + 1; break; }
+    if (!input) {
+        fprintf(stderr, "usage: tur jit [-I <dir>...] <file> [-- <args>...]\n");
+        free(user_inc);
+        return 2;
+    }
+
+    refine_discharge_reset();
+    g_emit_for_link = true;
+    Buf csrc;
+    buf_init(&csrc);
+    int rc = compile_to_c(input, &csrc, (const char **)user_inc, n_user_inc,
+                          NULL, 0);
+    if (rc != 0) { buf_free(&csrc); free(user_inc); return rc; }
+    hoist_tur_include_directives(&csrc);
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+
+    /* S2 (findings 19.4 item 3): swap the fixed preamble for the committed
+     * declarations region when this compiler still matches the committed
+     * artifacts.  The runtime then stays host-resident (tur_rt_split.c is
+     * linked into this executable and exported for the engine's dlsym
+     * resolver), and c2mir compiles ~60% less fixed text per program.
+     *
+     * The guard: re-emit the all-gates preamble under CURRENT process state
+     * and hash it against the recorded artifact hash.  Emitter drift, knob
+     * drift (--backtrack-depth, experiments), and a missing runtime archive
+     * all change that text, fail the compare, and keep the full preamble --
+     * never wrong, just slower.  Probe cost is one in-memory emission,
+     * microseconds against the ~90ms c2mir spend it can save.  Runs AFTER
+     * compile_to_c: emit_rt_split_source resets per-TU codegen registries,
+     * which must not disturb the program's own emission.
+     *
+     * The TU layout post-hoist is [hoisted user includes/code][preamble ...
+     * marker][program half]; the splice replaces exactly the preamble
+     * span, keeping any hoisted prefix.  TUR_JIT_NO_SPLIT=1 opts out. */
+    Buf split_src;
+    buf_init(&split_src);
+    bool split_used = jit_try_split_preamble(&csrc, &split_src);
+
+    /* Program argv: argv[0] = the source path (matches what a compiled binary
+     * would see as its own name closely enough for *args*), then everything
+     * after `--`. */
+    int prog_argc = 1 + (passthrough_start > 0 ? argc - passthrough_start : 0);
+    char **prog_argv = (char **)malloc(((size_t)prog_argc + 1) * sizeof(char *));
+    if (!prog_argv) {
+        buf_free(&csrc); buf_free(&split_src); buf_free(&autolink);
+        free(user_inc); return 2;
+    }
+    prog_argv[0] = (char *)input;
+    for (int i = 0; i < prog_argc - 1; i++)
+        prog_argv[i + 1] = argv[passthrough_start + i];
+    prog_argv[prog_argc] = NULL;
+
+    /* Include path for `#include "hamt.h"` et al. */
+    static char jit_inc0[4096], jit_inc1[4096];
+    const char *jit_incs[2];
+    int n_jit_incs = jit_sdk_include_dirs(jit_inc0, sizeof(jit_inc0),
+                                          jit_inc1, sizeof(jit_inc1),
+                                          jit_incs);
+
+    int prog_rc = 0;
+    int jrc;
+    if (split_used) {
+        /* Split first; if the split half fails to COMPILE or LINK, retry the
+         * full TU in the engine before conceding to cc -- the hash guard
+         * covers emitter drift but not, e.g., an export the host build
+         * dropped, and the full TU is self-contained against that.  A RUN
+         * failure is the program's own (a panic aborts identically either
+         * way), so it is not retried. */
+        jrc = tur_jit_execute(split_src.data, split_src.len,
+                              autolink.len ? autolink.data : NULL,
+                              jit_incs, n_jit_incs,
+                              prog_argc, prog_argv, &prog_rc);
+        if (jrc == TUR_JIT_ERR_COMPILE || jrc == TUR_JIT_ERR_LINK) {
+            fprintf(stderr,
+                    "tur: warning: TUR-W0071: split-runtime path failed to "
+                    "%s; retrying with the full preamble\n",
+                    jrc == TUR_JIT_ERR_COMPILE ? "compile" : "link");
+            jrc = tur_jit_execute(csrc.data, csrc.len,
+                                  autolink.len ? autolink.data : NULL,
+                                  jit_incs, n_jit_incs,
+                                  prog_argc, prog_argv, &prog_rc);
+        }
+    } else {
+        jrc = tur_jit_execute(csrc.data, csrc.len,
+                              autolink.len ? autolink.data : NULL,
+                              jit_incs, n_jit_incs,
+                              prog_argc, prog_argv, &prog_rc);
+    }
+    free(prog_argv);
+    buf_free(&csrc);
+    buf_free(&split_src);
+    buf_free(&autolink);
+    free(user_inc);
+    if (jrc == TUR_JIT_OK) return prog_rc;
+
+    /* Plan step 6: clean per-program fallback to the cc path.  cmd_run parses
+     * the same argv shape (it never looks at argv[1]), so delegate whole. */
+    fprintf(stderr,
+            "tur: warning: TUR-W0070: jit engine could not %s this program "
+            "(see diagnostics above); falling back to the cc path\n",
+            jrc == TUR_JIT_ERR_COMPILE ? "compile"
+            : jrc == TUR_JIT_ERR_LINK  ? "link"
+                                       : "run");
+    return cmd_run(argc, argv);
+#endif /* TUR_HAVE_JIT */
+}
+
+#ifdef TUR_HAVE_JIT
+/* ------------------------------------------------------------------ */
+/* J2 (jit-engine-plan 3.3): the REPL's in-process spice build.        */
+/* ------------------------------------------------------------------ */
+/* Replaces the `tur build --shared` subprocess + dlopen with the MIR
+ * engine, via the TurSpiceJitHook the loader consults.  The whole spice
+ * is compiled as ONE in-memory TU through the well-tested single-file
+ * path: a synthetic root module imports every source module, so imports
+ * dedupe through the ordinary module machinery (a load-based root
+ * duplicated any module that was also imported intra-spice).
+ *
+ * Module names come from each file's `(defmodule <name>` (filename stem
+ * when absent), and files whose module name does not match their
+ * filename are made importable through a SHADOW DIR of symlinks under
+ * .tur-repl-cache/jit-mods/ -- module resolution is filename-based, and
+ * on the --shared path a mismatched file was reachable only because each
+ * file was compiled separately.
+ *
+ * v1 limits (recorded, not silent): transitive :spices deps are not
+ * auto-appended (single-spice projects only -- the subprocess path
+ * remains the default and handles them), and POSIX symlinks gate this
+ * out of Windows along with the engine itself. */
+
+/* Peek a source file's defmodule name into out (cap bytes).  Textual scan
+ * of the first non-comment occurrence -- both `(defmodule x` and sweet-exp
+ * `defmodule x` spellings.  Returns false when the file has none. */
+static bool repl_jit_peek_module_name(const char *path, char *out, size_t cap) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    char line[4096];
+    bool found = false;
+    while (!found && fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == ';') continue;
+        if (*p == '(') { p++; while (*p == ' ') p++; }
+        if (strncmp(p, "defmodule", 9) != 0) continue;
+        p += 9;
+        if (*p != ' ' && *p != '\t') continue;
+        while (*p == ' ' || *p == '\t') p++;
+        size_t o = 0;
+        while (*p && *p != ' ' && *p != '\t' && *p != ')' && *p != '\n'
+               && *p != '\r' && o + 1 < cap)
+            out[o++] = *p++;
+        out[o] = '\0';
+        found = o > 0;
+    }
+    fclose(f);
+    return found;
+}
+
+struct repl_jit_mod {
+    char *src_path;   /* absolute source file path */
+    char *mod_name;   /* module name (may contain '/') */
+};
+
+static int repl_jit_scan_dir(const char *dir, struct repl_jit_mod **mods,
+                             uint32_t *n, uint32_t *cap) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;   /* unreadable subdir: skip, the build would too */
+    struct dirent *e;
+    int rc = 0;
+    while (rc == 0 && (e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char path[4600];
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            rc = repl_jit_scan_dir(path, mods, n, cap);
+            continue;
+        }
+        size_t nl = strlen(e->d_name);
+        if (nl < 5 || strcmp(e->d_name + nl - 4, ".tur") != 0) continue;
+        char modname[512];
+        if (!repl_jit_peek_module_name(path, modname, sizeof(modname))) {
+            snprintf(modname, sizeof(modname), "%.*s",
+                     (int)(nl - 4), e->d_name);
+        }
+        if (*n == *cap) {
+            uint32_t nc = *cap ? *cap * 2 : 8;
+            struct repl_jit_mod *na =
+                realloc(*mods, nc * sizeof(**mods));
+            if (!na) { rc = -1; break; }
+            *mods = na;
+            *cap = nc;
+        }
+        (*mods)[*n].src_path = strdup(path);
+        (*mods)[*n].mod_name = strdup(modname);
+        (*n)++;
+    }
+    closedir(d);
+    return rc;
+}
+
+static void repl_jit_mods_free(struct repl_jit_mod *mods, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        free(mods[i].src_path);
+        free(mods[i].mod_name);
+    }
+    free(mods);
+}
+
+/* mkdir -p for the directory part of shadow/<modname>.tur. */
+static void repl_jit_mkdirs_for(const char *shadow, const char *modname) {
+    char path[4800];
+    snprintf(path, sizeof(path), "%s/%s", shadow, modname);
+    for (char *p = path + strlen(shadow) + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(path, 0755);
+            *p = '/';
+        }
+    }
+}
+
+static int repl_jit_build(const char *build_dir, void **out_image,
+                          char **out_manifest) {
+    *out_image = NULL;
+    *out_manifest = NULL;
+
+    /* Spice root: the dir holding build.tur -- build_dir's parent when the
+     * conventional src/ layout is in play, else build_dir itself. */
+    char rootd[4300];
+    snprintf(rootd, sizeof(rootd), "%s", build_dir);
+    size_t rl = strlen(rootd);
+    if (rl > 4 && strcmp(rootd + rl - 4, "/src") == 0) rootd[rl - 4] = '\0';
+
+    struct repl_jit_mod *mods = NULL;
+    uint32_t n_mods = 0, cap_mods = 0;
+    if (repl_jit_scan_dir(build_dir, &mods, &n_mods, &cap_mods) != 0
+        || n_mods == 0) {
+        fprintf(stderr, "tur repl: jit: no .tur sources under %s\n",
+                build_dir);
+        repl_jit_mods_free(mods, n_mods);
+        return -1;
+    }
+
+    /* Shadow dir: module-name -> file symlinks + the synthetic root. */
+    char shadow[4400];
+    snprintf(shadow, sizeof(shadow), "%s/.tur-repl-cache", rootd);
+    mkdir(shadow, 0755);
+    snprintf(shadow, sizeof(shadow), "%s/.tur-repl-cache/jit-mods", rootd);
+    mkdir(shadow, 0755);
+
+    Buf root_src;
+    buf_init(&root_src);
+    buf_puts(&root_src, "(defmodule __jit-root\n");
+    int rc = 0;
+    for (uint32_t i = 0; i < n_mods && rc == 0; i++) {
+        repl_jit_mkdirs_for(shadow, mods[i].mod_name);
+        char link[4900];
+        snprintf(link, sizeof(link), "%s/%s.tur", shadow, mods[i].mod_name);
+        unlink(link);
+        if (symlink(mods[i].src_path, link) != 0) {
+            fprintf(stderr, "tur repl: jit: symlink %s: %s\n", link,
+                    strerror(errno));
+            rc = -1;
+            break;
+        }
+        buf_printf(&root_src, "  (import %s)\n", mods[i].mod_name);
+    }
+    buf_puts(&root_src, ")\n");
+    repl_jit_mods_free(mods, n_mods);
+
+    char root_file[4600];
+    snprintf(root_file, sizeof(root_file), "%s/__jit_root.tur", shadow);
+    if (rc == 0) {
+        FILE *rf = fopen(root_file, "w");
+        if (!rf || fwrite(root_src.data, 1, root_src.len, rf) != root_src.len) {
+            fprintf(stderr, "tur repl: jit: cannot write %s\n", root_file);
+            rc = -1;
+        }
+        if (rf) fclose(rf);
+    }
+    buf_free(&root_src);
+    if (rc != 0) return -1;
+
+    /* Compile the whole spice as one TU, capturing the exports manifest
+     * from the same program.  Same emission posture as cmd_jit -- which
+     * means COMPILED-mode elaboration: the REPL process runs with
+     * g_interpret_mode=true (turi_env_new sets it), and inheriting that
+     * here would select `#?(:turi ...)` branches into native code and
+     * demote unknown names from hard errors to W0040 runtime-dispatch
+     * warnings.  The subprocess build never saw the flag; clear it for
+     * exactly the compile. */
+    refine_discharge_reset();
+    bool saved_efl = g_emit_for_link;
+    bool saved_interp = g_interpret_mode;
+    g_emit_for_link = true;
+    g_interpret_mode = false;
+    Buf csrc, manifest;
+    buf_init(&csrc);
+    buf_init(&manifest);
+    const char *incs[1] = { shadow };
+    g_manifest_sink = &manifest;
+    g_emit_ffi_export_shims = true;   /* high-arity exports need __ffi shims */
+    rc = compile_to_c(root_file, &csrc, incs, 1, NULL, 0);
+    g_emit_ffi_export_shims = false;
+    g_manifest_sink = NULL;
+    g_emit_for_link = saved_efl;
+    g_interpret_mode = saved_interp;
+    if (rc != 0) {
+        /* Same actionable wording as the subprocess path (run_build): the
+         * user story -- fix the source, (reload) -- is identical. */
+        fprintf(stderr,
+                "tur repl: spice rebuild failed; fix the error above, then "
+                "type (reload) at the prompt to retry.\n");
+        buf_free(&csrc);
+        buf_free(&manifest);
+        return -1;
+    }
+    hoist_tur_include_directives(&csrc);
+    Buf autolink;
+    buf_init(&autolink);
+    scan_autolink_markers(&csrc, &autolink);
+
+    /* S2: same hash-gated preamble swap as cmd_jit -- a REPL reload is
+     * exactly the loop the split exists for. */
+    Buf split_src;
+    buf_init(&split_src);
+    bool split_used = jit_try_split_preamble(&csrc, &split_src);
+
+    static char jinc0[4096], jinc1[4096];
+    const char *jincs[2];
+    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
+                                       jinc1, sizeof(jinc1), jincs);
+
+    TurJitImage *img = NULL;
+    const Buf *use = split_used ? &split_src : &csrc;
+    int jrc = tur_jit_compile_image(use->data, use->len,
+                                    autolink.len ? autolink.data : NULL,
+                                    jincs, n_jincs, &img);
+    if (jrc != TUR_JIT_OK && split_used) {
+        /* Same ladder as cmd_jit: the full TU is self-contained against a
+         * hole the hash guard cannot see. */
+        fprintf(stderr,
+                "tur: warning: TUR-W0071: split-runtime path failed; "
+                "retrying with the full preamble\n");
+        jrc = tur_jit_compile_image(csrc.data, csrc.len,
+                                    autolink.len ? autolink.data : NULL,
+                                    jincs, n_jincs, &img);
+    }
+    buf_free(&csrc);
+    buf_free(&split_src);
+    buf_free(&autolink);
+    if (jrc != TUR_JIT_OK) {
+        fprintf(stderr,
+                "tur repl: jit: engine could not %s the spice; fix the "
+                "error above and type (reload) to retry.\n",
+                jrc == TUR_JIT_ERR_COMPILE ? "compile" : "link");
+        buf_free(&manifest);
+        return -1;
+    }
+
+    buf_putc(&manifest, '\0');
+    *out_manifest = strdup(manifest.data);
+    buf_free(&manifest);
+    *out_image = img;
+    return 0;
+}
+
+static void *repl_jit_hook_sym(void *image, const char *mangled) {
+    return tur_jit_image_sym((TurJitImage *)image, mangled);
+}
+static void repl_jit_hook_free(void *image) {
+    tur_jit_image_free((TurJitImage *)image);
+}
+static const TurSpiceJitHook g_repl_jit_hook = {
+    repl_jit_build, repl_jit_hook_sym, repl_jit_hook_free,
+};
+#endif /* TUR_HAVE_JIT */
 
 static int cmd_run(int argc, char **argv) {
     /* tur run [-I <dir>...] [--release] [--offline] [<file>] [-- <args>...] */
@@ -4660,11 +5240,22 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
      * downgrades are removed -- a NEW straddle now fails the build (as intended)
      * instead of hiding behind the macOS CI red.
      *
-     * -Wno-error=implicit-function-declaration is a SEPARATE, still-open concern
-     * (e.g. an emitted inline-C call to `tur_hamt_hash_xxh64` with no in-scope
-     * prototype) and stays.  Appended after the user's TUR_CC_FLAGS on purpose,
-     * so an override cannot accidentally drop it. */
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
+     * -Wno-error=implicit-function-declaration used to be appended here and at
+     * the two sibling cc invocations.  It is gone from all three: the two things
+     * it was covering are fixed at the source -- the undeclared
+     * `tur_hamt_hash_xxh64` call (now declared in the preamble) and the
+     * `__tur_include__` hoist emitting code payloads ahead of directive payloads
+     * (hoist_tur_include_directives now buckets the two).  An implicit
+     * declaration is UB, and suppressing it here is what let a wrong-code bug
+     * ride all the way to a second backend on another platform; it now fails the
+     * build, as intended.
+     *
+     * Do NOT re-add it to paper over a new implicit declaration -- fix the
+     * declaration.  And do not verify any change in this area with `emit-c`
+     * output or a plain `tests/run.sh`: neither exercises the hoist path, and
+     * both reported a false all-clear on exactly this question.  Use
+     * tools/jit-spike/sweep-turjit.sh.  See findings 21.2/21.3 and
+     * docs/archive/hoisted-inline-c-precedes-includes.md. */
     buf_puts(&cmd, " -lm");
 #ifdef _WIN32
     /* The emitted runtime uses pthread_mutex_t/pthread_cond_t and select().
@@ -5291,7 +5882,6 @@ static int cmd_compile(const char *input, const char *out_obj,
         if (include_dirs[i] && include_dirs[i][0])
             buf_printf(&cmd, " -I%s", include_dirs[i]);
     }
-    buf_puts(&cmd, " -Wno-error=implicit-function-declaration");
     buf_printf(&cmd, " -c %s -o %s", cpath, out_obj);
     buf_putc(&cmd, '\0');
     int sys_rc = system(cmd.data);
@@ -8968,6 +9558,12 @@ int main(int argc, char **argv) {
         free(inputs);
         return rc;
     }
+    if (strcmp(cmd, "jit") == 0) {
+        return cmd_jit(argc, argv);
+    }
+    if (strcmp(cmd, "emit-rt-split") == 0) {
+        return cmd_emit_rt_split(argc, argv);
+    }
     if (strcmp(cmd, "run") == 0) {
         /* Disambiguate: if the first non-flag argument ends in .tur or
          * .tur.sweet, use the classic compile-and-run path; if --release /
@@ -9019,6 +9615,16 @@ int main(int argc, char **argv) {
             fprintf(stderr, "tur repl: unknown option '%s'\n", argv[i]);
             return usage_repl();
         }
+#ifdef TUR_HAVE_JIT
+        /* J2 (jit-engine-plan 3.3): with the jit experiment enabled, spice
+         * auto-discovery builds in process through the MIR engine instead
+         * of the `tur build --shared` subprocess + dlopen.  Off (the
+         * default) keeps the subprocess path byte-for-byte. */
+        if (g_opt_jit) {
+            experiment_warn_if_used("jit");
+            tur_spice_set_jit_hook(&g_repl_jit_hook);
+        }
+#endif
         return cmd_repl(watch_mode);
     }
     /* Tier 3: persistent fixture worker for the test suite. */

@@ -7449,7 +7449,7 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
         return true;
     }
     /* send: eval channel then value; cooperative send; return the channel. */
-    if (ic->n_val_exprs == 2 && SESS_PFX("__extension__ ({ tur_session_send(")) {
+    if (ic->n_val_exprs == 2 && SESS_PFX("({ tur_session_send(")) {
         SESS_EVAL(cv, 0);
         SESS_EVAL(vv, 1);
         *out = session_send(env, (TuriChan *)(intptr_t)cv.as_int, vv);
@@ -7477,7 +7477,7 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
     }
     /* choose-left / choose-right: eval channel; send branch tag 0 / 1. */
     if (ic->n_val_exprs == 1 &&
-        SESS_PFX("__extension__ ({ tur_session_send_tag(")) {
+        SESS_PFX("({ tur_session_send_tag(")) {
         SESS_EVAL(cv, 0);
         /* The tag literal is baked into the template: `..., (int64_t)0)` or
          * `..., (int64_t)1)`.  Read the integer after the "(int64_t)" cast. */
@@ -7518,7 +7518,7 @@ static bool eval_session_intercept(TuriEnv *env, EvalFrame *frame,
         return true;
     }
     /* send-to: tur_router_send(__TUR_VAL_0__, TO_IDX, (int64_t)(__TUR_VAL_1__)). */
-    if (ic->n_val_exprs == 2 && SESS_PFX("__extension__ ({ tur_router_send(")) {
+    if (ic->n_val_exprs == 2 && SESS_PFX("({ tur_router_send(")) {
         SESS_EVAL(rv, 0);
         SESS_EVAL(vv, 1);
         int to_idx = session_int_after(p, n, "tur_router_send(__TUR_VAL_0__, ");

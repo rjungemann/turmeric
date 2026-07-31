@@ -31,6 +31,8 @@ static const struct Binding *byref_set_target(const Expr *e);
  * the direct emitter (emit_expr.c) does. */
 char *mangle_field_name(const char *name);
 char *adt_field_member_path(const AdtDef *def, const CtorDef *ctor, uint32_t fi);
+/* S1/findings 16: ground-truth return-type lookup for cps->direct call temps. */
+const char *emit_sig_lookup_ret_ctype(const char *cname);
 
 /* True for a NULL or `{}` (ERK_EMPTY) effect row.  Used to distinguish a
  * provably effect-free `TY_FN` param (safe to delegate an indirect call
@@ -4788,8 +4790,11 @@ typedef struct {
     Buf        *out;         /* current function/helper body buffer */
     Buf        *helpers;     /* file-scope accumulator for lifted reset/shift helpers */
     int         indent;
-    /* active inline joins: KK_VAR id -> join-parameter C name */
-    struct { uint32_t id; const char *param; } joins[MAX_JOINS];
+    /* active inline joins: KK_VAR id -> join-parameter C name + the C type the
+     * join local is DECLARED with (so a delivery can tell whether the slot is a
+     * one-word carrier or the by-value aggregate itself -- see
+     * deliver_slot_cty / the cps->direct aggregate bridge). */
+    struct { uint32_t id; const char *param; const char *cty; } joins[MAX_JOINS];
     int         n_joins;
     const char *cur_k;       /* C expr for the innermost prompt chain (KK_PROMPT target) */
     const char *cur_loop_name; /* cps-while-native: enclosing CT_LOOP helper `<name>__cps`
@@ -4838,6 +4843,13 @@ static const char *join_param(CE *ce, uint32_t id) {
     for (int i = ce->n_joins - 1; i >= 0; i--)
         if (ce->joins[i].id == id) return ce->joins[i].param;
     return "0";  /* unreachable when the term is well-formed */
+}
+
+/* The C type the join local for `id` was declared with, or NULL if unknown. */
+static const char *join_param_cty(CE *ce, uint32_t id) {
+    for (int i = ce->n_joins - 1; i >= 0; i--)
+        if (ce->joins[i].id == id) return ce->joins[i].cty;
+    return NULL;
 }
 
 /* Materialize an atom as a malloc'd C expression string. */
@@ -5202,6 +5214,30 @@ static const Type *deliver_ty(CE *ce, const CKont *kont) {
     return NULL;   /* KK_VAR: inline join, a plain C-local assignment */
 }
 
+/* True when C type spelling `cty` names a BY-VALUE AGGREGATE -- an ADT/struct
+ * record passed and returned as a C struct (`tur_adt_Result__int__int`), as
+ * opposed to a scalar, a pointer, or the uniform int64 carrier.  Keyed on the
+ * spelling rather than a Type because the sig side table (the source of truth
+ * for what a monomorph/spec clone actually returns) carries only the string.
+ * Positive-list on purpose: everything not recognizably an aggregate is treated
+ * as a word, which is the historical behavior. */
+static bool cty_is_byval_agg(const char *cty) {
+    if (!cty || !*cty) return false;
+    size_t L = strlen(cty);
+    if (cty[L - 1] == '*') return false;              /* a handle, not a value */
+    return strncmp(cty, "tur_adt_", 8) == 0;
+}
+
+/* The C type of the SLOT that a delivery to `kont` lands in: the join local's
+ * declared type (KK_VAR), or -- for the one-word DK slot -- the type the
+ * crossing value is expected to have there, which is what slot_store_reap keys
+ * its Tier-C boxing on.  NULL when not knowable (treated as a word). */
+static const char *deliver_slot_cty(CE *ce, const CKont *kont) {
+    if (kont->kind == KK_VAR) return join_param_cty(ce, kont->id);
+    const Type *vty = deliver_ty(ce, kont);
+    return vty ? binder_ctype_full(ce->ctx, vty->kind, vty) : NULL;
+}
+
 /* Deliver value-string `v` to continuation `kont`.  A Tier C by-value aggregate
  * is boxed into the slot on the way out.  `explicit_vty` is the delivered value's
  * own Type when the caller has it (a CT_APPCONT atom) -- it is the most precise
@@ -5547,10 +5583,43 @@ static void emit_term(CE *ce, const CTerm *t) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
                 } else {
-                    /* __auto_type keeps the callee's real return type (int, cstr,
-                     * ...); the slot cast at delivery narrows it to the word. */
-                    ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
-                    emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                    /* S1/findings 16: name the callee's real return type from the
+                     * signature side table (the forward declaration as actually
+                     * emitted) so the temp is c2mir-clean; __auto_type only when
+                     * the record is missing.  The slot cast at delivery narrows
+                     * it to the word either way. */
+                    const char *drt = emit_sig_lookup_ret_ctype(fn);
+                    if (drt && *drt && strcmp(drt, "void") != 0)
+                        ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
+                    else
+                        ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    /* findings 28 (typed/result-basic): the callee resolved to a
+                     * MONOMORPH/spec clone that returns its ADT BY VALUE
+                     * (`tur_adt_Result__int__int`), while the IR types the call at
+                     * the ERASED int64 carrier -- so the delivery slot is a word.
+                     * Assigning the struct straight into it is "incompatible types
+                     * when assigning" (gcc) / "incompatible types in assignment to
+                     * an arithmetic type lvalue" (c2mir): a hard error on every
+                     * COMPILING engine.  Bridge concrete->carrier the way the
+                     * direct emitter does (spill, deliver the ADDRESS), heap-copied
+                     * so the pointer outlives the delivering block and
+                     * reap-registered so it is freed at the entry boundary.  The
+                     * read side needs no change: every carrier consumer of an ADT
+                     * word already derefs it (`tur_is_ok`, and the spec clone's own
+                     * `(tur_adt_Result *)(intptr_t)r` parameter cast). */
+                    const char *slot_cty = deliver_slot_cty(ce, &t->as.tailcall.kont);
+                    if (cty_is_byval_agg(drt) && !cty_is_byval_agg(slot_cty)) {
+                        Buf bx; buf_init(&bx);
+                        buf_printf(&bx,
+                            "(int64_t)__dk_reap_ptr((intptr_t)({ %s *__bx = "
+                            "(%s *)malloc(sizeof(%s)); *__bx = %s; __bx; }))",
+                            drt, drt, drt, tmp);
+                        buf_putc(&bx, '\0');
+                        emit_deliver(ce, &t->as.tailcall.kont, bx.data);
+                        buf_free(&bx);
+                    } else {
+                        emit_deliver(ce, &t->as.tailcall.kont, tmp);
+                    }
                 }
                 free(argv_t);
                 free(tmp);
@@ -5572,6 +5641,11 @@ static void emit_term(CE *ce, const CTerm *t) {
             if (pushed) {
                 ce->joins[ce->n_joins].id = t->as.letcont.j.id;
                 ce->joins[ce->n_joins].param = pn;
+                /* Same spelling emit_binder_decls declares the local with, so a
+                 * delivery can compare the slot's C type against the delivered
+                 * value's (the cps->direct aggregate bridge). */
+                ce->joins[ce->n_joins].cty =
+                    binder_ctype_full(ce->ctx, t->as.letcont.param.ty, t->as.letcont.param.type);
                 ce->n_joins++;
             }
             emit_term(ce, t->as.letcont.body);
@@ -6911,16 +6985,21 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d,"
                     " (void *(*)(int64_t))%s, (int64_t (*)(void *))%s, 0 };\n"
-                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
                     ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc, eser, edeser,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             } else {
                 buf_printf(ce->helpers,
                     "static SkReg %s_skreg%d_%u = { \"%s%s\", %s_skcall%d_%u, %d, 0, 0, 0 };\n"
-                    "__attribute__((constructor)) static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
+                    "static void %s_skreginit%d_%u(void) { __sk_register(&%s_skreg%d_%u); }\n",
                     ce->fn_cn, id, i, cfn, side, ce->fn_cn, id, i, ekc,
                     ce->fn_cn, id, i, ce->fn_cn, id, i);
             }
+            /* S1b: the session-kind registry must be populated before any
+             * effectful call dispatches through it. */
+            char skinit[320];
+            snprintf(skinit, sizeof(skinit), "%s_skreginit%d_%u", ce->fn_cn, id, i);
+            static_init_register(skinit, STATIC_INIT_REGISTRY);
             free(eser); free(edeser);
             free(cfn);
         }
@@ -8116,6 +8195,7 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
         const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
         bool mvoid = (mrt->kind == TY_NIL);
         buf_puts(file, "int main(int argc, char **argv) {\n");
+        buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
         if (g_emit_panic_trace)
             buf_puts(file, "    g_panic_trace = 1;\n");
@@ -8274,9 +8354,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
     if (g_opt_cps_tramp_resume && threadable_has(fd->binding)) {
         buf_printf(file,
-            "static void __attribute__((constructor)) __tur_e2reg_%s(void) {\n"
+            "static void __tur_e2reg_%s(void) {\n"
             "    __tur_cps_register((intptr_t)%s, (__tur_cps_fn)%s__cps);\n"
             "}\n", cn, cn, cn);
+        /* S1b: the direct->CPS registry must be populated before a threaded
+         * call site looks up its CPS variant.  A dropped constructor here was
+         * the SIGSEGV in findings 3.1. */
+        char e2init[320];
+        snprintf(e2init, sizeof(e2init), "__tur_e2reg_%s", cn);
+        static_init_register(e2init, STATIC_INIT_REGISTRY);
     }
 
     ctx->fn_params   = saved_fn_params;

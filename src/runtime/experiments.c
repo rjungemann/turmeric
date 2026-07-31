@@ -169,6 +169,20 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "0.34.0",                  /* expires_at (soft deadline; review at cut) */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_refined },
+    /* J1 (docs/upcoming/jit-engine-plan.md): the in-process MIR JIT engine.
+     * Gated because it is a third execution engine whose semantics must stay
+     * identical to `tur build` output while the J3 parity sweep is still to
+     * come -- and because the capability itself is opt-in at build time
+     * (-DTUR_JIT=ON vendors MIR; a default build carries no fetch and no
+     * dependency).  `tur jit` errors out unless BOTH gates are open. */
+    { "jit",
+      "in-process MIR JIT execution engine (tur jit <file>)",
+      "docs/upcoming/jit-engine-plan.md",
+      "0.32.2",                  /* introduced */
+      "0.36.0",                  /* expires_at -- review at that cut: graduate,
+                                  *   shelve, or bump */
+      XF_LIFECYCLE_PROTOTYPE,
+      &g_opt_jit },
     /* sealed-opaque (docs/upcoming/sealed-opaque-plan.md): `::` is a COERCING
      * cast, so a `defopaque` handle can always be unwrapped to its carrier and
      * re-wrapped as a fresh value -- which bounds every guarantee built on top

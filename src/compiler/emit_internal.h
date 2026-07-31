@@ -99,6 +99,21 @@ void        sym_codegen_emit(Buf *out, bool external_weak);
 /* SYM5: note that str->sym is defined in this TU (gates the seeding ctor). */
 void        sym_codegen_note_intern_used(void);
 
+/* S1b (jit-engine-plan): per-TU explicit static-initialization registry.
+ * Replaces per-site `__attribute__((constructor))`, which c2mir silently
+ * discards (findings 3.1).  Bands encode the ordering the toolchain used to
+ * pick for us; within a band, registration order is preserved. */
+typedef enum StaticInitBand {
+    STATIC_INIT_KEYS     = 0,  /* pthread_key_create for dynamic variables */
+    STATIC_INIT_REGISTRY = 1,  /* __sk_register / __tur_cps_register / tur_sym_register */
+    STATIC_INIT_ATEXIT   = 2,  /* module-defer atexit() registration */
+    STATIC_INIT_DEFS     = 3,  /* __tur_module_def_init -- runs user code, last */
+} StaticInitBand;
+void     static_init_reset(void);
+void     static_init_register(const char *fn, StaticInitBand band);
+uint32_t static_init_count(void);
+void     static_init_emit(Buf *out);
+
 /* Phase B5: backtrack depth cap (set by main.c --backtrack-depth N) */
 extern int64_t g_backtrack_depth;
 /* Phase B5: dump cloneable capture plan (set by main.c --dump-clone-plan) */
@@ -208,6 +223,19 @@ typedef struct EmitCtx {
     Buf  *thunk_typedefs; /* TS1: shared thunk typedef prelude */
     int   indent;
     int   tmp_n;
+    /* S1 (jit-engine-plan, findings 16): the return C type of the call
+     * expression an EX_CALL builder just finished composing, handed to
+     * emit_value's panic-hoist so the `__ps_N` temp can be declared with a
+     * real type instead of `__auto_type` (which c2mir cannot parse).  This is
+     * GROUND TRUTH, not inference: each builder writes the same ret_c string
+     * it spelled into the cast / thunk-typedef of the call text itself.
+     * Protocol: a builder sets it as the LAST thing before returning its
+     * composed call string (nested argument calls were already hoisted and
+     * consumed their own notes by then); emit_value captures and CLEARS it
+     * unconditionally after every dispatch, so a note from a void/never call
+     * (whose hoist is skipped) can never leak onto a later call.  Empty
+     * string == no note. */
+    char  call_ret_note[256];
     /* consolidation increment 2 (bind cell): set while emitting an
      * EX_POLY_WRAP argument of a call whose resolved callee is the CARRIER
      * base instance entry (an __inst_* binding with no matched by-value
@@ -257,6 +285,15 @@ typedef struct EmitCtx {
     const char *env_var_name;  /* Name of the casted env variable (e.g., "__env_4") */
     /* Phase 4 v1: Frame tracking for unified defer model */
     const char *frame_var;    /* Name of current tur_frame variable (e.g., "__frame_3") */
+    /* S1b/dynvar early-exit: the dynamic-binding guards currently in scope,
+     * innermost LAST.  An early `return` out of a `binding` body must pop them
+     * explicitly: the __attribute__((cleanup)) that covers this on the cc path
+     * is discarded by c2mir with no diagnostic, which left the dynvar key
+     * pointing at a returned function's stack frame (a SEGV, not a leak).
+     * The pop is idempotent, so firing here AND via the attribute is safe. */
+    char    **dynvar_guard_ptrs;
+    char    **dynvar_guard_names;
+    uint32_t  n_dynvar_guards, cap_dynvar_guards;
     bool in_scope_with_defers; /* Track if current scope has defers */
     struct DeferThunk *pending_defer_thunks; /* Thunks to emit at file scope */
     /* Phase 4 v1: For defer thunk emission with captures */
@@ -504,6 +541,13 @@ void emit_sig_reset(void);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
+/* S1 (jit-engine-plan section 4): the same side table's return-type half.  A
+ * call site consults it to name the type of a hoisted call temp outright,
+ * instead of emitting GNU C's `__auto_type` -- which c2mir cannot parse at all
+ * and which accounts for 193 of the 256 full-corpus JIT failures. */
+void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
+                               const char *ctype);
+const char *emit_sig_lookup_ret_ctype(const char *cname);
 /* gcc14-int-conversion (carrier-representation-tracking): a side table recording
  * the ACTUAL emitted C type of each LOCAL variable / temp, keyed by its (globally
  * unique via fresh_tmp) C name.  A binder init `int64_t z = __t169;` reading a
@@ -515,6 +559,23 @@ const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+/* S1 (jit-engine-plan section 4): true when an emitted C type NAME denotes a
+ * scalar -- any pointer, or one of the primitive/stdint spellings the emitter
+ * produces.  Anything else (a struct typedef such as `Option__int` or
+ * `tur_adt_Vec__int`) is reported as non-scalar.
+ *
+ * Deliberately conservative in that direction: the only consumer picks between
+ * `((T)0)` and `(T){0}`, and `(T){0}` is what every site emitted before, so a
+ * false "aggregate" verdict is a no-op while a false "scalar" verdict would be
+ * a miscompile. */
+bool emit_c_type_is_scalar(const char *cname);
+/* S1: a zero of `cname`, spelled so c2mir accepts it.  `((T)0)` for scalars,
+ * `(T){0}` for aggregates.  Returns a malloc'd string the caller frees.
+ *
+ * A scalar compound literal is C99-legal and every cc takes it, but c2mir
+ * rejects it outright ("braces around scalar initializer", c2mir.c:7781), and
+ * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
+char *emit_c_zero_of(const char *cname);
 bool emit_str_is_bare_ident(const char *s);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);

@@ -4,6 +4,10 @@ build/
 build2/
 build-asan/
 build-debug/
+build-jit/
+build-jit-spike/
+build-turjit/
+build-turjit-debug/
 build-norel/
 build-oracle/
 build-rel/
@@ -29,6 +33,8 @@ build-release-check/
 !examples/**/*.h
 !docs/**/*.c
 !docs/**/*.h
+!tools/**/*.c
+!tools/**/*.h
 
 # Python bytecode
 __pycache__/
@@ -49,6 +55,7 @@ tests/fixtures/**/.gitignore
 tests/.stamp-cache/
 tests/.stamp-cache-doctest/
 tests/.stamp-cache-turi/
+tests/.stamp-cache-jit/
 tests/doctest-generated/
 /tmp/tur-build/
 tur
@@ -122,9 +129,13 @@ performance-comparison/inputs/large/
 # The harness diffs against expected.stdout, not these files.
 tests/fixtures/*/turi.stdout
 tests/fixtures/*/turi.stderr
+tests/fixtures/*/jit.stdout
+tests/fixtures/*/jit.stderr
 # Nested fixtures (errors/<name>, typed/<name>, typed-slots/<name>, ...).
 tests/fixtures/*/*/turi.stdout
 tests/fixtures/*/*/turi.stderr
+tests/fixtures/*/*/jit.stdout
+tests/fixtures/*/*/jit.stderr
 
 # REPL-compiled spice shared libraries and their symbol manifests.
 *.so
@@ -133,3 +144,10 @@ tests/fixtures/*/*/turi.stderr
 # Claude Code agent worktrees (transient, harness-managed)
 .claude/worktrees/
 
+
+# J3 benchmark triangle artifacts (run-triangle.sh output dir).
+benchmarks/output/
+build-mirpin/
+build-lazyrel/
+build-jitrel/
+build-i4/

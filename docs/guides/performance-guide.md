@@ -114,11 +114,20 @@ loop:
 
 ; named-let -- the (loop ...) call is the self-tail-call
 (defn sum-to [n :int] :int
-  (let loop [i n acc 0]
-    (if (= i 0)
+  (let loop [i   :int 0
+             acc :int 0]
+    (if (>= i n)
       acc
-      (loop (- i 1) (+ acc i)))))
+      (loop (+ i 1) (+ acc i)))))
 ```
+
+A named let lowers one of two ways -- to a lifted closure when the loop body
+reads an enclosing variable, and to a plain lifted function when it does not
+-- and both are optimized.  In the closure case the backedge reassigns the
+loop parameters and leaves the captured environment alone (it does not change
+across a self-call).  Pinned by `tests/fixtures/tco-named-let-capture-deep`
+and `tests/fixtures/tco-named-let-nocapture-deep` at 5,000,000 iterations
+each.
 
 **Boundary (1.0).** Only *self*-tail calls are optimized.  The following are
 left as ordinary recursive calls -- correct, but not stack-optimized:
@@ -128,7 +137,10 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
 - **mutual / general tail calls** (function A tail-calls B which tail-calls A);
 - **tail calls inside `match` arms**;
 - self-recursive functions with pass-by-pointer struct, function-typed, or
-  poly-fn parameters.
+  poly-fn parameters;
+- a self-recursive function that genuinely uses a control operator
+  (`perform`/`handle`/`shift`/`await`) -- it is CPS-lowered, and the loop
+  runs on the delimited-control path rather than as a C backedge.
 
 General/mutual tail-call elimination and trampolining are deferred to the
 post-1.0 CPS pass.  See
@@ -686,6 +698,66 @@ defn dot [ax ay az bx by bz] :float
 ```
 
 ---
+
+## Execution engines: interpreter vs `tur jit` vs `cc -O2`
+
+Turmeric has three execution engines, and which one is fastest depends on
+what you are optimizing for -- startup latency or steady-state throughput:
+
+| engine | invocation | compile step | best for |
+|---|---|---|---|
+| interpreter | `tur --interpret f.tur` | none | tiny scripts, REPL turns, debugging |
+| MIR JIT | `tur --enable=jit jit f.tur` | in-process (c2mir) | run-edit-run loops, spice REPL reloads |
+| cc | `tur build f.tur` + run | subprocess cc -O2 | long-running programs, deployment |
+
+Measured triangle (x86-64 Linux, Release `tur`, best of 5, end-to-end wall
+time; `bash benchmarks/run-triangle.sh` regenerates this from
+`benchmarks/triangle/`):
+
+| program | interpreter | tur jit | cc build | cc run | cc total |
+|---|---|---|---|---|---|
+| fib (fib 27, call-heavy) | 137ms | 127ms | 178ms | 2ms | 180ms |
+| loop-sum (5M-iteration loop) | 1567ms | 137ms | 180ms | 3ms | 183ms |
+| mandel (float inner loop) | 639ms | 142ms | 187ms | 5ms | 192ms |
+
+All three legs are re-measured together on each run, so the columns are
+comparable to each other. They are NOT comparable to an older snapshot taken
+on a different machine -- an earlier edition of this table had the interpreter
+at 223ms for `fib` where this one has 137ms, and essentially none of that is a
+Turmeric change.
+
+How to read it:
+
+- **The front end dominates one-shot latency on every engine.** Roughly
+  200ms of each cell is elaboration and codegen shared by all three legs;
+  the engines differ in what happens after. For a program this small the
+  interpreter's zero-compile leg makes it competitive end to end even
+  while its loop throughput is 9x behind (loop-sum).
+- **`tur jit` beats the cc round trip end to end**, by ~25-30% on these
+  programs. It did not always: with eager code generation it merely matched
+  cc, and switching to serialized LAZY generation -- only the functions a run
+  actually calls get compiled -- is what moved it ahead (23-36% off the JIT
+  leg alone). Its other advantage is structural, being IN PROCESS: no
+  subprocess, no disk artifacts, and the spice REPL reload path is ~3.2x
+  faster than the `tur build --shared` round trip it replaces (see the
+  repl guide). `TUR_JIT_GEN=eager` restores whole-program generation, which
+  is slower but compiles every function up front.
+- **Compiled native runtime is 4-7ms** for these workloads -- for any
+  long-running or repeatedly-invoked program, `tur build` once and run
+  the binary; nothing else is close in steady state.
+- The MIR tier generates good-but-not-gcc code: expect JIT'd loop bodies
+  within ~1-2x of cc -O2, not parity, and note the JIT runs the program
+  on a sized entry stack (`TUR_JIT_STACK_MB`, default 64) because
+  MIR does not perform gcc's sibling-call optimization -- so a deep
+  recursion the cc path survives only because gcc turned the self-call into
+  a jump will overflow here.  That is a real difference in what the two
+  engines forgive, and it is worth knowing which of your loops are actually
+  lowered to loops (see the self-tail-call section above).
+
+The engine triangle is exact on OUTPUT: `benchmarks/run-triangle.sh`
+refuses to time a program whose three engines disagree, and the fixture
+corpus runs under all three harnesses (`tests/run.sh`, `tests/run-turi.sh`,
+`tests/run-jit.sh`).
 
 ## Benchmarking methodology
 
