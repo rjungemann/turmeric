@@ -108,16 +108,30 @@ vec-get-existential-element erasure design), and the let-bind shadow skips
 bindings whose DECLARED type mentions tyvars (a spec-resolved generic body
 keeps the erased spelling by design).
 
-**Residual shadow inventory after chokepoint 1: 33 lines.**
+**Chokepoint 2 grounding (2026-07-31): no seam existed.**  The 27
+`byval-agg` lines were SC7 transparent int newtypes -- a parametric
+single-ctor record with one concrete-int field (`(ArrW int)`,
+`(Schema int)`) lowers to its raw int64 payload with NO ctor call, so the
+int64 decl IS the value.  `repr_of` classifies
+`type_is_transparent_int_newtype` as SCALAR_BITS in every position, the
+shadow mapper recognizes the same transparency, and the earlier deferral
+rationale (base-ctor/monomorph layout proof) is moot for this class: the
+probe showed the base ctor is never even called for these shapes.  The
+liveness smoke re-anchored to the lens fixture accordingly.
+
+**Final shadow inventory (sweep 6, clean binary): 6 lines.**
+521 -> 80 -> 38 -> 33 -> 6 across the calibration/migration arc; every
+remaining line is one class in one fixture family:
 
 | class | count | disposition |
 | --- | --- | --- |
-| `let-bind want=byval-agg got=carrier-i64` | 27 | chokepoint 2, DEFERRED with grounding guard: migrating means deref-initializing a by-value monomorph from the base-ctor carrier, which assumes base-struct/monomorph layout agreement for phantom-parameter apps (`(ArrW int)`, `(Schema int)`).  That proof is adjacent to the TY_CONTRACT peel prerequisite in the layout switch; until it exists the sites keep their init-following logic and the log keeps watching. |
-| `let-bind want=heap-ptr got=carrier-i64` (Line) | 6 | one fixture family (rank-2 van-laarhoven functor-lens result bindings); the minimal reproductions (make-struct init, generic-call init) do NOT reproduce, so the path is lens-specific.  Left on the work list; not chased under the one-track rule. |
+| `let-bind want=heap-ptr got=carrier-i64` (`Line`) | 6 | rank-2 van-laarhoven functor-lens result bindings (`van-laarhoven-lens-compose` / `-wide-compose`); minimal reproductions (make-struct init, generic-call init) do NOT reproduce, so the path is lens-machinery-specific.  The liveness smoke anchors here; migrating it flips the smoke to asserting corpus SILENCE -- stage 3's completion criterion. |
 
 Remaining candidates after the above: fn-value tail/join classification
 (already alias-aware -- mechanical), method-result carrier production,
-then the long tail of `emit_expr.c` per-arg bridges.
+then the long tail of `emit_expr.c` per-arg bridges -- these decide
+representations at positions the two shadowed sites do not cover yet;
+extending shadow coverage to them is the other half of finishing stage 3.
 
 ### Stage 4 -- registry + ratchet
 
