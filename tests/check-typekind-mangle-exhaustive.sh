@@ -29,11 +29,18 @@
 #      kind silently loses the by-value monomorph to the int64 carrier, which is
 #      the map-show-keyword-key-raw-int bug), so it needs -Wswitch just as much.
 #
-# Property 3 is checked only for the one-line `buf_puts(b, "tok")` arms; the
-# payload-appending arms are listed in SKIP_KINDS with the field `type_eq`
-# compares, and property 4 is what keeps that list honest.
+# Property 3 is checked over the TY_SIMPLE_REPR_ROWS table rows (increment 4
+# stage 1: simple payload-free kinds carry all three answers -- C name, mangle
+# token, layout -- in one row that each switch expands) plus any remaining
+# one-line `buf_puts(b, "tok")` arms; the payload-appending arms are listed in
+# SKIP_KINDS with the field `type_eq` compares, and property 4 is what keeps
+# that list honest.
 #
-# Exit 0 if all five hold, 1 otherwise.
+#   6. `type_c_name` -- the third of the report's three enumerations -- is
+#      exhaustive with no `default:` arm too (its post-switch `return "void"`
+#      is unreachable while property 6 holds).
+#
+# Exit 0 if all six hold, 1 otherwise.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -116,6 +123,21 @@ def strip_comments(s):
 sw = strip_comments(top_switch(func_body('static void append_type_mangle(Buf *b, Type t)')))
 rc = 0
 
+# TY_SIMPLE_REPR_ROWS: the shared simple-kind table.  Each row carries
+# (kind, c_name, mangle token, layout); the three switches expand it, so for
+# exhaustiveness/injectivity purposes a row IS a case in all three.
+rows = {}
+tbl = re.search(r'#define TY_SIMPLE_REPR_ROWS\(X\)(.*?)\n\n', src, re.S)
+if not tbl:
+    print('FAIL typekind-repr-table -- TY_SIMPLE_REPR_ROWS not found in types.c')
+    sys.exit(1)
+for m in re.finditer(r'X\(\s*(TY_[A-Z_0-9]+)\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*(true|false)\s*\)', tbl.group(1)):
+    rows[m.group(1)] = (m.group(2), m.group(3), m.group(4) == 'true')
+if not rows:
+    print('FAIL typekind-repr-table -- TY_SIMPLE_REPR_ROWS matched but no rows parsed')
+    sys.exit(1)
+print(f"PASS typekind-repr-table ({len(rows)} simple-kind rows)")
+
 # (1) no default arm
 if re.search(r'\bdefault\s*:', sw):
     print("FAIL typekind-mangle-no-default -- append_type_mangle has a `default:` arm.")
@@ -134,7 +156,7 @@ members = []
 for line in enum_body.split('\n')[1:]:
     for m in re.finditer(r'\b(TY_[A-Z_0-9]+)\b', line):
         if m.group(1) not in members: members.append(m.group(1))
-cased = set(re.findall(r'case (TY_[A-Z_0-9]+):', sw))
+cased = set(re.findall(r'case (TY_[A-Z_0-9]+):', sw)) | set(rows)
 missing = [k for k in members if k not in cased]
 if missing:
     print(f"FAIL typekind-mangle-exhaustive -- {len(missing)} kind(s) have no case:")
@@ -145,6 +167,9 @@ else:
 
 # (3) injectivity of the bare-token arms
 tokens = {}
+for k, (cn, tok, lay) in rows.items():
+    if k in skip: continue
+    tokens.setdefault(tok, []).append(k)
 for m in re.finditer(r'((?:case TY_[A-Z_0-9]+:\s*)+)buf_puts\(b, "([^"]+)"\);\s*break;', sw):
     kinds = re.findall(r'case (TY_[A-Z_0-9]+):', m.group(1))
     tok = m.group(2)
@@ -162,7 +187,7 @@ else:
     print(f"PASS typekind-mangle-injective ({len(tokens)} bare tokens, all distinct)")
 
 # (4) the payload-mangled kinds still mangle a payload
-bare_arms = set()
+bare_arms = set(rows)
 for m in re.finditer(r'((?:case TY_[A-Z_0-9]+:\s*)+)buf_puts\(b, "[^"]+"\);\s*break;', sw):
     bare_arms.update(re.findall(r'case (TY_[A-Z_0-9]+):', m.group(1)))
 decayed = sorted((skip - bare_ok) & bare_arms)
@@ -188,7 +213,7 @@ if re.search(r'\bdefault\s*:', csw):
 else:
     print("PASS typekind-concrete-no-default")
 
-ccased = set(re.findall(r'case (TY_[A-Z_0-9]+):', csw))
+ccased = set(re.findall(r'case (TY_[A-Z_0-9]+):', csw)) | set(rows)
 cmissing = [k for k in members if k not in ccased]
 if cmissing:
     print(f"FAIL typekind-concrete-exhaustive -- {len(cmissing)} kind(s) have no case:")
@@ -196,6 +221,22 @@ if cmissing:
     rc = 1
 else:
     print(f"PASS typekind-concrete-exhaustive ({len(members)} kinds)")
+
+# (6) type_c_name is under the same discipline
+nsw = strip_comments(top_switch(func_body('const char *type_c_name(Type t)')))
+if re.search(r'\bdefault\s*:', nsw):
+    print("FAIL typekind-cname-no-default -- type_c_name has a `default:` arm.")
+    rc = 1
+else:
+    print("PASS typekind-cname-no-default")
+ncased = set(re.findall(r'case (TY_[A-Z_0-9]+):', nsw)) | set(rows)
+nmissing = [k for k in members if k not in ncased]
+if nmissing:
+    print(f"FAIL typekind-cname-exhaustive -- {len(nmissing)} kind(s) have no case:")
+    for k in nmissing: print(f"     {k}")
+    rc = 1
+else:
+    print(f"PASS typekind-cname-exhaustive ({len(members)} kinds)")
 
 sys.exit(rc)
 PY

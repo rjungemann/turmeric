@@ -133,16 +133,22 @@ report is one missing cell:
 
 A structural note the last row exposes: the representation decision today is
 not one function but (at least) three hand-maintained `TypeKind` switches in
-`src/compiler/types.c` -- `type_c_name` (exhaustive),
-`type_has_concrete_codegen_layout` (fails closed: a missing kind silently
-falls back to the carrier), and `append_type_mangle` (failed open to
-`"opaque"` until 2026-07-29) -- and codegen is correct only when all three
-agree. Their drift is a bug generator of its own; since 2026-07-30 two CI
-guards ratchet it (`tests/check-typekind-mangle-exhaustive.sh` reads the
-switches' source, `tests/check-monomorph-name-collision.sh` reads what they
-emit), but the guards pin agreement rather than remove the triplication --
-collapsing the three switches into one decision function is increment 4 of
-the consolidation meta-plan.
+`src/compiler/types.c` -- `type_c_name`, `type_has_concrete_codegen_layout`
+(fails closed: a missing kind silently falls back to the carrier), and
+`append_type_mangle` (failed open to `"opaque"` until 2026-07-29) -- and
+codegen is correct only when all three agree. Since 2026-07-31 (increment 4
+stage 1) the triplication is removed for payload-free kinds: the
+`TY_SIMPLE_REPR_ROWS` table in `types.c` carries one row per simple kind
+with all three answers, and each switch expands the rows with its own
+projection -- adding a kind without all three answers is a build failure,
+not a silent drift. Payload-carrying kinds keep per-switch arms; two CI
+guards ratchet the whole arrangement
+(`tests/check-typekind-mangle-exhaustive.sh` parses the table + residual
+arms and now also checks `type_c_name` exhaustiveness;
+`tests/check-monomorph-name-collision.sh` reads what they emit). The
+position axis -- one `repr-of(type, position)` routine for the per-SITE
+choices -- is staged in
+[docs/upcoming/repr-decision-function-plan.md](../upcoming/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for

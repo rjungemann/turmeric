@@ -421,6 +421,14 @@ about, and cowpaths are paved before the field is closed:
   R4-style registry + CI ratchet extended to cover the new axes. This is
   the true consolidation; it goes last because by then the sites agree in
   *behavior* and the collapse is mechanical rather than semantic.
+  *Status 2026-07-31: child plan written
+  ([repr-decision-function-plan.md](repr-decision-function-plan.md));
+  stage 1 landed -- the TY_SIMPLE_REPR_ROWS table makes one X-macro row per
+  payload-free TypeKind the single home of its three type-axis answers
+  (C name, mangle token, concrete layout), expanded by all three switches,
+  byte-identical behavior, guard extended to a sixth property (type_c_name
+  exhaustiveness).  Stages 2-4 (position enum + shadow log, chokepoint
+  migration, registry ratchet) are specified in the child plan.*
 - **Increment 5 (conditional) -- representation retirement.** If the
   decision function shows a form with no remaining (type, position) pairs
   -- the by-value fat struct in-flight form is the likely candidate --
