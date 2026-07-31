@@ -119,13 +119,15 @@ static const char JIT_PRELUDE[] =
    * bare `#if` -- "empty preprocessor expression" -- and the guarded block is
    * lost.  `mach/port.h:100` is the one the corpus hits; it guards
    * `xnu_static_assert_struct_size`, so losing it silently DISABLES the SDK's
-   * own struct-size assertions.  Restoring the value re-arms them, which is
-   * the point: c2mir ignores the `#pragma pack(push, 4)` that
-   * mach/message.h:291 wraps those structs in, so it really does lay them out
-   * wrong (measured: 16 bytes where clang gives 12 for a pack(4) probe), and
-   * the assertions are what turn that from a silent ABI skew into a loud,
-   * correct fallback to cc.  See
-   * docs/reported/jit-c2mir-ignores-pragma-pack.md.
+   * own struct-size assertions.  Restoring the value re-arms them.
+   *
+   * That mattered: it exposed that c2mir was ignoring the
+   * `#pragma pack(push, 4)` mach/message.h:291 wraps those structs in, laying
+   * them out at natural alignment (16 bytes where clang gives 12, on a pack(4)
+   * probe).  `#pragma pack` is implemented as of MIR fork commit d7e19e8d, so
+   * the assertions now PASS and those programs JIT; they stay armed as a live
+   * guard against the layout drifting again.  See
+   * docs/archive/jit-c2mir-ignores-pragma-pack.md.
    *
    * This runs before any SDK header: c2mir's stream stack reads its own
    * prelude first, so a redefine here lands after MIR's and ahead of the
