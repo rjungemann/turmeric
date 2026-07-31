@@ -171,20 +171,24 @@ After importing, run `validate-labels.py` over the corpus. The library's own
 mis-imported file shows up as a disagreement rather than as a mysterious
 soundness failure later.
 
+### Already done -- you probably want the clone, not the importer
+
+**The import has been run and its output is published.** Unless you are
+producing a *different* sample, do not re-run `import-smtlib.py` -- clone
+[`github.com/rjungemann/smt-lib-benchmarks`](https://github.com/rjungemann/smt-lib-benchmarks)
+instead. See [The external corpus](#the-external-corpus-not-vendored-here)
+below. The rest of this section is for producing a new sample.
+
 ### If the record's host is blocked: mirror it
 
-`zenodo.org` is blocked by the egress policy of the container this corpus was
-built in (the proxy answers 403 to CONNECT, recorded as `connect_rejected` for
-`zenodo.org:443`). Two ways around that, neither of which needs the policy
-changed.
+Historical note, kept because the escape hatch is still useful: `zenodo.org`
+was blocked by the egress policy of the container this corpus was originally
+built in (the proxy answered 403 to CONNECT). That is an environment
+restriction, not a property of the data -- the library **was** obtained, from
+an environment with ordinary network access, and the result is the external
+repo linked above.
 
-**Simplest -- import once, commit the sample.** The corpus wants a bounded
-sample, not the library: 25 benchmarks per logic across the eight fragment
-logics is ~200 small files. Run the importer somewhere with ordinary network
-access and commit what it produces. The corpus is then self-contained, which is
-the whole point -- labels as data in the repo, no fetch step in the test path.
-
-**Or serve the tarballs from a mirror.** S3 and `raw.githubusercontent.com` are
+**Serve the tarballs from a mirror.** S3 and `raw.githubusercontent.com` are
 both reachable from this environment (verified: a public S3 object fetched
 200/28 KB). Upload the per-logic tarballs under their own names and point the
 importer at the bucket:
@@ -278,7 +282,8 @@ over-budget: it sits at the 10s line and moves with machine load, not with
 these changes.) The over-budget and unlabelled counts are timing- and
 sample-dependent; re-measure rather than compare across machines. Full
 measurements and fix rationale:
-[docs/upcoming/v1/corpus-reader-tail-plan.md](../../../docs/upcoming/v1/corpus-reader-tail-plan.md).
+[docs/archive/corpus-reader-tail-plan.md](../../../docs/archive/corpus-reader-tail-plan.md)
+(archived -- the tail it tracked is closed).
 
 ## Running it
 

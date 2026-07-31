@@ -39,12 +39,30 @@ by name. The md5 from the record is still enforced, so a mirror can only supply
 the same bytes; it cannot substitute different data. This is the escape hatch
 for an environment where the record's host is blocked but a bucket is not.
 
+## THIS HAS ALREADY BEEN RUN -- you probably want the clone
+
+The import is DONE and its output is published at
+
+    https://github.com/rjungemann/smt-lib-benchmarks
+
+as `smtlib-2025/`: 25 benchmarks per logic across the eight fragment logics
+(200 files), seed 1, with the CC-BY-4.0 ATTRIBUTION file. It lives in a
+separate repository because the data is too large to check into the turmeric
+tree's history -- NOT because it could not be obtained.
+
+    git clone https://github.com/rjungemann/smt-lib-benchmarks /tmp/smtlib-bench
+    TUR_CORPUS_TIMEOUT=3 ./build/tur_refine_corpus /tmp/smtlib-bench/smtlib-2025
+
+Only re-run this script to produce a DIFFERENT sample (other logics, other
+seed, larger `--sample`).
+
 ## Note on network access
 
-At the time this was written, `zenodo.org` was blocked by the egress policy of
-the container the corpus was built in (the proxy answered 403 to CONNECT). That
-is an environment restriction, not a problem with this script: run it anywhere
-with ordinary network access.
+`zenodo.org` was blocked by the egress policy of one container this was
+developed in (the proxy answered 403 to CONNECT). That was an environment
+restriction, not a problem with this script or with the availability of the
+data: it runs fine anywhere with ordinary network access, which is how the
+published sample above was produced.
 """
 
 import argparse

@@ -251,9 +251,14 @@ carrying a known cost we are not ready to impose on everyone) ship behind
 - Write a plan in `docs/upcoming/` and point `plan_path` at it.
 - Call `experiment_warn_if_used("<name>")` from the feature's elaboration
   entry point so the lifecycle warning (TUR-W0060/W0061) fires.
-- `expires_at` is a hard contract -- the release-cut skills refuse to bump
-  past it until the entry is graduated (deleted; feature goes always-on) or
-  shelved.
+- `expires_at` is **advisory and NEVER blocks a release.** The release-cut
+  skills surface an expiring row and proceed; the author then graduates it,
+  shelves it, or bumps `expires_at` with a one-line rationale. It is a
+  **deadline, not an earliest date** -- graduating early is routine.
+
+  **Do not refuse a version bump because a row is at or past its expiry**, and
+  do not reconstruct such a gate from older prose. No registry check has ever
+  existed in `cut-*-release.md`; believing it did has stranded two releases.
 
 Enable sources, in ascending precedence: user file
 (`~/.config/turmeric/experiments.tur` `:enable [...]`), project manifest

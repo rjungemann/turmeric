@@ -34,6 +34,20 @@ Run these in parallel and report findings before proceeding:
 If any check fails, stop and report. Do not proceed without the user
 explicitly overriding.
 
+### Advisory: experiment expiries (NEVER blocking)
+
+Run `./build/tur experiments` (or read `EXPERIMENTS[]` in
+`src/runtime/experiments.c`) and list any row whose `expires_at` is at or
+before the version being cut.
+
+**This is a notice, not a precondition. It NEVER blocks the release.** Report
+the rows and continue with the cut. The author decides separately whether to
+graduate, shelve, or bump `expires_at` -- in this release or a later one.
+
+`expires_at` is a deadline, not an earliest date, and there is no registry
+check anywhere in this file's preconditions. Do not invent one: treating this
+as a gate has stranded two releases.
+
 ## Step 1: Compute the new version
 
 Read `VERSION`. Parse `MAJOR.MINOR.PATCH`. Compute `NEW = MAJOR.(MINOR+1).0`.
@@ -217,6 +231,9 @@ End by reporting:
 ## Things to refuse
 
 - Refuse to bypass any precondition without explicit user override.
+- **Never** refuse or delay a release because an experiment's `expires_at` is
+  at or past the version being cut. That is advisory (see the Advisory section
+  above); surface it and proceed.
 - Refuse to push the tag before the deploy succeeds.
 - Refuse to skip the changelog/README updates -- they're load-bearing
   for users discovering the release.

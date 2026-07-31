@@ -1449,11 +1449,19 @@
 > against Z3 4.13 (0 soundness bugs, 0 refutation bugs). The last of these had
 > not been exercised in a long while -- it only builds in an oracle build.
 >
-> Not done: importing the **SMT-LIB benchmark library**, whose hosts are
-> unreachable from this environment by proxy policy. That is now a data drop --
-> the reader takes ordinary `.smt2` with `(set-info :status ...)`, skips what
-> falls outside the fragment, and the runner recurses -- rather than an
-> engineering task.
+> Not done at the time of this entry: importing the **SMT-LIB benchmark
+> library**, whose hosts were unreachable from the container this was written
+> in. That is now a data drop -- the reader takes ordinary `.smt2` with
+> `(set-info :status ...)`, skips what falls outside the fragment, and the
+> runner recurses -- rather than an engineering task.
+>
+> **CORRECTION (2026-07-30): this is DONE and has been for a while.** The
+> import lives at **`github.com/rjungemann/smt-lib-benchmarks`** (200
+> benchmarks, 8 logics x 25, produced by `import-smtlib.py --sample 25`). It is
+> a separate repo because the data is too large to check into this tree, NOT
+> because it could not be obtained. Do not re-derive "the library was never
+> imported" from the paragraph above -- see the Z3 retirement criteria section
+> for the current state.
 >
 > Worth naming precisely, because this plan and the corpus README both got it
 > loose at first. **SMT-LIB is a standard** (the 2.6 language, the theory and
@@ -2514,20 +2522,30 @@ all of the following hold:
   `tests/corpus/smt-lib-benchmark-data-2025.json`, and
   `tests/corpus/import-smtlib.py` turns it into a one-command import:
   md5-verified download, deterministic seeded sample per logic, attribution
-  file, and a loud report when it keeps fewer than asked. Its offline paths are
-  tested (dedup, shortfall, checksum failure, dry-run); only the HTTP fetch is
-  not, because the host is blocked here.
+  file, and a loud report when it keeps fewer than asked.
 
-  What is NOT yet done is importing the **SMT-LIB benchmark library** -- the
-  labelled data artifact, as distinct from the SMT-LIB *standard* (the language
-  and logic declarations) and from SMT-COMP (the annual competition, which uses
-  the library but is not a distribution of it). That is now a **data drop rather
-  than an engineering task**: the reader takes ordinary `.smt2` with
-  `(set-info :status ...)`, skips whatever falls outside the fragment rather
-  than guessing, and the runner recurses, so a collection can be dropped in a
-  subdirectory unfiltered. It was not done here because those hosts are
-  unreachable from this environment (proxy policy), not because anything is
-  missing.
+  **The SMT-LIB benchmark library import is DONE.** The sample lives in its own
+  repository -- **`github.com/rjungemann/smt-lib-benchmarks`** -- because the
+  data is too large to belong in this tree's history, not because it was
+  unobtainable. It is `smtlib-2025/`, 25 benchmarks per logic across the eight
+  fragment logics (**200 files**), produced by this repo's own importer
+  (`python3 tests/corpus/import-smtlib.py --sample 25`, seed 1) and carrying the
+  CC-BY-4.0 `ATTRIBUTION` file the licence requires:
+
+  ```sh
+  git clone https://github.com/rjungemann/smt-lib-benchmarks /tmp/smtlib-bench
+  TUR_CORPUS_TIMEOUT=3 ./build/tur_refine_corpus /tmp/smtlib-bench/smtlib-2025
+  ```
+
+  Measured 2026-07-26: **200 / 200 parsed, 0 skipped, 0 crashes, 0 soundness
+  failures.** The reader tail that used to skip 7 is closed -- see
+  [corpus-reader-tail-plan.md](../../archive/corpus-reader-tail-plan.md), now
+  archived/resolved. So the parsed-coverage bar this criterion actually gates on
+  is met outright.
+
+  The in-tree `tests/corpus/smtlib/` corpus is unaffected and remains the
+  standing no-network regression: the external sample is breadth, not a
+  dependency of the test path.
 - **No scaffold references remain in shippable code paths** (guaranteed by
   construction, since the CMake option refuses Release/WASM, but re-verified at
   deletion).
