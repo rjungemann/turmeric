@@ -391,6 +391,22 @@ about, and cowpaths are paved before the field is closed:
   `vec-byvalue-struct-element-invalid-c` and
   `fn-payload-in-container-undeclared-temp`, or (acceptably) turns the
   unrepresentable cases into real diagnostics.
+  *Status 2026-07-31: landed.* The rule is width-independent: a non-heap
+  by-value ADT product of any width is heap-boxed into container slots and
+  deref-unboxed on read (`type_is_boxed_container_elem`, consulted by the
+  push bridges, the read recovery, and the `tur-wide-byval?` /
+  `tur-vec-elem-wide?` ownership folds -- the four decisions that used to
+  be free to drift).  The old fork -- wide boxed, narrow stack-spilled with
+  no reader -- was exactly a two-place-decision bug: the push side and read
+  side each "handled" narrow structs by different (wrong) defaults.  Two
+  rode along: the let-binding double-deref guard (consult the merge temp's
+  RECORDED emitted C type instead of re-deriving from the tail -- this also
+  fixed the never-pinned wide `(let [b (:: (map-get m k) Point)] ...)`
+  shape), and the interpreter's 1-field-record carrier retag
+  (`from_struct_lowering`-gated).  Both fn-payload cells were already
+  closed by fat-normalization stage 2.  Transient (non-container) inline-C
+  crossings keep the cheap stack spill -- the performance guardrail --
+  discriminated by a heap-container sibling argument at the call site.
 - **Increment 4 -- the decision function.** Only after 1-3: collapse the
   per-site representation choices into the single `repr-of(type, position)`
   routine plus chokepoint bridges, with the R3-style Debug ICE and an

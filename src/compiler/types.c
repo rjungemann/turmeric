@@ -2932,6 +2932,27 @@ bool type_is_wide_byval_adt(Type t) {
     return false;
 }
 
+/* Increment 3 (representation-consolidation meta-plan): the CONTAINER-ELEMENT
+ * boxing predicate.  True when `t` is a non-heap by-value ADT product of ANY
+ * width -- the class of element that must be heap-boxed when stored into a
+ * heap container (Vec slot, HAMT value) and deref-unboxed on read-back.
+ *
+ * This deliberately drops the > 8-byte width fork of type_is_wide_byval_adt
+ * for container slots: a NARROW (<= 8 byte) by-value struct has no other
+ * working slot representation -- the plain concrete->carrier bridge spills it
+ * to a stack local whose address dangles once the frame returns, and the read
+ * side had no un-spill at all (vec-byvalue-struct-element-invalid-c).  Width
+ * still matters in positions with a paired inline layout (monomorph fields,
+ * B4 closure params); those keep type_is_wide_byval_adt.  Every container
+ * BOXING site, its ownership probe (tur-wide-byval? / tur-vec-elem-wide?
+ * folds), and the read-back recovery must consult THIS predicate so the four
+ * decisions cannot drift. */
+bool type_is_boxed_container_elem(Type t) {
+    if (t.kind != TY_ADT || !t.as.adt_.def) return false;
+    if (t.as.adt_.def->is_heap) return false;
+    return adt_byval_value_size_bytes(t.as.adt_.def) > 0;
+}
+
 /* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete
  * flat-product ADT-app (e.g. `(Pair2 int float)`) is laid out like its
  * monomorph aggregate, so it adopts the same >16-byte pass-by-pointer

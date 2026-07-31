@@ -155,12 +155,11 @@ def known_bug_slug(tags):
     # consolidation increment 2 -- continuation-wrapper ABI paired with the
     # selected entry point + ascription-aware carrier-type recovery -- and
     # archived; bind legs are in the DEFAULT generation rotation now.)
-    # A by-value (non-:heap) struct as a Vec element emits invalid C on the
-    # read side ('request for member in something not a structure'), with or
-    # without the documented `(:: (vec-get v i) T)` ascription idiom.  Found
-    # by this harness's probe phase, 2026-07-30.
-    if "vec_byvalue_struct" in tags:
-        return "vec-byvalue-struct-element-invalid-c"
+    # (vec-byvalue-struct-element-invalid-c: RESOLVED 2026-07-31 by
+    # consolidation increment 3 -- any-width by-value products are heap-boxed
+    # into container slots (push-side escaping bridge, read-side deref-unbox,
+    # ownership probes in lockstep via type_is_boxed_container_elem) -- and
+    # archived; vec_box_byvalue wrappers are in the DEFAULT pool now.)
     # (class-method-result-into-generic-invalid-c: RESOLVED 2026-07-31 by
     # consolidation increment 2 -- the carrier-producer classifier now knows
     # M7 by-value instance results -- and archived; rows retired.)
@@ -191,13 +190,9 @@ KNOWN_PROBES = [
      "  (fn [] (tcons x (tnil))))\n"
      "(defn use [A] [xs : (Cons A)] : int 0)\n"
      "(defn main [] : int (use ((pure 1))))\n"),
-    ("vec-byvalue-struct-element-invalid-c",
-     "(defstruct FzB [a : int])\n"
-     "(defn main [] : int\n"
-     "  (let [v (:: (vec-new) (Vec FzB))]\n"
-     "    (vec-push! v (FzB 31))\n"
-     "    (let [b (:: (vec-get v 0) FzB)]\n"
-     "      (println (.a b))))\n  0)\n"),
+    # (vec-byvalue-struct-element-invalid-c: RESOLVED 2026-07-31, archived;
+    # probe retired -- pinned by tests/fixtures/vec-byvalue-struct-element/
+    # and tests/fixtures/map-narrow-struct-value/.)
     # (fn-typed-value-return-ascribe-miscompiles: RESOLVED 2026-07-30 by
     # fat-normalization stage 2 and archived; its matrix -- broken rows
     # included -- is pinned by tests/fixtures/fn-value-matrix-ok-rows/, so
@@ -364,7 +359,8 @@ class Gen:
             {"vec_heap_struct"}
 
     def w_vec_box_byvalue(self, leg, ty):
-        # KNOWN shape: emitted only under --emit-known.
+        # In the DEFAULT pool since increment 3 (2026-07-31): any-width
+        # by-value struct elements ride container slots heap-boxed now.
         bn = "FzB%d%d" % (self.i, self.n_names)
         self.n_names += 1
         leg.defs.append("(defstruct %s [a : %s])" % (bn, ty))
@@ -419,12 +415,11 @@ class Gen:
             {"thunk", "closure_ret"}
 
     WRAPPERS = ["none", "box", "box_heap", "adt", "opt", "res", "vec",
-                "vec_box_heap", "opt_box", "res_box", "thunk"]
+                "vec_box_heap", "vec_box_byvalue", "opt_box", "res_box",
+                "thunk"]
 
     def pick_wrapper(self, leg, ty):
         pool = list(self.WRAPPERS)
-        if self.emit_known:
-            pool.append("vec_box_byvalue")
         which = self.rng.choice(pool)
         if which == "none":
             return self.w_none(leg, ty)

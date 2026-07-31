@@ -1767,6 +1767,7 @@ bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
 /* B4 (slice 2): true when `t` is a wide (>8 byte) by-value ADT -- one that must
  * ride a heap box when stored as a parametric carrier monomorph element. */
 bool         type_is_wide_byval_adt(Type t);
+bool         type_is_boxed_container_elem(Type t);
 /* Parametric-by-value: app-aware siblings of adt_byval_pass_by_ptr /
  * adt_is_byvalue_product -- a concrete flat-product ADT-app (`(Pair2 int
  * float)`) is laid out as its by-value monomorph aggregate, so it shares the

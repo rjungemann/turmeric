@@ -1071,10 +1071,18 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
              * as a carrier producer so the carrier->concrete deref-unbox bridge
              * fires.  Gated on the tyvar recovery, so a genuinely by-value
              * concrete accessor result (`Pos`, result_full_type not a tyvar) is
-             * untouched. */
+             * untouched.
+             *
+             * Increment 3 (vec-byvalue-struct-element-invalid-c): the width
+             * fork is gone -- a NARROW (<= 8 byte) by-value product element
+             * rides the container slot boxed too (there is no working inline
+             * form: the read side used to initialize `tur_adt_FzB b = <int64>`
+             * straight off the carrier, a hard cc error).  The shared
+             * container-element predicate keeps this read-back in lockstep
+             * with the push-side boxing and the ownership probes. */
             if (tyvar_recovered_concrete &&
                 !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
-                type_is_wide_byval_adt(sr))
+                type_is_boxed_container_elem(sr))
                 return sr;
             /* Gate on !type_uses_carrier_abi(sr): the by-value-temp strategy only
              * applies when the lowered aggregate flows by value.  At default the
@@ -1805,9 +1813,29 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the aggregate. */
             Type init_bv = fn_body_tail_byvalue_carrier_type(
                 ctx, e->as.let_.bindings[i].init);
+            /* Increment 3 (double-deref guard): when the init is a control
+             * form (a `let`/`do` -- e.g. the map-get macro's expansion) whose
+             * merge temp was ALREADY declared by-value and bridged by
+             * bridge_control_value_to_byvalue_temp, the value in hand IS the
+             * aggregate -- re-deriving "carrier producer" from the tail call
+             * here would deref it a second time (`(*(T *)(intptr_t)(<T
+             * value>))`, a hard cc error).  The temp's ACTUAL emitted C type
+             * is in the localvar side table (the init_val_recorded_* pattern
+             * above); a recorded by-value aggregate type equal to the
+             * binding's own suppresses the re-bridge -- consult the recorded
+             * representation instead of re-deciding from the tail. */
+            bool init_val_recorded_byval_agg = false;
+            if (emit_str_is_bare_ident(iv)) {
+                const char *lvty2 = emit_localvar_lookup_ctype(iv);
+                init_val_recorded_byval_agg =
+                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
+                    strcmp(lvty2, "int64_t") != 0 &&
+                    strchr(lvty2, '*') == NULL;
+            }
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
+                !init_val_recorded_byval_agg &&
                 !fn_body_tail_emits_byvalue_carrier_abi(
                     ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
@@ -2116,9 +2144,29 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the aggregate. */
             Type init_bv = fn_body_tail_byvalue_carrier_type(
                 ctx, e->as.let_.bindings[i].init);
+            /* Increment 3 (double-deref guard): when the init is a control
+             * form (a `let`/`do` -- e.g. the map-get macro's expansion) whose
+             * merge temp was ALREADY declared by-value and bridged by
+             * bridge_control_value_to_byvalue_temp, the value in hand IS the
+             * aggregate -- re-deriving "carrier producer" from the tail call
+             * here would deref it a second time (`(*(T *)(intptr_t)(<T
+             * value>))`, a hard cc error).  The temp's ACTUAL emitted C type
+             * is in the localvar side table (the init_val_recorded_* pattern
+             * above); a recorded by-value aggregate type equal to the
+             * binding's own suppresses the re-bridge -- consult the recorded
+             * representation instead of re-deciding from the tail. */
+            bool init_val_recorded_byval_agg = false;
+            if (emit_str_is_bare_ident(iv)) {
+                const char *lvty2 = emit_localvar_lookup_ctype(iv);
+                init_val_recorded_byval_agg =
+                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
+                    strcmp(lvty2, "int64_t") != 0 &&
+                    strchr(lvty2, '*') == NULL;
+            }
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
+                !init_val_recorded_byval_agg &&
                 !fn_body_tail_emits_byvalue_carrier_abi(
                     ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
@@ -3499,8 +3547,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     probe->as.borrow_immut_.expr)
                     probe = probe->as.borrow_immut_.expr;
                 Type at = emit_resolve_type(ctx, probe->type);
+                /* Increment 3: the fold follows the CONTAINER-ELEMENT boxing
+                 * predicate (any-width by-value product), not the wide-only
+                 * one, so the map's release decision cannot drift from the
+                 * insert-side boxing decision for narrow elements. */
                 bool wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
-                            type_is_wide_byval_adt(at);
+                            type_is_boxed_container_elem(at);
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
             }
 
@@ -3545,8 +3597,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 bool wide = false;
                 if (vt.kind == TY_APP && vt.as.app.arg) {
                     Type at = emit_resolve_type(ctx, *vt.as.app.arg);
+                    /* Increment 3: follow the container-element boxing
+                     * predicate (any-width), in lockstep with the push-side
+                     * boxing, so vec-free frees narrow element boxes too. */
                     wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
-                           type_is_wide_byval_adt(at);
+                           type_is_boxed_container_elem(at);
                 }
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
             }
@@ -5795,9 +5850,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * (value semantics -- mutating the source after insert
                              * does not change the stored element).  The narrow
                              * (transient, non-storing) inline-C carrier crossings
-                             * keep the cheaper stack spill. */
+                             * keep the cheaper stack spill.
+                             *
+                             * Increment 3 (vec-byvalue-struct-element-invalid-c):
+                             * a NARROW (<= 8 byte) by-value product is heap-boxed
+                             * too when the call stores it into a heap container --
+                             * the stack spill dangles exactly like the wide case,
+                             * and the read side now deref-unboxes any-width
+                             * elements (type_is_boxed_container_elem).  The
+                             * container-store discriminator is a heap-container
+                             * sibling argument (the receiver `(Vec A)` / map /
+                             * set), same as the TY_APP block above; a transient
+                             * consumer (`unwrap-or`-style, no container sibling)
+                             * keeps the stack spill unchanged. */
+                            bool _n3_container_store = false;
                             if (fn_binding->body_is_inline_c &&
-                                type_is_wide_byval_adt(rarg))
+                                !type_is_wide_byval_adt(rarg) &&
+                                type_is_boxed_container_elem(rarg)) {
+                                for (uint32_t _j = 0; _j < e->as.call_.n_args; _j++) {
+                                    if (_j == i) continue;
+                                    Type _st = emit_resolve_type(
+                                        ctx, e->as.call_.args[_j]->type);
+                                    if (type_is_heap_adt(_st) ||
+                                        type_is_heap_struct(_st)) {
+                                        _n3_container_store = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (fn_binding->body_is_inline_c &&
+                                (type_is_wide_byval_adt(rarg) ||
+                                 _n3_container_store))
                                 raw = emit_carrier_bridge_escaping(
                                           ctx, body, raw,
                                           CK_CONCRETE, CK_CARRIER, rarg);
@@ -5834,9 +5917,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                         : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    /* Increment 3: NARROW (<= 8 byte) by-value products box the
+                     * same way wide ones do, but only when the call stores into
+                     * a heap container (a heap-container sibling argument, e.g.
+                     * the `(Map K V)` receiver of map-assoc-eq-o) -- a transient
+                     * spec'd inline-C consumer with no container sibling keeps
+                     * the plain bridge unchanged. */
+                    bool _n3_hamt_store = false;
                     if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                         !type_is_heap_struct(rarg) && !type_is_heap_adt(rarg) &&
-                        type_is_wide_byval_adt(rarg)) {
+                        !type_is_wide_byval_adt(rarg) &&
+                        type_is_boxed_container_elem(rarg)) {
+                        for (uint32_t _j = 0; _j < e->as.call_.n_args; _j++) {
+                            if (_j == i) continue;
+                            Type _st = emit_resolve_type(
+                                ctx, e->as.call_.args[_j]->type);
+                            if (type_is_heap_adt(_st) ||
+                                type_is_heap_struct(_st)) {
+                                _n3_hamt_store = true;
+                                break;
+                            }
+                        }
+                    }
+                    if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                        !type_is_heap_struct(rarg) && !type_is_heap_adt(rarg) &&
+                        (type_is_wide_byval_adt(rarg) || _n3_hamt_store)) {
                         /* Box the value via tur_hamt_box_key (a refcount+size box)
                          * rather than a plain malloc, so the map can RELEASE it on
                          * free / entry-drop: map-assoc threads the value-owned bit
@@ -8252,9 +8357,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (rv && rv->kind == EX_CALL &&
                         !fn_body_tail_emits_byvalue_carrier_abi(ctx, rv)) {
                         Type bvt = fn_body_tail_byvalue_carrier_type(ctx, rv);
+                        /* Increment 3: any-width container elements are boxed
+                         * now, so the deref-read applies to narrow (<= 8 byte)
+                         * products too -- same shared predicate as the push
+                         * bridges and the let-binding read recovery.  A
+                         * concrete by-value accessor result still returns
+                         * UNKNOWN from the walk above, so it never routes
+                         * here. */
                         if (bvt.kind != TY_UNKNOWN &&
                             !type_is_heap_struct(bvt) && !type_is_heap_adt(bvt) &&
-                            type_is_wide_byval_adt(bvt))
+                            (type_is_wide_byval_adt(bvt) ||
+                             type_is_boxed_container_elem(bvt)))
                             recv_call_carrier_byval = true;
                     }
                 }

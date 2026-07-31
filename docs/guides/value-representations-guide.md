@@ -40,9 +40,21 @@ float bit-reinterpret note below).
    (`Option`, `Vec`, `Cons`). The carrier bits ARE the pointer, so the
    erasure round trip is lossless. This is why `Option` escaped the `bind`
    miscompile while by-value `Result` did not
-   (`result-monad-bind-typed-boundary-miscompiles`), and why `:heap` fixes
-   the by-value Vec-element shape
-   (`vec-byvalue-struct-element-invalid-c`).
+   (`result-monad-bind-typed-boundary-miscompiles`), and why `:heap` was
+   the workaround for the by-value Vec-element shape
+   (`vec-byvalue-struct-element-invalid-c`, resolved by increment 3).
+
+   Since 2026-07-31 (increment 3) **container element slots follow one
+   width-independent rule** per element class: scalar bits inline, heap
+   pointer as-is, by-value ADT product (ANY width) heap-boxed on insert and
+   deref-unboxed on read, fn value as a fat handle. The decision lives in
+   `type_is_boxed_container_elem` (`src/compiler/types.c`), consulted by
+   the push-side bridges, the read-back recovery, AND the ownership folds
+   (`tur-wide-byval?` / `tur-vec-elem-wide?`) so boxing and freeing cannot
+   drift. The old fork -- wide boxed, narrow stack-spilled with no reader --
+   was the missing-cell generator here. Width still matters where a paired
+   inline layout exists (parametric-carrier monomorph fields, B4 closure
+   params); those positions keep `type_is_wide_byval_adt`.
 
 4. **Concrete scalar** -- plain `int64_t` / `double` / `bool` / `char*`.
    One trap: a float crossing the carrier needs a **bit reinterpret**, not a
@@ -105,7 +117,7 @@ report is one missing cell:
 | --- | --- |
 | method result (carrier) -> typed `(Result A B)` defn boundary (RESOLVED 2026-07-31, increment 2; archived) | [`result-monad-bind-typed-boundary-miscompiles`](../archive/result-monad-bind-typed-boundary-miscompiles.md) |
 | method result (carrier) -> generic call argument (RESOLVED 2026-07-31, increment 2; archived) | [`class-method-result-into-generic-invalid-c`](../archive/class-method-result-into-generic-invalid-c.md) |
-| by-value struct -> Vec element slot | `vec-byvalue-struct-element-invalid-c` |
+| by-value struct -> Vec / Map element slot (RESOLVED 2026-07-31, increment 3: width-independent boxed element protocol; archived) | [`vec-byvalue-struct-element-invalid-c`](../archive/vec-byvalue-struct-element-invalid-c.md) |
 | capturing closure -> nominal thin `TY_FN` param, tyvar-sig or effectful (concrete effect-free sigs FIXED 2026-07-30, fat-normalized) | `poly-result-hof-capturing-closure-sigbus` |
 | closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF (RESOLVED 2026-07-30, fat-normalization stage 2; archived) | [`fn-typed-value-return-ascribe-miscompiles`](../archive/fn-typed-value-return-ascribe-miscompiles.md) |
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
