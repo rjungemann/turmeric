@@ -692,10 +692,26 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
         return;
     }
     indent_buf(body, ctx->indent);
-    if (is_main && result_kind == TY_INT)
+    if (is_main && result_kind == TY_INT) {
         buf_printf(body, "return (int)%s;\n", v);
-    else
+    } else if (!is_main && ctx->current_fn_ret_ctype &&
+               strcmp(ctx->current_fn_ret_ctype, "void") == 0) {
+        /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+         * violation in a function returning void -- even when the expression is
+         * itself void-typed.  A `!`-returning defn whose tail is a call to
+         * another `!`-returning defn lands exactly there:
+         *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+         * clang accepts it as an extension, so the cc path never complained,
+         * but c2mir rejects it and the program silently loses the JIT
+         * (panic-trace was the fixture that surfaced this).  Emit the tail as a
+         * statement and return separately; the cast keeps -Wunused-value quiet
+         * for a non-call tail and is valid on a void-typed one. */
+        buf_printf(body, "(void)(%s);\n", v);
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "return;\n");
+    } else {
         buf_printf(body, "return %s;\n", v);
+    }
     free(v);
 }
 
@@ -4279,6 +4295,21 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * int64 temp, which this branch never sees -- the recorded type is a
              * pointer). */
             buf_printf(file, "return (int64_t)(intptr_t)%s;\n", ret_val);
+        } else if (!is_main && ret_ctype && strcmp(ret_ctype, "void") == 0) {
+            /* C11 6.8.6.4p1: a `return` WITH an expression is a constraint
+             * violation in a function returning void -- even when the
+             * expression is itself void-typed.  A `!`-returning defn whose tail
+             * is a call to another `!`-returning defn lands exactly there:
+             *   (defn outer [] : ! (inner))  ->  static void outer() { return inner(); }
+             * clang accepts it as an extension, so the cc path never
+             * complained, but c2mir rejects it and the program silently loses
+             * the JIT (panic-trace was the fixture that surfaced this).  Emit
+             * the tail as a statement and return separately; the cast keeps
+             * -Wunused-value quiet for a non-call tail and is valid on a
+             * void-typed one. */
+            buf_printf(file, "(void)(%s);\n", ret_val);
+            indent_buf(file, ctx->indent);
+            buf_puts(file, "return;\n");
         } else {
             buf_printf(file, "return %s;\n", ret_val);
         }

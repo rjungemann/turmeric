@@ -7650,7 +7650,8 @@ static void inner() {
 }
 
 static void outer() {
-        return inner();
+        (void)(inner());
+        return;
 }
 
 int main(int argc, char **argv) {

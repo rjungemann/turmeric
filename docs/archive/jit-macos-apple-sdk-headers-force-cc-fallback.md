@@ -2,14 +2,18 @@
 
 **RESOLVED 2026-07-31.** No remaining cc fallback on macOS is attributable to
 an Apple SDK header. The eight fixtures this report tracked all JIT now, and
-the corpus fallback count went **31 -> 22** (the six-fixture enum round turned
-over one more than the five predicted -- `gc-auto-collects-without-gc-call`
-reaches `<malloc/malloc.h>` through the same inline-C heap probe).
+the corpus fallback count went **31 -> 17**.
+
+Two notes on that number. The enum round turned over six fixtures rather than
+the five predicted -- `gc-auto-collects-without-gc-call` reaches
+`<malloc/malloc.h>` through the same inline-C heap probe. And the first pass
+stopped at 22 and wrongly declared the remainder non-SDK; see the correction
+section below, which took it the rest of the way to 17.
 
 Totals across the whole effort: **2414 passed, 0 failed, 47 skipped**, before
 and after.
 
-The five blockers and how each closed:
+The blockers and how each closed:
 
 | # | Blocker | Fix |
 |---|---|---|
@@ -18,26 +22,62 @@ The five blockers and how each closed:
 | 3 | `TargetConditionals.h:398 #error` | `JIT_PRELUDE`, the six `TARGET_*` macros clang computes as 1 |
 | 4 | C23 `enum : uint64_t` (`malloc/malloc.h:96`) | fork commit `9c5ad5ef` |
 | 5 | `#pragma pack` ignored -> `mach/message.h` size asserts | fork commit `d7e19e8d` |
+| 6 | leading `__attribute__` on a struct member -> `<dirent.h>` unparseable | fork commit `9c221f96` |
+| 7 | `return <void expr>;` in a `void` function (OUR emitter, not c2mir) | `emit_fns.c` |
 
-Rows 4 and 5 are c2mir changes in `rjungemann/mir`; `cmake/mir.cmake` is
-repinned from `90633091` to `9c5ad5ef`. **Repinning needs a fresh build dir** --
+Rows 4, 5 and 6 are c2mir changes in `rjungemann/mir`; `cmake/mir.cmake` is
+repinned from `90633091` to `9c221f96`. Row 7 is a turmeric-side codegen fix.
+
+**Repinning needs a fresh build dir** --
 the cache-variable trap documented in that file is real; verify with
 `git -C <dir>/_deps/mir-src log --oneline -1`.
 
-## What is left, and why it is not this report
+## Correction (2026-07-31): the "none SDK-attributable" claim below was wrong
 
-22 fallbacks remain, none SDK-attributable:
+When this was first marked resolved at 22 fallbacks, the remaining set was
+categorised by grepping each fixture's diagnostics for `undefined item` /
+`error:` / `#error`. Four fixtures -- `io-stdlib-roundtrip`,
+`recursive-linear-borrow-branch`, `tmpfile-linear`, `tmpfile-linear-borrow` --
+reported `undeclared identifier d`, which matched none of those patterns, so
+they were miscounted as "unrelated c2mir strictness".
 
-- **14 are the `__atomic_*` / `__sync_*` family** (`arc-*`, `atomic-*`,
+They were **SDK header failures after all**, and the symptom is why it was
+missed: `<dirent.h>:84` is `__unused long __padding;`, `sys/cdefs.h:172`
+defines `__unused` unconditionally as `__attribute__((__unused__))`, and c2mir
+accepted a member attribute only *after* the declarator. The whole `DIR` struct
+therefore failed to parse -- and because the failure is at the typedef, the
+error surfaces far away as `undeclared identifier d` at every later
+`DIR *d = opendir(...)`, with nothing pointing at the attribute.
+
+Fixed in fork commit `9c221f96` (one call, matching the idiom `declaration`
+already used). Fallbacks **22 -> 18**.
+
+A fifth, `panic-trace`, was correctly categorised as non-SDK but turned out to
+be **our** bug rather than a c2mir gap: `(defn outer [] : ! (inner))` emitted
+`return inner();` inside a `void` function, which C11 6.8.6.4p1 makes a
+constraint violation even when the expression is void-typed. clang accepts it
+as an extension so the cc path never complained. Fixed in `emit_fns.c` (emit
+`(void)(expr); return;`), snapshot regenerated. Fallbacks **18 -> 17**.
+
+The lesson: categorising by grepping for known error spellings silently drops
+whatever spells its failure differently. Read every distinct message, not the
+ones you expect.
+
+## What is left
+
+17 fallbacks remain, and these genuinely are not SDK header failures:
+
+- **16 are the `__atomic_*` / `__sync_*` family** (`arc-*`, `atomic-*`,
   `cancel-*`, `future-*`, `once-basic`, `promise-linear`, `workstealing-*`,
-  `httpd-async-*`, `thread-local-basic`). Deliberate -- see
+  `httpd-async-*`). Deliberate -- see
   `src/jit_engine.c:58-62`. These builtins are type-generic and MIR binds one
   name to one signature, so any single shim writes the wrong width somewhere.
   The cc fallback is the correct behaviour for this class.
-- **The rest are unrelated c2mir strictness gaps** in the emitted C, not header
-  refusals -- e.g. `panic-trace` trips
-  `<tur-jit>: return with a value in function returning void`. Worth its own
-  report if anyone wants those fixtures; it has nothing to do with the SDK.
+- **1 is `thread-local-basic`** -- `_Thread_local`, which c2mir does not
+  support. Same category as the atomics: the spike's `#define __thread`
+  workaround is deliberately absent because collapsing a thread-local to a
+  global trades a clean compile error for silent cross-thread corruption. The
+  cc fallback is the correct behaviour.
 
 ## Lessons worth keeping
 
@@ -81,12 +121,11 @@ advertise, then `#error`-ing or producing an empty conditional:
 |---|---|---|---|
 | `#error TargetConditionals.h: unknown compiler` | 5 | `TargetConditionals.h:398` | `gc-collects-strong-cycle`, `gc-live-cycle-survives`, `hkt-fmap-rc-result-droppable`, `hkt-instance-rc-construct-result`, `weak-breaks-parent-child-cycle` |
 | `empty preprocessor expression` | 3 | `mach/port.h:100`, reached via `mach-o/dyld.h` | `image-hooks-tracked`, `image-reload-hook`, `image-roundtrip` |
-
-**Both surface errors above are now gone; the fixtures still fall back.** The
-table records the symptoms as first observed. As of 2026-07-30 the real
-blockers are one layer down -- `#pragma pack` and C23 enum base types -- see
-"Fix direction 1 was tried" below before acting on this table.
 | `unresolved import: _OSSwapInt16` | 1 | `libkern/_OSByteOrder.h` (`__DARWIN_OS_INLINE`) | `async-echo-server` |
+
+**All three surface errors above are now gone; the table records the symptoms
+as first observed.** The real blockers were one layer down -- see the resolution
+sections at the top of this file before acting on anything below.
 
 That is the original 9 from the parent report; findings 32.2 measures the
 current macOS fallback total at 60 against Linux's 47, i.e. **13** attributable

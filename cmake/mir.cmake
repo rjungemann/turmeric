@@ -57,6 +57,12 @@ include_guard(GLOBAL)
 #     /align/conversion needed no change; the rule added is that a fixed
 #     underlying type IS the enum's type -- never widened or narrowed to fit the
 #     enumerators -- while a plain enum keeps the range-based inference.
+#   9c221f96 -- struct_declaration accepted a GCC attribute only AFTER the
+#     declarator, never leading, though `declaration` already swallows one
+#     there.  <dirent.h>:84 is `__unused long __padding;` and sys/cdefs.h:172
+#     defines __unused unconditionally, so the whole DIR struct failed to parse
+#     -- surfacing far away as "undeclared identifier d" at every later
+#     `DIR *d = opendir(...)` use, with nothing pointing at the attribute.
 # Point TUR_MIR_GIT_REPOSITORY/TAG back at vnmakarov/mir when upstream lands
 # equivalents.
 # CACHE-VARIABLE TRAP: `set(... CACHE ...)` does NOT update an entry that is
@@ -70,8 +76,8 @@ include_guard(GLOBAL)
 # the cache still said vnmakarov/a8ab7c31 while this file said the fork.)
 set(TUR_MIR_GIT_REPOSITORY "https://github.com/rjungemann/mir.git"
     CACHE STRING "MIR repository for the JIT spike (fork carrying the ret + RA fixes)")
-set(TUR_MIR_GIT_TAG "9c5ad5efcd6f3042cb41b42e1d04533ece810afe"
-    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types")
+set(TUR_MIR_GIT_TAG "9c221f9602e0b3f537e60a74982616b4fc53d561"
+    CACHE STRING "MIR commit pin: upstream a8ab7c31 + make_one_ret + try_spilled_reg_mem + aarch64 __uint128_t align + #pragma pack + C23 enum base types + leading member attributes")
 
 include(FetchContent)
 
