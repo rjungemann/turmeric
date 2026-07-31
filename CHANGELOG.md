@@ -2,6 +2,34 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.32.4] -- 2026-07-30
+
+### Fixed
+
+- **Function-typed values now carry a single ABI shape.** Fn-typed values are
+  fat-normalized at return, ascription, and concrete-signature nominal
+  parameter positions, and carrier/fat provenance is tracked through aliases
+  and type joins. This closes a family of miscompiles where a closure passed
+  or returned across a typed boundary produced invalid C or a SIGBUS.
+- **`bind` continuations pair with the selected entry point.** Monadic `bind`
+  at a typed boundary (e.g. `Result`) no longer emits a continuation whose ABI
+  disagrees with the callee it was selected for.
+- **Class-method results into generic positions.** `__inst_` callees with
+  by-value results are no longer treated as carrier producers, fixing invalid
+  C from typeclass method results flowing into generic contexts.
+- **Width-independent container elements.** By-value struct elements in `vec`
+  and narrow struct values in `map` round-trip correctly under both `tur` and
+  `turi` instead of depending on the element's machine width.
+- **Heap-record bindings consult the representation spec.** Concrete heap
+  bindings (including wide lens families) get correctly typed pointer
+  bindings, and transparent int newtypes are treated as their payload.
+
+### Internal
+
+- `repr_of(type, position)` is now the single decision function for value
+  representation, backed by a one-row-per-`TypeKind` table, shadow
+  instrumentation, and a representation-decision ratchet in the test suite.
+
 ## [0.32.3] -- 2026-07-30
 
 ### Added

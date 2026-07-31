@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.3` -- a numeric tower (`Rational`, `Complex`) with `Num`-based operator overloading and `#rat`/`#cx` literals, plus higher-kinded dispatch through dictionary passing.
+**Latest release:** `v0.32.4` -- representation consolidation: function-typed values carry one ABI shape end to end, closing a family of closure/monad/typeclass boundary miscompiles.
 
 ## What
 
