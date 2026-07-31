@@ -111,7 +111,7 @@ report is one missing cell:
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
 | fn value read out of a container element, then called (RESOLVED 2026-07-31, fat-normalization stage 2; archived) | [`fn-payload-in-container-undeclared-temp`](../archive/fn-payload-in-container-undeclared-temp.md) |
 | let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification | `fn-value-carrier-fat-seam-residuals` |
-| closure handle -> `double`-typed element slot (two-types-one-C-name collision; exact only below 2^53) | `concrete-codegen-layout-kind-enumerations-drift` (Finding 2) |
+| closure handle -> `double`-typed element slot (two-types-one-C-name collision; RESOLVED 2026-07-30 upstream, both findings; archived) | [`concrete-codegen-layout-kind-enumerations-drift`](../archive/concrete-codegen-layout-kind-enumerations-drift.md) |
 
 A structural note the last row exposes: the representation decision today is
 not one function but (at least) three hand-maintained `TypeKind` switches in
@@ -119,8 +119,12 @@ not one function but (at least) three hand-maintained `TypeKind` switches in
 `type_has_concrete_codegen_layout` (fails closed: a missing kind silently
 falls back to the carrier), and `append_type_mangle` (failed open to
 `"opaque"` until 2026-07-29) -- and codegen is correct only when all three
-agree. Their drift is a bug generator of its own; collapsing them is
-increment 4 of the consolidation meta-plan.
+agree. Their drift is a bug generator of its own; since 2026-07-30 two CI
+guards ratchet it (`tests/check-typekind-mangle-exhaustive.sh` reads the
+switches' source, `tests/check-monomorph-name-collision.sh` reads what they
+emit), but the guards pin agreement rather than remove the triplication --
+collapsing the three switches into one decision function is increment 4 of
+the consolidation meta-plan.
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
