@@ -119,19 +119,30 @@ rationale (base-ctor/monomorph layout proof) is moot for this class: the
 probe showed the base ctor is never even called for these shapes.  The
 liveness smoke re-anchored to the lens fixture accordingly.
 
-**Final shadow inventory (sweep 6, clean binary): 6 lines.**
-521 -> 80 -> 38 -> 33 -> 6 across the calibration/migration arc; every
-remaining line is one class in one fixture family:
+**Corpus silence achieved for the shadowed sites (2026-07-31): sweep 7 = 0
+lines.**  521 -> 80 -> 38 -> 33 -> 6 -> 0 across the calibration/migration
+arc.  The final 6 (the lens family) fell to a real drift find: a :heap
+record with heap-struct FIELDS (`Line {a: Point}`) fails
+`adt_is_byvalue_product`, so `type_c_name` said int64 while the ctor
+emitter returned the typed pointer -- the two-switches-disagree anatomy at
+yet another pair of sites.  The binding chokepoint now asks the def for
+the pointer spelling directly (`adt_heap_ptr_c_name`).  Getting the guard
+right took two measured corrections, both now encoded in the arm: a
+tyvar-DECLARED binding keeps the erased spelling even when the spec
+resolves it (hoisting the arm above the carrier-ABI early return without
+this churned 140 fixtures), and a BARE parametric ADT base (`Map` with
+its args erased) is the erased container, not a concrete type.  One
+snapshot regenerated (`van-laarhoven-lens-wide-compose`, value-preserving
+`(int64_t)(intptr_t)` casts at dict-call args).  Suite 2449/0; fuzz seed
+149, 250 cases, 0 findings.
 
-| class | count | disposition |
-| --- | --- | --- |
-| `let-bind want=heap-ptr got=carrier-i64` (`Line`) | 6 | rank-2 van-laarhoven functor-lens result bindings (`van-laarhoven-lens-compose` / `-wide-compose`); minimal reproductions (make-struct init, generic-call init) do NOT reproduce, so the path is lens-machinery-specific.  The liveness smoke anchors here; migrating it flips the smoke to asserting corpus SILENCE -- stage 3's completion criterion. |
-
-Remaining candidates after the above: fn-value tail/join classification
-(already alias-aware -- mechanical), method-result carrier production,
-then the long tail of `emit_expr.c` per-arg bridges -- these decide
-representations at positions the two shadowed sites do not cover yet;
-extending shadow coverage to them is the other half of finishing stage 3.
+The liveness smoke GRADUATED to the silence criterion: any repr-shadow
+line on the former lens anchor is now a failure.  The let-bind and
+merge-temp positions are consolidated; what remains of stage 3 is
+EXTENDING shadow coverage to the positions not yet instrumented --
+fn-value tail/join classification (already alias-aware -- mechanical),
+method-result carrier production, then the long tail of `emit_expr.c`
+per-arg bridges -- and then stage 4's registry ratchet.
 
 ### Stage 4 -- registry + ratchet
 

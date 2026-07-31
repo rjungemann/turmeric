@@ -343,8 +343,6 @@ static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init) {
     Type rbt = emit_resolve_type(ctx, binding_ty);
-    if (!type_uses_carrier_abi(rbt))
-        return emit_type_c_name(ctx, binding_ty);
 
     /* Increment 4 stage 3, chokepoint 1 (repr-decision-function-plan): a
      * CONCRETE (tyvar-free) heap container / :heap struct binding is its
@@ -355,11 +353,43 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
      * this changes the declared spelling, never the value.  The first shadow
      * sweep measured 53 sites of this class (`(Vec int)` / `(MutableMap int
      * int)` / `Line` bound as int64_t); a tyvar-elemented heap app keeps the
-     * erased carrier spelling (same bits, unresolved element). */
+     * erased carrier spelling (same bits, unresolved element).  Placed BEFORE
+     * the carrier-ABI early return: the Line family (a :heap record with
+     * heap-struct fields) is NOT carrier-ABI, and the early return would
+     * hand back type_c_name's int64 spelling for it.
+     *
+     * Guarded on the DECLARED type being tyvar-free, exactly like the shadow
+     * check: a tyvar-DECLARED binding inside a generic body keeps the erased
+     * spelling by design even when the active spec resolves it concrete --
+     * without this guard the hoisted arm re-spelled spec-emitted stdlib
+     * bodies (`x : (Map K V)` resolved to `(Map int int)`) and churned 140
+     * fixtures' codegen. */
     if ((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
+        !emit_repr_type_mentions_tyvar(&binding_ty) &&
         !emit_repr_type_mentions_tyvar(&rbt) &&
-        repr_of(&rbt, REPR_POS_LET_BIND) == REPR_HEAP_PTR)
-        return emit_type_c_name(ctx, rbt);
+        /* A BARE parametric ADT base (`Map` with its args erased, standing
+         * for `(Map K V)` in a generic body) is the erased container, not a
+         * concrete type -- its element types are gone, so "mentions tyvar"
+         * cannot see them.  Keep the erased spelling; only a genuinely
+         * non-parametric def (Line, n_type_params == 0) or a concrete app
+         * takes the typed pointer. */
+        !(rbt.kind == TY_ADT && rbt.as.adt_.def &&
+          rbt.as.adt_.def->n_type_params > 0) &&
+        repr_of(&rbt, REPR_POS_LET_BIND) == REPR_HEAP_PTR) {
+        const char *hn = emit_type_c_name(ctx, rbt);
+        /* Lens family: a :heap record whose FIELDS disqualify
+         * adt_is_byvalue_product (heap-struct fields -- `Line {a: Point}`)
+         * c-names to the carrier while its ctor returns the typed pointer.
+         * Ask the def for the pointer spelling directly so the binding
+         * matches the value the ctor actually hands it. */
+        if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT &&
+            rbt.as.adt_.def)
+            hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
+        return hn;
+    }
+
+    if (!type_uses_carrier_abi(rbt))
+        return emit_type_c_name(ctx, binding_ty);
 
     const Expr *p = init;
     /* After KB-021 an ascription emits its inner value unchanged for carrier-ABI

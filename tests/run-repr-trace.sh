@@ -97,19 +97,21 @@ vcheck "agg-unbox traced"                 "^repr-trace bridge agg-unbox tur_adt_
 # shadow instrument is alive; (b) a fully-consolidated shape fires none --
 # proving the spec does not false-positive on clean code.
 #
-# (a) anchors on the rank-2 functor-lens fixture, the one family stage 3's
-# chokepoint 1 left un-migrated (a Line binding spelled int64 inside the
-# lens machinery).  When a later chokepoint migrates it, this smoke fails:
-# that is the signal to move the anchor to the next unmigrated shape -- or,
-# once the corpus log is empty, to flip this check to assert SILENCE
-# (stage 3's completion criterion).  The original anchor (a phantom
-# int-newtype app) stopped firing when the spec learned SC7 transparency --
-# by design, not by migration.
+# (a) GRADUATED to the silence criterion (2026-07-31): the lens family --
+# the last shadowed-site disagreement in the corpus -- was migrated (a
+# :heap record with heap-struct fields now gets its typed-pointer binding
+# via adt_heap_ptr_c_name), emptying the let-bind/merge-temp shadow log
+# corpus-wide.  The check now asserts SILENCE on the former anchor: any
+# repr-shadow line reappearing here means a site regressed away from the
+# protocol (or the spec changed) -- triage it against
+# docs/upcoming/repr-decision-function-plan.md.  History of the anchor:
+# phantom int-newtype app (silenced by the SC7 spec fix) -> lens Line
+# binding (silenced by migration) -> silence.
 strace="$("$TUR" emit-c --emit-abi-trace tests/fixtures/van-laarhoven-lens-compose/input.tur 2>&1 >/dev/null | grep '^repr-shadow' || true)"
-if echo "$strace" | grep -q "^repr-shadow binding let-bind .*want=heap-ptr got=carrier-i64"; then
-  echo "  ok  shadow disagreement fires on unmigrated lens shape"
+if [ -z "$strace" ]; then
+  echo "  ok  shadow log silent on the former lens anchor (stage-3 criterion)"
 else
-  echo "  FAIL shadow disagreement -- expected a 'repr-shadow binding let-bind ... want=heap-ptr got=carrier-i64' line from the lens fixture, got:"
+  echo "  FAIL shadow silence -- the migrated lens fixture fires again:"
   echo "$strace"
   rc=1
 fi

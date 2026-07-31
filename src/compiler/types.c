@@ -2698,6 +2698,17 @@ static const char *heap_ptr_c_name(const char *base) {
     return r;
 }
 
+/* Increment 4 stage 3 (lens family): the typed heap-pointer C name for a
+ * :heap record ADT, built from its def -- `tur_adt_<Name> *`.  Exists
+ * because type_c_name's TY_ADT arm gates the heap-pointer spelling on
+ * adt_is_byvalue_product, which a :heap record with heap-struct FIELDS
+ * fails -- so type_c_name says int64_t while the ctor emitter returns the
+ * typed pointer (the Line-family drift).  A chokepoint that wants the
+ * pointer spelling for such a def asks here. */
+const char *adt_heap_ptr_c_name(const AdtDef *def) {
+    return heap_ptr_c_name(adt_byval_c_name(def));
+}
+
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)

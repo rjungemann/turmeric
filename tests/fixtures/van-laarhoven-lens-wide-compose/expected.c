@@ -4753,7 +4753,7 @@ static int64_t line_hya_hyx_un_undict_un1386(int64_t __dict_1387, int64_t g, int
         __t66->__hkt_dict = __dict_1387;
         __t66->g = g;
         void *__t68 = __t66;
-        __auto_type __ps_69 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t68), s));
+        __auto_type __ps_69 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t68), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
         return (int64_t)(intptr_t)__ps_69;
 }
@@ -4772,7 +4772,7 @@ static int64_t line_hya_hyx_un_undict_un1400(int64_t __dict_1387, int64_t g, int
         __t71->__hkt_dict = __dict_1387;
         __t71->g = g;
         void *__t73 = __t71;
-        __auto_type __ps_74 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t73), s));
+        __auto_type __ps_74 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t73), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
         return (int64_t)(intptr_t)__ps_74;
 }
@@ -4795,7 +4795,7 @@ static int64_t line_hya_hyx_un_undict_un1416(int64_t __dict_1387, int64_t g, int
         __t76->__hkt_dict = __dict_1387;
         __t76->g = g;
         void *__t78 = __t76;
-        __auto_type __ps_79 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t78), s));
+        __auto_type __ps_79 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t78), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
         return (int64_t)(intptr_t)__ps_79;
 }
@@ -4814,7 +4814,7 @@ static int64_t line_hya_hyx_un_undict_un1428(int64_t __dict_1387, int64_t g, int
         __t81->__hkt_dict = __dict_1387;
         __t81->g = g;
         void *__t83 = __t81;
-        __auto_type __ps_84 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t83), s));
+        __auto_type __ps_84 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t83), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
         return (int64_t)(intptr_t)__ps_84;
 }
@@ -4833,7 +4833,7 @@ static int64_t line_hya_hyx_un_undict_un1441(int64_t __dict_1387, int64_t g, int
         __t86->__hkt_dict = __dict_1387;
         __t86->g = g;
         void *__t88 = __t86;
-        __auto_type __ps_89 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t88), s));
+        __auto_type __ps_89 = (line_hya_un_undict_un1358(__dict_1387, (int64_t)(intptr_t)(__t88), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return (int64_t){0};
         return (int64_t)(intptr_t)__ps_89;
 }
@@ -7924,28 +7924,28 @@ int main(int argc, char **argv) {
             /* panic-return-signal: ret ctype unknown; no propagation here */
             __auto_type __ps_222 = (ctor_Line((int64_t)(intptr_t)(__ps_220), (int64_t)(intptr_t)(__ps_221)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            int64_t ln_1385 = (int64_t)(intptr_t)(__ps_222);
+            tur_adt_Line * ln_1385 = (tur_adt_Line *)(intptr_t)(__ps_222);
             (void)ln_1385;
-            __auto_type __ps_223 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1390 }, ln_1385));
+            __auto_type __ps_223 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1390 }, (int64_t)(intptr_t)(ln_1385)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
             printf("%lld\n", (long long)(__ps_223));
             {
-                __auto_type __ps_224 = (over__spec__int64_t_void___int64_t_int64_t((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1402 }, (int64_t)(intptr_t)(__fn_1413), ln_1385));
+                __auto_type __ps_224 = (over__spec__int64_t_void___int64_t_int64_t((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1402 }, (int64_t)(intptr_t)(__fn_1413), (int64_t)(intptr_t)(ln_1385)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                int64_t ln2_1415 = __ps_224;
+                tur_adt_Line * ln2_1415 = (tur_adt_Line *)(intptr_t)(__ps_224);
                 (void)ln2_1415;
-                __auto_type __ps_225 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1418 }, ln2_1415));
+                __auto_type __ps_225 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1418 }, (int64_t)(intptr_t)(ln2_1415)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 printf("%lld\n", (long long)(__ps_225));
                 printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)((tur_adt_Point *)((tur_adt_Line *)(intptr_t)(ln2_1415))->a))->y));
                 printf("%lld\n", (long long)((int64_t)((tur_adt_Point *)(intptr_t)((tur_adt_Point *)((tur_adt_Line *)(intptr_t)(ln2_1415))->b))->x));
             }
             {
-                __auto_type __ps_226 = (set__spec__int64_t_void___int64_t_int64_t((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1430 }, INT64_C(42), ln_1385));
+                __auto_type __ps_226 = (set__spec__int64_t_void___int64_t_int64_t((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1430 }, INT64_C(42), (int64_t)(intptr_t)(ln_1385)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                int64_t ln3_1440 = __ps_226;
+                tur_adt_Line * ln3_1440 = (tur_adt_Line *)(intptr_t)(__ps_226);
                 (void)ln3_1440;
-                __auto_type __ps_227 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1443 }, ln3_1440));
+                __auto_type __ps_227 = (view((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_1443 }, (int64_t)(intptr_t)(ln3_1440)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
                 printf("%lld\n", (long long)(__ps_227));
             }
