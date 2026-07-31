@@ -1,0 +1,25 @@
+;; class-method-result-into-generic -- a typeclass method result (concrete
+;; by-value ADT or struct) composed DIRECTLY into a generic call.  Was
+;; invalid C ("aggregate value used where an integer was expected"): the
+;; spec-call arg path classified every __inst_ callee as a carrier producer
+;; by NAME and deref'd the by-value aggregate as a pointer.  Fixed in
+;; consolidation increment 2 (fn_body_tail_is_carrier_producer knows the
+;; M7 pure-Turmeric by-value instance result).  The let-bound and
+;; monomorphic-helper controls pin the workaround paths too.
+(defdata FzW (FzWc :int))
+(defstruct FzB [a : int])
+(defclass FzT [a] (thru [self : a] : a))
+(definstance FzT [FzW] (thru [self : FzW] : FzW self))
+(definstance FzT [FzB] (thru [self : FzB] : FzB self))
+(defn gid [A] [x : A] : A x)
+
+(defn main [] : int
+  ;; direct composition, ADT receiver, dotted and bare dispatch
+  (println (match (gid (.thru (FzWc -10))) (FzWc x) x))
+  (println (match (gid (thru (FzWc -11))) (FzWc x) x))
+  ;; direct composition, struct receiver
+  (println (.a (gid (thru (FzB -12)))))
+  ;; let-bound control (the old workaround)
+  (let [m (.thru (FzWc -13))]
+    (println (match (gid m) (FzWc x) x)))
+  0)

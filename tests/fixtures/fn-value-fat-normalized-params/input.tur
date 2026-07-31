@@ -1,0 +1,35 @@
+;; fn-value-fat-normalized-params -- stage 1 of
+;; docs/upcoming/fn-value-fat-normalization-plan.md: a NOMINAL thin fn-typed
+;; parameter with a CONCRETE, EFFECT-FREE, non-carrier-safe signature holds a
+;; fat {thunk, env} handle, so a capturing closure through it works.  These
+;; are the by-value rows of the poly-result-hof-capturing-closure-sigbus
+;; crash table, plus the forwarding hop (a normalized param passed into
+;; another normalized slot must pass through, not re-shim).
+(defstruct FzB [a : int])
+
+;; by-value struct RESULT + capturing closure (was: SIGSEGV)
+(defn call-res [f : (fn [] FzB)] : FzB (f))
+
+;; by-value struct ARGUMENT + capturing closure (was: SIGSEGV)
+(defn call-arg [f : (fn [FzB] int)] : int (f (FzB 3)))
+
+;; heap-container RESULT + capturing closure (was: SIGSEGV)
+(defn call-vec [f : (fn [] (Vec float))] : float
+  (:: (vec-get (f) 0) :float))
+
+;; forwarding: a normalized param forwarded into another normalized slot
+(defn fwd [f2 : (fn [] FzB)] : int (.a (call-res f2)))
+
+;; bare (non-capturing) fns still work through the same slots
+(defn mk7 [] : FzB (FzB 7))
+
+(defn main [] : int
+  (let [k 9]
+    (println (.a (call-res (fn [] (FzB k)))))
+    (println (call-arg (fn [b : FzB] (+ (.a b) k))))
+    (println (fwd (fn [] (FzB (+ k 1))))))
+  (let [v (:: (vec-new) (Vec float))]
+    (vec-push! v 7.25)
+    (println (= (call-vec (fn [] v)) 7.25)))
+  (println (.a (call-res mk7)))
+  0)

@@ -3,7 +3,19 @@
 **Severity:** medium (miscompile: clean compile, crashes at run time; a
 carrier-eligible-signature workaround exists).
 
-**Status:** open. Root cause identified and mechanism confirmed (2026-07-29);
+**Status:** PARTIALLY RESOLVED 2026-07-30 -- fn-value-fat-normalization
+stage 1 landed with a narrowed claim
+([docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md)).
+Of the crash table below: the by-value struct arg/result rows, heap-result
+shapes, and the `^linear`/`^borrow` rows are FIXED (concrete effect-free
+signatures are fat-normalized; pinned by
+`tests/fixtures/fn-value-fat-normalized-params/`).  Still crashing, and
+now explicitly out of the narrowed claim: the tyvar arg/result rows
+(arguments arrive thin through the generic/carrier machinery) and the
+effect-row row (the thin convention is load-bearing for the CPS backend).
+The report stays open for those rows.
+
+Root cause identified and mechanism confirmed (2026-07-29);
 the fix is a calling-convention change, not a patch -- see
 [Investigation](#investigation-2026-07-29). The original title said
 "polymorphic-result HOF"; the trigger is materially wider than that, so the
@@ -13,7 +25,7 @@ report as originally filed.
 2026-07-30: `tests/type-fuzz-src.py` found the sibling family for fn-typed
 VALUES (a returned closure through a pass-through param, `^fat` included, or
 an ascription around a let) -- see
-[fn-typed-value-return-ascribe-miscompiles.md](fn-typed-value-return-ascribe-miscompiles.md).
+[fn-typed-value-return-ascribe-miscompiles.md](../archive/fn-typed-value-return-ascribe-miscompiles.md).
 Those repros are additional acceptance tests for the calling-convention plan
 sketched below; the two reports should land together. The plan is now
 written: [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md).

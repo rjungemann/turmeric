@@ -445,33 +445,85 @@ bool type_extract_adt_app(const Type *t, AdtDef **out_def,
     return true;
 }
 
+/* ============================================================================
+ * Increment 4 stage 1 (repr-decision-function-plan): the SIMPLE-KIND
+ * REPRESENTATION TABLE -- the single place a payload-free TypeKind's three
+ * representation answers live:
+ *
+ *     X(kind,  C type name,  mangle token,  has-concrete-codegen-layout)
+ *
+ * The three per-kind switches (`type_c_name`, `append_type_mangle`,
+ * `type_has_concrete_codegen_layout`) each expand these rows with their own
+ * projection, so adding a simple kind is ONE row giving all three answers at
+ * once -- the drift that produced `map-show-keyword-key-raw-int` (TY_SYM
+ * present in type_c_name but absent from the layout switch, silently losing
+ * `(Vec Sym)`'s by-value monomorph to the int64 carrier) and both findings of
+ * `concrete-codegen-layout-kind-enumerations-drift` is structurally closed
+ * for this class of kind.  Kinds whose answer depends on a PAYLOAD (inner
+ * types, defs, arities: TY_PTR_VOID, TY_FN, TY_ADT, TY_APP, the ref family,
+ * ...) keep hand-written arms in each switch; -Wswitch still forces every
+ * enum member to appear in every switch either as a row here or as an arm
+ * there.  tests/check-typekind-mangle-exhaustive.sh reads this table plus
+ * the residual arms and re-checks exhaustiveness, no-default, and mangle
+ * injectivity on every run.
+ *
+ * Row notes:
+ * - TY_SYM is a pointer-sized scalar (`const struct __tur_sym *`) -- as
+ *   concrete a codegen layout as cstr (map-show-keyword-key-raw-int).
+ * - TY_UNKNOWN / TY_TYVAR deliberately SHARE the mangle token "struct" (the
+ *   def-less placeholder convention; see the guard's BARE_OK list) while
+ *   keeping distinct C names.
+ * - TY_ANY / TY_UNION c-name to the two-word `tur_tagged_t` but are NOT
+ *   concrete-layout (a 16-byte by-value field is an ABI change, not a table
+ *   edit); TY_UNION mangles its members, so only TY_ANY is a row here.
+ * - The session-protocol descriptors and other compile-time-only kinds
+ *   c-name to comment-void placeholders; none is ever a runtime value.
+ * ==========================================================================*/
+#define TY_SIMPLE_REPR_ROWS(X) \
+    X(TY_NIL,               "void",                     "nil",               true)  \
+    X(TY_BOOL,              "bool",                     "bool",              true)  \
+    X(TY_INT,               "int64_t",                  "int",               true)  \
+    X(TY_FLOAT,             "double",                   "float",             true)  \
+    X(TY_INT8,              "int8_t",                   "int8",              true)  \
+    X(TY_INT16,             "int16_t",                  "int16",             true)  \
+    X(TY_INT32,             "int32_t",                  "int32",             true)  \
+    X(TY_INT64,             "int64_t",                  "int64",             true)  \
+    X(TY_UINT8,             "uint8_t",                  "uint8",             true)  \
+    X(TY_UINT16,            "uint16_t",                 "uint16",            true)  \
+    X(TY_UINT32,            "uint32_t",                 "uint32",            true)  \
+    X(TY_UINT64,            "uint64_t",                 "uint64",            true)  \
+    X(TY_FLOAT32,           "float",                    "float32",           true)  \
+    X(TY_FLOAT64,           "double",                   "float64",           true)  \
+    X(TY_CSTR,              "const char *",             "cstr",              true)  \
+    X(TY_SYM,               "const struct __tur_sym *", "sym",               true)  \
+    X(TY_SET,               "tur_set_t *",              "set",               true)  \
+    X(TY_ROLE,              "void *",                   "role",              true)  \
+    X(TY_SESSION,           "void *",                   "session",           true)  \
+    X(TY_GENERATOR,         "void *",                   "generator",         true)  \
+    X(TY_NEVER,             "void",                     "never",             false) \
+    X(TY_ANY,               "tur_tagged_t",             "any",               false) \
+    X(TY_STRUCT,            "int64_t",                  "structdef",         false) \
+    X(TY_UNKNOWN,           "/*unknown*/ void",         "struct",            false) \
+    X(TY_TYVAR,             "int64_t",                  "struct",            false) \
+    X(TY_DYNVAR,            "/*dynvar*/ void",          "dynvar",            false) \
+    X(TY_GLOBAL,            "/*global-protocol*/ void", "global",            false) \
+    X(TY_SEND,              "/*session-protocol*/ void", "send",             false) \
+    X(TY_RECV,              "/*session-protocol*/ void", "recv",             false) \
+    X(TY_CLOSE,             "/*session-protocol*/ void", "close",            false) \
+    X(TY_CHOOSE,            "/*session-protocol*/ void", "choose",           false) \
+    X(TY_BRANCH,            "/*session-protocol*/ void", "branch",           false) \
+    X(TY_SESSION_REC,       "/*session-protocol*/ void", "session_rec",      false) \
+    X(TY_TIMEOUT,           "/*session-protocol*/ void", "timeout",          false) \
+    X(TY_SESSION_PAIR,      "void *",                   "session_pair",      false) \
+    X(TY_SESSION_RECV_PAIR, "void *",                   "session_recv_pair", false) \
+    X(TY_SESSION_OFFER,     "int64_t",                  "session_offer",     false)
+
 bool type_has_concrete_codegen_layout(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
-        case TY_NIL:
-        case TY_BOOL:
-        case TY_INT:
-        case TY_FLOAT:
-        case TY_INT8:
-        case TY_INT16:
-        case TY_INT32:
-        case TY_INT64:
-        case TY_UINT8:
-        case TY_UINT16:
-        case TY_UINT32:
-        case TY_UINT64:
-        case TY_FLOAT32:
-        case TY_FLOAT64:
-        case TY_CSTR:
-        /* map-show-keyword-key-raw-int root cause A: `:Sym` is a pointer-sized
-         * scalar (`const struct __tur_sym *`, see type_c_name below and
-         * emit_expr.c) -- as concrete a codegen layout as `cstr`.  Omitting it
-         * here made adt_app_is_byvalue_product((Vec Sym)) false, so type_c_name
-         * fell through to the int64 carrier: `(Vec Sym)` never got a by-value
-         * monomorph, its constrained-instance bodies were never specialized,
-         * and generic collection show bound Show[int] for the element and
-         * printed the raw carrier. */
-        case TY_SYM:
+#define X(k, cn, mg, lay) case k: return lay;
+        TY_SIMPLE_REPR_ROWS(X)
+#undef X
         case TY_PTR_VOID:
         case TY_REF:
         case TY_LREF:
@@ -484,11 +536,7 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_EXCEPTION:
         case TY_CONT:
         case TY_CLONEABLE_CONT:
-        case TY_SET:
         case TY_HANDLER:
-        case TY_SESSION:
-        case TY_ROLE:
-        case TY_GENERATOR:
             return true;
         /* concrete-codegen-layout-kind-enumerations-drift Finding 2 proposed
          * delegating this to the base type, since type_c_name does.  It does
@@ -529,31 +577,18 @@ bool type_has_concrete_codegen_layout(const Type *t) {
          * the map-show-keyword-key-raw-int bug, where an absent TY_SYM printed
          * a raw carrier integer with no diagnostic anywhere.  Listing every
          * kind makes -Wall's -Wswitch flag the next one at the point it is
-         * added.  Each rejection below says why. */
+         * added.  Simple payload-free kinds live in TY_SIMPLE_REPR_ROWS
+         * (expanded above); each remaining rejection below says why.
+         *
+         * TY_ANY / TY_UNION rationale (Finding 2, the `tur_tagged_t` pair):
+         * these DO have a real C type, and it is a TWO-WORD struct -- every
+         * accepted member is one word.  Admitting them is a by-value-ABI
+         * change (a 16-byte field in a monomorph, its own copy/drop
+         * crossings), not a table edit, and there is no way to build one
+         * today to test it: `(Vec any)` type-checks but `vec-of`'s
+         * type-witness binding trips TUR-E0201 inside stdlib/vec.tur.
+         * TY_ANY's row rejects; TY_UNION rejects below. */
 
-        /* Unresolved placeholders: there is no layout to be concrete about yet.
-         * (type_register_adt_app rejects these as type arguments outright.) */
-        case TY_UNKNOWN:
-        case TY_TYVAR:
-            return false;
-        /* structdef-retirement DS-D: no Type ever has kind TY_STRUCT. */
-        case TY_STRUCT:
-            return false;
-        /* Bottom type -- has no values, so nothing is ever stored at this type. */
-        case TY_NEVER:
-            return false;
-        /* Finding 2, the `tur_tagged_t` pair.  These DO have a real C type, and
-         * it is a TWO-WORD struct -- every other member of this list is one
-         * word.  Admitting them is a by-value-ABI change (a 16-byte field in a
-         * monomorph, its own copy/drop crossings), not a table edit, and there
-         * is no way to build one today to test it: `(Vec any)` type-checks but
-         * `vec-of`'s type-witness binding trips TUR-E0201 inside stdlib/vec.tur.
-         * Rejecting keeps them on the int64 carrier, which is what every
-         * existing crossing expects.  Their mangle tokens are distinct, so
-         * admitting one later cannot collide with a one-word kind. */
-        case TY_ANY:
-        case TY_UNION:
-            return false;
         /* type_c_name gives both of these the plain int64_t carrier, so a
          * by-value monomorph over one would have exactly the carrier's layout
          * and buy nothing but an extra C name.  TY_INTERSECTION is documented
@@ -562,35 +597,18 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_REC:
         case TY_INTERSECTION:
             return false;
+        /* Two-word tagged union (see the TY_ANY note above). */
+        case TY_UNION:
+            return false;
         /* Compile-time-only kinds: type_c_name gives each a comment-void or
          * erased placeholder, so none is ever the type of a runtime value.
          * (Rows are eliminated before codegen; quantified types are erased at
-         * instantiation; dynvar is an elaboration marker.) */
+         * instantiation.) */
         case TY_TYPECLASS:
         case TY_TYPECLASS_INST:
         case TY_FORALL:
         case TY_EXISTS:
         case TY_TYPEROW:
-        case TY_DYNVAR:
-        case TY_GLOBAL:
-            return false;
-        /* Session protocol descriptors: type-level states of a channel, erased
-         * at codegen (a "session-protocol" comment-void).  The endpoint that DOES
-         * carry a value is TY_SESSION, accepted above. */
-        case TY_SEND:
-        case TY_RECV:
-        case TY_CLOSE:
-        case TY_CHOOSE:
-        case TY_BRANCH:
-        case TY_SESSION_REC:
-        case TY_TIMEOUT:
-            return false;
-        /* SS1/SS2 internal result types of make-session / recv / offer.  They
-         * exist only between the call and its destructuring pattern and are
-         * never written by a user, so they never reach a type-argument slot. */
-        case TY_SESSION_PAIR:
-        case TY_SESSION_RECV_PAIR:
-        case TY_SESSION_OFFER:
             return false;
     }
     return false;
@@ -701,6 +719,68 @@ bool type_is_transparent_int_newtype(Type t) {
     return false;
 }
 
+/* fn-value-fat-normalization stage 1: true when a DECLARED nominal fn-typed
+ * parameter type is normalized onto the fat {thunk, env} protocol -- every
+ * value flowing into such a parameter is a fat handle (bare fns shimmed via
+ * EX_FN_TO_FAT at the call site) and every invoke of it dispatches through
+ * slot 0.  This is THE shared decision: the elaborator's call-site shim
+ * (elab_call.c) and the emitter's invoke dispatch (emit_expr.c ER2) both
+ * consult it, so the two sides cannot disagree.  Deliberately excluded:
+ *   - cfnptr    -- a raw C function pointer must stay thin (extern-c ABI);
+ *   - variadic  -- no shim family;
+ *   - arity > 5 -- outside the __tur_fatshim0..5 family (mirrors the ^fat
+ *                  auto-shim bound; such params keep today's thin protocol).
+ * Carrier-eligible params never reach this predicate: elab_fns retypes them
+ * to TY_PTR_VOID (is_poly_fn) before any caller asks.  ^fat params are fat
+ * by their own flag; this predicate makes the NOMINAL remainder match them.
+ *
+ * Stage-1 measurement narrowed the claim (the CPS-graduation rule: when the
+ * flip disagrees with the estimate, narrow the new path's claim rather than
+ * patch the misses).  Two further exclusions, both measured 2026-07-30:
+ *   - effect rows -- an effectful callback's thin convention is LOAD-BEARING
+ *     for the CPS backend (17 effect/cps fixtures regress behaviorally when
+ *     normalized: colored fn values have their own twin/trampoline calling
+ *     convention this predicate must not override);
+ *   - named tyvars anywhere in the signature -- a tyvar-sig param's
+ *     arguments arrive through the generic/carrier machinery as thin
+ *     pointers the call-site shim cannot see (10 hkt-cata / van-laarhoven
+ *     fixtures regress).  Normalizing those needs the carrier-side work
+ *     (meta-plan increments 2+), not a param-side rule.
+ * What remains normalized -- CONCRETE, EFFECT-FREE, non-carrier-safe
+ * signatures (by-value aggregate args/results, heap-container results) --
+ * is exactly the poly-result crash table's by-value rows. */
+static bool fn_sig_type_has_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return fn_sig_type_has_tyvar(t->as.app.fn) ||
+               fn_sig_type_has_tyvar(t->as.app.arg);
+    if (t->kind == TY_FN) {
+        if (fn_sig_type_has_tyvar(t->as.fn.result_full_type)) return true;
+        if (t->as.fn.arg_full_types)
+            for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                if (fn_sig_type_has_tyvar(t->as.fn.arg_full_types[i]))
+                    return true;
+    }
+    return false;
+}
+
+bool fn_param_type_is_fat_normalized(const Type *t) {
+    if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
+          !t->as.fn.is_variadic && t->as.fn.arity <= 5))
+        return false;
+    if (t->as.fn.effect_row) return false;
+    if (t->as.fn.result_kind == TY_TYVAR) return false;
+    if (fn_sig_type_has_tyvar(t->as.fn.result_full_type)) return false;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+        if (t->as.fn.arg_kinds[i] == TY_TYVAR) return false;
+        if (t->as.fn.arg_full_types &&
+            fn_sig_type_has_tyvar(t->as.fn.arg_full_types[i]))
+            return false;
+    }
+    return true;
+}
+
 /* Append `name` folded to a valid C-identifier component: any non-[A-Za-z0-9_]
  * byte becomes '_'.  Mirrors mangle_field_name (emit_core.c) and
  * adt_byval_c_name so a monomorph name built here agrees, byte for byte, with
@@ -738,22 +818,17 @@ static void append_u32(Buf *b, uint32_t n) {
 
 static void append_type_mangle(Buf *b, Type t) {
     switch (t.kind) {
-        case TY_NIL:      buf_puts(b, "nil"); break;
-        case TY_BOOL:     buf_puts(b, "bool"); break;
-        case TY_INT:      buf_puts(b, "int"); break;
-        case TY_FLOAT:    buf_puts(b, "float"); break;
-        case TY_INT8:     buf_puts(b, "int8"); break;
-        case TY_INT16:    buf_puts(b, "int16"); break;
-        case TY_INT32:    buf_puts(b, "int32"); break;
-        case TY_INT64:    buf_puts(b, "int64"); break;
-        case TY_UINT8:    buf_puts(b, "uint8"); break;
-        case TY_UINT16:   buf_puts(b, "uint16"); break;
-        case TY_UINT32:   buf_puts(b, "uint32"); break;
-        case TY_UINT64:   buf_puts(b, "uint64"); break;
-        case TY_FLOAT32:  buf_puts(b, "float32"); break;
-        case TY_FLOAT64:  buf_puts(b, "float64"); break;
-        case TY_CSTR:     buf_puts(b, "cstr"); break;
-        case TY_SYM:      buf_puts(b, "sym"); break;
+        /* Simple payload-free kinds: token comes from the shared repr table
+         * (TY_SIMPLE_REPR_ROWS), the single place their three representation
+         * answers live.  TY_UNKNOWN / TY_TYVAR share the "struct" token by
+         * design: a monomorph over either placeholder is the int64 carrier
+         * instance, and routing both to one token keeps the def-emitter and
+         * the call site agreed regardless of which placeholder representation
+         * the elaborator left behind (the producer inconsistency that
+         * surfaced the baseline-ctor-option-struct-mangling bug). */
+#define X(k, cn, mg, lay) case k: buf_puts(b, mg); break;
+        TY_SIMPLE_REPR_ROWS(X)
+#undef X
         /* The pointer/reference family: type_eq discriminates these by their
          * INNER type, so the mangling has to as well -- a flat "ref" token made
          * `(Box (ref int))` and `(Box (ref float))` one C name. */
@@ -788,16 +863,6 @@ static void append_type_mangle(Buf *b, Type t) {
         case TY_ADT:
             append_c_ident_mangled(b, t.as.adt_.def && t.as.adt_.def->name
                                           ? t.as.adt_.def->name : "adt");
-            break;
-        case TY_UNKNOWN:
-        case TY_TYVAR:
-            /* Unresolved placeholders share the def-less TY_STRUCT carrier
-             * convention: a monomorph over them is the int64 carrier instance.
-             * Route them to the SAME "struct" token so the def-emitter and the
-             * call site agree regardless of which placeholder representation the
-             * elaborator happened to leave behind (the producer inconsistency
-             * that surfaced the baseline-ctor-option-struct-mangling bug). */
-            buf_puts(b, "struct");
             break;
         case TY_APP: {
             /* structdef-retirement DS-D: no struct-headed app forms, so a mangled
@@ -851,7 +916,6 @@ static void append_type_mangle(Buf *b, Type t) {
             break;
         /* type_eq treats every TY_SET as equal (no payload comparison), so one
          * token is injective here. */
-        case TY_SET:             buf_puts(b, "set");            break;
         case TY_CONT:
             buf_puts(b, "cont"); buf_putc(b, '_');
             append_kind_mangle(b, t.as.cont.returns);
@@ -864,7 +928,6 @@ static void append_type_mangle(Buf *b, Type t) {
             buf_puts(b, "exception"); buf_putc(b, '_');
             append_kind_mangle(b, t.as.exn.payload_type);
             break;
-        case TY_GENERATOR:       buf_puts(b, "generator");       break;
         case TY_HANDLER:
             /* type_eq also consults handled_row, which has no short spelling
              * here; value/result kinds are the part that changes the C-visible
@@ -875,8 +938,6 @@ static void append_type_mangle(Buf *b, Type t) {
             buf_putc(b, '_');
             append_kind_mangle(b, t.as.handler_.result_kind);
             break;
-        case TY_ROLE:            buf_puts(b, "role");            break;
-        case TY_SESSION:         buf_puts(b, "session");         break;
         /* Finding 2 of the same report: injectivity is required against
          * `type_eq`, and `type_register_adt_app` mints a monomorph name for ANY
          * type argument that is not a bare tyvar -- the concrete-layout list
@@ -888,8 +949,6 @@ static void append_type_mangle(Buf *b, Type t) {
          * The kinds below whose `type_eq` compares nothing (it falls through to
          * `return 1` -- any two are the same type) keep a bare token, which is
          * injective by that definition. */
-        /* type_eq: `return 1` -- all `any` are one type. */
-        case TY_ANY:             buf_puts(b, "any");             break;
         /* type_eq compares union/intersection members structurally. */
         case TY_UNION:
             buf_puts(b, "union");
@@ -929,7 +988,6 @@ static void append_type_mangle(Buf *b, Type t) {
                 append_type_mangle(b, *t.as.contract_.base_type);
             }
             break;
-        case TY_NEVER:           buf_puts(b, "never");           break;
         /* type_eq compares forall/exists on n_vars, the constraint set and the
          * body (bound-variable names are not significant). */
         case TY_FORALL:
@@ -992,22 +1050,6 @@ static void append_type_mangle(Buf *b, Type t) {
                     buf_puts(b, "none");
             }
             break;
-        case TY_DYNVAR:          buf_puts(b, "dynvar");          break;
-        case TY_GLOBAL:          buf_puts(b, "global");          break;
-        /* Session protocol states (SS0b-SS5). */
-        case TY_SEND:               buf_puts(b, "send");              break;
-        case TY_RECV:               buf_puts(b, "recv");              break;
-        case TY_CLOSE:              buf_puts(b, "close");             break;
-        case TY_CHOOSE:             buf_puts(b, "choose");            break;
-        case TY_BRANCH:             buf_puts(b, "branch");            break;
-        case TY_SESSION_REC:        buf_puts(b, "session_rec");       break;
-        case TY_TIMEOUT:            buf_puts(b, "timeout");           break;
-        case TY_SESSION_PAIR:       buf_puts(b, "session_pair");      break;
-        case TY_SESSION_RECV_PAIR:  buf_puts(b, "session_recv_pair"); break;
-        case TY_SESSION_OFFER:      buf_puts(b, "session_offer");     break;
-        /* structdef-retirement DS-D: no Type ever has kind TY_STRUCT.  Listed
-         * only to keep the switch exhaustive. */
-        case TY_STRUCT:          buf_puts(b, "structdef");       break;
     }
 }
 
@@ -2713,6 +2755,17 @@ static const char *heap_ptr_c_name(const char *base) {
     return r;
 }
 
+/* Increment 4 stage 3 (lens family): the typed heap-pointer C name for a
+ * :heap record ADT, built from its def -- `tur_adt_<Name> *`.  Exists
+ * because type_c_name's TY_ADT arm gates the heap-pointer spelling on
+ * adt_is_byvalue_product, which a :heap record with heap-struct FIELDS
+ * fails -- so type_c_name says int64_t while the ctor emitter returns the
+ * typed pointer (the Line-family drift).  A chokepoint that wants the
+ * pointer spelling for such a def asks here. */
+const char *adt_heap_ptr_c_name(const AdtDef *def) {
+    return heap_ptr_c_name(adt_byval_c_name(def));
+}
+
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)
@@ -2927,6 +2980,27 @@ bool type_is_wide_byval_adt(Type t) {
     return false;
 }
 
+/* Increment 3 (representation-consolidation meta-plan): the CONTAINER-ELEMENT
+ * boxing predicate.  True when `t` is a non-heap by-value ADT product of ANY
+ * width -- the class of element that must be heap-boxed when stored into a
+ * heap container (Vec slot, HAMT value) and deref-unboxed on read-back.
+ *
+ * This deliberately drops the > 8-byte width fork of type_is_wide_byval_adt
+ * for container slots: a NARROW (<= 8 byte) by-value struct has no other
+ * working slot representation -- the plain concrete->carrier bridge spills it
+ * to a stack local whose address dangles once the frame returns, and the read
+ * side had no un-spill at all (vec-byvalue-struct-element-invalid-c).  Width
+ * still matters in positions with a paired inline layout (monomorph fields,
+ * B4 closure params); those keep type_is_wide_byval_adt.  Every container
+ * BOXING site, its ownership probe (tur-wide-byval? / tur-vec-elem-wide?
+ * folds), and the read-back recovery must consult THIS predicate so the four
+ * decisions cannot drift. */
+bool type_is_boxed_container_elem(Type t) {
+    if (t.kind != TY_ADT || !t.as.adt_.def) return false;
+    if (t.as.adt_.def->is_heap) return false;
+    return adt_byval_value_size_bytes(t.as.adt_.def) > 0;
+}
+
 /* Parametric-by-value: app-aware sibling of adt_byval_pass_by_ptr.  A concrete
  * flat-product ADT-app (e.g. `(Pair2 int float)`) is laid out like its
  * monomorph aggregate, so it adopts the same >16-byte pass-by-pointer
@@ -3043,22 +3117,12 @@ const char *type_c_name(Type t) {
     if (t.c_num_spelling == CNUM_SIZE_T)    return "size_t";
     if (t.c_num_spelling == CNUM_PTRDIFF_T) return "ptrdiff_t";
     switch (t.kind) {
-        case TY_UNKNOWN: return "/*unknown*/ void";
-        case TY_NIL:     return "void";
-        case TY_BOOL:    return "bool";
-        case TY_INT:     return "int64_t";
-        case TY_FLOAT:   return "double";
-        case TY_INT8:    return "int8_t";
-        case TY_INT16:   return "int16_t";
-        case TY_INT32:   return "int32_t";
-        case TY_INT64:   return "int64_t";
-        case TY_UINT8:   return "uint8_t";
-        case TY_UINT16:  return "uint16_t";
-        case TY_UINT32:  return "uint32_t";
-        case TY_UINT64:  return "uint64_t";
-        case TY_FLOAT32: return "float";
-        case TY_FLOAT64: return "double";
-        case TY_CSTR:    return "const char *";
+        /* Simple payload-free kinds: the C name comes from the shared repr
+         * table (TY_SIMPLE_REPR_ROWS), the single place their three
+         * representation answers live. */
+#define X(k, cn, mg, lay) case k: return cn;
+        TY_SIMPLE_REPR_ROWS(X)
+#undef X
         case TY_PTR_VOID:
             /* ptr-generic-parameterised-type: a typed ptr<T> lowers to `T *`.
              * The legacy untyped ptr<void> (inner == NULL) stays `void *`. */
@@ -3080,7 +3144,6 @@ const char *type_c_name(Type t) {
              * qualifier (e.g. a `const void *userData` C-callback slot). */
             if (t.as.ptr.is_const) return "const void *";
             return "void *";
-        case TY_NEVER:   return "void";  /* never type has no values, use void */
         case TY_FN: {
             /* typed-c-abi-function-pointers: a cfnptr lowers to the concrete
              * bare `R (*)(A...)` typedef -- it is a raw C function pointer with
@@ -3166,12 +3229,6 @@ const char *type_c_name(Type t) {
                 return adt_byval_c_name(t.as.adt_.def);
             }
             return "int64_t";
-        /* Phase G2: unresolved type variable — treated as int64_t at codegen level.
-         * TY_STRUCT is a retired Type.kind (unreachable): share the int64_t
-         * carrier convention its def-less/opaque arm used to emit. */
-        case TY_STRUCT:
-        case TY_TYVAR:
-            return "int64_t";
         /* Phase HKT-P1: Type application — generic struct values with
          * field-level type variables lower to the same concrete C struct as
          * their head constructor; other applications stay opaque int64_t. */
@@ -3202,12 +3259,6 @@ const char *type_c_name(Type t) {
         /* Phase HKT-P2: Recursive types — opaque int64_t handle in v1 */
         case TY_REC:
             return "int64_t";
-        /* Phase X3: Set literal — sorted int64_t array */
-        case TY_SET:
-            return "tur_set_t *";
-        /* SYM0: interned runtime symbol — pointer into static .rodata */
-        case TY_SYM:
-            return "const struct __tur_sym *";
         /* Phase HRT0: Quantified types — no runtime representation in HRT0 */
         case TY_FORALL:
         case TY_EXISTS:
@@ -3218,9 +3269,6 @@ const char *type_c_name(Type t) {
         /* IT2: Intersection types — opaque int64_t placeholder (full codegen in IT4) */
         case TY_INTERSECTION:
             return "int64_t";
-        /* IT4: any — tagged union struct (same as TY_UNION; tag is TypeKind of stored value) */
-        case TY_ANY:
-            return "tur_tagged_t";
         /* ET3/FH1: Handler value — pointer to an effect-keyed dispatch table.
          * (Was the type-only tur_handler_t struct before first-class handlers;
          * handler values are now created/passed/applied as tur_handler_table_t*.) */
@@ -3234,33 +3282,6 @@ const char *type_c_name(Type t) {
         /* SS0a/SS1: Session channel endpoints lower to void* in C until SS2
          * defines the TurChannel struct. Protocol descriptor types are erased
          * and never appear as C values. */
-        case TY_SESSION:
-            return "void *";
-        case TY_SEND:
-        case TY_RECV:
-        case TY_CLOSE:
-        case TY_CHOOSE:
-        case TY_BRANCH:
-        case TY_SESSION_REC:
-        case TY_TIMEOUT:
-            return "/*session-protocol*/ void";
-        case TY_SESSION_PAIR:
-            return "void *";  /* session pair lowers to TurChannel pointer */
-        case TY_SESSION_RECV_PAIR:
-            return "void *";  /* recv-pair lowers to TurChannel pointer */
-        case TY_SESSION_OFFER:
-            return "int64_t";
-        /* SS5: Global protocol types -- compile-time only; erased to void* at runtime */
-        case TY_GLOBAL:
-            return "/*global-protocol*/ void";
-        case TY_ROLE:
-            return "void *";   /* role endpoint -- NULL placeholder in SS5 */
-        /* DV0: TY_DYNVAR is an elaboration-time marker; it has no C runtime representation */
-        case TY_DYNVAR:
-            return "/*dynvar*/ void";
-        /* GF1: Generator is a heap-allocated state-machine struct; passes as void* */
-        case TY_GENERATOR:
-            return "void *";
         /* Variadic HKT rows: compile-time only -- a row should be eliminated
          * before codegen (it only ever appears as a type argument). If one
          * reaches here it has no runtime representation; erase to void with a
@@ -4517,4 +4538,148 @@ const char *type_struct_value_c_name(Type t) {
      * (no struct-headed app has a concrete by-value layout); the generic
      * type_c_name handles every remaining case (ADT monomorphs included). */
     return type_c_name(t);
+}
+
+/* ============================================================================
+ * Increment 4 stage 2 (repr-decision-function-plan): repr_of -- the intended
+ * representation protocol per (type, position).  See types.h for the contract:
+ * in stage 2 this is consulted only by shadow checks under --emit-abi-trace;
+ * a disagreement with a site's actual decision is a logged finding, never a
+ * behavior change.  The rules below are the consolidated protocol increments
+ * 1-3 established:
+ *
+ *   - scalars are their bits in every position;
+ *   - heap structs/ADTs/containers are heap pointers everywhere (the carrier
+ *     round trip is lossless);
+ *   - non-heap by-value products are real aggregates at param/result/binding/
+ *     field positions, and HEAP-BOXED (any width) in container element slots
+ *     and generic carrier sinks (increment 3);
+ *   - fn values: cfnptr is a bare C pointer; effect-row'd, tyvar-signature,
+ *     variadic, or arity>5 signatures keep the thin convention (the narrowed
+ *     stage-1 claim); every other fn value is a fat handle (stages 1-2);
+ *   - tyvars and compile-time-only kinds are the erased int64 carrier.
+ * ==========================================================================*/
+/* True when an app spine mentions an unresolved or deliberately-erased
+ * argument (a tyvar, an unknown, or an existential package type) -- the
+ * cases whose container spelling stays the erased int64 carrier. */
+static bool repr_app_mentions_erased_arg(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_EXISTS)
+        return true;
+    if (t->kind == TY_APP)
+        return repr_app_mentions_erased_arg(t->as.app.fn) ||
+               repr_app_mentions_erased_arg(t->as.app.arg);
+    return false;
+}
+
+const char *repr_form_name(ReprForm f) {
+    switch (f) {
+        case REPR_SCALAR_BITS: return "scalar-bits";
+        case REPR_HEAP_PTR:    return "heap-ptr";
+        case REPR_BYVAL_AGG:   return "byval-agg";
+        case REPR_BOXED_AGG:   return "boxed-agg";
+        case REPR_CARRIER_I64: return "carrier-i64";
+        case REPR_FAT_HANDLE:  return "fat-handle";
+        case REPR_THIN_FN:     return "thin-fn";
+    }
+    return "?";
+}
+
+const char *repr_position_name(ReprPosition pos) {
+    switch (pos) {
+        case REPR_POS_PARAM:          return "param";
+        case REPR_POS_RESULT:         return "result";
+        case REPR_POS_LET_BIND:       return "let-bind";
+        case REPR_POS_CONTAINER_ELEM: return "container-elem";
+        case REPR_POS_STRUCT_FIELD:   return "struct-field";
+        case REPR_POS_CARRIER_SINK:   return "carrier-sink";
+    }
+    return "?";
+}
+
+ReprForm repr_of(const Type *t, ReprPosition pos) {
+    if (!t) return REPR_CARRIER_I64;
+
+    /* Contracts share their base type's representation (type_c_name rule). */
+    if (t->kind == TY_CONTRACT)
+        return t->as.contract_.base_type
+                   ? repr_of(t->as.contract_.base_type, pos)
+                   : REPR_CARRIER_I64;
+
+    /* fn values (the increment-1 protocol). */
+    if (t->kind == TY_FN) {
+        if (t->as.fn.cfnptr) return REPR_THIN_FN;
+        if (t->as.fn.boxed) return REPR_FAT_HANDLE;
+        if (pos == REPR_POS_CARRIER_SINK) return REPR_CARRIER_I64;
+        return fn_param_type_is_fat_normalized(t) ? REPR_FAT_HANDLE
+                                                  : REPR_THIN_FN;
+    }
+
+    /* Erased/unresolved: the int64 carrier in every position. */
+    if (t->kind == TY_TYVAR || t->kind == TY_UNKNOWN || t->kind == TY_FORALL)
+        return REPR_CARRIER_I64;
+
+    /* An existential package is a heap-boxed (value, dict) pair -- a heap
+     * pointer wherever it travels (first sweep: 52 sites, all pointer-
+     * declared; the initial carrier spelling here was the spec hole). */
+    if (t->kind == TY_EXISTS)
+        return REPR_HEAP_PTR;
+
+    /* `any` / union values are the two-word tur_tagged_t -- a real by-value
+     * aggregate at direct positions; the erased carrier at generic sinks and
+     * container slots (the layout switch deliberately rejects them from
+     * by-value monomorph fields -- see the TY_ANY note there). */
+    if (t->kind == TY_ANY || t->kind == TY_UNION) {
+        if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK ||
+            pos == REPR_POS_STRUCT_FIELD)
+            return REPR_CARRIER_I64;
+        return REPR_BYVAL_AGG;
+    }
+
+    /* Heap-represented nominal/parametric types: the pointer IS the value.
+     * A heap app with UNRESOLVED (tyvar) or EXISTENTIAL arguments -- `(Vec
+     * A)` inside a generic body, `(Vec (exists ...))` whose element is a
+     * deliberately-erased package (the vec-get-existential-element design)
+     * -- is the SAME pointer spelled as the erased carrier (int64_t); report
+     * the erased spelling so the shadow log measures real seams, not the
+     * lossless pointer/carrier round trip (first sweep: 431 of 521 lines
+     * were this spelling distinction; the exists-element rows surfaced in
+     * the third). */
+    if (type_is_heap_struct(*t) || type_is_heap_adt(*t)) {
+        if (t->kind == TY_APP && repr_app_mentions_erased_arg(t))
+            return REPR_CARRIER_I64;
+        return REPR_HEAP_PTR;
+    }
+
+    /* A transparent int newtype (a PARAMETRIC single-ctor record whose one
+     * field is a concrete int -- `(defstruct Schema [A] (raw :int))`) is its
+     * int64 payload in every position: the SC7 rule type_c_name applies, and
+     * the reason `(:: (ArrShadow 7) (ArrShadow int))` emits no ctor call at
+     * all.  Fourth-sweep finding: the byval-agg prediction for these was a
+     * spec hole, not a site seam. */
+    if (type_is_transparent_int_newtype(*t))
+        return REPR_SCALAR_BITS;
+
+    /* Non-heap by-value products (nominal ADT or concrete parametric app):
+     * real aggregates in direct positions; boxed in container slots and
+     * generic sinks (increment 3, width-independent). */
+    bool byval_product =
+        (t->kind == TY_ADT && t->as.adt_.def &&
+         adt_is_byvalue_product(t->as.adt_.def)) ||
+        (t->kind == TY_APP && adt_app_is_byvalue_product(*t));
+    if (byval_product) {
+        if (pos == REPR_POS_CONTAINER_ELEM || pos == REPR_POS_CARRIER_SINK)
+            return REPR_BOXED_AGG;
+        return REPR_BYVAL_AGG;
+    }
+
+    /* Non-product ADTs / non-concrete apps ride the carrier. */
+    if (t->kind == TY_ADT || t->kind == TY_APP)
+        return REPR_CARRIER_I64;
+
+    /* Everything else with a concrete layout is a one-word scalar (int,
+     * float, bool, cstr, sym, ptr leaves, refs, handles...); the rest is the
+     * erased carrier (compile-time-only kinds, unions, placeholders). */
+    if (type_has_concrete_codegen_layout(t)) return REPR_SCALAR_BITS;
+    return REPR_CARRIER_I64;
 }

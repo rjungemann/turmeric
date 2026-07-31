@@ -134,39 +134,37 @@ CROSSING_TAGS = {"through", "deep", "let", "ascribe", "gid", "fat_hof",
 
 def known_bug_slug(tags):
     """Return the docs/reported slug a leg shape reproduces, or None."""
-    # A fn-typed VALUE (returned closure) across any further boundary --
-    # pass-through return, ^fat pass-through, ascribe-around-let, nested fat
-    # HOF -- miscompiles; only direct consume/invoke works.
-    if "thunk" in tags and tags & CROSSING_TAGS:
-        return "fn-typed-value-return-ascribe-miscompiles"
-    # Thin (non-^fat) fn-typed param + capturing closure crashes whenever the
-    # fn signature is not carrier-safe; by-value results are one such shape,
-    # heap containers (Vec) another.
-    if "thin_hof" in tags and tags & (BYVALUE_WRAPPERS
-                                      | {"vec", "vec_heap_struct"}):
-        return "poly-result-hof-capturing-closure-sigbus"
+    # (Retired 2026-07-30 by fn-value-fat-normalization stage 2: fn-typed
+    # VALUES survive pass-through returns, ascribe-around-let, and nested
+    # fat HOFs now -- thunk legs are back in the full crossing pool.)
+    # (fn-value-carrier-fat-seam-residuals: RESOLVED 2026-07-31 -- the tail
+    # walkers resolve let-ALIASES to their origin (a carrier-param alias
+    # converts via poly-to-fat instead of being thin-shimmed or skipped), the
+    # if unifier admits carrier-vs-boxed-fn joins by inserting the conversion
+    # at the join, and an ascription of a carrier param to its own fn type is
+    # a no-op assertion -- and archived; thunk through/deep legs are back in
+    # the full crossing pool.)
+    # (Retired 2026-07-30 by fn-value-fat-normalization stage 1: thin fn
+    # params with CONCRETE non-carrier-safe signatures -- by-value and heap
+    # results/args -- are fat-normalized now, so those thin_hof shapes are
+    # back in the default pool.  The tyvar-result rule below remains: tyvar
+    # signatures are excluded from the narrowed stage-1 claim.)
     # A capturing closure through a tyvar-result HOF ((fn [] R) : R) crashes
     # for every wrapper -- same report, widest trigger.
     if "tyvar_run" in tags:
         return "poly-result-hof-capturing-closure-sigbus"
-    # `bind` over Result through a typed (Result A B) boundary segfaults or
-    # emits invalid C.
-    if "res_bind" in tags:
-        return "result-monad-bind-typed-boundary-miscompiles"
-    # A by-value (non-:heap) struct as a Vec element emits invalid C on the
-    # read side ('request for member in something not a structure'), with or
-    # without the documented `(:: (vec-get v i) T)` ascription idiom.  Found
-    # by this harness's probe phase, 2026-07-30.
-    if "vec_byvalue_struct" in tags:
-        return "vec-byvalue-struct-element-invalid-c"
-    # A typeclass method result (by-value ADT/struct) composed DIRECTLY into
-    # a generic call emits invalid C; a let-bind in between is fine.  The
-    # x_class_thru -> x_gid composition can produce exactly that.  Found by
-    # this harness, seed 11 case 93, 2026-07-30.
-    if "class_thru" in tags and "gid" in tags:
-        return "class-method-result-into-generic-invalid-c"
-    if "class_extract" in tags and "gid" in tags:
-        return "class-method-result-into-generic-invalid-c"
+    # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31 by
+    # consolidation increment 2 -- continuation-wrapper ABI paired with the
+    # selected entry point + ascription-aware carrier-type recovery -- and
+    # archived; bind legs are in the DEFAULT generation rotation now.)
+    # (vec-byvalue-struct-element-invalid-c: RESOLVED 2026-07-31 by
+    # consolidation increment 3 -- any-width by-value products are heap-boxed
+    # into container slots (push-side escaping bridge, read-side deref-unbox,
+    # ownership probes in lockstep via type_is_boxed_container_elem) -- and
+    # archived; vec_box_byvalue wrappers are in the DEFAULT pool now.)
+    # (class-method-result-into-generic-invalid-c: RESOLVED 2026-07-31 by
+    # consolidation increment 2 -- the carrier-producer classifier now knows
+    # M7 by-value instance results -- and archived; rows retired.)
     return None
 
 
@@ -183,12 +181,9 @@ KNOWN_PROBES = [
      "(defn call [f : (fn [] FzB)] : FzB (f))\n"
      "(defn main [] : int\n"
      "  (let [k 7] (println (.a (call (fn [] (FzB k))))))\n  0)\n"),
-    ("result-monad-bind-typed-boundary-miscompiles",
-     "(defn f [n : int] : (Result int int) (if (= n 0) (err 7) (ok n)))\n"
-     "(defn g [n : int] : (Result int int)\n"
-     "  (bind (f n) (fn [x] (ok (* x 2)))))\n"
-     "(defn main [] : int\n"
-     "  (let [r (g 5)] (println (if (ok? r) (ok-val r) -1)))\n  0)\n"),
+    # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
+    # archived; probe retired -- pinned by
+    # tests/fixtures/result-monad-bind-typed-boundary/.)
     # Faithful to the report: it takes the stdlib Cons (a defstruct).  The
     # same shape over a local parametric defdata checks AND runs clean, so
     # the trigger is narrower than "generic + type-app + closure return".
@@ -197,32 +192,21 @@ KNOWN_PROBES = [
      "  (fn [] (tcons x (tnil))))\n"
      "(defn use [A] [xs : (Cons A)] : int 0)\n"
      "(defn main [] : int (use ((pure 1))))\n"),
-    ("vec-byvalue-struct-element-invalid-c",
-     "(defstruct FzB [a : int])\n"
-     "(defn main [] : int\n"
-     "  (let [v (:: (vec-new) (Vec FzB))]\n"
-     "    (vec-push! v (FzB 31))\n"
-     "    (let [b (:: (vec-get v 0) FzB)]\n"
-     "      (println (.a b))))\n  0)\n"),
-    ("fn-typed-value-return-ascribe-miscompiles (thin pass-through)",
-     "(defn mk [x : int] : (fn [] int) (fn [] x))\n"
-     "(defn thru [v : (fn [] int)] : (fn [] int) v)\n"
-     "(defn main [] : int (println ((thru (mk 5)))) 0)\n"),
-    ("fn-typed-value-return-ascribe-miscompiles (fat pass-through)",
-     "(defn mk [x : int] : (fn [] int) (fn [] x))\n"
-     "(defn thru [^fat v : (fn [] int)] : (fn [] int) v)\n"
-     "(defn main [] : int (println ((thru (mk 5)))) 0)\n"),
-    ("fn-typed-value-return-ascribe-miscompiles (ascribe around let)",
-     "(defn mk [x : int] : (fn [] int) (fn [] x))\n"
-     "(defn main [] : int\n"
-     "  (println ((:: (let [v (mk 5)] v) (fn [] int))))\n  0)\n"),
-    ("class-method-result-into-generic-invalid-c",
-     "(defdata FzW (FzWc :int))\n"
-     "(defclass FzT [a] (thru [self : a] : a))\n"
-     "(definstance FzT [FzW] (thru [self : FzW] : FzW self))\n"
-     "(defn gid [A] [x : A] : A x)\n"
-     "(defn main [] : int\n"
-     "  (println (match (gid (.thru (FzWc -10))) (FzWc x) x))\n  0)\n"),
+    # (vec-byvalue-struct-element-invalid-c: RESOLVED 2026-07-31, archived;
+    # probe retired -- pinned by tests/fixtures/vec-byvalue-struct-element/
+    # and tests/fixtures/map-narrow-struct-value/.)
+    # (fn-typed-value-return-ascribe-miscompiles: RESOLVED 2026-07-30 by
+    # fat-normalization stage 2 and archived; its matrix -- broken rows
+    # included -- is pinned by tests/fixtures/fn-value-matrix-ok-rows/, so
+    # the probes are retired rather than kept as permanent FIXED rows.)
+    # (class-method-result-into-generic-invalid-c: RESOLVED 2026-07-31,
+    # archived; probe retired -- pinned by
+    # tests/fixtures/class-method-result-into-generic/.)
+    # (fn-payload-in-container-undeclared-temp: RESOLVED 2026-07-31 by
+    # fat-normalization stage 2 -- the parametric-defdata + FLOAT variant
+    # verified by hand -- and archived; probe retired.)
+    # (fn-value-carrier-fat-seam-residuals: RESOLVED 2026-07-31, archived;
+    # probe retired -- pinned by tests/fixtures/fn-value-carrier-fat-seams/.)
 ]
 
 
@@ -374,7 +358,8 @@ class Gen:
             {"vec_heap_struct"}
 
     def w_vec_box_byvalue(self, leg, ty):
-        # KNOWN shape: emitted only under --emit-known.
+        # In the DEFAULT pool since increment 3 (2026-07-31): any-width
+        # by-value struct elements ride container slots heap-boxed now.
         bn = "FzB%d%d" % (self.i, self.n_names)
         self.n_names += 1
         leg.defs.append("(defstruct %s [a : %s])" % (bn, ty))
@@ -429,12 +414,11 @@ class Gen:
             {"thunk", "closure_ret"}
 
     WRAPPERS = ["none", "box", "box_heap", "adt", "opt", "res", "vec",
-                "vec_box_heap", "opt_box", "res_box", "thunk"]
+                "vec_box_heap", "vec_box_byvalue", "opt_box", "res_box",
+                "thunk"]
 
     def pick_wrapper(self, leg, ty):
         pool = list(self.WRAPPERS)
-        if self.emit_known:
-            pool.append("vec_box_byvalue")
         which = self.rng.choice(pool)
         if which == "none":
             return self.w_none(leg, ty)
@@ -525,20 +509,19 @@ class Gen:
         return "(%s%s %s)" % (dot, meth, e), "class_thru"
 
     def crossings_for(self, tn, tags):
-        # Fn-typed VALUES miscompile across every crossing here except direct
-        # consume/invoke (fn-typed-value-return-ascribe-miscompiles); the
-        # default pool for a thunk leg is therefore empty.
+        # Fn-typed VALUES are fat-normalized across returns/let/ascribe and
+        # HOF hops as of fn-value-fat-normalization stage 2 (2026-07-30) --
+        # thunk legs take the full crossing pool minus the class/gid pair
+        # (instance heads need plain names; gid over a thunk is fine and
+        # included).
         if "thunk" in tags:
-            if not self.emit_known:
-                return []
-            return [self.x_through, self.x_let, self.x_ascribe,
-                    self.x_fat_hof]
+            return [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
+                    self.x_fat_hof, self.x_thin_hof]
         xs = [self.x_through, self.x_let, self.x_ascribe, self.x_gid,
-              self.x_fat_hof]
-        # Thin HOF is carrier-safe for true scalars only; by-value wrappers
-        # and heap containers there are the known sigbus shape.
-        if tn in ("int", "float", "bool", "cstr") or self.emit_known:
-            xs.append(self.x_thin_hof)
+              self.x_fat_hof, self.x_thin_hof]
+        # Thin HOF over every wrapper: scalars ride the poly carrier;
+        # concrete by-value/heap signatures are fat-normalized as of
+        # fn-value-fat-normalization stage 1 (2026-07-30).
         # Instance heads: plain type names only.
         if not tn.startswith("("):
             xs.append(self.x_class_thru)
@@ -596,7 +579,9 @@ class Gen:
         return leg
 
     def leg_res_bind(self):
-        """KNOWN shape (result-monad-bind-typed-boundary); --emit-known only."""
+        """Monad bind over Result through a typed defn boundary.  Fixed by
+        consolidation increment 2 (was result-monad-bind-typed-boundary,
+        archived); generated in the default rotation since."""
         leg = Leg()
         f, g = self.name("bf"), self.name("bg")
         n = self.rng.randint(1, 9)
@@ -615,7 +600,8 @@ def gen_program(rng, n_legs, emit_known):
     legs = []
     for i in range(n_legs):
         g = Gen(rng, i, emit_known)
-        if emit_known and rng.random() < 0.15:
+        # Bind legs run in the default rotation since the increment-2 fix.
+        if rng.random() < 0.10:
             legs.append(g.leg_res_bind())
         else:
             legs.append(g.leg())

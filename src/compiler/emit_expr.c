@@ -295,6 +295,25 @@ bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e) {
  * the binding as int64_t would fail to type-check against the struct the call
  * returns.  Results carried as a tyvar (generic) or returned from an inline-C
  * body still come back as the int64_t carrier and are excluded here. */
+/* consolidation increment 2 (bind cell): does this type mention a named
+ * tyvar anywhere in its spine / fn signature?  Used to recognize a CARRIER
+ * base instance entry (`__inst_*_tyvar`) by its still-generic result. */
+static bool emit_repr_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return emit_repr_type_mentions_tyvar(t->as.app.fn) ||
+               emit_repr_type_mentions_tyvar(t->as.app.arg);
+    if (t->kind == TY_FN) {
+        if (emit_repr_type_mentions_tyvar(t->as.fn.result_full_type)) return true;
+        if (t->as.fn.arg_full_types)
+            for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                if (emit_repr_type_mentions_tyvar(t->as.fn.arg_full_types[i]))
+                    return true;
+    }
+    return false;
+}
+
 static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
     if (!call || call->kind != EX_CALL) return false;
     const Binding *fb = call->as.call_.fn_binding;
@@ -332,7 +351,53 @@ static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
  * types have a single representation, so they fall through to emit_type_c_name. */
 static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
                                             const Expr *init) {
-    if (!type_uses_carrier_abi(emit_resolve_type(ctx, binding_ty)))
+    Type rbt = emit_resolve_type(ctx, binding_ty);
+
+    /* Increment 4 stage 3, chokepoint 1 (repr-decision-function-plan): a
+     * CONCRETE (tyvar-free) heap container / :heap struct binding is its
+     * typed pointer, regardless of how the INIT spells the same bits --
+     * consulting repr_of's protocol instead of inheriting the initializer's
+     * erased int64 spelling.  The binding-emission arms below already bridge
+     * an int64 init into a pointer decl (and consumers reinterpret back), so
+     * this changes the declared spelling, never the value.  The first shadow
+     * sweep measured 53 sites of this class (`(Vec int)` / `(MutableMap int
+     * int)` / `Line` bound as int64_t); a tyvar-elemented heap app keeps the
+     * erased carrier spelling (same bits, unresolved element).  Placed BEFORE
+     * the carrier-ABI early return: the Line family (a :heap record with
+     * heap-struct fields) is NOT carrier-ABI, and the early return would
+     * hand back type_c_name's int64 spelling for it.
+     *
+     * Guarded on the DECLARED type being tyvar-free, exactly like the shadow
+     * check: a tyvar-DECLARED binding inside a generic body keeps the erased
+     * spelling by design even when the active spec resolves it concrete --
+     * without this guard the hoisted arm re-spelled spec-emitted stdlib
+     * bodies (`x : (Map K V)` resolved to `(Map int int)`) and churned 140
+     * fixtures' codegen. */
+    if ((type_is_heap_adt(rbt) || type_is_heap_struct(rbt)) &&
+        !emit_repr_type_mentions_tyvar(&binding_ty) &&
+        !emit_repr_type_mentions_tyvar(&rbt) &&
+        /* A BARE parametric ADT base (`Map` with its args erased, standing
+         * for `(Map K V)` in a generic body) is the erased container, not a
+         * concrete type -- its element types are gone, so "mentions tyvar"
+         * cannot see them.  Keep the erased spelling; only a genuinely
+         * non-parametric def (Line, n_type_params == 0) or a concrete app
+         * takes the typed pointer. */
+        !(rbt.kind == TY_ADT && rbt.as.adt_.def &&
+          rbt.as.adt_.def->n_type_params > 0) &&
+        repr_of(&rbt, REPR_POS_LET_BIND) == REPR_HEAP_PTR) {
+        const char *hn = emit_type_c_name(ctx, rbt);
+        /* Lens family: a :heap record whose FIELDS disqualify
+         * adt_is_byvalue_product (heap-struct fields -- `Line {a: Point}`)
+         * c-names to the carrier while its ctor returns the typed pointer.
+         * Ask the def for the pointer spelling directly so the binding
+         * matches the value the ctor actually hands it. */
+        if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT &&
+            rbt.as.adt_.def)
+            hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
+        return hn;
+    }
+
+    if (!type_uses_carrier_abi(rbt))
         return emit_type_c_name(ctx, binding_ty);
 
     const Expr *p = init;
@@ -381,6 +446,67 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
      * by-value var, or a control-form result temp declared via emit_type_c_name)
      * keeps the by-value concrete representation. */
     return emit_type_c_name(ctx, binding_ty);
+}
+
+/* Increment 4 stage 2 (repr-decision-function-plan): shadow-check a site's
+ * representation decision against repr_of's intended protocol.  Active only
+ * under --emit-abi-trace; NEVER changes what the site decided -- a mismatch
+ * is one stderr line, which the stage-3 migration reads as its blast-radius
+ * measurement.  `chosen_cty` is the C type the site actually declared; the
+ * observed ReprForm is recovered from it plus the resolved type. */
+static ReprForm repr_form_from_decision(EmitCtx *ctx, Type resolved,
+                                        const char *cty) {
+    size_t n = strlen(cty);
+    bool is_ptr = n >= 1 && cty[n - 1] == '*';
+    if (strcmp(cty, "int64_t") == 0) {
+        /* A transparent int newtype's int64 decl IS the payload -- the same
+         * scalar-bits form repr_of predicts (SC7); without this the shadow
+         * reports a spelling identity as a disagreement. */
+        if (type_is_transparent_int_newtype(resolved))
+            return REPR_SCALAR_BITS;
+        if (resolved.kind != TY_FN && resolved.kind != TY_ADT &&
+            resolved.kind != TY_APP &&
+            strcmp(emit_type_c_name(ctx, resolved), "int64_t") == 0 &&
+            type_has_concrete_codegen_layout(&resolved))
+            return REPR_SCALAR_BITS;   /* int64_t IS this scalar's spelling */
+        return REPR_CARRIER_I64;
+    }
+    if (is_ptr) {
+        if (resolved.kind == TY_FN) return REPR_FAT_HANDLE;
+        if (type_is_heap_struct(resolved) || type_is_heap_adt(resolved))
+            return REPR_HEAP_PTR;
+        /* A pointer that is the type's own scalar spelling (cstr, Sym,
+         * ptr<T> leaves) is the value's bits; any other pointer decl is a
+         * heap-object handle. */
+        if (strcmp(emit_type_c_name(ctx, resolved), cty) == 0 &&
+            type_has_concrete_codegen_layout(&resolved))
+            return REPR_SCALAR_BITS;
+        return REPR_HEAP_PTR;
+    }
+    if (strcmp(cty, "bool") == 0 || strcmp(cty, "double") == 0 ||
+        strcmp(cty, "float") == 0 || strcmp(cty, "void") == 0 ||
+        strstr(cty, "int8_t") || strstr(cty, "int16_t") ||
+        strstr(cty, "int32_t") || strstr(cty, "uint"))
+        return REPR_SCALAR_BITS;
+    return REPR_BYVAL_AGG;             /* a bare aggregate type name */
+}
+
+static void repr_shadow_check(EmitCtx *ctx, const char *site,
+                              ReprPosition pos, Type declared_ty,
+                              const char *chosen_cty) {
+    if (!g_emit_abi_trace || !chosen_cty) return;
+    Type resolved = emit_resolve_type(ctx, declared_ty);
+    ReprForm want = repr_of(&resolved, pos);
+    ReprForm got = repr_form_from_decision(ctx, resolved, chosen_cty);
+    if (want != got) {
+        Buf tb; buf_init(&tb);
+        type_print(&tb, resolved);
+        buf_putc(&tb, '\0');
+        fprintf(stderr, "repr-shadow %s %s type=%s want=%s got=%s cty=%s\n",
+                site, repr_position_name(pos), tb.data,
+                repr_form_name(want), repr_form_name(got), chosen_cty);
+        buf_free(&tb);
+    }
 }
 
 /* KB-021: true when emitting `e` yields a *by-value* concrete carrier-ABI
@@ -512,6 +638,10 @@ static char *emit_byval_recursive_carrier_reconstruct(EmitCtx *ctx, Type t,
  * malloc'd string the caller owns. */
 static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
+    /* repr-trace: aggregate heap-boxed into an int64 slot (field store /
+     * poly-carrier crossing / wide-byval element). */
+    if (g_emit_abi_trace)
+        fprintf(stderr, "repr-trace bridge agg-box %s\n", cn);
     Buf b; buf_init(&b);
     buf_printf(&b,
         "({ %s *__tur_pbox = (%s *)malloc(sizeof(%s)); "
@@ -524,6 +654,9 @@ static char *emit_agg_box(EmitCtx *ctx, Type t, const char *val) {
 }
 static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
+    /* repr-trace: int64 slot deref'd back to the by-value aggregate. */
+    if (g_emit_abi_trace)
+        fprintf(stderr, "repr-trace bridge agg-unbox %s\n", cn);
     Buf b; buf_init(&b);
     buf_printf(&b, "(*(%s *)(intptr_t)(%s))", cn, val);
     buf_putc(&b, '\0');
@@ -883,8 +1016,39 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
     Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
     if (!e) return unknown;
     switch (e->kind) {
-        case EX_ASCRIBE:
-            return fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+        case EX_ASCRIBE: {
+            Type inner_t =
+                fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+            if (inner_t.kind != TY_UNKNOWN) return inner_t;
+            /* consolidation increment 2 (bind cell, ascription form): the
+             * inner recovery failed -- a carrier producer whose declared
+             * result is still generic (`bind` at a partially-applied
+             * instance head) -- but the ASCRIPTION names the concrete type:
+             * `(:: (bind ...) (Result int int))` is the programmer stating
+             * what the carrier holds.  Use it when the inner really is a
+             * carrier producer and the ascribed type is a concrete by-value
+             * carrier-ABI aggregate, so the let-init / boundary bridges can
+             * re-wrap instead of assigning the raw int64 into the struct
+             * (`invalid initializer`). */
+            if (fn_body_tail_is_carrier_producer(e->as.ascribe_.inner)) {
+                /* Not gated on type_uses_carrier_abi: post-lowering a
+                 * parametric app (`(Result int int)`) is a BY-VALUE type for
+                 * which that predicate reports false (the seam-4 rule); the
+                 * test is "concrete non-heap aggregate with its own C
+                 * layout". */
+                Type at = emit_resolve_type(ctx, e->type);
+                /* No type_has_concrete_codegen_layout conjunct: that switch
+                 * has no TY_APP arm and fails closed (the enumerations-drift
+                 * pattern); a non-int64 c-name already proves a grounded
+                 * concrete monomorph layout exists. */
+                if ((at.kind == TY_ADT || at.kind == TY_APP ||
+                     at.kind == TY_STRUCT) &&
+                    !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
+                    strcmp(emit_type_c_name(ctx, at), "int64_t") != 0)
+                    return at;
+            }
+            return unknown;
+        }
         case EX_DO:
             return e->as.do_.n > 0
                 ? fn_body_tail_byvalue_carrier_type(ctx, e->as.do_.items[e->as.do_.n - 1])
@@ -1023,10 +1187,18 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
              * as a carrier producer so the carrier->concrete deref-unbox bridge
              * fires.  Gated on the tyvar recovery, so a genuinely by-value
              * concrete accessor result (`Pos`, result_full_type not a tyvar) is
-             * untouched. */
+             * untouched.
+             *
+             * Increment 3 (vec-byvalue-struct-element-invalid-c): the width
+             * fork is gone -- a NARROW (<= 8 byte) by-value product element
+             * rides the container slot boxed too (there is no working inline
+             * form: the read side used to initialize `tur_adt_FzB b = <int64>`
+             * straight off the carrier, a hard cc error).  The shared
+             * container-element predicate keeps this read-back in lockstep
+             * with the push-side boxing and the ownership probes. */
             if (tyvar_recovered_concrete &&
                 !type_is_heap_struct(sr) && !type_is_heap_adt(sr) &&
-                type_is_wide_byval_adt(sr))
+                type_is_boxed_container_elem(sr))
                 return sr;
             /* Gate on !type_uses_carrier_abi(sr): the by-value-temp strategy only
              * applies when the lowered aggregate flows by value.  At default the
@@ -1352,14 +1524,23 @@ static char *bridge_control_value_to_byvalue_temp(EmitCtx *ctx, Buf *body,
  * assigned value to match the temp's declared representation. */
 static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
                                               const Expr *tail) {
+    const char *out;
     Type bv = fn_body_tail_byvalue_carrier_type(ctx, tail);
     if (bv.kind != TY_UNKNOWN)
-        return emit_type_c_name(ctx, bv);
-    if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
-        fn_body_tail_is_carrier_producer(tail) &&
-        !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
-        return "int64_t";
-    return emit_type_c_name(ctx, type);
+        out = emit_type_c_name(ctx, bv);
+    else if (type_uses_carrier_abi(emit_resolve_type(ctx, type)) &&
+             fn_body_tail_is_carrier_producer(tail) &&
+             !fn_body_tail_emits_byvalue_carrier_abi(ctx, tail))
+        out = "int64_t";
+    else
+        out = emit_type_c_name(ctx, type);
+    /* Shadow against the RECOVERED type when the walker found one: the
+     * declared `type` may have been collapsed to a scalar at elab (the
+     * return-only-poly accessor shape), and shadowing the collapsed type
+     * reports the site's correct recovery as a false disagreement. */
+    repr_shadow_check(ctx, "merge-temp", REPR_POS_RESULT,
+                      bv.kind != TY_UNKNOWN ? bv : type, out);
+    return out;
 }
 
 /* gcc14-int-conversion (carrier-to-typed-param): reconcile a control-form result
@@ -1651,6 +1832,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (e.g. `int64_t v = (Vec__int){...}` or `Vec__int v = vec_new()`). */
             const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
                                      e->as.let_.bindings[i].init);
+            /* Shadow only bindings whose DECLARED type is concrete: a
+             * tyvar-declared binding inside a generic body keeps the erased
+             * spelling by design even when the active spec resolves it (the
+             * shadow resolves through the spec, so it would misread the
+             * erasure as a disagreement -- the Line-in-lens rows of the
+             * third sweep). */
+            if (!emit_repr_type_mentions_tyvar(&b->type))
+                repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                                  bind_c);
             /* KB-021: record whether this binding ended up by-value so that a
              * later dictionary-dispatch use of the var bridges it to the carrier. */
             if (e->as.let_.bindings[i].binding)
@@ -1757,9 +1947,29 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the aggregate. */
             Type init_bv = fn_body_tail_byvalue_carrier_type(
                 ctx, e->as.let_.bindings[i].init);
+            /* Increment 3 (double-deref guard): when the init is a control
+             * form (a `let`/`do` -- e.g. the map-get macro's expansion) whose
+             * merge temp was ALREADY declared by-value and bridged by
+             * bridge_control_value_to_byvalue_temp, the value in hand IS the
+             * aggregate -- re-deriving "carrier producer" from the tail call
+             * here would deref it a second time (`(*(T *)(intptr_t)(<T
+             * value>))`, a hard cc error).  The temp's ACTUAL emitted C type
+             * is in the localvar side table (the init_val_recorded_* pattern
+             * above); a recorded by-value aggregate type equal to the
+             * binding's own suppresses the re-bridge -- consult the recorded
+             * representation instead of re-deciding from the tail. */
+            bool init_val_recorded_byval_agg = false;
+            if (emit_str_is_bare_ident(iv)) {
+                const char *lvty2 = emit_localvar_lookup_ctype(iv);
+                init_val_recorded_byval_agg =
+                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
+                    strcmp(lvty2, "int64_t") != 0 &&
+                    strchr(lvty2, '*') == NULL;
+            }
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
+                !init_val_recorded_byval_agg &&
                 !fn_body_tail_emits_byvalue_carrier_abi(
                     ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
@@ -1964,6 +2174,15 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         } else {
             const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
                                      e->as.let_.bindings[i].init);
+            /* Shadow only bindings whose DECLARED type is concrete: a
+             * tyvar-declared binding inside a generic body keeps the erased
+             * spelling by design even when the active spec resolves it (the
+             * shadow resolves through the spec, so it would misread the
+             * erasure as a disagreement -- the Line-in-lens rows of the
+             * third sweep). */
+            if (!emit_repr_type_mentions_tyvar(&b->type))
+                repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                                  bind_c);
             if (e->as.let_.bindings[i].binding)
                 e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
                     type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
@@ -2068,9 +2287,29 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
              * the aggregate. */
             Type init_bv = fn_body_tail_byvalue_carrier_type(
                 ctx, e->as.let_.bindings[i].init);
+            /* Increment 3 (double-deref guard): when the init is a control
+             * form (a `let`/`do` -- e.g. the map-get macro's expansion) whose
+             * merge temp was ALREADY declared by-value and bridged by
+             * bridge_control_value_to_byvalue_temp, the value in hand IS the
+             * aggregate -- re-deriving "carrier producer" from the tail call
+             * here would deref it a second time (`(*(T *)(intptr_t)(<T
+             * value>))`, a hard cc error).  The temp's ACTUAL emitted C type
+             * is in the localvar side table (the init_val_recorded_* pattern
+             * above); a recorded by-value aggregate type equal to the
+             * binding's own suppresses the re-bridge -- consult the recorded
+             * representation instead of re-deciding from the tail. */
+            bool init_val_recorded_byval_agg = false;
+            if (emit_str_is_bare_ident(iv)) {
+                const char *lvty2 = emit_localvar_lookup_ctype(iv);
+                init_val_recorded_byval_agg =
+                    lvty2 && strcmp(lvty2, bind_c) == 0 &&
+                    strcmp(lvty2, "int64_t") != 0 &&
+                    strchr(lvty2, '*') == NULL;
+            }
             bool init_carrier_to_byval = !bind_is_ptr_repr &&
                 strcmp(bind_c, "int64_t") != 0 &&
                 init_bv.kind != TY_UNKNOWN &&
+                !init_val_recorded_byval_agg &&
                 !fn_body_tail_emits_byvalue_carrier_abi(
                     ctx, e->as.let_.bindings[i].init);
             if (init_is_pbp && !bind_is_ptr_repr &&
@@ -3555,8 +3794,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     probe->as.borrow_immut_.expr)
                     probe = probe->as.borrow_immut_.expr;
                 Type at = emit_resolve_type(ctx, probe->type);
+                /* Increment 3: the fold follows the CONTAINER-ELEMENT boxing
+                 * predicate (any-width by-value product), not the wide-only
+                 * one, so the map's release decision cannot drift from the
+                 * insert-side boxing decision for narrow elements. */
                 bool wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
-                            type_is_wide_byval_adt(at);
+                            type_is_boxed_container_elem(at);
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
             }
 
@@ -3601,8 +3844,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 bool wide = false;
                 if (vt.kind == TY_APP && vt.as.app.arg) {
                     Type at = emit_resolve_type(ctx, *vt.as.app.arg);
+                    /* Increment 3: follow the container-element boxing
+                     * predicate (any-width), in lockstep with the push-side
+                     * boxing, so vec-free frees narrow element boxes too. */
                     wide = !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
-                           type_is_wide_byval_adt(at);
+                           type_is_boxed_container_elem(at);
                 }
                 return strdup(wide ? "INT64_C(1)" : "INT64_C(0)");
             }
@@ -4520,8 +4766,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * must dispatch through slot 0 with the box as the env argument
                  * -- the same fat-call protocol as the TY_PTR_VOID path above.
                  * Emitting a thin ((R (*)(A...))g)(args) call here would treat the
-                 * fat box's address as code and jump to garbage. */
-                if (fn_binding->is_fat || fn_binding->type.as.fn.boxed) {
+                 * fat box's address as code and jump to garbage.
+                 *
+                 * fn-value-fat-normalization stage 1: a NOMINAL thin TY_FN
+                 * parameter joins the fat protocol -- every value flowing into
+                 * one is a fat handle (the elab call-site shim guarantees it,
+                 * keyed on the SAME fn_param_type_is_fat_normalized predicate),
+                 * so the invoke dispatches fat uniformly.  This is what turns
+                 * "capturing closure into a non-carrier fn param" from a SIGSEGV
+                 * (poly-result-hof-capturing-closure-sigbus) into a working
+                 * call.  Scoped to parameters; let-bound TY_FN locals keep
+                 * their existing paths. */
+                if (fn_binding->is_fat || fn_binding->type.as.fn.boxed ||
+                    (fn_binding->is_param &&
+                     fn_param_type_is_fat_normalized(&fn_binding->type))) {
                     char *raw_ptr = name_for_binding(ctx, fn_binding);
                     /* A TY_FN parameter is stored as int64_t in C; the fat-call
                      * protocol wants the box as a void *, so coerce once. */
@@ -5415,7 +5673,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     type_eq(matched_spec->arg_types[i], arg_expr->as.reinterpret_.expr->type)) {
                     emit_arg = arg_expr->as.reinterpret_.expr;
                 }
+                /* consolidation increment 2 (bind cell): pair the continuation
+                 * wrapper's return ABI with the entry point THIS call selects.
+                 * A carrier base instance (`__inst_*_tyvar` -- no by-value
+                 * spec matched, result still mentions a tyvar) invokes a
+                 * tur_poly_fn_t continuation through the int64 carrier cast,
+                 * so an EX_POLY_WRAP argument must spill-shim a by-value
+                 * aggregate result; a by-value spec callee consumes the raw
+                 * aggregate and must NOT see the shim (the load-bearing
+                 * Option pairing).  Scoped to the direct EX_POLY_WRAP arg so
+                 * nested emissions are unaffected. */
+                bool saved_pwc = ctx->poly_wrap_callee_carrier;
+                if (emit_arg && emit_arg->kind == EX_POLY_WRAP &&
+                    !matched_spec && fn_binding && fn_binding->name &&
+                    fn_binding->name->name &&
+                    strncmp(fn_binding->name->name, "__inst_", 7) == 0 &&
+                    fn_binding->type.kind == TY_FN &&
+                    fn_binding->type.as.fn.result_full_type &&
+                    emit_repr_type_mentions_tyvar(
+                        fn_binding->type.as.fn.result_full_type)) {
+                    ctx->poly_wrap_callee_carrier = true;
+                }
                 char *raw = emit_value(ctx, body, emit_arg);
+                ctx->poly_wrap_callee_carrier = saved_pwc;
                 /* byvalue-result-param-ok-predicate-materialize-bad-cast: set
                  * once a pass-by-pointer struct *parameter* argument has been
                  * converted to the int64 carrier by a pointer cast (its C value
@@ -5897,9 +6177,37 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * (value semantics -- mutating the source after insert
                              * does not change the stored element).  The narrow
                              * (transient, non-storing) inline-C carrier crossings
-                             * keep the cheaper stack spill. */
+                             * keep the cheaper stack spill.
+                             *
+                             * Increment 3 (vec-byvalue-struct-element-invalid-c):
+                             * a NARROW (<= 8 byte) by-value product is heap-boxed
+                             * too when the call stores it into a heap container --
+                             * the stack spill dangles exactly like the wide case,
+                             * and the read side now deref-unboxes any-width
+                             * elements (type_is_boxed_container_elem).  The
+                             * container-store discriminator is a heap-container
+                             * sibling argument (the receiver `(Vec A)` / map /
+                             * set), same as the TY_APP block above; a transient
+                             * consumer (`unwrap-or`-style, no container sibling)
+                             * keeps the stack spill unchanged. */
+                            bool _n3_container_store = false;
                             if (fn_binding->body_is_inline_c &&
-                                type_is_wide_byval_adt(rarg))
+                                !type_is_wide_byval_adt(rarg) &&
+                                type_is_boxed_container_elem(rarg)) {
+                                for (uint32_t _j = 0; _j < e->as.call_.n_args; _j++) {
+                                    if (_j == i) continue;
+                                    Type _st = emit_resolve_type(
+                                        ctx, e->as.call_.args[_j]->type);
+                                    if (type_is_heap_adt(_st) ||
+                                        type_is_heap_struct(_st)) {
+                                        _n3_container_store = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (fn_binding->body_is_inline_c &&
+                                (type_is_wide_byval_adt(rarg) ||
+                                 _n3_container_store))
                                 raw = emit_carrier_bridge_escaping(
                                           ctx, body, raw,
                                           CK_CONCRETE, CK_CARRIER, rarg);
@@ -5936,9 +6244,31 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     uint8_t param_idx = (i < n_fnparams) ? (uint8_t)i
                         : (uint8_t)(n_fnparams > 0 ? n_fnparams - 1 : 0);
                     TypeKind pk = fn_binding->type.as.fn.arg_kinds[param_idx];
+                    /* Increment 3: NARROW (<= 8 byte) by-value products box the
+                     * same way wide ones do, but only when the call stores into
+                     * a heap container (a heap-container sibling argument, e.g.
+                     * the `(Map K V)` receiver of map-assoc-eq-o) -- a transient
+                     * spec'd inline-C consumer with no container sibling keeps
+                     * the plain bridge unchanged. */
+                    bool _n3_hamt_store = false;
                     if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
                         !type_is_heap_struct(rarg) && !type_is_heap_adt(rarg) &&
-                        type_is_wide_byval_adt(rarg)) {
+                        !type_is_wide_byval_adt(rarg) &&
+                        type_is_boxed_container_elem(rarg)) {
+                        for (uint32_t _j = 0; _j < e->as.call_.n_args; _j++) {
+                            if (_j == i) continue;
+                            Type _st = emit_resolve_type(
+                                ctx, e->as.call_.args[_j]->type);
+                            if (type_is_heap_adt(_st) ||
+                                type_is_heap_struct(_st)) {
+                                _n3_hamt_store = true;
+                                break;
+                            }
+                        }
+                    }
+                    if ((pk == TY_TYVAR || pk == TY_FORALL || pk == TY_EXISTS) &&
+                        !type_is_heap_struct(rarg) && !type_is_heap_adt(rarg) &&
+                        (type_is_wide_byval_adt(rarg) || _n3_hamt_store)) {
                         /* Box the value via tur_hamt_box_key (a refcount+size box)
                          * rather than a plain malloc, so the map can RELEASE it on
                          * free / entry-drop: map-assoc threads the value-owned bit
@@ -8393,9 +8723,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (rv && rv->kind == EX_CALL &&
                         !fn_body_tail_emits_byvalue_carrier_abi(ctx, rv)) {
                         Type bvt = fn_body_tail_byvalue_carrier_type(ctx, rv);
+                        /* Increment 3: any-width container elements are boxed
+                         * now, so the deref-read applies to narrow (<= 8 byte)
+                         * products too -- same shared predicate as the push
+                         * bridges and the let-binding read recovery.  A
+                         * concrete by-value accessor result still returns
+                         * UNKNOWN from the walk above, so it never routes
+                         * here. */
                         if (bvt.kind != TY_UNKNOWN &&
                             !type_is_heap_struct(bvt) && !type_is_heap_adt(bvt) &&
-                            type_is_wide_byval_adt(bvt))
+                            (type_is_wide_byval_adt(bvt) ||
+                             type_is_boxed_container_elem(bvt)))
                             recv_call_carrier_byval = true;
                     }
                 }
@@ -8668,7 +9006,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * unboxes it).  A typed `:fn` carrier / monad continuation is consumed
              * BY VALUE via a concrete-cast call site, so it must NOT be spilled --
              * gating on boxes_aggregate keeps that path byte-for-byte unchanged. */
-            if (e->as.poly_wrap_.boxes_aggregate && wbnd && wbnd->type.kind == TY_FN) {
+            if ((e->as.poly_wrap_.boxes_aggregate ||
+                 /* increment 2 (bind cell): the enclosing call's resolved
+                  * callee is the carrier base entry -- see the flag's setter
+                  * in the call-arg loop.  The shim is defensive (NULL unless
+                  * the wrapper really returns a by-value aggregate). */
+                 ctx->poly_wrap_callee_carrier) &&
+                wbnd && wbnd->type.kind == TY_FN) {
                 Type wres = wbnd->type.as.fn.result_full_type
                     ? *wbnd->type.as.fn.result_full_type
                     : emit_type_from_kind(wbnd->type.as.fn.result_kind);
@@ -8793,6 +9137,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             char *typed_shim = ensure_typed_fatshim(ctx, fnt_result, fnt_params, arity);
 
+            /* repr-trace: a bare fn crossing into a fat sink -- the shim
+             * bridge is where the representation changes hands. */
+            if (g_emit_abi_trace) {
+                fprintf(stderr, "repr-trace %u:%u bridge bare-to-fat arity=%u %s\n",
+                        e->span.line, e->span.col_start, (unsigned)arity,
+                        typed_shim ? "typed-shim" : "int64-shim");
+            }
+
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             {
@@ -8837,6 +9189,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * method's real N-ary thunk (make_poly_wrapper), so binary or
              * higher-arity poly methods round-trip into a matching ^fat sink. */
             const Expr *inner = e->as.poly_to_fat_.inner;
+            /* repr-trace: a poly-carrier {env,fn} value boxed into a fat
+             * handle for a ^fat sink. */
+            if (g_emit_abi_trace) {
+                fprintf(stderr, "repr-trace %u:%u bridge poly-to-fat\n",
+                        e->span.line, e->span.col_start);
+            }
             char *pv = emit_value(ctx, body, inner);
             char *pf = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);

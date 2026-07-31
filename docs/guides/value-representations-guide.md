@@ -40,9 +40,21 @@ float bit-reinterpret note below).
    (`Option`, `Vec`, `Cons`). The carrier bits ARE the pointer, so the
    erasure round trip is lossless. This is why `Option` escaped the `bind`
    miscompile while by-value `Result` did not
-   (`result-monad-bind-typed-boundary-miscompiles`), and why `:heap` fixes
-   the by-value Vec-element shape
-   (`vec-byvalue-struct-element-invalid-c`).
+   (`result-monad-bind-typed-boundary-miscompiles`), and why `:heap` was
+   the workaround for the by-value Vec-element shape
+   (`vec-byvalue-struct-element-invalid-c`, resolved by increment 3).
+
+   Since 2026-07-31 (increment 3) **container element slots follow one
+   width-independent rule** per element class: scalar bits inline, heap
+   pointer as-is, by-value ADT product (ANY width) heap-boxed on insert and
+   deref-unboxed on read, fn value as a fat handle. The decision lives in
+   `type_is_boxed_container_elem` (`src/compiler/types.c`), consulted by
+   the push-side bridges, the read-back recovery, AND the ownership folds
+   (`tur-wide-byval?` / `tur-vec-elem-wide?`) so boxing and freeing cannot
+   drift. The old fork -- wide boxed, narrow stack-spilled with no reader --
+   was the missing-cell generator here. Width still matters where a paired
+   inline layout exists (parametric-carrier monomorph fields, B4 closure
+   params); those positions keep `type_is_wide_byval_adt`.
 
 4. **Concrete scalar** -- plain `int64_t` / `double` / `bool` / `char*`.
    One trap: a float crossing the carrier needs a **bit reinterpret**, not a
@@ -60,21 +72,34 @@ Function values are their own zoo. The per-boundary decision today spans
 is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 
 1. **`tur_poly_fn_t {env, fn}` carrier** -- for plain, non-effectful,
-   carrier-safe signatures with no named tyvar.
+   carrier-safe signatures with no named tyvar.  Since 2026-07-31 the
+   carrier<->fat seam is alias- and join-aware: the stage-2 tail walkers
+   resolve a let-ALIAS of a carrier param to its origin (converting via
+   poly-to-fat like the direct leaf), the `if` unifier admits a
+   carrier-param arm against a boxed fn result by inserting the conversion
+   at the join, and ascribing a carrier param to its own fn type is a
+   no-op assertion (`fn-value-carrier-fat-seam-residuals`, archived).
 2. **`^fat` parameter** -- explicit fat `{thunk, env}` handle.
 3. **`:ptr<void>`-fat sink** -- carries an `is_fat` flag disambiguating
    thin-vs-fat dispatch at the invoke (`src/compiler/emit_expr.c` ~4246).
 4. **Nominal bare `TY_FN` pointer** -- a thin code pointer with nowhere to
-   put an environment. Passing a capturing closure into one is the crash in
-   `poly-result-hof-capturing-closure-sigbus`.
+   put an environment. Since 2026-07-30 (fat-normalization stage 1) a
+   nominal param with a CONCRETE, EFFECT-FREE signature is fat-normalized
+   -- the thin form survives only for effect-row'd signatures (load-bearing
+   for the CPS backend's twin/trampoline convention), tyvar signatures
+   (arguments arrive thin through the carrier machinery), cfnptr, variadic,
+   and arity>5. Passing a capturing closure into one of THOSE is still the
+   crash in `poly-result-hof-capturing-closure-sigbus`; the shared decision
+   is `fn_param_type_is_fat_normalized` (`src/compiler/types.c`).
 5. **Struct-field-fat** -- `defstruct` fn-typed fields, normalized to the fat
    representation uniformly after the same bug was fixed there
    (`tests/fixtures/capturing-closure-struct-field/`).
 
 Plus one in-flight form the minimization matrix in
-`docs/reported/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
-**by-value fat struct** sitting in a parameter slot, whose return path then
-casts it thin (`return (int64_t)(intptr_t)v;` on an aggregate).
+`docs/archive/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
+**by-value fat struct** sitting in a parameter slot, whose return path
+used to cast it thin (`return (int64_t)(intptr_t)v;` on an aggregate --
+fixed by fat-normalization stage 2's poly-to-fat tail conversion).
 
 ## Boundaries
 
@@ -96,12 +121,34 @@ report is one missing cell:
 
 | Missing cell (producer -> boundary) | Report |
 | --- | --- |
-| method result (carrier) -> typed `(Result A B)` defn boundary | `result-monad-bind-typed-boundary-miscompiles` |
-| method result (carrier) -> generic call argument | `class-method-result-into-generic-invalid-c` |
-| by-value struct -> Vec element slot | `vec-byvalue-struct-element-invalid-c` |
-| capturing closure -> nominal thin `TY_FN` param | `poly-result-hof-capturing-closure-sigbus` |
-| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | `fn-typed-value-return-ascribe-miscompiles` |
+| method result (carrier) -> typed `(Result A B)` defn boundary (RESOLVED 2026-07-31, increment 2; archived) | [`result-monad-bind-typed-boundary-miscompiles`](../archive/result-monad-bind-typed-boundary-miscompiles.md) |
+| method result (carrier) -> generic call argument (RESOLVED 2026-07-31, increment 2; archived) | [`class-method-result-into-generic-invalid-c`](../archive/class-method-result-into-generic-invalid-c.md) |
+| by-value struct -> Vec / Map element slot (RESOLVED 2026-07-31, increment 3: width-independent boxed element protocol; archived) | [`vec-byvalue-struct-element-invalid-c`](../archive/vec-byvalue-struct-element-invalid-c.md) |
+| capturing closure -> nominal thin `TY_FN` param, tyvar-sig or effectful (concrete effect-free sigs FIXED 2026-07-30, fat-normalized) | `poly-result-hof-capturing-closure-sigbus` |
+| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF (RESOLVED 2026-07-30, fat-normalization stage 2; archived) | [`fn-typed-value-return-ascribe-miscompiles`](../archive/fn-typed-value-return-ascribe-miscompiles.md) |
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
+| fn value read out of a container element, then called (RESOLVED 2026-07-31, fat-normalization stage 2; archived) | [`fn-payload-in-container-undeclared-temp`](../archive/fn-payload-in-container-undeclared-temp.md) |
+| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification (RESOLVED 2026-07-31: alias provenance in the tail walkers + poly-to-fat at the if join; archived) | [`fn-value-carrier-fat-seam-residuals`](../archive/fn-value-carrier-fat-seam-residuals.md) |
+| closure handle -> `double`-typed element slot (two-types-one-C-name collision; RESOLVED 2026-07-30 upstream, both findings; archived) | [`concrete-codegen-layout-kind-enumerations-drift`](../archive/concrete-codegen-layout-kind-enumerations-drift.md) |
+
+A structural note the last row exposes: the representation decision today is
+not one function but (at least) three hand-maintained `TypeKind` switches in
+`src/compiler/types.c` -- `type_c_name`, `type_has_concrete_codegen_layout`
+(fails closed: a missing kind silently falls back to the carrier), and
+`append_type_mangle` (failed open to `"opaque"` until 2026-07-29) -- and
+codegen is correct only when all three agree. Since 2026-07-31 (increment 4
+stage 1) the triplication is removed for payload-free kinds: the
+`TY_SIMPLE_REPR_ROWS` table in `types.c` carries one row per simple kind
+with all three answers, and each switch expands the rows with its own
+projection -- adding a kind without all three answers is a build failure,
+not a silent drift. Payload-carrying kinds keep per-switch arms; two CI
+guards ratchet the whole arrangement
+(`tests/check-typekind-mangle-exhaustive.sh` parses the table + residual
+arms and now also checks `type_c_name` exhaustiveness;
+`tests/check-monomorph-name-collision.sh` reads what they emit). The
+position axis -- one `repr-of(type, position)` routine for the per-SITE
+choices -- is staged in
+[docs/upcoming/repr-decision-function-plan.md](../upcoming/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
@@ -120,7 +167,11 @@ pinned by `--known-probes` instead, so a red run means a NEW cell.
 The convention-level fix for the closure rows -- normalize every non-carrier
 fn boundary onto the fat protocol instead of deciding representation
 per-boundary -- is planned in
-`docs/upcoming/fn-value-fat-normalization-plan.md`.
+`docs/upcoming/fn-value-fat-normalization-plan.md`. The campaign-level
+strategy governing that plan and its successors (which seams consolidate in
+which order, the probe/blast-radius discipline, and the performance
+guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;
+this guide's missing-cells table is that campaign's live scoreboard.
 
 ## Maintenance -- keep this guide truthful
 

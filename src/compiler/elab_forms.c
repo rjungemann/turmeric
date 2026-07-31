@@ -2299,6 +2299,17 @@ static bool expr_is_fat_closure_value(const Expr *x) {
     return false;
 }
 
+/* fn-value-carrier-fat-seam-residuals (cell 2): is this expression a VAR of a
+ * carrier (tur_poly_fn_t) fn param -- the by-value poly carrier, whose elab
+ * type is spelled ptr<void>?  Peeks through ascriptions.  Used by the
+ * if-branch unifier to admit carrier-vs-boxed-fn joins by inserting the
+ * poly-to-fat conversion on this arm. */
+static bool expr_is_poly_carrier_fn_var(const Expr *x) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    return x && x->kind == EX_VAR && x->as.var.binding &&
+           x->as.var.binding->is_poly_fn && x->as.var.binding->is_param;
+}
+
 /* M2b: if-branch tyvar tolerance.
  *
  * The strict `type_eq` used for if-branch parity treats `(Option A)` (A bare
@@ -2598,6 +2609,43 @@ Expr *elab_if(Elab *e, const Form *call) {
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;
+        } else if (!type_eq(then_->type, else_->type) &&
+                   ((then_->type.kind == TY_PTR_VOID &&
+                     expr_is_poly_carrier_fn_var(then_) &&
+                     else_->type.kind == TY_FN &&
+                     (else_->type.as.fn.boxed ||
+                      fn_param_type_is_fat_normalized(&else_->type))) ||
+                    (else_->type.kind == TY_PTR_VOID &&
+                     expr_is_poly_carrier_fn_var(else_) &&
+                     then_->type.kind == TY_FN &&
+                     (then_->type.as.fn.boxed ||
+                      fn_param_type_is_fat_normalized(&then_->type))))) {
+            /* fn-value-carrier-fat-seam-residuals (cell 2): one arm is a
+             * CARRIER fn param (a by-value tur_poly_fn_t, spelled ptr<void>),
+             * the other a fat-normalized fn result of the same family --
+             * e.g. `(if (= n 0) v (f3 (- n 1) v))` where the recursion's
+             * result is the stage-2 boxed fn type.  The values are
+             * convertible (the poly-to-fat bridge exists); a reject here is
+             * the unifier not knowing that.  Insert the conversion on the
+             * carrier arm AT THE JOIN -- context-independent, so the fix
+             * holds whether or not this if sits in a tail the stage-2
+             * normalizer would visit -- and adopt the fn type for the if.
+             * Scoped to a carrier-param VAR arm against a boxed or
+             * fat-normalizable (concrete, effect-free) fn type; tyvar and
+             * effect-row'd signatures keep their conventions and still
+             * mismatch loudly. */
+            bool carrier_is_then = then_->type.kind == TY_PTR_VOID;
+            Expr **carm = carrier_is_then ? &then_ : &else_;
+            Type ft = carrier_is_then ? else_->type : then_->type;
+            ft.as.fn.boxed = true;
+            Type *sink = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *sink = ft;
+            Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID,
+                                  (*carm)->span);
+            conv->as.poly_to_fat_.inner = *carm;
+            conv->as.poly_to_fat_.sink_fn_type = sink;
+            *carm = conv;
+            result_t = ft;
         } else if ((expr_is_fat_closure_value(then_) && else_->type.kind == TY_PTR_VOID) ||
                    (expr_is_fat_closure_value(else_) && then_->type.kind == TY_PTR_VOID)) {
             /* vec-get-typed-fat-closure-readback: a fat-closure value (a directly

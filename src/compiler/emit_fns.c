@@ -324,7 +324,31 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
             if (!b) return false;
             if (b->is_construct_template) return true;
             if (b->name && b->name->name &&
-                strncmp(b->name->name, "__inst_", 7) == 0) return true;
+                strncmp(b->name->name, "__inst_", 7) == 0) {
+                /* consolidation increment 2 (method-result bridging): the
+                 * "__inst_ returns the carrier regardless of its declared
+                 * type" premise is stale for a PURE-TURMERIC instance method
+                 * whose declared result is a concrete by-value product -- the
+                 * M7 by-value path emits it returning the aggregate
+                 * (`tur_adt_FzW __inst_FzT_thru_FzW(tur_adt_FzW)`), and
+                 * classifying it as a carrier producer made the spec-call arg
+                 * path deref the aggregate as if it were a pointer
+                 * (class-method-result-into-generic-invalid-c; the let-bind
+                 * workaround dodged this classifier, which is why it worked).
+                 * Inline-C instance bodies still lower to the int64 carrier
+                 * and multi-variant/parametric/tyvar results stay on the
+                 * carrier -- those keep the producer classification. */
+                if (!b->body_is_inline_c && b->type.kind == TY_FN &&
+                    b->type.as.fn.result_full_type) {
+                    Type rr = *b->type.as.fn.result_full_type;
+                    if ((rr.kind == TY_ADT || rr.kind == TY_APP) &&
+                        !type_uses_carrier_abi(rr) &&
+                        !type_is_heap_adt(rr) && !type_is_heap_struct(rr) &&
+                        type_has_concrete_codegen_layout(&rr))
+                        return false;
+                }
+                return true;
+            }
             /* result-bridge-tail-call-from-pure-tur-to-inline-c: an inline-C
              * body whose declared return type uses the carrier ABI is lowered
              * with an int64_t C return type, so a tail call to it yields the
