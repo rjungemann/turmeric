@@ -104,7 +104,7 @@ report is one missing cell:
 | Missing cell (producer -> boundary) | Report |
 | --- | --- |
 | method result (carrier) -> typed `(Result A B)` defn boundary | `result-monad-bind-typed-boundary-miscompiles` |
-| method result (carrier) -> generic call argument | `class-method-result-into-generic-invalid-c` |
+| method result (carrier) -> generic call argument (RESOLVED 2026-07-31, increment 2; archived) | [`class-method-result-into-generic-invalid-c`](../archive/class-method-result-into-generic-invalid-c.md) |
 | by-value struct -> Vec element slot | `vec-byvalue-struct-element-invalid-c` |
 | capturing closure -> nominal thin `TY_FN` param, tyvar-sig or effectful (concrete effect-free sigs FIXED 2026-07-30, fat-normalized) | `poly-result-hof-capturing-closure-sigbus` |
 | closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF (RESOLVED 2026-07-30, fat-normalization stage 2; archived) | [`fn-typed-value-return-ascribe-miscompiles`](../archive/fn-typed-value-return-ascribe-miscompiles.md) |

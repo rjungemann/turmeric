@@ -362,6 +362,20 @@ about, and cowpaths are paved before the field is closed:
   `class-method-result-into-generic-invalid-c`. The let-bind workaround
   proves the bridge exists; this increment makes consulting it total,
   routing-plan style.
+  *Status 2026-07-31: first cell landed.* The generic-call-argument cell is
+  CLOSED (and its report archived): the defect was inverted from the
+  prediction -- not a missing bridge but a wrongly-consulted one
+  (`fn_body_tail_is_carrier_producer` classified every `__inst_*` callee as
+  a carrier producer by NAME; the M7 by-value instance amendment fixes it;
+  suite 2444/0 in isolation, pinned by
+  `tests/fixtures/class-method-result-into-generic/`). The `bind` cell is
+  diagnosed one level deeper (see the report's 2026-07-31 investigation
+  update): a continuation return-ABI mismatch -- the elab-side
+  `boxes_aggregate` gate pairs the wrapper ABI by receiver abstractness
+  while the emit-side dispatch selects the entry point; partially-applied
+  instance heads (`(Result _ B)`) get the carrier base with a
+  by-value-returning wrapper. Fixing it means deciding the pairing where
+  the entry point is selected -- remaining work for this increment.
 - **Increment 3 -- container element protocol.** One rule for what a
   container element slot holds per element class (scalar bits / heap ptr /
   spilled by-value / fat fn handle), shared by Vec, parametric ADT

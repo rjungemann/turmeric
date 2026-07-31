@@ -1,5 +1,5 @@
 ---
-status: open
+status: RESOLVED 2026-07-31 -- consolidation increment 2 (archived)
 severity: medium-high
 discovered: 2026-07-30
 area: compiler (typeclass method result erasure meets generic specialization)
@@ -18,6 +18,15 @@ constructed value works. The composition is what breaks. `tur check` passes.
 Found by `tests/type-fuzz-src.py` (seed 11 case 93, tags
 `adt,ascribe,class_thru,gid`), then hand-minimized -- the ascription is not
 needed.
+
+**Resolution:** `fn_body_tail_is_carrier_producer` (emit_fns.c) classified
+every `__inst_*` callee as a carrier producer BY NAME -- stale for the M7
+by-value path, where a pure-Turmeric instance method with a concrete
+by-value product result returns the aggregate. The spec-call arg path then
+deref'd that aggregate as a pointer. The classifier now consults the
+instance's declared result; suite 2444/0 in isolation; pinned by
+`tests/fixtures/class-method-result-into-generic/` (direct ADT + struct
+receivers, dotted and bare dispatch, plus the let-bound control).
 
 ## Repro
 

@@ -161,14 +161,9 @@ def known_bug_slug(tags):
     # by this harness's probe phase, 2026-07-30.
     if "vec_byvalue_struct" in tags:
         return "vec-byvalue-struct-element-invalid-c"
-    # A typeclass method result (by-value ADT/struct) composed DIRECTLY into
-    # a generic call emits invalid C; a let-bind in between is fine.  The
-    # x_class_thru -> x_gid composition can produce exactly that.  Found by
-    # this harness, seed 11 case 93, 2026-07-30.
-    if "class_thru" in tags and "gid" in tags:
-        return "class-method-result-into-generic-invalid-c"
-    if "class_extract" in tags and "gid" in tags:
-        return "class-method-result-into-generic-invalid-c"
+    # (class-method-result-into-generic-invalid-c: RESOLVED 2026-07-31 by
+    # consolidation increment 2 -- the carrier-producer classifier now knows
+    # M7 by-value instance results -- and archived; rows retired.)
     return None
 
 
@@ -210,13 +205,9 @@ KNOWN_PROBES = [
     # fat-normalization stage 2 and archived; its matrix -- broken rows
     # included -- is pinned by tests/fixtures/fn-value-matrix-ok-rows/, so
     # the probes are retired rather than kept as permanent FIXED rows.)
-    ("class-method-result-into-generic-invalid-c",
-     "(defdata FzW (FzWc :int))\n"
-     "(defclass FzT [a] (thru [self : a] : a))\n"
-     "(definstance FzT [FzW] (thru [self : FzW] : FzW self))\n"
-     "(defn gid [A] [x : A] : A x)\n"
-     "(defn main [] : int\n"
-     "  (println (match (gid (.thru (FzWc -10))) (FzWc x) x))\n  0)\n"),
+    # (class-method-result-into-generic-invalid-c: RESOLVED 2026-07-31,
+    # archived; probe retired -- pinned by
+    # tests/fixtures/class-method-result-into-generic/.)
     # (fn-payload-in-container-undeclared-temp: RESOLVED 2026-07-31 by
     # fat-normalization stage 2 -- the parametric-defdata + FLOAT variant
     # verified by hand -- and archived; probe retired.)
