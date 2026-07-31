@@ -234,6 +234,23 @@ int type_eq(Type a, Type b) {
     if (a.kind == TY_REC) {
         return a.as.rec.name == b.as.rec.name;
     }
+    /* CT0 / concrete-codegen-layout-kind-enumerations-drift Finding 2: two
+     * contract types are the same type only when they refine the same BASE
+     * type.  Without this they fell through to the `return 1` below and EVERY
+     * pair of contracts compared equal -- while `type_c_name` delegates to the
+     * base, so `{ x : int | .. }` and `{ y : float | .. }` had different C
+     * layouts.  `type_register_adt_app` keys its registry on `type_eq`, so
+     * `(Box { x : int | .. })` and `(Box { y : float | .. })` shared one
+     * registry entry and one `tur_adt_Box__contract` typedef: the surviving
+     * definition stored `int64_t` while the float arm's match read it back with
+     * a `(double)` conversion.  Predicates are deliberately NOT compared: they
+     * are checked at run time and never C-visible, so `{ x : int | (> x 0) }`
+     * and `{ x : int | (< x 0) }` stay interchangeable exactly as before. */
+    if (a.kind == TY_CONTRACT) {
+        if (!a.as.contract_.base_type || !b.as.contract_.base_type)
+            return a.as.contract_.base_type == b.as.contract_.base_type;
+        return type_eq(*a.as.contract_.base_type, *b.as.contract_.base_type);
+    }
     /* Phase HRT0/EX1b: Quantified types — structural equality on n_vars, body, and
      * constraint set.  Bound variable names are not significant (alpha-renaming);
      * constraints are compared by (typeclass identity, bound-var index) tuple. */
@@ -473,15 +490,110 @@ bool type_has_concrete_codegen_layout(const Type *t) {
         case TY_ROLE:
         case TY_GENERATOR:
             return true;
+        /* concrete-codegen-layout-kind-enumerations-drift Finding 2 proposed
+         * delegating this to the base type, since type_c_name does.  It does
+         * not belong here YET, and the reason is measured, not theoretical:
+         * with `return type_has_concrete_codegen_layout(base)` here,
+         *
+         *   (defn mk [] : (Box #refine{ v : int | (> v 0) }) (MkBox 5))
+         *
+         * stops compiling -- `cc` reports "incompatible types when returning
+         * 'tur_adt_Box__int' but 'tur_adt_Box__contract_int' was expected".
+         * The ctor call is typed from its argument, `(Box int)`, and nothing
+         * peels the declared `(Box contract)` to it, so admitting contracts
+         * splits one carrier into two by-value monomorphs that no crossing
+         * reconciles.  Today both collapse to the int64 carrier and the
+         * mismatch is invisible.  See
+         * docs/reported/contract-type-arg-not-peeled-to-base.md; that peel is
+         * the prerequisite, and it also unblocks the float base, which is
+         * separately stuck behind TUR-E0707.
+         *
+         * Nothing about the collision fix depends on this: the correct per-base
+         * FIELD width comes from type_c_name, and the distinct monomorph NAMES
+         * come from the type_eq / append_type_mangle arms.  Both hold with
+         * contracts on the carrier -- `tur_adt_Box__contract_int` still gets an
+         * int64_t field and `tur_adt_Box__contract_float` a double. */
+        case TY_CONTRACT:
+            return false;
         case TY_APP:
             /* structdef-retirement DS-D: a struct-headed TY_APP can never form
              * (no Type has kind TY_STRUCT), so a parametric-struct monomorph has
              * no concrete by-value layout here.  Concrete parametric ADTs are
              * recognised separately by type_app_is_concrete_adt. */
             return false;
-        default:
+
+        /* ---- Deliberately NOT concrete.  ------------------------------------
+         * There is no `default` arm, for the reason append_type_mangle has
+         * none: a kind missing from this switch is not diagnosed, it silently
+         * loses the by-value monomorph and falls back to the int64 carrier --
+         * the map-show-keyword-key-raw-int bug, where an absent TY_SYM printed
+         * a raw carrier integer with no diagnostic anywhere.  Listing every
+         * kind makes -Wall's -Wswitch flag the next one at the point it is
+         * added.  Each rejection below says why. */
+
+        /* Unresolved placeholders: there is no layout to be concrete about yet.
+         * (type_register_adt_app rejects these as type arguments outright.) */
+        case TY_UNKNOWN:
+        case TY_TYVAR:
+            return false;
+        /* structdef-retirement DS-D: no Type ever has kind TY_STRUCT. */
+        case TY_STRUCT:
+            return false;
+        /* Bottom type -- has no values, so nothing is ever stored at this type. */
+        case TY_NEVER:
+            return false;
+        /* Finding 2, the `tur_tagged_t` pair.  These DO have a real C type, and
+         * it is a TWO-WORD struct -- every other member of this list is one
+         * word.  Admitting them is a by-value-ABI change (a 16-byte field in a
+         * monomorph, its own copy/drop crossings), not a table edit, and there
+         * is no way to build one today to test it: `(Vec any)` type-checks but
+         * `vec-of`'s type-witness binding trips TUR-E0201 inside stdlib/vec.tur.
+         * Rejecting keeps them on the int64 carrier, which is what every
+         * existing crossing expects.  Their mangle tokens are distinct, so
+         * admitting one later cannot collide with a one-word kind. */
+        case TY_ANY:
+        case TY_UNION:
+            return false;
+        /* type_c_name gives both of these the plain int64_t carrier, so a
+         * by-value monomorph over one would have exactly the carrier's layout
+         * and buy nothing but an extra C name.  TY_INTERSECTION is documented
+         * as an IT2 placeholder awaiting real codegen; revisit both if either
+         * ever grows a representation of its own. */
+        case TY_REC:
+        case TY_INTERSECTION:
+            return false;
+        /* Compile-time-only kinds: type_c_name gives each a comment-void or
+         * erased placeholder, so none is ever the type of a runtime value.
+         * (Rows are eliminated before codegen; quantified types are erased at
+         * instantiation; dynvar is an elaboration marker.) */
+        case TY_TYPECLASS:
+        case TY_TYPECLASS_INST:
+        case TY_FORALL:
+        case TY_EXISTS:
+        case TY_TYPEROW:
+        case TY_DYNVAR:
+        case TY_GLOBAL:
+            return false;
+        /* Session protocol descriptors: type-level states of a channel, erased
+         * at codegen (a "session-protocol" comment-void).  The endpoint that DOES
+         * carry a value is TY_SESSION, accepted above. */
+        case TY_SEND:
+        case TY_RECV:
+        case TY_CLOSE:
+        case TY_CHOOSE:
+        case TY_BRANCH:
+        case TY_SESSION_REC:
+        case TY_TIMEOUT:
+            return false;
+        /* SS1/SS2 internal result types of make-session / recv / offer.  They
+         * exist only between the call and its destructuring pattern and are
+         * never written by a user, so they never reach a type-argument slot. */
+        case TY_SESSION_PAIR:
+        case TY_SESSION_RECV_PAIR:
+        case TY_SESSION_OFFER:
             return false;
     }
+    return false;
 }
 
 /* True when `t` is a parametric ADT (`defdata` sum) application all of whose
@@ -766,7 +878,7 @@ static void append_type_mangle(Buf *b, Type t) {
             }
             break;
         }
-        /* docs/reported/concrete-codegen-layout-kind-enumerations-drift.md:
+        /* docs/archive/concrete-codegen-layout-kind-enumerations-drift.md:
          * this switch used to end in `default: "opaque"`, which did not drop an
          * unlisted kind but MERGED it -- every kind without a case mangled to
          * the single token `opaque`, so two distinct instantiations claimed one
@@ -827,21 +939,121 @@ static void append_type_mangle(Buf *b, Type t) {
             break;
         case TY_ROLE:            buf_puts(b, "role");            break;
         case TY_SESSION:         buf_puts(b, "session");         break;
-        /* Type-level / no-runtime-representation kinds.  These are rejected by
-         * type_has_concrete_codegen_layout, so they should never reach a
-         * monomorph name -- but they get distinct tokens anyway, so that if one
-         * ever does, it collides with nothing. */
+        /* Finding 2 of the same report: injectivity is required against
+         * `type_eq`, and `type_register_adt_app` mints a monomorph name for ANY
+         * type argument that is not a bare tyvar -- the concrete-layout list
+         * does NOT gate it.  So a kind whose `type_eq` discriminates on a
+         * payload needs that payload in its token even when
+         * type_has_concrete_codegen_layout rejects it: `(Box (| int float))`
+         * and `(Box (| int cstr))` are two registry entries that both emitted
+         * `tur_adt_Box__union`, and the `#ifndef` guard dropped the second.
+         * The kinds below whose `type_eq` compares nothing (it falls through to
+         * `return 1` -- any two are the same type) keep a bare token, which is
+         * injective by that definition. */
+        /* type_eq: `return 1` -- all `any` are one type. */
         case TY_ANY:             buf_puts(b, "any");             break;
-        case TY_UNION:           buf_puts(b, "union");           break;
-        case TY_INTERSECTION:    buf_puts(b, "intersection");    break;
-        case TY_REC:             buf_puts(b, "rec");             break;
-        case TY_CONTRACT:        buf_puts(b, "contract");        break;
+        /* type_eq compares union/intersection members structurally. */
+        case TY_UNION:
+            buf_puts(b, "union");
+            append_u32(b, t.as.union_.n_members);
+            for (uint8_t i = 0; i < t.as.union_.n_members; i++) {
+                buf_putc(b, '_');
+                if (t.as.union_.members && t.as.union_.members[i])
+                    append_type_mangle(b, *t.as.union_.members[i]);
+                else
+                    buf_puts(b, "none");
+            }
+            break;
+        case TY_INTERSECTION:
+            buf_puts(b, "intersection");
+            append_u32(b, t.as.intersection_.n_members);
+            for (uint8_t i = 0; i < t.as.intersection_.n_members; i++) {
+                buf_putc(b, '_');
+                if (t.as.intersection_.members && t.as.intersection_.members[i])
+                    append_type_mangle(b, *t.as.intersection_.members[i]);
+                else
+                    buf_puts(b, "none");
+            }
+            break;
+        /* type_eq compares TY_REC by its interned binder name. */
+        case TY_REC:
+            buf_puts(b, "rec");
+            if (t.as.rec.name) { buf_putc(b, '_'); append_c_ident_mangled(b, t.as.rec.name); }
+            break;
+        /* type_eq compares a contract by its BASE type (see the TY_CONTRACT arm
+         * there), which is also what type_c_name lowers it to -- so the base is
+         * exactly what distinguishes two contract monomorphs.  Predicates are
+         * not compared and so are not mangled. */
+        case TY_CONTRACT:
+            buf_puts(b, "contract");
+            if (t.as.contract_.base_type) {
+                buf_putc(b, '_');
+                append_type_mangle(b, *t.as.contract_.base_type);
+            }
+            break;
         case TY_NEVER:           buf_puts(b, "never");           break;
-        case TY_FORALL:          buf_puts(b, "forall");          break;
-        case TY_EXISTS:          buf_puts(b, "exists");          break;
-        case TY_TYPECLASS:       buf_puts(b, "typeclass");       break;
-        case TY_TYPECLASS_INST:  buf_puts(b, "typeclass_inst");  break;
-        case TY_TYPEROW:         buf_puts(b, "typerow");         break;
+        /* type_eq compares forall/exists on n_vars, the constraint set and the
+         * body (bound-variable names are not significant). */
+        case TY_FORALL:
+        case TY_EXISTS:
+            buf_puts(b, t.kind == TY_FORALL ? "forall" : "exists");
+            append_u32(b, t.as.forall_.n_vars);
+            buf_putc(b, '_');
+            append_u32(b, t.as.forall_.n_constraints);
+            for (uint8_t i = 0; i < t.as.forall_.n_constraints; i++) {
+                buf_putc(b, '_');
+                TypeClass *c = t.as.forall_.constraint_classes
+                                   ? t.as.forall_.constraint_classes[i] : NULL;
+                append_c_ident_mangled(b, c && c->name ? c->name->name : "class");
+                buf_putc(b, '_');
+                append_u32(b, t.as.forall_.constraint_var_idx
+                                  ? t.as.forall_.constraint_var_idx[i] : 0);
+            }
+            buf_puts(b, "__");
+            if (t.as.forall_.body) append_type_mangle(b, *t.as.forall_.body);
+            else                   buf_puts(b, "none");
+            break;
+        /* type_eq compares TY_TYPECLASS by the TypeClass pointer; the interned
+         * class name stands in for it here (two distinct classes cannot share
+         * a name in one program). */
+        case TY_TYPECLASS:
+            buf_puts(b, "typeclass_");
+            append_c_ident_mangled(b, t.as.typeclass.typeclass &&
+                                      t.as.typeclass.typeclass->name
+                                          ? t.as.typeclass.typeclass->name->name
+                                          : "class");
+            break;
+        /* type_eq compares TY_TYPECLASS_INST by the instance pointer; the class
+         * name plus the instance's type arguments is what distinguishes two
+         * instances of a class. */
+        case TY_TYPECLASS_INST: {
+            const TypeClassInstance *inst = t.as.typeclass_inst.instance;
+            buf_puts(b, "typeclass_inst_");
+            append_c_ident_mangled(b, inst && inst->typeclass && inst->typeclass->name
+                                          ? inst->typeclass->name->name : "class");
+            for (uint8_t i = 0; inst && i < inst->n_type_args; i++) {
+                buf_putc(b, '_');
+                append_type_mangle(b, inst->type_args[i]);
+            }
+            break;
+        }
+        /* type_eq compares a row order-sensitively on its elements, and on the
+         * field names when the row is a typed-field row. */
+        case TY_TYPEROW:
+            buf_puts(b, "typerow");
+            append_u32(b, t.as.typerow_.n_elements);
+            for (uint8_t i = 0; i < t.as.typerow_.n_elements; i++) {
+                buf_putc(b, '_');
+                if (t.as.typerow_.field_names && t.as.typerow_.field_names[i]) {
+                    append_c_ident_mangled(b, t.as.typerow_.field_names[i]);
+                    buf_putc(b, '_');
+                }
+                if (t.as.typerow_.elements && t.as.typerow_.elements[i])
+                    append_type_mangle(b, *t.as.typerow_.elements[i]);
+                else
+                    buf_puts(b, "none");
+            }
+            break;
         case TY_DYNVAR:          buf_puts(b, "dynvar");          break;
         case TY_GLOBAL:          buf_puts(b, "global");          break;
         /* Session protocol states (SS0b-SS5). */

@@ -236,20 +236,38 @@ Expr *elab_defkind(Elab *e, const Form *call) {
     return e_nil(e, call->span);
 }
 
-/* Phase TA1: (defalias Name :primitive-type)
+/* Phase TA1/TA2: (defalias Name <type-expr>)
  *
- * Declares a type alias for a primitive TypeKind.  The alias is stored in
- * e->type_alias_names / e->type_alias_kinds and consulted during type-
- * annotation resolution in type_expr_from_form and elab_fns parameter parsing.
+ * Declares a *transparent* type alias.  The alias is stored in
+ * e->type_alias_names / e->type_alias_kinds / e->type_alias_types and consulted
+ * during type-annotation resolution in type_expr_from_form and the elab_fns
+ * parameter/return ladders; every use site sees the target type itself, so the
+ * alias never participates in unification as a nominal type of its own.
  *
- * Syntax: (defalias Sample :int)
- *         (defalias Timestamp :int64)
+ * TA1 accepted primitive keywords only:
+ *
+ *   (defalias Sample :int)
+ *   (defalias Timestamp :int64)
+ *
+ * TA2 (composite-type-alias-gap) accepts any type expression the elaborator can
+ * resolve -- type applications, struct/ADT names, function types, refinements:
+ *
+ *   (defalias IntList (Cons int))
+ *   (defalias Point P)                    ; P declared by defstruct
+ *   (defalias Backtrack (fn [int] int))
+ *   (defalias NonZero #refine{ x : int | (not= x 0) })
+ *
+ * `deftype` stays what it always was -- the recursive type binder (TY_REC).
+ * The two forms are disjoint: `defalias` is transparent, `deftype` is
+ * recursive-nominal.  Alias *parameters* -- `(defalias Name [a] ...)` -- are
+ * not supported; a parameterised alias would need type-level substitution at
+ * every use site, which nothing in the resolver does today.
  */
 Expr *elab_defalias(Elab *e, const Form *call) {
-    /* Minimum: (defalias Name :keyword) — 3 elements */
+    /* Minimum: (defalias Name <type-expr>) — 3 elements */
     if (call->as.list.len < 3) {
         diag_emit(DIAG_ERROR, call->span,
-                  "defalias requires (defalias Name :primitive-type)");
+                  "defalias requires (defalias Name <type-expr>)");
         return NULL;
     }
 
@@ -262,19 +280,80 @@ Expr *elab_defalias(Elab *e, const Form *call) {
     }
     const Symbol *alias_name = name_form->as.sym;
 
-    /* Parse target type — must be a primitive keyword */
+    /* A `deftype`-shaped parameter vector -- (defalias Name [a] body) -- is not
+     * a defalias.  Name it rather than letting the vector fall through to the
+     * type-expression parser and produce a confusing downstream error. */
     Form *type_form = call->as.list.items[2];
-    if (type_form->tag != F_KEYWORD) {
+    if (type_form->tag == F_VEC && call->as.list.len > 3) {
         diag_emit(DIAG_ERROR, type_form->span,
-                  "defalias: target type must be a keyword (e.g. :int, :float)");
+                  "defalias '%s': type parameters are not supported -- a "
+                  "defalias target must be a fully applied type "
+                  "(e.g. (defalias IntList (Cons int)))",
+                  alias_name->name);
         return NULL;
     }
-    TypeKind target_kind = typekind_from_symbol(type_form->as.sym->name);
-    if (target_kind == TY_UNKNOWN) {
-        diag_emit(DIAG_ERROR, type_form->span,
-                  "defalias: '%s' is not a recognised primitive type",
-                  type_form->as.sym->name);
-        return NULL;
+
+    /* Resolve the target.  Primitive keywords keep the TA1 fast path so the
+     * exact TypeKind (and nothing else) lands in the table; everything else
+     * goes through the full type-expression resolver. */
+    Type *target = NULL;
+    if (type_form->tag == F_KEYWORD) {
+        TypeKind prim = typekind_from_symbol(type_form->as.sym->name);
+        if (prim != TY_UNKNOWN) {
+            target = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *target = type_from_kind(prim);
+        }
+    }
+    if (!target) {
+        target = type_expr_from_form(e, type_form, NULL, NULL, NULL, 0);
+        if (!target) {
+            return NULL;
+        }
+        /* An alias to itself never terminates at a use site.  Checked before
+         * the tyvar-echo test below so the recursive case gets the diagnostic
+         * that names the right remedy rather than a generic "unknown type". */
+        if ((type_form->tag == F_SYM || type_form->tag == F_KEYWORD) &&
+            type_form->as.sym == alias_name) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "defalias '%s': an alias cannot refer to itself -- use "
+                      "deftype for a recursive type",
+                      alias_name->name);
+            return NULL;
+        }
+        /* type_expr_from_form's last resort for an unknown name is a TY_TYVAR
+         * carrying that very name.  Aliasing to it would silently accept a
+         * typo -- `(defalias Bad :not-a-type)` must stay an error -- so reject
+         * a tyvar that is just the target spelling echoed back.  (A *nested*
+         * unknown name, `(defalias Foo (Cons Bar))`, still lands on the same
+         * unresolved-tyvar fallback every other type position uses.) */
+        if (target->kind == TY_TYVAR &&
+            (type_form->tag == F_SYM || type_form->tag == F_KEYWORD) &&
+            target->as.tyvar_.name &&
+            strcmp(target->as.tyvar_.name, type_form->as.sym->name) == 0) {
+            diag_emit(DIAG_ERROR, type_form->span,
+                      "defalias: '%s' is not a recognised type",
+                      type_form->as.sym->name);
+            return NULL;
+        }
+        /* Same fallback, one level in: `(defalias L (list int))` applies a name
+         * that is not a type constructor, so the head of the TY_APP chain is an
+         * unresolved tyvar.  The direct annotation `[xs : (list int)]` reports
+         * this as a kind mismatch; without this the alias would swallow the
+         * declaration-site error and only surface a confusing unification
+         * failure at the first use.  No type parameters are in scope here, so a
+         * tyvar head can only ever mean an unknown name. */
+        {
+            const Type *head = target;
+            while (head && head->kind == TY_APP) head = head->as.app.fn;
+            if (head && head->kind == TY_TYVAR && head->as.tyvar_.name &&
+                target->kind == TY_APP) {
+                diag_emit(DIAG_ERROR, type_form->span,
+                          "defalias '%s': '%s' is not a type constructor -- "
+                          "it cannot be applied to type arguments",
+                          alias_name->name, head->as.tyvar_.name);
+                return NULL;
+            }
+        }
     }
 
     /* Grow the alias table if needed */
@@ -284,18 +363,24 @@ Expr *elab_defalias(Elab *e, const Form *call) {
             new_cap * sizeof(const Symbol *));
         TypeKind *new_kinds = (TypeKind *)arena_alloc(e->arena,
             new_cap * sizeof(TypeKind));
+        Type **new_types = (Type **)arena_alloc(e->arena,
+            new_cap * sizeof(Type *));
         if (e->n_type_aliases > 0) {
             memcpy(new_names, e->type_alias_names,
                    e->n_type_aliases * sizeof(const Symbol *));
             memcpy(new_kinds, e->type_alias_kinds,
                    e->n_type_aliases * sizeof(TypeKind));
+            memcpy(new_types, e->type_alias_types,
+                   e->n_type_aliases * sizeof(Type *));
         }
         e->type_alias_names = new_names;
         e->type_alias_kinds = new_kinds;
+        e->type_alias_types = new_types;
         e->cap_type_aliases = new_cap;
     }
     e->type_alias_names[e->n_type_aliases] = alias_name;
-    e->type_alias_kinds[e->n_type_aliases] = target_kind;
+    e->type_alias_kinds[e->n_type_aliases] = target->kind;
+    e->type_alias_types[e->n_type_aliases] = target;
     e->n_type_aliases++;
 
     /* defalias has no runtime effect — return nil */
@@ -709,13 +794,16 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             const Symbol *alias_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
             for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                 if (e->type_alias_names[ai] == alias_sym) {
+                    /* TA2: hand back the full target type, not just its kind --
+                     * a composite alias ((list int), a struct, (fn [int] int))
+                     * carries payload a bare TypeKind would drop. */
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *t = type_from_kind(e->type_alias_kinds[ai]);
+                    *t = *e->type_alias_types[ai];
                     return t;
                 }
             }
         }
-        
+
         /* IT4: any — top type. */
         if (sym->len == 3 && memcmp(sym->name, "any", 3) == 0) {
             Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -2231,13 +2319,13 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             t->c_num_spelling = c_num_spelling_for_name(sym->name);
             return t;
         }
-        /* Phase TA1: check defalias table before struct/ADT fallback */
+        /* Phase TA1/TA2: check defalias table before struct/ADT fallback */
         {
             const Symbol *alias_sym = symtab_intern(e->st, strslice(sym->name, sym->len));
             for (uint32_t ai = 0; ai < e->n_type_aliases; ai++) {
                 if (e->type_alias_names[ai] == alias_sym) {
                     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
-                    *t = type_from_kind(e->type_alias_kinds[ai]);
+                    *t = *e->type_alias_types[ai];
                     return t;
                 }
             }

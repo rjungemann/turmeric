@@ -1998,6 +1998,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_defalias      = intern_cstr(st, "defalias");
     e->type_alias_names  = NULL;
     e->type_alias_kinds  = NULL;
+    e->type_alias_types  = NULL;
     e->n_type_aliases    = 0;
     e->cap_type_aliases  = 0;
     /* Phase HKT-P1: type-app */

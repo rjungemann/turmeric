@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.32.3] -- 2026-07-30
 
 ### Added
 
@@ -31,6 +31,19 @@ All notable changes to Turmeric are documented here.
   interpreter natives; `fabs`, `ceil`, and `pow` gained the interpreter
   natives they were missing.
 - **`Num [float]` instance**, which the class was missing.
+- **Editor intelligence in the browser**: the LSP gained a WASM bridge and a
+  browser analysis backend, so Try Turmeric now offers completion, hover,
+  diagnostics, and go-to-definition without a server. Transport is split from
+  dispatch, with transport-free session unit tests behind it.
+- **`defalias` accepts a full type expression** -- not just a type constructor
+  -- so composite aliases (function types, rows, applications) are
+  expressible.
+- **`defopaque :sealed`**: `::` cannot cross the representation boundary of a
+  sealed opaque type.
+- **`:tur-version` in `build.tur`**: a spice can declare which compiler
+  versions it is known to work with.
+- **Shadowing diagnostic**: a `defn`/`defmacro` that shadows a special form
+  now warns at the definition site rather than surprising you at the call.
 
 ### Changed
 
@@ -41,6 +54,34 @@ All notable changes to Turmeric are documented here.
   `__inst_Num_add_int8` returns `int8_t`, not `int64_t`). This is what makes a
   `Num` instance for a non-integer type -- Rational, Complex, a user newtype --
   usable at a call site.
+
+### Fixed
+
+- **Higher-kinded dispatch inside constrained-polymorphic bodies** now goes
+  through dictionary passing ("Route B"). This fixes return-directed method
+  resolution on a constrained abstract type constructor, aggregate
+  continuation returns at the dict-dispatch carrier, and the
+  partial-application hole in the `Type`.
+- **ICE when taking an effectful function's address** -- it was counted as
+  performing the effect.
+- **SIGSEGV calling a `^fat` parameter with a non-empty effect row.**
+- **Name mangling**: `append_type_mangle` is now injective (its default arm is
+  gone), and C reserved words are guarded with a `tur_u_` prefix.
+- **Codegen**: a stored `fn` element is spelled as a handle with its type
+  variables substituted, and `:Sym` is treated as a concrete codegen layout.
+- **Row algebra threads field names through**, so typed-field rows survive row
+  operations.
+- **`load` honors a loaded file's inline `#lang`**, and `--interpret` now
+  routes through the same path.
+- **The transitive `:spices` include-path walk terminates on cycles.**
+- **`turi` shows collection elements by their own `Show` instance** rather
+  than always using `Show[int]`.
+- **`build.tur` bare-brace manifest syntax** in the docs and the manifest hint.
+
+### Docs
+
+- New guides for type-level rows, value representations, and the numeric
+  tower; `effects-vs-monads` rewritten around the present-tense choice.
 
 ## [0.32.2] -- 2026-07-27
 

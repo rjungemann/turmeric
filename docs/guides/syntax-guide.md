@@ -229,6 +229,54 @@ compound-annotation grammar is in the
 [Type Annotations Guide](type-annotations-guide.md); variadic rules are in the
 function-arity section of the project conventions.
 
+### Naming a type -- `defalias` vs `deftype`
+
+Two forms bind a type name, and they do different things.
+
+`defalias` is the **transparent** alias. The name and its target are the same
+type everywhere, so the alias never shows up in unification -- it is a
+readability tool, not a new type. The target can be any type expression:
+
+```turmeric
+(defalias Sample    :int)                            ; primitive
+(defalias IntList   (Cons int))                      ; type application
+(defalias Point     P)                               ; struct / ADT name
+(defalias Backtrack (fn [] int))                     ; function type
+(defalias NonZero   #refine{ q : int | (not= q 0) }) ; refinement
+```
+```sweet-exp
+defalias Sample    :int                              ; primitive
+defalias IntList   (Cons int)                        ; type application
+defalias Point     P                                 ; struct / ADT name
+defalias Backtrack (fn [] int)                       ; function type
+defalias NonZero   #refine{ q : int | (not= q 0) }   ; refinement
+```
+
+Because it is transparent, `(defn f [b : Backtrack] : int (b))` applies `b`
+exactly as `(fn [] int)` would, and a `Point` is accepted anywhere a `P` is.
+
+`deftype` is the **recursive type binder**. It wraps its body in a recursive
+type, which is what `Fix`/`Free` need, and takes its parameters as a bracket
+vector:
+
+```turmeric
+(deftype Fix [^f] (f (Fix f)))
+```
+
+That wrapping makes `deftype` the wrong tool for naming a non-recursive type:
+the bound name is a distinct nominal type, so use sites fail to unify with the
+body. Reach for `defalias` there. The one exception is a bare refinement body,
+which `deftype` binds transparently for `stdlib/refine.tur`'s benefit --
+`defalias` handles that case too, and is the clearer spelling in new code.
+
+Neither form takes alias type parameters: `(defalias Name [a] ...)` is an
+error, and a `deftype`'s parameters belong to the recursive type, not to an
+alias. For a named parametric shape, use `defstruct`/`defdata`.
+
+Two more forms are adjacent but distinct: `defopaque` makes a **nominal**
+newtype (deliberately *not* interchangeable with its representation), and
+`defstruct` declares a record.
+
 ### Indentation conventions
 
 Turmeric source follows Clojure-style indentation.

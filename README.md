@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.2` -- `tur lsp` gains formatting, signatureHelp, and cancellation, plus fixes so completion no longer goes blank mid-edit.
+**Latest release:** `v0.32.3` -- a numeric tower (`Rational`, `Complex`) with `Num`-based operator overloading and `#rat`/`#cx` literals, plus higher-kinded dispatch through dictionary passing.
 
 ## What
 

@@ -1,0 +1,5 @@
+;; Applying a name that is not a type constructor is caught at the defalias,
+;; not swallowed into the alias table and surfaced as a confusing unification
+;; failure at the first use site.  (`list` is not a type name here -- the
+;; cons-list type constructor is `Cons`.)
+(defalias IntList (list int))
