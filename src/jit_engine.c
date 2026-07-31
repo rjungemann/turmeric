@@ -38,6 +38,58 @@
 #include "c2mir.h"
 
 /* ------------------------------------------------------------------ */
+/* I0 SPIKE INSTRUMENTATION (mir-interp-tier-plan phase I0)            */
+/* Temporary: measures the tier so I0's go/no-go gate has numbers.     */
+/* Remove wholesale if I0 comes back negative and the plan is shelved. */
+/* ------------------------------------------------------------------ */
+#include <sys/resource.h>
+#include <time.h>
+
+static int g_jit_interp_mode;  /* TUR_JIT_GEN=interp */
+static int g_jit_gen_inited;   /* was MIR_gen_init called? */
+
+static double jit_now_ms (void) {
+  struct timespec ts;
+  clock_gettime (CLOCK_MONOTONIC, &ts);
+  return (double) ts.tv_sec * 1000.0 + (double) ts.tv_nsec / 1.0e6;
+}
+
+static double g_jit_t0, g_jit_t_prev;
+static int g_jit_timing;   /* TUR_JIT_TIMING=1 */
+
+static void jit_timing_begin (void) {
+  const char *t = getenv ("TUR_JIT_TIMING");
+  g_jit_timing = (t != NULL && strcmp (t, "1") == 0);
+  g_jit_t0 = g_jit_t_prev = jit_now_ms ();
+}
+
+/* Phase delta since the previous mark, on stderr so fixture stdout stays
+ * byte-comparable under the parity harness. */
+static void jit_timing_mark (const char *phase) {
+  if (!g_jit_timing) return;
+  double now = jit_now_ms ();
+  fprintf (stderr, "TUR_JIT_TIMING\t%s\t%s\t%.3f\n",
+           g_jit_interp_mode ? "interp" : "gen", phase, now - g_jit_t_prev);
+  g_jit_t_prev = now;
+}
+
+static void jit_timing_rss (void) {
+  if (!g_jit_timing) return;
+  struct rusage ru;
+  getrusage (RUSAGE_SELF, &ru);
+  /* Linux reports KB, macOS bytes; normalize to KB. */
+#if defined(__APPLE__)
+  double kb = (double) ru.ru_maxrss / 1024.0;
+#else
+  double kb = (double) ru.ru_maxrss;
+#endif
+  fprintf (stderr, "TUR_JIT_TIMING\t%s\tmaxrss_kb\t%.0f\n",
+           g_jit_interp_mode ? "interp" : "gen", kb);
+  fprintf (stderr, "TUR_JIT_TIMING\t%s\ttotal\t%.3f\n",
+           g_jit_interp_mode ? "interp" : "gen", jit_now_ms () - g_jit_t0);
+}
+
+/* ------------------------------------------------------------------ */
 /* input: the emitted C, in memory                                     */
 /* ------------------------------------------------------------------ */
 static const char *g_src;
@@ -417,6 +469,7 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   g_src_len = full_len;
   g_src_pos = 0;
 
+  jit_timing_begin ();
   MIR_context_t ctx = MIR_init ();
   MIR_set_error_func (ctx, jit_mir_error);
   g_jit_err_active = 1;
@@ -443,8 +496,27 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
     return TUR_JIT_ERR_COMPILE;
   }
 
-  MIR_gen_init (ctx);
-  MIR_gen_set_optimize_level (ctx, 2);
+  /* I0 SPIKE (mir-interp-tier-plan section 3, phase I0): TUR_JIT_GEN=interp
+   * selects MIR's bytecode interpreter instead of the generator, so the tier
+   * can be measured on the production path rather than a scratch driver.
+   * MIR_gen_init is SKIPPED in that mode -- the plan's benefit-3 claim (an
+   * interp-only deployment need not link mir-gen-<arch>.c) is only testable
+   * if the generator is never initialized.  g_jit_gen_inited keeps the
+   * matching MIR_gen_finish calls honest. */
+  g_jit_interp_mode = 0;
+  {
+    const char *g = getenv ("TUR_JIT_GEN");
+    if (g != NULL && strcmp (g, "interp") == 0) g_jit_interp_mode = 1;
+  }
+  jit_timing_mark ("c2mir");
+  if (!g_jit_interp_mode) {
+    MIR_gen_init (ctx);
+    MIR_gen_set_optimize_level (ctx, 2);
+    g_jit_gen_inited = 1;
+  } else {
+    g_jit_gen_inited = 0;
+  }
+  jit_timing_mark ("gen_init");
 
   for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
        m = DLIST_NEXT (MIR_module_t, m))
@@ -488,8 +560,12 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   {
     const char *g = getenv ("TUR_JIT_GEN");
     if (g != NULL && strcmp (g, "eager") == 0) gen_iface = MIR_set_gen_interface;
+    /* I0 spike: see the mode selection above. */
+    if (g_jit_interp_mode) gen_iface = MIR_set_interp_interface;
   }
+  jit_timing_mark ("load");
   MIR_link (ctx, gen_iface, jit_import_resolver);
+  jit_timing_mark ("link");
   jit_sync_config_globals (ctx);
   g_jit_err_active = 0;   /* past the last MIR call that can raise */
 
@@ -525,7 +601,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 
   MIR_item_t main_item = jit_find_func (ctx, "main");
   if (main_item == NULL) {
-    MIR_gen_finish (ctx);
+    if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
     fprintf (stderr, "tur: jit: no main in generated module\n");
@@ -544,7 +620,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   pthread_attr_setstacksize (&attr, stack_mb * 1024 * 1024);
   if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
     pthread_attr_destroy (&attr);
-    MIR_gen_finish (ctx);
+    if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
     fprintf (stderr, "tur: jit: entry thread create failed\n");
@@ -552,8 +628,10 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   }
   pthread_join (entry_thread, NULL);
   pthread_attr_destroy (&attr);
+  jit_timing_mark ("run");
+  jit_timing_rss ();
 
-  MIR_gen_finish (ctx);
+  if (g_jit_gen_inited) MIR_gen_finish (ctx);
   c2mir_finish (ctx);
   MIR_finish (ctx);
 
@@ -594,7 +672,7 @@ int tur_jit_compile_image (const char *csrc, size_t csrc_len,
 
   TurJitImage *img = (TurJitImage *) malloc (sizeof *img);
   if (!img) {
-    MIR_gen_finish (ctx);
+    if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
     return TUR_JIT_ERR_RUN;

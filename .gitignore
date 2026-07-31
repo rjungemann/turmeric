@@ -149,3 +149,4 @@ tests/fixtures/*/*/jit.stderr
 benchmarks/output/
 build-mirpin/
 build-lazyrel/
+build-jitrel/

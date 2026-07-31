@@ -1,7 +1,8 @@
 # MIR Interpreter Tier Plan (tier-0 `MIR_interp`)
 
-Status: **PROPOSED -- no code.** Depends on the JIT engine (J1/J2/S2, see
-[jit-engine-plan.md](jit-engine-plan.md)), which is landed.
+Status: **I0 RUN 2026-07-31 -- RESULT NEGATIVE for I1-I3; I4 still
+recommended.** See section 6 for the measurements. Depends on the JIT engine
+(J1/J2/S2, see [jit-engine-plan.md](jit-engine-plan.md)), which is landed.
 
 This plan opens by retracting the premise that motivated it. Read section 0
 before section 1: the headline benefit that made this idea attractive does
@@ -278,3 +279,147 @@ Run I0. Land I4 regardless of what I0 says. Build I1-I3 only on a positive
 I0, and expect the honest outcome to be that S2 already captured most of
 the available latency and the tier is not worth its second set of
 semantics.
+
+## 6. I0 RESULTS (2026-07-31, x86-64 Linux)
+
+Vehicle: `TUR_JIT_GEN=interp` extended onto the existing generation-mode env
+knob in `jit_engine.c`, plus `TUR_JIT_TIMING=1` phase marks. This measures
+the production path rather than a scratch driver. `MIR_gen_init` is skipped
+in interp mode so benefit 3 is testable.
+
+**All numbers are Release** (`build-jitrel`, `-DTUR_JIT=ON`). The Debug+ASan
+build inflates `MIR_gen_init` roughly 400x (0.8ms -> ~350ms) and would have
+produced a wildly favorable and completely false result for the tier. Any
+re-measurement must use Release.
+
+### 6.1 Latency
+
+Phase means, 3 runs, trivial `hello` program:
+
+| phase | gen (ms) | interp (ms) |
+| --- | --- | --- |
+| c2mir | 121.8 | 116.1 |
+| gen_init | 0.8 | 0.0 |
+| load | 4.1 | 4.5 |
+| link | 16.7 | 14.4 |
+| run | 0.9 | 0.5 |
+| **total** | **144.3** | **135.5** |
+
+**c2mir is 80-85% of end-to-end time and is identical in both modes.** That
+is a hard ceiling on anything this tier can win, and it is the single most
+important number here.
+
+`gen_init` costs 0.8ms in Release. Benefit 2 (skip generator init) is worth
+about 0.5% and is not a reason to do anything.
+
+### 6.2 Where the tier actually wins
+
+The win is not in `link` (2.3ms, near noise) -- it is **deferred codegen on
+cold functions**, which under lazy gen is charged to `run`. 400 functions
+each called exactly once:
+
+| phase | gen (ms) | interp (ms) |
+| --- | --- | --- |
+| link | 23.7 | 18.6 |
+| run | 26.5 | 1.0 |
+| **total** | **191.2** | **156.4** |
+
+**18% saved**, and it scales with function count. This is the eval-shaped
+profile -- a REPL turn, a freshly loaded spice -- and it is a real effect.
+
+Note this means I0's stated gate ("proceed only if tier-0 **link** latency is
+a large enough win") was aimed at the wrong phase. Link savings are noise;
+the effect is in run. The gate should have been written against cold-code
+codegen cost.
+
+### 6.3 Where it loses
+
+Compute-heavy (3M-iteration integer loop plus a 1M-iteration float loop,
+probe value `7.1`): `run` is 4.8ms under gen, 47.1ms under interp --
+**~10x slower in steady state**, unbounded as work grows. Both modes printed
+identical correct output including the float result.
+
+Crossover, sweeping loop trip count:
+
+| n | gen total (ms) | interp total (ms) |
+| --- | --- | --- |
+| 1,000 | 139.4 | 129.4 |
+| 10,000 | 135.4 | 132.4 |
+| 100,000 | 135.1 | 128.8 |
+| 300,000 | 137.2 | 137.2 |
+| 1,000,000 | 140.4 | 147.5 |
+
+**Crossover is ~300k iterations -- about 3ms of gen-mode execution.** Below
+it the tier wins at most ~5-7ms (4-5%); above it the loss grows without
+limit. The maximum upside is small and capped; the downside is not.
+
+### 6.4 Correctness -- the finding that decides it
+
+Full corpus under `TUR_JIT_GEN=interp`: **2356 passed, 58-62 failed** (count
+varies run to run; the concurrency fixtures are flaky under interp). Gen mode
+on the same build: 11 failed, all of them the unrelated Release/refine bug
+below.
+
+Classifying every failure by running both engines directly and comparing
+engine-to-engine (not against expected files):
+
+| class | count |
+| --- | --- |
+| DIVERGE-crash | 36 |
+| DIVERGE-wrong (silent wrong output) | 9 |
+| DIVERGE-hang | 4 |
+| SAME (gen fails identically -- not interp's fault) | 13 |
+
+**49 genuine divergences, including 9 silent wrong answers.** By family:
+httpd 26, session 13, gc 3, hkt 2, and one each of weak/stm/scheduler/fn/
+defstruct -- i.e. **39 of 49 are concurrency/async**, the rest refcount/GC.
+
+One contributing cause is identified: the interpreter `alloca`s a frame per
+call (`mir-interp.c:1930`), so Turmeric's CPS-heavy code exhausts the
+engine's 64MB sized stack and surfaces as heap corruption
+(`malloc(): corrupted top size`). Raising `TUR_JIT_STACK_MB` to 1024 clears
+the corruption -- **but fixes only 4 of the 49**. The remaining 45 are a
+deeper divergence that is not diagnosed here.
+
+This also runs against a standing architectural decision: the sized stack is
+a sanctioned stopgap and the long-run fix must retain the stackless
+architecture, never ever-bigger stack constants. A tier that needs 16x more
+stack pushes hard the wrong way.
+
+### 6.5 Incidental find (unrelated to the tier)
+
+The 13 SAME failures are 9 `refine-*` fixtures plus flaky cc-fallback ones.
+Isolating the refine ones off the JIT path entirely shows the `refined`
+experiment's runtime obligations **do not fire on a Release build** --
+`tur run` on `refine-match-field-wrong` exits 134 on Debug and 0 on Release.
+Filed separately as
+[docs/reported/refined-obligations-silently-pass-in-release.md](../reported/refined-obligations-silently-pass-in-release.md).
+It is a Release-only product bug, found only because I0 measured on Release.
+
+### 6.6 Verdict
+
+**Shelve I1-I3.** The ceiling is c2mir (80-85%, unchanged), the best case is
+18% on a workload shape that has to be cold to qualify, the crossover is
+~3ms of execution, and the correctness cost is 49 divergences concentrated
+in exactly the concurrency surface Turmeric cares most about -- 9 of them
+silent wrong answers. Closing that gap is a large, open-ended debugging
+project against a second set of execution semantics, to buy a capped
+single-digit-percent win on cold code.
+
+**Land I4 anyway.** It never depended on the tier: moving `jit_engine.c` into
+`tur_core`/`libturi` gives embedders the `MIR_gen` engine, which is what the
+original question asked for, and I0 changes nothing about its case.
+
+If the tier is ever revisited, the two things to fix first are the
+per-call `alloca` frame against the sized stack, and whatever makes 39
+concurrency fixtures diverge. Neither is small.
+
+### 6.7 Spike code
+
+The `TUR_JIT_GEN=interp` mode and `TUR_JIT_TIMING=1` marks are **kept**, not
+reverted, despite this plan's original "remove wholesale on a negative I0"
+note. They are env-gated, default off, and gen-mode behavior is byte
+identical (verified: the gen corpus run is unchanged). Keeping them means the
+49 divergences stay reproducible; deleting the mode would make this section
+unverifiable. Same precedent as the pre-existing `TUR_JIT_GEN=eager`
+diagnostic knob.
