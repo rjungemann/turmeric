@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.5` -- the dev-only Z3 refinement oracle is retired; solver soundness is now guarded by an in-repo labelled SMT-LIB corpus and a source-level fuzzer.
+**Latest release:** `v0.32.6` -- `tur jit` lands an in-process MIR JIT engine behind two gates, and the emitted C sheds every GCC extension that kept it out of a strict C11 front end.
 
 ## What
 

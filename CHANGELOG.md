@@ -2,6 +2,58 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.32.6] -- 2026-07-31
+
+### Added
+
+- **`tur jit <file>` -- an in-process MIR JIT engine.** Behind two gates
+  (`-DTUR_JIT=ON` at build time, `--enable=jit` at run time), `tur jit`
+  compiles a program's emitted C with c2mir and runs it in process -- no `cc`
+  subprocess, no linker. Any engine failure prints `TUR-W0070` and delegates
+  to the existing `cc` path, so the subcommand never fails where `tur run`
+  would have succeeded. A default build vendors nothing and carries no new
+  dependency.
+- **A split runtime: the JIT compiles against declarations, not the preamble.**
+  `tur jit` swaps the emitted all-gates preamble for a committed declarations
+  region under an xxh64 hash guard and resolves the runtime by address into
+  the host; on a mismatch (emitter drift, knob drift, missing archive) the
+  full preamble is used unchanged. `arith` end to end drops ~278ms -> ~200ms.
+  `TUR_JIT_NO_SPLIT=1` opts out.
+- **The REPL builds spices in process.** `tur --enable=jit repl` replaces the
+  `tur build --shared` subprocess + `dlopen` + `dlsym` pipeline with the
+  engine; cold spice load drops ~850ms -> ~260ms on a two-module probe.
+- **The JIT engine is reachable from a libturi embedder.** A C host linking
+  `libturi` probes for `TUR_HAVE_JIT` (a PUBLIC compile definition, so the
+  probe resolves whether or not an engine was built) and drives the engine
+  through `jit_engine.h`, falling back to `turi_eval` rather than to `cc`.
+
+### Fixed
+
+- **Emitted C is portable to a strict C11 front end.** `__auto_type`,
+  `__attribute__((constructor))`, `__attribute__((cleanup))`, and
+  `__extension__ ({...})` no longer appear in the emitted program -- replaced
+  by named types, an explicit `__tur_static_init()`, an explicit scope-exit
+  pop, and a bare statement expression. This is what unblocked the JIT, but it
+  makes the `cc` path's output more portable too.
+- **Invalid C from two emitter defects.** A call temp now records its
+  *declared* C type rather than a re-derived one, and a `TUR_APPLY` argument
+  is no longer cast to an aggregate parameter type.
+- **`return <void expr>;` is no longer emitted in `:void` functions**, and
+  hoisted `#include`s are ordered before hoisted code.
+- **Persistent-map `cstr` keys hash and compare by content**, not by pointer
+  identity, in the P3 `^persistent` lowering.
+- **Dynamic bindings pop on an early return**, not only via the cleanup path.
+- **Self-TCO fires through a capturing named `let`.**
+- Two arm64/macOS emitter defects: the `xxh64` prototype and the
+  `TaskGroupBlock` layout.
+- Monaco editor colors in the web REPL.
+
+### Internal
+
+- CI covers the MIR JIT engine (`tests/run-jit.sh`), and a parity harness plus
+  an engine benchmark triangle compare `tur jit` against the `cc` path across
+  the fixture corpus.
+
 ## [0.32.5] -- 2026-07-30
 
 ### Removed
