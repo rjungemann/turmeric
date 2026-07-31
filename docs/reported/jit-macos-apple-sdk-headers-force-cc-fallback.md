@@ -20,6 +20,11 @@ advertise, then `#error`-ing or producing an empty conditional:
 |---|---|---|---|
 | `#error TargetConditionals.h: unknown compiler` | 5 | `TargetConditionals.h:398` | `gc-collects-strong-cycle`, `gc-live-cycle-survives`, `hkt-fmap-rc-result-droppable`, `hkt-instance-rc-construct-result`, `weak-breaks-parent-child-cycle` |
 | `empty preprocessor expression` | 3 | `mach/port.h:100`, reached via `mach-o/dyld.h` | `image-hooks-tracked`, `image-reload-hook`, `image-roundtrip` |
+
+**Both surface errors above are now gone; the fixtures still fall back.** The
+table records the symptoms as first observed. As of 2026-07-30 the real
+blockers are one layer down -- `#pragma pack` and C23 enum base types -- see
+"Fix direction 1 was tried" below before acting on this table.
 | `unresolved import: _OSSwapInt16` | 1 | `libkern/_OSByteOrder.h` (`__DARWIN_OS_INLINE`) | `async-echo-server` |
 
 That is the original 9 from the parent report; findings 32.2 measures the
@@ -117,14 +122,59 @@ not re-parsing the Apple SDK headers per program." These 13 are the visible end
 of that: programs that cannot use the engine at all because a header stops the
 parse.
 
+## Fix direction 1 was tried and does NOT clear either class (2026-07-30)
+
+Measured on arm64 macOS. Predefining the macros works exactly as predicted at
+the *preprocessor* level -- and buys nothing, because each `#error` was masking
+a deeper c2mir gap that a `-D` cannot touch. **The fallback count did not move:
+2414 passed, 0 failed, 47 skipped, 31 via cc fallback, before and after.**
+
+Mechanism note for anyone retrying this: `c2mir_options.macro_commands` is
+processed in `compile_init`, but `add_standard_includes` pushes MIR's own
+target prelude afterwards and the stream stack reads it FIRST, so a `-D` there
+is overwritten by any prelude `#define` of the same name. Defining the macro in
+`JIT_PRELUDE` instead is what works -- it is prepended to the emitted TU, which
+c2mir reads after its own prelude and before the SDK headers.
+
+- **`mach/port.h` row (`image-*`, 3 fixtures) -- root cause found, and it is a
+  MIR bug, not a compiler-identity probe.** `mirc_aarch64_linux.h:135` spells
+  `#define __arm64__` with no replacement list, so `#if __arm64__` expands to a
+  bare `#if`. `JIT_PRELUDE` now restores it to `1` (shipped). The
+  "empty preprocessor expression" is gone -- and what it was hiding is that
+  the block it guards defines `xnu_static_assert_struct_size`. With the
+  assertions re-armed, `mach/message.h:543`/`:569` now fail
+  `static assertion failed: "struct changed size unexpectedly"`, because c2mir
+  ignores the `#pragma pack(push, 4)` those structs live inside. Still a
+  fallback, now for a **correct** reason. See
+  [jit-c2mir-ignores-pragma-pack.md](jit-c2mir-ignores-pragma-pack.md) -- the
+  more serious finding this investigation turned up.
+
+- **`TargetConditionals.h` row (gc/hkt/weak, 5 fixtures) -- blocked behind a
+  C23 feature.** `-DTARGET_CPU_ARM64=1` (the header's own documented
+  workaround, `TargetConditionals.h:393`) does suppress the `#error`. The next
+  thing the parse hits is `malloc/malloc.h:96`:
+  `typedef enum __enum_options : uint64_t {...}` -- a C23 enum with a fixed
+  underlying type, which c2mir cannot parse. Confirmed with a minimal probe
+  (`typedef enum : unsigned long long { E_A = 1u } t;` -> `syntax error on
+  typedef` under the JIT, `sizeof` 8 under cc). No `-D` reaches this; it needs
+  c2mir grammar work.
+
+  `TARGET_CPU_ARM64` was **deliberately not shipped**. It buys no fixture (the
+  malloc.h parse error blocks them anyway) and it leaves `TargetConditionals.h`
+  half-configured: the `#else` branch guards only the `#error`, so
+  `TARGET_OS_MAC` and friends stay undefined and any later `#if TARGET_OS_MAC`
+  silently evaluates 0. Adding a known-inconsistent macro set for zero measured
+  gain is the wrong trade -- if this is revisited, define the full
+  `TARGET_CPU_*`/`TARGET_OS_*` set, not one macro.
+
+So the remaining 8 fixtures are gated on two c2mir capabilities --
+`#pragma pack` and C23 enum base types -- not on compiler identity. Fix
+direction 1 is closed.
+
 ## Fix directions
 
-1. **Predefine what the headers probe for.** c2mir accepts `-D` options
-   (`c2mir_options.macro_commands`). Advertising a compiler identity the SDK
-   headers recognize -- and an endianness for `OSByteOrder.h` -- should clear
-   all three classes without touching the SDK. Cheapest first step; verify each
-   class separately, since `TargetConditionals.h` and `OSByteOrder.h` fail for
-   different reasons.
+1. ~~**Predefine what the headers probe for.**~~ **Tried; closed.** See the
+   section above. Cleared both `#error`s and moved the fallback count by zero.
 2. **Stop reaching the headers at all.** ~~The S2 split already removed the
    fixed runtime preamble from every per-program compile.~~ It did not: S2
    moved the runtime *definitions* out, but `tur_rt_split_decls.h:45-343`

@@ -61,6 +61,28 @@ static int jit_getc (void *data) {
  * clean compile error for silent corruption under spawn.  Inline C that uses
  * them fails c2mir loudly and takes the step-6 fallback to cc instead. */
 static const char JIT_PRELUDE[] =
+  /* MIR's Apple/aarch64 prelude spells `#define __arm64__` with NO
+   * replacement list (c2mir/aarch64/mirc_aarch64_linux.h:135), where Apple
+   * clang defines it as 1.  Every SDK `#if __arm64__` therefore expands to a
+   * bare `#if` -- "empty preprocessor expression" -- and the guarded block is
+   * lost.  `mach/port.h:100` is the one the corpus hits; it guards
+   * `xnu_static_assert_struct_size`, so losing it silently DISABLES the SDK's
+   * own struct-size assertions.  Restoring the value re-arms them, which is
+   * the point: c2mir ignores the `#pragma pack(push, 4)` that
+   * mach/message.h:291 wraps those structs in, so it really does lay them out
+   * wrong (measured: 16 bytes where clang gives 12 for a pack(4) probe), and
+   * the assertions are what turn that from a silent ABI skew into a loud,
+   * correct fallback to cc.  See
+   * docs/reported/jit-c2mir-ignores-pragma-pack.md.
+   *
+   * This runs before any SDK header: c2mir's stream stack reads its own
+   * prelude first, so a redefine here lands after MIR's and ahead of the
+   * emitted TU's #includes.  Scoped to Apple/aarch64 -- the only target whose
+   * prelude carries the empty spelling. */
+  "#if defined(__APPLE__) && defined(__aarch64__)\n"
+  "#undef __arm64__\n"
+  "#define __arm64__ 1\n"
+  "#endif\n"
   "double __builtin_pow (double, double);\n"
   "double __builtin_sqrt (double);\n"
   "double __builtin_ceil (double);\n"
