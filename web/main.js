@@ -1192,8 +1192,11 @@ function configureMonaco() {
             'editorCursor.foreground': '#0366d6',
             'editor.lineHighlightBackground': '#f8f8f8',
             'editorLineNumber.foreground': '#959da5',
-            'editor.selectionBackground': 'rgba(3, 102, 214, 0.3)',
-            'editor.inactiveSelectionBackground': 'rgba(3, 102, 214, 0.1)',
+            // NOTE: Monaco parses theme colors with Color.fromHex() and falls
+            // back to opaque RED on any parse failure -- rgba() strings are NOT
+            // supported here. Always use #RRGGBB or #RRGGBBAA.
+            'editor.selectionBackground': '#0366D64D',
+            'editor.inactiveSelectionBackground': '#0366D61A',
             'editorIndentGuide.background': '#e1e4e8',
             'editorIndentGuide.activeBackground': '#959da5',
             ...rainbowBrackets
@@ -1226,13 +1229,15 @@ function configureMonaco() {
             'editorLineNumber.foreground':          '#453F39',
             'editorLineNumber.activeForeground':    '#88796C',
 
-            // Cursor & selection
+            // Cursor & selection -- neutral medium gray, never a warning color.
+            // Selection/bracket-match/scrollbar are structural chrome; red is
+            // reserved for diagnostics.
             'editorCursor.foreground':              '#D48B1C',
-            'editor.selectionBackground':           'rgba(212,139,28,0.18)',
-            'editor.inactiveSelectionBackground':   'rgba(212,139,28,0.08)',
-            'editor.selectionHighlightBackground':  'rgba(212,139,28,0.08)',
-            'editor.wordHighlightBackground':       'rgba(212,139,28,0.10)',
-            'editor.wordHighlightStrongBackground': 'rgba(212,139,28,0.20)',
+            'editor.selectionBackground':           '#5A544C59',
+            'editor.inactiveSelectionBackground':   '#5A544C33',
+            'editor.selectionHighlightBackground':  '#5A544C2E',
+            'editor.wordHighlightBackground':       '#5A544C2E',
+            'editor.wordHighlightStrongBackground': '#5A544C40',
 
             // Line highlight
             'editor.lineHighlightBackground':       '#111009',
@@ -1242,14 +1247,15 @@ function configureMonaco() {
             'editorIndentGuide.background1':        '#252119',
             'editorIndentGuide.activeBackground1':  '#3E3830',
 
-            // Bracket matching — gold tint
-            'editorBracketMatch.background':        'rgba(212,139,28,0.12)',
-            'editorBracketMatch.border':            'rgba(212,139,28,0.50)',
+            // Bracket matching — medium gray, so a matched delimiter never
+            // reads as an error highlight
+            'editorBracketMatch.background':        '#6A625926',
+            'editorBracketMatch.border':            '#8C847A99',
 
             // Find matches
-            'editorFindMatch.background':           'rgba(212,139,28,0.28)',
-            'editorFindMatch.border':               'rgba(212,139,28,0.65)',
-            'editorFindMatchHighlight.background':  'rgba(212,139,28,0.12)',
+            'editorFindMatch.background':           '#D48B1C47',
+            'editorFindMatch.border':               '#D48B1CA6',
+            'editorFindMatchHighlight.background':  '#D48B1C1F',
 
             // Autocomplete / hover / suggest widgets
             'editorWidget.background':                       '#181512',
@@ -1258,21 +1264,21 @@ function configureMonaco() {
             'editorSuggestWidget.background':                '#181512',
             'editorSuggestWidget.border':                    '#302B24',
             'editorSuggestWidget.foreground':                '#EAE0D2',
-            'editorSuggestWidget.selectedBackground':        'rgba(212,139,28,0.15)',
+            'editorSuggestWidget.selectedBackground':        '#D48B1C26',
             'editorSuggestWidget.selectedForeground':        '#EAE0D2',
             'editorSuggestWidget.highlightForeground':       '#EFA030',
             'editorHoverWidget.background':                  '#181512',
             'editorHoverWidget.border':                      '#302B24',
             'editorHoverWidget.foreground':                  '#EAE0D2',
 
-            // Scrollbars — warm dark, gold on active
+            // Scrollbars — medium gray, brightening on hover/drag
             'scrollbar.shadow':                     '#00000000',
-            'scrollbarSlider.background':           'rgba(62,56,48,0.55)',
-            'scrollbarSlider.hoverBackground':      'rgba(88,79,68,0.75)',
-            'scrollbarSlider.activeBackground':     'rgba(212,139,28,0.40)',
+            'scrollbarSlider.background':           '#5A544C8C',
+            'scrollbarSlider.hoverBackground':      '#7A736ABF',
+            'scrollbarSlider.activeBackground':     '#8C847ACC',
 
             // Focus ring — gold instead of VS Code blue
-            'focusBorder':                          'rgba(212,139,28,0.40)',
+            'focusBorder':                          '#D48B1C66',
 
             // Rainbow brackets — depth-colored, matching the trowel editor
             ...rainbowBrackets
