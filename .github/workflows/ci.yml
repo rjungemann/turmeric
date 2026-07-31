@@ -113,6 +113,114 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-test-${{ runner.os }}-${{ github.sha }}
 
+  jit:
+    name: JIT engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The MIR JIT engine had NO CI coverage at all: the `test` job configures
+    # without -DTUR_JIT=ON, so `tur_jit_fixture_tests` and `tur_repl_spice_jit`
+    # never register (CMakeLists.txt:634-655 gates both on TUR_JIT) and the
+    # whole engine shipped untested on every platform.  Every macOS JIT number
+    # in docs/upcoming/jit-engine-j0-findings.md was hand-measured on someone's
+    # laptop as a result.
+    #
+    # This is a SEPARATE job rather than a flag on `test`, for three reasons:
+    #   1. TUR_JIT makes configure fetch MIR over the network (cmake/mir.cmake
+    #      FetchContent, full clone of a pinned fork).  Folding that into the
+    #      main gate would make a GitHub/network blip fail every PR.
+    #   2. tur_jit_fixture_tests re-runs the whole ~2500-fixture corpus through
+    #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
+    #      fanned out internally), but it is a second full corpus pass and
+    #      belongs on its own clock.
+    #   3. `jit` is still an experiment (--enable=jit, TUR-W0060), so it should
+    #      not gate merges at the same strength as the AOT suite.
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libedit-dev ccache
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libedit ccache || true
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-jit-${{ runner.os }}-
+
+      - name: Configure (Debug + JIT)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets, not `--target tur`: the engine's step-6 cc fallback links
+      # -lturi, and `tur` itself never links turi, so a tur-only build leaves
+      # every fallback fixture dying with `ld: library 'turi' not found`.
+      # (CLAUDE.md records this exact trap.)
+      - name: Build (all targets -- the cc fallback links libturi.a)
+        run: cmake --build build -j
+
+      # Load-bearing: tests/run-jit.sh probes the binary for the engine and
+      # SKIPs the entire corpus with exit 0 when it is absent.  That is the
+      # right behaviour for a local build, but in CI it means a job that
+      # silently lost -DTUR_JIT=ON would report GREEN having run nothing --
+      # precisely the failure mode that let this gap persist.  Fail loudly
+      # instead.  `perl -e alarm` is the portable timeout (macOS runners ship
+      # no coreutils `timeout`), matching the smoke check in the `test` job.
+      - name: Verify the JIT engine is actually present
+        run: |
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur --enable=jit jit 2>&1) || true
+          echo "$out"
+          case "$out" in
+            *"usage: tur jit"*)
+              echo "JIT engine present." ;;
+            *)
+              echo "::error::tur was built without the MIR JIT engine -- the JIT suites would self-skip and this job would pass vacuously."
+              exit 1 ;;
+          esac
+
+      # BLOCKING on macOS, non-blocking on Linux -- deliberately asymmetric,
+      # by evidence rather than by preference:
+      #
+      #   macOS: verified green on arm64 (Apple clang 21, macOS 27) at the
+      #     commit that adds this job -- 2414 passed, 0 failed, 47 skipped
+      #     (31 via the cc fallback).  A green baseline exists, so the leg gates.
+      #     This is also the leg that matters most: macOS is where the engine's
+      #     platform-specific hazards live (MAP_JIT/W^X, the AAPCS64
+      #     __uint128_t alignment skew, the Apple-SDK-header cc fallbacks).
+      #
+      #   Linux: NOT verified -- no Linux machine was available when this job
+      #     was written, and the corpus has never run under CI on any platform,
+      #     so asserting a green baseline there would be a guess.  It runs and
+      #     publishes its counts without gating.
+      #
+      # FLIP LINUX TO BLOCKING (drop the matrix condition, leaving no
+      # continue-on-error) as soon as the first run publishes a clean ubuntu
+      # leg.  Do not let this sit asymmetric indefinitely.
+      - name: Run JIT suites
+        continue-on-error: ${{ matrix.os != 'macos-latest' }}
+        run: ctest --output-on-failure --progress --test-dir build -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$'
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+
   check-guides:
     name: Check guide toggle pairs
     runs-on: ubuntu-latest

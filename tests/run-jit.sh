@@ -48,6 +48,21 @@ cd "$(dirname "$0")/.."
 # back in with ASAN_OPTIONS=detect_leaks=1.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
+# Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY -- the same
+# export tests/run.sh:72 makes, and it must match: the stdlib listen path
+# (stdlib/httpd.tur:703) reads this env at RUN time, so a fixture behaves
+# differently under a harness that omits it.
+#
+# httpd-new-pool-fail-drops-handler is the fixture that caught the omission.  It
+# occupies 127.0.0.1:<port> and then asserts httpd-new-pool's bind of the same
+# port is refused.  Without this export httpd binds 0.0.0.0 instead, and BSD's
+# SO_REUSEADDR (both sockets set it) permits a wildcard bind while a SPECIFIC
+# address holds the port -- so the bind SUCCEEDED and the fixture printed
+# "built" instead of "refused".  Linux refuses that bind either way, which is
+# why this only ever showed up on macOS and read as a JIT/BSD defect.  It is
+# neither: it was harness drift from run.sh.
+export TUR_BIND_LOOPBACK=1
+
 TUR="${TUR:-./build-turjit/tur}"
 [ -x "$TUR" ] || TUR=./build/tur
 [ -x "$TUR" ] || { echo "run-jit: no tur binary found" >&2; exit 2; }
