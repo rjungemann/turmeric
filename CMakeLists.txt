@@ -735,6 +735,18 @@ add_test(
   COMMAND "${CMAKE_BINARY_DIR}/tur_eval_basic"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# I4: a libturi embedder reaches the JIT engine (and falls back to the
+# tree-walking interpreter when the build has no engine).  The interpreter
+# half registers process-lifetime closures it never frees by design, so this
+# takes the same detect_leaks=0 the other turi harnesses do.
+add_test(
+  NAME tur_jit_embed
+  COMMAND "${CMAKE_BINARY_DIR}/tur_jit_embed"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_embed PROPERTIES
+  ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+)
 # web-repl-lang-switch-drops-stdlib: a reader-type change truncates src_acc back
 # to the pinned stdlib preload rather than emptying it, so the first collection
 # literal after a `#lang` switch still resolves hamt-of.

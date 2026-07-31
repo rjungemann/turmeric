@@ -241,7 +241,7 @@ load-bearing rather than polish.
 Exit: interp and mixed sweeps at parity with the gen sweep, or a documented
 denylist with a reason per entry.
 
-### I4 -- embed exposure
+### I4 -- embed exposure. **LANDED 2026-07-31.** See section 7.
 
 Move `jit_engine.c` into `tur_core` behind `TUR_JIT`; publish the image API
 and policy through the embed header; wire the interpreter fallback in place
@@ -423,3 +423,95 @@ identical (verified: the gen corpus run is unchanged). Keeping them means the
 49 divergences stay reproducible; deleting the mode would make this section
 unverifiable. Same precedent as the pre-existing `TUR_JIT_GEN=eager`
 diagnostic knob.
+
+## 7. I4 AS BUILT (2026-07-31)
+
+The engine is reachable from a plain `libturi` embedder. `tur` is unchanged.
+
+### 7.1 What moved
+
+Not into `tur_core`, as section 2.4 and the I4 phase text both said -- into a
+**separate `tur_jit_obj` OBJECT library** that `tur` and `libturi` each pick
+up. The plan's instruction was wrong and the build says why: eighteen targets
+consume `$<TARGET_OBJECTS:tur_core>`, including `libturi_wasm` and a dozen
+small unit-test executables. Putting the engine in `tur_core` puts MIR on
+every one of their link lines. Measured, not predicted: it failed with
+`undefined reference to MIR_set_error_func` across `tur_codegen_reinterpret`,
+`tur_semver_range_unit`, and the rest, and it would have forced MIR into the
+WASM build, where it has no business being.
+
+A second trap in the same area, worth recording because CMake gives no
+warning for it: `$<TARGET_OBJECTS:>` carries **objects only** -- no usage
+requirements, no transitive link. So neither `tur` nor `libturi` inherits
+anything from `tur_core`, and each states MIR's link and the `TUR_HAVE_JIT`
+define itself. `main.c`'s `cmd_jit` needs the define on the `tur` target
+directly for the same reason.
+
+### 7.2 The capability probe
+
+`libturi` carries `TUR_HAVE_JIT=1` as a **PUBLIC** compile definition, so a
+consumer's `#ifdef TUR_HAVE_JIT` resolves correctly with no manual define and
+no link error when the library was built without an engine. The embed test
+builds in both configurations on purpose, which makes it the check that the
+propagation works and not just that the engine runs.
+
+### 7.3 Fallback
+
+`tur jit`'s step-6 fallback shells out to `cc`. An embedded host has no
+toolchain at runtime, so its fallback is `turi_eval` -- already linked, same
+library. `tests/turi/jit-embed.c` exercises both paths and, when an engine is
+present, asserts the two agree on the same value rather than making two
+independent assertions:
+
+```
+built WITH a JIT (TUR_HAVE_JIT)      built WITHOUT a JIT
+PASS [interp] sum-to 99 => 4950      PASS [interp] sum-to 99 => 4950
+PASS [jit] embed_sum_to(99) => 4950  SKIP [jit] no engine in this build
+PASS [parity] ... agree (4950)
+```
+
+Registered as the `tur_jit_embed` ctest target.
+
+### 7.4 One embedder requirement, documented in the header
+
+The engine resolves the compiled program's externals with
+`dlsym(RTLD_DEFAULT)`, so a hosting executable must export its own symbols
+(`ENABLE_EXPORTS TRUE`, or `-rdynamic` by hand). A host that omits it gets
+failures from the JIT'd code rather than from its own build, which is an
+unpleasant thing to debug from first principles -- so it is called out in
+`jit_engine.h` alongside the capability probe and the fallback guidance, and
+the platform constraint (a process that JITs is a JIT application: MAP_JIT,
+`allow-jit` when notarized, unavailable on iOS).
+
+### 7.5 What I4 does NOT include
+
+The engine takes **emitted C**, and the driver that turns Turmeric source
+into emitted C -- `compile_to_c` (`main.c:704-828`) -- is still CLI-bound. So
+an embedder today can JIT C it already has, but cannot go from `.tur` source
+to a running image through the library alone.
+
+Everything that driver needs is already in `tur_core` (reader, elaborator,
+`run_core_passes`, `emit_program`, and `tur_stdlib_prepend_forms`, which the
+main.c-local `prepend_stdlib_forms` is already a thin adapter over). What
+holds it in `main.c` is four CLI-owned globals: `resolve_stdlib_root`,
+`g_no_auto_stdlib`, `resolve_rcgc_from_archive`, and `g_manifest_sink`.
+
+Extracting it is the follow-up that would make `libturi` self-sufficient for
+source-to-JIT evaluation. It was deliberately not attempted here: it is a
+`main.c` refactor touching CLI global state, it is not what I4 was scoped as,
+and duplicating the driver into a second copy for the library would be the
+divergence trap rather than a fix.
+
+### 7.6 Verification
+
+- `tests/run.sh`: **2499 passed, 0 failed**
+- `tests/run-jit.sh` (Release, `-DTUR_JIT=ON`): 2405 passed, **9 failed**,
+  47 skipped -- the 9 are exactly the Release `refined` bug from section 6.5,
+  unrelated to I4 and filed separately
+- `tur_jit_embed` passes in both the JIT and no-JIT configurations
+- `tur --version` and `tur jit` unaffected; the `tur` binary is unchanged
+
+One snapshot (`van-laarhoven-lens-wide-functor-show`) was regenerated here.
+It had drifted from `849731d85` ("record a call temp's DECLARED C type"),
+which updated the emitter but missed this fixture; the delta is that commit's
+cast, not anything from I4.

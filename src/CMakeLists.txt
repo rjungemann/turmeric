@@ -431,7 +431,27 @@ add_executable(tur main.c lsp/mcp.c $<TARGET_OBJECTS:tur_core>)
 # top-level guard), compiles the engine TU, and exports tur's symbols so the
 # engine's dlsym(RTLD_DEFAULT) resolver can see the linked-in runtime.
 if(TUR_JIT)
-  target_sources(tur PRIVATE jit_engine.c)
+  # I4 (mir-interp-tier-plan section 2.4): the engine is its own OBJECT
+  # library, added to BOTH `tur` and libturi, so a C host embedding the
+  # library can reach the image API instead of shelling out to `tur`.
+  #
+  # Deliberately NOT folded into tur_core: eighteen targets consume
+  # $<TARGET_OBJECTS:tur_core>, including libturi_wasm and a dozen small unit
+  # tests.  Putting the engine there drags MIR onto every one of their link
+  # lines -- which fails outright for the WASM build, and for the unit tests
+  # showed up as `undefined reference to MIR_set_error_func` across the
+  # board.  A separate object library keeps the blast radius to the two
+  # targets that actually want an engine.
+  add_library(tur_jit_obj OBJECT jit_engine.c runtime/generated/tur_rt_split_embed.c)
+  target_include_directories(tur_jit_obj PRIVATE ${TUR_INCLUDE_DIRS})
+  target_link_libraries(tur_jit_obj PRIVATE tur_mir)
+  target_compile_definitions(tur_jit_obj PRIVATE TUR_HAVE_JIT=1)
+  target_compile_options(tur_jit_obj PRIVATE
+      -Wall -Wextra ${TUR_WERROR} -Wno-unused-parameter ${TUR_CSTD} -pthread
+      $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+      $<$<CONFIG:Release>: -O2 -DNDEBUG>
+      $<$<CONFIG:TSan>:    -O1 -g -fsanitize=thread>
+  )
   # MIR's headers are not -pedantic-clean (extra semicolons from its DLIST
   # macros); suppress for the one TU that includes them, same treatment as
   # the generated ffi_dispatch.c above.
@@ -439,16 +459,25 @@ if(TUR_JIT)
     COMPILE_OPTIONS "-Wno-pedantic")
   # S2 (findings 19.4 item 3): the committed declarations-region string +
   # content hash cmd_jit consults before swapping the full preamble for the
-  # split.  JIT-only: non-JIT builds never read it, so they skip the ~100KB
-  # string TU entirely.
-  target_sources(tur PRIVATE runtime/generated/tur_rt_split_embed.c)
+  # split is compiled into tur_jit_obj above, alongside the engine.  JIT-only:
+  # non-JIT builds never read it, so they skip the ~100KB string TU entirely.
+  #
   # The decls string exceeds C99's 4095-char minimum guarantee by design;
   # every supported compiler handles it, so silence the portability nudge
   # for the one generated TU.
   set_source_files_properties(runtime/generated/tur_rt_split_embed.c
     PROPERTIES COMPILE_OPTIONS "-Wno-overlength-strings")
+  # $<TARGET_OBJECTS:> carries objects only -- no usage requirements, no
+  # transitive link -- so each consumer states the engine's needs itself.
+  target_sources(tur PRIVATE $<TARGET_OBJECTS:tur_jit_obj>)
+  # main.c's cmd_jit is compiled into `tur` directly, so it needs the define
+  # on its own target -- it does not inherit tur_jit_obj's.
   target_compile_definitions(tur PRIVATE TUR_HAVE_JIT=1)
   target_link_libraries(tur PRIVATE tur_mir)
+  # The engine resolves program symbols with dlsym(RTLD_DEFAULT), so whatever
+  # process hosts it must export its own symbols.  For `tur` that is this
+  # property; an embedding host has to set the equivalent itself (see the
+  # ENABLE_EXPORTS note in jit_engine.h).
   set_target_properties(tur PROPERTIES ENABLE_EXPORTS TRUE)
 endif()
 
@@ -515,6 +544,17 @@ target_link_libraries(libturi INTERFACE m)
 # WIN3: propagate ws2_32 to anyone linking libturi (io_iocp.c uses Winsock).
 if(WIN32)
     target_link_libraries(libturi INTERFACE ws2_32)
+endif()
+
+# I4: libturi carries the JIT engine when the build has one.  PUBLIC on both
+# so an embedding host gets MIR on its link line and TUR_HAVE_JIT in its
+# preprocessor -- the same capability probe `tur` itself compiles against, so
+# a host can write one #ifdef and fall back to the tree-walking interpreter
+# when the library was built without a JIT.
+if(TUR_JIT)
+    target_sources(libturi PRIVATE $<TARGET_OBJECTS:tur_jit_obj>)
+    target_link_libraries(libturi PUBLIC tur_mir)
+    target_compile_definitions(libturi PUBLIC TUR_HAVE_JIT=1)
 endif()
 if(HAVE_EDITLINE)
     target_link_libraries(libturi INTERFACE ${LIBEDIT_LIB})
@@ -622,6 +662,35 @@ target_link_options(tur_eval_basic PRIVATE -pthread
 )
 set_target_properties(tur_eval_basic PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+)
+
+# ---------------------------------------------------------------------------
+# I4 (mir-interp-tier-plan section 2.4): tur_jit_embed -- proves a plain
+# libturi embedder can reach the JIT engine, and that a build without one
+# still works through the interpreter fallback.  Builds in BOTH
+# configurations on purpose: TUR_HAVE_JIT arrives (or does not) through
+# libturi's PUBLIC compile definition, so this target is also the check that
+# the capability probe propagates to real consumers.
+# ---------------------------------------------------------------------------
+add_executable(tur_jit_embed ${CMAKE_SOURCE_DIR}/tests/turi/jit-embed.c)
+target_include_directories(tur_jit_embed PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_jit_embed PRIVATE libturi)
+target_compile_options(tur_jit_embed PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_jit_embed PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+# The engine resolves the compiled program's external symbols with
+# dlsym(RTLD_DEFAULT), so the hosting executable must export its own -- the
+# same requirement `tur` satisfies with ENABLE_EXPORTS.  An embedding host
+# that omits this gets link failures from the JIT'd code, not from its own
+# build, which is why it is called out in jit_engine.h.
+set_target_properties(tur_jit_embed PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    ENABLE_EXPORTS TRUE
 )
 
 # ---------------------------------------------------------------------------

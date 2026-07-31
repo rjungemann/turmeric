@@ -1,9 +1,42 @@
 /* jit_engine.h -- the in-process MIR JIT engine behind `tur jit` (Phase J1).
  *
- * Only built into `tur` under -DTUR_JIT=ON; cmd_jit in main.c compiles
- * against this header unconditionally and reports the missing capability
- * when TUR_HAVE_JIT is not defined.  See jit_engine.c and
- * docs/upcoming/jit-engine-plan.md section 3.2. */
+ * Built under -DTUR_JIT=ON into tur_jit_obj, which BOTH `tur` and libturi
+ * pick up (I4, docs/upcoming/mir-interp-tier-plan.md section 2.4).  cmd_jit
+ * in main.c compiles against this header unconditionally and reports the
+ * missing capability when TUR_HAVE_JIT is not defined.  See jit_engine.c and
+ * docs/upcoming/jit-engine-plan.md section 3.2.
+ *
+ * ---------------------------------------------------------------------
+ * EMBEDDING (I4)
+ * ---------------------------------------------------------------------
+ * A C host that links libturi can use this API directly instead of shelling
+ * out to `tur jit`.  Three things the host is responsible for:
+ *
+ * 1. Probe with `#ifdef TUR_HAVE_JIT`.  libturi defines it PUBLIC-ly when
+ *    the library was built with an engine, so the probe propagates to your
+ *    target automatically -- no manual define, and no link error if the
+ *    library happens to have been built without one.
+ *
+ * 2. Export your own symbols.  The engine resolves the compiled program's
+ *    externals with dlsym(RTLD_DEFAULT), so a host whose symbols are not
+ *    exported will see the JIT'd code fail to find the runtime it is
+ *    linked against.  With CMake that is
+ *    `set_target_properties(<host> PROPERTIES ENABLE_EXPORTS TRUE)`; by
+ *    hand it is `-rdynamic` / `-Wl,--export-dynamic`.  `tur` and the
+ *    tur_jit_embed test both set it.
+ *
+ * 3. Fall back to the tree-walking interpreter, not to cc.  `tur jit`'s
+ *    step-6 fallback shells out to a C compiler; an embedded host generally
+ *    has no toolchain at runtime, so the fallback that is actually
+ *    available to it is turi_eval (already linked -- same library).
+ *    tests/turi/jit-embed.c shows both paths.
+ *
+ * Note the platform constraint that comes with this: a process that JITs is
+ * a JIT application.  On Apple platforms that means MAP_JIT and, for a
+ * notarized binary with hardened runtime, the
+ * com.apple.security.cs.allow-jit entitlement -- and it is unavailable on
+ * iOS.  A host that cannot accept that should build libturi without
+ * TUR_JIT and use the interpreter, which generates no code at all. */
 #ifndef TUR_JIT_ENGINE_H
 #define TUR_JIT_ENGINE_H
 

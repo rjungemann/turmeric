@@ -150,3 +150,4 @@ benchmarks/output/
 build-mirpin/
 build-lazyrel/
 build-jitrel/
+build-i4/
