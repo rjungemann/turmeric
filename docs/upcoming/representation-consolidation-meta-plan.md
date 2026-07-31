@@ -355,6 +355,14 @@ about, and cowpaths are paved before the field is closed:
   staged as written (params -> return/let/ascribe -> unify flag'd sinks).
   Highest bug density, clearest precedent (struct-field-fat), and the axis
   the last campaign deliberately deferred.
+  *Status 2026-07-31: stages 1-2 landed; the residual seams stage 2 left
+  open (`fn-value-carrier-fat-seam-residuals`) are closed and archived --
+  the tail walkers resolve let-aliases to their origin, the if unifier
+  inserts poly-to-fat at a carrier-vs-boxed join, and ascribing a carrier
+  param to its own fn type is a no-op.  With that, the fuzzer's thunk legs
+  run the FULL crossing pool and a 300-case session reports 0 findings of
+  any class -- the campaign's first fully-clean session.  Stage 3 (unify
+  flag'd sinks) remains optional cleanup; increment 4 subsumes it.*
 - **Increment 2 -- method-result bridging.** The carrier->concrete re-wrap
   applied uniformly to typeclass method results at every consumer position
   (typed defn boundary, generic call argument, ascription) -- closes

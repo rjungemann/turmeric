@@ -137,11 +137,13 @@ def known_bug_slug(tags):
     # (Retired 2026-07-30 by fn-value-fat-normalization stage 2: fn-typed
     # VALUES survive pass-through returns, ascribe-around-let, and nested
     # fat HOFs now -- thunk legs are back in the full crossing pool.)
-    # Residual seams stage 2's first full-pool sessions surfaced: a thunk
-    # value through a pass-through DEFN (through/deep) hits the carrier<->fat
-    # alias/unification gaps.  let/ascribe/gid/HOF crossings are fine.
-    if "thunk" in tags and tags & {"through", "deep"}:
-        return "fn-value-carrier-fat-seam-residuals"
+    # (fn-value-carrier-fat-seam-residuals: RESOLVED 2026-07-31 -- the tail
+    # walkers resolve let-ALIASES to their origin (a carrier-param alias
+    # converts via poly-to-fat instead of being thin-shimmed or skipped), the
+    # if unifier admits carrier-vs-boxed-fn joins by inserting the conversion
+    # at the join, and an ascription of a carrier param to its own fn type is
+    # a no-op assertion -- and archived; thunk through/deep legs are back in
+    # the full crossing pool.)
     # (Retired 2026-07-30 by fn-value-fat-normalization stage 1: thin fn
     # params with CONCRETE non-carrier-safe signatures -- by-value and heap
     # results/args -- are fat-normalized now, so those thin_hof shapes are
@@ -203,11 +205,8 @@ KNOWN_PROBES = [
     # (fn-payload-in-container-undeclared-temp: RESOLVED 2026-07-31 by
     # fat-normalization stage 2 -- the parametric-defdata + FLOAT variant
     # verified by hand -- and archived; probe retired.)
-    ("fn-value-carrier-fat-seam-residuals (let-aliased carrier param tail)",
-     "(defn thru2 [v : (fn [] float)] : (fn [] float) (let [w v] w))\n"
-     "(defn main [] : int\n"
-     "  (let [k 1.25]\n"
-     "    (println (= ((thru2 (fn [] k))) 1.25)))\n  0)\n"),
+    # (fn-value-carrier-fat-seam-residuals: RESOLVED 2026-07-31, archived;
+    # probe retired -- pinned by tests/fixtures/fn-value-carrier-fat-seams/.)
 ]
 
 

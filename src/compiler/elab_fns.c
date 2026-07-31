@@ -2767,41 +2767,99 @@ static bool check_no_borrow_escape(const Expr *tail, uint32_t fn_local_depth,
  * caller fat-dispatches every leaf, so a thin-pointer arm is read as a fat box
  * (slot-0 of a code address) and jumped into -> SIGSEGV.  Walks through
  * tail-position structure only (do/if/let/match/ascribe). */
-static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
+/* fn-value-carrier-fat-seam-residuals (cell 1): the tail walkers classify
+ * leaves by BINDING, so a let-ALIAS of a param loses its provenance -- e.g.
+ * `(let [w v] w)` where `v` is a carrier (tur_poly_fn_t) fn param: `w` is a
+ * local non-param binding of non-boxed TY_FN (or ptr<void>), so the stage-2
+ * normalizer either thin-shims the by-value aggregate (invalid C) or skips
+ * it entirely (the merge temp assign is invalid C instead).  The walkers
+ * therefore carry a stack env of the let bindings they descend PAST, and a
+ * leaf var resolves transitively through recorded inits (peeking through
+ * ascriptions) back to the classifiable origin.  Only tail-position lets are
+ * recorded -- exactly the ones whose aliases can BE a tail leaf. */
+typedef struct FnTailAlias {
+    const struct FnTailAlias *up;
+    const Binding *binding;
+    const Expr *init;
+} FnTailAlias;
+
+static const Expr *fn_tail_resolve_alias(const Expr *x, const FnTailAlias *env) {
+    int guard = 32;  /* alias chains are tiny; guard against binding cycles */
+    while (x && guard-- > 0) {
+        while (x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+        if (x->kind != EX_VAR || !x->as.var.binding) return x;
+        const Binding *vb = x->as.var.binding;
+        if (vb->is_param) return x;
+        const Expr *init = NULL;
+        for (const FnTailAlias *a = env; a; a = a->up)
+            if (a->binding == vb) { init = a->init; break; }
+        if (!init) return x;
+        x = init;
+    }
+    return x;
+}
+
+/* Push one let form's bindings onto the alias env.  The storage array lives
+ * in the caller's block scope; the recursive walk into the let body happens
+ * inside that scope, so the nodes stay alive exactly as long as needed.
+ * Lets wider than the fixed cap simply skip recording (the resolver then
+ * conservatively leaves aliases unresolved -- current behavior). */
+#define FN_TAIL_PUSH_LET_ALIASES(x, env, storage)                            \
+    const FnTailAlias *env##_new = (env);                                    \
+    do {                                                                     \
+        uint32_t _n = (x)->as.let_.n;                                        \
+        if (_n > 16) _n = 0;                                                 \
+        for (uint32_t _i = 0; _i < _n; _i++) {                               \
+            storage[_i].binding = (x)->as.let_.bindings[_i].binding;         \
+            storage[_i].init = (x)->as.let_.bindings[_i].init;               \
+            storage[_i].up = (_i == 0) ? (env) : &storage[_i - 1];           \
+        }                                                                    \
+        if (_n > 0) env##_new = &storage[_n - 1];                            \
+    } while (0)
+
+static unsigned fn_tail_fn_leaf_kinds(const Expr *x, const FnTailAlias *env) {
     if (!x) return 0;
     switch (x->kind) {
         case EX_DO:
             return x->as.do_.n > 0
-                       ? fn_tail_fn_leaf_kinds(x->as.do_.items[x->as.do_.n - 1])
+                       ? fn_tail_fn_leaf_kinds(x->as.do_.items[x->as.do_.n - 1],
+                                               env)
                        : 0;
         case EX_IF:
-            return fn_tail_fn_leaf_kinds(x->as.if_.then_) |
+            return fn_tail_fn_leaf_kinds(x->as.if_.then_, env) |
                    (x->as.if_.else_or_null
-                        ? fn_tail_fn_leaf_kinds(x->as.if_.else_or_null)
+                        ? fn_tail_fn_leaf_kinds(x->as.if_.else_or_null, env)
                         : 0);
         case EX_LET:
-        case EX_LETREC:
-            return fn_tail_fn_leaf_kinds(x->as.let_.body);
+        case EX_LETREC: {
+            FnTailAlias _st[16];
+            FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
+            return fn_tail_fn_leaf_kinds(x->as.let_.body, env_new);
+        }
         case EX_ASCRIBE:
-            return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner);
+            return fn_tail_fn_leaf_kinds(x->as.ascribe_.inner, env);
         case EX_MATCH: {
             unsigned acc = 0;
             for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
-                acc |= fn_tail_fn_leaf_kinds(x->as.match_.arms[i].body);
+                acc |= fn_tail_fn_leaf_kinds(x->as.match_.arms[i].body, env);
             return acc;
         }
         case EX_CLOSURE:
         case EX_FN_TO_FAT:
             return 2u;  /* fat box */
-        case EX_VAR:
+        case EX_VAR: {
             /* fn-value-fat-normalization: binding-aware classification.  A
              * carrier (is_poly_fn) fn param is a by-value tur_poly_fn_t --
              * neither thin nor fat (bit 4).  A ^fat param or a stage-1
              * NORMALIZED nominal param already holds a fat handle even though
              * its static type is a non-boxed TY_FN -- classifying those as
-             * thin would double-box them. */
-            if (x->as.var.binding) {
-                const Binding *vb = x->as.var.binding;
+             * thin would double-box them.  A local ALIAS resolves to its
+             * origin first (cell 1). */
+            const Expr *r = fn_tail_resolve_alias(x, env);
+            if (r != x && r->kind != EX_VAR)
+                return fn_tail_fn_leaf_kinds(r, env);
+            if (r->kind == EX_VAR && r->as.var.binding) {
+                const Binding *vb = r->as.var.binding;
                 if (vb->is_poly_fn && vb->is_param) return 4u;
                 if (vb->is_fat ||
                     (vb->is_param && vb->type.kind == TY_FN &&
@@ -2811,6 +2869,7 @@ static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
             if (x->type.kind == TY_FN)
                 return x->type.as.fn.boxed ? 2u : 1u;  /* boxed=fat, bare=thin */
             return 0;
+        }
         default:
             if (x->type.kind == TY_FN && x->type.as.fn.boxed)
                 return 2u;
@@ -2825,29 +2884,34 @@ static unsigned fn_tail_fn_leaf_kinds(const Expr *x) {
  * is uniformly fat across all return leaves and a fat-dispatch consumer reads a
  * valid { thunk, ... } layout on every arm.  Symmetric with the ^fat-result
  * auto-shim and the parametric-ADT-field shim in elab_call.c. */
-static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot) {
+static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot,
+                                         const FnTailAlias *env) {
     Expr *x = *slot;
     if (!x) return;
     switch (x->kind) {
         case EX_DO:
             if (x->as.do_.n > 0)
-                elab_box_thin_fn_tail_leaves(e, &x->as.do_.items[x->as.do_.n - 1]);
+                elab_box_thin_fn_tail_leaves(e, &x->as.do_.items[x->as.do_.n - 1],
+                                             env);
             return;
         case EX_IF:
-            elab_box_thin_fn_tail_leaves(e, &x->as.if_.then_);
+            elab_box_thin_fn_tail_leaves(e, &x->as.if_.then_, env);
             if (x->as.if_.else_or_null)
-                elab_box_thin_fn_tail_leaves(e, &x->as.if_.else_or_null);
+                elab_box_thin_fn_tail_leaves(e, &x->as.if_.else_or_null, env);
             return;
         case EX_LET:
-        case EX_LETREC:
-            elab_box_thin_fn_tail_leaves(e, &x->as.let_.body);
+        case EX_LETREC: {
+            FnTailAlias _st[16];
+            FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
+            elab_box_thin_fn_tail_leaves(e, &x->as.let_.body, env_new);
             return;
+        }
         case EX_ASCRIBE:
-            elab_box_thin_fn_tail_leaves(e, &x->as.ascribe_.inner);
+            elab_box_thin_fn_tail_leaves(e, &x->as.ascribe_.inner, env);
             return;
         case EX_MATCH:
             for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
-                elab_box_thin_fn_tail_leaves(e, &x->as.match_.arms[i].body);
+                elab_box_thin_fn_tail_leaves(e, &x->as.match_.arms[i].body, env);
             return;
         default:
             break;
@@ -2856,12 +2920,20 @@ static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot) {
         x->type.as.fn.arity >= 1 && x->type.as.fn.arity <= 5) {
         /* stage-1 normalized params and ^fat params already hold fat handles
          * despite their non-boxed static type -- shimming them here would
-         * double-box (mirrors the classifier's binding-aware cases). */
-        if (x->as.var.binding &&
-            (x->as.var.binding->is_fat ||
-             (x->as.var.binding->is_param &&
-              fn_param_type_is_fat_normalized(&x->as.var.binding->type))))
+         * double-box (mirrors the classifier's binding-aware cases).  A local
+         * ALIAS resolves to its origin first (seam-residuals cell 1): an
+         * alias of a fat/normalized/carrier value must not be thin-shimmed. */
+        const Expr *r = fn_tail_resolve_alias(x, env);
+        const Binding *rb = (r && r->kind == EX_VAR) ? r->as.var.binding : NULL;
+        if (rb &&
+            (rb->is_fat || (rb->is_poly_fn && rb->is_param) ||
+             (rb->is_param &&
+              fn_param_type_is_fat_normalized(&rb->type))))
             return;
+        if (r && r != x && r->kind != EX_VAR &&
+            (r->kind == EX_CLOSURE || r->kind == EX_FN_TO_FAT ||
+             (r->type.kind == TY_FN && r->type.as.fn.boxed)))
+            return;  /* alias of a fat producer -- already fat */
         Type bt = x->type;
         bt.as.fn.boxed = true;
         Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, bt, x->span);
@@ -2879,35 +2951,49 @@ static void elab_box_thin_fn_tail_leaves(Elab *e, Expr **slot) {
  * caller then marks the declared result `boxed`, which steers the signature
  * and every consumer onto the existing fat-result plumbing. */
 static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
-                                          Type *sink_fn_type) {
+                                          Type *sink_fn_type,
+                                          const FnTailAlias *env) {
     Expr *x = *slot;
     if (!x) return;
     switch (x->kind) {
         case EX_DO:
             if (x->as.do_.n > 0)
                 elab_normalize_fn_tail_leaves(e,
-                    &x->as.do_.items[x->as.do_.n - 1], sink_fn_type);
+                    &x->as.do_.items[x->as.do_.n - 1], sink_fn_type, env);
             return;
         case EX_IF:
-            elab_normalize_fn_tail_leaves(e, &x->as.if_.then_, sink_fn_type);
+            elab_normalize_fn_tail_leaves(e, &x->as.if_.then_, sink_fn_type,
+                                          env);
             if (x->as.if_.else_or_null)
                 elab_normalize_fn_tail_leaves(e, &x->as.if_.else_or_null,
-                                              sink_fn_type);
+                                              sink_fn_type, env);
             return;
         case EX_LET:
-        case EX_LETREC:
-            elab_normalize_fn_tail_leaves(e, &x->as.let_.body, sink_fn_type);
+        case EX_LETREC: {
+            FnTailAlias _st[16];
+            FN_TAIL_PUSH_LET_ALIASES(x, env, _st);
+            elab_normalize_fn_tail_leaves(e, &x->as.let_.body, sink_fn_type,
+                                          env_new);
             return;
+        }
         case EX_MATCH:
             for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
                 elab_normalize_fn_tail_leaves(e, &x->as.match_.arms[i].body,
-                                              sink_fn_type);
+                                              sink_fn_type, env);
             return;
         default:
             break;
     }
     if (x->kind != EX_VAR || !x->as.var.binding) return;
-    Binding *vb = x->as.var.binding;
+    /* seam-residuals cell 1: resolve a local alias to its origin so the
+     * classification below sees the value's REAL representation.  The
+     * conversion (if any) is applied to the ORIGINAL leaf `x` -- its emitted
+     * value carries the same representation as the origin (a let alias of a
+     * tur_poly_fn_t param is a by-value tur_poly_fn_t copy). */
+    const Expr *r = fn_tail_resolve_alias(x, env);
+    Binding *vb = (r->kind == EX_VAR && r->as.var.binding)
+                      ? r->as.var.binding
+                      : x->as.var.binding;
     if (vb->is_poly_fn && vb->is_param) {
         Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, TYPE_PTR_VOID, x->span);
         conv->as.poly_to_fat_.inner = x;
@@ -2920,6 +3006,10 @@ static void elab_normalize_fn_tail_leaves(Elab *e, Expr **slot,
         (vb->is_param && vb->type.kind == TY_FN &&
          fn_param_type_is_fat_normalized(&vb->type)))
         return;  /* already fat */
+    if (r != x && r->kind != EX_VAR &&
+        (r->kind == EX_CLOSURE || r->kind == EX_FN_TO_FAT ||
+         (r->type.kind == TY_FN && r->type.as.fn.boxed)))
+        return;  /* alias of a fat producer -- already fat */
     if (x->type.kind == TY_FN && !x->type.as.fn.boxed &&
         x->type.as.fn.arity <= 5) {
         Type bt = x->type;
@@ -5916,9 +6006,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
              fn_type.as.fn.result_full_type->kind == TY_FN) ||
             (fn_type.as.fn.result_kind == TY_FN);
         if (result_is_fn && body) {
-            unsigned leaves = fn_tail_fn_leaf_kinds(body);
+            unsigned leaves = fn_tail_fn_leaf_kinds(body, NULL);
             if ((leaves & 1u) && (leaves & 2u)) {
-                elab_box_thin_fn_tail_leaves(e, &body);
+                elab_box_thin_fn_tail_leaves(e, &body, NULL);
             }
         }
     }
@@ -5940,7 +6030,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             fn_param_type_is_fat_normalized(rft) &&
             !(b->name && b->name->name &&
               strncmp(b->name->name, "__inst_", 7) == 0)) {
-            elab_normalize_fn_tail_leaves(e, &body, rft);
+            elab_normalize_fn_tail_leaves(e, &body, rft, NULL);
             rft->as.fn.boxed = true;
         }
     }

@@ -2921,6 +2921,20 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
      * not allowed to express it. */
     if (ascribe_check_sealed(e, call, &inner->type, ascribed)) return NULL;
 
+    /* fn-value-carrier-fat-seam-residuals (ascribed-alias variant): ascribing
+     * a CARRIER (tur_poly_fn_t) fn param to a fn type -- `(:: v (fn [] int))`
+     * where `v : (fn [] int)` is is_poly_fn -- is a pure type assertion, not a
+     * representation change.  Wrapping it in an EX_ASCRIBE node hands the let-
+     * binding path a TY_FN-typed init it bridges with the generic
+     * `(int64_t)(intptr_t)` pointer cast, which is invalid C on the by-value
+     * aggregate.  Return the var itself: an alias binding then copies the
+     * tur_poly_fn_t by value (the shape that works), and the tail machinery's
+     * alias resolution classifies it by its binding as usual. */
+    if (ascribed->kind == TY_FN && inner->kind == EX_VAR &&
+        inner->as.var.binding && inner->as.var.binding->is_poly_fn &&
+        inner->as.var.binding->is_param)
+        return inner;
+
     /* CONV-S1 (defstruct-as-defadt, seam 4): ascribing a concrete ADT app onto
      * an ADT constructor call whose own type is left bare/under-applied.  A
      * parametric struct whose type parameter is not pinned by its field types

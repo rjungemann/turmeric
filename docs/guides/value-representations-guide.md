@@ -72,7 +72,13 @@ Function values are their own zoo. The per-boundary decision today spans
 is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 
 1. **`tur_poly_fn_t {env, fn}` carrier** -- for plain, non-effectful,
-   carrier-safe signatures with no named tyvar.
+   carrier-safe signatures with no named tyvar.  Since 2026-07-31 the
+   carrier<->fat seam is alias- and join-aware: the stage-2 tail walkers
+   resolve a let-ALIAS of a carrier param to its origin (converting via
+   poly-to-fat like the direct leaf), the `if` unifier admits a
+   carrier-param arm against a boxed fn result by inserting the conversion
+   at the join, and ascribing a carrier param to its own fn type is a
+   no-op assertion (`fn-value-carrier-fat-seam-residuals`, archived).
 2. **`^fat` parameter** -- explicit fat `{thunk, env}` handle.
 3. **`:ptr<void>`-fat sink** -- carries an `is_fat` flag disambiguating
    thin-vs-fat dispatch at the invoke (`src/compiler/emit_expr.c` ~4246).
@@ -122,7 +128,7 @@ report is one missing cell:
 | closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF (RESOLVED 2026-07-30, fat-normalization stage 2; archived) | [`fn-typed-value-return-ascribe-miscompiles`](../archive/fn-typed-value-return-ascribe-miscompiles.md) |
 | generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
 | fn value read out of a container element, then called (RESOLVED 2026-07-31, fat-normalization stage 2; archived) | [`fn-payload-in-container-undeclared-temp`](../archive/fn-payload-in-container-undeclared-temp.md) |
-| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification | `fn-value-carrier-fat-seam-residuals` |
+| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification (RESOLVED 2026-07-31: alias provenance in the tail walkers + poly-to-fat at the if join; archived) | [`fn-value-carrier-fat-seam-residuals`](../archive/fn-value-carrier-fat-seam-residuals.md) |
 | closure handle -> `double`-typed element slot (two-types-one-C-name collision; RESOLVED 2026-07-30 upstream, both findings; archived) | [`concrete-codegen-layout-kind-enumerations-drift`](../archive/concrete-codegen-layout-kind-enumerations-drift.md) |
 
 A structural note the last row exposes: the representation decision today is
