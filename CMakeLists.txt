@@ -204,6 +204,15 @@ add_test(
   COMMAND bash tests/check-monomorph-name-collision.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# Increment 4 stage 4 (repr-decision-function-plan): representation-DECISION
+# predicates must not gain new inline call sites -- new code consults
+# repr_of / the shared predicates at chokepoints, or consciously updates the
+# baseline.  Source-text check, no build needed.
+add_test(
+  NAME tur_repr_decision_ratchet
+  COMMAND bash tests/check-repr-decision-ratchet.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # F2.6 (compiled-shallow-handlers-plan): acceptance probes for `handle-shallow`.
 # The distinguishing shallow behavior (a resume that re-performs) is
 # interpreter-only and hard-errors on the compiled fiber fallback, so it lives

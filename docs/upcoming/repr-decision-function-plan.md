@@ -145,12 +145,36 @@ method-result carrier production, then the long tail of `emit_expr.c`
 per-arg bridges -- and then stage 4's registry ratchet.
 
 ### Stage 4 -- registry + ratchet
+(ratchet LANDED 2026-07-31)
 
-Extend the CI guard family to the position axis: a registry test that
-enumerates (form, position) pairs and asserts `repr_of` totality, plus a
-grep-level ratchet that fails when a new site re-derives a representation
-decision inline (pattern: `type_is_wide_byval_adt|type_uses_carrier_abi`
-outside the blessed files) -- new sites must go through `repr_of`.
+`tests/check-repr-decision-ratchet.sh` (ctest: `tur_repr_decision_ratchet`)
+pins the per-file call-site count of every representation-DECISION
+predicate (`type_uses_carrier_abi`, `type_is_wide_byval_adt`,
+`type_is_boxed_container_elem`, `fn_param_type_is_fat_normalized`,
+`type_has_concrete_codegen_layout`) against
+`tests/repr-decision-baseline.txt` (22 rows at landing).  A count increase
+fails the build with a pointer to `repr_of` and this plan; a decrease
+passes with a tighten-the-baseline note; `--update` regenerates
+consciously.  New code therefore consults the chokepoints or explains
+itself in the same commit -- the structural end of quiet seam-reopening.
+
+### The param-position boundary (recorded 2026-07-31)
+
+Extending shadow coverage to the defn-signature PARAM position surfaced a
+genuine spec boundary: a fn-typed parameter's representation (poly
+carrier vs fat handle vs thin) is decided by per-BINDING flags
+(`is_poly_fn`, `is_fat`) that elaboration sets and that are NOT in the
+Type -- so `repr_of(type, position)` as signed cannot decide that axis,
+and a Type-only shadow would mislabel every fn param.  Elab already
+traces those decisions with reasons (`repr-trace fn-param`, increment 0),
+and the elab/emit drift-pairs for the fn axis were unified by stage 1's
+shared predicate -- so the position is COVERED, by trace rather than
+shadow.  If a future increment wants an independent check there, the
+signature must grow a binding-context argument
+(`repr_of_binding(const Binding *, ReprPosition)`); do that when a
+consumer needs it, not before.  The data-param half of the signature
+position is dominated by `type_uses_carrier_abi`/pass-by-ptr decisions
+whose call sites the stage-4 ratchet now pins.
 
 ## Guardrails (inherited from the meta-plan)
 
