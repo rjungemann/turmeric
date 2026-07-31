@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.4` -- representation consolidation: function-typed values carry one ABI shape end to end, closing a family of closure/monad/typeclass boundary miscompiles.
+**Latest release:** `v0.32.5` -- the dev-only Z3 refinement oracle is retired; solver soundness is now guarded by an in-repo labelled SMT-LIB corpus and a source-level fuzzer.
 
 ## What
 

@@ -2,6 +2,30 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.32.5] -- 2026-07-30
+
+### Removed
+
+- **The Z3 refinement oracle scaffold is retired.** The dev-only Z3 backend
+  (`refine_libz3.c`), the `TUR_REFINE_Z3_ORACLE` CMake option, its
+  `find_package(Z3)` block, and the `tur_refine_fuzz` VC-level differential
+  fuzzer are deleted, having met both retirement criteria. No shipped artifact
+  ever linked Z3 -- the option defaulted off and refused Release and WASM
+  builds -- so the compiler is functionally unchanged. Solver soundness is now
+  guarded by the labelled SMT-LIB corpus (`tur_refine_corpus`: 125 benchmarks,
+  no solver linked, 0 soundness failures) and the source-level fuzzer
+  `tests/refine-fuzz-src.py`, which never needed an oracle. The internal
+  diagnostic `TUR-I0379` is retired with it; its code stays reserved.
+
+### Docs
+
+- **Automatic GC is permanently opt-in.** The `cycle-gc` plan's CG8 phase no
+  longer conflates ungating `(gc-auto!)` with making `GC_AUTO` the default;
+  only the ungate is on the table, and the default-on option is recorded as
+  rejected rather than deferred.
+- `expires_at` is documented consistently as advisory -- it never blocks a
+  release cut.
+
 ## [0.32.4] -- 2026-07-30
 
 ### Fixed
