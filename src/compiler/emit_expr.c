@@ -3177,6 +3177,22 @@ char *emit_value(EmitCtx *ctx, Buf *body, const Expr *e) {
      * value would only add a value-preserving no-op cast, never a wrong one. */
     {
         const char *rcty = emit_binding_repr_c_name(ctx, e->type, e);
+        /* repr-typed-pointer straddle (increment 4 follow-up): when the temp's
+         * DECLARED C type is known (`ret_ct` -- read from the callee's own
+         * forward declaration, i.e. by construction what __auto_type would have
+         * deduced), that is ground truth and the side table must record it.
+         * Re-deriving from the source TYPE disagrees with the emitted form for
+         * a concrete heap ADT whose callee returns the int64 carrier: since
+         * increment 4 stage 3, `(HBox int)` c-names to `tur_adt_HBox__int *`,
+         * so the temp was DECLARED `int64_t` but RECORDED as a pointer.  Every
+         * downstream straddle bridge keys on the recorded representation, so
+         * all of them read "pointer -> pointer, nothing to do" and emitted
+         * `tur_adt_HBox__int * m = __ps_N;` -- an int64->pointer initialisation
+         * that Apple clang rejects outright (-Wint-conversion is an error by
+         * default there, a warning under the older gcc/clang on CI).
+         * Recording the declared type restores the agreement the bridges
+         * assume; it is value-preserving and only ever adds a reinterpret. */
+        if (ret_ct && *ret_ct) rcty = ret_ct;
         /* hkt-fmap-result-is-not-droppable: a carrier-dispatched typeclass method
          * whose call-node result type was REFINED to a pointer-family handle.
          *
