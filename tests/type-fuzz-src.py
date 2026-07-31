@@ -151,10 +151,10 @@ def known_bug_slug(tags):
     # for every wrapper -- same report, widest trigger.
     if "tyvar_run" in tags:
         return "poly-result-hof-capturing-closure-sigbus"
-    # `bind` over Result through a typed (Result A B) boundary segfaults or
-    # emits invalid C.
-    if "res_bind" in tags:
-        return "result-monad-bind-typed-boundary-miscompiles"
+    # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31 by
+    # consolidation increment 2 -- continuation-wrapper ABI paired with the
+    # selected entry point + ascription-aware carrier-type recovery -- and
+    # archived; bind legs are in the DEFAULT generation rotation now.)
     # A by-value (non-:heap) struct as a Vec element emits invalid C on the
     # read side ('request for member in something not a structure'), with or
     # without the documented `(:: (vec-get v i) T)` ascription idiom.  Found
@@ -180,12 +180,9 @@ KNOWN_PROBES = [
      "(defn call [f : (fn [] FzB)] : FzB (f))\n"
      "(defn main [] : int\n"
      "  (let [k 7] (println (.a (call (fn [] (FzB k))))))\n  0)\n"),
-    ("result-monad-bind-typed-boundary-miscompiles",
-     "(defn f [n : int] : (Result int int) (if (= n 0) (err 7) (ok n)))\n"
-     "(defn g [n : int] : (Result int int)\n"
-     "  (bind (f n) (fn [x] (ok (* x 2)))))\n"
-     "(defn main [] : int\n"
-     "  (let [r (g 5)] (println (if (ok? r) (ok-val r) -1)))\n  0)\n"),
+    # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
+    # archived; probe retired -- pinned by
+    # tests/fixtures/result-monad-bind-typed-boundary/.)
     # Faithful to the report: it takes the stdlib Cons (a defstruct).  The
     # same shape over a local parametric defdata checks AND runs clean, so
     # the trigger is narrower than "generic + type-app + closure return".
@@ -588,7 +585,9 @@ class Gen:
         return leg
 
     def leg_res_bind(self):
-        """KNOWN shape (result-monad-bind-typed-boundary); --emit-known only."""
+        """Monad bind over Result through a typed defn boundary.  Fixed by
+        consolidation increment 2 (was result-monad-bind-typed-boundary,
+        archived); generated in the default rotation since."""
         leg = Leg()
         f, g = self.name("bf"), self.name("bg")
         n = self.rng.randint(1, 9)
@@ -607,7 +606,8 @@ def gen_program(rng, n_legs, emit_known):
     legs = []
     for i in range(n_legs):
         g = Gen(rng, i, emit_known)
-        if emit_known and rng.random() < 0.15:
+        # Bind legs run in the default rotation since the increment-2 fix.
+        if rng.random() < 0.10:
             legs.append(g.leg_res_bind())
         else:
             legs.append(g.leg())

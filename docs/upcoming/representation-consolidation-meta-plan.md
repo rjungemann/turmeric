@@ -376,6 +376,14 @@ about, and cowpaths are paved before the field is closed:
   instance heads (`(Result _ B)`) get the carrier base with a
   by-value-returning wrapper. Fixing it means deciding the pairing where
   the entry point is selected -- remaining work for this increment.
+  *Status update, later 2026-07-31: DONE -- increment 2 complete.* The bind
+  cell landed exactly that way: `ctx->poly_wrap_callee_carrier` is set at
+  the call-arg emission (where the entry point is known) and consulted at
+  the EX_POLY_WRAP spill gate, so the wrapper ABI follows the selected
+  callee; the ascription form additionally needed
+  `fn_body_tail_byvalue_carrier_type` to trust the ascribed type over a
+  still-generic producer result.  Both reports this increment named are now
+  resolved and archived; `Option`/`Result` bind behave identically.
 - **Increment 3 -- container element protocol.** One rule for what a
   container element slot holds per element class (scalar bits / heap ptr /
   spilled by-value / fat fn handle), shared by Vec, parametric ADT

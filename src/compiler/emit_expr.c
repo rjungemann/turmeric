@@ -286,6 +286,25 @@ bool emit_tail_call_returns_tyvar_carrier(EmitCtx *ctx, const Expr *e) {
  * the binding as int64_t would fail to type-check against the struct the call
  * returns.  Results carried as a tyvar (generic) or returned from an inline-C
  * body still come back as the int64_t carrier and are excluded here. */
+/* consolidation increment 2 (bind cell): does this type mention a named
+ * tyvar anywhere in its spine / fn signature?  Used to recognize a CARRIER
+ * base instance entry (`__inst_*_tyvar`) by its still-generic result. */
+static bool emit_repr_type_mentions_tyvar(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR) return true;
+    if (t->kind == TY_APP)
+        return emit_repr_type_mentions_tyvar(t->as.app.fn) ||
+               emit_repr_type_mentions_tyvar(t->as.app.arg);
+    if (t->kind == TY_FN) {
+        if (emit_repr_type_mentions_tyvar(t->as.fn.result_full_type)) return true;
+        if (t->as.fn.arg_full_types)
+            for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                if (emit_repr_type_mentions_tyvar(t->as.fn.arg_full_types[i]))
+                    return true;
+    }
+    return false;
+}
+
 static bool call_returns_byvalue_aggregate(EmitCtx *ctx, const Expr *call) {
     if (!call || call->kind != EX_CALL) return false;
     const Binding *fb = call->as.call_.fn_binding;
@@ -881,8 +900,39 @@ Type fn_body_tail_byvalue_carrier_type(EmitCtx *ctx, const Expr *e) {
     Type unknown = type_simple(TY_UNKNOWN, CK_COPY);
     if (!e) return unknown;
     switch (e->kind) {
-        case EX_ASCRIBE:
-            return fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+        case EX_ASCRIBE: {
+            Type inner_t =
+                fn_body_tail_byvalue_carrier_type(ctx, e->as.ascribe_.inner);
+            if (inner_t.kind != TY_UNKNOWN) return inner_t;
+            /* consolidation increment 2 (bind cell, ascription form): the
+             * inner recovery failed -- a carrier producer whose declared
+             * result is still generic (`bind` at a partially-applied
+             * instance head) -- but the ASCRIPTION names the concrete type:
+             * `(:: (bind ...) (Result int int))` is the programmer stating
+             * what the carrier holds.  Use it when the inner really is a
+             * carrier producer and the ascribed type is a concrete by-value
+             * carrier-ABI aggregate, so the let-init / boundary bridges can
+             * re-wrap instead of assigning the raw int64 into the struct
+             * (`invalid initializer`). */
+            if (fn_body_tail_is_carrier_producer(e->as.ascribe_.inner)) {
+                /* Not gated on type_uses_carrier_abi: post-lowering a
+                 * parametric app (`(Result int int)`) is a BY-VALUE type for
+                 * which that predicate reports false (the seam-4 rule); the
+                 * test is "concrete non-heap aggregate with its own C
+                 * layout". */
+                Type at = emit_resolve_type(ctx, e->type);
+                /* No type_has_concrete_codegen_layout conjunct: that switch
+                 * has no TY_APP arm and fails closed (the enumerations-drift
+                 * pattern); a non-int64 c-name already proves a grounded
+                 * concrete monomorph layout exists. */
+                if ((at.kind == TY_ADT || at.kind == TY_APP ||
+                     at.kind == TY_STRUCT) &&
+                    !type_is_heap_struct(at) && !type_is_heap_adt(at) &&
+                    strcmp(emit_type_c_name(ctx, at), "int64_t") != 0)
+                    return at;
+            }
+            return unknown;
+        }
         case EX_DO:
             return e->as.do_.n > 0
                 ? fn_body_tail_byvalue_carrier_type(ctx, e->as.do_.items[e->as.do_.n - 1])
@@ -5241,7 +5291,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     type_eq(matched_spec->arg_types[i], arg_expr->as.reinterpret_.expr->type)) {
                     emit_arg = arg_expr->as.reinterpret_.expr;
                 }
+                /* consolidation increment 2 (bind cell): pair the continuation
+                 * wrapper's return ABI with the entry point THIS call selects.
+                 * A carrier base instance (`__inst_*_tyvar` -- no by-value
+                 * spec matched, result still mentions a tyvar) invokes a
+                 * tur_poly_fn_t continuation through the int64 carrier cast,
+                 * so an EX_POLY_WRAP argument must spill-shim a by-value
+                 * aggregate result; a by-value spec callee consumes the raw
+                 * aggregate and must NOT see the shim (the load-bearing
+                 * Option pairing).  Scoped to the direct EX_POLY_WRAP arg so
+                 * nested emissions are unaffected. */
+                bool saved_pwc = ctx->poly_wrap_callee_carrier;
+                if (emit_arg && emit_arg->kind == EX_POLY_WRAP &&
+                    !matched_spec && fn_binding && fn_binding->name &&
+                    fn_binding->name->name &&
+                    strncmp(fn_binding->name->name, "__inst_", 7) == 0 &&
+                    fn_binding->type.kind == TY_FN &&
+                    fn_binding->type.as.fn.result_full_type &&
+                    emit_repr_type_mentions_tyvar(
+                        fn_binding->type.as.fn.result_full_type)) {
+                    ctx->poly_wrap_callee_carrier = true;
+                }
                 char *raw = emit_value(ctx, body, emit_arg);
+                ctx->poly_wrap_callee_carrier = saved_pwc;
                 /* byvalue-result-param-ok-predicate-materialize-bad-cast: set
                  * once a pass-by-pointer struct *parameter* argument has been
                  * converted to the int64 carrier by a pointer cast (its C value
@@ -8455,7 +8527,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * unboxes it).  A typed `:fn` carrier / monad continuation is consumed
              * BY VALUE via a concrete-cast call site, so it must NOT be spilled --
              * gating on boxes_aggregate keeps that path byte-for-byte unchanged. */
-            if (e->as.poly_wrap_.boxes_aggregate && wbnd && wbnd->type.kind == TY_FN) {
+            if ((e->as.poly_wrap_.boxes_aggregate ||
+                 /* increment 2 (bind cell): the enclosing call's resolved
+                  * callee is the carrier base entry -- see the flag's setter
+                  * in the call-arg loop.  The shim is defensive (NULL unless
+                  * the wrapper really returns a by-value aggregate). */
+                 ctx->poly_wrap_callee_carrier) &&
+                wbnd && wbnd->type.kind == TY_FN) {
                 Type wres = wbnd->type.as.fn.result_full_type
                     ? *wbnd->type.as.fn.result_full_type
                     : emit_type_from_kind(wbnd->type.as.fn.result_kind);

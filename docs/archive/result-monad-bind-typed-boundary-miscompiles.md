@@ -1,11 +1,35 @@
 ---
-status: open
+status: RESOLVED 2026-07-31 -- consolidation increment 2 (archived)
 severity: high
 discovered: 2026-07-29
 area: stdlib + compiler (HKT method result typing, stdlib/result.tur)
 ---
 
 # `bind` / `do-m` over `Result` miscompiles across a typed `(Result A B)` boundary
+
+## Resolution (2026-07-31)
+
+Both symptoms fixed, per the investigation below:
+
+1. **Segfault (defn boundary):** the continuation wrapper's return ABI is now
+   paired with the entry point the dispatch actually SELECTS -- when the
+   callee is the carrier base instance (`__inst_*_tyvar`: no by-value spec,
+   tyvar-mentioning result), the EX_POLY_WRAP argument gets the
+   `ensure_aggregate_spill_shim` int64-returning wrapper
+   (`ctx->poly_wrap_callee_carrier`, set at the call-arg emission, consulted
+   at the spill gate).  A by-value spec callee keeps the raw aggregate
+   wrapper -- the load-bearing Option pairing, unchanged.
+2. **Invalid C (let + ascription):** `fn_body_tail_byvalue_carrier_type`'s
+   EX_ASCRIBE arm now falls back to the ASCRIBED type when the inner is a
+   carrier producer with a still-generic declared result -- the ascription
+   is the programmer stating what the carrier holds -- so the let-init
+   carrier->concrete re-wrap fires.  (Its gate deliberately avoids
+   `type_has_concrete_codegen_layout`, which has no TY_APP arm and fails
+   closed -- the enumerations-drift pattern.)
+
+Pinned by `tests/fixtures/result-monad-bind-typed-boundary/` (both forms,
+the err path, and the Option control).  The `Option`/`Result` call shapes now
+behave identically, which was this report's "worth fixing" bar.
 
 ## Investigation update (2026-07-31, consolidation increment 2)
 

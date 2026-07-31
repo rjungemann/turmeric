@@ -1,0 +1,29 @@
+;; result-monad-bind-typed-boundary -- Monad bind over Result flowing through
+;; typed (Result A B) boundaries.  Was: segfault (defn boundary) and invalid C
+;; (let+ascription).  Fixed in consolidation increment 2: (1) the continuation
+;; wrapper ABI is paired with the entry point the dispatch actually selects
+;; (a carrier base instance gets a spill-shimmed int64-returning wrapper; a
+;; by-value spec keeps the raw aggregate wrapper -- the Option control), and
+;; (2) fn_body_tail_byvalue_carrier_type recovers the concrete type from an
+;; ASCRIPTION over a still-generic carrier producer, so the let-init re-wrap
+;; fires.
+(defn f [n : int] : (Result int int)
+  (if (= n 0) (err 7) (ok n)))
+
+;; defn-boundary form (was: segfault)
+(defn g [n : int] : (Result int int)
+  (bind (f n) (fn [x] (ok (* x 2)))))
+
+;; Option control -- the load-bearing by-value spec pairing must not move
+(defn fo [n : int] : (Option int) (if (= n 0) (none) (some n)))
+(defn go [n : int] : (Option int) (bind (fo n) (fn [x] (some (* x 3)))))
+
+(defn main [] : int
+  (let [r (g 5)] (println (if (ok? r) (ok-val r) -1)))
+  ;; ascription form (was: invalid C)
+  (let [r2 (:: (bind (f 6) (fn [x] (ok (+ x 1)))) (Result int int))]
+    (println (if (ok? r2) (ok-val r2) -1)))
+  ;; err path through the boundary
+  (let [r3 (g 0)] (println (if (ok? r3) (ok-val r3) -1)))
+  (println (unwrap-or (go 5) -1))
+  0)
