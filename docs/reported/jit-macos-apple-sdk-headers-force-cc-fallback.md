@@ -171,6 +171,52 @@ So the remaining 8 fixtures are gated on two c2mir capabilities --
 `#pragma pack` and C23 enum base types -- not on compiler identity. Fix
 direction 1 is closed.
 
+## Ceiling experiment: all 8 fixtures ARE recoverable (2026-07-30)
+
+Rather than guess at what a fork change would buy, each blocker was neutralized
+by hand and the fixtures re-run. Method: patched copies of `malloc/malloc.h`
+(the `: uint64_t` deleted) and `mach/port.h` (the `_Static_assert` body replaced
+with `0 == 0`) dropped into `src/`, which `jit_sdk_include_dirs`
+(`src/main.c:3364`) puts on c2mir's search path ahead of the SDK -- note
+`tur jit -I` does **not** reach c2mir, only the cc fallback -- plus
+`TARGET_CPU_ARM64` and `__LITTLE_ENDIAN__` in `JIT_PRELUDE`.
+
+**Result: all 8 compile and run under the engine, no fallback.** So there is a
+real 8-fixture prize here; nothing is fundamentally out of reach.
+
+The full blocker chain, in the order each fixture hits it:
+
+| # | Blocker | Blocks | Fix |
+|---|---|---|---|
+| 1 | `__arm64__` defined empty by MIR's prelude | image-* (3) | **SHIPPED** (`JIT_PRELUDE`) |
+| 2 | `__LITTLE_ENDIAN__` undefined -> `OSByteOrder.h:314 #error Unknown endianess` | image-* (3) | one-line prelude define |
+| 3 | `TargetConditionals.h:398 #error` | gc/hkt/weak (5) | prelude defines (needs the full `TARGET_CPU_*`/`TARGET_OS_*` set, not one macro) |
+| 4 | C23 `enum : uint64_t` (`malloc/malloc.h:96`) | gc/hkt/weak (5) | **c2mir grammar -- fork** |
+| 5 | `#pragma pack` ignored -> `mach/message.h:543,569` size asserts | **all 8** | **c2mir layout -- fork** |
+
+### The ordering conclusion that matters
+
+**`#pragma pack` (row 5) is the keystone: it blocks all 8, so until it lands no
+other fix on this list buys a single fixture.** That is why shipping
+`__LITTLE_ENDIAN__` or `TARGET_CPU_ARM64` on their own was declined -- they are
+correct but inert, and inert changes that assert things about the target are
+pure downside.
+
+Sequence, if this is taken up: row 5, then row 4, then rows 2-3 (trivial once
+they can pay off). Row 4 was separately confirmed sufficient for `malloc.h` --
+with only the enum syntax patched, that header parses clean, so no further
+c2mir gap hides behind it.
+
+Note rows 4 and 5 are both changes to `c2mir/c2mir.c` in the
+`rjungemann/mir` fork (`cmake/mir.cmake`), and row 5 in particular touches the
+preprocessor, the parser, and struct layout: pragmas are consumed in
+`check_pragma` (`c2mir.c:2545`) and never reach the parser today, and
+preprocessing completes fully before parsing, so the packing state has to be
+carried across that boundary -- either as a marker token in the output stream
+or as a position-keyed side table consulted from `set_type_layout`
+(`c2mir.c:6220`). Member alignment is clamped in `update_field_layout`
+(`c2mir.c:6154`).
+
 ## Fix directions
 
 1. ~~**Predefine what the headers probe for.**~~ **Tried; closed.** See the
