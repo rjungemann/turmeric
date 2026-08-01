@@ -221,6 +221,108 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
 
+  windows:
+    name: Windows build (MSYS2/UCRT64)
+    runs-on: windows-latest
+
+    # Windows had NO CI coverage: `test` and `jit` both pin
+    # [ubuntu-latest, macos-latest].  In the ~899 commits after the bring-up
+    # merged (7a16ef1de), five independent breaks accumulated -- three of them
+    # inside one five-day window -- and `tur.exe` stopped building entirely
+    # before anyone noticed.  This job exists so that cannot happen silently
+    # again.
+    #
+    # It BUILDS ONLY.  It deliberately does not run the fixture suite: ~54
+    # fixtures fail on Windows today for known, pre-existing reasons (Winsock
+    # setsockopt in stdlib/httpd.tur, POSIX-only inline-C, and carrier<->pointer
+    # straddles that are not Windows-specific at all).  Those are tracked in
+    # docs/reported/windows-*.md and docs/upcoming/v1/windows-remaining-plan.md.
+    # A permanently-red job teaches people to ignore it, which is strictly worse
+    # than no job; every one of the five breaks above was a COMPILE error, so
+    # building is what actually guards this platform.  Turn the suite on here
+    # once those classes are closed.
+    #
+    # Separate job rather than a third entry in the `test` matrix because
+    # nothing in that job's shape transfers: it wants apt/brew, a POSIX ccache
+    # setup, and ends in `ctest`.
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      # Before checkout: git on Windows defaults to core.autocrlf=true, which
+      # would rewrite every LF file in the tree.  The committed split-runtime
+      # artifacts (src/runtime/generated/) and the shell harnesses are
+      # line-ending sensitive, and a CRLF checkout makes any regeneration here
+      # produce a whole-file diff.  `input` keeps the working tree as committed.
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+
+      # UCRT64 (not MINGW64, not the plain MSYS shell): the port targets the
+      # UCRT runtime, and MSYSTEM selects which toolchain lands on PATH.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # libedit is what gives the REPL line editing (HAVE_EDITLINE in
+          # src/CMakeLists.txt).  Without it the build still succeeds, just
+          # silently degraded -- so install it and keep the leg honest.
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-libedit
+
+      - name: Toolchain versions
+        run: |
+          echo "MSYSTEM=$MSYSTEM"
+          cc --version | head -1
+          cmake --version | head -1
+
+      # Ninja, not the default generator: matches `just build-windows`, so a
+      # local repro of a CI failure is the same command.  Sanitizers are off on
+      # this leg regardless -- MinGW gcc ships no ASan/UBSan runtime, and
+      # src/CMakeLists.txt already reports that at configure time.
+      - name: Configure
+        run: >-
+          cmake -S . -B build-win -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build-win -j
+
+      - name: Smoke check (tur.exe --version must not hang)
+        run: |
+          out=$(timeout 10 ./build-win/tur.exe --version)
+          rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::tur.exe --version failed or hung (exit $rc)"
+            exit 1
+          fi
+          case "$out" in
+            *"the Turmeric compiler"*) ;;
+            *) echo "::error::unexpected tur.exe --version output"; exit 1 ;;
+          esac
+
+      # A bare compile of `tur` proves far less than it looks: it says nothing
+      # about whether the compiler can drive cc, link against libturi, and
+      # produce a binary that runs.  One real fixture end-to-end covers the
+      # whole emit -> cc -> link -> execute path for the cost of a few seconds.
+      - name: End-to-end (compile and run a fixture)
+        run: |
+          ./build-win/tur.exe build tests/fixtures/arith/input.tur -o ./arith-smoke.exe
+          ./arith-smoke.exe > ./arith-smoke.out
+          if ! diff -u tests/fixtures/arith/expected.stdout ./arith-smoke.out; then
+            echo "::error::fixture 'arith' ran but its output did not match expected.stdout"
+            exit 1
+          fi
+          echo "fixture 'arith' compiled, ran, and matched expected.stdout"
+
   check-guides:
     name: Check guide toggle pairs
     runs-on: ubuntu-latest
