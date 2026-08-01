@@ -14,7 +14,7 @@
 // `injectSwVersion` plugin in vite.config.js (it regex-replaces the
 // `tur-try-v1-<x.y.z>` token in dist/sw.js). The literal here is the dev/no-build
 // fallback; keep it in sync with VERSION so an un-built serve is still correct.
-const CACHE_VERSION = 'tur-try-v1-0.32.6';
+const CACHE_VERSION = 'tur-try-v1-0.32.7';
 const PRECACHE = `${CACHE_VERSION}-precache`;
 const RUNTIME  = `${CACHE_VERSION}-runtime`;
 

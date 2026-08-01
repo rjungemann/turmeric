@@ -4,7 +4,7 @@
 
 A Lisp that compiles to C99.
 
-**Latest release:** `v0.32.6` -- `tur jit` lands an in-process MIR JIT engine behind two gates, and the emitted C sheds every GCC extension that kept it out of a strict C11 front end.
+**Latest release:** `v0.32.7` -- the Windows build is restored and covered by CI, with Winsock socket options shimmed and `stdlib/fs`/`stdlib/term` ported off POSIX-only APIs.
 
 ## What
 

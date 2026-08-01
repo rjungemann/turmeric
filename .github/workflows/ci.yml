@@ -263,18 +263,38 @@ jobs:
 
       # UCRT64 (not MINGW64, not the plain MSYS shell): the port targets the
       # UCRT runtime, and MSYSTEM selects which toolchain lands on PATH.
+      # UCRT64 (not MINGW64, not the plain MSYS shell): the port targets the
+      # UCRT runtime, and MSYSTEM selects which toolchain lands on PATH.
+      #
+      # Only what the BUILD genuinely requires goes here.  A pacman -S
+      # transaction is all-or-nothing, so one unresolvable name aborts the whole
+      # step and the job never reaches Configure -- which is exactly what
+      # happened when this list carried a nonexistent
+      # `mingw-w64-ucrt-x86_64-libedit`: the leg produced zero Windows signal
+      # while still appearing green-adjacent in the checks list.  Optional
+      # packages go in the non-fatal step below instead.
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: true
-          # libedit is what gives the REPL line editing (HAVE_EDITLINE in
-          # src/CMakeLists.txt).  Without it the build still succeeds, just
-          # silently degraded -- so install it and keep the leg honest.
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-libedit
+
+      # Optional: line editing for the REPL (HAVE_EDITLINE in
+      # src/CMakeLists.txt).  The package is `wineditline`, NOT `libedit` --
+      # verified with `pacman -Qo /ucrt64/lib/libedit.dll.a`, which is the exact
+      # file CMake's HAVE_EDITLINE probe finds, and it is owned by
+      # mingw-w64-ucrt-x86_64-wineditline.  (CLAUDE.md says the same: "MSYS2
+      # ships wineditline".)
+      #
+      # `|| true` regardless, mirroring the macOS legs' `brew install libedit
+      # ccache || true`: the build succeeds without it, just with a degraded
+      # REPL, so an unavailable optional package must never be able to take the
+      # whole leg down again.
+      - name: Install optional REPL line editing (non-fatal)
+        run: pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-wineditline || true
 
       - name: Toolchain versions
         run: |
