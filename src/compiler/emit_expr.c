@@ -9193,6 +9193,45 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         typed_shim ? "typed-shim" : "int64-shim");
             }
 
+            /* fn-value-fat-normalization: when the boxed value is a file-scope
+             * FUNCTION, the whole box is a constant -- hoist it to a statically
+             * allocated one instead of mallocing a fresh copy on every
+             * execution.  Nothing drops a box handed to a normalized fn param,
+             * so the per-execution form is an unbounded leak in a loop, not
+             * just an allocation (5e6 iterations of `(apply1 add3 acc)` leaked
+             * 122 MiB).  Restricted to `is_global` bindings: a local fn binding
+             * emits a plain identifier too, but its address is not a
+             * link-time constant, and a computed fn value never is.  Across the
+             * fixture corpus this covers 4307 of 4334 boxing sites. */
+            if (e->as.fn_to_fat_.static_ok &&
+                inner->kind == EX_VAR && inner->as.var.binding &&
+                inner->as.var.binding->is_global &&
+                !inner->as.var.binding->closure_fn_binding &&
+                !inner->as.var.binding->is_param &&
+                !inner->as.var.binding->is_poly_fn &&
+                !inner->as.var.binding->is_fat) {
+                char shim_name[64];
+                if (!typed_shim)
+                    snprintf(shim_name, sizeof shim_name, "__tur_fatshim%u",
+                             (unsigned)arity);
+                const char *box = ensure_static_fatbox(
+                    ctx, typed_shim ? typed_shim : shim_name, fnptr);
+                if (box) {
+                    if (g_emit_abi_trace)
+                        fprintf(stderr, "repr-trace %u:%u bridge bare-to-fat "
+                                        "static-box %s\n",
+                                e->span.line, e->span.col_start, box);
+                    char *sb_tmp = fresh_tmp(ctx);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body,
+                               "void *%s = (void *)((char *)&%s + sizeof(void *));\n",
+                               sb_tmp, box);
+                    free(fnptr);
+                    free(typed_shim);
+                    return sb_tmp;
+                }
+            }
+
             char *fat_tmp = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
             {

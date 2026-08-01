@@ -1196,7 +1196,18 @@ struct Expr {
         /* A#1: fat-closure auto-shim.  inner is a bare (non-capturing) fn value;
          * the emitter generates an env-ignoring wrapper thunk and a heap fat
          * struct { thunk, orig_fn_ptr } so a ^fat consumer can fat-call it. */
-        struct { struct Expr *inner; } fn_to_fat_;
+        /* `static_ok` OPTS IN to the file-scope { shim, orig } box the emitter
+         * can use when `inner` is a global fn (fn-value-fat-normalization).
+         * Default off, deliberately: the box is then shared between sites and
+         * lives forever, which is only sound at a sink that never DROPS its
+         * argument.  A `^fat` sink may (tests/fixtures/closure-drop-glue-
+         * fatshim calls TUR_CLOSURE_DROP on one), and an owning struct
+         * fn-field does at scope exit; the no-op drop glue keeps both correct,
+         * but GCC cannot see that through the inlined tur_closure_drop and
+         * reports `'free' called on unallocated object`.  Only the normalized
+         * NOMINAL param slot sets this -- nothing drops a box handed to one,
+         * which is exactly why that slot leaked a box per call. */
+        struct { struct Expr *inner; bool static_ok; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes

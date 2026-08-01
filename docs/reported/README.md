@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of twenty-one. Keep
+This index exists so a triage pass reads one file instead of twenty-two. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -32,6 +32,7 @@ the plan links. File a new repr cell there as well as here.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
+| [fat-sink-shim-box-leaks-per-call](fat-sink-shim-box-leaks-per-call.md) | medium | a bare fn passed to a `^fat` sink mallocs a `{shim, orig}` box per CALL and never frees it -- 1002 MiB over 5e6 iterations. Pre-existing; the same leak at a normalized nominal param is fixed (static box), but `^fat` has no ownership contract so the caller cannot choose |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
 | [macos-int-conversion-carrier-pointer-straddles](macos-int-conversion-carrier-pointer-straddles.md) | medium | `int64_t`/`void *` straddles at monomorphized-ctor args and fn-value returns; hard errors on Apple clang, warnings on Linux. **Sole cause of the standing red `Test (macos-latest)` CI job** -- fixing it turns that leg green. Reproducible on Linux; no macOS box needed |
 | [contract-type-arg-not-peeled-to-base](contract-type-arg-not-peeled-to-base.md) | medium | a contract in type-ARGUMENT position is never peeled; blocks `TY_CONTRACT` from the repr-row arrangement |

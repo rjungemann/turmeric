@@ -95,6 +95,16 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    capturing closure into an effect-row'd one is the last live row of
    `poly-result-hof-capturing-closure-sigbus`.
 
+   The `{ shim, orig }` box a bare fn is shimmed into is `malloc`'d per
+   execution of the bridge.  At a normalized nominal param nothing frees it,
+   so that was a leak per call (5e6 iterations of `(apply1 add3 acc)` peaked
+   at 122 MiB); such a box is a constant when the boxed value is a global fn,
+   so it is now allocated once at file scope and filled from
+   `__tur_static_init`.  The hoist is opt-in per shim site and ONLY the
+   normalized nominal slot opts in -- a `^fat` callee may drop its argument
+   and the call site cannot tell, so those keep the heap box and keep the
+   leak ([`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md)).
+
    Two predicates, both in `src/compiler/types.c`, and they deliberately
    disagree: `fn_param_type_is_fat_normalized` (param position, tyvars
    included) and `fn_result_type_is_fat_normalized` (declared result and
@@ -133,14 +143,16 @@ report is one missing cell.
 **Open cells.** These are the crossings that still have no working bridge;
 each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
-add the row. All four below were re-verified against `main` on 2026-08-01;
-the first row narrowed to the effect row the same day (increment 2).
+add the row. The four that predate today were re-verified against `main` on
+2026-08-01; the first row narrowed to the effect row the same day
+(increment 2), and the `^fat` leak row was filed the same day.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
 | capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
 | residual carrier<->pointer straddles at the monomorphized-ctor arg slot and at fn-value return sites -- the emitted C mixes `int64_t` and `void *` across the same field | [`macos-int-conversion-carrier-pointer-straddles`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/macos-int-conversion-carrier-pointer-straddles.md) |
+| bare fn -> `^fat` sink: a `{ shim, orig }` box is malloc'd per call and never freed (1002 MiB over 5e6 iterations); `^fat` has no ownership contract, so the caller cannot pick a representation | [`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md) |
 | `TY_CONTRACT` in type-ARGUMENT position -- never peeled to its base, so the payload keeps a live contract type at every downstream boundary | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/contract-type-arg-not-peeled-to-base.md) |
 
 The last two are new to this table, not new defects -- both were filed before

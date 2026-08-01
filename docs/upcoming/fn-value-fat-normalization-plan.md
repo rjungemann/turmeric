@@ -243,14 +243,68 @@ compiler deleting a loop it could inline through, so the multiplier is an
 artifact of an empty body, not a 175x on real code.  This is stage 1's
 mechanism, not increment 2's; increment 2 widens its population.
 
-Follow-up (not done here): a box whose `orig` is a static global fn and whose
-`shim` is a preamble symbol is a CONSTANT -- it wants a file-scope box filled
-once in `__tur_static_init`, not a malloc per execution.  The blocker is
-ownership, not layout: `tur_closure_drop` reads the `env[-1]` drop-glue header
-and a NULL header means "free the base allocation", so a static box handed to
-a drop path would `free()` a static address.  It needs a no-op drop-glue
-sentinel (or a proof that shim boxes never reach drop) before the hoist is
-safe.
+## Increment 2b -- LANDED 2026-08-01 (the static box; the leak, not the clock)
+
+The allocation above is not merely slow.  Nothing frees a box handed to a
+normalized param, so the loop LEAKS one per iteration: 5e6 iterations of
+`(apply1 add3 acc)` peaked at **122 MiB**, 24 bytes a turn, growing linearly
+with trip count.  That reclassifies the follow-up from perf to memory
+correctness, so it was done rather than deferred.
+
+A box whose `orig` is a file-scope function is a constant, so it is allocated
+once at file scope and filled from `__tur_static_init` (S1b, which exists so
+startup work survives any C11 front end -- a function pointer cast to
+`int64_t` is not an address constant, so a static initializer would not be
+portable).  Storage is a `union { void *; int64_t; char[...] }` rather than a
+struct: it needs `max(void *, int64_t)` alignment WITHOUT a struct's padding,
+which on a 32-bit target (wasm32) would move slot 0 off `+ sizeof(void *)` and
+break the `h[-1]` header recovery.
+
+The drop-glue blocker dissolved into two pieces:
+
+- The header is `__tur_fatbox_keep`, a no-op, not the malloc'd box's NULL.
+  NULL means "free the base allocation" to `tur_closure_drop`, which on a
+  static address is heap corruption and, on a second drop, a double free.
+  A no-op glue makes every drop path correctly do nothing -- which is also
+  what makes SHARING one box between sites sound.  (The box is write-once:
+  `EX_FN_TO_FAT` and `EX_POLY_TO_FAT` are the only writers of these slots in
+  the tree, both at creation, and nothing compares fn values by identity.)
+- Correct at runtime is not sufficient.  GCC cannot see the no-op through the
+  inlined `tur_closure_drop` and reports `'free' called on unallocated
+  object` (-Wfree-nonheap-object) at every drop site -- observed on
+  `closure-drop-glue-fatshim` and two `catch-unwind-*` fixtures.  Initializing
+  the header statically did not fold the branch away.
+
+So the hoist is **opt-in per shim site** (`fn_to_fat_.static_ok`), and exactly
+one site opts in: the A#1 shim at a normalized NOMINAL param.  Nothing drops a
+box handed to one -- which is precisely why it leaked -- so no drop path can
+reach a static box.  `^fat` sinks and owning struct fn-fields keep the heap
+box: a `^fat` callee MAY drop its argument (`closure-drop-glue-fatshim` calls
+`TUR_CLOSURE_DROP` on one) and the call site cannot tell.  Default-off means a
+future EX_FN_TO_FAT site is heap-allocated until someone proves otherwise.
+
+**Measurements.** The leak is gone and the cliff is mostly gone:
+
+| | peak RSS (5e6 iters) | 2e7-iter loop |
+| --- | --- | --- |
+| before | 122 MiB | 0.533 s |
+| after | **1 MiB** | **0.042 s** |
+
+The residual 0.042 s over 2e7 calls is ~2 ns/call -- the fat indirection this
+plan always accepted, not an allocation.  Suite 2505/0, turi 1703/0, ratchet
+green (`fn_result_type_is_fat_normalized` joined the pinned predicate list).
+Corpus footprint is small and honest: **one** fixture
+(`van-laarhoven-lens-wide-compose`) actually takes the static box, because
+most of the corpus's 4334 boxing sites are `^fat` sinks, struct stores and
+typeclass shims rather than the normalized nominal slot.  Pinned by
+`tests/fixtures/fn-value-static-fatbox/`, which also asserts the two forms
+that must NOT change (owning fn-fields, capturing closures).
+
+**Found while measuring, filed not fixed:** the same per-call box at a `^fat`
+sink leaks too, and worse -- 5e6 iterations peaked at **1002 MiB**.  It is
+pre-existing and needs an ownership contract on `^fat` before a caller can
+choose a representation, so it is its own report:
+[`fat-sink-shim-box-leaks-per-call`](../reported/fat-sink-shim-box-leaks-per-call.md).
 
 ## Stages
 

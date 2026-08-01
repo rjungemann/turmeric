@@ -10,11 +10,13 @@ type_is_wide_byval_adt emit_module.c 2
 type_is_wide_byval_adt types.c 4
 type_is_boxed_container_elem emit_expr.c 6
 type_is_boxed_container_elem types.c 1
-fn_param_type_is_fat_normalized elab_call.c 2
-fn_param_type_is_fat_normalized elab_fns.c 5
+fn_param_type_is_fat_normalized elab_call.c 4
+fn_param_type_is_fat_normalized elab_fns.c 3
 fn_param_type_is_fat_normalized elab_forms.c 2
 fn_param_type_is_fat_normalized emit_expr.c 1
-fn_param_type_is_fat_normalized types.c 2
+fn_param_type_is_fat_normalized types.c 3
+fn_result_type_is_fat_normalized elab_fns.c 2
+fn_result_type_is_fat_normalized types.c 2
 type_has_concrete_codegen_layout emit_core.c 1
 type_has_concrete_codegen_layout emit_expr.c 10
 type_has_concrete_codegen_layout emit_fns.c 5

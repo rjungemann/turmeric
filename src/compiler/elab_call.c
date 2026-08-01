@@ -5594,6 +5594,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
+                    /* A normalized NOMINAL param never drops its argument --
+                     * which is precisely why this shim leaked a box per call --
+                     * so its box may be the shared file-scope one.  A ^fat sink
+                     * (slot_fat_decl) may drop, so it keeps the heap box.  See
+                     * the static_ok comment in expr.h. */
+                    shim->as.fn_to_fat_.static_ok = slot_nominal && !slot_fat_decl;
                     args[i] = shim;
                 } else if (ak == TY_PTR_VOID || (ak == TY_FN && args[i]->type.as.fn.boxed) ||
                            ak == TY_NIL ||

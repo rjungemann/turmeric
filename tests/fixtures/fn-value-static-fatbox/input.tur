@@ -1,0 +1,68 @@
+;; fn-value-static-fatbox -- fn-value-fat-normalization: a { shim, orig } box
+;; whose `orig` is a file-scope FUNCTION is a constant, so it is allocated once
+;; at file scope (filled from __tur_static_init) instead of malloc'd on every
+;; execution of the EX_FN_TO_FAT bridge.
+;;
+;; The per-execution form was not merely slow: nothing drops a box handed to a
+;; normalized fn param, so a loop that boxed per iteration leaked without bound
+;; (5e6 iterations of `(apply1 add3 acc)` below leaked 122 MiB at 24 bytes a
+;; turn; with the static box the same loop peaks at 1 MiB).
+;;
+;; Three properties the hoist has to preserve, all exercised here:
+;;
+;;   1. SHARING.  One box now serves every site that boxes the same (shim, fn)
+;;      pair, where each site used to get its own.  `twice-boxed` passes the
+;;      same bare fn through two different normalized params.  Sharing is safe
+;;      because the box is write-once and the static box's drop-glue header is
+;;      `__tur_fatbox_keep`, a no-op -- tur_closure_drop reads a NULL header as
+;;      "free the base allocation", which on a static address would be heap
+;;      corruption, and a second drop a double free.
+;;
+;;   2. OWNING SINKS STAY ON THE HEAP.  `two-owners` stores the same bare fn
+;;      into two structs with OWNING fn-fields that run drop glue at scope
+;;      exit.  Those boxes keep the malloc'd form: the no-op glue makes a
+;;      static box's drop harmless, but GCC cannot see that through the inlined
+;;      tur_closure_drop and reports `'free' called on unallocated object`
+;;      (-Wfree-nonheap-object) at every such site.  Keeping owned sinks heap-
+;;      allocated keeps static boxes off drop paths entirely -- if this fixture
+;;      ever compiles with that warning, the owned_sink flag stopped reaching
+;;      the emitter.
+;;
+;;   3. THE MALLOC'D PATH STILL WORKS.  A CAPTURING closure has no constant box
+;;      and keeps the heap form; `capturing` mixes both through the same param.
+
+(defstruct Adder [f : (fn [int] int) base : int])
+
+(defn add3 [n : int] : int (+ n 3))
+(defn add10 [n : int] : int (+ n 10))
+
+;; tyvar-signature param -- normalized, so a bare fn arrives fat-shimmed
+(defn apply1 [A B] [f : (fn [A] B) x : A] : B (f x))
+(defn apply2 [A B] [g : (fn [A] B) x : A] : B (g x))
+
+;; the same global fn boxed at two distinct sites -> one shared static box
+(defn twice-boxed [x : int] : int
+  (+ (apply1 add3 x) (apply2 add3 x)))
+
+;; the shared box stored into two owning fn-fields; both drop at scope exit
+(defn two-owners [x : int] : int
+  (let [a (make-struct Adder add3 1)
+        b (make-struct Adder add3 2)]
+    (+ ((.f a) x) ((.f b) x))))
+
+;; a capturing closure keeps the heap box; both forms flow through one param
+(defn capturing [x : int] : int
+  (let [k 100]
+    (+ (apply1 (fn [y : int] : int (+ y k)) x)
+       (apply1 add10 x))))
+
+;; boxing in a loop -- the shape that used to leak 24 bytes per iteration
+(defn bump-loop [n : int acc : int] : int
+  (if (= n 0) acc (bump-loop (- n 1) (apply1 add3 acc))))
+
+(defn main [] : int
+  (println (twice-boxed 10))   ; 13 + 13 = 26
+  (println (two-owners 10))    ; 13 + 13 = 26
+  (println (capturing 10))     ; 110 + 20 = 130
+  (println (bump-loop 1000 0)) ; 3 * 1000 = 3000
+  0)
