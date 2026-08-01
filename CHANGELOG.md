@@ -2,9 +2,44 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.32.8] -- 2026-08-01
 
 ### Fixed
+
+- **`$` in sweet-exp no longer double-applies a rest-of-line that is already
+  one complete expression.** `println $ g(7)` expanded to `(println ((g 7)))`
+  and failed with "expression in call head has type `int`, which is not
+  callable" -- so `$` composed with a bare token sequence but not with a
+  neoteric call, a parenthesised form, a curly-infix group or a data literal,
+  exactly the spellings the rest of the sweet-exp style encourages. The chained
+  form the guides teach, `println $ normalize $ vec3(1.0 0.0 0.0)`, did not
+  compile. The wrap is now suppressed when the rest is already exactly one
+  balanced, delimited expression. A bare atom is deliberately untouched:
+  `f $ g` stays `(f (g))`, SRFI-110's zero-argument reading.
+
+- **A capturing closure passed to a tyvar-signature fn parameter no longer
+  segfaults.** `(defn run [R] [body : (fn [] R)] : R (body))` compiled clean
+  and then jumped into the closure's env struct, because a tyvar-signature
+  parameter kept the thin representation, which has nowhere to put an
+  environment. Fat normalization now admits tyvar signatures on the *parameter*
+  side; the result side deliberately keeps the concrete-only claim, since the
+  poly-call protocol boxes returned closures itself. Two missing shim sites came
+  with it: rank-2 forall params called through the carrier, and normalized
+  params stored into fat struct fields, which were boxed a second time. An
+  effect-row signature is still excluded and tracked as a fuzz `--known-probes`
+  row.
+
+- **A `{ shim, orig }` fat box no longer leaks once per call at a normalized fn
+  parameter.** Nothing frees a box handed to a normalized nominal param, so
+  `(apply1 add3 acc)` in a loop leaked 24 bytes an iteration -- 5e6 iterations
+  peaked at 122 MiB. Where the boxed value is a file-scope function the contents
+  are constant, so the box is allocated once at file scope, filled from
+  `__tur_static_init`, and given a no-op drop glue so every drop path correctly
+  does nothing. Peak RSS 122 MiB -> 1 MiB; a 2e7-iteration loop 0.533s ->
+  0.042s. The hoist is opt-in per shim site and only the normalized-nominal-param
+  site takes it -- `^fat` sinks and owning struct fn-fields keep the heap box,
+  since a `^fat` callee may drop its argument. The same per-call box at a `^fat`
+  sink leaks too and is filed as its own report.
 
 - **Generated C no longer straddles the int64 carrier and a pointer at a
   monomorphized constructor's field slot or at a fn-value return site.** Four
@@ -74,6 +109,18 @@ All notable changes to Turmeric are documented here.
   probe-output exemption list to the controls. The byte-level probe survives as
   `gc-collects-strong-cycle-heap-bytes`, `cc`-only, since bytes still catch a
   payload leak the block counter cannot see.
+
+- **Interpreted trampoline fixtures cap their RSS, and a per-fixture timeout is
+  reported as a timeout rather than a stdout mismatch.** The tree-walking
+  interpreter retains roughly 4 KiB per trampolined step, so a fixture's step
+  count is a memory multiplier under `--interpret` and two co-scheduled large
+  ones were memory pressure, not a CPS defect. Diffing stdout first had been
+  turning a killed fixture's partial output into a claim about the answer.
+
+- **CI**: the Windows leg installs `wineditline` and compares the smoke fixture
+  in bash (`diff` is not present on the runner); the macOS JIT baseline is
+  re-measured in the job's own configuration, and the JIT corpus counts are
+  published on a passing run.
 
 ## [0.32.7] -- 2026-08-01
 
