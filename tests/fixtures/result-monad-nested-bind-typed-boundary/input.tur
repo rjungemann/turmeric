@@ -1,0 +1,62 @@
+;; result-monad-nested-bind-typed-boundary -- two or more `bind`s NESTED over
+;; (Result A B) across a typed boundary.  Was: SIGSEGV at run time (checked and
+;; compiled clean), which capped `do-m` over Result at a single bind.
+;;
+;; Root cause: the inner continuation CAPTURES the outer bound variable, so it
+;; lowers to a fat closure whose `__fn` returns the by-value aggregate
+;; `tur_adt_Result__int__int` -- but the carrier base instance
+;; (__inst_Monad_bind_Result_tyvar) invokes it through the int64
+;; `(int64_t(*)(void*,int64_t))k.fn` cast, so the struct return was read as a
+;; plain carrier handle and then dereferenced.  The named-wrapper spill shim
+;; (increment 2) did not cover this shape because a capturing continuation has
+;; no named wrapper.  Fixed by ensure_fat_aggregate_spill_shim: a
+;; signature-keyed shim that reads the real entry point out of the closure
+;; env's `__fn` slot and boxes the aggregate to the int64 carrier.
+(defn half-r [x : int] : (Result int int)
+  (if (= x (* 2 (/ x 2))) (ok (/ x 2)) (err 1)))
+
+;; do-m form -- desugars to nested .bind (was: segfault)
+(defn quarter-sum-r [x : int] : (Result int int)
+  (do-m a (half-r x)
+        b (half-r a)
+        (ok (+ a b))))
+
+;; explicit nested-bind spelling (was: segfault)
+(defn explicit-r [x : int] : (Result int int)
+  (bind (half-r x) (fn [a] (bind (half-r a) (fn [b] (ok (+ a b)))))))
+
+;; three deep, to pin that the shim is not depth-1-specific
+(defn three-r [x : int] : (Result int int)
+  (do-m a (half-r x)
+        b (half-r a)
+        c (half-r b)
+        (ok (+ a (+ b c)))))
+
+;; a different error type through the same shape
+(defn cstr-err-r [x : int] : (Result int cstr)
+  (do-m a (:: (ok x) (Result int cstr))
+        b (:: (ok (* 2 a)) (Result int cstr))
+        (ok (+ a b))))
+
+;; Option control -- the by-value spec pairing must not move
+(defn half-o [x : int] : (Option int)
+  (if (= x (* 2 (/ x 2))) (some (/ x 2)) (none)))
+(defn quarter-sum-o [x : int] : (Option int)
+  (do-m a (half-o x)
+        b (half-o a)
+        (some (+ a b))))
+
+(defn main [] : int
+  (let [r (quarter-sum-r 20)] (println (if (ok? r) (ok-val r) -1)))
+  ;; err path short-circuits through both binds
+  (let [r (quarter-sum-r 21)] (println (if (ok? r) (ok-val r) -1)))
+  (let [r (explicit-r 20)] (println (if (ok? r) (ok-val r) -1)))
+  ;; ascription boundary instead of a defn boundary
+  (let [r (:: (bind (half-r 20) (fn [a] (bind (half-r a) (fn [b] (ok (+ a b))))))
+              (Result int int))]
+    (println (if (ok? r) (ok-val r) -1)))
+  (let [r (three-r 40)] (println (if (ok? r) (ok-val r) -1)))
+  (let [r (cstr-err-r 3)] (println (if (ok? r) (ok-val r) -1)))
+  (println (unwrap-or (quarter-sum-o 20) -1))
+  (println (unwrap-or (quarter-sum-o 21) -1))
+  0)

@@ -420,6 +420,46 @@ defn main [] : int
 Prints `15` then `-1`: `half 20` gives `10`, `half 10` gives `5`, and `10 + 5 =
 15`; `half 21` is `none`, which short-circuits the whole chain.
 
+The same chain over `(Result A B)` is the identical shape -- only the failure
+case carries a payload:
+
+```turmeric
+(defn half-r [x : int] : (Result int int)
+  (if (= x (* 2 (/ x 2)))
+    (ok (/ x 2))
+    (err 1)))
+
+(defn quarter-sum-r [x : int] : (Result int int)
+  (do-m a (half-r x)
+        b (half-r a)
+        (ok (+ a b))))
+
+(defn main [] : int
+  (let [r (quarter-sum-r 20)] (println (if (ok? r) (ok-val r) -1)))
+  (let [r (quarter-sum-r 21)] (println (if (ok? r) (ok-val r) -1)))
+  0)
+```
+
+```sweet-exp
+defn half-r [x : int] : (Result int int)
+  if {x = {2 * {x / 2}}}
+    ok({x / 2})
+    err(1)
+
+defn quarter-sum-r [x : int] : (Result int int)
+  do-m a half-r(x) b half-r(a) ok({a + b})
+
+defn main [] : int
+  let [r quarter-sum-r(20)]
+    println $ if ok?(r) ok-val(r) -1
+  let [r quarter-sum-r(21)]
+    println $ if ok?(r) ok-val(r) -1
+  0
+```
+
+Prints `15` then `-1` as well; the second call's `err 1` short-circuits both
+binds, and `err-val` would recover the `1`.
+
 There is no separate `do-option` / `do-result` macro and no `bind`/`pure` name
 to thread through -- `do-m` dispatches on the receiver's type through the
 `Monad` typeclass.
@@ -609,16 +649,6 @@ one:
   helper called from the clause.
 
 See `docs/reported/` for the open compiler defects behind the last two.
-
-### `do-m` over `Result` is limited to one `bind`
-
-A `do-m` chain over `(Result A B)` must contain a single `bind`. Two or more
-crash at run time, and the program checks and compiles clean first, so the
-crash is the only warning you get. `Option` chains have no such limit.
-
-Write a multi-step `Result` chain as one `bind` per function, thread it with
-explicit `if (ok? r)`, or use the `Result` effect formulation above. Tracked in
-`docs/reported/nested-bind-over-result-typed-boundary-segfaults.md`.
 
 ## Compared to Haskell
 

@@ -840,6 +840,13 @@ char *ensure_exists_byval_witness_dict(EmitCtx *ctx,
 char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
                                   Type result_type, Type *param_types,
                                   uint8_t n_params);
+/* nested-bind-over-result-typed-boundary: the fat-closure twin of the above.
+ * A CAPTURING continuation has no named wrapper, so the shim is keyed on the
+ * signature and reads the real entry point out of the closure env's `__fn`
+ * slot (offset 0) at run time.  Returns the shim name, or NULL when the return
+ * already rides the int64 carrier or a param is not int-register-class. */
+char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
+                                      Type *param_types, uint8_t n_params);
 /* E2 (fat-closure fn-value threading): ensure a `<wrapper>__cps` twin exists for
  * a poly-wrap thunk boxing an effectful named fn, DK-threading its call through
  * the direct->CPS registry.  Returns the malloc'd twin name (caller uses it for
