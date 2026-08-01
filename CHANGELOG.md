@@ -2,6 +2,37 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.32.7] -- 2026-08-01
+
+### Added
+
+- **A `windows-latest` CI job.** The Windows build is covered on every push
+  rather than rediscovered by hand, so a break in that path surfaces in CI
+  instead of at release time.
+- **`tur experiments` and `tur lang-layers` appear in `tur --help`**, alongside
+  the `--enable=<name>` global flag. All three shipped without a listing.
+
+### Fixed
+
+- **The Windows build works again.** The emitter, LSP, arena, REPL, and the
+  generated runtime-split sources build on Windows, and `platform_fs.h` grows
+  the shims that path needed.
+- **Winsock socket options.** `setsockopt`/`getsockopt` are shimmed in the
+  Winsock compatibility layer, and `SO_REUSEADDR` -- whose Windows semantics
+  are not the POSIX ones -- is no longer set there.
+- **`stdlib/fs` and `stdlib/term` on Windows.** Their inline-C bodies are
+  ported off POSIX-only APIs; fixtures that genuinely require POSIX I/O now
+  carry a `requires.posix-apis` marker and skip rather than fail.
+- **Nested `bind` over `result` no longer segfaults at a typed boundary.**
+  The emitter now agrees with itself about the carrier across the boundary.
+- **turi resolves return-directed class methods from the frame's pinned type
+  variables**, instead of keeping an instance baked in from an earlier call.
+
+### Internal
+
+- `tests/run-jit.sh` times negative fixtures through `_run_timed` rather than a
+  bare `timeout`, cutting the JIT harness's false failures from 407 to 6.
+
 ## [0.32.6] -- 2026-07-31
 
 ### Added
