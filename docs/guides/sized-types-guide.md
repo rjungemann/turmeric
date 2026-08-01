@@ -39,9 +39,9 @@ Sized types are enabled by default; the layer is built on the GADT machinery.
 > free variables that cannot be folded. Size arithmetic on indices (`+`, `*`
 > for concat-typed vectors) is also a runtime check today. The historical
 > roll-out is recorded in the
-> archived [sized-types-completion-plan.md](../archive/history/sized-types-completion-plan.md)
+> archived [sized-types-completion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-completion-plan.md)
 > (phases SZ6–SZ9) and
-> [sized-types-cross-param-unification-plan.md](../archive/history/sized-types-cross-param-unification-plan.md).
+> [sized-types-cross-param-unification-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-cross-param-unification-plan.md).
 
 ## Table of Contents
 
@@ -308,7 +308,7 @@ The same unification recovers indices across multi-index carriers
 `defstruct`/`defopaque` field projections (`(.fst p)` / `(.snd p)` into a
 shared-`n` callee), and through length-polymorphic helpers whose body re-wraps
 or threads the value. None of these require per-call re-annotation. The
-[fixtures under `tests/fixtures/sized-*`](../../tests/fixtures) exercise each
+[fixtures under `tests/fixtures/sized-*`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures) exercise each
 case (accept + reject).
 
 The boundary is the same as for the assertion forms: an index that is only
@@ -394,7 +394,7 @@ length. Inference covers literal constructor chains and linear `Add`/`Mul` over
 `Static` and one variable; an index that depends on an unknown operand (a
 parameter, a runtime-built vector) is left polymorphic -- `--dump-sizes` shows
 it as `(SizedVec ?)` -- rather than being guessed. See
-[sized-types-index-spec.md](../sized-types-index-spec.md) section 6 for the full
+[sized-types-index-spec.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-index-spec.md) section 6 for the full
 inference boundary.
 
 ---

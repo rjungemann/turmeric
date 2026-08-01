@@ -109,6 +109,6 @@ the shape test turns out to be awkward at the byte level.
 ## Found while
 
 Validating `docs/guides/logic-programming-guide.md` code blocks for
-[composite-type-alias-gap.md](../archive/composite-type-alias-gap.md).
+[composite-type-alias-gap.md](../archive/history/composite-type-alias-gap.md).
 Confirmed unrelated to that change -- it reproduces identically with no
 `defalias` in the file.

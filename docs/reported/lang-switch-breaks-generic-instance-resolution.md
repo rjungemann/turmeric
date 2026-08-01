@@ -5,7 +5,7 @@ in *constrained-instance resolution*, not in Show -- so the blast radius is
 every generic typeclass dispatch in a long-lived REPL, not just rendering.
 
 **Status:** open. Found 2026-07-29 while verifying the WASM half of
-[web-repl-lang-switch-drops-stdlib](../archive/web-repl-lang-switch-drops-stdlib.md).
+[web-repl-lang-switch-drops-stdlib](../archive/history/web-repl-lang-switch-drops-stdlib.md).
 Reproduces natively; **no emscripten needed**.
 
 ## Repro

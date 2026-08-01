@@ -7,7 +7,7 @@ description: Model protocols as types, whether the protocol has two participants
 # Session Types Guide
 
 > This guide supersedes the archived
-> [`stdlib-session-typed-channels-plan`](../archive/history/stdlib-session-typed-channels-plan.md).
+> [`stdlib-session-typed-channels-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-session-typed-channels-plan.md).
 > All phases (S1--S3) shipped; the user-facing reference for `stdlib/schan.tur`
 > and the broader session-types story is here.
 
@@ -486,7 +486,7 @@ Runnable examples: `tests/fixtures/schan-roundtrip` (single round trip),
 `tests/fixtures/schan-worker-pool` (a request/response served by worker threads
 reading from the wrapped channel), and `tests/fixtures/errors/schan-skip-step`
 (the phantom-mismatch failure). The wrapper sits on top of the low-level
-[`tur/chan`](../../stdlib/chan.tur) channels, which keep their untyped surface
+[`tur/chan`](https://github.com/rjungemann/turmeric/blob/main/stdlib/chan.tur) channels, which keep their untyped surface
 for callers that do not want the protocol discipline.
 
 > **Note on `schan-recv`.** The natural signature is

@@ -10,8 +10,8 @@ Turmeric ships two numeric types above the machine primitives:
 
 | Type | Module | Representation | Literal |
 |---|---|---|---|
-| `Rational` | [`stdlib/rational.tur`](../../stdlib/rational.tur) | `num`/`den` pair over `int` (int64), always normalized | `#rat{3/4}` |
-| `Complex` | [`stdlib/complex.tur`](../../stdlib/complex.tur) | `re`/`im` pair over `float` (double) | `#cx{3.25 -1.5}` |
+| `Rational` | [`stdlib/rational.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/rational.tur) | `num`/`den` pair over `int` (int64), always normalized | `#rat{3/4}` |
+| `Complex` | [`stdlib/complex.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/complex.tur) | `re`/`im` pair over `float` (double) | `#cx{3.25 -1.5}` |
 
 Both are `:copy` single-variant record products, so each lowers to a 16-byte C
 struct of two `int64_t` / two `double`. Neither carries an owning field, so
@@ -196,7 +196,7 @@ in Turmeric needs *zero* new natives and is byte-identical under `tur`, `turi`,
 and the upcoming `tur jit` by construction.
 
 The one dependency on inline C is the scalar libm layer in
-[`stdlib/math.tur`](../../stdlib/math.tur) -- `sqrt`, `fabs`, `exp`, `sin`,
+[`stdlib/math.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/math.tur) -- `sqrt`, `fabs`, `exp`, `sin`,
 `cos`, `atan2` -- which `complex/abs`, `complex/arg`, and `complex/exp` are built
 on. Each of those has a matching interpreter native so the two engines agree.
 

@@ -316,7 +316,7 @@ This pattern fails in three ways:
 The `scscm` spice used this pattern across all five of its source files.
 It was eliminated in the 2026-05 import refactor by converting each file to
 `defmodule` + `import`. See
-[scscm-spice-import-refactor-plan.md](../scscm-spice-import-refactor-plan.md)
+[scscm-spice-import-refactor-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/scscm-spice-import-refactor-plan.md)
 for the full migration. If you encounter the stub pattern in other spices,
 the fix is the same: add a `(defmodule ...)` + `(export ...)` header and
 replace each stub block with `(import <module> :refer [...])`.
@@ -448,6 +448,13 @@ tur check src/notebook/cli.tur   # resolves watch/watch via :path
 If the declared `:path` does not exist on disk (or contains no `build.tur`),
 `tur fetch` reports a hard error rather than silently ignoring the missing dep.
 
+**Cycles between local spices are legal.** Two `:path`-local or
+workspace-sibling spices may declare each other in `:spices`; this is supported,
+not a diagnostic. The transitive include-path walk terminates on a visited set
+keyed by each package root's `realpath`, so a mutual cycle is traversed once and
+both spices' `src/` still land on the include path. Do not "fix" this shape into
+an error.
+
 ### `tur fetch --dry-run` for verification
 
 To confirm how each dep will be classified before committing to a real fetch:
@@ -575,7 +582,7 @@ When a binding is simpler to write directly in C, use an inline-C block:
 ```
 
 The closing ` ``` ` and its enclosing `)` must be on the same line. See
-the [inline-C style rule](../../CLAUDE.md) for why.
+the [inline-C style rule](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md) for why.
 
 ### `:cmake-name` and `:targets` overrides
 
@@ -648,12 +655,12 @@ in the manifest.
 > **Caveats.** A binary linked against a Homebrew/apt shared library will fail
 > at runtime on a machine without that library installed; pin the source build
 > (or `--refetch`) for portable artefacts. See
-> [tur-fetch-system-first-plan.md](../tur-fetch-system-first-plan.md) for the
+> [tur-fetch-system-first-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-fetch-system-first-plan.md) for the
 > design rationale and open questions.
 
 For the full `:cmake-deps` field reference, the generated `SpiceDeps.cmake`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
-[CMake/CPM integration notes](../archive/cmake-cpm-integration-plan.md).
+[CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 
@@ -958,7 +965,7 @@ durably with `:build-dir "<path>"` in `build.tur` (path is relative to
 the manifest dir). Precedence runs CLI flag > env > manifest > default.
 The build dir is auto-created with a `.gitignore` of `*`, so its
 contents never leak into VCS even if the dir itself gets tracked. (See
-[manifest-driven-build-descent-plan.md](../manifest-driven-build-descent-plan.md).)
+[manifest-driven-build-descent-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/manifest-driven-build-descent-plan.md).)
 The per-file subcommands `tur check`, `tur emit-c`, `tur emit-h`,
 `tur build <file>`, and `tur run <file>` get the same module resolution
 automatically -- they walk up from the input file looking for a sibling
@@ -1085,7 +1092,7 @@ auto-installed or errors out.
 
 This is **deferred**; until it ships, a spice that wants to be reused as
 a library should be added the normal way with `tur add`. See the
-[global-spice-install plan](../global-spice-install-plan.md#imports-from-global-spices)
+[global-spice-install plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices)
 for the full design sketch.
 
 ---

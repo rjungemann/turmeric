@@ -206,5 +206,5 @@ from the table.
 
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- diagnostic/debug
   flags and the retired `-X<name>` set.
-- [docs/upcoming/v1/experimental-flag-mechanism-plan.md](../upcoming/v1/experimental-flag-mechanism-plan.md)
+- [docs/upcoming/v1/experimental-flag-mechanism-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/experimental-flag-mechanism-plan.md)
   -- the design plan (XF0--XF6).

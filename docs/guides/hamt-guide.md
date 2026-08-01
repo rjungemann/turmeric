@@ -119,6 +119,32 @@ def h   hamt/hash-ptr(ptr)
 
 For custom key types, compute a 64-bit hash yourself (e.g. via inline C calling `tur_hamt_hash_xxh64`) and pass it directly to `hamt/set` / `hamt/get` etc.
 
+### String keys compare by content
+
+`hamt/set` and friends compare keys by pointer identity, which is wrong for
+strings: two content-equal keys built at runtime have distinct addresses and
+the probe misses. Use the content-keyed wrappers instead -- they hash *and*
+compare by content, and take no separate hash argument:
+
+```turmeric
+(def m2 (hamt/set-cstr m "name" v))
+(hamt/get-cstr  m2 "name")   ; => v, even for a runtime-built key
+(hamt/has-cstr? m2 "name")   ; => true
+(def m3 (hamt/del-cstr m2 "name"))
+```
+```sweet-exp
+def m2 hamt/set-cstr(m "name" v)
+hamt/get-cstr(m2 "name")
+; => v, even for a runtime-built key
+hamt/has-cstr?(m2 "name")
+; => true
+def m3 hamt/del-cstr(m2 "name")
+```
+
+A `^persistent` map with `:cstr` keys lowers to these wrappers, so `assoc` /
+`get` / `has?` / `dissoc` on it compare by content. Non-cstr keys keep identity
+semantics.
+
 ## Merging Maps
 
 ```turmeric
@@ -291,6 +317,10 @@ hamt/dump(m)
 | `hamt/transient-set! t h k v` | Mutate transient (insert/update) |
 | `hamt/transient-del! t h k` | Mutate transient (delete) |
 | `hamt/persistent! t` | Seal transient into immutable map |
+| `hamt/set-cstr m k v` | Insert/update a string key, compared by content |
+| `hamt/get-cstr m k` | Lookup a string key by content |
+| `hamt/has-cstr? m k` | Membership test on a string key, by content |
+| `hamt/del-cstr m k` | Delete a string key, by content |
 | `hamt/hash-str s` | xxHash64 of a C string |
 | `hamt/hash-ptr p` | Hash a pointer value |
 | `hamt/show m` | Heap-allocated display string |
@@ -354,4 +384,4 @@ def config hamt/merge(defaults user-config)
 - [C Integration Guide](c-integration-guide.md) -- Passing C function pointers and inline C
 - [Threading Guide](threading-guide.md) -- Sharing immutable HAMTs across threads safely
 - [STM Guide](stm-guide.md) -- Storing HAMTs inside TVars for concurrent updates
-- [src/hamt.h](../../src/hamt.h) -- Full C API with inline documentation
+- [src/hamt.h](https://github.com/rjungemann/turmeric/blob/main/src/runtime/hamt.h) -- Full C API with inline documentation

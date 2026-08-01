@@ -273,4 +273,4 @@ required by the elaborator.
   existential form.
 - **Reclaiming existential records.** Constrained packs allocate a
   `tur_existential_t` on the heap; the deferred memory-management work
-  is tracked in [`../existential-gc-plan.md`](../existential-gc-plan.md).
+  is tracked in [`../existential-gc-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/existential-gc-plan.md).

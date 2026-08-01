@@ -31,7 +31,7 @@ first one that fits, not the most general one.
 | A buffer one piece of code mutates and nobody else holds | **By-value / single-owner mutable** -- `vec`, `mutmap`, `grid`, `ref`, `sized-*` | The owner owns the one buffer it mutates. No shared handles, so no back-pointers into shared nodes. |
 | An external resource with exactly-once teardown -- a socket, channel, task group, file | **Linear / affine opaque handle** -- `(defopaque H :linear)` / `:affine` | Single ownership and exactly-once teardown enforced by the type checker. This is the deliberate alternative to refcounting. |
 | Genuinely shared: several live owners, none of which is "the" owner, and the last one out must clean up | **`rc<T>`** | Runtime refcount. Prompt, deterministic release when the last strong handle goes. |
-| A back-edge, parent pointer, or observer inside an `rc<T>` graph | **`weak<T>`** ([stdlib/weak.tur](../../stdlib/weak.tur)) | Holds no strong count, so it cannot close a cycle. The forward edges alone decide the lifetime. |
+| A back-edge, parent pointer, or observer inside an `rc<T>` graph | **`weak<T>`** ([stdlib/weak.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur)) | Holds no strong count, so it cannot close a cycle. The forward edges alone decide the lifetime. |
 
 ## Where the stdlib actually sits
 
@@ -84,6 +84,39 @@ cheaper:
 If none of those apply, you have genuine shared ownership -- use `rc<T>`, and
 read on.
 
+## Reassigning an `rc<T>` binding with `set!`
+
+`set!` on an `^mut` binding that holds an `rc<T>` **releases the value it
+overwrites**, so the idiomatic reassign-in-a-loop does not leak. What decides
+whether you get that for free is the ownership of the value going *in*:
+
+- A fresh `(rc/of ...)` or an explicit `(rc/clone x)` carries its own `+1`.
+- A bare **variable** carries one too -- the elaborator treats it as a move and
+  suppresses the source binding's auto-drop.
+- A bare rc **field read** (`(set! h (.next h))`) carries nothing of its own, so
+  it is wrapped in a clone-on-read -- the same treatment a `let` initializer
+  already gets for the same borrow shape.
+
+The new value is fully evaluated before the old one is released, so a `set!`
+whose value reads the very slot being overwritten is safe, and
+`(set! h (rc/of ... (rc/clone h) ...))` takes its `+1` while the old value is
+still alive. The release is gated on exactly the scope-exit auto-drop predicate,
+so the two can never disagree: a binding whose ownership you manage by hand gets
+neither.
+
+`set!` of an `rc<T>` through a `&mut` borrow never reaches codegen -- the type
+checker rejects it (`set! type mismatch: cannot assign rc<...> through
+&mut rc<?> borrow`).
+
+**Two shapes still leak, deliberately.** Both suppress the auto-drop entirely,
+and releasing would be worse than leaking:
+
+- `(set! h h)` -- self-assignment lowers to `h = h` with no auto-drop; a release
+  would leave the binding dangling.
+- `(rc/drop h)` then `(set! h v)` -- the explicit drop already suppressed the
+  auto-drop, so `v` is never released. Releasing the old value here would
+  double-free instead. A genuine (if unusual) remaining gap.
+
 ## Breaking the cycle
 
 Two `rc<T>` values pointing at each other is the textbook leak: each keeps the
@@ -123,7 +156,7 @@ first asking whether the value is still there:
 
 The full surface is `rc/downgrade`, `weak/upgrade`, `weak/unwrap`,
 `weak/alive?`, and `weak/drop`, documented in
-[stdlib/weak.tur](../../stdlib/weak.tur). Two rules are easy to miss:
+[stdlib/weak.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur). Two rules are easy to miss:
 
 - The rc handed back by `weak/upgrade` is a **new** strong reference. Drop it.
 - A `weak<T>` in a local binding is **not** released at scope exit -- call
@@ -141,6 +174,6 @@ when you can name which edge is the back-edge, which is most of the time.
 
 - [gc-guide.md](gc-guide.md) -- reference counting, the cycle collector, and the
   stdlib ownership audit
-- [stdlib/weak.tur](../../stdlib/weak.tur) -- the `weak<T>` API
-- [stdlib/rcchain.tur](../../stdlib/rcchain.tur) -- a collection of `rc<A>` the
+- [stdlib/weak.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur) -- the `weak<T>` API
+- [stdlib/rcchain.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/rcchain.tur) -- a collection of `rc<A>` the
   cycle collector can trace through, for when the elements can cycle

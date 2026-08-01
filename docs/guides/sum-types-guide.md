@@ -228,7 +228,7 @@ The marker is the *only* escape hatch; without it a non-exhaustive match does
 not compile. Use it sparingly and leave a comment explaining why the missing
 arm is unreachable.
 
-> Note: this guide's plan ([sum-types-either-plan](../archive/history/sum-types-either-plan.md)) originally specced
+> Note: this guide's plan ([sum-types-either-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md)) originally specced
 > exhaustiveness as a *warning*. The implementation keeps it a hard **error**
 > (the stronger, pre-existing behaviour) and adds `#fx{NonExhaustive}` as the
 > deliberate opt-out -- see that plan's ADR for the rationale.
@@ -341,8 +341,8 @@ instance.
 
 ## See also
 
-- [sum-types-either-plan](../archive/history/sum-types-either-plan.md) -- the design plan and ADR.
-- [`stdlib/result.tur`](../../stdlib/result.tur) / `stdlib/option.tur` --
+- [sum-types-either-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md) -- the design plan and ADR.
+- [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/result.tur) / `stdlib/option.tur` --
   the unary-payload tagged structs that predate `Either`.
 - [[data-literals-guide]] -- literal construction syntax that composes with
   sum payloads.

@@ -357,7 +357,7 @@ CMake deps are also tracked in `tur.lock` with SHA-256 hashes for integrity
 verification. For the generated `SpiceDeps.cmake` format, the manifest
 schema, security considerations, and the outbound direction (publishing a
 Turmeric library so CMake projects can consume it), see the
-[CMake/CPM integration notes](../archive/cmake-cpm-integration-plan.md).
+[CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 
@@ -391,6 +391,12 @@ range.
 | Network failure | `Failed to reach https://github.com/...: <reason>` |
 | Ref not found | `Ref 'v99.0.0' not found in https://github.com/alice/tur-geom` |
 | SHA mismatch on re-fetch | `Integrity check failed for 'geom'. Run tur fetch --force to re-download.` |
+
+A spice can declare which compiler versions it supports with `:tur-version`; if
+your `tur` is below that floor the build stops with `TUR-E0621` (above a
+declared ceiling is `TUR-W0623`, a warning, and a malformed range in the spice's
+own manifest is `TUR-E0622`) -- see
+[Declaring a compiler version range](developing-spices-guide.md#declaring-a-compiler-version-range-tur-version).
 
 ---
 

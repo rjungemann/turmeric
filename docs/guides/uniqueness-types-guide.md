@@ -207,6 +207,11 @@ would introduce aliases:
 rc/new(my-unique-val)  ;; ERROR TUR-E0202: cannot wrap unique value in rc<T>
 ```
 
+A closure that *consumes* a captured `^unique` value is itself `^unique`, so
+`(rc/of that-closure)` is rejected the same way (and calling it twice is
+`TUR-E0201`) -- see
+[Closures inherit the discipline of what they consume](substructural-types-guide.md#closures-inherit-the-discipline-of-what-they-consume).
+
 ---
 
 ## Error codes

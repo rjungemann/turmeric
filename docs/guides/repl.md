@@ -69,6 +69,31 @@ To abandon an incomplete expression, enter a blank line.
 
 ---
 
+## Switching readers with `#lang`
+
+A line beginning with `#lang ` is handled before evaluation and switches the
+reader for the rest of the session:
+
+```
+> #lang turmeric/sweet
+; reader set to sweet-exp (session reset)
+```
+
+The switch **resets the session** -- the source you have accumulated so far is
+discarded, because it was read under the old reader and may not parse under the
+new one.  Repeating the reader you are already in prints
+`; reader already set to ...` and changes nothing.
+
+The preloaded stdlib survives the reset.  It is pinned as a prelude prefix when
+the REPL starts, and the reset rewinds to that pin rather than to zero, so
+macros (`when`) and collection literals (`#map{...}`, `#set{...}`, `[...]`)
+still resolve immediately after a switch.  That works only because the preload
+is plain s-expressions, which parse under every reader; without the pin the
+first literal after a switch failed with `unknown function or operator
+'hamt-of'`.
+
+---
+
 ## Meta-commands
 
 Meta-commands begin with `:` and are processed before evaluation.

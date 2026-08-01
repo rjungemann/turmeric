@@ -772,7 +772,7 @@
 > unrelated slice. (`hamt.c` does the same shift on a `uint64_t` and is fine.)
 >
 > **FIXED 2026-07-26**, archived at
-> [docs/archive/wasm32-promo-hash-shift-ub.md](../../archive/wasm32-promo-hash-shift-ub.md).
+> [docs/archive/history/wasm32-promo-hash-shift-ub.md](../../archive/history/wasm32-promo-hash-shift-ub.md).
 > The deferral reason above turned out not to apply: on LP64 the rewrite is
 > bit-identical (the cast is a no-op widening), so native hash values do not
 > move at all, and the promo map is a seen-set nothing iterates for output.
@@ -1626,7 +1626,7 @@
 > - [refined-graduation-plan.md](refined-graduation-plan.md) -- the decision and
 >   the mechanical checklist for removing the gate. The clock (`expires_at`
 >   `0.34.0`) makes this the only item with a deadline.
-> - [corpus-reader-tail-plan.md](corpus-reader-tail-plan.md) -- the last 7
+> - [corpus-reader-tail-plan.md](../../archive/history/corpus-reader-tail-plan.md) -- the last 7
 >   skips in the SMT-LIB corpus reader, with a recommendation to do one of the
 >   two items and skip the other.
 > - [../hold/refined-dogfooding-plan.md](../hold/refined-dogfooding-plan.md) --
@@ -2553,7 +2553,7 @@ scaffold is deleted once all of the following hold:
 
   Measured 2026-07-26: **200 / 200 parsed, 0 skipped, 0 crashes, 0 soundness
   failures.** The reader tail that used to skip 7 is closed -- see
-  [corpus-reader-tail-plan.md](../../archive/corpus-reader-tail-plan.md), now
+  [corpus-reader-tail-plan.md](../../archive/history/corpus-reader-tail-plan.md), now
   archived/resolved. So the parsed-coverage bar this criterion actually gates on
   is met outright.
 

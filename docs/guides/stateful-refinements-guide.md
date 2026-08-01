@@ -5,7 +5,7 @@
 > grant it enables are **implemented behind `--enable=refined`** (still
 > experimental -- emits `TUR-W0060`, breaking changes possible) and are tracked
 > in
-> [`docs/upcoming/v1/refine-stateful-measures-plan.md`](../upcoming/v1/refine-stateful-measures-plan.md).
+> [`docs/upcoming/v1/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md).
 > A `#reads`-refined accessor now proves its guarded crossings *and* codegens
 > (see [Codegen and enforcement](#codegen-and-enforcement) -- this required
 > suppressing an impure entry contract). Read the
@@ -261,7 +261,7 @@ both are worth knowing.
 about a mutable resource, congruent in a scope where that resource is frozen."
 The same `frozen` + `#reads` pair covers an open file (`(open? conn)`), a
 resizable buffer (`(in-bounds? buf i)` -- the bounds-elimination case
-[`loop-invariants-plan`](../upcoming/hold/loop-invariants-plan.md) wants;
+[`loop-invariants-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/loop-invariants-plan.md) wants;
 probed working 2026-07-26 and pinned by
 `tests/fixtures/refine-stateful-resizable-bounds`: the guard proves inside the
 region, `grow!` is `TUR-E0200` there, and without the region the read is
@@ -303,7 +303,7 @@ semantics break:
 
 Treat today's `#reads` as step 1 of that path, not as a finished `reads`-clause
 feature. Step 2 now has a written plan --
-[`checked-write-frames-plan.md`](../upcoming/checked-write-frames-plan.md):
+[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/checked-write-frames-plan.md):
 `#writes` declarations, a checked tier for pure-Turmeric bodies, and
 frame-aware hypothesis invalidation replacing the coarse whole-body `set!`
 decline (the binding constraint on side-effecting `for-each-alive!` bodies
@@ -327,7 +327,7 @@ and `while`-lowered loops).
   `^unique ^mut`, and the `TUR-E0200` exclusive-access rule the `frozen` region
   relies on.
 - [Uniqueness Types guide](uniqueness-types-guide.md) -- `^unique` semantics.
-- [`refine-stateful-measures-plan.md`](../upcoming/v1/refine-stateful-measures-plan.md)
+- [`refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md)
   -- the design record, including why the capability-token approach was retired
   in favour of `frozen` and why `#reads` is trusted.
 - [ECS guide](ecs-guide.md) -- the first consumer; `tur-ecs`'s `ecs/freeze`

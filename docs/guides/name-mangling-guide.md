@@ -177,4 +177,4 @@ manual update is needed when the mangling scheme changes.
   `tur_mangle_unit` ctest target
 - Regression fixtures: [`tests/fixtures/mangle-kebab-snake-coexist/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-kebab-snake-coexist) and
   [`tests/fixtures/mangle-arrow-name-vs-module/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-arrow-name-vs-module)
-- Plan: [reversible-name-mangling-plan](../upcoming/reversible-name-mangling-plan.md)
+- Plan: [reversible-name-mangling-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reversible-name-mangling-plan.md)

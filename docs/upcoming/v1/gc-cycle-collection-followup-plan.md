@@ -234,7 +234,7 @@ inside the closure body that nothing dropped.)
 
 That is a better outcome than the fixtures would have been, but it comes with a
 real expressiveness hole, filed as
-[docs/archive/collections-cannot-hold-rc-values.md](../../archive/collections-cannot-hold-rc-values.md).
+[docs/archive/history/collections-cannot-hold-rc-values.md](../../archive/history/collections-cannot-hold-rc-values.md).
 The blind spot documented in the GC guide reopens the moment collections accept
 `rc<T>`, and the fixtures become writable and necessary at the same instant.
 
@@ -273,7 +273,7 @@ freed blocks stay accounted in `malloc_zone_statistics`, so the fixture printed
 probe-output fixture is now excluded from **both** output checks and prints a
 visible SKIP line for each; `tests/run.sh` (unsanitized) remains where that
 assertion actually lives. See
-[docs/archive/gc-leak-gate-darwin-sanitized-probe-drift.md](../../archive/gc-leak-gate-darwin-sanitized-probe-drift.md).
+[docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md](../../archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md).
 
 Result: 14 passed, 2 skipped, 0 failed (was 11 passed when first measured; the
 fixture set has grown since). Opt-in (`bash tests/run-gc-leak-gate.sh`) -- a
@@ -562,7 +562,7 @@ What ungating should weigh when it comes up:
   `rc<T>` never releasing the overwritten value: 4000 rounds x 4 assignments,
   exactly. Acyclic and `strong_count > 0`, so no collector could reclaim it.
   **Since FIXED** -- archived at
-  [docs/archive/set-bang-does-not-release-old-rc-value.md](../../archive/set-bang-does-not-release-old-rc-value.md).
+  [docs/archive/history/set-bang-does-not-release-old-rc-value.md](../../archive/history/set-bang-does-not-release-old-rc-value.md).
   Re-measured after the fix, same workload:
 
   | half of the workload | collections | freed | live at exit |
@@ -615,7 +615,7 @@ baseline."
   **FIXED 2026-07-26** -- a closure that CONSUMES a captured linear/unique value
   now inherits its `copy_kind`, so the double call is TUR-E0101, `(rc/of f)` is
   TUR-E0103, and dropping it is TUR-E0100. Archived at
-  [docs/archive/closure-capture-escapes-linearity.md](../../archive/closure-capture-escapes-linearity.md).
+  [docs/archive/history/closure-capture-escapes-linearity.md](../../archive/history/closure-capture-escapes-linearity.md).
   The fix was in the substructural checker, not the collector, so it never gated
   CG8.
 - **Two collectors in one process.** **VERIFIED 2026-07-26 -- sound, but for a
@@ -632,7 +632,7 @@ baseline."
   class as the `Vec`/HAMT blind spot. Written up for users in
   [docs/guides/gc-guide.md](../../guides/gc-guide.md) ("Two collectors in one
   process") and archived at
-  [docs/archive/two-collectors-dlopen-boundary.md](../../archive/two-collectors-dlopen-boundary.md).
+  [docs/archive/history/two-collectors-dlopen-boundary.md](../../archive/history/two-collectors-dlopen-boundary.md).
 
 ## Filed on the way (not collector bugs)
 
@@ -640,7 +640,7 @@ Three defects surfaced while measuring the above. None is in the collector; all
 three were hit *because* the measurements drove the rc path harder than the
 fixtures do.
 
-- [set-bang-does-not-release-old-rc-value.md](../../archive/set-bang-does-not-release-old-rc-value.md)
+- [set-bang-does-not-release-old-rc-value.md](../../archive/history/set-bang-does-not-release-old-rc-value.md)
   -- was **high**, now **FIXED** (archived). `set!` on an `^mut` binding holding
   `rc<T>` never released the overwritten value. Acyclic, so no collector could
   reclaim it -- it was the whole of the residue in CG8's real-workload run
@@ -650,7 +650,7 @@ fixtures do.
   rather than a decrement. Pinned by `tests/fixtures/set-bang-releases-old-rc`
   and `tests/set-bang-rc-release-check.sh`.
 
-- [rc-free-queue-drain-is-quadratic.md](../../archive/rc-free-queue-drain-is-quadratic.md)
+- [rc-free-queue-drain-is-quadratic.md](../../archive/history/rc-free-queue-drain-is-quadratic.md)
   -- was **medium**, now **FIXED** (archived). `rc_free_queue_drain` memmoved
   the whole queue per pop, in both copies; it dominated the payload-zeroing
   measurement so completely that the memset was invisible until the queue was
@@ -662,7 +662,7 @@ fixtures do.
   blocks; 2M alloc/drop pairs 11,563 ms -> 70 ms. Pinned by
   `tests/fixtures/rc-free-queue-deep-cascade`.
 
-- [rc-scalar-default-glue-invalid-free.md](../../archive/rc-scalar-default-glue-invalid-free.md)
+- [rc-scalar-default-glue-invalid-free.md](../../archive/history/rc-scalar-default-glue-invalid-free.md)
   -- was **medium**, now **FIXED** (archived). `rc_cb_alloc(size, <scalar>,
   NULL)` got default drop glue that `free()`d its own inline payload. Scalars
   now default to a no-op inline glue; the fix flushed out that "C-API-only" was
@@ -673,7 +673,7 @@ fixtures do.
 
 ## Related plans
 
-- [stdlib-weak-ref-audit-plan.md](../../archive/stdlib-weak-ref-audit-plan.md)
+- [stdlib-weak-ref-audit-plan.md](../../archive/history/stdlib-weak-ref-audit-plan.md)
   -- COMPLETE (WR0--WR4 landed 2026-07-26) and archived; its cycle inventory
   seeded CG7's corpus.
 - [turi-interp-incremental-reclamation-plan.md](../../archive/turi-interp-incremental-reclamation-plan.md)

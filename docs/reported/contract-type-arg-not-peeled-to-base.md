@@ -4,7 +4,7 @@
 or a diagnostic. But it makes `#refine{...}` unusable in any position other
 than a parameter, return, or `let` annotation, and it is the one prerequisite
 blocking `TY_CONTRACT` from joining `type_has_concrete_codegen_layout` (see
-[concrete-codegen-layout-kind-enumerations-drift](../archive/concrete-codegen-layout-kind-enumerations-drift.md)
+[concrete-codegen-layout-kind-enumerations-drift](../archive/history/concrete-codegen-layout-kind-enumerations-drift.md)
 Finding 2, where this was recorded as "not fixed here").
 
 **Status:** open.

@@ -9,7 +9,7 @@ description: First-class functional lenses (view / set / over) via stdlib/lens.t
 A **lens** is a first-class getter/setter for a part `A` of a whole `S`. It lets
 you read, replace, and transform a nested field without hand-writing the
 rebuild-the-whole boilerplate at every use site. Turmeric ships lenses in
-[`stdlib/lens.tur`](../../stdlib/lens.tur).
+[`stdlib/lens.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/lens.tur).
 
 ```turmeric
 (load "stdlib/lens.tur")
@@ -145,23 +145,23 @@ ride the boxed carrier bridge as a correctness fallback:
   yet meet, so such a lens (and any consumer ever passed one) falls back to the
   boxed path. The fix that lets composed lenses join the by-value path is tracked
   in
-  [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
+  [../upcoming/v2/van-laarhoven-composed-byvalue-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md).
 
 ## Related
 
-- [`stdlib/lens.tur`](../../stdlib/lens.tur) -- the module (record encoding)
-- [constrained-hkt-forall plan](../upcoming/constrained-hkt-forall-plan.md) --
+- [`stdlib/lens.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/lens.tur) -- the module (record encoding)
+- [constrained-hkt-forall plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/constrained-hkt-forall-plan.md) --
   the van Laarhoven roadmap and the mode-A/mode-B decision
-- [constrained-hkt-forall mode-B plan](../upcoming/constrained-hkt-forall-mode-b-plan.md) --
+- [constrained-hkt-forall mode-B plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/constrained-hkt-forall-mode-b-plan.md) --
   the dictionary passing + dispatch the van Laarhoven form runs on
-- [van-laarhoven-wide-functor-carrier-plan](../upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
+- [van-laarhoven-wide-functor-carrier-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/van-laarhoven-wide-functor-carrier-plan.md) --
   the wide-by-value functor carrier bridge
-- [van-laarhoven-monomorphization-plan](../upcoming/van-laarhoven-monomorphization-plan.md) --
+- [van-laarhoven-monomorphization-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/van-laarhoven-monomorphization-plan.md) --
   the zero-overhead by-value monomorphization
-- [van-laarhoven-consumer-mono-plan](../upcoming/van-laarhoven-consumer-mono-plan.md) --
+- [van-laarhoven-consumer-mono-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/van-laarhoven-consumer-mono-plan.md) --
   consumer monomorphization: box-free clones for a lens param resolving to
   several simple lenses
-- [van-laarhoven-composed-byvalue-plan](../upcoming/v2/van-laarhoven-composed-byvalue-plan.md) --
+- [van-laarhoven-composed-byvalue-plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v2/van-laarhoven-composed-byvalue-plan.md) --
   the remaining fix that brings composed lenses onto the by-value path
 - [hrt-guide.md](hrt-guide.md) -- the rank-2 `forall` mechanism lenses use
 ```

@@ -144,7 +144,7 @@ left as ordinary recursive calls -- correct, but not stack-optimized:
 
 General/mutual tail-call elimination and trampolining are deferred to the
 post-1.0 CPS pass.  See
-[control-flow-completeness-plan.md](../control-flow-completeness-plan.md)
+[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
 (Phase CF1) for the full scope.
 
 ### Prime sieve

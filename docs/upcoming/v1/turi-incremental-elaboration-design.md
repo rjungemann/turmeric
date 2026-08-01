@@ -18,7 +18,7 @@
 > works, instead of failing with the misleading "already defined by an
 > auto-loaded stdlib module". Approved as a fix.
 >
-> **Problem owner:** `docs/archive/turi-repl-quadratic-reparse.md` (CPU) and
+> **Problem owner:** `docs/archive/history/turi-repl-quadratic-reparse.md` (CPU) and
 > TR0's measurement (memory: ~4.1 GB `eval_arenas` over a 3000-eval session).
 >
 > **Last updated:** 2026-07-25

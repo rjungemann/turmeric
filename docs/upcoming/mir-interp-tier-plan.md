@@ -395,7 +395,7 @@ The refine ones fail off the JIT path too: `tur run` on
 This was first written up as a high-severity product bug ("the `refined`
 experiment checks nothing in Release"). **That was wrong and is retracted** --
 see
-[docs/archive/refined-obligations-silently-pass-in-release.md](../archive/refined-obligations-silently-pass-in-release.md).
+[docs/archive/history/refined-obligations-silently-pass-in-release.md](../archive/history/refined-obligations-silently-pass-in-release.md).
 Contract checks are stripped from Release builds by CT3 policy unless
 `--keep-contracts` is passed (`elab_fns.c:250`, `:5287`), the same bargain C
 makes with `assert()`/`NDEBUG`; refinement obligations fall back to those

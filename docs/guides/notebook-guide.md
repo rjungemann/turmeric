@@ -313,6 +313,6 @@ merged onto the built-in map.
 
 ## Further Reading
 
-- [`docs/notebook-spice-plan.md`](../notebook-spice-plan.md) -- full milestone plan
+- [`docs/notebook-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/notebook-spice-plan.md) -- full milestone plan
 - [`../turmeric-spices/spices/notebook/README.md`](https://github.com/rjungemann/turmeric-spices/blob/main/spices/notebook/README.md) -- spice README
 - [`developing-spices-guide.md`](developing-spices-guide.md) -- how to develop and publish spices

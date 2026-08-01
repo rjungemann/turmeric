@@ -283,6 +283,6 @@ predicted here before a rebuild existed, and then **verified**: a fresh
 emscripten build renders `#map{:a 1}` => `#map{:a 1}`, `#map{"s" 1}` =>
 `#map{s 1}`, `#set{:x}` => `#set{:x}`, `(vec-of :a :b)` => `[:a :b]`. No
 web-side change was needed, which retired the last open item of
-[web-repl-lang-switch-drops-stdlib](../archive/web-repl-lang-switch-drops-stdlib.md)
+[web-repl-lang-switch-drops-stdlib](../archive/history/web-repl-lang-switch-drops-stdlib.md)
 (now archived) -- it had been filed as a Show *routing* gap and was really this
 type erasure.

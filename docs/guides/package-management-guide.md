@@ -106,6 +106,16 @@ Turmeric source file evaluated at build time. The top-level form is
 > ``:spices must be a map -- use `#map{...}` ``. The older `#{...}` spelling is
 > equally valid and is what `tur add` and the `tur.lock` writer emit; `#map{...}`
 > is the canonical one to type.
+>
+> Manifest snippets in the guides are checked, not just proofread:
+> `tools/check-guide-pairs.py` shape-checks every fenced block in `README.md`
+> and `docs/guides/` whose first form is `(defpackage ...)` by running
+> `tur fetch --dry-run` over it. A ```` ```turmeric no-check ```` fence does
+> **not** opt out of that -- `no-check` only means "this block has no sweet-exp
+> companion", which is true of nearly every manifest snippet. Use
+> ```` ```turmeric no-manifest-check ```` for a snippet that is deliberately not
+> a valid manifest. The `tur.lock` examples below keep `#{...}` on purpose: that
+> is what the lockfile writer emits.
 
 ### Full example
 
@@ -118,6 +128,9 @@ Turmeric source file evaluated at build time. The top-level form is
   :license     "MIT"
   :authors     ["Alice Smith <alice@example.com>"]
   :repository  "https://github.com/alice/tur-geom"
+
+  ;; Which `tur` compiler versions this package's source is valid under
+  :tur-version ">=0.32.2"
 
   ;; Turmeric package dependencies
   ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
@@ -165,6 +178,9 @@ defpackage geom
   :license     "MIT"
   :authors     ["Alice Smith <alice@example.com>"]
   :repository  "https://github.com/alice/tur-geom"
+
+  ;; Which `tur` compiler versions this package's source is valid under
+  :tur-version ">=0.32.2"
 
   ;; Turmeric package dependencies
   ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
@@ -232,6 +248,18 @@ A standalone binary with no dependencies:
 ```sweet-exp
 (defpackage hello :name "hello" :version "0.1.0")
 ```
+
+### `:tur-version` -- compiler compatibility
+
+`:version` is this package's own version. `:tur-version` is a separate,
+optional key naming which **`tur` compiler versions this package's source is
+valid under** -- a comma-separated range such as `">=0.32.2"` or
+`">=0.32.2, <0.35.0"`. A compiler below the floor is `TUR-E0621` (a hard
+error), a malformed range is `TUR-E0622`, and a compiler above a declared
+ceiling is `TUR-W0623` (a warning). Declare it whenever the package adopts
+version-dependent syntax, an `:experiments` entry, or a new manifest key. See
+[Declaring a compiler version range](developing-spices-guide.md#declaring-a-compiler-version-range-tur-version)
+in the developing-spices guide for the full syntax and the caret rule.
 
 ---
 
@@ -565,7 +593,7 @@ tur add --cmake https://github.com/raysan5/raylib --ref 5.0
 The entry goes into `:cmake-deps` instead of `:spices`.
 
 For projects that need direct control of the CMake build, see
-[cmake-cpm-integration-plan.md](../archive/cmake-cpm-integration-plan.md).
+[cmake-cpm-integration-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 

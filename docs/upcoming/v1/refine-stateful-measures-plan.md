@@ -613,7 +613,7 @@ noted per fixture):
   was vacuous because `tur` double-loaded its stdlib when spawned via a
   subprocess from a checkout root; fixed in `load_path_key` (resolve a
   `stdlib/X` load via `stdlib_dir` first). Report archived at
-  [`refine-fuzzer-subprocess-stdlib-double-load.md`](../../archive/refine-fuzzer-subprocess-stdlib-double-load.md).
+  [`refine-fuzzer-subprocess-stdlib-double-load.md`](../../archive/history/refine-fuzzer-subprocess-stdlib-double-load.md).
   **Run it with a Debug `tur` and `TUR_STDLIB_DIR` unset** (Release strips
   contracts so gate-off never aborts; a stale env stdlib is the wrong one).
 

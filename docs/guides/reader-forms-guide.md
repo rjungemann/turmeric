@@ -488,7 +488,7 @@ These spellings are still accepted during the grace window but produce a
 deprecation warning at every use. The migration script
 `tools/migrate-fx-rows.py` rewrites a tree mechanically. The plan that
 drives the rename lives at
-[`docs/upcoming/fx-row-syntax-rename-plan.md`](../upcoming/fx-row-syntax-rename-plan.md).
+[`docs/upcoming/fx-row-syntax-rename-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/fx-row-syntax-rename-plan.md).
 
 ### `#{...}` effect row -- TUR-D0002
 

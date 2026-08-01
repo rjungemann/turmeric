@@ -25,7 +25,7 @@ of Option 2.
 
 ### Option 1: Version manager (`tvm`)
 
-The bundled [Turmeric Version Manager](../../tvm/README.md) installs,
+The bundled [Turmeric Version Manager](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) installs,
 caches, and switches between releases per-shell -- the `nvm`/`rustup`
 model. Bootstrap it once from a checkout:
 
@@ -48,7 +48,7 @@ Option 2, verifies them against the release's `sha256sums.txt`, and
 extracts each version under `~/.tvm/versions/<v>/`. When no prebuilt
 asset exists for a tag (older than the prebuild matrix, or an
 unpublished platform), `tvm install --build <v>` falls back to a CMake
-source build. See [`tvm/README.md`](../../tvm/README.md) for the full
+source build. See [`tvm/README.md`](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) for the full
 command set, including `.tur-version` auto-switching.
 
 ### Option 2: Prebuilt binary from GitHub Releases
@@ -186,14 +186,14 @@ tur: cc invocation failed (status 256)
 ```
 
 This is a known limitation, tracked in
-[`docs/release-binaries-plan.md`](../release-binaries-plan.md) under
+[`docs/release-binaries-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/release-binaries-plan.md) under
 "Discovered during execution: runtime sources also missing". Until it's
 resolved, the `--interpret` and library-embedding paths are the
 fully-supported uses of a downloaded release.
 
 ### Option 5: Docker
 
-The repository ships a [`Dockerfile`](../../Dockerfile) that builds `tur` from
+The repository ships a [`Dockerfile`](https://github.com/rjungemann/turmeric/blob/main/Dockerfile) that builds `tur` from
 the local source tree and packages it into a self-contained Ubuntu 22.04 image.
 This is the easiest path on Linux if you do not want to install CMake or deal
 with libedit versions.

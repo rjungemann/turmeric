@@ -4,7 +4,7 @@
 > facades, interpreter and AOT execution, the editor plugin (highlighter,
 > completion, structured validation, and a stack-frame debugger),
 > inspector exports/signals, cross-script calls, and `preload`.
-> **Plan:** [docs/upcoming/v1/godot-language-binding-plan.md](../upcoming/v1/godot-language-binding-plan.md)
+> **Plan:** [docs/upcoming/v1/godot-language-binding-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/godot-language-binding-plan.md)
 > **Repo:** `../turmeric-godot/` (sibling to this one)
 
 This guide is for people who want to attach `.tur` scripts to Godot
@@ -253,7 +253,7 @@ table. The AOT path compiles each script to a shared library via
 the dlsym'd function pointer. Same observable behaviour either way --
 AOT is the optimisation, not a separate language.
 
-Plan reference: [docs/archive/godot-binding-aot-plan.md](../archive/godot-binding-aot-plan.md).
+Plan reference: [docs/archive/godot-binding-aot-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-binding-aot-plan.md).
 
 ### Opting in
 
@@ -415,7 +415,7 @@ friends.
    unwrap with `(:: h :int)` at the call boundary.
 
 3. **No Android / iOS / web export.** Desktop only for v1; web is
-   blocked on [`wasm-spices-plan.md`](../upcoming/wasm-spices-plan.md).
+   blocked on [`wasm-spices-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/wasm-spices-plan.md).
 
 4. **Generated facade allowlist is 53 of 920 classes.** Grown
    tactically as demos demand; the long tail is editor-internals /
@@ -436,7 +436,7 @@ friends.
   in the editor's error list before the script is attached. (The
   runtime-dispatch fallback is preserved for legitimately late-bound
   natives, so it's a warning, not a hard error.) See
-  [docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](../archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
+  [docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
 - **Inspector property types** expanded past the primitives (see gap 5).
 - **`signals.gd`** in `examples/spike/` parses again (`var sigs: Array =`
   landed).

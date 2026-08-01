@@ -200,7 +200,7 @@ Driving it -- `mplus` offers both branches, `bind` maps over every result:
 >   by two separate defects -- a generic closure return type erases its type
 >   application, and a struct constructor used inside a closure in a generic
 >   function is never emitted (link error). See
->   [docs/reported/generic-closure-return-type-app.md](../reported/generic-closure-return-type-app.md).
+>   [docs/reported/generic-closure-return-type-app.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md).
 
 ## Example: Parsing with Backtracking
 

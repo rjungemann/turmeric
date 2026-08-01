@@ -22,7 +22,7 @@ something we don't have.
 For the introductory tutorial see
 [`ecs-guide.md`](ecs-guide.md). For the long-form plan and the
 load-bearing prereqs that closed in 2026-06-11 see
-[`../upcoming/ecs-spice-plan.md`](../upcoming/ecs-spice-plan.md).
+[`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md).
 
 ## The bottom line
 
@@ -37,7 +37,7 @@ load-bearing prereqs that closed in 2026-06-11 see
 | **Entity aliveness** | `Maybe`-returning reads | `Maybe`-returning reads | Generational handles, checked where you ask: `sized-alive?` on sized worlds; the unsized `defcomponent-accessors` reads return `T` **unchecked** (a stale handle reads stale bits). Opt-in **compile-time** strict aliveness on the `ecs/refined-world` facade (`--enable=refined`): a read whose entity is not proven alive is a compile error |
 | **Query arity** | Tuples up to 8-ish via type-class hackery; degrades past that | `Query` arrow combinators -- no cap, but composition cost is real | Truly variadic via row-kinded `for-each`; row type is the kind-`[*]` of components |
 | **Dense-storage length matching** | Runtime check on zip | Runtime check on zip | Runtime check (lifts when the spice wires `SizedVec<n, T>` -- SZ6+ shipped, spice wiring still TODO) |
-| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](../upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
+| **Cross-world systems** | Out of scope | Out of scope | Planned ([`v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)); single-world is v1 |
 
 The single largest delta is **write-set enforcement**. Both Haskell
 libraries trust the programmer not to write to a component they didn't
@@ -260,10 +260,10 @@ A body that did not declare `:writes [Vel]` has no `Vel-write-cap`;
 the `set-Vel!` call name-resolves, but its first argument is unbound.
 
 The Phase I report
-([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](../archive/history/ecs-defsystem-write-caps-not-enforced.md))
+([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md))
 walks the implementation. The load-bearing prereq was the parametric
 `:linear` propagation fix
-([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](../archive/history/parametric-linear-opaque-not-enforced.md));
+([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/parametric-linear-opaque-not-enforced.md));
 without it, `WriteCap<T>` would compile-check fine but its
 single-use discipline would silently drop on every application.
 
@@ -328,7 +328,7 @@ Refinement types live behind `--enable=refined`
 impure-measure question -- `alive?` reads mutable world state through
 inline C, which is exactly what congruence must refuse in general -- was
 answered by `#reads` + `frozen` regions
-([`docs/upcoming/v1/refine-stateful-measures-plan.md`](../upcoming/v1/refine-stateful-measures-plan.md)):
+([`docs/upcoming/v1/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refine-stateful-measures-plan.md)):
 a `#reads w` measure is congruent while `w` is immutably borrowed, and
 the borrow makes `^unique ^mut` despawn a compile error inside the
 region, which is what makes trusting the guard sound. The
@@ -353,7 +353,7 @@ checks at runtime that both storages have the same length and rejects
 otherwise. The prereq for lifting this to compile time -- `SizedVec<n,
 T>` with a load-bearing size index -- shipped in 2026-06-10 (SZ6-SZ8;
 see
-[`docs/archive/history/sized-types-phantom-index.md`](../archive/history/sized-types-phantom-index.md)).
+[`docs/archive/history/sized-types-phantom-index.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-phantom-index.md)).
 The spice has not yet wired its dense storages through `SizedVec`.
 When it does, dense-vs-dense zip becomes statically rectangular; the
 runtime check disappears for that case.
@@ -428,12 +428,12 @@ scheduler ever runs.
 ## Where to look next
 
 - [`ecs-guide.md`](ecs-guide.md) -- the introductory tutorial.
-- [`../upcoming/ecs-spice-plan.md`](../upcoming/ecs-spice-plan.md)
+- [`../upcoming/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/ecs-spice-plan.md)
   -- the long-form plan, status, and what's still queued for v2.
-- [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](../archive/history/ecs-defsystem-write-caps-not-enforced.md)
+- [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md)
   -- the Phase I implementation log for the cap-gating surface that
   delivered the headline compile-time-write-set claim.
-- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](../upcoming/v1/ecs-cross-world-systems-plan.md)
+- [`../upcoming/v1/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-cross-world-systems-plan.md)
   -- post-v1 follow-up extending the cap surface to multi-world
   render-extract / client-prediction patterns.
 - [`substructural-types-guide.md`](substructural-types-guide.md) --

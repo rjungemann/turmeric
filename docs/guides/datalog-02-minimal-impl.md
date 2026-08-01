@@ -393,5 +393,5 @@ after `main` returns, so the OS reclaims all memory.
 
 ## Next
 
-[03 -- Query API](03-query-api.md) -- Add value equality, attribute+value queries,
+[03 -- Query API](datalog-03-query-api.md) -- Add value equality, attribute+value queries,
 temporal as-of snapshots, pull, history, and retraction.

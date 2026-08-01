@@ -148,6 +148,25 @@ The map is keyed by `Sym` pointer identity (via `Hash[Sym]` + `MapKey[Sym]`),
 so lookups are pointer comparisons with the precomputed hash -- no string
 work. String keys (`#map{"foo" 1}`) keep their hash-by-content lowering.
 
+## Showing symbols
+
+`Show [Sym]` renders a symbol with its leading colon, so `(show :hello)` is
+`":hello"`. The instance lives in `stdlib/typeclass-show.tur` rather than
+`sym.tur`, because that is where the `Show` class itself is defined and
+`sym.tur` loads first.
+
+```turmeric
+(show :hello)   ; => ":hello"
+```
+```sweet-exp
+show(:hello)
+; => ":hello"
+```
+
+Sym-keyed and Sym-element collections render through it as well, so
+`#map{:a 1}` displays as `#map{:a 1}` and `#set{:x :y}` as `#set{:x :y}` --
+in compiled code, the interpreter, `tur repl`, and the web REPL alike.
+
 ## Dynamic interning: `str->sym` (opt-in)
 
 Literal `:foo` symbols need no runtime table. To build a symbol from a string

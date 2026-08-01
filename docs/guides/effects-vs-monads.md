@@ -610,13 +610,15 @@ one:
 
 See `docs/reported/` for the open compiler defects behind the last two.
 
-### `Result` through `do-m`
+### `do-m` over `Result` is limited to one `bind`
 
-`bind` / `do-m` over `(Result A B)` currently miscompiles when the chain crosses
-a typed `(Result A B)` function boundary -- the method result carries the int
-erasure and is read back as a by-value struct. `Option` chains are unaffected.
-Use explicit `if (ok? r)` threading, or the `Result` effect formulation above,
-until this is fixed.
+A `do-m` chain over `(Result A B)` must contain a single `bind`. Two or more
+crash at run time, and the program checks and compiles clean first, so the
+crash is the only warning you get. `Option` chains have no such limit.
+
+Write a multi-step `Result` chain as one `bind` per function, thread it with
+explicit `if (ok? r)`, or use the `Result` effect formulation above. Tracked in
+`docs/reported/nested-bind-over-result-typed-boundary-segfaults.md`.
 
 ## Compared to Haskell
 

@@ -375,5 +375,5 @@ concise, composable query language without a parser.
 
 ## Next
 
-[04 -- Indexing](04-indexing.md) -- Replace the O(n) linear scan with a hash-based
+[04 -- Indexing](datalog-04-indexing.md) -- Replace the O(n) linear scan with a hash-based
 EAVT index for O(1) average-case entity+attribute lookups.

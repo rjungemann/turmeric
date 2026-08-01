@@ -206,10 +206,12 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[performance-guide.md](performance-guide.md)** -- Writing fast Turmeric programs -- numerical computation, data structures, string processing, concurrency, memory, recursion, I/O, and benchmarking methodology
 - **[monomorphization-abi-guide.md](monomorphization-abi-guide.md)** -- How Turmeric's end-to-end monomorphization ABI works, why the by-value path replaced the int64 carrier, and how to read `__spec_*` symbols
+- **[jit-guide.md](jit-guide.md)** -- What the in-process MIR JIT (`tur jit`) does differently from the `cc` path -- the fallback contract, the permanent constraints, and the inline-C rules that only bite under the JIT
 
 ## Compiler Internals
 
 - **[compiler-internals.md](compiler-internals.md)** -- End-to-end walkthrough of the `tur` compiler pipeline and source layout in `src/`, aimed at contributors
+- **[value-representations-guide.md](value-representations-guide.md)** -- The representation inventory and the producer/boundary matrix -- the live scoreboard for the representation-consolidation campaign
 - **[gc-guide.md](gc-guide.md)** -- How memory is managed -- reference counting, the Bacon-Rajan cycle collector, arenas, and what is (and isn't) GC-managed
 - **[ownership-guide.md](ownership-guide.md)** -- Which ownership strategy to reach for -- persistent-immutable, single-owner mutable, linear/affine handles, `rc<T>` for genuine sharing, and `weak<T>` to break the resulting cycles
 - **[name-mangling-guide.md](name-mangling-guide.md)** -- How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies
@@ -249,8 +251,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
-- Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md)
-- Compiler Internals → [compiler-internals.md](compiler-internals.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
+- Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
+- Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
 - Interoperability → [c-integration-guide.md](c-integration-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 
@@ -264,6 +266,6 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Planning and Design
 
 For design documents, architecture, and phase planning, see:
-- **[../](../README.md)** -- Main docs folder
-- **[../archive/](../archive/README.md)** -- Active planning documents
-- **[../archive/history/](../archive/history/README.md)** -- Historical completed work
+- **[docs/](https://github.com/rjungemann/turmeric/tree/main/docs)** -- Main docs folder
+- **[../archive/](https://github.com/rjungemann/turmeric/blob/main/docs/archive/README.md)** -- Active planning documents
+- **[../archive/history/](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/README.md)** -- Historical completed work

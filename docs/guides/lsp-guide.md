@@ -48,13 +48,21 @@ Behaviours worth knowing about:
   defaults to. Clients that honour the negotiated encoding need no special
   handling; a client that assumes UTF-16 regardless will be off on lines
   containing non-ASCII.
-- **The last good symbol index is retained.** Completion, hover, and
-  go-to-definition are driven by the symbols a compile produced. A buffer that
-  does not parse — one with an unclosed paren, which is the normal state
-  mid-keystroke — produces none, so rather than answering with an empty list
-  the server keeps serving the previous index until a compile yields a new
-  one. A few stale entries are far more useful than nothing; the index changes
-  much more slowly than the text does.
+- **Completion degrades in two tiers, never to nothing.** Completion, hover,
+  and go-to-definition are driven by the symbols a compile produced. A buffer
+  that does not parse -- one with an unclosed paren, which is the normal state
+  mid-keystroke -- produces none, so the server falls back rather than
+  answering with an empty list. If the document has *ever* parsed
+  successfully, the last good index is retained and served until a compile
+  yields a new one; a few stale entries are far more useful than nothing, and
+  the index changes much more slowly than the text does. If it has never
+  parsed -- opening a file that already contains a syntax error -- there is no
+  last-good index, so the server serves a process-wide stdlib-only fallback
+  instead. That cache is primed lazily from an empty buffer (the stdlib is
+  auto-loaded, so an empty file alone yields the whole surface), costs roughly
+  8ms once per process, and its membership is a path-prefix test against
+  `TUR_STDLIB_DIR`. It deliberately carries no document-local symbols: while
+  the file does not parse, what the document itself declares cannot be known.
 - **Completion returns a `CompletionList`**, with `isIncomplete` set when the
   200-item cap truncated the result. Items are prefix-filtered against what has
   been typed before the cursor, and the document's own definitions are emitted

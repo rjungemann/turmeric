@@ -678,7 +678,7 @@ at the same `a8ab7c31` pin, Debug `tur` at `d657707dc`. This is the
 full-corpus macOS run 8.4.2 asks for and leaves open.
 
 Full detail, repros and severity analysis:
-[docs/archive/jit-macos-full-corpus-extension-and-atexit.md](../archive/jit-macos-full-corpus-extension-and-atexit.md).
+[docs/archive/history/jit-macos-full-corpus-extension-and-atexit.md](../archive/history/jit-macos-full-corpus-extension-and-atexit.md).
 
 ### 9.1 The predicted ~85% does not hold -- 81.7%, and sampling was masking a real gap
 
@@ -1038,7 +1038,7 @@ diagnostic on the first sweep.
 | `unresolved import: tur_reactor_new` | 10 | S2 boundary -- harness links 9 runtime TUs. |
 | `unresolved import: __builtin_*` / `atexit` | 10 | Recommendation 8. |
 | `initialization of incomplete type variable` | 3 | c2mir checker limitation. |
-| ~~`conversion to non-scalar type requested`~~ | ~~2~~ **0** | **FIXED in `b61cdf578`** -- `TUR_APPLY<N>_T` expanded to `(A0)(a)`, a cast to a struct type when `A0` is an aggregate, which is not legal C. gcc accepts it; c2mir does not. The emitter now decides per argument: cast for scalars (load-bearing for the int64 <-> pointer direction), bare for aggregates (where it was provably a no-op). Corpus 1557 -> 1559. Archived at [docs/archive/jit-tur-apply-casts-to-aggregate-param-type.md](../archive/jit-tur-apply-casts-to-aggregate-param-type.md). |
+| ~~`conversion to non-scalar type requested`~~ | ~~2~~ **0** | **FIXED in `b61cdf578`** -- `TUR_APPLY<N>_T` expanded to `(A0)(a)`, a cast to a struct type when `A0` is an aggregate, which is not legal C. gcc accepts it; c2mir does not. The emitter now decides per argument: cast for scalars (load-bearing for the int64 <-> pointer direction), bare for aggregates (where it was provably a no-op). Corpus 1557 -> 1559. Archived at [docs/archive/history/jit-tur-apply-casts-to-aggregate-param-type.md](../archive/history/jit-tur-apply-casts-to-aggregate-param-type.md). |
 | signals | 2 | Shim's documented atomics hazard (8.4.3). |
 
 Note on that last-but-one row: both fixtures previously failed *earlier*, on
@@ -1097,7 +1097,7 @@ since it resolves by name at runtime, meets that edge.)
 
 The reactor aborts are now filed as their own open finding with what has
 actually been ruled out:
-[docs/reported/jit-reactor-fixtures-abort-under-mir.md](../reported/jit-reactor-fixtures-abort-under-mir.md).
+[docs/reported/jit-reactor-fixtures-abort-under-mir.md](../archive/jit-reactor-fixtures-abort-under-mir.md).
 The established fact is that the emitted preamble carries its own `static`
 ucontext fiber runtime and uses a **JIT-generated function as a `makecontext`
 entry point**; the same split exists on the `cc` path, where it works. Settling
@@ -1119,7 +1119,7 @@ them apart and was written as though it had. One line of CMake fixes it; the
 harness's compile-the-TU-in workaround is reverted, and the corpus is unchanged
 at 1645 without it, which is what shows the fix replaces the workaround exactly.
 Archived with the full post-mortem at
-[docs/archive/libturi-symbols-basename-collision.md](../archive/libturi-symbols-basename-collision.md).)
+[docs/archive/history/libturi-symbols-basename-collision.md](../archive/history/libturi-symbols-basename-collision.md).)
 
 Stride spread on this run is 91.7%-94.6% (3.0 points) -- narrower than the
 10.7 at 84.8%, because variance shrinks as the pass rate approaches 100%.
@@ -1209,7 +1209,7 @@ stands at:
   identical string literals -- unspecified behavior (C11 6.4.5p7) that c2mir
   does not provide. Reproduced on the plain `cc` path with runtime-built keys,
   no JIT involved. Filed:
-  [docs/reported/persistent-map-cstr-keys-identity-compared.md](../reported/persistent-map-cstr-keys-identity-compared.md).
+  [docs/reported/persistent-map-cstr-keys-identity-compared.md](../archive/history/persistent-map-cstr-keys-identity-compared.md).
   **`self-recursive-carrier-struct-return` is also explained, in the opposite
   direction: a genuine upstream MIR miscompilation** -- a two-word by-value
   struct return inside an `if/else + goto-backedge` CFG (the emitted tail-loop
@@ -1218,7 +1218,7 @@ stands at:
   **Fixed in the rjungemann/mir fork** (`b79e3681`, root cause: `make_one_ret`
   merge targets alias when simplify canonicalizes a trailing `ret 0,0`); the
   spike pin now points at the fix commit. Corpus 1641 -> 1642. Archived:
-  [docs/archive/mir-two-word-struct-return-goto-loop-miscompile.md](../archive/mir-two-word-struct-return-goto-loop-miscompile.md).
+  [docs/archive/history/mir-two-word-struct-return-goto-loop-miscompile.md](../archive/history/mir-two-word-struct-return-goto-loop-miscompile.md).
   **`load-in-imported-module` closes the set, and lands in a third layer: the
   spike harness itself.** The `(load "stdlib/math.tur")` splice gives the
   program a module-local `static double sqrt(double) { return
@@ -1402,7 +1402,7 @@ filed report:
 - **1 x** `hamt-lowering-basic` -- the filed `^persistent` cstr-key identity
   bug, reproduced on the `cc` path with no JIT involved -- **FIXED in section
   22; now a native PASS**
-  ([archived](../archive/persistent-map-cstr-keys-identity-compared.md)).
+  ([archived](../archive/history/persistent-map-cstr-keys-identity-compared.md)).
 
 ## 13. S2 sized -- the runtime boundary, measured exactly
 
@@ -2409,7 +2409,7 @@ the JIT: hoisted includes should precede hoisted code. Until then the comment at
 `src/main.c` should say *this* -- an include-ordering workaround -- rather than
 naming a single xxh64 call site that is now fixed, because the current wording
 invites exactly the removal attempted here. Filed:
-[../archive/hoisted-inline-c-precedes-includes.md](../archive/hoisted-inline-c-precedes-includes.md).
+[../archive/history/hoisted-inline-c-precedes-includes.md](../archive/history/hoisted-inline-c-precedes-includes.md).
 
 Method note, generalizing past this instance: a corpus-wide static sweep is only
 as good as its artifact, and "the suite did not change" is not evidence when the
@@ -2467,7 +2467,7 @@ cleanly now and fail only at link, where they failed before this whole thread
 started.
 
 Report archived:
-[../archive/hoisted-inline-c-precedes-includes.md](../archive/hoisted-inline-c-precedes-includes.md).
+[../archive/history/hoisted-inline-c-precedes-includes.md](../archive/history/hoisted-inline-c-precedes-includes.md).
 
 ## 22. The `^persistent` cstr-key bug fixed -- the sweep's last output-mismatch retired
 
@@ -2854,11 +2854,11 @@ suite stayed green):
 - `typed/result-basic` -- the `__cps` clone assigns a by-value
   `(Result int int)` struct to an int64 carrier; hard cc error
   (FIXED, section 28:
-  docs/archive/typed-result-map-cps-clone-struct-assign.md).
+  docs/archive/history/typed-result-map-cps-clone-struct-assign.md).
 - `typed-slots/cs3-nested-specialization` -- the nested-specialization
   float slot prints an int bit pattern through a double
   (FIXED, section 30:
-  docs/archive/typed-slots-nested-specialization-float-garbage.md).
+  docs/archive/history/typed-slots-nested-specialization-float-garbage.md).
 
 Both were denylisted in the harness with report pointers; both are
 fixed (sections 28 and 30) and the denylist is empty. The J0-era lesson generalizes again: every new engine or harness
@@ -2883,14 +2883,14 @@ because gcc's sibling-call optimization turns the emitted self-call into
 a jump; MIR performs no such optimization, so 5M iterations SIGSEGV on
 the default 64MB entry stack (TUR_JIT_STACK_MB=2048 passes, confirming
 depth). Filed (and FIXED for the capturing form, section 29):
-docs/archive/named-let-self-tail-not-tco.md. Per the
+docs/archive/history/named-let-self-tail-not-tco.md. Per the
 standing owner decision, the fix direction is extending the defn-level
 TCO rewrite to named-let, never a bigger stack.
 
 ## 28. First of the three fixed -- the cps->direct aggregate-carrier bridge
 
 Added 2026-07-30, resolving the first of section 27's finds:
-`typed/result-basic` (docs/archive/typed-result-map-cps-clone-struct-assign.md).
+`typed/result-basic` (docs/archive/history/typed-result-map-cps-clone-struct-assign.md).
 
 ### 28.1 Two representations of one ADT, and a delivery that admitted only one
 
@@ -2984,7 +2984,7 @@ All three of the phase's finds are now fixed -- sections 28, 29 and 30.
 ## 29. Named-let TCO -- one surface syntax, two lowerings, two different bugs
 
 Added 2026-07-30, resolving the second of section 27's finds
-(docs/archive/named-let-self-tail-not-tco.md) and splitting a second defect
+(docs/archive/history/named-let-self-tail-not-tco.md) and splitting a second defect
 out from under it.
 
 ### 29.1 The named let has two lowerings, and neither was a loop
@@ -3064,7 +3064,7 @@ sibling-call optimization to elide, and a prompt per iteration besides.
 
 That is a different root cause with a different fix, so it is a separate
 report:
-docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md
+docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md
 (FIXED, section 31 -- and by call-target resolution, not the eviction this
 paragraph reaches for).  There is a settled precedent for the shape of the answer -- the
 recursive-await eviction (emit_cps_ir.c:1815, :2250,
@@ -3094,7 +3094,7 @@ MIR, which is the engine that could not fake it.
 ## 30. The last of the three -- a return-ABI sibling, and the hole it hid in
 
 Added 2026-07-30, resolving the third and final find of section 27
-(docs/archive/typed-slots-nested-specialization-float-garbage.md) and closing
+(docs/archive/history/typed-slots-nested-specialization-float-garbage.md) and closing
 the coverage gap that let all three sit undisturbed.
 
 ### 30.1 Two clones, identical arguments, different return ABI
@@ -3185,7 +3185,7 @@ mechanism for carrying a compile-path miscompile without hiding it.
 
 All three of J3's finds are fixed (sections 28, 29, 30), and the structural
 gap that hid them is closed. The second defect section 29 split out is fixed too (section 31):
-docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md.
+docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md.
 
 The J0-era lesson has now paid out four times in this phase: a new engine or
 harness that runs code a previous one skipped finds real, latent product bugs.
@@ -3197,7 +3197,7 @@ code. Coverage gaps do not announce themselves; they read as green.
 ## 31. The non-capturing loop -- the fix was resolution, not eviction
 
 Added 2026-07-30, resolving the defect section 29 split out of the named-let
-report (docs/archive/cps-colored-noncapture-named-let-recurses-through-entry.md).
+report (docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md).
 
 ### 31.1 The report guessed the wrong fix, and said so with a precedent
 
@@ -3310,7 +3310,7 @@ seam 20.5 warned diverges. Invisible on x86-64 Linux because nothing in
 glibc's `ucontext_t` needs 16-byte alignment.
 
 Report + validated 3-hunk MIR patch:
-docs/archive/jit-arm64-uint128-align-struct-layout-skew.md (the patch also
+docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md (the patch also
 fixes two independent c2mir gaps: `_Alignas` is unparseable in
 `spec_qual_list`, and ignored for layout when it does parse). LANDED as
 fork commit `90633091`, with `TUR_MIR_GIT_TAG` repointed in

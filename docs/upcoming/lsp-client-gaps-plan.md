@@ -137,7 +137,7 @@ opened with a syntax error already in it had nothing to retain and completion
 stayed empty, which is when it is wanted most. `LspDoc.ever_analyzed` fixes
 the priming, and a lazily-built stdlib symbol cache backs the never-parsed
 case. Details and measurements in
-[docs/archive/lsp-symbol-retention-never-primes.md](../archive/lsp-symbol-retention-never-primes.md);
+[docs/archive/history/lsp-symbol-retention-never-primes.md](../archive/history/lsp-symbol-retention-never-primes.md);
 coverage in `test_lsp_unprimed_completion`.
 
 ### 2.2 Returns nothing at offset 0

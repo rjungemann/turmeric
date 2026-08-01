@@ -261,7 +261,7 @@ to become GC-visible first, which is exactly what `RcVec` is: the buffer's
 owner is an rc block, so the collector always knows whether the buffer is still
 held. The same argument applies unchanged to a HAMT node, which is why a cycle
 through a `Map` entry remains unreclaimed. See
-[docs/archive/collections-cannot-hold-rc-values.md](../archive/collections-cannot-hold-rc-values.md)
+[docs/archive/history/collections-cannot-hold-rc-values.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/collections-cannot-hold-rc-values.md)
 for the full design history.
 
 A closure that *captures* an `rc<T>` releases it correctly; that is not a blind
@@ -305,7 +305,7 @@ fails if a stdlib type annotation introduces `rc<...>` without an explicit
 `rc-cycle-ok` review marker.
 
 The escape hatch for the day shared ownership *is* wanted now exists in the
-library: [`stdlib/weak.tur`](../../stdlib/weak.tur) provides `rc/downgrade`,
+library: [`stdlib/weak.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur) provides `rc/downgrade`,
 `weak/upgrade`, `weak/unwrap`, `weak/alive?`, and `weak/drop` -- Rust's
 `Rc::downgrade` / `Weak::upgrade` pairing, wrapping intrinsics that already
 existed. It is opt-in (`(load "stdlib/weak.tur")`) and stdlib itself still uses
@@ -514,7 +514,7 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
 - Cycle collection is off by default. When enabled it now reclaims live strong
   `rc<T>` cycles as well as weak-zombies (CG0--CG2, 2026-07-25; measured 192
   bytes per cycle -> 0, archived at
-  `docs/archive/gc-strong-cycles-not-collected.md`). Remaining gaps: a cycle
+  `docs/archive/history/gc-strong-cycles-not-collected.md`). Remaining gaps: a cycle
   routed through an `RCK_OPAQUE` block is invisible to the walker, and there is
   no automatic trigger -- user code drives collection via `(gc!)` or the
   suspect threshold.
@@ -524,7 +524,7 @@ the symbol is present in `libturt_runtime.a` and absent from the `.so`.
   the collector cannot know whether another holder exists). Measured by
   `tests/fixtures/gc-blind-spot-cycle-through-vec`; the fix -- an rc-managed,
   self-walking container -- is designed in
-  `docs/archive/collections-cannot-hold-rc-values.md` item 3, and
+  `docs/archive/history/collections-cannot-hold-rc-values.md` item 3, and
   `stdlib/rcchain.tur` is a working instance of it.
 - Weak-pointer handling in `trial_deletion_phase` (`gc.c:332-341`) assumes
   no live weak pointers at collection time — see the comment there.

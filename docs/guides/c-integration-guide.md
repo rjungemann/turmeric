@@ -250,13 +250,64 @@ documentation.
   `__TUR_CNAME_<name>__` (see below). This is how `stdlib/digest.tur` factors
   its SHA-256 / MD5 block transforms out of the per-digest bodies.
 
+**Hoisting a payload to file scope -- `/* __tur_include__: ... */`:**
+
+An inline-C body is spliced *inside* the emitted C function, so anything that has
+to sit at file scope -- a system `#include` whose header declares top-level
+`static inline` functions (mbedTLS, anything pulling `psa/crypto.h`), a
+`typedef`, a file-scope `static` helper -- goes in a `__tur_include__` marker
+comment instead. `tur build` scans the generated TU for those markers and
+prepends each payload to the top of the file:
+
+```c
+/* __tur_include__: #include <stdlib.h> */
+/* __tur_include__: typedef struct { char *s; } Owned; */
+/* __tur_include__: static char *own(Owned *o, char *s) { ... } */
+```
+
+Payloads are sorted into two buckets -- preprocessor directives (`#include`,
+`#define`, `#undef`, `#pragma`) ahead of **all** code payloads -- with source
+order preserved within each bucket. So an `#include` supplied by one block covers
+code hoisted from another regardless of which block appears first in the file,
+and a feature-test `#define` still precedes the include it conditions. Spice
+authors do not have to order their blocks defensively.
+
+Because that ordering is fixed, no cc invocation site passes
+`-Wno-error=implicit-function-declaration`: a missing prototype in inline C is a
+hard build error, not a silently-wrong implicit declaration. Do not add the flag
+back to paper over one -- fix the declaration.
+
+Hoisting runs on the `tur build` path only. `tur emit-c` leaves the markers where
+they sit, so an `emit-c` dump (or a fixture snapshot) is not the place to check
+what the compiled TU actually looks like.
+
+**Declare a prototype for anything you call:**
+
+An unprototyped call in inline C is not a style nit, it is wrong code, and it is
+wrong in two independent ways.
+
+The implicit declaration returns `int`, so a 64-bit result is truncated on every
+host -- that is how an emitted `tur_hamt_hash_xxh64` call quietly produced a
+32-bit hash. And under `tur jit` it is worse: c2mir lowers a call with no
+prototype in scope as all-anonymous-variadic, which on Apple arm64 passes the
+arguments on the stack instead of in registers, so the callee reads whatever was
+left in `x0`/`x1`. That is not a crash you get to notice -- `htons(8080)`
+returned `0xb8f6` instead of `0x901f`, silently corrupting ports and header
+lengths. (An explicit variadic with named parameters -- `f(const void *, size_t,
+...)` -- is fine; it is specifically the fully unprototyped `f()` form that
+breaks.) The same reasoning is written out at the `JIT_PRELUDE` / `_OSSwapInt16`
+shims in `src/jit_engine.c`.
+
+So `#include` the header, or write the `extern` declaration yourself -- through
+`__tur_include__` when it has to be at file scope.
+
 **Calling a sibling `defn` from inline C -- `__TUR_CNAME_<name>__`:**
 
 When an inline-C body needs to call (or take the address of) another Turmeric
 `defn`, do **not** hand-write that defn's mangled C identifier -- the mangling
 scheme (`mangle.c`) is an internal detail that can change, and a stale spelling
-fails silently at the C-compile stage (`implicit declaration of function ...`)
-with no Turmeric-level warning. Instead, splice the name with the
+fails at the C-compile stage (`implicit declaration of function ...`, a hard
+error) with no Turmeric-level warning. Instead, splice the name with the
 `__TUR_CNAME_<source-name>__` placeholder. The emitter expands it through the
 same mangler the rest of the compiler uses, so the reference always tracks the
 current scheme:
@@ -563,6 +614,23 @@ collector, but only Turmeric-managed `rc<T>` nodes are tracked. If you create
 a cycle that involves a raw C pointer (e.g. a C struct that holds a `void *`
 back to an `rc<T>`), the cycle collector will not see it and memory will leak.
 
+**If you do drive a control block from C** (`src/runtime/rc.h`), two rules cover
+the whole surface:
+
+- **Never repoint `cb->value` by raw assignment.** Go through
+  `rc_set_value(cb, val, glue)`, and pass the drop glue **explicitly**. A bare
+  `NULL` there does not mean "leave it alone": it re-derives the free-capable
+  default for the block's value type, which clobbers an explicit struct drop
+  glue and strands everything that glue would have released. This is the
+  codegen's own path -- `rc/of` allocates, then repoints through `rc_set_value`
+  with the alloc's glue passed through unchanged.
+- **A scalar payload needs no glue at all.** `rc_cb_alloc(size, kind, NULL)`
+  places the value inline at `(cb + 1)`, inside the header's own allocation, so
+  `free(cb)` in `rc_cb_free` reclaims it. Scalar types therefore default to a
+  no-op glue (`inline_scalar_drop_fn`) -- freeing that interior pointer is an
+  invalid free and aborts. Only a *separately* allocated payload, installed by
+  `rc_set_value` or `tur_rc_from_ref`, wants a freeing drop function.
+
 ### Weak pointers -- `weak<T>`
 
 A `weak<T>` holds only the control block pointer (strong count = 0 is allowed).
@@ -734,6 +802,39 @@ deeper rationale and `^fat` on return types.
 First-class `:fn` values shipped (#272); the prior hedges in this guide
 about "closures cannot cross the boundary" are obsolete -- the rule is that
 they cross as `int64_t` and must be annotated at the boundary.
+
+### Calling a typed `fn` parameter from inline C -- `tur_poly_fn_t`
+
+A function-typed parameter that is *not* marked `^fat` -- an ordinary
+`f : (fn [int int] int)` -- arrives in inline C as a **`tur_poly_fn_t` struct**,
+declared in the emitted preamble as:
+
+```c
+typedef struct { void *env;
+                 int64_t (*fn)(void *, int64_t);
+                 int64_t (*fn_cps)(void *, int64_t, struct DK *); } tur_poly_fn_t;
+```
+
+Call it **env first, then every argument, uncurried**. The declared `fn` field
+type is the one-argument spelling, so cast the slot to the real arity:
+
+```turmeric
+(defn apply2 [f : (fn [int int] int) a : int b : int] : int
+  ```c
+  return ((int64_t (*)(void *, int64_t, int64_t))f.fn)(f.env, a, b);
+  ```)
+```
+
+That is exactly what the compiler emits for `(defn apply2 [...] (f a b))`. The
+pre-HKT spelling `(int64_t(*)(int64_t,int64_t))(intptr_t)f` is a hard C error
+under the by-value HKT path (`aggregate value used where an integer was
+expected`) -- `f` is a struct, not a handle.
+
+Better still, do not hand-write the convention at all. A stdlib or spice copy of
+a calling convention is a silent miscompile waiting for the convention to move,
+and it stays broken for as long as no fixture loads the module. If the body can
+be written in Turmeric (`(f init x)`), write it in Turmeric and let the compiler
+generate the ABI.
 
 ---
 

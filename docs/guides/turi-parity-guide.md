@@ -88,7 +88,7 @@ concurrency).
 
 Multishot resume, escaping continuations, and resume through nested handlers
 **all work under `--interpret` today**. They landed 2026-06-14
-([turi-interpreter-delimited-control-plan.md](../archive/turi-interpreter-delimited-control-plan.md)):
+([turi-interpreter-delimited-control-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-interpreter-delimited-control-plan.md)):
 capturable handles run on the driver work-stack as a heap-owned `TuriWsCont`
 continuation (the turi analog of `tur`'s heap `DK` chain), captured between the
 `perform` and the matching `DK_PROMPT`. Because the continuation is heap-owned
@@ -105,10 +105,10 @@ native / inline-C higher-order-function callback* (a native HOF that re-applies
 a closure via `turi_call` on a live C frame). That case errors **cleanly** (no
 crash, no silent miscompile) -- the tree-walker cannot capture across a native
 C frame. Lifting it is the subject of
-[turi-cek-stackless-reentry-plan.md](../archive/turi-cek-stackless-reentry-plan.md)
+[turi-cek-stackless-reentry-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)
 (SR, concluded + archived), which reifies the native callback onto the driver
 work-stack as an explicit resume continuation. Root-cause history:
-[the delimited-control gaps report](../archive/history/turi-interpreter-delimited-control-gaps.md)
+[the delimited-control gaps report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-interpreter-delimited-control-gaps.md)
 (RESOLVED).
 
 One-shot effects/handlers, `call/cc`/`escape`, abortive and context-capturing
@@ -230,4 +230,4 @@ test leg -- not for production hot loops. When throughput matters, `tur build`
 - [eval-api.md](eval-api.md) -- the libturi C embedding API and sandboxing surface.
 - [repl.md](repl.md) / [repl-tutorial.md](repl-tutorial.md) -- the interactive interpreter.
 - `docs/artifacts/turi-carve-out.txt` / `docs/artifacts/turi-preload-carve-out.txt` -- the machine-checked carve-out lists.
-- [turi-parity-post-v1-plan.md](../archive/turi-parity-post-v1-plan.md) -- the phased plan behind this matrix (archived; all phases landed).
+- [turi-parity-post-v1-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-parity-post-v1-plan.md) -- the phased plan behind this matrix (archived; all phases landed).

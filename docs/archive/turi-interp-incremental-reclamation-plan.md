@@ -171,7 +171,7 @@ TR0 measured this as the **dominant** long-lived-growth term by far: ~4.1 GB of
 `eval_arenas` (plus quadratic re-parse time) vs 158 MB for the value pool, even
 with promotion rewinding 100%. This is the phase that actually bounds a REPL. The
 CPU side of it (each eval re-parses the whole accumulated source, O(N^2)) is
-tracked as `docs/archive/turi-repl-quadratic-reparse.md` -- prefer parsing only
+tracked as `docs/archive/history/turi-repl-quadratic-reparse.md` -- prefer parsing only
 the new tail over merely reclaiming arenas, so the quadratic parse cost goes away
 too.
 
@@ -248,7 +248,7 @@ the cell under the REPL's defaults and a later `atomically` read was a
 use-after-reset. TVar cells are now malloc'd and tracked as one-value boxes:
 they survive rewinds, are swept when unreachable, and their stored value
 joins the mark (a TVar holding a vec handle keeps that vec alive). See
-`docs/archive/tvar-cell-dangled-across-promotion-rewind.md`.
+`docs/archive/history/tvar-cell-dangled-across-promotion-rewind.md`.
 
 Pinned by `test_collection_sweep` in `tests/turi/env-longlived.c`: bounded
 churn, four liveness shapes (global vec / struct field / vec-in-vec /

@@ -227,9 +227,9 @@ as type-level compile-time integers.
 > across parameters, through `defstruct`/`defopaque` wrappers, and through
 > polymorphic helpers. Sizes only known at run time fall back to runtime
 > assertions. See the archived
-> [sized-types-completion-plan.md](../archive/history/sized-types-completion-plan.md)
+> [sized-types-completion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-completion-plan.md)
 > (SZ6–SZ9) and
-> [sized-types-cross-param-unification-plan.md](../archive/history/sized-types-cross-param-unification-plan.md).
+> [sized-types-cross-param-unification-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-cross-param-unification-plan.md).
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.

@@ -96,7 +96,7 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    (`tests/fixtures/capturing-closure-struct-field/`).
 
 Plus one in-flight form the minimization matrix in
-`docs/archive/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
+`docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
 **by-value fat struct** sitting in a parameter slot, whose return path
 used to cast it thin (`return (int64_t)(intptr_t)v;` on an aggregate --
 fixed by fat-normalization stage 2's poly-to-fat tail conversion).
@@ -117,21 +117,31 @@ Each of these is a crossing where a bridge may be needed:
 The pairing is the problem: ~4 data representations (6 for closures) times
 each boundary kind, where every pair needs its own bridge and the bridges
 are implemented point-by-point, not derived from one convention. Each open
-report is one missing cell:
+report is one missing cell.
 
-| Missing cell (producer -> boundary) | Report |
+**Open cells.** These are the crossings that still have no working bridge;
+each has a live report in `docs/reported/`.
+
+| Open cell (producer -> boundary) | Report |
 | --- | --- |
-| method result (carrier) -> typed `(Result A B)` defn boundary (RESOLVED 2026-07-31, increment 2; archived) | [`result-monad-bind-typed-boundary-miscompiles`](../archive/result-monad-bind-typed-boundary-miscompiles.md) |
-| method result (carrier) -> generic call argument (RESOLVED 2026-07-31, increment 2; archived) | [`class-method-result-into-generic-invalid-c`](../archive/class-method-result-into-generic-invalid-c.md) |
-| by-value struct -> Vec / Map element slot (RESOLVED 2026-07-31, increment 3: width-independent boxed element protocol; archived) | [`vec-byvalue-struct-element-invalid-c`](../archive/vec-byvalue-struct-element-invalid-c.md) |
-| capturing closure -> nominal thin `TY_FN` param, tyvar-sig or effectful (concrete effect-free sigs FIXED 2026-07-30, fat-normalized) | `poly-result-hof-capturing-closure-sigbus` |
-| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF (RESOLVED 2026-07-30, fat-normalization stage 2; archived) | [`fn-typed-value-return-ascribe-miscompiles`](../archive/fn-typed-value-return-ascribe-miscompiles.md) |
-| generic closure return over a type application (struct `Cons`) | `generic-closure-return-type-app` |
-| fn value read out of a container element, then called (RESOLVED 2026-07-31, fat-normalization stage 2; archived) | [`fn-payload-in-container-undeclared-temp`](../archive/fn-payload-in-container-undeclared-temp.md) |
-| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification (RESOLVED 2026-07-31: alias provenance in the tail walkers + poly-to-fat at the if join; archived) | [`fn-value-carrier-fat-seam-residuals`](../archive/fn-value-carrier-fat-seam-residuals.md) |
-| closure handle -> `double`-typed element slot (two-types-one-C-name collision; RESOLVED 2026-07-30 upstream, both findings; archived) | [`concrete-codegen-layout-kind-enumerations-drift`](../archive/concrete-codegen-layout-kind-enumerations-drift.md) |
+| capturing closure -> nominal thin `TY_FN` param, where the signature mentions a tyvar or carries an effect row (concrete effect-free signatures are fat-normalized and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
+| generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
 
-A structural note the last row exposes: the representation decision today is
+**Closed cells (paper trail).** Bridges that now exist. Kept here because the
+resolution notes say *which* bridge was added and what it is paired against --
+the next cell in this family is usually adjacent to one of them.
+
+| Closed cell (producer -> boundary) | Resolution | Report |
+| --- | --- | --- |
+| method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
+| method result (carrier) -> generic call argument | increment 2 | [`class-method-result-into-generic-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/class-method-result-into-generic-invalid-c.md) |
+| by-value struct -> Vec / Map element slot | increment 3: width-independent boxed element protocol | [`vec-byvalue-struct-element-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/vec-byvalue-struct-element-invalid-c.md) |
+| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | fat-normalization stage 2 | [`fn-typed-value-return-ascribe-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md) |
+| fn value read out of a container element, then called | fat-normalization stage 2 | [`fn-payload-in-container-undeclared-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-payload-in-container-undeclared-temp.md) |
+| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification | alias provenance in the tail walkers + poly-to-fat at the `if` join | [`fn-value-carrier-fat-seam-residuals`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-value-carrier-fat-seam-residuals.md) |
+| closure handle -> `double`-typed element slot | two-types-one-C-name collision, resolved upstream (both findings) | [`concrete-codegen-layout-kind-enumerations-drift`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md) |
+
+A structural note the last closed row exposes: the representation decision today is
 not one function but (at least) three hand-maintained `TypeKind` switches in
 `src/compiler/types.c` -- `type_c_name`, `type_has_concrete_codegen_layout`
 (fails closed: a missing kind silently falls back to the carrier), and
@@ -148,7 +158,7 @@ arms and now also checks `type_c_name` exhaustiveness;
 `tests/check-monomorph-name-collision.sh` reads what they emit). The
 position axis -- one `repr-of(type, position)` routine for the per-SITE
 choices -- is staged in
-[docs/upcoming/repr-decision-function-plan.md](../upcoming/repr-decision-function-plan.md).
+[docs/upcoming/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
@@ -161,7 +171,7 @@ carrier->concrete bridge the direct composition skips).
 correct-by-construction programs routing known values through random
 wrapper x boundary compositions and asserts check-accepted implies
 compiles + links + runs + prints the predicted output. Shapes reproducing
-the open reports above are excluded via its `known_bug_slug` table and
+the open cells above are excluded via its `known_bug_slug` table and
 pinned by `--known-probes` instead, so a red run means a NEW cell.
 
 The convention-level fix for the closure rows -- normalize every non-carrier
@@ -171,7 +181,9 @@ per-boundary -- is planned in
 strategy governing that plan and its successors (which seams consolidate in
 which order, the probe/blast-radius discipline, and the performance
 guardrails) is `docs/upcoming/representation-consolidation-meta-plan.md`;
-this guide's missing-cells table is that campaign's live scoreboard.
+this guide's open-cells table is that campaign's live scoreboard, and the
+closed-cells table below it is the record of what the campaign has already
+consolidated.
 
 ## Maintenance -- keep this guide truthful
 
@@ -185,6 +197,7 @@ pointing back here. If you:
 - resolve one of the linked **reports**,
 
 then update the corresponding section here in the same PR: fix the
-inventory, move the cell out of the missing-cells table, and note the new
+inventory, move the cell from the open-cells table down into the
+closed-cells table with a one-line resolution note, and note the new
 invariant. When a report is archived, update its row's link to
 `docs/archive/`.

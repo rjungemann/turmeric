@@ -677,7 +677,7 @@ functions are excluded (CF7.3), but same-function bindings that happen to be
 in lexical scope may be flagged even if they are dead at the shift point.
 
 Full precision requires the post-1.0 CPS liveness pass (tracked in
-[control-flow-completeness-plan.md](../control-flow-completeness-plan.md) CF7.5).
+[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md) CF7.5).
 
 **Workaround:** consume or drop non-Serializable values before the shift point,
 or restructure so only Serializable bindings remain in scope.

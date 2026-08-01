@@ -390,7 +390,7 @@ through any number of middleware wraps.
 ## Not yet shipped
 
 The following items are tracked in
-[`docs/archive/httpd-middleware-plan.md`](../archive/httpd-middleware-plan.md)
+[`docs/archive/httpd-middleware-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/httpd-middleware-plan.md)
 but not yet in stdlib:
 
 - **`mw-timeout`** -- per-request wall-clock budget. Needs a
@@ -401,10 +401,10 @@ but not yet in stdlib:
   primitive `(catch-unwind thunk)` exists at the surface level but
   its current lowering does not propagate the closure env -- the
   thunk cannot capture `next`. Tracked in
-  [`src/compiler/emit_expr.c`](../../src/compiler/emit_expr.c) under
+  [`src/compiler/emit_expr.c`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/emit_expr.c) under
   `EX_CATCH_UNWIND`.
 - **Compression middleware** -- spun out into its own plan
-  [`docs/archive/history/httpd-compression-zlib-spice-plan.md`](../archive/history/httpd-compression-zlib-spice-plan.md).
+  [`docs/archive/history/httpd-compression-zlib-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/httpd-compression-zlib-spice-plan.md).
 
 ## See also
 

@@ -147,7 +147,7 @@ shared range bounds):
 
 This is exactly the `Bound` GADT that backs `stdlib/range.tur`'s internal
 endpoint representation -- `Inclusive` / `Exclusive` / `Unbounded` range
-bounds (see [`range-gadt-typeclass-migration-plan`](../archive/history/range-gadt-typeclass-migration-plan.md)).
+bounds (see [`range-gadt-typeclass-migration-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/range-gadt-typeclass-migration-plan.md)).
 
 GADT support is on by default, so no flag is needed. (Passing the legacy
 `-Xgadt` flag still works but prints a deprecation notice.)

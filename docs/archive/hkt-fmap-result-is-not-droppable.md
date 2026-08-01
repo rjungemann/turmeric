@@ -42,7 +42,7 @@ underlying reason.
 ## Severity
 
 Low. It was previously unreachable -- `rc.tur` did not compile at all until
-2026-07-26 (`docs/archive/rc-tur-legacy-instances-do-not-compile.md`), so no
+2026-07-26 (`docs/archive/history/rc-tur-legacy-instances-do-not-compile.md`), so no
 program could have hit this. Nothing in stdlib uses `fmap` over an `rc`, and
 `rc.tur` is opt-in. Filed so the hole is on the record now that the module can
 actually be loaded.
@@ -137,7 +137,7 @@ is superseded by the above.
 The class method's declared result is `(f b)` over the class's type constructor
 variable. Instantiating the instance head `[rc]` should ground that to `rc<b>`,
 but the result stays a `TY_APP` with both positions unresolved. This is adjacent
-to the gap noted in `docs/archive/rc-tur-legacy-instances-do-not-compile.md` fix
+to the gap noted in `docs/archive/history/rc-tur-legacy-instances-do-not-compile.md` fix
 direction 2: on the *parameter* side, `(t a)` instantiates to
 `(type-app rc<?> tyvar 'a')` and does not unify with a `rc<A>` parameter either.
 Both look like the same missing normalization of a `TY_APP` whose head is a

@@ -202,7 +202,7 @@ path is not consolidating a representation**; each axis needs its own
 campaign.
 
 **Stalled (instructively): the first fn-element substitution fix
-(2026-07-30).** `docs/archive/fn-element-tyvars-not-substituted-in-spec-types.md`
+(2026-07-30).** `docs/archive/history/fn-element-tyvars-not-substituted-in-spec-types.md`
 is the sharpest recent record. The first attempt applied a global
 substitution change without a grounding guard: 1916 fixture failures,
 reverted. The landed fix measured each step in isolation (step 1 alone:

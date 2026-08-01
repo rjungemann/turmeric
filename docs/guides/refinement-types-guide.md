@@ -5,7 +5,7 @@
 > in `build.tur`, or `#lang turmeric refined` at the top of a single file.
 > See [contract-types-guide.md](contract-types-guide.md) for the always-on
 > runtime half, and
-> [../upcoming/v1/refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md)
+> [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md)
 > for the design.
 
 Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
@@ -891,7 +891,7 @@ anyway.
   is the implementation that will actually run. `TUR-W0377` marks a call that
   depends on that leniency; it is a warning rather than an error because the
   call is correct for the instance it resolved to. See
-  [docs/archive/class-param-refinement-not-demanded-of-callers.md](../archive/class-param-refinement-not-demanded-of-callers.md)
+  [docs/archive/class-param-refinement-not-demanded-of-callers.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/class-param-refinement-not-demanded-of-callers.md)
   for why that reading was chosen over making the class signature binding on
   callers.
 - **[by design] An argument that cannot be PROVED is not an error; one that is DEFINITELY
@@ -954,7 +954,7 @@ anyway.
   and none is planned -- inferring facts is the thing this design deliberately
   does not do. A user-written `:invariant`, which would be checking rather than
   inference, is a plausible future addition but is not in the prototype; see
-  [docs/upcoming/hold/loop-invariants-plan.md](../upcoming/hold/loop-invariants-plan.md).
+  [docs/upcoming/hold/loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/loop-invariants-plan.md).
 - **[prototype] No refinements on type parameters or higher-order predicates.** These are
   rejected or fall through to runtime. (Typeclass method signatures *are*
   supported now, on parameters and results alike -- see above.)
@@ -1005,4 +1005,4 @@ states.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half
 - [experimental-flags-guide.md](experimental-flags-guide.md) -- the `--enable=` mechanism
 - [syntax-guide.md](syntax-guide.md) -- `#lang` layers
-- [../upcoming/v1/refinement-types-plan.md](../upcoming/v1/refinement-types-plan.md) -- design, staging, and what is left
+- [../upcoming/v1/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/refinement-types-plan.md) -- design, staging, and what is left

@@ -426,5 +426,5 @@ struct. See the `schema-hkt-functor`, `schema-hkt-alternative`,
 > you (and `Functor` is loaded globally), so `(load "stdlib/schema.tur")` is
 > enough -- no `(load "stdlib/typeclass.tur")` is required to use the instances.
 
-See [docs/archive/history/schema-plan.md](../archive/history/schema-plan.md) for the full design and the
+See [docs/archive/history/schema-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.

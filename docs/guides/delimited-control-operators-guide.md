@@ -178,7 +178,7 @@ computation (possibly composed, possibly more than once with `call/cc*`),
 > runtime-backed today. `call/cc`/`escape` are delimited sugar over them; the
 > full early-exit lowering (`escape` via `shift0`, an enforced enclosing
 > boundary) is tracked in
-> [`call-cc-completion-plan.md`](../archive/history/call-cc-completion-plan.md). Until
+> [`call-cc-completion-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/call-cc-completion-plan.md). Until
 > that lands, treat the semantics above as the contract and check the plan for
 > the current stub caveats.
 
@@ -214,12 +214,12 @@ their semantics:
    `PASS_CPS`, which compiles down to the `tur_cont` runtime.
 
 The symbol bindings live in
-[`src/compiler/elab_internal.h`](../../src/compiler/elab_internal.h) (`sym_shift`,
+[`src/compiler/elab_internal.h`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/elab_internal.h) (`sym_shift`,
 `sym_reset`, `sym_shift0`, `sym_call_cc`, `sym_escape`, ...), elaboration in the
 `elab_*` entry points there, and codegen in `src/compiler/emit_internal.h`
 (`emit_effects_shift`, `emit_effects_reset`, `emit_effects_shift0`, ...). The
 runtime structures are in
-[`src/runtime/runtime.h`](../../src/runtime/runtime.h) (`tur_cont`,
+[`src/runtime/runtime.h`](https://github.com/rjungemann/turmeric/blob/main/src/runtime/runtime.h) (`tur_cont`,
 `tur_cloneable_cont`, `tur_frame`).
 
 ### Abortive shift and the direct/CPS oracle
@@ -259,7 +259,7 @@ rather than a fallback.
 - [Checkpointing Guide](checkpointing-guide.md) -- Cloneable continuations for persistent workflows
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- Capturing and resuming across process boundaries
 - [Compiler Internals](compiler-internals.md) -- Effect lowering and the CPS pass
-- [`call-cc-completion-plan.md`](../archive/history/call-cc-completion-plan.md) -- The plan finishing `call/cc`/`escape`
+- [`call-cc-completion-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/call-cc-completion-plan.md) -- The plan finishing `call/cc`/`escape`
 - [Bibliography](bibliography.md#delimited-continuations) -- Papers behind these operators
 
 ## References
