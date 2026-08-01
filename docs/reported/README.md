@@ -19,7 +19,8 @@ under "Windows port" and "Platform-independent, found on a platform sweep"
 arrived with `main`'s Windows work and were **not** re-verified here -- their
 repros need an MSYS2/UCRT64 box. They are indexed on the authority of their own
 filings. The `libedit` CI row *was* verified (three job runs across two heads
-and `main`'s tip).
+and `main`'s tip); it has since been fixed and archived, so it no longer appears
+below.
 
 ## Value representation (the consolidation campaign)
 
@@ -85,7 +86,6 @@ the single red line in `tests/run-turi.sh`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [windows-ci-leg-installs-nonexistent-libedit](windows-ci-leg-installs-nonexistent-libedit.md) | medium | the `Windows build (MSYS2/UCRT64)` job dies at `pacman -S` on `mingw-w64-ucrt-x86_64-libedit` (no such target), before Configure/Build/smoke. **The Windows leg has produced zero signal since it was added** -- the three Windows port reports below are unwatched by CI. Optional dep made hard-required; one-line fix |
 | [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | **both halves diagnosed 2026-08-01, neither is a macOS defect.** JIT half **fixed and confirmed** (`run-jit.sh:308` called bare `timeout`, absent on stock macOS; 407 failures -> 6). AOT half is exactly the four straddle fixtures above. Closes when the straddles are fixed |
 | [jit-macos-gc-rc-weak-fixtures-fail](jit-macos-gc-rc-weak-fixtures-fail.md) | medium | the 6 residuals the harness bug was hiding: GC / `Rc` / weak-ref fixtures failing under the JIT engine on macOS arm64 only (Linux JIT green, both AOT legs green). Needs a macOS box |
 | [ci-cps-tramp-turi-timeouts-under-load](ci-cps-tramp-turi-timeouts-under-load.md) | low | `cps-tramp-resume-*` time out under suite parallelism; **did not reproduce** in two full runs on 2026-08-01, but nothing was fixed |
@@ -94,8 +94,11 @@ the single red line in `tests/run-turi.sh`.
 ## Windows port
 
 Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in
-this directory with that work. **None of them is currently watched by CI** --
-see the `libedit` row above, which is why the Windows leg never compiles.
+this directory with that work. The Windows CI leg that watches them was itself
+broken until 2026-08-01 -- it installed a nonexistent `libedit` package and
+never reached Configure -- which is now fixed (report archived at
+`docs/archive/windows-ci-leg-installs-nonexistent-libedit.md`). Note the leg is
+build-only by design, so these three are still not FIXTURE-watched on Windows.
 
 | Report | Severity | One line |
 | --- | --- | --- |
