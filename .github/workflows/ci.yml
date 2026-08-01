@@ -232,7 +232,44 @@ jobs:
       #   something there too -- which makes the flip more worthwhile, not less.
       - name: Run JIT suites
         continue-on-error: ${{ matrix.os != 'macos-latest' }}
-        run: ctest --output-on-failure --progress --test-dir build -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$'
+        shell: bash
+        run: |
+          # `-V` rather than `--output-on-failure`, so the harness's own counts
+          # reach the log on a PASSING run too.
+          #
+          # This is not cosmetic.  Under --output-on-failure a green run prints
+          # nothing but ctest's own "100% tests passed", so the corpus counts
+          # are unobservable from CI -- and the baseline documented above can
+          # only ever be checked by running the suite by hand.  That is exactly
+          # how it drifted: 2414 / 47 skipped / 31 fallback, hand-measured on an
+          # unsanitized local build, against a job that builds sanitized.  The
+          # numbers disagreed for months and nothing surfaced it.
+          #
+          # -V alone would dump ~2500 PASS lines per leg, so the output is
+          # filtered to what is worth reading -- about 20 lines: each harness's
+          # summary, every FAIL line, ctest's own verdict, and the cc-fallback
+          # fixtures BY NAME (two archived JIT reports track exactly which
+          # fixtures fall back, and the count alone does not say which moved).
+          # The full unfiltered log stays in jit-ctest.log for a follow-up
+          # artifact upload if one is ever added.
+          #
+          # ctest's status is captured BEFORE the filter runs, so neither the
+          # grep's exit code (1 when nothing matches) nor the redirection can
+          # mask a failing suite.
+          #
+          # --no-tests=error because a `-R` that matches NOTHING exits 0.  The
+          # "Verify the JIT engine is actually present" step above catches the
+          # main way that happens (a build that silently lost -DTUR_JIT=ON), but
+          # any other break in test registration would sail through as a green
+          # step that ran no tests -- the same vacuous-pass shape that step
+          # exists to prevent.
+          set +e
+          ctest --test-dir build -V --no-tests=error \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' \
+                > jit-ctest.log 2>&1
+          rc=$?
+          grep -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|[0-9]+% tests passed|\*\*\*|Errors while running CTest' jit-ctest.log
+          exit $rc
 
       - name: Save ccache
         if: always()
