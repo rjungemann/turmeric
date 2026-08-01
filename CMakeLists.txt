@@ -490,11 +490,14 @@ add_test(
 # Z3 retirement: the labelled SMT-LIB corpus, replayed with no Z3 present.
 # Labels come from the corpus files, not from a live solver, which is the whole
 # point -- this is what stays behind when the scaffold is deleted.
+# POSIX-only: the harness needs fork() to sandbox each case (src/CMakeLists.txt).
+if(NOT WIN32)
 add_test(
   NAME tur_refine_corpus
   COMMAND "${CMAKE_BINARY_DIR}/tur_refine_corpus" tests/corpus/smtlib
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+endif()
 # Source-level differential fuzz: generated programs compiled and run with the
 # `refined` gate off and on, asserting the gate never turns a program the
 # runtime contract caught into one that exits 0.  tur_refine_solver fuzzes

@@ -206,7 +206,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[performance-guide.md](performance-guide.md)** -- Writing fast Turmeric programs -- numerical computation, data structures, string processing, concurrency, memory, recursion, I/O, and benchmarking methodology
 - **[monomorphization-abi-guide.md](monomorphization-abi-guide.md)** -- How Turmeric's end-to-end monomorphization ABI works, why the by-value path replaced the int64 carrier, and how to read `__spec_*` symbols
-- **[jit-guide.md](jit-guide.md)** -- What the in-process MIR JIT (`tur jit`) does differently from the `cc` path -- the fallback contract, the permanent constraints, and the inline-C rules that only bite under the JIT
+- **[jit-guide.md](jit-guide.md)** -- The in-process MIR JIT (`tur jit`) end to end -- what MIR is, how the engine is wired into the build, and what it does differently from the `cc` path (the fallback contract, the permanent constraints, and the inline-C rules that only bite under the JIT)
 
 ## Compiler Internals
 

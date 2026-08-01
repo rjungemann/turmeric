@@ -7228,13 +7228,19 @@ static void emit_win_ucontext_shim(Buf *out) {
  * because it remaps close/recv/send/accept/connect/socket/fcntl -- which must
  * not happen in a program that has no sockets (it would hijack file close()).
  *
- * It closes two gaps that BSD-vs-Winsock differ on:
+ * It closes three gaps that BSD-vs-Winsock differ on:
  *   1. Compile: F_GETFL/F_SETFL/O_NONBLOCK/fcntl don't exist for Winsock. The
  *      only fcntl idiom used is setting O_NONBLOCK, which maps to
- *      ioctlsocket(FIONBIO).
+ *      ioctlsocket(FIONBIO).  setsockopt's option value is `const char *` there
+ *      rather than `const void *`, so a POSIX-shaped call is
+ *      -Wincompatible-pointer-types -- a hard error on gcc >= 14.
  *   2. Runtime: a would-block socket op reports via WSAGetLastError(), not
  *      errno -- so `errno == EWOULDBLOCK` in the fixtures would never be true.
  *      The recv/send/accept/connect wrappers copy WSAGetLastError() into errno.
+ *   3. Semantics: SO_RCVTIMEO/SO_SNDTIMEO take a `struct timeval` on POSIX and
+ *      a DWORD count of milliseconds on Winsock.  This is the dangerous one --
+ *      a plain cast compiles clean and then sets a garbage timeout from the
+ *      reinterpreted struct bytes, so the wrapper converts instead.
  *
  * close() is socket-aware (getsockopt SO_TYPE distinguishes a socket from a CRT
  * fd) so it can safely stand in for BOTH file and socket close in a socket
@@ -7276,6 +7282,45 @@ static void emit_winsock_compat_shim(Buf *out) {
     buf_puts(out, "    return __r;\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static int tur_compat_close(int __fd){ int __t; int __tl=(int)sizeof(__t); if (getsockopt((SOCKET)__fd,SOL_SOCKET,SO_TYPE,(char*)&__t,&__tl)==0) return closesocket((SOCKET)__fd); return _close(__fd); }\n");
+    buf_puts(out, "static int tur_compat_setsockopt(int __fd,int __lv,int __opt,const void*__v,socklen_t __l){\n");
+    /* SO_REUSEADDR is the one option whose MEANING inverts across the two
+     * stacks, so passing it through would be actively wrong rather than merely
+     * non-portable.  POSIX SO_REUSEADDR permits rebinding a port in TIME_WAIT
+     * but still refuses to bind over a LIVE socket; Winsock SO_REUSEADDR
+     * permits binding over a live socket (it is closer to POSIX SO_REUSEPORT).
+     * Forwarding it therefore turns "refuse to double-bind" into "silently
+     * steal the port" -- which is how httpd-new-pool-fail-drops-handler's
+     * deliberate bind conflict came to succeed on Windows.
+     *
+     * Dropping it restores the half that matters: a conflicting bind is
+     * refused, as on POSIX.  Report success so callers that check the return
+     * see what they would on POSIX.
+     *
+     * Residual difference, deliberately accepted: POSIX SO_REUSEADDR also
+     * allows rebinding a TIME_WAIT port, and plain Winsock does not, so a
+     * server restarted immediately after shutdown can see WSAEADDRINUSE where
+     * POSIX would have let it bind.  Refusing a real conflict is worth more
+     * than the restart convenience; SO_EXCLUSIVEADDRUSE would be stricter still
+     * and does not recover the TIME_WAIT case either. */
+    buf_puts(out, "    if (__lv == SOL_SOCKET && __opt == SO_REUSEADDR) return 0;\n");
+    buf_puts(out, "    if (__lv == SOL_SOCKET && (__opt == SO_RCVTIMEO || __opt == SO_SNDTIMEO)\n");
+    buf_puts(out, "        && __l == (socklen_t)sizeof(struct timeval)) {\n");
+    buf_puts(out, "        const struct timeval *__tv = (const struct timeval *)__v;\n");
+    buf_puts(out, "        DWORD __ms = (DWORD)(__tv->tv_sec * 1000L + __tv->tv_usec / 1000L);\n");
+    buf_puts(out, "        return setsockopt((SOCKET)__fd,__lv,__opt,(const char*)&__ms,(int)sizeof(__ms));\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    return setsockopt((SOCKET)__fd,__lv,__opt,(const char*)__v,(int)__l);\n");
+    buf_puts(out, "}\n");
+    /* getsockopt differs in BOTH pointer arguments: the value is char* rather
+     * than void*, and the length is int* rather than socklen_t*.  Bounce the
+     * length through a real int so the sizes cannot disagree on a platform
+     * where socklen_t is not int. */
+    buf_puts(out, "static int tur_compat_getsockopt(int __fd,int __lv,int __opt,void*__v,socklen_t*__l){\n");
+    buf_puts(out, "    int __n = __l ? (int)*__l : 0;\n");
+    buf_puts(out, "    int __r = getsockopt((SOCKET)__fd,__lv,__opt,(char*)__v,__l ? &__n : NULL);\n");
+    buf_puts(out, "    if (__l) *__l = (socklen_t)__n;\n");
+    buf_puts(out, "    return __r;\n");
+    buf_puts(out, "}\n");
     buf_puts(out, "#define socket(a,b,c)  tur_compat_socket((a),(b),(c))\n");
     buf_puts(out, "#define fcntl(a,b,c)   tur_compat_fcntl((a),(b),(c))\n");
     buf_puts(out, "#define recv(a,b,c,d)  tur_compat_recv((a),(b),(c),(d))\n");
@@ -7283,6 +7328,8 @@ static void emit_winsock_compat_shim(Buf *out) {
     buf_puts(out, "#define accept(a,b,c)  tur_compat_accept((a),(b),(c))\n");
     buf_puts(out, "#define connect(a,b,c) tur_compat_connect((a),(b),(c))\n");
     buf_puts(out, "#define close(a)       tur_compat_close((a))\n");
+    buf_puts(out, "#define setsockopt(a,b,c,d,e) tur_compat_setsockopt((a),(b),(c),(d),(e))\n");
+    buf_puts(out, "#define getsockopt(a,b,c,d,e) tur_compat_getsockopt((a),(b),(c),(d),(e))\n");
     buf_puts(out, "#endif /* _WIN32 */\n");
 }
 
@@ -7499,12 +7546,30 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_regex_h) {
         /* MinGW ships no POSIX <regex.h>.  Fail at compile time with a sentence
          * that names the cause, rather than emitting a call to a regcomp that
-         * does not exist and letting the linker say "undefined reference". */
-        buf_puts(out, "#ifdef _WIN32\n");
-        buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
-        buf_puts(out, "#else\n");
-        buf_puts(out, "#include <regex.h>\n");
-        buf_puts(out, "#endif\n");
+         * does not exist and letting the linker say "undefined reference".
+         *
+         * The split-runtime artifact is the one place that diagnostic must not
+         * appear.  emit_rt_split_source() force-enables every gate, and the
+         * result is a committed file (src/runtime/generated/) that is both
+         * compiled into tur_core itself and spliced ahead of every JIT'd
+         * program -- so a bare #error there breaks the Windows build of the
+         * *compiler*, not one stdlib module.  Emit the plain include instead:
+         * it still carries regex.h into the spliced region on POSIX (a JIT'd
+         * regex program needs it, since this block sits above the split
+         * marker), and compiles away on Windows.  A Windows program that
+         * actually uses regex still gets the #error, from its own per-program
+         * emission where g_rt_split_all_gates is false. */
+        if (g_rt_split_all_gates) {
+            buf_puts(out, "#ifndef _WIN32\n");
+            buf_puts(out, "#include <regex.h>\n");
+            buf_puts(out, "#endif\n");
+        } else {
+            buf_puts(out, "#ifdef _WIN32\n");
+            buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
+            buf_puts(out, "#else\n");
+            buf_puts(out, "#include <regex.h>\n");
+            buf_puts(out, "#endif\n");
+        }
     }
     /* inline-c-function-scope-include-guards fix: emit every `#include`
      * directive that elab lifted from the top of an inline-C body so

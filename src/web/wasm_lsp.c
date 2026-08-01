@@ -43,6 +43,8 @@
 #include "arena.h"
 #include "buf.h"
 #include "diag.h"
+#include "platform_fs.h"  /* setenv on Windows (this TU also builds natively
+                           * for the tur_lsp_wasm_backend_unit test) */
 #include "elab.h"
 #include "expr.h"
 #include "forms.h"

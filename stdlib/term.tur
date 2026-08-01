@@ -19,9 +19,23 @@
 (defn term/width [] : int
   ```c
   #include <sys/ioctl.h>
+  /* Windows has no ioctl/TIOCGWINSZ; the console size comes from
+   * GetConsoleScreenBufferInfo.  srWindow is the visible window rather than the
+   * (usually taller) screen buffer, which is what "terminal width" means here.
+   * No #include is needed for it -- windows.h is already at file scope in a
+   * Windows build.  Both branches keep the same 80-column fallback. */
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int cols = (int)(csbi.srWindow.Right - csbi.srWindow.Left) + 1;
+    if (cols > 0) return (int64_t)cols;
+  }
+  return 80;
+#else
   struct winsize ws;
   if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return (int64_t)ws.ws_col;
   return 80;
+#endif
   ```)
 ;;; term/height -- return the terminal row height.
 ;;;
@@ -36,9 +50,19 @@
 (defn term/height [] : int
   ```c
   #include <sys/ioctl.h>
+  /* See term/width for why this branches rather than calling ioctl. */
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int rows = (int)(csbi.srWindow.Bottom - csbi.srWindow.Top) + 1;
+    if (rows > 0) return (int64_t)rows;
+  }
+  return 24;
+#else
   struct winsize ws;
   if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) return (int64_t)ws.ws_row;
   return 24;
+#endif
   ```)
 ;;; term/is-tty? -- test whether a file descriptor refers to a terminal.
 ;;;
@@ -79,6 +103,25 @@
   ```c
   #include <termios.h>
   #include <unistd.h>
+  #include <io.h>
+  /* Windows has no termios.  The console analogue is GetConsoleMode /
+   * SetConsoleMode on the underlying HANDLE: clearing ENABLE_LINE_INPUT stops
+   * the line-discipline buffering, ENABLE_ECHO_INPUT stops the echo, and
+   * ENABLE_PROCESSED_INPUT stops Ctrl-C being swallowed as a signal -- together
+   * the three that cfmakeraw() turns off.  GetConsoleMode fails on a redirected
+   * handle, which is the same "not a terminal" answer the POSIX branch's
+   * tcgetpgrp guard produces, so both return -1 there. */
+#ifdef _WIN32
+  static DWORD saved_console_mode;
+  HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  DWORD mode;
+  if (!GetConsoleMode(h, &mode)) return -1;
+  saved_console_mode = mode;
+  DWORD raw_mode = mode & (DWORD)~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT |
+                                   ENABLE_PROCESSED_INPUT);
+  return SetConsoleMode(h, raw_mode) ? 0 : -1;
+#else
   static struct termios saved_termios;
   struct termios raw;
   // Guard against SIGTTOU: if this process is not the foreground process
@@ -91,6 +134,7 @@
   raw = saved_termios;
   cfmakeraw(&raw);
   return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &raw);
+#endif
   ```)
 ;;; term/set-cooked -- restore a terminal to cooked (canonical) mode.
 ;;;
@@ -111,10 +155,25 @@
   ```c
   #include <termios.h>
   #include <unistd.h>
+  #include <io.h>
+  /* See term/set-raw.  NOTE: like the POSIX branch, this restores from a static
+   * local to THIS function, which is not the one term/set-raw wrote -- so the
+   * restore is to a zeroed value, not the saved state.  That defect is
+   * pre-existing and platform-independent; mirrored here rather than diverging
+   * one platform silently.  See docs/reported/term-set-cooked-restores-zeroed-state.md. */
+#ifdef _WIN32
+  static DWORD saved_console_mode;
+  HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  DWORD probe;
+  if (!GetConsoleMode(h, &probe)) return -1;
+  return SetConsoleMode(h, saved_console_mode) ? 0 : -1;
+#else
   static struct termios saved_termios;
   pid_t fg = tcgetpgrp((int)fd);
   if (fg == -1 || fg != getpgrp()) return -1;
   return (int64_t)tcsetattr((int)fd, TCSAFLUSH, &saved_termios);
+#endif
   ```)
 ;; -- ANSI color helpers -------------------------------------------------------
 ;; Each helper wraps s in the appropriate ANSI escape sequence when stdout is
