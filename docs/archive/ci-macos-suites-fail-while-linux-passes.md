@@ -138,8 +138,9 @@ infrastructure improvement, not a defect.
 - [`macos-int-conversion-carrier-pointer-straddles`](macos-int-conversion-carrier-pointer-straddles.md)
   -- the AOT half. Resolved.
 - [`jit-macos-gc-rc-weak-fixtures-fail`](jit-macos-gc-rc-weak-fixtures-fail.md)
-  -- the 6 JIT residuals the harness fix exposed. Also closed: they were a
-  live-heap probe measuring the compiler's own (sanitized) allocator under
-  one-process `tur jit`, not a GC/Rc/JIT defect.
+  -- the 6 JIT residuals the harness fix exposed. Also closed: they asserted on
+  a process-wide live-heap probe, which under one-process `tur jit` measures the
+  compiler's allocator. They now read the CG6 collector counter and run under
+  both paths. Never a GC/Rc/JIT defect.
 - `ci-cps-tramp-turi-timeouts-under-load.md` -- the unrelated ubuntu
   `turi_fixture_tests` failure noted in the table above.

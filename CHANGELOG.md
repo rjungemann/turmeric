@@ -21,14 +21,28 @@ All notable changes to Turmeric are documented here.
 
 ### Internal
 
-- Six GC / `Rc` / weak-reference fixtures carry `requires.cc`. They assert on a
-  process-wide live-heap byte count, which only measures the program's heap when
-  the program owns its process. Under one-process `tur jit` the program shares
-  the compiler's allocator, and on a sanitized Debug build -- the configuration
-  CI's JIT job uses -- ASan becomes the default malloc zone and its quarantine
-  makes the delta arbitrarily large. The `cc` path still runs all six. This was
-  the whole of the `JIT engine (macos-latest)` redness; it was never a GC, `Rc`,
-  weak-reference, or JIT-codegen defect.
+- **Six GC / `Rc` / weak-reference fixtures assert on the CG6 collector counter
+  (`gc-live-blocks`) instead of a process-wide malloc probe.** The probe equals
+  the program's heap only on an unsanitized `cc` build that owns its process; it
+  was already known to be vacuous under ASan on glibc and quarantine-inflated
+  under ASan on Darwin, and under one-process `tur jit` it reads the compiler's
+  heap. That last mode was the whole of the `JIT engine (macos-latest)` redness
+  -- never a GC, `Rc`, weak-reference, or JIT-codegen defect.
+
+  The counter is program-scoped, exact rather than tolerance-based, portable,
+  and identical across every linkage mode, so the six now run under the JIT and
+  under `cc` with the same output. The assertions got stronger: the
+  collector-off control moved from *impossible* (identical output either way on
+  glibc) to `10000` against a tolerance of `0`. Five of them also stopped
+  falling back to `cc` under the JIT engine, since the probe's
+  `#include <malloc/malloc.h>` was what dragged in the `TargetConditionals.h`
+  the MIR front end rejects.
+
+  `tests/run-gc-leak-gate.sh` gained four real assertions (14 passed / 2 skipped
+  -> 18 / 2) because `gc-collects-strong-cycle` could move from its
+  probe-output exemption list to the controls. The byte-level probe survives as
+  `gc-collects-strong-cycle-heap-bytes`, `cc`-only, since bytes still catch a
+  payload leak the block counter cannot see.
 
 ## [0.32.7] -- 2026-08-01
 

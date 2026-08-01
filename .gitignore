@@ -5,6 +5,7 @@ build2/
 build-asan/
 build-debug/
 build-jit/
+build-jit-asan/
 build-jit-spike/
 build-turjit/
 build-turjit-debug/

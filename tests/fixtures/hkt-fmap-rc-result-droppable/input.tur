@@ -26,24 +26,18 @@
 (defn dbl [x : int] : int (* x 2))
 (defn add [a : int b : int] : int (+ a b))
 
-(defn heap-uordblks [] : int
-  ```c
-  /* Bytes currently handed out by malloc; see gc-collects-strong-cycle for the
-     per-platform spelling. Reports 0 on a libc with no portable query, which
-     makes the no-growth assertion vacuously true there. */
-  #if defined(__APPLE__)
-  #include <malloc/malloc.h>
-  malloc_statistics_t ms;
-  malloc_zone_statistics(malloc_default_zone(), &ms);
-  return (int64_t)ms.size_in_use;
-  #elif defined(__GLIBC__)
-  #include <malloc.h>
-  struct mallinfo2 mi = mallinfo2();
-  return (int64_t)mi.uordblks;
-  #else
-  return 0;
-  #endif
-  ```)
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
 
 (defn fmap-and-drop [] : int
   (let [r (rc/of 21)]
@@ -69,9 +63,9 @@
     (println (rc/strong-count r)))           ; 1
 
   ;; And the leak arm: 5000 fmap/drop pairs must not grow the heap.
-  (run 500)                                  ; warm up allocator behaviour
-  (let [before (heap-uordblks)]
+  (run 500)                                  ; reach steady state before sampling
+  (let [before (gc-live-blocks)]
     (run 5000)
-    (let [after (heap-uordblks)]
+    (let [after (gc-live-blocks)]
       (println (if (= (- after before) 0) 0 (- after before)))))
   0)
