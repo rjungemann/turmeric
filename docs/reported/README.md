@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of twenty-one. Keep
+This index exists so a triage pass reads one file instead of eighteen. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -26,7 +26,7 @@ below.
 
 The scoreboard for this family is the open-cells table in
 [docs/guides/value-representations-guide.md](../guides/value-representations-guide.md),
-not this file -- these four each have a row there, and the guide carries the
+not this file -- these each have a row there, and the guide carries the
 matrix, the structural note about which `TypeKind` switch is authoritative, and
 the plan links. File a new repr cell there as well as here.
 
@@ -35,13 +35,15 @@ the plan links. File a new repr cell there as well as here.
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **one row left** -- an EFFECT-ROW signature. The tyvar rows (incl. the report's own repro) fixed 2026-08-01; the thin convention is load-bearing for the CPS backend, and lifting it also stops 5 `errors/effect-*` fixtures diagnosing |
 | [fat-sink-shim-box-leaks-per-call](fat-sink-shim-box-leaks-per-call.md) | medium | a bare fn passed to a `^fat` sink mallocs a `{shim, orig}` box per CALL and never frees it -- 1002 MiB over 5e6 iterations. Pre-existing; the same leak at a normalized nominal param is fixed (static box), but `^fat` has no ownership contract so the caller cannot choose |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
-| [macos-int-conversion-carrier-pointer-straddles](macos-int-conversion-carrier-pointer-straddles.md) | medium | `int64_t`/`void *` straddles at monomorphized-ctor args and fn-value returns; hard errors on Apple clang, warnings on Linux. **Sole cause of the standing red `Test (macos-latest)` CI job** -- fixing it turns that leg green. Reproducible on Linux; no macOS box needed |
 | [contract-type-arg-not-peeled-to-base](contract-type-arg-not-peeled-to-base.md) | medium | a contract in type-ARGUMENT position is never peeled; blocks `TY_CONTRACT` from the repr-row arrangement |
 
 These are one campaign but **not** duplicates -- each has its own pinned
 investigation and its own fix (a calling-convention change; a generic
-instantiation + ctor-emission bug; ctor-arg cast gating; a peel site). Do not
-merge them; the investigations are the expensive part.
+instantiation + ctor-emission bug; a peel site). Do not merge them; the
+investigations are the expensive part. A fourth,
+`macos-int-conversion-carrier-pointer-straddles`, was resolved 2026-08-01 and
+moved to [docs/archive](../archive/macos-int-conversion-carrier-pointer-straddles.md);
+its resolution note is the closed-cells row in the guide.
 
 ## Effect handlers
 
@@ -86,8 +88,6 @@ the single red line in `tests/run-turi.sh`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | **both halves diagnosed 2026-08-01, neither is a macOS defect.** JIT half **fixed and confirmed** (`run-jit.sh:308` called bare `timeout`, absent on stock macOS; 407 failures -> 6). AOT half is exactly the four straddle fixtures above. Closes when the straddles are fixed |
-| [jit-macos-gc-rc-weak-fixtures-fail](jit-macos-gc-rc-weak-fixtures-fail.md) | medium | the 6 residuals the harness bug was hiding: GC / `Rc` / weak-ref fixtures failing under the JIT engine on macOS arm64 only (Linux JIT green, both AOT legs green). Needs a macOS box |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 
 ## Windows port

@@ -18,27 +18,18 @@
   return NULL;
   ```)
 
-(defn heap-bytes [] : int
-  ```c
-  /* Bytes currently handed out by malloc.  Spelled per-platform: mallinfo2 is
-     glibc-only (macOS has no <malloc.h> and no struct mallinfo2), and the
-     Darwin equivalent is malloc_zone_statistics on the default zone.  Any
-     other libc has no portable query, so the probe reports 0 there and the
-     no-growth assertions below degrade to vacuously true -- CI covers glibc
-     and Darwin, which are the two that actually measure. */
-  #if defined(__APPLE__)
-  #include <malloc/malloc.h>
-  malloc_statistics_t ms;
-  malloc_zone_statistics(malloc_default_zone(), &ms);
-  return (int64_t)ms.size_in_use;
-  #elif defined(__GLIBC__)
-  #include <malloc.h>
-  struct mallinfo2 mi = mallinfo2();
-  return (int64_t)mi.uordblks;
-  #else
-  return 0;
-  #endif
-  ```)
+; The no-growth assertion reads the CG6 collector counter, not a malloc probe.
+; Every value this fixture leaks-or-frees is an rc<T> control block, and each
+; one is registered at rc_cb_alloc_kinded and unregistered when it is freed --
+; by the collector OR by plain refcounting -- so (gc-live-blocks) is an exact,
+; program-scoped count of what has not been reclaimed.
+;
+; It replaced a malloc probe (mallinfo2 / malloc_zone_statistics) reading the
+; PROCESS heap, which was blind or wrong four different ways: vacuous under
+; ASan on glibc, quarantine-inflated under ASan on Darwin, reading the
+; COMPILER's heap under one-process `tur jit`, and hardcoded to 0 on any other
+; libc.  See the full table in tests/fixtures/gc-collects-strong-cycle/input.tur
+; and docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md.
 
 ; Build a cycle, collect WHILE still holding it, then keep using it.
 (defn live-cycle-survives [] : int
@@ -65,7 +56,7 @@
   (println (live-cycle-survives))       ; 33 -- survived and still readable
   (println (live-cycle-survives))       ; 33 -- and again, repeatedly
   (run-dead 500)
-  (let [h0 (heap-bytes)]
+  (let [h0 (gc-live-blocks)]
     (run-dead 5000)
-    (println (- (heap-bytes) h0)))      ; 0 -- unreachable cycles still collected
+    (println (- (gc-live-blocks) h0)))      ; 0 -- unreachable cycles still collected
   0)

@@ -2962,7 +2962,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     uint8_t nb = 0;
                     for (uint8_t k = 0; k < an1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
                         if (ae2[k].kind == TY_TYVAR && ae2[k].as.tyvar_.name &&
-                            type_has_concrete_codegen_layout(&ae1[k])) {
+                            (type_has_concrete_codegen_layout(&ae1[k]) ||
+                             (ae1[k].kind == TY_APP &&
+                              type_app_is_concrete_adt(&ae1[k])))) {
+                            /* vec-empty-like-monomorph-selects-int-element:
+                             * type_has_concrete_codegen_layout returns false for
+                             * EVERY TY_APP by design -- its own comment says so,
+                             * and names `type_app_is_concrete_adt` as the
+                             * companion predicate for a concrete parametric ADT.
+                             * Consulting only the first one made this recovery
+                             * decline any ADT-application element, so a spec over
+                             * `(Vec (Map sym int))` synthesized no `{A -> ...}`
+                             * binding, fell through the `n_bindings == 0` gate
+                             * below, and never interned its own callee monomorph
+                             * -- leaving `vec-empty-like__`'s Map clone calling
+                             * `vec_new__spec__tur_adt_Vec__int__`, the int one.
+                             * The int clone worked only because `int` is not a
+                             * TY_APP.  The either/or pairing is the established
+                             * idiom for this question (cf. emit_expr.c's
+                             * field_read_emits_byvalue_aggregate). */
                             rehydrated[nb].name = ae2[k].as.tyvar_.name;
                             rehydrated[nb].type = ae1[k];
                             nb++;
@@ -12669,19 +12687,30 @@ int emit_program(Buf *out, const Expr *program) {
 
     /* Final assembly order (ensures correct C visibility):
      *  1. early_file  - struct typedefs + drop glue (visible to everything)
-     *  2. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
-     *  3. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
+     *  2. concrete_fn_ptr_typedefs - typed fn-ptr typedefs for parametric struct fields
+     *  3. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
      *  4. extern_decls - user extern-c declarations
      *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
      *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
      *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
      *  8. file        - Turmeric function definitions (can reference handler fns by name)
      *  9. main()      - entry point body
-     */
+     *
+     * macos-int-conversion-carrier-pointer-straddles: (2) and (3) are written in
+     * the opposite order to the one they are GENERATED in above, and both orders
+     * are load-bearing.  Generation must run adt_apps first because emitting a
+     * monomorph calls type_c_name, which is what REGISTERS the fn-ptr typedefs;
+     * collecting them earlier would miss every one.  Output must put the
+     * typedefs first because a monomorph over a `(c-fn ...)` element names one
+     * in its own typedef and ctor signature -- `tur_adt_Option__fnc1_int__int`
+     * holds a `tur_fnptr_int64_t_int64_t_t`.  That was latent until cfnptr got
+     * its own mangle token: before, such a monomorph collided with the ordinary
+     * `(fn ...)` one and the `#ifndef` guard preprocessed the whole block away,
+     * so the dangling reference never reached cc. */
     if (early_file.len)  { buf_write(out, early_file.data, early_file.len); buf_putc(out, '\n'); }
     if (sym_records.len) { buf_write(out, sym_records.data, sym_records.len); buf_putc(out, '\n'); }
-    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
+    if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (thunk_typedefs.len) { buf_write(out, thunk_typedefs.data, thunk_typedefs.len); buf_putc(out, '\n'); }
     if (extern_decls.len){ buf_write(out, extern_decls.data, extern_decls.len); buf_putc(out, '\n'); }
     if (fwd_decls.len)   { buf_write(out, fwd_decls.data, fwd_decls.len); buf_putc(out, '\n'); }

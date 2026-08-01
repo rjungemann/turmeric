@@ -542,6 +542,63 @@ static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
     return expr_tail_is_catch_box(fd->body, fd->body);
 }
 
+/* macos-int-conversion-carrier-pointer-straddles (case B): true when the
+ * function's tail expression is EMITTED as the int64 carrier, decided from the
+ * typed AST rather than by sniffing the emitted C text.
+ *
+ * The `(int64_t)`-prefix / localvar-table sniff the return bridge below uses
+ * cannot see three shapes that reach it, all of which straddle a pointer
+ * return type:
+ *
+ *   static void * thru_hyfat(int64_t v)          { return v; }
+ *   static void * __fn_1374(void *p)             { return __env->c; }
+ *   static tur_adt_Cons__int * mk_hylist(void)   { return cons(...); }
+ *
+ * A parameter, a closure-env field read and a builtin call are all absent from
+ * the localvar table, and registering them there is unsafe (that table is keyed
+ * by bare C name and reset per PROGRAM, so one function's `v` would define the
+ * type every other function's `v` resolves to).  Ask the AST instead:
+ *
+ *  - EX_VAR: a fn-typed binding is carried as the int64 fn-ABI carrier both as
+ *    a parameter (the TY_FN param branch below) and as a closure-env field
+ *    (emit_expr.c pins TY_FN captures to int64_t).  Two spellings opt out and
+ *    keep a concrete C type -- a rank-2 poly param (`tur_poly_fn_t`) and a
+ *    cfnptr (a typed C function pointer) -- so both are excluded.
+ *  - EX_BUILTIN `cons`: the preamble cons-cell helper returns the int64
+ *    carrier.  Keyed on `c_op` the way elab_call.c:3351 and emit_core.c:3516
+ *    already key their carrier-ABI special cases for it, NOT on
+ *    `result_type.kind == TY_INT` generally -- a builtin's declared result kind
+ *    does not pin its C helper's return type (`tur_cloneable_cont_clone`
+ *    declares TY_INT and returns `tur_cloneable_cont *`), and a rule that
+ *    claimed "carrier" there would cast a pointer to a pointer through
+ *    intptr_t.
+ *
+ * Deliberately narrow: it must never claim "carrier" for a value that is
+ * already the pointer, or the bridge would paper over a genuinely mis-selected
+ * monomorph (the failure mode `data-literal-nested` documents). */
+static bool fn_tail_emits_int64_carrier(const FnDef *fd, const Expr *body) {
+    if (!fd || !body) return false;
+    if (body->kind == EX_VAR) {
+        Binding *b = body->as.var.binding;
+        if (!b || b->is_poly_fn) return false;
+        if (b->type.kind != TY_FN || b->type.as.fn.cfnptr) return false;
+        for (uint32_t i = 0; i < fd->n_params; i++)
+            if (fd->params[i] == b)
+                return fd->param_types[i].kind == TY_FN &&
+                       !fd->param_types[i].as.fn.cfnptr;
+        if (fd->closure && !b->is_global)
+            for (uint8_t i = 0; i < fd->closure->n_captures; i++)
+                if (fd->closure->captures[i] == b) return true;
+        return false;
+    }
+    if (body->kind == EX_BUILTIN) {
+        const BuiltinSpec *spec = body->as.builtin.spec;
+        return spec && spec->shape == BS_FUNC_CALL && spec->c_op &&
+               strcmp(spec->c_op, "cons") == 0;
+    }
+    return false;
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -4261,14 +4318,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 buf_printf(file, "return %s;\n", bridged);
                 free(bridged);
             }
-        } else if (ret_ctype && !is_main &&
+        } else if (ret_ctype && !is_main && ret_val &&
                    ret_ctype[strlen(ret_ctype) - 1] == '*' &&
-                   strcmp(ret_ctype, "void *") != 0 &&
-                   ret_val &&
-                   (strncmp(ret_val, "(int64_t)", 9) == 0 ||
-                    (emit_str_is_bare_ident(ret_val) &&
-                     emit_localvar_lookup_ctype(ret_val) &&
-                     strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) {
+                   ((strcmp(ret_ctype, "void *") != 0 &&
+                     (strncmp(ret_val, "(int64_t)", 9) == 0 ||
+                      (emit_str_is_bare_ident(ret_val) &&
+                       emit_localvar_lookup_ctype(ret_val) &&
+                       strcmp(emit_localvar_lookup_ctype(ret_val), "int64_t") == 0))) ||
+                    fn_tail_emits_int64_carrier(fd, fd->body))) {
             /* gcc14-int-conversion (carrier-representation-tracking): a spec
              * clone whose C return type is a concrete pointer (e.g. an element
              * accessor `err-val [A B] : B` monomorphized to `const char *` /
@@ -4277,7 +4334,15 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
              * RECORDED as int64 (`return __ps_224;` where run_id__spec returns
              * int64 but the fn returns `tur_adt_Point *`).  `return <int64>` into
              * a pointer return type is `pointer from integer` -- a hard error
-             * under GCC >= 14.  Reinterpret to the return type (value-preserving). */
+             * under GCC >= 14.  Reinterpret to the return type (value-preserving).
+             *
+             * macos-int-conversion-carrier-pointer-straddles (case B): the
+             * `void *` exclusion above is conservatism from fe6f47b60, not
+             * semantics -- `return <int64>` into `void *` is the same
+             * -Wint-conversion error and the same intptr_t round-trip fixes it.
+             * It only stays because the string sniff cannot tell a carrier from
+             * a genuine pointer; the AST predicate can, so a tail it recognizes
+             * bridges for any pointer return type, `void *` included. */
             buf_printf(file, "return (%s)(intptr_t)%s;\n", ret_ctype, ret_val);
         } else if (ret_is_int64_carrier && ret_val &&
                    emit_str_is_bare_ident(ret_val) &&

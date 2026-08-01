@@ -2,6 +2,79 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Generated C no longer straddles the int64 carrier and a pointer at a
+  monomorphized constructor's field slot or at a fn-value return site.** Four
+  programs (`conv-defstruct-option-fn-element`, `hkt-ap-fn-in-container`,
+  `defalias-composite`, `fn-value-matrix-ok-rows`) failed to compile on any
+  toolchain that promotes `-Wint-conversion` to an error -- Apple clang >= 15
+  and gcc >= 14 -- while the older gcc on the CI Linux leg merely warned. This
+  was the sole remaining cause of the standing red `Test (macos-latest)` job.
+  Both halves come down to not re-deriving an emitted C type from a `Type`: the
+  constructor's real parameter C type is now recorded when the ADT application
+  is registered and looked up at the call site, and the return-site bridge asks
+  the typed AST whether the tail expression emits the carrier rather than
+  pattern-matching the emitted string. No codegen snapshot moved.
+
+- **A `(c-fn ...)` and an ordinary `(fn ...)` of the same signature no longer
+  collide on one monomorph C name.** The type checker already holds the two
+  distinct whenever the latter is a capturing closure -- a fat closure must
+  never flow into a raw C callback sink -- but the type mangle did not carry
+  the `cfnptr` flag, so `(Option (c-fn [int] int))` and `(Option (fn [int] int))`
+  produced two registry entries under one name. The second `#ifndef` block was
+  preprocessed away and the `c-fn` view silently adopted the closure view's
+  `void *` constructor slot in place of its own function-pointer typedef, with
+  **no diagnostic from any compiler**. Benign in practice only because every
+  function-value representation is a same-bits 8-byte word.
+
+  Splitting the names then exposed a latent ordering bug the collision had been
+  hiding: function-pointer typedefs are now written before the monomorphized ADT
+  definitions that reference them (they are still *generated* after, since
+  emitting a monomorph is what registers them). `type_eq` is deliberately
+  unchanged.
+
+- **A generic whose result family is instantiated at a parametric ADT no longer
+  calls the wrong monomorph.** Both specializations of `vec-empty-like__` called
+  the `int`-element `vec-new` clone; the `(Map sym int)`-element one was never
+  interned or emitted. A zero-argument, return-only-polymorphic call records no
+  type-variable bindings at elaboration, so its callee monomorph is recovered
+  from the enclosing specialization's result family -- and that recovery gated
+  each element on `type_has_concrete_codegen_layout`, which returns false for
+  every type application by design (its own comment names
+  `type_app_is_concrete_adt` as the companion predicate for a concrete
+  parametric ADT). Consulting only the first meant every ADT-application element
+  was silently declined; the `int` clone worked only because `int` is not a type
+  application. Runtime-benign where it was found, purely because `vec-new`'s body
+  is element-agnostic.
+
+### Internal
+
+- **Six GC / `Rc` / weak-reference fixtures assert on the CG6 collector counter
+  (`gc-live-blocks`) instead of a process-wide malloc probe.** The probe equals
+  the program's heap only on an unsanitized `cc` build that owns its process; it
+  was already known to be vacuous under ASan on glibc and quarantine-inflated
+  under ASan on Darwin, and under one-process `tur jit` it reads the compiler's
+  heap. That last mode was the whole of the `JIT engine (macos-latest)` redness
+  -- never a GC, `Rc`, weak-reference, or JIT-codegen defect.
+
+  The counter is program-scoped, exact rather than tolerance-based, portable,
+  and identical across every linkage mode, so the six now run under the JIT and
+  under `cc` with the same output. The assertions got stronger: the
+  collector-off control moved from *impossible* (identical output either way on
+  glibc) to `10000` against a tolerance of `0`. Five of them also stopped
+  falling back to `cc` under the JIT engine, since the probe's
+  `#include <malloc/malloc.h>` was what dragged in the `TargetConditionals.h`
+  the MIR front end rejects.
+
+  `tests/run-gc-leak-gate.sh` gained four real assertions (14 passed / 2 skipped
+  -> 18 / 2) because `gc-collects-strong-cycle` could move from its
+  probe-output exemption list to the controls. The byte-level probe survives as
+  `gc-collects-strong-cycle-heap-bytes`, `cc`-only, since bytes still catch a
+  payload leak the block counter cannot see.
+
 ## [0.32.7] -- 2026-08-01
 
 ### Added

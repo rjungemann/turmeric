@@ -25,8 +25,8 @@
 ;;      tur_closure_drop and reports `'free' called on unallocated object`
 ;;      (-Wfree-nonheap-object) at every such site.  Keeping owned sinks heap-
 ;;      allocated keeps static boxes off drop paths entirely -- if this fixture
-;;      ever compiles with that warning, the owned_sink flag stopped reaching
-;;      the emitter.
+;;      ever compiles with that warning, the static_ok opt-in leaked past the
+;;      normalized-nominal slot it is scoped to.
 ;;
 ;;   3. THE MALLOC'D PATH STILL WORKS.  A CAPTURING closure has no constant box
 ;;      and keeps the heap form; `capturing` mixes both through the same param.
