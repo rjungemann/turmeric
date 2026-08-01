@@ -1,0 +1,5 @@
+Full-depth (1e6 / 5e5) trampoline fixtures: ~3.5 GiB RSS each under the
+tree-walking interpreter, which is what made tests/run-turi.sh flaky when two
+of them landed in the same parallel batch. Compiled they are O(1) memory.
+Small-N siblings (cps-tramp-resume-deep, cps-tramp-resume-multicase) keep the
+interpreter coverage. See docs/archive/ci-cps-tramp-turi-timeouts-under-load.md.

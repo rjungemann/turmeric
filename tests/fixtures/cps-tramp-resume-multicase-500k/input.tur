@@ -1,0 +1,18 @@
+;; Two-effect, two-case resuming handler at 5e5 iterations (1e6 resumes), which
+;; is the depth at which a per-case trampoline regression would show up as a
+;; SIGSEGV rather than a wrong number. result = (1 + 2) * 500000 = 1500000.
+;;
+;; COMPILED-ONLY (requires.compiled). Full-depth half of a pair; the sibling
+;; `cps-tramp-resume-multicase` runs the same program at 5e4 on every path, so
+;; the interpreter keeps its two-case dispatch coverage without the memory bill.
+;; Same reason as cps-tramp-resume-deep-1m -- read the header there.
+(defeffect Add [] :int)
+(defeffect Mul [] :int)
+(defn loop [n : int acc : int] : int
+  (if (= n 0) acc
+    (loop (- n 1) (+ (+ acc (perform (Add))) (perform (Mul))))))
+(defn run [] : int
+  (handle (loop 500000 0)
+    (Add [] k) (resume k 1)
+    (Mul [] k) (resume k 2)))
+(defn main [] : int (println (run)) 0)

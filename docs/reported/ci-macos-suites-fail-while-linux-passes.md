@@ -24,7 +24,9 @@ So the compiled suite AND the JIT suite both fail on macOS and both pass on
 Linux, same commit, same fixtures.
 
 The ubuntu `turi_fixture_tests` failure is a different thing and is filed
-separately (`ci-cps-tramp-turi-timeouts-under-load.md` plus the real
+separately ([`ci-cps-tramp-turi-timeouts-under-load.md`](../archive/ci-cps-tramp-turi-timeouts-under-load.md)
+-- resolved 2026-08-01, the cause was ~3.5 GiB RSS per fixture under
+`--interpret`, not CPU contention -- plus the real
 `turi-hkt-constrained-byvalue-bind-pure-wrong-values.md`).
 
 ## Not caused by the PR's recent commits

@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of twenty-two. Keep
+This index exists so a triage pass reads one file instead of twenty-one. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -87,7 +87,6 @@ the single red line in `tests/run-turi.sh`.
 | [windows-ci-leg-installs-nonexistent-libedit](windows-ci-leg-installs-nonexistent-libedit.md) | medium | the `Windows build (MSYS2/UCRT64)` job dies at `pacman -S` on `mingw-w64-ucrt-x86_64-libedit` (no such target), before Configure/Build/smoke. **The Windows leg has produced zero signal since it was added** -- the three Windows port reports below are unwatched by CI. Optional dep made hard-required; one-line fix |
 | [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | **both halves diagnosed 2026-08-01, neither is a macOS defect.** JIT half **fixed and confirmed** (`run-jit.sh:308` called bare `timeout`, absent on stock macOS; 407 failures -> 6). AOT half is exactly the four straddle fixtures above. Closes when the straddles are fixed |
 | [jit-macos-gc-rc-weak-fixtures-fail](jit-macos-gc-rc-weak-fixtures-fail.md) | medium | the 6 residuals the harness bug was hiding: GC / `Rc` / weak-ref fixtures failing under the JIT engine on macOS arm64 only (Linux JIT green, both AOT legs green). Needs a macOS box |
-| [ci-cps-tramp-turi-timeouts-under-load](ci-cps-tramp-turi-timeouts-under-load.md) | low | `cps-tramp-resume-*` time out under suite parallelism; **did not reproduce** in two full runs on 2026-08-01, but nothing was fixed |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 
 ## Windows port

@@ -519,6 +519,7 @@ Closed reports that arrived after the sweep, still in [../archive/](.) rather
 than `history/` because they have not been swept yet:
 
 - **[sweet-dollar-double-applies-single-call.md](sweet-dollar-double-applies-single-call.md)** -- sweet-exp `$` no longer wraps a rest-of-line that is already one complete expression, so it composes with neoteric / curly-infix / data literals; see [syntax-guide.md](../guides/syntax-guide.md)
+- **[ci-cps-tramp-turi-timeouts-under-load.md](ci-cps-tramp-turi-timeouts-under-load.md)** -- the turi flake was ~3.5 GiB RSS per fixture, not CPU contention; full depth moved to compiled-only siblings, and both harnesses now report a timeout as a timeout instead of a "stdout mismatch"
 
 ### Held back from the v0.32.6 sweep
 

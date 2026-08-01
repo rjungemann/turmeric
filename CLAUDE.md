@@ -401,9 +401,28 @@ observed:
   would otherwise finish comfortably. Both targets are marked `RUN_SERIAL` so
   ctest gives them the machine, which is what they already assumed.
 
+- **Memory, not CPU, inside a single turi run.** The tree-walking interpreter
+  retains roughly 4 KiB per step of a trampolined loop -- its closures and
+  continuations are process-lifetime by design -- so a fixture's step count is
+  a *memory* multiplier under `--interpret` and nothing at all compiled. A
+  1e6-step fixture peaks at ~3.5 GiB RSS; two of them co-scheduled by the
+  harness's own `xargs -P nproc` is memory pressure on a 16 GiB runner, and the
+  interpreter's wall clock goes superlinear once RSS passes ~2 GiB (5e5 -> 1e6
+  steps costs 7.6x the time, not 2x). CPU parallelism is not the variable:
+  `nproc` workers on `nproc` cores measured no slower than idle. When an
+  `--interpret` fixture times out, check its peak RSS
+  (`/proc/<pid>/status` `VmHWM`) before reaching for a bigger timeout. See
+  [docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](docs/archive/ci-cps-tramp-turi-timeouts-under-load.md).
+
 The rule of thumb: **before diagnosing a test failure, check whether anything
 else was building or testing at the same time.** If it was, re-run alone before
 believing the result. Do not launch a build and a suite concurrently.
+
+Both harnesses report a per-fixture timeout as `timed out (>Ns)`. They used to
+diff stdout first, so a killed fixture's partial output surfaced as a
+`stdout mismatch` -- a claim about the answer, not the clock. If you are reading
+an older CI log, treat a `stdout mismatch` on a long-running fixture as
+possibly a timeout.
 
 Release build:
 
