@@ -5,14 +5,21 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of nineteen. Keep it
-current when you file, absorb, or archive a report -- a row here is cheaper than
-re-deriving the grouping.
+This index exists so a triage pass reads one file instead of twenty-three. Keep
+it current when you file, absorb, or archive a report -- a row here is cheaper
+than re-deriving the grouping.
 
 **Last full verification sweep: 2026-08-01.** Every report below had its own
 repro re-run against `main` and still reproduces, except where a row says
 otherwise. That means a red result you hit today is almost certainly one of
 these, not something new -- check here before opening an investigation.
+
+**Two exceptions to that sweep, both added later the same day:** the four rows
+under "Windows port" and "Platform-independent, found on a platform sweep"
+arrived with `main`'s Windows work and were **not** re-verified here -- their
+repros need an MSYS2/UCRT64 box. They are indexed on the authority of their own
+filings. The `libedit` CI row *was* verified (three job runs across two heads
+and `main`'s tip).
 
 ## Value representation (the consolidation campaign)
 
@@ -78,10 +85,29 @@ the single red line in `tests/run-turi.sh`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
+| [windows-ci-leg-installs-nonexistent-libedit](windows-ci-leg-installs-nonexistent-libedit.md) | medium | the `Windows build (MSYS2/UCRT64)` job dies at `pacman -S` on `mingw-w64-ucrt-x86_64-libedit` (no such target), before Configure/Build/smoke. **The Windows leg has produced zero signal since it was added** -- the three Windows port reports below are unwatched by CI. Optional dep made hard-required; one-line fix |
 | [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | **both halves diagnosed 2026-08-01, neither is a macOS defect.** JIT half **fixed and confirmed** (`run-jit.sh:308` called bare `timeout`, absent on stock macOS; 407 failures -> 6). AOT half is exactly the four straddle fixtures above. Closes when the straddles are fixed |
 | [jit-macos-gc-rc-weak-fixtures-fail](jit-macos-gc-rc-weak-fixtures-fail.md) | medium | the 6 residuals the harness bug was hiding: GC / `Rc` / weak-ref fixtures failing under the JIT engine on macOS arm64 only (Linux JIT green, both AOT legs green). Needs a macOS box |
 | [ci-cps-tramp-turi-timeouts-under-load](ci-cps-tramp-turi-timeouts-under-load.md) | low | `cps-tramp-resume-*` time out under suite parallelism; **did not reproduce** in two full runs on 2026-08-01, but nothing was fixed |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
+
+## Windows port
+
+Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in
+this directory with that work. **None of them is currently watched by CI** --
+see the `libedit` row above, which is why the Windows leg never compiles.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [windows-subprocess-and-shared-lib-gaps](windows-subprocess-and-shared-lib-gaps.md) | high (for Windows users) | `tur install` / `fetch` / `new` / `build --shared` / REPL spice loading all fail -- the subprocess and shared-library layers are unported. Read-verified by audit, **not** exercised end-to-end |
+| [windows-posix-inline-c-gaps](windows-posix-inline-c-gaps.md) | low | 5 fixtures; three unrelated POSIX APIs reached from stdlib inline-C with no Windows path (`_mkdir` conflicting decl, one real port, one probably should not be ported) |
+| [windows-pipe-reactor-fixtures-do-not-build](windows-pipe-reactor-fixtures-do-not-build.md) | low | 9 pipe-reactor fixtures fail at **build**, not runtime -- the value here is the correction to the plan doc, which documents them as a runtime limitation |
+
+## Platform-independent, found on a platform sweep
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [term-set-cooked-restores-zeroed-state](term-set-cooked-restores-zeroed-state.md) | medium | `term/set-cooked` restores zeroed state, not what `term/set-raw` saved -- each declares its own function-local `static` of the same name, and the docstring claims the opposite. **All platforms**, POSIX `termios` path included; found during the Windows port but not caused by it |
 
 ## Filing conventions
 
