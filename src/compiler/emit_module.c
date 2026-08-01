@@ -761,13 +761,15 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     return name;
 }
 
-char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
-                                  Type result_type, Type *param_types,
-                                  uint8_t n_params) {
+/* Does `result_type` return a by-value aggregate that cannot ride the int64
+ * `tur_poly_fn_t.fn` ABI without boxing?  Shared by both spill shims (the
+ * named-wrapper one below and the fat-closure one after it) so the two agree
+ * on exactly which returns need a carrier box. */
+static bool spill_result_is_byvalue_aggregate(Type result_type) {
     /* Only by-value aggregates need spilling: a struct/applied type with a
      * concrete codegen layout whose C name is not the int64 carrier. */
     const char *rc = type_c_name(result_type);
-    if (!rc || strcmp(rc, "int64_t") == 0) return NULL;
+    if (!rc || strcmp(rc, "int64_t") == 0) return false;
     bool is_aggr = (result_type.kind == TY_APP &&
                     type_has_concrete_codegen_layout(&result_type) &&
                     !type_uses_carrier_abi(result_type));
@@ -784,7 +786,14 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
                  adt_is_byvalue_product(result_type.as.adt_.def))
             is_aggr = true;
     }
-    if (!is_aggr) return NULL;
+    return is_aggr;
+}
+
+char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
+                                  Type result_type, Type *param_types,
+                                  uint8_t n_params) {
+    const char *rc = type_c_name(result_type);
+    if (!spill_result_is_byvalue_aggregate(result_type)) return NULL;
 
     Buf nb; buf_init(&nb);
     buf_puts(&nb, "__tur_aggrspill_");
@@ -821,6 +830,69 @@ char *ensure_aggregate_spill_shim(EmitCtx *ctx, const char *real_fn,
         buf_printf(target, ", %s a%u", type_c_name(param_types[i]), (unsigned)i);
     buf_puts(target, ") {\n    ");
     buf_printf(target, "%s __r = %s(__e", rc, real_fn);
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n    ");
+    buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);
+    buf_printf(target, "memcpy(__p, &__r, sizeof(%s));\n    ", rc);
+    buf_puts(target, "return (int64_t)(intptr_t)__p;\n}\n");
+    return name;
+}
+
+/* nested-bind-over-result-typed-boundary: the fat-closure twin of the shim
+ * above.  A CAPTURING continuation has no named wrapper to spill -- its real
+ * entry point lives in the closure env's `__fn` slot at offset 0 and is only
+ * known at run time -- so the shim is keyed on the SIGNATURE and reads the
+ * callee out of the env it is handed.  Needed whenever such a closure returns
+ * a by-value aggregate and the consuming instance invokes it through the int64
+ * `tur_poly_fn_t.fn` cast: without the box the struct return (RAX:RDX or an
+ * sret hidden pointer) is read as a plain int64 handle and the consumer
+ * dereferences garbage.  Returns NULL when the return already rides the
+ * carrier, or when a param is not int-register-class (the poly-fn ABI only
+ * carries int64 args, so a wider param has no valid shim). */
+char *ensure_fat_aggregate_spill_shim(EmitCtx *ctx, Type result_type,
+                                      Type *param_types, uint8_t n_params) {
+    const char *rc = type_c_name(result_type);
+    if (!spill_result_is_byvalue_aggregate(result_type)) return NULL;
+    for (uint8_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc || strcmp(pc, "int64_t") != 0) return NULL;
+    }
+
+    Buf nb; buf_init(&nb);
+    buf_puts(&nb, "__tur_fatspill_");
+    append_sanitized_c_token(&nb, rc);
+    buf_printf(&nb, "_%u", (unsigned)n_params);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++) {
+        if (strcmp(ctx->fatshim_names[i], name) == 0) { return name; }
+    }
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++)
+        buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n    ");
+    /* `__fn` is the first slot of every closure env -- the same offset the
+     * uncast fat-closure emit reads with `((int64_t *)env)[0]`. */
+    buf_printf(target, "%s (*__f)(void *", rc);
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+    buf_printf(target, ") = (%s (*)(void *", rc);
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+    buf_puts(target, "))(intptr_t)((int64_t *)__e)[0];\n    ");
+    buf_printf(target, "%s __r = __f(__e", rc);
     for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
     buf_puts(target, ");\n    ");
     buf_printf(target, "void *__p = malloc(sizeof(%s));\n    ", rc);

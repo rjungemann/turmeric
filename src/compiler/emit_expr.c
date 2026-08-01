@@ -8966,17 +8966,46 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = NULL;
                     Type thunk_params[MAX_FN_ARITY];
                     uint8_t thunk_arity = 0;
+                    /* nested-bind-over-result-typed-boundary: a CAPTURING
+                     * continuation that returns a by-value aggregate is the fat
+                     * twin of the named-wrapper spill gate below.  `do-m` over
+                     * `(Result A B)` produces one as soon as there are two
+                     * binds: the inner `(fn [b] (ok (+ a b)))` captures `a`, so
+                     * it lowers to a fat closure whose `__fn` returns
+                     * `tur_adt_Result__int__int` by value -- but the carrier
+                     * base instance (`__inst_Monad_bind_Result_tyvar`) invokes
+                     * it through `(int64_t(*)(void*,int64_t))k.fn`.  Route it
+                     * through a signature-keyed shim that boxes the aggregate
+                     * to the int64 carrier the consumer actually reads back.
+                     * (The outer, non-capturing continuation goes through the
+                     * named-wrapper path and was already paired correctly.) */
+                    char *fat_spill = NULL;
                     if (thunk_binding && thunk_binding->type.kind == TY_FN) {
                         thunk_arity = thunk_binding->type.as.fn.arity > 0
                             ? (uint8_t)(thunk_binding->type.as.fn.arity - 1) : 0;
                         for (uint8_t i = 0; i < thunk_arity; i++) {
                             thunk_params[i] = emit_fn_arg_type_from_type(thunk_binding->type, (uint8_t)(i + 1));
                         }
+                        Type thunk_result =
+                            emit_fn_result_type_from_type(thunk_binding->type);
                         thunk_typedef = ensure_typed_thunk_typedef(
-                            ctx, ctx->file,
-                            emit_fn_result_type_from_type(thunk_binding->type),
+                            ctx, ctx->file, thunk_result,
                             thunk_arity ? thunk_params : NULL,
                             thunk_arity);
+                        if (e->as.poly_wrap_.boxes_aggregate ||
+                            ctx->poly_wrap_callee_carrier) {
+                            /* Resolve `(F A)` to its concrete monomorph so the
+                             * by-value-layout check sees a real aggregate (a
+                             * raw TY_APP has no by-value layout on its own) --
+                             * same resolve the named-wrapper gate performs. */
+                            Type spill_result = emit_resolve_type(ctx, thunk_result);
+                            Type spill_params[MAX_FN_ARITY];
+                            for (uint8_t i = 0; i < thunk_arity; i++)
+                                spill_params[i] = emit_resolve_type(ctx, thunk_params[i]);
+                            fat_spill = ensure_fat_aggregate_spill_shim(
+                                ctx, spill_result,
+                                thunk_arity ? spill_params : NULL, thunk_arity);
+                        }
                     }
                     indent_buf(body, ctx->indent);
                     /* The closure value may be carried as int64_t (a let-bound
@@ -8986,7 +9015,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(body, "void *%s = (void *)(intptr_t)(%s);\n", tmp, fat);
                     free(fat);
                     Buf out; buf_init(&out);
-                    if (thunk_typedef) {
+                    if (fat_spill) {
+                        buf_printf(&out, "(tur_poly_fn_t){ %s, %s }", tmp, fat_spill);
+                    } else if (thunk_typedef) {
                         buf_printf(&out,
                             "(tur_poly_fn_t){ %s, "
                             "(int64_t(*)(void*,int64_t))(*( %s *)(%s)) }",
@@ -9000,6 +9031,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
+                    free(fat_spill);
                     free(thunk_typedef);
                     free(tmp);
                     return result;

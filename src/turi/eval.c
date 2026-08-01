@@ -4489,6 +4489,51 @@ static TuriValue gde_reresolve_method(TuriEnv *env, const Expr *dict_arg,
     return gde_method_closure(env, dict_arg, tc, match);
 }
 
+/* Re-resolve a baked-representative method whose class variable appears ONLY in
+ * the result type -- `pure`, `empty`, `default-of`.  These are RETURN-directed:
+ * there is no receiver argument, so the call carries no `abi_bindings` at all
+ * and the receiver-tyvar gate at the EX_CALL site cannot fire.  The elaborator's
+ * baked representative then answers every call site, which is silently wrong for
+ * any constrained generic that calls one (see
+ * docs/reported/turi-return-directed-method-keeps-baked-instance.md: two
+ * differently-tagged Applicatives both return the second instance's answer).
+ *
+ * The concrete type is already on the frame.  `frame_record_abi` pins the
+ * caller's substitution when it enters the generic -- `(just-pure (some 0))`
+ * records `m -> Option` -- so the class variable's binding is reachable by
+ * walking the frame chain even though the call itself pins nothing.
+ *
+ * We do not know WHICH pinned tyvar is the class variable (the frame records the
+ * callee's spelling, `m`, not the `defclass` spelling), so rather than guess we
+ * let the instance table decide: try each concretely-bound tyvar, keep the ones
+ * that resolve to a real instance of THIS class, and act only when exactly one
+ * does.  A generic with two tyvars that both have an instance of the same class
+ * is genuinely ambiguous from here -- bail and keep today's behaviour rather than
+ * pick.  `gde_reresolve_method` already returns nil when the match IS the baked
+ * representative, so a single-instance program is untouched. */
+static TuriValue gde_reresolve_return_directed(TuriEnv *env, EvalFrame *cf,
+                                               const Expr *dict_arg) {
+    if (!env || !cf || !dict_arg) return turi_nil();
+    TuriValue   found      = turi_nil();
+    const char *found_head = NULL;
+    for (EvalFrame *fr = cf; fr; fr = fr->parent) {
+        for (TyvarBind *tb = fr->tyvars; tb; tb = tb->next) {
+            if (tb->type.kind == TY_TYVAR) continue;   /* still abstract */
+            const char *head = gde_type_head_name(&tb->type);
+            if (!head) continue;
+            /* An outer frame re-binding the same concrete type (or the same
+             * tyvar shadowed inward) is not a second candidate. */
+            if (found_head && strcmp(found_head, head) == 0) continue;
+            TuriValue rv = gde_reresolve_method(env, dict_arg, &tb->type);
+            if (rv.tag != TURI_CLOSURE) continue;
+            if (found.tag == TURI_CLOSURE) return turi_nil();  /* ambiguous */
+            found      = rv;
+            found_head = head;
+        }
+    }
+    return found;
+}
+
 /* Re-resolve a baked-representative typeclass method using the RUNTIME type of
  * the receiver value, rather than a statically-pinned tyvar.  This catches the
  * constrained-instance element-dispatch case the static path misses: inside a
@@ -5836,6 +5881,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                             if (rv.tag == TURI_CLOSURE) { fn_val = rv; gde_resolved = true; }
                         }
                     }
+                }
+                /* Return-directed methods (`pure`, `empty`, `default-of`) pin
+                 * NOTHING at the call -- n_abi_bindings == 0 -- because the class
+                 * variable lives only in the result type.  The gate above needs a
+                 * receiver tyvar, so it never fires and the baked representative
+                 * survives.  Recover the concrete type from the enclosing
+                 * generic's frame instead.  Scoped to the zero-binding shape so a
+                 * receiver-directed call whose abi_bindings[0] merely failed to
+                 * match keeps its exact prior dispatch. */
+                if (!gde_resolved && control->as.call_.dict_arg &&
+                    control->as.call_.n_abi_bindings == 0 &&
+                    control->as.call_.fn_binding) {
+                    TuriValue rv = gde_reresolve_return_directed(
+                        env, cf, control->as.call_.dict_arg);
+                    if (rv.tag == TURI_CLOSURE) { fn_val = rv; gde_resolved = true; }
                 }
                 if (!gde_resolved && control->as.call_.fn_binding) {
                     fn_val = eval_lookup(env, cf,

@@ -36,6 +36,32 @@ deliberately removed (`src/main.c:5231-5241`), on the stated grounds that
 not hold on gcc 16.1.0. Do not re-add the downgrades; the removal is correct and
 these are the genuine remaining straddles it exposed.
 
+**Update 2026-08-01: that leg already does fail on exactly these, and has been
+red on `main` ever since.** Run 2202, job 91324836416, head `8b1ea4380`:
+
+```
+summary: 2495 passed, 4 failed
+  - conv-defstruct-option-fn-element (build failed)
+  - defalias-composite (build failed)
+  - fn-value-matrix-ok-rows (build failed)
+  - hkt-ap-fn-in-container (build failed)
+```
+
+Four failures, no others -- these four *are* the `Test (macos-latest)` redness,
+with both open cases below reproduced verbatim (case A's
+`ctor_Option__fn1_float__float(true, x)`, case B's `return cons(...)`,
+`return v;`, `return __env___env_1376->c;`). So this report is no longer a
+"macOS-only annoyance somebody should get to": it is the sole blocker on a
+standing red CI job, and fixing it takes that job green. See
+[`ci-macos-suites-fail-while-linux-passes`](ci-macos-suites-fail-while-linux-passes.md),
+which was filed as an undiagnosed macOS mystery and is now known to be this.
+
+The defect is **not** macOS-specific -- only the diagnosis is. Re-verified
+2026-08-01 on Linux: all four fixtures still emit int-conversion diagnostics
+from `./build/tur build`, where they are warnings rather than Apple clang's
+hard errors. Anyone can work on this without a macOS box; the check is
+`./build/tur build tests/fixtures/<name>/input.tur 2>&1 | grep int-conversion`.
+
 ## Status
 
 Seven fixtures failed on a clean macOS build of `66c3bb7c4`. **Three are fixed**
@@ -309,3 +335,12 @@ Two fix levels:
   boxed and an unboxed `(fn [int] int)` get distinct names rather than racing.
   Higher blast radius (corpus-wide symbol renames, large snapshot churn) but it
   removes the latent silent-layout merge, which is the actual defect.
+
+## Guide upkeep
+
+This report is a row in the open-cells table of
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+-- carrier<->pointer straddles at the monomorphized-ctor arg slot and at
+fn-value return sites. When it is resolved (or the bridge it needs changes
+shape on the way), move the row into the closed-cells table with a one-line
+resolution note and update the link to `docs/archive/` in the same PR.

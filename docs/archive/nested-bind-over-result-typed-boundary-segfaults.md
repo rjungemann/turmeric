@@ -1,10 +1,60 @@
 ---
-status: open
+status: RESOLVED 2026-08-01 -- fat-closure continuation spill shim (archived)
 severity: medium
 area: compiler (HKT method result typing / continuation-wrapper ABI pairing)
 ---
 
 # Chaining two `bind`s over `Result` segfaults; one `bind` is fine
+
+## Resolution (2026-08-01)
+
+Not the flag-clobbering the "likely direction" below guessed at --
+`ctx->poly_wrap_callee_carrier` was already saved/restored around the
+call-arg emission (`emit_expr.c`), and the OUTER continuation was in fact
+paired correctly. The gap was one shape lower: **the increment-2 spill shim
+only covers NAMED wrappers.**
+
+Nesting is the trigger because it is what makes the inner continuation
+*capture*. `(fn [b] (ok (+ a b)))` closes over the outer bound `a`, so it
+lowers to a fat closure rather than a named `__poly_N` wrapper -- and its
+`__fn` (`__fn_1332`) returns the by-value aggregate
+`tur_adt_Result__int__int`. The EX_POLY_WRAP fat-closure branch had no
+spill arm at all: it emitted the raw env slot as
+`(int64_t(*)(void*,int64_t))(intptr_t)((int64_t*)env)[0]`, so
+`__inst_Monad_bind_Result_tyvar` invoked a struct-returning function through
+an int64-returning pointer. The struct return (RAX:RDX, or an sret hidden
+pointer that consumes the env argument) was then read back as a carrier
+handle and dereferenced -- the segfault.
+
+`Option` escapes at both depths for the same reason it escaped in the parent
+report: its continuation resolves to a by-value spec whose pairing is
+unshimmed by design.
+
+The fix mirrors the named-wrapper gate on the fat side:
+
+- `ensure_fat_aggregate_spill_shim` (`src/compiler/emit_module.c`) -- keyed
+  on the SIGNATURE rather than a callee name, because a capturing
+  continuation's real entry point is only known at run time. It reads that
+  entry point out of the closure env's `__fn` slot (offset 0 -- the same
+  offset the uncast emit already assumed), calls it at its true aggregate
+  return type, boxes the result, and hands back the int64 carrier. Returns
+  NULL when the return already rides the carrier or a param is not
+  int-register-class, so nothing else changes shape.
+- The `spill_result_is_byvalue_aggregate` predicate is now factored out and
+  shared with `ensure_aggregate_spill_shim`, so the named and fat shims
+  cannot drift on which returns need boxing.
+- The EX_POLY_WRAP fat-closure branch (`src/compiler/emit_expr.c`) consults
+  it under the same gate as the named path
+  (`boxes_aggregate || ctx->poly_wrap_callee_carrier`).
+
+Pinned by `tests/fixtures/result-monad-nested-bind-typed-boundary/`: the
+`do-m` form, the explicit nested-`bind` spelling, the `(:: ...)` ascription
+boundary, three binds deep, a `(Result int cstr)` error type, the err
+short-circuit, and the `Option` control. Full suite: 2500 passed, 0 failed,
+no snapshot churn (no existing fixture reached the fat-aggregate shape).
+
+`do-m` over `Result` now has no depth limit, so the guide's `Option` and
+`Result` examples sit side by side.
 
 ## Summary
 

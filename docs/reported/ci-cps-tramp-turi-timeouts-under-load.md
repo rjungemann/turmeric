@@ -69,6 +69,31 @@ timing reasons trains people to ignore it, which is expensive on a suite that
 also carries one real filed failure
 (`turi-hkt-constrained-byvalue-bind-pure-wrong-values.md`).
 
+## Did not reproduce 2026-08-01 -- still open, but the bar has moved
+
+Two consecutive full-parallelism `bash tests/run-turi.sh` runs on a 4-core
+Linux box (the report's own repro configuration) both came back:
+
+```
+turi fixture summary: 1699 passed, 1 failed, 697 skipped
+FAIL hkt-constrained-byvalue-bind-pure -- stdout mismatch
+```
+
+Both `cps-tramp-resume-deep` and `cps-tramp-resume-multicase` passed. The only
+red is the real interpreter defect
+([`turi-return-directed-method-keeps-baked-instance`](turi-return-directed-method-keeps-baked-instance.md)),
+which is what the "one real filed failure" line below refers to.
+
+Nothing was fixed: `expected.timeout` is still 60 on both fixtures, there is
+still no `requires.serial` marker, and the trampoline step count is unchanged.
+So this stays open -- an intermittent timing failure is not disproved by two
+green runs, and `Test (ubuntu-latest)` is still red on `main` at the
+`turi_fixture_tests` target. But the margin on this hardware is evidently not
+thin, which points at the CI runner being slower than a 4-core container rather
+than at 60s being universally too tight. Whoever picks this up should get the
+per-fixture timing off a failing CI run before choosing between the fix
+directions below -- fix 1 is a guess without it.
+
 ## Fix directions
 
 Any of these would do; the first is the smallest:

@@ -305,7 +305,16 @@ run_jit_error_fixture() {
 
     local flags=""; [ -f "$dir/flags" ] && flags=$(cat "$dir/flags")
     local err="$dir/jit.stderr"
-    timeout 15 "$TUR" $flags --enable=jit jit "$dir/input.tur" \
+    # _run_timed, NOT bare `timeout` -- stock macOS ships no timeout(1) (see
+    # the _tur_timeout_bin probe above).  This call site was missed when that
+    # guard went in, and the failure is silent and total: `timeout` not found
+    # makes the command fail, `|| true` swallows it, jit.stderr ends up with a
+    # shell error instead of a diagnostic, and EVERY needle misses -- so all
+    # ~400 negative fixtures report `jit diagnostic mismatch` as though the
+    # compiler had stopped emitting diagnostics.  A Mac with Homebrew coreutils
+    # on PATH does not reproduce it, which is why the local baseline was green
+    # while macOS CI was not.
+    _run_timed 15 "$TUR" $flags --enable=jit jit "$dir/input.tur" \
         >/dev/null 2>"$err" || true
 
     local missing=0 needle

@@ -120,12 +120,34 @@ are implemented point-by-point, not derived from one convention. Each open
 report is one missing cell.
 
 **Open cells.** These are the crossings that still have no working bridge;
-each has a live report in `docs/reported/`.
+each has a live report in `docs/reported/`. This table is the campaign's
+index -- a repr cell with a filed report belongs here, so if you file one,
+add the row. All four below were re-verified against `main` on 2026-08-01.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
 | capturing closure -> nominal thin `TY_FN` param, where the signature mentions a tyvar or carries an effect row (concrete effect-free signatures are fat-normalized and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
+| residual carrier<->pointer straddles at the monomorphized-ctor arg slot and at fn-value return sites -- the emitted C mixes `int64_t` and `void *` across the same field | [`macos-int-conversion-carrier-pointer-straddles`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/macos-int-conversion-carrier-pointer-straddles.md) |
+| `TY_CONTRACT` in type-ARGUMENT position -- never peeled to its base, so the payload keeps a live contract type at every downstream boundary | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/contract-type-arg-not-peeled-to-base.md) |
+
+The last two are new to this table, not new defects -- both were filed before
+it existed as an index. Two notes on why they belong here rather than where
+their titles suggest:
+
+- The **straddle** row reads as macOS-only because Apple clang makes
+  `-Wint-conversion` an error while the CI Linux legs still warn. The
+  *defect* is platform-independent: all four of its fixtures
+  (`hkt-ap-fn-in-container`, `conv-defstruct-option-fn-element`,
+  `defalias-composite`, `fn-value-matrix-ok-rows`) still emit int-conversion
+  diagnostics on Linux today. Its open case A is a three-way disagreement
+  about whether a monomorphized ctor's carrier field is `int64_t` or
+  `void *` -- the same "which switch is authoritative" shape as the
+  structural note below.
+- The **contract** row is the one prerequisite blocking `TY_CONTRACT` from
+  joining `type_has_concrete_codegen_layout`, i.e. from getting a row in the
+  arrangement described immediately below. It is a repr-decision gap wearing
+  an elaboration-error costume.
 
 **Closed cells (paper trail).** Bridges that now exist. Kept here because the
 resolution notes say *which* bridge was added and what it is paired against --
@@ -134,6 +156,7 @@ the next cell in this family is usually adjacent to one of them.
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
 | method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
+| by-value aggregate returned by a CAPTURING continuation -> int64 `tur_poly_fn_t.fn` carrier sink (nested `bind` / multi-step `do-m`) | signature-keyed fat spill shim: reads the real entry point out of the closure env's `__fn` slot and boxes the aggregate, the fat twin of the row above (which only covered named wrappers) | [`nested-bind-over-result-typed-boundary-segfaults`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/nested-bind-over-result-typed-boundary-segfaults.md) |
 | method result (carrier) -> generic call argument | increment 2 | [`class-method-result-into-generic-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/class-method-result-into-generic-invalid-c.md) |
 | by-value struct -> Vec / Map element slot | increment 3: width-independent boxed element protocol | [`vec-byvalue-struct-element-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/vec-byvalue-struct-element-invalid-c.md) |
 | closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | fat-normalization stage 2 | [`fn-typed-value-return-ascribe-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md) |
