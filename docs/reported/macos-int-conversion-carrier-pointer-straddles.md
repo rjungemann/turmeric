@@ -297,15 +297,75 @@ the type every other function's `v` resolves to, at every straddle bridge that
 consults the table -- a silent wrong-type conclusion, in more places than this
 one branch.
 
-The real fix is to stop sniffing the emitted string and consult the typed AST:
-the return branch has `fd` and the body expression in scope, so the predicate
-should be "the body's type is the int64 carrier and `ret_ctype` is a pointer",
-not "the emitted text starts with `(int64_t)`". Failing that, making the
-localvar table function-scoped would unblock the parameter case specifically.
-
 A revert of the exclusion-only change is in the history rather than the tree;
 it was backed out because it fixed nothing in the corpus while still altering a
 codegen condition, and could not be validated off Windows.
+
+### Second attempt: the typed AST cannot answer this either (2026-08-01)
+
+The obvious follow-up -- "consult the typed AST instead of sniffing the string"
+-- **does not work, and would give the wrong answer.** Recorded because it is
+the natural next idea.
+
+For `defalias-composite`, the body's Turmeric type is `(Cons int)`, which
+`type_c_name`s to `tur_adt_Cons__int *` -- i.e. it *matches* `ret_ctype`. A
+typed-AST predicate concludes "no straddle, no bridge needed" and emits exactly
+the code that fails to compile. The mismatch is not visible in the Turmeric
+types at all; it is between the Turmeric type and what the emitted C *call*
+evaluates to.
+
+So the question really is "what C type does this emitted expression have", and
+the codebase already has the right instrument: `emit_sig_lookup_ret_ctype`, the
+forward-declaration side table `emit_value` uses for its `__auto_type` naming.
+Extracting that lookup into a reusable
+`emit_call_str_ret_ctype()` and adding it as a third disjunct to the guard is a
+small, clean change.
+
+**It still does not fire, and the reason is the useful finding:**
+
+```
+[retdbg] ctype=tur_adt_Cons__int *  val=cons((int64_t)(intptr_t)(INT64_C(1)), ...  callret=(null)
+```
+
+`cons` is not in the signature table and never can be. It is not a `defn` --
+it is hardcoded preamble text emitted by `emit_module.c:5909`:
+
+```c
+buf_puts(out, "static int64_t cons(int64_t h, int64_t t) {\n");
+```
+
+It has no forward declaration in the output at all, and the signature table is
+populated only from the forward-declaration loop (`emit_module.c:5841`), which
+walks `defn`s. So every preamble builtin is invisible to it.
+
+### What this means for the fix
+
+The return-site bridge is a band-aid over a defect created upstream:
+`mk_hylist` is given the C return type `tur_adt_Cons__int *` while its body is a
+call to a preamble builtin that returns the int64 carrier. Those two decisions
+are made independently and are simply inconsistent.
+
+Three ways forward, cheapest first:
+
+1. **Register the preamble's own signatures.** The preamble knows them --
+   `emit_module.c:5909` could `emit_sig_record_ret_ctype("cons", 2, "int64_t")`
+   as it emits. That completes the table for exactly the functions currently
+   missing and makes the `emit_call_str_ret_ctype` disjunct work. Scoped, but
+   needs doing for each preamble builtin reachable in tail position.
+2. **Make the return type follow the body's representation.** If a function's
+   body is a carrier-producing call, its C return type should be the carrier,
+   not the concrete pointer -- then no bridge is needed. Bigger, and the right
+   shape.
+3. Leave the bridge and accept these five as known-red on toolchains that
+   promote the diagnostic.
+
+The parameter case (`thru_hyfat`) and the closure-env field case (`__fn_1374`)
+are still unaddressed by any of the above and need their own answers; note the
+localvar-table trap recorded in the previous section applies to the first.
+
+Both attempts were reverted rather than landed. Neither fixed a fixture, both
+altered codegen conditions, and codegen cannot be validated off Windows from
+this environment.
 
 ## Why the open-case-A fix fell through (2026-07-31)
 
