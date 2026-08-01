@@ -12,9 +12,9 @@ out to be *narrower and sharper than described*, and which uncovered a silent
 name collision no compiler diagnoses. See
 [The "proper" fix, measured](#the-proper-fix-measured-2026-08-01).
 
-The one thing this report carried that is NOT fixed -- `data-literal-nested`,
-which was never a straddle -- is split out as
-[`vec-empty-like-monomorph-selects-int-element`](../reported/vec-empty-like-monomorph-selects-int-element.md).
+The one thing this report carried that was never a straddle --
+`data-literal-nested` -- was split out, and is now also resolved:
+[`vec-empty-like-monomorph-selects-int-element`](vec-empty-like-monomorph-selects-int-element.md).
 
 ---
 
@@ -310,7 +310,7 @@ member of the class. It is not a straddle at all but a wrong-monomorph
 selection bug (`vec_empty_like__`'s `Map` monomorph calls the `int`-element
 `vec_new` spec), and it is deliberately untouched -- the new bridge does not
 fire on pointer->pointer. Re-filed standalone as
-[`vec-empty-like-monomorph-selects-int-element`](../reported/vec-empty-like-monomorph-selects-int-element.md).
+[`vec-empty-like-monomorph-selects-int-element`](vec-empty-like-monomorph-selects-int-element.md).
 
 Its "the clang-still-warns half of that story is inferred, not measured -- worth
 one check on a macOS box" note is now measured: Apple clang 21 warns

@@ -2869,7 +2869,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                     uint8_t nb = 0;
                     for (uint8_t k = 0; k < an1 && nb < ABI_TYPE_BINDINGS_MAX; k++) {
                         if (ae2[k].kind == TY_TYVAR && ae2[k].as.tyvar_.name &&
-                            type_has_concrete_codegen_layout(&ae1[k])) {
+                            (type_has_concrete_codegen_layout(&ae1[k]) ||
+                             (ae1[k].kind == TY_APP &&
+                              type_app_is_concrete_adt(&ae1[k])))) {
+                            /* vec-empty-like-monomorph-selects-int-element:
+                             * type_has_concrete_codegen_layout returns false for
+                             * EVERY TY_APP by design -- its own comment says so,
+                             * and names `type_app_is_concrete_adt` as the
+                             * companion predicate for a concrete parametric ADT.
+                             * Consulting only the first one made this recovery
+                             * decline any ADT-application element, so a spec over
+                             * `(Vec (Map sym int))` synthesized no `{A -> ...}`
+                             * binding, fell through the `n_bindings == 0` gate
+                             * below, and never interned its own callee monomorph
+                             * -- leaving `vec-empty-like__`'s Map clone calling
+                             * `vec_new__spec__tur_adt_Vec__int__`, the int one.
+                             * The int clone worked only because `int` is not a
+                             * TY_APP.  The either/or pairing is the established
+                             * idiom for this question (cf. emit_expr.c's
+                             * field_read_emits_byvalue_aggregate). */
                             rehydrated[nb].name = ae2[k].as.tyvar_.name;
                             rehydrated[nb].type = ae1[k];
                             nb++;

@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of twenty-one. Keep
+This index exists so a triage pass reads one file instead of twenty. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -108,7 +108,6 @@ see the `libedit` row above, which is why the Windows leg never compiles.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [term-set-cooked-restores-zeroed-state](term-set-cooked-restores-zeroed-state.md) | medium | `term/set-cooked` restores zeroed state, not what `term/set-raw` saved -- each declares its own function-local `static` of the same name, and the docstring claims the opposite. **All platforms**, POSIX `termios` path included; found during the Windows port but not caused by it |
-| [vec-empty-like-monomorph-selects-int-element](vec-empty-like-monomorph-selects-int-element.md) | medium | both monomorphs of `vec-empty-like__` call the `int`-element `vec_new` spec -- the `Map` one is never interned or emitted. A **hard error on gcc >= 14**, a warning on Apple clang, silent on the CI Linux leg. Split out of the straddle report 2026-08-01; do NOT "fix" it with a return-site cast |
 
 ## Filing conventions
 

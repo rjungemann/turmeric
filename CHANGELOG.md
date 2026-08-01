@@ -36,6 +36,20 @@ All notable changes to Turmeric are documented here.
   emitting a monomorph is what registers them). `type_eq` is deliberately
   unchanged.
 
+- **A generic whose result family is instantiated at a parametric ADT no longer
+  calls the wrong monomorph.** Both specializations of `vec-empty-like__` called
+  the `int`-element `vec-new` clone; the `(Map sym int)`-element one was never
+  interned or emitted. A zero-argument, return-only-polymorphic call records no
+  type-variable bindings at elaboration, so its callee monomorph is recovered
+  from the enclosing specialization's result family -- and that recovery gated
+  each element on `type_has_concrete_codegen_layout`, which returns false for
+  every type application by design (its own comment names
+  `type_app_is_concrete_adt` as the companion predicate for a concrete
+  parametric ADT). Consulting only the first meant every ADT-application element
+  was silently declined; the `int` clone worked only because `int` is not a type
+  application. Runtime-benign where it was found, purely because `vec-new`'s body
+  is element-agnostic.
+
 ### Internal
 
 - **Six GC / `Rc` / weak-reference fixtures assert on the CG6 collector counter
