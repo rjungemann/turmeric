@@ -153,11 +153,24 @@ Fixed in this PR: `:308` now uses `_run_timed`, matching the positive path. On
 Linux this is a byte-for-byte no-op (`_run_timed 15 cmd` expands to
 `timeout 15 cmd`), so it can only change the macOS result.
 
-**Confidence: high, but unproven** -- the shape, the call-site asymmetry, the
-local/CI split, and the demonstrated mechanism all agree, but it cannot be
-executed on macOS from here. The next macOS JIT run is the experiment: if the
-407 collapses, confirmed. If failures remain after the fix, they are real JIT
-findings that this bug was masking, and they need filing on their own.
+### CONFIRMED (2026-08-01): 407 -> 6
+
+The first macOS JIT run carrying the fix (run 30685603734, job 91330616390,
+head `03ec0d4a`):
+
+```
+jit fixture summary: 2409 passed, 6 failed, 47 skipped
+```
+
+Every `errors/*` negative fixture now passes. 401 of the 407 were the harness
+bug; the diagnosis holds.
+
+The **6 residuals are real JIT findings this bug was masking** -- all GC / `Rc`
+/ weak-reference fixtures, all macOS-only (the Linux JIT leg is genuinely
+green, ctest target passing outright rather than `continue-on-error` hiding
+it). They were failing on `main` too, buried in the 401. Filed separately as
+[`jit-macos-gc-rc-weak-fixtures-fail`](jit-macos-gc-rc-weak-fixtures-fail.md);
+they are not this report's problem and it does not wait on them.
 
 ## Fix directions
 
@@ -166,14 +179,17 @@ findings that this bug was masking, and they need filing on their own.
    fight to diagnose.
 2. Fix [`macos-int-conversion-carrier-pointer-straddles`](macos-int-conversion-carrier-pointer-straddles.md)
    and re-check: that should take `Test (macos-latest)` green.
-3. ~~JIT half~~ -- fixed in PR #753 (`tests/run-jit.sh:308`), pending
-   confirmation from the next macOS JIT run.
+3. ~~JIT half~~ -- **done.** Fixed in PR #753 (`tests/run-jit.sh:308`),
+   confirmed by run 30685603734 (407 -> 6). The 6 residuals moved to
+   [`jit-macos-gc-rc-weak-fixtures-fail`](jit-macos-gc-rc-weak-fixtures-fail.md).
 
-**When both are confirmed green, this report closes**: neither half was a
-macOS-platform defect. One is a filed codegen bug that Linux only warns about;
-the other is a test-harness portability bug. The report's original framing --
-an undiagnosed macOS-only mystery needing someone with a Mac -- was wrong on
-both counts, and no macOS box was needed to resolve either.
+**This report closes when the AOT half (the straddles) is fixed.** Neither half
+was a macOS-platform defect: one is a filed codegen bug that Linux only warns
+about, the other was a test-harness portability bug. Its original framing -- an
+undiagnosed macOS-only mystery needing someone with a Mac -- was wrong on both
+counts, and no macOS box was needed to resolve either. (The GC/Rc report it
+spawned *does* need one, but that is a different, genuinely platform-specific
+finding.)
 
 ## Fix directions
 
