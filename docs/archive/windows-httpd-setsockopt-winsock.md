@@ -1,9 +1,12 @@
 # `stdlib/httpd.tur` setsockopt calls do not compile against Winsock
 
-**Severity: medium (Windows-only, ~40 fixtures). RESOLVED 2026-07-31 except for
-one behavioural difference -- see the last section.** The entire `httpd-*` /
-`httpd-async-*` fixture family failed to build on Windows. Not a regression --
-these sites predate the Windows bring-up and have never worked there.
+**Severity: medium (Windows-only, ~40 fixtures). RESOLVED 2026-07-31 --
+`34 passed, 0 failed`.** The entire `httpd-*` / `httpd-async-*` fixture family
+failed to build on Windows. Not a regression -- these sites predate the Windows
+bring-up and have never worked there.
+
+This report should be moved to `docs/archive/` once the change lands, per the
+archiving rule in `CLAUDE.md`. It is kept in `docs/reported/` only until then.
 
 **Resolution.** Fixed in the emitter's Winsock compat shim
 (`emit_winsock_compat_shim`, `src/compiler/emit_module.c`) rather than at the
@@ -68,10 +71,10 @@ build error. That site needs a real `#ifdef _WIN32` branch passing a `DWORD`.
 Grep the rest of the stdlib for `setsockopt`/`getsockopt` while in here; only
 these two modules were checked.
 
-## STILL OPEN -- `SO_REUSEADDR` means something different on Winsock
+## `SO_REUSEADDR` means something different on Winsock -- RESOLVED
 
-One fixture survives the shim fix: `httpd-new-pool-fail-drops-handler` prints
-`built` where `refused` is expected.
+One fixture survived the first shim fix: `httpd-new-pool-fail-drops-handler`
+printed `built` where `refused` was expected.
 
 The fixture occupies an ephemeral loopback port, then asks `httpd-new-pool` to
 bind the same port, expecting `bind()` to fail so it can assert the handler
@@ -89,17 +92,29 @@ Cause: the two platforms assign nearly opposite meanings to the same option.
 `stdlib/httpd.tur:694` sets `SO_REUSEADDR` unconditionally, so on Windows the
 conflicting bind is permitted and the failure path under test never runs.
 
-This is deliberately NOT fixed in the shim yet, because it is a behavioural
-decision rather than a portability shim: silently dropping `SO_REUSEADDR` on
-Windows (the usual porting advice, and what would make semantics match POSIX)
-also changes how a real server behaves on restart. Options:
+**Resolution (option 1, chosen 2026-07-31): the shim drops `SO_REUSEADDR` on
+Windows** -- `tur_compat_setsockopt` returns success without applying it. This
+is the one option whose meaning inverts across the stacks, so forwarding it was
+actively wrong rather than merely non-portable: it turned "refuse to
+double-bind" into "silently steal the port".
 
-1. Drop `SO_REUSEADDR` on `_WIN32` in the shim -- semantics then match POSIX,
-   and the fixture passes. Affects real servers' restart behaviour.
-2. Map it to `SO_EXCLUSIVEADDRUSE` -- closest true equivalent, strongest
-   exclusion, also changes restart behaviour.
-3. Leave it and mark the fixture `requires.*`-skip on Windows, documenting that
-   bind-conflict detection is not portable.
+Dropping it restores the half that matters -- a conflicting bind is refused, as
+on POSIX -- and returns 0 so callers that check the result see what they would
+on POSIX. With this, the filtered suite is `34 passed, 0 failed`: the whole
+httpd/async family passes on Windows.
 
-Note the leak this fixture guards (the handler box on the construction-failure
-path) is genuinely untested on Windows under any of these but option 1 or 2.
+**Residual difference, deliberately accepted.** POSIX `SO_REUSEADDR` *also*
+permits rebinding a port in TIME_WAIT, and plain Winsock does not. So a server
+restarted immediately after shutdown can see `WSAEADDRINUSE` on Windows where
+POSIX would have let it bind. Refusing a real conflict was judged worth more
+than the restart convenience. Note that `SO_EXCLUSIVEADDRUSE` (option 2) would
+be stricter still and does **not** recover the TIME_WAIT case either -- there is
+no Winsock setting that reproduces POSIX `SO_REUSEADDR` exactly.
+
+If the restart behaviour ever becomes a real complaint, the fix is at the
+application level (retry the bind briefly), not in the shim.
+
+The alternatives considered were: (2) map to `SO_EXCLUSIVEADDRUSE`, and (3)
+leave it and `requires.*`-skip the fixture -- rejected because the leak the
+fixture guards (the handler fat-closure box released on the construction-failure
+path) would then be untested on Windows.

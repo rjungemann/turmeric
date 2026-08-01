@@ -7211,6 +7211,26 @@ static void emit_winsock_compat_shim(Buf *out) {
     buf_puts(out, "}\n");
     buf_puts(out, "static int tur_compat_close(int __fd){ int __t; int __tl=(int)sizeof(__t); if (getsockopt((SOCKET)__fd,SOL_SOCKET,SO_TYPE,(char*)&__t,&__tl)==0) return closesocket((SOCKET)__fd); return _close(__fd); }\n");
     buf_puts(out, "static int tur_compat_setsockopt(int __fd,int __lv,int __opt,const void*__v,socklen_t __l){\n");
+    /* SO_REUSEADDR is the one option whose MEANING inverts across the two
+     * stacks, so passing it through would be actively wrong rather than merely
+     * non-portable.  POSIX SO_REUSEADDR permits rebinding a port in TIME_WAIT
+     * but still refuses to bind over a LIVE socket; Winsock SO_REUSEADDR
+     * permits binding over a live socket (it is closer to POSIX SO_REUSEPORT).
+     * Forwarding it therefore turns "refuse to double-bind" into "silently
+     * steal the port" -- which is how httpd-new-pool-fail-drops-handler's
+     * deliberate bind conflict came to succeed on Windows.
+     *
+     * Dropping it restores the half that matters: a conflicting bind is
+     * refused, as on POSIX.  Report success so callers that check the return
+     * see what they would on POSIX.
+     *
+     * Residual difference, deliberately accepted: POSIX SO_REUSEADDR also
+     * allows rebinding a TIME_WAIT port, and plain Winsock does not, so a
+     * server restarted immediately after shutdown can see WSAEADDRINUSE where
+     * POSIX would have let it bind.  Refusing a real conflict is worth more
+     * than the restart convenience; SO_EXCLUSIVEADDRUSE would be stricter still
+     * and does not recover the TIME_WAIT case either. */
+    buf_puts(out, "    if (__lv == SOL_SOCKET && __opt == SO_REUSEADDR) return 0;\n");
     buf_puts(out, "    if (__lv == SOL_SOCKET && (__opt == SO_RCVTIMEO || __opt == SO_SNDTIMEO)\n");
     buf_puts(out, "        && __l == (socklen_t)sizeof(struct timeval)) {\n");
     buf_puts(out, "        const struct timeval *__tv = (const struct timeval *)__v;\n");

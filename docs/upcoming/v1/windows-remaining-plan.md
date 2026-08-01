@@ -11,12 +11,18 @@ programs. Measured on main at `f630230e5` with gcc 16.1.0:
 
 ```
 TUR=./build-win/tur.exe bash tests/run.sh
-# summary: 2445 passed, 54 failed
+# summary: 2478 passed, 21 failed
 ```
 
-That is the whole fixture tree, not the async subset -- roughly 97%. (An earlier
+That is the whole fixture tree, not the async subset -- roughly 99%. (An earlier
 revision of this plan cited "~65 fixtures"; that was the async/reactor/httpd
 subset at bring-up time, not a ceiling.)
+
+The 21 are four known classes and nothing else: 9 pipe-fd fixtures, 5
+carrier<->pointer straddles (not Windows-specific), 5 POSIX-only inline-C, and 2
+scheduler stdout mismatches. Each is a section below. The run was 2445/54 before
+the Winsock setsockopt/getsockopt shim landed; the whole `httpd-*` family moved
+in one change.
 
 **WIN0 regressed between the merge and 2026-07-31 and had to be re-fixed.** Five
 independent breaks accumulated, three of them within five days, because nothing
@@ -90,7 +96,7 @@ Clang-cl -- see the archived plan.)
 
 ---
 
-## WIN3 tail -- the ~11 async fixtures still failing
+## WIN3 tail -- the async fixtures still failing
 
 None of these block WIN2; they are the long tail of the async subset.
 
@@ -127,27 +133,44 @@ diagnosed. Worth a focused diagnosis pass; start by comparing fiber/worker
 scheduling order against Linux.
 
 (An earlier revision named `httpd-h4-keepalive`, `httpd-h6-routing` and
-`taskgroup-async` here. Those no longer reach the run phase -- the whole `httpd`
-family now fails to build, see below -- and `taskgroup-async` passes.)
+`taskgroup-async` here. All three now pass -- the first two were collateral of
+the Winsock `setsockopt` build failure, not a scheduler difference.)
 
 ---
 
-## Winsock / POSIX gaps in the stdlib (~45 fixtures, the bulk of the 54)
+## Winsock / POSIX gaps in the stdlib
 
-Found 2026-07-31. Neither is a regression: both predate the bring-up or were
-missed by it.
+Found 2026-07-31. Not regressions: these predate the bring-up or were missed by
+it.
 
-- **`setsockopt` against Winsock (~40 fixtures).** The whole `httpd-*` /
-  `httpd-async-*` family fails to build: Winsock declares the option value as
-  `const char *`, and `stdlib/httpd.tur` passes `&opt`/`&tv` uncast at three
-  sites. The portable spelling already exists at `stdlib/async_socket.tur:58`,
-  added by the bring-up itself -- `httpd.tur` was simply not swept. Note
-  `SO_RCVTIMEO` is not a cast fix: Winsock wants a `DWORD` of milliseconds, not
-  a `struct timeval`. See
-  [docs/reported/windows-httpd-setsockopt-winsock.md](../../reported/windows-httpd-setsockopt-winsock.md).
-- **POSIX-only inline-C (5 fixtures).** `_mkdir` (a conflicting hand-rolled
-  prototype, not a missing include), `ioctl`/`struct winsize`, and
-  `fork`/`getppid`. See
+- **`setsockopt`/`getsockopt` against Winsock (~40 fixtures) -- RESOLVED.** The
+  whole `httpd-*` / `httpd-async-*` family failed to build: Winsock declares the
+  option value as `char *` rather than `void *`. Fixed in the emitter's Winsock
+  compat shim (`emit_winsock_compat_shim`), which already remapped
+  `socket`/`fcntl`/`recv`/`send`/`accept`/`connect`/`close` and was simply
+  missing these two -- so every current and future POSIX-shaped call in any
+  inline-C is covered, not just the three sites in `stdlib/httpd.tur`. Two
+  subtleties handled there rather than per call site: `SO_RCVTIMEO`/`SO_SNDTIMEO`
+  take a DWORD of milliseconds, not a `struct timeval` (a plain cast sets a
+  garbage timeout), and `SO_REUSEADDR` is *dropped* on Windows because its
+  meaning inverts -- Winsock's permits binding over a LIVE socket. See
+  [docs/archive/windows-httpd-setsockopt-winsock.md](../../archive/windows-httpd-setsockopt-winsock.md).
+- **POSIX-only inline-C (5 fixtures).** `_mkdir` (3), `ioctl`/`struct winsize`
+  (1), `fork`/`getppid` (1). The `_mkdir` case is **not** a source bug --
+  `stdlib/fs.tur` is correctly written with `#ifdef _WIN32` /
+  `#include <direct.h>`. The include hoister
+  (`tur_hoist_top_includes_scan`, `src/compiler/emit_core.c:3005`) consumes only
+  blank lines, `//` comments, `#include` and object-like `#define` at the top of
+  an inline-C body and stops at anything else -- including `/* */` comments and
+  `#ifdef`. So a platform-conditional include is never lifted to file scope, and
+  because an in-body include is block-scoped AND the header's include guard makes
+  the *second* function's copy expand to nothing, the next function that needs it
+  sees an implicit declaration. That is precisely the class the hoister exists to
+  fix (see its own `#define`-hoisting comment), just an unhandled gap in it.
+  Fixing it generally -- lift a top-of-body conditional block verbatim when it
+  contains only includes/defines/comments -- also unblocks the natural port of
+  `term/width`/`term/height`, which would otherwise break the same way the moment
+  their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
   [docs/reported/windows-posix-inline-c-gaps.md](../../reported/windows-posix-inline-c-gaps.md).
 
 ## Subprocess and shared-library layers (not fixture-visible)
