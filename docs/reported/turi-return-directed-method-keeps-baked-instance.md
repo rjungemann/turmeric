@@ -171,6 +171,51 @@ inline-C-free fixture and thereby made a pre-existing gap visible. The gap is
 older than the fixture and wider than it: `run-turi` was reporting green on this
 family only because it never executed any of it.
 
+## PARTIALLY FIXED 2026-08-01 -- direct-call shape resolved, rank-2 forall not
+
+Fix direction 1's first candidate landed (`gde_reresolve_return_directed`,
+`src/turi/eval.c`). The mechanism was confirmed by instrumenting the call site,
+and it is simpler than "consult the class variable's bind": a return-directed
+call pins **nothing at all**.
+
+```
+[gde] call fn=__inst_Applicative_pure_Schema nabi=0 | frame tyvar m -> Option
+```
+
+`n_abi_bindings == 0`, because the class variable lives only in the result type
+and there is no receiver argument to carry it -- so the EX_CALL gate
+(`n_abi_bindings >= 1 && abi_bindings[0].kind == TY_TYVAR`) can never fire, and
+`__inst_Applicative_pure_Schema` answers. But the concrete type is *already on
+the frame*: `frame_record_abi` pinned `m -> Option` when the caller entered the
+generic. Nothing needed computing -- only reaching.
+
+The fix adds a fallback for the zero-binding shape that walks the frame chain
+and lets the instance table pick: try each concretely-bound tyvar, keep those
+that resolve to a real instance of this class, and act only when exactly one
+does (two candidates is genuinely ambiguous from here, so it bails and keeps
+prior behaviour). Scoped to `n_abi_bindings == 0` so a receiver-directed call
+whose `abi_bindings[0]` merely failed to match keeps its exact prior dispatch.
+
+**Fixed** -- the direct-call shape, which is this report's headline repro and
+the suite's only red:
+
+| Probe | Was | Now |
+| --- | --- | --- |
+| `(just-pure (some 0))` / ascribed `(pure 7)` | `1` / `7` | `7` / `7` |
+| `hkt-constrained-byvalue-bind-pure` (the `run-turi` red) | `1 / -1 / 1` | `42 / -1 / 7` |
+
+**Still open** -- the rank-2 forall shape. `hkt-constrained-pure-two-instances`
+and `hkt-constrained-continuation-dict` still print `207 207` where `107 207` is
+wanted. They do not call the generic directly: `make` is passed as a value into
+`(defn at-t1 [g (forall [(m :: * -> *)] ...)])` and invoked as `(g (mk-t1 0))`,
+so no tyvar reaches the frame for the fallback to find and it correctly
+declines rather than guess. Pinning `m` across a rank-2 forall parameter is a
+separate piece of work from reading a binding that is already there.
+
+Both are inline-C carve-out PASS-skips under `run-turi`, so neither shows up in
+the suite -- which is exactly the visibility trap the "Coverage note" below
+warns about. They are the reason this report stays open.
+
 ## Fix directions
 
 1. **Extend the re-resolution to the return-directed shape.** `gde_reresolve_method`
