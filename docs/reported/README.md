@@ -5,7 +5,7 @@ Every file in this directory is an **open** finding. Resolved reports move to
 see the archiving rule in [CLAUDE.md](../../CLAUDE.md). `docs/reported/history/`
 is forbidden and blocked by a `PreToolUse` hook.
 
-This index exists so a triage pass reads one file instead of twenty-three. Keep
+This index exists so a triage pass reads one file instead of twenty-two. Keep
 it current when you file, absorb, or archive a report -- a row here is cheaper
 than re-deriving the grouping.
 
@@ -71,7 +71,6 @@ the single red line in `tests/run-turi.sh`.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [for-comprehension-pure-ambiguous-against-stdlib](for-comprehension-pure-ambiguous-against-stdlib.md) | medium | `for` desugars to a bare `.pure` inside a `fn`, so it is ambiguous against the auto-loaded instances -- `for` is dead surface as shipped |
-| [sweet-dollar-double-applies-single-call](sweet-dollar-double-applies-single-call.md) | medium | sweet-exp `$` double-applies when the rest-of-line is already one complete call; CLAUDE.md's own chained example does not compile |
 | [lsp-completion-internal-symbols](lsp-completion-internal-symbols.md) | medium | completion is dominated by `__inst_*` / `__fn_*` globals, which also overrun the 200-item cap |
 
 ## Soundness limits and UB

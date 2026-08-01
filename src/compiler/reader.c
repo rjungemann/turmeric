@@ -3457,7 +3457,10 @@ static int try_consume_use_directive(Reader *r,
  *   5. `$` rest-of-line: a `$` token at top level (not inside
  *      brackets/string/comment) wraps the rest of the line in `(` `)`,
  *      i.e. `f $ g x` becomes `f (g x)`.  Counts as a single element
- *      for wrap decisions.
+ *      for wrap decisions.  The wrap is suppressed when the rest is
+ *      already one complete delimited expression -- `f $ g(x)` emits
+ *      `f g(x)`, not `f ((g x))`.  See
+ *      sweet_dollar_rest_is_delimited().
  *
  * Unsupported (yet): `\\` group operator, explicit `\` line
  * continuation.  Block-comment lines are treated as regular
@@ -3872,6 +3875,65 @@ static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
     }
 }
 
+/* True when [start, end) is *already* exactly one complete, delimited
+ * expression: an optional prefix run (an identifier for a neoteric call,
+ * or reader/quote sigils like `#map`, `'`, `` ` ``) glued directly to one
+ * balanced `(`/`[`/`{` group that closes at the end of the range.
+ *
+ * `$` means "wrap the rest of the line in one pair of parens", which is
+ * right for a bare token sequence (`f $ g 1 2` => `(f (g 1 2))`) but adds a
+ * second application layer when the rest is already one expression --
+ * `f $ g(1)` would become `(f ((g 1)))`.  The `$` rewrite consults this to
+ * suppress the redundant wrap.  A bare atom (`f $ g`) is deliberately NOT
+ * covered: SRFI-110 specifies `(f (g))` there, and that is a call, not a
+ * double application. */
+static bool sweet_dollar_rest_is_delimited(const char *src,
+                                            size_t start, size_t end) {
+    while (start < end && (src[start] == ' ' || src[start] == '\t')) start++;
+    while (end > start && (src[end - 1] == ' ' || src[end - 1] == '\t' ||
+                           src[end - 1] == '\r' || src[end - 1] == '\n'))
+        end--;
+    if (start >= end) return false;
+
+    /* Prefix: everything before the first opening delimiter.  Any
+     * whitespace, string quote, stray closer, continuation or second `$`
+     * in it means the rest is a sequence, not a single expression. */
+    size_t p = start;
+    while (p < end) {
+        char c = src[p];
+        if (c == '(' || c == '[' || c == '{') break;
+        if (c == ' ' || c == '\t' || c == '"' || c == '\\' || c == '$' ||
+            c == ')' || c == ']' || c == '}')
+            return false;
+        p++;
+    }
+    if (p >= end) return false;  /* no delimited group at all */
+
+    /* The group must be balanced and must close exactly at `end`. */
+    int bd = 0;
+    bool in_str = false;
+    size_t q = p;
+    while (q < end) {
+        char c = src[q];
+        if (in_str) {
+            if (c == '\\' && q + 1 < end) { q += 2; continue; }
+            if (c == '"') in_str = false;
+            q++; continue;
+        }
+        if (c == '"') { in_str = true; q++; continue; }
+        if (c == '(' || c == '[' || c == '{') { bd++; q++; continue; }
+        if (c == ')' || c == ']' || c == '}') {
+            bd--; q++;
+            if (bd == 0) break;
+            if (bd < 0) return false;
+            continue;
+        }
+        q++;
+    }
+    if (in_str || bd != 0) return false;
+    return q == end;
+}
+
 /* Emit the line content with `$` rewritten to `(<rest-of-line>)`.
  * Records xform→original byte runs in e->map (when non-NULL) so
  * diagnostic snippets can be rendered from the user's original source. */
@@ -3953,7 +4015,6 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
         if (bd == 0 && c == '$' &&
             (i + 1 >= end || src[i + 1] == ' ' || src[i + 1] == '\t')) {
             /* Replace `$ <rest>` with `(<rest>)`. */
-            emit_insert_char_(e, '(');
             i++;
             /* Skip the whitespace immediately after `$`. */
             while (i < end && (src[i] == ' ' || src[i] == '\t')) i++;
@@ -3973,8 +4034,14 @@ static void sweet_emit_content(SweetEmit *e, const char *src,
                 rs++;
             }
             rest_end = rs;
+            /* ... but when the rest is already one complete expression --
+             * a neoteric call `g(7)`, a parenthesised form `(g 7)`, a
+             * curly-infix group, a data literal -- wrapping it again would
+             * apply the result as a function.  Emit it as-is. */
+            bool wrap = !sweet_dollar_rest_is_delimited(src, i, rest_end);
+            if (wrap) emit_insert_char_(e, '(');
             sweet_emit_content(e, src, i, rest_end);
-            emit_insert_char_(e, ')');
+            if (wrap) emit_insert_char_(e, ')');
             i = rest_end;
             continue;
         }

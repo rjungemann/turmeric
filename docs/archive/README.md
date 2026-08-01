@@ -513,6 +513,13 @@ campaign's live scoreboard is the missing-cells table in
 - **[fmt-idempotence-head-z-silently-skips-on-bsd.md](history/fmt-idempotence-head-z-silently-skips-on-bsd.md)**, **[ctest-parallel-contention-false-failures.md](history/ctest-parallel-contention-false-failures.md)** -- two harness checks that passed without testing anything
 - **[wasm-artifact-requires-second-deploy-commit.md](history/wasm-artifact-requires-second-deploy-commit.md)** -- `web/public/turmeric.{js,wasm}` untracked; `sw.js` `CACHE_VERSION` auto-bumped
 
+### Resolved since the v0.32.6 sweep
+
+Closed reports that arrived after the sweep, still in [../archive/](.) rather
+than `history/` because they have not been swept yet:
+
+- **[sweet-dollar-double-applies-single-call.md](sweet-dollar-double-applies-single-call.md)** -- sweet-exp `$` no longer wraps a rest-of-line that is already one complete expression, so it composes with neoteric / curly-infix / data literals; see [syntax-guide.md](../guides/syntax-guide.md)
+
 ### Held back from the v0.32.6 sweep
 
 Same vintage, still in [../archive/](.) because each carries a named open

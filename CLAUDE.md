@@ -706,6 +706,14 @@ println $ normalize $ vec3(1.0 0.0 0.0)
 Prefer `$` over neoteric when the outer call takes exactly one argument that is
 itself a call with multiple space-separated arguments.
 
+`$` wraps the rest of the line in one pair of parens only when the rest needs
+it -- a bare token sequence. When the rest is *already* one complete delimited
+expression (a neoteric call `g(7)`, a parenthesised form `(g 7)`, a curly-infix
+group `{a + b}`, a data literal), the wrap is suppressed, so `$` composes with
+neoteric and curly-infix rather than double-applying them. A bare atom is the
+one exception: `f $ g` is `(f (g))` per SRFI-110 -- a zero-argument call, not
+`(f g)`.
+
 ### Curly-infix -- `{a + b}` for arithmetic
 
 Curly-infix is enabled in every dialect (plain s-expression and sweet-exp
