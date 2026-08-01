@@ -64,6 +64,18 @@ case "${MSYSTEM:-}" in
   UCRT64|MINGW64|CLANG64|MINGW32) mkdir -p /c/tmp 2>/dev/null || true ;;
 esac
 
+# Are we producing Windows binaries?  Used by the requires.posix-apis skip
+# below.  Keyed on MSYSTEM rather than uname so it stays false under WSL, which
+# runs the Linux build and has every POSIX API.
+# Exported because the fixture workers run as separate bash processes under
+# xargs (see the `export -f` block below), so a plain shell variable would not
+# reach them and every skip would silently no-op.
+TUR_HOST_WINDOWS=0
+case "${MSYSTEM:-}" in
+  UCRT64|MINGW64|CLANG64|MINGW32) TUR_HOST_WINDOWS=1 ;;
+esac
+export TUR_HOST_WINDOWS
+
 # Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY. On Windows this
 # stops the Defender Firewall "allow this app" dialog from popping for every
 # freshly-built fixture binary; elsewhere it is a harmless tightening (the
@@ -443,6 +455,19 @@ run_happy() {
         return
     fi
 
+    # Skip fixtures whose inline-C calls a POSIX API that Windows does not have
+    # and that is not worth emulating.  The marker file's contents name the API
+    # and say why, per fixture -- read it before assuming a fixture is skipped
+    # for a reason that still applies.  Currently: pipe() (MinGW ships _pipe,
+    # and Windows select() is socket-only so the reactor could not poll a pipe
+    # fd even if it compiled) and fork()/getppid().  See
+    # docs/reported/windows-pipe-reactor-fixtures-do-not-build.md and
+    # docs/reported/windows-posix-inline-c-gaps.md.
+    if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
+        write_result "PASS" "$name" "(posix-apis-skipped)" ""
+        return
+    fi
+
     # turi-session-types-plan (Slice B): interpreter-only fixtures whose peer
     # runs as a `tur --interpret` async fiber over the cooperative session
     # runtime.  They are owned by tests/run-turi.sh; the compiled suite skips
@@ -675,6 +700,12 @@ run_negative() {
     # spice import never resolves. See CLAUDE.md "Optional dependencies".
     if [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
         write_result "PASS" "$name" "(spices-skipped)" ""
+        return
+    fi
+
+    # POSIX-API skip (mirrors the happy-path guard above).
+    if [ -f "$dir/requires.posix-apis" ] && [ "$TUR_HOST_WINDOWS" = "1" ]; then
+        write_result "PASS" "$name" "(posix-apis-skipped)" ""
         return
     fi
 
