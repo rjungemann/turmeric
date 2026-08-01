@@ -1,24 +1,40 @@
-# Residual carrier<->pointer straddles are hard errors on Apple clang
+# Residual carrier<->pointer straddles are hard errors on modern toolchains
 
-**Severity: medium (macOS-only build breakage, four fixtures).** The affected
-programs fail to compile at the `cc` step on macOS. They build fine on Linux
-CI, so the suite is green there and this is invisible to the release gate.
+**Severity: medium (build breakage on any sufficiently new toolchain, five
+fixtures).** The affected programs fail to compile at the `cc` step. They build
+fine on the Linux CI leg, so the suite is green there and this is invisible to
+the release gate.
 
 Found 2026-07-30 on arm64 macOS (Apple clang 21.0.0, macOS 27.0) while checking
 `claude/j0-jit-engine-plan-znqibo` for regressions after
 `66c3bb7c4` (merge of `origin/main` into the JIT engine branch).
 
+**Confirmed 2026-07-31 on Windows** (MSYS2/UCRT64, gcc 16.1.0, main at
+`f630230e5`) during a Windows-support sweep. This is NOT a macOS/clang quirk:
+it is "any toolchain new enough to promote the diagnostic." See the Windows
+confirmation section at the end -- it also shows one case listed below as fixed
+is still failing.
+
 ## Why Linux CI cannot catch this
 
 `-Wint-conversion` (assigning/passing an `int64_t` where a pointer is expected,
 or the reverse) has been an **error by default** since clang 15, and Apple clang
-21 enforces it. The gcc/clang on the CI Linux legs still treat it as a warning,
-so every one of these emits a warning there and compiles clean. This class has
-bitten before -- see the "Apple clang 17 `-Werror=int-conversion`" entry in
-`CHANGELOG.md` -- and it will keep recurring until the macOS leg builds fixtures.
+21 enforces it. GCC promoted `-Wint-conversion` and
+`-Wincompatible-pointer-types` to errors in GCC 14. The gcc on the CI Linux leg
+is older than that, so every one of these emits a warning there and compiles
+clean. This class has bitten before -- see the "Apple clang 17
+`-Werror=int-conversion`" entry in `CHANGELOG.md` -- and it will keep recurring
+until a leg that enforces them builds fixtures.
 
 `.github/workflows/ci.yml:30` does run a `macos-latest` leg, so a real fix here
 is to let that leg fail on these rather than to chase them by hand.
+
+Note that the two `-Wno-error=` downgrades that used to hide this were
+deliberately removed (`src/main.c:5231-5241`), on the stated grounds that
+"every straddle is now bridged at emit time" and "the whole fixture tree emits 0
+-Wint-conversion / -Wincompatible-pointer-types hard errors." That claim does
+not hold on gcc 16.1.0. Do not re-add the downgrades; the removal is correct and
+these are the genuine remaining straddles it exposed.
 
 ## Status
 
@@ -115,3 +131,42 @@ Recording `ret_ct` when it is known restores the agreement the bridges assume.
 It is value-preserving; the only codegen movement in the whole corpus was
 `van-laarhoven-lens-wide-functor-show`, where two now-redundant
 `(const char *)(intptr_t)` casts dropped out (snapshot regenerated).
+
+## Windows / gcc 16 confirmation (2026-07-31)
+
+Sweep of `TUR=./build-win/tur.exe bash tests/run.sh` on main at `f630230e5`
+(MSYS2/UCRT64, gcc 16.1.0): `summary: 2445 passed, 54 failed`. Five of the 54
+are this report's class, and they line up with the open cases above:
+
+```
+conv-defstruct-option-fn-element   error: passing argument 2 of
+    'ctor_Option__fn1_float__float' makes integer from pointer without a cast
+hkt-ap-fn-in-container             (same)                      <- open case A
+defalias-composite                 error: returning 'int64_t' from a function
+    with return type 'tur_adt_Cons__int *'
+fn-value-matrix-ok-rows            error: returning 'int64_t' from a function
+    with return type 'void *'                                  <- open case B
+data-literal-nested                error: returning 'tur_adt_Vec__int *' from a
+    function with return type 'tur_adt_Vec__Map__sym__int *'   <- SEE BELOW
+```
+
+Two things this adds:
+
+1. **The class is not macOS-specific.** Same defects, different vendor, same
+   cause (diagnostic promoted to an error). Any fix should be validated against
+   a promoting toolchain, not against Linux CI.
+
+2. **`data-literal-nested` is listed above as FIXED by the `ret_ct` change, but
+   it still fails.** Its symptom on gcc is also a different shape from the other
+   four: not an int<->pointer straddle at all, but a *pointer-to-pointer* type
+   mismatch between two different monomorphs (`Vec__int *` vs
+   `Vec__Map__sym__int *`), i.e. `-Wincompatible-pointer-types` rather than
+   `-Wint-conversion`. That is consistent with the `ret_ct` change having fixed
+   the straddle half while leaving a wrong monomorph selection underneath, which
+   clang would not have flagged once the int/pointer confusion went away.
+   Worth re-opening specifically: a wrong element-type monomorph reaching codegen
+   is a more serious bug than a missing cast, and the fix note above may have
+   closed it prematurely.
+
+Reproduce without Windows by building with gcc >= 14 and compiling any of the
+five fixtures.
