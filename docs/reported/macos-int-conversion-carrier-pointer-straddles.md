@@ -239,6 +239,48 @@ through two specific gaps in its guard:
   which is neither `(int64_t)`-prefixed nor a bare recorded ident, so neither
   disjunct at `:4268-4271` matches.
 
+### Attempted fix for case B, and why it was backed out (2026-07-31)
+
+Removing the `void *` exclusion is **correct but not sufficient**, and the
+obvious way to finish it is unsafe. Recorded so the next person does not repeat
+it.
+
+The exclusion is conservatism, not semantics: `fe6f47b60`, which introduced this
+bridge, scoped it to "a concrete pointer" because that was all its fixture
+needed. `return <int64>` into `void *` is the same `-Wint-conversion` error and
+the same `intptr_t` round-trip fixes it. But removing it alone changes nothing,
+because all three failing sites also fail the guard's *value*-side test:
+
+```c
+static void * thru_hyfat(int64_t v) { return v; }            /* v is a PARAM */
+static void * __fn_1374(void *p) { return __env->c; }         /* field read   */
+static tur_adt_Cons__int * mk_hylist() { return cons(...); }  /* call expr    */
+```
+
+None is `(int64_t)`-prefixed, and `emit_localvar_lookup_ctype` finds none of
+them -- parameters, field reads and call expressions are all absent from that
+table.
+
+**Do NOT "fix" this by registering parameters in the localvar table.** That
+table (`emit_module.c:5505-5549`) is keyed by bare C name and reset **per
+program**, not per function (`emit_localvar_reset` is called at
+`emit_module.c:11189` / `:13400`), and `emit_localvar_record_ctype` overwrites on
+a duplicate name. Temps (`__ps_162`) are program-unique so that is safe today;
+parameter names are not. Registering them would let one function's `v` define
+the type every other function's `v` resolves to, at every straddle bridge that
+consults the table -- a silent wrong-type conclusion, in more places than this
+one branch.
+
+The real fix is to stop sniffing the emitted string and consult the typed AST:
+the return branch has `fd` and the body expression in scope, so the predicate
+should be "the body's type is the int64 carrier and `ret_ctype` is a pointer",
+not "the emitted text starts with `(int64_t)`". Failing that, making the
+localvar table function-scoped would unblock the parameter case specifically.
+
+A revert of the exclusion-only change is in the history rather than the tree;
+it was backed out because it fixed nothing in the corpus while still altering a
+codegen condition, and could not be validated off Windows.
+
 ## Why the open-case-A fix fell through (2026-07-31)
 
 `adt_field_type_for_app` (`src/compiler/types.c:1379-1387`) does resolve
