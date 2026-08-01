@@ -166,6 +166,59 @@ This is the "consult the typed AST" fix the backed-out attempt's note asked for,
 and it needed neither a function-scoped localvar table nor any parameter
 registration.
 
+#### Reconciling the "the typed AST cannot answer this either" note
+
+A concurrent second attempt (`e2ba90b50`, merged to `main` 2026-08-01) recorded
+that this direction **"does not work and would give the WRONG answer."** That
+note is correct about the predicate it tested and does not apply to this one;
+both are worth keeping straight, because its two findings are what make this
+fix's shape the right one.
+
+- What it tested was a predicate over the body's **type**: *"the body's type is
+  the int64 carrier and `ret_ctype` is a pointer."* That genuinely fails. For
+  `defalias-composite` the body's Turmeric type is `(Cons int)`, which
+  `type_c_name`s to `tur_adt_Cons__int *` -- it *matches* `ret_ctype`, so the
+  predicate concludes "no straddle" and emits the code that will not compile.
+  Its diagnosis of why is exactly right: the mismatch is invisible in the
+  Turmeric types, because it is between the Turmeric type and what the emitted C
+  *call* evaluates to.
+
+- `fn_tail_emits_int64_carrier` never asks that question. It does not compare
+  `type_c_name(fd->body->type)` against `ret_ctype` -- it keys on the body's
+  **shape**: an `EX_BUILTIN` whose `c_op` is the preamble cons helper, or an
+  `EX_VAR` bound to a fn-typed parameter or closure capture. Each of those has a
+  known emitted representation independent of its Turmeric type.
+
+- That note's second finding is the load-bearing one, and it is why this fix
+  reads `builtins.c` rather than the signature table. It tried
+  `emit_sig_lookup_ret_ctype` and found `cons` is **not in the table and never
+  can be**: it is not a `defn` but hardcoded preamble text
+  (`emit_module.c:5909`), with no forward declaration at all, and the table is
+  populated only from the forward-declaration loop, which walks `defn`s. The
+  BuiltinSpec (`builtins.c:152`) already declares the same fact -- `BS_FUNC_CALL`,
+  `c_op = "cons"` -- so this predicate reads it from where it is already
+  written. That is that note's own fix direction (1), "register the preamble's
+  own signatures", reached from the other end and without a second side table to
+  keep in sync.
+
+- It also lists `thru_hyfat` (the parameter case) and `__fn_1374` (the
+  closure-env field case) as "still unaddressed by any of the above and need
+  their own answers". The `EX_VAR` arm is that answer for both.
+
+Its fix direction (2) -- *make the return type follow the body's representation,
+so no bridge is needed at all* -- is untaken and remains the right long-term
+shape. `mk_hylist` being handed the C return type `tur_adt_Cons__int *` while
+its body calls a preamble builtin returning the carrier is two decisions made
+independently and inconsistently; every bridge in this family is a band-aid over
+that. Worth doing on its own merits, no longer load-bearing for any known
+failure.
+
+Both of its attempts were reverted rather than landed, on the stated grounds
+that neither fixed a fixture and codegen could not be validated off Windows from
+that environment. This one was validated on a promoting toolchain directly: all
+four fixtures build and match `expected.stdout`, the corpus is green, and no
+snapshot moved.
+
 ### Case A -- record the ctor's real param C type at registration
 
 `emit_sig_record_param_ctype` / `emit_sig_lookup_param_ctype` already existed

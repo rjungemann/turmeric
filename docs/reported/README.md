@@ -19,7 +19,8 @@ under "Windows port" and "Platform-independent, found on a platform sweep"
 arrived with `main`'s Windows work and were **not** re-verified here -- their
 repros need an MSYS2/UCRT64 box. They are indexed on the authority of their own
 filings. The `libedit` CI row *was* verified (three job runs across two heads
-and `main`'s tip).
+and `main`'s tip); it has since been fixed and archived, so it no longer appears
+below.
 
 ## Value representation (the consolidation campaign)
 
@@ -87,15 +88,17 @@ the single red line in `tests/run-turi.sh`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [windows-ci-leg-installs-nonexistent-libedit](windows-ci-leg-installs-nonexistent-libedit.md) | medium | the `Windows build (MSYS2/UCRT64)` job dies at `pacman -S` on `mingw-w64-ucrt-x86_64-libedit` (no such target), before Configure/Build/smoke. **The Windows leg has produced zero signal since it was added** -- the three Windows port reports below are unwatched by CI. Optional dep made hard-required; one-line fix |
 | [ci-cps-tramp-turi-timeouts-under-load](ci-cps-tramp-turi-timeouts-under-load.md) | low | `cps-tramp-resume-*` time out under suite parallelism; **did not reproduce** in two full runs on 2026-08-01, but nothing was fixed |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 
 ## Windows port
 
 Filed 2026-07-31 during the Windows-support sweep on `main`; they arrived in
-this directory with that work. **None of them is currently watched by CI** --
-see the `libedit` row above, which is why the Windows leg never compiles.
+this directory with that work. The Windows CI leg that watches them was itself
+broken until 2026-08-01 -- it installed a nonexistent `libedit` package and
+never reached Configure -- which is now fixed (report archived at
+`docs/archive/windows-ci-leg-installs-nonexistent-libedit.md`). Note the leg is
+build-only by design, so these three are still not FIXTURE-watched on Windows.
 
 | Report | Severity | One line |
 | --- | --- | --- |
