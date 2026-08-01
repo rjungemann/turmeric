@@ -20,6 +20,32 @@ bitten before -- see the "Apple clang 17 `-Werror=int-conversion`" entry in
 `.github/workflows/ci.yml:30` does run a `macos-latest` leg, so a real fix here
 is to let that leg fail on these rather than to chase them by hand.
 
+**Update 2026-08-01: that leg already does fail on exactly these, and has been
+red on `main` ever since.** Run 2202, job 91324836416, head `8b1ea4380`:
+
+```
+summary: 2495 passed, 4 failed
+  - conv-defstruct-option-fn-element (build failed)
+  - defalias-composite (build failed)
+  - fn-value-matrix-ok-rows (build failed)
+  - hkt-ap-fn-in-container (build failed)
+```
+
+Four failures, no others -- these four *are* the `Test (macos-latest)` redness,
+with both open cases below reproduced verbatim (case A's
+`ctor_Option__fn1_float__float(true, x)`, case B's `return cons(...)`,
+`return v;`, `return __env___env_1376->c;`). So this report is no longer a
+"macOS-only annoyance somebody should get to": it is the sole blocker on a
+standing red CI job, and fixing it takes that job green. See
+[`ci-macos-suites-fail-while-linux-passes`](ci-macos-suites-fail-while-linux-passes.md),
+which was filed as an undiagnosed macOS mystery and is now known to be this.
+
+The defect is **not** macOS-specific -- only the diagnosis is. Re-verified
+2026-08-01 on Linux: all four fixtures still emit int-conversion diagnostics
+from `./build/tur build`, where they are warnings rather than Apple clang's
+hard errors. Anyone can work on this without a macOS box; the check is
+`./build/tur build tests/fixtures/<name>/input.tur 2>&1 | grep int-conversion`.
+
 ## Status
 
 Seven fixtures failed on a clean macOS build of `66c3bb7c4`. **Three are fixed**

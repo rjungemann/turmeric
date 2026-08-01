@@ -49,42 +49,71 @@ tests/run-jit.sh (Release, -DTUR_JIT=ON)       2414 passed, 0 failed, 47 skipped
 
 The macOS agent's own commit message on `dbfecd0d2` likewise reports
 `JIT: 2414 passed, 0 failed` and `AOT: 2495 passed, 4 failed` measured
-locally on macOS -- which disagrees with what macOS CI reports for the same
-tree. That gap is the most interesting part of this report: a local macOS run
-and a macOS CI run of the same suites do not agree.
+locally on macOS -- which the report originally read as disagreeing with macOS
+CI. **It does not disagree; see below.**
 
-## Leading hypothesis (unverified)
+## RESOLVED for `Test (macos-latest)` (2026-08-01): it is the straddle report
 
-CLAUDE.md documents two macOS-specific build traps that would produce exactly
-this shape, and both differ between a hand-run local build and CI:
+The fixture names were extracted from run 2202 on `main`
+(job 91324836416, head `8b1ea4380`). The AOT suite's tail is:
 
-- **Sanitizer/toolchain mismatch.** `TUR_DEBUG_SANITIZE` defaults ON
-  everywhere including macOS, and a local macOS build commonly turns it off
-  (or uses Homebrew LLVM) to dodge the ASan startup deadlock. A local run with
-  sanitizers off and a CI run with them on are not the same experiment -- and
-  this session already saw a latent heap-use-after-free
-  (`emit_module.c` ret_ctype, fixed in `c091889a4`) that was invisible without
-  ASan and failed 43 fixtures with it.
-- **Timeouts under CI contention.** The six-hour hang in run 2196 points at
-  something that does not terminate rather than something that mismatches.
+```
+summary: 2495 passed, 4 failed
+  - conv-defstruct-option-fn-element (build failed)
+  - defalias-composite (build failed)
+  - fn-value-matrix-ok-rows (build failed)
+  - hkt-ap-fn-in-container (build failed)
+```
 
-## What was not determined
+That is **exactly** the four fixtures of
+[`macos-int-conversion-carrier-pointer-straddles`](macos-int-conversion-carrier-pointer-straddles.md),
+with exactly its two error shapes -- `incompatible pointer to integer
+conversion passing 'void *' to parameter of type 'int64_t'` at
+`ctor_Option__fn1_float__float(true, x)` (its open case A) and `incompatible
+integer to pointer conversion returning 'int64_t'` at `return cons(...)` /
+`return v;` / `return __env___env_1376->c;` (its open case B).
 
-The failing fixture NAMES were not extracted. The Actions log API returns a
-tail window, and for both macOS jobs the tail is occupied by the harness's
-skip list and the ctest summary; the per-fixture `FAIL` lines scroll off above
-it. Getting them needs either a larger log fetch, a re-run with the harness
-output uploaded as an artifact, or a local macOS run.
+Three corrections follow, and they retire most of this report:
+
+1. **There is no local-vs-CI disagreement.** The commit message's
+   `AOT: 2495 passed, 4 failed` and CI's `summary: 2495 passed, 4 failed` are
+   the same numbers. The "most interesting part of this report" was a
+   misreading of its own evidence.
+2. **The sanitizer/toolchain hypothesis is dead for this job.** The failures
+   are `cc` rejecting emitted C at `-Wint-conversion`, which has nothing to do
+   with ASan, Homebrew LLVM, or the startup deadlock. It reproduces at any
+   sanitizer setting.
+3. **The six-hour hang in run 2196 was not this.** `Test (macos-latest)`
+   completed in 501s in run 2202. Whatever stalled 2196 was a one-off or a
+   different phase; there is no standing hang to hunt.
+
+So `Test (macos-latest)` is not an undiagnosed macOS-only defect. It is a
+known, filed, platform-independent codegen bug that only Linux's warn-instead-
+of-error posture hides. **Fixing the straddle report turns this job green.**
+
+## Still open: `JIT engine (macos-latest)`
+
+Not identified. The Actions log API returns a fixed ~3.5 KB tail window
+regardless of the requested line count, and for this job that window is
+entirely `tests/run-jit.sh`'s skip list -- the summary and `FAIL` lines sit
+above it. Requesting more lines does not widen the window, so this needs the
+artifact upload in fix direction 1.
+
+Whether it is the same cause is genuinely unknown: the JIT path compiles
+through c2mir rather than `cc`, and c2mir does not enforce
+`-Wint-conversion`, so the straddles may well pass there and this may be
+something else. Do not assume it is the same bug.
 
 ## Fix directions
 
-1. Get the fixture names first -- everything else is speculation until then.
-   Easiest path is uploading `tests/**/actual.*` (or the harness stdout) as a
-   CI artifact on failure.
-2. Reconcile the local-macOS vs macOS-CI disagreement explicitly: run the
-   suites on macOS with `TUR_DEBUG_SANITIZE=ON` and the same generator CI
-   uses, and see whether the local numbers move to match CI.
-3. If it turns out to be the six-hour-hang class rather than mismatches, treat
-   it as a hang hunt (untimed compile phase) rather than a fixture triage --
-   CLAUDE.md's note that a runtime loop surfaces as a FAIL, not a stall, means
-   an indefinite stall is in `emit-c`/`build`.
+1. **Upload the harness stdout (or `tests/**/actual.*`) as a CI artifact on
+   failure.** This is now the only thing standing between here and naming the
+   JIT failures -- the log-tail window cannot be widened from the API side.
+2. Fix [`macos-int-conversion-carrier-pointer-straddles`](macos-int-conversion-carrier-pointer-straddles.md)
+   and re-check: that should take `Test (macos-latest)` green and leave only
+   the JIT job.
+3. If the JIT job turns out to be the straddles too, this report closes
+   entirely as a duplicate of that one.
+
+~~Reconcile the local-macOS vs macOS-CI disagreement~~ -- struck: there is no
+disagreement (correction 1 above).

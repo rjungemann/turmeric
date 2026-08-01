@@ -26,7 +26,7 @@ the plan links. File a new repr cell there as well as here.
 | --- | --- | --- |
 | [poly-result-hof-capturing-closure-sigbus](poly-result-hof-capturing-closure-sigbus.md) | medium | capturing closure into a thin `(fn ...)` param crashes; **partially** fixed -- tyvar-in-signature and effect-row rows still crash |
 | [generic-closure-return-type-app](generic-closure-return-type-app.md) | medium-high | generic fn returning a closure over `(F A)`: type-app erased (checker), and `ctor_Cons` emitted-but-undefined (**link** error) |
-| [macos-int-conversion-carrier-pointer-straddles](macos-int-conversion-carrier-pointer-straddles.md) | medium | `int64_t`/`void *` straddles at monomorphized-ctor args and fn-value returns; hard errors on Apple clang, warnings on Linux |
+| [macos-int-conversion-carrier-pointer-straddles](macos-int-conversion-carrier-pointer-straddles.md) | medium | `int64_t`/`void *` straddles at monomorphized-ctor args and fn-value returns; hard errors on Apple clang, warnings on Linux. **Sole cause of the standing red `Test (macos-latest)` CI job** -- fixing it turns that leg green. Reproducible on Linux; no macOS box needed |
 | [contract-type-arg-not-peeled-to-base](contract-type-arg-not-peeled-to-base.md) | medium | a contract in type-ARGUMENT position is never peeled; blocks `TY_CONTRACT` from the repr-row arrangement |
 
 These are one campaign but **not** duplicates -- each has its own pinned
@@ -78,7 +78,7 @@ the single red line in `tests/run-turi.sh`.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | both macOS jobs fail while Linux passes on the same SHA; undiagnosed, still red on `main` as of 2026-08-01 |
+| [ci-macos-suites-fail-while-linux-passes](ci-macos-suites-fail-while-linux-passes.md) | medium | **half resolved 2026-08-01** -- `Test (macos-latest)` is exactly the four straddle fixtures above, not a macOS mystery; `JIT engine (macos-latest)` still unidentified and blocked on a CI artifact upload |
 | [ci-cps-tramp-turi-timeouts-under-load](ci-cps-tramp-turi-timeouts-under-load.md) | low | `cps-tramp-resume-*` time out under suite parallelism; **did not reproduce** in two full runs on 2026-08-01, but nothing was fixed |
 | [jit-s2-split-disengages-on-hoisted-inline-c-include](jit-s2-split-disengages-on-hoisted-inline-c-include.md) | low-medium | any program with a hoisted inline-C `#include` silently loses the S2 fast path; correctness unaffected |
 
