@@ -903,9 +903,30 @@ static void append_type_mangle(Buf *b, Type t) {
         /* type_eq compares a TY_FN by arity, argument kinds and result kind --
          * mangle exactly that triple.  A bare "fn" token merged every function
          * type, which is the collision the report demonstrates: two `Box`
-         * instantiations over `(fn [int] float)` and `(fn [int] int)`. */
+         * instantiations over `(fn [int] float)` and `(fn [int] int)`.
+         *
+         * macos-int-conversion-carrier-pointer-straddles: that triple is not the
+         * WHOLE of type_eq.  It also refuses to equate a `cfnptr` with a `boxed`
+         * fn (types.c:118-122) -- a fat closure must never flow into a raw C
+         * callback sink -- so `(Option (c-fn [int] int))` and an
+         * `(Option (fn [int] int))` holding a capturing closure are DISTINCT
+         * types that both mangled to `fn1_int__int`.  Two registry entries, one
+         * C name: the second `#ifndef TUR_TY_` / `TUR_FN_` block was
+         * preprocessed away and the second type silently adopted the first's
+         * ctor slot (`void *` vs `tur_fnptr_int64_t_int64_t_t`), with no
+         * diagnostic from any compiler.  Benign only because every TY_FN
+         * representation is a same-bits 8-byte word today; a variant that is not
+         * would be a silent miscompile.  Give cfnptr its own token.
+         *
+         * ONLY cfnptr, deliberately.  `boxed` is not mangled: type_eq equates a
+         * boxed fn with a bare one of the same signature (and, at its top, with
+         * TY_PTR_VOID), so those share ONE registry entry -- mangling `boxed`
+         * would only make which name that entry gets depend on registration
+         * order, without splitting anything.  cfnptr-vs-boxed is the sole
+         * type_eq-distinct pair, and this is exactly enough to separate it. */
         case TY_FN:
             buf_puts(b, "fn");
+            if (t.as.fn.cfnptr) buf_putc(b, 'c');
             append_u32(b, t.as.fn.arity);
             for (uint32_t i = 0; i < t.as.fn.arity; i++) {
                 buf_putc(b, '_');

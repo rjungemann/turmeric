@@ -19,6 +19,23 @@ All notable changes to Turmeric are documented here.
   the typed AST whether the tail expression emits the carrier rather than
   pattern-matching the emitted string. No codegen snapshot moved.
 
+- **A `(c-fn ...)` and an ordinary `(fn ...)` of the same signature no longer
+  collide on one monomorph C name.** The type checker already holds the two
+  distinct whenever the latter is a capturing closure -- a fat closure must
+  never flow into a raw C callback sink -- but the type mangle did not carry
+  the `cfnptr` flag, so `(Option (c-fn [int] int))` and `(Option (fn [int] int))`
+  produced two registry entries under one name. The second `#ifndef` block was
+  preprocessed away and the `c-fn` view silently adopted the closure view's
+  `void *` constructor slot in place of its own function-pointer typedef, with
+  **no diagnostic from any compiler**. Benign in practice only because every
+  function-value representation is a same-bits 8-byte word.
+
+  Splitting the names then exposed a latent ordering bug the collision had been
+  hiding: function-pointer typedefs are now written before the monomorphized ADT
+  definitions that reference them (they are still *generated* after, since
+  emitting a monomorph is what registers them). `type_eq` is deliberately
+  unchanged.
+
 ### Internal
 
 - **Six GC / `Rc` / weak-reference fixtures assert on the CG6 collector counter

@@ -2,9 +2,15 @@
 
 **RESOLVED 2026-08-01** (arm64 macOS, Apple clang 21, macOS 27, at `54fef281d`).
 All four open fixtures build clean and match their expected output; the whole
-corpus is `2500 passed, 0 failed` on a toolchain where `-Wint-conversion` is a
-hard error, and the JIT corpus is `2415 passed, 0 failed, 47 skipped`. See
+corpus is `2502 passed, 0 failed` on a toolchain where `-Wint-conversion` is a
+hard error, and the JIT corpus is `2416 passed, 0 failed, 48 skipped`. See
 **Resolution** below.
+
+Both fix levels the report named are done: the "low risk" one that turns the
+four fixtures green, and -- in a second pass -- the "proper" one, which turned
+out to be *narrower and sharper than described*, and which uncovered a silent
+name collision no compiler diagnoses. See
+[The "proper" fix, measured](#the-proper-fix-measured-2026-08-01).
 
 The one thing this report carried that is NOT fixed -- `data-literal-nested`,
 which was never a straddle -- is split out as
@@ -184,24 +190,107 @@ would file `int64_t` against a slot the emission renders `void *`. Recording now
 happens off the **canonical** `g_adt_apps[i].type`, so the recorded string is
 always the one the prototype will carry.
 
-This is the report's own "low risk" fix level. The "proper" level -- putting
-`boxed`/`cfnptr` into the `TY_FN` mangle and `type_eq` so a boxed and an
-unboxed `(fn [int] int)` get distinct names rather than racing -- is still the
-real removal of the latent silent-layout merge, and is still worth doing on its
-own merits. It is no longer load-bearing for any known failure.
+This is the report's own "low risk" fix level. For the "proper" level, and what
+it actually turned out to be, see the next section.
+
+## The "proper" fix, measured (2026-08-01)
+
+The report proposed a second level: put `boxed`/`cfnptr` into the `TY_FN` mangle
+**and** `type_eq`, "higher blast radius (corpus-wide symbol renames, large
+snapshot churn) but it removes the latent silent-layout merge, which is the
+actual defect."
+
+Taken literally that is **wrong in one half and unnecessary in the other**. What
+the measurement found instead:
+
+### `type_eq` must NOT change -- it already does the right thing
+
+`type_eq` is not structural equality; it is an interchangeability relation with
+two deliberate rules for `TY_FN`:
+
+- Its very first statement (`types.c:90-103`) equates a **boxed** `TY_FN` with
+  `TY_PTR_VOID`, so closures flow through legacy `:ptr<void>` sinks with no
+  coercion node. Load-bearing back-compat.
+- `types.c:118-122` already refuses to equate a **cfnptr** with a **boxed** fn,
+  "what keeps a fat closure from silently flowing into a raw C callback sink."
+
+So `type_eq` already draws the one distinction that matters, and adding `boxed`
+to it would contradict its own opening rule. No change was made there. Verified
+empirically: a bare and a boxed `(fn [int] int)` in one `Option` share a single
+monomorph, and that is **correct** -- they are type_eq-equal, both 8 bytes, same
+bits, and the payload slot is `int64_t` either way.
+
+### The mangle DID have a real hole, and it was the cfnptr one
+
+The mangle's stated contract is "mangle exactly what `type_eq` compares." It
+covered arity + arg kinds + result kind -- but not the cfnptr-vs-boxed rule. So
+two types the checker holds **distinct** collided on one name:
+
+```c
+/* one program, both emitted, both under the SAME guard */
+#ifndef TUR_FN_tur_adt_Option__fn1_int__int
+static ... ctor_Option__fn1_int__int(bool _0, void * _1)                    { ... }
+#ifndef TUR_FN_tur_adt_Option__fn1_int__int          /* <- preprocessed away */
+static ... ctor_Option__fn1_int__int(bool _0, tur_fnptr_int64_t_int64_t_t _1) { ... }
+```
+
+Two registry entries, one C name, the second definition silently dropped, and
+the `(c-fn ...)` view left using the closure view's `void *` slot. **No
+diagnostic from any compiler, on any platform, at any warning level** -- unlike
+every other symptom in this report, which at least announced itself on a
+promoting toolchain. Benign only because every `TY_FN` representation happens to
+be a same-bits 8-byte word; a variant that is not would be a silent miscompile.
+
+Fix: one token, `if (t.as.fn.cfnptr) buf_putc(b, 'c')`. `boxed` is deliberately
+NOT mangled -- boxed and bare share one registry entry, so mangling it would
+only make that entry's name depend on registration order.
+
+The feared "corpus-wide symbol renames, large snapshot churn" did not
+materialize, because only `cfnptr` moved and almost nothing uses a `(c-fn ...)`
+as a container element: **4 snapshots, 8 lines, all of it one typedef changing
+position.**
+
+### It exposed a latent ordering bug
+
+With the names split, the `(c-fn ...)` monomorph is emitted for the first time
+-- and it names `tur_fnptr_int64_t_int64_t_t` in its own typedef and ctor, while
+the final assembly wrote fn-ptr typedefs *after* the ADT monomorphs. That was a
+dangling reference the `#ifndef` collision had been hiding.
+
+The two orders are both load-bearing and now differ on purpose
+(`emit_module.c`): **generation** must run `adt_apps` first, because emitting a
+monomorph is what *registers* the fn-ptr typedefs via `type_c_name`; **output**
+must put the typedefs first, because a monomorph over a cfnptr element
+references one.
+
+### Coverage
+
+- `tests/check-monomorph-name-collision.sh` gains the `cfnptr-vs-boxed` repro.
+  Verified to fail loudly on a revert, on **both** of the guard's properties
+  (A: one guard, two different bodies; B: the expected second name absent).
+- `tests/fixtures/cfnptr-vs-boxed-monomorph-split` pins that both views still
+  run -- `11` through a bare code pointer, `42` through the fat protocol.
+
+The two views must never meet at a call site in either repro: the checker
+rejects that on its own with TUR-E0001, so a crossing repro would never reach
+codegen. That is also why the merge survived so long -- the only way to reach it
+is two separate functions.
 
 ### Validation
 
 | Check | Result |
 | --- | --- |
 | The four fixtures, `tur build` on Apple clang 21 | build clean, stdout matches `expected.stdout` |
-| `bash tests/run.sh` (macOS arm64) | `2500 passed, 0 failed` |
-| `tur run regen-snapshots -- --check` | `140 snapshots are up to date` -- **zero** codegen drift |
-| `tests/run-jit.sh` (Release + `-DTUR_JIT=ON`, macOS arm64) | `2415 passed, 0 failed, 47 skipped` |
+| `bash tests/run.sh` (macOS arm64) | `2502 passed, 0 failed` |
+| `tur run regen-snapshots -- --check` | `140 up to date` (4 regenerated for the cfnptr ordering fix; see below) |
+| `tests/run-jit.sh`, Debug+JIT+ASan (CI's config) | `2416 passed, 0 failed, 48 skipped` |
+| `tests/check-monomorph-name-collision.sh` | all checks passed, incl. the new `cfnptr-vs-boxed` repro |
+| `tests/check-typekind-mangle-exhaustive.sh` | all checks passed |
 
-Zero snapshot drift is the notable one: both fixes are strictly additive
-branches that fire only on shapes that previously emitted invalid C, so no
-already-valid emission moved.
+The two bridge fixes caused **zero** snapshot drift -- both are strictly
+additive branches firing only on shapes that previously emitted invalid C, so no
+already-valid emission moved. The 4 regenerated snapshots come from the separate
+cfnptr mangle/ordering fix below, and are one typedef changing position.
 
 `tools/check_crossing_routing.py` counts one new `emit_var_spec_arg_type` call
 site; the registry and the audit table in

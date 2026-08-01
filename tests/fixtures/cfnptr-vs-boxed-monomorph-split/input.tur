@@ -1,0 +1,38 @@
+;; cfnptr-vs-boxed-monomorph-split -- a (c-fn [int] int) and an ordinary
+;; (fn [int] int) holding a CAPTURING closure are type_eq-DISTINCT: types.c
+;; refuses to equate a cfnptr with a boxed fn, because a fat closure must never
+;; flow into a raw C callback sink.  They must therefore get distinct monomorph
+;; C names when they appear as the element of the same container family.
+;;
+;; They did not.  append_type_mangle carried arity + arg kinds + result kind but
+;; not `cfnptr`, so both mangled to `fn1_int__int`: two registry entries, ONE C
+;; name, and the second `#ifndef TUR_TY_` / `TUR_FN_` block preprocessed away --
+;; the c-fn view silently adopting the closure view's `void *` ctor slot in
+;; place of its own `tur_fnptr_int64_t_int64_t_t`.  No compiler emitted a
+;; diagnostic, on any platform or warning level; it was benign only because
+;; every TY_FN representation happens to be a same-bits 8-byte word.
+;;
+;; See docs/archive/macos-int-conversion-carrier-pointer-straddles.md.  The
+;; emitted-name half is pinned by tests/check-monomorph-name-collision.sh
+;; (repro `cfnptr-vs-boxed`); this fixture pins that both views still RUN.
+;;
+;; The two views deliberately never meet at a call site -- the checker rejects
+;; that on its own (TUR-E0001), so a crossing repro would never reach codegen.
+
+(defn bare-inc [x : int] : int (+ x 1))
+
+;; The raw C-ABI view: a bare, captureless fn is a genuine code pointer.
+(defn use-c [v : int] : int
+  (let [o (:: (some bare-inc) (Option (c-fn [int] int)))]
+    (if (some? o) ((unwrap o) v) (- 0 1))))
+
+;; The closure view: capturing, so boxed -- a fat { thunk, env } box.
+(defn use-t [v : int] : int
+  (let [c 41
+        o (some (fn [x : int] : int (+ x c)))]
+    (if (some? o) ((unwrap o) v) (- 0 1))))
+
+(defn main [] : int
+  (println (use-c 10))   ; 11 -- called as a bare code pointer
+  (println (use-t 1))    ; 42 -- called through the fat protocol
+  0)

@@ -3793,6 +3793,8 @@ struct __tur_sym {
 };
 #endif
 
+typedef int64_t (*tur_fnptr_int64_t_int64_t_t)(int64_t);
+
 #ifndef TUR_TY_tur_adt_Option__fn1_int__int
 #define TUR_TY_tur_adt_Option__fn1_int__int
 typedef struct tur_adt_Option__fn1_int__int {
@@ -3883,8 +3885,6 @@ static int64_t ctor_Option__Zipper__struct(bool _0, int64_t _1) {
 }
 
 #endif
-
-typedef int64_t (*tur_fnptr_int64_t_int64_t_t)(int64_t);
 
 static bool __tur_fatshim_bool_int64_t_int64_t(void *__e, int64_t a0, int64_t a1) {
     return ((bool (*)(int64_t, int64_t))(intptr_t)((int64_t *)__e)[1])(a0, a1);
