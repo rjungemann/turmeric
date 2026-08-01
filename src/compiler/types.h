@@ -1844,6 +1844,7 @@ bool         type_is_transparent_int_newtype(Type t);
  * (see types.c). Consulted by BOTH the elab call-site shim and the emit
  * invoke dispatch -- do not fork this logic. */
 bool         fn_param_type_is_fat_normalized(const Type *t);
+bool         fn_result_type_is_fat_normalized(const Type *t);
 /* Phase HRT0: compute the rank of a type (0 = monotype, 1 = rank-1, ≥2 = higher-ranked) */
 int          type_rank(const Type *t);
 

@@ -3,17 +3,36 @@
 **Severity:** medium (miscompile: clean compile, crashes at run time; a
 carrier-eligible-signature workaround exists).
 
-**Status:** PARTIALLY RESOLVED 2026-07-30 -- fn-value-fat-normalization
-stage 1 landed with a narrowed claim
-([docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md)).
-Of the crash table below: the by-value struct arg/result rows, heap-result
-shapes, and the `^linear`/`^borrow` rows are FIXED (concrete effect-free
-signatures are fat-normalized; pinned by
-`tests/fixtures/fn-value-fat-normalized-params/`).  Still crashing, and
-now explicitly out of the narrowed claim: the tyvar arg/result rows
-(arguments arrive thin through the generic/carrier machinery) and the
-effect-row row (the thin convention is load-bearing for the CPS backend).
-The report stays open for those rows.
+**Status:** ONE ROW LEFT -- **the effect row**. Everything else in the crash
+table below is fixed and pinned. The report stays open only for
+`(fn [] #fx{Write} int)`; its title still applies to that row.
+
+- **2026-07-30, stage 1** -- by-value struct arg/result, heap results, and
+  the `^linear`/`^borrow` rows: FIXED (concrete effect-free signatures are
+  fat-normalized; pinned by `tests/fixtures/fn-value-fat-normalized-params/`).
+- **2026-08-01, increment 2** -- the tyvar arg/result rows, including this
+  report's own minimal repro, are FIXED and pinned by
+  `tests/fixtures/fn-value-fat-normalized-tyvar-params/`. Stage 1 had
+  excluded them because "arguments arrive thin through the generic/carrier
+  machinery"; that turned out to name two missing shim SITES rather than a
+  representation problem -- a call through a rank-2/forall param
+  (`elab_poly_call`), and the make-struct fn-field store, which was boxing an
+  already-normalized param a second time. Lifting the exclusion on the
+  post-stage-2 tree cost 2 behavioral fixtures, not stage 1's 10, and both
+  were those two sites. `--known-probes` prints FIXED for the tyvar-result
+  probe, and the `tyvar_run` avoid rule is retired from the fuzzer.
+- **Still open: the effect row.** An effectful callback's thin convention is
+  load-bearing for the CPS backend. Re-measured 2026-08-01 with the tyvar
+  half in place: lifting it regresses **22** fixtures -- 17 effect/cps
+  behavioral (colored fn values have their own twin/trampoline calling
+  convention), and, more seriously, **5 `tests/fixtures/errors/effect-*`
+  negative fixtures stop diagnosing at all**, so effect-row checking itself
+  reads the thin representation. That is a CPS-backend increment, not a
+  param-side rule. Pinned as a probe:
+  `poly-result-hof-capturing-closure-sigbus (effect row)` in
+  `tests/type-fuzz-src.py --known-probes`.
+
+Plan: [docs/upcoming/fn-value-fat-normalization-plan.md](../upcoming/fn-value-fat-normalization-plan.md).
 
 Root cause identified and mechanism confirmed (2026-07-29);
 the fix is a calling-convention change, not a patch -- see
@@ -39,20 +58,23 @@ The report's headline (and its control table) says the trigger is specifically
 `build/tur` at `ae00d40c`, all of these compile clean and then crash
 identically (SIGSEGV rc=139 on Linux; the report saw SIGBUS rc=138):
 
-| `(fn ...)` parameter shape, capturing closure passed | result |
-| --- | --- |
-| concrete `int` result | **OK** |
-| concrete `float` result | **OK** |
-| `^fat` param | **OK** |
-| stored in a `defstruct` fn-typed *field* | **OK** (fixed separately, see below) |
-| tyvar **result** -- `(fn [] R)` (the report's case) | **crash** |
-| tyvar **argument** -- `(fn [A] int)` | **crash** |
-| by-value struct **result**, no tyvar anywhere | **crash** |
-| by-value struct **argument**, no tyvar anywhere | **crash** |
-| effect row -- `(fn [] #fx{Write} int)`, no tyvar | **crash** |
-| `^linear` param | **crash** |
-| `^borrow` param | **crash** |
-| *non-capturing* closure, tyvar result (control) | **OK** |
+The **as-filed** column is the 2026-07-29 measurement; **today** is
+2026-08-01, after stage 1 and increment 2 of the normalization plan.
+
+| `(fn ...)` parameter shape, capturing closure passed | as filed | today |
+| --- | --- | --- |
+| concrete `int` result | **OK** | OK |
+| concrete `float` result | **OK** | OK |
+| `^fat` param | **OK** | OK |
+| stored in a `defstruct` fn-typed *field* | **OK** (fixed separately, see below) | OK |
+| tyvar **result** -- `(fn [] R)` (the report's case) | **crash** | **fixed** (increment 2) |
+| tyvar **argument** -- `(fn [A] int)` | **crash** | **fixed** (increment 2) |
+| by-value struct **result**, no tyvar anywhere | **crash** | **fixed** (stage 1) |
+| by-value struct **argument**, no tyvar anywhere | **crash** | **fixed** (stage 1) |
+| effect row -- `(fn [] #fx{Write} int)`, no tyvar | **crash** | **still crashes** |
+| `^linear` param | **crash** | **fixed** (stage 1) |
+| `^borrow` param | **crash** | **fixed** (stage 1) |
+| *non-capturing* closure, tyvar result (control) | **OK** | OK |
 
 So a type variable is neither necessary nor special. The rule is: **a capturing
 closure crashes whenever the `(fn ...)` parameter is not routed through one of
@@ -150,6 +172,8 @@ working programs is worse than the status quo, so nothing was landed.
 
 ## Summary (as originally filed)
 
+(Historical -- the shape described here is fixed; see **Status** at the top.)
+
 A **capturing** closure passed to a higher-order function whose result type is
 a **type variable** (`(fn [] R) ... : R`) compiles without error and then
 crashes at run time (SIGBUS, exit 138). A non-capturing closure is fine, and a
@@ -214,9 +238,25 @@ the memory notes on poly-closure-result specialization
 
 ## Reproduce
 
-`tur run` the snippet above with any current `build/tur` (seen at v0.31.0).
-The monomorphic control in the table is the fastest confirmation it is the
-result tyvar and not the capture.
+**The snippet above no longer reproduces** -- it prints `8` since increment 2
+(2026-08-01). To reproduce what is left of this report, use the effect-row
+shape instead:
+
+```turmeric
+(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
+(defn main [] #fx{Write} : int
+  (let [k 7]
+    (println (run (fn [] #fx{Write} : int (+ k 1)))))
+  0)
+```
+
+```
+$ tur run fxbug.tur   ; compiles clean, then:
+rc=139   (SIGSEGV), no output
+```
+
+Same shape as the original, one `#fx{...}` annotation away. The control is the
+same snippet with the effect annotations dropped, which prints `8`.
 
 ## Guide upkeep
 

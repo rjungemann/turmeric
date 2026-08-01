@@ -147,12 +147,15 @@ def known_bug_slug(tags):
     # (Retired 2026-07-30 by fn-value-fat-normalization stage 1: thin fn
     # params with CONCRETE non-carrier-safe signatures -- by-value and heap
     # results/args -- are fat-normalized now, so those thin_hof shapes are
-    # back in the default pool.  The tyvar-result rule below remains: tyvar
-    # signatures are excluded from the narrowed stage-1 claim.)
-    # A capturing closure through a tyvar-result HOF ((fn [] R) : R) crashes
-    # for every wrapper -- same report, widest trigger.
-    if "tyvar_run" in tags:
-        return "poly-result-hof-capturing-closure-sigbus"
+    # back in the default pool.)
+    # (Retired 2026-08-01 by fn-value-fat-normalization increment 2: TYVAR
+    # signatures are fat-normalized too -- the carrier-side feeds that stage 1
+    # was waiting on (a call through a rank-2/forall param, and the
+    # make-struct fn-field store) now shim as well -- so tyvar_run legs are
+    # back in the default pool.  Pinned by
+    # tests/fixtures/fn-value-fat-normalized-tyvar-params/.  What is still
+    # open in that report is the EFFECT-ROW row only, which the generator
+    # does not produce: no leg wrapper emits an effect-annotated fn param.)
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31 by
     # consolidation increment 2 -- continuation-wrapper ABI paired with the
     # selected entry point + ascription-aware carrier-type recovery -- and
@@ -172,6 +175,11 @@ def known_bug_slug(tags):
 # keep the avoid list honest: when one prints `fixed`, retire its
 # known_bug_slug row.
 KNOWN_PROBES = [
+    # The tyvar-result and by-value-result rows are FIXED (stage 1 and
+    # increment 2 of fn-value-fat-normalization) and pinned by
+    # tests/fixtures/fn-value-fat-normalized-{,tyvar-}params/.  They stay here
+    # as regression probes: --known-probes prints FIXED for both, and a future
+    # regression flips them back to `fires` without waiting for a fuzz session.
     ("poly-result-hof-capturing-closure-sigbus (tyvar result)",
      "(defn run [R] [body : (fn [] R)] : R (body))\n"
      "(defn main [] : int\n"
@@ -181,6 +189,12 @@ KNOWN_PROBES = [
      "(defn call [f : (fn [] FzB)] : FzB (f))\n"
      "(defn main [] : int\n"
      "  (let [k 7] (println (.a (call (fn [] (FzB k))))))\n  0)\n"),
+    # The one row of that report still open: an EFFECT-ANNOTATED fn param
+    # keeps the thin convention (load-bearing for the CPS backend).
+    ("poly-result-hof-capturing-closure-sigbus (effect row)",
+     "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
+     "(defn main [] #fx{Write} : int\n"
+     "  (let [k 7] (println (run (fn [] #fx{Write} : int (+ k 1)))))\n  0)\n"),
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
     # archived; probe retired -- pinned by
     # tests/fixtures/result-monad-bind-typed-boundary/.)

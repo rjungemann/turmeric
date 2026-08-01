@@ -1,0 +1,53 @@
+;; fn-value-fat-normalized-tyvar-params -- increment 2 of
+;; docs/upcoming/fn-value-fat-normalization-plan.md: a fn-typed parameter whose
+;; SIGNATURE CONTAINS A TYPE VARIABLE is fat-normalized like any other nominal
+;; fn param, so a capturing closure through it works.  These are the tyvar rows
+;; of the poly-result-hof-capturing-closure-sigbus crash table -- the report's
+;; own headline repro is `run` below.
+;;
+;; Stage 1 had to exclude tyvar signatures because such a param is also fed
+;; through the generic/carrier machinery, where the call-site shim never runs.
+;; The two feeds that were missing are pinned here as well:
+;;   - `use-twice` calls THROUGH a rank-2 forall param (`l.fn(l.env, arg)`);
+;;   - `mk-box` stores a normalized param into a fat struct field, which must
+;;     pass the handle through rather than box it a second time.
+
+;; tyvar RESULT + capturing closure -- the report's minimal repro (was SIGBUS/SIGSEGV)
+(defn run [R] [body : (fn [] R)] : R (body))
+
+;; tyvar ARGUMENT + capturing closure (was: SIGSEGV)
+(defn apply1 [A] [body : (fn [A] int) x : A] : int (body x))
+
+;; tyvar on both sides, and the closure captures across the call
+(defn map1 [A B] [f : (fn [A] B) x : A] : B (f x))
+
+;; A tyvar-sig param forwarded into another tyvar-sig slot: pass through, do
+;; not re-shim (the double-box reads the fat handle as code).
+(defn fwd [A] [g : (fn [A] int) y : A] : int (apply1 g y))
+
+;; A tyvar-sig param stored into a fat struct field, then called back out.
+(defstruct BoxF :copy [A] (call (fn [A] int)))
+(defn mk-box [A] [g : (fn [A] int)] : (BoxF A) (make-struct BoxF :call g))
+(defn run-box [A] [b : (BoxF A) x : A] : int ((.call b) x))
+
+;; Calling THROUGH a rank-2 forall param: the argument reaches the callee's
+;; tyvar-sig slot via the carrier, so the shim has to happen at the poly call.
+(defn twice-fn [A] [g : (fn [A] A)] : (fn [A] A)
+  (fn [x : A] : A (g (g x))))
+(defn inc [n : int] : int (+ n 1))
+(defn use-twice [l (forall [a] (-> (-> a a) (-> a a)))] : int
+  ((l inc) 10))
+
+;; A bare (non-capturing) top-level fn through the same slots still works.
+(defn double-it [n : int] : int (* n 2))
+
+(defn main [] : int
+  (let [k 7]
+    (println (run (fn [] : int (+ k 1))))              ; 8
+    (println (apply1 (fn [y : int] : int (+ k y)) 5))  ; 12
+    (println (map1 (fn [y : int] : int (* k y)) 6))    ; 42
+    (println (fwd (fn [y : int] : int (- y k)) 10))    ; 3
+    (println (run-box (mk-box (fn [y : int] : int (+ y k))) 100))  ; 107
+    (println (apply1 double-it 21))                    ; 42
+    (println (use-twice twice-fn)))                    ; 12
+  0)

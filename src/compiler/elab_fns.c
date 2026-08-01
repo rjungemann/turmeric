@@ -3795,7 +3795,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 {
                     Type *nr = ann->as.fn.result_full_type;
                     while (nr && nr->kind == TY_FN && !nr->as.fn.boxed &&
-                           fn_param_type_is_fat_normalized(nr)) {
+                           fn_result_type_is_fat_normalized(nr)) {
                         nr->as.fn.boxed = true;
                         nr = nr->as.fn.result_full_type;
                     }
@@ -6027,7 +6027,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             !fn_type.as.fn.result_fat &&
             rft->as.fn.result_kind != TY_FN &&
             rft->as.fn.result_kind != TY_UNKNOWN &&
-            fn_param_type_is_fat_normalized(rft) &&
+            fn_result_type_is_fat_normalized(rft) &&
             !(b->name && b->name->name &&
               strncmp(b->name->name, "__inst_", 7) == 0)) {
             elab_normalize_fn_tail_leaves(e, &body, rft, NULL);

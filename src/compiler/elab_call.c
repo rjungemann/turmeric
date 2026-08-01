@@ -2974,6 +2974,21 @@ Expr *elab_call(Elab *e, Form *call) {
                     Expr *fa = call_expr->as.call_.args[fi];
                     if (!fa || fa->type.kind != TY_FN || fa->type.as.fn.boxed)
                         continue;
+                    /* fn-value-fat-normalization increment 2: a NORMALIZED fn
+                     * param already holds a fat handle even though its declared
+                     * type is not marked `boxed` (normalization is a property of
+                     * the type, not a flag on it).  Storing it into a fat field
+                     * must pass through -- the `boxed` test above cannot see it,
+                     * and re-boxing makes the field's slot 0 the outer shim, so
+                     * the field call runs the handle as code.  This is the
+                     * struct-store twin of the A#1 forwarding guard; it is what
+                     * `stdlib/lens.tur`'s `(lens get put)` hits once `get`/`put`
+                     * (tyvar signatures) are normalized. */
+                    if (fa->kind == EX_VAR && fa->as.var.binding &&
+                        fa->as.var.binding->is_param &&
+                        (fa->as.var.binding->is_fat ||
+                         fn_param_type_is_fat_normalized(&fa->as.var.binding->type)))
+                        continue;
                     uint32_t inner_arity = fa->type.as.fn.arity;
                     if (inner_arity < 1 || inner_arity > 5) continue;
                     Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -7480,6 +7495,31 @@ static Expr *elab_poly_call(Elab *e, const Form *call, Binding *fn_binding) {
                     }
                     args[i] = wrap;
                     poly_arg_mask |= ARG_IDX_BIT(i);
+                    continue;
+                }
+                /* fn-value-fat-normalization increment 2: a fn-typed slot in
+                 * the forall body is fat-normalized like any other nominal fn
+                 * param, so a bare/thin fn argument must be shimmed HERE too.
+                 * This call goes through the carrier (`l.fn(l.env, arg)`), so
+                 * the A#1 call-site shim never sees it -- that gap is what made
+                 * the tyvar rows of the poly-result crash table survive stage 1
+                 * ("a tyvar-sig param's arguments arrive through the
+                 * generic/carrier machinery as thin pointers the call-site shim
+                 * cannot see").  Every function reachable through this forall
+                 * declares the same slot type, so both ends agree by type.
+                 * Already-fat values (boxed TY_FN, TY_PTR_VOID) pass through. */
+                if (aft && aft->kind == TY_FN &&
+                    fn_param_type_is_fat_normalized(aft) &&
+                    args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed &&
+                    args[i]->type.as.fn.arity >= 1 &&
+                    args[i]->type.as.fn.arity <= 5) {
+                    Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *bt = args[i]->type;
+                    bt->as.fn.boxed = true;
+                    Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt,
+                                          args[i]->span);
+                    shim->as.fn_to_fat_.inner = args[i];
+                    args[i] = shim;
                 }
             }
         }

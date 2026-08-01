@@ -129,6 +129,7 @@ claim, do not patch the misses):
   regress -- a tyvar-sig param's arguments arrive through the
   generic/carrier machinery as thin pointers the call-site shim cannot
   see.  Deferred to the carrier-side increments (meta-plan 2+).
+  **Lifted 2026-08-01 by increment 2 below.**
 
 One post-flip defect found and fixed by the s1c probe: a normalized param
 FORWARDED as an argument into another normalized slot was double-shimmed
@@ -175,6 +176,81 @@ first three bridges (the two curried fixtures), **2438/0** with bridge 4.
 The full boundary matrix of `fn-typed-value-return-ascribe-miscompiles` --
 broken rows included -- is pinned in
 `tests/fixtures/fn-value-matrix-ok-rows/`.
+
+## Increment 2 -- LANDED 2026-08-01 (tyvar signatures; the carrier-side feeds)
+
+Stage 1 deferred tyvar-signature params on a diagnosis that turned out to
+name exactly two missing shim sites, not a representation problem: "a
+tyvar-sig param's arguments arrive through the generic/carrier machinery as
+thin pointers the call-site shim cannot see."  Both feeds are now shimmed,
+so the exclusion is gone from `fn_param_type_is_fat_normalized`.
+
+**Re-measuring first.** Lifting the tyvar exclusion on the post-stage-2 tree
+costs **2** behavioral fixtures, not the 10 stage 1 saw -- stage 2's
+return/let/ascribe bridges had already absorbed most of that set.  Both
+survivors were one mechanism each:
+
+1. `hrt-curried-fn-result` -- `((l inc) 10)` where `l` is a rank-2 forall
+   param.  The call goes through the carrier (`l.fn(l.env, arg)`), a path
+   `elab_poly_call` owns and the A#1 call-site shim never reaches.  Fixed by
+   shimming fn-typed slots of the forall body there, beside the existing
+   `TY_FORALL`-slot `EX_POLY_WRAP` handling.  Both ends agree by TYPE: every
+   function reachable through that forall declares the same slot.
+2. `stdlib-lens-record-field` -- `(lens get put)` where `get`/`put` are now
+   normalized params being stored into fat struct fields.  The make-struct
+   store shim's already-fat test is `type.as.fn.boxed`, which a normalized
+   param does not set (normalization is a property of the type, not a flag
+   on it), so the handle was boxed a SECOND time and the field call ran it as
+   code.  Fixed with the store-side twin of the A#1 forwarding guard.
+
+**The param/result asymmetry is deliberate.** A tyvar-sig fn type is
+normalized in PARAM position but NOT as a declared RESULT --
+`fn_result_type_is_fat_normalized` (new) keeps the concrete-only claim and is
+what stages 2's tail normalizer and the nested-annotation boxer consult.
+Widening the result side too double-boxes against the hrt-curried-result
+poly-call protocol, which boxes returned closures itself.  The two sides may
+differ safely because the call-site shim normalizes whatever it is handed.
+`repr_of` routes on `REPR_POS_PARAM` so the ABI trace reports the same split.
+
+**Measurements**
+
+| | `run.sh` | behavioral | `run-turi.sh` |
+| --- | --- | --- | --- |
+| baseline | 2503 / 0 | -- | 1701 / 0 |
+| tyvar flip, no carrier-side work | 2361 / 142 | 2 | -- |
+| + both shims | 2363 / 140 | **0** | -- |
+| + snapshot regen + acceptance fixture | **2504 / 0** | 0 | **1702 / 0** |
+
+The 140 snapshots are one function: the auto-loaded stdlib's `consume`
+(a tyvar-sig fn param, so present in every program) moving from thin to fat
+dispatch -- exactly the "1 in the auto-loaded stdlib" stage 0's blast-radius
+probe predicted.  `--known-probes` now prints FIXED for both poly-result
+rows, the `tyvar_run` `known_bug_slug` row is retired, and `--n 500` on two
+fresh seeds (1337, 20260801) is green with those legs back in the pool.
+
+**Perf: no measurable cost on real workloads, one synthetic cliff.**
+`benchmarks/run-benchmarks.sh` on Release builds either side: 4 of 11
+benchmarks run (the other 7 fail identically before and after -- pre-existing),
+and those 4 are unchanged (86->86ms, 132->131ms, 3->2ms; parsec-json's
+7->10ms harness reading is single-run noise -- best-of-5 on the built binary
+is 9.8ms before, 8.2ms after).
+
+The cliff is real but narrow: `EX_FN_TO_FAT` **mallocs a fresh `{shim, orig}`
+box every time it executes**, so a tight loop that passes a BARE GLOBAL fn
+into a tyvar-sig HOF now allocates per iteration.  A 20M-iteration
+`(apply1 add3 acc)` loop goes 0.003s -> 0.533s -- though the 0.003s is the C
+compiler deleting a loop it could inline through, so the multiplier is an
+artifact of an empty body, not a 175x on real code.  This is stage 1's
+mechanism, not increment 2's; increment 2 widens its population.
+
+Follow-up (not done here): a box whose `orig` is a static global fn and whose
+`shim` is a preamble symbol is a CONSTANT -- it wants a file-scope box filled
+once in `__tur_static_init`, not a malloc per execution.  The blocker is
+ownership, not layout: `tur_closure_drop` reads the `env[-1]` drop-glue header
+and a NULL header means "free the base allocation", so a static box handed to
+a drop path would `free()` a static address.  It needs a no-op drop-glue
+sentinel (or a proof that shim boxes never reach drop) before the hoist is
+safe.
 
 ## Stages
 

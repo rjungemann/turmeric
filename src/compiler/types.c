@@ -736,19 +736,29 @@ bool type_is_transparent_int_newtype(Type t) {
  *
  * Stage-1 measurement narrowed the claim (the CPS-graduation rule: when the
  * flip disagrees with the estimate, narrow the new path's claim rather than
- * patch the misses).  Two further exclusions, both measured 2026-07-30:
+ * patch the misses).  Increment 2 (2026-08-01) RESTORED the tyvar half of
+ * that narrowing by doing the carrier-side work it was waiting on: a
+ * tyvar-sig param's arguments arrive through the generic/carrier machinery,
+ * so the two paths that feed such a slot now shim there as well --
+ * `elab_poly_call` (a call THROUGH a rank-2/forall param, `l.fn(l.env, a)`)
+ * and the make-struct fn-field store (which must not re-box an already
+ * normalized param).  Named tyvars are therefore no longer excluded here.
+ *
+ * One exclusion remains, measured again 2026-08-01 with the tyvar half in:
  *   - effect rows -- an effectful callback's thin convention is LOAD-BEARING
- *     for the CPS backend (17 effect/cps fixtures regress behaviorally when
- *     normalized: colored fn values have their own twin/trampoline calling
- *     convention this predicate must not override);
- *   - named tyvars anywhere in the signature -- a tyvar-sig param's
- *     arguments arrive through the generic/carrier machinery as thin
- *     pointers the call-site shim cannot see (10 hkt-cata / van-laarhoven
- *     fixtures regress).  Normalizing those needs the carrier-side work
- *     (meta-plan increments 2+), not a param-side rule.
- * What remains normalized -- CONCRETE, EFFECT-FREE, non-carrier-safe
- * signatures (by-value aggregate args/results, heap-container results) --
- * is exactly the poly-result crash table's by-value rows. */
+ *     for the CPS backend.  Lifting it regresses 22 fixtures: 17 effect/cps
+ *     behavioral (colored fn values have their own twin/trampoline calling
+ *     convention this predicate must not override) and, more seriously, 5
+ *     `tests/fixtures/errors/effect-*` negative fixtures STOP diagnosing --
+ *     effect-row checking itself reads the thin representation.  That is a
+ *     CPS-backend increment, not a param-side rule.
+ *
+ * Note the asymmetry with fn_result_type_is_fat_normalized below: a tyvar-sig
+ * fn type is normalized in PARAM position but not as a declared RESULT.  The
+ * stage-2 tail normalizer would otherwise double-box against the
+ * hrt-curried-result poly-call protocol, which boxes returned closures
+ * itself.  The two sides may differ safely because the call-site shim
+ * normalizes whatever it is handed. */
 static bool fn_sig_type_has_tyvar(const Type *t) {
     if (!t) return false;
     if (t->kind == TY_TYVAR) return true;
@@ -765,20 +775,33 @@ static bool fn_sig_type_has_tyvar(const Type *t) {
     return false;
 }
 
+static bool fn_type_sig_has_named_tyvar_(const Type *t) {
+    if (t->as.fn.result_kind == TY_TYVAR) return true;
+    if (fn_sig_type_has_tyvar(t->as.fn.result_full_type)) return true;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+        if (t->as.fn.arg_kinds[i] == TY_TYVAR) return true;
+        if (t->as.fn.arg_full_types &&
+            fn_sig_type_has_tyvar(t->as.fn.arg_full_types[i]))
+            return true;
+    }
+    return false;
+}
+
 bool fn_param_type_is_fat_normalized(const Type *t) {
     if (!(t && t->kind == TY_FN && !t->as.fn.cfnptr &&
           !t->as.fn.is_variadic && t->as.fn.arity <= 5))
         return false;
     if (t->as.fn.effect_row) return false;
-    if (t->as.fn.result_kind == TY_TYVAR) return false;
-    if (fn_sig_type_has_tyvar(t->as.fn.result_full_type)) return false;
-    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
-        if (t->as.fn.arg_kinds[i] == TY_TYVAR) return false;
-        if (t->as.fn.arg_full_types &&
-            fn_sig_type_has_tyvar(t->as.fn.arg_full_types[i]))
-            return false;
-    }
     return true;
+}
+
+/* The RESULT-position twin: a defn whose declared result is a fn type returns
+ * a fat handle (stage-2 tail normalization), and a nested fn result inside a
+ * param annotation is marked boxed to match.  Narrower than the param rule --
+ * see the asymmetry note above. */
+bool fn_result_type_is_fat_normalized(const Type *t) {
+    if (!fn_param_type_is_fat_normalized(t)) return false;
+    return !fn_type_sig_has_named_tyvar_(t);
 }
 
 /* Append `name` folded to a valid C-identifier component: any non-[A-Za-z0-9_]
@@ -4611,8 +4634,13 @@ ReprForm repr_of(const Type *t, ReprPosition pos) {
         if (t->as.fn.cfnptr) return REPR_THIN_FN;
         if (t->as.fn.boxed) return REPR_FAT_HANDLE;
         if (pos == REPR_POS_CARRIER_SINK) return REPR_CARRIER_I64;
-        return fn_param_type_is_fat_normalized(t) ? REPR_FAT_HANDLE
-                                                  : REPR_THIN_FN;
+        /* Param and result positions ask different questions -- a tyvar-sig fn
+         * type is fat in a param slot and thin as a declared result. */
+        if (pos == REPR_POS_PARAM)
+            return fn_param_type_is_fat_normalized(t) ? REPR_FAT_HANDLE
+                                                      : REPR_THIN_FN;
+        return fn_result_type_is_fat_normalized(t) ? REPR_FAT_HANDLE
+                                                   : REPR_THIN_FN;
     }
 
     /* Erased/unresolved: the int64 carrier in every position. */
