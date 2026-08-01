@@ -137,6 +137,28 @@ repro contract-base "--enable=refined" \
 (defn main [] : int 0)
 EOF
 
+# macos-int-conversion-carrier-pointer-straddles: a `(c-fn ...)` and an
+# ordinary `(fn ...)` of the same signature are type_eq-DISTINCT whenever the
+# latter is a capturing (boxed) closure -- types.c:118-122 refuses to equate
+# them, because a fat closure must never flow into a raw C callback sink.  The
+# mangle did not carry `cfnptr`, so both landed on `fn1_int__int`: two registry
+# entries, one C name, and the second `#ifndef` block preprocessed away.  This
+# is a property-(A) repro -- the two guarded bodies differed (`void *` vs
+# `tur_fnptr_int64_t_int64_t_t` in the ctor slot) with no diagnostic from any
+# compiler.  Note the two views must NOT meet at a call site; the checker
+# rejects that on its own, which is why this needs two separate functions.
+repro cfnptr-vs-boxed "" tur_adt_Option__fn1_int__int tur_adt_Option__fnc1_int__int <<'EOF'
+(defn bare-inc [x : int] : int (+ x 1))
+(defn use-c [v : int] : int
+  (let [o (:: (some bare-inc) (Option (c-fn [int] int)))]
+    (if (some? o) ((unwrap o) v) (- 0 1))))
+(defn use-t [v : int] : int
+  (let [c 41
+        o (some (fn [x : int] : int (+ x c)))]
+    (if (some? o) ((unwrap o) v) (- 0 1))))
+(defn main [] : int 0)
+EOF
+
 echo
 if [ "$FAIL" -eq 0 ]; then
     echo "monomorph-name-collision: all checks passed"

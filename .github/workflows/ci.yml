@@ -195,24 +195,81 @@ jobs:
       # BLOCKING on macOS, non-blocking on Linux -- deliberately asymmetric,
       # by evidence rather than by preference:
       #
-      #   macOS: verified green on arm64 (Apple clang 21, macOS 27) at the
-      #     commit that adds this job -- 2414 passed, 0 failed, 47 skipped
-      #     (31 via the cc fallback).  A green baseline exists, so the leg gates.
-      #     This is also the leg that matters most: macOS is where the engine's
-      #     platform-specific hazards live (MAP_JIT/W^X, the AAPCS64
-      #     __uint128_t alignment skew, the Apple-SDK-header cc fallbacks).
+      #   macOS: verified green on arm64 (Apple clang 21, macOS 27) --
+      #     2416 passed, 0 failed, 48 skipped (17 via the cc fallback), measured
+      #     2026-08-01 in THIS JOB'S OWN CONFIGURATION (Debug + -DTUR_JIT=ON,
+      #     TUR_DEBUG_SANITIZE at its default ON).  A green baseline exists, so
+      #     the leg gates.  This is also the leg that matters most: macOS is
+      #     where the engine's platform-specific hazards live (MAP_JIT/W^X, the
+      #     AAPCS64 __uint128_t alignment skew, the Apple-SDK-header cc
+      #     fallbacks).
       #
-      #   Linux: NOT verified -- no Linux machine was available when this job
-      #     was written, and the corpus has never run under CI on any platform,
-      #     so asserting a green baseline there would be a guess.  It runs and
+      #     Re-measure IN THIS CONFIGURATION when you update these numbers.  The
+      #     previous baseline (2414 / 47 skipped / 31 fallback) was taken on an
+      #     unsanitized local build, and that mismatch is exactly why the leg
+      #     read red-for-months against a "known green" figure: six GC/Rc/weak
+      #     fixtures asserted on a process-wide malloc probe that ASan and
+      #     one-process `tur jit` both perturb.  See
+      #     docs/archive/jit-macos-gc-rc-weak-fixtures-fail.md.  A local
+      #     `-DTUR_DEBUG_SANITIZE=OFF` or Release build will NOT reproduce this
+      #     job.
+      #
+      #   Linux: NOT verified locally when this job was written, so it runs and
       #     publishes its counts without gating.
       #
       # FLIP LINUX TO BLOCKING (drop the matrix condition, leaving no
       # continue-on-error) as soon as the first run publishes a clean ubuntu
       # leg.  Do not let this sit asymmetric indefinitely.
+      #
+      #   The precondition is MET: run 30685603734 published a clean ubuntu leg
+      #   (ctest target passing outright, not continue-on-error hiding it).  The
+      #   flip is a gating-policy change and is deliberately left to a human.
+      #   One caveat worth knowing before making it: that green was PARTLY
+      #   VACUOUS on the GC/Rc/weak family, because the malloc probe those
+      #   fixtures used is `mallinfo2`, which reports ~nothing once ASan
+      #   replaces glibc's allocator.  As of 2026-08-01 they assert on the CG6
+      #   collector counters instead, so the Linux leg's green now means
+      #   something there too -- which makes the flip more worthwhile, not less.
       - name: Run JIT suites
         continue-on-error: ${{ matrix.os != 'macos-latest' }}
-        run: ctest --output-on-failure --progress --test-dir build -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$'
+        shell: bash
+        run: |
+          # `-V` rather than `--output-on-failure`, so the harness's own counts
+          # reach the log on a PASSING run too.
+          #
+          # This is not cosmetic.  Under --output-on-failure a green run prints
+          # nothing but ctest's own "100% tests passed", so the corpus counts
+          # are unobservable from CI -- and the baseline documented above can
+          # only ever be checked by running the suite by hand.  That is exactly
+          # how it drifted: 2414 / 47 skipped / 31 fallback, hand-measured on an
+          # unsanitized local build, against a job that builds sanitized.  The
+          # numbers disagreed for months and nothing surfaced it.
+          #
+          # -V alone would dump ~2500 PASS lines per leg, so the output is
+          # filtered to what is worth reading -- about 20 lines: each harness's
+          # summary, every FAIL line, ctest's own verdict, and the cc-fallback
+          # fixtures BY NAME (two archived JIT reports track exactly which
+          # fixtures fall back, and the count alone does not say which moved).
+          # The full unfiltered log stays in jit-ctest.log for a follow-up
+          # artifact upload if one is ever added.
+          #
+          # ctest's status is captured BEFORE the filter runs, so neither the
+          # grep's exit code (1 when nothing matches) nor the redirection can
+          # mask a failing suite.
+          #
+          # --no-tests=error because a `-R` that matches NOTHING exits 0.  The
+          # "Verify the JIT engine is actually present" step above catches the
+          # main way that happens (a build that silently lost -DTUR_JIT=ON), but
+          # any other break in test registration would sail through as a green
+          # step that ran no tests -- the same vacuous-pass shape that step
+          # exists to prevent.
+          set +e
+          ctest --test-dir build -V --no-tests=error \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' \
+                > jit-ctest.log 2>&1
+          rc=$?
+          grep -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|[0-9]+% tests passed|\*\*\*|Errors while running CTest' jit-ctest.log
+          exit $rc
 
       - name: Save ccache
         if: always()

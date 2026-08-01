@@ -65,7 +65,7 @@ fi
 # Every fixture here gets the ASan-clean checks.  Nothing that reads its result
 # from a malloc probe gets an OUTPUT check of any kind, because a malloc probe
 # does not measure the program's own heap once ASan is underneath it.  Measured
-# for gc-collects-strong-cycle:
+# on the fixture that used to be the only entry here:
 #
 #            collector on   collector off
 #   plain          0           1087232      <- the probe measures; run.sh asserts this
@@ -82,15 +82,23 @@ fi
 #     ~800000 (a clean 160 B/iteration of quarantined frees over 5000
 #     iterations, not a leak) and the check fails for a reason that has nothing
 #     to do with the collector.  See
-#     docs/archive/gc-leak-gate-darwin-sanitized-probe-drift.md, and the two
-#     Darwin heap reports archived before it for the same probe-vs-allocator
+#     docs/archive/history/gc-leak-gate-darwin-sanitized-probe-drift.md, and the
+#     two Darwin heap reports archived before it for the same probe-vs-allocator
 #     family.
 #
 # So a probe-output fixture is here for its ASan-clean checks only.  Its output
 # assertion lives in tests/run.sh, which compiles fixtures WITHOUT sanitizers --
 # where the probe measures what it claims to.  The skip is printed, not silent.
-PROBE_OUTPUT_FIXTURES="gc-collects-strong-cycle"
-CONTROL_FIXTURES="exg5-exists-cycle gc-stats-observability rcvec-cycle-is-collected"
+#
+# 2026-08-01: `gc-collects-strong-cycle` now reads the CG6 (gc-live-blocks)
+# counter instead of a malloc probe, so it MOVED to CONTROL_FIXTURES -- both of
+# its skips became real assertions.  The counter is program-scoped and ASan
+# cannot perturb it, so the sanitized numbers discriminate: 0 with the collector
+# on, 10000 with it off.  The malloc-probe version survives as the
+# `-heap-bytes` sibling below, which keeps the two skips because bytes still
+# catch a payload leak the block counter cannot see.
+PROBE_OUTPUT_FIXTURES="gc-collects-strong-cycle-heap-bytes"
+CONTROL_FIXTURES="exg5-exists-cycle gc-stats-observability rcvec-cycle-is-collected gc-collects-strong-cycle"
 
 # TUR_CC_FLAGS REPLACES the default compiler flags rather than appending, so the
 # defaults are restated here -- dropping -std=c99 alone is enough to fail the
