@@ -159,3 +159,9 @@ build-i4/
 # to publish the counts, not the log.  The pattern keeps the next one out.
 /*-ctest.log
 /ctest.log
+
+# CTest's own scratch directory, created by a bare `ctest` at the repo root
+# (everything here runs `ctest --test-dir build`, which writes build/Testing/
+# instead).  Testing/Temporary/{LastTest.log,CTestCostData.txt} were committed
+# by accident in #728 -- both stubs from a run that executed no tests.
+/Testing/
