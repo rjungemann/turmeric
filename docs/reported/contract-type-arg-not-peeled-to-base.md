@@ -151,3 +151,13 @@ error: defdata: constructor field type must be a keyword like :int, :bool, :cstr
 That is a parser-level restriction on field type spellings, upstream of
 anything here. Worth folding into the same pass if fix direction 2 is taken,
 since both want a contract to survive as a field type.
+
+## Guide upkeep
+
+This report is a row in the open-cells table of
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+-- it is the prerequisite for `TY_CONTRACT` getting a row in the
+`TY_SIMPLE_REPR_ROWS` / `type_has_concrete_codegen_layout` arrangement that
+guide describes. When it is resolved, move the row into the closed-cells table
+with a one-line resolution note and update the link to `docs/archive/` in the
+same PR.

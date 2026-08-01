@@ -1,5 +1,33 @@
 # turi: constrained by-value HKT bind/pure returns wrong values
 
+---
+status: NOT FIXED -- ABSORBED 2026-08-01 into
+[`turi-return-directed-method-keeps-baked-instance`](../reported/turi-return-directed-method-keeps-baked-instance.md)
+---
+
+**The defect is still open; only this file is closed.** This was a symptom
+report against one fixture. The root cause is `--interpret` keeping the
+elaboration-baked instance for a RETURN-directed class method, which is
+diagnosed and tracked in the report linked above -- read that one.
+
+Two things here are wrong and are corrected there, so do not act on them:
+
+- The "mis-slotted by-value Option carrier / interpreter readback" direction
+  (and the pointer at `src/turi/interpreter_natives.c`). The payload-
+  independence probe rules it out: `(pure-n (some 0) 7)` and
+  `(pure-n (some 0) 99)` both give `1`, so no `pure` runs and there is no value
+  to mis-slot.
+- "The sibling `hkt-constrained-continuation-dict` passes under turi, so plain
+  instance selection is fine." It carries inline-C and is PASS-**skipped** by
+  the TI7 carve-out. Run directly it gives `207 207` where `107 207` is wanted
+  -- the same defect.
+
+What this report established and the successor keeps: the failure is
+**pre-existing**, verified by A/B against the tree with the `^persistent`
+cstr-key fix stashed.
+
+---
+
 **Severity: medium.** Interpreter-only wrong output; the compiled path is
 correct. Found 2026-07-30 while running `tests/run-turi.sh` after the
 `^persistent` cstr-key fix; A/B against the pre-change tree confirms it is

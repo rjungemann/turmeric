@@ -5,9 +5,41 @@ any constrained generic that calls a return-directed class method (`pure`,
 `default-of`, ...). The compiled path is correct, so this is an
 interpreter/compiled divergence, not a miscompile.
 
-**Status:** open. Found 2026-07-30 while checking whether
+**Status:** open. Re-verified 2026-08-01 -- every repro below still reproduces
+on `main`. Found 2026-07-30 while checking whether
 `hkt-constrained-byvalue-bind-pure` (red under `run-turi`) was caused by local
 changes. It is not -- see [Nothing regressed](#nothing-regressed-a-carve-out-lifted).
+
+## Scope -- this report absorbs two symptom reports (2026-08-01)
+
+Two earlier reports described the *same defect* from the symptom end, both
+against the single fixture that surfaces it. They are archived; their content
+is folded in here, and this file is the one to read.
+
+| Archived | What it was |
+| --- | --- |
+| [`turi-hkt-constrained-byvalue-bind-pure-wrong-values`](../archive/turi-hkt-constrained-byvalue-bind-pure-wrong-values.md) | filed 2026-07-30: `hkt-constrained-byvalue-bind-pure` prints `1 / -1 / 1` under turi |
+| [`turi-hkt-byvalue-bind-pure-wrong-value`](../archive/turi-hkt-byvalue-bind-pure-wrong-value.md) | filed 2026-07-31: the same fixture, the same three numbers, re-discovered a day later |
+
+Both read the wrong `1` as a mis-slotted by-value `Option` carrier -- an
+interpreter *readback* bug -- and pointed at
+`src/turi/interpreter_natives.c`'s option/result carrier helpers. That
+direction is wrong, and the payload-independence probe below is what rules it
+out: `(pure-n (some 0) 7)` and `(pure-n (some 0) 99)` both interpret to `1`,
+so no `pure` is running at all and there is no payload to mis-slot. The `1` is
+the baked representative instance answering, not a misread value word.
+
+One claim from the first of the two should not be carried forward: it says
+"the sibling `hkt-constrained-continuation-dict` passes under turi, so plain
+instance selection is fine." That fixture carries an inline-C block and is
+PASS-**skipped** by the TI7 carve-out -- it is never executed. Run directly it
+gives `207 207` where `107 207` is wanted, which is this same defect. See
+[Nothing regressed](#nothing-regressed-a-carve-out-lifted).
+
+Both archived reports also independently established that the failure is
+**pre-existing**, each against a different suspect change (the `^persistent`
+cstr-key fix; consolidation increment 3). Neither caused it -- that question is
+settled twice over and does not need asking a third time.
 
 ## Repro
 
@@ -58,6 +90,32 @@ interpreted:              207  207
 
 One instance answers both call sites. Same for
 `hkt-constrained-continuation-dict`: `207 207` where `107 207` is wanted.
+
+## The suite-visible symptom (from the two absorbed reports)
+
+`tests/fixtures/hkt-constrained-byvalue-bind-pure` is the only member of the
+`hkt-constrained-*` family the interpreter actually runs, so it is the one red
+line this defect produces in `bash tests/run-turi.sh`:
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 ./build/tur --interpret \
+    tests/fixtures/hkt-constrained-byvalue-bind-pure/input.tur
+# prints:   1 / -1 / 1
+# expected: 42 / -1 / 7
+```
+
+Line by line, which is what identifies the mechanism:
+
+| Line | Shape | Interpreted | Why |
+| --- | --- | --- | --- |
+| 1 | `(bind (some 41) (fn [v] (pure (+ v 1))))` | `1`, want `42` | reaches `pure` inside a constrained callee |
+| 2 | `none` short-circuit | `-1`, correct | `bind` is receiver-dispatched and never calls the continuation |
+| 3 | `(just-pure (some 0))`, body `(pure 7)` | `1`, want `7` | reaches `pure` inside a constrained callee |
+
+The middle line being right is the tell: `bind` is receiver-dispatched and
+re-resolves correctly; only the two lines that reach the return-directed `pure`
+are wrong. As of 2026-08-01 this is the **sole** failure in a full
+`tests/run-turi.sh` run (1699 passed, 1 failed, 697 skipped).
 
 ## Why the existing fix does not cover it
 

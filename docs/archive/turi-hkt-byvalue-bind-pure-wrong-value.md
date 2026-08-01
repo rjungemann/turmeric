@@ -1,11 +1,33 @@
 ---
-status: open
+status: NOT FIXED -- ABSORBED 2026-08-01 into
+  docs/reported/turi-return-directed-method-keeps-baked-instance.md
 severity: medium
 discovered: 2026-07-31
 area: interpreter (turi HKT dict routing, Option value readback)
 ---
 
 # turi: `bind`-then-`pure` over constrained `^m` at `(Option int)` returns the is-some flag, not the value
+
+**The defect is still open; only this file is closed.** This was a duplicate:
+it re-discovered, a day later, the same fixture and the same three numbers
+already filed as
+`turi-hkt-constrained-byvalue-bind-pure-wrong-values.md`, and both are symptom
+reports on one root cause -- `--interpret` keeping the elaboration-baked
+instance for a RETURN-directed class method. Read
+[`turi-return-directed-method-keeps-baked-instance`](../reported/turi-return-directed-method-keeps-baked-instance.md)
+instead.
+
+The "is-some flag / wrong-slot readback" reading below is wrong: nothing is
+being read back, because no `pure` runs. See the payload-independence probe in
+the successor.
+
+What this report established and the successor keeps: the failure is
+**pre-existing**, verified independently of the other duplicate by reverting
+consolidation increment 3's only interpreter-side change.
+
+The `cps-tramp-resume-*` observation in the Notes below is a separate,
+harness-level issue tracked in
+[`ci-cps-tramp-turi-timeouts-under-load`](../reported/ci-cps-tramp-turi-timeouts-under-load.md).
 
 ## Summary
 

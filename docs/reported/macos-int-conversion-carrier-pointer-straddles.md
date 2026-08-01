@@ -115,3 +115,12 @@ Recording `ret_ct` when it is known restores the agreement the bridges assume.
 It is value-preserving; the only codegen movement in the whole corpus was
 `van-laarhoven-lens-wide-functor-show`, where two now-redundant
 `(const char *)(intptr_t)` casts dropped out (snapshot regenerated).
+
+## Guide upkeep
+
+This report is a row in the open-cells table of
+[docs/guides/value-representations-guide.md](../guides/value-representations-guide.md)
+-- carrier<->pointer straddles at the monomorphized-ctor arg slot and at
+fn-value return sites. When it is resolved (or the bridge it needs changes
+shape on the way), move the row into the closed-cells table with a one-line
+resolution note and update the link to `docs/archive/` in the same PR.
