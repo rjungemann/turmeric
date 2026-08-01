@@ -12,10 +12,31 @@
 #include "platform_fs.h"  /* mkstemps() on Windows */
 
 #include <errno.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* input_pending() needs a "are there bytes waiting on stdin" primitive.  That
+ * is poll() on POSIX and PeekNamedPipe() on Windows; see the function itself
+ * for why select() is not an option there.  windows.h is pulled in here rather
+ * than via a platform_*.h shim because this is the only TU in the compiler
+ * that needs it, and the lean/NOGDI/NOMINMAX trio keeps its macros (ERROR,
+ * min, max) from colliding with diag.h and friends above. */
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <io.h>       /* _get_osfhandle */
+#else
+#include <poll.h>
+#endif
 #include <unistd.h>
 
 /* Declared in main.c (non-static wrapper around compile_to_c) */
@@ -478,6 +499,35 @@ static void lsp_flush_dirty(LspSink *sink) {
  * Safe only because lsp_read_message reads straight from the fd with no
  * userspace buffer of its own — otherwise a buffered message could be sitting
  * in memory while poll() reported the fd quiet. */
+#ifdef _WIN32
+/* Windows has no poll() over stdio: select() is socket-only, and a pipe HANDLE
+ * is not a waitable synchronization object -- WaitForSingleObject on one tells
+ * you nothing about whether bytes are buffered.  PeekNamedPipe is the primitive
+ * that actually answers the question, sampled on a short tick until the
+ * deadline.
+ *
+ * A 10ms tick against the 200ms debounce is at most 20 wakeups per quiet
+ * period and bounds the added latency at one tick, which is far finer than a
+ * heuristic about human typing pauses needs.
+ *
+ * Anything that is not a pipe (a console stdin, i.e. someone driving the
+ * server by hand) makes PeekNamedPipe fail; report "quiet" in that case.  That
+ * is the safe direction: the caller analyzes the dirty document and loops, and
+ * because the flush clears the dirty flag the next iteration falls through to
+ * the blocking read.  Reporting "pending" instead would strand diagnostics
+ * until the client happened to send another message. */
+static int input_pending(int fd_in, int timeout_ms) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd_in);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    for (int waited = 0; ; waited += 10) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) return 0;
+        if (avail > 0) return 1;
+        if (waited >= timeout_ms) return 0;
+        Sleep(10);
+    }
+}
+#else
 static int input_pending(int fd_in, int timeout_ms) {
     struct pollfd pfd = { .fd = fd_in, .events = POLLIN, .revents = 0 };
     for (;;) {
@@ -486,6 +536,7 @@ static int input_pending(int fd_in, int timeout_ms) {
         return n > 0;
     }
 }
+#endif
 
 /* How long the client must go quiet before a changed document is analyzed. */
 #define LSP_ANALYSIS_DEBOUNCE_MS 200

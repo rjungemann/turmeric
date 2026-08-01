@@ -946,7 +946,17 @@ set_target_properties(tur_refine_solver PROPERTIES
 # the repo.  This target IS that surviving regression, and is now the whole of
 # the standing solver-soundness check, so it is built unconditionally.
 # See tests/unit/refine_corpus.c and tests/corpus/smtlib/README.md.
+#
+# "Unconditionally" means "on every platform that can run it".  The harness
+# sandboxes each corpus case behind fork() + waitpid(WNOHANG), so a case that
+# crashes or spins is contained and reported rather than taking the run down --
+# that isolation IS the harness, not an incidental detail, and there is no
+# fork() on Windows to build it on.  Rather than ship a Windows variant with
+# the containment quietly removed (a corpus that hangs instead of reporting is
+# worse than one that is absent), the target is POSIX-only.  The solver it
+# tests is pure portable C and is covered on Linux/macOS in CI.
 # ---------------------------------------------------------------------------
+if(NOT WIN32)
 add_executable(tur_refine_corpus
     ${CMAKE_SOURCE_DIR}/tests/unit/refine_corpus.c
     $<TARGET_OBJECTS:tur_core>
@@ -968,6 +978,7 @@ endif()
 set_target_properties(tur_refine_corpus PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+endif()  # NOT WIN32
 
 # ---------------------------------------------------------------------------
 # RT3: the VC-level differential fuzzer (tests/unit/refine_fuzz.c) compared the

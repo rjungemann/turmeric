@@ -48,8 +48,17 @@ struct ArenaSlab {
  * the faulting address still inside the old slab -- the strongest form of
  * the diagnostic, and the one that works when ASan's own allocator perturbs
  * the layout enough to hide the bug.  The protected regions are retained for
- * the life of the process (bounded, deliberate).  Opt-in only. */
-#ifndef NDEBUG
+ * the life of the process (bounded, deliberate).  Opt-in only.
+ *
+ * Unavailable on Windows, hence TUR_ARENA_GUARD rather than a bare NDEBUG
+ * test: the mode needs mprotect(PROT_NONE) to retire a mapping in place, and
+ * platform_mman.h deliberately emulates only anonymous mmap/munmap -- it
+ * declines mprotect rather than fake it (see the header's comment).  Since
+ * this is an opt-in diagnostic and not a correctness feature, the Windows
+ * build simply loses it and keeps the malloc path; TUR_DEBUG_ARENA_GUARD=1
+ * is a no-op there. */
+#if !defined(NDEBUG) && !defined(_WIN32)
+#define TUR_ARENA_GUARD 1
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -93,7 +102,7 @@ static void oom(void) {
 }
 
 static ArenaSlab *slab_new(size_t cap) {
-#ifndef NDEBUG
+#ifdef TUR_ARENA_GUARD
     if (arena_guard_mode()) {
         /* Page-rounded private mapping so arena_free can mprotect it whole.
          * cap absorbs the rounding slack (header + cap == mapping exactly). */
@@ -185,7 +194,7 @@ void arena_free(Arena *a) {
     ArenaSlab *s = a->head;
     while (s) {
         ArenaSlab *next = s->next;
-#ifndef NDEBUG
+#ifdef TUR_ARENA_GUARD
         if (arena_guard_mode()) {
             /* Retire the whole mapping: any stale pointer into this arena now
              * faults at the deref.  Never unmapped, so the address range is

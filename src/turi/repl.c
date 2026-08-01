@@ -32,6 +32,7 @@
 #include "interpreter_natives.h"  /* wk_register_* interpreter native overrides */
 #include "spice_loader.h"  /* RP3: auto-discover + load the enclosing spice */
 #include "ffi_thunk.h"     /* RP4: install per-export TuriNativeFn bindings */
+#include "platform_fs.h"   /* setenv/unsetenv on Windows */
 
 #include <ctype.h>
 #include <errno.h>
