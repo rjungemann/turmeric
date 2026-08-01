@@ -128,6 +128,21 @@ static inline int tur_setenv(const char *name, const char *value, int overwrite)
 }
 #define setenv(name, value, overwrite) tur_setenv((name), (value), (overwrite))
 
+/*
+ * unsetenv(3) -> _putenv_s(name, "").  Assigning the empty string is how the
+ * CRT removes a variable outright -- after it, getenv(name) returns NULL, not
+ * "".  POSIX unsetenv succeeds when the name is already absent, and so does
+ * this.  (EINVAL for a NULL/empty/'='-bearing name matches POSIX too.)
+ */
+static inline int tur_unsetenv(const char *name) {
+    if (!name || !*name || strchr(name, '=') != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return _putenv_s(name, "") == 0 ? 0 : -1;
+}
+#define unsetenv(name) tur_unsetenv((name))
+
 /* ---- Temp files ---------------------------------------------------------- */
 
 /*

@@ -7427,12 +7427,30 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (g_needs_regex_h) {
         /* MinGW ships no POSIX <regex.h>.  Fail at compile time with a sentence
          * that names the cause, rather than emitting a call to a regcomp that
-         * does not exist and letting the linker say "undefined reference". */
-        buf_puts(out, "#ifdef _WIN32\n");
-        buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
-        buf_puts(out, "#else\n");
-        buf_puts(out, "#include <regex.h>\n");
-        buf_puts(out, "#endif\n");
+         * does not exist and letting the linker say "undefined reference".
+         *
+         * The split-runtime artifact is the one place that diagnostic must not
+         * appear.  emit_rt_split_source() force-enables every gate, and the
+         * result is a committed file (src/runtime/generated/) that is both
+         * compiled into tur_core itself and spliced ahead of every JIT'd
+         * program -- so a bare #error there breaks the Windows build of the
+         * *compiler*, not one stdlib module.  Emit the plain include instead:
+         * it still carries regex.h into the spliced region on POSIX (a JIT'd
+         * regex program needs it, since this block sits above the split
+         * marker), and compiles away on Windows.  A Windows program that
+         * actually uses regex still gets the #error, from its own per-program
+         * emission where g_rt_split_all_gates is false. */
+        if (g_rt_split_all_gates) {
+            buf_puts(out, "#ifndef _WIN32\n");
+            buf_puts(out, "#include <regex.h>\n");
+            buf_puts(out, "#endif\n");
+        } else {
+            buf_puts(out, "#ifdef _WIN32\n");
+            buf_puts(out, "#error \"stdlib/re.tur needs POSIX <regex.h>, which MinGW does not provide; regex is not supported on Windows yet\"\n");
+            buf_puts(out, "#else\n");
+            buf_puts(out, "#include <regex.h>\n");
+            buf_puts(out, "#endif\n");
+        }
     }
     /* inline-c-function-scope-include-guards fix: emit every `#include`
      * directive that elab lifted from the top of an inline-C body so

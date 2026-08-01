@@ -23,6 +23,7 @@
 #include "diag.h"
 #include "lsp_session.h"
 #include "lsp_sym.h"
+#include "platform_fs.h"  /* setenv on Windows */
 
 static int passed = 0;
 static int failed = 0;

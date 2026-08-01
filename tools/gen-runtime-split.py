@@ -281,7 +281,10 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
 
-    with open(os.path.join(args.out, 'tur_rt_split.c'), 'w') as f:
+    # newline='\n' on every write below: these are committed artifacts, and the
+    # default text mode would translate to CRLF when regenerating on Windows,
+    # turning a content-free regen into a 3000-line whole-file diff.
+    with open(os.path.join(args.out, 'tur_rt_split.c'), 'w', newline='\n') as f:
         f.write(f'/* {GEN_NOTE}\n'
                 f' *\n'
                 f' * The Turmeric runtime as one TU: the emitted preamble '
@@ -291,7 +294,7 @@ def main():
                 f' * accessors.  source hash {hash_hex}. */\n')
         f.write(impl)
 
-    with open(os.path.join(args.out, 'tur_rt_split_decls.h'), 'w') as f:
+    with open(os.path.join(args.out, 'tur_rt_split_decls.h'), 'w', newline='\n') as f:
         f.write(f'/* {GEN_NOTE}\n'
                 f' *\n'
                 f' * Declarations-only image of the runtime preamble: what '
@@ -303,7 +306,7 @@ def main():
                 f' * tur_rt_split_embed.c.  source hash {hash_hex}. */\n')
         f.write(decls)
 
-    with open(os.path.join(args.out, 'tur_rt_split_embed.c'), 'w') as f:
+    with open(os.path.join(args.out, 'tur_rt_split_embed.c'), 'w', newline='\n') as f:
         f.write(f'/* {GEN_NOTE} */\n')
         f.write('#include <stdint.h>\n#include <stddef.h>\n\n')
         f.write('/* xxHash64 of the exact `tur emit-rt-split` text these '
