@@ -91,6 +91,15 @@ So `Test (macos-latest)` is not an undiagnosed macOS-only defect. It is a
 known, filed, platform-independent codegen bug that only Linux's warn-instead-
 of-error posture hides. **Fixing the straddle report turns this job green.**
 
+Corroborated on PR #753 (job 91329206395, head `5662aab4`): the same four
+fixtures, the same two error shapes, and `summary: 2496 passed, 4 failed` --
+the pass count moved by exactly +1 against main's 2495, which is that PR's one
+added fixture. The failing set is stable and does not drift with unrelated
+work, so it is a fixed, enumerable list rather than a flaky or load-dependent
+one. That also makes this job usable as a regression signal despite being red:
+a *fifth* name appearing, or a count that does not move by the number of
+fixtures a PR adds, is real news.
+
 ## Still open: `JIT engine (macos-latest)`
 
 Not identified. The Actions log API returns a fixed ~3.5 KB tail window
