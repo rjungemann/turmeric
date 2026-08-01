@@ -1,10 +1,38 @@
 # Windows Support -- Remaining Work
 
-**Status:** WIN0 (compiler/runtime), WIN1 (generated-code portability), and the
-hard core of WIN3 (async I/O + fiber context switches) are **done and on the
-`windows-bringup` branch**. `tur.exe` builds under MSYS2/UCRT64, `tur build`
-compiles and runs real programs, and the async/reactor/httpd/fiber subset passes
-~65 fixtures. This plan tracks only what is left.
+**Status (revised 2026-07-31):** WIN0 (compiler/runtime), WIN1 (generated-code
+portability), and the hard core of WIN3 (async I/O + fiber context switches) are
+done and **merged to `main`** -- squash-merged as `7a16ef1de` ("Windows Bringup
+(#682)"). The `windows-bringup` branch is stale (~900 commits behind main); do
+not work from it.
+
+`tur.exe` builds under MSYS2/UCRT64, and `tur build` compiles and runs real
+programs. Measured on main at `f630230e5` with gcc 16.1.0:
+
+```
+TUR=./build-win/tur.exe bash tests/run.sh
+# summary: 2445 passed, 54 failed
+```
+
+That is the whole fixture tree, not the async subset -- roughly 97%. (An earlier
+revision of this plan cited "~65 fixtures"; that was the async/reactor/httpd
+subset at bring-up time, not a ceiling.)
+
+**WIN0 regressed between the merge and 2026-07-31 and had to be re-fixed.** Five
+independent breaks accumulated, three of them within five days, because nothing
+guards Windows in CI. The compiler did not build at all. See
+`docs/reported/windows-*.md` and the `fix(windows): restore the Windows build on
+main` commit.
+
+**The single highest-value item in this plan is therefore a `windows-latest` CI
+job**, which is not otherwise listed here -- `.github/workflows/ci.yml` runs
+`[ubuntu-latest, macos-latest]` on both the `test` and `jit` legs, and
+`release.yml` ships no Windows artifact. Without a guard, everything below
+rots as fast as it is fixed. Note also that `src/CMakeLists.txt:45-49` disables
+`-Werror` on Windows pending a warning-clean port, so a new job runs with
+warnings unpromoted until that is revisited.
+
+This plan tracks what is left.
 
 The original end-to-end plan (toolchain rationale, the WIN0/WIN1 blockers, the
 Wine loop, the full WIN3 investigation) is archived at
@@ -66,13 +94,21 @@ Clang-cl -- see the archived plan.)
 
 None of these block WIN2; they are the long tail of the async subset.
 
-### Pipe-fd polling: a hard `select()` limit (~8 fixtures)
+### Pipe-fd fixtures: do not build, and would not poll either (9 fixtures)
 
 `reactor-fd-*`, `reactor-fibers-cancel-on-free`, `reactor-fibers-park-fd`,
 `reactor-stop-from-callback`, `reactor-wake-cross-thread`, `scheduler-io-park`
-create a `pipe()` and register the pipe fds with the reactor. **Windows
-`select()` is socket-only** -- it cannot poll pipe or file fds at all, so the
-select-based backend (`src/async/io_iocp.c`) cannot service them.
+create a `pipe()` and register the pipe fds with the reactor.
+
+**Correction (2026-07-31): these fail at `cc`, not at runtime.** MinGW does not
+declare `pipe()` -- it ships `_pipe`, with a different signature -- and
+`-Wimplicit-function-declaration` is a hard error on gcc >= 14. No reactor code
+is reached. See `docs/reported/windows-pipe-reactor-fixtures-do-not-build.md`.
+
+The runtime limitation below is still real and still applies the moment they do
+compile, so the two causes compound rather than compete: **Windows `select()` is
+socket-only** -- it cannot poll pipe or file fds at all, so the select-based
+backend (`src/async/io_iocp.c`) cannot service them.
 
 Options, in rough order of effort:
 1. Accept as a platform limit (Godot scripts don't poll pipes). Mark the fixtures
@@ -83,28 +119,66 @@ Options, in rough order of effort:
 
 Recommendation: option 1 unless a use case forces option 2.
 
-### Concurrency stdout mismatches (~3 fixtures)
+### Concurrency stdout mismatches (2 fixtures)
 
-`httpd-h4-keepalive`, `httpd-h6-routing`, `taskgroup-async` build and run but
-produce diverging output -- scheduler/timing under the select backend, not yet
-diagnosed. `scheduler-multithread` sometimes prints the same worker-thread id
-twice (distribution nuance, but it passes). Worth a focused diagnosis pass;
-start by comparing fiber/worker scheduling order against Linux.
+`fiber-effect` and `p19-8-fiber-effect-chain` build and run but produce
+diverging output -- scheduler/timing under the select backend, not yet
+diagnosed. Worth a focused diagnosis pass; start by comparing fiber/worker
+scheduling order against Linux.
+
+(An earlier revision named `httpd-h4-keepalive`, `httpd-h6-routing` and
+`taskgroup-async` here. Those no longer reach the run phase -- the whole `httpd`
+family now fails to build, see below -- and `taskgroup-async` passes.)
+
+---
+
+## Winsock / POSIX gaps in the stdlib (~45 fixtures, the bulk of the 54)
+
+Found 2026-07-31. Neither is a regression: both predate the bring-up or were
+missed by it.
+
+- **`setsockopt` against Winsock (~40 fixtures).** The whole `httpd-*` /
+  `httpd-async-*` family fails to build: Winsock declares the option value as
+  `const char *`, and `stdlib/httpd.tur` passes `&opt`/`&tv` uncast at three
+  sites. The portable spelling already exists at `stdlib/async_socket.tur:58`,
+  added by the bring-up itself -- `httpd.tur` was simply not swept. Note
+  `SO_RCVTIMEO` is not a cast fix: Winsock wants a `DWORD` of milliseconds, not
+  a `struct timeval`. See
+  [docs/reported/windows-httpd-setsockopt-winsock.md](../../reported/windows-httpd-setsockopt-winsock.md).
+- **POSIX-only inline-C (5 fixtures).** `_mkdir` (a conflicting hand-rolled
+  prototype, not a missing include), `ioctl`/`struct winsize`, and
+  `fork`/`getppid`. See
+  [docs/reported/windows-posix-inline-c-gaps.md](../../reported/windows-posix-inline-c-gaps.md).
+
+## Subprocess and shared-library layers (not fixture-visible)
+
+The commands that shell out or produce/load a shared library are unported:
+`tur install`, `tur fetch`, `tur new`, `tur build --shared`, and REPL spice
+loading. They pass `/bin/sh` command strings with single-quote quoting to
+`cmd.exe`, `--shared` still emits `lib<name>.so`, and the REPL JIT module graph
+hits the deliberate `symlink` `ENOSYS` stub. This is the highest-impact group
+for an actual Windows user and is a prerequisite for WIN2 above. See
+[docs/reported/windows-subprocess-and-shared-lib-gaps.md](../../reported/windows-subprocess-and-shared-lib-gaps.md).
 
 ---
 
 ## Codegen defects the port surfaced (NOT Windows-specific)
 
-Both are latent on Linux too and will bite when CI's toolchain advances.
-
-- **GCC >= 14 permerrors.** Generated C trips `-Wincompatible-pointer-types`,
-  `-Wint-conversion`, and `-Wimplicit-function-declaration` (a missing `hamt.h`
-  include), all promoted to hard errors in GCC 14. Worked around with
-  `-Wno-error=` in `src/main.c`; the real fix is well-typed codegen. See
-  [docs/reported/codegen-gcc14-permerrors.md](../../reported/codegen-gcc14-permerrors.md).
-- **`-O0` link failure.** Generated C references `tur_get_contract_handler` /
-  `tur_set_contract_handler`, which are declared but never defined; at `-O1`+ the
-  calls are optimised away so it links. Surfaces only in a debug (`-O0`) build.
+- **Carrier<->pointer straddles (5 fixtures).** Generated C trips
+  `-Wint-conversion` / `-Wincompatible-pointer-types`, hard errors on gcc >= 14
+  and Apple clang >= 15. **Correction (2026-07-31): the `-Wno-error=`
+  workaround this plan previously cited is gone** -- both downgrades were
+  deliberately removed (`src/main.c:5231-5251`) on the grounds that every
+  straddle was bridged at emit time. Five remain under gcc 16.1.0, so that claim
+  does not hold; do not re-add the downgrades, the removal is what exposed them.
+  Tracked in
+  [docs/reported/macos-int-conversion-carrier-pointer-straddles.md](../../reported/macos-int-conversion-carrier-pointer-straddles.md)
+  (not macOS-specific despite the filename -- it is "any toolchain new enough").
+  The older gcc-14 reports are resolved and archived under
+  `docs/archive/history/`.
+- **`-O0` link failure -- RESOLVED.** Generated C referenced
+  `tur_get_contract_handler` / `tur_set_contract_handler` with no definition.
+  Both are now defined in `src/runtime/contract_handler.c:21,30`.
 
 ---
 
@@ -118,7 +192,13 @@ wanted.
 - **REPL:** MSYS2 ships wineditline, so line editing already works; nothing to do
   unless targeting a non-MSYS2 build.
 - **Release packaging:** add `windows-x86_64` to `.github/workflows/release.yml`,
-  producing a `.zip`.
+  producing a `.zip` (the other targets ship `.tar.gz`). The binary links two
+  non-system DLLs -- `/ucrt64/bin/libwinpthread-1.dll` and `/ucrt64/bin/edit.dll`
+  (libedit, and hence the REPL's line editing) -- so either bundle them in the
+  zip or link statically; a bare `tur.exe` will not start on a machine without
+  MSYS2. Confirm by unzipping with MSYS2 off `PATH` and running `tur --version`.
+  Make sure the runner installs `mingw-w64-ucrt-x86_64-libedit`, or the build
+  quietly succeeds and ships a REPL with no line editing.
 
 ---
 
