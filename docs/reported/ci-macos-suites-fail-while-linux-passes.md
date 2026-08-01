@@ -100,18 +100,80 @@ one. That also makes this job usable as a regression signal despite being red:
 a *fifth* name appearing, or a count that does not move by the number of
 fixtures a PR adds, is real news.
 
-## Still open: `JIT engine (macos-latest)`
+## `JIT engine (macos-latest)` (2026-08-01): a harness bug, unrelated to the above
 
-Not identified. The Actions log API returns a fixed ~3.5 KB tail window
-regardless of the requested line count, and for this job that window is
-entirely `tests/run-jit.sh`'s skip list -- the summary and `FAIL` lines sit
-above it. Requesting more lines does not widen the window, so this needs the
-artifact upload in fix direction 1.
+Identified, and it is **not** the straddles -- a completely different cause.
+(The earlier note here said the log window could not be widened; that was
+wrong. `tail_lines` does work, the `errors/*` skip list is just long enough
+that ~560 lines are needed to clear it.)
 
-Whether it is the same cause is genuinely unknown: the JIT path compiles
-through c2mir rather than `cc`, and c2mir does not enforce
-`-Wint-conversion`, so the straddles may well pass there and this may be
-something else. Do not assume it is the same bug.
+From PR #753, job 91329206401:
+
+```
+jit fixture summary: 2008 passed, 407 failed, 47 skipped
+  (of which 17 passed via the cc fallback -- TUR-W0070)
+```
+
+**All 407 failures are `errors/*` negative fixtures, every one reporting
+`jit diagnostic mismatch`.** No positive fixture fails. That shape is the
+whole diagnosis: negative fixtures are the only ones that go through
+`run_jit_error_fixture`.
+
+### Root cause -- `tests/run-jit.sh:308` called bare `timeout`
+
+The harness already knows stock macOS ships no `timeout(1)` and probes for it
+at `tests/run-jit.sh:109-118`, setting `_tur_timeout_bin` to `timeout`, else
+`gtimeout`, else empty (run untimed). The positive-fixture path uses the
+resulting `_run_timed` wrapper (`:235`, `:239`). **The negative-fixture path
+was missed and still called bare `timeout 15`.**
+
+On a runner without GNU coreutils that fails silently and totally:
+
+```
+$ ( PATH=/nonexistent timeout 15 sh -c 'echo DIAGNOSTIC >&2' ) 2>err || true
+$ cat err
+bash: timeout: command not found          <- not the diagnostic
+```
+
+`timeout` is not found, the command fails, the trailing `|| true` swallows it,
+`jit.stderr` gets a shell error instead of a compiler diagnostic, and every
+`expected.diag` needle misses. Every negative fixture then reports
+`jit diagnostic mismatch` as though the compiler had stopped emitting
+diagnostics at all.
+
+This also explains the one place a local-vs-CI disagreement is *real*. The
+macOS JIT leg was made blocking on a hand-measured local baseline of
+`2414 passed, 0 failed, 47 skipped` (`.github/workflows/ci.yml:195-212`). A
+developer Mac with Homebrew coreutils on `PATH` has `timeout` and is green; the
+GitHub macOS runner does not and is not. The skip count matches exactly (47) and
+the corpus totals agree, so nothing else differs -- and Linux is green because
+`timeout` exists there.
+
+Fixed in this PR: `:308` now uses `_run_timed`, matching the positive path. On
+Linux this is a byte-for-byte no-op (`_run_timed 15 cmd` expands to
+`timeout 15 cmd`), so it can only change the macOS result.
+
+**Confidence: high, but unproven** -- the shape, the call-site asymmetry, the
+local/CI split, and the demonstrated mechanism all agree, but it cannot be
+executed on macOS from here. The next macOS JIT run is the experiment: if the
+407 collapses, confirmed. If failures remain after the fix, they are real JIT
+findings that this bug was masking, and they need filing on their own.
+
+## Fix directions
+
+1. **Upload the harness stdout (or `tests/**/actual.*`) as a CI artifact on
+   failure.** Still worth doing -- both halves of this report cost a log-window
+   fight to diagnose.
+2. Fix [`macos-int-conversion-carrier-pointer-straddles`](macos-int-conversion-carrier-pointer-straddles.md)
+   and re-check: that should take `Test (macos-latest)` green.
+3. ~~JIT half~~ -- fixed in PR #753 (`tests/run-jit.sh:308`), pending
+   confirmation from the next macOS JIT run.
+
+**When both are confirmed green, this report closes**: neither half was a
+macOS-platform defect. One is a filed codegen bug that Linux only warns about;
+the other is a test-harness portability bug. The report's original framing --
+an undiagnosed macOS-only mystery needing someone with a Mac -- was wrong on
+both counts, and no macOS box was needed to resolve either.
 
 ## Fix directions
 
