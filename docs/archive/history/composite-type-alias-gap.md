@@ -364,4 +364,5 @@ type spelled inline:
   call, so `println $ g(7)` becomes `(println ((g 7)))`. `CLAUDE.md`'s own
   chained example (`println $ normalize $ vec3(...)`) does not compile. Filed
   as
-  [sweet-dollar-double-applies-single-call.md](../../reported/sweet-dollar-double-applies-single-call.md).
+  [sweet-dollar-double-applies-single-call.md](../sweet-dollar-double-applies-single-call.md)
+  -- resolved 2026-08-01; the redundant wrap is now suppressed.

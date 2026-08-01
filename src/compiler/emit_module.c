@@ -647,6 +647,99 @@ static char *typed_fatshim_name(Type result_type, Type *param_types, uint8_t n_p
     return result;
 }
 
+/* fn-value-fat-normalization: return the C name of a file-scope, statically
+ * initialized `{ drop-glue, shim, orig }` box for (shim, fnptr), creating it on
+ * first request; NULL when this TU has no place to put one.
+ *
+ * EX_FN_TO_FAT otherwise mallocs a fresh box every time it executes.  When the
+ * boxed value is a file-scope function the box contents are constant, so the
+ * allocation is pure waste -- and worse than waste: nothing drops a box handed
+ * to a normalized fn param, so a loop that boxes per iteration leaks without
+ * bound (measured: 122 MiB over 5e6 iterations, 24 bytes a turn).
+ *
+ * Layout is byte-compatible with the malloc'd box on purpose --
+ * `sizeof(void *)` of drop-glue header followed by two int64 slots, handle
+ * pointing at slot 0 -- because tur_closure_drop recovers the header at
+ * `h[-1]` and the fat-call protocol reads slots 0/1.  The union gives the
+ * storage max(void *, int64_t) alignment without a struct's padding, which
+ * would move slot 0 off `+ sizeof(void *)` on a 32-bit target (wasm32).
+ *
+ * The header is `__tur_fatbox_keep`, a no-op, rather than the malloc'd box's
+ * NULL.  NULL means "free the base allocation" to tur_closure_drop, which on a
+ * static address is a heap corruption; a no-op glue makes every drop path
+ * (struct drop glue, __dk_reap, an owning field released twice) correctly do
+ * nothing.  That also makes SHARING a box between boxing sites safe, which is
+ * what the dedup relies on: the box is write-once (EX_FN_TO_FAT and
+ * EX_POLY_TO_FAT are the only writers of these slots in the tree, both at
+ * creation), and nothing compares fn values by identity.
+ *
+ * Filled from __tur_static_init rather than a static initializer: casting a
+ * function pointer to int64_t is not an address constant, and S1b exists
+ * precisely so startup work survives any C11 front end (c2mir included). */
+const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
+                                        const char *fnptr) {
+    if (!ctx || !ctx->fatbox_init || !ctx->thunk_typedefs) return NULL;
+    if (!shim || !*shim || !fnptr || !*fnptr) return NULL;
+
+    Buf key; buf_init(&key);
+    buf_puts(&key, shim); buf_putc(&key, '|'); buf_puts(&key, fnptr);
+    buf_putc(&key, '\0');
+    for (uint32_t i = 0; i < ctx->n_fatbox_keys; i++) {
+        if (strcmp(ctx->fatbox_keys[i], key.data) == 0) {
+            buf_free(&key);
+            static char name[96];
+            snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)i);
+            return name;
+        }
+    }
+    if (ctx->n_fatbox_keys >= ctx->cap_fatbox_keys) {
+        uint32_t nc = ctx->cap_fatbox_keys ? ctx->cap_fatbox_keys * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatbox_keys, nc * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatbox_keys = nn;
+        ctx->cap_fatbox_keys = nc;
+    }
+    uint32_t idx = ctx->n_fatbox_keys++;
+    ctx->fatbox_keys[idx] = strdup(key.data);
+    if (!ctx->fatbox_keys[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_free(&key);
+
+    if (idx == 0) {
+        buf_puts(ctx->thunk_typedefs,
+            "/* fn-value-fat-normalization: no-op drop glue for statically\n"
+            " * allocated { shim, orig } boxes.  tur_closure_drop treats a NULL\n"
+            " * header as \"free the base allocation\", which would free() a\n"
+            " * static address; this makes every drop of such a box a no-op. */\n"
+            "static void __tur_fatbox_keep(void *__e) { (void)__e; }\n");
+    }
+    /* The drop-glue header is a STATIC initializer, not a fill: `__a` is the
+     * union's first member and occupies exactly the header slot, and a
+     * function-pointer-to-void* conversion is an address constant (the
+     * preamble's __tur_fatshim_keep[] table already relies on that).  It has
+     * to be initialized at load time rather than from __tur_fatbox_init,
+     * because tur_closure_drop's else-branch is `free(header_address)` -- with
+     * a zero-initialized header GCC cannot prove that branch dead and warns
+     * `'free' called on unallocated object` at every drop site that inlines it
+     * (-Wfree-nonheap-object).  Non-NULL from load time folds the branch away.
+     * The int64 SLOTS still need the fill: a function pointer cast to int64_t
+     * is not an address constant. */
+    buf_printf(ctx->thunk_typedefs,
+        "static union { void *__a; int64_t __b;\n"
+        "               char __c[sizeof(void *) + 2 * sizeof(int64_t)]; }\n"
+        "    __tur_fatbox_%u = { .__a = (void *)__tur_fatbox_keep };\n",
+        (unsigned)idx);
+    buf_printf(ctx->fatbox_init,
+        "    { char *__b = (char *)&__tur_fatbox_%u;\n"
+        "      int64_t *__s = (int64_t *)(__b + sizeof(void *));\n"
+        "      __s[0] = (int64_t)(intptr_t)%s;\n"
+        "      __s[1] = (int64_t)(intptr_t)%s; }\n",
+        (unsigned)idx, shim, fnptr);
+
+    static char name[96];
+    snprintf(name, sizeof name, "__tur_fatbox_%u", (unsigned)idx);
+    return name;
+}
+
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params) {
     /* The call site invokes the boxed fn through the typed-thunk cast only when
@@ -11315,6 +11408,7 @@ int emit_program(Buf *out, const Expr *program) {
      * to handler functions; handler functions visible to fn definitions. */
     Buf early_file;  buf_init(&early_file);
     Buf thunk_typedefs; buf_init(&thunk_typedefs);
+    Buf fatbox_init; buf_init(&fatbox_init);
     Buf fwd_decls;   buf_init(&fwd_decls);
     Buf extern_decls; buf_init(&extern_decls);
     Buf defer_thunks; buf_init(&defer_thunks);
@@ -11338,6 +11432,7 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs;
+    ctx.fatbox_init = &fatbox_init;
     ctx.indent = 4;
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
@@ -11358,6 +11453,9 @@ int emit_program(Buf *out, const Expr *program) {
     ctx.poly_fatshim_names = NULL;
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
+    ctx.fatbox_keys = NULL;
+    ctx.n_fatbox_keys = 0;
+    ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
     ctx.n_exbox_dict_names = 0;
     ctx.cap_exbox_dict_names = 0;
@@ -12623,6 +12721,9 @@ int emit_program(Buf *out, const Expr *program) {
     if (cprelude.len)    { buf_write(out, cprelude.data, cprelude.len); buf_putc(out, '\n'); }
     buf_free(&early_file);
     buf_free(&thunk_typedefs);
+    /* NOTE: fatbox_init is NOT freed here -- it is read further down, where the
+     * __tur_fatbox_init definition is emitted (it must follow the forward decls
+     * for the functions it takes addresses of). */
     buf_free(&extern_decls);
     buf_free(&fwd_decls);
     buf_free(&defer_thunks);
@@ -12687,6 +12788,17 @@ int emit_program(Buf *out, const Expr *program) {
         static_init_register("__tur_module_def_init", STATIC_INIT_DEFS);
     }
 
+    /* fn-value-fat-normalization: fill the statically allocated { shim, orig }
+     * boxes.  KEYS band -- the earliest -- so a box is live before any
+     * registry, atexit or user def-init code can reach a boxing site. */
+    if (fatbox_init.len) {
+        buf_puts(out, "static void __tur_fatbox_init(void) {\n");
+        buf_write(out, fatbox_init.data, fatbox_init.len);
+        buf_puts(out, "}\n\n");
+        static_init_register("__tur_fatbox_init", STATIC_INIT_KEYS);
+    }
+    buf_free(&fatbox_init);
+
     /* S1b: after every registered initializer's own definition (they are all
      * `static`), and after `main` -- the preamble carries the declaration. */
     static_init_emit(out);
@@ -12709,6 +12821,8 @@ int emit_program(Buf *out, const Expr *program) {
     free(ctx.fatshim_names);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    free(ctx.fatbox_keys);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);
@@ -13505,6 +13619,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     Buf body; buf_init(&body);
 
     Buf thunk_typedefs2; buf_init(&thunk_typedefs2);
+    Buf fatbox_init2; buf_init(&fatbox_init2);
 
     EmitCtx ctx;
     /* Zero every field first -- see the companion memset above; the manual
@@ -13516,6 +13631,7 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.main_ = &body;
     ctx.program_root = program;   /* cps-transform-plan (a): serial env instance scan */
     ctx.thunk_typedefs = &thunk_typedefs2;
+    ctx.fatbox_init = &fatbox_init2;
     ctx.indent = 4;
     ctx.tmp_n = 0;
     ctx.fn_params = NULL;
@@ -13536,6 +13652,9 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     ctx.poly_fatshim_names = NULL;
     ctx.n_poly_fatshim_names = 0;
     ctx.cap_poly_fatshim_names = 0;
+    ctx.fatbox_keys = NULL;
+    ctx.n_fatbox_keys = 0;
+    ctx.cap_fatbox_keys = 0;
     ctx.exbox_dict_names = NULL;
     ctx.n_exbox_dict_names = 0;
     ctx.cap_exbox_dict_names = 0;
@@ -14012,6 +14131,16 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
         buf_puts(out, "}\n");
     }
 
+    /* fn-value-fat-normalization: fill this TU's statically allocated
+     * { shim, orig } boxes (see the whole-program path for the rationale).
+     * KEYS band -- the earliest. */
+    if (fatbox_init2.len) {
+        buf_puts(out, "static void __tur_fatbox_init(void) {\n");
+        buf_write(out, fatbox_init2.data, fatbox_init2.len);
+        buf_puts(out, "}\n\n");
+        static_init_register("__tur_fatbox_init", STATIC_INIT_KEYS);
+    }
+
     /* S1b: after every registered initializer's definition.  Emitted in
      * separate-compilation mode too -- there is no `main` in this TU to call
      * it, so the constructor wrapper is the whole mechanism there. */
@@ -14021,12 +14150,15 @@ int emit_implementation(Buf *out, const char *module_name, const Expr *program,
     buf_free(&body);
     buf_free(&impl_fwd_decls);
     buf_free(&thunk_typedefs2);
+    buf_free(&fatbox_init2);
     for (uint32_t i = 0; i < ctx.n_thunk_typedef_names; i++) free(ctx.thunk_typedef_names[i]);
     free(ctx.thunk_typedef_names);
     for (uint32_t i = 0; i < ctx.n_fatshim_names; i++) free(ctx.fatshim_names[i]);
     free(ctx.fatshim_names);
     for (uint32_t i = 0; i < ctx.n_poly_fatshim_names; i++) free(ctx.poly_fatshim_names[i]);
     free(ctx.poly_fatshim_names);
+    for (uint32_t i = 0; i < ctx.n_fatbox_keys; i++) free(ctx.fatbox_keys[i]);
+    free(ctx.fatbox_keys);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     free(ctx.env_struct_names);

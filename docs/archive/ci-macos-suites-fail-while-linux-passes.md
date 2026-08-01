@@ -24,7 +24,7 @@ Run 2197, head `c091889a4`
 | Test (macos-latest) | `tur_tests` | **FAILED** (0% of 1) |
 | JIT engine (macos-latest) | `tur_jit_fixture_tests` | **FAILED** (50% of 2) |
 | Test (ubuntu-latest) | `tur_tests` | passed |
-| Test (ubuntu-latest) | `turi_fixture_tests` | failed -- unrelated, filed as `ci-cps-tramp-turi-timeouts-under-load.md` |
+| Test (ubuntu-latest) | `turi_fixture_tests` | failed -- unrelated, filed as [`ci-cps-tramp-turi-timeouts-under-load.md`](ci-cps-tramp-turi-timeouts-under-load.md) (resolved 2026-08-01) |
 | JIT engine (ubuntu-latest) | `tur_jit_fixture_tests` | **passed** |
 
 Not caused by the PR's commits: the previous run (2196, head `dbfecd0d2`) shows
@@ -142,5 +142,6 @@ infrastructure improvement, not a defect.
   a process-wide live-heap probe, which under one-process `tur jit` measures the
   compiler's allocator. They now read the CG6 collector counter and run under
   both paths. Never a GC/Rc/JIT defect.
-- `ci-cps-tramp-turi-timeouts-under-load.md` -- the unrelated ubuntu
-  `turi_fixture_tests` failure noted in the table above.
+- [`ci-cps-tramp-turi-timeouts-under-load.md`](ci-cps-tramp-turi-timeouts-under-load.md)
+  -- the unrelated ubuntu `turi_fixture_tests` failure noted in the table
+  above; resolved 2026-08-01 (peak RSS, not CPU contention) and archived.

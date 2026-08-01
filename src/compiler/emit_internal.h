@@ -272,6 +272,18 @@ typedef struct EmitCtx {
     char    **poly_fatshim_names;
     uint32_t  n_poly_fatshim_names;
     uint32_t  cap_poly_fatshim_names;
+    /* fn-value-fat-normalization: STATIC {shim, orig} boxes.  A box whose
+     * `orig` is a file-scope function is a CONSTANT, so it does not need the
+     * per-execution malloc EX_FN_TO_FAT would otherwise emit -- which is not
+     * merely slow but an unbounded leak, since nothing drops a box handed to a
+     * normalized param (a 5e6-iteration `(apply1 add3 acc)` loop leaked
+     * 122 MiB).  `fatbox_keys` dedups on "<shim>|<orig>"; the definitions land
+     * in `thunk_typedefs` and the fill statements in `fatbox_init`, emitted as
+     * one `__tur_fatbox_init` registered in the earliest static-init band. */
+    char    **fatbox_keys;
+    uint32_t  n_fatbox_keys;
+    uint32_t  cap_fatbox_keys;
+    Buf      *fatbox_init;
     /* constrained-byval dispatch: per-(class,struct-instance) carrier-adapter
      * witness-dict tracking.  A constrained existential over a by-value struct
      * payload points its witness at one of these `dict_<Class>_<T>__exbox`
@@ -814,6 +826,8 @@ char *ensure_typed_thunk_typedef(EmitCtx *ctx, Buf *out,
  * given closure signature, returning its C function name.  Returns NULL when
  * the signature is the all-int64_t carrier case (caller uses the preamble
  * __tur_fatshim<arity> shim instead) -- this keeps int64 fixtures churn-free. */
+const char *ensure_static_fatbox(EmitCtx *ctx, const char *shim,
+                                 const char *fnptr);
 char *ensure_typed_fatshim(EmitCtx *ctx,
                            Type result_type, Type *param_types, uint8_t n_params);
 /* constrained-byval dispatch: ensure a carrier-adapter witness dict exists for a

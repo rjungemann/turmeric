@@ -129,6 +129,7 @@ claim, do not patch the misses):
   regress -- a tyvar-sig param's arguments arrive through the
   generic/carrier machinery as thin pointers the call-site shim cannot
   see.  Deferred to the carrier-side increments (meta-plan 2+).
+  **Lifted 2026-08-01 by increment 2 below.**
 
 One post-flip defect found and fixed by the s1c probe: a normalized param
 FORWARDED as an argument into another normalized slot was double-shimmed
@@ -175,6 +176,135 @@ first three bridges (the two curried fixtures), **2438/0** with bridge 4.
 The full boundary matrix of `fn-typed-value-return-ascribe-miscompiles` --
 broken rows included -- is pinned in
 `tests/fixtures/fn-value-matrix-ok-rows/`.
+
+## Increment 2 -- LANDED 2026-08-01 (tyvar signatures; the carrier-side feeds)
+
+Stage 1 deferred tyvar-signature params on a diagnosis that turned out to
+name exactly two missing shim sites, not a representation problem: "a
+tyvar-sig param's arguments arrive through the generic/carrier machinery as
+thin pointers the call-site shim cannot see."  Both feeds are now shimmed,
+so the exclusion is gone from `fn_param_type_is_fat_normalized`.
+
+**Re-measuring first.** Lifting the tyvar exclusion on the post-stage-2 tree
+costs **2** behavioral fixtures, not the 10 stage 1 saw -- stage 2's
+return/let/ascribe bridges had already absorbed most of that set.  Both
+survivors were one mechanism each:
+
+1. `hrt-curried-fn-result` -- `((l inc) 10)` where `l` is a rank-2 forall
+   param.  The call goes through the carrier (`l.fn(l.env, arg)`), a path
+   `elab_poly_call` owns and the A#1 call-site shim never reaches.  Fixed by
+   shimming fn-typed slots of the forall body there, beside the existing
+   `TY_FORALL`-slot `EX_POLY_WRAP` handling.  Both ends agree by TYPE: every
+   function reachable through that forall declares the same slot.
+2. `stdlib-lens-record-field` -- `(lens get put)` where `get`/`put` are now
+   normalized params being stored into fat struct fields.  The make-struct
+   store shim's already-fat test is `type.as.fn.boxed`, which a normalized
+   param does not set (normalization is a property of the type, not a flag
+   on it), so the handle was boxed a SECOND time and the field call ran it as
+   code.  Fixed with the store-side twin of the A#1 forwarding guard.
+
+**The param/result asymmetry is deliberate.** A tyvar-sig fn type is
+normalized in PARAM position but NOT as a declared RESULT --
+`fn_result_type_is_fat_normalized` (new) keeps the concrete-only claim and is
+what stages 2's tail normalizer and the nested-annotation boxer consult.
+Widening the result side too double-boxes against the hrt-curried-result
+poly-call protocol, which boxes returned closures itself.  The two sides may
+differ safely because the call-site shim normalizes whatever it is handed.
+`repr_of` routes on `REPR_POS_PARAM` so the ABI trace reports the same split.
+
+**Measurements**
+
+| | `run.sh` | behavioral | `run-turi.sh` |
+| --- | --- | --- | --- |
+| baseline | 2503 / 0 | -- | 1701 / 0 |
+| tyvar flip, no carrier-side work | 2361 / 142 | 2 | -- |
+| + both shims | 2363 / 140 | **0** | -- |
+| + snapshot regen + acceptance fixture | **2504 / 0** | 0 | **1702 / 0** |
+
+The 140 snapshots are one function: the auto-loaded stdlib's `consume`
+(a tyvar-sig fn param, so present in every program) moving from thin to fat
+dispatch -- exactly the "1 in the auto-loaded stdlib" stage 0's blast-radius
+probe predicted.  `--known-probes` now prints FIXED for both poly-result
+rows, the `tyvar_run` `known_bug_slug` row is retired, and `--n 500` on two
+fresh seeds (1337, 20260801) is green with those legs back in the pool.
+
+**Perf: no measurable cost on real workloads, one synthetic cliff.**
+`benchmarks/run-benchmarks.sh` on Release builds either side: 4 of 11
+benchmarks run (the other 7 fail identically before and after -- pre-existing),
+and those 4 are unchanged (86->86ms, 132->131ms, 3->2ms; parsec-json's
+7->10ms harness reading is single-run noise -- best-of-5 on the built binary
+is 9.8ms before, 8.2ms after).
+
+The cliff is real but narrow: `EX_FN_TO_FAT` **mallocs a fresh `{shim, orig}`
+box every time it executes**, so a tight loop that passes a BARE GLOBAL fn
+into a tyvar-sig HOF now allocates per iteration.  A 20M-iteration
+`(apply1 add3 acc)` loop goes 0.003s -> 0.533s -- though the 0.003s is the C
+compiler deleting a loop it could inline through, so the multiplier is an
+artifact of an empty body, not a 175x on real code.  This is stage 1's
+mechanism, not increment 2's; increment 2 widens its population.
+
+## Increment 2b -- LANDED 2026-08-01 (the static box; the leak, not the clock)
+
+The allocation above is not merely slow.  Nothing frees a box handed to a
+normalized param, so the loop LEAKS one per iteration: 5e6 iterations of
+`(apply1 add3 acc)` peaked at **122 MiB**, 24 bytes a turn, growing linearly
+with trip count.  That reclassifies the follow-up from perf to memory
+correctness, so it was done rather than deferred.
+
+A box whose `orig` is a file-scope function is a constant, so it is allocated
+once at file scope and filled from `__tur_static_init` (S1b, which exists so
+startup work survives any C11 front end -- a function pointer cast to
+`int64_t` is not an address constant, so a static initializer would not be
+portable).  Storage is a `union { void *; int64_t; char[...] }` rather than a
+struct: it needs `max(void *, int64_t)` alignment WITHOUT a struct's padding,
+which on a 32-bit target (wasm32) would move slot 0 off `+ sizeof(void *)` and
+break the `h[-1]` header recovery.
+
+The drop-glue blocker dissolved into two pieces:
+
+- The header is `__tur_fatbox_keep`, a no-op, not the malloc'd box's NULL.
+  NULL means "free the base allocation" to `tur_closure_drop`, which on a
+  static address is heap corruption and, on a second drop, a double free.
+  A no-op glue makes every drop path correctly do nothing -- which is also
+  what makes SHARING one box between sites sound.  (The box is write-once:
+  `EX_FN_TO_FAT` and `EX_POLY_TO_FAT` are the only writers of these slots in
+  the tree, both at creation, and nothing compares fn values by identity.)
+- Correct at runtime is not sufficient.  GCC cannot see the no-op through the
+  inlined `tur_closure_drop` and reports `'free' called on unallocated
+  object` (-Wfree-nonheap-object) at every drop site -- observed on
+  `closure-drop-glue-fatshim` and two `catch-unwind-*` fixtures.  Initializing
+  the header statically did not fold the branch away.
+
+So the hoist is **opt-in per shim site** (`fn_to_fat_.static_ok`), and exactly
+one site opts in: the A#1 shim at a normalized NOMINAL param.  Nothing drops a
+box handed to one -- which is precisely why it leaked -- so no drop path can
+reach a static box.  `^fat` sinks and owning struct fn-fields keep the heap
+box: a `^fat` callee MAY drop its argument (`closure-drop-glue-fatshim` calls
+`TUR_CLOSURE_DROP` on one) and the call site cannot tell.  Default-off means a
+future EX_FN_TO_FAT site is heap-allocated until someone proves otherwise.
+
+**Measurements.** The leak is gone and the cliff is mostly gone:
+
+| | peak RSS (5e6 iters) | 2e7-iter loop |
+| --- | --- | --- |
+| before | 122 MiB | 0.533 s |
+| after | **1 MiB** | **0.042 s** |
+
+The residual 0.042 s over 2e7 calls is ~2 ns/call -- the fat indirection this
+plan always accepted, not an allocation.  Suite 2505/0, turi 1703/0, ratchet
+green (`fn_result_type_is_fat_normalized` joined the pinned predicate list).
+Corpus footprint is small and honest: **one** fixture
+(`van-laarhoven-lens-wide-compose`) actually takes the static box, because
+most of the corpus's 4334 boxing sites are `^fat` sinks, struct stores and
+typeclass shims rather than the normalized nominal slot.  Pinned by
+`tests/fixtures/fn-value-static-fatbox/`, which also asserts the two forms
+that must NOT change (owning fn-fields, capturing closures).
+
+**Found while measuring, filed not fixed:** the same per-call box at a `^fat`
+sink leaks too, and worse -- 5e6 iterations peaked at **1002 MiB**.  It is
+pre-existing and needs an ownership contract on `^fat` before a caller can
+choose a representation, so it is its own report:
+[`fat-sink-shim-box-leaks-per-call`](../reported/fat-sink-shim-box-leaks-per-call.md).
 
 ## Stages
 

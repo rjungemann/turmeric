@@ -409,8 +409,26 @@ call takes exactly one argument:
 (println (vec-get squares i))
 ```
 ```sweet-exp
-println(vec-get(squares i))
+println $ vec-get squares i
 ```
+
+`$` wraps everything to its right in one pair of parens -- but only when the
+rest of the line is a bare token sequence that needs the wrap. When the rest is
+*already* one complete delimited expression -- a neoteric call, a parenthesised
+form, a curly-infix group, a data literal -- the wrap is suppressed, so `$`
+composes with the other two tools instead of double-applying them:
+
+| Rest-of-line shape | Written | Reads as |
+|---|---|---|
+| bare token sequence | `println $ vec-get squares i` | `(println (vec-get squares i))` |
+| neoteric call | `println $ vec-get(squares i)` | `(println (vec-get squares i))` |
+| parenthesised form | `println $ (vec-get squares i)` | `(println (vec-get squares i))` |
+| curly-infix group | `println $ {a + b}` | `(println (+ a b))` |
+| chained `$` | `println $ normalize $ vec3(x y z)` | `(println (normalize (vec3 x y z)))` |
+
+A *bare atom* after `$` is still wrapped, per SRFI-110 -- `f $ g` reads as
+`(f (g))`, a zero-argument call, not `(f g)`. Pass a function value with
+plain juxtaposition (`f(g)` or `(f g)`) rather than `$`.
 
 ### Curly-infix `{a op b}`
 

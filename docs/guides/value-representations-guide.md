@@ -83,14 +83,35 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 3. **`:ptr<void>`-fat sink** -- carries an `is_fat` flag disambiguating
    thin-vs-fat dispatch at the invoke (`src/compiler/emit_expr.c` ~4246).
 4. **Nominal bare `TY_FN` pointer** -- a thin code pointer with nowhere to
-   put an environment. Since 2026-07-30 (fat-normalization stage 1) a
-   nominal param with a CONCRETE, EFFECT-FREE signature is fat-normalized
-   -- the thin form survives only for effect-row'd signatures (load-bearing
-   for the CPS backend's twin/trampoline convention), tyvar signatures
-   (arguments arrive thin through the carrier machinery), cfnptr, variadic,
-   and arity>5. Passing a capturing closure into one of THOSE is still the
-   crash in `poly-result-hof-capturing-closure-sigbus`; the shared decision
-   is `fn_param_type_is_fat_normalized` (`src/compiler/types.c`).
+   put an environment. Fat-normalization has all but retired it in PARAM
+   position: stage 1 (2026-07-30) normalized concrete effect-free
+   signatures, and increment 2 (2026-08-01) added tyvar signatures once the
+   two carrier-side feeds were shimmed as well -- a call THROUGH a
+   rank-2/forall param (`elab_poly_call`) and the make-struct fn-field
+   store, which had been boxing an already-normalized param a second time.
+   The thin form now survives only for **effect-row'd** signatures
+   (load-bearing for the CPS backend's twin/trampoline convention, and for
+   effect-row checking itself), cfnptr, variadic, and arity>5. Passing a
+   capturing closure into an effect-row'd one is the last live row of
+   `poly-result-hof-capturing-closure-sigbus`.
+
+   The `{ shim, orig }` box a bare fn is shimmed into is `malloc`'d per
+   execution of the bridge.  At a normalized nominal param nothing frees it,
+   so that was a leak per call (5e6 iterations of `(apply1 add3 acc)` peaked
+   at 122 MiB); such a box is a constant when the boxed value is a global fn,
+   so it is now allocated once at file scope and filled from
+   `__tur_static_init`.  The hoist is opt-in per shim site and ONLY the
+   normalized nominal slot opts in -- a `^fat` callee may drop its argument
+   and the call site cannot tell, so those keep the heap box and keep the
+   leak ([`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md)).
+
+   Two predicates, both in `src/compiler/types.c`, and they deliberately
+   disagree: `fn_param_type_is_fat_normalized` (param position, tyvars
+   included) and `fn_result_type_is_fat_normalized` (declared result and
+   nested result annotations, concrete only -- widening it double-boxes
+   against the hrt-curried-result poly-call protocol, which boxes returned
+   closures itself). `repr_of` routes on `REPR_POS_PARAM`, so the
+   `--emit-abi-trace` output reports the same split.
 5. **Struct-field-fat** -- `defstruct` fn-typed fields, normalized to the fat
    representation uniformly after the same bug was fixed there
    (`tests/fixtures/capturing-closure-struct-field/`).
@@ -122,12 +143,15 @@ report is one missing cell.
 **Open cells.** These are the crossings that still have no working bridge;
 each has a live report in `docs/reported/`. This table is the campaign's
 index -- a repr cell with a filed report belongs here, so if you file one,
-add the row. All three below were re-verified against `main` on 2026-08-01.
+add the row. All four below were re-verified against `main` on 2026-08-01.
+Two moved that day: the first row narrowed to the effect row (increment 2),
+and the `^fat` leak row was filed.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| capturing closure -> nominal thin `TY_FN` param, where the signature mentions a tyvar or carries an effect row (concrete effect-free signatures are fat-normalized and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
+| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (concrete AND tyvar signatures are both fat-normalized now and work) | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/poly-result-hof-capturing-closure-sigbus.md) |
 | generic closure return over a type application (struct `Cons`) | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generic-closure-return-type-app.md) |
+| bare fn -> `^fat` sink: a `{ shim, orig }` box is malloc'd per call and never freed (1002 MiB over 5e6 iterations); `^fat` has no ownership contract, so the caller cannot pick a representation | [`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/fat-sink-shim-box-leaks-per-call.md) |
 | `TY_CONTRACT` in type-ARGUMENT position -- never peeled to its base, so the payload keeps a live contract type at every downstream boundary | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/contract-type-arg-not-peeled-to-base.md) |
 
 The **contract** row is new to this table, not a new defect -- it was filed

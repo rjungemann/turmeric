@@ -394,7 +394,27 @@ jobs:
         run: |
           ./build-win/tur.exe build tests/fixtures/arith/input.tur -o ./arith-smoke.exe
           ./arith-smoke.exe > ./arith-smoke.out
-          if ! diff -u tests/fixtures/arith/expected.stdout ./arith-smoke.out; then
+          # Compared in bash, not with `diff`.  The UCRT64 environment installs
+          # only what the build needs (gcc/cmake/ninja) and diffutils is not in
+          # that set, so `diff` was `command not found` -- which `if !` then
+          # reported as "output did not match".  The comparison had never run,
+          # and the message named the wrong cause: this leg's FIRST green build
+          # (after the libedit fix in d7ed892c let it past pacman at all) was
+          # reported as a codegen failure.  Same shape as the bare `timeout` in
+          # run-jit.sh that hid 407 macOS failures.
+          #
+          # Bash string equality needs no package and cannot go missing, and
+          # `$(< f)` is a builtin redirection, so not even `cat` is required.
+          # The CR strip keeps the check honest if stdout ever stops being set
+          # to binary mode (the emitted main() calls _setmode(_O_BINARY) today,
+          # so output is LF and matches the LF-checked-out fixture).
+          expected=$(< tests/fixtures/arith/expected.stdout)
+          actual=$(< ./arith-smoke.out)
+          expected=${expected//$'\r'/}
+          actual=${actual//$'\r'/}
+          if [ "$expected" != "$actual" ]; then
+            echo "expected:"; printf '%s\n' "$expected"
+            echo "actual:";   printf '%s\n' "$actual"
             echo "::error::fixture 'arith' ran but its output did not match expected.stdout"
             exit 1
           fi

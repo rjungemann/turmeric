@@ -27,7 +27,8 @@ consolidation increment 3's only interpreter-side change.
 
 The `cps-tramp-resume-*` observation in the Notes below is a separate,
 harness-level issue tracked in
-[`ci-cps-tramp-turi-timeouts-under-load`](../reported/ci-cps-tramp-turi-timeouts-under-load.md).
+[`ci-cps-tramp-turi-timeouts-under-load`](ci-cps-tramp-turi-timeouts-under-load.md)
+-- resolved 2026-08-01.
 
 ## Summary
 

@@ -1,5 +1,12 @@
 # Sweet-exp `$` double-applies when the rest-of-line is already one complete call
 
+> **RESOLVED 2026-08-01 -- Fix direction 1 (suppress the redundant wrap).**
+> `sweet_emit_content` now shape-tests the rest-of-line and emits it unwrapped
+> when it is already one complete delimited expression, so `$` composes with
+> neoteric, parenthesised forms, curly-infix and data literals. Both repros
+> below check clean, as do the two documented examples. Details in
+> *Resolution* at the end of this document.
+
 **Severity:** medium (expressiveness / docs). `$` is one of the three
 sweet-exp tools the project conventions tell you to reach for, and the
 conventions' own chained example does not compile. There is a workaround
@@ -109,6 +116,66 @@ the shape test turns out to be awkward at the byte level.
 ## Found while
 
 Validating `docs/guides/logic-programming-guide.md` code blocks for
-[composite-type-alias-gap.md](../archive/history/composite-type-alias-gap.md).
+[composite-type-alias-gap.md](history/composite-type-alias-gap.md).
 Confirmed unrelated to that change -- it reproduces identically with no
 `defalias` in the file.
+
+## Resolution
+
+**Fix direction 1.** Option 2 (reject with a diagnostic) was the cheap answer,
+but the shape test turned out not to be awkward at the byte level, and the
+guides had already committed to option 1's semantics in prose -- both
+`docs/guides/syntax-guide.md`'s cheat sheet (`f $ g(x)` => `(f (g x))`) and
+`docs/guides/binding-forms-guide.md`'s `println $ if(even?(10) "even" "odd")`
+document the composing behaviour. Option 2 would have meant retracting
+published surface rather than delivering it.
+
+### The shape test
+
+`sweet_dollar_rest_is_delimited()` (`src/compiler/reader.c`) answers "is
+`[start, end)` already exactly one complete, delimited expression?" It trims
+surrounding whitespace, then splits the range into
+
+- a **prefix run** -- everything before the first `(`, `[` or `{`. Whitespace,
+  a string quote, a stray closer, a line continuation or a second `$` anywhere
+  in it means the rest is a token *sequence*, not one expression, and the test
+  fails immediately.
+- one **balanced group**, scanned string-aware, which must close exactly at
+  `end`.
+
+An empty prefix is a parenthesised form / curly-infix group / bracket literal;
+a non-empty one glued to the delimiter is a neoteric call (`g(7)`), a reader
+dispatch (`#map{...}`) or a quote sigil (`'(1 2)`). The `$` branch of
+`sweet_emit_content` consults it and skips the `(` / `)` insertion when it
+answers yes; the recursion for chained `$` is unchanged, so each `$` on a line
+decides independently.
+
+The test runs on the raw bytes of the rest-of-line, *before* the recursive
+`sweet_emit_content` call, which is what makes it cheap -- no second paren-depth
+pass, no reliance on the emitter's own state.
+
+### What did not change
+
+A **bare atom** after `$` is still wrapped: `f $ g` remains `(f (g))`. That is
+SRFI-110's specified reading and it is a zero-argument call, not a double
+application, so it is not part of this defect. A rest-of-line containing a `\`
+line continuation is conservatively treated as a sequence (the prefix scan
+rejects `\`), matching the pre-fix behaviour for the one shape where it was
+already correct.
+
+### Coverage
+
+`tests/fixtures/sweet-exp-dollar-shapes/` -- fix direction 3 -- exercises `$`
+against every rest-of-line shape in one program: bare sequence, bare atom,
+neoteric call, parenthesised form, curly-infix group, chained `$`, a call with
+a trailing line comment, and a continuation-spanning sequence. Full suite:
+2501 passed, 0 failed.
+
+### Docs
+
+- `CLAUDE.md` -- the sweet-exp `$` section gained the suppression rule and the
+  bare-atom exception. Its chained example, `println $ normalize $
+  vec3(1.0 0.0 0.0)`, now compiles as written.
+- `docs/guides/syntax-guide.md` -- the section introducing tool 3 never showed
+  a `$` at all: its sweet-exp pane gave the neoteric spelling. Replaced with
+  the `$` form, plus a worked list of the shapes and the bare-atom note.

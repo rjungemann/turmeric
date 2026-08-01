@@ -621,6 +621,20 @@ run_happy() {
         expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
     fi
 
+    # Report a run-phase timeout AS a timeout.  The emit-c and build phases
+    # above already special-case rc 124; the run phase did not, so a killed
+    # binary's partial stdout fell through to the diff below and was reported
+    # as "stdout mismatch" -- pointing whoever reads the log at a wrong answer
+    # that does not exist.  This check must stay ahead of the stdout diff.  See
+    # docs/archive/ci-cps-tramp-turi-timeouts-under-load.md.
+    if [ "$rc" -eq 124 ] && [ "$expected_exit" != "124" ]; then
+        {
+            echo "FAIL $name — timed out (>${fixture_timeout}s)"
+        } > "$log_file"
+        write_result "FAIL" "$name" "timed out (>${fixture_timeout}s)" "$log_file"
+        return
+    fi
+
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null; then
             {

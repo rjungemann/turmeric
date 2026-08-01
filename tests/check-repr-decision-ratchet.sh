@@ -27,7 +27,11 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 BASELINE=tests/repr-decision-baseline.txt
-PREDICATES="type_uses_carrier_abi type_is_wide_byval_adt type_is_boxed_container_elem fn_param_type_is_fat_normalized type_has_concrete_codegen_layout"
+# fn_result_type_is_fat_normalized joined the list with increment 2 of
+# fn-value-fat-normalization: it is a representation DECISION in its own
+# right (the result-position twin of the param predicate, deliberately
+# narrower), so it gets pinned like the rest rather than growing unwatched.
+PREDICATES="type_uses_carrier_abi type_is_wide_byval_adt type_is_boxed_container_elem fn_param_type_is_fat_normalized fn_result_type_is_fat_normalized type_has_concrete_codegen_layout"
 
 census() {
   for p in $PREDICATES; do

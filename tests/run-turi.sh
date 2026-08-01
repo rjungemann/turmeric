@@ -346,6 +346,19 @@ run_turi_fixture() {
     local expected_exit="0"
     [ -f "$dir/expected.exit" ] && expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
 
+    # Report a timeout AS a timeout.  timeout(1) exits 124 when it kills the
+    # child, and the partial stdout that leaves behind would otherwise fall
+    # through to the diff below and be reported as "stdout mismatch" -- which
+    # sends whoever reads the log looking for a wrong answer that does not
+    # exist.  This check must stay ahead of the stdout diff.  See
+    # docs/archive/ci-cps-tramp-turi-timeouts-under-load.md, where exactly that
+    # misreport cost a triage pass.
+    if [ "$rc" -eq 124 ] && [ "$expected_exit" != "124" ]; then
+        echo "FAIL $name -- timed out (>${fixture_timeout}s under --interpret)"
+        echo "FAIL" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+        return
+    fi
+
     # Check stdout.
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null 2>&1; then

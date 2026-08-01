@@ -152,3 +152,16 @@ build-mirpin/
 build-lazyrel/
 build-jitrel/
 build-i4/
+
+# CTest output captured at the repo root.  jit-ctest.log -- 86 KB of raw ctest
+# output from a local macOS build tree -- was committed by accident in
+# 0ee40e7a ("ci: publish the JIT corpus counts on a passing run"), which meant
+# to publish the counts, not the log.  The pattern keeps the next one out.
+/*-ctest.log
+/ctest.log
+
+# CTest's own scratch directory, created by a bare `ctest` at the repo root
+# (everything here runs `ctest --test-dir build`, which writes build/Testing/
+# instead).  Testing/Temporary/{LastTest.log,CTestCostData.txt} were committed
+# by accident in #728 -- both stubs from a run that executed no tests.
+/Testing/
